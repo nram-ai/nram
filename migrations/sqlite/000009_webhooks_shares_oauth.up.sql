@@ -28,6 +28,29 @@ CREATE TABLE memory_shares (
 
 CREATE INDEX idx_shares_target ON memory_shares (target_ns_id);
 
+-- Token usage table (LLM provider billing and analytics).
+CREATE TABLE token_usage (
+  id            TEXT PRIMARY KEY,
+  org_id        TEXT REFERENCES organizations(id),
+  user_id       TEXT REFERENCES users(id),
+  project_id    TEXT REFERENCES projects(id),
+  namespace_id  TEXT NOT NULL REFERENCES namespaces(id),
+  operation     TEXT NOT NULL,
+  provider      TEXT NOT NULL,
+  model         TEXT NOT NULL,
+  tokens_input  INTEGER NOT NULL DEFAULT 0,
+  tokens_output INTEGER NOT NULL DEFAULT 0,
+  memory_id     TEXT REFERENCES memories(id),
+  api_key_id    TEXT REFERENCES api_keys(id),
+  latency_ms    INTEGER,
+  created_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX idx_token_usage_org_time ON token_usage (org_id, created_at);
+CREATE INDEX idx_token_usage_user_time ON token_usage (user_id, created_at);
+CREATE INDEX idx_token_usage_project_time ON token_usage (project_id, created_at);
+CREATE INDEX idx_token_usage_operation ON token_usage (operation, created_at);
+
 -- OAuth clients table (registered OAuth2 applications).
 CREATE TABLE oauth_clients (
   id              TEXT PRIMARY KEY,
