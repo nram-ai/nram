@@ -70,21 +70,51 @@ export interface SetupResponse {
   message: string;
 }
 
-export interface DashboardData {
-  memory_count: number;
-  project_count: number;
-  user_count: number;
-  org_count: number;
-  recent_activity: ActivityEntry[];
+export interface ProjectMemoryCount {
+  project_id: string;
+  project_name: string;
+  count: number;
 }
 
-export interface ActivityEntry {
+export interface EnrichmentQueueStats {
+  pending: number;
+  processing: number;
+  failed: number;
+}
+
+export interface DashboardData {
+  total_memories: number;
+  total_projects: number;
+  total_users: number;
+  total_organizations: number;
+  memories_by_project: ProjectMemoryCount[];
+  enrichment_queue?: EnrichmentQueueStats;
+}
+
+export interface ActivityEvent {
   id: string;
-  action: string;
-  resource_type: string;
-  resource_id: string;
-  actor: string;
+  type: string;
+  summary: string;
+  project_id?: string;
+  user_id?: string;
   timestamp: string;
+}
+
+export interface ActivityResponse {
+  events: ActivityEvent[];
+}
+
+export interface StoreMemoryRequest {
+  content: string;
+  tags?: string[];
+}
+
+export interface StoredMemory {
+  id: string;
+  content: string;
+  tags?: string[];
+  project_id: string;
+  created_at: string;
 }
 
 export interface Organization {
@@ -177,7 +207,7 @@ export const adminAPI = {
 
   // Activity
   getActivity: (limit = 50) =>
-    request<ActivityEntry[]>("GET", `/admin/activity?limit=${limit}`),
+    request<ActivityResponse>("GET", `/admin/activity?limit=${limit}`),
 
   // Organizations
   listOrgs: () => request<Organization[]>("GET", "/admin/orgs"),
@@ -246,6 +276,13 @@ export const adminAPI = {
   // Namespaces
   getNamespaceTree: () =>
     request<Record<string, unknown>>("GET", "/admin/namespaces/tree"),
+};
+
+// --- Memory API (project-scoped) ---
+
+export const memoryAPI = {
+  store: (projectId: string, data: StoreMemoryRequest) =>
+    request<StoredMemory>("POST", `/projects/${projectId}/memories`, data),
 };
 
 // --- Health ---

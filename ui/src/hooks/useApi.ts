@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   adminAPI,
+  memoryAPI,
   healthAPI,
   type SetupRequest,
   type SetupResponse,
@@ -10,6 +11,7 @@ import {
   type Provider,
   type Setting,
   type Webhook,
+  type StoreMemoryRequest,
 } from "../api/client";
 
 // --- Health ---
@@ -47,6 +49,7 @@ export function useDashboard() {
   return useQuery({
     queryKey: ["admin", "dashboard"],
     queryFn: adminAPI.getDashboard,
+    refetchInterval: 30_000,
   });
 }
 
@@ -56,6 +59,26 @@ export function useActivity(limit = 50) {
   return useQuery({
     queryKey: ["admin", "activity", limit],
     queryFn: () => adminAPI.getActivity(limit),
+    refetchInterval: 30_000,
+  });
+}
+
+// --- Store Memory ---
+
+export function useStoreMemory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      data,
+    }: {
+      projectId: string;
+      data: StoreMemoryRequest;
+    }) => memoryAPI.store(projectId, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "dashboard"] });
+      qc.invalidateQueries({ queryKey: ["admin", "activity"] });
+    },
   });
 }
 
