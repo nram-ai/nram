@@ -55,15 +55,19 @@ async function request<T>(
 // --- Type definitions ---
 
 export interface SetupStatus {
-  completed: boolean;
-  steps: { id: string; label: string; completed: boolean }[];
+  setup_complete: boolean;
+  backend: "sqlite" | "postgres";
 }
 
 export interface SetupRequest {
-  admin_email: string;
-  admin_password: string;
-  org_name: string;
-  project_name: string;
+  email: string;
+  password: string;
+}
+
+export interface SetupResponse {
+  user: User;
+  api_key: string;
+  message: string;
 }
 
 export interface DashboardData {
@@ -166,7 +170,7 @@ export const adminAPI = {
   // Setup
   getSetupStatus: () => request<SetupStatus>("GET", "/admin/setup/status"),
   completeSetup: (data: SetupRequest) =>
-    request<void>("POST", "/admin/setup", data),
+    request<SetupResponse>("POST", "/admin/setup", data),
 
   // Dashboard
   getDashboard: () => request<DashboardData>("GET", "/admin/dashboard"),

@@ -1,4 +1,5 @@
-import { Routes, Route, NavLink } from "react-router-dom";
+import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
+import { useSetupStatus } from "./hooks/useApi";
 import Dashboard from "./pages/Dashboard";
 import SetupWizard from "./pages/SetupWizard";
 import MemoryBrowser from "./pages/MemoryBrowser";
@@ -25,7 +26,6 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: "/", label: "Dashboard", section: "Overview" },
-  { path: "/setup", label: "Setup Wizard", section: "Overview" },
   { path: "/memories", label: "Memory Browser", section: "Data" },
   { path: "/entities", label: "Entity Browser", section: "Data" },
   { path: "/graph", label: "Graph Visualization", section: "Data" },
@@ -54,7 +54,28 @@ function groupBySection(items: NavItem[]): Record<string, NavItem[]> {
   return groups;
 }
 
-function App() {
+function SetupGuard({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  const { data: status, isLoading } = useSetupStatus();
+
+  // While loading, show a minimal loading indicator
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="text-sm text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
+
+  // If setup is not complete and we are not already on /setup, redirect
+  if (status && !status.setup_complete && location.pathname !== "/setup") {
+    return <Navigate to="/setup" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+function AppLayout() {
   const sections = groupBySection(navItems);
 
   return (
@@ -97,7 +118,6 @@ function App() {
         <div className="p-6">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/setup" element={<SetupWizard />} />
             <Route path="/memories" element={<MemoryBrowser />} />
             <Route path="/projects" element={<ProjectManagement />} />
             <Route path="/organizations" element={<OrganizationManagement />} />
@@ -117,6 +137,17 @@ function App() {
         </div>
       </main>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <SetupGuard>
+      <Routes>
+        <Route path="/setup" element={<SetupWizard />} />
+        <Route path="/*" element={<AppLayout />} />
+      </Routes>
+    </SetupGuard>
   );
 }
 

@@ -3,6 +3,7 @@ import {
   adminAPI,
   healthAPI,
   type SetupRequest,
+  type SetupResponse,
   type Organization,
   type User,
   type Project,
@@ -32,7 +33,7 @@ export function useSetupStatus() {
 
 export function useCompleteSetup() {
   const qc = useQueryClient();
-  return useMutation({
+  return useMutation<SetupResponse, Error, SetupRequest>({
     mutationFn: (data: SetupRequest) => adminAPI.completeSetup(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "setup-status"] });
