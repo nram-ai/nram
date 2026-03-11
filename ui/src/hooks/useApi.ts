@@ -14,7 +14,6 @@ import {
   type Project,
   type ProjectUpdateRequest,
   type Provider,
-  type Setting,
   type Webhook,
   type StoreMemoryRequest,
   type MemoryListParams,
@@ -365,17 +364,25 @@ export function usePullOllamaModel() {
 
 // --- Settings ---
 
-export function useSettings() {
+export function useSettings(scope?: string) {
   return useQuery({
-    queryKey: ["admin", "settings"],
-    queryFn: adminAPI.getSettings,
+    queryKey: ["admin", "settings", scope],
+    queryFn: () => adminAPI.getSettings(scope),
   });
 }
 
-export function useUpdateSettings() {
+export function useSettingsSchema() {
+  return useQuery({
+    queryKey: ["admin", "settings-schema"],
+    queryFn: adminAPI.getSettingsSchema,
+  });
+}
+
+export function useUpdateSetting() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (settings: Setting[]) => adminAPI.updateSettings(settings),
+    mutationFn: ({ key, value, scope }: { key: string; value: unknown; scope: string }) =>
+      adminAPI.updateSetting(key, value, scope),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "settings"] });
     },

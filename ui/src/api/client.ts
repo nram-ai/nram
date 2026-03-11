@@ -351,9 +351,18 @@ export interface OllamaModel {
 
 export interface Setting {
   key: string;
-  value: string;
+  value: unknown;
+  scope: string;
+  updated_by?: string;
+  updated_at: string;
+}
+
+export interface SettingSchema {
+  key: string;
   type: string;
+  default_value: unknown;
   description: string;
+  category: string;
 }
 
 export interface Webhook {
@@ -466,9 +475,14 @@ export const adminAPI = {
     request<{ status: string }>("POST", "/admin/providers/ollama/pull", { model }),
 
   // Settings
-  getSettings: () => request<Setting[]>("GET", "/admin/settings"),
-  updateSettings: (settings: Setting[]) =>
-    request<void>("PUT", "/admin/settings", settings),
+  getSettings: (scope?: string) => {
+    const params = scope ? `?scope=${encodeURIComponent(scope)}` : "";
+    return request<{ data: Setting[] }>("GET", `/admin/settings${params}`);
+  },
+  getSettingsSchema: () =>
+    request<{ data: SettingSchema[] }>("GET", "/admin/settings?schema=true"),
+  updateSetting: (key: string, value: unknown, scope: string) =>
+    request<{ status: string }>("PUT", "/admin/settings", { key, value, scope }),
 
   // Webhooks
   listWebhooks: () => request<Webhook[]>("GET", "/admin/webhooks"),
