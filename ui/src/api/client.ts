@@ -316,6 +316,39 @@ export interface Provider {
   config: Record<string, unknown>;
 }
 
+export interface ProviderSlot {
+  slot: string;
+  configured: boolean;
+  type: string;
+  url: string;
+  model: string;
+  dimensions?: number;
+  api_key_set: boolean;
+  healthy: boolean;
+  last_health_check?: string;
+  avg_latency_ms?: number;
+}
+
+export interface UpdateProviderSlotRequest {
+  type: string;
+  url: string;
+  model: string;
+  api_key?: string;
+  dimensions?: number;
+}
+
+export interface TestProviderResult {
+  success: boolean;
+  latency_ms: number;
+  error?: string;
+}
+
+export interface OllamaModel {
+  name: string;
+  size: string;
+  modified_at: string;
+}
+
 export interface Setting {
   key: string;
   value: string;
@@ -409,7 +442,7 @@ export const adminAPI = {
   deleteProject: (id: string) =>
     request<void>("DELETE", `/admin/projects/${id}`),
 
-  // Providers
+  // Providers (legacy)
   listProviders: () => request<Provider[]>("GET", "/admin/providers"),
   getProvider: (id: string) =>
     request<Provider>("GET", `/admin/providers/${id}`),
@@ -419,6 +452,18 @@ export const adminAPI = {
     request<Provider>("PUT", `/admin/providers/${id}`, data),
   deleteProvider: (id: string) =>
     request<void>("DELETE", `/admin/providers/${id}`),
+
+  // Provider slots
+  getProviderSlots: () =>
+    request<ProviderSlot[]>("GET", "/admin/providers"),
+  updateProviderSlot: (slot: string, data: UpdateProviderSlotRequest) =>
+    request<ProviderSlot>("PUT", `/admin/providers/${slot}`, data),
+  testProviderSlot: (slot: string) =>
+    request<TestProviderResult>("POST", `/admin/providers/${slot}/test`),
+  getOllamaModels: () =>
+    request<{ models: OllamaModel[] }>("GET", "/admin/providers/ollama/models"),
+  pullOllamaModel: (model: string) =>
+    request<{ status: string }>("POST", "/admin/providers/ollama/pull", { model }),
 
   // Settings
   getSettings: () => request<Setting[]>("GET", "/admin/settings"),

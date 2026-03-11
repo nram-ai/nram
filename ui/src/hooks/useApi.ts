@@ -22,6 +22,8 @@ import {
   type MemoryUpdateRequest,
   type ForgetRequest,
   type EnrichRequest,
+  type UpdateProviderSlotRequest,
+  type TestProviderResult,
 } from "../api/client";
 
 // --- Health ---
@@ -308,6 +310,55 @@ export function useDeleteProvider() {
     mutationFn: (id: string) => adminAPI.deleteProvider(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "providers"] });
+    },
+  });
+}
+
+// --- Provider Slots ---
+
+export function useProviderSlots() {
+  return useQuery({
+    queryKey: ["admin", "provider-slots"],
+    queryFn: adminAPI.getProviderSlots,
+  });
+}
+
+export function useUpdateProviderSlot() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      slot,
+      data,
+    }: {
+      slot: string;
+      data: UpdateProviderSlotRequest;
+    }) => adminAPI.updateProviderSlot(slot, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "provider-slots"] });
+    },
+  });
+}
+
+export function useTestProviderSlot() {
+  return useMutation<TestProviderResult, Error, string>({
+    mutationFn: (slot: string) => adminAPI.testProviderSlot(slot),
+  });
+}
+
+export function useOllamaModels() {
+  return useQuery({
+    queryKey: ["admin", "ollama-models"],
+    queryFn: adminAPI.getOllamaModels,
+    enabled: false,
+  });
+}
+
+export function usePullOllamaModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (model: string) => adminAPI.pullOllamaModel(model),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "ollama-models"] });
     },
   });
 }
