@@ -513,6 +513,16 @@ export function useTestExtractionPrompt() {
   });
 }
 
+// --- Graph ---
+
+export function useGraph(projectId: string) {
+  return useQuery({
+    queryKey: ["admin", "graph", projectId],
+    queryFn: () => adminAPI.getGraph(projectId),
+    enabled: !!projectId,
+  });
+}
+
 // --- Namespaces ---
 
 export function useNamespaceTree() {

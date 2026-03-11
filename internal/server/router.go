@@ -72,6 +72,7 @@ type Handlers struct {
 	AdminUsage       http.HandlerFunc
 	AdminNamespaces  http.HandlerFunc
 	AdminDatabase    http.HandlerFunc
+	AdminGraph       http.HandlerFunc
 }
 
 // notImplemented returns a handler that responds with 501 Not Implemented.
@@ -178,6 +179,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Get("/analytics", handler(handlers.AdminAnalytics))
 			r.Get("/usage", handler(handlers.AdminUsage))
 			r.Get("/namespaces/tree", handler(handlers.AdminNamespaces))
+			r.Get("/graph", handler(handlers.AdminGraph))
 			r.HandleFunc("/database", handler(handlers.AdminDatabase))
 			r.HandleFunc("/database/*", handler(handlers.AdminDatabase))
 		})

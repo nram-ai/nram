@@ -170,6 +170,26 @@ func (r *RelationshipRepo) TraverseFromEntity(ctx context.Context, entityID uuid
 	return result, nil
 }
 
+// ListByNamespace returns all relationships for a namespace, ordered by created_at DESC.
+func (r *RelationshipRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.Relationship, error) {
+	query := selectRelationshipColumns + ` FROM relationships
+		WHERE namespace_id = ?
+		ORDER BY created_at DESC`
+	if r.db.Backend() == BackendPostgres {
+		query = selectRelationshipColumns + ` FROM relationships
+			WHERE namespace_id = $1
+			ORDER BY created_at DESC`
+	}
+
+	rows, err := r.db.Query(ctx, query, namespaceID.String())
+	if err != nil {
+		return nil, fmt.Errorf("relationship list by namespace: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanRelationships(rows)
+}
+
 // ListByEntity returns all relationships where the given entity is either
 // the source or the target, ordered by created_at DESC.
 func (r *RelationshipRepo) ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.Relationship, error) {

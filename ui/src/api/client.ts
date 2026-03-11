@@ -459,6 +459,30 @@ export interface ExtractionTestResult {
   latency_ms: number;
 }
 
+export interface GraphEntity {
+  id: string;
+  name: string;
+  canonical: string;
+  entity_type: string;
+  mention_count: number;
+  aliases: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GraphRelationship {
+  id: string;
+  source_id: string;
+  target_id: string;
+  relation: string;
+  weight: number;
+}
+
+export interface GraphData {
+  entities: GraphEntity[];
+  relationships: GraphRelationship[];
+}
+
 export interface PaginatedResponse<T> {
   data: T[];
   total: number;
@@ -587,6 +611,10 @@ export const adminAPI = {
       prompt,
       sample_input: sampleInput,
     }),
+
+  // Graph
+  getGraph: (projectId: string) =>
+    request<GraphData>("GET", `/admin/graph?project=${encodeURIComponent(projectId)}`),
 
   // Namespaces
   getNamespaceTree: () =>
