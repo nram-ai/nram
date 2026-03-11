@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -72,7 +73,7 @@ func TestEnrichHandler_ByIDs_Success(t *testing.T) {
 		},
 	}
 
-	router := newEnrichRouter(NewEnrichHandler(svc))
+	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 	body := map[string]interface{}{
 		"ids":      []string{id1.String(), id2.String()},
 		"priority": 5,
@@ -117,7 +118,7 @@ func TestEnrichHandler_All_Success(t *testing.T) {
 		},
 	}
 
-	router := newEnrichRouter(NewEnrichHandler(svc))
+	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 	body := map[string]interface{}{
 		"all": true,
 	}
@@ -142,7 +143,7 @@ func TestEnrichHandler_All_Success(t *testing.T) {
 
 func TestEnrichHandler_MissingIDsAndAll(t *testing.T) {
 	svc := &mockEnrichService{}
-	router := newEnrichRouter(NewEnrichHandler(svc))
+	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 
 	projectID := uuid.New()
 	body := map[string]interface{}{
@@ -166,7 +167,7 @@ func TestEnrichHandler_MissingIDsAndAll(t *testing.T) {
 
 func TestEnrichHandler_InvalidProjectID(t *testing.T) {
 	svc := &mockEnrichService{}
-	router := newEnrichRouter(NewEnrichHandler(svc))
+	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 
 	body := map[string]interface{}{
 		"all": true,
@@ -193,7 +194,7 @@ func TestEnrichHandler_ServiceError_NotFound(t *testing.T) {
 			return nil, fmt.Errorf("project not found: record does not exist")
 		},
 	}
-	router := newEnrichRouter(NewEnrichHandler(svc))
+	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 
 	projectID := uuid.New()
 	body := map[string]interface{}{
@@ -221,7 +222,7 @@ func TestEnrichHandler_ServiceError_Internal(t *testing.T) {
 			return nil, fmt.Errorf("database connection lost")
 		},
 	}
-	router := newEnrichRouter(NewEnrichHandler(svc))
+	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 
 	projectID := uuid.New()
 	body := map[string]interface{}{
@@ -240,5 +241,91 @@ func TestEnrichHandler_ServiceError_Internal(t *testing.T) {
 	}
 	if envelope.Error == nil || envelope.Error.Code != "internal_error" {
 		t.Errorf("expected internal_error, got %+v", envelope.Error)
+	}
+}
+
+func TestEnrichHandler_EmitsMemoryEnrichedEvent(t *testing.T) {
+	bus := events.NewMemoryBus()
+	defer bus.Close()
+
+	ch, cancel, err := bus.Subscribe(context.Background(), "")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+
+	id1 := uuid.New()
+	projectID := uuid.New()
+
+	svc := &mockEnrichService{
+		enrichFn: func(ctx context.Context, req *service.EnrichRequest) (*service.EnrichResponse, error) {
+			return &service.EnrichResponse{Queued: 1, Skipped: 0, LatencyMs: 5}, nil
+		},
+	}
+
+	router := newEnrichRouter(NewEnrichHandler(svc, bus))
+
+	body := map[string]interface{}{
+		"ids": []string{id1.String()},
+	}
+
+	w := doEnrichRequest(router, projectID.String(), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Type != events.MemoryEnriched {
+			t.Errorf("expected event type %s, got %s", events.MemoryEnriched, ev.Type)
+		}
+		if ev.Scope != "project:"+projectID.String() {
+			t.Errorf("expected scope project:%s, got %s", projectID, ev.Scope)
+		}
+	default:
+		t.Fatal("expected memory.enriched event to be emitted")
+	}
+}
+
+func TestEnrichHandler_EmitsEnrichmentFailedEvent(t *testing.T) {
+	bus := events.NewMemoryBus()
+	defer bus.Close()
+
+	ch, cancel, err := bus.Subscribe(context.Background(), "")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+
+	id1 := uuid.New()
+	projectID := uuid.New()
+
+	svc := &mockEnrichService{
+		enrichFn: func(ctx context.Context, req *service.EnrichRequest) (*service.EnrichResponse, error) {
+			return nil, fmt.Errorf("database connection lost")
+		},
+	}
+
+	router := newEnrichRouter(NewEnrichHandler(svc, bus))
+
+	body := map[string]interface{}{
+		"ids": []string{id1.String()},
+	}
+
+	w := doEnrichRequest(router, projectID.String(), body)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d: %s", w.Code, w.Body.String())
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Type != events.EnrichmentFailed {
+			t.Errorf("expected event type %s, got %s", events.EnrichmentFailed, ev.Type)
+		}
+		if ev.Scope != "project:"+projectID.String() {
+			t.Errorf("expected scope project:%s, got %s", projectID, ev.Scope)
+		}
+	default:
+		t.Fatal("expected enrichment.failed event to be emitted")
 	}
 }

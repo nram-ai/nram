@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -56,7 +57,7 @@ func doBatchStoreRequest(router http.Handler, projectID string, body interface{}
 
 func TestBatchStoreHandler_Success(t *testing.T) {
 	svc := &mockBatchStoreService{}
-	router := newBatchStoreRouter(NewBatchStoreHandler(svc))
+	router := newBatchStoreRouter(NewBatchStoreHandler(svc, nil))
 
 	projectID := uuid.New()
 	userID := uuid.New()
@@ -97,7 +98,7 @@ func TestBatchStoreHandler_Success(t *testing.T) {
 
 func TestBatchStoreHandler_EmptyItems(t *testing.T) {
 	svc := &mockBatchStoreService{}
-	router := newBatchStoreRouter(NewBatchStoreHandler(svc))
+	router := newBatchStoreRouter(NewBatchStoreHandler(svc, nil))
 
 	projectID := uuid.New()
 	body := map[string]interface{}{
@@ -121,7 +122,7 @@ func TestBatchStoreHandler_EmptyItems(t *testing.T) {
 
 func TestBatchStoreHandler_InvalidProjectID(t *testing.T) {
 	svc := &mockBatchStoreService{}
-	router := newBatchStoreRouter(NewBatchStoreHandler(svc))
+	router := newBatchStoreRouter(NewBatchStoreHandler(svc, nil))
 
 	body := map[string]interface{}{
 		"items": []map[string]interface{}{
@@ -150,7 +151,7 @@ func TestBatchStoreHandler_ServiceError_ProjectNotFound(t *testing.T) {
 			return nil, fmt.Errorf("project not found: record not found")
 		},
 	}
-	router := newBatchStoreRouter(NewBatchStoreHandler(svc))
+	router := newBatchStoreRouter(NewBatchStoreHandler(svc, nil))
 
 	projectID := uuid.New()
 	body := map[string]interface{}{
@@ -187,7 +188,7 @@ func TestBatchStoreHandler_PartialSuccess(t *testing.T) {
 			}, nil
 		},
 	}
-	router := newBatchStoreRouter(NewBatchStoreHandler(svc))
+	router := newBatchStoreRouter(NewBatchStoreHandler(svc, nil))
 
 	projectID := uuid.New()
 	userID := uuid.New()
@@ -223,5 +224,49 @@ func TestBatchStoreHandler_PartialSuccess(t *testing.T) {
 	}
 	if resp.Errors[0].Index != 1 {
 		t.Errorf("expected error index=1, got %d", resp.Errors[0].Index)
+	}
+}
+
+func TestBatchStoreHandler_EmitsMemoryCreatedEvents(t *testing.T) {
+	bus := events.NewMemoryBus()
+	defer bus.Close()
+
+	ch, cancel, err := bus.Subscribe(context.Background(), "")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+
+	svc := &mockBatchStoreService{}
+	router := newBatchStoreRouter(NewBatchStoreHandler(svc, bus))
+
+	projectID := uuid.New()
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+
+	body := map[string]interface{}{
+		"items": []map[string]interface{}{
+			{"content": "first memory"},
+			{"content": "second memory"},
+		},
+	}
+
+	w := doBatchStoreRequest(router, projectID.String(), body, ac)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The mock returns MemoriesCreated=2, so we expect 2 events.
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type != events.MemoryCreated {
+				t.Errorf("event %d: expected type %s, got %s", i, events.MemoryCreated, ev.Type)
+			}
+			if ev.Scope != "project:"+projectID.String() {
+				t.Errorf("event %d: expected scope project:%s, got %s", i, projectID, ev.Scope)
+			}
+		default:
+			t.Fatalf("expected event %d to be emitted", i)
+		}
 	}
 }

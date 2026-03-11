@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
@@ -128,7 +129,7 @@ func doStoreRequest(router http.Handler, projectID string, body interface{}, ac 
 
 func TestStoreHandler_Success(t *testing.T) {
 	svc := newTestStoreService(&mockProjectRepo{})
-	router := newTestRouter(NewStoreHandler(svc))
+	router := newTestRouter(NewStoreHandler(svc, nil))
 
 	projectID := uuid.New()
 	userID := uuid.New()
@@ -164,7 +165,7 @@ func TestStoreHandler_Success(t *testing.T) {
 
 func TestStoreHandler_MissingContent(t *testing.T) {
 	svc := newTestStoreService(&mockProjectRepo{})
-	router := newTestRouter(NewStoreHandler(svc))
+	router := newTestRouter(NewStoreHandler(svc, nil))
 
 	projectID := uuid.New()
 	body := map[string]interface{}{
@@ -188,7 +189,7 @@ func TestStoreHandler_MissingContent(t *testing.T) {
 
 func TestStoreHandler_InvalidProjectID(t *testing.T) {
 	svc := newTestStoreService(&mockProjectRepo{})
-	router := newTestRouter(NewStoreHandler(svc))
+	router := newTestRouter(NewStoreHandler(svc, nil))
 
 	body := map[string]interface{}{
 		"content": "test content",
@@ -214,7 +215,7 @@ func TestStoreHandler_ServiceError_ProjectNotFound(t *testing.T) {
 		err: fmt.Errorf("record not found"),
 	}
 	svc := newTestStoreService(projectRepo)
-	router := newTestRouter(NewStoreHandler(svc))
+	router := newTestRouter(NewStoreHandler(svc, nil))
 
 	projectID := uuid.New()
 	body := map[string]interface{}{
@@ -252,7 +253,7 @@ func TestStoreHandler_ServiceError_Internal(t *testing.T) {
 		&mockVectorStore{},
 		func() provider.EmbeddingProvider { return nil },
 	)
-	router := newTestRouter(NewStoreHandler(svc))
+	router := newTestRouter(NewStoreHandler(svc, nil))
 
 	projectID := uuid.New()
 	body := map[string]interface{}{
@@ -276,7 +277,7 @@ func TestStoreHandler_ServiceError_Internal(t *testing.T) {
 
 func TestStoreHandler_InvalidJSON(t *testing.T) {
 	svc := newTestStoreService(&mockProjectRepo{})
-	router := newTestRouter(NewStoreHandler(svc))
+	router := newTestRouter(NewStoreHandler(svc, nil))
 
 	projectID := uuid.New()
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID.String()+"/memories",
@@ -288,5 +289,44 @@ func TestStoreHandler_InvalidJSON(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestStoreHandler_EmitsMemoryCreatedEvent(t *testing.T) {
+	bus := events.NewMemoryBus()
+	defer bus.Close()
+
+	ch, cancel, err := bus.Subscribe(context.Background(), "")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+
+	svc := newTestStoreService(&mockProjectRepo{})
+	router := newTestRouter(NewStoreHandler(svc, bus))
+
+	projectID := uuid.New()
+	userID := uuid.New()
+	ac := &auth.AuthContext{UserID: userID, Role: "user"}
+
+	body := map[string]interface{}{
+		"content": "test event emission",
+	}
+
+	w := doStoreRequest(router, projectID.String(), body, ac)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Type != events.MemoryCreated {
+			t.Errorf("expected event type %s, got %s", events.MemoryCreated, ev.Type)
+		}
+		if ev.Scope != "project:"+projectID.String() {
+			t.Errorf("expected scope project:%s, got %s", projectID, ev.Scope)
+		}
+	default:
+		t.Fatal("expected memory.created event to be emitted")
 	}
 }

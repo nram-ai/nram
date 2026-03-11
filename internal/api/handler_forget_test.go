@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -92,7 +93,7 @@ func TestBulkForgetHandler_Success(t *testing.T) {
 		},
 	}
 
-	router := newBulkForgetRouter(NewBulkForgetHandler(svc))
+	router := newBulkForgetRouter(NewBulkForgetHandler(svc, nil))
 	userID := uuid.New()
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
@@ -121,7 +122,7 @@ func TestBulkForgetHandler_Success(t *testing.T) {
 
 func TestBulkForgetHandler_MissingFilters(t *testing.T) {
 	svc := &mockForgetService{}
-	router := newBulkForgetRouter(NewBulkForgetHandler(svc))
+	router := newBulkForgetRouter(NewBulkForgetHandler(svc, nil))
 	projectID := uuid.New()
 
 	// Body with no ids and no tags.
@@ -146,7 +147,7 @@ func TestBulkForgetHandler_MissingFilters(t *testing.T) {
 
 func TestBulkForgetHandler_InvalidProjectID(t *testing.T) {
 	svc := &mockForgetService{}
-	router := newBulkForgetRouter(NewBulkForgetHandler(svc))
+	router := newBulkForgetRouter(NewBulkForgetHandler(svc, nil))
 
 	body := map[string]interface{}{
 		"ids": []string{uuid.New().String()},
@@ -189,7 +190,7 @@ func TestDeleteHandler_Success(t *testing.T) {
 		},
 	}
 
-	router := newDeleteRouter(NewDeleteHandler(svc))
+	router := newDeleteRouter(NewDeleteHandler(svc, nil))
 	userID := uuid.New()
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
@@ -213,7 +214,7 @@ func TestDeleteHandler_Success(t *testing.T) {
 
 func TestDeleteHandler_InvalidMemoryID(t *testing.T) {
 	svc := &mockForgetService{}
-	router := newDeleteRouter(NewDeleteHandler(svc))
+	router := newDeleteRouter(NewDeleteHandler(svc, nil))
 	projectID := uuid.New()
 
 	w := doDeleteRequest(router, "/v1/projects/"+projectID.String()+"/memories/not-a-uuid", nil)
@@ -266,7 +267,7 @@ func TestForgetHandler_ServiceErrorMapping(t *testing.T) {
 				},
 			}
 
-			router := newBulkForgetRouter(NewBulkForgetHandler(svc))
+			router := newBulkForgetRouter(NewBulkForgetHandler(svc, nil))
 			projectID := uuid.New()
 			body := map[string]interface{}{
 				"ids": []string{uuid.New().String()},
@@ -304,7 +305,7 @@ func TestBulkForgetHandler_TagsOnly(t *testing.T) {
 		},
 	}
 
-	router := newBulkForgetRouter(NewBulkForgetHandler(svc))
+	router := newBulkForgetRouter(NewBulkForgetHandler(svc, nil))
 
 	body := map[string]interface{}{
 		"tags": []string{"obsolete", "temp"},
@@ -314,5 +315,88 @@ func TestBulkForgetHandler_TagsOnly(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteHandler_EmitsMemoryDeletedEvent(t *testing.T) {
+	bus := events.NewMemoryBus()
+	defer bus.Close()
+
+	ch, cancel, err := bus.Subscribe(context.Background(), "")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+
+	projectID := uuid.New()
+	memoryID := uuid.New()
+
+	svc := &mockForgetService{
+		forgetFn: func(ctx context.Context, req *service.ForgetRequest) (*service.ForgetResponse, error) {
+			return &service.ForgetResponse{Deleted: 1, LatencyMs: 5}, nil
+		},
+	}
+
+	router := newDeleteRouter(NewDeleteHandler(svc, bus))
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+
+	w := doDeleteRequest(router, "/v1/projects/"+projectID.String()+"/memories/"+memoryID.String(), ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Type != events.MemoryDeleted {
+			t.Errorf("expected event type %s, got %s", events.MemoryDeleted, ev.Type)
+		}
+		if ev.Scope != "project:"+projectID.String() {
+			t.Errorf("expected scope project:%s, got %s", projectID, ev.Scope)
+		}
+	default:
+		t.Fatal("expected memory.deleted event to be emitted")
+	}
+}
+
+func TestBulkForgetHandler_EmitsMemoryDeletedEvents(t *testing.T) {
+	bus := events.NewMemoryBus()
+	defer bus.Close()
+
+	ch, cancel, err := bus.Subscribe(context.Background(), "")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+
+	projectID := uuid.New()
+	id1 := uuid.New()
+	id2 := uuid.New()
+
+	svc := &mockForgetService{
+		forgetFn: func(ctx context.Context, req *service.ForgetRequest) (*service.ForgetResponse, error) {
+			return &service.ForgetResponse{Deleted: 2, LatencyMs: 10}, nil
+		},
+	}
+
+	router := newBulkForgetRouter(NewBulkForgetHandler(svc, bus))
+
+	body := map[string]interface{}{
+		"ids": []string{id1.String(), id2.String()},
+	}
+
+	w := doBulkForgetRequest(router, "/v1/projects/"+projectID.String()+"/memories/forget", body, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type != events.MemoryDeleted {
+				t.Errorf("event %d: expected type %s, got %s", i, events.MemoryDeleted, ev.Type)
+			}
+		default:
+			t.Fatalf("expected event %d to be emitted", i)
+		}
 	}
 }

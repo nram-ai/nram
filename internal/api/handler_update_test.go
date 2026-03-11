@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -80,7 +81,7 @@ func TestUpdateHandler_ContentSuccess(t *testing.T) {
 		},
 	}
 
-	router := newUpdateTestRouter(NewUpdateHandler(svc))
+	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 	body := map[string]interface{}{
 		"content": "updated content",
@@ -137,7 +138,7 @@ func TestUpdateHandler_TagsOnlySuccess(t *testing.T) {
 		},
 	}
 
-	router := newUpdateTestRouter(NewUpdateHandler(svc))
+	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
 	body := map[string]interface{}{
 		"tags": []string{"new", "tags"},
 	}
@@ -167,7 +168,7 @@ func TestUpdateHandler_MissingAllFields(t *testing.T) {
 		},
 	}
 
-	router := newUpdateTestRouter(NewUpdateHandler(svc))
+	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
 	body := map[string]interface{}{}
 
 	w := doUpdateRequest(router, projectID.String(), memoryID.String(), body, nil)
@@ -189,7 +190,7 @@ func TestUpdateHandler_InvalidProjectID(t *testing.T) {
 	memoryID := uuid.New()
 	svc := &mockUpdateService{}
 
-	router := newUpdateTestRouter(NewUpdateHandler(svc))
+	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
 	body := map[string]interface{}{
 		"content": "test",
 	}
@@ -213,7 +214,7 @@ func TestUpdateHandler_InvalidMemoryID(t *testing.T) {
 	projectID := uuid.New()
 	svc := &mockUpdateService{}
 
-	router := newUpdateTestRouter(NewUpdateHandler(svc))
+	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
 	body := map[string]interface{}{
 		"content": "test",
 	}
@@ -243,7 +244,7 @@ func TestUpdateHandler_ServiceError_NotFound(t *testing.T) {
 		},
 	}
 
-	router := newUpdateTestRouter(NewUpdateHandler(svc))
+	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
 	body := map[string]interface{}{
 		"content": "test",
 	}
@@ -260,5 +261,44 @@ func TestUpdateHandler_ServiceError_NotFound(t *testing.T) {
 	}
 	if envelope.Error == nil || envelope.Error.Code != "not_found" {
 		t.Errorf("expected not_found error, got %+v", envelope.Error)
+	}
+}
+
+func TestUpdateHandler_EmitsMemoryUpdatedEvent(t *testing.T) {
+	bus := events.NewMemoryBus()
+	defer bus.Close()
+
+	ch, cancel, err := bus.Subscribe(context.Background(), "")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+
+	projectID := uuid.New()
+	memoryID := uuid.New()
+
+	svc := &mockUpdateService{}
+	router := newUpdateTestRouter(NewUpdateHandler(svc, bus))
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+
+	body := map[string]interface{}{
+		"content": "updated content",
+	}
+
+	w := doUpdateRequest(router, projectID.String(), memoryID.String(), body, ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Type != events.MemoryUpdated {
+			t.Errorf("expected event type %s, got %s", events.MemoryUpdated, ev.Type)
+		}
+		if ev.Scope != "project:"+projectID.String() {
+			t.Errorf("expected scope project:%s, got %s", projectID, ev.Scope)
+		}
+	default:
+		t.Fatal("expected memory.updated event to be emitted")
 	}
 }

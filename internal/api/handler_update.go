@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -26,7 +27,7 @@ type updateRequestBody struct {
 
 // NewUpdateHandler returns an http.HandlerFunc that accepts a PUT request to
 // update an existing memory within a project. It delegates to the given UpdateServicer.
-func NewUpdateHandler(svc UpdateServicer) http.HandlerFunc {
+func NewUpdateHandler(svc UpdateServicer, bus events.EventBus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Parse and validate project_id from the URL.
 		projectIDStr := chi.URLParam(r, "project_id")
@@ -73,6 +74,11 @@ func NewUpdateHandler(svc UpdateServicer) http.HandlerFunc {
 			mapUpdateError(w, err)
 			return
 		}
+
+		events.Emit(r.Context(), bus, events.MemoryUpdated, "project:"+projectID.String(), map[string]string{
+			"memory_id":  memoryID.String(),
+			"project_id": projectID.String(),
+		})
 
 		writeJSON(w, http.StatusOK, resp)
 	}

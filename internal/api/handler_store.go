@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -28,7 +29,7 @@ type storeBodyOpts struct {
 
 // NewStoreHandler returns an http.HandlerFunc that accepts a POST request to
 // create a new memory within a project. It delegates to the given StoreService.
-func NewStoreHandler(svc *service.StoreService) http.HandlerFunc {
+func NewStoreHandler(svc *service.StoreService, bus events.EventBus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Parse and validate project_id from the URL.
 		projectIDStr := chi.URLParam(r, "project_id")
@@ -90,6 +91,11 @@ func NewStoreHandler(svc *service.StoreService) http.HandlerFunc {
 			}
 			return
 		}
+
+		events.Emit(r.Context(), bus, events.MemoryCreated, "project:"+projectID.String(), map[string]string{
+			"memory_id":  resp.ID.String(),
+			"project_id": projectID.String(),
+		})
 
 		writeJSON(w, http.StatusCreated, resp)
 	}

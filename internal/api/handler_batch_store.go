@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -25,7 +26,7 @@ type batchStoreRequestBody struct {
 
 // NewBatchStoreHandler returns an http.HandlerFunc that accepts a POST request to
 // create multiple memories in batch within a project.
-func NewBatchStoreHandler(svc BatchStoreServicer) http.HandlerFunc {
+func NewBatchStoreHandler(svc BatchStoreServicer, bus events.EventBus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Parse and validate project_id from the URL.
 		projectIDStr := chi.URLParam(r, "project_id")
@@ -82,6 +83,13 @@ func NewBatchStoreHandler(svc BatchStoreServicer) http.HandlerFunc {
 				WriteError(w, ErrInternal(msg))
 			}
 			return
+		}
+
+		scope := "project:" + projectID.String()
+		for i := 0; i < resp.MemoriesCreated; i++ {
+			events.Emit(r.Context(), bus, events.MemoryCreated, scope, map[string]string{
+				"project_id": projectID.String(),
+			})
 		}
 
 		writeJSON(w, http.StatusCreated, resp)

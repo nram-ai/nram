@@ -5,12 +5,13 @@ import (
 	"net/http"
 	"strings"
 
+	"context"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/service"
-
-	"context"
 )
 
 // ForgetServicer defines the interface for forget/delete operations, allowing mocking in tests.
@@ -41,7 +42,7 @@ func mapForgetError(w http.ResponseWriter, err error) {
 
 // NewBulkForgetHandler returns an http.HandlerFunc that accepts a POST request to
 // bulk forget (delete) memories within a project by IDs or tag filters.
-func NewBulkForgetHandler(svc ForgetServicer) http.HandlerFunc {
+func NewBulkForgetHandler(svc ForgetServicer, bus events.EventBus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Parse and validate project_id from the URL.
 		projectIDStr := chi.URLParam(r, "project_id")
@@ -85,13 +86,29 @@ func NewBulkForgetHandler(svc ForgetServicer) http.HandlerFunc {
 			return
 		}
 
+		scope := "project:" + projectID.String()
+		if len(body.IDs) > 0 {
+			for _, id := range body.IDs {
+				events.Emit(r.Context(), bus, events.MemoryDeleted, scope, map[string]string{
+					"memory_id":  id.String(),
+					"project_id": projectID.String(),
+				})
+			}
+		} else {
+			for i := 0; i < resp.Deleted; i++ {
+				events.Emit(r.Context(), bus, events.MemoryDeleted, scope, map[string]string{
+					"project_id": projectID.String(),
+				})
+			}
+		}
+
 		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
 // NewDeleteHandler returns an http.HandlerFunc that accepts a DELETE request to
 // soft-delete a single memory by its ID within a project.
-func NewDeleteHandler(svc ForgetServicer) http.HandlerFunc {
+func NewDeleteHandler(svc ForgetServicer, bus events.EventBus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Parse and validate project_id from the URL.
 		projectIDStr := chi.URLParam(r, "project_id")
@@ -128,6 +145,11 @@ func NewDeleteHandler(svc ForgetServicer) http.HandlerFunc {
 			mapForgetError(w, err)
 			return
 		}
+
+		events.Emit(r.Context(), bus, events.MemoryDeleted, "project:"+projectID.String(), map[string]string{
+			"memory_id":  memoryID.String(),
+			"project_id": projectID.String(),
+		})
 
 		writeJSON(w, http.StatusOK, resp)
 	}
