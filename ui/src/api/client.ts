@@ -175,12 +175,35 @@ export interface EnrichRequest {
   ids: string[];
 }
 
+export interface OrgUser {
+  id: string;
+  email: string;
+  display_name?: string;
+  role: string;
+}
+
 export interface Organization {
   id: string;
   name: string;
   slug: string;
+  user_count: number;
+  memory_count: number;
+  project_count?: number;
+  settings?: Record<string, unknown>;
+  users?: OrgUser[];
+  owners?: OrgUser[];
   created_at: string;
   updated_at: string;
+}
+
+export interface CreateOrgRequest {
+  name: string;
+  slug: string;
+}
+
+export interface UpdateOrgRequest {
+  name?: string;
+  settings?: Record<string, unknown>;
 }
 
 export interface User {
@@ -307,9 +330,9 @@ export const adminAPI = {
   // Organizations
   listOrgs: () => request<Organization[]>("GET", "/admin/orgs"),
   getOrg: (id: string) => request<Organization>("GET", `/admin/orgs/${id}`),
-  createOrg: (data: Partial<Organization>) =>
+  createOrg: (data: CreateOrgRequest) =>
     request<Organization>("POST", "/admin/orgs", data),
-  updateOrg: (id: string, data: Partial<Organization>) =>
+  updateOrg: (id: string, data: UpdateOrgRequest) =>
     request<Organization>("PUT", `/admin/orgs/${id}`, data),
   deleteOrg: (id: string) => request<void>("DELETE", `/admin/orgs/${id}`),
 

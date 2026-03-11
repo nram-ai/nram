@@ -5,7 +5,8 @@ import {
   healthAPI,
   type SetupRequest,
   type SetupResponse,
-  type Organization,
+  type CreateOrgRequest,
+  type UpdateOrgRequest,
   type User,
   type Project,
   type ProjectUpdateRequest,
@@ -108,7 +109,7 @@ export function useOrg(id: string) {
 export function useCreateOrg() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: Partial<Organization>) => adminAPI.createOrg(data),
+    mutationFn: (data: CreateOrgRequest) => adminAPI.createOrg(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "orgs"] });
     },
@@ -118,10 +119,11 @@ export function useCreateOrg() {
 export function useUpdateOrg() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Organization> }) =>
+    mutationFn: ({ id, data }: { id: string; data: UpdateOrgRequest }) =>
       adminAPI.updateOrg(id, data),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["admin", "orgs"] });
+      qc.invalidateQueries({ queryKey: ["admin", "orgs", vars.id] });
     },
   });
 }
