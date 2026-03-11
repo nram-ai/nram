@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/nram-ai/nram/internal/config"
+	"github.com/nram-ai/nram/internal/migration"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -44,6 +45,28 @@ func main() {
 	defer db.Close()
 
 	log.Printf("database backend: %s", db.Backend())
+
+	// Handle migration CLI commands before starting the server.
+	handled, err := migration.RunCLI(os.Args, db.DB(), db.Backend())
+	if err != nil {
+		log.Fatalf("migration command failed: %v", err)
+	}
+	if handled {
+		return
+	}
+
+	// Auto-migrate on startup if configured.
+	if cfg.Database.MigrateOnStart {
+		m, err := migration.NewMigrator(db.DB(), db.Backend())
+		if err != nil {
+			log.Fatalf("failed to create migrator: %v", err)
+		}
+		if err := m.Up(); err != nil {
+			log.Fatalf("auto-migration failed: %v", err)
+		}
+		m.Close()
+		log.Println("migrations applied successfully")
+	}
 
 	r := chi.NewRouter()
 
