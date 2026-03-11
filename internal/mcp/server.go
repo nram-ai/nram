@@ -30,6 +30,11 @@ type NamespaceRepo interface {
 	Create(ctx context.Context, ns *model.Namespace) error
 }
 
+// OrgRepo defines the organization lookup operations needed by MCP tool handlers.
+type OrgRepo interface {
+	GetBySlug(ctx context.Context, slug string) (*model.Organization, error)
+}
+
 // EntityReader provides entity lookup operations for MCP tool handlers.
 type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
@@ -56,6 +61,7 @@ type Dependencies struct {
 	ProjectRepo   ProjectRepo
 	UserRepo      UserRepo
 	NamespaceRepo NamespaceRepo
+	OrgRepo       OrgRepo
 	EntityReader  EntityReader
 	Traverser     RelationshipTraverser
 	EventBus      events.EventBus
@@ -105,6 +111,7 @@ func NewServer(deps Dependencies) *Server {
 
 	RegisterStoreTools(s)
 	RegisterUpdateGetTools(s)
+	RegisterRecallTool(s)
 
 	return s
 }
