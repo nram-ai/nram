@@ -23,6 +23,7 @@ import {
   type EnrichRequest,
   type UpdateProviderSlotRequest,
   type TestProviderResult,
+  type ExtractionTestResult,
 } from "../api/client";
 
 // --- Health ---
@@ -478,6 +479,17 @@ export function useEnrichmentStatus() {
     queryKey: ["admin", "enrichment"],
     queryFn: adminAPI.getEnrichmentStatus,
     refetchInterval: 10_000,
+  });
+}
+
+export function useTestExtractionPrompt() {
+  return useMutation<
+    ExtractionTestResult,
+    Error,
+    { type: "fact" | "entity"; prompt: string; sampleInput: string }
+  >({
+    mutationFn: ({ type, prompt, sampleInput }) =>
+      adminAPI.testExtractionPrompt(type, prompt, sampleInput),
   });
 }
 

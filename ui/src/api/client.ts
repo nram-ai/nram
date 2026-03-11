@@ -428,6 +428,13 @@ export interface EnrichmentQueueStatus {
   failed: number;
 }
 
+export interface ExtractionTestResult {
+  output: string;
+  parsed: unknown;
+  error?: string;
+  latency_ms: number;
+}
+
 export interface PaginatedResponse<T> {
   data: T[];
   total: number;
@@ -542,6 +549,16 @@ export const adminAPI = {
   // Enrichment
   getEnrichmentStatus: () =>
     request<EnrichmentQueueStatus>("GET", "/admin/enrichment"),
+  testExtractionPrompt: (
+    type: "fact" | "entity",
+    prompt: string,
+    sampleInput: string,
+  ) =>
+    request<ExtractionTestResult>("POST", "/admin/enrichment/test-prompt", {
+      type,
+      prompt,
+      sample_input: sampleInput,
+    }),
 
   // Namespaces
   getNamespaceTree: () =>

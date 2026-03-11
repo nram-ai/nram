@@ -17,6 +17,7 @@ import BulkImport from "./pages/BulkImport";
 import WebhookManagement from "./pages/WebhookManagement";
 import OAuthClients from "./pages/OAuthClients";
 import MCPConfigGenerator from "./pages/MCPConfigGenerator";
+import ExtractionPromptEditor from "./pages/ExtractionPromptEditor";
 
 interface NavItem {
   path: string;
@@ -34,6 +35,7 @@ const navItems: NavItem[] = [
   { path: "/users", label: "Users", section: "Management" },
   { path: "/providers", label: "Providers", section: "Configuration" },
   { path: "/settings", label: "Settings", section: "Configuration" },
+  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration" },
   { path: "/webhooks", label: "Webhooks", section: "Configuration" },
   { path: "/oauth", label: "OAuth Clients", section: "Configuration" },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
@@ -124,6 +126,7 @@ function AppLayout() {
             <Route path="/users" element={<UserManagement />} />
             <Route path="/providers" element={<ProviderConfiguration />} />
             <Route path="/settings" element={<SettingsEditor />} />
+            <Route path="/extraction-prompts" element={<ExtractionPromptEditor />} />
             <Route path="/database" element={<DatabaseManagement />} />
             <Route path="/enrichment" element={<EnrichmentMonitor />} />
             <Route path="/graph" element={<GraphVisualization />} />
