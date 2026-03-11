@@ -24,6 +24,10 @@ import {
   type UpdateProviderSlotRequest,
   type TestProviderResult,
   type ExtractionTestResult,
+  type OAuthClientCreated,
+  type CreateOAuthClientRequest,
+  type IdPConfig,
+  type CreateIdPConfigRequest,
 } from "../api/client";
 
 // --- Health ---
@@ -654,5 +658,63 @@ export function useExportMemories(projectId: string, enabled: boolean) {
     queryKey: ["memories", "export", projectId],
     queryFn: () => memoryAPI.export(projectId),
     enabled: !!projectId && enabled,
+  });
+}
+
+// --- OAuth Clients ---
+
+export function useOAuthClients() {
+  return useQuery({
+    queryKey: ["admin", "oauth-clients"],
+    queryFn: adminAPI.listOAuthClients,
+  });
+}
+
+export function useCreateOAuthClient() {
+  const qc = useQueryClient();
+  return useMutation<OAuthClientCreated, Error, CreateOAuthClientRequest>({
+    mutationFn: (data) => adminAPI.createOAuthClient(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "oauth-clients"] });
+    },
+  });
+}
+
+export function useDeleteOAuthClient() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => adminAPI.deleteOAuthClient(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "oauth-clients"] });
+    },
+  });
+}
+
+// --- IdP Config ---
+
+export function useIdPConfigs() {
+  return useQuery({
+    queryKey: ["admin", "idp-configs"],
+    queryFn: adminAPI.listIdPConfigs,
+  });
+}
+
+export function useCreateIdPConfig() {
+  const qc = useQueryClient();
+  return useMutation<IdPConfig, Error, CreateIdPConfigRequest>({
+    mutationFn: (data) => adminAPI.createIdPConfig(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "idp-configs"] });
+    },
+  });
+}
+
+export function useDeleteIdPConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => adminAPI.deleteIdPConfig(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "idp-configs"] });
+    },
   });
 }

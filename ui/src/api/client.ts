@@ -459,6 +459,55 @@ export interface ExtractionTestResult {
   latency_ms: number;
 }
 
+export interface OAuthClient {
+  id: string;
+  name: string;
+  client_id: string;
+  type: "auto" | "manual";
+  client_type: "public" | "confidential";
+  redirect_uris: string[];
+  created_at: string;
+  last_used?: string;
+}
+
+export interface OAuthClientCreated extends OAuthClient {
+  client_secret?: string;
+}
+
+export interface CreateOAuthClientRequest {
+  name: string;
+  redirect_uris: string[];
+  client_type: "public" | "confidential";
+}
+
+export interface IdPConfig {
+  id: string;
+  org_id: string;
+  org_name?: string;
+  provider_type: "google" | "github" | "oidc";
+  client_id: string;
+  issuer_url?: string;
+  authorization_url?: string;
+  token_url?: string;
+  userinfo_url?: string;
+  allowed_domains: string[];
+  auto_provision: boolean;
+  created_at: string;
+}
+
+export interface CreateIdPConfigRequest {
+  org_id: string;
+  provider_type: "google" | "github" | "oidc";
+  client_id: string;
+  client_secret: string;
+  issuer_url?: string;
+  authorization_url?: string;
+  token_url?: string;
+  userinfo_url?: string;
+  allowed_domains: string[];
+  auto_provision: boolean;
+}
+
 export interface GraphEntity {
   id: string;
   name: string;
@@ -624,6 +673,22 @@ export const adminAPI = {
   // Namespaces
   getNamespaceTree: () =>
     request<Record<string, unknown>>("GET", "/admin/namespaces/tree"),
+
+  // OAuth Clients
+  listOAuthClients: () =>
+    request<OAuthClient[]>("GET", "/admin/oauth/clients"),
+  createOAuthClient: (data: CreateOAuthClientRequest) =>
+    request<OAuthClientCreated>("POST", "/admin/oauth/clients", data),
+  deleteOAuthClient: (id: string) =>
+    request<void>("DELETE", `/admin/oauth/clients/${id}`),
+
+  // IdP Config
+  listIdPConfigs: () =>
+    request<IdPConfig[]>("GET", "/admin/oauth/idp"),
+  createIdPConfig: (data: CreateIdPConfigRequest) =>
+    request<IdPConfig>("POST", "/admin/oauth/idp", data),
+  deleteIdPConfig: (id: string) =>
+    request<void>("DELETE", `/admin/oauth/idp/${id}`),
 };
 
 // --- Memory API (project-scoped) ---
