@@ -11,6 +11,13 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
+// QueueStats holds aggregate counts of enrichment queue items by status.
+type QueueStats struct {
+	Pending    int `json:"pending"`
+	Processing int `json:"processing"`
+	Failed     int `json:"failed"`
+}
+
 // EnrichmentQueueRepo provides operations for the enrichment_queue table.
 type EnrichmentQueueRepo struct {
 	db DB
@@ -325,4 +332,32 @@ func (r *EnrichmentQueueRepo) populateItem(
 	}
 
 	return item, nil
+}
+
+// CountByStatus returns aggregate counts of queue items grouped by status.
+func (r *EnrichmentQueueRepo) CountByStatus(ctx context.Context) (*QueueStats, error) {
+	query := `SELECT status, COUNT(*) FROM enrichment_queue GROUP BY status`
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("enrichment queue count by status: %w", err)
+	}
+	defer rows.Close()
+
+	stats := &QueueStats{}
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, fmt.Errorf("enrichment queue scan: %w", err)
+		}
+		switch status {
+		case "pending":
+			stats.Pending = count
+		case "processing":
+			stats.Processing = count
+		case "failed":
+			stats.Failed = count
+		}
+	}
+	return stats, rows.Err()
 }
