@@ -430,6 +430,16 @@ export function useDeleteWebhook() {
   });
 }
 
+export function useTestWebhook() {
+  return useMutation<
+    { success: boolean; status_code?: number; error?: string },
+    Error,
+    string
+  >({
+    mutationFn: (id: string) => adminAPI.testWebhook(id),
+  });
+}
+
 // --- Analytics ---
 
 export function useAnalytics() {

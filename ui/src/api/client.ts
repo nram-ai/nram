@@ -582,6 +582,11 @@ export const adminAPI = {
     request<Webhook>("PUT", `/admin/webhooks/${id}`, data),
   deleteWebhook: (id: string) =>
     request<void>("DELETE", `/admin/webhooks/${id}`),
+  testWebhook: (id: string) =>
+    request<{ success: boolean; status_code?: number; error?: string }>(
+      "POST",
+      `/admin/webhooks/${id}/test`,
+    ),
 
   // Analytics
   getAnalytics: () => request<AnalyticsData[]>("GET", "/admin/analytics"),
