@@ -50,6 +50,9 @@ type Handlers struct {
 	// MCP Streamable HTTP server
 	MCP http.Handler
 
+	// Embedded admin UI
+	UI http.Handler
+
 	// Health
 	Health http.HandlerFunc
 
@@ -179,6 +182,11 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/database/*", handler(handlers.AdminDatabase))
 		})
 	})
+
+	// Serve embedded UI for all other paths.
+	if handlers.UI != nil {
+		r.NotFound(handlers.UI.ServeHTTP)
+	}
 
 	return r
 }
