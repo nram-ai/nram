@@ -114,6 +114,7 @@ func NewServer(deps Dependencies) *Server {
 	RegisterRecallTool(s)
 	RegisterForgetEnrichTools(s)
 	RegisterGraphProjectsExportTools(s)
+	RegisterResources(s)
 
 	return s
 }
