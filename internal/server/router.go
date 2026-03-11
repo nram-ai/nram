@@ -47,6 +47,9 @@ type Handlers struct {
 	// SSE events
 	Events http.HandlerFunc
 
+	// MCP Streamable HTTP server
+	MCP http.Handler
+
 	// Health
 	Health http.HandlerFunc
 
@@ -112,6 +115,12 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 
 		// SSE events endpoint.
 		r.Get("/v1/events", handler(handlers.Events))
+
+		// MCP Streamable HTTP endpoint.
+		if handlers.MCP != nil {
+			r.Handle("/mcp", handlers.MCP)
+			r.Handle("/mcp/*", handlers.MCP)
+		}
 
 		// Project-scoped memory routes.
 		r.Route("/v1/projects/{project_id}/memories", func(r chi.Router) {
