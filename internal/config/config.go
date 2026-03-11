@@ -11,6 +11,7 @@ type Config struct {
 	Embed    ProviderConfig `yaml:"embed"`
 	Fact     ProviderConfig `yaml:"fact"`
 	Entity   ProviderConfig `yaml:"entity"`
+	Qdrant   QdrantConfig   `yaml:"qdrant"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -30,6 +31,11 @@ type DatabaseConfig struct {
 type AdminConfig struct {
 	Email    string `yaml:"email"`
 	Password string `yaml:"password"`
+}
+
+// QdrantConfig holds Qdrant vector database connection settings.
+type QdrantConfig struct {
+	Addr string `yaml:"addr"` // gRPC address, e.g. "localhost:6334"
 }
 
 // ProviderConfig holds LLM/embedding provider settings.
