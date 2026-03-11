@@ -166,6 +166,42 @@ func (r *UserRepo) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]model.User
 	return result, nil
 }
 
+// ListAll returns all users ordered by email.
+func (r *UserRepo) ListAll(ctx context.Context) ([]model.User, error) {
+	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
+		FROM users ORDER BY email`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("user list all: %w", err)
+	}
+	defer rows.Close()
+
+	var result []model.User
+	for rows.Next() {
+		u, err := r.scanUserFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("user list all iteration: %w", err)
+	}
+	return result, nil
+}
+
+// CountAdmins returns the number of active (non-disabled) administrator users.
+func (r *UserRepo) CountAdmins(ctx context.Context) (int, error) {
+	query := `SELECT COUNT(*) FROM users WHERE role = 'administrator' AND disabled_at IS NULL`
+	row := r.db.QueryRow(ctx, query)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("user count admins: %w", err)
+	}
+	return count, nil
+}
+
 func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 

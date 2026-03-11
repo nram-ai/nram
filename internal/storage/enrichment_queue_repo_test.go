@@ -570,3 +570,67 @@ func TestEnrichmentQueueRepo_FullLifecycle(t *testing.T) {
 
 // Suppress unused import warning for json.
 var _ = json.RawMessage{}
+
+func TestEnrichmentQueueRepo_ListRecent(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+
+		nsID, memID := createTestMemoryForQueue(t, ctx, db)
+
+		item := &model.EnrichmentJob{
+			MemoryID:    memID,
+			NamespaceID: nsID,
+		}
+		if err := repo.Enqueue(ctx, item); err != nil {
+			t.Fatalf("failed to enqueue: %v", err)
+		}
+
+		items, err := repo.ListRecent(ctx, 10)
+		if err != nil {
+			t.Fatalf("ListRecent failed: %v", err)
+		}
+		if len(items) < 1 {
+			t.Fatalf("expected at least 1 item, got %d", len(items))
+		}
+	})
+}
+
+func TestEnrichmentQueueRepo_RetryAllFailed(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+
+		nsID, memID := createTestMemoryForQueue(t, ctx, db)
+
+		item := &model.EnrichmentJob{
+			MemoryID:    memID,
+			NamespaceID: nsID,
+		}
+		if err := repo.Enqueue(ctx, item); err != nil {
+			t.Fatalf("failed to enqueue: %v", err)
+		}
+
+		// Fail the item
+		if err := repo.Fail(ctx, item.ID, "test error"); err != nil {
+			t.Fatalf("failed to fail item: %v", err)
+		}
+
+		count, err := repo.RetryAllFailed(ctx)
+		if err != nil {
+			t.Fatalf("RetryAllFailed failed: %v", err)
+		}
+		if count < 1 {
+			t.Fatalf("expected at least 1 retried, got %d", count)
+		}
+
+		// Verify it's now pending
+		retried, err := repo.GetByID(ctx, item.ID)
+		if err != nil {
+			t.Fatalf("failed to get retried item: %v", err)
+		}
+		if retried.Status != "pending" {
+			t.Fatalf("expected status pending, got %s", retried.Status)
+		}
+	})
+}

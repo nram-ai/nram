@@ -639,3 +639,62 @@ func TestMemoryRepo_Create_WithOptionalFields(t *testing.T) {
 		}
 	})
 }
+
+func TestMemoryRepo_ListExpired(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		memRepo := NewMemoryRepo(db)
+		past := time.Now().Add(-1 * time.Hour)
+		mem := &model.Memory{
+			NamespaceID: nsID,
+			Content:     "expired memory",
+			Confidence:  0.9,
+			Importance:  0.5,
+			ExpiresAt:   &past,
+		}
+		if err := memRepo.Create(ctx, mem); err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		results, err := memRepo.ListExpired(ctx, time.Now(), 10)
+		if err != nil {
+			t.Fatalf("ListExpired failed: %v", err)
+		}
+		if len(results) < 1 {
+			t.Fatalf("expected at least 1 expired memory, got %d", len(results))
+		}
+	})
+}
+
+func TestMemoryRepo_ListPurgeable(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		memRepo := NewMemoryRepo(db)
+		mem := &model.Memory{
+			NamespaceID: nsID,
+			Content:     "purgeable memory",
+			Confidence:  0.9,
+			Importance:  0.5,
+		}
+		if err := memRepo.Create(ctx, mem); err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		// Soft delete it
+		if err := memRepo.SoftDelete(ctx, mem.ID); err != nil {
+			t.Fatalf("failed to soft delete: %v", err)
+		}
+
+		results, err := memRepo.ListPurgeable(ctx, time.Now().Add(1*time.Hour), 10)
+		if err != nil {
+			t.Fatalf("ListPurgeable failed: %v", err)
+		}
+		if len(results) < 1 {
+			t.Fatalf("expected at least 1 purgeable memory, got %d", len(results))
+		}
+	})
+}

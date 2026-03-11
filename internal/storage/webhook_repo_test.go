@@ -475,3 +475,28 @@ func TestWebhookRepo_ListByNamespace_Isolation(t *testing.T) {
 		}
 	})
 }
+
+func TestWebhookRepo_ListAll(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewWebhookRepo(db)
+
+		wh := &model.Webhook{
+			URL:    "https://example.com/hook-listall",
+			Events: []string{"memory.created"},
+			Scope:  "global",
+			Active: true,
+		}
+		if err := repo.Create(ctx, wh); err != nil {
+			t.Fatalf("failed to create webhook: %v", err)
+		}
+
+		webhooks, err := repo.ListAll(ctx)
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(webhooks) < 1 {
+			t.Fatalf("expected at least 1 webhook, got %d", len(webhooks))
+		}
+	})
+}

@@ -575,3 +575,36 @@ func TestUserRepo_Delete(t *testing.T) {
 		}
 	})
 }
+
+func TestUserRepo_ListAll(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+
+		createTestUser(t, ctx, db)
+
+		repo := NewUserRepo(db)
+		users, err := repo.ListAll(ctx)
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(users) < 1 {
+			t.Fatalf("expected at least 1 user, got %d", len(users))
+		}
+	})
+}
+
+func TestUserRepo_CountAdmins(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+
+		repo := NewUserRepo(db)
+		count, err := repo.CountAdmins(ctx)
+		if err != nil {
+			t.Fatalf("CountAdmins failed: %v", err)
+		}
+		// count is >= 0 (no specific admins created in this test, just verifying the query works)
+		if count < 0 {
+			t.Fatalf("expected count >= 0, got %d", count)
+		}
+	})
+}

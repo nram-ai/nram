@@ -371,3 +371,76 @@ func (r *EnrichmentQueueRepo) CountByStatus(ctx context.Context) (*QueueStats, e
 	}
 	return stats, rows.Err()
 }
+
+func (r *EnrichmentQueueRepo) scanItemFromRows(rows *sql.Rows) (*model.EnrichmentJob, error) {
+	var item model.EnrichmentJob
+	var idStr, memoryIDStr, namespaceIDStr string
+	var claimedAtStr, claimedBy sql.NullString
+	var lastErrorStr, completedAtStr sql.NullString
+	var stepsCompletedStr string
+	var createdAtStr, updatedAtStr string
+
+	err := rows.Scan(
+		&idStr, &memoryIDStr, &namespaceIDStr, &item.Status, &item.Priority,
+		&claimedAtStr, &claimedBy, &item.Attempts, &item.MaxAttempts,
+		&lastErrorStr, &stepsCompletedStr,
+		&completedAtStr, &createdAtStr, &updatedAtStr,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("enrichment queue scan rows: %w", err)
+	}
+
+	return r.populateItem(&item, idStr, memoryIDStr, namespaceIDStr,
+		claimedAtStr, claimedBy, lastErrorStr, stepsCompletedStr,
+		completedAtStr, createdAtStr, updatedAtStr)
+}
+
+// ListRecent returns the most recent enrichment queue items, ordered by created_at DESC.
+func (r *EnrichmentQueueRepo) ListRecent(ctx context.Context, limit int) ([]model.EnrichmentJob, error) {
+	query := selectEnrichmentQueueColumns + ` FROM enrichment_queue ORDER BY created_at DESC LIMIT ?`
+	if r.db.Backend() == BackendPostgres {
+		query = selectEnrichmentQueueColumns + ` FROM enrichment_queue ORDER BY created_at DESC LIMIT $1`
+	}
+
+	rows, err := r.db.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("enrichment queue list recent: %w", err)
+	}
+	defer rows.Close()
+
+	var result []model.EnrichmentJob
+	for rows.Next() {
+		item, err := r.scanItemFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("enrichment queue list recent iteration: %w", err)
+	}
+	return result, nil
+}
+
+// RetryAllFailed resets all failed items back to pending status. Returns the number of items retried.
+func (r *EnrichmentQueueRepo) RetryAllFailed(ctx context.Context) (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = ?
+		WHERE status = 'failed'`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = $1
+			WHERE status = 'failed'`
+	}
+
+	result, err := r.db.Exec(ctx, query, now)
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue retry all failed: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue retry all failed rows affected: %w", err)
+	}
+	return int(rows), nil
+}

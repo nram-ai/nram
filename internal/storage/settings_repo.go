@@ -133,6 +133,31 @@ func (r *SettingsRepo) ListByScope(ctx context.Context, scope string) ([]model.S
 	return result, nil
 }
 
+// ListAll returns all settings ordered by key.
+func (r *SettingsRepo) ListAll(ctx context.Context) ([]model.Setting, error) {
+	query := `SELECT key, value, scope, updated_by, updated_at
+		FROM settings ORDER BY key`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("settings list all: %w", err)
+	}
+	defer rows.Close()
+
+	var result []model.Setting
+	for rows.Next() {
+		setting, err := r.scanSettingFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *setting)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("settings list all iteration: %w", err)
+	}
+	return result, nil
+}
+
 // GetSchema returns the schema/definition for a setting key from the "global" scope.
 func (r *SettingsRepo) GetSchema(ctx context.Context, key string) (*model.Setting, error) {
 	return r.getExact(ctx, key, "global")

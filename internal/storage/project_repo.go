@@ -110,6 +110,31 @@ func (r *ProjectRepo) ListByUser(ctx context.Context, ownerNamespaceID uuid.UUID
 	return result, nil
 }
 
+// ListAll returns all projects ordered by name.
+func (r *ProjectRepo) ListAll(ctx context.Context) ([]model.Project, error) {
+	query := `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
+		FROM projects ORDER BY name`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("project list all: %w", err)
+	}
+	defer rows.Close()
+
+	var result []model.Project
+	for rows.Next() {
+		p, err := r.scanProjectFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("project list all iteration: %w", err)
+	}
+	return result, nil
+}
+
 // Update updates a project's mutable fields: name, slug, description, default_tags, settings.
 func (r *ProjectRepo) Update(ctx context.Context, project *model.Project) error {
 	now := time.Now().UTC().Format(time.RFC3339)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 )
 
@@ -434,4 +435,28 @@ func TestCascadeScopes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSettingsRepo_ListAll(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewSettingsRepo(db)
+
+		setting := &model.Setting{
+			Key:   "test.listall." + uuid.New().String()[:8],
+			Value: json.RawMessage(`"value"`),
+			Scope: "global",
+		}
+		if err := repo.Set(ctx, setting); err != nil {
+			t.Fatalf("failed to set setting: %v", err)
+		}
+
+		settings, err := repo.ListAll(ctx)
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(settings) < 1 {
+			t.Fatalf("expected at least 1 setting, got %d", len(settings))
+		}
+	})
 }

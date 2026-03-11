@@ -246,6 +246,19 @@ func (r *WebhookRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID
 	return r.scanWebhooks(rows)
 }
 
+// ListAll returns all webhooks ordered by created_at DESC.
+func (r *WebhookRepo) ListAll(ctx context.Context) ([]model.Webhook, error) {
+	query := selectWebhookColumns + ` FROM webhooks ORDER BY created_at DESC`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("webhook list all: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanWebhooks(rows)
+}
+
 // reload fetches the webhook by ID and populates the struct in place.
 func (r *WebhookRepo) reload(ctx context.Context, webhook *model.Webhook) error {
 	fetched, err := r.GetByID(ctx, webhook.ID)

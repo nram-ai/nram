@@ -422,3 +422,21 @@ func TestProjectRepo_AutoCreateUnderUser_Idempotent(t *testing.T) {
 		}
 	})
 }
+
+func TestProjectRepo_ListAll(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+
+		createTestProject(t, ctx, db, "proj-list-all-"+uuid.New().String()[:6])
+		createTestProject(t, ctx, db, "proj-list-all-b-"+uuid.New().String()[:6])
+
+		repo := NewProjectRepo(db)
+		projects, err := repo.ListAll(ctx)
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(projects) < 2 {
+			t.Fatalf("expected at least 2 projects, got %d", len(projects))
+		}
+	})
+}

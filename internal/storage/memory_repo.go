@@ -286,6 +286,73 @@ func (r *MemoryRepo) HardDelete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// ListExpired returns memories whose expires_at is before the given time and are not yet soft-deleted.
+func (r *MemoryRepo) ListExpired(ctx context.Context, before time.Time, limit int) ([]model.Memory, error) {
+	beforeStr := before.UTC().Format(time.RFC3339)
+
+	query := selectMemoryColumns + ` FROM memories
+		WHERE expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL
+		ORDER BY expires_at ASC LIMIT ?`
+	if r.db.Backend() == BackendPostgres {
+		query = selectMemoryColumns + ` FROM memories
+			WHERE expires_at IS NOT NULL AND expires_at < $1 AND deleted_at IS NULL
+			ORDER BY expires_at ASC LIMIT $2`
+	}
+
+	rows, err := r.db.Query(ctx, query, beforeStr, limit)
+	if err != nil {
+		return nil, fmt.Errorf("memory list expired: %w", err)
+	}
+	defer rows.Close()
+
+	var result []model.Memory
+	for rows.Next() {
+		mem, err := r.scanMemoryFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *mem)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory list expired iteration: %w", err)
+	}
+	return result, nil
+}
+
+// ListPurgeable returns soft-deleted memories whose deleted_at is before the given time,
+// making them eligible for hard deletion.
+func (r *MemoryRepo) ListPurgeable(ctx context.Context, before time.Time, limit int) ([]model.Memory, error) {
+	beforeStr := before.UTC().Format(time.RFC3339)
+
+	query := selectMemoryColumns + ` FROM memories
+		WHERE deleted_at IS NOT NULL AND deleted_at < ?
+		ORDER BY deleted_at ASC LIMIT ?`
+	if r.db.Backend() == BackendPostgres {
+		query = selectMemoryColumns + ` FROM memories
+			WHERE deleted_at IS NOT NULL AND deleted_at < $1
+			ORDER BY deleted_at ASC LIMIT $2`
+	}
+
+	rows, err := r.db.Query(ctx, query, beforeStr, limit)
+	if err != nil {
+		return nil, fmt.Errorf("memory list purgeable: %w", err)
+	}
+	defer rows.Close()
+
+	var result []model.Memory
+	for rows.Next() {
+		mem, err := r.scanMemoryFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *mem)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory list purgeable iteration: %w", err)
+	}
+	return result, nil
+}
+
 // reload fetches the memory by ID and populates the struct in place.
 func (r *MemoryRepo) reload(ctx context.Context, mem *model.Memory) error {
 	fetched, err := r.getByIDIncludeDeleted(ctx, mem.ID)

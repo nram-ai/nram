@@ -108,6 +108,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	}
 	r.Get("/v1/health", handler(handlers.Health))
 
+	// Setup endpoints are public — must be accessible before first user exists.
+	r.Get("/v1/admin/setup/status", handler(handlers.AdminSetupStatus))
+	r.Post("/v1/admin/setup", handler(handlers.AdminSetup))
+
 	// Authenticated routes.
 	r.Group(func(r chi.Router) {
 		if config.AuthMiddleware != nil {
@@ -158,9 +162,6 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		// Admin routes (require administrator role).
 		r.Route("/v1/admin", func(r chi.Router) {
 			r.Use(auth.RequireRole(auth.RoleAdministrator))
-
-			r.Get("/setup/status", handler(handlers.AdminSetupStatus))
-			r.Post("/setup", handler(handlers.AdminSetup))
 			r.Get("/dashboard", handler(handlers.AdminDashboard))
 			r.Get("/activity", handler(handlers.AdminActivity))
 			r.HandleFunc("/orgs", handler(handlers.AdminOrgs))
