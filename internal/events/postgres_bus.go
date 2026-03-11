@@ -70,6 +70,11 @@ func (b *PostgresBus) Subscribe(ctx context.Context, scope string) (<-chan Event
 	return b.local.Subscribe(ctx, scope)
 }
 
+// Replay delegates to the underlying MemoryBus.
+func (b *PostgresBus) Replay(lastEventID string) []Event {
+	return b.local.Replay(lastEventID)
+}
+
 // Close stops the listener goroutine and shuts down the local bus.
 func (b *PostgresBus) Close() error {
 	b.cancel()

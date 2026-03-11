@@ -12,6 +12,10 @@ type EventBus interface {
 	// function removes the subscription and closes the channel.
 	Subscribe(ctx context.Context, scope string) (<-chan Event, func(), error)
 
+	// Replay returns buffered events after the given lastEventID.
+	// If lastEventID is empty or not found, all buffered events are returned.
+	Replay(lastEventID string) []Event
+
 	// Close shuts down the bus and closes all subscriber channels.
 	Close() error
 }

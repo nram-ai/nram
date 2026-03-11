@@ -20,12 +20,14 @@ type MemoryBus struct {
 	subscribers map[uint64]*subscriber
 	nextID      uint64
 	closed      bool
+	replay      *ReplayBuffer
 }
 
 // NewMemoryBus creates a new in-memory event bus.
 func NewMemoryBus() *MemoryBus {
 	return &MemoryBus{
 		subscribers: make(map[uint64]*subscriber),
+		replay:      NewReplayBuffer(defaultReplayCapacity),
 	}
 }
 
@@ -37,6 +39,8 @@ func (b *MemoryBus) Publish(_ context.Context, event Event) error {
 	if b.closed {
 		return ErrBusClosed
 	}
+
+	b.replay.Add(event)
 
 	for _, sub := range b.subscribers {
 		if !matchesScope(sub.scope, event.Scope) {
@@ -99,6 +103,11 @@ func (b *MemoryBus) Close() error {
 	}
 
 	return nil
+}
+
+// Replay returns buffered events after the given lastEventID.
+func (b *MemoryBus) Replay(lastEventID string) []Event {
+	return b.replay.Since(lastEventID)
 }
 
 // matchesScope returns true if the subscriber scope is a prefix of the event scope.

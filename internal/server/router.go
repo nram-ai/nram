@@ -44,6 +44,9 @@ type Handlers struct {
 	// Org-scoped handlers
 	OrgRecall http.HandlerFunc
 
+	// SSE events
+	Events http.HandlerFunc
+
 	// Health
 	Health http.HandlerFunc
 
@@ -106,6 +109,9 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		if config.RateLimiter != nil {
 			r.Use(config.RateLimiter.Handler)
 		}
+
+		// SSE events endpoint.
+		r.Get("/v1/events", handler(handlers.Events))
 
 		// Project-scoped memory routes.
 		r.Route("/v1/projects/{project_id}/memories", func(r chi.Router) {
