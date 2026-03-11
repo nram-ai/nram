@@ -104,6 +104,7 @@ func NewServer(deps Dependencies) *Server {
 	}
 
 	RegisterStoreTools(s)
+	RegisterUpdateGetTools(s)
 
 	return s
 }
