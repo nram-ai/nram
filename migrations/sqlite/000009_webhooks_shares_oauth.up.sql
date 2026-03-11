@@ -21,6 +21,7 @@ CREATE TABLE memory_shares (
   permission      TEXT NOT NULL DEFAULT 'recall',
   created_by      TEXT REFERENCES users(id),
   expires_at      TEXT,
+  revoked_at      TEXT,
   created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
   UNIQUE(source_ns_id, target_ns_id)
 );

@@ -21,6 +21,7 @@ CREATE TABLE memory_shares (
   permission      TEXT NOT NULL DEFAULT 'recall',
   created_by      UUID REFERENCES users(id),
   expires_at      TIMESTAMPTZ,
+  revoked_at      TIMESTAMPTZ,
   created_at      TIMESTAMPTZ DEFAULT now(),
   UNIQUE(source_ns_id, target_ns_id)
 );

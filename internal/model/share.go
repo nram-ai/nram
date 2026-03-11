@@ -13,5 +13,6 @@ type MemoryShare struct {
 	Permission string     `json:"permission"`
 	CreatedBy  *uuid.UUID `json:"created_by"`
 	ExpiresAt  *time.Time `json:"expires_at"`
+	RevokedAt  *time.Time `json:"revoked_at"`
 	CreatedAt  time.Time  `json:"created_at"`
 }
