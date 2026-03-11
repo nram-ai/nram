@@ -12,6 +12,11 @@ import {
   type Setting,
   type Webhook,
   type StoreMemoryRequest,
+  type MemoryListParams,
+  type RecallRequest,
+  type MemoryUpdateRequest,
+  type ForgetRequest,
+  type EnrichRequest,
 } from "../api/client";
 
 // --- Health ---
@@ -375,5 +380,120 @@ export function useNamespaceTree() {
   return useQuery({
     queryKey: ["admin", "namespaces"],
     queryFn: adminAPI.getNamespaceTree,
+  });
+}
+
+// --- Memory Browser ---
+
+export function useMemoryList(projectId: string, params?: MemoryListParams) {
+  return useQuery({
+    queryKey: ["memories", "list", projectId, params],
+    queryFn: () => memoryAPI.list(projectId, params),
+    enabled: !!projectId,
+  });
+}
+
+export function useMemoryRecall(
+  projectId: string,
+  body: RecallRequest | null,
+) {
+  return useQuery({
+    queryKey: ["memories", "recall", projectId, body],
+    queryFn: () => memoryAPI.recall(projectId, body!),
+    enabled: !!projectId && !!body,
+  });
+}
+
+export function useMemoryDetail(projectId: string, memoryId: string) {
+  return useQuery({
+    queryKey: ["memories", "detail", projectId, memoryId],
+    queryFn: () => memoryAPI.get(projectId, memoryId),
+    enabled: !!projectId && !!memoryId,
+  });
+}
+
+export function useUpdateMemory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      memoryId,
+      data,
+    }: {
+      projectId: string;
+      memoryId: string;
+      data: MemoryUpdateRequest;
+    }) => memoryAPI.update(projectId, memoryId, data),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["memories", "list", vars.projectId] });
+      qc.invalidateQueries({
+        queryKey: ["memories", "detail", vars.projectId, vars.memoryId],
+      });
+      qc.invalidateQueries({
+        queryKey: ["memories", "recall", vars.projectId],
+      });
+    },
+  });
+}
+
+export function useDeleteMemory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      memoryId,
+    }: {
+      projectId: string;
+      memoryId: string;
+    }) => memoryAPI.remove(projectId, memoryId),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["memories", "list", vars.projectId] });
+      qc.invalidateQueries({
+        queryKey: ["memories", "recall", vars.projectId],
+      });
+    },
+  });
+}
+
+export function useForgetMemories() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      body,
+    }: {
+      projectId: string;
+      body: ForgetRequest;
+    }) => memoryAPI.forget(projectId, body),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["memories", "list", vars.projectId] });
+      qc.invalidateQueries({
+        queryKey: ["memories", "recall", vars.projectId],
+      });
+    },
+  });
+}
+
+export function useEnrichMemories() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      body,
+    }: {
+      projectId: string;
+      body: EnrichRequest;
+    }) => memoryAPI.enrich(projectId, body),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["memories", "list", vars.projectId] });
+    },
+  });
+}
+
+export function useExportMemories(projectId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["memories", "export", projectId],
+    queryFn: () => memoryAPI.export(projectId),
+    enabled: !!projectId && enabled,
   });
 }

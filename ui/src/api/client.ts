@@ -117,6 +117,64 @@ export interface StoredMemory {
   created_at: string;
 }
 
+export interface Memory {
+  id: string;
+  content: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  enriched: boolean;
+  entities?: { id: string; name: string; type: string }[];
+  lineage?: { id: string; type: string; related_memory_id: string }[];
+}
+
+export interface RecallResult {
+  memory: Memory;
+  score: number;
+}
+
+export interface RecallRequest {
+  query: string;
+  limit?: number;
+  tags?: string[];
+  threshold?: number;
+}
+
+export interface MemoryListParams {
+  limit?: number;
+  offset?: number;
+  tag?: string;
+  text?: string;
+  from?: string;
+  to?: string;
+  enriched?: string;
+  source?: string;
+}
+
+export interface MemoryListResponse {
+  memories: Memory[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface MemoryUpdateRequest {
+  content?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface ForgetRequest {
+  ids?: string[];
+  filter?: { tags?: string[]; before?: string; after?: string };
+}
+
+export interface EnrichRequest {
+  ids: string[];
+}
+
 export interface Organization {
   id: string;
   name: string;
@@ -283,6 +341,52 @@ export const adminAPI = {
 export const memoryAPI = {
   store: (projectId: string, data: StoreMemoryRequest) =>
     request<StoredMemory>("POST", `/projects/${projectId}/memories`, data),
+
+  list: (projectId: string, params?: MemoryListParams) => {
+    const sp = new URLSearchParams();
+    if (params?.limit !== undefined) sp.set("limit", String(params.limit));
+    if (params?.offset !== undefined) sp.set("offset", String(params.offset));
+    if (params?.tag) sp.set("tag", params.tag);
+    if (params?.text) sp.set("text", params.text);
+    if (params?.from) sp.set("from", params.from);
+    if (params?.to) sp.set("to", params.to);
+    if (params?.enriched) sp.set("enriched", params.enriched);
+    if (params?.source) sp.set("source", params.source);
+    const qs = sp.toString();
+    return request<MemoryListResponse>(
+      "GET",
+      `/projects/${projectId}/memories${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  recall: (projectId: string, body: RecallRequest) =>
+    request<RecallResult[]>(
+      "POST",
+      `/projects/${projectId}/memories/recall`,
+      body,
+    ),
+
+  get: (projectId: string, memoryId: string) =>
+    request<Memory>("GET", `/projects/${projectId}/memories/${memoryId}`),
+
+  update: (projectId: string, memoryId: string, body: MemoryUpdateRequest) =>
+    request<Memory>(
+      "PUT",
+      `/projects/${projectId}/memories/${memoryId}`,
+      body,
+    ),
+
+  remove: (projectId: string, memoryId: string) =>
+    request<void>("DELETE", `/projects/${projectId}/memories/${memoryId}`),
+
+  forget: (projectId: string, body: ForgetRequest) =>
+    request<void>("POST", `/projects/${projectId}/memories/forget`, body),
+
+  enrich: (projectId: string, body: EnrichRequest) =>
+    request<void>("POST", `/projects/${projectId}/memories/enrich`, body),
+
+  export: (projectId: string) =>
+    request<Memory[]>("GET", `/projects/${projectId}/memories/export`),
 };
 
 // --- Health ---
