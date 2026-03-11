@@ -380,11 +380,46 @@ export interface AnalyticsData {
   api_requests: number;
 }
 
+export interface SQLiteInfo {
+  file_path: string;
+  file_size_bytes: number;
+}
+
+export interface PostgresInfo {
+  host: string;
+  database: string;
+  pgvector_version?: string;
+  active_connections: number;
+  idle_connections: number;
+  max_connections: number;
+}
+
+export interface DataCounts {
+  memories: number;
+  entities: number;
+  projects: number;
+  users: number;
+  organizations: number;
+}
+
 export interface DatabaseInfo {
-  driver: string;
+  backend: string;
   version: string;
-  migration_version: number;
-  dirty: boolean;
+  sqlite?: SQLiteInfo;
+  postgres?: PostgresInfo;
+  data_counts: DataCounts;
+}
+
+export interface ConnectionTestResult {
+  success: boolean;
+  message: string;
+  pgvector_installed: boolean;
+  latency_ms: number;
+}
+
+export interface MigrationStatus {
+  status: string;
+  message: string;
 }
 
 export interface EnrichmentQueueStatus {
@@ -499,6 +534,10 @@ export const adminAPI = {
 
   // Database
   getDatabaseInfo: () => request<DatabaseInfo>("GET", "/admin/database"),
+  testDatabaseConnection: (url: string) =>
+    request<ConnectionTestResult>("POST", "/admin/database/test", { url }),
+  triggerMigration: (url: string) =>
+    request<MigrationStatus>("POST", "/admin/database/migrate", { url }),
 
   // Enrichment
   getEnrichmentStatus: () =>

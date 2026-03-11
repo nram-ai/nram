@@ -454,6 +454,23 @@ export function useDatabaseInfo() {
   });
 }
 
+export function useTestDatabaseConnection() {
+  return useMutation({
+    mutationFn: (url: string) => adminAPI.testDatabaseConnection(url),
+  });
+}
+
+export function useTriggerMigration() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (url: string) => adminAPI.triggerMigration(url),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "database"] });
+      qc.invalidateQueries({ queryKey: ["admin", "setup-status"] });
+    },
+  });
+}
+
 // --- Enrichment ---
 
 export function useEnrichmentStatus() {
