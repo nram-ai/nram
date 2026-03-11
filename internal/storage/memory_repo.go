@@ -193,6 +193,20 @@ func (r *MemoryRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID,
 	return result, nil
 }
 
+// CountByNamespace returns the total number of non-deleted memories in a namespace.
+func (r *MemoryRepo) CountByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error) {
+	query := `SELECT COUNT(*) FROM memories WHERE namespace_id = ? AND deleted_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM memories WHERE namespace_id = $1 AND deleted_at IS NULL`
+	}
+	row := r.db.QueryRow(ctx, query, namespaceID.String())
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("memory count by namespace: %w", err)
+	}
+	return count, nil
+}
+
 // Update updates mutable fields of a memory: content, source, tags, metadata, importance.
 // It also bumps updated_at.
 func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
