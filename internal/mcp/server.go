@@ -16,6 +16,7 @@ import (
 type ProjectRepo interface {
 	GetBySlug(ctx context.Context, ownerNamespaceID uuid.UUID, slug string) (*model.Project, error)
 	ListByUser(ctx context.Context, ownerNamespaceID uuid.UUID) ([]model.Project, error)
+	Create(ctx context.Context, project *model.Project) error
 }
 
 // UserRepo defines the user lookup operations needed by MCP tool handlers.
@@ -26,6 +27,7 @@ type UserRepo interface {
 // NamespaceRepo defines the namespace lookup operations needed by MCP tool handlers.
 type NamespaceRepo interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Namespace, error)
+	Create(ctx context.Context, ns *model.Namespace) error
 }
 
 // EntityReader provides entity lookup operations for MCP tool handlers.
@@ -95,11 +97,15 @@ func NewServer(deps Dependencies) *Server {
 		}),
 	)
 
-	return &Server{
+	s := &Server{
 		mcpServer:   mcpSrv,
 		httpHandler: httpSrv,
 		deps:        deps,
 	}
+
+	RegisterStoreTools(s)
+
+	return s
 }
 
 // Handler returns the http.Handler that serves the MCP Streamable HTTP
