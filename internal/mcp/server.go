@@ -112,6 +112,7 @@ func NewServer(deps Dependencies) *Server {
 	RegisterStoreTools(s)
 	RegisterUpdateGetTools(s)
 	RegisterRecallTool(s)
+	RegisterForgetEnrichTools(s)
 
 	return s
 }
