@@ -8,6 +8,7 @@ import {
   type Organization,
   type User,
   type Project,
+  type ProjectUpdateRequest,
   type Provider,
   type Setting,
   type Webhook,
@@ -214,10 +215,11 @@ export function useCreateProject() {
 export function useUpdateProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Project> }) =>
+    mutationFn: ({ id, data }: { id: string; data: ProjectUpdateRequest }) =>
       adminAPI.updateProject(id, data),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["admin", "projects"] });
+      qc.invalidateQueries({ queryKey: ["admin", "projects", vars.id] });
     },
   });
 }

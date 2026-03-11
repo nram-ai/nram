@@ -193,13 +193,50 @@ export interface User {
   updated_at: string;
 }
 
+export interface ProjectRankingWeights {
+  recency: number;
+  relevance: number;
+  importance: number;
+}
+
+export interface ProjectSettings {
+  dedup_threshold: number;
+  enrichment_enabled: boolean;
+  ranking_weights: ProjectRankingWeights;
+}
+
+export interface ProjectOwner {
+  id: string;
+  email: string;
+}
+
+export interface ProjectOrganization {
+  id: string;
+  name: string;
+}
+
 export interface Project {
   id: string;
   name: string;
   slug: string;
+  path: string;
+  description: string;
+  memory_count: number;
+  entity_count: number;
+  default_tags: string[];
+  settings: ProjectSettings;
+  owner?: ProjectOwner;
+  organization?: ProjectOrganization;
   org_id: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProjectUpdateRequest {
+  name?: string;
+  description?: string;
+  default_tags?: string[];
+  settings?: Partial<ProjectSettings>;
 }
 
 export interface Provider {
@@ -290,7 +327,7 @@ export const adminAPI = {
   getProject: (id: string) => request<Project>("GET", `/admin/projects/${id}`),
   createProject: (data: Partial<Project>) =>
     request<Project>("POST", "/admin/projects", data),
-  updateProject: (id: string, data: Partial<Project>) =>
+  updateProject: (id: string, data: ProjectUpdateRequest) =>
     request<Project>("PUT", `/admin/projects/${id}`, data),
   deleteProject: (id: string) =>
     request<void>("DELETE", `/admin/projects/${id}`),
