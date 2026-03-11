@@ -172,12 +172,22 @@ func (r *EnrichmentQueueRepo) Complete(ctx context.Context, id uuid.UUID) error 
 func (r *EnrichmentQueueRepo) Fail(ctx context.Context, id uuid.UUID, errMsg string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	// last_error is JSONB in Postgres, TEXT in SQLite.
+	var lastErrorVal interface{} = errMsg
+	if r.db.Backend() == BackendPostgres {
+		b, err := json.Marshal(errMsg)
+		if err != nil {
+			return fmt.Errorf("enrichment queue fail marshal error: %w", err)
+		}
+		lastErrorVal = string(b)
+	}
+
 	query := `UPDATE enrichment_queue SET status = 'failed', last_error = ?, attempts = attempts + 1, updated_at = ? WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `UPDATE enrichment_queue SET status = 'failed', last_error = $1, attempts = attempts + 1, updated_at = $2 WHERE id = $3`
 	}
 
-	result, err := r.db.Exec(ctx, query, errMsg, now, id.String())
+	result, err := r.db.Exec(ctx, query, lastErrorVal, now, id.String())
 	if err != nil {
 		return fmt.Errorf("enrichment queue fail: %w", err)
 	}

@@ -35,10 +35,7 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 		mem.Metadata = json.RawMessage(`{}`)
 	}
 
-	tagsJSON, err := json.Marshal(mem.Tags)
-	if err != nil {
-		return fmt.Errorf("memory create marshal tags: %w", err)
-	}
+	tagsVal := encodeStringArray(r.db.Backend(), mem.Tags)
 
 	var source interface{}
 	if mem.Source != nil {
@@ -70,10 +67,7 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
 	}
 
-	enrichedInt := 0
-	if mem.Enriched {
-		enrichedInt = 1
-	}
+	enrichedVal := encodeBool(r.db.Backend(), mem.Enriched)
 
 	query := `INSERT INTO memories (id, namespace_id, content, embedding_dim, source, tags,
 		confidence, importance, access_count, last_accessed, expires_at, superseded_by,
@@ -86,10 +80,10 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`
 	}
 
-	_, err = r.db.Exec(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		mem.ID.String(), mem.NamespaceID.String(), mem.Content, embeddingDim, source,
-		string(tagsJSON), mem.Confidence, mem.Importance, mem.AccessCount,
-		lastAccessed, expiresAt, supersededBy, enrichedInt, string(mem.Metadata), purgeAfter,
+		tagsVal, mem.Confidence, mem.Importance, mem.AccessCount,
+		lastAccessed, expiresAt, supersededBy, enrichedVal, string(mem.Metadata), purgeAfter,
 	)
 	if err != nil {
 		return fmt.Errorf("memory create: %w", err)
@@ -219,10 +213,7 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 		mem.Metadata = json.RawMessage(`{}`)
 	}
 
-	tagsJSON, err := json.Marshal(mem.Tags)
-	if err != nil {
-		return fmt.Errorf("memory update marshal tags: %w", err)
-	}
+	tagsVal := encodeStringArray(r.db.Backend(), mem.Tags)
 
 	var source interface{}
 	if mem.Source != nil {
@@ -239,7 +230,7 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 	}
 
 	result, err := r.db.Exec(ctx, query,
-		mem.Content, source, string(tagsJSON), string(mem.Metadata),
+		mem.Content, source, tagsVal, string(mem.Metadata),
 		mem.Importance, now, mem.ID.String(),
 	)
 	if err != nil {
@@ -318,12 +309,12 @@ func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 	var source sql.NullString
 	var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
 	var supersededByStr sql.NullString
-	var enrichedInt int
+	var enrichedBool bool
 
 	err := row.Scan(
 		&idStr, &namespaceIDStr, &mem.Content, &embeddingDim, &source, &tagsStr,
 		&mem.Confidence, &mem.Importance, &mem.AccessCount, &lastAccessedStr,
-		&expiresAtStr, &supersededByStr, &enrichedInt, &metadataStr,
+		&expiresAtStr, &supersededByStr, &enrichedBool, &metadataStr,
 		&createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
 	)
 	if err != nil {
@@ -332,7 +323,7 @@ func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 
 	return r.populateMemory(&mem, idStr, namespaceIDStr, tagsStr, metadataStr,
 		createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
-		expiresAtStr, supersededByStr, enrichedInt, deletedAtStr, purgeAfterStr)
+		expiresAtStr, supersededByStr, enrichedBool, deletedAtStr, purgeAfterStr)
 }
 
 func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
@@ -344,12 +335,12 @@ func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
 	var source sql.NullString
 	var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
 	var supersededByStr sql.NullString
-	var enrichedInt int
+	var enrichedBool bool
 
 	err := rows.Scan(
 		&idStr, &namespaceIDStr, &mem.Content, &embeddingDim, &source, &tagsStr,
 		&mem.Confidence, &mem.Importance, &mem.AccessCount, &lastAccessedStr,
-		&expiresAtStr, &supersededByStr, &enrichedInt, &metadataStr,
+		&expiresAtStr, &supersededByStr, &enrichedBool, &metadataStr,
 		&createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
 	)
 	if err != nil {
@@ -358,7 +349,7 @@ func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
 
 	return r.populateMemory(&mem, idStr, namespaceIDStr, tagsStr, metadataStr,
 		createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
-		expiresAtStr, supersededByStr, enrichedInt, deletedAtStr, purgeAfterStr)
+		expiresAtStr, supersededByStr, enrichedBool, deletedAtStr, purgeAfterStr)
 }
 
 func (r *MemoryRepo) populateMemory(
@@ -366,7 +357,7 @@ func (r *MemoryRepo) populateMemory(
 	idStr, namespaceIDStr, tagsStr, metadataStr, createdAtStr, updatedAtStr string,
 	embeddingDim sql.NullInt64,
 	source, lastAccessedStr, expiresAtStr, supersededByStr sql.NullString,
-	enrichedInt int,
+	enrichedBool bool,
 	deletedAtStr, purgeAfterStr sql.NullString,
 ) (*model.Memory, error) {
 	id, err := uuid.Parse(idStr)
@@ -381,12 +372,14 @@ func (r *MemoryRepo) populateMemory(
 	}
 	mem.NamespaceID = nsID
 
-	if err := json.Unmarshal([]byte(tagsStr), &mem.Tags); err != nil {
+	tags, err := decodeStringArray(r.db.Backend(), tagsStr)
+	if err != nil {
 		return nil, fmt.Errorf("memory parse tags: %w", err)
 	}
+	mem.Tags = tags
 
 	mem.Metadata = json.RawMessage(metadataStr)
-	mem.Enriched = enrichedInt != 0
+	mem.Enriched = enrichedBool
 
 	if embeddingDim.Valid {
 		dim := int(embeddingDim.Int64)

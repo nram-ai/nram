@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -39,19 +38,9 @@ func (r *OAuthRepo) CreateClient(ctx context.Context, client *model.OAuthClient)
 		client.GrantTypes = []string{}
 	}
 
-	redirectJSON, err := json.Marshal(client.RedirectURIs)
-	if err != nil {
-		return fmt.Errorf("oauth client create marshal redirect_uris: %w", err)
-	}
-	grantJSON, err := json.Marshal(client.GrantTypes)
-	if err != nil {
-		return fmt.Errorf("oauth client create marshal grant_types: %w", err)
-	}
-
-	autoReg := 0
-	if client.AutoRegistered {
-		autoReg = 1
-	}
+	redirectVal := encodeStringArray(r.db.Backend(), client.RedirectURIs)
+	grantVal := encodeStringArray(r.db.Backend(), client.GrantTypes)
+	autoRegVal := encodeBool(r.db.Backend(), client.AutoRegistered)
 
 	var orgID *string
 	if client.OrgID != nil {
@@ -66,9 +55,9 @@ func (r *OAuthRepo) CreateClient(ctx context.Context, client *model.OAuthClient)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 	}
 
-	_, err = r.db.Exec(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		client.ID.String(), client.ClientID, client.ClientSecret, client.Name,
-		string(redirectJSON), string(grantJSON), orgID, autoReg,
+		redirectVal, grantVal, orgID, autoRegVal,
 	)
 	if err != nil {
 		return fmt.Errorf("oauth client create: %w", err)
@@ -151,7 +140,7 @@ func (r *OAuthRepo) scanClient(row *sql.Row) (*model.OAuthClient, error) {
 	var idStr string
 	var redirectStr, grantStr string
 	var orgIDStr sql.NullString
-	var autoReg int
+	var autoReg bool
 	var createdAtStr string
 
 	err := row.Scan(
@@ -170,7 +159,7 @@ func (r *OAuthRepo) scanClientFromRows(rows *sql.Rows) (*model.OAuthClient, erro
 	var idStr string
 	var redirectStr, grantStr string
 	var orgIDStr sql.NullString
-	var autoReg int
+	var autoReg bool
 	var createdAtStr string
 
 	err := rows.Scan(
@@ -203,7 +192,7 @@ func (r *OAuthRepo) populateClient(
 	client *model.OAuthClient,
 	idStr, redirectStr, grantStr string,
 	orgIDStr sql.NullString,
-	autoReg int,
+	autoReg bool,
 	createdAtStr string,
 ) (*model.OAuthClient, error) {
 	id, err := uuid.Parse(idStr)
@@ -212,12 +201,17 @@ func (r *OAuthRepo) populateClient(
 	}
 	client.ID = id
 
-	if err := json.Unmarshal([]byte(redirectStr), &client.RedirectURIs); err != nil {
+	redirectURIs, err := decodeStringArray(r.db.Backend(), redirectStr)
+	if err != nil {
 		return nil, fmt.Errorf("oauth client parse redirect_uris: %w", err)
 	}
-	if err := json.Unmarshal([]byte(grantStr), &client.GrantTypes); err != nil {
+	client.RedirectURIs = redirectURIs
+
+	grantTypes, err := decodeStringArray(r.db.Backend(), grantStr)
+	if err != nil {
 		return nil, fmt.Errorf("oauth client parse grant_types: %w", err)
 	}
+	client.GrantTypes = grantTypes
 
 	if orgIDStr.Valid {
 		oid, err := uuid.Parse(orgIDStr.String)
@@ -227,7 +221,7 @@ func (r *OAuthRepo) populateClient(
 		client.OrgID = &oid
 	}
 
-	client.AutoRegistered = autoReg == 1
+	client.AutoRegistered = autoReg
 
 	client.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
 	if err != nil {
@@ -527,20 +521,13 @@ func (r *OAuthRepo) CreateIdP(ctx context.Context, idp *model.OAuthIdPConfig) er
 		idp.AllowedDomains = []string{}
 	}
 
-	domainsJSON, err := json.Marshal(idp.AllowedDomains)
-	if err != nil {
-		return fmt.Errorf("oauth idp create marshal allowed_domains: %w", err)
-	}
+	domainsVal := encodeStringArray(r.db.Backend(), idp.AllowedDomains)
+	autoProvVal := encodeBool(r.db.Backend(), idp.AutoProvision)
 
 	var orgID *string
 	if idp.OrgID != nil {
 		s := idp.OrgID.String()
 		orgID = &s
-	}
-
-	autoProv := 0
-	if idp.AutoProvision {
-		autoProv = 1
 	}
 
 	query := `INSERT INTO oauth_idp_configs (id, org_id, provider_type, client_id, client_secret, issuer_url, allowed_domains, auto_provision, default_role)
@@ -550,9 +537,9 @@ func (r *OAuthRepo) CreateIdP(ctx context.Context, idp *model.OAuthIdPConfig) er
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 	}
 
-	_, err = r.db.Exec(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		idp.ID.String(), orgID, idp.ProviderType, idp.ClientID, idp.ClientSecret,
-		idp.IssuerURL, string(domainsJSON), autoProv, idp.DefaultRole,
+		idp.IssuerURL, domainsVal, autoProvVal, idp.DefaultRole,
 	)
 	if err != nil {
 		return fmt.Errorf("oauth idp create: %w", err)
@@ -617,7 +604,7 @@ func (r *OAuthRepo) scanIdP(row *sql.Row) (*model.OAuthIdPConfig, error) {
 	var orgIDStr sql.NullString
 	var issuerURL sql.NullString
 	var domainsStr string
-	var autoProv int
+	var autoProv bool
 	var createdAtStr, updatedAtStr string
 
 	err := row.Scan(
@@ -638,7 +625,7 @@ func (r *OAuthRepo) scanIdPFromRows(rows *sql.Rows) (*model.OAuthIdPConfig, erro
 	var orgIDStr sql.NullString
 	var issuerURL sql.NullString
 	var domainsStr string
-	var autoProv int
+	var autoProv bool
 	var createdAtStr, updatedAtStr string
 
 	err := rows.Scan(
@@ -673,7 +660,7 @@ func (r *OAuthRepo) populateIdP(
 	idStr string,
 	orgIDStr, issuerURL sql.NullString,
 	domainsStr string,
-	autoProv int,
+	autoProv bool,
 	createdAtStr, updatedAtStr string,
 ) (*model.OAuthIdPConfig, error) {
 	var err error
@@ -694,11 +681,13 @@ func (r *OAuthRepo) populateIdP(
 		idp.IssuerURL = &issuerURL.String
 	}
 
-	if err := json.Unmarshal([]byte(domainsStr), &idp.AllowedDomains); err != nil {
+	domains, err := decodeStringArray(r.db.Backend(), domainsStr)
+	if err != nil {
 		return nil, fmt.Errorf("oauth idp parse allowed_domains: %w", err)
 	}
+	idp.AllowedDomains = domains
 
-	idp.AutoProvision = autoProv == 1
+	idp.AutoProvision = autoProv
 
 	idp.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
 	if err != nil {

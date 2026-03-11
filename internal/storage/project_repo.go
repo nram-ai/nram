@@ -34,10 +34,7 @@ func (r *ProjectRepo) Create(ctx context.Context, project *model.Project) error 
 		project.DefaultTags = []string{}
 	}
 
-	tagsJSON, err := json.Marshal(project.DefaultTags)
-	if err != nil {
-		return fmt.Errorf("project create marshal default_tags: %w", err)
-	}
+	tagsVal := encodeStringArray(r.db.Backend(), project.DefaultTags)
 
 	query := `INSERT INTO projects (id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -46,10 +43,10 @@ func (r *ProjectRepo) Create(ctx context.Context, project *model.Project) error 
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 	}
 
-	_, err = r.db.Exec(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		project.ID.String(), project.NamespaceID.String(), project.OwnerNamespaceID.String(),
 		project.Name, project.Slug, project.Description,
-		string(tagsJSON), string(project.Settings),
+		tagsVal, string(project.Settings),
 	)
 	if err != nil {
 		return fmt.Errorf("project create: %w", err)
@@ -124,10 +121,7 @@ func (r *ProjectRepo) Update(ctx context.Context, project *model.Project) error 
 		project.DefaultTags = []string{}
 	}
 
-	tagsJSON, err := json.Marshal(project.DefaultTags)
-	if err != nil {
-		return fmt.Errorf("project update marshal default_tags: %w", err)
-	}
+	tagsVal := encodeStringArray(r.db.Backend(), project.DefaultTags)
 
 	query := `UPDATE projects SET name = ?, slug = ?, description = ?, default_tags = ?, settings = ?, updated_at = ?
 		WHERE id = ?`
@@ -136,9 +130,9 @@ func (r *ProjectRepo) Update(ctx context.Context, project *model.Project) error 
 			WHERE id = $7`
 	}
 
-	_, err = r.db.Exec(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		project.Name, project.Slug, project.Description,
-		string(tagsJSON), string(project.Settings), now, project.ID.String(),
+		tagsVal, string(project.Settings), now, project.ID.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("project update: %w", err)
@@ -253,9 +247,11 @@ func (r *ProjectRepo) scanProject(row *sql.Row) (*model.Project, error) {
 	}
 	project.OwnerNamespaceID = ownerNSID
 
-	if err := json.Unmarshal([]byte(defaultTagsStr), &project.DefaultTags); err != nil {
+	tags, err := decodeStringArray(r.db.Backend(), defaultTagsStr)
+	if err != nil {
 		return nil, fmt.Errorf("project scan parse default_tags: %w", err)
 	}
+	project.DefaultTags = tags
 
 	project.Settings = json.RawMessage(settingsStr)
 
@@ -305,9 +301,11 @@ func (r *ProjectRepo) scanProjectFromRows(rows *sql.Rows) (*model.Project, error
 	}
 	project.OwnerNamespaceID = ownerNSID
 
-	if err := json.Unmarshal([]byte(defaultTagsStr), &project.DefaultTags); err != nil {
+	tags, err := decodeStringArray(r.db.Backend(), defaultTagsStr)
+	if err != nil {
 		return nil, fmt.Errorf("project scan rows parse default_tags: %w", err)
 	}
+	project.DefaultTags = tags
 
 	project.Settings = json.RawMessage(settingsStr)
 

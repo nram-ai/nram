@@ -38,10 +38,7 @@ func (r *IngestionLogRepo) Create(ctx context.Context, log *model.IngestionLog) 
 		log.Metadata = json.RawMessage("{}")
 	}
 
-	memoryIDsJSON, err := json.Marshal(log.MemoryIDs)
-	if err != nil {
-		return fmt.Errorf("ingestion_log create marshal memory_ids: %w", err)
-	}
+	memoryIDsEncoded := encodeStringArray(r.db.Backend(), uuidsToStrings(log.MemoryIDs))
 
 	query := `INSERT INTO ingestion_log (id, namespace_id, source, content_hash, raw_content, memory_ids, status, error, metadata)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -50,9 +47,9 @@ func (r *IngestionLogRepo) Create(ctx context.Context, log *model.IngestionLog) 
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 	}
 
-	_, err = r.db.Exec(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		log.ID.String(), log.NamespaceID.String(), log.Source, log.ContentHash,
-		log.RawContent, string(memoryIDsJSON), log.Status,
+		log.RawContent, memoryIDsEncoded, log.Status,
 		string(log.Error), string(log.Metadata),
 	)
 	if err != nil {
@@ -187,8 +184,17 @@ func (r *IngestionLogRepo) populateIngestionLog(
 		log.ContentHash = &contentHash.String
 	}
 
-	if err := json.Unmarshal([]byte(memoryIDsStr), &log.MemoryIDs); err != nil {
-		return nil, fmt.Errorf("ingestion_log parse memory_ids: %w", err)
+	memoryIDStrs, err := decodeStringArray(r.db.Backend(), memoryIDsStr)
+	if err != nil {
+		return nil, fmt.Errorf("ingestion_log decode memory_ids: %w", err)
+	}
+	if len(memoryIDStrs) > 0 {
+		log.MemoryIDs, err = stringsToUUIDs(memoryIDStrs)
+		if err != nil {
+			return nil, fmt.Errorf("ingestion_log parse memory_ids: %w", err)
+		}
+	} else {
+		log.MemoryIDs = []uuid.UUID{}
 	}
 
 	if errorStr.Valid {

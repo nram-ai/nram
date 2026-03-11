@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -43,10 +42,7 @@ func (r *APIKeyRepo) Create(ctx context.Context, key *model.APIKey) (string, err
 	key.KeyHash = hex.EncodeToString(hash[:])
 	key.KeyPrefix = rawKey[:15]
 
-	scopesJSON, err := json.Marshal(key.Scopes)
-	if err != nil {
-		return "", fmt.Errorf("api key create marshal scopes: %w", err)
-	}
+	scopesVal := encodeUUIDArray(r.db.Backend(), key.Scopes)
 
 	var expiresAt interface{}
 	if key.ExpiresAt != nil {
@@ -60,9 +56,9 @@ func (r *APIKeyRepo) Create(ctx context.Context, key *model.APIKey) (string, err
 			VALUES ($1, $2, $3, $4, $5, $6, $7)`
 	}
 
-	_, err = r.db.Exec(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		key.ID.String(), key.UserID.String(), key.KeyPrefix, key.KeyHash,
-		key.Name, string(scopesJSON), expiresAt,
+		key.Name, scopesVal, expiresAt,
 	)
 	if err != nil {
 		return "", fmt.Errorf("api key create: %w", err)
@@ -272,9 +268,11 @@ func (r *APIKeyRepo) populateKey(key *model.APIKey, idStr, userIDStr, scopesStr,
 	}
 	key.UserID = userID
 
-	if err := json.Unmarshal([]byte(scopesStr), &key.Scopes); err != nil {
+	scopes, err := decodeUUIDArray(r.db.Backend(), scopesStr)
+	if err != nil {
 		return nil, fmt.Errorf("api key parse scopes: %w", err)
 	}
+	key.Scopes = scopes
 
 	key.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
 	if err != nil {

@@ -28,319 +28,329 @@ func createEntityForAliasTest(t *testing.T, ctx context.Context, db DB, nsID uui
 }
 
 func TestEntityAliasRepo_Create(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	nsID := createTestNamespace(t, ctx, db)
-	entity := createEntityForAliasTest(t, ctx, db, nsID, "alice")
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		entity := createEntityForAliasTest(t, ctx, db, nsID, "alice")
+		repo := NewEntityAliasRepo(db)
 
-	alias := &model.EntityAlias{
-		EntityID:  entity.ID,
-		Alias:     "Al",
-		AliasType: "nickname",
-	}
-	if err := repo.Create(ctx, alias); err != nil {
-		t.Fatalf("failed to create alias: %v", err)
-	}
+		alias := &model.EntityAlias{
+			EntityID:  entity.ID,
+			Alias:     "Al",
+			AliasType: "nickname",
+		}
+		if err := repo.Create(ctx, alias); err != nil {
+			t.Fatalf("failed to create alias: %v", err)
+		}
 
-	if alias.ID == uuid.Nil {
-		t.Fatal("expected non-nil ID after create")
-	}
-	if alias.EntityID != entity.ID {
-		t.Fatalf("expected entity_id %s, got %s", entity.ID, alias.EntityID)
-	}
-	if alias.Alias != "Al" {
-		t.Fatalf("expected alias 'Al', got %q", alias.Alias)
-	}
-	if alias.AliasType != "nickname" {
-		t.Fatalf("expected alias_type 'nickname', got %q", alias.AliasType)
-	}
-	if alias.CreatedAt.IsZero() {
-		t.Fatal("expected non-zero created_at")
-	}
+		if alias.ID == uuid.Nil {
+			t.Fatal("expected non-nil ID after create")
+		}
+		if alias.EntityID != entity.ID {
+			t.Fatalf("expected entity_id %s, got %s", entity.ID, alias.EntityID)
+		}
+		if alias.Alias != "Al" {
+			t.Fatalf("expected alias 'Al', got %q", alias.Alias)
+		}
+		if alias.AliasType != "nickname" {
+			t.Fatalf("expected alias_type 'nickname', got %q", alias.AliasType)
+		}
+		if alias.CreatedAt.IsZero() {
+			t.Fatal("expected non-zero created_at")
+		}
+	})
 }
 
 func TestEntityAliasRepo_Create_GeneratesID(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	nsID := createTestNamespace(t, ctx, db)
-	entity := createEntityForAliasTest(t, ctx, db, nsID, "bob")
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		entity := createEntityForAliasTest(t, ctx, db, nsID, "bob")
+		repo := NewEntityAliasRepo(db)
 
-	alias := &model.EntityAlias{
-		EntityID:  entity.ID,
-		Alias:     "Bobby",
-		AliasType: "nickname",
-	}
-	if err := repo.Create(ctx, alias); err != nil {
-		t.Fatalf("failed to create: %v", err)
-	}
-	if alias.ID == uuid.Nil {
-		t.Fatal("expected non-nil generated ID")
-	}
+		alias := &model.EntityAlias{
+			EntityID:  entity.ID,
+			Alias:     "Bobby",
+			AliasType: "nickname",
+		}
+		if err := repo.Create(ctx, alias); err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+		if alias.ID == uuid.Nil {
+			t.Fatal("expected non-nil generated ID")
+		}
+	})
 }
 
 func TestEntityAliasRepo_Create_ExplicitID(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	nsID := createTestNamespace(t, ctx, db)
-	entity := createEntityForAliasTest(t, ctx, db, nsID, "charlie")
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		entity := createEntityForAliasTest(t, ctx, db, nsID, "charlie")
+		repo := NewEntityAliasRepo(db)
 
-	explicitID := uuid.New()
-	alias := &model.EntityAlias{
-		ID:        explicitID,
-		EntityID:  entity.ID,
-		Alias:     "Chuck",
-		AliasType: "nickname",
-	}
-	if err := repo.Create(ctx, alias); err != nil {
-		t.Fatalf("failed to create: %v", err)
-	}
-	if alias.ID != explicitID {
-		t.Fatalf("expected ID %s, got %s", explicitID, alias.ID)
-	}
+		explicitID := uuid.New()
+		alias := &model.EntityAlias{
+			ID:        explicitID,
+			EntityID:  entity.ID,
+			Alias:     "Chuck",
+			AliasType: "nickname",
+		}
+		if err := repo.Create(ctx, alias); err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+		if alias.ID != explicitID {
+			t.Fatalf("expected ID %s, got %s", explicitID, alias.ID)
+		}
+	})
 }
 
 func TestEntityAliasRepo_Create_DefaultAliasType(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	nsID := createTestNamespace(t, ctx, db)
-	entity := createEntityForAliasTest(t, ctx, db, nsID, "dave")
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		entity := createEntityForAliasTest(t, ctx, db, nsID, "dave")
+		repo := NewEntityAliasRepo(db)
 
-	alias := &model.EntityAlias{
-		EntityID:  entity.ID,
-		Alias:     "David",
-		AliasType: "name",
-	}
-	if err := repo.Create(ctx, alias); err != nil {
-		t.Fatalf("failed to create: %v", err)
-	}
-	if alias.AliasType != "name" {
-		t.Fatalf("expected alias_type 'name', got %q", alias.AliasType)
-	}
+		alias := &model.EntityAlias{
+			EntityID:  entity.ID,
+			Alias:     "David",
+			AliasType: "name",
+		}
+		if err := repo.Create(ctx, alias); err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+		if alias.AliasType != "name" {
+			t.Fatalf("expected alias_type 'name', got %q", alias.AliasType)
+		}
+	})
 }
 
 func TestEntityAliasRepo_FindByAlias(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	nsID := createTestNamespace(t, ctx, db)
-	entity := createEntityForAliasTest(t, ctx, db, nsID, "eve")
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		entity := createEntityForAliasTest(t, ctx, db, nsID, "eve")
+		repo := NewEntityAliasRepo(db)
 
-	// Create two aliases for the same entity
-	a1 := &model.EntityAlias{EntityID: entity.ID, Alias: "Evie", AliasType: "nickname"}
-	a2 := &model.EntityAlias{EntityID: entity.ID, Alias: "E", AliasType: "abbreviation"}
-	if err := repo.Create(ctx, a1); err != nil {
-		t.Fatalf("failed to create alias 1: %v", err)
-	}
-	if err := repo.Create(ctx, a2); err != nil {
-		t.Fatalf("failed to create alias 2: %v", err)
-	}
+		// Create two aliases for the same entity
+		a1 := &model.EntityAlias{EntityID: entity.ID, Alias: "Evie", AliasType: "nickname"}
+		a2 := &model.EntityAlias{EntityID: entity.ID, Alias: "E", AliasType: "abbreviation"}
+		if err := repo.Create(ctx, a1); err != nil {
+			t.Fatalf("failed to create alias 1: %v", err)
+		}
+		if err := repo.Create(ctx, a2); err != nil {
+			t.Fatalf("failed to create alias 2: %v", err)
+		}
 
-	// Find by alias text
-	results, err := repo.FindByAlias(ctx, nsID, "Evie")
-	if err != nil {
-		t.Fatalf("failed to find by alias: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result for 'Evie', got %d", len(results))
-	}
-	if results[0].Alias != "Evie" {
-		t.Fatalf("expected alias 'Evie', got %q", results[0].Alias)
-	}
-	if results[0].EntityID != entity.ID {
-		t.Fatalf("expected entity_id %s, got %s", entity.ID, results[0].EntityID)
-	}
+		// Find by alias text
+		results, err := repo.FindByAlias(ctx, nsID, "Evie")
+		if err != nil {
+			t.Fatalf("failed to find by alias: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result for 'Evie', got %d", len(results))
+		}
+		if results[0].Alias != "Evie" {
+			t.Fatalf("expected alias 'Evie', got %q", results[0].Alias)
+		}
+		if results[0].EntityID != entity.ID {
+			t.Fatalf("expected entity_id %s, got %s", entity.ID, results[0].EntityID)
+		}
 
-	// Find by other alias
-	results, err = repo.FindByAlias(ctx, nsID, "E")
-	if err != nil {
-		t.Fatalf("failed to find by alias 'E': %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result for 'E', got %d", len(results))
-	}
+		// Find by other alias
+		results, err = repo.FindByAlias(ctx, nsID, "E")
+		if err != nil {
+			t.Fatalf("failed to find by alias 'E': %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result for 'E', got %d", len(results))
+		}
 
-	// Non-existent alias returns empty
-	results, err = repo.FindByAlias(ctx, nsID, "nonexistent")
-	if err != nil {
-		t.Fatalf("failed to find non-existent alias: %v", err)
-	}
-	if len(results) != 0 {
-		t.Fatalf("expected 0 results for non-existent alias, got %d", len(results))
-	}
+		// Non-existent alias returns empty
+		results, err = repo.FindByAlias(ctx, nsID, "nonexistent")
+		if err != nil {
+			t.Fatalf("failed to find non-existent alias: %v", err)
+		}
+		if len(results) != 0 {
+			t.Fatalf("expected 0 results for non-existent alias, got %d", len(results))
+		}
+	})
 }
 
 func TestEntityAliasRepo_FindByAlias_CaseInsensitive(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	nsID := createTestNamespace(t, ctx, db)
-	entity := createEntityForAliasTest(t, ctx, db, nsID, "frank")
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		entity := createEntityForAliasTest(t, ctx, db, nsID, "frank")
+		repo := NewEntityAliasRepo(db)
 
-	a := &model.EntityAlias{EntityID: entity.ID, Alias: "Frankie", AliasType: "nickname"}
-	if err := repo.Create(ctx, a); err != nil {
-		t.Fatalf("failed to create alias: %v", err)
-	}
+		a := &model.EntityAlias{EntityID: entity.ID, Alias: "Frankie", AliasType: "nickname"}
+		if err := repo.Create(ctx, a); err != nil {
+			t.Fatalf("failed to create alias: %v", err)
+		}
 
-	// Search with different case
-	results, err := repo.FindByAlias(ctx, nsID, "frankie")
-	if err != nil {
-		t.Fatalf("failed to find: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result for case-insensitive search, got %d", len(results))
-	}
+		// Search with different case
+		results, err := repo.FindByAlias(ctx, nsID, "frankie")
+		if err != nil {
+			t.Fatalf("failed to find: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result for case-insensitive search, got %d", len(results))
+		}
 
-	results, err = repo.FindByAlias(ctx, nsID, "FRANKIE")
-	if err != nil {
-		t.Fatalf("failed to find: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result for uppercase search, got %d", len(results))
-	}
+		results, err = repo.FindByAlias(ctx, nsID, "FRANKIE")
+		if err != nil {
+			t.Fatalf("failed to find: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result for uppercase search, got %d", len(results))
+		}
+	})
 }
 
 func TestEntityAliasRepo_FindByAlias_NamespaceIsolation(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	nsID1 := createTestNamespace(t, ctx, db)
-	nsID2 := createTestNamespace(t, ctx, db)
-	entity1 := createEntityForAliasTest(t, ctx, db, nsID1, "grace_ns1")
-	entity2 := createEntityForAliasTest(t, ctx, db, nsID2, "grace_ns2")
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID1 := createTestNamespace(t, ctx, db)
+		nsID2 := createTestNamespace(t, ctx, db)
+		entity1 := createEntityForAliasTest(t, ctx, db, nsID1, "grace_ns1")
+		entity2 := createEntityForAliasTest(t, ctx, db, nsID2, "grace_ns2")
+		repo := NewEntityAliasRepo(db)
 
-	// Same alias text in different namespaces
-	a1 := &model.EntityAlias{EntityID: entity1.ID, Alias: "Gracie", AliasType: "nickname"}
-	a2 := &model.EntityAlias{EntityID: entity2.ID, Alias: "Gracie", AliasType: "nickname"}
-	if err := repo.Create(ctx, a1); err != nil {
-		t.Fatalf("failed to create alias in ns1: %v", err)
-	}
-	if err := repo.Create(ctx, a2); err != nil {
-		t.Fatalf("failed to create alias in ns2: %v", err)
-	}
+		// Same alias text in different namespaces
+		a1 := &model.EntityAlias{EntityID: entity1.ID, Alias: "Gracie", AliasType: "nickname"}
+		a2 := &model.EntityAlias{EntityID: entity2.ID, Alias: "Gracie", AliasType: "nickname"}
+		if err := repo.Create(ctx, a1); err != nil {
+			t.Fatalf("failed to create alias in ns1: %v", err)
+		}
+		if err := repo.Create(ctx, a2); err != nil {
+			t.Fatalf("failed to create alias in ns2: %v", err)
+		}
 
-	// Should only find alias in ns1
-	results, err := repo.FindByAlias(ctx, nsID1, "Gracie")
-	if err != nil {
-		t.Fatalf("failed to find: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result in ns1, got %d", len(results))
-	}
-	if results[0].EntityID != entity1.ID {
-		t.Fatalf("expected entity from ns1, got entity_id %s", results[0].EntityID)
-	}
+		// Should only find alias in ns1
+		results, err := repo.FindByAlias(ctx, nsID1, "Gracie")
+		if err != nil {
+			t.Fatalf("failed to find: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result in ns1, got %d", len(results))
+		}
+		if results[0].EntityID != entity1.ID {
+			t.Fatalf("expected entity from ns1, got entity_id %s", results[0].EntityID)
+		}
 
-	// Should only find alias in ns2
-	results, err = repo.FindByAlias(ctx, nsID2, "Gracie")
-	if err != nil {
-		t.Fatalf("failed to find: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result in ns2, got %d", len(results))
-	}
-	if results[0].EntityID != entity2.ID {
-		t.Fatalf("expected entity from ns2, got entity_id %s", results[0].EntityID)
-	}
+		// Should only find alias in ns2
+		results, err = repo.FindByAlias(ctx, nsID2, "Gracie")
+		if err != nil {
+			t.Fatalf("failed to find: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result in ns2, got %d", len(results))
+		}
+		if results[0].EntityID != entity2.ID {
+			t.Fatalf("expected entity from ns2, got entity_id %s", results[0].EntityID)
+		}
+	})
 }
 
 func TestEntityAliasRepo_ListByEntity(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	nsID := createTestNamespace(t, ctx, db)
-	entity := createEntityForAliasTest(t, ctx, db, nsID, "heidi")
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		entity := createEntityForAliasTest(t, ctx, db, nsID, "heidi")
+		repo := NewEntityAliasRepo(db)
 
-	// Create multiple aliases
-	aliases := []struct {
-		alias     string
-		aliasType string
-	}{
-		{"Heids", "nickname"},
-		{"H", "abbreviation"},
-		{"Heidi M.", "formal"},
-	}
-	for _, a := range aliases {
-		ea := &model.EntityAlias{EntityID: entity.ID, Alias: a.alias, AliasType: a.aliasType}
-		if err := repo.Create(ctx, ea); err != nil {
-			t.Fatalf("failed to create alias %q: %v", a.alias, err)
+		// Create multiple aliases
+		aliases := []struct {
+			alias     string
+			aliasType string
+		}{
+			{"Heids", "nickname"},
+			{"H", "abbreviation"},
+			{"Heidi M.", "formal"},
 		}
-	}
-
-	results, err := repo.ListByEntity(ctx, entity.ID)
-	if err != nil {
-		t.Fatalf("failed to list by entity: %v", err)
-	}
-	if len(results) != 3 {
-		t.Fatalf("expected 3 aliases, got %d", len(results))
-	}
-
-	// Should be ordered by created_at DESC
-	for i := 1; i < len(results); i++ {
-		if results[i].CreatedAt.After(results[i-1].CreatedAt) {
-			t.Fatal("expected results ordered by created_at DESC")
+		for _, a := range aliases {
+			ea := &model.EntityAlias{EntityID: entity.ID, Alias: a.alias, AliasType: a.aliasType}
+			if err := repo.Create(ctx, ea); err != nil {
+				t.Fatalf("failed to create alias %q: %v", a.alias, err)
+			}
 		}
-	}
+
+		results, err := repo.ListByEntity(ctx, entity.ID)
+		if err != nil {
+			t.Fatalf("failed to list by entity: %v", err)
+		}
+		if len(results) != 3 {
+			t.Fatalf("expected 3 aliases, got %d", len(results))
+		}
+
+		// Should be ordered by created_at DESC
+		for i := 1; i < len(results); i++ {
+			if results[i].CreatedAt.After(results[i-1].CreatedAt) {
+				t.Fatal("expected results ordered by created_at DESC")
+			}
+		}
+	})
 }
 
 func TestEntityAliasRepo_ListByEntity_Empty(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityAliasRepo(db)
 
-	results, err := repo.ListByEntity(ctx, uuid.New())
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if len(results) != 0 {
-		t.Fatalf("expected 0 results, got %d", len(results))
-	}
+		results, err := repo.ListByEntity(ctx, uuid.New())
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if len(results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(results))
+		}
+	})
 }
 
 func TestEntityAliasRepo_ListByEntity_Isolation(t *testing.T) {
-	ctx := context.Background()
-	db := testDBWithMigrations(t)
-	nsID := createTestNamespace(t, ctx, db)
-	entity1 := createEntityForAliasTest(t, ctx, db, nsID, "ivan")
-	entity2 := createEntityForAliasTest(t, ctx, db, nsID, "judy")
-	repo := NewEntityAliasRepo(db)
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		entity1 := createEntityForAliasTest(t, ctx, db, nsID, "ivan")
+		entity2 := createEntityForAliasTest(t, ctx, db, nsID, "judy")
+		repo := NewEntityAliasRepo(db)
 
-	// Aliases for entity1
-	a1 := &model.EntityAlias{EntityID: entity1.ID, Alias: "Ivy", AliasType: "nickname"}
-	if err := repo.Create(ctx, a1); err != nil {
-		t.Fatalf("failed to create alias for entity1: %v", err)
-	}
+		// Aliases for entity1
+		a1 := &model.EntityAlias{EntityID: entity1.ID, Alias: "Ivy", AliasType: "nickname"}
+		if err := repo.Create(ctx, a1); err != nil {
+			t.Fatalf("failed to create alias for entity1: %v", err)
+		}
 
-	// Aliases for entity2
-	a2 := &model.EntityAlias{EntityID: entity2.ID, Alias: "Jules", AliasType: "nickname"}
-	if err := repo.Create(ctx, a2); err != nil {
-		t.Fatalf("failed to create alias for entity2: %v", err)
-	}
+		// Aliases for entity2
+		a2 := &model.EntityAlias{EntityID: entity2.ID, Alias: "Jules", AliasType: "nickname"}
+		if err := repo.Create(ctx, a2); err != nil {
+			t.Fatalf("failed to create alias for entity2: %v", err)
+		}
 
-	// List entity1 should only see its aliases
-	results, err := repo.ListByEntity(ctx, entity1.ID)
-	if err != nil {
-		t.Fatalf("failed to list: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 alias for entity1, got %d", len(results))
-	}
-	if results[0].Alias != "Ivy" {
-		t.Fatalf("expected alias 'Ivy', got %q", results[0].Alias)
-	}
+		// List entity1 should only see its aliases
+		results, err := repo.ListByEntity(ctx, entity1.ID)
+		if err != nil {
+			t.Fatalf("failed to list: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 alias for entity1, got %d", len(results))
+		}
+		if results[0].Alias != "Ivy" {
+			t.Fatalf("expected alias 'Ivy', got %q", results[0].Alias)
+		}
 
-	// List entity2 should only see its aliases
-	results, err = repo.ListByEntity(ctx, entity2.ID)
-	if err != nil {
-		t.Fatalf("failed to list: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 alias for entity2, got %d", len(results))
-	}
-	if results[0].Alias != "Jules" {
-		t.Fatalf("expected alias 'Jules', got %q", results[0].Alias)
-	}
+		// List entity2 should only see its aliases
+		results, err = repo.ListByEntity(ctx, entity2.ID)
+		if err != nil {
+			t.Fatalf("failed to list: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 alias for entity2, got %d", len(results))
+		}
+		if results[0].Alias != "Jules" {
+			t.Fatalf("expected alias 'Jules', got %q", results[0].Alias)
+		}
+	})
 }

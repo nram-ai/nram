@@ -1,7 +1,6 @@
 -- Dimension-specific vector tables for memory embeddings.
--- Requires pgvector extension.
+-- Requires pgvector extension to be enabled by a database administrator.
 -- Entity vector tables are created in 000007 after the entities table exists.
-CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE memory_vectors_384 (
   memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
@@ -37,4 +36,5 @@ CREATE TABLE memory_vectors_3072 (
   memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
   embedding vector(3072) NOT NULL
 );
-CREATE INDEX idx_mv_3072_hnsw ON memory_vectors_3072 USING hnsw (embedding vector_cosine_ops);
+-- pgvector HNSW/IVFFlat indexes support up to 2000 dimensions;
+-- 3072-dim tables use sequential scan by default.

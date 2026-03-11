@@ -52,7 +52,8 @@ CREATE TABLE entity_vectors_3072 (
   entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
   embedding vector(3072) NOT NULL
 );
-CREATE INDEX idx_ev_3072_hnsw ON entity_vectors_3072 USING hnsw (embedding vector_cosine_ops);
+-- pgvector HNSW/IVFFlat indexes support up to 2000 dimensions;
+-- 3072-dim tables use sequential scan by default.
 
 -- Relationships table (knowledge graph edges).
 CREATE TABLE relationships (

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,48 @@ func NewWebhookRepo(db DB) *WebhookRepo {
 	return &WebhookRepo{db: db}
 }
 
+// encodeEvents serializes events for storage.
+// SQLite: JSON array string. Postgres: TEXT[] literal {a,b,c}.
+func (r *WebhookRepo) encodeEvents(events []string) (string, error) {
+	if r.db.Backend() == BackendPostgres {
+		return "{" + strings.Join(events, ",") + "}", nil
+	}
+	b, err := json.Marshal(events)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// decodeEvents deserializes events from storage.
+func (r *WebhookRepo) decodeEvents(s string) ([]string, error) {
+	if r.db.Backend() == BackendPostgres {
+		// Postgres TEXT[] comes back as {a,b,c}
+		s = strings.TrimPrefix(s, "{")
+		s = strings.TrimSuffix(s, "}")
+		if s == "" {
+			return []string{}, nil
+		}
+		return strings.Split(s, ","), nil
+	}
+	var events []string
+	if err := json.Unmarshal([]byte(s), &events); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+// encodeActive returns the appropriate value for the active column.
+func (r *WebhookRepo) encodeActive(active bool) interface{} {
+	if r.db.Backend() == BackendPostgres {
+		return active
+	}
+	if active {
+		return 1
+	}
+	return 0
+}
+
 // Create inserts a new webhook. ID is generated if zero-valued.
 // Events defaults to `[]` if nil.
 func (r *WebhookRepo) Create(ctx context.Context, webhook *model.Webhook) error {
@@ -31,7 +74,7 @@ func (r *WebhookRepo) Create(ctx context.Context, webhook *model.Webhook) error 
 		webhook.Events = []string{}
 	}
 
-	eventsJSON, err := json.Marshal(webhook.Events)
+	eventsVal, err := r.encodeEvents(webhook.Events)
 	if err != nil {
 		return fmt.Errorf("webhook create marshal events: %w", err)
 	}
@@ -43,14 +86,9 @@ func (r *WebhookRepo) Create(ctx context.Context, webhook *model.Webhook) error 
 			VALUES ($1, $2, $3, $4, $5, $6, $7)`
 	}
 
-	activeInt := 0
-	if webhook.Active {
-		activeInt = 1
-	}
-
 	_, err = r.db.Exec(ctx, query,
 		webhook.ID.String(), webhook.URL, webhook.Secret,
-		string(eventsJSON), webhook.Scope, activeInt, webhook.FailureCount,
+		eventsVal, webhook.Scope, r.encodeActive(webhook.Active), webhook.FailureCount,
 	)
 	if err != nil {
 		return fmt.Errorf("webhook create: %w", err)
@@ -76,17 +114,12 @@ func (r *WebhookRepo) Update(ctx context.Context, webhook *model.Webhook) error 
 		webhook.Events = []string{}
 	}
 
-	eventsJSON, err := json.Marshal(webhook.Events)
+	eventsVal, err := r.encodeEvents(webhook.Events)
 	if err != nil {
 		return fmt.Errorf("webhook update marshal events: %w", err)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-
-	activeInt := 0
-	if webhook.Active {
-		activeInt = 1
-	}
 
 	query := `UPDATE webhooks SET url = ?, secret = ?, events = ?, scope = ?, active = ?, updated_at = ?
 		WHERE id = ?`
@@ -96,7 +129,7 @@ func (r *WebhookRepo) Update(ctx context.Context, webhook *model.Webhook) error 
 	}
 
 	_, err = r.db.Exec(ctx, query,
-		webhook.URL, webhook.Secret, string(eventsJSON), webhook.Scope, activeInt, now,
+		webhook.URL, webhook.Secret, eventsVal, webhook.Scope, r.encodeActive(webhook.Active), now,
 		webhook.ID.String(),
 	)
 	if err != nil {
@@ -122,21 +155,26 @@ func (r *WebhookRepo) Delete(ctx context.Context, id uuid.UUID) error {
 
 // ListActiveForEvent returns webhooks that are active and subscribed to the
 // given event within a namespace scope. The scope is matched as "ns:{namespaceID}".
-// Events are stored as a JSON array; LIKE matching is used for membership checks.
 func (r *WebhookRepo) ListActiveForEvent(ctx context.Context, namespaceID uuid.UUID, event string) ([]model.Webhook, error) {
 	scope := "ns:" + namespaceID.String()
-	pattern := "%" + `"` + event + `"` + "%"
 
+	// SQLite: events is TEXT (JSON array), use LIKE for membership.
+	// Postgres: events is TEXT[], use ANY() for membership.
 	query := selectWebhookColumns + ` FROM webhooks
 		WHERE active = 1 AND scope = ? AND events LIKE ?
 		ORDER BY created_at DESC`
+	var args []interface{}
 	if r.db.Backend() == BackendPostgres {
 		query = selectWebhookColumns + ` FROM webhooks
-			WHERE active = 1 AND scope = $1 AND events LIKE $2
+			WHERE active = true AND scope = $1 AND $2 = ANY(events)
 			ORDER BY created_at DESC`
+		args = []interface{}{scope, event}
+	} else {
+		pattern := "%" + `"` + event + `"` + "%"
+		args = []interface{}{scope, pattern}
 	}
 
-	rows, err := r.db.Query(ctx, query, scope, pattern)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("webhook list active for event: %w", err)
 	}
@@ -146,7 +184,7 @@ func (r *WebhookRepo) ListActiveForEvent(ctx context.Context, namespaceID uuid.U
 }
 
 // RecordFailure increments consecutive failure count. If failure_count reaches
-// 10, the webhook is auto-disabled by setting active = 0.
+// 10, the webhook is auto-disabled.
 func (r *WebhookRepo) RecordFailure(ctx context.Context, id uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -158,7 +196,7 @@ func (r *WebhookRepo) RecordFailure(ctx context.Context, id uuid.UUID) error {
 	if r.db.Backend() == BackendPostgres {
 		query = `UPDATE webhooks SET
 			failure_count = failure_count + 1,
-			active = CASE WHEN failure_count + 1 >= 10 THEN 0 ELSE active END,
+			active = CASE WHEN failure_count + 1 >= 10 THEN false ELSE active END,
 			updated_at = $1
 			WHERE id = $2`
 	}
@@ -225,10 +263,10 @@ func (r *WebhookRepo) scanWebhook(row *sql.Row) (*model.Webhook, error) {
 	var webhook model.Webhook
 	var idStr string
 	var eventsStr string
-	var active int
-	var lastFiredStr, lastStatusVal sql.NullString
-	var createdAtStr, updatedAtStr string
+	var active bool
+	var lastFiredStr sql.NullString
 	var lastStatus sql.NullInt64
+	var createdAtStr, updatedAtStr string
 
 	err := row.Scan(
 		&idStr, &webhook.URL, &webhook.Secret, &eventsStr, &webhook.Scope, &active,
@@ -238,8 +276,6 @@ func (r *WebhookRepo) scanWebhook(row *sql.Row) (*model.Webhook, error) {
 		return nil, err
 	}
 
-	_ = lastStatusVal // unused, using lastStatus directly
-
 	return r.populateWebhook(&webhook, idStr, eventsStr, active, lastFiredStr, lastStatus, createdAtStr, updatedAtStr)
 }
 
@@ -247,7 +283,7 @@ func (r *WebhookRepo) scanWebhookFromRows(rows *sql.Rows) (*model.Webhook, error
 	var webhook model.Webhook
 	var idStr string
 	var eventsStr string
-	var active int
+	var active bool
 	var lastFiredStr sql.NullString
 	var lastStatus sql.NullInt64
 	var createdAtStr, updatedAtStr string
@@ -281,7 +317,7 @@ func (r *WebhookRepo) scanWebhooks(rows *sql.Rows) ([]model.Webhook, error) {
 func (r *WebhookRepo) populateWebhook(
 	webhook *model.Webhook,
 	idStr, eventsStr string,
-	active int,
+	active bool,
 	lastFiredStr sql.NullString,
 	lastStatus sql.NullInt64,
 	createdAtStr, updatedAtStr string,
@@ -292,11 +328,13 @@ func (r *WebhookRepo) populateWebhook(
 	}
 	webhook.ID = id
 
-	if err := json.Unmarshal([]byte(eventsStr), &webhook.Events); err != nil {
+	events, err := r.decodeEvents(eventsStr)
+	if err != nil {
 		return nil, fmt.Errorf("webhook parse events: %w", err)
 	}
+	webhook.Events = events
 
-	webhook.Active = active == 1
+	webhook.Active = active
 
 	if lastFiredStr.Valid {
 		t, err := time.Parse(time.RFC3339, lastFiredStr.String)
