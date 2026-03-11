@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS memory_lineage;
+DROP TABLE IF EXISTS entity_aliases;
+DROP TABLE IF EXISTS relationships;
+DROP TABLE IF EXISTS entity_vectors_3072;
+DROP TABLE IF EXISTS entity_vectors_1536;
+DROP TABLE IF EXISTS entity_vectors_1024;
+DROP TABLE IF EXISTS entity_vectors_768;
+DROP TABLE IF EXISTS entity_vectors_512;
+DROP TABLE IF EXISTS entity_vectors_384;
+DROP TABLE IF EXISTS entities;
