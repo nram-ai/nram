@@ -7,7 +7,10 @@ import {
   type SetupResponse,
   type CreateOrgRequest,
   type UpdateOrgRequest,
-  type User,
+  type CreateUserRequest,
+  type UpdateUserRequest,
+  type GenerateAPIKeyRequest,
+  type GenerateAPIKeyResponse,
   type Project,
   type ProjectUpdateRequest,
   type Provider,
@@ -158,8 +161,7 @@ export function useUser(id: string) {
 export function useCreateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: Partial<User> & { password?: string }) =>
-      adminAPI.createUser(data),
+    mutationFn: (data: CreateUserRequest) => adminAPI.createUser(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
     },
@@ -169,10 +171,11 @@ export function useCreateUser() {
 export function useUpdateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<User> }) =>
+    mutationFn: ({ id, data }: { id: string; data: UpdateUserRequest }) =>
       adminAPI.updateUser(id, data),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      qc.invalidateQueries({ queryKey: ["admin", "users", vars.id] });
     },
   });
 }
@@ -183,6 +186,31 @@ export function useDeleteUser() {
     mutationFn: (id: string) => adminAPI.deleteUser(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
+  });
+}
+
+export function useGenerateAPIKey() {
+  const qc = useQueryClient();
+  return useMutation<
+    GenerateAPIKeyResponse,
+    Error,
+    { userId: string; data: GenerateAPIKeyRequest }
+  >({
+    mutationFn: ({ userId, data }) => adminAPI.generateAPIKey(userId, data),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["admin", "users", vars.userId] });
+    },
+  });
+}
+
+export function useRevokeAPIKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ userId, keyId }: { userId: string; keyId: string }) =>
+      adminAPI.revokeAPIKey(userId, keyId),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["admin", "users", vars.userId] });
     },
   });
 }

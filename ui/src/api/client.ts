@@ -206,14 +206,60 @@ export interface UpdateOrgRequest {
   settings?: Record<string, unknown>;
 }
 
+export interface APIKey {
+  id: string;
+  label: string;
+  prefix: string;
+  scopes: string[];
+  expires_at?: string;
+  last_used?: string;
+  created_at: string;
+}
+
 export interface User {
   id: string;
   email: string;
   display_name: string;
   role: string;
   org_id: string;
+  organization?: { id: string; name: string };
+  last_login?: string;
+  disabled: boolean;
+  settings: Record<string, unknown>;
+  api_keys?: APIKey[];
   created_at: string;
   updated_at: string;
+}
+
+export interface CreateUserRequest {
+  email: string;
+  display_name?: string;
+  password: string;
+  role: string;
+  organization_id?: string;
+}
+
+export interface UpdateUserRequest {
+  display_name?: string;
+  role?: string;
+  disabled?: boolean;
+  settings?: Record<string, unknown>;
+}
+
+export interface GenerateAPIKeyRequest {
+  label: string;
+  scopes?: string[];
+  expires_at?: string;
+}
+
+export interface GenerateAPIKeyResponse {
+  id: string;
+  key: string;
+  label: string;
+  prefix: string;
+  scopes: string[];
+  expires_at?: string;
+  created_at: string;
 }
 
 export interface ProjectRankingWeights {
@@ -339,11 +385,19 @@ export const adminAPI = {
   // Users
   listUsers: () => request<User[]>("GET", "/admin/users"),
   getUser: (id: string) => request<User>("GET", `/admin/users/${id}`),
-  createUser: (data: Partial<User> & { password?: string }) =>
+  createUser: (data: CreateUserRequest) =>
     request<User>("POST", "/admin/users", data),
-  updateUser: (id: string, data: Partial<User>) =>
+  updateUser: (id: string, data: UpdateUserRequest) =>
     request<User>("PUT", `/admin/users/${id}`, data),
   deleteUser: (id: string) => request<void>("DELETE", `/admin/users/${id}`),
+  generateAPIKey: (userId: string, data: GenerateAPIKeyRequest) =>
+    request<GenerateAPIKeyResponse>(
+      "POST",
+      `/admin/users/${userId}/api-keys`,
+      data,
+    ),
+  revokeAPIKey: (userId: string, keyId: string) =>
+    request<void>("DELETE", `/admin/users/${userId}/api-keys/${keyId}`),
 
   // Projects
   listProjects: () => request<Project[]>("GET", "/admin/projects"),
