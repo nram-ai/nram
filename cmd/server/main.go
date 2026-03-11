@@ -13,11 +13,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/nram-ai/nram/internal/config"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 type healthResponse struct {
-	Status  string `json:"status"`
-	Version string `json:"version"`
+	Status   string `json:"status"`
+	Version  string `json:"version"`
+	Database string `json:"database"`
 }
 
 func main() {
@@ -35,14 +37,23 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
+	db, err := storage.Open(cfg.Database)
+	if err != nil {
+		log.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	log.Printf("database backend: %s", db.Backend())
+
 	r := chi.NewRouter()
 
 	r.Get("/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(healthResponse{
-			Status:  "ok",
-			Version: "0.1.0",
+			Status:   "ok",
+			Version:  "0.1.0",
+			Database: db.Backend(),
 		})
 	})
 
