@@ -422,10 +422,34 @@ export interface MigrationStatus {
   message: string;
 }
 
-export interface EnrichmentQueueStatus {
+export interface EnrichmentQueueCounts {
   pending: number;
   processing: number;
+  completed: number;
   failed: number;
+}
+
+export interface EnrichmentQueueItem {
+  id: string;
+  memory_id: string;
+  status: string;
+  attempts: number;
+  last_error?: string;
+  created_at: string;
+}
+
+export interface EnrichmentQueueStatus {
+  counts: EnrichmentQueueCounts;
+  items: EnrichmentQueueItem[];
+  paused: boolean;
+}
+
+export interface EnrichmentRetryResponse {
+  retried: number;
+}
+
+export interface EnrichmentPauseResponse {
+  paused: boolean;
 }
 
 export interface ExtractionTestResult {
@@ -549,6 +573,10 @@ export const adminAPI = {
   // Enrichment
   getEnrichmentStatus: () =>
     request<EnrichmentQueueStatus>("GET", "/admin/enrichment"),
+  retryEnrichment: (ids?: string[]) =>
+    request<EnrichmentRetryResponse>("POST", "/admin/enrichment/retry", { ids: ids ?? [] }),
+  pauseEnrichment: (paused: boolean) =>
+    request<EnrichmentPauseResponse>("POST", "/admin/enrichment/pause", { paused }),
   testExtractionPrompt: (
     type: "fact" | "entity",
     prompt: string,

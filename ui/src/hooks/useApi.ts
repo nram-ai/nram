@@ -482,6 +482,26 @@ export function useEnrichmentStatus() {
   });
 }
 
+export function useRetryEnrichment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids?: string[]) => adminAPI.retryEnrichment(ids),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+    },
+  });
+}
+
+export function usePauseEnrichment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (paused: boolean) => adminAPI.pauseEnrichment(paused),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+    },
+  });
+}
+
 export function useTestExtractionPrompt() {
   return useMutation<
     ExtractionTestResult,
