@@ -533,16 +533,27 @@ function ProviderSlotCard({
 
   const handleTest = useCallback(() => {
     setTestResult(null);
-    testMutation.mutate(slot.slot, {
-      onSuccess: (result) => setTestResult(result),
-      onError: () =>
-        setTestResult({
-          success: false,
-          latency_ms: 0,
-          message: "Request failed",
-        }),
-    });
-  }, [slot.slot, testMutation]);
+    testMutation.mutate(
+      {
+        slot: slot.slot,
+        config: {
+          type: slot.type,
+          url: slot.url,
+          model: slot.model,
+          dimensions: slot.dimensions ?? undefined,
+        },
+      },
+      {
+        onSuccess: (result) => setTestResult(result),
+        onError: () =>
+          setTestResult({
+            success: false,
+            latency_ms: 0,
+            message: "Request failed",
+          }),
+      },
+    );
+  }, [slot, testMutation]);
 
   const handleSave = useCallback(
     (data: UpdateProviderSlotRequest) => {

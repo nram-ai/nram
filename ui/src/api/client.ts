@@ -415,9 +415,45 @@ export interface Project {
 
 export interface ProjectUpdateRequest {
   name?: string;
+  slug?: string;
   description?: string;
   default_tags?: string[];
   settings?: Partial<ProjectSettings>;
+}
+
+export interface AdminCreateProjectRequest {
+  name: string;
+  slug: string;
+  owner_namespace_id: string;
+  description?: string;
+  default_tags?: string[];
+  settings?: Partial<ProjectSettings>;
+}
+
+export interface WebhookCreateRequest {
+  url: string;
+  events: string[];
+  scope?: string;
+  secret?: string | null;
+  active?: boolean;
+}
+
+export interface WebhookUpdateRequest {
+  url: string;
+  events: string[];
+  scope?: string;
+  secret?: string | null;
+  active?: boolean;
+}
+
+export interface NamespaceNode {
+  id: string;
+  name: string;
+  slug: string;
+  kind: string;
+  path: string;
+  depth: number;
+  children: NamespaceNode[];
 }
 
 export interface ProviderSlot {
@@ -699,7 +735,6 @@ export interface LookupRequest {
 
 export interface LookupResponse {
   method: "local" | "idp" | "unknown";
-  idp_type?: string | null;
 }
 
 export const authAPI = {
@@ -751,7 +786,7 @@ export const adminAPI = {
   // Projects
   listProjects: () => request<{ data: Project[] }>("GET", "/admin/projects").then(r => r.data),
   getProject: (id: string) => request<Project>("GET", `/admin/projects/${id}`),
-  createProject: (data: Partial<Project>) =>
+  createProject: (data: AdminCreateProjectRequest) =>
     request<Project>("POST", "/admin/projects", data),
   updateProject: (id: string, data: ProjectUpdateRequest) =>
     request<Project>("PUT", `/admin/projects/${id}`, data),
@@ -768,7 +803,7 @@ export const adminAPI = {
     }),
   updateProviderSlot: (slot: string, data: UpdateProviderSlotRequest) =>
     request<{ status: string }>("PUT", `/admin/providers/${slot}`, data),
-  testProviderSlot: (slot: string, config?: UpdateProviderSlotRequest) =>
+  testProviderSlot: (slot: string, config: UpdateProviderSlotRequest) =>
     request<TestProviderResult>("POST", "/admin/providers/test", { slot, config }),
   getOllamaModels: () =>
     request<OllamaModel[]>("GET", "/admin/providers/ollama/models").then(
@@ -789,9 +824,9 @@ export const adminAPI = {
 
   // Webhooks
   listWebhooks: () => request<{ data: Webhook[] }>("GET", "/admin/webhooks").then(r => r.data),
-  createWebhook: (data: Partial<Webhook>) =>
+  createWebhook: (data: WebhookCreateRequest) =>
     request<Webhook>("POST", "/admin/webhooks", data),
-  updateWebhook: (id: string, data: Partial<Webhook>) =>
+  updateWebhook: (id: string, data: WebhookUpdateRequest) =>
     request<Webhook>("PUT", `/admin/webhooks/${id}`, data),
   deleteWebhook: (id: string) =>
     request<void>("DELETE", `/admin/webhooks/${id}`),
@@ -836,7 +871,7 @@ export const adminAPI = {
 
   // Namespaces
   getNamespaceTree: () =>
-    request<Record<string, unknown>>("GET", "/admin/namespaces/tree"),
+    request<{ tree: NamespaceNode[] }>("GET", "/admin/namespaces/tree"),
 
   // OAuth Clients
   listOAuthClients: () =>

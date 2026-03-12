@@ -11,9 +11,10 @@ import {
   type UpdateUserRequest,
   type GenerateAPIKeyRequest,
   type GenerateAPIKeyResponse,
-  type Project,
+  type AdminCreateProjectRequest,
   type ProjectUpdateRequest,
-  type Webhook,
+  type WebhookCreateRequest,
+  type WebhookUpdateRequest,
   type StoreMemoryRequest,
   type MemoryListParams,
   type RecallRequest,
@@ -241,7 +242,7 @@ export function useProject(id: string) {
 export function useCreateProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: Partial<Project>) => adminAPI.createProject(data),
+    mutationFn: (data: AdminCreateProjectRequest) => adminAPI.createProject(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "projects"] });
     },
@@ -296,8 +297,8 @@ export function useUpdateProviderSlot() {
 }
 
 export function useTestProviderSlot() {
-  return useMutation<TestProviderResult, Error, string>({
-    mutationFn: (slot: string) => adminAPI.testProviderSlot(slot),
+  return useMutation<TestProviderResult, Error, { slot: string; config: UpdateProviderSlotRequest }>({
+    mutationFn: ({ slot, config }) => adminAPI.testProviderSlot(slot, config),
   });
 }
 
@@ -358,7 +359,7 @@ export function useWebhooks() {
 export function useCreateWebhook() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: Partial<Webhook>) => adminAPI.createWebhook(data),
+    mutationFn: (data: WebhookCreateRequest) => adminAPI.createWebhook(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "webhooks"] });
     },
@@ -368,7 +369,7 @@ export function useCreateWebhook() {
 export function useUpdateWebhook() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Webhook> }) =>
+    mutationFn: ({ id, data }: { id: string; data: WebhookUpdateRequest }) =>
       adminAPI.updateWebhook(id, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "webhooks"] });

@@ -6,7 +6,7 @@ import {
   useDeleteWebhook,
   useTestWebhook,
 } from "../hooks/useApi";
-import type { Webhook, WebhookTestResult } from "../api/client";
+import type { Webhook, WebhookCreateRequest, WebhookUpdateRequest, WebhookTestResult } from "../api/client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -459,16 +459,14 @@ function WebhookManagement() {
 
   function handleCreate(data: WebhookFormData) {
     setCreateError(null);
-    const payload: Record<string, unknown> = {
+    const payload: WebhookCreateRequest = {
       url: data.url,
+      events: data.events.length > 0 ? data.events : [],
       scope: data.scope || undefined,
-      events: data.events.length > 0 ? data.events : undefined,
       active: data.active,
+      secret: data.secret || undefined,
     };
-    if (data.secret) {
-      payload.secret = data.secret;
-    }
-    createMut.mutate(payload as Partial<Webhook>, {
+    createMut.mutate(payload, {
       onSuccess: () => {
         setShowCreate(false);
         setCreateError(null);
@@ -482,17 +480,15 @@ function WebhookManagement() {
   function handleUpdate(data: WebhookFormData) {
     if (!editingWebhook) return;
     setEditError(null);
-    const payload: Record<string, unknown> = {
+    const payload: WebhookUpdateRequest = {
       url: data.url,
+      events: data.events.length > 0 ? data.events : [],
       scope: data.scope || undefined,
-      events: data.events.length > 0 ? data.events : undefined,
       active: data.active,
+      secret: data.secret || undefined,
     };
-    if (data.secret) {
-      payload.secret = data.secret;
-    }
     updateMut.mutate(
-      { id: editingWebhook.id, data: payload as Partial<Webhook> },
+      { id: editingWebhook.id, data: payload },
       {
         onSuccess: () => {
           setEditingWebhook(null);
@@ -531,7 +527,7 @@ function WebhookManagement() {
   function handleToggleEnabled(wh: WebhookFull) {
     updateMut.mutate({
       id: wh.id,
-      data: { active: !wh.active },
+      data: { url: wh.url, events: wh.events, scope: wh.scope, active: !wh.active },
     });
   }
 
