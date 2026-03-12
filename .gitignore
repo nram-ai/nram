@@ -1,6 +1,10 @@
 bin/
 /server
 /nram
+/nram-server
+*.db
+*.db-shm
+*.db-wal
 ui/node_modules/
 ui/dist/
 ui/vite.config.js
