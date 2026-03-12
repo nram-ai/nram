@@ -68,22 +68,6 @@ const CLOUD_PROVIDERS = new Set(["openai", "gemini", "anthropic", "openrouter"])
 // Helpers
 // ---------------------------------------------------------------------------
 
-function relativeTime(timestamp: string): string {
-  const now = Date.now();
-  const then = new Date(timestamp).getTime();
-  const diffSec = Math.floor((now - then) / 1000);
-  if (diffSec < 0) return "just now";
-  if (diffSec < 60) return `${diffSec}s ago`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} min ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay === 1) return "yesterday";
-  if (diffDay < 30) return `${diffDay}d ago`;
-  return new Date(timestamp).toLocaleDateString();
-}
-
 function maskUrl(url: string): string {
   try {
     const u = new URL(url);
@@ -147,7 +131,7 @@ function TestResultDisplay({ result }: { result: TestProviderResult }) {
       <svg className="h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
       </svg>
-      {result.error || "Connection failed"}
+      {result.message || "Connection failed"}
     </div>
   );
 }
@@ -555,7 +539,7 @@ function ProviderSlotCard({
         setTestResult({
           success: false,
           latency_ms: 0,
-          error: "Request failed",
+          message: "Request failed",
         }),
     });
   }, [slot.slot, testMutation]);
@@ -587,7 +571,7 @@ function ProviderSlotCard({
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <div className="flex items-center gap-3">
-          <StatusDot configured={slot.configured} healthy={slot.healthy} />
+          <StatusDot configured={slot.configured} healthy={slot.status === "ok"} />
           <div>
             <h3 className="text-sm font-semibold text-foreground">{label}</h3>
             <p className="text-xs text-muted-foreground">{description}</p>
@@ -637,43 +621,17 @@ function ProviderSlotCard({
                 </div>
               )}
               <div>
-                <span className="text-muted-foreground">API Key</span>
-                <p className="flex items-center gap-1 text-foreground">
-                  {slot.api_key_set ? (
-                    <>
-                      <svg
-                        className="h-3.5 w-3.5 text-green-600 dark:text-green-400"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                        />
-                      </svg>
-                      <span className="text-xs">Set</span>
-                    </>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      Not set
-                    </span>
-                  )}
+                <span className="text-muted-foreground">Status</span>
+                <p className="text-xs text-foreground">
+                  {slot.status ?? "unknown"}
                 </p>
               </div>
             </div>
 
             {/* Health info */}
             <div className="flex items-center gap-4 text-xs text-muted-foreground">
-              {slot.last_health_check && (
-                <span>
-                  Last check: {relativeTime(slot.last_health_check)}
-                </span>
-              )}
-              {slot.avg_latency_ms != null && (
-                <span>Avg latency: {slot.avg_latency_ms}ms</span>
+              {slot.latency_ms != null && (
+                <span>Latency: {slot.latency_ms}ms</span>
               )}
             </div>
 

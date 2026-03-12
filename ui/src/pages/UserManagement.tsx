@@ -532,9 +532,9 @@ function APIKeyTable({
             <tbody className="divide-y">
               {keys.map((key) => (
                 <tr key={key.id} className="transition-colors hover:bg-accent/50">
-                  <td className="px-3 py-2 text-sm font-medium">{key.label}</td>
+                  <td className="px-3 py-2 text-sm font-medium">{key.name}</td>
                   <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
-                    {key.prefix}
+                    {key.key_prefix}
                   </td>
                   <td className="px-3 py-2 text-xs">
                     {key.scopes && key.scopes.length > 0 ? (
@@ -643,7 +643,7 @@ function UserDetailPanel({
     if (user && !initialized) {
       setEditDisplayName(user.display_name || "");
       setEditRole(user.role || "member");
-      setEditDisabled(user.disabled ?? false);
+      setEditDisabled(user.disabled_at != null);
       const settings = user.settings || {};
       setEditEnrichmentEnabled(
         settings.enrichment_enabled !== undefined
@@ -666,7 +666,7 @@ function UserDetailPanel({
 
   const isLastAdmin = useMemo(() => {
     const adminCount = userList.filter(
-      (u) => u.role === "administrator" && !u.disabled,
+      (u) => u.role === "administrator" && u.disabled_at == null,
     ).length;
     return user?.role === "administrator" && adminCount <= 1;
   }, [userList, user]);
@@ -676,7 +676,6 @@ function UserDetailPanel({
     const data: UpdateUserRequest = {
       display_name: editDisplayName,
       role: editRole,
-      disabled: editDisabled,
       settings: {
         enrichment_enabled: editEnrichmentEnabled,
         ranking_weights: {
@@ -1169,9 +1168,9 @@ function UserManagement() {
                       </td>
                       <td className="px-4 py-3">
                         <span
-                          className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${statusBadge(user.disabled)}`}
+                          className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${statusBadge(user.disabled_at != null)}`}
                         >
-                          {user.disabled ? "Disabled" : "Active"}
+                          {user.disabled_at != null ? "Disabled" : "Active"}
                         </span>
                       </td>
                     </tr>

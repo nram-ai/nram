@@ -577,49 +577,15 @@ function MemoryDetailPanel({
               </div>
             </div>
 
-            {/* Entities */}
-            {memory.entities && memory.entities.length > 0 && (
+            {/* Metadata */}
+            {memory.metadata && Object.keys(memory.metadata).length > 0 && (
               <div>
                 <h3 className="mb-2 text-sm font-medium text-muted-foreground">
-                  Linked Entities
+                  Metadata
                 </h3>
-                <div className="space-y-1">
-                  {memory.entities.map((ent) => (
-                    <div
-                      key={ent.id}
-                      className="flex items-center gap-2 text-sm"
-                    >
-                      <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-xs text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300">
-                        {ent.type}
-                      </span>
-                      <span>{ent.name}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Lineage */}
-            {memory.lineage && memory.lineage.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-sm font-medium text-muted-foreground">
-                  Lineage
-                </h3>
-                <div className="space-y-1">
-                  {memory.lineage.map((ln) => (
-                    <div
-                      key={ln.id}
-                      className="flex items-center gap-2 text-sm"
-                    >
-                      <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-300">
-                        {ln.type}
-                      </span>
-                      <span className="font-mono text-xs">
-                        {ln.related_memory_id}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                <pre className="rounded bg-gray-100 p-2 text-xs dark:bg-gray-800">
+                  {JSON.stringify(memory.metadata, null, 2)}
+                </pre>
               </div>
             )}
 
@@ -939,19 +905,29 @@ function MemoryBrowser() {
   // Derived data
   const memories: Memory[] = useMemo(() => {
     if (isSemanticSearch) {
-      return (recallQuery.data ?? []).map((r) => r.memory);
+      const results = recallQuery.data?.memories ?? [];
+      return results.map((r) => ({
+        id: r.id,
+        content: r.content,
+        tags: r.tags,
+        source: r.source,
+        enriched: false,
+        metadata: r.metadata,
+        created_at: r.created_at,
+        updated_at: r.created_at,
+      }));
     }
-    return listQuery.data?.memories ?? [];
+    return listQuery.data?.data ?? [];
   }, [isSemanticSearch, recallQuery.data, listQuery.data]);
 
   const scoreMap = useMemo(() => {
     if (!isSemanticSearch || !recallQuery.data) return new Map<string, number>();
-    return new Map(recallQuery.data.map((r) => [r.memory.id, r.score]));
+    return new Map(recallQuery.data.memories.map((r) => [r.id, r.score]));
   }, [isSemanticSearch, recallQuery.data]);
 
   const total = isSemanticSearch
     ? memories.length
-    : (listQuery.data?.total ?? 0);
+    : (listQuery.data?.pagination?.total ?? 0);
 
   const isLoading = isSemanticSearch
     ? recallQuery.isLoading

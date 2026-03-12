@@ -117,32 +117,69 @@ export interface ActivityResponse {
 export interface StoreMemoryRequest {
   content: string;
   tags?: string[];
+  source?: string;
+  metadata?: Record<string, unknown>;
+  options?: {
+    enrich?: boolean;
+    extract?: boolean;
+    ttl?: string;
+  };
 }
 
 export interface StoredMemory {
   id: string;
+  project_id: string;
+  project_slug: string;
   content: string;
   tags?: string[];
-  project_id: string;
-  created_at: string;
+  enriched: boolean;
+  enrichment_queued: boolean;
+  latency_ms: number;
 }
 
 export interface Memory {
   id: string;
+  namespace_id?: string;
   content: string;
+  embedding_dim?: number | null;
+  source: string | null;
   tags: string[];
+  confidence?: number;
+  importance?: number;
+  access_count?: number;
+  last_accessed?: string | null;
+  expires_at?: string | null;
+  superseded_by?: string | null;
+  enriched: boolean;
   metadata: Record<string, unknown>;
-  source: string;
   created_at: string;
   updated_at: string;
-  enriched: boolean;
-  entities?: { id: string; name: string; type: string }[];
-  lineage?: { id: string; type: string; related_memory_id: string }[];
+  deleted_at?: string | null;
+  purge_after?: string | null;
 }
 
 export interface RecallResult {
-  memory: Memory;
+  id: string;
+  project_id: string;
+  content: string;
+  tags: string[];
+  source: string | null;
   score: number;
+  similarity?: number | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface RecallResponse {
+  memories: RecallResult[];
+  entities?: RecallEntity[];
+  latency_ms: number;
+}
+
+export interface RecallEntity {
+  id: string;
+  name: string;
+  type: string;
 }
 
 export interface RecallRequest {
@@ -164,10 +201,12 @@ export interface MemoryListParams {
 }
 
 export interface MemoryListResponse {
-  memories: Memory[];
-  total: number;
-  offset: number;
-  limit: number;
+  data: Memory[];
+  pagination: {
+    total: number;
+    limit: number;
+    offset: number;
+  };
 }
 
 export interface MemoryUpdateRequest {
@@ -178,7 +217,61 @@ export interface MemoryUpdateRequest {
 
 export interface ForgetRequest {
   ids?: string[];
-  filter?: { tags?: string[]; before?: string; after?: string };
+  tags?: string[];
+  hard?: boolean;
+}
+
+export interface ForgetResponse {
+  deleted: number;
+  latency_ms: number;
+}
+
+export interface EnrichResponse {
+  queued: number;
+  skipped: number;
+  latency_ms: number;
+}
+
+export interface ExportData {
+  version: string;
+  exported_at: string;
+  project: { id: string; name: string; slug: string };
+  memories: ExportMemory[];
+  entities?: ExportEntity[];
+  relationships?: ExportRelationship[];
+  stats?: { memory_count: number; entity_count: number; relationship_count: number };
+}
+
+export interface ExportMemory {
+  id: string;
+  content: string;
+  tags: string[];
+  source?: string | null;
+  confidence?: number;
+  importance?: number;
+  enriched: boolean;
+  metadata?: Record<string, unknown>;
+  lineage?: { parent_id: string | null; relation: string }[];
+  created_at: string;
+}
+
+export interface ExportEntity {
+  id: string;
+  name: string;
+  type: string;
+  canonical: string;
+  properties?: Record<string, unknown>;
+  mention_count: number;
+}
+
+export interface ExportRelationship {
+  id: string;
+  source_id: string;
+  target_id: string;
+  relation: string;
+  weight: number;
+  valid_from?: string;
+  valid_until?: string | null;
 }
 
 export interface EnrichRequest {
@@ -218,11 +311,12 @@ export interface UpdateOrgRequest {
 
 export interface APIKey {
   id: string;
-  label: string;
-  prefix: string;
+  user_id?: string;
+  key_prefix: string;
+  name: string;
   scopes: string[];
-  expires_at?: string;
-  last_used?: string;
+  last_used?: string | null;
+  expires_at?: string | null;
   created_at: string;
 }
 
@@ -234,7 +328,7 @@ export interface User {
   org_id: string;
   organization?: { id: string; name: string };
   last_login?: string;
-  disabled: boolean;
+  disabled_at: string | null;
   settings: Record<string, unknown>;
   api_keys?: APIKey[];
   created_at: string;
@@ -252,7 +346,6 @@ export interface CreateUserRequest {
 export interface UpdateUserRequest {
   display_name?: string;
   role?: string;
-  disabled?: boolean;
   settings?: Record<string, unknown>;
 }
 
@@ -332,11 +425,9 @@ export interface ProviderSlot {
   type: string;
   url: string;
   model: string;
-  dimensions?: number;
-  api_key_set: boolean;
-  healthy: boolean;
-  last_health_check?: string;
-  avg_latency_ms?: number;
+  dimensions?: number | null;
+  status?: string;
+  latency_ms?: number | null;
 }
 
 export interface UpdateProviderSlotRequest {
@@ -355,8 +446,8 @@ export interface ProviderConfigResponse {
 
 export interface TestProviderResult {
   success: boolean;
+  message?: string;
   latency_ms: number;
-  error?: string;
 }
 
 export interface OllamaModel {
@@ -384,9 +475,14 @@ export interface SettingSchema {
 export interface Webhook {
   id: string;
   url: string;
+  events: string[];
   scope: string;
-  enabled: boolean;
+  active: boolean;
+  last_fired?: string | null;
+  last_status?: number | null;
+  failure_count: number;
   created_at: string;
+  updated_at: string;
 }
 
 export interface AnalyticsData {
@@ -646,20 +742,15 @@ export const adminAPI = {
   // Provider slots — backend returns { embedding: {...}, fact: {...}, entity: {...} }
   getProviderSlots: () =>
     request<ProviderConfigResponse>("GET", "/admin/providers").then((r) => {
-      const mapping: Record<string, string> = {
-        embedding: "embedding",
-        fact: "fact_extraction",
-        entity: "entity_extraction",
-      };
-      return Object.entries(mapping).map(([key, slot]) => ({
+      return (["embedding", "fact", "entity"] as const).map((slot) => ({
         slot,
-        ...(r[key as keyof ProviderConfigResponse] ?? {}),
+        ...(r[slot] ?? {}),
       })) as ProviderSlot[];
     }),
   updateProviderSlot: (slot: string, data: UpdateProviderSlotRequest) =>
     request<ProviderSlot>("PUT", `/admin/providers/${slot}`, data),
-  testProviderSlot: (slot: string) =>
-    request<TestProviderResult>("POST", `/admin/providers/${slot}/test`),
+  testProviderSlot: (slot: string, config?: UpdateProviderSlotRequest) =>
+    request<TestProviderResult>("POST", "/admin/providers/test", { slot, config }),
   getOllamaModels: () =>
     request<OllamaModel[]>("GET", "/admin/providers/ollama/models").then(
       (models) => ({ models }),
@@ -769,7 +860,7 @@ export const memoryAPI = {
   },
 
   recall: (projectId: string, body: RecallRequest) =>
-    request<RecallResult[]>(
+    request<RecallResponse>(
       "POST",
       `/projects/${projectId}/memories/recall`,
       body,
@@ -786,20 +877,41 @@ export const memoryAPI = {
     ),
 
   remove: (projectId: string, memoryId: string) =>
-    request<void>("DELETE", `/projects/${projectId}/memories/${memoryId}`),
+    request<ForgetResponse>("DELETE", `/projects/${projectId}/memories/${memoryId}`),
 
   forget: (projectId: string, body: ForgetRequest) =>
-    request<void>("POST", `/projects/${projectId}/memories/forget`, body),
+    request<ForgetResponse>("POST", `/projects/${projectId}/memories/forget`, body),
 
   enrich: (projectId: string, body: EnrichRequest) =>
-    request<void>("POST", `/projects/${projectId}/memories/enrich`, body),
+    request<EnrichResponse>("POST", `/projects/${projectId}/memories/enrich`, body),
 
   export: (projectId: string) =>
-    request<Memory[]>("GET", `/projects/${projectId}/memories/export`),
+    request<ExportData>("GET", `/projects/${projectId}/memories/export`),
 };
 
 // --- Health ---
 
+export interface HealthProviderStatus {
+  status: string;
+  provider: string;
+  model: string;
+  latency_ms?: number | null;
+}
+
+export interface HealthResponse {
+  status: "ok" | "degraded";
+  version: string;
+  backend: "sqlite" | "postgres";
+  database: { status: "ok" | "error"; latency_ms: number };
+  providers: {
+    embedding: HealthProviderStatus;
+    fact_extraction: HealthProviderStatus;
+    entity_extraction: HealthProviderStatus;
+  };
+  enrichment_queue?: { pending: number; processing: number; failed: number } | null;
+  uptime_seconds: number;
+}
+
 export const healthAPI = {
-  check: () => request<{ status: string }>("GET", "/health"),
+  check: () => request<HealthResponse>("GET", "/health"),
 };

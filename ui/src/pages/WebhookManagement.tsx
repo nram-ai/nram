@@ -13,11 +13,8 @@ import type { Webhook } from "../api/client";
 // ---------------------------------------------------------------------------
 
 interface WebhookFull extends Webhook {
-  events?: string[];
   secret?: string;
-  failure_count?: number;
   last_delivery?: string;
-  last_status?: number;
 }
 
 interface WebhookFormData {
@@ -25,7 +22,7 @@ interface WebhookFormData {
   scope: string;
   events: string[];
   secret: string;
-  enabled: boolean;
+  active: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +86,7 @@ function emptyForm(): WebhookFormData {
     scope: "",
     events: [],
     secret: "",
-    enabled: true,
+    active: true,
   };
 }
 
@@ -99,7 +96,7 @@ function webhookToForm(wh: WebhookFull): WebhookFormData {
     scope: wh.scope || "",
     events: wh.events ?? [],
     secret: "",
-    enabled: wh.enabled,
+    active: wh.active,
   };
 }
 
@@ -294,8 +291,8 @@ function WebhookFormDialog({
                 type="checkbox"
                 id="webhook-enabled"
                 className="rounded border"
-                checked={form.enabled}
-                onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+                checked={form.active}
+                onChange={(e) => setForm({ ...form, active: e.target.checked })}
               />
               <label htmlFor="webhook-enabled" className="text-sm">
                 Enabled
@@ -470,7 +467,7 @@ function WebhookManagement() {
       url: data.url,
       scope: data.scope || undefined,
       events: data.events.length > 0 ? data.events : undefined,
-      enabled: data.enabled,
+      active: data.active,
     };
     if (data.secret) {
       payload.secret = data.secret;
@@ -493,7 +490,7 @@ function WebhookManagement() {
       url: data.url,
       scope: data.scope || undefined,
       events: data.events.length > 0 ? data.events : undefined,
-      enabled: data.enabled,
+      active: data.active,
     };
     if (data.secret) {
       payload.secret = data.secret;
@@ -538,7 +535,7 @@ function WebhookManagement() {
   function handleToggleEnabled(wh: WebhookFull) {
     updateMut.mutate({
       id: wh.id,
-      data: { enabled: !wh.enabled },
+      data: { active: !wh.active },
     });
   }
 
@@ -655,9 +652,9 @@ function WebhookManagement() {
                       type="button"
                       onClick={() => handleToggleEnabled(wh)}
                       disabled={updateMut.isPending}
-                      title={wh.enabled ? "Click to disable" : "Click to enable"}
+                      title={wh.active ? "Click to disable" : "Click to enable"}
                     >
-                      {wh.enabled ? (
+                      {wh.active ? (
                         <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-300">
                           Enabled
                         </span>
