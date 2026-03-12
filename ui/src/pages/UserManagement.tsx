@@ -1029,8 +1029,6 @@ function UserManagement() {
     return result;
   }, [users, search, sortField, sortDir]);
 
-  const singleUser = !usersQuery.isLoading && users.length <= 1;
-
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -1045,16 +1043,6 @@ function UserManagement() {
         </div>
       </div>
 
-      {/* Single-user info message */}
-      {singleUser && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
-          <p className="text-sm text-blue-800 dark:text-blue-300">
-            User management is available when multiple users exist. Create
-            additional users to enable this section.
-          </p>
-        </div>
-      )}
-
       {/* Loading state */}
       {usersQuery.isLoading && (
         <div className="py-8 text-center text-sm text-muted-foreground">
@@ -1062,8 +1050,8 @@ function UserManagement() {
         </div>
       )}
 
-      {/* Main content (visible when multiple users exist) */}
-      {!usersQuery.isLoading && !singleUser && (
+      {/* Main content */}
+      {!usersQuery.isLoading && (
         <>
           {/* Toolbar */}
           <div className="flex items-center justify-between gap-4 pb-4">

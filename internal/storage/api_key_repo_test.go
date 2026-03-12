@@ -254,8 +254,8 @@ func TestAPIKeyRepo_ListByUser_Empty(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to list: %v", err)
 		}
-		if keys != nil {
-			t.Fatalf("expected nil for no keys, got %d keys", len(keys))
+		if len(keys) != 0 {
+			t.Fatalf("expected empty slice for no keys, got %d keys", len(keys))
 		}
 	})
 }

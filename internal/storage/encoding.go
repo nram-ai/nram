@@ -32,6 +32,9 @@ func decodeStringArray(backend string, s string) ([]string, error) {
 	if err := json.Unmarshal([]byte(s), &arr); err != nil {
 		return nil, err
 	}
+	if arr == nil {
+		arr = []string{}
+	}
 	return arr, nil
 }
 

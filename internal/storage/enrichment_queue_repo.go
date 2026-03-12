@@ -408,7 +408,7 @@ func (r *EnrichmentQueueRepo) ListRecent(ctx context.Context, limit int) ([]mode
 	}
 	defer rows.Close()
 
-	var result []model.EnrichmentJob
+	result := []model.EnrichmentJob{}
 	for rows.Next() {
 		item, err := r.scanItemFromRows(rows)
 		if err != nil {

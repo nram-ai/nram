@@ -119,7 +119,7 @@ func (r *SettingsRepo) ListByScope(ctx context.Context, scope string) ([]model.S
 	}
 	defer rows.Close()
 
-	var result []model.Setting
+	result := []model.Setting{}
 	for rows.Next() {
 		setting, err := r.scanSettingFromRows(rows)
 		if err != nil {
@@ -144,7 +144,7 @@ func (r *SettingsRepo) ListAll(ctx context.Context) ([]model.Setting, error) {
 	}
 	defer rows.Close()
 
-	var result []model.Setting
+	result := []model.Setting{}
 	for rows.Next() {
 		setting, err := r.scanSettingFromRows(rows)
 		if err != nil {

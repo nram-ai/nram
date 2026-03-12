@@ -152,7 +152,7 @@ func (r *UserRepo) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]model.User
 	}
 	defer rows.Close()
 
-	var result []model.User
+	result := []model.User{}
 	for rows.Next() {
 		u, err := r.scanUserFromRows(rows)
 		if err != nil {
@@ -177,7 +177,7 @@ func (r *UserRepo) ListAll(ctx context.Context) ([]model.User, error) {
 	}
 	defer rows.Close()
 
-	var result []model.User
+	result := []model.User{}
 	for rows.Next() {
 		u, err := r.scanUserFromRows(rows)
 		if err != nil {
@@ -414,6 +414,26 @@ func (r *UserRepo) scanUserFromRows(rows *sql.Rows) (*model.User, error) {
 	}
 
 	return &user, nil
+}
+
+// VerifyPassword checks whether the given plaintext password matches the
+// encoded argon2id hash.
+func VerifyPassword(encoded, password string) bool {
+	return verifyArgon2id(encoded, password)
+}
+
+// UpdateLastLogin sets the last_login timestamp for the given user to now.
+func (r *UserRepo) UpdateLastLogin(ctx context.Context, userID uuid.UUID) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE users SET last_login = ? WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE users SET last_login = $1 WHERE id = $2`
+	}
+	_, err := r.db.Exec(ctx, query, now, userID.String())
+	if err != nil {
+		return fmt.Errorf("user update last_login: %w", err)
+	}
+	return nil
 }
 
 func HashPassword(password string) (string, error) {

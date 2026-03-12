@@ -36,6 +36,14 @@ async function request<T>(
   });
 
   if (!res.ok) {
+    // On 401, the token is invalid or expired — clear it and redirect to login.
+    if (res.status === 401) {
+      localStorage.removeItem("nram_token");
+      if (window.location.pathname !== "/login" && window.location.pathname !== "/setup") {
+        window.location.href = "/login";
+        return new Promise<T>(() => {}); // never resolves — page is navigating
+      }
+    }
     let errBody: unknown;
     try {
       errBody = await res.json();
@@ -67,6 +75,7 @@ export interface SetupRequest {
 export interface SetupResponse {
   user: User;
   api_key: string;
+  token: string;
   message: string;
 }
 
@@ -86,6 +95,7 @@ export interface DashboardData {
   total_memories: number;
   total_projects: number;
   total_users: number;
+  total_entities: number;
   total_organizations: number;
   memories_by_project: ProjectMemoryCount[];
   enrichment_queue?: EnrichmentQueueStats;
@@ -337,6 +347,12 @@ export interface UpdateProviderSlotRequest {
   dimensions?: number;
 }
 
+export interface ProviderConfigResponse {
+  embedding: Omit<ProviderSlot, "slot">;
+  fact: Omit<ProviderSlot, "slot">;
+  entity: Omit<ProviderSlot, "slot">;
+}
+
 export interface TestProviderResult {
   success: boolean;
   latency_ms: number;
@@ -539,6 +555,32 @@ export interface PaginatedResponse<T> {
   per_page: number;
 }
 
+// --- Auth API ---
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: { id: string; email: string; display_name: string; role: string; org_id: string };
+}
+
+export interface LookupRequest {
+  email: string;
+}
+
+export interface LookupResponse {
+  method: "local" | "idp" | "unknown";
+  idp_type?: string | null;
+}
+
+export const authAPI = {
+  login: (data: LoginRequest) => request<LoginResponse>("POST", "/auth/login", data),
+  lookup: (data: LookupRequest) => request<LookupResponse>("POST", "/auth/lookup", data),
+};
+
 // --- Admin API client ---
 
 export const adminAPI = {
@@ -555,7 +597,7 @@ export const adminAPI = {
     request<ActivityResponse>("GET", `/admin/activity?limit=${limit}`),
 
   // Organizations
-  listOrgs: () => request<Organization[]>("GET", "/admin/orgs"),
+  listOrgs: () => request<{ data: Organization[] }>("GET", "/admin/orgs").then(r => r.data),
   getOrg: (id: string) => request<Organization>("GET", `/admin/orgs/${id}`),
   createOrg: (data: CreateOrgRequest) =>
     request<Organization>("POST", "/admin/orgs", data),
@@ -564,7 +606,7 @@ export const adminAPI = {
   deleteOrg: (id: string) => request<void>("DELETE", `/admin/orgs/${id}`),
 
   // Users
-  listUsers: () => request<User[]>("GET", "/admin/users"),
+  listUsers: () => request<{ data: User[] }>("GET", "/admin/users").then(r => r.data),
   getUser: (id: string) => request<User>("GET", `/admin/users/${id}`),
   createUser: (data: CreateUserRequest) =>
     request<User>("POST", "/admin/users", data),
@@ -581,7 +623,7 @@ export const adminAPI = {
     request<void>("DELETE", `/admin/users/${userId}/api-keys/${keyId}`),
 
   // Projects
-  listProjects: () => request<Project[]>("GET", "/admin/projects"),
+  listProjects: () => request<{ data: Project[] }>("GET", "/admin/projects").then(r => r.data),
   getProject: (id: string) => request<Project>("GET", `/admin/projects/${id}`),
   createProject: (data: Partial<Project>) =>
     request<Project>("POST", "/admin/projects", data),
@@ -601,15 +643,27 @@ export const adminAPI = {
   deleteProvider: (id: string) =>
     request<void>("DELETE", `/admin/providers/${id}`),
 
-  // Provider slots
+  // Provider slots — backend returns { embedding: {...}, fact: {...}, entity: {...} }
   getProviderSlots: () =>
-    request<ProviderSlot[]>("GET", "/admin/providers"),
+    request<ProviderConfigResponse>("GET", "/admin/providers").then((r) => {
+      const mapping: Record<string, string> = {
+        embedding: "embedding",
+        fact: "fact_extraction",
+        entity: "entity_extraction",
+      };
+      return Object.entries(mapping).map(([key, slot]) => ({
+        slot,
+        ...(r[key as keyof ProviderConfigResponse] ?? {}),
+      })) as ProviderSlot[];
+    }),
   updateProviderSlot: (slot: string, data: UpdateProviderSlotRequest) =>
     request<ProviderSlot>("PUT", `/admin/providers/${slot}`, data),
   testProviderSlot: (slot: string) =>
     request<TestProviderResult>("POST", `/admin/providers/${slot}/test`),
   getOllamaModels: () =>
-    request<{ models: OllamaModel[] }>("GET", "/admin/providers/ollama/models"),
+    request<OllamaModel[]>("GET", "/admin/providers/ollama/models").then(
+      (models) => ({ models }),
+    ),
   pullOllamaModel: (model: string) =>
     request<{ status: string }>("POST", "/admin/providers/ollama/pull", { model }),
 
@@ -624,7 +678,7 @@ export const adminAPI = {
     request<{ status: string }>("PUT", "/admin/settings", { key, value, scope }),
 
   // Webhooks
-  listWebhooks: () => request<Webhook[]>("GET", "/admin/webhooks"),
+  listWebhooks: () => request<{ data: Webhook[] }>("GET", "/admin/webhooks").then(r => r.data),
   createWebhook: (data: Partial<Webhook>) =>
     request<Webhook>("POST", "/admin/webhooks", data),
   updateWebhook: (id: string, data: Partial<Webhook>) =>

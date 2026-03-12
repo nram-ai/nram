@@ -98,7 +98,7 @@ func (r *NamespaceRepo) ListByParent(ctx context.Context, parentID uuid.UUID) ([
 	}
 	defer rows.Close()
 
-	var result []model.Namespace
+	result := []model.Namespace{}
 	for rows.Next() {
 		ns, err := r.scanNamespaceFromRows(rows)
 		if err != nil {
@@ -201,7 +201,7 @@ func (r *NamespaceRepo) ResolvePathPrefix(ctx context.Context, prefix string) ([
 	}
 	defer rows.Close()
 
-	var ids []uuid.UUID
+	ids := []uuid.UUID{}
 	for rows.Next() {
 		var idStr string
 		if err := rows.Scan(&idStr); err != nil {

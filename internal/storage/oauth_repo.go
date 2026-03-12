@@ -109,6 +109,41 @@ func (r *OAuthRepo) ListClientsByUser(ctx context.Context, userID uuid.UUID) ([]
 	return r.scanClients(rows)
 }
 
+// ListAllClients returns all OAuth clients, ordered by created_at DESC.
+func (r *OAuthRepo) ListAllClients(ctx context.Context) ([]model.OAuthClient, error) {
+	query := selectOAuthClientColumns + ` FROM oauth_clients ORDER BY created_at DESC`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("oauth client list all: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanClients(rows)
+}
+
+// DeleteClientByPK removes an OAuth client by its primary key UUID.
+func (r *OAuthRepo) DeleteClientByPK(ctx context.Context, id uuid.UUID) error {
+	query := `DELETE FROM oauth_clients WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM oauth_clients WHERE id = $1`
+	}
+
+	result, err := r.db.Exec(ctx, query, id.String())
+	if err != nil {
+		return fmt.Errorf("oauth client delete by pk: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("oauth client delete by pk rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("oauth client not found")
+	}
+	return nil
+}
+
 // DeleteClient removes an OAuth client by its client_id string.
 func (r *OAuthRepo) DeleteClient(ctx context.Context, clientID string) error {
 	query := `DELETE FROM oauth_clients WHERE client_id = ?`
@@ -174,7 +209,7 @@ func (r *OAuthRepo) scanClientFromRows(rows *sql.Rows) (*model.OAuthClient, erro
 }
 
 func (r *OAuthRepo) scanClients(rows *sql.Rows) ([]model.OAuthClient, error) {
-	var result []model.OAuthClient
+	result := []model.OAuthClient{}
 	for rows.Next() {
 		client, err := r.scanClientFromRows(rows)
 		if err != nil {
@@ -205,11 +240,17 @@ func (r *OAuthRepo) populateClient(
 	if err != nil {
 		return nil, fmt.Errorf("oauth client parse redirect_uris: %w", err)
 	}
+	if redirectURIs == nil {
+		redirectURIs = []string{}
+	}
 	client.RedirectURIs = redirectURIs
 
 	grantTypes, err := decodeStringArray(r.db.Backend(), grantStr)
 	if err != nil {
 		return nil, fmt.Errorf("oauth client parse grant_types: %w", err)
+	}
+	if grantTypes == nil {
+		grantTypes = []string{}
 	}
 	client.GrantTypes = grantTypes
 
@@ -641,7 +682,7 @@ func (r *OAuthRepo) scanIdPFromRows(rows *sql.Rows) (*model.OAuthIdPConfig, erro
 }
 
 func (r *OAuthRepo) scanIdPs(rows *sql.Rows) ([]model.OAuthIdPConfig, error) {
-	var result []model.OAuthIdPConfig
+	result := []model.OAuthIdPConfig{}
 	for rows.Next() {
 		idp, err := r.scanIdPFromRows(rows)
 		if err != nil {
@@ -684,6 +725,9 @@ func (r *OAuthRepo) populateIdP(
 	domains, err := decodeStringArray(r.db.Backend(), domainsStr)
 	if err != nil {
 		return nil, fmt.Errorf("oauth idp parse allowed_domains: %w", err)
+	}
+	if domains == nil {
+		domains = []string{}
 	}
 	idp.AllowedDomains = domains
 

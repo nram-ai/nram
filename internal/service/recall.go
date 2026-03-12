@@ -76,7 +76,7 @@ type RecallResult struct {
 // RecallResponse contains the full recall result including optional graph entities.
 type RecallResponse struct {
 	Memories  []RecallResult `json:"memories"`
-	Entities  []RecallEntity `json:"entities,omitempty"`
+	Entities  []RecallEntity `json:"entities"`
 	LatencyMs int64          `json:"latency_ms"`
 }
 
@@ -198,7 +198,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		projectID = project.ID
 	}
 
-	var candidates []scoredMemory
+	candidates := []scoredMemory{}
 
 	// Try vector search if embedding provider is available.
 	var embeddingUsed bool
@@ -299,7 +299,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	}
 
 	// Graph traversal if requested.
-	var entities []RecallEntity
+	entities := []RecallEntity{}
 	if req.IncludeGraph && s.entityReader != nil && s.traverser != nil {
 		// Search for entities related to the query.
 		foundEntities, err := s.entityReader.FindBySimilarity(ctx, namespaceID, req.Query, "", 10)
@@ -397,11 +397,15 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			sim = &s
 		}
 
+		tags := c.memory.Tags
+		if tags == nil {
+			tags = []string{}
+		}
 		results = append(results, RecallResult{
 			ID:         c.memory.ID,
 			ProjectID:  c.projectID,
 			Content:    c.memory.Content,
-			Tags:       c.memory.Tags,
+			Tags:       tags,
 			Source:     c.memory.Source,
 			Score:      score,
 			Similarity: sim,

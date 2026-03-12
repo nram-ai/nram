@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"crypto/rand"
 	"fmt"
 
 	"github.com/nram-ai/nram/internal/api"
@@ -212,6 +211,9 @@ func main() {
 	// Build start time for health handler.
 	startTime := time.Now()
 
+	// Create setup checker (cached atomic bool, queries DB once).
+	setupChecker := api.NewSetupChecker(db)
+
 	// Create admin store adapters.
 	setupStore := adminstore.NewSetupStore(userRepo, namespaceRepo, orgRepo, apiKeyRepo, db)
 	orgAdminStore := adminstore.NewOrgAdminStore(orgRepo, namespaceRepo)
@@ -225,6 +227,7 @@ func main() {
 	databaseAdminStore := adminstore.NewDatabaseAdminStore(db)
 	namespaceAdminStore := adminstore.NewNamespaceAdminStore(db)
 	providerAdminStore := adminstore.NewProviderAdminStore(registry, settingsRepo)
+	oauthAdminStore := adminstore.NewOAuthAdminStore(oauthRepo)
 	enrichmentAdminStore := adminstore.NewEnrichmentAdminStore(enrichmentQueueRepo, settingsRepo, db)
 
 	// Provider accessors for enrichment test prompt.
@@ -239,6 +242,25 @@ func main() {
 			return nil
 		}
 		return registry.GetEntity()
+	}
+
+	// Create auth config for login/lookup handlers.
+	// JWT secret is loaded later, but we need it here — load it early.
+	jwtSecret, err := storage.LoadOrCreateJWTSecret(context.Background(), db)
+	if err != nil {
+		log.Fatalf("failed to load jwt secret: %v", err)
+	}
+
+	// Create OAuth server.
+	oauthHost := cfg.Server.Host
+	if oauthHost == "" || oauthHost == "0.0.0.0" {
+		oauthHost = "localhost"
+	}
+	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret, fmt.Sprintf("http://%s:%d", oauthHost, cfg.Server.Port))
+
+	authCfg := api.AuthConfig{
+		UserRepo:  userRepo,
+		JWTSecret: jwtSecret,
 	}
 
 	// Assemble handlers.
@@ -286,9 +308,25 @@ func main() {
 		// Embedded admin UI
 		UI: ui.Handler(),
 
+		// Auth handlers
+		AuthLogin:  api.NewLoginHandler(authCfg),
+		AuthLookup: api.NewLookupHandler(authCfg),
+
+		// OAuth handlers
+		OAuthAuthorize:         oauthServer.AuthorizeHandler(),
+		OAuthToken:             oauthServer.TokenHandler(),
+		OAuthRegister:          oauthServer.RegisterClientHandler(),
+		OAuthUserInfo:          oauthServer.UserInfoHandler(),
+		OAuthMetadata:          oauthServer.MetadataHandler(),
+		OAuthProtectedResource: oauthServer.ProtectedResourceHandler(),
+
 		// Admin handlers
 		AdminSetupStatus: api.NewAdminSetupStatusHandler(api.SetupConfig{Store: setupStore}),
-		AdminSetup:       api.NewAdminSetupHandler(api.SetupConfig{Store: setupStore}),
+		AdminSetup: api.NewAdminSetupHandler(api.SetupConfig{
+			Store:      setupStore,
+			JWTSecret:  jwtSecret,
+			OnComplete: setupChecker.MarkComplete,
+		}),
 		AdminDashboard:   api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashboardStore}),
 		AdminActivity:    api.NewAdminActivityHandler(api.DashboardConfig{Store: dashboardStore}),
 		AdminOrgs:        api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore}),
@@ -301,6 +339,7 @@ func main() {
 			FactProvider:   factProvider,
 			EntityProvider: entityProvider,
 		}),
+		AdminOAuth:      api.NewAdminOAuthHandler(api.OAuthAdminConfig{Store: oauthAdminStore}),
 		AdminWebhooks:   api.NewAdminWebhooksHandler(api.WebhookAdminConfig{Store: webhookAdminStore}),
 		AdminAnalytics:  api.NewAdminAnalyticsHandler(api.AnalyticsConfig{Store: analyticsStore}),
 		AdminUsage:      api.NewAdminUsageHandler(api.UsageConfig{Store: usageStore}),
@@ -314,13 +353,6 @@ func main() {
 		}),
 	}
 
-	// Generate JWT secret (random 32 bytes per process — in production this
-	// should be persisted or configured, but for now auto-generate is fine).
-	jwtSecret := make([]byte, 32)
-	if _, err := rand.Read(jwtSecret); err != nil {
-		log.Fatalf("failed to generate jwt secret: %v", err)
-	}
-
 	// Build router config with auth middleware and rate limiter.
 	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, jwtSecret)
 	rateLimiter := auth.NewRateLimiter(10, 20)
@@ -330,6 +362,7 @@ func main() {
 		Metrics:        metrics,
 		AuthMiddleware: authMiddleware,
 		RateLimiter:    rateLimiter,
+		SetupGuard:     api.SetupGuardMiddleware(setupChecker.IsComplete),
 	}
 
 	r := server.NewRouter(routerCfg, handlers)

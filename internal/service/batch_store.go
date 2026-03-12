@@ -161,7 +161,7 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 	}
 
 	// Process each item independently.
-	var errors []BatchStoreError
+	errors := []BatchStoreError{}
 	memoriesCreated := 0
 
 	for i, item := range req.Items {

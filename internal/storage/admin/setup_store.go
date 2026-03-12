@@ -38,9 +38,19 @@ func NewSetupStore(
 }
 
 func (s *SetupStore) IsSetupComplete(ctx context.Context) (bool, error) {
-	count, err := s.userRepo.CountAdmins(ctx)
+	val, err := storage.GetSystemMeta(ctx, s.db, "setup_complete")
 	if err != nil {
 		return false, fmt.Errorf("check setup complete: %w", err)
+	}
+	if val == "true" {
+		return true, nil
+	}
+
+	// Fallback for databases upgraded before the system_meta flag existed:
+	// if no flag is set but admin users exist, treat setup as complete.
+	count, err := s.userRepo.CountAdmins(ctx)
+	if err != nil {
+		return false, fmt.Errorf("check setup complete (fallback): %w", err)
 	}
 	return count > 0, nil
 }
@@ -115,6 +125,14 @@ func (s *SetupStore) CompleteSetup(ctx context.Context, email, password string) 
 	rawKey, err := s.apiKeyRepo.Create(ctx, apiKey)
 	if err != nil {
 		return nil, "", fmt.Errorf("setup create api key: %w", err)
+	}
+
+	// Mark setup as complete in system_meta.
+	if err := storage.SetSystemMeta(ctx, s.db, "setup_complete", "true"); err != nil {
+		return nil, "", fmt.Errorf("setup set setup_complete flag: %w", err)
+	}
+	if err := storage.SetSystemMeta(ctx, s.db, "storage_backend", s.db.Backend()); err != nil {
+		return nil, "", fmt.Errorf("setup set storage_backend: %w", err)
 	}
 
 	return user, rawKey, nil

@@ -164,7 +164,7 @@ func (r *MemoryShareRepo) scanMemoryShareFromRows(rows *sql.Rows) (*model.Memory
 }
 
 func (r *MemoryShareRepo) scanMemoryShares(rows *sql.Rows) ([]model.MemoryShare, error) {
-	var result []model.MemoryShare
+	result := []model.MemoryShare{}
 	for rows.Next() {
 		share, err := r.scanMemoryShareFromRows(rows)
 		if err != nil {

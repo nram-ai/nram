@@ -89,10 +89,14 @@ func (s *BatchGetService) BatchGet(ctx context.Context, req *BatchGetRequest) (*
 		}
 
 		foundMap[mem.ID] = struct{}{}
+		tags := mem.Tags
+		if tags == nil {
+			tags = []string{}
+		}
 		found = append(found, MemoryDetail{
 			ID:        mem.ID,
 			Content:   mem.Content,
-			Tags:      mem.Tags,
+			Tags:      tags,
 			Source:    mem.Source,
 			Metadata:  mem.Metadata,
 			Enriched:  mem.Enriched,

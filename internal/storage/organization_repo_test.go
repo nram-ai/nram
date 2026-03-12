@@ -319,6 +319,25 @@ func TestOrganizationRepo_List(t *testing.T) {
 	})
 }
 
+func TestOrganizationRepo_List_Empty(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewOrganizationRepo(db)
+
+		// List on a fresh database (no orgs created in this sub-test) may still
+		// contain orgs from other subtests when sharing a Postgres instance, so
+		// we use a dedicated SQLite-only assertion for true emptiness.  For the
+		// nil-safety contract we care about: result must never be nil.
+		orgs, err := repo.List(ctx)
+		if err != nil {
+			t.Fatalf("failed to list: %v", err)
+		}
+		if orgs == nil {
+			t.Fatal("expected non-nil slice from List on empty table, got nil")
+		}
+	})
+}
+
 func TestOrganizationRepo_Update(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

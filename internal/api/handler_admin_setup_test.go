@@ -101,6 +101,8 @@ func TestSetupSuccess(t *testing.T) {
 	orgID := uuid.New()
 	nsID := uuid.New()
 
+	jwtSecret := []byte("test-secret-key-for-setup")
+
 	h := NewAdminSetupHandler(SetupConfig{
 		Store: &mockSetupStore{
 			complete: false,
@@ -118,6 +120,7 @@ func TestSetupSuccess(t *testing.T) {
 			},
 			setupKey: "nram_k_testkey123",
 		},
+		JWTSecret: jwtSecret,
 	})
 
 	body := `{"email":"admin@example.com","password":"supersecret"}`
@@ -149,6 +152,9 @@ func TestSetupSuccess(t *testing.T) {
 	}
 	if resp.APIKey != "nram_k_testkey123" {
 		t.Errorf("expected api_key nram_k_testkey123, got %q", resp.APIKey)
+	}
+	if resp.Token == "" {
+		t.Error("expected non-empty token in response")
 	}
 	if resp.Message == "" {
 		t.Error("expected non-empty message")

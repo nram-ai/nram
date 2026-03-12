@@ -28,7 +28,7 @@ type errorEnvelope struct {
 type errorBody struct {
 	Code    string      `json:"code"`
 	Message string      `json:"message"`
-	Details interface{} `json:"details"`
+	Details interface{} `json:"details,omitempty"`
 }
 
 // ErrBadRequest returns a 400 Bad Request error.

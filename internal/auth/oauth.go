@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/storage"
@@ -48,6 +50,7 @@ type serverMetadata struct {
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
 	RegistrationEndpoint              string   `json:"registration_endpoint"`
+	UserinfoEndpoint                  string   `json:"userinfo_endpoint"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
 	GrantTypesSupported               []string `json:"grant_types_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
@@ -59,9 +62,10 @@ func (s *OAuthServer) MetadataHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		meta := serverMetadata{
 			Issuer:                            s.issuerURL,
-			AuthorizationEndpoint:             s.issuerURL + "/authorize",
-			TokenEndpoint:                     s.issuerURL + "/token",
-			RegistrationEndpoint:              s.issuerURL + "/register",
+			AuthorizationEndpoint:             s.issuerURL + "/oauth/authorize",
+			TokenEndpoint:                     s.issuerURL + "/oauth/token",
+			RegistrationEndpoint:              s.issuerURL + "/oauth/register",
+			UserinfoEndpoint:                  s.issuerURL + "/oauth/userinfo",
 			ResponseTypesSupported:            []string{"code"},
 			GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 			CodeChallengeMethodsSupported:     []string{codeChallengeMethodS256},
@@ -202,14 +206,34 @@ func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
 
 		scope := q.Get("scope")
 
-		// Determine the authenticated user. In production, this comes from the session
-		// (via AuthMiddleware). For auto-approve flows without a consent screen, the user
-		// must already be authenticated before reaching the authorize endpoint.
+		// Determine the authenticated user. Check the auth context first (set by
+		// AuthMiddleware), then fall back to the nram_session cookie which the
+		// login page sets for the short-lived OAuth redirect flow.
 		var userID uuid.UUID
 		if ac := FromContext(r.Context()); ac != nil {
 			userID = ac.UserID
+		} else if cookie, err := r.Cookie("nram_session"); err == nil && cookie.Value != "" {
+			claims := &Claims{}
+			tok, parseErr := jwt.ParseWithClaims(cookie.Value, claims, func(t *jwt.Token) (interface{}, error) {
+				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("unexpected signing method")
+				}
+				return s.jwtSecret, nil
+			})
+			if parseErr == nil && tok.Valid {
+				sub, _ := claims.GetSubject()
+				if uid, parseErr := uuid.Parse(sub); parseErr == nil {
+					userID = uid
+				}
+			}
+			if userID == uuid.Nil {
+				loginURL := "/login?redirect=" + url.QueryEscape("/oauth/authorize?"+r.URL.RawQuery)
+				http.Redirect(w, r, loginURL, http.StatusFound)
+				return
+			}
 		} else {
-			writeOAuthError(w, http.StatusUnauthorized, "login_required", "user must be authenticated to authorize")
+			loginURL := "/login?redirect=" + url.QueryEscape("/oauth/authorize?"+r.URL.RawQuery)
+			http.Redirect(w, r, loginURL, http.StatusFound)
 			return
 		}
 
@@ -244,6 +268,15 @@ func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
 		}
 		redirectURL.RawQuery = rq.Encode()
 
+		// Clear the short-lived session cookie after successful authorization
+		http.SetCookie(w, &http.Cookie{
+			Name:     "nram_session",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
 		http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 	}
 }
@@ -474,6 +507,98 @@ func (s *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
+}
+
+// userInfoResponse is the response for the UserInfo endpoint.
+type userInfoResponse struct {
+	Sub   string `json:"sub"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	Role  string `json:"role"`
+	OrgID string `json:"org_id"`
+}
+
+// UserInfoHandler returns user information for the authenticated Bearer token holder.
+// Implements a subset of OpenID Connect UserInfo (GET /oauth/userinfo).
+func (s *OAuthServer) UserInfoHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "missing authorization header")
+			return
+		}
+
+		tokenStr, ok := strings.CutPrefix(authHeader, "Bearer ")
+		if !ok || tokenStr == "" {
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "invalid authorization header format")
+			return
+		}
+
+		claims := &Claims{}
+		tok, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
+			return s.jwtSecret, nil
+		})
+		if err != nil || !tok.Valid {
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "invalid or expired token")
+			return
+		}
+
+		sub, err := claims.GetSubject()
+		if err != nil || sub == "" {
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "token missing subject")
+			return
+		}
+
+		userID, err := uuid.Parse(sub)
+		if err != nil {
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "invalid user id in token")
+			return
+		}
+
+		user, err := s.userRepo.GetByID(r.Context(), userID)
+		if err != nil {
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "user not found")
+			return
+		}
+
+		resp := userInfoResponse{
+			Sub:   user.ID.String(),
+			Email: user.Email,
+			Name:  user.DisplayName,
+			Role:  user.Role,
+			OrgID: user.OrgID.String(),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// protectedResourceMetadata is the response for RFC 9728 protected resource metadata.
+type protectedResourceMetadata struct {
+	Resource                string   `json:"resource"`
+	AuthorizationServers    []string `json:"authorization_servers"`
+	BearerMethodsSupported  []string `json:"bearer_methods_supported"`
+}
+
+// ProtectedResourceHandler returns RFC 9728 OAuth Protected Resource Metadata.
+// Served at GET /.well-known/oauth-protected-resource.
+func (s *OAuthServer) ProtectedResourceHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		meta := protectedResourceMetadata{
+			Resource:               s.issuerURL,
+			AuthorizationServers:   []string{s.issuerURL},
+			BearerMethodsSupported: []string{"header"},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(meta)
+	}
 }
 
 // verifyCodeChallenge verifies a PKCE code_verifier against a stored code_challenge.

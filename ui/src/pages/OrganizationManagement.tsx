@@ -5,7 +5,6 @@ import {
   useCreateOrg,
   useUpdateOrg,
   useDeleteOrg,
-  useUsers,
 } from "../hooks/useApi";
 import type { Organization, OrgUser, UpdateOrgRequest } from "../api/client";
 
@@ -518,9 +517,7 @@ function OrgDetailPanel({
 
 function OrganizationManagement() {
   const orgsQuery = useOrgs();
-  const usersQuery = useUsers();
   const orgs = orgsQuery.data ?? [];
-  const userCount = usersQuery.data?.length ?? 0;
 
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -542,10 +539,6 @@ function OrganizationManagement() {
     return result;
   }, [orgs, sortField, sortDir]);
 
-  // Still loading users to determine visibility
-  const usersLoading = usersQuery.isLoading;
-  const singleUser = !usersLoading && userCount <= 1;
-
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -560,24 +553,15 @@ function OrganizationManagement() {
         </div>
       </div>
 
-      {/* Single-user info message */}
-      {singleUser && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
-          <p className="text-sm text-blue-800 dark:text-blue-300">
-            Organization management is available when multiple users exist.
-          </p>
-        </div>
-      )}
-
-      {/* Loading state for user check */}
-      {usersLoading && (
+      {/* Loading state */}
+      {orgsQuery.isLoading && (
         <div className="py-8 text-center text-sm text-muted-foreground">
           Loading...
         </div>
       )}
 
-      {/* Main content (visible when multiple users exist) */}
-      {!usersLoading && !singleUser && (
+      {/* Main content */}
+      {!orgsQuery.isLoading && (
         <>
           {/* Toolbar */}
           <div className="flex items-center justify-between pb-4">

@@ -1,11 +1,10 @@
 import { useState, useCallback } from "react";
-import { useProjects } from "../hooks/useApi";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type ToolTab = "claude-code" | "claude-desktop" | "cursor";
+type ToolTab = "claude-code" | "claude-desktop" | "cursor" | "chatgpt" | "api-key";
 
 interface CopyButtonProps {
   text: string;
@@ -55,43 +54,8 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Snippet generators
+// Constants
 // ---------------------------------------------------------------------------
-
-function generateClaudeCodeSnippet(serverUrl: string, apiKey: string): string {
-  const key = apiKey || "YOUR_API_KEY";
-  return `claude mcp add nram --transport http ${serverUrl}/mcp --header "Authorization: Bearer ${key}"`;
-}
-
-function generateClaudeDesktopSnippet(serverUrl: string, apiKey: string): string {
-  const key = apiKey || "YOUR_API_KEY";
-  const config = {
-    mcpServers: {
-      nram: {
-        url: `${serverUrl}/mcp`,
-        headers: {
-          Authorization: `Bearer ${key}`,
-        },
-      },
-    },
-  };
-  return JSON.stringify(config, null, 2);
-}
-
-function generateCursorSnippet(serverUrl: string, apiKey: string): string {
-  const key = apiKey || "YOUR_API_KEY";
-  const config = {
-    mcpServers: {
-      nram: {
-        url: `${serverUrl}/mcp`,
-        headers: {
-          Authorization: `Bearer ${key}`,
-        },
-      },
-    },
-  };
-  return JSON.stringify(config, null, 2);
-}
 
 const CLAUDE_MD_SNIPPET = `## Memory (nram)
 
@@ -141,46 +105,200 @@ function TabButton({ active, label, onClick }: TabButtonProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Tab content components
+// ---------------------------------------------------------------------------
+
+function ClaudeCodeTab({ serverUrl }: { serverUrl: string }) {
+  const oauthCmd = `claude mcp add --transport http nram ${serverUrl}/mcp`;
+  const explicitCmd = `claude mcp add --transport http nram ${serverUrl}/mcp --client-id <client_id> --client-secret <client_secret>`;
+
+  return (
+    <div className="bg-card rounded-md border border-border p-4 space-y-4">
+      <div>
+        <p className="text-sm font-medium">OAuth (recommended)</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Claude Code supports OAuth auto-discovery. No API key or headers needed
+          &mdash; you will be prompted to authenticate in your browser.
+        </p>
+      </div>
+      <CodeBlock code={oauthCmd} label="Run in your terminal" />
+
+      <div className="border-t border-border pt-4">
+        <p className="text-sm font-medium">Alternative with explicit credentials</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          If you need to specify the OAuth client credentials directly, use the
+          following command instead. Replace the client ID and secret with your
+          own values.
+        </p>
+      </div>
+      <CodeBlock code={explicitCmd} />
+    </div>
+  );
+}
+
+function ClaudeDesktopTab({ serverUrl }: { serverUrl: string }) {
+  const url = `${serverUrl}/mcp`;
+
+  return (
+    <div className="bg-card rounded-md border border-border p-4 space-y-4">
+      <div>
+        <p className="text-sm font-medium">OAuth (recommended)</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Go to <span className="font-medium">Settings &rarr; Connectors &rarr; Add URL</span>,
+          then enter the URL below.
+        </p>
+      </div>
+      <CodeBlock code={url} label="Server URL" />
+      <p className="text-sm text-muted-foreground">
+        Claude Desktop and claude.ai support OAuth auto-discovery. You will be
+        prompted to authenticate in your browser when connecting.
+      </p>
+    </div>
+  );
+}
+
+function CursorTab({ serverUrl }: { serverUrl: string }) {
+  const url = `${serverUrl}/mcp`;
+
+  return (
+    <div className="bg-card rounded-md border border-border p-4 space-y-4">
+      <div>
+        <p className="text-sm font-medium">OAuth (recommended)</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Go to <span className="font-medium">Settings &rarr; MCP &rarr; Add</span>,
+          select the <span className="font-medium">URL</span> type, then enter the
+          URL below.
+        </p>
+      </div>
+      <CodeBlock code={url} label="Server URL" />
+      <p className="text-sm text-muted-foreground">
+        Cursor supports OAuth-based MCP servers. You will be prompted to
+        authenticate when connecting.
+      </p>
+    </div>
+  );
+}
+
+function ChatGPTTab({ serverUrl }: { serverUrl: string }) {
+  const httpsUrl = serverUrl.replace(/^http:\/\//, "https://");
+  const url = `${httpsUrl}/mcp`;
+
+  return (
+    <div className="bg-card rounded-md border border-border p-4 space-y-4">
+      <div className="bg-muted rounded-md p-3 text-sm">
+        <span className="font-medium">Note:</span> ChatGPT requires HTTPS. If
+        you are running nram locally, use a tunnel service (such as ngrok) or
+        deploy to a server with TLS.
+      </div>
+      <div>
+        <p className="text-sm font-medium">Add MCP Server</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          In ChatGPT settings, add a new MCP server with the URL below.
+        </p>
+      </div>
+      <CodeBlock code={url} label="Server URL (HTTPS required)" />
+      <p className="text-sm text-muted-foreground">
+        ChatGPT uses RFC 9728 OAuth discovery. Ensure your server is accessible
+        over HTTPS.
+      </p>
+    </div>
+  );
+}
+
+function ApiKeyTab({ serverUrl, apiKey, setApiKey }: {
+  serverUrl: string;
+  apiKey: string;
+  setApiKey: (v: string) => void;
+}) {
+  const key = apiKey || "YOUR_API_KEY";
+  const jsonConfig = JSON.stringify(
+    {
+      mcpServers: {
+        nram: {
+          url: `${serverUrl}/mcp`,
+          headers: {
+            Authorization: `Bearer ${key}`,
+          },
+        },
+      },
+    },
+    null,
+    2,
+  );
+  const cliCmd = `claude mcp add nram --transport http ${serverUrl}/mcp --header "Authorization: Bearer ${key}"`;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-card rounded-md border border-border p-4 space-y-4">
+        <div>
+          <p className="text-sm font-medium">Fallback for tools that do not support OAuth</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Use bearer-token authentication only when your MCP client does not
+            support OAuth auto-discovery. Prefer the OAuth-based methods shown in
+            the other tabs when possible.
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <label htmlFor="api-key" className="text-sm text-muted-foreground">
+            API Key
+          </label>
+          <input
+            id="api-key"
+            type="text"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="Paste your API key here (e.g. nram_k_...)"
+            className="w-full bg-background border border-border rounded-md px-3 py-1.5 text-sm font-mono"
+          />
+          <p className="text-xs text-muted-foreground">
+            API keys can be generated from the{" "}
+            <a href="/users" className="text-primary hover:underline">
+              Users
+            </a>{" "}
+            page. If left blank, snippets will show YOUR_API_KEY as a placeholder.
+          </p>
+        </div>
+      </div>
+
+      <div className="bg-card rounded-md border border-border p-4 space-y-4">
+        <p className="text-sm font-medium">JSON configuration</p>
+        <p className="text-sm text-muted-foreground">
+          Add this to your MCP client&apos;s configuration file. If you already
+          have other MCP servers configured, merge the nram entry into your
+          existing mcpServers object.
+        </p>
+        <CodeBlock code={jsonConfig} />
+      </div>
+
+      <div className="bg-card rounded-md border border-border p-4 space-y-4">
+        <p className="text-sm font-medium">CLI command</p>
+        <p className="text-sm text-muted-foreground">
+          Alternatively, register the server via the Claude Code CLI with the
+          authorization header.
+        </p>
+        <CodeBlock code={cliCmd} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
 function MCPConfigGenerator() {
   const [serverUrl, setServerUrl] = useState(() => window.location.origin);
   const [apiKey, setApiKey] = useState("");
-  const [selectedProjectId, setSelectedProjectId] = useState("");
   const [activeTab, setActiveTab] = useState<ToolTab>("claude-code");
-
-  const { data: projects } = useProjects();
-
-  const selectedProject = projects?.find((p) => p.id === selectedProjectId);
 
   const tabs: { key: ToolTab; label: string }[] = [
     { key: "claude-code", label: "Claude Code" },
-    { key: "claude-desktop", label: "Claude Desktop" },
+    { key: "claude-desktop", label: "Claude Desktop / Claude.ai" },
     { key: "cursor", label: "Cursor" },
+    { key: "chatgpt", label: "ChatGPT" },
+    { key: "api-key", label: "API Key Fallback" },
   ];
-
-  const snippetMap: Record<ToolTab, { code: string; filename: string; description: string }> = {
-    "claude-code": {
-      code: generateClaudeCodeSnippet(serverUrl, apiKey),
-      filename: "Terminal command",
-      description: "Run this command in your terminal to register nram as an MCP server in Claude Code.",
-    },
-    "claude-desktop": {
-      code: generateClaudeDesktopSnippet(serverUrl, apiKey),
-      filename: "claude_desktop_config.json",
-      description:
-        "Add this to your Claude Desktop configuration file (claude_desktop_config.json). If you already have other MCP servers configured, merge the nram entry into your existing mcpServers object.",
-    },
-    cursor: {
-      code: generateCursorSnippet(serverUrl, apiKey),
-      filename: ".cursor/mcp.json",
-      description:
-        "Add this to the .cursor/mcp.json file in your project root. If you already have other MCP servers configured, merge the nram entry into your existing mcpServers object.",
-    },
-  };
-
-  const activeSnippet = snippetMap[activeTab];
 
   return (
     <div className="space-y-8">
@@ -188,7 +306,8 @@ function MCPConfigGenerator() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">MCP Config Generator</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Generate copy-pasteable MCP server configuration snippets for your preferred AI tool.
+          Generate connection instructions for your preferred AI tool. OAuth is
+          the recommended authentication method for all supported clients.
         </p>
       </div>
 
@@ -209,69 +328,13 @@ function MCPConfigGenerator() {
             className="w-full bg-background border border-border rounded-md px-3 py-1.5 text-sm"
           />
         </div>
-
-        <div className="space-y-1">
-          <label htmlFor="api-key" className="text-sm text-muted-foreground">
-            API Key
-          </label>
-          <input
-            id="api-key"
-            type="text"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="Paste your API key here"
-            className="w-full bg-background border border-border rounded-md px-3 py-1.5 text-sm font-mono"
-          />
-          <p className="text-xs text-muted-foreground">
-            API keys can be generated from the{" "}
-            <a href="/users" className="text-primary hover:underline">
-              Users
-            </a>{" "}
-            page. If left blank, snippets will show YOUR_API_KEY as a placeholder.
-          </p>
-        </div>
-
-        <div className="space-y-1">
-          <label htmlFor="project" className="text-sm text-muted-foreground">
-            Project (optional)
-          </label>
-          <select
-            id="project"
-            value={selectedProjectId}
-            onChange={(e) => setSelectedProjectId(e.target.value)}
-            className="w-full bg-background border border-border rounded-md px-3 py-1.5 text-sm"
-          >
-            <option value="">All projects (no filter)</option>
-            {projects?.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.slug})
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-muted-foreground">
-            Selecting a project is for reference only. The MCP server handles project scoping
-            via the memory tools&apos; project parameter.
-          </p>
-        </div>
-
-        {selectedProject && (
-          <div className="bg-muted rounded-md p-3 text-sm">
-            <span className="font-medium">Selected project:</span>{" "}
-            <span className="font-mono">{selectedProject.slug}</span>
-            {selectedProject.path && (
-              <>
-                {" "}&mdash; path: <span className="font-mono">{selectedProject.path}</span>
-              </>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Snippet tabs */}
       <div className="space-y-4">
-        <h2 className="text-sm font-medium">Tool Configuration Snippets</h2>
+        <h2 className="text-sm font-medium">Tool Configuration</h2>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {tabs.map((tab) => (
             <TabButton
               key={tab.key}
@@ -282,13 +345,13 @@ function MCPConfigGenerator() {
           ))}
         </div>
 
-        <div className="bg-card rounded-md border border-border p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium font-mono">{activeSnippet.filename}</p>
-          </div>
-          <p className="text-sm text-muted-foreground">{activeSnippet.description}</p>
-          <CodeBlock code={activeSnippet.code} />
-        </div>
+        {activeTab === "claude-code" && <ClaudeCodeTab serverUrl={serverUrl} />}
+        {activeTab === "claude-desktop" && <ClaudeDesktopTab serverUrl={serverUrl} />}
+        {activeTab === "cursor" && <CursorTab serverUrl={serverUrl} />}
+        {activeTab === "chatgpt" && <ChatGPTTab serverUrl={serverUrl} />}
+        {activeTab === "api-key" && (
+          <ApiKeyTab serverUrl={serverUrl} apiKey={apiKey} setApiKey={setApiKey} />
+        )}
       </div>
 
       {/* System prompts */}

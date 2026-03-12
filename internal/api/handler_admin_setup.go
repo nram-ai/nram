@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
+	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
 )
 
@@ -21,7 +23,11 @@ type SetupStore interface {
 
 // SetupConfig holds dependencies for setup handlers.
 type SetupConfig struct {
-	Store SetupStore
+	Store     SetupStore
+	JWTSecret []byte
+	// OnComplete is called after setup succeeds to flip the cached setup flag.
+	// May be nil.
+	OnComplete func()
 }
 
 type setupStatusResponse struct {
@@ -37,6 +43,7 @@ type setupRequest struct {
 type setupResponse struct {
 	User    *model.User `json:"user"`
 	APIKey  string      `json:"api_key"`
+	Token   string      `json:"token"`
 	Message string      `json:"message"`
 }
 
@@ -99,9 +106,20 @@ func NewAdminSetupHandler(cfg SetupConfig) http.HandlerFunc {
 			return
 		}
 
+		token, err := auth.GenerateJWT(user.ID, user.Role, cfg.JWTSecret, 24*time.Hour)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to generate auth token"))
+			return
+		}
+
+		if cfg.OnComplete != nil {
+			cfg.OnComplete()
+		}
+
 		writeJSON(w, http.StatusCreated, setupResponse{
 			User:    user,
 			APIKey:  apiKey,
+			Token:   token,
 			Message: "Setup complete. Store this API key — it will not be shown again.",
 		})
 	}

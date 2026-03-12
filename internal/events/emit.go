@@ -17,7 +17,7 @@ func Emit(ctx context.Context, bus EventBus, eventType, scope string, data inter
 		return
 	}
 
-	raw, err := json.Marshal(data)
+	raw, err := json.Marshal(sanitizeForJSON(data))
 	if err != nil {
 		log.Printf("events: failed to marshal event data for %s: %v", eventType, err)
 		return

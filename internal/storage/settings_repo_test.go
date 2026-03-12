@@ -365,6 +365,39 @@ func TestSettingsRepo_ListByScope_Empty(t *testing.T) {
 	})
 }
 
+func TestSettingsRepo_ListByScope_Empty_NilSafety(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewSettingsRepo(db)
+
+		settings, err := repo.ListByScope(ctx, "org:empty-"+uuid.New().String()[:8])
+		if err != nil {
+			t.Fatalf("failed to list by scope: %v", err)
+		}
+		if settings == nil {
+			t.Fatal("expected non-nil slice from ListByScope on empty result, got nil")
+		}
+		if len(settings) != 0 {
+			t.Fatalf("expected 0 settings, got %d", len(settings))
+		}
+	})
+}
+
+func TestSettingsRepo_ListAll_Empty(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewSettingsRepo(db)
+
+		settings, err := repo.ListAll(ctx)
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if settings == nil {
+			t.Fatal("expected non-nil slice from ListAll, got nil")
+		}
+	})
+}
+
 func TestSettingsRepo_GetSchema(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

@@ -45,14 +45,18 @@ func (s *UserAdminStore) CreateUser(ctx context.Context, email, displayName, pas
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
 
-	// Resolve the org's namespace path.
-	org, err := s.orgRepo.GetByID(ctx, orgID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve org: %w", err)
-	}
-	orgNS, err := s.nsRepo.GetByID(ctx, org.NamespaceID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve org namespace: %w", err)
+	// Resolve the org's namespace path when an org is specified.
+	var orgNSPath string
+	if orgID != uuid.Nil {
+		org, err := s.orgRepo.GetByID(ctx, orgID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve org: %w", err)
+		}
+		orgNS, err := s.nsRepo.GetByID(ctx, org.NamespaceID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve org namespace: %w", err)
+		}
+		orgNSPath = orgNS.Path
 	}
 
 	user := &model.User{
@@ -63,7 +67,7 @@ func (s *UserAdminStore) CreateUser(ctx context.Context, email, displayName, pas
 		Role:         role,
 		Settings:     json.RawMessage(`{}`),
 	}
-	if err := s.userRepo.Create(ctx, user, s.nsRepo, orgNS.Path); err != nil {
+	if err := s.userRepo.Create(ctx, user, s.nsRepo, orgNSPath); err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}
 	return user, nil

@@ -129,7 +129,7 @@ func (r *APIKeyRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]model.
 	}
 	defer rows.Close()
 
-	var result []model.APIKey
+	result := []model.APIKey{}
 	for rows.Next() {
 		key, err := r.scanKeyFromRows(rows)
 		if err != nil {

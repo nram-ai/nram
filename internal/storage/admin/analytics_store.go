@@ -86,11 +86,11 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 
 	rows, err := s.db.Query(ctx, query)
 	if err != nil {
-		return nil
+		return []api.MemoryRankItem{}
 	}
 	defer rows.Close()
 
-	var items []api.MemoryRankItem
+	items := []api.MemoryRankItem{}
 	for rows.Next() {
 		var idStr, content, createdAtStr string
 		var accessCount int

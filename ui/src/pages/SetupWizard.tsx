@@ -118,20 +118,7 @@ function CompletionScreen({
   const navigate = useNavigate();
   const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8674";
 
-  const mcpConfig = JSON.stringify(
-    {
-      mcpServers: {
-        nram: {
-          url: `${origin}/mcp`,
-          headers: {
-            Authorization: `Bearer ${result.api_key}`,
-          },
-        },
-      },
-    },
-    null,
-    2,
-  );
+  const claudeCodeCmd = `claude mcp add --transport http nram ${origin}/mcp`;
 
   const curlStore = `curl -X POST ${origin}/v1/memories \\
   -H "Authorization: Bearer ${result.api_key}" \\
@@ -158,6 +145,28 @@ function CompletionScreen({
         </p>
       </div>
 
+      {/* MCP Connection */}
+      <div className="space-y-3">
+        <h2 className="text-lg font-semibold">Connect an MCP Client</h2>
+        <p className="text-sm text-muted-foreground">
+          nram supports OAuth auto-discovery. Most MCP clients connect with just the server URL &mdash; no API key needed.
+        </p>
+        <CodeBlock code={claudeCodeCmd} label="Claude Code" />
+        <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+          <p className="text-sm font-medium">Claude Desktop / Claude.ai</p>
+          <p className="text-sm text-muted-foreground">Settings &rarr; Connectors &rarr; Add URL:</p>
+          <code className="block rounded-md bg-muted px-3 py-2 text-sm font-mono">{origin}/mcp</code>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+          <p className="text-sm font-medium">Cursor</p>
+          <p className="text-sm text-muted-foreground">Settings &rarr; MCP &rarr; Add &rarr; URL type:</p>
+          <code className="block rounded-md bg-muted px-3 py-2 text-sm font-mono">{origin}/mcp</code>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          For more options including ChatGPT and API key fallback, visit the <a href="/mcp-config" className="text-primary hover:underline">MCP Config</a> page.
+        </p>
+      </div>
+
       {/* API Key */}
       <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-5 dark:border-amber-600 dark:bg-amber-950/30">
         <div className="flex items-start gap-3">
@@ -166,7 +175,10 @@ function CompletionScreen({
           </svg>
           <div className="flex-1">
             <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
-              API Key &mdash; save this now, it will not be shown again
+              API Key (fallback) &mdash; save this now, it will not be shown again
+            </p>
+            <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+              Use this for tools that don&apos;t support OAuth, or for direct API access.
             </p>
             <div className="mt-3 flex items-center gap-2">
               <code className="flex-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-mono break-all dark:border-amber-700 dark:bg-amber-950/50">
@@ -176,15 +188,6 @@ function CompletionScreen({
             </div>
           </div>
         </div>
-      </div>
-
-      {/* MCP Config */}
-      <div className="space-y-2">
-        <h2 className="text-lg font-semibold">MCP Configuration</h2>
-        <p className="text-sm text-muted-foreground">
-          Add this to your MCP client configuration to connect to nram.
-        </p>
-        <CodeBlock code={mcpConfig} label="mcp_config.json" />
       </div>
 
       {/* curl examples */}
@@ -270,6 +273,9 @@ function SetupWizard() {
       { email: email.trim(), password },
       {
         onSuccess: (data) => {
+          if (data.token) {
+            localStorage.setItem("nram_token", data.token);
+          }
           setSetupResult(data);
         },
       },

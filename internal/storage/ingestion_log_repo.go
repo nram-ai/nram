@@ -146,7 +146,7 @@ func (r *IngestionLogRepo) scanIngestionLogFromRows(rows *sql.Rows) (*model.Inge
 }
 
 func (r *IngestionLogRepo) scanIngestionLogs(rows *sql.Rows) ([]model.IngestionLog, error) {
-	var result []model.IngestionLog
+	result := []model.IngestionLog{}
 	for rows.Next() {
 		log, err := r.scanIngestionLogFromRows(rows)
 		if err != nil {

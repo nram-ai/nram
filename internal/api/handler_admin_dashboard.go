@@ -22,6 +22,7 @@ type DashboardStatsData struct {
 	TotalMemories     int                  `json:"total_memories"`
 	TotalProjects     int                  `json:"total_projects"`
 	TotalUsers        int                  `json:"total_users"`
+	TotalEntities     int                  `json:"total_entities"`
 	TotalOrgs         int                  `json:"total_organizations"`
 	MemoriesByProject []ProjectMemoryCount `json:"memories_by_project"`
 	EnrichmentQueue   *DashboardQueueStats `json:"enrichment_queue,omitempty"`

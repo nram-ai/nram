@@ -14,6 +14,9 @@ type RouterConfig struct {
 	AuthMiddleware *auth.AuthMiddleware
 	RateLimiter    *auth.RateLimiter
 	Metrics        *api.Metrics
+	// SetupGuard is middleware that returns 503 until initial setup is complete.
+	// If nil, no setup guard is applied.
+	SetupGuard func(http.Handler) http.Handler
 }
 
 // Handlers holds all handler instances. Nil handlers are replaced with a
@@ -56,6 +59,18 @@ type Handlers struct {
 	// Health
 	Health http.HandlerFunc
 
+	// Auth handlers (semi-public: setup guard, no auth)
+	AuthLogin  http.HandlerFunc
+	AuthLookup http.HandlerFunc
+
+	// OAuth handlers
+	OAuthAuthorize         http.HandlerFunc
+	OAuthToken             http.HandlerFunc
+	OAuthRegister          http.HandlerFunc
+	OAuthUserInfo          http.HandlerFunc
+	OAuthMetadata          http.HandlerFunc
+	OAuthProtectedResource http.HandlerFunc
+
 	// Admin handlers
 	AdminSetupStatus http.HandlerFunc
 	AdminSetup       http.HandlerFunc
@@ -67,6 +82,7 @@ type Handlers struct {
 	AdminProviders   http.HandlerFunc
 	AdminSettings    http.HandlerFunc
 	AdminEnrichment  http.HandlerFunc
+	AdminOAuth       http.HandlerFunc
 	AdminWebhooks    http.HandlerFunc
 	AdminAnalytics   http.HandlerFunc
 	AdminUsage       http.HandlerFunc
@@ -112,14 +128,36 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	r.Get("/v1/admin/setup/status", handler(handlers.AdminSetupStatus))
 	r.Post("/v1/admin/setup", handler(handlers.AdminSetup))
 
+	// OAuth discovery and flow endpoints (public — no auth, no setup guard).
+	r.Get("/.well-known/oauth-authorization-server", handler(handlers.OAuthMetadata))
+	r.Get("/.well-known/oauth-protected-resource", handler(handlers.OAuthProtectedResource))
+	r.Get("/oauth/authorize", handler(handlers.OAuthAuthorize))
+	r.Post("/oauth/token", handler(handlers.OAuthToken))
+	r.Post("/oauth/register", handler(handlers.OAuthRegister))
+
+	// Semi-public routes: setup guard required but no auth (login flow).
+	r.Group(func(r chi.Router) {
+		if config.SetupGuard != nil {
+			r.Use(config.SetupGuard)
+		}
+		r.Post("/v1/auth/login", handler(handlers.AuthLogin))
+		r.Post("/v1/auth/lookup", handler(handlers.AuthLookup))
+	})
+
 	// Authenticated routes.
 	r.Group(func(r chi.Router) {
+		if config.SetupGuard != nil {
+			r.Use(config.SetupGuard)
+		}
 		if config.AuthMiddleware != nil {
 			r.Use(config.AuthMiddleware.Handler)
 		}
 		if config.RateLimiter != nil {
 			r.Use(config.RateLimiter.Handler)
 		}
+
+		// OAuth userinfo (requires authentication).
+		r.Get("/oauth/userinfo", handler(handlers.OAuthUserInfo))
 
 		// SSE events endpoint.
 		r.Get("/v1/events", handler(handlers.Events))
@@ -175,6 +213,8 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/settings", handler(handlers.AdminSettings))
 			r.HandleFunc("/enrichment", handler(handlers.AdminEnrichment))
 			r.HandleFunc("/enrichment/*", handler(handlers.AdminEnrichment))
+			r.HandleFunc("/oauth", handler(handlers.AdminOAuth))
+			r.HandleFunc("/oauth/*", handler(handlers.AdminOAuth))
 			r.HandleFunc("/webhooks", handler(handlers.AdminWebhooks))
 			r.HandleFunc("/webhooks/*", handler(handlers.AdminWebhooks))
 			r.Get("/analytics", handler(handlers.AdminAnalytics))

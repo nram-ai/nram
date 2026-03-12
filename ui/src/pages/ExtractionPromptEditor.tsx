@@ -487,7 +487,7 @@ function PromptEditorCard({
 // Main Page
 // ---------------------------------------------------------------------------
 
-export default function ExtractionPromptEditor() {
+export default function ExtractionPromptEditor({ isSQLite }: { isSQLite?: boolean }) {
   const settingsQuery = useSettings();
   const schemaQuery = useSettingsSchema();
   const updateMutation = useUpdateSetting();
@@ -628,6 +628,27 @@ export default function ExtractionPromptEditor() {
       },
     );
   }, [entitySampleInput, testMutation]);
+
+  if (isSQLite) {
+    return (
+      <div>
+        <div className="mb-6">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Extraction Prompt Editor
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Edit the system prompts used by the enrichment pipeline.
+          </p>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-8 text-center">
+          <p className="text-sm text-muted-foreground">
+            Extraction prompts are not available on SQLite. Upgrade to PostgreSQL
+            to enable the enrichment pipeline and extraction prompt editing.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>

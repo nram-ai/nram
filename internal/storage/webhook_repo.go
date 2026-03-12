@@ -50,6 +50,9 @@ func (r *WebhookRepo) decodeEvents(s string) ([]string, error) {
 	if err := json.Unmarshal([]byte(s), &events); err != nil {
 		return nil, err
 	}
+	if events == nil {
+		events = []string{}
+	}
 	return events, nil
 }
 
@@ -313,7 +316,7 @@ func (r *WebhookRepo) scanWebhookFromRows(rows *sql.Rows) (*model.Webhook, error
 }
 
 func (r *WebhookRepo) scanWebhooks(rows *sql.Rows) ([]model.Webhook, error) {
-	var result []model.Webhook
+	result := []model.Webhook{}
 	for rows.Next() {
 		webhook, err := r.scanWebhookFromRows(rows)
 		if err != nil {
@@ -344,6 +347,9 @@ func (r *WebhookRepo) populateWebhook(
 	events, err := r.decodeEvents(eventsStr)
 	if err != nil {
 		return nil, fmt.Errorf("webhook parse events: %w", err)
+	}
+	if events == nil {
+		events = []string{}
 	}
 	webhook.Events = events
 

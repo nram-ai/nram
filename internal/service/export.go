@@ -319,7 +319,7 @@ func (s *ExportService) ExportNDJSON(ctx context.Context, req *ExportRequest, w 
 
 // collectAllMemories paginates through all memories in the given namespace.
 func (s *ExportService) collectAllMemories(ctx context.Context, namespaceID uuid.UUID) ([]model.Memory, error) {
-	var all []model.Memory
+	all := []model.Memory{}
 	offset := 0
 	for {
 		page, err := s.memories.ListByNamespace(ctx, namespaceID, exportPageSize, offset)

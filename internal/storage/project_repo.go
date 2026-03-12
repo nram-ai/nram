@@ -96,7 +96,7 @@ func (r *ProjectRepo) ListByUser(ctx context.Context, ownerNamespaceID uuid.UUID
 	}
 	defer rows.Close()
 
-	var result []model.Project
+	result := []model.Project{}
 	for rows.Next() {
 		p, err := r.scanProjectFromRows(rows)
 		if err != nil {
@@ -121,7 +121,7 @@ func (r *ProjectRepo) ListAll(ctx context.Context) ([]model.Project, error) {
 	}
 	defer rows.Close()
 
-	var result []model.Project
+	result := []model.Project{}
 	for rows.Next() {
 		p, err := r.scanProjectFromRows(rows)
 		if err != nil {
@@ -276,6 +276,9 @@ func (r *ProjectRepo) scanProject(row *sql.Row) (*model.Project, error) {
 	if err != nil {
 		return nil, fmt.Errorf("project scan parse default_tags: %w", err)
 	}
+	if tags == nil {
+		tags = []string{}
+	}
 	project.DefaultTags = tags
 
 	project.Settings = json.RawMessage(settingsStr)
@@ -329,6 +332,9 @@ func (r *ProjectRepo) scanProjectFromRows(rows *sql.Rows) (*model.Project, error
 	tags, err := decodeStringArray(r.db.Backend(), defaultTagsStr)
 	if err != nil {
 		return nil, fmt.Errorf("project scan rows parse default_tags: %w", err)
+	}
+	if tags == nil {
+		tags = []string{}
 	}
 	project.DefaultTags = tags
 

@@ -80,13 +80,13 @@ function DetailPanel({ entity, connections, onClose }: DetailPanelProps) {
             <p className="text-sm mt-0.5">{entity.mention_count}</p>
           </div>
 
-          {entity.aliases.length > 0 && (
+          {(entity.aliases ?? []).length > 0 && (
             <div>
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                 Aliases
               </label>
               <div className="flex flex-wrap gap-1 mt-1">
-                {entity.aliases.map((alias, i) => (
+                {(entity.aliases ?? []).map((alias, i) => (
                   <span
                     key={i}
                     className="inline-block rounded-full bg-accent px-2 py-0.5 text-xs text-accent-foreground"
@@ -148,7 +148,7 @@ function EntityBrowser() {
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
 
-  const { data: graphData, isLoading: graphLoading } = useGraph(selectedProjectId);
+  const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 
   const entityMap = useMemo(() => {
     const map = new Map<string, GraphEntity>();
@@ -270,8 +270,19 @@ function EntityBrowser() {
         </div>
       )}
 
+      {selectedProjectId && !isLoading && graphError && (
+        <div className="flex items-center justify-center rounded-lg border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/30 h-[500px]">
+          <div className="text-center">
+            <p className="text-sm text-red-800 dark:text-red-300">
+              Failed to load entity data. Please try again.
+            </p>
+          </div>
+        </div>
+      )}
+
       {selectedProjectId &&
         !isLoading &&
+        !graphError &&
         graphData &&
         (!graphData.entities || graphData.entities.length === 0) && (
           <div className="flex items-center justify-center rounded-lg border border-dashed border-border bg-accent/30 h-[500px]">
@@ -288,6 +299,7 @@ function EntityBrowser() {
 
       {selectedProjectId &&
         !isLoading &&
+        !graphError &&
         graphData &&
         graphData.entities &&
         graphData.entities.length > 0 && (
@@ -353,9 +365,9 @@ function EntityBrowser() {
                         </td>
                         <td className="px-4 py-2.5 text-muted-foreground">{entity.mention_count}</td>
                         <td className="px-4 py-2.5">
-                          {entity.aliases.length > 0 ? (
+                          {(entity.aliases ?? []).length > 0 ? (
                             <div className="flex flex-wrap gap-1">
-                              {entity.aliases.map((alias, i) => (
+                              {(entity.aliases ?? []).map((alias, i) => (
                                 <span
                                   key={i}
                                   className="inline-block rounded-full bg-accent px-2 py-0.5 text-xs text-accent-foreground"

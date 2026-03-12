@@ -73,6 +73,9 @@ func NewEventsHandler(bus events.EventBus) http.HandlerFunc {
 
 // writeSSE writes a single event in SSE wire format.
 func writeSSE(w http.ResponseWriter, evt events.Event) {
+	if evt.Data == nil {
+		evt.Data = json.RawMessage("{}")
+	}
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return

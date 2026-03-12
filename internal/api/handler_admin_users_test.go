@@ -141,7 +141,7 @@ func TestAdminUsers_CreateUser_Success(t *testing.T) {
 		},
 	}
 
-	body := `{"email":"new@example.com","display_name":"New User","password":"securepassword123","role":"member","org_id":"` + orgID.String() + `"}`
+	body := `{"email":"new@example.com","display_name":"New User","password":"securepassword123","role":"member","organization_id":"` + orgID.String() + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/users", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -214,6 +214,9 @@ func TestAdminUsers_GetUser_Found(t *testing.T) {
 			}
 			return &user, nil
 		},
+		listAPIKeysFn: func(_ context.Context, _ uuid.UUID) ([]model.APIKey, error) {
+			return []model.APIKey{}, nil
+		},
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/users/"+user.ID.String(), nil)
@@ -224,7 +227,10 @@ func TestAdminUsers_GetUser_Found(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp model.User
+	var resp struct {
+		model.User
+		APIKeys []model.APIKey `json:"api_keys"`
+	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -420,7 +426,7 @@ func TestAdminUsers_GenerateAPIKey_Success(t *testing.T) {
 		},
 	}
 
-	body := `{"name":"Admin Generated Key","scopes":[]}`
+	body := `{"label":"Admin Generated Key","scopes":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/users/"+userID.String()+"/api-keys", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -434,11 +440,11 @@ func TestAdminUsers_GenerateAPIKey_Success(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp.RawKey != rawKey {
-		t.Errorf("expected raw_key %q, got %q", rawKey, resp.RawKey)
+	if resp.Key != rawKey {
+		t.Errorf("expected key %q, got %q", rawKey, resp.Key)
 	}
-	if resp.APIKey.Name != "Admin Generated Key" {
-		t.Errorf("expected api_key name 'Admin Generated Key', got %q", resp.APIKey.Name)
+	if resp.Label != "Admin Generated Key" {
+		t.Errorf("expected label 'Admin Generated Key', got %q", resp.Label)
 	}
 }
 

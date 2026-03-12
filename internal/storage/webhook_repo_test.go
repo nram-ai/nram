@@ -476,6 +476,21 @@ func TestWebhookRepo_ListByNamespace_Isolation(t *testing.T) {
 	})
 }
 
+func TestWebhookRepo_DecodeEvents_NullJSON(t *testing.T) {
+	// Verify that decoding a JSON "null" for events produces a non-nil empty
+	// slice, matching the nil-safety contract.
+	result, err := decodeStringArray("sqlite", "null")
+	if err != nil {
+		t.Fatalf("decodeStringArray(sqlite, null) returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil slice from decodeStringArray(sqlite, \"null\"), got nil")
+	}
+	if len(result) != 0 {
+		t.Fatalf("expected 0 elements, got %d", len(result))
+	}
+}
+
 func TestWebhookRepo_ListAll(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

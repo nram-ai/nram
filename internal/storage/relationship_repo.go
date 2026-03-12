@@ -134,7 +134,7 @@ func (r *RelationshipRepo) TraverseFromEntity(ctx context.Context, entityID uuid
 	visitedEntities := map[uuid.UUID]bool{entityID: true}
 	visitedRels := map[uuid.UUID]bool{}
 	frontier := []uuid.UUID{entityID}
-	var result []model.Relationship
+	result := []model.Relationship{}
 
 	for hop := 0; hop < maxHops && len(frontier) > 0; hop++ {
 		var nextFrontier []uuid.UUID
@@ -267,7 +267,7 @@ func (r *RelationshipRepo) scanRelationshipFromRows(rows *sql.Rows) (*model.Rela
 }
 
 func (r *RelationshipRepo) scanRelationships(rows *sql.Rows) ([]model.Relationship, error) {
-	var result []model.Relationship
+	result := []model.Relationship{}
 	for rows.Next() {
 		rel, err := r.scanRelationshipFromRows(rows)
 		if err != nil {

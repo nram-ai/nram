@@ -37,7 +37,7 @@ type createUserRequest struct {
 	DisplayName string `json:"display_name"`
 	Password    string `json:"password"`
 	Role        string `json:"role"`
-	OrgID       string `json:"org_id"`
+	OrgID       string `json:"organization_id"`
 }
 
 // updateUserRequest is the JSON body for PUT /v1/admin/users/{id}.
@@ -49,15 +49,20 @@ type updateUserRequest struct {
 
 // generateAPIKeyRequest is the JSON body for POST /v1/admin/users/{id}/api-keys.
 type generateAPIKeyRequest struct {
-	Name      string      `json:"name"`
+	Label     string      `json:"label"`
 	Scopes    []uuid.UUID `json:"scopes"`
 	ExpiresAt *time.Time  `json:"expires_at"`
 }
 
 // generateAPIKeyResponse is returned on successful admin API key generation.
 type generateAPIKeyResponse struct {
-	APIKey *model.APIKey `json:"api_key"`
-	RawKey string        `json:"raw_key"`
+	ID        string   `json:"id"`
+	Key       string   `json:"key"`
+	Label     string   `json:"label"`
+	Prefix    string   `json:"prefix"`
+	Scopes    []string `json:"scopes"`
+	ExpiresAt *string  `json:"expires_at,omitempty"`
+	CreatedAt string   `json:"created_at"`
 }
 
 // validUserRoles contains the set of valid role values for user creation and update.
@@ -231,7 +236,17 @@ func handleAdminGetUser(w http.ResponseWriter, r *http.Request, store UserAdminS
 		return
 	}
 
-	writeJSON(w, http.StatusOK, user)
+	keys, err := store.ListAPIKeys(r.Context(), id)
+	if err != nil {
+		WriteError(w, ErrInternal("failed to list api keys"))
+		return
+	}
+
+	type userDetailResponse struct {
+		*model.User
+		APIKeys []model.APIKey `json:"api_keys"`
+	}
+	writeJSON(w, http.StatusOK, userDetailResponse{User: user, APIKeys: keys})
 }
 
 func handleAdminUpdateUser(w http.ResponseWriter, r *http.Request, store UserAdminStore, id uuid.UUID) {
@@ -314,21 +329,33 @@ func handleAdminGenerateAPIKey(w http.ResponseWriter, r *http.Request, store Use
 		return
 	}
 
-	if strings.TrimSpace(body.Name) == "" {
-		WriteError(w, ErrBadRequest("name is required"))
+	if strings.TrimSpace(body.Label) == "" {
+		WriteError(w, ErrBadRequest("label is required"))
 		return
 	}
 
-	key, rawKey, err := store.GenerateAPIKey(r.Context(), userID, body.Name, body.Scopes, body.ExpiresAt)
+	key, rawKey, err := store.GenerateAPIKey(r.Context(), userID, body.Label, body.Scopes, body.ExpiresAt)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to generate api key"))
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, generateAPIKeyResponse{
-		APIKey: key,
-		RawKey: rawKey,
-	})
+	resp := generateAPIKeyResponse{
+		ID:        key.ID.String(),
+		Key:       rawKey,
+		Label:     key.Name,
+		Prefix:    key.KeyPrefix,
+		CreatedAt: key.CreatedAt.Format(time.RFC3339),
+	}
+	if key.ExpiresAt != nil {
+		s := key.ExpiresAt.Format(time.RFC3339)
+		resp.ExpiresAt = &s
+	}
+	resp.Scopes = make([]string, len(key.Scopes))
+	for i, s := range key.Scopes {
+		resp.Scopes[i] = s.String()
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func handleAdminRevokeAPIKey(w http.ResponseWriter, r *http.Request, store UserAdminStore, keyID uuid.UUID) {

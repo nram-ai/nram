@@ -156,7 +156,7 @@ func (r *MemoryLineageRepo) scanLineageFromRows(rows *sql.Rows) (*model.MemoryLi
 }
 
 func (r *MemoryLineageRepo) scanLineages(rows *sql.Rows) ([]model.MemoryLineage, error) {
-	var result []model.MemoryLineage
+	result := []model.MemoryLineage{}
 	for rows.Next() {
 		lineage, err := r.scanLineageFromRows(rows)
 		if err != nil {

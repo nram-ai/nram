@@ -249,13 +249,13 @@ function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
             <p className="text-sm mt-0.5">{entity.canonical}</p>
           </div>
 
-          {entity.aliases.length > 0 && (
+          {(entity.aliases ?? []).length > 0 && (
             <div>
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                 Aliases
               </label>
               <div className="flex flex-wrap gap-1 mt-1">
-                {entity.aliases.map((alias, i) => (
+                {(entity.aliases ?? []).map((alias, i) => (
                   <span
                     key={i}
                     className="inline-block rounded-full bg-accent px-2 py-0.5 text-xs text-accent-foreground"
@@ -325,7 +325,7 @@ function GraphVisualization() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
 
-  const { data: graphData, isLoading: graphLoading } = useGraph(selectedProjectId);
+  const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -487,8 +487,19 @@ function GraphVisualization() {
         </div>
       )}
 
+      {selectedProjectId && !isLoading && graphError && (
+        <div className="flex items-center justify-center rounded-lg border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/30 h-[600px]">
+          <div className="text-center">
+            <p className="text-sm text-red-800 dark:text-red-300">
+              Failed to load graph data. Please try again.
+            </p>
+          </div>
+        </div>
+      )}
+
       {selectedProjectId &&
         !isLoading &&
+        !graphError &&
         graphData &&
         (!graphData.entities || graphData.entities.length === 0) && (
           <div className="flex items-center justify-center rounded-lg border border-dashed border-border bg-accent/30 h-[600px]">
@@ -505,6 +516,7 @@ function GraphVisualization() {
 
       {selectedProjectId &&
         !isLoading &&
+        !graphError &&
         graphData &&
         graphData.entities &&
         graphData.entities.length > 0 && (

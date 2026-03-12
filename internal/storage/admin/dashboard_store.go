@@ -22,7 +22,9 @@ func NewDashboardStore(db storage.DB, enrichmentQueueRepo *storage.EnrichmentQue
 }
 
 func (s *DashboardStore) DashboardStats(ctx context.Context) (*api.DashboardStatsData, error) {
-	stats := &api.DashboardStatsData{}
+	stats := &api.DashboardStatsData{
+		MemoriesByProject: []api.ProjectMemoryCount{},
+	}
 
 	// Count totals.
 	counts := []struct {
@@ -33,6 +35,7 @@ func (s *DashboardStore) DashboardStats(ctx context.Context) (*api.DashboardStat
 		{"memories", &stats.TotalMemories, " WHERE deleted_at IS NULL"},
 		{"projects", &stats.TotalProjects, ""},
 		{"users", &stats.TotalUsers, ""},
+		{"entities", &stats.TotalEntities, ""},
 		{"organizations", &stats.TotalOrgs, ""},
 	}
 	for _, c := range counts {
@@ -99,7 +102,7 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int) ([]api.A
 	}
 	defer rows.Close()
 
-	var events []api.ActivityEvent
+	events := []api.ActivityEvent{}
 	for rows.Next() {
 		var idStr, content, createdAtStr string
 		if err := rows.Scan(&idStr, &content, &createdAtStr); err != nil {

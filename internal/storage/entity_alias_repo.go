@@ -129,7 +129,7 @@ func (r *EntityAliasRepo) scanAliasFromRows(rows *sql.Rows) (*model.EntityAlias,
 }
 
 func (r *EntityAliasRepo) scanAliases(rows *sql.Rows) ([]model.EntityAlias, error) {
-	var result []model.EntityAlias
+	result := []model.EntityAlias{}
 	for rows.Next() {
 		alias, err := r.scanAliasFromRows(rows)
 		if err != nil {

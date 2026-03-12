@@ -215,15 +215,15 @@ function OllamaModelPicker({
       {ollamaModelsQuery.data && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">
-            Available Models ({ollamaModelsQuery.data.models.length})
+            Available Models ({(ollamaModelsQuery.data?.models ?? []).length})
           </p>
           <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-1">
-            {ollamaModelsQuery.data.models.length === 0 ? (
+            {(ollamaModelsQuery.data?.models ?? []).length === 0 ? (
               <p className="px-2 py-3 text-center text-sm text-muted-foreground">
                 No models found. Pull a model below.
               </p>
             ) : (
-              ollamaModelsQuery.data.models.map((m: OllamaModel) => (
+              (ollamaModelsQuery.data?.models ?? []).map((m: OllamaModel) => (
                 <button
                   key={m.name}
                   type="button"

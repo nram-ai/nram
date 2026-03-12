@@ -198,11 +198,16 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 
 	latency := time.Since(start).Milliseconds()
 
+	tags := mem.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+
 	return &UpdateResponse{
 		ID:              mem.ID,
 		ProjectID:       project.ID,
 		Content:         mem.Content,
-		Tags:            mem.Tags,
+		Tags:            tags,
 		PreviousContent: previousContent,
 		ReEmbedded:      reEmbedded,
 		LatencyMs:       latency,

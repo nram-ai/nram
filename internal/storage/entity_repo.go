@@ -268,7 +268,7 @@ func (r *EntityRepo) scanEntityFromRows(rows *sql.Rows) (*model.Entity, error) {
 }
 
 func (r *EntityRepo) scanEntities(rows *sql.Rows) ([]model.Entity, error) {
-	var result []model.Entity
+	result := []model.Entity{}
 	for rows.Next() {
 		entity, err := r.scanEntityFromRows(rows)
 		if err != nil {

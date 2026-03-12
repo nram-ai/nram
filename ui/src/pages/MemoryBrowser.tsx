@@ -389,7 +389,7 @@ function MemoryCard({
         <div className="min-w-0 flex-1">
           <p className="text-sm leading-relaxed">{preview(memory.content)}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            {memory.tags.map((tag) => (
+            {(memory.tags ?? []).map((tag) => (
               <TagChip key={tag} tag={tag} />
             ))}
             {score !== undefined && (
@@ -438,7 +438,7 @@ function MemoryDetailPanel({
 
   function handleRemoveTag(tag: string) {
     if (!memory) return;
-    const newTags = memory.tags.filter((t) => t !== tag);
+    const newTags = (memory.tags ?? []).filter((t) => t !== tag);
     updateMut.mutate({
       projectId,
       memoryId,
@@ -526,7 +526,7 @@ function MemoryDetailPanel({
                 Tags
               </h3>
               <div className="flex flex-wrap items-center gap-2">
-                {memory.tags.map((tag) => (
+                {(memory.tags ?? []).map((tag) => (
                   <TagChip
                     key={tag}
                     tag={tag}

@@ -62,7 +62,7 @@ func (s *NamespaceAdminStore) GetNamespaceTree(ctx context.Context) ([]api.Names
 
 	// Build tree from flat list.
 	nodeMap := make(map[uuid.UUID]*api.NamespaceNode, len(nodes))
-	var roots []api.NamespaceNode
+	roots := []api.NamespaceNode{}
 
 	for _, n := range nodes {
 		node := api.NamespaceNode{

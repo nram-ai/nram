@@ -98,7 +98,7 @@ func (r *OrganizationRepo) List(ctx context.Context) ([]model.Organization, erro
 	}
 	defer rows.Close()
 
-	var result []model.Organization
+	result := []model.Organization{}
 	for rows.Next() {
 		org, err := r.scanOrganizationFromRows(rows)
 		if err != nil {

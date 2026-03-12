@@ -108,14 +108,15 @@ func (mg *Migrator) Status() (version uint, dirty bool, err error) {
 	return v, d, err
 }
 
-// Close releases resources and advisory locks.
+// Close releases advisory locks. It intentionally does NOT call m.Close()
+// because golang-migrate's Close() closes the underlying database driver,
+// which would close the shared *sql.DB owned by the caller.
 func (mg *Migrator) Close() error {
-	srcErr, dbErr := mg.m.Close()
-	var lockErr error
 	if mg.backend == "postgres" {
-		_, lockErr = mg.db.Exec("SELECT pg_advisory_unlock(1)")
+		_, err := mg.db.Exec("SELECT pg_advisory_unlock(1)")
+		return err
 	}
-	return errors.Join(srcErr, dbErr, lockErr)
+	return nil
 }
 
 // NewMigratorWithDir creates a Migrator using migration files from a filesystem directory.

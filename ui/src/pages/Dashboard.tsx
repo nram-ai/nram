@@ -523,9 +523,9 @@ function Dashboard() {
   const providers = useProviders();
 
   const dashData = dashboard.data;
-  const activityEvents = activity.data?.events ?? [];
-  const projectList = projects.data ?? [];
-  const providerList = providers.data ?? [];
+  const activityEvents = Array.isArray(activity.data?.events) ? activity.data.events : [];
+  const projectList = Array.isArray(projects.data) ? projects.data : [];
+  const providerList = Array.isArray(providers.data) ? providers.data : [];
 
   const hasProviders = providerList.length > 0;
 
@@ -552,7 +552,7 @@ function Dashboard() {
       <SummaryCards
         totalMemories={dashData?.total_memories ?? 0}
         totalProjects={dashData?.total_projects ?? 0}
-        totalEntities={dashData?.total_users ?? 0}
+        totalEntities={dashData?.total_entities ?? 0}
         isLoading={dashboard.isLoading}
       />
 

@@ -49,7 +49,7 @@ func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context) (*api.Enrichment
 		return nil, fmt.Errorf("queue status items: %w", err)
 	}
 
-	var queueItems []api.EnrichmentQueueItem
+	queueItems := []api.EnrichmentQueueItem{}
 	for _, item := range items {
 		lastErr := ""
 		if item.LastError != nil {

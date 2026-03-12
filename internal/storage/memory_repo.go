@@ -118,7 +118,7 @@ func (r *MemoryRepo) getByIDIncludeDeleted(ctx context.Context, id uuid.UUID) (*
 // GetBatch returns multiple memories by their UUIDs. Soft-deleted records are excluded.
 func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return []model.Memory{}, nil
 	}
 
 	placeholders := make([]string, len(ids))
@@ -141,7 +141,7 @@ func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Mem
 	}
 	defer rows.Close()
 
-	var result []model.Memory
+	result := []model.Memory{}
 	for rows.Next() {
 		mem, err := r.scanMemoryFromRows(rows)
 		if err != nil {
@@ -173,7 +173,7 @@ func (r *MemoryRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID,
 	}
 	defer rows.Close()
 
-	var result []model.Memory
+	result := []model.Memory{}
 	for rows.Next() {
 		mem, err := r.scanMemoryFromRows(rows)
 		if err != nil {
@@ -305,7 +305,7 @@ func (r *MemoryRepo) ListExpired(ctx context.Context, before time.Time, limit in
 	}
 	defer rows.Close()
 
-	var result []model.Memory
+	result := []model.Memory{}
 	for rows.Next() {
 		mem, err := r.scanMemoryFromRows(rows)
 		if err != nil {
@@ -339,7 +339,7 @@ func (r *MemoryRepo) ListPurgeable(ctx context.Context, before time.Time, limit 
 	}
 	defer rows.Close()
 
-	var result []model.Memory
+	result := []model.Memory{}
 	for rows.Next() {
 		mem, err := r.scanMemoryFromRows(rows)
 		if err != nil {
@@ -443,8 +443,14 @@ func (r *MemoryRepo) populateMemory(
 	if err != nil {
 		return nil, fmt.Errorf("memory parse tags: %w", err)
 	}
+	if tags == nil {
+		tags = []string{}
+	}
 	mem.Tags = tags
 
+	if metadataStr == "" || metadataStr == "null" {
+		metadataStr = "{}"
+	}
 	mem.Metadata = json.RawMessage(metadataStr)
 	mem.Enriched = enrichedBool
 

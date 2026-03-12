@@ -249,8 +249,8 @@ func TestMemoryRepo_GetBatch_Empty(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
-		if results != nil {
-			t.Fatalf("expected nil result for empty input, got %v", results)
+		if len(results) != 0 {
+			t.Fatalf("expected empty result for empty input, got %v", results)
 		}
 	})
 }

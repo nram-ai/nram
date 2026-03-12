@@ -184,7 +184,7 @@ func (r *TokenUsageRepo) scanTokenUsageFromRows(rows *sql.Rows) (*model.TokenUsa
 }
 
 func (r *TokenUsageRepo) scanTokenUsages(rows *sql.Rows) ([]model.TokenUsage, error) {
-	var result []model.TokenUsage
+	result := []model.TokenUsage{}
 	for rows.Next() {
 		usage, err := r.scanTokenUsageFromRows(rows)
 		if err != nil {

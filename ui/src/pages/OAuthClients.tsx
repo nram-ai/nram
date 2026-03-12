@@ -789,7 +789,7 @@ function OAuthClientsSection() {
                     </span>
                   </td>
                   <td className="max-w-[200px] truncate px-4 py-2 text-xs text-muted-foreground">
-                    {client.redirect_uris.join(", ")}
+                    {(client.redirect_uris ?? []).join(", ")}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
                     {formatDate(client.created_at)}
@@ -920,8 +920,8 @@ function IdPSection() {
                     </code>
                   </td>
                   <td className="max-w-[200px] truncate px-4 py-2 text-xs text-muted-foreground">
-                    {cfg.allowed_domains.length > 0
-                      ? cfg.allowed_domains.join(", ")
+                    {(cfg.allowed_domains ?? []).length > 0
+                      ? (cfg.allowed_domains ?? []).join(", ")
                       : "-"}
                   </td>
                   <td className="px-4 py-2">

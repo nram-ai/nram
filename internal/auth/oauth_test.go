@@ -164,14 +164,17 @@ func TestMetadataHandler_ReturnsValidJSON(t *testing.T) {
 	if meta.Issuer != "https://auth.example.com" {
 		t.Fatalf("unexpected issuer: %q", meta.Issuer)
 	}
-	if meta.AuthorizationEndpoint != "https://auth.example.com/authorize" {
+	if meta.AuthorizationEndpoint != "https://auth.example.com/oauth/authorize" {
 		t.Fatalf("unexpected authorization_endpoint: %q", meta.AuthorizationEndpoint)
 	}
-	if meta.TokenEndpoint != "https://auth.example.com/token" {
+	if meta.TokenEndpoint != "https://auth.example.com/oauth/token" {
 		t.Fatalf("unexpected token_endpoint: %q", meta.TokenEndpoint)
 	}
-	if meta.RegistrationEndpoint != "https://auth.example.com/register" {
+	if meta.RegistrationEndpoint != "https://auth.example.com/oauth/register" {
 		t.Fatalf("unexpected registration_endpoint: %q", meta.RegistrationEndpoint)
+	}
+	if meta.UserinfoEndpoint != "https://auth.example.com/oauth/userinfo" {
+		t.Fatalf("unexpected userinfo_endpoint: %q", meta.UserinfoEndpoint)
 	}
 	if len(meta.ResponseTypesSupported) != 1 || meta.ResponseTypesSupported[0] != "code" {
 		t.Fatalf("unexpected response_types_supported: %v", meta.ResponseTypesSupported)
@@ -318,8 +321,16 @@ func TestAuthorizeHandler_Unauthenticated(t *testing.T) {
 
 	env.server.AuthorizeHandler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rec.Code)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+
+	loc := rec.Header().Get("Location")
+	if loc == "" {
+		t.Fatal("expected Location header on redirect")
+	}
+	if !strings.HasPrefix(loc, "/login?redirect=") {
+		t.Fatalf("expected redirect to /login, got %q", loc)
 	}
 }
 

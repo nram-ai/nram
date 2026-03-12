@@ -278,12 +278,17 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 
 	latency := time.Since(start).Milliseconds()
 
+	tags := req.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+
 	return &StoreResponse{
 		ID:               memID,
 		ProjectID:        project.ID,
 		ProjectSlug:      project.Slug,
 		Content:          req.Content,
-		Tags:             req.Tags,
+		Tags:             tags,
 		Enriched:         false,
 		EnrichmentQueued: enrichmentQueued,
 		LatencyMs:        latency,
