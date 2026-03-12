@@ -6,7 +6,7 @@ import {
   useDeleteWebhook,
   useTestWebhook,
 } from "../hooks/useApi";
-import type { Webhook } from "../api/client";
+import type { Webhook, WebhookTestResult } from "../api/client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -386,7 +386,7 @@ function TestResultDialog({
   result,
   onClose,
 }: {
-  result: { success: boolean; status_code?: number; error?: string };
+  result: WebhookTestResult;
   onClose: () => void;
 }) {
   return (
@@ -413,11 +413,11 @@ function TestResultDialog({
               <span className="font-mono text-sm">{result.status_code}</span>
             </div>
           )}
-          {result.error && (
+          {result.message && (
             <div>
-              <span className="text-sm font-medium">Error:</span>
+              <span className="text-sm font-medium">Message:</span>
               <pre className="mt-1 overflow-auto rounded border bg-muted/50 p-2 text-xs font-mono">
-                {result.error}
+                {result.message}
               </pre>
             </div>
           )}
@@ -452,11 +452,7 @@ function WebhookManagement() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState<WebhookFull | null>(null);
   const [deletingWebhook, setDeletingWebhook] = useState<WebhookFull | null>(null);
-  const [testResult, setTestResult] = useState<{
-    success: boolean;
-    status_code?: number;
-    error?: string;
-  } | null>(null);
+  const [testResult, setTestResult] = useState<WebhookTestResult | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -526,7 +522,7 @@ function WebhookManagement() {
         setTestingId(null);
       },
       onError: (err) => {
-        setTestResult({ success: false, error: err.message });
+        setTestResult({ success: false, message: err.message, latency_ms: 0 });
         setTestingId(null);
       },
     });

@@ -220,7 +220,7 @@ function OllamaModelPicker({
                 >
                   <span className="font-medium">{m.name}</span>
                   <span className="ml-2 text-xs text-muted-foreground">
-                    {m.size}
+                    {(m.size / (1024 * 1024 * 1024)).toFixed(1)} GB
                   </span>
                 </button>
               ))

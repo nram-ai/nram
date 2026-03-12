@@ -8,6 +8,7 @@ import {
   useOrgs,
   useGenerateAPIKey,
   useRevokeAPIKey,
+  useSetupStatus,
 } from "../hooks/useApi";
 import type {
   User,
@@ -623,8 +624,10 @@ function UserDetailPanel({
   onDeleted: () => void;
 }) {
   const detailQuery = useUser(userId);
+  const setupQuery = useSetupStatus();
   const updateMut = useUpdateUser();
   const deleteMut = useDeleteUser();
+  const isPostgres = setupQuery.data?.backend === "postgres";
 
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editRole, setEditRole] = useState("");
@@ -838,6 +841,7 @@ function UserDetailPanel({
             <div className="space-y-4 rounded-lg border p-4">
               <h3 className="text-sm font-semibold">User Settings</h3>
 
+              {isPostgres && (
               <div className="flex items-center gap-3">
                 <label className="text-sm text-muted-foreground">
                   Enrichment enabled
@@ -862,6 +866,7 @@ function UserDetailPanel({
                   />
                 </button>
               </div>
+              )}
 
               <div>
                 <label className="mb-2 block text-sm text-muted-foreground">

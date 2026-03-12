@@ -3,13 +3,13 @@ import {
   useDashboard,
   useActivity,
   useProjects,
-  useProviders,
+  useProviderSlots,
   useStoreMemory,
 } from "../hooks/useApi";
 import type {
   ProjectMemoryCount,
   ActivityEvent,
-  Provider,
+  ProviderSlot,
 } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -218,47 +218,19 @@ function ActivityFeed({
   );
 }
 
-interface ProviderSlotInfo {
-  slot: string;
-  slotLabel: string;
-  provider?: Provider;
-}
+const SLOT_LABELS: Record<string, string> = {
+  embedding: "Embedding",
+  fact: "Fact Extraction",
+  entity: "Entity Extraction",
+};
 
 function ProviderHealthCards({
-  providers,
+  slots,
   isLoading,
 }: {
-  providers: Provider[];
+  slots: ProviderSlot[];
   isLoading: boolean;
 }) {
-  const slots: ProviderSlotInfo[] = useMemo(() => {
-    const slotDefs: { slot: string; slotLabel: string; match: string[] }[] = [
-      {
-        slot: "embedding",
-        slotLabel: "Embedding",
-        match: ["embedding"],
-      },
-      {
-        slot: "fact_extraction",
-        slotLabel: "Fact Extraction",
-        match: ["fact_extraction", "fact-extraction"],
-      },
-      {
-        slot: "entity_extraction",
-        slotLabel: "Entity Extraction",
-        match: ["entity_extraction", "entity-extraction"],
-      },
-    ];
-
-    return slotDefs.map((s) => ({
-      slot: s.slot,
-      slotLabel: s.slotLabel,
-      provider: providers.find(
-        (p) => s.match.includes(p.name) || s.match.includes(p.type),
-      ),
-    }));
-  }, [providers]);
-
   if (isLoading) {
     return (
       <div className="space-y-3">
@@ -276,17 +248,16 @@ function ProviderHealthCards({
       </div>
       <div className="divide-y">
         {slots.map((s) => {
-          const configured = !!s.provider;
-          const enabled = s.provider?.enabled ?? false;
+          const isOk = s.status === "ok";
           let dotColor = "bg-gray-400";
           let statusText = "Not configured";
 
-          if (configured && enabled) {
+          if (s.configured && isOk) {
             dotColor = "bg-green-500";
-            statusText = s.provider!.type;
-          } else if (configured && !enabled) {
+            statusText = s.type;
+          } else if (s.configured && !isOk) {
             dotColor = "bg-red-500";
-            statusText = `${s.provider!.type} (disabled)`;
+            statusText = `${s.type} (${s.status ?? "unhealthy"})`;
           }
 
           return (
@@ -295,7 +266,7 @@ function ProviderHealthCards({
                 className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${dotColor}`}
               />
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">{s.slotLabel}</p>
+                <p className="text-sm font-medium">{SLOT_LABELS[s.slot] ?? s.slot}</p>
                 <p className="truncate text-xs text-muted-foreground">
                   {statusText}
                 </p>
@@ -520,14 +491,14 @@ function Dashboard() {
   const dashboard = useDashboard();
   const activity = useActivity(20);
   const projects = useProjects();
-  const providers = useProviders();
+  const providerSlots = useProviderSlots();
 
   const dashData = dashboard.data;
   const activityEvents = Array.isArray(activity.data?.events) ? activity.data.events : [];
   const projectList = Array.isArray(projects.data) ? projects.data : [];
-  const providerList = Array.isArray(providers.data) ? providers.data : [];
+  const slotList = Array.isArray(providerSlots.data) ? providerSlots.data : [];
 
-  const hasProviders = providerList.length > 0;
+  const hasProviders = slotList.some((s) => s.configured);
 
   const hasError = dashboard.isError || activity.isError;
   const errorMessage = dashboard.error?.message ?? activity.error?.message ?? "";
@@ -570,8 +541,8 @@ function Dashboard() {
         </div>
         <div className="space-y-6">
           <ProviderHealthCards
-            providers={providerList}
-            isLoading={providers.isLoading}
+            slots={slotList}
+            isLoading={providerSlots.isLoading}
           />
           <EnrichmentQueueCard
             queue={dashData?.enrichment_queue ?? undefined}

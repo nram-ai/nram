@@ -1,11 +1,6 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
-import {
-  useAnalytics,
-  useUsage,
-  useProjects,
-  useUsers,
-  useOrgs,
-} from "../hooks/useApi";
+import { useState, useMemo, useCallback } from "react";
+import { useAnalytics, useUsage } from "../hooks/useApi";
+import type { AnalyticsData, UsageReport, MemoryRankItem, UsageGroup } from "../api/client";
 import {
   BarChart,
   Bar,
@@ -14,12 +9,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
   Legend,
-  LineChart,
-  Line,
 } from "recharts";
 
 // ---------------------------------------------------------------------------
@@ -38,22 +28,9 @@ const CHART_COLORS = [
 const COST_RATES_KEY = "nram_cost_rates";
 
 interface CostRate {
-  model: string;
+  key: string;
   inputCostPer1k: number;
   outputCostPer1k: number;
-}
-
-interface UsageEntry {
-  operation: string;
-  provider: string;
-  model: string;
-  input_tokens: number;
-  output_tokens: number;
-  count: number;
-  period?: string;
-  org_id?: string;
-  user_id?: string;
-  project_id?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,17 +62,13 @@ function formatCost(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-function extractUsageEntries(data: Record<string, unknown>): UsageEntry[] {
-  if (Array.isArray(data)) return data as UsageEntry[];
-  if (data && typeof data === "object") {
-    if (Array.isArray((data as Record<string, unknown>).entries))
-      return (data as Record<string, unknown>).entries as UsageEntry[];
-    if (Array.isArray((data as Record<string, unknown>).data))
-      return (data as Record<string, unknown>).data as UsageEntry[];
-    if (Array.isArray((data as Record<string, unknown>).usage))
-      return (data as Record<string, unknown>).usage as UsageEntry[];
-  }
-  return [];
+function formatPercent(n: number): string {
+  return `${(n * 100).toFixed(1)}%`;
+}
+
+function truncateContent(content: string, maxLen = 80): string {
+  if (content.length <= maxLen) return content;
+  return content.slice(0, maxLen) + "...";
 }
 
 // ---------------------------------------------------------------------------
@@ -146,179 +119,104 @@ function ErrorBanner({
 }
 
 // ---------------------------------------------------------------------------
-// Memory Activity Chart
+// Memory Count Summary Cards
 // ---------------------------------------------------------------------------
 
-function MemoryActivityChart({
+function MemoryCountCards({
   data,
   isLoading,
 }: {
-  data: { period: string; memory_stores: number; memory_recalls: number; api_requests: number }[];
+  data: AnalyticsData | undefined;
   isLoading: boolean;
 }) {
-  if (isLoading) return <SkeletonChart />;
-
-  if (data.length === 0) {
+  if (isLoading) {
     return (
-      <div className="rounded-lg border border-border bg-card p-6">
-        <h2 className="text-sm font-semibold">Memory Activity</h2>
-        <p className="mt-4 text-sm text-muted-foreground">
-          No analytics data available yet.
-        </p>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
       </div>
     );
   }
 
+  const counts = data?.memory_counts ?? { total: 0, active: 0, deleted: 0, enriched: 0 };
+
+  const cards = [
+    { label: "Total Memories", value: formatNumber(counts.total), color: "text-blue-600 dark:text-blue-400" },
+    { label: "Active", value: formatNumber(counts.active), color: "text-green-600 dark:text-green-400" },
+    { label: "Deleted", value: formatNumber(counts.deleted), color: "text-red-600 dark:text-red-400" },
+    { label: "Enriched", value: formatNumber(counts.enriched), color: "text-purple-600 dark:text-purple-400" },
+  ];
+
   return (
-    <div className="rounded-lg border border-border bg-card p-6">
-      <h2 className="text-sm font-semibold">Memory Activity Over Time</h2>
-      <div className="mt-4 h-72">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-            <XAxis
-              dataKey="period"
-              tick={{ fontSize: 12 }}
-              tickFormatter={(v: string) => {
-                const d = new Date(v);
-                return isNaN(d.getTime()) ? v : `${d.getMonth() + 1}/${d.getDate()}`;
-              }}
-            />
-            <YAxis tick={{ fontSize: 12 }} />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: "hsl(var(--card))",
-                border: "1px solid hsl(var(--border))",
-                borderRadius: "0.5rem",
-                fontSize: "0.75rem",
-              }}
-            />
-            <Legend wrapperStyle={{ fontSize: "0.75rem" }} />
-            <Bar dataKey="memory_stores" name="Stores" fill={CHART_COLORS[0]} radius={[2, 2, 0, 0]} />
-            <Bar dataKey="memory_recalls" name="Recalls" fill={CHART_COLORS[1]} radius={[2, 2, 0, 0]} />
-            <Bar dataKey="api_requests" name="API Requests" fill={CHART_COLORS[2]} radius={[2, 2, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {cards.map((c) => (
+        <div
+          key={c.label}
+          className="rounded-lg border border-border bg-card p-4"
+        >
+          <p className="text-sm font-medium text-muted-foreground">{c.label}</p>
+          <p className={`mt-1 text-3xl font-bold tracking-tight ${c.color}`}>{c.value}</p>
+        </div>
+      ))}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Top Recalled / Dead Weight
+// Memory Rank Table (reused for most_recalled, least_recalled, dead_weight)
 // ---------------------------------------------------------------------------
 
-function TopRecalledTable({
-  data,
+function MemoryRankTable({
+  title,
+  description,
+  items,
   isLoading,
 }: {
-  data: { period: string; memory_stores: number; memory_recalls: number; api_requests: number }[];
+  title: string;
+  description: string;
+  items: MemoryRankItem[];
   isLoading: boolean;
 }) {
-  const sorted = useMemo(() => {
-    return [...data]
-      .sort((a, b) => b.memory_recalls - a.memory_recalls)
-      .slice(0, 10);
-  }, [data]);
-
   if (isLoading) return <SkeletonChart />;
 
   return (
     <div className="rounded-lg border border-border bg-card">
       <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">Most Active Periods</h2>
-        <p className="text-xs text-muted-foreground">
-          Periods with the highest recall activity
-        </p>
+        <h2 className="text-sm font-semibold">{title}</h2>
+        <p className="text-xs text-muted-foreground">{description}</p>
       </div>
       <div className="p-4">
-        {sorted.length === 0 ? (
+        {items.length === 0 ? (
           <p className="text-sm text-muted-foreground">No data available.</p>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-muted-foreground">
-                <th className="pb-2 font-medium">Period</th>
-                <th className="pb-2 text-right font-medium">Stores</th>
-                <th className="pb-2 text-right font-medium">Recalls</th>
-                <th className="pb-2 text-right font-medium">API Reqs</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {sorted.map((row) => (
-                <tr key={row.period}>
-                  <td className="py-2">{row.period}</td>
-                  <td className="py-2 text-right font-mono">
-                    {row.memory_stores.toLocaleString()}
-                  </td>
-                  <td className="py-2 text-right font-mono">
-                    {row.memory_recalls.toLocaleString()}
-                  </td>
-                  <td className="py-2 text-right font-mono">
-                    {row.api_requests.toLocaleString()}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="pb-2 font-medium">Content</th>
+                  <th className="pb-2 text-right font-medium">Access Count</th>
+                  <th className="pb-2 text-right font-medium">Created</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DeadWeightDetection({
-  data,
-  isLoading,
-}: {
-  data: { period: string; memory_stores: number; memory_recalls: number; api_requests: number }[];
-  isLoading: boolean;
-}) {
-  const deadPeriods = useMemo(() => {
-    return [...data]
-      .filter((d) => d.memory_recalls === 0 && d.memory_stores > 0)
-      .sort((a, b) => b.memory_stores - a.memory_stores)
-      .slice(0, 10);
-  }, [data]);
-
-  if (isLoading) return <SkeletonChart />;
-
-  return (
-    <div className="rounded-lg border border-border bg-card">
-      <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">Dead Weight Detection</h2>
-        <p className="text-xs text-muted-foreground">
-          Periods with stored memories but zero recalls
-        </p>
-      </div>
-      <div className="p-4">
-        {deadPeriods.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No dead weight periods detected. All periods with stored memories have recalls.
-          </p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-muted-foreground">
-                <th className="pb-2 font-medium">Period</th>
-                <th className="pb-2 text-right font-medium">Stores</th>
-                <th className="pb-2 text-right font-medium">Recalls</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {deadPeriods.map((row) => (
-                <tr key={row.period}>
-                  <td className="py-2">{row.period}</td>
-                  <td className="py-2 text-right font-mono">
-                    {row.memory_stores.toLocaleString()}
-                  </td>
-                  <td className="py-2 text-right font-mono text-red-600 dark:text-red-400">
-                    0
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {items.map((item) => (
+                  <tr key={item.id}>
+                    <td className="max-w-xs py-2" title={item.content}>
+                      {truncateContent(item.content)}
+                    </td>
+                    <td className="py-2 text-right font-mono">
+                      {item.access_count.toLocaleString()}
+                    </td>
+                    <td className="py-2 text-right text-xs text-muted-foreground">
+                      {new Date(item.created_at).toLocaleDateString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
@@ -329,134 +227,94 @@ function DeadWeightDetection({
 // Enrichment Stats
 // ---------------------------------------------------------------------------
 
-function EnrichmentStats({
+function EnrichmentStatsCard({
   data,
   isLoading,
 }: {
-  data: { period: string; memory_stores: number; memory_recalls: number; api_requests: number }[];
+  data: AnalyticsData | undefined;
   isLoading: boolean;
 }) {
-  const stats = useMemo(() => {
-    const totalStores = data.reduce((s, d) => s + d.memory_stores, 0);
-    const totalRecalls = data.reduce((s, d) => s + d.memory_recalls, 0);
-    const totalApiReqs = data.reduce((s, d) => s + d.api_requests, 0);
-    const enrichmentAttempts = totalApiReqs > 0 ? totalApiReqs - totalStores - totalRecalls : 0;
-
-    return [
-      { name: "Stores", value: totalStores, color: CHART_COLORS[0] },
-      { name: "Recalls", value: totalRecalls, color: CHART_COLORS[1] },
-      { name: "Other API", value: Math.max(0, enrichmentAttempts), color: CHART_COLORS[2] },
-    ].filter((s) => s.value > 0);
-  }, [data]);
-
-  const totals = useMemo(() => {
-    return {
-      stores: data.reduce((s, d) => s + d.memory_stores, 0),
-      recalls: data.reduce((s, d) => s + d.memory_recalls, 0),
-      apiRequests: data.reduce((s, d) => s + d.api_requests, 0),
-    };
-  }, [data]);
-
   if (isLoading) return <SkeletonChart />;
+
+  const stats = data?.enrichment_stats ?? {
+    total_processed: 0,
+    success_rate: 0,
+    failure_rate: 0,
+    avg_latency_ms: 0,
+  };
 
   return (
     <div className="rounded-lg border border-border bg-card p-6">
-      <h2 className="text-sm font-semibold">Request Distribution</h2>
-      <div className="mt-2 grid grid-cols-3 gap-4">
+      <h2 className="text-sm font-semibold">Enrichment Stats</h2>
+      <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="text-center">
           <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-            {formatNumber(totals.stores)}
+            {formatNumber(stats.total_processed)}
           </p>
-          <p className="text-xs text-muted-foreground">Total Stores</p>
+          <p className="text-xs text-muted-foreground">Total Processed</p>
         </div>
         <div className="text-center">
           <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-            {formatNumber(totals.recalls)}
+            {formatPercent(stats.success_rate)}
           </p>
-          <p className="text-xs text-muted-foreground">Total Recalls</p>
+          <p className="text-xs text-muted-foreground">Success Rate</p>
+        </div>
+        <div className="text-center">
+          <p className="text-2xl font-bold text-red-600 dark:text-red-400">
+            {formatPercent(stats.failure_rate)}
+          </p>
+          <p className="text-xs text-muted-foreground">Failure Rate</p>
         </div>
         <div className="text-center">
           <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">
-            {formatNumber(totals.apiRequests)}
+            {stats.avg_latency_ms.toLocaleString()}ms
           </p>
-          <p className="text-xs text-muted-foreground">Total API Requests</p>
+          <p className="text-xs text-muted-foreground">Avg Latency</p>
         </div>
       </div>
-      {stats.length > 0 && (
-        <div className="mt-4 h-56">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={stats}
-                cx="50%"
-                cy="50%"
-                innerRadius={50}
-                outerRadius={80}
-                paddingAngle={3}
-                dataKey="value"
-                label={({ name, percent }: { name: string; percent: number }) =>
-                  `${name} ${(percent * 100).toFixed(0)}%`
-                }
-              >
-                {stats.map((entry, idx) => (
-                  <Cell key={entry.name} fill={entry.color || CHART_COLORS[idx % CHART_COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "hsl(var(--card))",
-                  border: "1px solid hsl(var(--border))",
-                  borderRadius: "0.5rem",
-                  fontSize: "0.75rem",
-                }}
-              />
-              <Legend wrapperStyle={{ fontSize: "0.75rem" }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Token Usage Section
+// Token Usage Summary Cards
 // ---------------------------------------------------------------------------
 
 function TokenUsageSummaryCards({
-  entries,
+  data,
   costRates,
   isLoading,
 }: {
-  entries: UsageEntry[];
+  data: UsageReport | undefined;
   costRates: CostRate[];
   isLoading: boolean;
 }) {
   const summary = useMemo(() => {
-    let totalInput = 0;
-    let totalOutput = 0;
+    const totals = data?.totals ?? { tokens_input: 0, tokens_output: 0, call_count: 0 };
+    const groups = data?.groups ?? [];
+
     let totalCost = 0;
-
-    for (const e of entries) {
-      const input = e.input_tokens ?? 0;
-      const output = e.output_tokens ?? 0;
-      totalInput += input;
-      totalOutput += output;
-
-      const rate = costRates.find((r) => r.model === e.model);
+    for (const g of groups) {
+      const rate = costRates.find((r) => r.key === g.key);
       if (rate) {
         totalCost +=
-          (input / 1000) * rate.inputCostPer1k +
-          (output / 1000) * rate.outputCostPer1k;
+          (g.tokens_input / 1000) * rate.inputCostPer1k +
+          (g.tokens_output / 1000) * rate.outputCostPer1k;
       }
     }
 
-    return { totalInput, totalOutput, totalCost };
-  }, [entries, costRates]);
+    return {
+      totalInput: totals.tokens_input,
+      totalOutput: totals.tokens_output,
+      totalCalls: totals.call_count,
+      totalCost,
+    };
+  }, [data, costRates]);
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+        <SkeletonCard />
         <SkeletonCard />
         <SkeletonCard />
         <SkeletonCard />
@@ -467,11 +325,12 @@ function TokenUsageSummaryCards({
   const cards = [
     { label: "Total Input Tokens", value: formatNumber(summary.totalInput) },
     { label: "Total Output Tokens", value: formatNumber(summary.totalOutput) },
+    { label: "Total Calls", value: formatNumber(summary.totalCalls) },
     { label: "Estimated Cost", value: formatCost(summary.totalCost) },
   ];
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {cards.map((c) => (
         <div
           key={c.label}
@@ -485,18 +344,22 @@ function TokenUsageSummaryCards({
   );
 }
 
-function TokenUsageTable({
-  entries,
+// ---------------------------------------------------------------------------
+// Usage Breakdown Table
+// ---------------------------------------------------------------------------
+
+function UsageBreakdownTable({
+  groups,
   costRates,
   isLoading,
 }: {
-  entries: UsageEntry[];
+  groups: UsageGroup[];
   costRates: CostRate[];
   isLoading: boolean;
 }) {
   if (isLoading) return <SkeletonChart />;
 
-  if (entries.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="rounded-lg border border-border bg-card p-6">
         <h2 className="text-sm font-semibold">Usage Breakdown</h2>
@@ -512,42 +375,38 @@ function TokenUsageTable({
       <div className="border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Usage Breakdown</h2>
         <p className="text-xs text-muted-foreground">
-          Token usage by operation, provider, and model
+          Token usage by group key
         </p>
       </div>
       <div className="overflow-x-auto p-4">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left text-muted-foreground">
-              <th className="pb-2 font-medium">Operation</th>
-              <th className="pb-2 font-medium">Provider</th>
-              <th className="pb-2 font-medium">Model</th>
-              <th className="pb-2 text-right font-medium">Count</th>
+              <th className="pb-2 font-medium">Key</th>
               <th className="pb-2 text-right font-medium">Input Tokens</th>
               <th className="pb-2 text-right font-medium">Output Tokens</th>
+              <th className="pb-2 text-right font-medium">Calls</th>
               <th className="pb-2 text-right font-medium">Est. Cost</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {entries.map((e, idx) => {
-              const rate = costRates.find((r) => r.model === e.model);
+            {groups.map((g) => {
+              const rate = costRates.find((r) => r.key === g.key);
               const cost = rate
-                ? ((e.input_tokens ?? 0) / 1000) * rate.inputCostPer1k +
-                  ((e.output_tokens ?? 0) / 1000) * rate.outputCostPer1k
+                ? (g.tokens_input / 1000) * rate.inputCostPer1k +
+                  (g.tokens_output / 1000) * rate.outputCostPer1k
                 : 0;
               return (
-                <tr key={`${e.operation}-${e.provider}-${e.model}-${idx}`}>
-                  <td className="py-2">{e.operation || "-"}</td>
-                  <td className="py-2">{e.provider || "-"}</td>
-                  <td className="py-2 font-mono text-xs">{e.model || "-"}</td>
+                <tr key={g.key}>
+                  <td className="py-2 font-mono text-xs">{g.key}</td>
                   <td className="py-2 text-right font-mono">
-                    {(e.count ?? 0).toLocaleString()}
+                    {g.tokens_input.toLocaleString()}
                   </td>
                   <td className="py-2 text-right font-mono">
-                    {(e.input_tokens ?? 0).toLocaleString()}
+                    {g.tokens_output.toLocaleString()}
                   </td>
                   <td className="py-2 text-right font-mono">
-                    {(e.output_tokens ?? 0).toLocaleString()}
+                    {g.call_count.toLocaleString()}
                   </td>
                   <td className="py-2 text-right font-mono">
                     {rate ? formatCost(cost) : "-"}
@@ -562,42 +421,42 @@ function TokenUsageTable({
   );
 }
 
-function TokenUsageChart({
-  entries,
+// ---------------------------------------------------------------------------
+// Usage Bar Chart
+// ---------------------------------------------------------------------------
+
+function UsageBarChart({
+  groups,
   isLoading,
 }: {
-  entries: UsageEntry[];
+  groups: UsageGroup[];
   isLoading: boolean;
 }) {
   const chartData = useMemo(() => {
-    const byOp: Record<string, { operation: string; input_tokens: number; output_tokens: number }> = {};
-    for (const e of entries) {
-      const key = e.operation || "unknown";
-      if (!byOp[key]) {
-        byOp[key] = { operation: key, input_tokens: 0, output_tokens: 0 };
-      }
-      byOp[key].input_tokens += e.input_tokens ?? 0;
-      byOp[key].output_tokens += e.output_tokens ?? 0;
-    }
-    return Object.values(byOp).sort(
-      (a, b) => b.input_tokens + b.output_tokens - (a.input_tokens + a.output_tokens),
-    );
-  }, [entries]);
+    return [...groups]
+      .sort(
+        (a, b) =>
+          b.tokens_input + b.tokens_output - (a.tokens_input + a.tokens_output),
+      )
+      .map((g) => ({
+        key: g.key,
+        tokens_input: g.tokens_input,
+        tokens_output: g.tokens_output,
+      }));
+  }, [groups]);
 
   if (isLoading) return <SkeletonChart />;
 
-  if (chartData.length === 0) {
-    return null;
-  }
+  if (chartData.length === 0) return null;
 
   return (
     <div className="rounded-lg border border-border bg-card p-6">
-      <h2 className="text-sm font-semibold">Token Usage by Operation</h2>
+      <h2 className="text-sm font-semibold">Token Usage by Group</h2>
       <div className="mt-4 h-72">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-            <XAxis dataKey="operation" tick={{ fontSize: 12 }} />
+            <XAxis dataKey="key" tick={{ fontSize: 12 }} />
             <YAxis tick={{ fontSize: 12 }} />
             <Tooltip
               contentStyle={{
@@ -610,13 +469,13 @@ function TokenUsageChart({
             />
             <Legend wrapperStyle={{ fontSize: "0.75rem" }} />
             <Bar
-              dataKey="input_tokens"
+              dataKey="tokens_input"
               name="Input Tokens"
               fill={CHART_COLORS[0]}
               radius={[2, 2, 0, 0]}
             />
             <Bar
-              dataKey="output_tokens"
+              dataKey="tokens_output"
               name="Output Tokens"
               fill={CHART_COLORS[3]}
               radius={[2, 2, 0, 0]}
@@ -629,130 +488,54 @@ function TokenUsageChart({
 }
 
 // ---------------------------------------------------------------------------
-// Usage Over Time Chart
-// ---------------------------------------------------------------------------
-
-function UsageOverTimeChart({
-  entries,
-  isLoading,
-}: {
-  entries: UsageEntry[];
-  isLoading: boolean;
-}) {
-  const chartData = useMemo(() => {
-    const byPeriod: Record<string, { period: string; input_tokens: number; output_tokens: number }> = {};
-    for (const e of entries) {
-      const key = e.period || "total";
-      if (!byPeriod[key]) {
-        byPeriod[key] = { period: key, input_tokens: 0, output_tokens: 0 };
-      }
-      byPeriod[key].input_tokens += e.input_tokens ?? 0;
-      byPeriod[key].output_tokens += e.output_tokens ?? 0;
-    }
-    return Object.values(byPeriod).sort((a, b) => a.period.localeCompare(b.period));
-  }, [entries]);
-
-  if (isLoading) return <SkeletonChart />;
-  if (chartData.length <= 1) return null;
-
-  return (
-    <div className="rounded-lg border border-border bg-card p-6">
-      <h2 className="text-sm font-semibold">Token Usage Over Time</h2>
-      <div className="mt-4 h-72">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-            <XAxis
-              dataKey="period"
-              tick={{ fontSize: 12 }}
-              tickFormatter={(v: string) => {
-                const d = new Date(v);
-                return isNaN(d.getTime()) ? v : `${d.getMonth() + 1}/${d.getDate()}`;
-              }}
-            />
-            <YAxis tick={{ fontSize: 12 }} />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: "hsl(var(--card))",
-                border: "1px solid hsl(var(--border))",
-                borderRadius: "0.5rem",
-                fontSize: "0.75rem",
-              }}
-              formatter={(value: number) => value.toLocaleString()}
-            />
-            <Legend wrapperStyle={{ fontSize: "0.75rem" }} />
-            <Line
-              type="monotone"
-              dataKey="input_tokens"
-              name="Input Tokens"
-              stroke={CHART_COLORS[0]}
-              strokeWidth={2}
-              dot={false}
-            />
-            <Line
-              type="monotone"
-              dataKey="output_tokens"
-              name="Output Tokens"
-              stroke={CHART_COLORS[3]}
-              strokeWidth={2}
-              dot={false}
-            />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Cost Rate Editor
 // ---------------------------------------------------------------------------
 
 function CostRateEditor({
   costRates,
-  models,
+  groupKeys,
   onUpdate,
 }: {
   costRates: CostRate[];
-  models: string[];
+  groupKeys: string[];
   onUpdate: (rates: CostRate[]) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [newModel, setNewModel] = useState("");
+  const [newKey, setNewKey] = useState("");
   const [newInputRate, setNewInputRate] = useState("0.001");
   const [newOutputRate, setNewOutputRate] = useState("0.002");
 
-  const unconfiguredModels = useMemo(
-    () => models.filter((m) => !costRates.find((r) => r.model === m)),
-    [models, costRates],
+  const unconfiguredKeys = useMemo(
+    () => groupKeys.filter((k) => !costRates.find((r) => r.key === k)),
+    [groupKeys, costRates],
   );
 
   function handleAdd() {
-    const model = newModel.trim();
-    if (!model) return;
+    const key = newKey.trim();
+    if (!key) return;
     const inputRate = parseFloat(newInputRate) || 0;
     const outputRate = parseFloat(newOutputRate) || 0;
     const updated = [
-      ...costRates.filter((r) => r.model !== model),
-      { model, inputCostPer1k: inputRate, outputCostPer1k: outputRate },
+      ...costRates.filter((r) => r.key !== key),
+      { key, inputCostPer1k: inputRate, outputCostPer1k: outputRate },
     ];
     onUpdate(updated);
-    setNewModel("");
+    setNewKey("");
     setNewInputRate("0.001");
     setNewOutputRate("0.002");
   }
 
-  function handleRemove(model: string) {
-    onUpdate(costRates.filter((r) => r.model !== model));
+  function handleRemove(key: string) {
+    onUpdate(costRates.filter((r) => r.key !== key));
   }
 
   function handleRateChange(
-    model: string,
+    key: string,
     field: "inputCostPer1k" | "outputCostPer1k",
     value: string,
   ) {
     const updated = costRates.map((r) => {
-      if (r.model !== model) return r;
+      if (r.key !== key) return r;
       return { ...r, [field]: parseFloat(value) || 0 };
     });
     onUpdate(updated);
@@ -768,7 +551,7 @@ function CostRateEditor({
         <div>
           <h2 className="text-sm font-semibold">Cost Rate Configuration</h2>
           <p className="text-xs text-muted-foreground">
-            Set per-model cost rates for billing estimation
+            Set per-group cost rates for billing estimation
           </p>
         </div>
         <span className="text-sm text-muted-foreground">
@@ -781,7 +564,7 @@ function CostRateEditor({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
-                  <th className="pb-2 font-medium">Model</th>
+                  <th className="pb-2 font-medium">Key</th>
                   <th className="pb-2 font-medium">Input $/1K tokens</th>
                   <th className="pb-2 font-medium">Output $/1K tokens</th>
                   <th className="pb-2 font-medium" />
@@ -789,8 +572,8 @@ function CostRateEditor({
               </thead>
               <tbody className="divide-y divide-border">
                 {costRates.map((rate) => (
-                  <tr key={rate.model}>
-                    <td className="py-2 font-mono text-xs">{rate.model}</td>
+                  <tr key={rate.key}>
+                    <td className="py-2 font-mono text-xs">{rate.key}</td>
                     <td className="py-2">
                       <input
                         type="number"
@@ -799,7 +582,7 @@ function CostRateEditor({
                         className="w-28 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
                         value={rate.inputCostPer1k}
                         onChange={(e) =>
-                          handleRateChange(rate.model, "inputCostPer1k", e.target.value)
+                          handleRateChange(rate.key, "inputCostPer1k", e.target.value)
                         }
                       />
                     </td>
@@ -811,7 +594,7 @@ function CostRateEditor({
                         className="w-28 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
                         value={rate.outputCostPer1k}
                         onChange={(e) =>
-                          handleRateChange(rate.model, "outputCostPer1k", e.target.value)
+                          handleRateChange(rate.key, "outputCostPer1k", e.target.value)
                         }
                       />
                     </td>
@@ -819,7 +602,7 @@ function CostRateEditor({
                       <button
                         type="button"
                         className="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                        onClick={() => handleRemove(rate.model)}
+                        onClick={() => handleRemove(rate.key)}
                       >
                         Remove
                       </button>
@@ -833,18 +616,18 @@ function CostRateEditor({
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex-1" style={{ minWidth: 160 }}>
               <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                Model
+                Key
               </label>
-              {unconfiguredModels.length > 0 ? (
+              {unconfiguredKeys.length > 0 ? (
                 <select
                   className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-                  value={newModel}
-                  onChange={(e) => setNewModel(e.target.value)}
+                  value={newKey}
+                  onChange={(e) => setNewKey(e.target.value)}
                 >
-                  <option value="">Select a model...</option>
-                  {unconfiguredModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
+                  <option value="">Select a key...</option>
+                  {unconfiguredKeys.map((k) => (
+                    <option key={k} value={k}>
+                      {k}
                     </option>
                   ))}
                   <option value="__custom__">Custom...</option>
@@ -853,17 +636,17 @@ function CostRateEditor({
                 <input
                   type="text"
                   className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-                  placeholder="model-name"
-                  value={newModel === "__custom__" ? "" : newModel}
-                  onChange={(e) => setNewModel(e.target.value)}
+                  placeholder="group-key"
+                  value={newKey === "__custom__" ? "" : newKey}
+                  onChange={(e) => setNewKey(e.target.value)}
                 />
               )}
-              {newModel === "__custom__" && unconfiguredModels.length > 0 && (
+              {newKey === "__custom__" && unconfiguredKeys.length > 0 && (
                 <input
                   type="text"
                   className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-                  placeholder="Enter model name"
-                  onChange={(e) => setNewModel(e.target.value)}
+                  placeholder="Enter group key"
+                  onChange={(e) => setNewKey(e.target.value)}
                 />
               )}
             </div>
@@ -897,7 +680,7 @@ function CostRateEditor({
               type="button"
               className="inline-flex items-center rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               onClick={handleAdd}
-              disabled={!newModel.trim() || newModel === "__custom__"}
+              disabled={!newKey.trim() || newKey === "__custom__"}
             >
               Add Rate
             </button>
@@ -909,194 +692,27 @@ function CostRateEditor({
 }
 
 // ---------------------------------------------------------------------------
-// Filters
-// ---------------------------------------------------------------------------
-
-interface FilterState {
-  orgId: string;
-  userId: string;
-  projectId: string;
-  timeRange: string;
-}
-
-function UsageFilters({
-  filters,
-  onChange,
-  orgs,
-  users,
-  projects,
-}: {
-  filters: FilterState;
-  onChange: (f: FilterState) => void;
-  orgs: { id: string; name: string }[];
-  users: { id: string; email: string }[];
-  projects: { id: string; name: string }[];
-}) {
-  const selectClass =
-    "rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm";
-
-  return (
-    <div className="flex flex-wrap items-end gap-3">
-      <div>
-        <label className="mb-1 block text-xs font-medium text-muted-foreground">
-          Organization
-        </label>
-        <select
-          className={selectClass}
-          value={filters.orgId}
-          onChange={(e) => onChange({ ...filters, orgId: e.target.value })}
-        >
-          <option value="">All Orgs</option>
-          {orgs.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label className="mb-1 block text-xs font-medium text-muted-foreground">
-          User
-        </label>
-        <select
-          className={selectClass}
-          value={filters.userId}
-          onChange={(e) => onChange({ ...filters, userId: e.target.value })}
-        >
-          <option value="">All Users</option>
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.email}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label className="mb-1 block text-xs font-medium text-muted-foreground">
-          Project
-        </label>
-        <select
-          className={selectClass}
-          value={filters.projectId}
-          onChange={(e) => onChange({ ...filters, projectId: e.target.value })}
-        >
-          <option value="">All Projects</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label className="mb-1 block text-xs font-medium text-muted-foreground">
-          Time Range
-        </label>
-        <select
-          className={selectClass}
-          value={filters.timeRange}
-          onChange={(e) => onChange({ ...filters, timeRange: e.target.value })}
-        >
-          <option value="">All Time</option>
-          <option value="1d">Last 24 Hours</option>
-          <option value="7d">Last 7 Days</option>
-          <option value="30d">Last 30 Days</option>
-          <option value="90d">Last 90 Days</option>
-        </select>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main Analytics Page
 // ---------------------------------------------------------------------------
 
 function Analytics() {
   const analytics = useAnalytics();
   const usage = useUsage();
-  const projectsQuery = useProjects();
-  const usersQuery = useUsers();
-  const orgsQuery = useOrgs();
 
   const [costRates, setCostRates] = useState<CostRate[]>(loadCostRates);
-  const [filters, setFilters] = useState<FilterState>({
-    orgId: "",
-    userId: "",
-    projectId: "",
-    timeRange: "",
-  });
 
   const handleCostRateUpdate = useCallback((rates: CostRate[]) => {
     setCostRates(rates);
     saveCostRates(rates);
   }, []);
 
-  const analyticsData = analytics.data ?? [];
-  const rawUsageData = (usage.data ?? {}) as Record<string, unknown>;
-  const allUsageEntries = useMemo(
-    () => extractUsageEntries(rawUsageData),
-    [rawUsageData],
-  );
+  const analyticsData = analytics.data as AnalyticsData | undefined;
+  const usageData = usage.data as UsageReport | undefined;
+  const groups = usageData?.groups ?? [];
 
-  // Apply filters to usage entries
-  const filteredUsageEntries = useMemo(() => {
-    let entries = allUsageEntries;
-
-    if (filters.orgId) {
-      entries = entries.filter((e) => e.org_id === filters.orgId);
-    }
-    if (filters.userId) {
-      entries = entries.filter((e) => e.user_id === filters.userId);
-    }
-    if (filters.projectId) {
-      entries = entries.filter((e) => e.project_id === filters.projectId);
-    }
-    if (filters.timeRange) {
-      const now = Date.now();
-      const rangeMs: Record<string, number> = {
-        "1d": 86400000,
-        "7d": 604800000,
-        "30d": 2592000000,
-        "90d": 7776000000,
-      };
-      const cutoff = now - (rangeMs[filters.timeRange] ?? 0);
-      entries = entries.filter((e) => {
-        if (!e.period) return true;
-        const t = new Date(e.period).getTime();
-        return isNaN(t) || t >= cutoff;
-      });
-    }
-
-    return entries;
-  }, [allUsageEntries, filters]);
-
-  // Collect unique models from usage data
-  const uniqueModels = useMemo(() => {
-    const models = new Set<string>();
-    for (const e of allUsageEntries) {
-      if (e.model) models.add(e.model);
-    }
-    return Array.from(models).sort();
-  }, [allUsageEntries]);
-
-  // Sync new models into cost rates if they appear
-  useEffect(() => {
-    // no-op: we don't auto-add rates, the user configures them manually
-  }, [uniqueModels]);
-
-  const orgs = useMemo(
-    () => (orgsQuery.data ?? []).map((o) => ({ id: o.id, name: o.name })),
-    [orgsQuery.data],
-  );
-  const users = useMemo(
-    () => (usersQuery.data ?? []).map((u) => ({ id: u.id, email: u.email })),
-    [usersQuery.data],
-  );
-  const projects = useMemo(
-    () => (projectsQuery.data ?? []).map((p) => ({ id: p.id, name: p.name })),
-    [projectsQuery.data],
-  );
+  const groupKeys = useMemo(() => {
+    return groups.map((g) => g.key).sort();
+  }, [groups]);
 
   const hasError = analytics.isError || usage.isError;
   const errorMessage =
@@ -1125,27 +741,39 @@ function Analytics() {
           Memory Analytics
         </h2>
 
-        {/* Activity Chart */}
-        <MemoryActivityChart
+        {/* Summary cards */}
+        <MemoryCountCards
           data={analyticsData}
           isLoading={analytics.isLoading}
         />
 
-        {/* Stats and distribution */}
+        {/* Enrichment Stats */}
+        <EnrichmentStatsCard
+          data={analyticsData}
+          isLoading={analytics.isLoading}
+        />
+
+        {/* Most Recalled and Least Recalled */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <EnrichmentStats
-            data={analyticsData}
+          <MemoryRankTable
+            title="Most Recalled"
+            description="Memories with the highest access counts"
+            items={analyticsData?.most_recalled ?? []}
             isLoading={analytics.isLoading}
           />
-          <TopRecalledTable
-            data={analyticsData}
+          <MemoryRankTable
+            title="Least Recalled"
+            description="Memories with the lowest access counts"
+            items={analyticsData?.least_recalled ?? []}
             isLoading={analytics.isLoading}
           />
         </div>
 
         {/* Dead weight */}
-        <DeadWeightDetection
-          data={analyticsData}
+        <MemoryRankTable
+          title="Dead Weight"
+          description="Memories that have never been recalled"
+          items={analyticsData?.dead_weight ?? []}
           isLoading={analytics.isLoading}
         />
       </div>
@@ -1157,18 +785,9 @@ function Analytics() {
       <div className="space-y-6">
         <h2 className="text-lg font-semibold tracking-tight">Token Usage</h2>
 
-        {/* Filters */}
-        <UsageFilters
-          filters={filters}
-          onChange={setFilters}
-          orgs={orgs}
-          users={users}
-          projects={projects}
-        />
-
         {/* Summary cards */}
         <TokenUsageSummaryCards
-          entries={filteredUsageEntries}
+          data={usageData}
           costRates={costRates}
           isLoading={usage.isLoading}
         />
@@ -1176,25 +795,19 @@ function Analytics() {
         {/* Cost rate config */}
         <CostRateEditor
           costRates={costRates}
-          models={uniqueModels}
+          groupKeys={groupKeys}
           onUpdate={handleCostRateUpdate}
         />
 
         {/* Usage chart */}
-        <TokenUsageChart
-          entries={filteredUsageEntries}
-          isLoading={usage.isLoading}
-        />
-
-        {/* Usage over time */}
-        <UsageOverTimeChart
-          entries={filteredUsageEntries}
+        <UsageBarChart
+          groups={groups}
           isLoading={usage.isLoading}
         />
 
         {/* Usage table */}
-        <TokenUsageTable
-          entries={filteredUsageEntries}
+        <UsageBreakdownTable
+          groups={groups}
           costRates={costRates}
           isLoading={usage.isLoading}
         />

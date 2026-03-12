@@ -388,7 +388,7 @@ function DeleteIdPDialog({
             {config.provider_type.toUpperCase()}
           </span>{" "}
           identity provider
-          {config.org_name ? ` for ${config.org_name}` : ""}? Users
+          {config.org_id ? ` for org ${config.org_id}` : ""}? Users
           authenticating through this provider will no longer be able to sign in.
         </p>
         <div className="mt-6 flex justify-end gap-2">
@@ -433,9 +433,6 @@ function AddIdPDialog({
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [issuerUrl, setIssuerUrl] = useState("");
-  const [authorizationUrl, setAuthorizationUrl] = useState("");
-  const [tokenUrl, setTokenUrl] = useState("");
-  const [userinfoUrl, setUserinfoUrl] = useState("");
   const [allowedDomains, setAllowedDomains] = useState("");
   const [autoProvision, setAutoProvision] = useState(false);
   const [error, setError] = useState("");
@@ -446,9 +443,6 @@ function AddIdPDialog({
     setClientId("");
     setClientSecret("");
     setIssuerUrl("");
-    setAuthorizationUrl("");
-    setTokenUrl("");
-    setUserinfoUrl("");
     setAllowedDomains("");
     setAutoProvision(false);
     setError("");
@@ -489,9 +483,6 @@ function AddIdPDialog({
 
     if (providerType === "oidc") {
       data.issuer_url = issuerUrl.trim();
-      if (authorizationUrl.trim()) data.authorization_url = authorizationUrl.trim();
-      if (tokenUrl.trim()) data.token_url = tokenUrl.trim();
-      if (userinfoUrl.trim()) data.userinfo_url = userinfoUrl.trim();
     }
 
     try {
@@ -507,9 +498,6 @@ function AddIdPDialog({
     clientSecret,
     providerType,
     issuerUrl,
-    authorizationUrl,
-    tokenUrl,
-    userinfoUrl,
     allowedDomains,
     autoProvision,
     createMutation,
@@ -592,7 +580,6 @@ function AddIdPDialog({
           </div>
 
           {providerType === "oidc" && (
-            <>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">
                   Issuer URL
@@ -605,43 +592,6 @@ function AddIdPDialog({
                   placeholder="https://idp.example.com"
                 />
               </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">
-                  Authorization URL
-                </label>
-                <input
-                  type="url"
-                  value={authorizationUrl}
-                  onChange={(e) => setAuthorizationUrl(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-                  placeholder="https://idp.example.com/authorize"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">
-                  Token URL
-                </label>
-                <input
-                  type="url"
-                  value={tokenUrl}
-                  onChange={(e) => setTokenUrl(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-                  placeholder="https://idp.example.com/token"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">
-                  Userinfo URL
-                </label>
-                <input
-                  type="url"
-                  value={userinfoUrl}
-                  onChange={(e) => setUserinfoUrl(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-                  placeholder="https://idp.example.com/userinfo"
-                />
-              </div>
-            </>
           )}
 
           <div>
@@ -759,7 +709,6 @@ function OAuthClientsSection() {
                 <th className="px-4 py-2">Type</th>
                 <th className="px-4 py-2">Redirect URIs</th>
                 <th className="px-4 py-2">Created</th>
-                <th className="px-4 py-2">Last Used</th>
                 <th className="px-4 py-2">Actions</th>
               </tr>
             </thead>
@@ -793,9 +742,6 @@ function OAuthClientsSection() {
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
                     {formatDate(client.created_at)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
-                    {formatDate(client.last_used)}
                   </td>
                   <td className="px-4 py-2">
                     <button
@@ -910,7 +856,7 @@ function IdPSection() {
                     {providerLabel(cfg.provider_type)}
                   </td>
                   <td className="px-4 py-2 text-muted-foreground">
-                    {cfg.org_name || cfg.org_id}
+                    {cfg.org_id || "-"}
                   </td>
                   <td className="px-4 py-2">
                     <code className="rounded bg-muted px-1.5 py-0.5 text-xs">

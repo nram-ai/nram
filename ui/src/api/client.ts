@@ -187,6 +187,8 @@ export interface RecallRequest {
   limit?: number;
   tags?: string[];
   threshold?: number;
+  include_graph?: boolean;
+  graph_depth?: number;
 }
 
 export interface MemoryListParams {
@@ -275,7 +277,9 @@ export interface ExportRelationship {
 }
 
 export interface EnrichRequest {
-  ids: string[];
+  ids?: string[];
+  all?: boolean;
+  priority?: number;
 }
 
 export interface OrgUser {
@@ -287,16 +291,17 @@ export interface OrgUser {
 
 export interface Organization {
   id: string;
+  namespace_id?: string;
   name: string;
   slug: string;
-  user_count: number;
-  memory_count: number;
-  project_count?: number;
   settings?: Record<string, unknown>;
-  users?: OrgUser[];
-  owners?: OrgUser[];
   created_at: string;
   updated_at: string;
+  user_count?: number;
+  memory_count?: number;
+  project_count?: number;
+  users?: OrgUser[];
+  owners?: OrgUser[];
 }
 
 export interface CreateOrgRequest {
@@ -306,6 +311,7 @@ export interface CreateOrgRequest {
 
 export interface UpdateOrgRequest {
   name?: string;
+  slug?: string;
   settings?: Record<string, unknown>;
 }
 
@@ -322,6 +328,7 @@ export interface APIKey {
 
 export interface User {
   id: string;
+  namespace_id?: string;
   email: string;
   display_name: string;
   role: string;
@@ -389,17 +396,19 @@ export interface ProjectOrganization {
 
 export interface Project {
   id: string;
+  namespace_id?: string;
+  owner_namespace_id?: string;
   name: string;
   slug: string;
-  path: string;
+  path?: string;
   description: string;
-  memory_count: number;
-  entity_count: number;
+  memory_count?: number;
+  entity_count?: number;
   default_tags: string[];
   settings: ProjectSettings;
   owner?: ProjectOwner;
   organization?: ProjectOrganization;
-  org_id: string;
+  org_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -409,14 +418,6 @@ export interface ProjectUpdateRequest {
   description?: string;
   default_tags?: string[];
   settings?: Partial<ProjectSettings>;
-}
-
-export interface Provider {
-  id: string;
-  name: string;
-  type: string;
-  enabled: boolean;
-  config: Record<string, unknown>;
 }
 
 export interface ProviderSlot {
@@ -432,8 +433,8 @@ export interface ProviderSlot {
 
 export interface UpdateProviderSlotRequest {
   type: string;
-  url: string;
-  model: string;
+  url?: string;
+  model?: string;
   api_key?: string;
   dimensions?: number;
 }
@@ -452,7 +453,7 @@ export interface TestProviderResult {
 
 export interface OllamaModel {
   name: string;
-  size: string;
+  size: number;
   modified_at: string;
 }
 
@@ -485,11 +486,46 @@ export interface Webhook {
   updated_at: string;
 }
 
+export interface MemoryRankItem {
+  id: string;
+  content: string;
+  access_count: number;
+  project_id?: string | null;
+  created_at: string;
+}
+
 export interface AnalyticsData {
-  period: string;
-  memory_stores: number;
-  memory_recalls: number;
-  api_requests: number;
+  memory_counts: {
+    total: number;
+    active: number;
+    deleted: number;
+    enriched: number;
+  };
+  most_recalled: MemoryRankItem[];
+  least_recalled: MemoryRankItem[];
+  dead_weight: MemoryRankItem[];
+  enrichment_stats: {
+    total_processed: number;
+    success_rate: number;
+    failure_rate: number;
+    avg_latency_ms: number;
+  };
+}
+
+export interface UsageGroup {
+  key: string;
+  tokens_input: number;
+  tokens_output: number;
+  call_count: number;
+}
+
+export interface UsageReport {
+  groups: UsageGroup[];
+  totals: {
+    tokens_input: number;
+    tokens_output: number;
+    call_count: number;
+  };
 }
 
 export interface SQLiteInfo {
@@ -579,7 +615,6 @@ export interface OAuthClient {
   client_type: "public" | "confidential";
   redirect_uris: string[];
   created_at: string;
-  last_used?: string;
 }
 
 export interface OAuthClientCreated extends OAuthClient {
@@ -588,34 +623,29 @@ export interface OAuthClientCreated extends OAuthClient {
 
 export interface CreateOAuthClientRequest {
   name: string;
-  redirect_uris: string[];
-  client_type: "public" | "confidential";
+  redirect_uris?: string[];
+  client_type?: "public" | "confidential";
 }
 
 export interface IdPConfig {
   id: string;
-  org_id: string;
-  org_name?: string;
-  provider_type: "google" | "github" | "oidc";
+  org_id?: string | null;
+  provider_type: string;
   client_id: string;
-  issuer_url?: string;
-  authorization_url?: string;
-  token_url?: string;
-  userinfo_url?: string;
+  issuer_url?: string | null;
   allowed_domains: string[];
   auto_provision: boolean;
+  default_role?: string;
   created_at: string;
+  updated_at: string;
 }
 
 export interface CreateIdPConfigRequest {
   org_id: string;
-  provider_type: "google" | "github" | "oidc";
+  provider_type: string;
   client_id: string;
   client_secret: string;
   issuer_url?: string;
-  authorization_url?: string;
-  token_url?: string;
-  userinfo_url?: string;
   allowed_domains: string[];
   auto_provision: boolean;
 }
@@ -728,17 +758,6 @@ export const adminAPI = {
   deleteProject: (id: string) =>
     request<void>("DELETE", `/admin/projects/${id}`),
 
-  // Providers (legacy)
-  listProviders: () => request<Provider[]>("GET", "/admin/providers"),
-  getProvider: (id: string) =>
-    request<Provider>("GET", `/admin/providers/${id}`),
-  createProvider: (data: Partial<Provider>) =>
-    request<Provider>("POST", "/admin/providers", data),
-  updateProvider: (id: string, data: Partial<Provider>) =>
-    request<Provider>("PUT", `/admin/providers/${id}`, data),
-  deleteProvider: (id: string) =>
-    request<void>("DELETE", `/admin/providers/${id}`),
-
   // Provider slots — backend returns { embedding: {...}, fact: {...}, entity: {...} }
   getProviderSlots: () =>
     request<ProviderConfigResponse>("GET", "/admin/providers").then((r) => {
@@ -748,7 +767,7 @@ export const adminAPI = {
       })) as ProviderSlot[];
     }),
   updateProviderSlot: (slot: string, data: UpdateProviderSlotRequest) =>
-    request<ProviderSlot>("PUT", `/admin/providers/${slot}`, data),
+    request<{ status: string }>("PUT", `/admin/providers/${slot}`, data),
   testProviderSlot: (slot: string, config?: UpdateProviderSlotRequest) =>
     request<TestProviderResult>("POST", "/admin/providers/test", { slot, config }),
   getOllamaModels: () =>
@@ -756,7 +775,7 @@ export const adminAPI = {
       (models) => ({ models }),
     ),
   pullOllamaModel: (model: string) =>
-    request<{ status: string }>("POST", "/admin/providers/ollama/pull", { model }),
+    request<{ status: string; model: string }>("POST", "/admin/providers/ollama/pull", { model }),
 
   // Settings
   getSettings: (scope?: string) => {
@@ -777,14 +796,14 @@ export const adminAPI = {
   deleteWebhook: (id: string) =>
     request<void>("DELETE", `/admin/webhooks/${id}`),
   testWebhook: (id: string) =>
-    request<{ success: boolean; status_code?: number; error?: string }>(
+    request<WebhookTestResult>(
       "POST",
       `/admin/webhooks/${id}/test`,
     ),
 
   // Analytics
-  getAnalytics: () => request<AnalyticsData[]>("GET", "/admin/analytics"),
-  getUsage: () => request<Record<string, unknown>>("GET", "/admin/usage"),
+  getAnalytics: () => request<AnalyticsData>("GET", "/admin/analytics"),
+  getUsage: () => request<UsageReport>("GET", "/admin/usage"),
 
   // Database
   getDatabaseInfo: () => request<DatabaseInfo>("GET", "/admin/database"),
@@ -836,6 +855,23 @@ export const adminAPI = {
     request<void>("DELETE", `/admin/oauth/idp/${id}`),
 };
 
+export interface UpdateMemoryResponse {
+  id: string;
+  project_id: string;
+  content: string;
+  tags: string[];
+  previous_content?: string;
+  re_embedded: boolean;
+  latency_ms: number;
+}
+
+export interface WebhookTestResult {
+  success: boolean;
+  status_code?: number;
+  message?: string;
+  latency_ms: number;
+}
+
 // --- Memory API (project-scoped) ---
 
 export const memoryAPI = {
@@ -870,7 +906,7 @@ export const memoryAPI = {
     request<Memory>("GET", `/projects/${projectId}/memories/${memoryId}`),
 
   update: (projectId: string, memoryId: string, body: MemoryUpdateRequest) =>
-    request<Memory>(
+    request<UpdateMemoryResponse>(
       "PUT",
       `/projects/${projectId}/memories/${memoryId}`,
       body,

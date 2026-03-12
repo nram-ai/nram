@@ -13,7 +13,6 @@ import {
   type GenerateAPIKeyResponse,
   type Project,
   type ProjectUpdateRequest,
-  type Provider,
   type Webhook,
   type StoreMemoryRequest,
   type MemoryListParams,
@@ -28,6 +27,7 @@ import {
   type CreateOAuthClientRequest,
   type IdPConfig,
   type CreateIdPConfigRequest,
+  type WebhookTestResult,
 } from "../api/client";
 
 // --- Health ---
@@ -270,54 +270,6 @@ export function useDeleteProject() {
   });
 }
 
-// --- Providers ---
-
-export function useProviders() {
-  return useQuery({
-    queryKey: ["admin", "providers"],
-    queryFn: adminAPI.listProviders,
-  });
-}
-
-export function useProvider(id: string) {
-  return useQuery({
-    queryKey: ["admin", "providers", id],
-    queryFn: () => adminAPI.getProvider(id),
-    enabled: !!id,
-  });
-}
-
-export function useCreateProvider() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Partial<Provider>) => adminAPI.createProvider(data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin", "providers"] });
-    },
-  });
-}
-
-export function useUpdateProvider() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Provider> }) =>
-      adminAPI.updateProvider(id, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin", "providers"] });
-    },
-  });
-}
-
-export function useDeleteProvider() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => adminAPI.deleteProvider(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin", "providers"] });
-    },
-  });
-}
-
 // --- Provider Slots ---
 
 export function useProviderSlots() {
@@ -436,7 +388,7 @@ export function useDeleteWebhook() {
 
 export function useTestWebhook() {
   return useMutation<
-    { success: boolean; status_code?: number; error?: string },
+    WebhookTestResult,
     Error,
     string
   >({
