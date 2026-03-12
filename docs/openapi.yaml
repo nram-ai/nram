@@ -1,0 +1,3768 @@
+openapi: 3.1.0
+info:
+  title: nram API
+  description: Neural RAM — persistent memory layer for AI agents.
+  version: 0.1.0
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8674
+    description: Local development
+
+tags:
+  - name: Health
+    description: System health and status
+  - name: Setup
+    description: Initial server setup
+  - name: Auth
+    description: Authentication endpoints
+  - name: OAuth
+    description: OAuth 2.0 Authorization Code + PKCE flow
+  - name: Memories
+    description: Project-scoped memory CRUD
+  - name: User
+    description: User-scoped (self-service) endpoints
+  - name: Admin - Dashboard
+    description: Admin dashboard and activity
+  - name: Admin - Organizations
+    description: Admin organization management
+  - name: Admin - Users
+    description: Admin user management
+  - name: Admin - Projects
+    description: Admin project management
+  - name: Admin - Providers
+    description: LLM/embedding provider configuration
+  - name: Admin - Settings
+    description: System settings
+  - name: Admin - Webhooks
+    description: Webhook management
+  - name: Admin - Enrichment
+    description: Enrichment queue management
+  - name: Admin - Analytics
+    description: Memory analytics
+  - name: Admin - Usage
+    description: Token usage reporting
+  - name: Admin - Namespaces
+    description: Namespace hierarchy
+  - name: Admin - Database
+    description: Database info and migration
+  - name: Admin - Graph
+    description: Knowledge graph visualization
+  - name: Admin - OAuth
+    description: OAuth client and IdP management
+  - name: Events
+    description: Server-Sent Events
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ── Health ──────────────────────────────────────────────────────────────
+  /v1/health:
+    get:
+      operationId: getHealth
+      tags: [Health]
+      summary: System health check
+      security: []
+      responses:
+        "200":
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /metrics:
+    get:
+      operationId: getMetrics
+      tags: [Health]
+      summary: Prometheus metrics (optional)
+      security: []
+      responses:
+        "200":
+          description: Prometheus text format
+
+  # ── Setup ───────────────────────────────────────────────────────────────
+  /v1/admin/setup/status:
+    get:
+      operationId: getSetupStatus
+      tags: [Setup]
+      summary: Check if initial setup is complete
+      security: []
+      responses:
+        "200":
+          description: Setup status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupStatusResponse"
+
+  /v1/admin/setup:
+    post:
+      operationId: performSetup
+      tags: [Setup]
+      summary: Perform initial setup (create first admin account)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetupRequest"
+      responses:
+        "201":
+          description: Setup complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Setup already complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ── Auth ────────────────────────────────────────────────────────────────
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Authenticate with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/auth/lookup:
+    post:
+      operationId: lookupAuthMethod
+      tags: [Auth]
+      summary: Check auth method for an email address
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: Auth method lookup result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  method:
+                    type: string
+                    enum: [local, idp, unknown]
+
+  # ── OAuth Discovery & Flow ─────────────────────────────────────────────
+  /.well-known/oauth-authorization-server:
+    get:
+      operationId: getOAuthMetadata
+      tags: [OAuth]
+      summary: OAuth 2.0 Authorization Server Metadata (RFC 8414)
+      security: []
+      responses:
+        "200":
+          description: Server metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthServerMetadata"
+
+  /.well-known/oauth-protected-resource:
+    get:
+      operationId: getProtectedResourceMetadata
+      tags: [OAuth]
+      summary: OAuth Protected Resource Metadata (RFC 9728)
+      security: []
+      responses:
+        "200":
+          description: Protected resource metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthProtectedResourceMetadata"
+
+  /oauth/authorize:
+    get:
+      operationId: oauthAuthorize
+      tags: [OAuth]
+      summary: OAuth authorization endpoint (redirects)
+      security: []
+      parameters:
+        - name: client_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: redirect_uri
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+        - name: response_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [code]
+        - name: code_challenge
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: code_challenge_method
+          in: query
+          schema:
+            type: string
+            enum: [S256]
+            default: S256
+        - name: scope
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to redirect_uri with authorization code
+        "400":
+          description: OAuth error response
+
+  /oauth/token:
+    post:
+      operationId: oauthToken
+      tags: [OAuth]
+      summary: OAuth token endpoint
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [authorization_code, refresh_token]
+                code:
+                  type: string
+                redirect_uri:
+                  type: string
+                  format: uri
+                client_id:
+                  type: string
+                code_verifier:
+                  type: string
+                refresh_token:
+                  type: string
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OAuthTokenRequest"
+      responses:
+        "200":
+          description: Token response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthTokenResponse"
+        "400":
+          description: OAuth error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthErrorResponse"
+
+  /oauth/register:
+    post:
+      operationId: oauthRegisterClient
+      tags: [OAuth]
+      summary: Dynamic Client Registration (RFC 7591)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OAuthClientRegistrationRequest"
+      responses:
+        "201":
+          description: Client registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthClientRegistrationResponse"
+        "400":
+          description: Invalid request
+
+  /oauth/userinfo:
+    get:
+      operationId: oauthUserInfo
+      tags: [OAuth]
+      summary: Get authenticated user info (OpenID Connect subset)
+      responses:
+        "200":
+          description: User info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthUserInfoResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Events (SSE) ───────────────────────────────────────────────────────
+  /v1/events:
+    get:
+      operationId: streamEvents
+      tags: [Events]
+      summary: Server-Sent Events stream
+      parameters:
+        - name: scope
+          in: query
+          description: Prefix filter for event scope (e.g. "project:<uuid>")
+          schema:
+            type: string
+        - name: Last-Event-ID
+          in: header
+          description: Resume from this event ID
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  # ── Project-Scoped Memories ─────────────────────────────────────────────
+  /v1/projects/{project_id}/memories:
+    post:
+      operationId: storeMemory
+      tags: [Memories]
+      summary: Store a new memory
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreMemoryRequest"
+      responses:
+        "201":
+          description: Memory created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoreMemoryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    get:
+      operationId: listMemories
+      tags: [Memories]
+      summary: List memories with pagination
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Paginated memory list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedMemories"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/projects/{project_id}/memories/{id}:
+    get:
+      operationId: getMemory
+      tags: [Memories]
+      summary: Get a single memory by ID
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/MemoryId"
+      responses:
+        "200":
+          description: Memory detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Memory"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      operationId: updateMemory
+      tags: [Memories]
+      summary: Update a memory
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/MemoryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMemoryRequest"
+      responses:
+        "200":
+          description: Memory updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateMemoryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: deleteMemory
+      tags: [Memories]
+      summary: Soft-delete a single memory
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/MemoryId"
+      responses:
+        "200":
+          description: Memory deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForgetResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/projects/{project_id}/memories/batch:
+    post:
+      operationId: batchStoreMemories
+      tags: [Memories]
+      summary: Store multiple memories in batch
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchStoreRequest"
+      responses:
+        "201":
+          description: Batch store result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchStoreResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/projects/{project_id}/memories/get:
+    post:
+      operationId: batchGetMemories
+      tags: [Memories]
+      summary: Retrieve multiple memories by ID
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  minItems: 1
+      responses:
+        "200":
+          description: Batch get result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchGetResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/projects/{project_id}/memories/recall:
+    post:
+      operationId: recallMemories
+      tags: [Memories]
+      summary: Semantic memory recall (vector search + ranking)
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecallRequest"
+      responses:
+        "200":
+          description: Recall results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecallResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/projects/{project_id}/memories/forget:
+    post:
+      operationId: bulkForgetMemories
+      tags: [Memories]
+      summary: Bulk delete memories by IDs or tags
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkForgetRequest"
+      responses:
+        "200":
+          description: Forget result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForgetResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/projects/{project_id}/memories/enrich:
+    post:
+      operationId: enrichMemories
+      tags: [Memories]
+      summary: Queue memories for enrichment (Postgres only)
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichRequest"
+      responses:
+        "200":
+          description: Enrich result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/projects/{project_id}/memories/export:
+    get:
+      operationId: exportMemories
+      tags: [Memories]
+      summary: Export project data
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, ndjson]
+            default: json
+      responses:
+        "200":
+          description: Export data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportData"
+            application/x-ndjson:
+              schema:
+                type: string
+
+  /v1/projects/{project_id}/memories/import:
+    post:
+      operationId: importMemories
+      tags: [Memories]
+      summary: Import memories from file
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [nram, mem0, zep]
+            default: nram
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  # ── User-Scoped ────────────────────────────────────────────────────────
+  /v1/me/memories/recall:
+    post:
+      operationId: meRecall
+      tags: [User]
+      summary: User-scoped memory recall (across all user projects)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecallRequest"
+      responses:
+        "200":
+          description: Recall results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecallResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/me/projects:
+    get:
+      operationId: meListProjects
+      tags: [User]
+      summary: List authenticated user's projects
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Paginated project list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedProjects"
+
+    post:
+      operationId: meCreateProject
+      tags: [User]
+      summary: Create a new project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Slug conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/me/api-keys:
+    get:
+      operationId: meListApiKeys
+      tags: [User]
+      summary: List authenticated user's API keys
+      responses:
+        "200":
+          description: API key list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIKey"
+
+    post:
+      operationId: meCreateApiKey
+      tags: [User]
+      summary: Create a new API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAPIKeyRequest"
+      responses:
+        "201":
+          description: API key created (key shown only once)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateAPIKeyResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/me/api-keys/{id}:
+    delete:
+      operationId: meRevokeApiKey
+      tags: [User]
+      summary: Revoke an API key
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Key revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:
+                    type: boolean
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/me/oauth-clients:
+    get:
+      operationId: meListOAuthClients
+      tags: [User]
+      summary: List authenticated user's OAuth clients
+      responses:
+        "200":
+          description: OAuth client list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OAuthClient"
+
+    post:
+      operationId: meCreateOAuthClient
+      tags: [User]
+      summary: Create a new OAuth client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOAuthClientRequest"
+      responses:
+        "201":
+          description: OAuth client created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateOAuthClientResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/me/oauth-clients/{id}:
+    delete:
+      operationId: meDeleteOAuthClient
+      tags: [User]
+      summary: Delete an OAuth client
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Client deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Org-Scoped ─────────────────────────────────────────────────────────
+  /v1/orgs/{org_id}/memories/recall:
+    post:
+      operationId: orgRecall
+      tags: [Memories]
+      summary: Org-scoped memory recall
+      parameters:
+        - name: org_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecallRequest"
+      responses:
+        "200":
+          description: Recall results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecallResponse"
+
+  # ── Admin: Dashboard ───────────────────────────────────────────────────
+  /v1/admin/dashboard:
+    get:
+      operationId: adminDashboard
+      tags: [Admin - Dashboard]
+      summary: Aggregate dashboard statistics
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+  /v1/admin/activity:
+    get:
+      operationId: adminActivity
+      tags: [Admin - Dashboard]
+      summary: Recent activity events
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        "200":
+          description: Activity events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ActivityEvent"
+
+  # ── Admin: Organizations ───────────────────────────────────────────────
+  /v1/admin/orgs:
+    get:
+      operationId: adminListOrgs
+      tags: [Admin - Organizations]
+      summary: List all organizations
+      responses:
+        "200":
+          description: Organization list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Organization"
+
+    post:
+      operationId: adminCreateOrg
+      tags: [Admin - Organizations]
+      summary: Create an organization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug]
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+      responses:
+        "201":
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/admin/orgs/{id}:
+    get:
+      operationId: adminGetOrg
+      tags: [Admin - Organizations]
+      summary: Get organization by ID
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Organization detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      operationId: adminUpdateOrg
+      tags: [Admin - Organizations]
+      summary: Update an organization
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                settings:
+                  type: object
+      responses:
+        "200":
+          description: Organization updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: adminDeleteOrg
+      tags: [Admin - Organizations]
+      summary: Delete an organization
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: Organization deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Admin: Users ───────────────────────────────────────────────────────
+  /v1/admin/users:
+    get:
+      operationId: adminListUsers
+      tags: [Admin - Users]
+      summary: List all users
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+
+    post:
+      operationId: adminCreateUser
+      tags: [Admin - Users]
+      summary: Create a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/admin/users/{id}:
+    get:
+      operationId: adminGetUser
+      tags: [Admin - Users]
+      summary: Get user by ID (includes API keys)
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: User detail with API keys
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/User"
+                  - type: object
+                    properties:
+                      api_keys:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/APIKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      operationId: adminUpdateUser
+      tags: [Admin - Users]
+      summary: Update a user
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                role:
+                  $ref: "#/components/schemas/UserRole"
+                settings:
+                  type: object
+      responses:
+        "200":
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: adminDeleteUser
+      tags: [Admin - Users]
+      summary: Delete a user
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: User deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Cannot delete last administrator
+
+  /v1/admin/users/{id}/api-keys:
+    get:
+      operationId: adminListUserApiKeys
+      tags: [Admin - Users]
+      summary: List API keys for a user
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: API key list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIKey"
+
+    post:
+      operationId: adminGenerateApiKey
+      tags: [Admin - Users]
+      summary: Generate an API key for a user
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label:
+                  type: string
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                expires_at:
+                  type: string
+                  format: date-time
+      responses:
+        "201":
+          description: API key generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminGenerateAPIKeyResponse"
+
+  /v1/admin/users/{id}/api-keys/{key_id}:
+    delete:
+      operationId: adminRevokeApiKey
+      tags: [Admin - Users]
+      summary: Revoke a user's API key
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: API key revoked
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Admin: Projects ────────────────────────────────────────────────────
+  /v1/admin/projects:
+    get:
+      operationId: adminListProjects
+      tags: [Admin - Projects]
+      summary: List all projects
+      responses:
+        "200":
+          description: Project list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Project"
+
+    post:
+      operationId: adminCreateProject
+      tags: [Admin - Projects]
+      summary: Create a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCreateProjectRequest"
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/admin/projects/{id}:
+    get:
+      operationId: adminGetProject
+      tags: [Admin - Projects]
+      summary: Get project by ID
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Project detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      operationId: adminUpdateProject
+      tags: [Admin - Projects]
+      summary: Update a project
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                description:
+                  type: string
+                default_tags:
+                  type: array
+                  items:
+                    type: string
+                settings:
+                  type: object
+      responses:
+        "200":
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: adminDeleteProject
+      tags: [Admin - Projects]
+      summary: Delete a project
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: Project deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Admin: Providers ───────────────────────────────────────────────────
+  /v1/admin/providers:
+    get:
+      operationId: adminGetProviders
+      tags: [Admin - Providers]
+      summary: Get current provider configuration
+      responses:
+        "200":
+          description: Provider config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConfigResponse"
+
+  /v1/admin/providers/test:
+    post:
+      operationId: adminTestProvider
+      tags: [Admin - Providers]
+      summary: Test a provider connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderTestRequest"
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderTestResult"
+
+  /v1/admin/providers/{slot}:
+    put:
+      operationId: adminUpdateProviderSlot
+      tags: [Admin - Providers]
+      summary: Update a provider slot
+      parameters:
+        - name: slot
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [embedding, fact, entity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderSlotConfig"
+      responses:
+        "200":
+          description: Slot updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /v1/admin/providers/ollama/models:
+    get:
+      operationId: adminListOllamaModels
+      tags: [Admin - Providers]
+      summary: List available Ollama models
+      responses:
+        "200":
+          description: Model list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OllamaModel"
+
+  /v1/admin/providers/ollama/pull:
+    post:
+      operationId: adminPullOllamaModel
+      tags: [Admin - Providers]
+      summary: Pull an Ollama model
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model]
+              properties:
+                model:
+                  type: string
+      responses:
+        "202":
+          description: Pull accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: accepted
+                  model:
+                    type: string
+
+  # ── Admin: Settings ────────────────────────────────────────────────────
+  /v1/admin/settings:
+    get:
+      operationId: adminListSettings
+      tags: [Admin - Settings]
+      summary: List settings or get schema definitions
+      parameters:
+        - name: scope
+          in: query
+          schema:
+            type: string
+        - name: schema
+          in: query
+          description: Set to "true" to get setting definitions
+          schema:
+            type: string
+            enum: ["true"]
+      responses:
+        "200":
+          description: Settings list or schema
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      oneOf:
+                        - $ref: "#/components/schemas/Setting"
+                        - $ref: "#/components/schemas/SettingSchema"
+
+    put:
+      operationId: adminUpdateSetting
+      tags: [Admin - Settings]
+      summary: Update a setting
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key:
+                  type: string
+                value: {}
+                scope:
+                  type: string
+                  default: global
+      responses:
+        "200":
+          description: Setting updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # ── Admin: Webhooks ────────────────────────────────────────────────────
+  /v1/admin/webhooks:
+    get:
+      operationId: adminListWebhooks
+      tags: [Admin - Webhooks]
+      summary: List all webhooks
+      responses:
+        "200":
+          description: Webhook list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Webhook"
+
+    post:
+      operationId: adminCreateWebhook
+      tags: [Admin - Webhooks]
+      summary: Create a webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookCreateRequest"
+      responses:
+        "201":
+          description: Webhook created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+
+  /v1/admin/webhooks/{id}:
+    get:
+      operationId: adminGetWebhook
+      tags: [Admin - Webhooks]
+      summary: Get webhook by ID
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Webhook detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      operationId: adminUpdateWebhook
+      tags: [Admin - Webhooks]
+      summary: Update a webhook
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookUpdateRequest"
+      responses:
+        "200":
+          description: Webhook updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: adminDeleteWebhook
+      tags: [Admin - Webhooks]
+      summary: Delete a webhook
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: Webhook deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/admin/webhooks/{id}/test:
+    post:
+      operationId: adminTestWebhook
+      tags: [Admin - Webhooks]
+      summary: Fire a test event to a webhook
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookTestResult"
+
+  # ── Admin: Enrichment ──────────────────────────────────────────────────
+  /v1/admin/enrichment:
+    get:
+      operationId: adminGetEnrichmentQueue
+      tags: [Admin - Enrichment]
+      summary: Get enrichment queue status
+      responses:
+        "200":
+          description: Queue status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/admin/enrichment/queue:
+    get:
+      operationId: adminGetEnrichmentQueueDetail
+      tags: [Admin - Enrichment]
+      summary: Get enrichment queue status (alias)
+      responses:
+        "200":
+          description: Queue status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/admin/enrichment/retry:
+    post:
+      operationId: adminRetryEnrichment
+      tags: [Admin - Enrichment]
+      summary: Retry failed enrichment jobs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        "200":
+          description: Retry result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  retried:
+                    type: integer
+
+  /v1/admin/enrichment/pause:
+    post:
+      operationId: adminPauseEnrichment
+      tags: [Admin - Enrichment]
+      summary: Pause or resume enrichment workers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paused]
+              properties:
+                paused:
+                  type: boolean
+      responses:
+        "200":
+          description: Pause state updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  paused:
+                    type: boolean
+
+  /v1/admin/enrichment/test-prompt:
+    post:
+      operationId: adminTestEnrichmentPrompt
+      tags: [Admin - Enrichment]
+      summary: Test an extraction prompt against sample input
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentTestPromptRequest"
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentTestPromptResponse"
+
+  # ── Admin: Analytics ───────────────────────────────────────────────────
+  /v1/admin/analytics:
+    get:
+      operationId: adminGetAnalytics
+      tags: [Admin - Analytics]
+      summary: Memory analytics (counts, rankings, enrichment stats)
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsData"
+
+  # ── Admin: Usage ───────────────────────────────────────────────────────
+  /v1/admin/usage:
+    get:
+      operationId: adminGetUsage
+      tags: [Admin - Usage]
+      summary: Token usage report
+      parameters:
+        - name: org
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: user
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: project
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [org, user, project, operation, model]
+            default: operation
+      responses:
+        "200":
+          description: Usage report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageReport"
+
+  # ── Admin: Namespaces ──────────────────────────────────────────────────
+  /v1/admin/namespaces/tree:
+    get:
+      operationId: adminGetNamespaceTree
+      tags: [Admin - Namespaces]
+      summary: Get full namespace hierarchy tree
+      responses:
+        "200":
+          description: Namespace tree
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tree:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NamespaceNode"
+
+  # ── Admin: Database ────────────────────────────────────────────────────
+  /v1/admin/database:
+    get:
+      operationId: adminGetDatabaseInfo
+      tags: [Admin - Database]
+      summary: Get current database backend info and statistics
+      responses:
+        "200":
+          description: Database info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatabaseInfo"
+
+  /v1/admin/database/test:
+    post:
+      operationId: adminTestDatabaseConnection
+      tags: [Admin - Database]
+      summary: Test a PostgreSQL connection URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+      responses:
+        "200":
+          description: Connection test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionTestResult"
+
+  /v1/admin/database/migrate:
+    post:
+      operationId: adminTriggerMigration
+      tags: [Admin - Database]
+      summary: Trigger SQLite-to-Postgres migration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+      responses:
+        "202":
+          description: Migration accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationStatus"
+
+  # ── Admin: Graph ───────────────────────────────────────────────────────
+  /v1/admin/graph:
+    get:
+      operationId: adminGetGraph
+      tags: [Admin - Graph]
+      summary: Get knowledge graph data for a project
+      parameters:
+        - name: project
+          in: query
+          required: true
+          description: Project UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Graph data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Admin: OAuth ───────────────────────────────────────────────────────
+  /v1/admin/oauth/clients:
+    get:
+      operationId: adminListOAuthClients
+      tags: [Admin - OAuth]
+      summary: List all OAuth clients
+      responses:
+        "200":
+          description: OAuth client list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminOAuthClientResponse"
+
+    post:
+      operationId: adminCreateOAuthClient
+      tags: [Admin - OAuth]
+      summary: Create an OAuth client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                redirect_uris:
+                  type: array
+                  items:
+                    type: string
+                client_type:
+                  type: string
+                  enum: [public, confidential]
+                  default: confidential
+      responses:
+        "201":
+          description: OAuth client created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOAuthClientCreatedResponse"
+
+  /v1/admin/oauth/clients/{id}:
+    delete:
+      operationId: adminDeleteOAuthClient
+      tags: [Admin - OAuth]
+      summary: Delete an OAuth client
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: Client deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/admin/oauth/idp:
+    get:
+      operationId: adminListIdPs
+      tags: [Admin - OAuth]
+      summary: List identity providers
+      responses:
+        "200":
+          description: IdP list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OAuthIdPConfig"
+
+    post:
+      operationId: adminCreateIdP
+      tags: [Admin - OAuth]
+      summary: Create an identity provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIdPRequest"
+      responses:
+        "201":
+          description: IdP created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthIdPConfig"
+
+  /v1/admin/oauth/idp/{id}:
+    delete:
+      operationId: adminDeleteIdP
+      tags: [Admin - OAuth]
+      summary: Delete an identity provider
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: IdP deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: JWT token or API key (prefixed with nram_k_)
+
+  parameters:
+    ProjectId:
+      name: project_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    MemoryId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    # ── Error ──────────────────────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum: [bad_request, unauthorized, forbidden, not_found, conflict, rate_limited, internal_error]
+            message:
+              type: string
+            details:
+              type: object
+
+    # ── Core Models ────────────────────────────────────────────────────
+    Memory:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        namespace_id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        embedding_dim:
+          type: integer
+          nullable: true
+        source:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+          format: double
+        importance:
+          type: number
+          format: double
+        access_count:
+          type: integer
+        last_accessed:
+          type: string
+          format: date-time
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        superseded_by:
+          type: string
+          format: uuid
+          nullable: true
+        enriched:
+          type: boolean
+        metadata:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+        purge_after:
+          type: string
+          format: date-time
+          nullable: true
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        org_id:
+          type: string
+          format: uuid
+        namespace_id:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/UserRole"
+        settings:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        last_login:
+          type: string
+          format: date-time
+          nullable: true
+        disabled_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    UserRole:
+      type: string
+      enum: [administrator, org_owner, member, readonly, service]
+
+    Organization:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        namespace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        settings:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        namespace_id:
+          type: string
+          format: uuid
+        owner_namespace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        default_tags:
+          type: array
+          items:
+            type: string
+        settings:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        key_prefix:
+          type: string
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+            format: uuid
+        last_used:
+          type: string
+          format: date-time
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    OAuthClient:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        client_id:
+          type: string
+        name:
+          type: string
+        redirect_uris:
+          type: array
+          items:
+            type: string
+        grant_types:
+          type: array
+          items:
+            type: string
+        org_id:
+          type: string
+          format: uuid
+          nullable: true
+        auto_registered:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    OAuthIdPConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+          nullable: true
+        provider_type:
+          type: string
+        client_id:
+          type: string
+        issuer_url:
+          type: string
+          nullable: true
+        allowed_domains:
+          type: array
+          items:
+            type: string
+        auto_provision:
+          type: boolean
+        default_role:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Webhook:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+        scope:
+          type: string
+        active:
+          type: boolean
+        last_fired:
+          type: string
+          format: date-time
+          nullable: true
+        last_status:
+          type: integer
+          nullable: true
+        failure_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Setting:
+      type: object
+      properties:
+        key:
+          type: string
+        value: {}
+        scope:
+          type: string
+        updated_by:
+          type: string
+          format: uuid
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+
+    Pagination:
+      type: object
+      properties:
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    # ── Health ─────────────────────────────────────────────────────────
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+        backend:
+          type: string
+          enum: [sqlite, postgres]
+        database:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [ok, error]
+            latency_ms:
+              type: integer
+              format: int64
+        providers:
+          type: object
+          properties:
+            embedding:
+              $ref: "#/components/schemas/HealthProviderStatus"
+            fact_extraction:
+              $ref: "#/components/schemas/HealthProviderStatus"
+            entity_extraction:
+              $ref: "#/components/schemas/HealthProviderStatus"
+        enrichment_queue:
+          type: object
+          nullable: true
+          properties:
+            pending:
+              type: integer
+            processing:
+              type: integer
+            failed:
+              type: integer
+        uptime_seconds:
+          type: integer
+          format: int64
+
+    HealthProviderStatus:
+      type: object
+      properties:
+        status:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        latency_ms:
+          type: integer
+          format: int64
+          nullable: true
+
+    # ── Setup ──────────────────────────────────────────────────────────
+    SetupStatusResponse:
+      type: object
+      properties:
+        setup_complete:
+          type: boolean
+        backend:
+          type: string
+          enum: [sqlite, postgres]
+
+    SetupRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+
+    SetupResponse:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        api_key:
+          type: string
+        token:
+          type: string
+        message:
+          type: string
+
+    # ── Auth ───────────────────────────────────────────────────────────
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+            display_name:
+              type: string
+            role:
+              $ref: "#/components/schemas/UserRole"
+            org_id:
+              type: string
+              format: uuid
+
+    # ── OAuth ──────────────────────────────────────────────────────────
+    OAuthServerMetadata:
+      type: object
+      properties:
+        issuer:
+          type: string
+        authorization_endpoint:
+          type: string
+        token_endpoint:
+          type: string
+        registration_endpoint:
+          type: string
+        userinfo_endpoint:
+          type: string
+        response_types_supported:
+          type: array
+          items:
+            type: string
+        grant_types_supported:
+          type: array
+          items:
+            type: string
+        code_challenge_methods_supported:
+          type: array
+          items:
+            type: string
+        token_endpoint_auth_methods_supported:
+          type: array
+          items:
+            type: string
+
+    OAuthProtectedResourceMetadata:
+      type: object
+      properties:
+        resource:
+          type: string
+        authorization_servers:
+          type: array
+          items:
+            type: string
+        bearer_methods_supported:
+          type: array
+          items:
+            type: string
+
+    OAuthTokenRequest:
+      type: object
+      required: [grant_type]
+      properties:
+        grant_type:
+          type: string
+          enum: [authorization_code, refresh_token]
+        code:
+          type: string
+        redirect_uri:
+          type: string
+          format: uri
+        client_id:
+          type: string
+        code_verifier:
+          type: string
+        refresh_token:
+          type: string
+
+    OAuthTokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+        refresh_token:
+          type: string
+
+    OAuthErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        error_description:
+          type: string
+
+    OAuthClientRegistrationRequest:
+      type: object
+      required: [client_name, redirect_uris]
+      properties:
+        client_name:
+          type: string
+        redirect_uris:
+          type: array
+          items:
+            type: string
+        grant_types:
+          type: array
+          items:
+            type: string
+
+    OAuthClientRegistrationResponse:
+      type: object
+      properties:
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        client_name:
+          type: string
+        redirect_uris:
+          type: array
+          items:
+            type: string
+        grant_types:
+          type: array
+          items:
+            type: string
+
+    OAuthUserInfoResponse:
+      type: object
+      properties:
+        sub:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+        org_id:
+          type: string
+
+    # ── Memory Operations ──────────────────────────────────────────────
+    StoreMemoryRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+        source:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+        options:
+          type: object
+          properties:
+            enrich:
+              type: boolean
+              default: false
+            extract:
+              type: boolean
+              default: false
+            ttl:
+              type: string
+              description: Duration string (e.g. "30d", "7d", "24h")
+
+    StoreMemoryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        project_slug:
+          type: string
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        enriched:
+          type: boolean
+        enrichment_queued:
+          type: boolean
+        latency_ms:
+          type: integer
+          format: int64
+
+    UpdateMemoryRequest:
+      type: object
+      properties:
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+
+    UpdateMemoryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        previous_content:
+          type: string
+        re_embedded:
+          type: boolean
+        latency_ms:
+          type: integer
+          format: int64
+
+    BatchStoreRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [content]
+            properties:
+              content:
+                type: string
+              source:
+                type: string
+              tags:
+                type: array
+                items:
+                  type: string
+              metadata:
+                type: object
+          minItems: 1
+        options:
+          type: object
+          properties:
+            enrich:
+              type: boolean
+              default: false
+            extract:
+              type: boolean
+              default: false
+            ttl:
+              type: string
+
+    BatchStoreResponse:
+      type: object
+      properties:
+        processed:
+          type: integer
+        memories_created:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                type: string
+        latency_ms:
+          type: integer
+          format: int64
+
+    BatchGetResponse:
+      type: object
+      properties:
+        found:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryDetail"
+        not_found:
+          type: array
+          items:
+            type: string
+            format: uuid
+        latency_ms:
+          type: integer
+          format: int64
+
+    MemoryDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+        enriched:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RecallRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        limit:
+          type: integer
+        threshold:
+          type: number
+          format: double
+        tags:
+          type: array
+          items:
+            type: string
+        include_graph:
+          type: boolean
+          default: false
+        graph_depth:
+          type: integer
+
+    RecallResponse:
+      type: object
+      properties:
+        memories:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecallResult"
+        entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecallEntity"
+        latency_ms:
+          type: integer
+          format: int64
+
+    RecallResult:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
+          nullable: true
+        score:
+          type: number
+          format: double
+        similarity:
+          type: number
+          format: double
+          nullable: true
+        metadata:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+
+    RecallEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+
+    BulkForgetRequest:
+      type: object
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        tags:
+          type: array
+          items:
+            type: string
+        hard:
+          type: boolean
+          default: false
+
+    ForgetResponse:
+      type: object
+      properties:
+        deleted:
+          type: integer
+        latency_ms:
+          type: integer
+          format: int64
+
+    EnrichRequest:
+      type: object
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        all:
+          type: boolean
+        priority:
+          type: integer
+
+    EnrichResponse:
+      type: object
+      properties:
+        queued:
+          type: integer
+        skipped:
+          type: integer
+        latency_ms:
+          type: integer
+          format: int64
+
+    # ── Export/Import ──────────────────────────────────────────────────
+    ExportData:
+      type: object
+      properties:
+        version:
+          type: string
+        exported_at:
+          type: string
+          format: date-time
+        project:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            slug:
+              type: string
+        memories:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              content:
+                type: string
+              tags:
+                type: array
+                items:
+                  type: string
+              source:
+                type: string
+                nullable: true
+              confidence:
+                type: number
+                format: double
+              importance:
+                type: number
+                format: double
+              enriched:
+                type: boolean
+              metadata:
+                type: object
+              lineage:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    parent_id:
+                      type: string
+                      format: uuid
+                      nullable: true
+                    relation:
+                      type: string
+              created_at:
+                type: string
+                format: date-time
+        entities:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              type:
+                type: string
+              canonical:
+                type: string
+              properties:
+                type: object
+              mention_count:
+                type: integer
+        relationships:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              source_id:
+                type: string
+                format: uuid
+              target_id:
+                type: string
+                format: uuid
+              relation:
+                type: string
+              weight:
+                type: number
+                format: double
+              valid_from:
+                type: string
+                format: date-time
+              valid_until:
+                type: string
+                format: date-time
+                nullable: true
+        stats:
+          type: object
+          properties:
+            memory_count:
+              type: integer
+            entity_count:
+              type: integer
+            relationship_count:
+              type: integer
+
+    ImportResponse:
+      type: object
+      properties:
+        imported:
+          type: integer
+        skipped:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                type: string
+        latency_ms:
+          type: integer
+          format: int64
+
+    # ── Paginated Responses ───────────────────────────────────────────
+    PaginatedMemories:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Memory"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    PaginatedProjects:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    # ── User Self-Service ─────────────────────────────────────────────
+    CreateProjectRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+          description: Auto-generated from name if omitted
+        description:
+          type: string
+        default_tags:
+          type: array
+          items:
+            type: string
+
+    CreateAPIKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+            format: uuid
+        expires_at:
+          type: string
+          format: date-time
+
+    CreateAPIKeyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: string
+          description: Full API key (shown only once)
+        key_prefix:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CreateOAuthClientRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        redirect_uris:
+          type: array
+          items:
+            type: string
+        grant_types:
+          type: array
+          items:
+            type: string
+
+    CreateOAuthClientResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        client_id:
+          type: string
+        client_secret:
+          type: string
+          nullable: true
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Admin Requests ────────────────────────────────────────────────
+    AdminCreateUserRequest:
+      type: object
+      required: [email, password, role]
+      properties:
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        password:
+          type: string
+          minLength: 8
+        role:
+          $ref: "#/components/schemas/UserRole"
+        organization_id:
+          type: string
+          format: uuid
+
+    AdminCreateProjectRequest:
+      type: object
+      required: [name, slug, owner_namespace_id]
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        owner_namespace_id:
+          type: string
+          format: uuid
+        default_tags:
+          type: array
+          items:
+            type: string
+        settings:
+          type: object
+
+    AdminGenerateAPIKeyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        label:
+          type: string
+        prefix:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+
+    # ── Admin OAuth ───────────────────────────────────────────────────
+    AdminOAuthClientResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        client_id:
+          type: string
+        type:
+          type: string
+          enum: [auto, manual]
+        client_type:
+          type: string
+          enum: [public, confidential]
+        redirect_uris:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+
+    AdminOAuthClientCreatedResponse:
+      allOf:
+        - $ref: "#/components/schemas/AdminOAuthClientResponse"
+        - type: object
+          properties:
+            client_secret:
+              type: string
+              nullable: true
+
+    CreateIdPRequest:
+      type: object
+      required: [org_id, provider_type, client_id, client_secret]
+      properties:
+        org_id:
+          type: string
+        provider_type:
+          type: string
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        issuer_url:
+          type: string
+          nullable: true
+        allowed_domains:
+          type: array
+          items:
+            type: string
+        auto_provision:
+          type: boolean
+
+    # ── Dashboard ─────────────────────────────────────────────────────
+    DashboardStats:
+      type: object
+      properties:
+        total_memories:
+          type: integer
+        total_projects:
+          type: integer
+        total_users:
+          type: integer
+        total_entities:
+          type: integer
+        total_organizations:
+          type: integer
+        memories_by_project:
+          type: array
+          items:
+            type: object
+            properties:
+              project_id:
+                type: string
+                format: uuid
+              project_name:
+                type: string
+              count:
+                type: integer
+        enrichment_queue:
+          type: object
+          nullable: true
+          properties:
+            pending:
+              type: integer
+            processing:
+              type: integer
+            failed:
+              type: integer
+
+    ActivityEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        summary:
+          type: string
+        project_id:
+          type: string
+          format: uuid
+          nullable: true
+        user_id:
+          type: string
+          format: uuid
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+
+    # ── Providers ─────────────────────────────────────────────────────
+    ProviderConfigResponse:
+      type: object
+      properties:
+        embedding:
+          $ref: "#/components/schemas/ProviderSlotStatus"
+        fact:
+          $ref: "#/components/schemas/ProviderSlotStatus"
+        entity:
+          $ref: "#/components/schemas/ProviderSlotStatus"
+
+    ProviderSlotStatus:
+      type: object
+      properties:
+        configured:
+          type: boolean
+        type:
+          type: string
+        url:
+          type: string
+        model:
+          type: string
+        dimensions:
+          type: integer
+          nullable: true
+        status:
+          type: string
+        latency_ms:
+          type: integer
+          format: int64
+          nullable: true
+
+    ProviderTestRequest:
+      type: object
+      required: [slot, config]
+      properties:
+        slot:
+          type: string
+          enum: [embedding, fact, entity]
+        config:
+          $ref: "#/components/schemas/ProviderSlotConfig"
+
+    ProviderSlotConfig:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+        url:
+          type: string
+        api_key:
+          type: string
+        model:
+          type: string
+        dimensions:
+          type: integer
+
+    ProviderTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        latency_ms:
+          type: integer
+          format: int64
+
+    OllamaModel:
+      type: object
+      properties:
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
+        modified_at:
+          type: string
+
+    # ── Settings Schema ───────────────────────────────────────────────
+    SettingSchema:
+      type: object
+      properties:
+        key:
+          type: string
+        type:
+          type: string
+        default_value: {}
+        description:
+          type: string
+        category:
+          type: string
+
+    # ── Webhooks ──────────────────────────────────────────────────────
+    WebhookCreateRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+        scope:
+          type: string
+          default: global
+        events:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        secret:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          default: true
+
+    WebhookUpdateRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+        scope:
+          type: string
+        events:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        secret:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+
+    WebhookTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        status_code:
+          type: integer
+        message:
+          type: string
+        latency_ms:
+          type: integer
+          format: int64
+
+    # ── Enrichment ────────────────────────────────────────────────────
+    EnrichmentQueueStatus:
+      type: object
+      properties:
+        counts:
+          type: object
+          properties:
+            pending:
+              type: integer
+            processing:
+              type: integer
+            completed:
+              type: integer
+            failed:
+              type: integer
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              memory_id:
+                type: string
+                format: uuid
+              status:
+                type: string
+              attempts:
+                type: integer
+              last_error:
+                type: string
+              created_at:
+                type: string
+                format: date-time
+        paused:
+          type: boolean
+
+    EnrichmentTestPromptRequest:
+      type: object
+      required: [type, sample_input]
+      properties:
+        type:
+          type: string
+          enum: [fact, entity]
+        prompt:
+          type: string
+          description: Custom prompt (uses default if empty)
+        sample_input:
+          type: string
+
+    EnrichmentTestPromptResponse:
+      type: object
+      properties:
+        output:
+          type: string
+        parsed: {}
+        error:
+          type: string
+        latency_ms:
+          type: integer
+          format: int64
+
+    # ── Analytics ─────────────────────────────────────────────────────
+    AnalyticsData:
+      type: object
+      properties:
+        memory_counts:
+          type: object
+          properties:
+            total:
+              type: integer
+            active:
+              type: integer
+            deleted:
+              type: integer
+            enriched:
+              type: integer
+        most_recalled:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryRankItem"
+        least_recalled:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryRankItem"
+        dead_weight:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryRankItem"
+        enrichment_stats:
+          type: object
+          properties:
+            total_processed:
+              type: integer
+            success_rate:
+              type: number
+              format: double
+            failure_rate:
+              type: number
+              format: double
+            avg_latency_ms:
+              type: integer
+              format: int64
+
+    MemoryRankItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        access_count:
+          type: integer
+        project_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Usage ─────────────────────────────────────────────────────────
+    UsageReport:
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              tokens_input:
+                type: integer
+                format: int64
+              tokens_output:
+                type: integer
+                format: int64
+              call_count:
+                type: integer
+                format: int64
+        totals:
+          type: object
+          properties:
+            tokens_input:
+              type: integer
+              format: int64
+            tokens_output:
+              type: integer
+              format: int64
+            call_count:
+              type: integer
+              format: int64
+
+    # ── Namespaces ────────────────────────────────────────────────────
+    NamespaceNode:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        kind:
+          type: string
+        path:
+          type: string
+        depth:
+          type: integer
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/NamespaceNode"
+
+    # ── Database ──────────────────────────────────────────────────────
+    DatabaseInfo:
+      type: object
+      properties:
+        backend:
+          type: string
+          enum: [sqlite, postgres]
+        version:
+          type: string
+        sqlite:
+          type: object
+          nullable: true
+          properties:
+            file_path:
+              type: string
+            file_size_bytes:
+              type: integer
+              format: int64
+        postgres:
+          type: object
+          nullable: true
+          properties:
+            host:
+              type: string
+            database:
+              type: string
+            pgvector_version:
+              type: string
+            active_connections:
+              type: integer
+            idle_connections:
+              type: integer
+            max_connections:
+              type: integer
+        data_counts:
+          type: object
+          properties:
+            memories:
+              type: integer
+            entities:
+              type: integer
+            projects:
+              type: integer
+            users:
+              type: integer
+            organizations:
+              type: integer
+
+    ConnectionTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        pgvector_installed:
+          type: boolean
+        latency_ms:
+          type: integer
+          format: int64
+
+    MigrationStatus:
+      type: object
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+
+    # ── Graph ─────────────────────────────────────────────────────────
+    GraphResponse:
+      type: object
+      properties:
+        entities:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              canonical:
+                type: string
+              entity_type:
+                type: string
+              mention_count:
+                type: integer
+              aliases:
+                type: array
+                items:
+                  type: string
+              created_at:
+                type: string
+              updated_at:
+                type: string
+        relationships:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              source_id:
+                type: string
+              target_id:
+                type: string
+              relation:
+                type: string
+              weight:
+                type: number
+                format: double
+
+    # ── SSE Event ─────────────────────────────────────────────────────
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum:
+            - memory.created
+            - memory.enriched
+            - memory.updated
+            - memory.deleted
+            - entity.created
+            - relationship.created
+            - relationship.expired
+            - conflict.detected
+            - enrichment.failed
+        scope:
+          type: string
+        data:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
