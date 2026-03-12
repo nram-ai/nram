@@ -21,14 +21,14 @@ import type {
 
 const SLOT_LABELS: Record<string, string> = {
   embedding: "Embedding",
-  fact_extraction: "Fact Extraction",
-  entity_extraction: "Entity Extraction",
+  fact: "Fact Extraction",
+  entity: "Entity Extraction",
 };
 
 const SLOT_DESCRIPTIONS: Record<string, string> = {
   embedding: "Generates vector embeddings for semantic search",
-  fact_extraction: "Extracts structured facts from stored memories",
-  entity_extraction: "Identifies entities and relationships in content",
+  fact: "Extracts structured facts from stored memories",
+  entity: "Identifies entities and relationships in content",
 };
 
 const PROVIDER_TYPES = [
@@ -767,16 +767,14 @@ function ProviderConfiguration() {
   // Build slots array, defaulting to unconfigured if API returns nothing
   const defaultSlots: ProviderSlot[] = [
     "embedding",
-    "fact_extraction",
-    "entity_extraction",
+    "fact",
+    "entity",
   ].map((s) => ({
     slot: s,
     configured: false,
     type: "",
     url: "",
     model: "",
-    api_key_set: false,
-    healthy: false,
   }));
 
   const slots: ProviderSlot[] = (() => {

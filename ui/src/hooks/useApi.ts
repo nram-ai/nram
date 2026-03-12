@@ -409,7 +409,7 @@ export function useAnalytics() {
 export function useUsage() {
   return useQuery({
     queryKey: ["admin", "usage"],
-    queryFn: adminAPI.getUsage,
+    queryFn: () => adminAPI.getUsage(),
   });
 }
 

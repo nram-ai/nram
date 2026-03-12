@@ -12,10 +12,8 @@ import type { Webhook, WebhookCreateRequest, WebhookUpdateRequest, WebhookTestRe
 // Types
 // ---------------------------------------------------------------------------
 
-interface WebhookFull extends Webhook {
-  secret?: string;
-  last_delivery?: string;
-}
+// Alias for Webhook — the API never returns secret in list responses.
+type WebhookFull = Webhook;
 
 interface WebhookFormData {
   url: string;

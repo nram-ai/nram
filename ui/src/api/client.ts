@@ -368,7 +368,7 @@ export interface GenerateAPIKeyResponse {
   label: string;
   prefix: string;
   scopes: string[];
-  expires_at?: string;
+  expires_at: string | null;
   created_at: string;
 }
 
@@ -682,8 +682,8 @@ export interface CreateIdPConfigRequest {
   client_id: string;
   client_secret: string;
   issuer_url?: string;
-  allowed_domains: string[];
-  auto_provision: boolean;
+  allowed_domains?: string[];
+  auto_provision?: boolean;
 }
 
 export interface GraphEntity {
@@ -838,7 +838,17 @@ export const adminAPI = {
 
   // Analytics
   getAnalytics: () => request<AnalyticsData>("GET", "/admin/analytics"),
-  getUsage: () => request<UsageReport>("GET", "/admin/usage"),
+  getUsage: (params?: { org?: string; user?: string; project?: string; from?: string; to?: string; group_by?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.org) sp.set("org", params.org);
+    if (params?.user) sp.set("user", params.user);
+    if (params?.project) sp.set("project", params.project);
+    if (params?.from) sp.set("from", params.from);
+    if (params?.to) sp.set("to", params.to);
+    if (params?.group_by) sp.set("group_by", params.group_by);
+    const qs = sp.toString();
+    return request<UsageReport>("GET", `/admin/usage${qs ? `?${qs}` : ""}`);
+  },
 
   // Database
   getDatabaseInfo: () => request<DatabaseInfo>("GET", "/admin/database"),
