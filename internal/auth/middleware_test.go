@@ -359,13 +359,14 @@ func TestGenerateJWT_ErrorOnEmptySecret(t *testing.T) {
 	}
 }
 
-// Verify that 401 responses include WWW-Authenticate header when issuerURL is set.
+// Verify that 401 responses include WWW-Authenticate header derived from the
+// request Host header (base URL is always derived from the request, never configured).
 func TestHandler_WWWAuthenticate_WithIssuerURL(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
-		WithIssuerURL("http://localhost:8674"))
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	// No auth header → 401 with WWW-Authenticate.
+	// httptest.NewRequest sets Host: example.com so base is http://example.com.
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -379,7 +380,7 @@ func TestHandler_WWWAuthenticate_WithIssuerURL(t *testing.T) {
 		t.Fatal("expected WWW-Authenticate header, got empty")
 	}
 
-	expected := `Bearer resource_metadata="http://localhost:8674/.well-known/oauth-protected-resource"`
+	expected := `Bearer resource_metadata="http://example.com/.well-known/oauth-protected-resource"`
 	if wwwAuth != expected {
 		t.Errorf("WWW-Authenticate mismatch\n  got:  %s\n  want: %s", wwwAuth, expected)
 	}
@@ -387,8 +388,7 @@ func TestHandler_WWWAuthenticate_WithIssuerURL(t *testing.T) {
 
 // Verify WWW-Authenticate also appears on invalid token 401s.
 func TestHandler_WWWAuthenticate_InvalidToken(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
-		WithIssuerURL("http://localhost:8674"))
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
@@ -406,29 +406,10 @@ func TestHandler_WWWAuthenticate_InvalidToken(t *testing.T) {
 	}
 }
 
-// Verify no WWW-Authenticate header when issuerURL is not set (backwards compat).
-func TestHandler_NoWWWAuthenticate_WithoutIssuerURL(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
-	handler := mw.Handler(okHandler())
-
-	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rec.Code)
-	}
-
-	wwwAuth := rec.Header().Get("WWW-Authenticate")
-	if wwwAuth != "" {
-		t.Errorf("expected no WWW-Authenticate without issuer URL, got: %s", wwwAuth)
-	}
-}
-
-// Verify JWT with wrong audience is rejected when issuerURL is set (RFC 8707 audience validation).
+// Verify JWT with wrong audience is rejected (RFC 8707 audience validation).
+// httptest.NewRequest sets Host: example.com so expected audience is http://example.com/mcp.
 func TestHandler_JWT_WrongAudience_Rejected(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
-		WithIssuerURL("http://localhost:8674"))
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	userID := uuid.New()
@@ -448,14 +429,15 @@ func TestHandler_JWT_WrongAudience_Rejected(t *testing.T) {
 	}
 }
 
-// Verify JWT with correct audience passes when issuerURL is set.
+// Verify JWT with correct audience passes.
+// httptest.NewRequest sets Host: example.com so the correct audience is http://example.com/mcp.
 func TestHandler_JWT_CorrectAudience_Accepted(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
-		WithIssuerURL("http://localhost:8674"))
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	userID := uuid.New()
-	correctAudToken, err := generateJWTWithAudience(userID, "member", testSecret, time.Hour, "http://localhost:8674/mcp")
+	// Audience must match what baseURLFromRequest returns for Host: example.com.
+	correctAudToken, err := generateJWTWithAudience(userID, "member", testSecret, time.Hour, "http://example.com/mcp")
 	if err != nil {
 		t.Fatalf("generate JWT: %v", err)
 	}
@@ -473,8 +455,7 @@ func TestHandler_JWT_CorrectAudience_Accepted(t *testing.T) {
 // Verify JWT without audience claim still works (backwards compat with tokens
 // issued before resource parameter was sent).
 func TestHandler_JWT_NoAudience_Accepted(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
-		WithIssuerURL("http://localhost:8674"))
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	userID := uuid.New()

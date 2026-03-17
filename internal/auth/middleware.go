@@ -54,29 +54,14 @@ type Claims struct {
 type AuthMiddleware struct {
 	apiKeyValidator APIKeyValidator
 	jwtSecret       []byte
-	issuerURL       string // OAuth issuer URL for WWW-Authenticate header
 }
 
 // NewAuthMiddleware creates a new AuthMiddleware with the given dependencies.
-// issuerURL is optional — when set, 401 responses include a WWW-Authenticate
-// header with the resource_metadata URI so MCP clients can auto-discover OAuth.
-func NewAuthMiddleware(apiKeyValidator APIKeyValidator, jwtSecret []byte, opts ...AuthMiddlewareOption) *AuthMiddleware {
-	m := &AuthMiddleware{
+func NewAuthMiddleware(apiKeyValidator APIKeyValidator, jwtSecret []byte) *AuthMiddleware {
+	return &AuthMiddleware{
 		apiKeyValidator: apiKeyValidator,
 		jwtSecret:       jwtSecret,
 	}
-	for _, o := range opts {
-		o(m)
-	}
-	return m
-}
-
-// AuthMiddlewareOption configures optional AuthMiddleware behaviour.
-type AuthMiddlewareOption func(*AuthMiddleware)
-
-// WithIssuerURL sets the OAuth issuer URL used to build WWW-Authenticate headers.
-func WithIssuerURL(url string) AuthMiddlewareOption {
-	return func(m *AuthMiddleware) { m.issuerURL = url }
 }
 
 // Handler returns an http.Handler middleware that authenticates requests.
@@ -84,13 +69,13 @@ func (m *AuthMiddleware) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			m.writeUnauthorized(w, "missing authorization header")
+			writeUnauthorized(w, r, "missing authorization header")
 			return
 		}
 
 		token, ok := strings.CutPrefix(authHeader, "Bearer ")
 		if !ok || token == "" {
-			m.writeUnauthorized(w, "invalid authorization header format")
+			writeUnauthorized(w, r, "invalid authorization header format")
 			return
 		}
 
@@ -100,11 +85,11 @@ func (m *AuthMiddleware) Handler(next http.Handler) http.Handler {
 		if strings.HasPrefix(token, "nram_k_") {
 			ac, err = m.validateAPIKey(r.Context(), token)
 		} else {
-			ac, err = m.validateJWT(token)
+			ac, err = m.validateJWT(r, token)
 		}
 
 		if err != nil {
-			m.writeUnauthorized(w, err.Error())
+			writeUnauthorized(w, r, err.Error())
 			return
 		}
 
@@ -115,12 +100,30 @@ func (m *AuthMiddleware) Handler(next http.Handler) http.Handler {
 // writeUnauthorized writes a 401 response with a WWW-Authenticate header
 // that points MCP clients to the OAuth protected resource metadata endpoint
 // for auto-discovery per the MCP auth specification.
-func (m *AuthMiddleware) writeUnauthorized(w http.ResponseWriter, msg string) {
-	if m.issuerURL != "" {
+func writeUnauthorized(w http.ResponseWriter, r *http.Request, msg string) {
+	base := baseURLFromRequest(r)
+	if base != "" {
 		w.Header().Set("WWW-Authenticate",
-			fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource"`, m.issuerURL))
+			fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource"`, base))
 	}
 	http.Error(w, msg, http.StatusUnauthorized)
+}
+
+// baseURL derives the external base URL from the request's Host header.
+// The Host header includes the port when non-standard (e.g. "localhost:8674").
+// X-Forwarded-Proto is respected for TLS detection behind reverse proxies.
+func baseURLFromRequest(r *http.Request) string {
+	if r == nil || r.Host == "" {
+		return ""
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd != "" {
+		scheme = fwd
+	}
+	return scheme + "://" + r.Host
 }
 
 func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*AuthContext, error) {
@@ -138,7 +141,7 @@ func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*Au
 	}, nil
 }
 
-func (m *AuthMiddleware) validateJWT(tokenStr string) (*AuthContext, error) {
+func (m *AuthMiddleware) validateJWT(r *http.Request, tokenStr string) (*AuthContext, error) {
 	claims := &Claims{}
 	tok, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -155,10 +158,10 @@ func (m *AuthMiddleware) validateJWT(tokenStr string) (*AuthContext, error) {
 
 	// RFC 8707 / MCP spec: "MCP servers MUST validate that access tokens were
 	// issued specifically for them as the intended audience."
-	// When the token carries an audience claim AND this server knows its own
-	// resource URI, verify the audience includes this server.
-	if m.issuerURL != "" {
-		expectedAudience := m.issuerURL + "/mcp"
+	// Derive expected audience from the request Host header.
+	base := baseURLFromRequest(r)
+	if base != "" {
+		expectedAudience := base + "/mcp"
 		aud, _ := claims.GetAudience()
 		if len(aud) > 0 && !containsAudience(aud, expectedAudience) {
 			return nil, fmt.Errorf("token audience %v does not include this server (%s)", aud, expectedAudience)

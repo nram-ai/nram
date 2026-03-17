@@ -127,9 +127,9 @@ func computeCodeChallenge(verifier string) string {
 //   - POST /token
 //   - POST /register
 //   - GET  /userinfo
-//   - GET  /mcp  (protected by AuthMiddleware with issuerURL set)
-func buildOAuthRouter(oauthSrv *OAuthServer, issuerURL string, secret []byte) http.Handler {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, secret, WithIssuerURL(issuerURL))
+//   - GET  /mcp  (protected by AuthMiddleware)
+func buildOAuthRouter(oauthSrv *OAuthServer, secret []byte) http.Handler {
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, secret)
 
 	r := chi.NewRouter()
 
@@ -164,13 +164,8 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 	oauthRepo := storage.NewOAuthRepo(db)
 	userRepo := storage.NewUserRepo(db)
 
-	srv := httptest.NewServer(nil) // start just to get URL
-	srv.Close()
-
-	// Use a fixed issuer URL for the test server
-	issuerURL := "http://localhost:8674"
-	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
@@ -203,15 +198,14 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 	// Step 2: Parse resource_metadata URL from WWW-Authenticate
 	// -----------------------------------------------------------------------
 	// Format: Bearer resource_metadata="<url>"
+	// The base URL is derived from the request's Host header, which for
+	// real HTTP client requests to httptest.Server is ts.URL's host.
 	const prefix = `Bearer resource_metadata="`
 	if !strings.HasPrefix(wwwAuth, prefix) {
 		t.Fatalf("step 2: WWW-Authenticate does not start with expected prefix, got: %s", wwwAuth)
 	}
 	resourceMetaURL := strings.TrimSuffix(strings.TrimPrefix(wwwAuth, prefix), `"`)
 	t.Logf("step 2 resource_metadata URL: %s", resourceMetaURL)
-
-	// Replace the issuerURL host with the test server host for actual requests
-	resourceMetaURL = strings.Replace(resourceMetaURL, issuerURL, ts.URL, 1)
 
 	// -----------------------------------------------------------------------
 	// Step 3: GET /.well-known/oauth-protected-resource → parse authorization_servers
@@ -492,9 +486,8 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 func TestOAuthFlow_ProtectedResourceMetadata(t *testing.T) {
 	db := oauthTestDB(t)
 	secret := []byte("test-secret-32-bytes-xxxxxxxxxx!!")
-	issuerURL := "http://localhost:8674"
-	oauthSrv := NewOAuthServer(storage.NewOAuthRepo(db), storage.NewUserRepo(db), secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(storage.NewOAuthRepo(db), storage.NewUserRepo(db), secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -532,12 +525,14 @@ func TestOAuthFlow_ProtectedResourceMetadata(t *testing.T) {
 	if len(meta.BearerMethods) == 0 {
 		t.Error("RFC 9728: 'bearer_methods_supported' field is required but empty")
 	}
-	expectedResource := issuerURL + "/mcp"
+	// Base URL is derived from the Host header; for real HTTP requests to
+	// httptest.Server the host is the server's listen address (ts.URL).
+	expectedResource := ts.URL + "/mcp"
 	if meta.Resource != expectedResource {
 		t.Errorf("resource mismatch: got %q, want %q (must be MCP endpoint per RFC 9728)", meta.Resource, expectedResource)
 	}
-	if len(meta.AuthorizationServers) > 0 && meta.AuthorizationServers[0] != issuerURL {
-		t.Errorf("authorization_servers[0] mismatch: got %q, want %q", meta.AuthorizationServers[0], issuerURL)
+	if len(meta.AuthorizationServers) > 0 && meta.AuthorizationServers[0] != ts.URL {
+		t.Errorf("authorization_servers[0] mismatch: got %q, want %q", meta.AuthorizationServers[0], ts.URL)
 	}
 	t.Logf("RFC 9728 metadata valid: resource=%s, auth_servers=%v", meta.Resource, meta.AuthorizationServers)
 }
@@ -549,9 +544,8 @@ func TestOAuthFlow_ProtectedResourceMetadata(t *testing.T) {
 func TestOAuthFlow_AuthServerMetadata(t *testing.T) {
 	db := oauthTestDB(t)
 	secret := []byte("test-secret-32-bytes-xxxxxxxxxx!!")
-	issuerURL := "http://localhost:8674"
-	oauthSrv := NewOAuthServer(storage.NewOAuthRepo(db), storage.NewUserRepo(db), secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(storage.NewOAuthRepo(db), storage.NewUserRepo(db), secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -612,9 +606,10 @@ func TestOAuthFlow_AuthServerMetadata(t *testing.T) {
 		t.Errorf("PKCE S256 method missing from code_challenge_methods_supported: %v", meta.CodeChallengeMethodsSupported)
 	}
 
-	// Verify issuer matches
-	if meta.Issuer != issuerURL {
-		t.Errorf("issuer mismatch: got %q, want %q", meta.Issuer, issuerURL)
+	// Base URL is derived from the Host header; for real HTTP requests to
+	// httptest.Server the issuer is ts.URL.
+	if meta.Issuer != ts.URL {
+		t.Errorf("issuer mismatch: got %q, want %q", meta.Issuer, ts.URL)
 	}
 
 	// Verify endpoints contain the issuer URL base
@@ -623,8 +618,8 @@ func TestOAuthFlow_AuthServerMetadata(t *testing.T) {
 		{"token_endpoint", meta.TokenEndpoint},
 		{"registration_endpoint", meta.RegistrationEndpoint},
 	} {
-		if !strings.HasPrefix(ep.val, issuerURL) {
-			t.Errorf("%s should start with issuer URL %q, got %q", ep.name, issuerURL, ep.val)
+		if !strings.HasPrefix(ep.val, ts.URL) {
+			t.Errorf("%s should start with issuer URL %q, got %q", ep.name, ts.URL, ep.val)
 		}
 	}
 
@@ -638,9 +633,8 @@ func TestOAuthFlow_AuthServerMetadata(t *testing.T) {
 func TestOAuthFlow_DynamicRegistration(t *testing.T) {
 	db := oauthTestDB(t)
 	secret := []byte("test-secret-32-bytes-xxxxxxxxxx!!")
-	issuerURL := "http://localhost:8674"
-	oauthSrv := NewOAuthServer(storage.NewOAuthRepo(db), storage.NewUserRepo(db), secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(storage.NewOAuthRepo(db), storage.NewUserRepo(db), secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -757,11 +751,10 @@ func TestOAuthFlow_PKCE_Required(t *testing.T) {
 	db := oauthTestDB(t)
 	user := oauthTestUser(t, db)
 	secret := []byte("test-secret-32-bytes-xxxxxxxxxx!!")
-	issuerURL := "http://localhost:8674"
 	oauthRepo := storage.NewOAuthRepo(db)
 	userRepo := storage.NewUserRepo(db)
-	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -836,11 +829,10 @@ func TestOAuthFlow_PKCE_WrongVerifier(t *testing.T) {
 	db := oauthTestDB(t)
 	user := oauthTestUser(t, db)
 	secret := []byte("test-secret-32-bytes-xxxxxxxxxx!!")
-	issuerURL := "http://localhost:8674"
 	oauthRepo := storage.NewOAuthRepo(db)
 	userRepo := storage.NewUserRepo(db)
-	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -934,7 +926,6 @@ func TestOAuthFlow_ExpiredCode(t *testing.T) {
 	db := oauthTestDB(t)
 	user := oauthTestUser(t, db)
 	secret := []byte("test-secret-32-bytes-xxxxxxxxxx!!")
-	issuerURL := "http://localhost:8674"
 	oauthRepo := storage.NewOAuthRepo(db)
 	userRepo := storage.NewUserRepo(db)
 
@@ -971,8 +962,8 @@ func TestOAuthFlow_ExpiredCode(t *testing.T) {
 		t.Fatalf("create expired auth code: %v", err)
 	}
 
-	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -1017,11 +1008,10 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 	db := oauthTestDB(t)
 	user := oauthTestUser(t, db)
 	secret := []byte("test-secret-32-bytes-xxxxxxxxxx!!")
-	issuerURL := "http://localhost:8674"
 	oauthRepo := storage.NewOAuthRepo(db)
 	userRepo := storage.NewUserRepo(db)
-	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -1159,9 +1149,8 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 func TestOAuthFlow_WWWAuthenticate_Header(t *testing.T) {
 	db := oauthTestDB(t)
 	secret := []byte("test-secret-32-bytes-xxxxxxxxxx!!")
-	issuerURL := "http://localhost:8674"
-	oauthSrv := NewOAuthServer(storage.NewOAuthRepo(db), storage.NewUserRepo(db), secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(storage.NewOAuthRepo(db), storage.NewUserRepo(db), secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -1261,9 +1250,8 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 	oauthRepo := storage.NewOAuthRepo(db)
 	userRepo := storage.NewUserRepo(db)
 
-	issuerURL := "http://localhost:8674"
-	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -1294,7 +1282,7 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 	codeChallenge := computeCodeChallenge(codeVerifier)
 
 	// Step 1: Authorize with the correct resource for this server
-	correctResource := issuerURL + "/mcp"
+	correctResource := ts.URL + "/mcp"
 	authParams := url.Values{}
 	authParams.Set("client_id", regResp.ClientID)
 	authParams.Set("redirect_uri", "http://localhost/cb")
@@ -1371,9 +1359,8 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 	oauthRepo := storage.NewOAuthRepo(db)
 	userRepo := storage.NewUserRepo(db)
 
-	issuerURL := "http://localhost:8674"
-	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -1399,7 +1386,7 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 		t.Fatal("expected non-empty client_id from registration")
 	}
 
-	targetResource := issuerURL + "/mcp"
+	targetResource := ts.URL + "/mcp"
 	codeVerifier := "audience_test_verifier_string_1234567890abcd"
 	codeChallenge := computeCodeChallenge(codeVerifier)
 
@@ -1506,9 +1493,8 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 	oauthRepo := storage.NewOAuthRepo(db)
 	userRepo := storage.NewUserRepo(db)
 
-	issuerURL := "http://localhost:8674"
-	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
-	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret)
+	router := buildOAuthRouter(oauthSrv, secret)
 	ts := httptest.NewServer(router)
 	t.Cleanup(ts.Close)
 
@@ -1534,7 +1520,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 		t.Fatal("empty client_id")
 	}
 
-	resourceIndicator := issuerURL + "/mcp"
+	resourceIndicator := ts.URL + "/mcp"
 	codeVerifier := "full_flow_resource_verifier_abcdefghijklmno"
 	codeChallenge := computeCodeChallenge(codeVerifier)
 	state := "rf-state-" + uuid.New().String()[:8]

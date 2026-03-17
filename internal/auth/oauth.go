@@ -31,16 +31,14 @@ type OAuthServer struct {
 	oauthRepo *storage.OAuthRepo
 	userRepo  *storage.UserRepo
 	jwtSecret []byte
-	issuerURL string
 }
 
 // NewOAuthServer creates a new OAuthServer with the given dependencies.
-func NewOAuthServer(oauthRepo *storage.OAuthRepo, userRepo *storage.UserRepo, jwtSecret []byte, issuerURL string) *OAuthServer {
+func NewOAuthServer(oauthRepo *storage.OAuthRepo, userRepo *storage.UserRepo, jwtSecret []byte) *OAuthServer {
 	return &OAuthServer{
 		oauthRepo: oauthRepo,
 		userRepo:  userRepo,
 		jwtSecret: jwtSecret,
-		issuerURL: issuerURL,
 	}
 }
 
@@ -60,12 +58,13 @@ type serverMetadata struct {
 // MetadataHandler returns the RFC 8414 OAuth Authorization Server Metadata.
 func (s *OAuthServer) MetadataHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		base := baseURLFromRequest(r)
 		meta := serverMetadata{
-			Issuer:                            s.issuerURL,
-			AuthorizationEndpoint:             s.issuerURL + "/authorize",
-			TokenEndpoint:                     s.issuerURL + "/token",
-			RegistrationEndpoint:              s.issuerURL + "/register",
-			UserinfoEndpoint:                  s.issuerURL + "/userinfo",
+			Issuer:                            base,
+			AuthorizationEndpoint:             base + "/authorize",
+			TokenEndpoint:                     base + "/token",
+			RegistrationEndpoint:              base + "/register",
+			UserinfoEndpoint:                  base + "/userinfo",
 			ResponseTypesSupported:            []string{"code"},
 			GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 			CodeChallengeMethodsSupported:     []string{codeChallengeMethodS256},
@@ -209,9 +208,10 @@ func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
 
 		// RFC 8707: Validate the resource parameter identifies THIS server.
 		// The canonical resource URI is issuerURL + "/mcp".
-		if resource != "" && resource != s.issuerURL+"/mcp" {
+		base := baseURLFromRequest(r)
+		if resource != "" && resource != base+"/mcp" {
 			redirectWithError(w, r, redirectURI, "invalid_target",
-				fmt.Sprintf("resource parameter must be %s/mcp", s.issuerURL), q.Get("state"))
+				fmt.Sprintf("resource parameter must be %s/mcp", base), q.Get("state"))
 			return
 		}
 
@@ -398,11 +398,11 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 	}
 
 	// RFC 8707: Validate resource parameter.
-	// If the token request supplies a resource, it must match this server's
-	// canonical URI. If the auth code also had a resource, they must match.
-	if req.Resource != "" && req.Resource != s.issuerURL+"/mcp" {
+	base := baseURLFromRequest(r)
+	canonicalResource := base + "/mcp"
+	if req.Resource != "" && req.Resource != canonicalResource {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant",
-			fmt.Sprintf("resource parameter must be %s/mcp", s.issuerURL))
+			fmt.Sprintf("resource parameter must be %s", canonicalResource))
 		return
 	}
 	if authCode.Resource != "" && req.Resource != "" && authCode.Resource != req.Resource {
@@ -425,13 +425,12 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 
 	// RFC 8707: Use this server's canonical resource URI as the JWT audience.
 	// The authorize handler already validated that the client-supplied resource
-	// matches s.issuerURL+"/mcp", so we use the server's own value rather than
-	// trusting the client-supplied string. When neither the auth code nor the
-	// token request included a resource, issue a token without audience (backwards
-	// compat with clients that don't send resource yet).
+	// matches the canonical URI, so we use the server's own value. When neither
+	// the auth code nor the token request included a resource, issue a token
+	// without audience (backwards compat).
 	effectiveResource := ""
 	if authCode.Resource != "" || req.Resource != "" {
-		effectiveResource = s.issuerURL + "/mcp"
+		effectiveResource = canonicalResource
 	}
 
 	// Generate access token (JWT), including the audience claim when a resource
@@ -632,9 +631,10 @@ type protectedResourceMetadata struct {
 // client uses tokens against), not the authorization server URL.
 func (s *OAuthServer) ProtectedResourceHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		base := baseURLFromRequest(r)
 		meta := protectedResourceMetadata{
-			Resource:               s.issuerURL + "/mcp",
-			AuthorizationServers:   []string{s.issuerURL},
+			Resource:               base + "/mcp",
+			AuthorizationServers:   []string{base},
 			BearerMethodsSupported: []string{"header"},
 		}
 

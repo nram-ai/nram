@@ -251,21 +251,9 @@ func main() {
 		log.Fatalf("failed to load jwt secret: %v", err)
 	}
 
-	// Determine the external base URL used for OAuth issuer, JWT audience, and
-	// MCP metadata. Prefer the explicit ExternalURL config; fall back to
-	// http://host:port for local/development use.
-	externalURL := cfg.Server.ExternalURL
-	if externalURL == "" {
-		oauthHost := cfg.Server.Host
-		if oauthHost == "" || oauthHost == "0.0.0.0" {
-			oauthHost = "localhost"
-		}
-		externalURL = fmt.Sprintf("http://%s:%d", oauthHost, cfg.Server.Port)
-	}
-	log.Printf("external URL: %s", externalURL)
-
-	// Create OAuth server.
-	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret, externalURL)
+	// Create OAuth server. Base URL for metadata, JWT audience, etc. is derived
+	// from the request Host header automatically — no configuration needed.
+	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret)
 
 	authCfg := api.AuthConfig{
 		UserRepo:  userRepo,
@@ -363,8 +351,7 @@ func main() {
 	}
 
 	// Build router config with auth middleware and rate limiter.
-	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, jwtSecret,
-		auth.WithIssuerURL(externalURL))
+	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, jwtSecret)
 	rateLimiter := auth.NewRateLimiter(10, 20)
 	defer rateLimiter.Stop()
 

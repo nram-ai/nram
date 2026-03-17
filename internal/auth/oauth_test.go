@@ -127,7 +127,7 @@ func setupOAuthEnv(t *testing.T) *testOAuthEnv {
 		t.Fatalf("failed to create test oauth client: %v", err)
 	}
 
-	srv := NewOAuthServer(oauthRepo, userRepo, testSecret, "https://auth.example.com")
+	srv := NewOAuthServer(oauthRepo, userRepo, testSecret)
 
 	return &testOAuthEnv{
 		db:        db,
@@ -161,19 +161,21 @@ func TestMetadataHandler_ReturnsValidJSON(t *testing.T) {
 		t.Fatalf("failed to decode metadata: %v", err)
 	}
 
-	if meta.Issuer != "https://auth.example.com" {
+	// httptest.NewRequest sets Host: example.com; baseURLFromRequest returns "http://example.com"
+	expectedBase := "http://example.com"
+	if meta.Issuer != expectedBase {
 		t.Fatalf("unexpected issuer: %q", meta.Issuer)
 	}
-	if meta.AuthorizationEndpoint != "https://auth.example.com/authorize" {
+	if meta.AuthorizationEndpoint != expectedBase+"/authorize" {
 		t.Fatalf("unexpected authorization_endpoint: %q", meta.AuthorizationEndpoint)
 	}
-	if meta.TokenEndpoint != "https://auth.example.com/token" {
+	if meta.TokenEndpoint != expectedBase+"/token" {
 		t.Fatalf("unexpected token_endpoint: %q", meta.TokenEndpoint)
 	}
-	if meta.RegistrationEndpoint != "https://auth.example.com/register" {
+	if meta.RegistrationEndpoint != expectedBase+"/register" {
 		t.Fatalf("unexpected registration_endpoint: %q", meta.RegistrationEndpoint)
 	}
-	if meta.UserinfoEndpoint != "https://auth.example.com/userinfo" {
+	if meta.UserinfoEndpoint != expectedBase+"/userinfo" {
 		t.Fatalf("unexpected userinfo_endpoint: %q", meta.UserinfoEndpoint)
 	}
 	if len(meta.ResponseTypesSupported) != 1 || meta.ResponseTypesSupported[0] != "code" {
