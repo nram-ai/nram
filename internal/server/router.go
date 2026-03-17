@@ -177,18 +177,25 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			if config.ProjectAccess != nil {
 				r.Use(config.ProjectAccess)
 			}
-			r.Post("/", handler(handlers.Store))
+
+			// Read operations — accessible to all authenticated roles including readonly.
 			r.Get("/", handler(handlers.List))
 			r.Get("/{id}", handler(handlers.Detail))
-			r.Put("/{id}", handler(handlers.Update))
-			r.Delete("/{id}", handler(handlers.Delete))
-			r.Post("/batch", handler(handlers.BatchStore))
 			r.Post("/get", handler(handlers.BatchGet))
 			r.Post("/recall", handler(handlers.Recall))
-			r.Post("/forget", handler(handlers.BulkForget))
-			r.Post("/enrich", handler(handlers.Enrich))
 			r.Get("/export", handler(handlers.Export))
-			r.Post("/import", handler(handlers.Import))
+
+			// Write operations — blocked for readonly users.
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireWriteAccess())
+				r.Post("/", handler(handlers.Store))
+				r.Put("/{id}", handler(handlers.Update))
+				r.Delete("/{id}", handler(handlers.Delete))
+				r.Post("/batch", handler(handlers.BatchStore))
+				r.Post("/forget", handler(handlers.BulkForget))
+				r.Post("/enrich", handler(handlers.Enrich))
+				r.Post("/import", handler(handlers.Import))
+			})
 		})
 
 		// User-scoped routes.

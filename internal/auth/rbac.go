@@ -61,6 +61,33 @@ func RequireRole(minRole string) func(http.Handler) http.Handler {
 	}
 }
 
+// RequireWriteAccess returns middleware that blocks requests from users with
+// the readonly role on mutating HTTP methods (POST, PUT, PATCH, DELETE).
+// GET and HEAD requests are always allowed through.
+func RequireWriteAccess() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			ac := FromContext(r.Context())
+			if ac == nil {
+				http.Error(w, "authentication required", http.StatusUnauthorized)
+				return
+			}
+
+			if ac.Role == RoleReadonly {
+				http.Error(w, "forbidden: readonly users cannot perform write operations", http.StatusForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // RequireAnyRole returns middleware that checks whether the authenticated
 // user holds any one of the listed roles. This is useful for granting
 // access to the service role alongside specific human roles without
