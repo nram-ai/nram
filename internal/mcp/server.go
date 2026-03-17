@@ -94,6 +94,8 @@ func NewServer(deps Dependencies) *Server {
 		"nram",
 		"1.0.0",
 		server.WithToolCapabilities(true),
+		server.WithResourceCapabilities(false, true), // subscribe=false, listChanged=true
+		server.WithRecovery(),                        // recover from panics in tool handlers
 	)
 
 	httpSrv := server.NewStreamableHTTPServer(
@@ -121,8 +123,34 @@ func NewServer(deps Dependencies) *Server {
 
 // Handler returns the http.Handler that serves the MCP Streamable HTTP
 // protocol. Mount this on the application router at /mcp.
+// It wraps the SDK handler with Origin header validation per the MCP spec:
+// "Servers MUST validate the Origin header on all incoming connections to
+// prevent DNS rebinding attacks."
 func (s *Server) Handler() http.Handler {
-	return s.httpHandler
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if !isAllowedOrigin(origin, r.Host) {
+				http.Error(w, `{"jsonrpc":"2.0","error":{"code":-32600,"message":"forbidden: invalid origin"}}`, http.StatusForbidden)
+				return
+			}
+		}
+		s.httpHandler.ServeHTTP(w, r)
+	})
+}
+
+// isAllowedOrigin checks whether the Origin header matches the server's Host.
+// This prevents DNS rebinding attacks per the MCP spec security requirements.
+func isAllowedOrigin(origin, host string) bool {
+	// Strip scheme from origin to compare against Host header.
+	// Origin is like "http://localhost:8674" or "https://nram.example.com".
+	stripped := origin
+	for _, prefix := range []string{"https://", "http://"} {
+		if len(stripped) > len(prefix) && stripped[:len(prefix)] == prefix {
+			stripped = stripped[len(prefix):]
+			break
+		}
+	}
+	return stripped == host
 }
 
 // Backend returns the storage backend identifier ("sqlite" or "postgres")
