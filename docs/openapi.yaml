@@ -23,8 +23,8 @@ tags:
     description: Project-scoped memory CRUD
   - name: User
     description: User-scoped (self-service) endpoints
-  - name: Admin - Dashboard
-    description: Admin dashboard and activity
+  - name: Dashboard
+    description: "Dashboard and activity — scoped by role"
   - name: Admin - Organizations
     description: Admin organization management
   - name: Admin - Users
@@ -37,20 +37,26 @@ tags:
     description: System settings
   - name: Admin - Webhooks
     description: Webhook management
-  - name: Admin - Enrichment
-    description: Enrichment queue management
-  - name: Admin - Analytics
-    description: Memory analytics
-  - name: Admin - Usage
-    description: Token usage reporting
-  - name: Admin - Namespaces
-    description: Namespace hierarchy
+  - name: Enrichment
+    description: "Enrichment queue — read for all, writes admin-only"
+  - name: Analytics
+    description: "Memory analytics — scoped by role"
+  - name: Usage
+    description: "Token usage reporting — scoped by role"
+  - name: Namespaces
+    description: "Namespace hierarchy — scoped by role"
   - name: Admin - Database
     description: Database info and migration
-  - name: Admin - Graph
-    description: Knowledge graph visualization
+  - name: Graph
+    description: "Knowledge graph visualization — scoped by role"
   - name: Admin - OAuth
     description: OAuth client and IdP management
+  - name: Org - Users
+    description: "Org-scoped user management (org_owner+)"
+  - name: Org - Projects
+    description: "Org-scoped project listing (member+)"
+  - name: Org - IdP
+    description: "Org-scoped IdP configuration (org_owner+)"
   - name: Events
     description: Server-Sent Events
 
@@ -887,12 +893,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/RecallResponse"
 
-  # ── Admin: Dashboard ───────────────────────────────────────────────────
-  /v1/admin/dashboard:
+  # ── Scoped Data Viewing (readonly+) ────────────────────────────────────
+  /v1/dashboard:
     get:
-      operationId: adminDashboard
-      tags: [Admin - Dashboard]
-      summary: Aggregate dashboard statistics
+      operationId: getDashboard
+      tags: [Dashboard]
+      summary: Dashboard statistics scoped by role
+      description: |
+        Returns aggregate stats. Admin sees global data, org_owner sees their org,
+        member/readonly/service see their org's data.
       responses:
         "200":
           description: Dashboard stats
@@ -901,11 +910,11 @@ paths:
               schema:
                 $ref: "#/components/schemas/DashboardStats"
 
-  /v1/admin/activity:
+  /v1/activity:
     get:
-      operationId: adminActivity
-      tags: [Admin - Dashboard]
-      summary: Recent activity events
+      operationId: getActivity
+      tags: [Dashboard]
+      summary: Recent activity events scoped by role
       parameters:
         - name: limit
           in: query
@@ -925,6 +934,530 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/ActivityEvent"
+
+  /v1/analytics:
+    get:
+      operationId: getAnalytics
+      tags: [Analytics]
+      summary: Memory analytics scoped by role
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsData"
+
+  /v1/usage:
+    get:
+      operationId: getUsage
+      tags: [Usage]
+      summary: Token usage scoped by role
+      description: |
+        Admin can filter by ?org=, ?user=, ?project= query params.
+        Non-admin users are restricted to their own org and user.
+      parameters:
+        - name: org
+          in: query
+          description: Filter by org (admin only)
+          schema:
+            type: string
+            format: uuid
+        - name: user
+          in: query
+          description: Filter by user (admin only)
+          schema:
+            type: string
+            format: uuid
+        - name: project
+          in: query
+          description: Filter by project
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [org, user, project, operation, model]
+            default: operation
+      responses:
+        "200":
+          description: Usage report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageReport"
+
+  /v1/graph:
+    get:
+      operationId: getGraph
+      tags: [Graph]
+      summary: Entity graph for a project (scoped by org membership)
+      parameters:
+        - name: project
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Graph data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/namespaces/tree:
+    get:
+      operationId: getNamespaceTree
+      tags: [Namespaces]
+      summary: Namespace hierarchy scoped by role
+      responses:
+        "200":
+          description: Namespace tree
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NamespaceTreeResponse"
+
+  /v1/enrichment:
+    get:
+      operationId: getEnrichmentStatus
+      tags: [Enrichment]
+      summary: Enrichment queue status (all authenticated users)
+      responses:
+        "200":
+          description: Queue status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/enrichment/queue:
+    get:
+      operationId: getEnrichmentQueue
+      tags: [Enrichment]
+      summary: Enrichment queue with items (all authenticated users)
+      responses:
+        "200":
+          description: Queue status with items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/enrichment/retry:
+    post:
+      operationId: retryEnrichment
+      tags: [Enrichment]
+      summary: Retry failed enrichment jobs (administrator only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        "200":
+          description: Retry result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  retried:
+                    type: integer
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/enrichment/pause:
+    post:
+      operationId: pauseEnrichment
+      tags: [Enrichment]
+      summary: Pause or resume enrichment workers (administrator only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paused]
+              properties:
+                paused:
+                  type: boolean
+      responses:
+        "200":
+          description: Pause state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  paused:
+                    type: boolean
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/enrichment/test-prompt:
+    post:
+      operationId: testEnrichmentPrompt
+      tags: [Enrichment]
+      summary: Test an enrichment prompt against an LLM (administrator only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentTestPromptRequest"
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentTestPromptResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  # ── Org-Scoped Routes ──────────────────────────────────────────────────
+  /v1/orgs/{org_id}/users:
+    get:
+      operationId: orgListUsers
+      tags: [Org - Users]
+      summary: List users in organization (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Paginated user list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedUsers"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      operationId: orgCreateUser
+      tags: [Org - Users]
+      summary: Create user in organization (org_owner+)
+      description: |
+        Org owners cannot assign the administrator role.
+        Only administrators can create administrator users.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/orgs/{org_id}/users/{id}:
+    get:
+      operationId: orgGetUser
+      tags: [Org - Users]
+      summary: Get user detail (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: User detail with API keys
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      operationId: orgUpdateUser
+      tags: [Org - Users]
+      summary: Update user (org_owner+)
+      description: |
+        Org owners cannot set role to administrator.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: orgDeleteUser
+      tags: [Org - Users]
+      summary: Delete user (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: User deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Cannot delete last administrator
+
+  /v1/orgs/{org_id}/users/{id}/api-keys:
+    get:
+      operationId: orgListUserAPIKeys
+      tags: [Org - Users]
+      summary: List API keys for user (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Paginated API key list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAPIKeys"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    post:
+      operationId: orgGenerateUserAPIKey
+      tags: [Org - Users]
+      summary: Generate API key for user (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label:
+                  type: string
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                expires_at:
+                  type: string
+                  format: date-time
+      responses:
+        "201":
+          description: API key generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneratedAPIKey"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/orgs/{org_id}/users/{id}/api-keys/{key_id}:
+    delete:
+      operationId: orgRevokeUserAPIKey
+      tags: [Org - Users]
+      summary: Revoke API key (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: API key revoked
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/orgs/{org_id}/projects:
+    get:
+      operationId: orgListProjects
+      tags: [Org - Projects]
+      summary: List projects in organization (member+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Paginated project list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedProjects"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/orgs/{org_id}/analytics:
+    get:
+      operationId: orgGetAnalytics
+      tags: [Org - Projects]
+      summary: Memory analytics for organization (member+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsData"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/orgs/{org_id}/usage:
+    get:
+      operationId: orgGetUsage
+      tags: [Org - Projects]
+      summary: Token usage for organization (member+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: project
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [org, user, project, operation, model]
+            default: operation
+      responses:
+        "200":
+          description: Usage report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageReport"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/orgs/{org_id}/idp:
+    get:
+      operationId: orgGetIdP
+      tags: [Org - IdP]
+      summary: Get IdP configuration (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: IdP configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider:
+                    type: string
+                  configured:
+                    type: boolean
+
+    post:
+      operationId: orgConfigureIdP
+      tags: [Org - IdP]
+      summary: Configure IdP (org_owner+, not yet implemented)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "501":
+          description: Not yet implemented
 
   # ── Admin: Organizations ───────────────────────────────────────────────
   /v1/admin/orgs:
@@ -1581,185 +2114,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/WebhookTestResult"
 
-  # ── Admin: Enrichment ──────────────────────────────────────────────────
-  /v1/admin/enrichment:
-    get:
-      operationId: adminGetEnrichmentQueue
-      tags: [Admin - Enrichment]
-      summary: Get enrichment queue status
-      responses:
-        "200":
-          description: Queue status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EnrichmentQueueStatus"
-
-  /v1/admin/enrichment/queue:
-    get:
-      operationId: adminGetEnrichmentQueueDetail
-      tags: [Admin - Enrichment]
-      summary: Get enrichment queue status (alias)
-      responses:
-        "200":
-          description: Queue status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EnrichmentQueueStatus"
-
-  /v1/admin/enrichment/retry:
-    post:
-      operationId: adminRetryEnrichment
-      tags: [Admin - Enrichment]
-      summary: Retry failed enrichment jobs
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                ids:
-                  type: array
-                  items:
-                    type: string
-                    format: uuid
-      responses:
-        "200":
-          description: Retry result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  retried:
-                    type: integer
-
-  /v1/admin/enrichment/pause:
-    post:
-      operationId: adminPauseEnrichment
-      tags: [Admin - Enrichment]
-      summary: Pause or resume enrichment workers
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [paused]
-              properties:
-                paused:
-                  type: boolean
-      responses:
-        "200":
-          description: Pause state updated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  paused:
-                    type: boolean
-
-  /v1/admin/enrichment/test-prompt:
-    post:
-      operationId: adminTestEnrichmentPrompt
-      tags: [Admin - Enrichment]
-      summary: Test an extraction prompt against sample input
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/EnrichmentTestPromptRequest"
-      responses:
-        "200":
-          description: Test result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EnrichmentTestPromptResponse"
-
-  # ── Admin: Analytics ───────────────────────────────────────────────────
-  /v1/admin/analytics:
-    get:
-      operationId: adminGetAnalytics
-      tags: [Admin - Analytics]
-      summary: Memory analytics (counts, rankings, enrichment stats)
-      responses:
-        "200":
-          description: Analytics data
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AnalyticsData"
-
-  # ── Admin: Usage ───────────────────────────────────────────────────────
-  /v1/admin/usage:
-    get:
-      operationId: adminGetUsage
-      tags: [Admin - Usage]
-      summary: Token usage report
-      parameters:
-        - name: org
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: user
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: project
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: from
-          in: query
-          schema:
-            type: string
-            format: date-time
-        - name: to
-          in: query
-          schema:
-            type: string
-            format: date-time
-        - name: group_by
-          in: query
-          schema:
-            type: string
-            enum: [org, user, project, operation, model]
-            default: operation
-      responses:
-        "200":
-          description: Usage report
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UsageReport"
-
-  # ── Admin: Namespaces ──────────────────────────────────────────────────
-  /v1/admin/namespaces/tree:
-    get:
-      operationId: adminGetNamespaceTree
-      tags: [Admin - Namespaces]
-      summary: Get full namespace hierarchy tree
-      responses:
-        "200":
-          description: Namespace tree
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  tree:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/NamespaceNode"
-
   # ── Admin: Database ────────────────────────────────────────────────────
   /v1/admin/database:
     get:
@@ -1819,32 +2173,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MigrationStatus"
-
-  # ── Admin: Graph ───────────────────────────────────────────────────────
-  /v1/admin/graph:
-    get:
-      operationId: adminGetGraph
-      tags: [Admin - Graph]
-      summary: Get knowledge graph data for a project
-      parameters:
-        - name: project
-          in: query
-          required: true
-          description: Project UUID
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: Graph data
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GraphResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
 
   # ── Admin: OAuth ───────────────────────────────────────────────────────
   /v1/admin/oauth/clients:
@@ -1980,6 +2308,27 @@ components:
       schema:
         type: string
         format: uuid
+    OrgId:
+      name: org_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Organization ID
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 50
+        maximum: 200
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        default: 0
 
   responses:
     BadRequest:
@@ -1995,7 +2344,7 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     Forbidden:
-      description: Forbidden
+      description: "Forbidden — insufficient role or org membership"
       content:
         application/json:
           schema:
@@ -3026,7 +3375,36 @@ components:
           type: integer
           format: int64
 
+    # ── Namespace Tree ───────────────────────────────────────────────
+    NamespaceTreeResponse:
+      type: object
+      properties:
+        tree:
+          type: array
+          items:
+            $ref: "#/components/schemas/NamespaceNode"
+
     # ── Paginated Responses ───────────────────────────────────────────
+    PaginatedUsers:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    PaginatedAPIKeys:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/APIKey"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
     PaginatedMemories:
       type: object
       properties:
@@ -3127,6 +3505,65 @@ components:
         created_at:
           type: string
           format: date-time
+
+    # ── Org-Scoped User Requests ────────────────────────────────────
+    UserDetail:
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          properties:
+            api_keys:
+              type: array
+              items:
+                $ref: "#/components/schemas/APIKey"
+
+    CreateUserRequest:
+      type: object
+      required: [email, password, role]
+      properties:
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        password:
+          type: string
+          minLength: 8
+        role:
+          $ref: "#/components/schemas/UserRole"
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        display_name:
+          type: string
+        role:
+          $ref: "#/components/schemas/UserRole"
+        settings:
+          type: object
+
+    GeneratedAPIKey:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: string
+          description: Full API key (shown only once)
+        label:
+          type: string
+        prefix:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type: string
+          nullable: true
+        created_at:
+          type: string
 
     # ── Admin Requests ────────────────────────────────────────────────
     AdminCreateUserRequest:
