@@ -166,6 +166,49 @@ func (r *UserRepo) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]model.User
 	return result, nil
 }
 
+// CountByOrg returns the number of users in the given organization.
+func (r *UserRepo) CountByOrg(ctx context.Context, orgID uuid.UUID) (int, error) {
+	query := `SELECT COUNT(*) FROM users WHERE org_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM users WHERE org_id = $1`
+	}
+	row := r.db.QueryRow(ctx, query, orgID.String())
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("user count by org: %w", err)
+	}
+	return count, nil
+}
+
+// ListByOrgPaged returns users in the given organization with LIMIT and OFFSET applied.
+func (r *UserRepo) ListByOrgPaged(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]model.User, error) {
+	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
+		FROM users WHERE org_id = ? ORDER BY email LIMIT ? OFFSET ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
+			FROM users WHERE org_id = $1 ORDER BY email LIMIT $2 OFFSET $3`
+	}
+
+	rows, err := r.db.Query(ctx, query, orgID.String(), limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("user list by org paged: %w", err)
+	}
+	defer rows.Close()
+
+	result := []model.User{}
+	for rows.Next() {
+		u, err := r.scanUserFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("user list by org paged iteration: %w", err)
+	}
+	return result, nil
+}
+
 // ListAll returns all users ordered by email.
 func (r *UserRepo) ListAll(ctx context.Context) ([]model.User, error) {
 	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
@@ -461,23 +504,28 @@ func VerifyPassword(encoded, password string) bool {
 	return verifyArgon2id(encoded, password)
 }
 
-// GetRoleByID returns the role of an active (non-disabled) user by ID.
+// GetIdentityByID returns the role and org ID of an active (non-disabled) user by ID.
 // Returns an error if the user does not exist or is disabled.
-func (r *UserRepo) GetRoleByID(ctx context.Context, id uuid.UUID) (string, error) {
-	query := `SELECT role FROM users WHERE id = ? AND disabled_at IS NULL`
+func (r *UserRepo) GetIdentityByID(ctx context.Context, id uuid.UUID) (string, uuid.UUID, error) {
+	query := `SELECT role, org_id FROM users WHERE id = ? AND disabled_at IS NULL`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT role FROM users WHERE id = $1 AND disabled_at IS NULL`
+		query = `SELECT role, org_id FROM users WHERE id = $1 AND disabled_at IS NULL`
 	}
 
 	row := r.db.QueryRow(ctx, query, id.String())
 	var role string
-	if err := row.Scan(&role); err != nil {
+	var orgIDStr string
+	if err := row.Scan(&role, &orgIDStr); err != nil {
 		if err == sql.ErrNoRows {
-			return "", fmt.Errorf("user not found or disabled: %w", err)
+			return "", uuid.Nil, fmt.Errorf("user not found or disabled: %w", err)
 		}
-		return "", fmt.Errorf("user get role by id: %w", err)
+		return "", uuid.Nil, fmt.Errorf("user get identity by id: %w", err)
 	}
-	return role, nil
+	orgID, err := uuid.Parse(orgIDStr)
+	if err != nil {
+		return "", uuid.Nil, fmt.Errorf("user get identity parse org_id: %w", err)
+	}
+	return role, orgID, nil
 }
 
 // UpdateLastLogin sets the last_login timestamp for the given user to now.

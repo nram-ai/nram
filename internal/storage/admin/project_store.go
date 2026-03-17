@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -12,13 +13,14 @@ import (
 
 // ProjectAdminStore implements api.ProjectAdminStore by wrapping ProjectRepo and NamespaceRepo.
 type ProjectAdminStore struct {
+	db          storage.DB
 	projectRepo *storage.ProjectRepo
 	nsRepo      *storage.NamespaceRepo
 }
 
 // NewProjectAdminStore creates a new ProjectAdminStore.
-func NewProjectAdminStore(projectRepo *storage.ProjectRepo, nsRepo *storage.NamespaceRepo) *ProjectAdminStore {
-	return &ProjectAdminStore{projectRepo: projectRepo, nsRepo: nsRepo}
+func NewProjectAdminStore(db storage.DB, projectRepo *storage.ProjectRepo, nsRepo *storage.NamespaceRepo) *ProjectAdminStore {
+	return &ProjectAdminStore{db: db, projectRepo: projectRepo, nsRepo: nsRepo}
 }
 
 func (s *ProjectAdminStore) CountProjects(ctx context.Context) (int, error) {
@@ -105,4 +107,74 @@ func (s *ProjectAdminStore) UpdateProject(ctx context.Context, id uuid.UUID, nam
 
 func (s *ProjectAdminStore) DeleteProject(ctx context.Context, id uuid.UUID) error {
 	return s.projectRepo.Delete(ctx, id)
+}
+
+// CountProjectsByOrg returns the number of projects under the given organization's namespace.
+func (s *ProjectAdminStore) CountProjectsByOrg(ctx context.Context, orgID uuid.UUID) (int, error) {
+	query := `SELECT COUNT(*) FROM projects p
+		JOIN namespaces pn ON p.namespace_id = pn.id
+		WHERE pn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)`
+	if s.db.Backend() == storage.BackendPostgres {
+		query = `SELECT COUNT(*) FROM projects p
+			JOIN namespaces pn ON p.namespace_id = pn.id
+			WHERE pn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)`
+	}
+	row := s.db.QueryRow(ctx, query, orgID.String())
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("project count by org: %w", err)
+	}
+	return count, nil
+}
+
+// ListProjectsByOrg returns projects under the given organization's namespace with pagination.
+func (s *ProjectAdminStore) ListProjectsByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]model.Project, error) {
+	query := `SELECT p.id, p.namespace_id, p.owner_namespace_id, p.name, p.slug, p.description, p.default_tags, p.settings, p.created_at, p.updated_at
+		FROM projects p
+		JOIN namespaces pn ON p.namespace_id = pn.id
+		WHERE pn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
+		ORDER BY p.name
+		LIMIT ? OFFSET ?`
+	if s.db.Backend() == storage.BackendPostgres {
+		query = `SELECT p.id, p.namespace_id, p.owner_namespace_id, p.name, p.slug, p.description, p.default_tags, p.settings, p.created_at, p.updated_at
+			FROM projects p
+			JOIN namespaces pn ON p.namespace_id = pn.id
+			WHERE pn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
+			ORDER BY p.name
+			LIMIT $2 OFFSET $3`
+	}
+	rows, err := s.db.Query(ctx, query, orgID.String(), limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("project list by org: %w", err)
+	}
+	defer rows.Close()
+
+	var projects []model.Project
+	for rows.Next() {
+		var p model.Project
+		var idStr, nsIDStr, ownerNSIDStr string
+		var tagsStr, settingsStr string
+		var createdAtStr, updatedAtStr string
+		if err := rows.Scan(&idStr, &nsIDStr, &ownerNSIDStr, &p.Name, &p.Slug, &p.Description, &tagsStr, &settingsStr, &createdAtStr, &updatedAtStr); err != nil {
+			return nil, fmt.Errorf("project list by org scan: %w", err)
+		}
+		p.ID, _ = uuid.Parse(idStr)
+		p.NamespaceID, _ = uuid.Parse(nsIDStr)
+		p.OwnerNamespaceID, _ = uuid.Parse(ownerNSIDStr)
+		_ = json.Unmarshal([]byte(tagsStr), &p.DefaultTags)
+		if p.DefaultTags == nil {
+			p.DefaultTags = []string{}
+		}
+		p.Settings = json.RawMessage(settingsStr)
+		p.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+		p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAtStr)
+		projects = append(projects, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("project list by org iteration: %w", err)
+	}
+	if projects == nil {
+		projects = []model.Project{}
+	}
+	return projects, nil
 }

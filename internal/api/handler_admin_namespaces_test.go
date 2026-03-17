@@ -18,7 +18,7 @@ type mockNamespaceStore struct {
 	err  error
 }
 
-func (m *mockNamespaceStore) GetNamespaceTree(_ context.Context) ([]NamespaceNode, error) {
+func (m *mockNamespaceStore) GetNamespaceTree(_ context.Context, _ *uuid.UUID) ([]NamespaceNode, error) {
 	return m.tree, m.err
 }
 

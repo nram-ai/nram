@@ -111,6 +111,16 @@ func (s *UserAdminStore) CountAdmins(ctx context.Context) (int, error) {
 	return s.userRepo.CountAdmins(ctx)
 }
 
+// CountUsersByOrg returns the count of users in a given organization.
+func (s *UserAdminStore) CountUsersByOrg(ctx context.Context, orgID uuid.UUID) (int, error) {
+	return s.userRepo.CountByOrg(ctx, orgID)
+}
+
+// ListUsersByOrg returns a paginated list of users in a given organization.
+func (s *UserAdminStore) ListUsersByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]model.User, error) {
+	return s.userRepo.ListByOrgPaged(ctx, orgID, limit, offset)
+}
+
 func (s *UserAdminStore) CountAPIKeys(ctx context.Context, userID uuid.UUID) (int, error) {
 	return s.apiKeyRepo.CountByUser(ctx, userID)
 }

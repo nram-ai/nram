@@ -18,15 +18,16 @@ type APIKeyValidator interface {
 	Validate(ctx context.Context, rawKey string) (*model.APIKey, error)
 }
 
-// UserRoleLookup resolves the role for an active user by ID.
+// UserIdentityLookup resolves the role and org ID for an active user by ID.
 // It must return an error if the user is disabled or not found.
-type UserRoleLookup interface {
-	GetRoleByID(ctx context.Context, id uuid.UUID) (string, error)
+type UserIdentityLookup interface {
+	GetIdentityByID(ctx context.Context, id uuid.UUID) (role string, orgID uuid.UUID, err error)
 }
 
 // AuthContext holds the authenticated identity extracted from a request.
 type AuthContext struct {
 	UserID   uuid.UUID
+	OrgID    uuid.UUID
 	Role     string
 	APIKeyID *uuid.UUID // non-nil when authenticated via API key
 	Scopes   []uuid.UUID
@@ -51,24 +52,25 @@ func WithContext(ctx context.Context, ac *AuthContext) context.Context {
 // Claims defines the JWT claims used by nram.
 type Claims struct {
 	jwt.RegisteredClaims
-	Role string `json:"role"`
+	Role  string `json:"role"`
+	OrgID string `json:"org_id,omitempty"`
 }
 
 // AuthMiddleware validates Bearer tokens from the Authorization header.
 // Tokens with the "nram_k_" prefix are validated as API keys; all others
 // are parsed as JWTs signed with HMAC-SHA256.
 type AuthMiddleware struct {
-	apiKeyValidator APIKeyValidator
-	userRoleLookup  UserRoleLookup
-	jwtSecret       []byte
+	apiKeyValidator    APIKeyValidator
+	userIdentityLookup UserIdentityLookup
+	jwtSecret          []byte
 }
 
 // NewAuthMiddleware creates a new AuthMiddleware with the given dependencies.
-func NewAuthMiddleware(apiKeyValidator APIKeyValidator, userRoleLookup UserRoleLookup, jwtSecret []byte) *AuthMiddleware {
+func NewAuthMiddleware(apiKeyValidator APIKeyValidator, userIdentityLookup UserIdentityLookup, jwtSecret []byte) *AuthMiddleware {
 	return &AuthMiddleware{
-		apiKeyValidator: apiKeyValidator,
-		userRoleLookup:  userRoleLookup,
-		jwtSecret:       jwtSecret,
+		apiKeyValidator:    apiKeyValidator,
+		userIdentityLookup: userIdentityLookup,
+		jwtSecret:          jwtSecret,
 	}
 }
 
@@ -140,7 +142,7 @@ func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*Au
 		return nil, fmt.Errorf("invalid api key: %w", err)
 	}
 
-	role, err := m.userRoleLookup.GetRoleByID(ctx, key.UserID)
+	role, orgID, err := m.userIdentityLookup.GetIdentityByID(ctx, key.UserID)
 	if err != nil {
 		// User is disabled or not found — treat as unauthorized.
 		return nil, fmt.Errorf("api key user unavailable: %w", err)
@@ -149,6 +151,7 @@ func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*Au
 	keyID := key.ID
 	return &AuthContext{
 		UserID:   key.UserID,
+		OrgID:    orgID,
 		Role:     role,
 		APIKeyID: &keyID,
 		Scopes:   key.Scopes,
@@ -192,8 +195,17 @@ func (m *AuthMiddleware) validateJWT(r *http.Request, tokenStr string) (*AuthCon
 		return nil, fmt.Errorf("jwt subject is not a valid uuid: %w", err)
 	}
 
+	var orgID uuid.UUID
+	if claims.OrgID != "" {
+		orgID, err = uuid.Parse(claims.OrgID)
+		if err != nil {
+			return nil, fmt.Errorf("jwt org_id is not a valid uuid: %w", err)
+		}
+	}
+
 	return &AuthContext{
 		UserID: userID,
+		OrgID:  orgID,
 		Role:   claims.Role,
 	}, nil
 }
@@ -210,13 +222,13 @@ func containsAudience(aud jwt.ClaimStrings, expected string) bool {
 
 // GenerateJWT creates a signed JWT for the given user without an audience claim.
 // Use generateJWTWithAudience when an RFC 8707 resource indicator must be bound.
-func GenerateJWT(userID uuid.UUID, role string, secret []byte, expiry time.Duration) (string, error) {
-	return generateJWTWithAudience(userID, role, secret, expiry, "")
+func GenerateJWT(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration) (string, error) {
+	return generateJWTWithAudience(userID, orgID, role, secret, expiry, "")
 }
 
 // generateJWTWithAudience creates a signed JWT. When resource is non-empty it
 // is set as the sole audience claim (RFC 8707 §2).
-func generateJWTWithAudience(userID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string) (string, error) {
+func generateJWTWithAudience(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string) (string, error) {
 	now := time.Now().UTC()
 	reg := jwt.RegisteredClaims{
 		Subject:   userID.String(),
@@ -227,9 +239,14 @@ func generateJWTWithAudience(userID uuid.UUID, role string, secret []byte, expir
 	if resource != "" {
 		reg.Audience = jwt.ClaimStrings{resource}
 	}
+	var orgIDStr string
+	if orgID != uuid.Nil {
+		orgIDStr = orgID.String()
+	}
 	claims := Claims{
 		RegisteredClaims: reg,
 		Role:             role,
+		OrgID:            orgIDStr,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

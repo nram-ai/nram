@@ -19,8 +19,9 @@ type NamespaceNode struct {
 }
 
 // NamespaceStore abstracts access to namespace tree data.
+// When orgID is non-nil, the tree is filtered to the organization's subtree.
 type NamespaceStore interface {
-	GetNamespaceTree(ctx context.Context) ([]NamespaceNode, error)
+	GetNamespaceTree(ctx context.Context, orgID *uuid.UUID) ([]NamespaceNode, error)
 }
 
 // NamespaceAdminConfig holds dependencies for the admin namespaces handler.
@@ -43,7 +44,9 @@ func NewAdminNamespacesHandler(cfg NamespaceAdminConfig) http.HandlerFunc {
 			return
 		}
 
-		nodes, err := cfg.Store.GetNamespaceTree(r.Context())
+		orgID := resolveOrgScope(r)
+
+		nodes, err := cfg.Store.GetNamespaceTree(r.Context(), orgID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{
 				"error": "failed to retrieve namespace tree",

@@ -36,7 +36,7 @@ var integrationJWTSecret = []byte("integration-test-jwt-secret-key-32b")
 
 func integrationJWT(t *testing.T, userID uuid.UUID, role string) string {
 	t.Helper()
-	tok, err := auth.GenerateJWT(userID, role, integrationJWTSecret, time.Hour)
+	tok, err := auth.GenerateJWT(userID, uuid.Nil, role, integrationJWTSecret, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateJWT: %v", err)
 	}
@@ -50,12 +50,12 @@ func (v *integrationAPIKeyValidator) Validate(_ context.Context, _ string) (*mod
 	return nil, fmt.Errorf("invalid key")
 }
 
-// integrationUserRoleLookup always returns "member" — only used if API key auth
+// integrationUserIdentityLookup always returns "member" — only used if API key auth
 // succeeds, which it never does in integration tests.
-type integrationUserRoleLookup struct{}
+type integrationUserIdentityLookup struct{}
 
-func (v *integrationUserRoleLookup) GetRoleByID(_ context.Context, _ uuid.UUID) (string, error) {
-	return "member", nil
+func (v *integrationUserIdentityLookup) GetIdentityByID(_ context.Context, _ uuid.UUID) (string, uuid.UUID, error) {
+	return "member", uuid.Nil, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ type integrationRouterConfig struct {
 func newIntegrationRouter(t *testing.T, cfg integrationRouterConfig) http.Handler {
 	t.Helper()
 
-	mw := auth.NewAuthMiddleware(&integrationAPIKeyValidator{}, &integrationUserRoleLookup{}, integrationJWTSecret)
+	mw := auth.NewAuthMiddleware(&integrationAPIKeyValidator{}, &integrationUserIdentityLookup{}, integrationJWTSecret)
 
 	r := chi.NewRouter()
 	r.Use(ErrorMiddleware)

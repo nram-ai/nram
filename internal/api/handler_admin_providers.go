@@ -193,6 +193,11 @@ func handleOllamaModels(w http.ResponseWriter, r *http.Request, cfg ProviderAdmi
 		return
 	}
 
+	if models == nil {
+		writeJSON(w, http.StatusOK, []struct{}{})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, models)
 }
 

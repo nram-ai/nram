@@ -129,7 +129,7 @@ func computeCodeChallenge(verifier string) string {
 //   - GET  /userinfo
 //   - GET  /mcp  (protected by AuthMiddleware)
 func buildOAuthRouter(oauthSrv *OAuthServer, secret []byte) http.Handler {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, secret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, secret)
 
 	r := chi.NewRouter()
 
@@ -323,7 +323,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 	// Step 7: GET /authorize with nram_session cookie → expect redirect to callback
 	// -----------------------------------------------------------------------
 	// Generate a valid session JWT for the test user
-	sessionToken, err := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	sessionToken, err := GenerateJWT(user.ID, user.OrgID, user.Role, secret, time.Hour)
 	if err != nil {
 		t.Fatalf("step 7 generate session JWT: %v", err)
 	}
@@ -779,7 +779,7 @@ func TestOAuthFlow_PKCE_Required(t *testing.T) {
 	json.Unmarshal(regData, &reg)
 
 	// Create session token
-	sessionToken, _ := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	sessionToken, _ := GenerateJWT(user.ID, user.OrgID, user.Role, secret, time.Hour)
 
 	// Try authorization WITHOUT code_challenge
 	params := url.Values{}
@@ -857,7 +857,7 @@ func TestOAuthFlow_PKCE_WrongVerifier(t *testing.T) {
 	codeVerifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	codeChallenge := computeCodeChallenge(codeVerifier)
 
-	sessionToken, _ := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	sessionToken, _ := GenerateJWT(user.ID, user.OrgID, user.Role, secret, time.Hour)
 
 	params := url.Values{}
 	params.Set("client_id", reg.ClientID)
@@ -1034,7 +1034,7 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 	// Complete auth code flow
 	codeVerifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	codeChallenge := computeCodeChallenge(codeVerifier)
-	sessionToken, _ := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	sessionToken, _ := GenerateJWT(user.ID, user.OrgID, user.Role, secret, time.Hour)
 
 	params := url.Values{}
 	params.Set("client_id", reg.ClientID)
@@ -1213,7 +1213,7 @@ func TestOAuthFlow_WWWAuthenticate_Header(t *testing.T) {
 	t.Run("valid token does not produce 401", func(t *testing.T) {
 		// Generate a valid JWT for this test
 		userID := uuid.New()
-		tokenStr, err := GenerateJWT(userID, "admin", secret, time.Hour)
+		tokenStr, err := GenerateJWT(userID, uuid.Nil, "admin", secret, time.Hour)
 		if err != nil {
 			t.Fatalf("GenerateJWT: %v", err)
 		}
@@ -1292,7 +1292,7 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 	authParams.Set("state", "s1")
 	authParams.Set("resource", correctResource)
 
-	sessionToken, err := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	sessionToken, err := GenerateJWT(user.ID, user.OrgID, user.Role, secret, time.Hour)
 	if err != nil {
 		t.Fatalf("generate session JWT: %v", err)
 	}
@@ -1400,7 +1400,7 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 	authParams.Set("state", "s2")
 	authParams.Set("resource", targetResource)
 
-	sessionToken, err := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	sessionToken, err := GenerateJWT(user.ID, user.OrgID, user.Role, secret, time.Hour)
 	if err != nil {
 		t.Fatalf("generate session JWT: %v", err)
 	}
@@ -1536,7 +1536,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 	authParams.Set("state", state)
 	authParams.Set("resource", resourceIndicator)
 
-	sessionToken, err := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	sessionToken, err := GenerateJWT(user.ID, user.OrgID, user.Role, secret, time.Hour)
 	if err != nil {
 		t.Fatalf("generate session JWT: %v", err)
 	}

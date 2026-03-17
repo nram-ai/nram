@@ -6,15 +6,18 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
 
 // DashboardStore abstracts storage operations for dashboard/activity.
+// When orgID is non-nil, results are scoped to that organization.
 type DashboardStore interface {
 	// DashboardStats returns aggregate stats for the dashboard.
-	DashboardStats(ctx context.Context) (*DashboardStatsData, error)
+	DashboardStats(ctx context.Context, orgID *uuid.UUID) (*DashboardStatsData, error)
 	// RecentActivity returns the most recent activity events, up to limit.
-	RecentActivity(ctx context.Context, limit int) ([]ActivityEvent, error)
+	RecentActivity(ctx context.Context, limit int, orgID *uuid.UUID) ([]ActivityEvent, error)
 }
 
 // DashboardStatsData holds aggregate statistics for the admin dashboard.
@@ -62,14 +65,34 @@ type DashboardConfig struct {
 // provider health, and queue depth.
 func NewAdminDashboardHandler(cfg DashboardConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		stats, err := cfg.Store.DashboardStats(r.Context())
+		orgID := resolveOrgScope(r)
+
+		stats, err := cfg.Store.DashboardStats(r.Context(), orgID)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to retrieve dashboard stats"))
 			return
 		}
 
+		if stats.MemoriesByProject == nil {
+			stats.MemoriesByProject = []ProjectMemoryCount{}
+		}
+
 		writeJSON(w, http.StatusOK, stats)
 	}
+}
+
+// resolveOrgScope determines the org scope for a request.
+// If an {org_id} URL param is present it takes precedence; otherwise
+// scope is derived from the authenticated user's context.
+func resolveOrgScope(r *http.Request) *uuid.UUID {
+	if urlOrgID := chi.URLParam(r, "org_id"); urlOrgID != "" {
+		if id, err := uuid.Parse(urlOrgID); err == nil {
+			return &id
+		}
+	}
+	ac := auth.FromContext(r.Context())
+	scope := ScopeFromAuth(ac)
+	return scope.OrgID
 }
 
 const (
@@ -95,10 +118,16 @@ func NewAdminActivityHandler(cfg DashboardConfig) http.HandlerFunc {
 			limit = maxActivityLimit
 		}
 
-		events, err := cfg.Store.RecentActivity(r.Context(), limit)
+		orgID := resolveOrgScope(r)
+
+		events, err := cfg.Store.RecentActivity(r.Context(), limit, orgID)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to retrieve activity events"))
 			return
+		}
+
+		if events == nil {
+			events = []ActivityEvent{}
 		}
 
 		writeJSON(w, http.StatusOK, map[string]interface{}{

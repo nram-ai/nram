@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/provider"
 )
 
@@ -80,6 +81,15 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sub := extractEnrichmentSubPath(r.URL.Path)
 
+		// Write operations require administrator role.
+		if sub == "retry" || sub == "pause" || sub == "test-prompt" {
+			ac := auth.FromContext(r.Context())
+			if ac == nil || ac.Role != auth.RoleAdministrator {
+				http.Error(w, "forbidden: administrator required", http.StatusForbidden)
+				return
+			}
+		}
+
 		switch sub {
 		case "", "queue":
 			handleEnrichmentQueue(w, r, cfg)
@@ -119,6 +129,10 @@ func handleEnrichmentQueue(w http.ResponseWriter, r *http.Request, cfg Enrichmen
 	if err != nil {
 		WriteError(w, ErrInternal("failed to get enrichment queue status"))
 		return
+	}
+
+	if status.Items == nil {
+		status.Items = []EnrichmentQueueItem{}
 	}
 
 	writeJSON(w, http.StatusOK, status)
@@ -386,9 +400,10 @@ func stripTestMarkdownFences(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "```") {
 		idx := strings.Index(s, "\n")
-		if idx >= 0 {
-			s = s[idx+1:]
+		if idx < 0 {
+			return s
 		}
+		s = s[idx+1:]
 		if lastIdx := strings.LastIndex(s, "```"); lastIdx >= 0 {
 			s = s[:lastIdx]
 		}

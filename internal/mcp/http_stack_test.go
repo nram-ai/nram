@@ -55,12 +55,12 @@ func (t *testAPIKeyValidator) Validate(_ context.Context, _ string) (*model.APIK
 	return nil, fmt.Errorf("api key validation not supported in test")
 }
 
-// testUserRoleLookup implements auth.UserRoleLookup for tests.
+// testUserIdentityLookup implements auth.UserIdentityLookup for tests.
 // API key validation always fails in these tests so this is never called.
-type testUserRoleLookup struct{}
+type testUserIdentityLookup struct{}
 
-func (t *testUserRoleLookup) GetRoleByID(_ context.Context, _ uuid.UUID) (string, error) {
-	return "member", nil
+func (t *testUserIdentityLookup) GetIdentityByID(_ context.Context, _ uuid.UUID) (string, uuid.UUID, error) {
+	return "member", uuid.Nil, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ func generateHTTPStackJWT(t *testing.T, userID uuid.UUID, host string) string {
 	t.Helper()
 	// Generate a JWT without audience so it passes the audience check
 	// (audience check is skipped when aud claim is empty).
-	token, err := auth.GenerateJWT(userID, auth.RoleMember, httpStackTestSecret, 1*time.Hour)
+	token, err := auth.GenerateJWT(userID, uuid.Nil, auth.RoleMember, httpStackTestSecret, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate test JWT: %v", err)
 	}
@@ -159,7 +159,7 @@ func newHTTPStackEnv(t *testing.T) *httpStackEnv {
 	}
 	mcpSrv := NewServer(deps)
 
-	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserRoleLookup{}, httpStackTestSecret)
+	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserIdentityLookup{}, httpStackTestSecret)
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
@@ -1401,7 +1401,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 	}
 	mcpSrv := NewServer(deps)
 
-	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserRoleLookup{}, httpStackTestSecret)
+	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserIdentityLookup{}, httpStackTestSecret)
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {

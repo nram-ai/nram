@@ -416,11 +416,13 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Look up the user to get their role
+	// Look up the user to get their role and org ID
 	role := "member"
+	var userOrgID uuid.UUID
 	user, err := s.userRepo.GetByID(r.Context(), authCode.UserID)
 	if err == nil {
 		role = user.Role
+		userOrgID = user.OrgID
 	}
 
 	// RFC 8707: Use this server's canonical resource URI as the JWT audience.
@@ -435,7 +437,7 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 
 	// Generate access token (JWT), including the audience claim when a resource
 	// indicator is present (RFC 8707 §2).
-	accessToken, err := generateJWTWithAudience(authCode.UserID, role, s.jwtSecret, accessTokenExpiry, effectiveResource)
+	accessToken, err := generateJWTWithAudience(authCode.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry, effectiveResource)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to generate access token")
 		return
@@ -498,15 +500,17 @@ func (s *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Look up user role
+	// Look up user role and org ID
 	role := "member"
+	var userOrgID uuid.UUID
 	user, err := s.userRepo.GetByID(r.Context(), storedToken.UserID)
 	if err == nil {
 		role = user.Role
+		userOrgID = user.OrgID
 	}
 
 	// Generate new access token
-	accessToken, err := GenerateJWT(storedToken.UserID, role, s.jwtSecret, accessTokenExpiry)
+	accessToken, err := GenerateJWT(storedToken.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to generate access token")
 		return

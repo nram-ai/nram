@@ -48,7 +48,10 @@ type Handlers struct {
 	MeOAuthClientRevoke http.HandlerFunc
 
 	// Org-scoped handlers
-	OrgRecall http.HandlerFunc
+	OrgRecall   http.HandlerFunc
+	OrgUsers    http.HandlerFunc
+	OrgProjects http.HandlerFunc
+	OrgIdP      http.HandlerFunc
 
 	// SSE events
 	Events http.HandlerFunc
@@ -208,14 +211,42 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Delete("/oauth-clients/{id}", handler(handlers.MeOAuthClientRevoke))
 		})
 
+		// Scoped data-viewing routes (all authenticated users — scope auto-applied).
+		r.Get("/v1/dashboard", handler(handlers.AdminDashboard))
+		r.Get("/v1/activity", handler(handlers.AdminActivity))
+		r.Get("/v1/analytics", handler(handlers.AdminAnalytics))
+		r.Get("/v1/usage", handler(handlers.AdminUsage))
+		r.Get("/v1/graph", handler(handlers.AdminGraph))
+		r.Get("/v1/namespaces/tree", handler(handlers.AdminNamespaces))
+		r.HandleFunc("/v1/enrichment", handler(handlers.AdminEnrichment))
+		r.HandleFunc("/v1/enrichment/*", handler(handlers.AdminEnrichment))
+
 		// Org-scoped routes.
-		r.Post("/v1/orgs/{org_id}/memories/recall", handler(handlers.OrgRecall))
+		r.Route("/v1/orgs/{org_id}", func(r chi.Router) {
+			r.Use(api.OrgAccessMiddleware())
+
+			// Data viewing (member+ in org).
+			r.Get("/projects", handler(handlers.OrgProjects))
+			r.Get("/projects/*", handler(handlers.OrgProjects))
+			r.Get("/analytics", handler(handlers.AdminAnalytics))
+			r.Get("/usage", handler(handlers.AdminUsage))
+
+			// Management (org_owner+).
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRole(auth.RoleOrgOwner))
+				r.HandleFunc("/users", handler(handlers.OrgUsers))
+				r.HandleFunc("/users/*", handler(handlers.OrgUsers))
+				r.HandleFunc("/idp", handler(handlers.OrgIdP))
+				r.HandleFunc("/idp/*", handler(handlers.OrgIdP))
+			})
+
+			// Keep existing recall route.
+			r.Post("/memories/recall", handler(handlers.OrgRecall))
+		})
 
 		// Admin routes (require administrator role).
 		r.Route("/v1/admin", func(r chi.Router) {
 			r.Use(auth.RequireRole(auth.RoleAdministrator))
-			r.Get("/dashboard", handler(handlers.AdminDashboard))
-			r.Get("/activity", handler(handlers.AdminActivity))
 			r.HandleFunc("/orgs", handler(handlers.AdminOrgs))
 			r.HandleFunc("/orgs/*", handler(handlers.AdminOrgs))
 			r.HandleFunc("/users", handler(handlers.AdminUsers))
@@ -225,16 +256,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/providers", handler(handlers.AdminProviders))
 			r.HandleFunc("/providers/*", handler(handlers.AdminProviders))
 			r.HandleFunc("/settings", handler(handlers.AdminSettings))
-			r.HandleFunc("/enrichment", handler(handlers.AdminEnrichment))
-			r.HandleFunc("/enrichment/*", handler(handlers.AdminEnrichment))
 			r.HandleFunc("/oauth", handler(handlers.AdminOAuth))
 			r.HandleFunc("/oauth/*", handler(handlers.AdminOAuth))
 			r.HandleFunc("/webhooks", handler(handlers.AdminWebhooks))
 			r.HandleFunc("/webhooks/*", handler(handlers.AdminWebhooks))
-			r.Get("/analytics", handler(handlers.AdminAnalytics))
-			r.Get("/usage", handler(handlers.AdminUsage))
-			r.Get("/namespaces/tree", handler(handlers.AdminNamespaces))
-			r.Get("/graph", handler(handlers.AdminGraph))
 			r.HandleFunc("/database", handler(handlers.AdminDatabase))
 			r.HandleFunc("/database/*", handler(handlers.AdminDatabase))
 		})

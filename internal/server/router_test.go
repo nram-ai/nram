@@ -22,19 +22,19 @@ func (m *mockAPIKeyValidator) Validate(_ context.Context, _ string) (*model.APIK
 	return nil, fmt.Errorf("invalid key")
 }
 
-// mockUserRoleLookup implements auth.UserRoleLookup for testing.
+// mockUserIdentityLookup implements auth.UserIdentityLookup for testing.
 // It always returns "member" as the role.
-type mockUserRoleLookup struct{}
+type mockUserIdentityLookup struct{}
 
-func (m *mockUserRoleLookup) GetRoleByID(_ context.Context, _ uuid.UUID) (string, error) {
-	return "member", nil
+func (m *mockUserIdentityLookup) GetIdentityByID(_ context.Context, _ uuid.UUID) (string, uuid.UUID, error) {
+	return "member", uuid.Nil, nil
 }
 
 var testJWTSecret = []byte("test-secret-key-for-router-tests")
 
 func generateTestJWT(t *testing.T, userID uuid.UUID, role string) string {
 	t.Helper()
-	token, err := auth.GenerateJWT(userID, role, testJWTSecret, 1*time.Hour)
+	token, err := auth.GenerateJWT(userID, uuid.Nil, role, testJWTSecret, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate test JWT: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestAdminRouteAdminReturns200(t *testing.T) {
 	userID := uuid.New()
 	token := generateTestJWT(t, userID, auth.RoleAdministrator)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/dashboard", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -195,7 +195,7 @@ func newTestRouter(t *testing.T, handlers Handlers) http.Handler {
 	t.Helper()
 
 	validator := &mockAPIKeyValidator{}
-	authMw := auth.NewAuthMiddleware(validator, &mockUserRoleLookup{}, testJWTSecret)
+	authMw := auth.NewAuthMiddleware(validator, &mockUserIdentityLookup{}, testJWTSecret)
 	rl := auth.NewRateLimiter(100, 200)
 	t.Cleanup(rl.Stop)
 	metrics := api.NewMetrics()

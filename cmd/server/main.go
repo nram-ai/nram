@@ -218,7 +218,7 @@ func main() {
 	setupStore := adminstore.NewSetupStore(userRepo, namespaceRepo, orgRepo, apiKeyRepo, db)
 	orgAdminStore := adminstore.NewOrgAdminStore(orgRepo, namespaceRepo)
 	userAdminStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, namespaceRepo, orgRepo)
-	projectAdminStore := adminstore.NewProjectAdminStore(projectRepo, namespaceRepo)
+	projectAdminStore := adminstore.NewProjectAdminStore(db, projectRepo, namespaceRepo)
 	webhookAdminStore := adminstore.NewWebhookAdminStore(webhookRepo)
 	settingsAdminStore := adminstore.NewSettingsAdminStore(settingsRepo)
 	dashboardStore := adminstore.NewDashboardStore(db, enrichmentQueueRepo)
@@ -294,7 +294,10 @@ func main() {
 		MeOAuthClientRevoke: api.NewMeOAuthClientRevokeHandler(oauthRepo),
 
 		// Org-scoped handlers
-		OrgRecall: api.NewOrgRecallHandler(recallSvc, orgRepo, userRepo),
+		OrgRecall:   api.NewOrgRecallHandler(recallSvc, orgRepo, userRepo),
+		OrgUsers:    api.NewOrgUsersHandler(api.OrgUserConfig{Store: userAdminStore}),
+		OrgProjects: api.NewOrgProjectsHandler(api.OrgProjectConfig{Store: projectAdminStore}),
+		OrgIdP:      api.NewOrgIdPHandler(),
 
 		// SSE events
 		Events: api.NewEventsHandler(eventBus),
@@ -347,6 +350,8 @@ func main() {
 			Entities:      entityRepo,
 			Relationships: relationshipRepo,
 			Aliases:       entityAliasRepo,
+			Namespaces:    namespaceRepo,
+			Orgs:          orgRepo,
 		}),
 	}
 

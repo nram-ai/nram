@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
 )
 
@@ -55,12 +57,24 @@ type GraphAliasStore interface {
 	ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.EntityAlias, error)
 }
 
+// GraphNamespaceLookup retrieves a namespace by ID to check path ancestry.
+type GraphNamespaceLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Namespace, error)
+}
+
+// GraphOrgLookup retrieves an organization by ID to resolve its namespace.
+type GraphOrgLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Organization, error)
+}
+
 // GraphAdminConfig holds dependencies for the admin graph handler.
 type GraphAdminConfig struct {
 	Projects      GraphProjectStore
 	Entities      GraphEntityStore
 	Relationships GraphRelationshipStore
 	Aliases       GraphAliasStore
+	Namespaces    GraphNamespaceLookup
+	Orgs          GraphOrgLookup
 }
 
 // NewAdminGraphHandler returns an http.HandlerFunc that serves graph data
@@ -96,6 +110,56 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 				"error": "project not found",
 			})
 			return
+		}
+
+		// Verify the requesting user has access to this project's org.
+		ac := auth.FromContext(r.Context())
+		if ac != nil && ac.Role != auth.RoleAdministrator {
+			if ac.OrgID == uuid.Nil {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "user does not have an organization assigned",
+				})
+				return
+			}
+
+			if cfg.Namespaces == nil || cfg.Orgs == nil {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "access denied: org verification unavailable",
+				})
+				return
+			}
+
+			ns, nsErr := cfg.Namespaces.GetByID(r.Context(), project.NamespaceID)
+			if nsErr != nil {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "access denied to this project",
+				})
+				return
+			}
+
+			org, orgErr := cfg.Orgs.GetByID(r.Context(), ac.OrgID)
+			if orgErr != nil {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "access denied to this project",
+				})
+				return
+			}
+
+			orgNS, orgNSErr := cfg.Namespaces.GetByID(r.Context(), org.NamespaceID)
+			if orgNSErr != nil {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "access denied to this project",
+				})
+				return
+			}
+
+			prefix := orgNS.Path + "/"
+			if !strings.HasPrefix(ns.Path, prefix) && ns.Path != orgNS.Path {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "access denied to this project",
+				})
+				return
+			}
 		}
 
 		entities, err := cfg.Entities.ListByNamespace(r.Context(), project.NamespaceID)

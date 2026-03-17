@@ -106,7 +106,7 @@ func NewAdminSetupHandler(cfg SetupConfig) http.HandlerFunc {
 			return
 		}
 
-		token, err := auth.GenerateJWT(user.ID, user.Role, cfg.JWTSecret, 24*time.Hour)
+		token, err := auth.GenerateJWT(user.ID, user.OrgID, user.Role, cfg.JWTSecret, 24*time.Hour)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to generate auth token"))
 			return

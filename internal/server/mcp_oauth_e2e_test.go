@@ -460,7 +460,7 @@ func e2eComputeCodeChallenge(verifier string) string {
 
 func e2eCreateSessionCookie(t *testing.T, userID uuid.UUID) *http.Cookie {
 	t.Helper()
-	token, err := auth.GenerateJWT(userID, "admin", e2eJWTSecret, 10*time.Minute)
+	token, err := auth.GenerateJWT(userID, uuid.Nil, "admin", e2eJWTSecret, 10*time.Minute)
 	if err != nil {
 		t.Fatalf("failed to create session JWT: %v", err)
 	}
@@ -1639,7 +1639,7 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 	sessionCookie := e2eCreateSessionCookie(t, userID)
 	if role != "" && role != "admin" {
 		// Create a session cookie with the specified role
-		token, err := auth.GenerateJWT(userID, role, e2eJWTSecret, 10*time.Minute)
+		token, err := auth.GenerateJWT(userID, uuid.Nil, role, e2eJWTSecret, 10*time.Minute)
 		if err != nil {
 			t.Fatalf("oauth flow: create session JWT: %v", err)
 		}
@@ -1956,11 +1956,18 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 			w.Write([]byte(`{"setup_complete":true}`))
 		},
 
-		// Admin dashboard stub
+		// Admin dashboard stub (now mounted at /v1/dashboard for all authenticated users)
 		AdminDashboard: func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"total_memories":42,"total_projects":3}`))
+		},
+
+		// Admin orgs stub (admin-only route)
+		AdminOrgs: func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"data":[],"pagination":{"total":0,"limit":50,"offset":0}}`))
 		},
 	}
 
@@ -2845,21 +2852,21 @@ func TestE2E_AdminRoute_WithOAuthToken(t *testing.T) {
 	t.Log("completing OAuth flow for administrator user")
 	adminOAuth := e2eFullOAuthFlow(t, env, "Admin RBAC Test", "http://localhost:3000/callback", adminUser.ID, "administrator")
 
-	// Hit GET /v1/admin/dashboard with admin token → expect 200
-	t.Log("hitting /v1/admin/dashboard with administrator token")
-	req, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/admin/dashboard", nil)
+	// Hit GET /v1/admin/orgs with admin token → expect 200
+	t.Log("hitting /v1/admin/orgs with administrator token")
+	req, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/admin/orgs", nil)
 	req.Header.Set("Authorization", "Bearer "+adminOAuth.AccessToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("admin dashboard: %v", err)
+		t.Fatalf("admin orgs: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("admin dashboard with administrator token: expected 200, got %d; body: %s", resp.StatusCode, body)
+		t.Fatalf("admin orgs with administrator token: expected 200, got %d; body: %s", resp.StatusCode, body)
 	}
-	t.Log("admin dashboard accessible with administrator token: OK")
+	t.Log("admin orgs accessible with administrator token: OK")
 
 	// Create a member user
 	t.Log("creating member user")
@@ -2898,19 +2905,19 @@ func TestE2E_AdminRoute_WithOAuthToken(t *testing.T) {
 	t.Log("completing OAuth flow for member user")
 	memberOAuth := e2eFullOAuthFlow(t, env, "Member RBAC Test", "http://localhost:3000/callback-member", memberUser.ID, "member")
 
-	// Hit GET /v1/admin/dashboard with member token → expect 403
-	t.Log("hitting /v1/admin/dashboard with member token")
-	memberReq, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/admin/dashboard", nil)
+	// Hit GET /v1/admin/orgs with member token → expect 403
+	t.Log("hitting /v1/admin/orgs with member token")
+	memberReq, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/admin/orgs", nil)
 	memberReq.Header.Set("Authorization", "Bearer "+memberOAuth.AccessToken)
 	resp2, err := http.DefaultClient.Do(memberReq)
 	if err != nil {
-		t.Fatalf("member admin dashboard: %v", err)
+		t.Fatalf("member admin orgs: %v", err)
 	}
 	io.ReadAll(resp2.Body)
 	resp2.Body.Close()
 
 	if resp2.StatusCode != http.StatusForbidden {
-		t.Fatalf("member admin dashboard: expected 403, got %d", resp2.StatusCode)
+		t.Fatalf("member admin orgs: expected 403, got %d", resp2.StatusCode)
 	}
 	t.Log("member correctly denied admin access with 403: PASSED")
 }

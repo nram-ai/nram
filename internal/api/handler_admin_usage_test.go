@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
 
 // --- mock UsageStore ---
@@ -112,6 +113,9 @@ func TestAdminUsageAllFilters(t *testing.T) {
 		"&group_by=user"
 
 	req := httptest.NewRequest(http.MethodGet, url, nil)
+	// Inject admin auth context so ?org= query param is honoured.
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: auth.RoleAdministrator}
+	req = req.WithContext(auth.WithContext(req.Context(), ac))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -289,6 +293,9 @@ func TestAdminUsageInvalidUUIDIgnored(t *testing.T) {
 	h := NewAdminUsageHandler(UsageConfig{Store: store})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/usage?org=not-a-uuid", nil)
+	// Admin context — invalid UUID should be silently ignored.
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: auth.RoleAdministrator}
+	req = req.WithContext(auth.WithContext(req.Context(), ac))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 

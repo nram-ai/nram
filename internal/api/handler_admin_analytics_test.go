@@ -19,7 +19,7 @@ type mockAnalyticsStore struct {
 	err  error
 }
 
-func (m *mockAnalyticsStore) GetAnalytics(_ context.Context) (*AnalyticsData, error) {
+func (m *mockAnalyticsStore) GetAnalytics(_ context.Context, _ *uuid.UUID) (*AnalyticsData, error) {
 	return m.data, m.err
 }
 

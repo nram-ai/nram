@@ -9,8 +9,9 @@ import (
 )
 
 // AnalyticsStore abstracts retrieval of memory analytics data.
+// When orgID is non-nil, results are scoped to that organization.
 type AnalyticsStore interface {
-	GetAnalytics(ctx context.Context) (*AnalyticsData, error)
+	GetAnalytics(ctx context.Context, orgID *uuid.UUID) (*AnalyticsData, error)
 }
 
 // AnalyticsConfig holds the dependencies for the admin analytics handler.
@@ -62,10 +63,22 @@ func NewAdminAnalyticsHandler(cfg AnalyticsConfig) http.HandlerFunc {
 			return
 		}
 
-		data, err := cfg.Store.GetAnalytics(r.Context())
+		orgID := resolveOrgScope(r)
+
+		data, err := cfg.Store.GetAnalytics(r.Context(), orgID)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to retrieve analytics"))
 			return
+		}
+
+		if data.MostRecalled == nil {
+			data.MostRecalled = []MemoryRankItem{}
+		}
+		if data.LeastRecalled == nil {
+			data.LeastRecalled = []MemoryRankItem{}
+		}
+		if data.DeadWeight == nil {
+			data.DeadWeight = []MemoryRankItem{}
 		}
 
 		writeJSON(w, http.StatusOK, data)

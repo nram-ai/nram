@@ -21,38 +21,78 @@ func NewDashboardStore(db storage.DB, enrichmentQueueRepo *storage.EnrichmentQue
 	return &DashboardStore{db: db, enrichmentQueueRepo: enrichmentQueueRepo}
 }
 
-func (s *DashboardStore) DashboardStats(ctx context.Context) (*api.DashboardStatsData, error) {
+func (s *DashboardStore) DashboardStats(ctx context.Context, orgID *uuid.UUID) (*api.DashboardStatsData, error) {
 	stats := &api.DashboardStatsData{
 		MemoriesByProject: []api.ProjectMemoryCount{},
 	}
 
-	// Count totals.
-	counts := []struct {
-		table string
-		dest  *int
-		where string
-	}{
-		{"memories", &stats.TotalMemories, " WHERE deleted_at IS NULL"},
-		{"projects", &stats.TotalProjects, ""},
-		{"users", &stats.TotalUsers, ""},
-		{"entities", &stats.TotalEntities, ""},
-		{"organizations", &stats.TotalOrgs, ""},
-	}
-	for _, c := range counts {
-		row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM "+c.table+c.where)
-		if err := row.Scan(c.dest); err != nil {
-			return nil, fmt.Errorf("dashboard count %s: %w", c.table, err)
+	if orgID == nil {
+		// Global counts — no org filter.
+		counts := []struct {
+			table string
+			dest  *int
+			where string
+		}{
+			{"memories", &stats.TotalMemories, " WHERE deleted_at IS NULL"},
+			{"projects", &stats.TotalProjects, ""},
+			{"users", &stats.TotalUsers, ""},
+			{"entities", &stats.TotalEntities, ""},
+			{"organizations", &stats.TotalOrgs, ""},
 		}
+		for _, c := range counts {
+			row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM "+c.table+c.where)
+			if err := row.Scan(c.dest); err != nil {
+				return nil, fmt.Errorf("dashboard count %s: %w", c.table, err)
+			}
+		}
+	} else {
+		// Org-scoped counts.
+		orgIDStr := orgID.String()
+
+		// Users in this org.
+		row := s.db.QueryRow(ctx, s.orgUserCountQuery(), orgIDStr)
+		if err := row.Scan(&stats.TotalUsers); err != nil {
+			return nil, fmt.Errorf("dashboard org user count: %w", err)
+		}
+
+		// Memories under this org's namespace prefix.
+		row = s.db.QueryRow(ctx, s.orgMemoryCountQuery(), orgIDStr)
+		if err := row.Scan(&stats.TotalMemories); err != nil {
+			return nil, fmt.Errorf("dashboard org memory count: %w", err)
+		}
+
+		// Projects under this org's namespace prefix.
+		row = s.db.QueryRow(ctx, s.orgProjectCountQuery(), orgIDStr)
+		if err := row.Scan(&stats.TotalProjects); err != nil {
+			return nil, fmt.Errorf("dashboard org project count: %w", err)
+		}
+
+		// Entities under this org's namespace prefix.
+		row = s.db.QueryRow(ctx, s.orgEntityCountQuery(), orgIDStr)
+		if err := row.Scan(&stats.TotalEntities); err != nil {
+			return nil, fmt.Errorf("dashboard org entity count: %w", err)
+		}
+
+		// Org count is always 1 when scoped.
+		stats.TotalOrgs = 1
 	}
 
 	// Memories by project.
-	query := `SELECT p.id, p.name, COUNT(m.id) as count
-		FROM projects p
-		LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
-		GROUP BY p.id, p.name
-		ORDER BY count DESC
-		LIMIT 10`
-	rows, err := s.db.Query(ctx, query)
+	var memoriesByProjectQuery string
+	var memoriesByProjectArgs []interface{}
+	if orgID == nil {
+		memoriesByProjectQuery = `SELECT p.id, p.name, COUNT(m.id) as count
+			FROM projects p
+			LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
+			GROUP BY p.id, p.name
+			ORDER BY count DESC
+			LIMIT 10`
+	} else {
+		memoriesByProjectQuery = s.orgMemoriesByProjectQuery()
+		memoriesByProjectArgs = []interface{}{orgID.String()}
+	}
+
+	rows, err := s.db.Query(ctx, memoriesByProjectQuery, memoriesByProjectArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("dashboard memories by project: %w", err)
 	}
@@ -85,18 +125,26 @@ func (s *DashboardStore) DashboardStats(ctx context.Context) (*api.DashboardStat
 	return stats, nil
 }
 
-func (s *DashboardStore) RecentActivity(ctx context.Context, limit int) ([]api.ActivityEvent, error) {
-	// Query recent memories as activity events.
-	query := `SELECT id, content, created_at FROM memories
-		WHERE deleted_at IS NULL
-		ORDER BY created_at DESC LIMIT ?`
-	if s.db.Backend() == storage.BackendPostgres {
+func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID *uuid.UUID) ([]api.ActivityEvent, error) {
+	var query string
+	var args []interface{}
+
+	if orgID == nil {
 		query = `SELECT id, content, created_at FROM memories
 			WHERE deleted_at IS NULL
-			ORDER BY created_at DESC LIMIT $1`
+			ORDER BY created_at DESC LIMIT ?`
+		if s.db.Backend() == storage.BackendPostgres {
+			query = `SELECT id, content, created_at FROM memories
+				WHERE deleted_at IS NULL
+				ORDER BY created_at DESC LIMIT $1`
+		}
+		args = []interface{}{limit}
+	} else {
+		query = s.orgRecentActivityQuery()
+		args = []interface{}{orgID.String(), limit}
 	}
 
-	rows, err := s.db.Query(ctx, query, limit)
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("recent activity: %w", err)
 	}
@@ -128,4 +176,84 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int) ([]api.A
 	}
 
 	return events, nil
+}
+
+// --- org-scoped SQL helpers ---
+
+func (s *DashboardStore) orgUserCountQuery() string {
+	if s.db.Backend() == storage.BackendPostgres {
+		return `SELECT COUNT(*) FROM users WHERE org_id = $1`
+	}
+	return `SELECT COUNT(*) FROM users WHERE org_id = ?`
+}
+
+func (s *DashboardStore) orgMemoryCountQuery() string {
+	if s.db.Backend() == storage.BackendPostgres {
+		return `SELECT COUNT(*) FROM memories m
+			JOIN namespaces mn ON m.namespace_id = mn.id
+			WHERE mn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
+			AND m.deleted_at IS NULL`
+	}
+	return `SELECT COUNT(*) FROM memories m
+		JOIN namespaces mn ON m.namespace_id = mn.id
+		WHERE mn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
+		AND m.deleted_at IS NULL`
+}
+
+func (s *DashboardStore) orgProjectCountQuery() string {
+	if s.db.Backend() == storage.BackendPostgres {
+		return `SELECT COUNT(*) FROM projects p
+			JOIN namespaces pn ON p.namespace_id = pn.id
+			WHERE pn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)`
+	}
+	return `SELECT COUNT(*) FROM projects p
+		JOIN namespaces pn ON p.namespace_id = pn.id
+		WHERE pn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)`
+}
+
+func (s *DashboardStore) orgEntityCountQuery() string {
+	if s.db.Backend() == storage.BackendPostgres {
+		return `SELECT COUNT(*) FROM entities e
+			JOIN namespaces en ON e.namespace_id = en.id
+			WHERE en.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)`
+	}
+	return `SELECT COUNT(*) FROM entities e
+		JOIN namespaces en ON e.namespace_id = en.id
+		WHERE en.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)`
+}
+
+func (s *DashboardStore) orgMemoriesByProjectQuery() string {
+	if s.db.Backend() == storage.BackendPostgres {
+		return `SELECT p.id, p.name, COUNT(m.id) as count
+			FROM projects p
+			JOIN namespaces pn ON p.namespace_id = pn.id
+			LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
+			WHERE pn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
+			GROUP BY p.id, p.name
+			ORDER BY count DESC
+			LIMIT 10`
+	}
+	return `SELECT p.id, p.name, COUNT(m.id) as count
+		FROM projects p
+		JOIN namespaces pn ON p.namespace_id = pn.id
+		LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
+		WHERE pn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
+		GROUP BY p.id, p.name
+		ORDER BY count DESC
+		LIMIT 10`
+}
+
+func (s *DashboardStore) orgRecentActivityQuery() string {
+	if s.db.Backend() == storage.BackendPostgres {
+		return `SELECT m.id, m.content, m.created_at FROM memories m
+			JOIN namespaces mn ON m.namespace_id = mn.id
+			WHERE mn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
+			AND m.deleted_at IS NULL
+			ORDER BY m.created_at DESC LIMIT $2`
+	}
+	return `SELECT m.id, m.content, m.created_at FROM memories m
+		JOIN namespaces mn ON m.namespace_id = mn.id
+		WHERE mn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
+		AND m.deleted_at IS NULL
+		ORDER BY m.created_at DESC LIMIT ?`
 }

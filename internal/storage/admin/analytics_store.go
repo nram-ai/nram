@@ -20,46 +20,74 @@ func NewAnalyticsStore(db storage.DB) *AnalyticsStore {
 	return &AnalyticsStore{db: db}
 }
 
-func (s *AnalyticsStore) GetAnalytics(ctx context.Context) (*api.AnalyticsData, error) {
+func (s *AnalyticsStore) GetAnalytics(ctx context.Context, orgID *uuid.UUID) (*api.AnalyticsData, error) {
 	data := &api.AnalyticsData{}
 
-	// Memory counts.
-	row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM memories")
-	if err := row.Scan(&data.MemoryCounts.Total); err != nil {
-		return nil, fmt.Errorf("analytics total memories: %w", err)
-	}
+	if orgID == nil {
+		// Global counts — no org filter.
+		row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM memories")
+		if err := row.Scan(&data.MemoryCounts.Total); err != nil {
+			return nil, fmt.Errorf("analytics total memories: %w", err)
+		}
 
-	row = s.db.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
-	if err := row.Scan(&data.MemoryCounts.Active); err != nil {
-		return nil, fmt.Errorf("analytics active memories: %w", err)
-	}
+		row = s.db.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
+		if err := row.Scan(&data.MemoryCounts.Active); err != nil {
+			return nil, fmt.Errorf("analytics active memories: %w", err)
+		}
 
-	row = s.db.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE deleted_at IS NOT NULL")
-	if err := row.Scan(&data.MemoryCounts.Deleted); err != nil {
-		return nil, fmt.Errorf("analytics deleted memories: %w", err)
-	}
+		row = s.db.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE deleted_at IS NOT NULL")
+		if err := row.Scan(&data.MemoryCounts.Deleted); err != nil {
+			return nil, fmt.Errorf("analytics deleted memories: %w", err)
+		}
 
-	enrichedQuery := "SELECT COUNT(*) FROM memories WHERE enriched = 1 AND deleted_at IS NULL"
-	if s.db.Backend() == storage.BackendPostgres {
-		enrichedQuery = "SELECT COUNT(*) FROM memories WHERE enriched = true AND deleted_at IS NULL"
-	}
-	row = s.db.QueryRow(ctx, enrichedQuery)
-	if err := row.Scan(&data.MemoryCounts.Enriched); err != nil {
-		return nil, fmt.Errorf("analytics enriched memories: %w", err)
+		enrichedQuery := "SELECT COUNT(*) FROM memories WHERE enriched = 1 AND deleted_at IS NULL"
+		if s.db.Backend() == storage.BackendPostgres {
+			enrichedQuery = "SELECT COUNT(*) FROM memories WHERE enriched = true AND deleted_at IS NULL"
+		}
+		row = s.db.QueryRow(ctx, enrichedQuery)
+		if err := row.Scan(&data.MemoryCounts.Enriched); err != nil {
+			return nil, fmt.Errorf("analytics enriched memories: %w", err)
+		}
+	} else {
+		orgIDStr := orgID.String()
+		// Org-scoped memory counts via namespace join.
+		row := s.db.QueryRow(ctx, s.orgMemoryCountQuery(""), orgIDStr)
+		if err := row.Scan(&data.MemoryCounts.Total); err != nil {
+			return nil, fmt.Errorf("analytics org total memories: %w", err)
+		}
+
+		row = s.db.QueryRow(ctx, s.orgMemoryCountQuery("AND m.deleted_at IS NULL"), orgIDStr)
+		if err := row.Scan(&data.MemoryCounts.Active); err != nil {
+			return nil, fmt.Errorf("analytics org active memories: %w", err)
+		}
+
+		row = s.db.QueryRow(ctx, s.orgMemoryCountQuery("AND m.deleted_at IS NOT NULL"), orgIDStr)
+		if err := row.Scan(&data.MemoryCounts.Deleted); err != nil {
+			return nil, fmt.Errorf("analytics org deleted memories: %w", err)
+		}
+
+		enrichedFilter := "AND m.enriched = 1 AND m.deleted_at IS NULL"
+		if s.db.Backend() == storage.BackendPostgres {
+			enrichedFilter = "AND m.enriched = true AND m.deleted_at IS NULL"
+		}
+		row = s.db.QueryRow(ctx, s.orgMemoryCountQuery(enrichedFilter), orgIDStr)
+		if err := row.Scan(&data.MemoryCounts.Enriched); err != nil {
+			return nil, fmt.Errorf("analytics org enriched memories: %w", err)
+		}
 	}
 
 	// Most recalled (top 10 by access count).
-	data.MostRecalled = s.queryRankedMemories(ctx, "ORDER BY access_count DESC", 10)
+	data.MostRecalled = s.queryRankedMemories(ctx, "ORDER BY access_count DESC", 10, orgID)
 
 	// Least recalled (bottom 10 by access count, excluding zero).
-	data.LeastRecalled = s.queryRankedMemories(ctx, "AND access_count > 0 ORDER BY access_count ASC", 10)
+	data.LeastRecalled = s.queryRankedMemories(ctx, "AND access_count > 0 ORDER BY access_count ASC", 10, orgID)
 
 	// Dead weight (zero access count, oldest first).
-	data.DeadWeight = s.queryRankedMemories(ctx, "AND access_count = 0 ORDER BY created_at ASC", 10)
+	data.DeadWeight = s.queryRankedMemories(ctx, "AND access_count = 0 ORDER BY created_at ASC", 10, orgID)
 
 	// Enrichment stats.
 	var completed, failed int
-	row = s.db.QueryRow(ctx, "SELECT COUNT(*) FROM enrichment_queue WHERE status = 'completed'")
+	row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM enrichment_queue WHERE status = 'completed'")
 	if err := row.Scan(&completed); err != nil {
 		completed = 0
 	}
@@ -80,11 +108,33 @@ func (s *AnalyticsStore) GetAnalytics(ctx context.Context) (*api.AnalyticsData, 
 	return data, nil
 }
 
-func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause string, limit int) []api.MemoryRankItem {
-	query := fmt.Sprintf(`SELECT id, content, access_count, created_at
-		FROM memories WHERE deleted_at IS NULL %s LIMIT %d`, orderClause, limit)
+func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause string, limit int, orgID *uuid.UUID) []api.MemoryRankItem {
+	var query string
+	var args []interface{}
 
-	rows, err := s.db.Query(ctx, query)
+	if orgID == nil {
+		query = fmt.Sprintf(`SELECT id, content, access_count, created_at
+			FROM memories WHERE deleted_at IS NULL %s LIMIT %d`, orderClause, limit)
+	} else {
+		if s.db.Backend() == storage.BackendPostgres {
+			query = fmt.Sprintf(`SELECT m.id, m.content, m.access_count, m.created_at
+				FROM memories m
+				JOIN namespaces mn ON m.namespace_id = mn.id
+				WHERE m.deleted_at IS NULL
+				AND mn.path LIKE (SELECT n.path || '/' || '%%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
+				%s LIMIT %d`, orderClause, limit)
+		} else {
+			query = fmt.Sprintf(`SELECT m.id, m.content, m.access_count, m.created_at
+				FROM memories m
+				JOIN namespaces mn ON m.namespace_id = mn.id
+				WHERE m.deleted_at IS NULL
+				AND mn.path LIKE (SELECT n.path || '/%%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
+				%s LIMIT %d`, orderClause, limit)
+		}
+		args = []interface{}{orgID.String()}
+	}
+
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return []api.MemoryRankItem{}
 	}
@@ -107,4 +157,17 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 		})
 	}
 	return items
+}
+
+func (s *AnalyticsStore) orgMemoryCountQuery(extraFilter string) string {
+	if s.db.Backend() == storage.BackendPostgres {
+		return fmt.Sprintf(`SELECT COUNT(*) FROM memories m
+			JOIN namespaces mn ON m.namespace_id = mn.id
+			WHERE mn.path LIKE (SELECT n.path || '/' || '%%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
+			%s`, extraFilter)
+	}
+	return fmt.Sprintf(`SELECT COUNT(*) FROM memories m
+		JOIN namespaces mn ON m.namespace_id = mn.id
+		WHERE mn.path LIKE (SELECT n.path || '/%%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
+		%s`, extraFilter)
 }

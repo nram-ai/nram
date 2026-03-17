@@ -11,7 +11,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
+
+// enrichmentAdminRequest creates a request with administrator auth context.
+func enrichmentAdminRequest(method, url string, body *bytes.Buffer) *http.Request {
+	if body == nil {
+		body = bytes.NewBuffer(nil)
+	}
+	req := httptest.NewRequest(method, url, body)
+	ac := &auth.AuthContext{
+		UserID: uuid.New(),
+		Role:   auth.RoleAdministrator,
+	}
+	return req.WithContext(auth.WithContext(req.Context(), ac))
+}
 
 // --- mock EnrichmentAdminStore ---
 
@@ -115,8 +129,7 @@ func TestEnrichmentRetryAll(t *testing.T) {
 
 	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{Store: store})
 
-	body := bytes.NewBufferString(`{}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/admin/enrichment/retry", body)
+	req := enrichmentAdminRequest(http.MethodPost, "/v1/admin/enrichment/retry", bytes.NewBufferString(`{}`))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -146,7 +159,7 @@ func TestEnrichmentRetrySpecificIDs(t *testing.T) {
 	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{Store: store})
 
 	bodyBytes, _ := json.Marshal(enrichmentRetryRequest{IDs: []uuid.UUID{id1, id2}})
-	req := httptest.NewRequest(http.MethodPost, "/v1/admin/enrichment/retry", bytes.NewReader(bodyBytes))
+	req := enrichmentAdminRequest(http.MethodPost, "/v1/admin/enrichment/retry", bytes.NewBuffer(bodyBytes))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -176,8 +189,7 @@ func TestEnrichmentPauseWorkers(t *testing.T) {
 
 	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{Store: store})
 
-	body := bytes.NewBufferString(`{"paused":true}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/admin/enrichment/pause", body)
+	req := enrichmentAdminRequest(http.MethodPost, "/v1/admin/enrichment/pause", bytes.NewBufferString(`{"paused":true}`))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -204,8 +216,7 @@ func TestEnrichmentResumeWorkers(t *testing.T) {
 
 	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{Store: store})
 
-	body := bytes.NewBufferString(`{"paused":false}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/admin/enrichment/pause", body)
+	req := enrichmentAdminRequest(http.MethodPost, "/v1/admin/enrichment/pause", bytes.NewBufferString(`{"paused":false}`))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -250,8 +261,7 @@ func TestEnrichmentRetryStoreError(t *testing.T) {
 
 	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{Store: store})
 
-	body := bytes.NewBufferString(`{}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/admin/enrichment/retry", body)
+	req := enrichmentAdminRequest(http.MethodPost, "/v1/admin/enrichment/retry", bytes.NewBufferString(`{}`))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 

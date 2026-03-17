@@ -250,7 +250,7 @@ func (m *rbacLineageCreator) Create(_ context.Context, _ *model.MemoryLineage) e
 // rbacDashboardStore implements api.DashboardStore for admin dashboard tests.
 type rbacDashboardStore struct{}
 
-func (s *rbacDashboardStore) DashboardStats(_ context.Context) (*api.DashboardStatsData, error) {
+func (s *rbacDashboardStore) DashboardStats(_ context.Context, _ *uuid.UUID) (*api.DashboardStatsData, error) {
 	return &api.DashboardStatsData{
 		TotalMemories: 42,
 		TotalProjects: 2,
@@ -260,7 +260,7 @@ func (s *rbacDashboardStore) DashboardStats(_ context.Context) (*api.DashboardSt
 	}, nil
 }
 
-func (s *rbacDashboardStore) RecentActivity(_ context.Context, _ int) ([]api.ActivityEvent, error) {
+func (s *rbacDashboardStore) RecentActivity(_ context.Context, _ int, _ *uuid.UUID) ([]api.ActivityEvent, error) {
 	return []api.ActivityEvent{}, nil
 }
 
@@ -391,7 +391,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 			t.Fatalf("create user %s: %v", email, err)
 		}
 
-		jwt, err := auth.GenerateJWT(user.ID, role, e2eJWTSecret, 1*time.Hour)
+		jwt, err := auth.GenerateJWT(user.ID, user.OrgID, role, e2eJWTSecret, 1*time.Hour)
 		if err != nil {
 			t.Fatalf("generate JWT for %s: %v", email, err)
 		}
@@ -766,7 +766,7 @@ func rbacMCPStore(t *testing.T, baseURL, token, sessionID, projectSlug, content 
 
 func TestRBAC_Admin_CanAccessAdminDashboard(t *testing.T) {
 	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/admin/dashboard", env.Admin.JWT, nil)
+	resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/dashboard", env.Admin.JWT, nil)
 	rbacExpectStatus(t, resp, http.StatusOK)
 }
 
@@ -794,8 +794,8 @@ func TestRBAC_Admin_CanManageUsers(t *testing.T) {
 
 func TestRBAC_Admin_CanAccessViaAPIKey(t *testing.T) {
 	env := newRBACTestEnv(t)
-	// Dashboard via API key
-	resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/admin/dashboard", env.Admin.APIKey, nil)
+	// Dashboard via API key (now at /v1/dashboard instead of /v1/admin/dashboard)
+	resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/dashboard", env.Admin.APIKey, nil)
 	rbacExpectStatus(t, resp, http.StatusOK)
 	// Store to Org A via API key
 	rbacStoreMemory(t, env.Server.URL, env.Admin.APIKey, env.ProjectA.ID)
@@ -1106,8 +1106,8 @@ func TestRBAC_MCP_APIKeyMember_CanStore(t *testing.T) {
 
 func TestRBAC_MCP_APIKeyAdmin_CanAccessAdmin(t *testing.T) {
 	env := newRBACTestEnv(t)
-	// Admin API key should be able to hit admin routes
-	resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/admin/dashboard", env.Admin.APIKey, nil)
+	// Admin API key should be able to hit scoped data routes
+	resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/dashboard", env.Admin.APIKey, nil)
 	rbacExpectStatus(t, resp, http.StatusOK)
 }
 
@@ -1127,7 +1127,7 @@ func TestRBAC_DisabledUser_JWT_Rejected(t *testing.T) {
 	// JWT still has valid claims (role baked in), so the JWT itself will validate.
 	// The system does NOT re-check disabled status for JWT auth currently.
 	// This is a known limitation: JWT tokens remain valid until expiry even for disabled users.
-	// Document this finding: the JWT middleware does NOT call GetRoleByID for JWT tokens,
+	// Document this finding: the JWT middleware does NOT call GetIdentityByID for JWT tokens,
 	// only for API keys.
 	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.JWT, map[string]interface{}{
 		"query": "test",
@@ -1151,7 +1151,7 @@ func TestRBAC_DisabledUser_APIKey_Rejected(t *testing.T) {
 		t.Fatalf("disable user: %v", err)
 	}
 
-	// API key validation calls GetRoleByID which filters disabled_at IS NULL.
+	// API key validation calls GetIdentityByID which filters disabled_at IS NULL.
 	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.APIKey, map[string]interface{}{
 		"query": "test",
 	})
@@ -1323,7 +1323,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 			t.Fatalf("create user %s: %v", email, err)
 		}
 
-		jwt, err := auth.GenerateJWT(user.ID, role, e2eJWTSecret, 1*time.Hour)
+		jwt, err := auth.GenerateJWT(user.ID, user.OrgID, role, e2eJWTSecret, 1*time.Hour)
 		if err != nil {
 			t.Fatalf("generate JWT for %s: %v", email, err)
 		}

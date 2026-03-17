@@ -22,11 +22,11 @@ type mockDashboardStore struct {
 	lastLimit  int
 }
 
-func (m *mockDashboardStore) DashboardStats(_ context.Context) (*DashboardStatsData, error) {
+func (m *mockDashboardStore) DashboardStats(_ context.Context, _ *uuid.UUID) (*DashboardStatsData, error) {
 	return m.stats, m.statsErr
 }
 
-func (m *mockDashboardStore) RecentActivity(_ context.Context, limit int) ([]ActivityEvent, error) {
+func (m *mockDashboardStore) RecentActivity(_ context.Context, limit int, _ *uuid.UUID) ([]ActivityEvent, error) {
 	m.lastLimit = limit
 	return m.events, m.activityErr
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
 
 // UsageStore abstracts access to token usage aggregation queries.
@@ -72,24 +73,42 @@ func NewAdminUsageHandler(cfg UsageConfig) http.HandlerFunc {
 
 		var filter UsageFilter
 
-		// Parse org UUID — silently ignore invalid values.
-		if raw := q.Get("org"); raw != "" {
-			if id, err := uuid.Parse(raw); err == nil {
-				filter.OrgID = &id
-			}
-		}
+		// Determine scope. Start with the org from URL param or auth context
+		// (resolveOrgScope handles both). Then apply role-based restrictions.
+		ac := auth.FromContext(r.Context())
+		scope := ScopeFromAuth(ac)
 
-		// Parse user UUID — silently ignore invalid values.
-		if raw := q.Get("user"); raw != "" {
-			if id, err := uuid.Parse(raw); err == nil {
-				filter.UserID = &id
+		// Org: URL param > ?org= query (admin only) > auth scope.
+		filter.OrgID = resolveOrgScope(r)
+		if scope.IsAdmin {
+			// Admin: if no org from URL/scope, try ?org= query param.
+			if filter.OrgID == nil {
+				if raw := q.Get("org"); raw != "" {
+					if id, err := uuid.Parse(raw); err == nil {
+						filter.OrgID = &id
+					}
+				}
 			}
-		}
-
-		// Parse project UUID — silently ignore invalid values.
-		if raw := q.Get("project"); raw != "" {
-			if id, err := uuid.Parse(raw); err == nil {
-				filter.ProjectID = &id
+			// Admin can filter by user/project via query params.
+			if raw := q.Get("user"); raw != "" {
+				if id, err := uuid.Parse(raw); err == nil {
+					filter.UserID = &id
+				}
+			}
+			if raw := q.Get("project"); raw != "" {
+				if id, err := uuid.Parse(raw); err == nil {
+					filter.ProjectID = &id
+				}
+			}
+		} else {
+			// Non-admin: org locked from scope (resolveOrgScope already set it).
+			// Member/readonly/service: also restricted to own user.
+			filter.UserID = scope.UserID
+			// Project filter allowed within org scope.
+			if raw := q.Get("project"); raw != "" {
+				if id, err := uuid.Parse(raw); err == nil {
+					filter.ProjectID = &id
+				}
 			}
 		}
 
@@ -122,6 +141,10 @@ func NewAdminUsageHandler(cfg UsageConfig) http.HandlerFunc {
 		if err != nil {
 			WriteError(w, ErrInternal("failed to query usage"))
 			return
+		}
+
+		if report.Groups == nil {
+			report.Groups = []UsageGroup{}
 		}
 
 		writeJSON(w, http.StatusOK, report)
