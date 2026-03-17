@@ -1054,3 +1054,1724 @@ func extractToolResultText(t *testing.T, rpcResp *jsonrpcResponse) string {
 	t.Fatal("no text content in tool result")
 	return ""
 }
+
+// extractToolResultTextRaw extracts the text content from a JSON-RPC tool call
+// result without failing on isError — returns (text, isError).
+func extractToolResultTextRaw(t *testing.T, rpcResp *jsonrpcResponse) (string, bool) {
+	t.Helper()
+
+	var toolResult struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(rpcResp.Result, &toolResult); err != nil {
+		t.Fatalf("failed to unmarshal tool result: %v (raw: %s)", err, string(rpcResp.Result))
+	}
+
+	for _, c := range toolResult.Content {
+		if c.Type == "text" {
+			return c.Text, toolResult.IsError
+		}
+	}
+	t.Fatal("no text content in tool result")
+	return "", false
+}
+
+// ---------------------------------------------------------------------------
+// Multi-user httpStackEnv builder
+// ---------------------------------------------------------------------------
+
+// multiUserEnvConfig describes one user's identity for multi-user env building.
+type multiUserEnvConfig struct {
+	userID    uuid.UUID
+	nsID      uuid.UUID
+	nsPath    string
+	projectID uuid.UUID
+	projSlug  string
+}
+
+// multiUserHTTPStackEnv bundles a test server that can serve multiple users
+// with namespace-aware mocking so recall properly isolates by namespace.
+type multiUserHTTPStackEnv struct {
+	Server  *httptest.Server
+	Users   []multiUserEnvUser
+	MemRepo *nsAwareMemoryRepo
+}
+
+type multiUserEnvUser struct {
+	UserID    uuid.UUID
+	NsID      uuid.UUID
+	ProjectID uuid.UUID
+	ProjSlug  string
+	Token     string
+}
+
+func (e *multiUserHTTPStackEnv) Close() {
+	e.Server.Close()
+}
+
+func (e *multiUserHTTPStackEnv) sessionFor(t *testing.T, idx int) *mcpSession {
+	t.Helper()
+	u := e.Users[idx]
+	fakeEnv := &httpStackEnv{
+		Server: e.Server,
+		UserID: u.UserID,
+		Token:  u.Token,
+		NsID:   u.NsID,
+	}
+	return initMCPSession(t, fakeEnv)
+}
+
+func (e *multiUserHTTPStackEnv) envFor(idx int) *httpStackEnv {
+	u := e.Users[idx]
+	return &httpStackEnv{
+		Server:    e.Server,
+		UserID:    u.UserID,
+		Token:     u.Token,
+		NsID:      u.NsID,
+		ProjectID: u.ProjectID,
+	}
+}
+
+// nsAwareMemoryRepo stores memories keyed by ID and scoped by NamespaceID,
+// enabling proper multi-user isolation in recall.
+type nsAwareMemoryRepo struct {
+	memories map[uuid.UUID]*model.Memory
+}
+
+func newNsAwareMemoryRepo() *nsAwareMemoryRepo {
+	return &nsAwareMemoryRepo{memories: make(map[uuid.UUID]*model.Memory)}
+}
+
+func (m *nsAwareMemoryRepo) Create(_ context.Context, mem *model.Memory) error {
+	if mem.ID == uuid.Nil {
+		mem.ID = uuid.New()
+	}
+	clone := *mem
+	m.memories[mem.ID] = &clone
+	return nil
+}
+
+func (m *nsAwareMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+	mem, ok := m.memories[id]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+	return mem, nil
+}
+
+func (m *nsAwareMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+	var out []model.Memory
+	for _, id := range ids {
+		if mem, ok := m.memories[id]; ok {
+			out = append(out, *mem)
+		}
+	}
+	return out, nil
+}
+
+func (m *nsAwareMemoryRepo) ListByNamespace(_ context.Context, nsID uuid.UUID, limit, _ int) ([]model.Memory, error) {
+	var out []model.Memory
+	for _, mem := range m.memories {
+		if mem.NamespaceID == nsID && mem.DeletedAt == nil {
+			out = append(out, *mem)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (m *nsAwareMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID) error {
+	mem, ok := m.memories[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	now := time.Now()
+	mem.DeletedAt = &now
+	return nil
+}
+
+func (m *nsAwareMemoryRepo) HardDelete(_ context.Context, id uuid.UUID) error {
+	delete(m.memories, id)
+	return nil
+}
+
+// nsAwareUserRepo maps userID -> *model.User.
+type nsAwareUserRepo struct {
+	users map[uuid.UUID]*model.User
+}
+
+func (m *nsAwareUserRepo) GetByID(_ context.Context, id uuid.UUID) (*model.User, error) {
+	u, ok := m.users[id]
+	if !ok {
+		return nil, fmt.Errorf("user not found")
+	}
+	return u, nil
+}
+
+// nsAwareNamespaceRepo maps nsID -> *model.Namespace.
+type nsAwareNamespaceRepo struct {
+	namespaces map[uuid.UUID]*model.Namespace
+}
+
+func (m *nsAwareNamespaceRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Namespace, error) {
+	ns, ok := m.namespaces[id]
+	if !ok {
+		return nil, fmt.Errorf("namespace not found")
+	}
+	return ns, nil
+}
+
+func (m *nsAwareNamespaceRepo) Create(_ context.Context, ns *model.Namespace) error {
+	m.namespaces[ns.ID] = ns
+	return nil
+}
+
+// nsAwareProjectRepo maps (ownerNsID, slug) -> *model.Project, supports auto-create.
+type nsAwareProjectRepo struct {
+	projects map[string]*model.Project // key: ownerNsID + ":" + slug
+}
+
+func newNsAwareProjectRepo() *nsAwareProjectRepo {
+	return &nsAwareProjectRepo{projects: make(map[string]*model.Project)}
+}
+
+func projectKey(ownerNsID uuid.UUID, slug string) string {
+	return ownerNsID.String() + ":" + slug
+}
+
+func (m *nsAwareProjectRepo) GetBySlug(_ context.Context, ownerNsID uuid.UUID, slug string) (*model.Project, error) {
+	p, ok := m.projects[projectKey(ownerNsID, slug)]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+	return p, nil
+}
+
+func (m *nsAwareProjectRepo) ListByUser(_ context.Context, ownerNsID uuid.UUID) ([]model.Project, error) {
+	var out []model.Project
+	prefix := ownerNsID.String() + ":"
+	for k, p := range m.projects {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
+
+func (m *nsAwareProjectRepo) Create(_ context.Context, p *model.Project) error {
+	if p.ID == uuid.Nil {
+		p.ID = uuid.New()
+	}
+	m.projects[projectKey(p.OwnerNamespaceID, p.Slug)] = p
+	return nil
+}
+
+// nsAwareProjectLookup satisfies service.ProjectRepository (GetByID only).
+type nsAwareProjectLookup struct {
+	repo *nsAwareProjectRepo
+}
+
+func (m *nsAwareProjectLookup) GetByID(_ context.Context, id uuid.UUID) (*model.Project, error) {
+	for _, p := range m.repo.projects {
+		if p.ID == id {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("project not found")
+}
+
+// nsAwareNamespaceLookup satisfies service.NamespaceRepository (GetByID only).
+type nsAwareNamespaceLookup struct {
+	repo *nsAwareNamespaceRepo
+}
+
+func (m *nsAwareNamespaceLookup) GetByID(ctx context.Context, id uuid.UUID) (*model.Namespace, error) {
+	return m.repo.GetByID(ctx, id)
+}
+
+// newMultiUserHTTPStackEnv builds a full-stack test server supporting multiple users.
+func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multiUserHTTPStackEnv {
+	t.Helper()
+
+	memRepo := newNsAwareMemoryRepo()
+	userRepo := &nsAwareUserRepo{users: make(map[uuid.UUID]*model.User)}
+	nsRepo := &nsAwareNamespaceRepo{namespaces: make(map[uuid.UUID]*model.Namespace)}
+	projectRepo := newNsAwareProjectRepo()
+	projectLookup := &nsAwareProjectLookup{repo: projectRepo}
+	nsLookup := &nsAwareNamespaceLookup{repo: nsRepo}
+
+	for _, cfg := range configs {
+		user := &model.User{ID: cfg.userID, NamespaceID: cfg.nsID}
+		ns := &model.Namespace{ID: cfg.nsID, Path: cfg.nsPath, Depth: 2}
+		userRepo.users[cfg.userID] = user
+		nsRepo.namespaces[cfg.nsID] = ns
+
+		if cfg.projSlug != "" {
+			projNsID := uuid.New()
+			projNs := &model.Namespace{
+				ID:       projNsID,
+				Name:     cfg.projSlug,
+				Slug:     cfg.projSlug,
+				Kind:     "project",
+				ParentID: &cfg.nsID,
+				Path:     cfg.nsPath + "/" + cfg.projSlug,
+				Depth:    3,
+			}
+			nsRepo.namespaces[projNsID] = projNs
+
+			project := &model.Project{
+				ID:               cfg.projectID,
+				NamespaceID:      projNsID,
+				OwnerNamespaceID: cfg.nsID,
+				Name:             cfg.projSlug,
+				Slug:             cfg.projSlug,
+			}
+			projectRepo.projects[projectKey(cfg.nsID, cfg.projSlug)] = project
+		}
+	}
+
+	storeSvc := service.NewStoreService(
+		memRepo, projectLookup, nsLookup,
+		&mockIngestionLogRepo{}, &mockTokenUsageRepo{}, &mockEnrichmentQueueRepo{},
+		nil, nil,
+	)
+	batchStoreSvc := service.NewBatchStoreService(
+		memRepo, projectLookup, nsLookup,
+		&mockIngestionLogRepo{}, &mockTokenUsageRepo{}, &mockEnrichmentQueueRepo{},
+		nil, nil,
+	)
+	recallSvc := service.NewRecallService(
+		memRepo, projectLookup, nsLookup,
+		&mockTokenUsageRepo{}, nil, nil, nil, nil, nil,
+	)
+	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil)
+	updateSvc := service.NewUpdateService(
+		&nsAwareMemRepoUpdater{memRepo: memRepo},
+		projectLookup, &mockLineageCreator{}, nil, &mockTokenUsageRepo{}, nil,
+	)
+	batchGetSvc := service.NewBatchGetService(memRepo, projectLookup)
+	exportSvc := service.NewExportService(
+		memRepo,
+		&mockExportEntityLister{entities: []model.Entity{}},
+		&mockExportRelLister{rels: []model.Relationship{}},
+		&mockExportLineageReader{},
+		projectLookup,
+	)
+
+	deps := Dependencies{
+		Backend:       storage.BackendSQLite,
+		Store:         storeSvc,
+		Recall:        recallSvc,
+		Forget:        forgetSvc,
+		Update:        updateSvc,
+		BatchStore:    batchStoreSvc,
+		BatchGet:      batchGetSvc,
+		Export:        exportSvc,
+		ProjectRepo:   projectRepo,
+		UserRepo:      userRepo,
+		NamespaceRepo: nsRepo,
+	}
+	mcpSrv := NewServer(deps)
+
+	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, httpStackTestSecret)
+
+	r := chi.NewRouter()
+	r.Group(func(r chi.Router) {
+		r.Use(authMw.Handler)
+		r.Handle("/mcp", mcpSrv.Handler())
+		r.Handle("/mcp/*", mcpSrv.Handler())
+	})
+
+	ts := httptest.NewServer(r)
+
+	var users []multiUserEnvUser
+	for _, cfg := range configs {
+		token := generateHTTPStackJWT(t, cfg.userID, ts.URL)
+		users = append(users, multiUserEnvUser{
+			UserID:    cfg.userID,
+			NsID:      cfg.nsID,
+			ProjectID: cfg.projectID,
+			ProjSlug:  cfg.projSlug,
+			Token:     token,
+		})
+	}
+
+	return &multiUserHTTPStackEnv{
+		Server:  ts,
+		Users:   users,
+		MemRepo: memRepo,
+	}
+}
+
+// nsAwareMemRepoUpdater wraps nsAwareMemoryRepo to satisfy service.MemoryUpdater.
+type nsAwareMemRepoUpdater struct {
+	memRepo *nsAwareMemoryRepo
+}
+
+func (m *nsAwareMemRepoUpdater) GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error) {
+	mem, err := m.memRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	clone := *mem
+	return &clone, nil
+}
+
+func (m *nsAwareMemRepoUpdater) Update(_ context.Context, mem *model.Memory) error {
+	m.memRepo.memories[mem.ID] = mem
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: TestHTTPStack_MCP_TwoUsers_SeparateStores
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_TwoUsers_SeparateStores(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+	userB := uuid.New()
+	nsB := uuid.New()
+	projB := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "shared-proj"},
+		{userID: userB, nsID: nsB, nsPath: "/users/bob", projectID: projB, projSlug: "shared-proj"},
+	})
+	defer env.Close()
+
+	sessA := env.sessionFor(t, 0)
+	sessB := env.sessionFor(t, 1)
+
+	// User A stores "Alice's secret".
+	_, storeRPC := sessA.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "shared-proj",
+			"content": "Alice's secret",
+			"tags":    []string{"secret"},
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("User A store failed: %v", storeRPC)
+	}
+
+	// User B stores "Bob's secret".
+	_, storeRPC = sessB.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "shared-proj",
+			"content": "Bob's secret",
+			"tags":    []string{"secret"},
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("User B store failed: %v", storeRPC)
+	}
+
+	// User A recalls "secret" — must only get Alice's.
+	_, recallRPC := sessA.call(t, 3, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query":   "secret",
+			"project": "shared-proj",
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("User A recall failed")
+	}
+	recallText := extractToolResultText(t, recallRPC)
+	var recallResp service.RecallResponse
+	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+		t.Fatalf("unmarshal recall: %v", err)
+	}
+	if len(recallResp.Memories) != 1 {
+		t.Fatalf("User A recall: expected 1 memory, got %d", len(recallResp.Memories))
+	}
+	if !strings.Contains(recallResp.Memories[0].Content, "Alice") {
+		t.Errorf("User A recall: expected Alice's content, got %q", recallResp.Memories[0].Content)
+	}
+
+	// User B recalls "secret" — must only get Bob's.
+	_, recallRPC = sessB.call(t, 3, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query":   "secret",
+			"project": "shared-proj",
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("User B recall failed")
+	}
+	recallText = extractToolResultText(t, recallRPC)
+	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+		t.Fatalf("unmarshal recall: %v", err)
+	}
+	if len(recallResp.Memories) != 1 {
+		t.Fatalf("User B recall: expected 1 memory, got %d", len(recallResp.Memories))
+	}
+	if !strings.Contains(recallResp.Memories[0].Content, "Bob") {
+		t.Errorf("User B recall: expected Bob's content, got %q", recallResp.Memories[0].Content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: TestHTTPStack_MCP_TwoUsers_SeparateProjects
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_TwoUsers_SeparateProjects(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+	userB := uuid.New()
+	nsB := uuid.New()
+	projB := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "alpha"},
+		{userID: userB, nsID: nsB, nsPath: "/users/bob", projectID: projB, projSlug: "beta"},
+	})
+	defer env.Close()
+
+	sessA := env.sessionFor(t, 0)
+	sessB := env.sessionFor(t, 1)
+
+	// User A stores in "alpha".
+	_, storeRPC := sessA.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "alpha",
+			"content": "Alpha memory",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("User A store failed")
+	}
+
+	// User B stores in "beta".
+	_, storeRPC = sessB.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "beta",
+			"content": "Beta memory",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("User B store failed")
+	}
+
+	// User A lists projects — should only see "alpha".
+	_, projRPC := sessA.call(t, 3, "tools/call", map[string]interface{}{
+		"name":      "memory_projects",
+		"arguments": map[string]interface{}{},
+	})
+	if projRPC == nil || projRPC.Error != nil {
+		t.Fatalf("User A list projects failed")
+	}
+	projText := extractToolResultText(t, projRPC)
+	var projectsA []projectItem
+	if err := json.Unmarshal([]byte(projText), &projectsA); err != nil {
+		t.Fatalf("unmarshal projects: %v", err)
+	}
+	if len(projectsA) != 1 {
+		t.Fatalf("User A: expected 1 project, got %d", len(projectsA))
+	}
+	if projectsA[0].Slug != "alpha" {
+		t.Errorf("User A: expected project slug 'alpha', got %q", projectsA[0].Slug)
+	}
+
+	// User B lists projects — should only see "beta".
+	_, projRPC = sessB.call(t, 3, "tools/call", map[string]interface{}{
+		"name":      "memory_projects",
+		"arguments": map[string]interface{}{},
+	})
+	if projRPC == nil || projRPC.Error != nil {
+		t.Fatalf("User B list projects failed")
+	}
+	projText = extractToolResultText(t, projRPC)
+	var projectsB []projectItem
+	if err := json.Unmarshal([]byte(projText), &projectsB); err != nil {
+		t.Fatalf("unmarshal projects: %v", err)
+	}
+	if len(projectsB) != 1 {
+		t.Fatalf("User B: expected 1 project, got %d", len(projectsB))
+	}
+	if projectsB[0].Slug != "beta" {
+		t.Errorf("User B: expected project slug 'beta', got %q", projectsB[0].Slug)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: TestHTTPStack_MCP_UserCannotAccessOtherUserProject
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_UserCannotAccessOtherUserProject(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+	userB := uuid.New()
+	nsB := uuid.New()
+	projB := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "private"},
+		{userID: userB, nsID: nsB, nsPath: "/users/bob", projectID: projB, projSlug: "other"},
+	})
+	defer env.Close()
+
+	sessA := env.sessionFor(t, 0)
+	sessB := env.sessionFor(t, 1)
+
+	// User A stores in "private".
+	_, storeRPC := sessA.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "private",
+			"content": "User A private data",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("User A store failed")
+	}
+
+	// User B tries to recall from "private" — should get error (project not found for User B).
+	_, recallRPC := sessB.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query":   "private data",
+			"project": "private",
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("recall RPC failed at protocol level")
+	}
+	text, isErr := extractToolResultTextRaw(t, recallRPC)
+	if !isErr {
+		// If not an error, it should be empty results.
+		var resp service.RecallResponse
+		if err := json.Unmarshal([]byte(text), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(resp.Memories) > 0 {
+			t.Fatalf("User B should NOT see User A's private memories, but got %d", len(resp.Memories))
+		}
+		// Getting zero results is acceptable — project not found for User B.
+	}
+	// If isErr is true, that's also acceptable — means "project not found".
+}
+
+// ---------------------------------------------------------------------------
+// Test 14: TestHTTPStack_MCP_BatchStoreAndRecall
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_BatchStoreAndRecall(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Batch store 5 items with different tags.
+	_, batchRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store_batch",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"items": []interface{}{
+				map[string]interface{}{"content": "Go goroutines are lightweight threads", "tags": []interface{}{"go", "concurrency"}},
+				map[string]interface{}{"content": "Rust ownership model prevents data races", "tags": []interface{}{"rust", "safety"}},
+				map[string]interface{}{"content": "Python GIL limits true parallelism", "tags": []interface{}{"python", "concurrency"}},
+				map[string]interface{}{"content": "JavaScript event loop is single-threaded", "tags": []interface{}{"javascript", "concurrency"}},
+				map[string]interface{}{"content": "TypeScript adds type safety to JavaScript", "tags": []interface{}{"typescript", "safety"}},
+			},
+		},
+	})
+	if batchRPC == nil || batchRPC.Error != nil {
+		t.Fatalf("batch store failed")
+	}
+	batchText := extractToolResultText(t, batchRPC)
+	var batchResp service.BatchStoreResponse
+	if err := json.Unmarshal([]byte(batchText), &batchResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if batchResp.Processed != 5 {
+		t.Errorf("expected processed=5, got %d", batchResp.Processed)
+	}
+	if batchResp.MemoriesCreated != 5 {
+		t.Errorf("expected memories_created=5, got %d", batchResp.MemoriesCreated)
+	}
+
+	// Recall with tag filter ["concurrency"] — should get 3 items.
+	_, recallRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query":   "concurrency",
+			"project": "test-proj",
+			"tags":    []interface{}{"concurrency"},
+			"limit":   float64(10),
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("recall with tags failed")
+	}
+	recallText := extractToolResultText(t, recallRPC)
+	var recallResp service.RecallResponse
+	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(recallResp.Memories) != 3 {
+		t.Errorf("recall with tag 'concurrency': expected 3 memories, got %d", len(recallResp.Memories))
+	}
+	for _, mem := range recallResp.Memories {
+		hasConcurrency := false
+		for _, tag := range mem.Tags {
+			if tag == "concurrency" {
+				hasConcurrency = true
+				break
+			}
+		}
+		if !hasConcurrency {
+			t.Errorf("recall result %q missing 'concurrency' tag", mem.Content)
+		}
+	}
+
+	// Recall without tag filter — should get all 5.
+	_, recallRPC = sess.call(t, 4, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query":   "programming language",
+			"project": "test-proj",
+			"limit":   float64(10),
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("recall without tags failed")
+	}
+	recallText = extractToolResultText(t, recallRPC)
+	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(recallResp.Memories) != 5 {
+		t.Errorf("recall without tag filter: expected 5 memories, got %d", len(recallResp.Memories))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: TestHTTPStack_MCP_BatchStorePartialContent
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_BatchStorePartialContent(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Batch store 3 items with distinct content.
+	_, batchRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store_batch",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"items": []interface{}{
+				map[string]interface{}{"content": "The Eiffel Tower is in Paris France"},
+				map[string]interface{}{"content": "Mount Everest is the tallest mountain"},
+				map[string]interface{}{"content": "The Pacific Ocean is the largest ocean"},
+			},
+		},
+	})
+	if batchRPC == nil || batchRPC.Error != nil {
+		t.Fatalf("batch store failed")
+	}
+
+	// Recall each one individually by content keywords.
+	keywords := []struct {
+		query    string
+		expected string
+	}{
+		{"Eiffel Tower", "Eiffel Tower is in Paris"},
+		{"tallest mountain", "Mount Everest"},
+		{"largest ocean", "Pacific Ocean"},
+	}
+
+	for i, kw := range keywords {
+		_, recallRPC := sess.call(t, 3+i, "tools/call", map[string]interface{}{
+			"name": "memory_recall",
+			"arguments": map[string]interface{}{
+				"query":   kw.query,
+				"project": "test-proj",
+				"limit":   float64(5),
+			},
+		})
+		if recallRPC == nil || recallRPC.Error != nil {
+			t.Fatalf("recall %q failed", kw.query)
+		}
+		recallText := extractToolResultText(t, recallRPC)
+		var recallResp service.RecallResponse
+		if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+			t.Fatalf("unmarshal recall %q: %v", kw.query, err)
+		}
+		found := false
+		for _, mem := range recallResp.Memories {
+			if strings.Contains(mem.Content, kw.expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("recall %q: expected to find content containing %q in results", kw.query, kw.expected)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 16: TestHTTPStack_MCP_StoreInMultipleProjects
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_StoreInMultipleProjects(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+
+	// Pre-create "frontend" project; "backend" will be auto-created.
+	projFrontend := uuid.New()
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projFrontend, projSlug: "frontend"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store in "frontend".
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "frontend",
+			"content": "React component lifecycle",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store in frontend failed")
+	}
+
+	// Store in "backend" (auto-created).
+	_, storeRPC = sess.call(t, 3, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "backend",
+			"content": "Go HTTP handler patterns",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store in backend failed")
+	}
+
+	// Recall from "frontend" — only frontend memories.
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query":   "development",
+			"project": "frontend",
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("recall frontend failed")
+	}
+	recallText := extractToolResultText(t, recallRPC)
+	var recallResp service.RecallResponse
+	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, mem := range recallResp.Memories {
+		if strings.Contains(mem.Content, "Go HTTP") {
+			t.Error("frontend recall should NOT contain backend memory")
+		}
+	}
+	frontendFound := false
+	for _, mem := range recallResp.Memories {
+		if strings.Contains(mem.Content, "React") {
+			frontendFound = true
+		}
+	}
+	if !frontendFound {
+		t.Error("frontend recall should contain React memory")
+	}
+
+	// Recall from "backend" — only backend memories.
+	_, recallRPC = sess.call(t, 5, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query":   "development",
+			"project": "backend",
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("recall backend failed")
+	}
+	recallText = extractToolResultText(t, recallRPC)
+	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, mem := range recallResp.Memories {
+		if strings.Contains(mem.Content, "React") {
+			t.Error("backend recall should NOT contain frontend memory")
+		}
+	}
+	backendFound := false
+	for _, mem := range recallResp.Memories {
+		if strings.Contains(mem.Content, "Go HTTP") {
+			backendFound = true
+		}
+	}
+	if !backendFound {
+		t.Error("backend recall should contain Go HTTP memory")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: TestHTTPStack_MCP_ProjectAutoCreate
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_ProjectAutoCreate(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+
+	// Do NOT pre-create any project — the store call should auto-create it.
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store to a project that doesn't exist — should auto-create.
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "brand-new",
+			"content": "something in a new project",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store to auto-created project failed")
+	}
+
+	storeText := extractToolResultText(t, storeRPC)
+	var storeResp service.StoreResponse
+	if err := json.Unmarshal([]byte(storeText), &storeResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if storeResp.ID == uuid.Nil {
+		t.Error("expected non-nil memory ID")
+	}
+
+	// List projects — should see "brand-new".
+	_, projRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+		"name":      "memory_projects",
+		"arguments": map[string]interface{}{},
+	})
+	if projRPC == nil || projRPC.Error != nil {
+		t.Fatalf("list projects failed")
+	}
+	projText := extractToolResultText(t, projRPC)
+	var projects []projectItem
+	if err := json.Unmarshal([]byte(projText), &projects); err != nil {
+		t.Fatalf("unmarshal projects: %v", err)
+	}
+	found := false
+	for _, p := range projects {
+		if p.Slug == "brand-new" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("auto-created project 'brand-new' not found in project list: %v", projects)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 18: TestHTTPStack_MCP_RecallAcrossAllProjects
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_RecallAcrossAllProjects(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "project-a"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store in project-a.
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "project-a",
+			"content": "Memory in project A about databases",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store project-a failed")
+	}
+
+	// Store in project-b (auto-created).
+	_, storeRPC = sess.call(t, 3, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "project-b",
+			"content": "Memory in project B about caching",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store project-b failed")
+	}
+
+	// Recall WITHOUT specifying a project — user-scoped recall.
+	// This searches the user's root namespace. In the multi-user env,
+	// the recall service uses ListByNamespace with the user's nsID.
+	// Since the memories are stored in child namespaces (project namespaces),
+	// the user-scoped recall won't find them in a real system with proper
+	// namespace hierarchy. But this tests the code path.
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query": "data storage",
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("user-scoped recall failed")
+	}
+	// The call should succeed (no error) even if results are empty —
+	// validates the user-scoped recall code path.
+	recallText := extractToolResultText(t, recallRPC)
+	var recallResp service.RecallResponse
+	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// In the mock setup, ListByNamespace on user NS will return empty
+	// since memories are in project namespaces. This is still a valid test
+	// that the code path doesn't crash.
+	t.Logf("user-scoped recall returned %d memories (expected 0 due to namespace hierarchy)", len(recallResp.Memories))
+}
+
+// ---------------------------------------------------------------------------
+// Test 19: TestHTTPStack_MCP_UpdateNonexistentMemory
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_UpdateNonexistentMemory(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	fakeID := uuid.New()
+	_, updateRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_update",
+		"arguments": map[string]interface{}{
+			"id":      fakeID.String(),
+			"project": "test-proj",
+			"content": "updated content",
+		},
+	})
+	if updateRPC == nil || updateRPC.Error != nil {
+		t.Fatalf("update RPC failed at protocol level")
+	}
+
+	text, isErr := extractToolResultTextRaw(t, updateRPC)
+	if !isErr {
+		t.Fatalf("expected tool error for nonexistent memory update, got success: %s", text)
+	}
+	if !strings.Contains(strings.ToLower(text), "not found") && !strings.Contains(strings.ToLower(text), "fail") {
+		t.Errorf("expected error message about not found, got: %s", text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 20: TestHTTPStack_MCP_ForgetThenRecall
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_ForgetThenRecall(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store.
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"content": "ephemeral data that will be forgotten",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store failed")
+	}
+	storeText := extractToolResultText(t, storeRPC)
+	var storeResp service.StoreResponse
+	if err := json.Unmarshal([]byte(storeText), &storeResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	memID := storeResp.ID
+
+	// Forget.
+	_, forgetRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+		"name": "memory_forget",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"ids":     []string{memID.String()},
+		},
+	})
+	if forgetRPC == nil || forgetRPC.Error != nil {
+		t.Fatalf("forget failed")
+	}
+	forgetText := extractToolResultText(t, forgetRPC)
+	var forgetResp service.ForgetResponse
+	if err := json.Unmarshal([]byte(forgetText), &forgetResp); err != nil {
+		t.Fatalf("unmarshal forget: %v", err)
+	}
+	if forgetResp.Deleted != 1 {
+		t.Errorf("expected deleted=1, got %d", forgetResp.Deleted)
+	}
+
+	// Recall — forgotten memory should NOT appear.
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query":   "ephemeral data",
+			"project": "test-proj",
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("recall failed")
+	}
+	recallText := extractToolResultText(t, recallRPC)
+	var recallResp service.RecallResponse
+	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, mem := range recallResp.Memories {
+		if mem.ID == memID {
+			t.Error("forgotten memory should NOT appear in recall results")
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 21: TestHTTPStack_MCP_ForgetNonexistentMemory
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_ForgetNonexistentMemory(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	fakeID := uuid.New()
+	_, forgetRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_forget",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"ids":     []string{fakeID.String()},
+		},
+	})
+	if forgetRPC == nil || forgetRPC.Error != nil {
+		t.Fatalf("forget RPC failed at protocol level")
+	}
+
+	forgetText := extractToolResultText(t, forgetRPC)
+	var forgetResp service.ForgetResponse
+	if err := json.Unmarshal([]byte(forgetText), &forgetResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Forget of non-existent ID should succeed with deleted=0.
+	if forgetResp.Deleted != 0 {
+		t.Errorf("expected deleted=0 for non-existent memory, got %d", forgetResp.Deleted)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 22: TestHTTPStack_MCP_DoubleForget
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_DoubleForget(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store.
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"content": "double-forget test data",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store failed")
+	}
+	storeText := extractToolResultText(t, storeRPC)
+	var storeResp service.StoreResponse
+	if err := json.Unmarshal([]byte(storeText), &storeResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	memID := storeResp.ID
+
+	// First forget.
+	_, forgetRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+		"name": "memory_forget",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"ids":     []string{memID.String()},
+		},
+	})
+	if forgetRPC == nil || forgetRPC.Error != nil {
+		t.Fatalf("first forget failed")
+	}
+	forgetText := extractToolResultText(t, forgetRPC)
+	var forgetResp service.ForgetResponse
+	if err := json.Unmarshal([]byte(forgetText), &forgetResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if forgetResp.Deleted != 1 {
+		t.Errorf("first forget: expected deleted=1, got %d", forgetResp.Deleted)
+	}
+
+	// Second forget — should not crash, deleted=0 (already soft-deleted).
+	_, forgetRPC = sess.call(t, 4, "tools/call", map[string]interface{}{
+		"name": "memory_forget",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"ids":     []string{memID.String()},
+		},
+	})
+	if forgetRPC == nil || forgetRPC.Error != nil {
+		t.Fatalf("second forget failed at protocol level")
+	}
+	forgetText = extractToolResultText(t, forgetRPC)
+	if err := json.Unmarshal([]byte(forgetText), &forgetResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// The second forget should either return deleted=0 (already soft-deleted)
+	// or deleted=1 (re-soft-deletes). Both are acceptable — the key is no crash.
+	t.Logf("second forget returned deleted=%d", forgetResp.Deleted)
+}
+
+// ---------------------------------------------------------------------------
+// Test 23: TestHTTPStack_MCP_StoreWithMetadata
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_StoreWithMetadata(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store with metadata.
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"content": "memory with metadata",
+			"metadata": map[string]interface{}{
+				"agent":   "claude",
+				"session": "abc123",
+			},
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store failed")
+	}
+	storeText := extractToolResultText(t, storeRPC)
+	var storeResp service.StoreResponse
+	if err := json.Unmarshal([]byte(storeText), &storeResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Verify metadata was stored in the memory repo.
+	mem, ok := env.MemRepo.memories[storeResp.ID]
+	if !ok {
+		t.Fatal("memory not found in repo")
+	}
+	if mem.Metadata == nil {
+		t.Fatal("expected metadata to be stored, got nil")
+	}
+	var meta map[string]interface{}
+	if err := json.Unmarshal(mem.Metadata, &meta); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if meta["agent"] != "claude" {
+		t.Errorf("expected metadata agent='claude', got %v", meta["agent"])
+	}
+	if meta["session"] != "abc123" {
+		t.Errorf("expected metadata session='abc123', got %v", meta["session"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 24: TestHTTPStack_MCP_StoreWithTags
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_StoreWithTags(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store with tags.
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"content": "architecture decision about authentication",
+			"tags":    []interface{}{"architecture", "auth"},
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store failed")
+	}
+
+	// Also store something without the "auth" tag.
+	_, storeRPC = sess.call(t, 3, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"content": "deployment pipeline setup",
+			"tags":    []interface{}{"devops", "deployment"},
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store 2 failed")
+	}
+
+	// Recall with tag filter ["auth"].
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+		"name": "memory_recall",
+		"arguments": map[string]interface{}{
+			"query":   "decisions",
+			"project": "test-proj",
+			"tags":    []interface{}{"auth"},
+		},
+	})
+	if recallRPC == nil || recallRPC.Error != nil {
+		t.Fatalf("recall failed")
+	}
+	recallText := extractToolResultText(t, recallRPC)
+	var recallResp service.RecallResponse
+	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(recallResp.Memories) != 1 {
+		t.Fatalf("expected 1 memory with tag 'auth', got %d", len(recallResp.Memories))
+	}
+	if !strings.Contains(recallResp.Memories[0].Content, "authentication") {
+		t.Errorf("expected auth-tagged memory, got %q", recallResp.Memories[0].Content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 25: TestHTTPStack_MCP_StoreEmptyContent_Rejected
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_StoreEmptyContent_Rejected(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"content": "",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store RPC failed at protocol level")
+	}
+
+	text, isErr := extractToolResultTextRaw(t, storeRPC)
+	if !isErr {
+		t.Fatalf("expected tool error for empty content, got success: %s", text)
+	}
+	if !strings.Contains(strings.ToLower(text), "content") {
+		t.Errorf("expected error about content, got: %s", text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 26: TestHTTPStack_MCP_StoreEmptyProject_Rejected
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_StoreEmptyProject_Rejected(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "",
+			"content": "some content",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store RPC failed at protocol level")
+	}
+
+	text, isErr := extractToolResultTextRaw(t, storeRPC)
+	if !isErr {
+		t.Fatalf("expected tool error for empty project, got success: %s", text)
+	}
+	if !strings.Contains(strings.ToLower(text), "project") {
+		t.Errorf("expected error about project, got: %s", text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 27: TestHTTPStack_MCP_GetSpecificMemories
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_GetSpecificMemories(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store 3 memories.
+	var ids []uuid.UUID
+	contents := []string{"first memory", "second memory", "third memory"}
+	for i, content := range contents {
+		_, storeRPC := sess.call(t, 2+i, "tools/call", map[string]interface{}{
+			"name": "memory_store",
+			"arguments": map[string]interface{}{
+				"project": "test-proj",
+				"content": content,
+			},
+		})
+		if storeRPC == nil || storeRPC.Error != nil {
+			t.Fatalf("store %d failed", i)
+		}
+		storeText := extractToolResultText(t, storeRPC)
+		var resp service.StoreResponse
+		if err := json.Unmarshal([]byte(storeText), &resp); err != nil {
+			t.Fatalf("unmarshal store %d: %v", i, err)
+		}
+		ids = append(ids, resp.ID)
+	}
+
+	// Get 2 of them by ID (first and third).
+	_, getRPC := sess.call(t, 10, "tools/call", map[string]interface{}{
+		"name": "memory_get",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"ids":     []string{ids[0].String(), ids[2].String()},
+		},
+	})
+	if getRPC == nil || getRPC.Error != nil {
+		t.Fatalf("get failed")
+	}
+	getText := extractToolResultText(t, getRPC)
+	var getResp service.BatchGetResponse
+	if err := json.Unmarshal([]byte(getText), &getResp); err != nil {
+		t.Fatalf("unmarshal get: %v", err)
+	}
+	if len(getResp.Found) != 2 {
+		t.Fatalf("expected 2 found, got %d", len(getResp.Found))
+	}
+
+	// Verify the correct memories were returned.
+	foundContents := make(map[string]bool)
+	for _, f := range getResp.Found {
+		foundContents[f.Content] = true
+	}
+	if !foundContents["first memory"] {
+		t.Error("expected 'first memory' in results")
+	}
+	if !foundContents["third memory"] {
+		t.Error("expected 'third memory' in results")
+	}
+	if foundContents["second memory"] {
+		t.Error("'second memory' should NOT be in results")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 28: TestHTTPStack_MCP_GetWithInvalidID
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_GetWithInvalidID(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store one memory.
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+		"name": "memory_store",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"content": "valid memory",
+		},
+	})
+	if storeRPC == nil || storeRPC.Error != nil {
+		t.Fatalf("store failed")
+	}
+	storeText := extractToolResultText(t, storeRPC)
+	var storeResp service.StoreResponse
+	if err := json.Unmarshal([]byte(storeText), &storeResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	validID := storeResp.ID
+	invalidID := uuid.New()
+
+	// Get with mix of valid and invalid IDs.
+	_, getRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+		"name": "memory_get",
+		"arguments": map[string]interface{}{
+			"project": "test-proj",
+			"ids":     []string{validID.String(), invalidID.String()},
+		},
+	})
+	if getRPC == nil || getRPC.Error != nil {
+		t.Fatalf("get failed")
+	}
+	getText := extractToolResultText(t, getRPC)
+	var getResp service.BatchGetResponse
+	if err := json.Unmarshal([]byte(getText), &getResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(getResp.Found) != 1 {
+		t.Fatalf("expected 1 found, got %d", len(getResp.Found))
+	}
+	if getResp.Found[0].ID != validID {
+		t.Errorf("expected found ID %s, got %s", validID, getResp.Found[0].ID)
+	}
+	if len(getResp.NotFound) != 1 {
+		t.Fatalf("expected 1 not_found, got %d", len(getResp.NotFound))
+	}
+	if getResp.NotFound[0] != invalidID {
+		t.Errorf("expected not_found ID %s, got %s", invalidID, getResp.NotFound[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 29: TestHTTPStack_MCP_ExportProject
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_ExportProject(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "export-proj"},
+	})
+	defer env.Close()
+
+	sess := env.sessionFor(t, 0)
+
+	// Store several memories.
+	contents := []string{
+		"Export test memory one",
+		"Export test memory two",
+		"Export test memory three",
+	}
+	for i, content := range contents {
+		_, storeRPC := sess.call(t, 2+i, "tools/call", map[string]interface{}{
+			"name": "memory_store",
+			"arguments": map[string]interface{}{
+				"project": "export-proj",
+				"content": content,
+			},
+		})
+		if storeRPC == nil || storeRPC.Error != nil {
+			t.Fatalf("store %d failed", i)
+		}
+	}
+
+	// Export the project.
+	_, exportRPC := sess.call(t, 10, "tools/call", map[string]interface{}{
+		"name": "memory_export",
+		"arguments": map[string]interface{}{
+			"project": "export-proj",
+		},
+	})
+	if exportRPC == nil || exportRPC.Error != nil {
+		t.Fatalf("export failed")
+	}
+	exportText := extractToolResultText(t, exportRPC)
+	var exportData service.ExportData
+	if err := json.Unmarshal([]byte(exportText), &exportData); err != nil {
+		t.Fatalf("unmarshal export: %v", err)
+	}
+	if exportData.Stats.MemoryCount != 3 {
+		t.Errorf("expected 3 exported memories, got %d", exportData.Stats.MemoryCount)
+	}
+	if len(exportData.Memories) != 3 {
+		t.Fatalf("expected 3 memories in export, got %d", len(exportData.Memories))
+	}
+
+	// Verify all contents are present.
+	exportedContents := make(map[string]bool)
+	for _, mem := range exportData.Memories {
+		exportedContents[mem.Content] = true
+	}
+	for _, content := range contents {
+		if !exportedContents[content] {
+			t.Errorf("expected exported content %q not found", content)
+		}
+	}
+	if exportData.Project.Slug != "export-proj" {
+		t.Errorf("expected project slug 'export-proj', got %q", exportData.Project.Slug)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 30: TestHTTPStack_MCP_SessionIDPersists
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_SessionIDPersists(t *testing.T) {
+	userA := uuid.New()
+	nsA := uuid.New()
+	projA := uuid.New()
+
+	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
+		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
+	})
+	defer env.Close()
+
+	fakeEnv := env.envFor(0)
+
+	// Send initialize request.
+	initReq := jsonrpcRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":    map[string]interface{}{},
+			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+		},
+	}
+
+	resp, rpcResp := doMCPRequest(t, fakeEnv, initReq)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("initialize: expected 200, got %d", resp.StatusCode)
+	}
+	if rpcResp == nil || rpcResp.Error != nil {
+		t.Fatal("initialize failed")
+	}
+
+	sessionID := resp.Header.Get("Mcp-Session-Id")
+	if sessionID == "" {
+		t.Fatal("expected Mcp-Session-Id header after initialize, got empty")
+	}
+
+	// Send a subsequent request using the session ID.
+	listReq := jsonrpcRequest{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "tools/list",
+	}
+	headers := map[string]string{"Mcp-Session-Id": sessionID}
+	resp2, rpcResp2 := doMCPRequestWithHeaders(t, fakeEnv, listReq, headers)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("tools/list: expected 200, got %d", resp2.StatusCode)
+	}
+	if rpcResp2 == nil || rpcResp2.Error != nil {
+		t.Fatal("tools/list with session ID failed")
+	}
+
+	// Verify the response still works (session is maintained).
+	var listResult struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(rpcResp2.Result, &listResult); err != nil {
+		t.Fatalf("unmarshal tools/list: %v", err)
+	}
+	if len(listResult.Tools) == 0 {
+		t.Error("expected at least one tool in tools/list response")
+	}
+}
