@@ -1561,6 +1561,1491 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 	t.Log("API Key E2E: direct MCP access without OAuth passed")
 }
 
+// ---------------------------------------------------------------------------
+// Helper: complete an OAuth flow and return tokens + metadata
+// ---------------------------------------------------------------------------
+
+type e2eOAuthResult struct {
+	AccessToken  string
+	RefreshToken string
+	ClientID     string
+	SessionID    string // MCP session ID from initialize
+	TokenEndpoint string
+	Resource     string
+	RedirectURI  string
+}
+
+// e2eFullOAuthFlow registers a client, completes the OAuth authorization code
+// flow with PKCE, and returns the resulting tokens. The clientName and
+// redirectURI parameters control the client registration.
+func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string, userID uuid.UUID, role string) *e2eOAuthResult {
+	t.Helper()
+	client := e2eNoRedirectClient()
+	baseURL := env.Server.URL
+
+	// Discovery
+	resp, err := client.Get(baseURL + "/.well-known/oauth-authorization-server")
+	if err != nil {
+		t.Fatalf("oauth flow: discovery: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("oauth flow: discovery: expected 200, got %d", resp.StatusCode)
+	}
+	var meta struct {
+		AuthorizationEndpoint string `json:"authorization_endpoint"`
+		TokenEndpoint         string `json:"token_endpoint"`
+		RegistrationEndpoint  string `json:"registration_endpoint"`
+	}
+	json.Unmarshal(body, &meta)
+
+	// Register client
+	regBody, _ := json.Marshal(map[string]interface{}{
+		"client_name":   clientName,
+		"redirect_uris": []string{redirectURI},
+		"grant_types":   []string{"authorization_code", "refresh_token"},
+	})
+	resp, err = client.Post(meta.RegistrationEndpoint, "application/json", bytes.NewReader(regBody))
+	if err != nil {
+		t.Fatalf("oauth flow: register: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("oauth flow: register: expected 201, got %d; body: %s", resp.StatusCode, body)
+	}
+	var regResp struct {
+		ClientID string `json:"client_id"`
+	}
+	json.Unmarshal(body, &regResp)
+
+	// PKCE + authorize
+	codeVerifier := "e2e-flow-verifier-which-is-at-least-43-characters-long-for-pkce-" + uuid.New().String()[:8]
+	codeChallenge := e2eComputeCodeChallenge(codeVerifier)
+	state := "state-" + uuid.New().String()[:8]
+	resource := baseURL + "/mcp"
+
+	authURL := fmt.Sprintf(
+		"%s?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=%s&resource=%s",
+		meta.AuthorizationEndpoint,
+		url.QueryEscape(regResp.ClientID),
+		url.QueryEscape(redirectURI),
+		url.QueryEscape(codeChallenge),
+		url.QueryEscape(state),
+		url.QueryEscape(resource),
+	)
+
+	sessionCookie := e2eCreateSessionCookie(t, userID)
+	if role != "" && role != "admin" {
+		// Create a session cookie with the specified role
+		token, err := auth.GenerateJWT(userID, role, e2eJWTSecret, 10*time.Minute)
+		if err != nil {
+			t.Fatalf("oauth flow: create session JWT: %v", err)
+		}
+		sessionCookie = &http.Cookie{
+			Name:     "nram_session",
+			Value:    token,
+			Path:     "/",
+			HttpOnly: true,
+		}
+	}
+
+	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
+	authReq.AddCookie(sessionCookie)
+	resp, err = client.Do(authReq)
+	if err != nil {
+		t.Fatalf("oauth flow: authorize: %v", err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("oauth flow: authorize: expected 302, got %d", resp.StatusCode)
+	}
+
+	location := resp.Header.Get("Location")
+	redirectURL, _ := url.Parse(location)
+	code := redirectURL.Query().Get("code")
+	if code == "" {
+		t.Fatal("oauth flow: no code in redirect")
+	}
+
+	// Token exchange
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+		"client_id":     {regResp.ClientID},
+		"code_verifier": {codeVerifier},
+		"resource":      {resource},
+	}
+	resp, err = client.PostForm(meta.TokenEndpoint, tokenForm)
+	if err != nil {
+		t.Fatalf("oauth flow: token: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("oauth flow: token: expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	json.Unmarshal(body, &tokenResp)
+
+	return &e2eOAuthResult{
+		AccessToken:   tokenResp.AccessToken,
+		RefreshToken:  tokenResp.RefreshToken,
+		ClientID:      regResp.ClientID,
+		TokenEndpoint: meta.TokenEndpoint,
+		Resource:      resource,
+		RedirectURI:   redirectURI,
+	}
+}
+
+// e2eInitializeMCP sends the initialize + notifications/initialized handshake
+// and returns the MCP session ID.
+func e2eInitializeMCP(t *testing.T, baseURL, token string) string {
+	t.Helper()
+	resp := e2eMCPPost(t, baseURL, token, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "E2E Test Client", "version": "1.0"},
+		},
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("initialize: expected 200, got %d; body: %s", resp.StatusCode, string(bodyBytes))
+	}
+	rpc := e2eParseJSONRPC(t, resp)
+	if rpc.Error != nil {
+		t.Fatalf("initialize: JSON-RPC error: %s", rpc.Error.Message)
+	}
+	sessionID := resp.Header.Get("Mcp-Session-Id")
+
+	notifResp := e2eMCPPost(t, baseURL, token, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		Method:  "notifications/initialized",
+	}, sessionID)
+	io.ReadAll(notifResp.Body)
+	notifResp.Body.Close()
+
+	return sessionID
+}
+
+// e2eGetAuthCodeParts returns the parts needed for auth code exchange without
+// actually exchanging. Useful for testing error paths.
+type e2eAuthCodeParts struct {
+	Code          string
+	CodeVerifier  string
+	ClientID      string
+	RedirectURI   string
+	Resource      string
+	TokenEndpoint string
+}
+
+func e2eGetAuthCode(t *testing.T, env *e2eEnv, clientName, redirectURI string) *e2eAuthCodeParts {
+	t.Helper()
+	client := e2eNoRedirectClient()
+	baseURL := env.Server.URL
+
+	// Discovery
+	resp, err := client.Get(baseURL + "/.well-known/oauth-authorization-server")
+	if err != nil {
+		t.Fatalf("get auth code: discovery: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var meta struct {
+		AuthorizationEndpoint string `json:"authorization_endpoint"`
+		TokenEndpoint         string `json:"token_endpoint"`
+		RegistrationEndpoint  string `json:"registration_endpoint"`
+	}
+	json.Unmarshal(body, &meta)
+
+	// Register client
+	regBody, _ := json.Marshal(map[string]interface{}{
+		"client_name":   clientName,
+		"redirect_uris": []string{redirectURI},
+		"grant_types":   []string{"authorization_code", "refresh_token"},
+	})
+	resp, err = client.Post(meta.RegistrationEndpoint, "application/json", bytes.NewReader(regBody))
+	if err != nil {
+		t.Fatalf("get auth code: register: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("get auth code: register: expected 201, got %d; body: %s", resp.StatusCode, body)
+	}
+	var regResp struct {
+		ClientID string `json:"client_id"`
+	}
+	json.Unmarshal(body, &regResp)
+
+	// PKCE + authorize
+	codeVerifier := "e2e-authcode-verifier-at-least-43-characters-long-for-pkce-" + uuid.New().String()[:8]
+	codeChallenge := e2eComputeCodeChallenge(codeVerifier)
+	state := "state-" + uuid.New().String()[:8]
+	resource := baseURL + "/mcp"
+
+	authURL := fmt.Sprintf(
+		"%s?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=%s&resource=%s",
+		meta.AuthorizationEndpoint,
+		url.QueryEscape(regResp.ClientID),
+		url.QueryEscape(redirectURI),
+		url.QueryEscape(codeChallenge),
+		url.QueryEscape(state),
+		url.QueryEscape(resource),
+	)
+
+	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
+	authReq.AddCookie(e2eCreateSessionCookie(t, env.User.ID))
+	resp, err = client.Do(authReq)
+	if err != nil {
+		t.Fatalf("get auth code: authorize: %v", err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("get auth code: authorize: expected 302, got %d", resp.StatusCode)
+	}
+
+	location := resp.Header.Get("Location")
+	redirectURL, _ := url.Parse(location)
+	code := redirectURL.Query().Get("code")
+	if code == "" {
+		t.Fatal("get auth code: no code in redirect")
+	}
+
+	return &e2eAuthCodeParts{
+		Code:          code,
+		CodeVerifier:  codeVerifier,
+		ClientID:      regResp.ClientID,
+		RedirectURI:   redirectURI,
+		Resource:      resource,
+		TokenEndpoint: meta.TokenEndpoint,
+	}
+}
+
+// newE2EEnvWithAdmin creates an E2E environment that includes an AdminDashboard
+// handler (the default newE2EEnv leaves it nil which results in 501).
+func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
+	t.Helper()
+
+	db := e2eTestDB(t)
+	user := e2eTestUser(t, db)
+
+	// Build real repos
+	oauthRepo := storage.NewOAuthRepo(db)
+	userRepo := storage.NewUserRepo(db)
+	apiKeyRepo := storage.NewAPIKeyRepo(db)
+
+	// Real OAuth server
+	oauthSrv := auth.NewOAuthServer(oauthRepo, userRepo, e2eJWTSecret)
+
+	// Real auth middleware (with real API key validator)
+	authMw := auth.NewAuthMiddleware(apiKeyRepo, e2eJWTSecret)
+
+	// Real rate limiter
+	rl := auth.NewRateLimiter(1000, 2000)
+	t.Cleanup(rl.Stop)
+
+	// Real metrics
+	metrics := api.NewMetrics()
+
+	// MCP server with in-memory mock services
+	memRepo := newE2EMemoryRepo()
+	nsID := user.NamespaceID
+	ns := &model.Namespace{ID: nsID, Path: "/users/e2etest", Depth: 2}
+	project := &model.Project{
+		ID:               uuid.New(),
+		NamespaceID:      nsID,
+		OwnerNamespaceID: nsID,
+		Name:             "claude-test",
+		Slug:             "claude-test",
+	}
+
+	projectLookup := &e2eProjectLookup{project: project}
+	namespaceLookup := &e2eNamespaceLookup{ns: ns}
+
+	storeSvc := service.NewStoreService(
+		memRepo,
+		projectLookup,
+		namespaceLookup,
+		&e2eIngestionLogRepo{},
+		&e2eTokenUsageRepo{},
+		&e2eEnrichmentQueueRepo{},
+		nil, nil,
+	)
+
+	recallSvc := service.NewRecallService(
+		memRepo,
+		projectLookup,
+		namespaceLookup,
+		&e2eTokenUsageRepo{},
+		nil, nil, nil, nil, nil,
+	)
+
+	forgetSvc := service.NewForgetService(
+		memRepo,
+		projectLookup,
+		nil,
+	)
+
+	updateSvc := service.NewUpdateService(
+		memRepo,
+		projectLookup,
+		&e2eLineageCreator{},
+		nil,
+		&e2eTokenUsageRepo{},
+		nil,
+	)
+
+	batchStoreSvc := service.NewBatchStoreService(
+		memRepo,
+		projectLookup,
+		namespaceLookup,
+		&e2eIngestionLogRepo{},
+		&e2eTokenUsageRepo{},
+		&e2eEnrichmentQueueRepo{},
+		nil, nil,
+	)
+
+	mcpDeps := mcp.Dependencies{
+		Backend:       storage.BackendSQLite,
+		Store:         storeSvc,
+		Recall:        recallSvc,
+		Forget:        forgetSvc,
+		Update:        updateSvc,
+		BatchStore:    batchStoreSvc,
+		ProjectRepo:   projectLookup,
+		UserRepo:      &e2eUserRepoMCP{user: user},
+		NamespaceRepo: namespaceLookup,
+		OrgRepo:       &e2eOrgRepoMCP{},
+	}
+	mcpSrv := mcp.NewServer(mcpDeps)
+
+	handlers := Handlers{
+		MCP: mcpSrv.Handler(),
+
+		// OAuth handlers
+		OAuthAuthorize:         oauthSrv.AuthorizeHandler(),
+		OAuthToken:             oauthSrv.TokenHandler(),
+		OAuthRegister:          oauthSrv.RegisterClientHandler(),
+		OAuthUserInfo:          oauthSrv.UserInfoHandler(),
+		OAuthMetadata:          oauthSrv.MetadataHandler(),
+		OAuthProtectedResource: oauthSrv.ProtectedResourceHandler(),
+
+		// Health
+		Health: func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"ok"}`))
+		},
+
+		// Admin setup status (returns setup complete)
+		AdminSetupStatus: func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"setup_complete":true}`))
+		},
+
+		// Admin dashboard stub
+		AdminDashboard: func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"total_memories":42,"total_projects":3}`))
+		},
+	}
+
+	cfg := RouterConfig{
+		AuthMiddleware: authMw,
+		RateLimiter:    rl,
+		Metrics:        metrics,
+	}
+
+	router := NewRouter(cfg, handlers)
+	ts := httptest.NewServer(router)
+	t.Cleanup(ts.Close)
+
+	return &e2eEnv{
+		Server:  ts,
+		DB:      db,
+		User:    user,
+		MemRepo: memRepo,
+	}
+}
+
+// ===========================================================================
+// TestE2E_ExpiredToken_MCPReturns401_ThenRefresh
+// ===========================================================================
+
+func TestE2E_ExpiredToken_MCPReturns401_ThenRefresh(t *testing.T) {
+	env := newE2EEnv(t)
+	baseURL := env.Server.URL
+
+	// Complete OAuth flow to get tokens
+	oauthResult := e2eFullOAuthFlow(t, env, "Expired Token Test", "http://localhost:3000/callback", env.User.ID, "admin")
+
+	// Verify the valid token works first
+	resp := e2eMCPPost(t, baseURL, oauthResult.AccessToken, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "Expired Token Test", "version": "1.0"},
+		},
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("valid token should work: got %d; body: %s", resp.StatusCode, string(bodyBytes))
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// Manually create an EXPIRED JWT (exp set to the past)
+	now := time.Now().UTC()
+	expiredClaims := auth.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   env.User.ID.String(),
+			IssuedAt:  jwt.NewNumericDate(now.Add(-2 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(-1 * time.Hour)), // expired 1 hour ago
+			Issuer:    "nram",
+			Audience:  jwt.ClaimStrings{baseURL + "/mcp"},
+		},
+		Role: "admin",
+	}
+	expiredToken := jwt.NewWithClaims(jwt.SigningMethodHS256, expiredClaims)
+	expiredTokenStr, err := expiredToken.SignedString(e2eJWTSecret)
+	if err != nil {
+		t.Fatalf("failed to sign expired JWT: %v", err)
+	}
+
+	// POST /mcp with expired token → expect 401 with WWW-Authenticate
+	t.Log("POST /mcp with expired token")
+	expiredResp := e2eMCPPost(t, baseURL, expiredTokenStr, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "Expired Token Test", "version": "1.0"},
+		},
+	}, "")
+	io.ReadAll(expiredResp.Body)
+	expiredResp.Body.Close()
+
+	if expiredResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expired token: expected 401, got %d", expiredResp.StatusCode)
+	}
+	wwwAuth := expiredResp.Header.Get("WWW-Authenticate")
+	if wwwAuth == "" {
+		t.Fatal("expired token: missing WWW-Authenticate header")
+	}
+	if !strings.Contains(wwwAuth, "oauth-protected-resource") {
+		t.Fatalf("expired token: WWW-Authenticate should reference oauth-protected-resource: %s", wwwAuth)
+	}
+	t.Logf("expired token correctly returned 401 with WWW-Authenticate: %s", wwwAuth)
+
+	// Use refresh token to get a new access token
+	client := e2eNoRedirectClient()
+	refreshForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {oauthResult.RefreshToken},
+		"client_id":     {oauthResult.ClientID},
+	}
+	refreshResp, err := client.PostForm(oauthResult.TokenEndpoint, refreshForm)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	body, _ := io.ReadAll(refreshResp.Body)
+	refreshResp.Body.Close()
+	if refreshResp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh: expected 200, got %d; body: %s", refreshResp.StatusCode, body)
+	}
+
+	var newTokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	json.Unmarshal(body, &newTokenResp)
+	if newTokenResp.AccessToken == "" {
+		t.Fatal("refresh: empty new access_token")
+	}
+
+	// POST /mcp with new token → expect success
+	t.Log("POST /mcp with refreshed token")
+	newResp := e2eMCPPost(t, baseURL, newTokenResp.AccessToken, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      3,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "Expired Token Test", "version": "1.0"},
+		},
+	}, "")
+	if newResp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(newResp.Body)
+		newResp.Body.Close()
+		t.Fatalf("refreshed token: expected 200, got %d; body: %s", newResp.StatusCode, string(bodyBytes))
+	}
+	io.ReadAll(newResp.Body)
+	newResp.Body.Close()
+
+	t.Log("expired token → 401 → refresh → new token works: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_WrongAudience_MCPRejects
+// ===========================================================================
+
+func TestE2E_WrongAudience_MCPRejects(t *testing.T) {
+	env := newE2EEnv(t)
+	baseURL := env.Server.URL
+
+	// Complete OAuth flow to verify things work
+	oauthResult := e2eFullOAuthFlow(t, env, "Wrong Audience Test", "http://localhost:3000/callback", env.User.ID, "admin")
+
+	// Verify the valid token works
+	resp := e2eMCPPost(t, baseURL, oauthResult.AccessToken, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "Wrong Aud Test", "version": "1.0"},
+		},
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("valid token should work: got %d; body: %s", resp.StatusCode, string(bodyBytes))
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// Craft a JWT with wrong audience
+	now := time.Now().UTC()
+	wrongAudClaims := auth.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   env.User.ID.String(),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(1 * time.Hour)),
+			Issuer:    "nram",
+			Audience:  jwt.ClaimStrings{"https://other-server.example.com/mcp"},
+		},
+		Role: "admin",
+	}
+	wrongAudToken := jwt.NewWithClaims(jwt.SigningMethodHS256, wrongAudClaims)
+	wrongAudTokenStr, err := wrongAudToken.SignedString(e2eJWTSecret)
+	if err != nil {
+		t.Fatalf("failed to sign wrong-audience JWT: %v", err)
+	}
+
+	// POST /mcp with wrong audience → expect 401
+	t.Log("POST /mcp with wrong audience JWT")
+	wrongResp := e2eMCPPost(t, baseURL, wrongAudTokenStr, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "Wrong Aud Test", "version": "1.0"},
+		},
+	}, "")
+	io.ReadAll(wrongResp.Body)
+	wrongResp.Body.Close()
+
+	if wrongResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong audience: expected 401, got %d", wrongResp.StatusCode)
+	}
+	t.Log("wrong audience JWT correctly rejected with 401: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_RevokedRefreshToken_Rejected
+// ===========================================================================
+
+func TestE2E_RevokedRefreshToken_Rejected(t *testing.T) {
+	env := newE2EEnv(t)
+	client := e2eNoRedirectClient()
+
+	// Complete OAuth flow
+	oauthResult := e2eFullOAuthFlow(t, env, "Revoked Refresh Test", "http://localhost:3000/callback", env.User.ID, "admin")
+
+	// Use the refresh token once (it rotates)
+	refreshForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {oauthResult.RefreshToken},
+		"client_id":     {oauthResult.ClientID},
+	}
+	resp, err := client.PostForm(oauthResult.TokenEndpoint, refreshForm)
+	if err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first refresh: expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	var newTokenResp struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	json.Unmarshal(body, &newTokenResp)
+	if newTokenResp.RefreshToken == "" {
+		t.Fatal("first refresh: empty new refresh_token")
+	}
+	if newTokenResp.RefreshToken == oauthResult.RefreshToken {
+		t.Fatal("first refresh: token was not rotated")
+	}
+
+	// Try the OLD refresh token again → should be rejected
+	t.Log("trying old (revoked) refresh token")
+	oldRefreshForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {oauthResult.RefreshToken},
+		"client_id":     {oauthResult.ClientID},
+	}
+	resp2, err := client.PostForm(oauthResult.TokenEndpoint, oldRefreshForm)
+	if err != nil {
+		t.Fatalf("old refresh: %v", err)
+	}
+	body2, _ := io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+
+	if resp2.StatusCode == http.StatusOK {
+		t.Fatal("old refresh token should have been rejected but was accepted")
+	}
+
+	// Verify error response indicates invalid_grant
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	json.Unmarshal(body2, &errResp)
+	if errResp.Error != "invalid_grant" {
+		t.Logf("note: error was %q (expected invalid_grant); status=%d", errResp.Error, resp2.StatusCode)
+	}
+
+	t.Log("revoked refresh token correctly rejected: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_OAuth_WrongPKCEVerifier
+// ===========================================================================
+
+func TestE2E_OAuth_WrongPKCEVerifier(t *testing.T) {
+	env := newE2EEnv(t)
+	client := e2eNoRedirectClient()
+
+	// Get auth code through the full flow
+	parts := e2eGetAuthCode(t, env, "Wrong PKCE Test", "http://localhost:3000/callback")
+
+	// Exchange code with WRONG code_verifier
+	t.Log("exchanging code with wrong PKCE verifier")
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {parts.Code},
+		"redirect_uri":  {parts.RedirectURI},
+		"client_id":     {parts.ClientID},
+		"code_verifier": {"this-is-definitely-the-wrong-verifier-and-at-least-43-characters-long"},
+		"resource":      {parts.Resource},
+	}
+	resp, err := client.PostForm(parts.TokenEndpoint, tokenForm)
+	if err != nil {
+		t.Fatalf("token exchange: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("wrong PKCE verifier should have been rejected but token was issued")
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("wrong PKCE verifier: expected 400, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	json.Unmarshal(body, &errResp)
+	if errResp.Error != "invalid_grant" {
+		t.Logf("note: error was %q (expected invalid_grant)", errResp.Error)
+	}
+
+	t.Log("wrong PKCE verifier correctly rejected: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_OAuth_WrongRedirectURI
+// ===========================================================================
+
+func TestE2E_OAuth_WrongRedirectURI(t *testing.T) {
+	env := newE2EEnv(t)
+	client := e2eNoRedirectClient()
+	baseURL := env.Server.URL
+
+	// Discovery
+	resp, err := client.Get(baseURL + "/.well-known/oauth-authorization-server")
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var meta struct {
+		AuthorizationEndpoint string `json:"authorization_endpoint"`
+		RegistrationEndpoint  string `json:"registration_endpoint"`
+	}
+	json.Unmarshal(body, &meta)
+
+	// Register client with redirect_uri A
+	regBody, _ := json.Marshal(map[string]interface{}{
+		"client_name":   "Wrong Redirect Test",
+		"redirect_uris": []string{"http://localhost:3000/callback-a"},
+		"grant_types":   []string{"authorization_code", "refresh_token"},
+	})
+	resp, err = client.Post(meta.RegistrationEndpoint, "application/json", bytes.NewReader(regBody))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("register: expected 201, got %d; body: %s", resp.StatusCode, body)
+	}
+	var regResp struct {
+		ClientID string `json:"client_id"`
+	}
+	json.Unmarshal(body, &regResp)
+
+	// Call /authorize with redirect_uri B (different from registered)
+	t.Log("calling /authorize with wrong redirect_uri")
+	codeVerifier := "wrong-redirect-verifier-which-is-at-least-43-characters-long-for-pkce"
+	codeChallenge := e2eComputeCodeChallenge(codeVerifier)
+	state := "state-" + uuid.New().String()[:8]
+
+	authURL := fmt.Sprintf(
+		"%s?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=%s",
+		meta.AuthorizationEndpoint,
+		url.QueryEscape(regResp.ClientID),
+		url.QueryEscape("http://localhost:3000/callback-b"), // WRONG redirect URI
+		url.QueryEscape(codeChallenge),
+		url.QueryEscape(state),
+	)
+
+	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
+	authReq.AddCookie(e2eCreateSessionCookie(t, env.User.ID))
+	resp, err = client.Do(authReq)
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// Should be rejected — either as a 400 error or a redirect with error param
+	if resp.StatusCode == http.StatusFound {
+		location := resp.Header.Get("Location")
+		parsedLoc, _ := url.Parse(location)
+		errorParam := parsedLoc.Query().Get("error")
+		if errorParam == "" {
+			t.Fatalf("wrong redirect URI: got redirect without error: %s", location)
+		}
+		t.Logf("wrong redirect URI rejected via redirect with error=%s", errorParam)
+	} else if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusForbidden {
+		t.Logf("wrong redirect URI rejected with status %d", resp.StatusCode)
+	} else {
+		t.Fatalf("wrong redirect URI: expected error response, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	t.Log("wrong redirect URI correctly rejected: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_OAuth_ExpiredAuthCode
+// ===========================================================================
+
+func TestE2E_OAuth_ExpiredAuthCode(t *testing.T) {
+	env := newE2EEnv(t)
+	client := e2eNoRedirectClient()
+
+	// Get an auth code
+	parts := e2eGetAuthCode(t, env, "Expired Code Test", "http://localhost:3000/callback")
+
+	// Directly update the DB to expire the auth code
+	_, err := env.DB.DB().ExecContext(context.Background(),
+		"UPDATE oauth_authorization_codes SET expires_at = ? WHERE code = ?",
+		time.Now().UTC().Add(-1*time.Hour).Format(time.RFC3339), parts.Code)
+	if err != nil {
+		t.Fatalf("failed to expire auth code in DB: %v", err)
+	}
+
+	// Exchange the expired code
+	t.Log("exchanging expired auth code")
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {parts.Code},
+		"redirect_uri":  {parts.RedirectURI},
+		"client_id":     {parts.ClientID},
+		"code_verifier": {parts.CodeVerifier},
+		"resource":      {parts.Resource},
+	}
+	resp, err := client.PostForm(parts.TokenEndpoint, tokenForm)
+	if err != nil {
+		t.Fatalf("token exchange: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("expired auth code should have been rejected but token was issued")
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expired auth code: expected 400, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	// Check for "expired" or "invalid_grant" in the response
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "expired") && !strings.Contains(bodyStr, "invalid_grant") {
+		t.Logf("note: response body doesn't mention expired or invalid_grant: %s", bodyStr)
+	}
+
+	t.Log("expired auth code correctly rejected: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_OAuth_CodeReuse
+// ===========================================================================
+
+func TestE2E_OAuth_CodeReuse(t *testing.T) {
+	env := newE2EEnv(t)
+	client := e2eNoRedirectClient()
+
+	// Get an auth code
+	parts := e2eGetAuthCode(t, env, "Code Reuse Test", "http://localhost:3000/callback")
+
+	// First exchange — should succeed
+	t.Log("first code exchange (should succeed)")
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {parts.Code},
+		"redirect_uri":  {parts.RedirectURI},
+		"client_id":     {parts.ClientID},
+		"code_verifier": {parts.CodeVerifier},
+		"resource":      {parts.Resource},
+	}
+	resp, err := client.PostForm(parts.TokenEndpoint, tokenForm)
+	if err != nil {
+		t.Fatalf("first exchange: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first exchange: expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	// Second exchange — same code, should fail
+	t.Log("second code exchange (should fail — code reuse)")
+	resp2, err := client.PostForm(parts.TokenEndpoint, tokenForm)
+	if err != nil {
+		t.Fatalf("second exchange: %v", err)
+	}
+	body2, _ := io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+
+	if resp2.StatusCode == http.StatusOK {
+		t.Fatal("code reuse should have been rejected but second exchange succeeded")
+	}
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("code reuse: expected 400, got %d; body: %s", resp2.StatusCode, body2)
+	}
+
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	json.Unmarshal(body2, &errResp)
+	if errResp.Error != "invalid_grant" {
+		t.Logf("note: error was %q (expected invalid_grant)", errResp.Error)
+	}
+
+	t.Log("code reuse correctly rejected: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_OAuth_UnregisteredClientID
+// ===========================================================================
+
+func TestE2E_OAuth_UnregisteredClientID(t *testing.T) {
+	env := newE2EEnv(t)
+	client := e2eNoRedirectClient()
+	baseURL := env.Server.URL
+
+	// Discovery
+	resp, err := client.Get(baseURL + "/.well-known/oauth-authorization-server")
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var meta struct {
+		AuthorizationEndpoint string `json:"authorization_endpoint"`
+	}
+	json.Unmarshal(body, &meta)
+
+	// Call /authorize with a fake client_id that doesn't exist
+	t.Log("calling /authorize with unregistered client_id")
+	fakeClientID := "non-existent-client-" + uuid.New().String()
+	codeVerifier := "unregistered-client-verifier-at-least-43-characters-long-for-pkce-test"
+	codeChallenge := e2eComputeCodeChallenge(codeVerifier)
+	state := "state-" + uuid.New().String()[:8]
+
+	authURL := fmt.Sprintf(
+		"%s?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=%s",
+		meta.AuthorizationEndpoint,
+		url.QueryEscape(fakeClientID),
+		url.QueryEscape("http://localhost:3000/callback"),
+		url.QueryEscape(codeChallenge),
+		url.QueryEscape(state),
+	)
+
+	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
+	authReq.AddCookie(e2eCreateSessionCookie(t, env.User.ID))
+	resp, err = client.Do(authReq)
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// Should get an error — either 400 directly or a redirect with error
+	if resp.StatusCode == http.StatusFound {
+		location := resp.Header.Get("Location")
+		parsedLoc, _ := url.Parse(location)
+		errorParam := parsedLoc.Query().Get("error")
+		if errorParam != "" {
+			t.Logf("unregistered client rejected via redirect: error=%s", errorParam)
+		} else {
+			t.Fatalf("unregistered client got redirect without error: %s", location)
+		}
+	} else if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
+		t.Logf("unregistered client rejected with status %d", resp.StatusCode)
+	} else {
+		t.Fatalf("unregistered client: expected error, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	t.Log("unregistered client_id correctly rejected: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_OAuth_MissingPKCE
+// ===========================================================================
+
+func TestE2E_OAuth_MissingPKCE(t *testing.T) {
+	env := newE2EEnv(t)
+	client := e2eNoRedirectClient()
+	baseURL := env.Server.URL
+
+	// Discovery
+	resp, err := client.Get(baseURL + "/.well-known/oauth-authorization-server")
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var meta struct {
+		AuthorizationEndpoint string `json:"authorization_endpoint"`
+		RegistrationEndpoint  string `json:"registration_endpoint"`
+	}
+	json.Unmarshal(body, &meta)
+
+	// Register a client
+	regBody, _ := json.Marshal(map[string]interface{}{
+		"client_name":   "Missing PKCE Test",
+		"redirect_uris": []string{"http://localhost:3000/callback"},
+		"grant_types":   []string{"authorization_code", "refresh_token"},
+	})
+	resp, err = client.Post(meta.RegistrationEndpoint, "application/json", bytes.NewReader(regBody))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("register: expected 201, got %d; body: %s", resp.StatusCode, body)
+	}
+	var regResp struct {
+		ClientID string `json:"client_id"`
+	}
+	json.Unmarshal(body, &regResp)
+
+	// Call /authorize WITHOUT code_challenge (no PKCE)
+	t.Log("calling /authorize without PKCE code_challenge")
+	state := "state-" + uuid.New().String()[:8]
+	authURL := fmt.Sprintf(
+		"%s?client_id=%s&redirect_uri=%s&response_type=code&state=%s",
+		meta.AuthorizationEndpoint,
+		url.QueryEscape(regResp.ClientID),
+		url.QueryEscape("http://localhost:3000/callback"),
+		url.QueryEscape(state),
+	)
+
+	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
+	authReq.AddCookie(e2eCreateSessionCookie(t, env.User.ID))
+	resp, err = client.Do(authReq)
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// Should be rejected — PKCE is required per MCP spec
+	if resp.StatusCode == http.StatusFound {
+		location := resp.Header.Get("Location")
+		parsedLoc, _ := url.Parse(location)
+		errorParam := parsedLoc.Query().Get("error")
+		if errorParam != "" {
+			t.Logf("missing PKCE rejected via redirect: error=%s", errorParam)
+		} else {
+			t.Fatalf("missing PKCE: got redirect without error (should require PKCE): %s", location)
+		}
+	} else if resp.StatusCode == http.StatusBadRequest {
+		t.Logf("missing PKCE rejected with status 400")
+	} else {
+		t.Fatalf("missing PKCE: expected error, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	t.Log("missing PKCE correctly rejected: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_TwoClients_SeparateTokens
+// ===========================================================================
+
+func TestE2E_TwoClients_SeparateTokens(t *testing.T) {
+	env := newE2EEnv(t)
+	baseURL := env.Server.URL
+	client := e2eNoRedirectClient()
+
+	// Register and complete OAuth for client A
+	t.Log("completing OAuth flow for client A")
+	clientA := e2eFullOAuthFlow(t, env, "Client A", "http://localhost:3001/callback", env.User.ID, "admin")
+
+	// Register and complete OAuth for client B
+	t.Log("completing OAuth flow for client B")
+	clientB := e2eFullOAuthFlow(t, env, "Client B", "http://localhost:3002/callback", env.User.ID, "admin")
+
+	// Client IDs must be different (different registrations)
+	if clientA.ClientID == clientB.ClientID {
+		t.Fatal("client A and client B should have different client IDs")
+	}
+	// Refresh tokens must be different (unique per client)
+	if clientA.RefreshToken == clientB.RefreshToken {
+		t.Fatal("client A and client B should have different refresh tokens")
+	}
+	// Access tokens may match if same user/claims/timestamp but verify both are non-empty
+	if clientA.AccessToken == "" || clientB.AccessToken == "" {
+		t.Fatal("both clients should have non-empty access tokens")
+	}
+
+	// Both can call /mcp independently
+	t.Log("verifying client A can call /mcp")
+	respA := e2eMCPPost(t, baseURL, clientA.AccessToken, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "Client A", "version": "1.0"},
+		},
+	}, "")
+	if respA.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(respA.Body)
+		respA.Body.Close()
+		t.Fatalf("client A MCP: expected 200, got %d; body: %s", respA.StatusCode, string(bodyBytes))
+	}
+	io.ReadAll(respA.Body)
+	respA.Body.Close()
+
+	t.Log("verifying client B can call /mcp")
+	respB := e2eMCPPost(t, baseURL, clientB.AccessToken, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "Client B", "version": "1.0"},
+		},
+	}, "")
+	if respB.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(respB.Body)
+		respB.Body.Close()
+		t.Fatalf("client B MCP: expected 200, got %d; body: %s", respB.StatusCode, string(bodyBytes))
+	}
+	io.ReadAll(respB.Body)
+	respB.Body.Close()
+
+	// Revoke client A's refresh token by using it (rotation)
+	t.Log("rotating client A's refresh token")
+	refreshFormA := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {clientA.RefreshToken},
+		"client_id":     {clientA.ClientID},
+	}
+	resp, err := client.PostForm(clientA.TokenEndpoint, refreshFormA)
+	if err != nil {
+		t.Fatalf("rotate client A: %v", err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rotate client A: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Client B's refresh token should still work (independent)
+	t.Log("verifying client B's refresh token still works")
+	refreshFormB := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {clientB.RefreshToken},
+		"client_id":     {clientB.ClientID},
+	}
+	resp, err = client.PostForm(clientB.TokenEndpoint, refreshFormB)
+	if err != nil {
+		t.Fatalf("refresh client B: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh client B: expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	var newB struct {
+		AccessToken string `json:"access_token"`
+	}
+	json.Unmarshal(body, &newB)
+	if newB.AccessToken == "" {
+		t.Fatal("client B refresh: empty access token")
+	}
+
+	t.Log("two clients with separate tokens: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_ChatGPT_OAuthFlow
+// ===========================================================================
+
+func TestE2E_ChatGPT_OAuthFlow(t *testing.T) {
+	env := newE2EEnv(t)
+	baseURL := env.Server.URL
+
+	// Use ChatGPT-typical redirect URI and client name
+	chatGPTRedirect := "https://chatgpt.com/aip/g-abc123/oauth/callback"
+	oauthResult := e2eFullOAuthFlow(t, env, "ChatGPT Plugin", chatGPTRedirect, env.User.ID, "admin")
+
+	if oauthResult.AccessToken == "" {
+		t.Fatal("ChatGPT flow: empty access token")
+	}
+	if oauthResult.RefreshToken == "" {
+		t.Fatal("ChatGPT flow: empty refresh token")
+	}
+
+	// Verify the token works with MCP
+	t.Log("verifying ChatGPT token works with /mcp")
+	resp := e2eMCPPost(t, baseURL, oauthResult.AccessToken, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "ChatGPT Plugin", "version": "1.0"},
+		},
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("ChatGPT MCP: expected 200, got %d; body: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	rpc := e2eParseJSONRPC(t, resp)
+	if rpc.Error != nil {
+		t.Fatalf("ChatGPT MCP: JSON-RPC error: %s", rpc.Error.Message)
+	}
+
+	var initResult map[string]interface{}
+	json.Unmarshal(rpc.Result, &initResult)
+	si, _ := initResult["serverInfo"].(map[string]interface{})
+	if name, _ := si["name"].(string); name != "nram" {
+		t.Fatalf("ChatGPT MCP: expected serverInfo.name=nram, got %q", name)
+	}
+
+	t.Log("ChatGPT OAuth flow: PASSED (not hardcoded to Claude-specific values)")
+}
+
+// ===========================================================================
+// TestE2E_AdminRoute_WithOAuthToken
+// ===========================================================================
+
+func TestE2E_AdminRoute_WithOAuthToken(t *testing.T) {
+	env := newE2EEnvWithAdmin(t)
+	baseURL := env.Server.URL
+	ctx := context.Background()
+
+	nsRepo := storage.NewNamespaceRepo(env.DB)
+	orgRepo := storage.NewOrganizationRepo(env.DB)
+	userRepo := storage.NewUserRepo(env.DB)
+	rootID := uuid.MustParse("00000000-0000-0000-0000-000000000000")
+
+	// Create an administrator user (the RBAC system requires "administrator", not "admin")
+	adminOrgNSID := uuid.New()
+	adminOrgNS := &model.Namespace{
+		ID:       adminOrgNSID,
+		Name:     "Admin RBAC Org NS",
+		Slug:     adminOrgNSID.String(),
+		Kind:     "org",
+		ParentID: &rootID,
+		Path:     adminOrgNSID.String(),
+		Depth:    1,
+	}
+	if err := nsRepo.Create(ctx, adminOrgNS); err != nil {
+		t.Fatalf("create admin org NS: %v", err)
+	}
+	adminOrg := &model.Organization{
+		NamespaceID: adminOrgNSID,
+		Name:        "Admin RBAC Org",
+		Slug:        "admin-rbac-" + adminOrgNSID.String()[:8],
+	}
+	if err := orgRepo.Create(ctx, adminOrg); err != nil {
+		t.Fatalf("create admin org: %v", err)
+	}
+	adminUser := &model.User{
+		Email:       "admin-rbac-" + uuid.New().String()[:8] + "@example.com",
+		DisplayName: "Admin RBAC User",
+		OrgID:       adminOrg.ID,
+		Role:        "administrator",
+	}
+	if err := userRepo.Create(ctx, adminUser, nsRepo, adminOrgNS.Path); err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+
+	// Complete OAuth flow for admin user
+	t.Log("completing OAuth flow for administrator user")
+	adminOAuth := e2eFullOAuthFlow(t, env, "Admin RBAC Test", "http://localhost:3000/callback", adminUser.ID, "administrator")
+
+	// Hit GET /v1/admin/dashboard with admin token → expect 200
+	t.Log("hitting /v1/admin/dashboard with administrator token")
+	req, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/admin/dashboard", nil)
+	req.Header.Set("Authorization", "Bearer "+adminOAuth.AccessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("admin dashboard: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin dashboard with administrator token: expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	t.Log("admin dashboard accessible with administrator token: OK")
+
+	// Create a member user
+	t.Log("creating member user")
+	memberOrgNSID := uuid.New()
+	memberOrgNS := &model.Namespace{
+		ID:       memberOrgNSID,
+		Name:     "Member Org NS",
+		Slug:     memberOrgNSID.String(),
+		Kind:     "org",
+		ParentID: &rootID,
+		Path:     memberOrgNSID.String(),
+		Depth:    1,
+	}
+	if err := nsRepo.Create(ctx, memberOrgNS); err != nil {
+		t.Fatalf("create member org NS: %v", err)
+	}
+	memberOrg := &model.Organization{
+		NamespaceID: memberOrgNSID,
+		Name:        "Member Org",
+		Slug:        "member-org-" + memberOrgNSID.String()[:8],
+	}
+	if err := orgRepo.Create(ctx, memberOrg); err != nil {
+		t.Fatalf("create member org: %v", err)
+	}
+	memberUser := &model.User{
+		Email:       "member-" + uuid.New().String()[:8] + "@example.com",
+		DisplayName: "Member User",
+		OrgID:       memberOrg.ID,
+		Role:        "member",
+	}
+	if err := userRepo.Create(ctx, memberUser, nsRepo, memberOrgNS.Path); err != nil {
+		t.Fatalf("create member user: %v", err)
+	}
+
+	// Complete OAuth flow for the member user
+	t.Log("completing OAuth flow for member user")
+	memberOAuth := e2eFullOAuthFlow(t, env, "Member RBAC Test", "http://localhost:3000/callback-member", memberUser.ID, "member")
+
+	// Hit GET /v1/admin/dashboard with member token → expect 403
+	t.Log("hitting /v1/admin/dashboard with member token")
+	memberReq, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/admin/dashboard", nil)
+	memberReq.Header.Set("Authorization", "Bearer "+memberOAuth.AccessToken)
+	resp2, err := http.DefaultClient.Do(memberReq)
+	if err != nil {
+		t.Fatalf("member admin dashboard: %v", err)
+	}
+	io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("member admin dashboard: expected 403, got %d", resp2.StatusCode)
+	}
+	t.Log("member correctly denied admin access with 403: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_OAuth_OriginValidation
+// ===========================================================================
+
+func TestE2E_OAuth_OriginValidation(t *testing.T) {
+	env := newE2EEnv(t)
+	baseURL := env.Server.URL
+
+	// Complete OAuth flow to get a valid token
+	oauthResult := e2eFullOAuthFlow(t, env, "Origin Test", "http://localhost:3000/callback", env.User.ID, "admin")
+
+	// POST /mcp with valid token BUT a bad Origin header
+	t.Log("POST /mcp with valid token but bad Origin header")
+	initBody, _ := json.Marshal(e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "Origin Test", "version": "1.0"},
+		},
+	})
+
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/mcp", bytes.NewReader(initBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+oauthResult.AccessToken)
+	req.Header.Set("Origin", "http://evil-site.example.com") // bad Origin
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("bad origin request: %v", err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("bad Origin: expected 403, got %d", resp.StatusCode)
+	}
+
+	// Verify that a good Origin (or no Origin) works
+	t.Log("POST /mcp with valid token and no Origin header (should work)")
+	goodResp := e2eMCPPost(t, baseURL, oauthResult.AccessToken, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]interface{}{},
+			"clientInfo":     map[string]interface{}{"name": "Origin Test", "version": "1.0"},
+		},
+	}, "")
+	if goodResp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(goodResp.Body)
+		goodResp.Body.Close()
+		t.Fatalf("good origin: expected 200, got %d; body: %s", goodResp.StatusCode, string(bodyBytes))
+	}
+	io.ReadAll(goodResp.Body)
+	goodResp.Body.Close()
+
+	t.Log("Origin validation correctly blocks bad origins: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_HealthEndpoint_NoAuth
+// ===========================================================================
+
+func TestE2E_HealthEndpoint_NoAuth(t *testing.T) {
+	env := newE2EEnv(t)
+	baseURL := env.Server.URL
+
+	// GET /v1/health with no auth → expect 200
+	t.Log("GET /v1/health with no auth")
+	resp, err := http.Get(baseURL + "/v1/health")
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health: expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	var healthResp struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &healthResp); err != nil {
+		t.Fatalf("health: unmarshal: %v", err)
+	}
+	if healthResp.Status != "ok" {
+		t.Fatalf("health: expected status=ok, got %q", healthResp.Status)
+	}
+
+	t.Log("health endpoint accessible without auth: PASSED")
+}
+
+// ===========================================================================
+// TestE2E_SetupStatusEndpoint_NoAuth
+// ===========================================================================
+
+func TestE2E_SetupStatusEndpoint_NoAuth(t *testing.T) {
+	env := newE2EEnvWithAdmin(t) // Use admin env which has the setup status handler
+	baseURL := env.Server.URL
+
+	// GET /v1/admin/setup/status with no auth → expect 200
+	t.Log("GET /v1/admin/setup/status with no auth")
+	resp, err := http.Get(baseURL + "/v1/admin/setup/status")
+	if err != nil {
+		t.Fatalf("setup status: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup status: expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	// Verify it returns JSON with setup_complete field
+	var statusResp struct {
+		SetupComplete bool `json:"setup_complete"`
+	}
+	if err := json.Unmarshal(body, &statusResp); err != nil {
+		t.Fatalf("setup status: unmarshal: %v", err)
+	}
+
+	t.Logf("setup status: setup_complete=%v", statusResp.SetupComplete)
+	t.Log("setup status endpoint accessible without auth: PASSED")
+}
+
 // Ensure imports are used.
 var _ jwt.Claims
 var _ *model.APIKey
