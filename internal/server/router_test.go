@@ -22,6 +22,14 @@ func (m *mockAPIKeyValidator) Validate(_ context.Context, _ string) (*model.APIK
 	return nil, fmt.Errorf("invalid key")
 }
 
+// mockUserRoleLookup implements auth.UserRoleLookup for testing.
+// It always returns "member" as the role.
+type mockUserRoleLookup struct{}
+
+func (m *mockUserRoleLookup) GetRoleByID(_ context.Context, _ uuid.UUID) (string, error) {
+	return "member", nil
+}
+
 var testJWTSecret = []byte("test-secret-key-for-router-tests")
 
 func generateTestJWT(t *testing.T, userID uuid.UUID, role string) string {
@@ -187,7 +195,7 @@ func newTestRouter(t *testing.T, handlers Handlers) http.Handler {
 	t.Helper()
 
 	validator := &mockAPIKeyValidator{}
-	authMw := auth.NewAuthMiddleware(validator, testJWTSecret)
+	authMw := auth.NewAuthMiddleware(validator, &mockUserRoleLookup{}, testJWTSecret)
 	rl := auth.NewRateLimiter(100, 200)
 	t.Cleanup(rl.Stop)
 	metrics := api.NewMetrics()

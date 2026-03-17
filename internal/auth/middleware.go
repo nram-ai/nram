@@ -18,6 +18,12 @@ type APIKeyValidator interface {
 	Validate(ctx context.Context, rawKey string) (*model.APIKey, error)
 }
 
+// UserRoleLookup resolves the role for an active user by ID.
+// It must return an error if the user is disabled or not found.
+type UserRoleLookup interface {
+	GetRoleByID(ctx context.Context, id uuid.UUID) (string, error)
+}
+
 // AuthContext holds the authenticated identity extracted from a request.
 type AuthContext struct {
 	UserID   uuid.UUID
@@ -53,13 +59,15 @@ type Claims struct {
 // are parsed as JWTs signed with HMAC-SHA256.
 type AuthMiddleware struct {
 	apiKeyValidator APIKeyValidator
+	userRoleLookup  UserRoleLookup
 	jwtSecret       []byte
 }
 
 // NewAuthMiddleware creates a new AuthMiddleware with the given dependencies.
-func NewAuthMiddleware(apiKeyValidator APIKeyValidator, jwtSecret []byte) *AuthMiddleware {
+func NewAuthMiddleware(apiKeyValidator APIKeyValidator, userRoleLookup UserRoleLookup, jwtSecret []byte) *AuthMiddleware {
 	return &AuthMiddleware{
 		apiKeyValidator: apiKeyValidator,
+		userRoleLookup:  userRoleLookup,
 		jwtSecret:       jwtSecret,
 	}
 }
@@ -132,10 +140,16 @@ func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*Au
 		return nil, fmt.Errorf("invalid api key: %w", err)
 	}
 
+	role, err := m.userRoleLookup.GetRoleByID(ctx, key.UserID)
+	if err != nil {
+		// User is disabled or not found — treat as unauthorized.
+		return nil, fmt.Errorf("api key user unavailable: %w", err)
+	}
+
 	keyID := key.ID
 	return &AuthContext{
 		UserID:   key.UserID,
-		Role:     "", // API keys do not carry a role; callers should resolve from user record if needed
+		Role:     role,
 		APIKeyID: &keyID,
 		Scopes:   key.Scopes,
 	}, nil

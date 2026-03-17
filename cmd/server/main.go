@@ -294,7 +294,7 @@ func main() {
 		MeOAuthClientRevoke: api.NewMeOAuthClientRevokeHandler(oauthRepo),
 
 		// Org-scoped handlers
-		OrgRecall: api.NewOrgRecallHandler(recallSvc, orgRepo),
+		OrgRecall: api.NewOrgRecallHandler(recallSvc, orgRepo, userRepo),
 
 		// SSE events
 		Events: api.NewEventsHandler(eventBus),
@@ -351,15 +351,25 @@ func main() {
 	}
 
 	// Build router config with auth middleware and rate limiter.
-	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, jwtSecret)
+	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, userRepo, jwtSecret)
 	rateLimiter := auth.NewRateLimiter(10, 20)
 	defer rateLimiter.Stop()
+
+	// Project access middleware enforces org-membership checks on all
+	// /v1/projects/{project_id}/memories/* routes.
+	projectAccessCfg := api.ProjectAccessConfig{
+		Projects:   projectRepo,
+		Namespaces: namespaceRepo,
+		Orgs:       orgRepo,
+		Users:      userRepo,
+	}
 
 	routerCfg := server.RouterConfig{
 		Metrics:        metrics,
 		AuthMiddleware: authMiddleware,
 		RateLimiter:    rateLimiter,
 		SetupGuard:     api.SetupGuardMiddleware(setupChecker.IsComplete),
+		ProjectAccess:  api.ProjectAccessMiddleware(projectAccessCfg),
 	}
 
 	r := server.NewRouter(routerCfg, handlers)

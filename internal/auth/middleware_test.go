@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,6 +28,25 @@ func (m *mockAPIKeyValidator) Validate(_ context.Context, _ string) (*model.APIK
 	return m.key, nil
 }
 
+// mockUserRoleLookup implements UserRoleLookup for testing.
+// It maps user IDs to roles; if the ID is not found it returns an error.
+type mockUserRoleLookup struct {
+	roles map[uuid.UUID]string
+	// fixedRole is returned for any user ID when roles is nil.
+	fixedRole string
+}
+
+func (m *mockUserRoleLookup) GetRoleByID(_ context.Context, id uuid.UUID) (string, error) {
+	if m.roles != nil {
+		role, ok := m.roles[id]
+		if !ok {
+			return "", fmt.Errorf("user not found")
+		}
+		return role, nil
+	}
+	return m.fixedRole, nil
+}
+
 var testSecret = []byte("test-secret-key-for-jwt-signing!")
 
 // okHandler is a simple handler that returns 200 and the user ID from context.
@@ -43,7 +63,7 @@ func okHandler() http.Handler {
 }
 
 func TestHandler_NoAuthorizationHeader(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -56,7 +76,7 @@ func TestHandler_NoAuthorizationHeader(t *testing.T) {
 }
 
 func TestHandler_InvalidBearerFormat(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	for _, header := range []string{"Basic abc", "Bearer ", "Token xyz"} {
@@ -81,8 +101,9 @@ func TestHandler_ValidAPIKey(t *testing.T) {
 			Scopes: []uuid.UUID{uuid.New()},
 		},
 	}
+	roleLookup := &mockUserRoleLookup{roles: map[uuid.UUID]string{userID: "member"}}
 
-	mw := NewAuthMiddleware(validator, testSecret)
+	mw := NewAuthMiddleware(validator, roleLookup, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -103,7 +124,7 @@ func TestHandler_InvalidAPIKey(t *testing.T) {
 		err: storage.ErrAPIKeyNotFound,
 	}
 
-	mw := NewAuthMiddleware(validator, testSecret)
+	mw := NewAuthMiddleware(validator, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -121,7 +142,7 @@ func TestHandler_ExpiredAPIKey(t *testing.T) {
 		err: storage.ErrAPIKeyExpired,
 	}
 
-	mw := NewAuthMiddleware(validator, testSecret)
+	mw := NewAuthMiddleware(validator, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -141,7 +162,7 @@ func TestHandler_ValidJWT(t *testing.T) {
 		t.Fatalf("generate jwt: %v", err)
 	}
 
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -165,7 +186,7 @@ func TestHandler_ExpiredJWT(t *testing.T) {
 		t.Fatalf("generate jwt: %v", err)
 	}
 
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -186,7 +207,7 @@ func TestHandler_InvalidJWTSignature(t *testing.T) {
 		t.Fatalf("generate jwt: %v", err)
 	}
 
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -200,7 +221,7 @@ func TestHandler_InvalidJWTSignature(t *testing.T) {
 }
 
 func TestHandler_GarbageJWT(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -258,8 +279,9 @@ func TestHandler_APIKeyContextHasAPIKeyID(t *testing.T) {
 			Scopes: []uuid.UUID{},
 		},
 	}
+	roleLookup := &mockUserRoleLookup{roles: map[uuid.UUID]string{userID: "member"}}
 
-	mw := NewAuthMiddleware(validator, testSecret)
+	mw := NewAuthMiddleware(validator, roleLookup, testSecret)
 
 	var captured *AuthContext
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -287,7 +309,7 @@ func TestHandler_JWTContextHasNoAPIKeyID(t *testing.T) {
 		t.Fatalf("generate jwt: %v", err)
 	}
 
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 
 	var captured *AuthContext
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -362,7 +384,7 @@ func TestGenerateJWT_ErrorOnEmptySecret(t *testing.T) {
 // Verify that 401 responses include WWW-Authenticate header derived from the
 // request Host header (base URL is always derived from the request, never configured).
 func TestHandler_WWWAuthenticate_WithIssuerURL(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	// No auth header → 401 with WWW-Authenticate.
@@ -388,7 +410,7 @@ func TestHandler_WWWAuthenticate_WithIssuerURL(t *testing.T) {
 
 // Verify WWW-Authenticate also appears on invalid token 401s.
 func TestHandler_WWWAuthenticate_InvalidToken(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
@@ -409,7 +431,7 @@ func TestHandler_WWWAuthenticate_InvalidToken(t *testing.T) {
 // Verify JWT with wrong audience is rejected (RFC 8707 audience validation).
 // httptest.NewRequest sets Host: example.com so expected audience is http://example.com/mcp.
 func TestHandler_JWT_WrongAudience_Rejected(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	userID := uuid.New()
@@ -432,7 +454,7 @@ func TestHandler_JWT_WrongAudience_Rejected(t *testing.T) {
 // Verify JWT with correct audience passes.
 // httptest.NewRequest sets Host: example.com so the correct audience is http://example.com/mcp.
 func TestHandler_JWT_CorrectAudience_Accepted(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	userID := uuid.New()
@@ -455,7 +477,7 @@ func TestHandler_JWT_CorrectAudience_Accepted(t *testing.T) {
 // Verify JWT without audience claim still works (backwards compat with tokens
 // issued before resource parameter was sent).
 func TestHandler_JWT_NoAudience_Accepted(t *testing.T) {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	userID := uuid.New()
@@ -480,7 +502,7 @@ func TestHandler_APIKeyValidatorArbitraryError(t *testing.T) {
 		err: errors.New("database connection lost"),
 	}
 
-	mw := NewAuthMiddleware(validator, testSecret)
+	mw := NewAuthMiddleware(validator, &mockUserRoleLookup{fixedRole: "member"}, testSecret)
 	handler := mw.Handler(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

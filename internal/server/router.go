@@ -17,6 +17,9 @@ type RouterConfig struct {
 	// SetupGuard is middleware that returns 503 until initial setup is complete.
 	// If nil, no setup guard is applied.
 	SetupGuard func(http.Handler) http.Handler
+	// ProjectAccess is middleware that enforces project-level ownership checks.
+	// If nil, no ownership check is applied (useful in tests).
+	ProjectAccess func(http.Handler) http.Handler
 }
 
 // Handlers holds all handler instances. Nil handlers are replaced with a
@@ -171,6 +174,9 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 
 		// Project-scoped memory routes.
 		r.Route("/v1/projects/{project_id}/memories", func(r chi.Router) {
+			if config.ProjectAccess != nil {
+				r.Use(config.ProjectAccess)
+			}
 			r.Post("/", handler(handlers.Store))
 			r.Get("/", handler(handlers.List))
 			r.Get("/{id}", handler(handlers.Detail))

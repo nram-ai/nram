@@ -325,7 +325,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	oauthSrv := auth.NewOAuthServer(oauthRepo, userRepo, e2eJWTSecret)
 
 	// Real auth middleware (with real API key validator)
-	authMw := auth.NewAuthMiddleware(apiKeyRepo, e2eJWTSecret)
+	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
 
 	// Real rate limiter
 	rl := auth.NewRateLimiter(1000, 2000)
@@ -1851,7 +1851,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 	oauthSrv := auth.NewOAuthServer(oauthRepo, userRepo, e2eJWTSecret)
 
 	// Real auth middleware (with real API key validator)
-	authMw := auth.NewAuthMiddleware(apiKeyRepo, e2eJWTSecret)
+	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
 
 	// Real rate limiter
 	rl := auth.NewRateLimiter(1000, 2000)

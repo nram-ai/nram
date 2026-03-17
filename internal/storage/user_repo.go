@@ -461,6 +461,25 @@ func VerifyPassword(encoded, password string) bool {
 	return verifyArgon2id(encoded, password)
 }
 
+// GetRoleByID returns the role of an active (non-disabled) user by ID.
+// Returns an error if the user does not exist or is disabled.
+func (r *UserRepo) GetRoleByID(ctx context.Context, id uuid.UUID) (string, error) {
+	query := `SELECT role FROM users WHERE id = ? AND disabled_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT role FROM users WHERE id = $1 AND disabled_at IS NULL`
+	}
+
+	row := r.db.QueryRow(ctx, query, id.String())
+	var role string
+	if err := row.Scan(&role); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("user not found or disabled: %w", err)
+		}
+		return "", fmt.Errorf("user get role by id: %w", err)
+	}
+	return role, nil
+}
+
 // UpdateLastLogin sets the last_login timestamp for the given user to now.
 func (r *UserRepo) UpdateLastLogin(ctx context.Context, userID uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)

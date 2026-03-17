@@ -50,6 +50,14 @@ func (v *integrationAPIKeyValidator) Validate(_ context.Context, _ string) (*mod
 	return nil, fmt.Errorf("invalid key")
 }
 
+// integrationUserRoleLookup always returns "member" — only used if API key auth
+// succeeds, which it never does in integration tests.
+type integrationUserRoleLookup struct{}
+
+func (v *integrationUserRoleLookup) GetRoleByID(_ context.Context, _ uuid.UUID) (string, error) {
+	return "member", nil
+}
+
 // ---------------------------------------------------------------------------
 // Full chi router factory
 // ---------------------------------------------------------------------------
@@ -77,7 +85,7 @@ type integrationRouterConfig struct {
 func newIntegrationRouter(t *testing.T, cfg integrationRouterConfig) http.Handler {
 	t.Helper()
 
-	mw := auth.NewAuthMiddleware(&integrationAPIKeyValidator{}, integrationJWTSecret)
+	mw := auth.NewAuthMiddleware(&integrationAPIKeyValidator{}, &integrationUserRoleLookup{}, integrationJWTSecret)
 
 	r := chi.NewRouter()
 	r.Use(ErrorMiddleware)

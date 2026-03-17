@@ -152,8 +152,9 @@ func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
 }
 
 // NewOrgRecallHandler returns an http.HandlerFunc for org-scoped memory recall.
-// It parses org_id from the URL and looks up the organization's namespace.
-func NewOrgRecallHandler(svc RecallServicer, orgs OrgReader) http.HandlerFunc {
+// It parses org_id from the URL, verifies the authenticated user belongs to that
+// organization (or is an administrator), and looks up the organization's namespace.
+func NewOrgRecallHandler(svc RecallServicer, orgs OrgReader, users UserReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgIDStr := chi.URLParam(r, "org_id")
 		orgID, err := uuid.Parse(orgIDStr)
@@ -173,6 +174,25 @@ func NewOrgRecallHandler(svc RecallServicer, orgs OrgReader) http.HandlerFunc {
 			return
 		}
 
+		ac := auth.FromContext(r.Context())
+		if ac == nil {
+			WriteError(w, ErrUnauthorized("authentication required"))
+			return
+		}
+
+		// Verify the caller belongs to the target org, unless they are an administrator.
+		if ac.Role != auth.RoleAdministrator {
+			user, err := users.GetByID(r.Context(), ac.UserID)
+			if err != nil {
+				WriteError(w, ErrForbidden("user not found"))
+				return
+			}
+			if user.OrgID != orgID {
+				WriteError(w, ErrForbidden("access denied: you are not a member of this organization"))
+				return
+			}
+		}
+
 		org, err := orgs.GetByID(r.Context(), orgID)
 		if err != nil {
 			WriteError(w, ErrNotFound("organization not found"))
@@ -190,11 +210,9 @@ func NewOrgRecallHandler(svc RecallServicer, orgs OrgReader) http.HandlerFunc {
 			OrgID:        &orgID,
 		}
 
-		if ac := auth.FromContext(r.Context()); ac != nil {
-			uid := ac.UserID
-			req.UserID = &uid
-			req.APIKeyID = ac.APIKeyID
-		}
+		uid := ac.UserID
+		req.UserID = &uid
+		req.APIKeyID = ac.APIKeyID
 
 		resp, err := svc.Recall(r.Context(), req)
 		if err != nil {

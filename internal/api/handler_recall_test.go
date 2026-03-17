@@ -274,11 +274,20 @@ func TestMeRecallHandler_Success(t *testing.T) {
 func TestOrgRecallHandler_Success(t *testing.T) {
 	namespaceID := uuid.New()
 	orgID := uuid.New()
+	userID := uuid.New()
 
 	orgs := &mockOrgReader{
 		org: &model.Organization{
 			ID:          orgID,
 			NamespaceID: namespaceID,
+		},
+	}
+
+	// User belongs to orgID — org membership check must pass.
+	users := &mockUserReader{
+		user: &model.User{
+			ID:    userID,
+			OrgID: orgID,
 		},
 	}
 
@@ -299,8 +308,7 @@ func TestOrgRecallHandler_Success(t *testing.T) {
 		},
 	}
 
-	router := newOrgRecallRouter(NewOrgRecallHandler(svc, orgs))
-	userID := uuid.New()
+	router := newOrgRecallRouter(NewOrgRecallHandler(svc, orgs, users))
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
 	body := map[string]interface{}{
@@ -380,7 +388,8 @@ func TestRecallHandler_ServiceError(t *testing.T) {
 func TestOrgRecallHandler_InvalidOrgID(t *testing.T) {
 	svc := &mockRecallService{}
 	orgs := &mockOrgReader{}
-	router := newOrgRecallRouter(NewOrgRecallHandler(svc, orgs))
+	users := &mockUserReader{}
+	router := newOrgRecallRouter(NewOrgRecallHandler(svc, orgs, users))
 
 	body := map[string]interface{}{
 		"query": "test query",

@@ -129,7 +129,7 @@ func computeCodeChallenge(verifier string) string {
 //   - GET  /userinfo
 //   - GET  /mcp  (protected by AuthMiddleware)
 func buildOAuthRouter(oauthSrv *OAuthServer, secret []byte) http.Handler {
-	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, secret)
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserRoleLookup{fixedRole: "member"}, secret)
 
 	r := chi.NewRouter()
 

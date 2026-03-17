@@ -55,6 +55,14 @@ func (t *testAPIKeyValidator) Validate(_ context.Context, _ string) (*model.APIK
 	return nil, fmt.Errorf("api key validation not supported in test")
 }
 
+// testUserRoleLookup implements auth.UserRoleLookup for tests.
+// API key validation always fails in these tests so this is never called.
+type testUserRoleLookup struct{}
+
+func (t *testUserRoleLookup) GetRoleByID(_ context.Context, _ uuid.UUID) (string, error) {
+	return "member", nil
+}
+
 // ---------------------------------------------------------------------------
 // Test JWT secret and helper
 // ---------------------------------------------------------------------------
@@ -151,7 +159,7 @@ func newHTTPStackEnv(t *testing.T) *httpStackEnv {
 	}
 	mcpSrv := NewServer(deps)
 
-	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, httpStackTestSecret)
+	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserRoleLookup{}, httpStackTestSecret)
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
@@ -1380,7 +1388,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 	}
 	mcpSrv := NewServer(deps)
 
-	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, httpStackTestSecret)
+	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserRoleLookup{}, httpStackTestSecret)
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
