@@ -1210,3 +1210,1205 @@ func TestRBAC_NoAuth_ProtectedRoutes(t *testing.T) {
 	resp = rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/admin/users", "", nil)
 	rbacExpectStatus(t, resp, http.StatusUnauthorized)
 }
+
+// ===========================================================================
+// Extended RBAC test environment with ALL handlers wired up
+// ===========================================================================
+
+// rbacCountingMemoryRepo extends rbacMemoryRepo with CountByNamespace for list handler.
+type rbacCountingMemoryRepo struct {
+	*rbacMemoryRepo
+}
+
+func (m *rbacCountingMemoryRepo) CountByNamespace(_ context.Context, _ uuid.UUID) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.memories), nil
+}
+
+// rbacEntityLister is a no-op entity lister for export.
+type rbacEntityLister struct{}
+
+func (m *rbacEntityLister) ListByNamespace(_ context.Context, _ uuid.UUID) ([]model.Entity, error) {
+	return nil, nil
+}
+
+// rbacRelationshipLister is a no-op relationship lister for export.
+type rbacRelationshipLister struct{}
+
+func (m *rbacRelationshipLister) ListByEntity(_ context.Context, _ uuid.UUID) ([]model.Relationship, error) {
+	return nil, nil
+}
+
+// rbacLineageReader is a no-op lineage reader for export.
+type rbacLineageReader struct{}
+
+func (m *rbacLineageReader) ListByMemory(_ context.Context, _ uuid.UUID) ([]model.MemoryLineage, error) {
+	return nil, nil
+}
+
+// rbacFullTestEnv builds a test env with all handlers wired up (List, Detail,
+// BatchGet, Export, Import, Enrich, Events) in addition to those in newRBACTestEnv.
+func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
+	t.Helper()
+
+	db := e2eTestDB(t)
+	ctx := context.Background()
+
+	nsRepo := storage.NewNamespaceRepo(db)
+	orgRepo := storage.NewOrganizationRepo(db)
+	userRepo := storage.NewUserRepo(db)
+	apiKeyRepo := storage.NewAPIKeyRepo(db)
+
+	rootID := uuid.MustParse("00000000-0000-0000-0000-000000000000")
+
+	// --- Org A ("acme") ---
+	orgANSID := uuid.New()
+	orgANS := &model.Namespace{
+		ID:       orgANSID,
+		Name:     "Acme NS",
+		Slug:     "acme-ns",
+		Kind:     "org",
+		ParentID: &rootID,
+		Path:     "root/acme-ns",
+		Depth:    1,
+	}
+	if err := nsRepo.Create(ctx, orgANS); err != nil {
+		t.Fatalf("create org A namespace: %v", err)
+	}
+
+	orgA := &model.Organization{
+		NamespaceID: orgANSID,
+		Name:        "Acme",
+		Slug:        "acme",
+	}
+	if err := orgRepo.Create(ctx, orgA); err != nil {
+		t.Fatalf("create org A: %v", err)
+	}
+
+	// --- Org B ("globex") ---
+	orgBNSID := uuid.New()
+	orgBNS := &model.Namespace{
+		ID:       orgBNSID,
+		Name:     "Globex NS",
+		Slug:     "globex-ns",
+		Kind:     "org",
+		ParentID: &rootID,
+		Path:     "root/globex-ns",
+		Depth:    1,
+	}
+	if err := nsRepo.Create(ctx, orgBNS); err != nil {
+		t.Fatalf("create org B namespace: %v", err)
+	}
+
+	orgB := &model.Organization{
+		NamespaceID: orgBNSID,
+		Name:        "Globex",
+		Slug:        "globex",
+	}
+	if err := orgRepo.Create(ctx, orgB); err != nil {
+		t.Fatalf("create org B: %v", err)
+	}
+
+	// --- Helper to create a user + JWT + API key ---
+	createUser := func(email, displayName, role string, org *model.Organization, orgNSPath string) rbacUser {
+		t.Helper()
+		user := &model.User{
+			Email:       email,
+			DisplayName: displayName,
+			OrgID:       org.ID,
+			Role:        role,
+		}
+		if err := userRepo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+			t.Fatalf("create user %s: %v", email, err)
+		}
+
+		jwt, err := auth.GenerateJWT(user.ID, role, e2eJWTSecret, 1*time.Hour)
+		if err != nil {
+			t.Fatalf("generate JWT for %s: %v", email, err)
+		}
+
+		key := &model.APIKey{
+			UserID: user.ID,
+			Name:   displayName + " API Key",
+			Scopes: []uuid.UUID{},
+		}
+		rawKey, err := apiKeyRepo.Create(ctx, key)
+		if err != nil {
+			t.Fatalf("create API key for %s: %v", email, err)
+		}
+
+		return rbacUser{User: user, JWT: jwt, APIKey: rawKey}
+	}
+
+	admin := createUser("admin@acme.test", "Admin", auth.RoleAdministrator, orgA, orgANS.Path)
+	orgAOwner := createUser("owner@acme.test", "OrgA Owner", auth.RoleOrgOwner, orgA, orgANS.Path)
+	orgAMember := createUser("member@acme.test", "OrgA Member", auth.RoleMember, orgA, orgANS.Path)
+	orgAReadonly := createUser("readonly@acme.test", "OrgA Readonly", auth.RoleReadonly, orgA, orgANS.Path)
+	orgAService := createUser("service@acme.test", "OrgA Service", auth.RoleService, orgA, orgANS.Path)
+	orgBMember := createUser("member@globex.test", "OrgB Member", auth.RoleMember, orgB, orgBNS.Path)
+
+	// --- Projects ---
+	projectANSID := uuid.New()
+	projectANS := &model.Namespace{
+		ID:       projectANSID,
+		Name:     "proj-a",
+		Slug:     "proj-a",
+		Kind:     "project",
+		ParentID: &orgAMember.User.NamespaceID,
+		Path:     orgANS.Path + "/" + orgAMember.User.NamespaceID.String() + "/proj-a",
+		Depth:    3,
+	}
+	if err := nsRepo.Create(ctx, projectANS); err != nil {
+		t.Fatalf("create project A namespace: %v", err)
+	}
+
+	projectA := &model.Project{
+		ID:               uuid.New(),
+		NamespaceID:      projectANSID,
+		OwnerNamespaceID: orgAMember.User.NamespaceID,
+		Name:             "Project A",
+		Slug:             "proj-a",
+	}
+
+	projectBNSID := uuid.New()
+	projectBNS := &model.Namespace{
+		ID:       projectBNSID,
+		Name:     "proj-b",
+		Slug:     "proj-b",
+		Kind:     "project",
+		ParentID: &orgBMember.User.NamespaceID,
+		Path:     orgBNS.Path + "/" + orgBMember.User.NamespaceID.String() + "/proj-b",
+		Depth:    3,
+	}
+	if err := nsRepo.Create(ctx, projectBNS); err != nil {
+		t.Fatalf("create project B namespace: %v", err)
+	}
+
+	projectB := &model.Project{
+		ID:               uuid.New(),
+		NamespaceID:      projectBNSID,
+		OwnerNamespaceID: orgBMember.User.NamespaceID,
+		Name:             "Project B",
+		Slug:             "proj-b",
+	}
+
+	// --- Build services ---
+	memRepo := newRBACMemoryRepo()
+	countingMemRepo := &rbacCountingMemoryRepo{memRepo}
+
+	projectLookup := newRBACMultiProjectLookup()
+	projectLookup.Add(projectA)
+	projectLookup.Add(projectB)
+
+	namespaceLookup := &rbacNamespaceLookup{db: db}
+	userLookup := &rbacUserLookup{db: db}
+	orgLookup := &rbacOrgLookup{db: db}
+
+	storeSvc := service.NewStoreService(
+		memRepo, projectLookup, namespaceLookup,
+		&rbacIngestionLogRepo{}, &rbacTokenUsageRepo{}, &rbacEnrichmentQueueRepo{},
+		nil, nil,
+	)
+
+	recallSvc := service.NewRecallService(
+		memRepo, projectLookup, namespaceLookup,
+		&rbacTokenUsageRepo{},
+		nil, nil, nil, nil, nil,
+	)
+
+	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil)
+
+	updateSvc := service.NewUpdateService(
+		memRepo, projectLookup, &rbacLineageCreator{},
+		nil, &rbacTokenUsageRepo{}, nil,
+	)
+
+	batchStoreSvc := service.NewBatchStoreService(
+		memRepo, projectLookup, namespaceLookup,
+		&rbacIngestionLogRepo{}, &rbacTokenUsageRepo{}, &rbacEnrichmentQueueRepo{},
+		nil, nil,
+	)
+
+	batchGetSvc := service.NewBatchGetService(memRepo, projectLookup)
+
+	exportSvc := service.NewExportService(
+		memRepo, &rbacEntityLister{}, &rbacRelationshipLister{},
+		&rbacLineageReader{}, projectLookup,
+	)
+
+	importSvc := service.NewImportService(
+		memRepo, projectLookup, namespaceLookup, &rbacIngestionLogRepo{},
+	)
+
+	enrichSvc := service.NewEnrichService(
+		memRepo, projectLookup, &rbacEnrichmentQueueRepo{},
+	)
+
+	// --- MCP server ---
+	mcpDeps := mcp.Dependencies{
+		Backend:       storage.BackendSQLite,
+		Store:         storeSvc,
+		Recall:        recallSvc,
+		Forget:        forgetSvc,
+		Update:        updateSvc,
+		BatchGet:      batchGetSvc,
+		BatchStore:    batchStoreSvc,
+		Export:        exportSvc,
+		Enrich:        enrichSvc,
+		ProjectRepo:   projectLookup,
+		UserRepo:      userLookup,
+		NamespaceRepo: namespaceLookup,
+		OrgRepo:       orgLookup,
+	}
+	mcpSrv := mcp.NewServer(mcpDeps)
+
+	// --- Auth middleware ---
+	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
+
+	// --- Rate limiter ---
+	rl := auth.NewRateLimiter(10000, 20000)
+	t.Cleanup(rl.Stop)
+
+	// --- Metrics ---
+	metrics := api.NewMetrics()
+
+	// --- Project access middleware ---
+	projectAccessMw := api.ProjectAccessMiddleware(api.ProjectAccessConfig{
+		Projects:   projectLookup,
+		Namespaces: namespaceLookup,
+		Orgs:       orgLookup,
+		Users:      userLookup,
+	})
+
+	// --- Dashboard + User admin stores ---
+	dashStore := &rbacDashboardStore{}
+	userAdminStore := &rbacUserAdminStore{db: db}
+
+	// --- Handlers (all wired up) ---
+	handlers := Handlers{
+		MCP: mcpSrv.Handler(),
+
+		// Memory handlers
+		Store:      api.NewStoreHandler(storeSvc, nil),
+		Recall:     api.NewRecallHandler(recallSvc),
+		Update:     api.NewUpdateHandler(updateSvc, nil),
+		Delete:     api.NewDeleteHandler(forgetSvc, nil),
+		BulkForget: api.NewBulkForgetHandler(forgetSvc, nil),
+		BatchStore: api.NewBatchStoreHandler(batchStoreSvc, nil),
+		BatchGet:   api.NewBatchGetHandler(batchGetSvc),
+		List:       api.NewListHandler(countingMemRepo, projectLookup),
+		Detail:     api.NewDetailHandler(countingMemRepo, projectLookup),
+		Export:     api.NewExportHandler(exportSvc),
+		Import:     api.NewImportHandler(importSvc),
+		Enrich:     api.NewEnrichHandler(enrichSvc, nil),
+
+		// User-scoped handlers
+		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup),
+		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
+		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
+		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
+
+		// Org-scoped
+		OrgRecall: api.NewOrgRecallHandler(recallSvc, orgLookup, userLookup),
+
+		// Admin
+		AdminDashboard: api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashStore}),
+		AdminUsers:     api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore}),
+
+		// Health
+		Health: func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"ok"}`))
+		},
+
+		// Setup status
+		AdminSetupStatus: func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"complete":true}`))
+		},
+
+		// SSE events (simple handler that returns 200 with SSE headers)
+		Events: func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.WriteHeader(http.StatusOK)
+			// Write a single keepalive comment and return immediately.
+			w.Write([]byte(": keepalive\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		},
+	}
+
+	// --- Build the real production router ---
+	cfg := RouterConfig{
+		AuthMiddleware: authMw,
+		RateLimiter:    rl,
+		Metrics:        metrics,
+		ProjectAccess:  projectAccessMw,
+	}
+
+	router := NewRouter(cfg, handlers)
+	ts := httptest.NewServer(router)
+	t.Cleanup(ts.Close)
+
+	return &rbacTestEnv{
+		Server:      ts,
+		DB:          db,
+		OrgA:        orgA,
+		OrgB:        orgB,
+		OrgANS:      orgANS,
+		OrgBNS:      orgBNS,
+		Admin:       admin,
+		OrgAOwner:   orgAOwner,
+		OrgAMember:  orgAMember,
+		OrgAReadonly: orgAReadonly,
+		OrgAService: orgAService,
+		OrgBMember:  orgBMember,
+		ProjectA:    projectA,
+		ProjectB:    projectB,
+		MemRepo:     memRepo,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// URL helpers for new endpoints
+// ---------------------------------------------------------------------------
+
+func rbacBatchStoreURL(baseURL string, projectID uuid.UUID) string {
+	return fmt.Sprintf("%s/v1/projects/%s/memories/batch", baseURL, projectID)
+}
+
+func rbacBatchGetURL(baseURL string, projectID uuid.UUID) string {
+	return fmt.Sprintf("%s/v1/projects/%s/memories/get", baseURL, projectID)
+}
+
+func rbacListURL(baseURL string, projectID uuid.UUID) string {
+	return fmt.Sprintf("%s/v1/projects/%s/memories", baseURL, projectID)
+}
+
+func rbacDetailURL(baseURL string, projectID, memoryID uuid.UUID) string {
+	return fmt.Sprintf("%s/v1/projects/%s/memories/%s", baseURL, projectID, memoryID)
+}
+
+func rbacExportURL(baseURL string, projectID uuid.UUID) string {
+	return fmt.Sprintf("%s/v1/projects/%s/memories/export", baseURL, projectID)
+}
+
+func rbacImportURL(baseURL string, projectID uuid.UUID) string {
+	return fmt.Sprintf("%s/v1/projects/%s/memories/import", baseURL, projectID)
+}
+
+func rbacEnrichURL(baseURL string, projectID uuid.UUID) string {
+	return fmt.Sprintf("%s/v1/projects/%s/memories/enrich", baseURL, projectID)
+}
+
+func rbacDeleteURL(baseURL string, projectID, memoryID uuid.UUID) string {
+	return fmt.Sprintf("%s/v1/projects/%s/memories/%s", baseURL, projectID, memoryID)
+}
+
+// rbacStoreMemoryFull stores a memory via admin token and returns the memory ID.
+func rbacStoreMemoryFull(t *testing.T, env *rbacTestEnv, projectID uuid.UUID) uuid.UUID {
+	t.Helper()
+	idStr := rbacStoreMemory(t, env.Server.URL, env.Admin.JWT, projectID)
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		t.Fatalf("parse memory ID: %v", err)
+	}
+	return id
+}
+
+// ---------------------------------------------------------------------------
+// role test case helper type
+// ---------------------------------------------------------------------------
+
+type rbacRoleTestCase struct {
+	name       string
+	token      string
+	projectID  uuid.UUID
+	wantStatus int
+}
+
+// rbacAllRoleCases builds 10 test cases: 5 roles x own-org + cross-org.
+func rbacAllRoleCases(env *rbacTestEnv, ownOrgWrite, crossOrgWrite int) []rbacRoleTestCase {
+	// ownOrgWrite = expected status for write ops from own org (non-readonly)
+	// crossOrgWrite = expected status for cross-org (non-admin)
+	return []rbacRoleTestCase{
+		{"admin_own_org", env.Admin.JWT, env.ProjectA.ID, ownOrgWrite},
+		{"admin_cross_org", env.Admin.JWT, env.ProjectB.ID, ownOrgWrite},
+		{"org_owner_own_org", env.OrgAOwner.JWT, env.ProjectA.ID, ownOrgWrite},
+		{"org_owner_cross_org", env.OrgAOwner.JWT, env.ProjectB.ID, crossOrgWrite},
+		{"member_own_org", env.OrgAMember.JWT, env.ProjectA.ID, ownOrgWrite},
+		{"member_cross_org", env.OrgAMember.JWT, env.ProjectB.ID, crossOrgWrite},
+		{"readonly_own_org", env.OrgAReadonly.JWT, env.ProjectA.ID, http.StatusForbidden},
+		{"readonly_cross_org", env.OrgAReadonly.JWT, env.ProjectB.ID, http.StatusForbidden},
+		{"service_own_org", env.OrgAService.JWT, env.ProjectA.ID, ownOrgWrite},
+		{"service_cross_org", env.OrgAService.JWT, env.ProjectB.ID, crossOrgWrite},
+	}
+}
+
+// rbacAllRoleReadCases builds 10 test cases for read ops (readonly allowed on own org).
+func rbacAllRoleReadCases(env *rbacTestEnv, ownOrgRead, crossOrgRead int) []rbacRoleTestCase {
+	return []rbacRoleTestCase{
+		{"admin_own_org", env.Admin.JWT, env.ProjectA.ID, ownOrgRead},
+		{"admin_cross_org", env.Admin.JWT, env.ProjectB.ID, ownOrgRead},
+		{"org_owner_own_org", env.OrgAOwner.JWT, env.ProjectA.ID, ownOrgRead},
+		{"org_owner_cross_org", env.OrgAOwner.JWT, env.ProjectB.ID, crossOrgRead},
+		{"member_own_org", env.OrgAMember.JWT, env.ProjectA.ID, ownOrgRead},
+		{"member_cross_org", env.OrgAMember.JWT, env.ProjectB.ID, crossOrgRead},
+		{"readonly_own_org", env.OrgAReadonly.JWT, env.ProjectA.ID, ownOrgRead},
+		{"readonly_cross_org", env.OrgAReadonly.JWT, env.ProjectB.ID, crossOrgRead},
+		{"service_own_org", env.OrgAService.JWT, env.ProjectA.ID, ownOrgRead},
+		{"service_cross_org", env.OrgAService.JWT, env.ProjectB.ID, crossOrgRead},
+	}
+}
+
+// ===========================================================================
+// Test 1: TestRBAC_AllRoles_BatchStore
+// ===========================================================================
+
+func TestRBAC_AllRoles_BatchStore(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := rbacAllRoleCases(env, http.StatusCreated, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := map[string]interface{}{
+				"items": []map[string]interface{}{
+					{"content": "batch item 1 " + tt.name, "source": "rbac-test"},
+					{"content": "batch item 2 " + tt.name, "source": "rbac-test"},
+				},
+			}
+			resp := rbacDoRequest(t, http.MethodPost, rbacBatchStoreURL(env.Server.URL, tt.projectID), tt.token, body)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 2: TestRBAC_AllRoles_BatchGet
+// ===========================================================================
+
+func TestRBAC_AllRoles_BatchGet(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// Pre-store a memory in each project as admin.
+	memA := rbacStoreMemoryFull(t, env, env.ProjectA.ID)
+	memB := rbacStoreMemoryFull(t, env, env.ProjectB.ID)
+
+	tests := rbacAllRoleReadCases(env, http.StatusOK, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			memID := memA
+			if tt.projectID == env.ProjectB.ID {
+				memID = memB
+			}
+			body := map[string]interface{}{
+				"ids": []string{memID.String()},
+			}
+			resp := rbacDoRequest(t, http.MethodPost, rbacBatchGetURL(env.Server.URL, tt.projectID), tt.token, body)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 3: TestRBAC_AllRoles_Update
+// ===========================================================================
+
+func TestRBAC_AllRoles_Update(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// Pre-store memories in each project as admin.
+	memA := rbacStoreMemoryFull(t, env, env.ProjectA.ID)
+	memB := rbacStoreMemoryFull(t, env, env.ProjectB.ID)
+
+	tests := rbacAllRoleCases(env, http.StatusOK, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			memID := memA
+			if tt.projectID == env.ProjectB.ID {
+				memID = memB
+			}
+			body := map[string]interface{}{
+				"content": "updated content " + tt.name,
+			}
+			resp := rbacDoRequest(t, http.MethodPut, rbacUpdateURL(env.Server.URL, tt.projectID, memID), tt.token, body)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 4: TestRBAC_AllRoles_SingleDelete
+// ===========================================================================
+
+func TestRBAC_AllRoles_SingleDelete(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := rbacAllRoleCases(env, http.StatusOK, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Store a fresh memory for each subtest since delete removes it.
+			var memID uuid.UUID
+			if tt.wantStatus != http.StatusForbidden {
+				memID = rbacStoreMemoryFull(t, env, tt.projectID)
+			} else {
+				// For forbidden cases, use a dummy — we won't even reach deletion.
+				// Store in the target project as admin so the ID exists.
+				memID = rbacStoreMemoryFull(t, env, tt.projectID)
+			}
+			resp := rbacDoRequest(t, http.MethodDelete, rbacDeleteURL(env.Server.URL, tt.projectID, memID), tt.token, nil)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 5: TestRBAC_AllRoles_BulkForget
+// ===========================================================================
+
+func TestRBAC_AllRoles_BulkForget(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := rbacAllRoleCases(env, http.StatusOK, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Store a fresh memory for each subtest.
+			memID := rbacStoreMemoryFull(t, env, tt.projectID)
+			body := map[string]interface{}{
+				"ids": []string{memID.String()},
+			}
+			resp := rbacDoRequest(t, http.MethodPost, rbacForgetURL(env.Server.URL, tt.projectID), tt.token, body)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 6: TestRBAC_AllRoles_List
+// ===========================================================================
+
+func TestRBAC_AllRoles_List(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := rbacAllRoleReadCases(env, http.StatusOK, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rbacDoRequest(t, http.MethodGet, rbacListURL(env.Server.URL, tt.projectID), tt.token, nil)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 7: TestRBAC_AllRoles_Detail
+// ===========================================================================
+
+func TestRBAC_AllRoles_Detail(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// Pre-store memories.
+	memA := rbacStoreMemoryFull(t, env, env.ProjectA.ID)
+	memB := rbacStoreMemoryFull(t, env, env.ProjectB.ID)
+
+	tests := rbacAllRoleReadCases(env, http.StatusOK, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			memID := memA
+			if tt.projectID == env.ProjectB.ID {
+				memID = memB
+			}
+			resp := rbacDoRequest(t, http.MethodGet, rbacDetailURL(env.Server.URL, tt.projectID, memID), tt.token, nil)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 8: TestRBAC_AllRoles_Export
+// ===========================================================================
+
+func TestRBAC_AllRoles_Export(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := rbacAllRoleReadCases(env, http.StatusOK, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rbacDoRequest(t, http.MethodGet, rbacExportURL(env.Server.URL, tt.projectID), tt.token, nil)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 9: TestRBAC_AllRoles_Import
+// ===========================================================================
+
+func TestRBAC_AllRoles_Import(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := rbacAllRoleCases(env, http.StatusOK, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Minimal valid nram import payload.
+			body := map[string]interface{}{
+				"version": "1.0",
+				"memories": []map[string]interface{}{
+					{"content": "imported memory " + tt.name, "source": "rbac-import-test"},
+				},
+			}
+			resp := rbacDoRequest(t, http.MethodPost, rbacImportURL(env.Server.URL, tt.projectID), tt.token, body)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 10: TestRBAC_AllRoles_Enrich
+// ===========================================================================
+
+func TestRBAC_AllRoles_Enrich(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// Pre-store memories to enrich.
+	memA := rbacStoreMemoryFull(t, env, env.ProjectA.ID)
+	memB := rbacStoreMemoryFull(t, env, env.ProjectB.ID)
+
+	tests := rbacAllRoleCases(env, http.StatusOK, http.StatusForbidden)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			memID := memA
+			if tt.projectID == env.ProjectB.ID {
+				memID = memB
+			}
+			body := map[string]interface{}{
+				"ids": []string{memID.String()},
+			}
+			resp := rbacDoRequest(t, http.MethodPost, rbacEnrichURL(env.Server.URL, tt.projectID), tt.token, body)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 11: TestRBAC_AllRoles_MeRecall
+// ===========================================================================
+
+func TestRBAC_AllRoles_MeRecall(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := []struct {
+		name       string
+		token      string
+		wantStatus int
+	}{
+		{"admin", env.Admin.JWT, http.StatusOK},
+		{"org_owner", env.OrgAOwner.JWT, http.StatusOK},
+		{"member", env.OrgAMember.JWT, http.StatusOK},
+		{"readonly", env.OrgAReadonly.JWT, http.StatusOK},
+		{"service", env.OrgAService.JWT, http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := map[string]interface{}{
+				"query": "test recall",
+			}
+			resp := rbacDoRequest(t, http.MethodPost, env.Server.URL+"/v1/me/memories/recall", tt.token, body)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 12: TestRBAC_AllRoles_MeProjects
+// ===========================================================================
+
+func TestRBAC_AllRoles_MeProjects(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := []struct {
+		name       string
+		token      string
+		wantStatus int
+	}{
+		{"admin", env.Admin.JWT, http.StatusOK},
+		{"org_owner", env.OrgAOwner.JWT, http.StatusOK},
+		{"member", env.OrgAMember.JWT, http.StatusOK},
+		{"readonly", env.OrgAReadonly.JWT, http.StatusOK},
+		{"service", env.OrgAService.JWT, http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/me/projects", tt.token, nil)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 13: TestRBAC_AllRoles_MeAPIKeys
+// ===========================================================================
+
+func TestRBAC_AllRoles_MeAPIKeys(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := []struct {
+		name       string
+		token      string
+		wantStatus int
+	}{
+		{"admin", env.Admin.JWT, http.StatusOK},
+		{"org_owner", env.OrgAOwner.JWT, http.StatusOK},
+		{"member", env.OrgAMember.JWT, http.StatusOK},
+		{"readonly", env.OrgAReadonly.JWT, http.StatusOK},
+		{"service", env.OrgAService.JWT, http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/me/api-keys", tt.token, nil)
+			rbacExpectStatus(t, resp, tt.wantStatus)
+		})
+	}
+}
+
+// ===========================================================================
+// Test 14: TestRBAC_AllRoles_SSE_Events
+// ===========================================================================
+
+func TestRBAC_AllRoles_SSE_Events(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	tests := []struct {
+		name       string
+		token      string
+		wantStatus int
+	}{
+		{"admin", env.Admin.JWT, http.StatusOK},
+		{"org_owner", env.OrgAOwner.JWT, http.StatusOK},
+		{"member", env.OrgAMember.JWT, http.StatusOK},
+		{"readonly", env.OrgAReadonly.JWT, http.StatusOK},
+		{"service", env.OrgAService.JWT, http.StatusOK},
+		{"unauthenticated", "", http.StatusUnauthorized},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/events", tt.token, nil)
+			body := rbacReadBody(t, resp)
+			if resp.StatusCode != tt.wantStatus {
+				t.Fatalf("expected status %d, got %d; body: %s", tt.wantStatus, resp.StatusCode, body)
+			}
+			if tt.wantStatus == http.StatusOK {
+				ct := resp.Header.Get("Content-Type")
+				if ct != "text/event-stream" {
+					t.Fatalf("expected Content-Type text/event-stream, got %s", ct)
+				}
+			}
+		})
+	}
+}
+
+// ===========================================================================
+// Test 15: TestRBAC_AllRoles_AdminEndpoints
+// ===========================================================================
+
+func TestRBAC_AllRoles_AdminEndpoints(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	adminEndpoints := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"dashboard", http.MethodGet, "/v1/admin/dashboard"},
+		{"activity", http.MethodGet, "/v1/admin/activity"},
+		{"orgs", http.MethodGet, "/v1/admin/orgs"},
+		{"users", http.MethodGet, "/v1/admin/users"},
+		{"projects", http.MethodGet, "/v1/admin/projects"},
+		{"providers", http.MethodGet, "/v1/admin/providers"},
+		{"settings", http.MethodGet, "/v1/admin/settings"},
+		{"enrichment", http.MethodGet, "/v1/admin/enrichment"},
+		{"oauth", http.MethodGet, "/v1/admin/oauth"},
+		{"webhooks", http.MethodGet, "/v1/admin/webhooks"},
+		{"analytics", http.MethodGet, "/v1/admin/analytics"},
+		{"usage", http.MethodGet, "/v1/admin/usage"},
+		{"namespaces_tree", http.MethodGet, "/v1/admin/namespaces/tree"},
+		{"graph", http.MethodGet, "/v1/admin/graph"},
+		{"database", http.MethodGet, "/v1/admin/database"},
+	}
+
+	roles := []struct {
+		name       string
+		token      string
+		wantStatus int // expected status for admin endpoints
+	}{
+		{"admin", env.Admin.JWT, -1},     // -1 means "not 403" (could be 200 or 501)
+		{"org_owner", env.OrgAOwner.JWT, http.StatusForbidden},
+		{"member", env.OrgAMember.JWT, http.StatusForbidden},
+		{"readonly", env.OrgAReadonly.JWT, http.StatusForbidden},
+		{"service", env.OrgAService.JWT, http.StatusForbidden},
+	}
+
+	for _, ep := range adminEndpoints {
+		for _, role := range roles {
+			testName := ep.name + "/" + role.name
+			t.Run(testName, func(t *testing.T) {
+				resp := rbacDoRequest(t, ep.method, env.Server.URL+ep.path, role.token, nil)
+				body := rbacReadBody(t, resp)
+				if role.wantStatus == -1 {
+					// Admin should NOT get 403; may get 200 or 501 for unimplemented endpoints.
+					if resp.StatusCode == http.StatusForbidden {
+						t.Fatalf("admin should not get 403 on %s; body: %s", ep.path, body)
+					}
+				} else {
+					if resp.StatusCode != role.wantStatus {
+						t.Fatalf("expected status %d for %s on %s, got %d; body: %s",
+							role.wantStatus, role.name, ep.path, resp.StatusCode, body)
+					}
+				}
+			})
+		}
+	}
+}
+
+// ===========================================================================
+// MCP helpers for comprehensive role tests
+// ===========================================================================
+
+// rbacMCPCallTool calls a named MCP tool and returns the parsed response.
+func rbacMCPCallTool(t *testing.T, baseURL, token, sessionID, toolName string, args map[string]interface{}) *e2eJSONRPCResponse {
+	t.Helper()
+	resp := rbacMCPPost(t, baseURL, token, e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "tools/call",
+		Params: map[string]interface{}{
+			"name":      toolName,
+			"arguments": args,
+		},
+	}, sessionID)
+	return e2eParseJSONRPC(t, resp)
+}
+
+// rbacMCPIsError checks whether the MCP response indicates an error (either
+// JSON-RPC error or isError in tool result).
+func rbacMCPIsError(rpc *e2eJSONRPCResponse) bool {
+	if rpc.Error != nil {
+		return true
+	}
+	if rpc.Result == nil {
+		return false
+	}
+	var toolResult struct {
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(rpc.Result, &toolResult); err == nil && toolResult.IsError {
+		return true
+	}
+	return false
+}
+
+type rbacMCPRoleCase struct {
+	name      string
+	token     string
+	project   string // project slug — for MCP, this is user-scoped (each user has their own project namespace)
+	wantError bool   // true if we expect the MCP tool call to return an error
+}
+
+// rbacMCPStoreAndGetID stores a memory via MCP memory_store for a given user/session and
+// returns the memory ID string. memory_store uses resolveOrCreateProject which auto-creates
+// the project under the calling user's namespace.
+func rbacMCPStoreAndGetID(t *testing.T, baseURL, token, sessionID, project string) string {
+	t.Helper()
+	rpc := rbacMCPCallTool(t, baseURL, token, sessionID, "memory_store", map[string]interface{}{
+		"project": project,
+		"content": "mcp seed " + uuid.New().String()[:8],
+	})
+	if rbacMCPIsError(rpc) {
+		t.Fatalf("failed to pre-store memory in %s: result=%s", project, string(rpc.Result))
+	}
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	json.Unmarshal(rpc.Result, &result)
+	var storeResp struct {
+		ID string `json:"id"`
+	}
+	if len(result.Content) > 0 {
+		json.Unmarshal([]byte(result.Content[0].Text), &storeResp)
+	}
+	if storeResp.ID == "" {
+		t.Fatalf("empty memory ID from MCP store; result=%s", string(rpc.Result))
+	}
+	return storeResp.ID
+}
+
+// MCP project slug resolution is user-scoped: GetBySlug(user.NamespaceID, slug).
+// Each user can only see projects under their own namespace. Cross-org access
+// is enforced by the fact that the slug does not exist under the requesting
+// user's namespace.
+//
+// NOTE: MCP does NOT enforce role-based write restrictions (no RequireWriteAccess
+// middleware on /mcp). All authenticated users, including readonly, can perform
+// write operations on their own projects via MCP. Cross-org projects are simply
+// "not found" because the slug resolves under the user's own namespace.
+//
+// For tests with 10 subtests (5 roles x own + cross):
+// - own_org: all roles succeed (slug resolves to user's own project)
+// - cross_org: all roles fail (slug does not exist under user's namespace)
+
+// rbacMCPAllRoleCases builds 10 MCP test cases: 5 roles x own-org + cross-org.
+// own-org slug "rbac-proj" resolves for each user (store first to auto-create).
+// cross-org slug "foreign-proj" does not exist under the user's namespace.
+func rbacMCPAllRoleCases(env *rbacTestEnv) []rbacMCPRoleCase {
+	return []rbacMCPRoleCase{
+		{"admin_own_org", env.Admin.JWT, "rbac-proj", false},
+		{"admin_cross_org", env.Admin.JWT, "foreign-proj", true},
+		{"org_owner_own_org", env.OrgAOwner.JWT, "rbac-proj", false},
+		{"org_owner_cross_org", env.OrgAOwner.JWT, "foreign-proj", true},
+		{"member_own_org", env.OrgAMember.JWT, "rbac-proj", false},
+		{"member_cross_org", env.OrgAMember.JWT, "foreign-proj", true},
+		{"readonly_own_org", env.OrgAReadonly.JWT, "rbac-proj", false},
+		{"readonly_cross_org", env.OrgAReadonly.JWT, "foreign-proj", true},
+		{"service_own_org", env.OrgAService.JWT, "rbac-proj", false},
+		{"service_cross_org", env.OrgAService.JWT, "foreign-proj", true},
+	}
+}
+
+// rbacMCPSeedProject stores a memory for each role user with the "rbac-proj" slug
+// so that the project exists under each user's namespace for subsequent operations.
+// Returns a map of token -> memory ID stored.
+func rbacMCPSeedProject(t *testing.T, env *rbacTestEnv) map[string]string {
+	t.Helper()
+	tokens := []string{
+		env.Admin.JWT,
+		env.OrgAOwner.JWT,
+		env.OrgAMember.JWT,
+		env.OrgAReadonly.JWT,
+		env.OrgAService.JWT,
+	}
+	memIDs := make(map[string]string, len(tokens))
+	for _, token := range tokens {
+		sessionID := rbacMCPInitialize(t, env.Server.URL, token)
+		memIDs[token] = rbacMCPStoreAndGetID(t, env.Server.URL, token, sessionID, "rbac-proj")
+	}
+	return memIDs
+}
+
+// ===========================================================================
+// Test 16: TestRBAC_MCP_AllRoles_BatchStore
+// ===========================================================================
+
+func TestRBAC_MCP_AllRoles_BatchStore(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// memory_store_batch uses resolveOrCreateProject, so own-org auto-creates.
+	// Cross-org slugs that don't exist under the user will also auto-create
+	// (since batch store also uses resolveOrCreateProject). Both own and cross
+	// slug succeed, but the "cross" slug just creates a new project under the
+	// calling user. We test the 5 roles x 2 projects pattern: own slug succeeds,
+	// cross slug also succeeds (auto-create).
+	tests := []rbacMCPRoleCase{
+		{"admin_own_org", env.Admin.JWT, "batch-proj", false},
+		{"admin_cross_org", env.Admin.JWT, "batch-foreign", false},
+		{"org_owner_own_org", env.OrgAOwner.JWT, "batch-proj", false},
+		{"org_owner_cross_org", env.OrgAOwner.JWT, "batch-foreign", false},
+		{"member_own_org", env.OrgAMember.JWT, "batch-proj", false},
+		{"member_cross_org", env.OrgAMember.JWT, "batch-foreign", false},
+		{"readonly_own_org", env.OrgAReadonly.JWT, "batch-proj", false},
+		{"readonly_cross_org", env.OrgAReadonly.JWT, "batch-foreign", false},
+		{"service_own_org", env.OrgAService.JWT, "batch-proj", false},
+		{"service_cross_org", env.OrgAService.JWT, "batch-foreign", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_store_batch", map[string]interface{}{
+				"project": tt.project,
+				"items": []interface{}{
+					map[string]interface{}{"content": "mcp batch " + tt.name},
+				},
+			})
+			gotError := rbacMCPIsError(rpc)
+			if gotError != tt.wantError {
+				t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))
+			}
+		})
+	}
+}
+
+// ===========================================================================
+// Test 17: TestRBAC_MCP_AllRoles_Update
+// ===========================================================================
+
+func TestRBAC_MCP_AllRoles_Update(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// Seed "rbac-proj" for each user so they each have a memory to update.
+	memIDs := rbacMCPSeedProject(t, env)
+
+	tests := rbacMCPAllRoleCases(env)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
+			memID := memIDs[tt.token]
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_update", map[string]interface{}{
+				"id":      memID,
+				"project": tt.project,
+				"content": "updated via mcp " + tt.name,
+			})
+			gotError := rbacMCPIsError(rpc)
+			if gotError != tt.wantError {
+				t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))
+			}
+		})
+	}
+}
+
+// ===========================================================================
+// Test 18: TestRBAC_MCP_AllRoles_Forget
+// ===========================================================================
+
+func TestRBAC_MCP_AllRoles_Forget(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// Seed "rbac-proj" for each user. For forget we need fresh memories per subtest
+	// since forget removes them.
+	tests := rbacMCPAllRoleCases(env)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
+
+			if !tt.wantError {
+				// Store a memory first (creates project if needed).
+				memID := rbacMCPStoreAndGetID(t, env.Server.URL, tt.token, sessionID, tt.project)
+				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_forget", map[string]interface{}{
+					"project": tt.project,
+					"ids":     []interface{}{memID},
+				})
+				gotError := rbacMCPIsError(rpc)
+				if gotError != tt.wantError {
+					t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))
+				}
+			} else {
+				// Cross-org: slug doesn't exist under this user, so forget fails with "project not found".
+				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_forget", map[string]interface{}{
+					"project": tt.project,
+					"ids":     []interface{}{uuid.New().String()},
+				})
+				gotError := rbacMCPIsError(rpc)
+				if gotError != tt.wantError {
+					t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))
+				}
+			}
+		})
+	}
+}
+
+// ===========================================================================
+// Test 19: TestRBAC_MCP_AllRoles_Get
+// ===========================================================================
+
+func TestRBAC_MCP_AllRoles_Get(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// Seed "rbac-proj" for each user.
+	memIDs := rbacMCPSeedProject(t, env)
+
+	tests := rbacMCPAllRoleCases(env)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
+			memID := memIDs[tt.token]
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_get", map[string]interface{}{
+				"project": tt.project,
+				"ids":     []interface{}{memID},
+			})
+			gotError := rbacMCPIsError(rpc)
+			if gotError != tt.wantError {
+				t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))
+			}
+		})
+	}
+}
+
+// ===========================================================================
+// Test 20: TestRBAC_MCP_AllRoles_Export
+// ===========================================================================
+
+func TestRBAC_MCP_AllRoles_Export(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// Seed "rbac-proj" for each user.
+	rbacMCPSeedProject(t, env)
+
+	tests := rbacMCPAllRoleCases(env)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_export", map[string]interface{}{
+				"project": tt.project,
+			})
+			gotError := rbacMCPIsError(rpc)
+			if gotError != tt.wantError {
+				t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))
+			}
+		})
+	}
+}
+
+// ===========================================================================
+// Test 21: TestRBAC_MCP_AllRoles_Projects
+// ===========================================================================
+
+func TestRBAC_MCP_AllRoles_Projects(t *testing.T) {
+	env := newRBACFullTestEnv(t)
+
+	// memory_projects lists projects for the authenticated user. All roles should succeed.
+	tests := []struct {
+		name      string
+		token     string
+		wantError bool
+	}{
+		{"admin", env.Admin.JWT, false},
+		{"org_owner", env.OrgAOwner.JWT, false},
+		{"member", env.OrgAMember.JWT, false},
+		{"readonly", env.OrgAReadonly.JWT, false},
+		{"service", env.OrgAService.JWT, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_projects", map[string]interface{}{})
+			gotError := rbacMCPIsError(rpc)
+			if gotError != tt.wantError {
+				t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))
+			}
+		})
+	}
+}
