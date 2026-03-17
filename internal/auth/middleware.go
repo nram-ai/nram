@@ -54,14 +54,29 @@ type Claims struct {
 type AuthMiddleware struct {
 	apiKeyValidator APIKeyValidator
 	jwtSecret       []byte
+	issuerURL       string // OAuth issuer URL for WWW-Authenticate header
 }
 
 // NewAuthMiddleware creates a new AuthMiddleware with the given dependencies.
-func NewAuthMiddleware(apiKeyValidator APIKeyValidator, jwtSecret []byte) *AuthMiddleware {
-	return &AuthMiddleware{
+// issuerURL is optional — when set, 401 responses include a WWW-Authenticate
+// header with the resource_metadata URI so MCP clients can auto-discover OAuth.
+func NewAuthMiddleware(apiKeyValidator APIKeyValidator, jwtSecret []byte, opts ...AuthMiddlewareOption) *AuthMiddleware {
+	m := &AuthMiddleware{
 		apiKeyValidator: apiKeyValidator,
 		jwtSecret:       jwtSecret,
 	}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
+}
+
+// AuthMiddlewareOption configures optional AuthMiddleware behaviour.
+type AuthMiddlewareOption func(*AuthMiddleware)
+
+// WithIssuerURL sets the OAuth issuer URL used to build WWW-Authenticate headers.
+func WithIssuerURL(url string) AuthMiddlewareOption {
+	return func(m *AuthMiddleware) { m.issuerURL = url }
 }
 
 // Handler returns an http.Handler middleware that authenticates requests.
@@ -69,13 +84,13 @@ func (m *AuthMiddleware) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			http.Error(w, "missing authorization header", http.StatusUnauthorized)
+			m.writeUnauthorized(w, "missing authorization header")
 			return
 		}
 
 		token, ok := strings.CutPrefix(authHeader, "Bearer ")
 		if !ok || token == "" {
-			http.Error(w, "invalid authorization header format", http.StatusUnauthorized)
+			m.writeUnauthorized(w, "invalid authorization header format")
 			return
 		}
 
@@ -89,12 +104,23 @@ func (m *AuthMiddleware) Handler(next http.Handler) http.Handler {
 		}
 
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			m.writeUnauthorized(w, err.Error())
 			return
 		}
 
 		next.ServeHTTP(w, r.WithContext(WithContext(r.Context(), ac)))
 	})
+}
+
+// writeUnauthorized writes a 401 response with a WWW-Authenticate header
+// that points MCP clients to the OAuth protected resource metadata endpoint
+// for auto-discovery per the MCP auth specification.
+func (m *AuthMiddleware) writeUnauthorized(w http.ResponseWriter, msg string) {
+	if m.issuerURL != "" {
+		w.Header().Set("WWW-Authenticate",
+			fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource"`, m.issuerURL))
+	}
+	http.Error(w, msg, http.StatusUnauthorized)
 }
 
 func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*AuthContext, error) {

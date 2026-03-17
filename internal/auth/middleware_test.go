@@ -359,6 +359,72 @@ func TestGenerateJWT_ErrorOnEmptySecret(t *testing.T) {
 	}
 }
 
+// Verify that 401 responses include WWW-Authenticate header when issuerURL is set.
+func TestHandler_WWWAuthenticate_WithIssuerURL(t *testing.T) {
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
+		WithIssuerURL("http://localhost:8674"))
+	handler := mw.Handler(okHandler())
+
+	// No auth header → 401 with WWW-Authenticate.
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if wwwAuth == "" {
+		t.Fatal("expected WWW-Authenticate header, got empty")
+	}
+
+	expected := `Bearer resource_metadata="http://localhost:8674/.well-known/oauth-protected-resource"`
+	if wwwAuth != expected {
+		t.Errorf("WWW-Authenticate mismatch\n  got:  %s\n  want: %s", wwwAuth, expected)
+	}
+}
+
+// Verify WWW-Authenticate also appears on invalid token 401s.
+func TestHandler_WWWAuthenticate_InvalidToken(t *testing.T) {
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
+		WithIssuerURL("http://localhost:8674"))
+	handler := mw.Handler(okHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer bad-jwt-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if wwwAuth == "" {
+		t.Fatal("expected WWW-Authenticate header on invalid token, got empty")
+	}
+}
+
+// Verify no WWW-Authenticate header when issuerURL is not set (backwards compat).
+func TestHandler_NoWWWAuthenticate_WithoutIssuerURL(t *testing.T) {
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret)
+	handler := mw.Handler(okHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if wwwAuth != "" {
+		t.Errorf("expected no WWW-Authenticate without issuer URL, got: %s", wwwAuth)
+	}
+}
+
 // Verify that a non-ErrAPIKeyNotFound error from the validator also results in 401.
 func TestHandler_APIKeyValidatorArbitraryError(t *testing.T) {
 	validator := &mockAPIKeyValidator{

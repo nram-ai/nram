@@ -62,10 +62,10 @@ func (s *OAuthServer) MetadataHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		meta := serverMetadata{
 			Issuer:                            s.issuerURL,
-			AuthorizationEndpoint:             s.issuerURL + "/oauth/authorize",
-			TokenEndpoint:                     s.issuerURL + "/oauth/token",
-			RegistrationEndpoint:              s.issuerURL + "/oauth/register",
-			UserinfoEndpoint:                  s.issuerURL + "/oauth/userinfo",
+			AuthorizationEndpoint:             s.issuerURL + "/authorize",
+			TokenEndpoint:                     s.issuerURL + "/token",
+			RegistrationEndpoint:              s.issuerURL + "/register",
+			UserinfoEndpoint:                  s.issuerURL + "/userinfo",
 			ResponseTypesSupported:            []string{"code"},
 			GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 			CodeChallengeMethodsSupported:     []string{codeChallengeMethodS256},
@@ -227,12 +227,12 @@ func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
 				}
 			}
 			if userID == uuid.Nil {
-				loginURL := "/login?redirect=" + url.QueryEscape("/oauth/authorize?"+r.URL.RawQuery)
+				loginURL := "/login?redirect=" + url.QueryEscape("/authorize?"+r.URL.RawQuery)
 				http.Redirect(w, r, loginURL, http.StatusFound)
 				return
 			}
 		} else {
-			loginURL := "/login?redirect=" + url.QueryEscape("/oauth/authorize?"+r.URL.RawQuery)
+			loginURL := "/login?redirect=" + url.QueryEscape("/authorize?"+r.URL.RawQuery)
 			http.Redirect(w, r, loginURL, http.StatusFound)
 			return
 		}
@@ -519,7 +519,7 @@ type userInfoResponse struct {
 }
 
 // UserInfoHandler returns user information for the authenticated Bearer token holder.
-// Implements a subset of OpenID Connect UserInfo (GET /oauth/userinfo).
+// Implements a subset of OpenID Connect UserInfo (GET /userinfo).
 func (s *OAuthServer) UserInfoHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -580,17 +580,20 @@ func (s *OAuthServer) UserInfoHandler() http.HandlerFunc {
 
 // protectedResourceMetadata is the response for RFC 9728 protected resource metadata.
 type protectedResourceMetadata struct {
-	Resource                string   `json:"resource"`
-	AuthorizationServers    []string `json:"authorization_servers"`
-	BearerMethodsSupported  []string `json:"bearer_methods_supported"`
+	Resource               string   `json:"resource"`
+	AuthorizationServers   []string `json:"authorization_servers"`
+	BearerMethodsSupported []string `json:"bearer_methods_supported"`
+	ScopesSupported        []string `json:"scopes_supported,omitempty"`
 }
 
 // ProtectedResourceHandler returns RFC 9728 OAuth Protected Resource Metadata.
 // Served at GET /.well-known/oauth-protected-resource.
+// The `resource` field is the canonical MCP server URI (the endpoint the
+// client uses tokens against), not the authorization server URL.
 func (s *OAuthServer) ProtectedResourceHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		meta := protectedResourceMetadata{
-			Resource:               s.issuerURL,
+			Resource:               s.issuerURL + "/mcp",
 			AuthorizationServers:   []string{s.issuerURL},
 			BearerMethodsSupported: []string{"header"},
 		}

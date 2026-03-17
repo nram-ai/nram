@@ -129,11 +129,12 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	r.Post("/v1/admin/setup", handler(handlers.AdminSetup))
 
 	// OAuth discovery and flow endpoints (public — no auth, no setup guard).
+	// Paths follow MCP spec fallback defaults: /authorize, /token, /register.
 	r.Get("/.well-known/oauth-authorization-server", handler(handlers.OAuthMetadata))
 	r.Get("/.well-known/oauth-protected-resource", handler(handlers.OAuthProtectedResource))
-	r.Get("/oauth/authorize", handler(handlers.OAuthAuthorize))
-	r.Post("/oauth/token", handler(handlers.OAuthToken))
-	r.Post("/oauth/register", handler(handlers.OAuthRegister))
+	r.Get("/authorize", handler(handlers.OAuthAuthorize))
+	r.Post("/token", handler(handlers.OAuthToken))
+	r.Post("/register", handler(handlers.OAuthRegister))
 
 	// Semi-public routes: setup guard required but no auth (login flow).
 	r.Group(func(r chi.Router) {
@@ -157,7 +158,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		}
 
 		// OAuth userinfo (requires authentication).
-		r.Get("/oauth/userinfo", handler(handlers.OAuthUserInfo))
+		r.Get("/userinfo", handler(handlers.OAuthUserInfo))
 
 		// SSE events endpoint.
 		r.Get("/v1/events", handler(handlers.Events))

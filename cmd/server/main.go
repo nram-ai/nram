@@ -354,7 +354,8 @@ func main() {
 	}
 
 	// Build router config with auth middleware and rate limiter.
-	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, jwtSecret)
+	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, jwtSecret,
+		auth.WithIssuerURL(fmt.Sprintf("http://%s:%d", oauthHost, cfg.Server.Port)))
 	rateLimiter := auth.NewRateLimiter(10, 20)
 	defer rateLimiter.Stop()
 

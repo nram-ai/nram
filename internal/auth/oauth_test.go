@@ -164,16 +164,16 @@ func TestMetadataHandler_ReturnsValidJSON(t *testing.T) {
 	if meta.Issuer != "https://auth.example.com" {
 		t.Fatalf("unexpected issuer: %q", meta.Issuer)
 	}
-	if meta.AuthorizationEndpoint != "https://auth.example.com/oauth/authorize" {
+	if meta.AuthorizationEndpoint != "https://auth.example.com/authorize" {
 		t.Fatalf("unexpected authorization_endpoint: %q", meta.AuthorizationEndpoint)
 	}
-	if meta.TokenEndpoint != "https://auth.example.com/oauth/token" {
+	if meta.TokenEndpoint != "https://auth.example.com/token" {
 		t.Fatalf("unexpected token_endpoint: %q", meta.TokenEndpoint)
 	}
-	if meta.RegistrationEndpoint != "https://auth.example.com/oauth/register" {
+	if meta.RegistrationEndpoint != "https://auth.example.com/register" {
 		t.Fatalf("unexpected registration_endpoint: %q", meta.RegistrationEndpoint)
 	}
-	if meta.UserinfoEndpoint != "https://auth.example.com/oauth/userinfo" {
+	if meta.UserinfoEndpoint != "https://auth.example.com/userinfo" {
 		t.Fatalf("unexpected userinfo_endpoint: %q", meta.UserinfoEndpoint)
 	}
 	if len(meta.ResponseTypesSupported) != 1 || meta.ResponseTypesSupported[0] != "code" {
