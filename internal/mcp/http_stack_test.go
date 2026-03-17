@@ -1146,8 +1146,9 @@ func (e *multiUserHTTPStackEnv) envFor(idx int) *httpStackEnv {
 }
 
 // nsAwareMemoryRepo stores memories keyed by ID and scoped by NamespaceID,
-// enabling proper multi-user isolation in recall.
+// enabling proper multi-user isolation in recall. Thread-safe via mutex.
 type nsAwareMemoryRepo struct {
+	mu       sync.Mutex
 	memories map[uuid.UUID]*model.Memory
 }
 
@@ -1156,6 +1157,8 @@ func newNsAwareMemoryRepo() *nsAwareMemoryRepo {
 }
 
 func (m *nsAwareMemoryRepo) Create(_ context.Context, mem *model.Memory) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if mem.ID == uuid.Nil {
 		mem.ID = uuid.New()
 	}
@@ -1165,6 +1168,8 @@ func (m *nsAwareMemoryRepo) Create(_ context.Context, mem *model.Memory) error {
 }
 
 func (m *nsAwareMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	mem, ok := m.memories[id]
 	if !ok {
 		return nil, fmt.Errorf("not found")
@@ -1173,6 +1178,8 @@ func (m *nsAwareMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Mem
 }
 
 func (m *nsAwareMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var out []model.Memory
 	for _, id := range ids {
 		if mem, ok := m.memories[id]; ok {
@@ -1183,6 +1190,8 @@ func (m *nsAwareMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID) ([]mode
 }
 
 func (m *nsAwareMemoryRepo) ListByNamespace(_ context.Context, nsID uuid.UUID, limit, _ int) ([]model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var out []model.Memory
 	for _, mem := range m.memories {
 		if mem.NamespaceID == nsID && mem.DeletedAt == nil {
@@ -1196,6 +1205,8 @@ func (m *nsAwareMemoryRepo) ListByNamespace(_ context.Context, nsID uuid.UUID, l
 }
 
 func (m *nsAwareMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	mem, ok := m.memories[id]
 	if !ok {
 		return fmt.Errorf("not found")
@@ -1206,6 +1217,8 @@ func (m *nsAwareMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID) error {
 }
 
 func (m *nsAwareMemoryRepo) HardDelete(_ context.Context, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.memories, id)
 	return nil
 }
