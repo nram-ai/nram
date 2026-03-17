@@ -205,6 +205,7 @@ func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
 		}
 
 		scope := q.Get("scope")
+		resource := q.Get("resource")
 
 		// Determine the authenticated user. Check the auth context first (set by
 		// AuthMiddleware), then fall back to the nram_session cookie which the
@@ -247,6 +248,7 @@ func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
 			Scope:               scope,
 			CodeChallenge:       &codeChallenge,
 			CodeChallengeMethod: codeChallengeMethodS256,
+			Resource:            resource,
 			ExpiresAt:           time.Now().UTC().Add(authCodeExpiry),
 		}
 
@@ -289,6 +291,10 @@ type tokenRequest struct {
 	ClientID     string `json:"client_id"`
 	CodeVerifier string `json:"code_verifier"`
 	RefreshToken string `json:"refresh_token"`
+	// Resource is the RFC 8707 resource indicator sent by the client during
+	// token exchange. When present it must match the resource recorded in the
+	// authorization code.
+	Resource string `json:"resource"`
 }
 
 // tokenResponse is the response for the /token endpoint.
@@ -323,6 +329,7 @@ func (s *OAuthServer) TokenHandler() http.HandlerFunc {
 				ClientID:     r.FormValue("client_id"),
 				CodeVerifier: r.FormValue("code_verifier"),
 				RefreshToken: r.FormValue("refresh_token"),
+				Resource:     r.FormValue("resource"),
 			}
 		} else {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -382,6 +389,14 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// RFC 8707: Validate resource parameter binding.
+	// If the authorization code has a non-empty resource AND the token request
+	// also supplies a resource, they must match exactly.
+	if authCode.Resource != "" && req.Resource != "" && authCode.Resource != req.Resource {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "resource parameter mismatch")
+		return
+	}
+
 	// Consume the authorization code (single-use)
 	if err := s.oauthRepo.ConsumeAuthCode(r.Context(), req.Code); err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code already consumed")
@@ -395,8 +410,19 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		role = user.Role
 	}
 
-	// Generate access token (JWT)
-	accessToken, err := GenerateJWT(authCode.UserID, role, s.jwtSecret, accessTokenExpiry)
+	// Determine the effective resource: prefer the value from the auth code;
+	// fall back to whatever the token request provided (covers the case where
+	// the client omits resource on the authorize step but sends it on the
+	// token step, which is unusual but harmless since no stored code value
+	// existed to conflict with).
+	effectiveResource := authCode.Resource
+	if effectiveResource == "" {
+		effectiveResource = req.Resource
+	}
+
+	// Generate access token (JWT), including the audience claim when a resource
+	// indicator is present (RFC 8707 §2).
+	accessToken, err := generateJWTWithAudience(authCode.UserID, role, s.jwtSecret, accessTokenExpiry, effectiveResource)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to generate access token")
 		return

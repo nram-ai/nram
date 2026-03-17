@@ -26,6 +26,7 @@ type OAuthAuthorizationCode struct {
 	Scope               string    `json:"scope"`
 	CodeChallenge       *string   `json:"code_challenge"`
 	CodeChallengeMethod string    `json:"code_challenge_method"`
+	Resource            string    `json:"resource,omitempty"`
 	ExpiresAt           time.Time `json:"expires_at"`
 	CreatedAt           time.Time `json:"created_at"`
 }

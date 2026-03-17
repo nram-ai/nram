@@ -278,17 +278,23 @@ func (r *OAuthRepo) populateClient(
 
 // CreateAuthCode inserts a new OAuth authorization code.
 func (r *OAuthRepo) CreateAuthCode(ctx context.Context, code *model.OAuthAuthorizationCode) error {
-	query := `INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, resource, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+		query = `INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, resource, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+	}
+
+	var resource *string
+	if code.Resource != "" {
+		r := code.Resource
+		resource = &r
 	}
 
 	_, err := r.db.Exec(ctx, query,
 		code.Code, code.ClientID, code.UserID.String(), code.RedirectURI,
 		code.Scope, code.CodeChallenge, code.CodeChallengeMethod,
-		code.ExpiresAt.UTC().Format(time.RFC3339),
+		resource, code.ExpiresAt.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("oauth auth code create: %w", err)
@@ -359,33 +365,40 @@ func (r *OAuthRepo) reloadAuthCode(ctx context.Context, code *model.OAuthAuthori
 	return nil
 }
 
-const selectAuthCodeColumns = `SELECT code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at, created_at`
+const selectAuthCodeColumns = `SELECT code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, resource, expires_at, created_at`
 
 func (r *OAuthRepo) scanAuthCode(row *sql.Row) (*model.OAuthAuthorizationCode, error) {
 	var ac model.OAuthAuthorizationCode
 	var userIDStr string
+	var resourceStr sql.NullString
 	var expiresAtStr, createdAtStr string
 
 	err := row.Scan(
 		&ac.Code, &ac.ClientID, &userIDStr, &ac.RedirectURI,
 		&ac.Scope, &ac.CodeChallenge, &ac.CodeChallengeMethod,
-		&expiresAtStr, &createdAtStr,
+		&resourceStr, &expiresAtStr, &createdAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return r.populateAuthCode(&ac, userIDStr, expiresAtStr, createdAtStr)
+	return r.populateAuthCode(&ac, userIDStr, resourceStr, expiresAtStr, createdAtStr)
 }
 
 func (r *OAuthRepo) populateAuthCode(
 	ac *model.OAuthAuthorizationCode,
-	userIDStr, expiresAtStr, createdAtStr string,
+	userIDStr string,
+	resourceStr sql.NullString,
+	expiresAtStr, createdAtStr string,
 ) (*model.OAuthAuthorizationCode, error) {
 	var err error
 	ac.UserID, err = uuid.Parse(userIDStr)
 	if err != nil {
 		return nil, fmt.Errorf("oauth auth code parse user_id: %w", err)
+	}
+
+	if resourceStr.Valid {
+		ac.Resource = resourceStr.String
 	}
 
 	ac.ExpiresAt, err = time.Parse(time.RFC3339, expiresAtStr)

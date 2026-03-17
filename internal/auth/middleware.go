@@ -169,17 +169,28 @@ func (m *AuthMiddleware) validateJWT(tokenStr string) (*AuthContext, error) {
 	}, nil
 }
 
-// GenerateJWT creates a signed JWT for the given user.
+// GenerateJWT creates a signed JWT for the given user without an audience claim.
+// Use generateJWTWithAudience when an RFC 8707 resource indicator must be bound.
 func GenerateJWT(userID uuid.UUID, role string, secret []byte, expiry time.Duration) (string, error) {
+	return generateJWTWithAudience(userID, role, secret, expiry, "")
+}
+
+// generateJWTWithAudience creates a signed JWT. When resource is non-empty it
+// is set as the sole audience claim (RFC 8707 §2).
+func generateJWTWithAudience(userID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string) (string, error) {
 	now := time.Now().UTC()
+	reg := jwt.RegisteredClaims{
+		Subject:   userID.String(),
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(now.Add(expiry)),
+		Issuer:    "nram",
+	}
+	if resource != "" {
+		reg.Audience = jwt.ClaimStrings{resource}
+	}
 	claims := Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   userID.String(),
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(expiry)),
-			Issuer:    "nram",
-		},
-		Role: role,
+		RegisteredClaims: reg,
+		Role:             role,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

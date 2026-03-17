@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/config"
 	"github.com/nram-ai/nram/internal/migration"
@@ -1243,4 +1244,412 @@ func TestOAuthFlow_WWWAuthenticate_Header(t *testing.T) {
 		}
 		t.Logf("valid JWT resulted in status %d (not 401)", resp.StatusCode)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// RFC 8707 resource parameter tests
+// ---------------------------------------------------------------------------
+
+// TestOAuthFlow_ResourceParameter_Mismatch verifies that a token request whose
+// resource parameter differs from the one stored in the authorization code is
+// rejected with an invalid_grant error.
+func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
+	db := oauthTestDB(t)
+	user := oauthTestUser(t, db)
+
+	secret := []byte("test-oauth-secret-32-bytes-long!!")
+	oauthRepo := storage.NewOAuthRepo(db)
+	userRepo := storage.NewUserRepo(db)
+
+	issuerURL := "http://localhost:8674"
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
+	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	ts := httptest.NewServer(router)
+	t.Cleanup(ts.Close)
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Register a client
+	regBody := `{"client_name":"Resource Test Client","redirect_uris":["http://localhost/cb"],"grant_types":["authorization_code"]}`
+	resp, err := client.Post(ts.URL+"/register", "application/json", strings.NewReader(regBody))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	var regResp struct {
+		ClientID string `json:"client_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&regResp)
+	resp.Body.Close()
+
+	if regResp.ClientID == "" {
+		t.Fatal("expected non-empty client_id from registration")
+	}
+
+	// Generate PKCE pair
+	codeVerifier := "mismatch_resource_test_verifier_1234567890ab"
+	codeChallenge := computeCodeChallenge(codeVerifier)
+
+	// Step 1: Authorize with resource=https://resource-a.example.com
+	authParams := url.Values{}
+	authParams.Set("client_id", regResp.ClientID)
+	authParams.Set("redirect_uri", "http://localhost/cb")
+	authParams.Set("response_type", "code")
+	authParams.Set("code_challenge", codeChallenge)
+	authParams.Set("code_challenge_method", "S256")
+	authParams.Set("state", "s1")
+	authParams.Set("resource", "https://resource-a.example.com")
+
+	sessionToken, err := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	if err != nil {
+		t.Fatalf("generate session JWT: %v", err)
+	}
+	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/authorize?"+authParams.Encode(), nil)
+	authReq.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
+
+	resp, err = client.Do(authReq)
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize: expected 302, got %d", resp.StatusCode)
+	}
+
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	authCode := loc.Query().Get("code")
+	if authCode == "" {
+		t.Fatalf("no code in redirect: %s", resp.Header.Get("Location"))
+	}
+
+	// Step 2: Token exchange with a DIFFERENT resource — must be rejected
+	tokenParams := url.Values{}
+	tokenParams.Set("grant_type", "authorization_code")
+	tokenParams.Set("code", authCode)
+	tokenParams.Set("redirect_uri", "http://localhost/cb")
+	tokenParams.Set("client_id", regResp.ClientID)
+	tokenParams.Set("code_verifier", codeVerifier)
+	tokenParams.Set("resource", "https://resource-b.example.com") // intentional mismatch
+
+	tokenResp, err := client.Post(ts.URL+"/token", "application/x-www-form-urlencoded", strings.NewReader(tokenParams.Encode()))
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(tokenResp.Body)
+	tokenResp.Body.Close()
+
+	if tokenResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for resource mismatch, got %d; body: %s", tokenResp.StatusCode, body)
+	}
+
+	var errResp struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	if err := json.Unmarshal(body, &errResp); err != nil {
+		t.Fatalf("unmarshal error response: %v; body: %s", err, body)
+	}
+	if errResp.Error != "invalid_grant" {
+		t.Fatalf("expected error=invalid_grant, got %q", errResp.Error)
+	}
+	t.Logf("resource mismatch correctly rejected with: %s — %s", errResp.Error, errResp.ErrorDescription)
+}
+
+// TestOAuthFlow_ResourceParameter_InJWT verifies that when a resource parameter
+// is present in the authorization request, the issued access token carries a
+// matching audience (aud) claim per RFC 8707 §2.
+func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
+	db := oauthTestDB(t)
+	user := oauthTestUser(t, db)
+
+	secret := []byte("test-oauth-secret-32-bytes-long!!")
+	oauthRepo := storage.NewOAuthRepo(db)
+	userRepo := storage.NewUserRepo(db)
+
+	issuerURL := "http://localhost:8674"
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
+	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	ts := httptest.NewServer(router)
+	t.Cleanup(ts.Close)
+
+	httpClient := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Register a client
+	regBody := `{"client_name":"JWT Audience Test","redirect_uris":["http://localhost/cb"],"grant_types":["authorization_code"]}`
+	resp, err := httpClient.Post(ts.URL+"/register", "application/json", strings.NewReader(regBody))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	var regResp struct {
+		ClientID string `json:"client_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&regResp)
+	resp.Body.Close()
+
+	if regResp.ClientID == "" {
+		t.Fatal("expected non-empty client_id from registration")
+	}
+
+	targetResource := "https://mcp.example.com/server"
+	codeVerifier := "audience_test_verifier_string_1234567890abcd"
+	codeChallenge := computeCodeChallenge(codeVerifier)
+
+	// Authorize with resource indicator
+	authParams := url.Values{}
+	authParams.Set("client_id", regResp.ClientID)
+	authParams.Set("redirect_uri", "http://localhost/cb")
+	authParams.Set("response_type", "code")
+	authParams.Set("code_challenge", codeChallenge)
+	authParams.Set("code_challenge_method", "S256")
+	authParams.Set("state", "s2")
+	authParams.Set("resource", targetResource)
+
+	sessionToken, err := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	if err != nil {
+		t.Fatalf("generate session JWT: %v", err)
+	}
+	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/authorize?"+authParams.Encode(), nil)
+	authReq.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
+
+	resp, err = httpClient.Do(authReq)
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize: expected 302, got %d", resp.StatusCode)
+	}
+
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	authCode := loc.Query().Get("code")
+	if authCode == "" {
+		t.Fatalf("no code in redirect: %s", resp.Header.Get("Location"))
+	}
+
+	// Token exchange — supply matching resource
+	tokenParams := url.Values{}
+	tokenParams.Set("grant_type", "authorization_code")
+	tokenParams.Set("code", authCode)
+	tokenParams.Set("redirect_uri", "http://localhost/cb")
+	tokenParams.Set("client_id", regResp.ClientID)
+	tokenParams.Set("code_verifier", codeVerifier)
+	tokenParams.Set("resource", targetResource)
+
+	tokenResp, err := httpClient.Post(ts.URL+"/token", "application/x-www-form-urlencoded", strings.NewReader(tokenParams.Encode()))
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(tokenResp.Body)
+	tokenResp.Body.Close()
+
+	if tokenResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", tokenResp.StatusCode, body)
+	}
+
+	var tok struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(body, &tok); err != nil {
+		t.Fatalf("unmarshal token response: %v; body: %s", err, body)
+	}
+	if tok.AccessToken == "" {
+		t.Fatal("expected non-empty access_token")
+	}
+
+	// Parse JWT and verify audience claim contains the resource indicator
+	claims := &Claims{}
+	parsed, err := jwt.ParseWithClaims(tok.AccessToken, claims, func(t *jwt.Token) (interface{}, error) {
+		return secret, nil
+	})
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
+	}
+	if !parsed.Valid {
+		t.Fatal("access token is not valid")
+	}
+
+	aud, err := claims.GetAudience()
+	if err != nil || len(aud) == 0 {
+		t.Fatalf("expected audience claim in JWT, got: %v (err=%v)", aud, err)
+	}
+	found := false
+	for _, a := range aud {
+		if a == targetResource {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected audience to contain %q, got %v", targetResource, aud)
+	}
+	t.Logf("JWT audience correctly set to: %v", aud)
+}
+
+// TestOAuthFlow_MCPDiscovery_FullFlow_WithResource re-runs the complete MCP
+// discovery and auth code flow with the RFC 8707 resource parameter included in
+// both the authorization request and the token exchange.
+func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
+	db := oauthTestDB(t)
+	user := oauthTestUser(t, db)
+
+	secret := []byte("test-oauth-secret-32-bytes-long!!")
+	oauthRepo := storage.NewOAuthRepo(db)
+	userRepo := storage.NewUserRepo(db)
+
+	issuerURL := "http://localhost:8674"
+	oauthSrv := NewOAuthServer(oauthRepo, userRepo, secret, issuerURL)
+	router := buildOAuthRouter(oauthSrv, issuerURL, secret)
+	ts := httptest.NewServer(router)
+	t.Cleanup(ts.Close)
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Register client
+	regBody := `{"client_name":"Full Flow Resource Client","redirect_uris":["http://localhost/callback"],"grant_types":["authorization_code","refresh_token"]}`
+	resp, err := client.Post(ts.URL+"/register", "application/json", strings.NewReader(regBody))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	var regResp struct {
+		ClientID string `json:"client_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&regResp)
+	resp.Body.Close()
+
+	if regResp.ClientID == "" {
+		t.Fatal("empty client_id")
+	}
+
+	resourceIndicator := issuerURL + "/mcp"
+	codeVerifier := "full_flow_resource_verifier_abcdefghijklmno"
+	codeChallenge := computeCodeChallenge(codeVerifier)
+	state := "rf-state-" + uuid.New().String()[:8]
+	redirectURI := "http://localhost/callback"
+
+	// Build authorization URL with resource parameter
+	authParams := url.Values{}
+	authParams.Set("client_id", regResp.ClientID)
+	authParams.Set("redirect_uri", redirectURI)
+	authParams.Set("response_type", "code")
+	authParams.Set("code_challenge", codeChallenge)
+	authParams.Set("code_challenge_method", "S256")
+	authParams.Set("state", state)
+	authParams.Set("resource", resourceIndicator)
+
+	sessionToken, err := GenerateJWT(user.ID, user.Role, secret, time.Hour)
+	if err != nil {
+		t.Fatalf("generate session JWT: %v", err)
+	}
+	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/authorize?"+authParams.Encode(), nil)
+	authReq.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
+
+	resp, err = client.Do(authReq)
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize: expected 302, got %d", resp.StatusCode)
+	}
+
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	authCode := loc.Query().Get("code")
+	if authCode == "" {
+		t.Fatalf("no code in redirect URL: %s", resp.Header.Get("Location"))
+	}
+	if loc.Query().Get("state") != state {
+		t.Fatalf("state mismatch: got %q, want %q", loc.Query().Get("state"), state)
+	}
+
+	// Token exchange with matching resource
+	tokenParams := url.Values{}
+	tokenParams.Set("grant_type", "authorization_code")
+	tokenParams.Set("code", authCode)
+	tokenParams.Set("redirect_uri", redirectURI)
+	tokenParams.Set("client_id", regResp.ClientID)
+	tokenParams.Set("code_verifier", codeVerifier)
+	tokenParams.Set("resource", resourceIndicator)
+
+	tokenHTTPResp, err := client.Post(ts.URL+"/token", "application/x-www-form-urlencoded", strings.NewReader(tokenParams.Encode()))
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(tokenHTTPResp.Body)
+	tokenHTTPResp.Body.Close()
+
+	if tokenHTTPResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", tokenHTTPResp.StatusCode, body)
+	}
+
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		TokenType    string `json:"token_type"`
+		ExpiresIn    int    `json:"expires_in"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		t.Fatalf("unmarshal: %v; body: %s", err, body)
+	}
+	if tokenResp.AccessToken == "" {
+		t.Fatal("empty access_token")
+	}
+	if tokenResp.RefreshToken == "" {
+		t.Fatal("empty refresh_token")
+	}
+
+	// Parse JWT and verify audience
+	claims := &Claims{}
+	parsed, err := jwt.ParseWithClaims(tokenResp.AccessToken, claims, func(t *jwt.Token) (interface{}, error) {
+		return secret, nil
+	})
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
+	}
+	if !parsed.Valid {
+		t.Fatal("access token invalid")
+	}
+
+	aud, err := claims.GetAudience()
+	if err != nil || len(aud) == 0 {
+		t.Fatalf("expected audience claim, got: %v (err=%v)", aud, err)
+	}
+	found := false
+	for _, a := range aud {
+		if a == resourceIndicator {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("JWT audience should contain %q, got %v", resourceIndicator, aud)
+	}
+
+	// Verify the token works against the protected /mcp endpoint
+	mcpReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/mcp", nil)
+	mcpReq.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
+	mcpResp, err := client.Do(mcpReq)
+	if err != nil {
+		t.Fatalf("GET /mcp: %v", err)
+	}
+	mcpBody, _ := io.ReadAll(mcpResp.Body)
+	mcpResp.Body.Close()
+
+	if mcpResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /mcp with resource-bound token, got %d; body: %s", mcpResp.StatusCode, mcpBody)
+	}
+	t.Logf("full flow with resource parameter succeeded; JWT aud=%v", aud)
 }
