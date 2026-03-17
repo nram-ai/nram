@@ -425,6 +425,74 @@ func TestHandler_NoWWWAuthenticate_WithoutIssuerURL(t *testing.T) {
 	}
 }
 
+// Verify JWT with wrong audience is rejected when issuerURL is set (RFC 8707 audience validation).
+func TestHandler_JWT_WrongAudience_Rejected(t *testing.T) {
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
+		WithIssuerURL("http://localhost:8674"))
+	handler := mw.Handler(okHandler())
+
+	userID := uuid.New()
+	// Generate a token with audience for a DIFFERENT server.
+	wrongAudToken, err := generateJWTWithAudience(userID, "member", testSecret, time.Hour, "https://other-server.example.com/mcp")
+	if err != nil {
+		t.Fatalf("generate JWT: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+wrongAudToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for wrong-audience token, got %d", rec.Code)
+	}
+}
+
+// Verify JWT with correct audience passes when issuerURL is set.
+func TestHandler_JWT_CorrectAudience_Accepted(t *testing.T) {
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
+		WithIssuerURL("http://localhost:8674"))
+	handler := mw.Handler(okHandler())
+
+	userID := uuid.New()
+	correctAudToken, err := generateJWTWithAudience(userID, "member", testSecret, time.Hour, "http://localhost:8674/mcp")
+	if err != nil {
+		t.Fatalf("generate JWT: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+correctAudToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for correct-audience token, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Verify JWT without audience claim still works (backwards compat with tokens
+// issued before resource parameter was sent).
+func TestHandler_JWT_NoAudience_Accepted(t *testing.T) {
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, testSecret,
+		WithIssuerURL("http://localhost:8674"))
+	handler := mw.Handler(okHandler())
+
+	userID := uuid.New()
+	noAudToken, err := GenerateJWT(userID, "member", testSecret, time.Hour)
+	if err != nil {
+		t.Fatalf("generate JWT: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+noAudToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for no-audience token (backwards compat), got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // Verify that a non-ErrAPIKeyNotFound error from the validator also results in 401.
 func TestHandler_APIKeyValidatorArbitraryError(t *testing.T) {
 	validator := &mockAPIKeyValidator{

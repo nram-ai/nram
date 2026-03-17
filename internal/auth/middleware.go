@@ -153,6 +153,18 @@ func (m *AuthMiddleware) validateJWT(tokenStr string) (*AuthContext, error) {
 		return nil, fmt.Errorf("invalid jwt token")
 	}
 
+	// RFC 8707 / MCP spec: "MCP servers MUST validate that access tokens were
+	// issued specifically for them as the intended audience."
+	// When the token carries an audience claim AND this server knows its own
+	// resource URI, verify the audience includes this server.
+	if m.issuerURL != "" {
+		expectedAudience := m.issuerURL + "/mcp"
+		aud, _ := claims.GetAudience()
+		if len(aud) > 0 && !containsAudience(aud, expectedAudience) {
+			return nil, fmt.Errorf("token audience %v does not include this server (%s)", aud, expectedAudience)
+		}
+	}
+
 	sub, err := claims.GetSubject()
 	if err != nil || sub == "" {
 		return nil, fmt.Errorf("jwt missing subject")
@@ -167,6 +179,16 @@ func (m *AuthMiddleware) validateJWT(tokenStr string) (*AuthContext, error) {
 		UserID: userID,
 		Role:   claims.Role,
 	}, nil
+}
+
+// containsAudience checks if an audience list contains the expected value.
+func containsAudience(aud jwt.ClaimStrings, expected string) bool {
+	for _, a := range aud {
+		if a == expected {
+			return true
+		}
+	}
+	return false
 }
 
 // GenerateJWT creates a signed JWT for the given user without an audience claim.
