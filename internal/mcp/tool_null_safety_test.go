@@ -67,11 +67,11 @@ func TestMemoryRecallTool_EmptyResults_NoNull(t *testing.T) {
 	if len(resp.Memories) != 0 {
 		t.Errorf("expected 0 memories, got %d", len(resp.Memories))
 	}
-	if resp.Entities == nil {
-		t.Error("expected non-nil Entities slice, got nil")
+	if resp.Graph.Entities == nil {
+		t.Error("expected non-nil Graph.Entities slice, got nil")
 	}
-	if len(resp.Entities) != 0 {
-		t.Errorf("expected 0 entities, got %d", len(resp.Entities))
+	if len(resp.Graph.Entities) != 0 {
+		t.Errorf("expected 0 graph entities, got %d", len(resp.Graph.Entities))
 	}
 }
 

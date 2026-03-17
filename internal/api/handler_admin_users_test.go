@@ -17,19 +17,28 @@ import (
 // --- mock UserAdminStore ---
 
 type mockUserAdminStore struct {
-	listUsersFn     func(ctx context.Context) ([]model.User, error)
-	createUserFn    func(ctx context.Context, email, displayName, password, role string, orgID uuid.UUID) (*model.User, error)
-	getUserFn       func(ctx context.Context, id uuid.UUID) (*model.User, error)
-	updateUserFn    func(ctx context.Context, id uuid.UUID, displayName, role string, settings json.RawMessage) (*model.User, error)
-	deleteUserFn    func(ctx context.Context, id uuid.UUID) error
-	countAdminsFn   func(ctx context.Context) (int, error)
-	listAPIKeysFn   func(ctx context.Context, userID uuid.UUID) ([]model.APIKey, error)
+	countUsersFn     func(ctx context.Context) (int, error)
+	listUsersFn      func(ctx context.Context, limit, offset int) ([]model.User, error)
+	createUserFn     func(ctx context.Context, email, displayName, password, role string, orgID uuid.UUID) (*model.User, error)
+	getUserFn        func(ctx context.Context, id uuid.UUID) (*model.User, error)
+	updateUserFn     func(ctx context.Context, id uuid.UUID, displayName, role string, settings json.RawMessage) (*model.User, error)
+	deleteUserFn     func(ctx context.Context, id uuid.UUID) error
+	countAdminsFn    func(ctx context.Context) (int, error)
+	countAPIKeysFn   func(ctx context.Context, userID uuid.UUID) (int, error)
+	listAPIKeysFn    func(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.APIKey, error)
 	generateAPIKeyFn func(ctx context.Context, userID uuid.UUID, name string, scopes []uuid.UUID, expiresAt *time.Time) (*model.APIKey, string, error)
-	revokeAPIKeyFn  func(ctx context.Context, keyID uuid.UUID) error
+	revokeAPIKeyFn   func(ctx context.Context, keyID uuid.UUID) error
 }
 
-func (m *mockUserAdminStore) ListUsers(ctx context.Context) ([]model.User, error) {
-	return m.listUsersFn(ctx)
+func (m *mockUserAdminStore) CountUsers(ctx context.Context) (int, error) {
+	if m.countUsersFn != nil {
+		return m.countUsersFn(ctx)
+	}
+	return 0, nil
+}
+
+func (m *mockUserAdminStore) ListUsers(ctx context.Context, limit, offset int) ([]model.User, error) {
+	return m.listUsersFn(ctx, limit, offset)
 }
 
 func (m *mockUserAdminStore) CreateUser(ctx context.Context, email, displayName, password, role string, orgID uuid.UUID) (*model.User, error) {
@@ -52,8 +61,15 @@ func (m *mockUserAdminStore) CountAdmins(ctx context.Context) (int, error) {
 	return m.countAdminsFn(ctx)
 }
 
-func (m *mockUserAdminStore) ListAPIKeys(ctx context.Context, userID uuid.UUID) ([]model.APIKey, error) {
-	return m.listAPIKeysFn(ctx, userID)
+func (m *mockUserAdminStore) CountAPIKeys(ctx context.Context, userID uuid.UUID) (int, error) {
+	if m.countAPIKeysFn != nil {
+		return m.countAPIKeysFn(ctx, userID)
+	}
+	return 0, nil
+}
+
+func (m *mockUserAdminStore) ListAPIKeys(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.APIKey, error) {
+	return m.listAPIKeysFn(ctx, userID, limit, offset)
 }
 
 func (m *mockUserAdminStore) GenerateAPIKey(ctx context.Context, userID uuid.UUID, name string, scopes []uuid.UUID, expiresAt *time.Time) (*model.APIKey, string, error) {
@@ -92,7 +108,10 @@ func TestAdminUsers_ListUsers(t *testing.T) {
 	u2 := newTestUser("bob@example.com", "member")
 
 	store := &mockUserAdminStore{
-		listUsersFn: func(_ context.Context) ([]model.User, error) {
+		countUsersFn: func(_ context.Context) (int, error) {
+			return 2, nil
+		},
+		listUsersFn: func(_ context.Context, limit, offset int) ([]model.User, error) {
 			return []model.User{u1, u2}, nil
 		},
 	}
@@ -105,9 +124,7 @@ func TestAdminUsers_ListUsers(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp struct {
-		Data []model.User `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.User]
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -116,6 +133,9 @@ func TestAdminUsers_ListUsers(t *testing.T) {
 	}
 	if resp.Data[0].Email != "alice@example.com" {
 		t.Errorf("expected first user email 'alice@example.com', got %q", resp.Data[0].Email)
+	}
+	if resp.Pagination.Total != 2 {
+		t.Errorf("expected pagination.total=2, got %d", resp.Pagination.Total)
 	}
 }
 
@@ -214,7 +234,7 @@ func TestAdminUsers_GetUser_Found(t *testing.T) {
 			}
 			return &user, nil
 		},
-		listAPIKeysFn: func(_ context.Context, _ uuid.UUID) ([]model.APIKey, error) {
+		listAPIKeysFn: func(_ context.Context, _ uuid.UUID, _, _ int) ([]model.APIKey, error) {
 			return []model.APIKey{}, nil
 		},
 	}
@@ -362,7 +382,10 @@ func TestAdminUsers_ListAPIKeys_Success(t *testing.T) {
 	now := time.Now().UTC()
 
 	store := &mockUserAdminStore{
-		listAPIKeysFn: func(_ context.Context, uid uuid.UUID) ([]model.APIKey, error) {
+		countAPIKeysFn: func(_ context.Context, uid uuid.UUID) (int, error) {
+			return 1, nil
+		},
+		listAPIKeysFn: func(_ context.Context, uid uuid.UUID, limit, offset int) ([]model.APIKey, error) {
 			if uid != userID {
 				t.Errorf("expected userID %s, got %s", userID, uid)
 			}
@@ -387,9 +410,7 @@ func TestAdminUsers_ListAPIKeys_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp struct {
-		Data []model.APIKey `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.APIKey]
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}

@@ -119,6 +119,7 @@ function SQLiteView({
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(
     null,
   );
+  const [migrationError, setMigrationError] = useState<string | null>(null);
 
   const testMutation = useTestDatabaseConnection();
   const migrateMutation = useTriggerMigration();
@@ -144,12 +145,23 @@ function SQLiteView({
   }, [dbUrl, testMutation]);
 
   const handleStartMigration = useCallback(() => {
+    setMigrationError(null);
     setStep("migrating");
     migrateMutation.mutate(dbUrl, {
-      onSuccess: () => {
-        setStep("complete");
+      onSuccess: (data) => {
+        if (data.status === "complete") {
+          setStep("complete");
+        } else if (data.status === "in_progress") {
+          // Server is processing asynchronously — stay on the migrating step.
+        } else {
+          setMigrationError(data.message || "Migration failed");
+          setStep("review");
+        }
       },
-      onError: () => {
+      onError: (error) => {
+        setMigrationError(
+          error instanceof Error ? error.message : "Migration failed",
+        );
         setStep("review");
       },
     });
@@ -159,6 +171,7 @@ function SQLiteView({
     setStep("input");
     setDbUrl("");
     setTestResult(null);
+    setMigrationError(null);
   }, []);
 
   return (
@@ -429,11 +442,25 @@ function SQLiteView({
                 </div>
               </div>
 
-              {migrateMutation.isError && (
-                <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-900/30 dark:text-red-300">
-                  Migration failed:{" "}
-                  {(migrateMutation.error as Error).message ||
-                    "An unexpected error occurred."}
+              {migrationError && (
+                <div className="flex items-start gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-900/30 dark:text-red-300">
+                  <svg
+                    className="mt-0.5 h-4 w-4 flex-shrink-0"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                  <span>
+                    <span className="font-medium">Migration failed: </span>
+                    {migrationError}
+                  </span>
                 </div>
               )}
 

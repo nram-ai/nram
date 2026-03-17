@@ -32,7 +32,11 @@ type mockSettingsAdminStore struct {
 	updatedBy    *uuid.UUID
 }
 
-func (m *mockSettingsAdminStore) ListSettings(_ context.Context, scope string) ([]model.Setting, error) {
+func (m *mockSettingsAdminStore) CountSettings(_ context.Context, scope string) (int, error) {
+	return len(m.settings), m.listErr
+}
+
+func (m *mockSettingsAdminStore) ListSettings(_ context.Context, scope string, limit, offset int) ([]model.Setting, error) {
 	m.listScope = scope
 	return m.settings, m.listErr
 }
@@ -81,9 +85,7 @@ func TestAdminSettingsListSettings(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var resp struct {
-		Data []model.Setting `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.Setting]
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -96,6 +98,9 @@ func TestAdminSettingsListSettings(t *testing.T) {
 	}
 	if resp.Data[1].Key != "enrichment.auto_extract" {
 		t.Errorf("expected key enrichment.auto_extract, got %q", resp.Data[1].Key)
+	}
+	if resp.Pagination.Total != 2 {
+		t.Errorf("expected pagination.total=2, got %d", resp.Pagination.Total)
 	}
 }
 
@@ -124,9 +129,7 @@ func TestAdminSettingsListSettingsWithScope(t *testing.T) {
 		t.Errorf("expected scope project, got %q", store.listScope)
 	}
 
-	var resp struct {
-		Data []model.Setting `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.Setting]
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,13 +16,15 @@ import (
 
 // UserAdminStore abstracts storage for admin user operations.
 type UserAdminStore interface {
-	ListUsers(ctx context.Context) ([]model.User, error)
+	CountUsers(ctx context.Context) (int, error)
+	ListUsers(ctx context.Context, limit, offset int) ([]model.User, error)
 	CreateUser(ctx context.Context, email, displayName, password, role string, orgID uuid.UUID) (*model.User, error)
 	GetUser(ctx context.Context, id uuid.UUID) (*model.User, error)
 	UpdateUser(ctx context.Context, id uuid.UUID, displayName, role string, settings json.RawMessage) (*model.User, error)
 	DeleteUser(ctx context.Context, id uuid.UUID) error
 	CountAdmins(ctx context.Context) (int, error)
-	ListAPIKeys(ctx context.Context, userID uuid.UUID) ([]model.APIKey, error)
+	CountAPIKeys(ctx context.Context, userID uuid.UUID) (int, error)
+	ListAPIKeys(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.APIKey, error)
 	GenerateAPIKey(ctx context.Context, userID uuid.UUID, name string, scopes []uuid.UUID, expiresAt *time.Time) (*model.APIKey, string, error)
 	RevokeAPIKey(ctx context.Context, keyID uuid.UUID) error
 }
@@ -173,14 +176,45 @@ func isUserNotFound(err error) bool {
 }
 
 func handleAdminListUsers(w http.ResponseWriter, r *http.Request, store UserAdminStore) {
-	users, err := store.ListUsers(r.Context())
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			limit = n
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	total, err := store.CountUsers(r.Context())
+	if err != nil {
+		WriteError(w, ErrInternal("failed to count users"))
+		return
+	}
+
+	users, err := store.ListUsers(r.Context(), limit, offset)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to list users"))
 		return
 	}
+	if users == nil {
+		users = []model.User{}
+	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"data": users,
+	writeJSON(w, http.StatusOK, model.PaginatedResponse[model.User]{
+		Data: users,
+		Pagination: model.Pagination{
+			Total:  total,
+			Limit:  limit,
+			Offset: offset,
+		},
 	})
 }
 
@@ -236,10 +270,13 @@ func handleAdminGetUser(w http.ResponseWriter, r *http.Request, store UserAdminS
 		return
 	}
 
-	keys, err := store.ListAPIKeys(r.Context(), id)
+	keys, err := store.ListAPIKeys(r.Context(), id, 200, 0)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to list api keys"))
 		return
+	}
+	if keys == nil {
+		keys = []model.APIKey{}
 	}
 
 	type userDetailResponse struct {
@@ -311,14 +348,45 @@ func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request, store UserAdm
 }
 
 func handleAdminListAPIKeys(w http.ResponseWriter, r *http.Request, store UserAdminStore, userID uuid.UUID) {
-	keys, err := store.ListAPIKeys(r.Context(), userID)
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			limit = n
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	total, err := store.CountAPIKeys(r.Context(), userID)
+	if err != nil {
+		WriteError(w, ErrInternal("failed to count api keys"))
+		return
+	}
+
+	keys, err := store.ListAPIKeys(r.Context(), userID, limit, offset)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to list api keys"))
 		return
 	}
+	if keys == nil {
+		keys = []model.APIKey{}
+	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"data": keys,
+	writeJSON(w, http.StatusOK, model.PaginatedResponse[model.APIKey]{
+		Data: keys,
+		Pagination: model.Pagination{
+			Total:  total,
+			Limit:  limit,
+			Offset: offset,
+		},
 	})
 }
 

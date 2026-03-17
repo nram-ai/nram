@@ -87,6 +87,45 @@ func (r *OrganizationRepo) GetByNamespaceID(ctx context.Context, namespaceID uui
 	return r.scanOrganization(row)
 }
 
+// Count returns the total number of organizations.
+func (r *OrganizationRepo) Count(ctx context.Context) (int, error) {
+	row := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM organizations`)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("organization count: %w", err)
+	}
+	return count, nil
+}
+
+// ListPaged returns organizations ordered by name with LIMIT and OFFSET applied.
+func (r *OrganizationRepo) ListPaged(ctx context.Context, limit, offset int) ([]model.Organization, error) {
+	query := `SELECT id, namespace_id, name, slug, settings, created_at, updated_at
+		FROM organizations ORDER BY name LIMIT ? OFFSET ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT id, namespace_id, name, slug, settings, created_at, updated_at
+			FROM organizations ORDER BY name LIMIT $1 OFFSET $2`
+	}
+
+	rows, err := r.db.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("organization list paged: %w", err)
+	}
+	defer rows.Close()
+
+	result := []model.Organization{}
+	for rows.Next() {
+		org, err := r.scanOrganizationFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *org)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("organization list paged iteration: %w", err)
+	}
+	return result, nil
+}
+
 // List returns all organizations ordered by name.
 func (r *OrganizationRepo) List(ctx context.Context) ([]model.Organization, error) {
 	query := `SELECT id, namespace_id, name, slug, settings, created_at, updated_at

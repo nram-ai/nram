@@ -143,6 +143,49 @@ func (r *APIKeyRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]model.
 	return result, nil
 }
 
+// CountByUser returns the total number of API keys belonging to a user.
+func (r *APIKeyRepo) CountByUser(ctx context.Context, userID uuid.UUID) (int, error) {
+	query := `SELECT COUNT(*) FROM api_keys WHERE user_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM api_keys WHERE user_id = $1`
+	}
+	row := r.db.QueryRow(ctx, query, userID.String())
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("api key count by user: %w", err)
+	}
+	return count, nil
+}
+
+// ListByUserPaged returns API keys for a user with LIMIT and OFFSET applied.
+func (r *APIKeyRepo) ListByUserPaged(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.APIKey, error) {
+	query := `SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used, expires_at, created_at
+		FROM api_keys WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used, expires_at, created_at
+			FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+	}
+
+	rows, err := r.db.Query(ctx, query, userID.String(), limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("api key list by user paged: %w", err)
+	}
+	defer rows.Close()
+
+	result := []model.APIKey{}
+	for rows.Next() {
+		key, err := r.scanKeyFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("api key list by user paged iteration: %w", err)
+	}
+	return result, nil
+}
+
 // Revoke deletes an API key by ID.
 func (r *APIKeyRepo) Revoke(ctx context.Context, id uuid.UUID) error {
 	query := `DELETE FROM api_keys WHERE id = ?`

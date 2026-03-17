@@ -21,8 +21,12 @@ func NewOrgAdminStore(orgRepo *storage.OrganizationRepo, nsRepo *storage.Namespa
 	return &OrgAdminStore{orgRepo: orgRepo, nsRepo: nsRepo}
 }
 
-func (s *OrgAdminStore) ListOrgs(ctx context.Context) ([]model.Organization, error) {
-	return s.orgRepo.List(ctx)
+func (s *OrgAdminStore) CountOrgs(ctx context.Context) (int, error) {
+	return s.orgRepo.Count(ctx)
+}
+
+func (s *OrgAdminStore) ListOrgs(ctx context.Context, limit, offset int) ([]model.Organization, error) {
+	return s.orgRepo.ListPaged(ctx, limit, offset)
 }
 
 func (s *OrgAdminStore) CreateOrg(ctx context.Context, name, slug string) (*model.Organization, error) {

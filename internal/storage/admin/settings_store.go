@@ -20,11 +20,18 @@ func NewSettingsAdminStore(settingsRepo *storage.SettingsRepo) *SettingsAdminSto
 	return &SettingsAdminStore{settingsRepo: settingsRepo}
 }
 
-func (s *SettingsAdminStore) ListSettings(ctx context.Context, scope string) ([]model.Setting, error) {
+func (s *SettingsAdminStore) CountSettings(ctx context.Context, scope string) (int, error) {
 	if scope != "" {
-		return s.settingsRepo.ListByScope(ctx, scope)
+		return s.settingsRepo.CountByScope(ctx, scope)
 	}
-	return s.settingsRepo.ListAll(ctx)
+	return s.settingsRepo.CountAll(ctx)
+}
+
+func (s *SettingsAdminStore) ListSettings(ctx context.Context, scope string, limit, offset int) ([]model.Setting, error) {
+	if scope != "" {
+		return s.settingsRepo.ListByScopePaged(ctx, scope, limit, offset)
+	}
+	return s.settingsRepo.ListAllPaged(ctx, limit, offset)
 }
 
 func (s *SettingsAdminStore) UpdateSetting(ctx context.Context, key string, value json.RawMessage, scope string, updatedBy *uuid.UUID) error {

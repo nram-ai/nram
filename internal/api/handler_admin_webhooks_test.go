@@ -44,7 +44,11 @@ type mockWebhookAdminStore struct {
 	gotID         uuid.UUID
 }
 
-func (m *mockWebhookAdminStore) ListWebhooks(_ context.Context) ([]model.Webhook, error) {
+func (m *mockWebhookAdminStore) CountWebhooks(_ context.Context) (int, error) {
+	return len(m.webhooks), m.listErr
+}
+
+func (m *mockWebhookAdminStore) ListWebhooks(_ context.Context, limit, offset int) ([]model.Webhook, error) {
 	return m.webhooks, m.listErr
 }
 
@@ -120,9 +124,7 @@ func TestAdminWebhooksListWebhooks(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var resp struct {
-		Data []model.Webhook `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.Webhook]
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -135,6 +137,9 @@ func TestAdminWebhooksListWebhooks(t *testing.T) {
 	}
 	if resp.Data[1].URL != "https://example.com/hook2" {
 		t.Errorf("expected URL https://example.com/hook2, got %q", resp.Data[1].URL)
+	}
+	if resp.Pagination.Total != 2 {
+		t.Errorf("expected pagination.total=2, got %d", resp.Pagination.Total)
 	}
 }
 
@@ -152,15 +157,16 @@ func TestAdminWebhooksListWebhooksEmpty(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var resp struct {
-		Data []model.Webhook `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.Webhook]
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
 	if len(resp.Data) != 0 {
 		t.Fatalf("expected 0 webhooks, got %d", len(resp.Data))
+	}
+	if resp.Pagination.Total != 0 {
+		t.Errorf("expected pagination.total=0, got %d", resp.Pagination.Total)
 	}
 }
 

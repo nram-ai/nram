@@ -478,14 +478,14 @@ func TestRecall_GraphTraversal(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(resp.Entities) != 1 {
-		t.Fatalf("expected 1 entity, got %d", len(resp.Entities))
+	if len(resp.Graph.Entities) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(resp.Graph.Entities))
 	}
-	if resp.Entities[0].Name != "TestEntity" {
-		t.Errorf("expected entity 'TestEntity', got %q", resp.Entities[0].Name)
+	if resp.Graph.Entities[0].Name != "TestEntity" {
+		t.Errorf("expected entity 'TestEntity', got %q", resp.Graph.Entities[0].Name)
 	}
-	if resp.Entities[0].EntityType != "concept" {
-		t.Errorf("expected entity type 'concept', got %q", resp.Entities[0].EntityType)
+	if resp.Graph.Entities[0].EntityType != "concept" {
+		t.Errorf("expected entity type 'concept', got %q", resp.Graph.Entities[0].EntityType)
 	}
 
 	if len(resp.Memories) != 1 {

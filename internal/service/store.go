@@ -75,6 +75,7 @@ type StoreResponse struct {
 	ID               uuid.UUID `json:"id"`
 	ProjectID        uuid.UUID `json:"project_id"`
 	ProjectSlug      string    `json:"project_slug"`
+	Path             string    `json:"path"`
 	Content          string    `json:"content"`
 	Tags             []string  `json:"tags"`
 	Enriched         bool      `json:"enriched"`
@@ -287,6 +288,7 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 		ID:               memID,
 		ProjectID:        project.ID,
 		ProjectSlug:      project.Slug,
+		Path:             ns.Path,
 		Content:          req.Content,
 		Tags:             tags,
 		Enriched:         false,

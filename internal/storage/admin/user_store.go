@@ -35,8 +35,12 @@ func NewUserAdminStore(
 	}
 }
 
-func (s *UserAdminStore) ListUsers(ctx context.Context) ([]model.User, error) {
-	return s.userRepo.ListAll(ctx)
+func (s *UserAdminStore) CountUsers(ctx context.Context) (int, error) {
+	return s.userRepo.CountAll(ctx)
+}
+
+func (s *UserAdminStore) ListUsers(ctx context.Context, limit, offset int) ([]model.User, error) {
+	return s.userRepo.ListAllPaged(ctx, limit, offset)
 }
 
 func (s *UserAdminStore) CreateUser(ctx context.Context, email, displayName, password, role string, orgID uuid.UUID) (*model.User, error) {
@@ -107,8 +111,12 @@ func (s *UserAdminStore) CountAdmins(ctx context.Context) (int, error) {
 	return s.userRepo.CountAdmins(ctx)
 }
 
-func (s *UserAdminStore) ListAPIKeys(ctx context.Context, userID uuid.UUID) ([]model.APIKey, error) {
-	return s.apiKeyRepo.ListByUser(ctx, userID)
+func (s *UserAdminStore) CountAPIKeys(ctx context.Context, userID uuid.UUID) (int, error) {
+	return s.apiKeyRepo.CountByUser(ctx, userID)
+}
+
+func (s *UserAdminStore) ListAPIKeys(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.APIKey, error) {
+	return s.apiKeyRepo.ListByUserPaged(ctx, userID, limit, offset)
 }
 
 func (s *UserAdminStore) GenerateAPIKey(ctx context.Context, userID uuid.UUID, name string, scopes []uuid.UUID, expiresAt *time.Time) (*model.APIKey, string, error) {

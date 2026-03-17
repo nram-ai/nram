@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -12,7 +13,8 @@ import (
 
 // WebhookAdminStore abstracts storage operations for the webhook admin API.
 type WebhookAdminStore interface {
-	ListWebhooks(ctx context.Context) ([]model.Webhook, error)
+	CountWebhooks(ctx context.Context) (int, error)
+	ListWebhooks(ctx context.Context, limit, offset int) ([]model.Webhook, error)
 	CreateWebhook(ctx context.Context, url, scope string, events []string, secret *string, active bool) (*model.Webhook, error)
 	GetWebhook(ctx context.Context, id uuid.UUID) (*model.Webhook, error)
 	UpdateWebhook(ctx context.Context, id uuid.UUID, url, scope string, events []string, secret *string, active bool) (*model.Webhook, error)
@@ -135,13 +137,46 @@ func extractWebhookSubPath(path string) (id, action string) {
 
 // handleListWebhooks handles GET /webhooks.
 func handleListWebhooks(w http.ResponseWriter, r *http.Request, cfg WebhookAdminConfig) {
-	webhooks, err := cfg.Store.ListWebhooks(r.Context())
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			limit = n
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	total, err := cfg.Store.CountWebhooks(r.Context())
 	if err != nil {
 		WriteError(w, mapWebhookError(err))
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"data": webhooks})
+	webhooks, err := cfg.Store.ListWebhooks(r.Context(), limit, offset)
+	if err != nil {
+		WriteError(w, mapWebhookError(err))
+		return
+	}
+	if webhooks == nil {
+		webhooks = []model.Webhook{}
+	}
+
+	writeJSON(w, http.StatusOK, model.PaginatedResponse[model.Webhook]{
+		Data: webhooks,
+		Pagination: model.Pagination{
+			Total:  total,
+			Limit:  limit,
+			Offset: offset,
+		},
+	})
 }
 
 // handleCreateWebhook handles POST /webhooks.

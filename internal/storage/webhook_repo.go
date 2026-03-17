@@ -262,6 +262,32 @@ func (r *WebhookRepo) ListAll(ctx context.Context) ([]model.Webhook, error) {
 	return r.scanWebhooks(rows)
 }
 
+// CountAll returns the total number of webhooks.
+func (r *WebhookRepo) CountAll(ctx context.Context) (int, error) {
+	row := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM webhooks`)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("webhook count all: %w", err)
+	}
+	return count, nil
+}
+
+// ListAllPaged returns all webhooks ordered by created_at DESC with LIMIT and OFFSET applied.
+func (r *WebhookRepo) ListAllPaged(ctx context.Context, limit, offset int) ([]model.Webhook, error) {
+	query := selectWebhookColumns + ` FROM webhooks ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	if r.db.Backend() == BackendPostgres {
+		query = selectWebhookColumns + ` FROM webhooks ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	}
+
+	rows, err := r.db.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("webhook list all paged: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanWebhooks(rows)
+}
+
 // reload fetches the webhook by ID and populates the struct in place.
 func (r *WebhookRepo) reload(ctx context.Context, webhook *model.Webhook) error {
 	fetched, err := r.GetByID(ctx, webhook.ID)

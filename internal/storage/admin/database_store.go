@@ -2,9 +2,12 @@ package admin
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
+	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib" // pgx stdlib driver
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -81,24 +84,77 @@ func (s *DatabaseAdminStore) GetDatabaseInfo(ctx context.Context) (*api.Database
 	return info, nil
 }
 
+// TestConnection opens a temporary Postgres connection to the provided URL,
+// pings it, checks for pgvector, measures latency, and then closes the connection.
 func (s *DatabaseAdminStore) TestConnection(ctx context.Context, url string) (*api.ConnectionTestResult, error) {
-	// This would open a temporary connection to test. For safety, we only report
-	// that the current connection is healthy.
-	if err := s.db.Ping(ctx); err != nil {
+	start := time.Now()
+
+	db, err := sql.Open("pgx", url)
+	if err != nil {
 		return &api.ConnectionTestResult{
 			Success: false,
-			Message: fmt.Sprintf("ping failed: %v", err),
+			Message: fmt.Sprintf("failed to open connection: %v", err),
 		}, nil
 	}
+	defer db.Close()
+
+	db.SetMaxOpenConns(1)
+	db.SetConnMaxLifetime(10 * time.Second)
+
+	if err := db.PingContext(ctx); err != nil {
+		return &api.ConnectionTestResult{
+			Success:   false,
+			Message:   fmt.Sprintf("ping failed: %v", err),
+			LatencyMs: time.Since(start).Milliseconds(),
+		}, nil
+	}
+
+	latency := time.Since(start).Milliseconds()
+
+	// Check whether pgvector is installed.
+	var pgvVersion string
+	pgvInstalled := false
+	row := db.QueryRowContext(ctx, "SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+	if row.Scan(&pgvVersion) == nil {
+		pgvInstalled = true
+	}
+
 	return &api.ConnectionTestResult{
-		Success: true,
-		Message: "connection successful",
+		Success:           true,
+		Message:           "connection successful",
+		PgvectorInstalled: pgvInstalled,
+		LatencyMs:         latency,
 	}, nil
 }
 
+// TriggerMigration runs a full SQLite-to-Postgres data migration.
+// It rejects the request if the current backend is already Postgres.
 func (s *DatabaseAdminStore) TriggerMigration(ctx context.Context, url string) (*api.MigrationStatus, error) {
+	if s.db.Backend() != storage.BackendSQLite {
+		return &api.MigrationStatus{
+			Status:  "error",
+			Message: "migration is only supported from SQLite; current backend is already postgres",
+		}, nil
+	}
+
+	dm, err := newDataMigrator(ctx, s.db.DB(), url)
+	if err != nil {
+		return &api.MigrationStatus{
+			Status:  "error",
+			Message: fmt.Sprintf("failed to initialize migration: %v", err),
+		}, nil
+	}
+	defer dm.Close()
+
+	if err := dm.Run(ctx); err != nil {
+		return &api.MigrationStatus{
+			Status:  "error",
+			Message: fmt.Sprintf("migration failed: %v", err),
+		}, nil
+	}
+
 	return &api.MigrationStatus{
-		Status:  "not_supported",
-		Message: "live migration is not yet implemented",
+		Status:  "complete",
+		Message: "all data successfully migrated to postgres",
 	}, nil
 }

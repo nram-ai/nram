@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -13,7 +14,8 @@ import (
 
 // SettingsAdminStore abstracts storage operations for the settings admin API.
 type SettingsAdminStore interface {
-	ListSettings(ctx context.Context, scope string) ([]model.Setting, error)
+	CountSettings(ctx context.Context, scope string) (int, error)
+	ListSettings(ctx context.Context, scope string, limit, offset int) ([]model.Setting, error)
 	UpdateSetting(ctx context.Context, key string, value json.RawMessage, scope string, updatedBy *uuid.UUID) error
 	GetSettingsSchema(ctx context.Context) ([]SettingSchema, error)
 }
@@ -67,13 +69,46 @@ func NewAdminSettingsHandler(cfg SettingsAdminConfig) http.HandlerFunc {
 func handleListSettings(w http.ResponseWriter, r *http.Request, cfg SettingsAdminConfig) {
 	scope := r.URL.Query().Get("scope")
 
-	settings, err := cfg.Store.ListSettings(r.Context(), scope)
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			limit = n
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	total, err := cfg.Store.CountSettings(r.Context(), scope)
 	if err != nil {
 		WriteError(w, mapSettingsError(err))
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"data": settings})
+	settings, err := cfg.Store.ListSettings(r.Context(), scope, limit, offset)
+	if err != nil {
+		WriteError(w, mapSettingsError(err))
+		return
+	}
+	if settings == nil {
+		settings = []model.Setting{}
+	}
+
+	writeJSON(w, http.StatusOK, model.PaginatedResponse[model.Setting]{
+		Data: settings,
+		Pagination: model.Pagination{
+			Total:  total,
+			Limit:  limit,
+			Offset: offset,
+		},
+	})
 }
 
 // handleSettingsSchema handles GET /settings?schema=true — returns setting definitions.

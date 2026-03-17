@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -14,7 +15,8 @@ import (
 
 // ProjectAdminStore abstracts storage for admin project operations.
 type ProjectAdminStore interface {
-	ListProjects(ctx context.Context) ([]model.Project, error)
+	CountProjects(ctx context.Context) (int, error)
+	ListProjects(ctx context.Context, limit, offset int) ([]model.Project, error)
 	CreateProject(ctx context.Context, name, slug, description string, ownerNamespaceID uuid.UUID, defaultTags []string, settings json.RawMessage) (*model.Project, error)
 	GetProject(ctx context.Context, id uuid.UUID) (*model.Project, error)
 	UpdateProject(ctx context.Context, id uuid.UUID, name, slug, description string, defaultTags []string, settings json.RawMessage) (*model.Project, error)
@@ -101,14 +103,45 @@ func isProjectNotFound(err error) bool {
 }
 
 func handleAdminListProjects(w http.ResponseWriter, r *http.Request, store ProjectAdminStore) {
-	projects, err := store.ListProjects(r.Context())
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			limit = n
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	total, err := store.CountProjects(r.Context())
+	if err != nil {
+		WriteError(w, ErrInternal("failed to count projects"))
+		return
+	}
+
+	projects, err := store.ListProjects(r.Context(), limit, offset)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to list projects"))
 		return
 	}
+	if projects == nil {
+		projects = []model.Project{}
+	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"data": projects,
+	writeJSON(w, http.StatusOK, model.PaginatedResponse[model.Project]{
+		Data: projects,
+		Pagination: model.Pagination{
+			Total:  total,
+			Limit:  limit,
+			Offset: offset,
+		},
 	})
 }
 

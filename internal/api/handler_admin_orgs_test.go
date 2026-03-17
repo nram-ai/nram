@@ -18,15 +18,23 @@ import (
 // --- mock OrgStore ---
 
 type mockOrgStore struct {
-	listOrgsFunc  func(ctx context.Context) ([]model.Organization, error)
+	countOrgsFunc func(ctx context.Context) (int, error)
+	listOrgsFunc  func(ctx context.Context, limit, offset int) ([]model.Organization, error)
 	createOrgFunc func(ctx context.Context, name, slug string) (*model.Organization, error)
 	getOrgFunc    func(ctx context.Context, id uuid.UUID) (*model.Organization, error)
 	updateOrgFunc func(ctx context.Context, id uuid.UUID, name, slug string, settings json.RawMessage) (*model.Organization, error)
 	deleteOrgFunc func(ctx context.Context, id uuid.UUID) error
 }
 
-func (m *mockOrgStore) ListOrgs(ctx context.Context) ([]model.Organization, error) {
-	return m.listOrgsFunc(ctx)
+func (m *mockOrgStore) CountOrgs(ctx context.Context) (int, error) {
+	if m.countOrgsFunc != nil {
+		return m.countOrgsFunc(ctx)
+	}
+	return 0, nil
+}
+
+func (m *mockOrgStore) ListOrgs(ctx context.Context, limit, offset int) ([]model.Organization, error) {
+	return m.listOrgsFunc(ctx, limit, offset)
 }
 
 func (m *mockOrgStore) CreateOrg(ctx context.Context, name, slug string) (*model.Organization, error) {
@@ -70,7 +78,10 @@ func TestAdminOrgs_ListOrgs(t *testing.T) {
 	org2 := newTestOrg("Globex", "globex")
 
 	store := &mockOrgStore{
-		listOrgsFunc: func(_ context.Context) ([]model.Organization, error) {
+		countOrgsFunc: func(_ context.Context) (int, error) {
+			return 2, nil
+		},
+		listOrgsFunc: func(_ context.Context, limit, offset int) ([]model.Organization, error) {
 			return []model.Organization{org1, org2}, nil
 		},
 	}
@@ -83,9 +94,7 @@ func TestAdminOrgs_ListOrgs(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 
-	var resp struct {
-		Data []model.Organization `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.Organization]
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -95,11 +104,23 @@ func TestAdminOrgs_ListOrgs(t *testing.T) {
 	if resp.Data[0].Name != "Acme" {
 		t.Errorf("expected first org name 'Acme', got %q", resp.Data[0].Name)
 	}
+	if resp.Pagination.Total != 2 {
+		t.Errorf("expected pagination.total=2, got %d", resp.Pagination.Total)
+	}
+	if resp.Pagination.Limit != 50 {
+		t.Errorf("expected pagination.limit=50, got %d", resp.Pagination.Limit)
+	}
+	if resp.Pagination.Offset != 0 {
+		t.Errorf("expected pagination.offset=0, got %d", resp.Pagination.Offset)
+	}
 }
 
 func TestAdminOrgs_ListOrgs_Empty(t *testing.T) {
 	store := &mockOrgStore{
-		listOrgsFunc: func(_ context.Context) ([]model.Organization, error) {
+		countOrgsFunc: func(_ context.Context) (int, error) {
+			return 0, nil
+		},
+		listOrgsFunc: func(_ context.Context, limit, offset int) ([]model.Organization, error) {
 			return []model.Organization{}, nil
 		},
 	}
@@ -112,14 +133,15 @@ func TestAdminOrgs_ListOrgs_Empty(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 
-	var resp struct {
-		Data []model.Organization `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.Organization]
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 	if len(resp.Data) != 0 {
 		t.Fatalf("expected 0 orgs, got %d", len(resp.Data))
+	}
+	if resp.Pagination.Total != 0 {
+		t.Errorf("expected pagination.total=0, got %d", resp.Pagination.Total)
 	}
 }
 

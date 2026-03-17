@@ -22,8 +22,12 @@ func NewWebhookAdminStore(webhookRepo *storage.WebhookRepo) *WebhookAdminStore {
 	return &WebhookAdminStore{webhookRepo: webhookRepo}
 }
 
-func (s *WebhookAdminStore) ListWebhooks(ctx context.Context) ([]model.Webhook, error) {
-	return s.webhookRepo.ListAll(ctx)
+func (s *WebhookAdminStore) CountWebhooks(ctx context.Context) (int, error) {
+	return s.webhookRepo.CountAll(ctx)
+}
+
+func (s *WebhookAdminStore) ListWebhooks(ctx context.Context, limit, offset int) ([]model.Webhook, error) {
+	return s.webhookRepo.ListAllPaged(ctx, limit, offset)
 }
 
 func (s *WebhookAdminStore) CreateWebhook(ctx context.Context, url, scope string, events []string, secret *string, active bool) (*model.Webhook, error) {

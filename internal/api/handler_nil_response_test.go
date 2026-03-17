@@ -34,6 +34,7 @@ func assertNoNullCollections(t *testing.T, body string) {
 	allowed := map[string]bool{
 		"source":        true,
 		"similarity":    true,
+		"shared_from":   true, // nullable: only set when surfaced via cross-namespace sharing
 		"last_accessed": true,
 		"expires_at":    true,
 		"superseded_by": true,
@@ -86,10 +87,9 @@ func TestRecallHandler_EmptyResults_NoNull(t *testing.T) {
 
 	svc := &mockRecallService{
 		recallFn: func(_ context.Context, _ *service.RecallRequest) (*service.RecallResponse, error) {
-			// Return a response where both slices are nil (the default zero value).
+			// Return a response where slices are nil (the default zero value).
 			return &service.RecallResponse{
 				Memories:  nil,
-				Entities:  nil,
 				LatencyMs: 1,
 			}, nil
 		},
@@ -115,14 +115,30 @@ func TestRecallHandler_EmptyResults_NoNull(t *testing.T) {
 
 	// Verify specific fields are arrays.
 	assertFieldIsArray(t, body, "memories")
-	assertFieldIsArray(t, body, "entities")
+
+	// Verify graph sub-fields are arrays (entities/relationships moved under graph).
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	graphObj, ok := raw["graph"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graph object in response, got %T", raw["graph"])
+	}
+	if ents := graphObj["entities"]; ents == nil {
+		t.Error("graph.entities is null, expected empty array []")
+	} else if _, ok := ents.([]interface{}); !ok {
+		t.Errorf("graph.entities is type %T, expected []interface{}", ents)
+	}
+	if rels := graphObj["relationships"]; rels == nil {
+		t.Error("graph.relationships is null, expected empty array []")
+	} else if _, ok := rels.([]interface{}); !ok {
+		t.Errorf("graph.relationships is type %T, expected []interface{}", rels)
+	}
 
 	// Also verify with strings.Contains as a belt-and-suspenders check.
 	if strings.Contains(body, `"memories":null`) {
 		t.Error("response contains \"memories\":null, expected empty array")
-	}
-	if strings.Contains(body, `"entities":null`) {
-		t.Error("response contains \"entities\":null, expected empty array")
 	}
 }
 
@@ -383,7 +399,10 @@ func TestRecallHandler_NilTagsInResult_ReturnsEmptyArray(t *testing.T) {
 						CreatedAt: time.Now(),
 					},
 				},
-				Entities:  []service.RecallEntity{},
+				Graph: service.RecallGraph{
+					Entities:      []service.RecallEntity{},
+					Relationships: []service.RecallRelationship{},
+				},
 				LatencyMs: 1,
 			}, nil
 		},

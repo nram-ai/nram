@@ -158,6 +158,88 @@ func (r *SettingsRepo) ListAll(ctx context.Context) ([]model.Setting, error) {
 	return result, nil
 }
 
+// CountAll returns the total number of settings rows.
+func (r *SettingsRepo) CountAll(ctx context.Context) (int, error) {
+	row := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM settings`)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("settings count all: %w", err)
+	}
+	return count, nil
+}
+
+// CountByScope returns the number of settings rows for a given scope.
+func (r *SettingsRepo) CountByScope(ctx context.Context, scope string) (int, error) {
+	query := `SELECT COUNT(*) FROM settings WHERE scope = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM settings WHERE scope = $1`
+	}
+	row := r.db.QueryRow(ctx, query, scope)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("settings count by scope: %w", err)
+	}
+	return count, nil
+}
+
+// ListAllPaged returns all settings ordered by key with LIMIT and OFFSET applied.
+func (r *SettingsRepo) ListAllPaged(ctx context.Context, limit, offset int) ([]model.Setting, error) {
+	query := `SELECT key, value, scope, updated_by, updated_at
+		FROM settings ORDER BY key LIMIT ? OFFSET ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT key, value, scope, updated_by, updated_at
+			FROM settings ORDER BY key LIMIT $1 OFFSET $2`
+	}
+
+	rows, err := r.db.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("settings list all paged: %w", err)
+	}
+	defer rows.Close()
+
+	result := []model.Setting{}
+	for rows.Next() {
+		setting, err := r.scanSettingFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *setting)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("settings list all paged iteration: %w", err)
+	}
+	return result, nil
+}
+
+// ListByScopePaged returns settings for a scope with LIMIT and OFFSET applied.
+func (r *SettingsRepo) ListByScopePaged(ctx context.Context, scope string, limit, offset int) ([]model.Setting, error) {
+	query := `SELECT key, value, scope, updated_by, updated_at
+		FROM settings WHERE scope = ? ORDER BY key LIMIT ? OFFSET ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT key, value, scope, updated_by, updated_at
+			FROM settings WHERE scope = $1 ORDER BY key LIMIT $2 OFFSET $3`
+	}
+
+	rows, err := r.db.Query(ctx, query, scope, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("settings list by scope paged: %w", err)
+	}
+	defer rows.Close()
+
+	result := []model.Setting{}
+	for rows.Next() {
+		setting, err := r.scanSettingFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *setting)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("settings list by scope paged iteration: %w", err)
+	}
+	return result, nil
+}
+
 // GetSchema returns the schema/definition for a setting key from the "global" scope.
 func (r *SettingsRepo) GetSchema(ctx context.Context, key string) (*model.Setting, error) {
 	return r.getExact(ctx, key, "global")

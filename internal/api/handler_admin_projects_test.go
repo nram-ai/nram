@@ -17,15 +17,23 @@ import (
 // --- mock ProjectAdminStore ---
 
 type mockProjectAdminStore struct {
-	listProjectsFunc  func(ctx context.Context) ([]model.Project, error)
+	countProjectsFunc func(ctx context.Context) (int, error)
+	listProjectsFunc  func(ctx context.Context, limit, offset int) ([]model.Project, error)
 	createProjectFunc func(ctx context.Context, name, slug, description string, ownerNamespaceID uuid.UUID, defaultTags []string, settings json.RawMessage) (*model.Project, error)
 	getProjectFunc    func(ctx context.Context, id uuid.UUID) (*model.Project, error)
 	updateProjectFunc func(ctx context.Context, id uuid.UUID, name, slug, description string, defaultTags []string, settings json.RawMessage) (*model.Project, error)
 	deleteProjectFunc func(ctx context.Context, id uuid.UUID) error
 }
 
-func (m *mockProjectAdminStore) ListProjects(ctx context.Context) ([]model.Project, error) {
-	return m.listProjectsFunc(ctx)
+func (m *mockProjectAdminStore) CountProjects(ctx context.Context) (int, error) {
+	if m.countProjectsFunc != nil {
+		return m.countProjectsFunc(ctx)
+	}
+	return 0, nil
+}
+
+func (m *mockProjectAdminStore) ListProjects(ctx context.Context, limit, offset int) ([]model.Project, error) {
+	return m.listProjectsFunc(ctx, limit, offset)
 }
 
 func (m *mockProjectAdminStore) CreateProject(ctx context.Context, name, slug, description string, ownerNamespaceID uuid.UUID, defaultTags []string, settings json.RawMessage) (*model.Project, error) {
@@ -72,7 +80,10 @@ func TestAdminProjects_ListProjects(t *testing.T) {
 	p2 := newTestProject("Beta", "beta")
 
 	store := &mockProjectAdminStore{
-		listProjectsFunc: func(_ context.Context) ([]model.Project, error) {
+		countProjectsFunc: func(_ context.Context) (int, error) {
+			return 2, nil
+		},
+		listProjectsFunc: func(_ context.Context, limit, offset int) ([]model.Project, error) {
 			return []model.Project{p1, p2}, nil
 		},
 	}
@@ -85,9 +96,7 @@ func TestAdminProjects_ListProjects(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 
-	var resp struct {
-		Data []model.Project `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.Project]
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -97,11 +106,17 @@ func TestAdminProjects_ListProjects(t *testing.T) {
 	if resp.Data[0].Name != "Alpha" {
 		t.Errorf("expected first project name 'Alpha', got %q", resp.Data[0].Name)
 	}
+	if resp.Pagination.Total != 2 {
+		t.Errorf("expected pagination.total=2, got %d", resp.Pagination.Total)
+	}
 }
 
 func TestAdminProjects_ListProjects_Empty(t *testing.T) {
 	store := &mockProjectAdminStore{
-		listProjectsFunc: func(_ context.Context) ([]model.Project, error) {
+		countProjectsFunc: func(_ context.Context) (int, error) {
+			return 0, nil
+		},
+		listProjectsFunc: func(_ context.Context, limit, offset int) ([]model.Project, error) {
 			return []model.Project{}, nil
 		},
 	}
@@ -114,14 +129,15 @@ func TestAdminProjects_ListProjects_Empty(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 
-	var resp struct {
-		Data []model.Project `json:"data"`
-	}
+	var resp model.PaginatedResponse[model.Project]
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 	if len(resp.Data) != 0 {
 		t.Fatalf("expected 0 projects, got %d", len(resp.Data))
+	}
+	if resp.Pagination.Total != 0 {
+		t.Errorf("expected pagination.total=0, got %d", resp.Pagination.Total)
 	}
 }
 

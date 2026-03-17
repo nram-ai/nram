@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -14,7 +15,8 @@ import (
 
 // OrgStore abstracts storage for admin org operations.
 type OrgStore interface {
-	ListOrgs(ctx context.Context) ([]model.Organization, error)
+	CountOrgs(ctx context.Context) (int, error)
+	ListOrgs(ctx context.Context, limit, offset int) ([]model.Organization, error)
 	CreateOrg(ctx context.Context, name, slug string) (*model.Organization, error)
 	GetOrg(ctx context.Context, id uuid.UUID) (*model.Organization, error)
 	UpdateOrg(ctx context.Context, id uuid.UUID, name, slug string, settings json.RawMessage) (*model.Organization, error)
@@ -95,14 +97,45 @@ func isOrgNotFound(err error) bool {
 }
 
 func handleListOrgs(w http.ResponseWriter, r *http.Request, store OrgStore) {
-	orgs, err := store.ListOrgs(r.Context())
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			limit = n
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	total, err := store.CountOrgs(r.Context())
+	if err != nil {
+		WriteError(w, ErrInternal("failed to count organizations"))
+		return
+	}
+
+	orgs, err := store.ListOrgs(r.Context(), limit, offset)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to list organizations"))
 		return
 	}
+	if orgs == nil {
+		orgs = []model.Organization{}
+	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"data": orgs,
+	writeJSON(w, http.StatusOK, model.PaginatedResponse[model.Organization]{
+		Data: orgs,
+		Pagination: model.Pagination{
+			Total:  total,
+			Limit:  limit,
+			Offset: offset,
+		},
 	})
 }
 

@@ -21,8 +21,12 @@ func NewProjectAdminStore(projectRepo *storage.ProjectRepo, nsRepo *storage.Name
 	return &ProjectAdminStore{projectRepo: projectRepo, nsRepo: nsRepo}
 }
 
-func (s *ProjectAdminStore) ListProjects(ctx context.Context) ([]model.Project, error) {
-	return s.projectRepo.ListAll(ctx)
+func (s *ProjectAdminStore) CountProjects(ctx context.Context) (int, error) {
+	return s.projectRepo.CountAll(ctx)
+}
+
+func (s *ProjectAdminStore) ListProjects(ctx context.Context, limit, offset int) ([]model.Project, error) {
+	return s.projectRepo.ListAllPaged(ctx, limit, offset)
 }
 
 func (s *ProjectAdminStore) CreateProject(ctx context.Context, name, slug, description string, ownerNamespaceID uuid.UUID, defaultTags []string, settings json.RawMessage) (*model.Project, error) {

@@ -44,6 +44,11 @@ async function request<T>(
         return new Promise<T>(() => {}); // never resolves — page is navigating
       }
     }
+    // On 403, the token is valid but role is insufficient.
+    if (res.status === 403) {
+      const msg = await res.text();
+      throw new APIError(403, msg || "forbidden: insufficient permissions");
+    }
     let errBody: unknown;
     try {
       errBody = await res.json();

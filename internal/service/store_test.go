@@ -194,6 +194,9 @@ func TestStore_SuccessWithoutEmbedding(t *testing.T) {
 	if resp.ProjectSlug != "test-project" {
 		t.Errorf("expected slug 'test-project', got %q", resp.ProjectSlug)
 	}
+	if resp.Path != "test-ns" {
+		t.Errorf("expected path 'test-ns', got %q", resp.Path)
+	}
 	if resp.Content != "Hello world" {
 		t.Errorf("expected content 'Hello world', got %q", resp.Content)
 	}

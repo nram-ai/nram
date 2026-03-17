@@ -62,22 +62,35 @@ type RecallRequest struct {
 
 // RecallResult holds a single recalled memory with its computed score.
 type RecallResult struct {
-	ID        uuid.UUID       `json:"id"`
-	ProjectID uuid.UUID       `json:"project_id"`
-	Content   string          `json:"content"`
-	Tags      []string        `json:"tags"`
-	Source    *string         `json:"source,omitempty"`
-	Score     float64         `json:"score"`
-	Similarity *float64       `json:"similarity,omitempty"`
-	Metadata  json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID          uuid.UUID       `json:"id"`
+	ProjectID   uuid.UUID       `json:"project_id"`
+	ProjectSlug string          `json:"project_slug"`
+	Path        string          `json:"path"`
+	Content     string          `json:"content"`
+	Tags        []string        `json:"tags"`
+	Source      *string         `json:"source,omitempty"`
+	Score       float64         `json:"score"`
+	Similarity  *float64        `json:"similarity,omitempty"`
+	Confidence  float64         `json:"confidence"`
+	SharedFrom  *string         `json:"shared_from"`
+	AccessCount int             `json:"access_count"`
+	Enriched    bool            `json:"enriched"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
 }
 
-// RecallResponse contains the full recall result including optional graph entities.
+// RecallGraph holds the graph entities and relationships found during graph traversal.
+type RecallGraph struct {
+	Entities      []RecallEntity      `json:"entities"`
+	Relationships []RecallRelationship `json:"relationships"`
+}
+
+// RecallResponse contains the full recall result including optional graph data.
 type RecallResponse struct {
-	Memories  []RecallResult `json:"memories"`
-	Entities  []RecallEntity `json:"entities"`
-	LatencyMs int64          `json:"latency_ms"`
+	Memories      []RecallResult `json:"memories"`
+	Graph         RecallGraph    `json:"graph"`
+	TotalSearched int            `json:"total_searched"`
+	LatencyMs     int64          `json:"latency_ms"`
 }
 
 // RecallEntity represents an entity found during graph traversal.
@@ -85,6 +98,15 @@ type RecallEntity struct {
 	ID         uuid.UUID `json:"id"`
 	Name       string    `json:"name"`
 	EntityType string    `json:"type"`
+}
+
+// RecallRelationship represents a relationship found during graph traversal.
+type RecallRelationship struct {
+	ID       uuid.UUID `json:"id"`
+	SourceID uuid.UUID `json:"source_id"`
+	TargetID uuid.UUID `json:"target_id"`
+	Relation string    `json:"relation"`
+	Weight   float64   `json:"weight"`
 }
 
 // RankingWeights controls the relative importance of each scoring factor.
@@ -157,6 +179,9 @@ type scoredMemory struct {
 	similarity     float64
 	graphRelevance float64
 	projectID      uuid.UUID
+	projectSlug    string
+	namespacePath  string
+	sharedFromNs   *string // non-nil if surfaced via cross-namespace sharing (source namespace slug)
 }
 
 // Recall retrieves and ranks memories matching the given query.
@@ -182,10 +207,18 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// Determine namespace ID.
 	var namespaceID uuid.UUID
 	var projectID uuid.UUID
+	var projectSlug string
+	var namespacePath string
 
 	if req.NamespaceID != nil {
 		namespaceID = *req.NamespaceID
 		projectID = req.ProjectID
+		// Resolve namespace path for the override namespace.
+		if s.namespaces != nil {
+			if ns, err := s.namespaces.GetByID(ctx, namespaceID); err == nil {
+				namespacePath = ns.Path
+			}
+		}
 	} else {
 		if req.ProjectID == uuid.Nil {
 			return nil, fmt.Errorf("project_id is required")
@@ -196,6 +229,13 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		}
 		namespaceID = project.NamespaceID
 		projectID = project.ID
+		projectSlug = project.Slug
+		// Resolve namespace path.
+		if s.namespaces != nil {
+			if ns, err := s.namespaces.GetByID(ctx, namespaceID); err == nil {
+				namespacePath = ns.Path
+			}
+		}
 	}
 
 	candidates := []scoredMemory{}
@@ -262,9 +302,11 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							for _, mem := range memories {
 								sim := simMap[mem.ID]
 								candidates = append(candidates, scoredMemory{
-									memory:     mem,
-									similarity: sim,
-									projectID:  projectID,
+									memory:        mem,
+									similarity:    sim,
+									projectID:     projectID,
+									projectSlug:   projectSlug,
+									namespacePath: namespacePath,
 								})
 							}
 						}
@@ -280,12 +322,54 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		if err == nil {
 			for _, mem := range memories {
 				candidates = append(candidates, scoredMemory{
-					memory:    mem,
-					projectID: projectID,
+					memory:        mem,
+					projectID:     projectID,
+					projectSlug:   projectSlug,
+					namespacePath: namespacePath,
 				})
 			}
 		}
 	}
+
+	// Include memories from shared namespaces.
+	if s.shares != nil && s.memories != nil {
+		sharedRecords, err := s.shares.ListSharedToNamespace(ctx, namespaceID)
+		if err == nil {
+			for _, share := range sharedRecords {
+				// Skip revoked shares.
+				if share.RevokedAt != nil {
+					continue
+				}
+				// Resolve the source namespace slug for the shared_from field.
+				var sourceNsSlug string
+				if s.namespaces != nil {
+					if sourceNs, err := s.namespaces.GetByID(ctx, share.SourceNsID); err == nil {
+						sourceNsSlug = sourceNs.Slug
+					}
+				}
+				if sourceNsSlug == "" {
+					sourceNsSlug = share.SourceNsID.String()
+				}
+				// Fetch memories from the source namespace.
+				sharedMems, err := s.memories.ListByNamespace(ctx, share.SourceNsID, limit*3, 0)
+				if err == nil {
+					for _, mem := range sharedMems {
+						slug := sourceNsSlug
+						candidates = append(candidates, scoredMemory{
+							memory:        mem,
+							projectID:     projectID,
+							projectSlug:   projectSlug,
+							namespacePath: namespacePath,
+							sharedFromNs:  &slug,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// Track total candidates searched (before tag/threshold filtering).
+	totalSearched := len(candidates)
 
 	// Filter by tags (intersection: memory must have ALL requested tags).
 	if len(req.Tags) > 0 {
@@ -299,16 +383,19 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	}
 
 	// Graph traversal if requested.
-	entities := []RecallEntity{}
+	graphEntities := []RecallEntity{}
+	graphRelationships := []RecallRelationship{}
 	if req.IncludeGraph && s.entityReader != nil && s.traverser != nil {
 		// Search for entities related to the query.
 		foundEntities, err := s.entityReader.FindBySimilarity(ctx, namespaceID, req.Query, "", 10)
 		if err == nil {
 			// Build set of memory IDs connected via graph.
 			graphMemoryRelevance := make(map[uuid.UUID]float64)
+			// Deduplicate relationships by ID.
+			seenRels := make(map[uuid.UUID]struct{})
 
 			for _, ent := range foundEntities {
-				entities = append(entities, RecallEntity{
+				graphEntities = append(graphEntities, RecallEntity{
 					ID:         ent.ID,
 					Name:       ent.Name,
 					EntityType: ent.EntityType,
@@ -317,6 +404,16 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				rels, err := s.traverser.TraverseFromEntity(ctx, ent.ID, graphDepth)
 				if err == nil {
 					for _, rel := range rels {
+						if _, seen := seenRels[rel.ID]; !seen {
+							seenRels[rel.ID] = struct{}{}
+							graphRelationships = append(graphRelationships, RecallRelationship{
+								ID:       rel.ID,
+								SourceID: rel.SourceID,
+								TargetID: rel.TargetID,
+								Relation: rel.Relation,
+								Weight:   rel.Weight,
+							})
+						}
 						if rel.SourceMemory != nil {
 							// Compute graph relevance: 1/(1+hops) * weight.
 							// We approximate hops as 1 for directly connected relationships.
@@ -393,8 +490,8 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 		var sim *float64
 		if embeddingUsed {
-			s := c.similarity
-			sim = &s
+			sv := c.similarity
+			sim = &sv
 		}
 
 		tags := c.memory.Tags
@@ -402,15 +499,21 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			tags = []string{}
 		}
 		results = append(results, RecallResult{
-			ID:         c.memory.ID,
-			ProjectID:  c.projectID,
-			Content:    c.memory.Content,
-			Tags:       tags,
-			Source:     c.memory.Source,
-			Score:      score,
-			Similarity: sim,
-			Metadata:   c.memory.Metadata,
-			CreatedAt:  c.memory.CreatedAt,
+			ID:          c.memory.ID,
+			ProjectID:   c.projectID,
+			ProjectSlug: c.projectSlug,
+			Path:        c.namespacePath,
+			Content:     c.memory.Content,
+			Tags:        tags,
+			Source:      c.memory.Source,
+			Score:       score,
+			Similarity:  sim,
+			Confidence:  c.memory.Confidence,
+			SharedFrom:  c.sharedFromNs,
+			AccessCount: c.memory.AccessCount,
+			Enriched:    c.memory.Enriched,
+			Metadata:    c.memory.Metadata,
+			CreatedAt:   c.memory.CreatedAt,
 		})
 
 		if len(results) >= limit {
@@ -425,9 +528,13 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	latency := time.Since(start).Milliseconds()
 
 	return &RecallResponse{
-		Memories:  results,
-		Entities:  entities,
-		LatencyMs: latency,
+		Memories: results,
+		Graph: RecallGraph{
+			Entities:      graphEntities,
+			Relationships: graphRelationships,
+		},
+		TotalSearched: totalSearched,
+		LatencyMs:     latency,
 	}, nil
 }
 
