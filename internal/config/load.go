@@ -122,6 +122,10 @@ func applyEnv(cfg *Config) {
 		cfg.Database.URL = v
 	}
 
+	if v := os.Getenv("NRAM_EXTERNAL_URL"); v != "" {
+		cfg.Server.ExternalURL = strings.TrimRight(v, "/")
+	}
+
 	if v := os.Getenv("NRAM_ADMIN_EMAIL"); v != "" {
 		cfg.Admin.Email = v
 	}

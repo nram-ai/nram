@@ -251,12 +251,21 @@ func main() {
 		log.Fatalf("failed to load jwt secret: %v", err)
 	}
 
-	// Create OAuth server.
-	oauthHost := cfg.Server.Host
-	if oauthHost == "" || oauthHost == "0.0.0.0" {
-		oauthHost = "localhost"
+	// Determine the external base URL used for OAuth issuer, JWT audience, and
+	// MCP metadata. Prefer the explicit ExternalURL config; fall back to
+	// http://host:port for local/development use.
+	externalURL := cfg.Server.ExternalURL
+	if externalURL == "" {
+		oauthHost := cfg.Server.Host
+		if oauthHost == "" || oauthHost == "0.0.0.0" {
+			oauthHost = "localhost"
+		}
+		externalURL = fmt.Sprintf("http://%s:%d", oauthHost, cfg.Server.Port)
 	}
-	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret, fmt.Sprintf("http://%s:%d", oauthHost, cfg.Server.Port))
+	log.Printf("external URL: %s", externalURL)
+
+	// Create OAuth server.
+	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret, externalURL)
 
 	authCfg := api.AuthConfig{
 		UserRepo:  userRepo,
@@ -355,7 +364,7 @@ func main() {
 
 	// Build router config with auth middleware and rate limiter.
 	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, jwtSecret,
-		auth.WithIssuerURL(fmt.Sprintf("http://%s:%d", oauthHost, cfg.Server.Port)))
+		auth.WithIssuerURL(externalURL))
 	rateLimiter := auth.NewRateLimiter(10, 20)
 	defer rateLimiter.Stop()
 

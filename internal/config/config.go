@@ -18,6 +18,12 @@ type Config struct {
 type ServerConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
+	// ExternalURL is the public-facing base URL of this nram instance
+	// (e.g. "https://nram.mycompany.com"). Used for OAuth issuer, JWT audience,
+	// WWW-Authenticate headers, and MCP metadata. When empty, derived from
+	// Host + Port as http://host:port. Set this when running behind a reverse
+	// proxy, TLS terminator, or on a custom domain.
+	ExternalURL string `yaml:"external_url"`
 }
 
 // DatabaseConfig holds database connection settings.

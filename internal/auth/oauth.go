@@ -207,6 +207,14 @@ func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
 		scope := q.Get("scope")
 		resource := q.Get("resource")
 
+		// RFC 8707: Validate the resource parameter identifies THIS server.
+		// The canonical resource URI is issuerURL + "/mcp".
+		if resource != "" && resource != s.issuerURL+"/mcp" {
+			redirectWithError(w, r, redirectURI, "invalid_target",
+				fmt.Sprintf("resource parameter must be %s/mcp", s.issuerURL), q.Get("state"))
+			return
+		}
+
 		// Determine the authenticated user. Check the auth context first (set by
 		// AuthMiddleware), then fall back to the nram_session cookie which the
 		// login page sets for the short-lived OAuth redirect flow.
@@ -389,9 +397,14 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// RFC 8707: Validate resource parameter binding.
-	// If the authorization code has a non-empty resource AND the token request
-	// also supplies a resource, they must match exactly.
+	// RFC 8707: Validate resource parameter.
+	// If the token request supplies a resource, it must match this server's
+	// canonical URI. If the auth code also had a resource, they must match.
+	if req.Resource != "" && req.Resource != s.issuerURL+"/mcp" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant",
+			fmt.Sprintf("resource parameter must be %s/mcp", s.issuerURL))
+		return
+	}
 	if authCode.Resource != "" && req.Resource != "" && authCode.Resource != req.Resource {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "resource parameter mismatch")
 		return
@@ -410,14 +423,15 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		role = user.Role
 	}
 
-	// Determine the effective resource: prefer the value from the auth code;
-	// fall back to whatever the token request provided (covers the case where
-	// the client omits resource on the authorize step but sends it on the
-	// token step, which is unusual but harmless since no stored code value
-	// existed to conflict with).
-	effectiveResource := authCode.Resource
-	if effectiveResource == "" {
-		effectiveResource = req.Resource
+	// RFC 8707: Use this server's canonical resource URI as the JWT audience.
+	// The authorize handler already validated that the client-supplied resource
+	// matches s.issuerURL+"/mcp", so we use the server's own value rather than
+	// trusting the client-supplied string. When neither the auth code nor the
+	// token request included a resource, issue a token without audience (backwards
+	// compat with clients that don't send resource yet).
+	effectiveResource := ""
+	if authCode.Resource != "" || req.Resource != "" {
+		effectiveResource = s.issuerURL + "/mcp"
 	}
 
 	// Generate access token (JWT), including the audience claim when a resource

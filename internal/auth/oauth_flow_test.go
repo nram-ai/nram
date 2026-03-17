@@ -1293,7 +1293,8 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 	codeVerifier := "mismatch_resource_test_verifier_1234567890ab"
 	codeChallenge := computeCodeChallenge(codeVerifier)
 
-	// Step 1: Authorize with resource=https://resource-a.example.com
+	// Step 1: Authorize with the correct resource for this server
+	correctResource := issuerURL + "/mcp"
 	authParams := url.Values{}
 	authParams.Set("client_id", regResp.ClientID)
 	authParams.Set("redirect_uri", "http://localhost/cb")
@@ -1301,7 +1302,7 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 	authParams.Set("code_challenge", codeChallenge)
 	authParams.Set("code_challenge_method", "S256")
 	authParams.Set("state", "s1")
-	authParams.Set("resource", "https://resource-a.example.com")
+	authParams.Set("resource", correctResource)
 
 	sessionToken, err := GenerateJWT(user.ID, user.Role, secret, time.Hour)
 	if err != nil {
@@ -1333,7 +1334,7 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 	tokenParams.Set("redirect_uri", "http://localhost/cb")
 	tokenParams.Set("client_id", regResp.ClientID)
 	tokenParams.Set("code_verifier", codeVerifier)
-	tokenParams.Set("resource", "https://resource-b.example.com") // intentional mismatch
+	tokenParams.Set("resource", "https://other-server.example.com/mcp") // intentional mismatch
 
 	tokenResp, err := client.Post(ts.URL+"/token", "application/x-www-form-urlencoded", strings.NewReader(tokenParams.Encode()))
 	if err != nil {
@@ -1398,7 +1399,7 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 		t.Fatal("expected non-empty client_id from registration")
 	}
 
-	targetResource := "https://mcp.example.com/server"
+	targetResource := issuerURL + "/mcp"
 	codeVerifier := "audience_test_verifier_string_1234567890abcd"
 	codeChallenge := computeCodeChallenge(codeVerifier)
 
