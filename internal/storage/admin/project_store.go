@@ -158,16 +158,38 @@ func (s *ProjectAdminStore) ListProjectsByOrg(ctx context.Context, orgID uuid.UU
 		if err := rows.Scan(&idStr, &nsIDStr, &ownerNSIDStr, &p.Name, &p.Slug, &p.Description, &tagsStr, &settingsStr, &createdAtStr, &updatedAtStr); err != nil {
 			return nil, fmt.Errorf("project list by org scan: %w", err)
 		}
-		p.ID, _ = uuid.Parse(idStr)
-		p.NamespaceID, _ = uuid.Parse(nsIDStr)
-		p.OwnerNamespaceID, _ = uuid.Parse(ownerNSIDStr)
-		_ = json.Unmarshal([]byte(tagsStr), &p.DefaultTags)
+		parsedID, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("project list by org parse id: %w", err)
+		}
+		p.ID = parsedID
+		nsID, err := uuid.Parse(nsIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("project list by org parse namespace_id: %w", err)
+		}
+		p.NamespaceID = nsID
+		ownerNSID, err := uuid.Parse(ownerNSIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("project list by org parse owner_namespace_id: %w", err)
+		}
+		p.OwnerNamespaceID = ownerNSID
+		if err := json.Unmarshal([]byte(tagsStr), &p.DefaultTags); err != nil {
+			return nil, fmt.Errorf("project list by org parse default_tags: %w", err)
+		}
 		if p.DefaultTags == nil {
 			p.DefaultTags = []string{}
 		}
 		p.Settings = json.RawMessage(settingsStr)
-		p.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
-		p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAtStr)
+		createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+		if err != nil {
+			return nil, fmt.Errorf("project list by org parse created_at: %w", err)
+		}
+		p.CreatedAt = createdAt
+		updatedAt, err := time.Parse(time.RFC3339, updatedAtStr)
+		if err != nil {
+			return nil, fmt.Errorf("project list by org parse updated_at: %w", err)
+		}
+		p.UpdatedAt = updatedAt
 		projects = append(projects, p)
 	}
 	if err := rows.Err(); err != nil {

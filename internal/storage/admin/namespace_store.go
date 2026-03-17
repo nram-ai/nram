@@ -72,7 +72,11 @@ func (s *NamespaceAdminStore) GetNamespaceTree(ctx context.Context, orgID *uuid.
 		if err := rows.Scan(&idStr, &n.Name, &n.Slug, &n.Kind, &parentIDStr, &n.Path, &n.Depth); err != nil {
 			return nil, fmt.Errorf("namespace tree scan: %w", err)
 		}
-		n.ID, _ = uuid.Parse(idStr)
+		parsedID, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("namespace tree parse id: %w", err)
+		}
+		n.ID = parsedID
 		if parentIDStr != nil {
 			pid, err := uuid.Parse(*parentIDStr)
 			if err == nil {

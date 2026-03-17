@@ -104,7 +104,11 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID *uuid.UUID) (
 		if err := rows.Scan(&idStr, &item.ProjectName, &item.Count); err != nil {
 			return nil, fmt.Errorf("dashboard scan project memory count: %w", err)
 		}
-		item.ProjectID, _ = uuid.Parse(idStr)
+		projectID, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("dashboard scan project id: %w", err)
+		}
+		item.ProjectID = projectID
 		stats.MemoriesByProject = append(stats.MemoriesByProject, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -156,7 +160,10 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID *u
 		if err := rows.Scan(&idStr, &content, &createdAtStr); err != nil {
 			return nil, fmt.Errorf("recent activity scan: %w", err)
 		}
-		ts, _ := time.Parse(time.RFC3339, createdAtStr)
+		ts, err := time.Parse(time.RFC3339, createdAtStr)
+		if err != nil {
+			return nil, fmt.Errorf("recent activity parse timestamp: %w", err)
+		}
 
 		// Truncate content for summary.
 		summary := content

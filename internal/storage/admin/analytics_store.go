@@ -77,23 +77,34 @@ func (s *AnalyticsStore) GetAnalytics(ctx context.Context, orgID *uuid.UUID) (*a
 	}
 
 	// Most recalled (top 10 by access count).
-	data.MostRecalled = s.queryRankedMemories(ctx, "ORDER BY access_count DESC", 10, orgID)
+	var err error
+	data.MostRecalled, err = s.queryRankedMemories(ctx, "ORDER BY access_count DESC", 10, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("analytics most recalled: %w", err)
+	}
 
 	// Least recalled (bottom 10 by access count, excluding zero).
-	data.LeastRecalled = s.queryRankedMemories(ctx, "AND access_count > 0 ORDER BY access_count ASC", 10, orgID)
+	data.LeastRecalled, err = s.queryRankedMemories(ctx, "AND access_count > 0 ORDER BY access_count ASC", 10, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("analytics least recalled: %w", err)
+	}
 
 	// Dead weight (zero access count, oldest first).
-	data.DeadWeight = s.queryRankedMemories(ctx, "AND access_count = 0 ORDER BY created_at ASC", 10, orgID)
+	data.DeadWeight, err = s.queryRankedMemories(ctx, "AND access_count = 0 ORDER BY created_at ASC", 10, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("analytics dead weight: %w", err)
+	}
 
 	// Enrichment stats.
-	var completed, failed int
+	var completed int
 	row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM enrichment_queue WHERE status = 'completed'")
 	if err := row.Scan(&completed); err != nil {
-		completed = 0
+		return nil, fmt.Errorf("analytics enrichment completed count: %w", err)
 	}
+	var failed int
 	row = s.db.QueryRow(ctx, "SELECT COUNT(*) FROM enrichment_queue WHERE status = 'failed'")
 	if err := row.Scan(&failed); err != nil {
-		failed = 0
+		return nil, fmt.Errorf("analytics enrichment failed count: %w", err)
 	}
 
 	total := completed + failed
@@ -108,7 +119,7 @@ func (s *AnalyticsStore) GetAnalytics(ctx context.Context, orgID *uuid.UUID) (*a
 	return data, nil
 }
 
-func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause string, limit int, orgID *uuid.UUID) []api.MemoryRankItem {
+func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause string, limit int, orgID *uuid.UUID) ([]api.MemoryRankItem, error) {
 	var query string
 	var args []interface{}
 
@@ -136,7 +147,7 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
-		return []api.MemoryRankItem{}
+		return nil, fmt.Errorf("ranked memories query: %w", err)
 	}
 	defer rows.Close()
 
@@ -145,10 +156,16 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 		var idStr, content, createdAtStr string
 		var accessCount int
 		if err := rows.Scan(&idStr, &content, &accessCount, &createdAtStr); err != nil {
-			continue
+			return nil, fmt.Errorf("ranked memories scan: %w", err)
 		}
-		id, _ := uuid.Parse(idStr)
-		createdAt, _ := time.Parse(time.RFC3339, createdAtStr)
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("ranked memories parse id: %w", err)
+		}
+		createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+		if err != nil {
+			return nil, fmt.Errorf("ranked memories parse created_at: %w", err)
+		}
 		items = append(items, api.MemoryRankItem{
 			ID:          id,
 			Content:     content,
@@ -156,7 +173,10 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 			CreatedAt:   createdAt,
 		})
 	}
-	return items
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ranked memories iteration: %w", err)
+	}
+	return items, nil
 }
 
 func (s *AnalyticsStore) orgMemoryCountQuery(extraFilter string) string {
