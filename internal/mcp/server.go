@@ -6,7 +6,9 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
@@ -151,6 +153,25 @@ func isAllowedOrigin(origin, host string) bool {
 		}
 	}
 	return stripped == host
+}
+
+// checkWriteAccess verifies that the authenticated user is not readonly.
+// Returns a tool error result if the user's role is readonly, nil otherwise.
+// Call this at the top of every MCP write tool handler (store, batch store,
+// update, forget, enrich, import).
+func checkWriteAccess(ctx context.Context) *mcp.CallToolResult {
+	r := HTTPRequestFromContext(ctx)
+	if r == nil {
+		return nil
+	}
+	ac := auth.FromContext(r.Context())
+	if ac == nil {
+		return nil // auth check handled separately
+	}
+	if ac.Role == auth.RoleReadonly {
+		return mcp.NewToolResultError("forbidden: readonly users cannot perform write operations")
+	}
+	return nil
 }
 
 // Backend returns the storage backend identifier ("sqlite" or "postgres")

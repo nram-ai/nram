@@ -2167,19 +2167,14 @@ func rbacMCPStoreAndGetID(t *testing.T, baseURL, token, sessionID, project strin
 // is enforced by the fact that the slug does not exist under the requesting
 // user's namespace.
 //
-// NOTE: MCP does NOT enforce role-based write restrictions (no RequireWriteAccess
-// middleware on /mcp). All authenticated users, including readonly, can perform
-// write operations on their own projects via MCP. Cross-org projects are simply
-// "not found" because the slug resolves under the user's own namespace.
-//
-// For tests with 10 subtests (5 roles x own + cross):
-// - own_org: all roles succeed (slug resolves to user's own project)
-// - cross_org: all roles fail (slug does not exist under user's namespace)
+// MCP write operations enforce readonly restrictions via checkWriteAccess().
+// MCP read operations (get, export, recall) are allowed for all roles.
+// Cross-org projects are "not found" because the slug resolves under the
+// user's own namespace.
 
-// rbacMCPAllRoleCases builds 10 MCP test cases: 5 roles x own-org + cross-org.
-// own-org slug "rbac-proj" resolves for each user (store first to auto-create).
-// cross-org slug "foreign-proj" does not exist under the user's namespace.
-func rbacMCPAllRoleCases(env *rbacTestEnv) []rbacMCPRoleCase {
+// rbacMCPWriteCases builds 10 MCP test cases for WRITE operations.
+// Readonly users get rejected on own-org writes (checkWriteAccess).
+func rbacMCPWriteCases(env *rbacTestEnv) []rbacMCPRoleCase {
 	return []rbacMCPRoleCase{
 		{"admin_own_org", env.Admin.JWT, "rbac-proj", false},
 		{"admin_cross_org", env.Admin.JWT, "foreign-proj", true},
@@ -2187,15 +2182,34 @@ func rbacMCPAllRoleCases(env *rbacTestEnv) []rbacMCPRoleCase {
 		{"org_owner_cross_org", env.OrgAOwner.JWT, "foreign-proj", true},
 		{"member_own_org", env.OrgAMember.JWT, "rbac-proj", false},
 		{"member_cross_org", env.OrgAMember.JWT, "foreign-proj", true},
-		{"readonly_own_org", env.OrgAReadonly.JWT, "rbac-proj", false},
+		{"readonly_own_org", env.OrgAReadonly.JWT, "rbac-proj", true},  // readonly blocked
 		{"readonly_cross_org", env.OrgAReadonly.JWT, "foreign-proj", true},
 		{"service_own_org", env.OrgAService.JWT, "rbac-proj", false},
 		{"service_cross_org", env.OrgAService.JWT, "foreign-proj", true},
 	}
 }
 
-// rbacMCPSeedProject stores a memory for each role user with the "rbac-proj" slug
-// so that the project exists under each user's namespace for subsequent operations.
+// rbacMCPReadCases builds 10 MCP test cases for READ operations.
+// Readonly users cannot have a seeded project via MCP (can't store),
+// so reads against "rbac-proj" error with project not found.
+func rbacMCPReadCases(env *rbacTestEnv) []rbacMCPRoleCase {
+	return []rbacMCPRoleCase{
+		{"admin_own_org", env.Admin.JWT, "rbac-proj", false},
+		{"admin_cross_org", env.Admin.JWT, "foreign-proj", true},
+		{"org_owner_own_org", env.OrgAOwner.JWT, "rbac-proj", false},
+		{"org_owner_cross_org", env.OrgAOwner.JWT, "foreign-proj", true},
+		{"member_own_org", env.OrgAMember.JWT, "rbac-proj", false},
+		{"member_cross_org", env.OrgAMember.JWT, "foreign-proj", true},
+		{"readonly_own_org", env.OrgAReadonly.JWT, "rbac-proj", true},  // no project seeded (can't write)
+		{"readonly_cross_org", env.OrgAReadonly.JWT, "foreign-proj", true},
+		{"service_own_org", env.OrgAService.JWT, "rbac-proj", false},
+		{"service_cross_org", env.OrgAService.JWT, "foreign-proj", true},
+	}
+}
+
+// rbacMCPSeedProject stores a memory for each writable role user with the
+// "rbac-proj" slug so that the project exists under each user's namespace for
+// subsequent operations. Readonly users are skipped (they cannot write).
 // Returns a map of token -> memory ID stored.
 func rbacMCPSeedProject(t *testing.T, env *rbacTestEnv) map[string]string {
 	t.Helper()
@@ -2203,7 +2217,7 @@ func rbacMCPSeedProject(t *testing.T, env *rbacTestEnv) map[string]string {
 		env.Admin.JWT,
 		env.OrgAOwner.JWT,
 		env.OrgAMember.JWT,
-		env.OrgAReadonly.JWT,
+		// readonly skipped — cannot write
 		env.OrgAService.JWT,
 	}
 	memIDs := make(map[string]string, len(tokens))
@@ -2234,8 +2248,8 @@ func TestRBAC_MCP_AllRoles_BatchStore(t *testing.T) {
 		{"org_owner_cross_org", env.OrgAOwner.JWT, "batch-foreign", false},
 		{"member_own_org", env.OrgAMember.JWT, "batch-proj", false},
 		{"member_cross_org", env.OrgAMember.JWT, "batch-foreign", false},
-		{"readonly_own_org", env.OrgAReadonly.JWT, "batch-proj", false},
-		{"readonly_cross_org", env.OrgAReadonly.JWT, "batch-foreign", false},
+		{"readonly_own_org", env.OrgAReadonly.JWT, "batch-proj", true},     // readonly blocked
+		{"readonly_cross_org", env.OrgAReadonly.JWT, "batch-foreign", true},
 		{"service_own_org", env.OrgAService.JWT, "batch-proj", false},
 		{"service_cross_org", env.OrgAService.JWT, "batch-foreign", false},
 	}
@@ -2267,7 +2281,7 @@ func TestRBAC_MCP_AllRoles_Update(t *testing.T) {
 	// Seed "rbac-proj" for each user so they each have a memory to update.
 	memIDs := rbacMCPSeedProject(t, env)
 
-	tests := rbacMCPAllRoleCases(env)
+	tests := rbacMCPWriteCases(env)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2295,7 +2309,7 @@ func TestRBAC_MCP_AllRoles_Forget(t *testing.T) {
 
 	// Seed "rbac-proj" for each user. For forget we need fresh memories per subtest
 	// since forget removes them.
-	tests := rbacMCPAllRoleCases(env)
+	tests := rbacMCPWriteCases(env)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2337,7 +2351,7 @@ func TestRBAC_MCP_AllRoles_Get(t *testing.T) {
 	// Seed "rbac-proj" for each user.
 	memIDs := rbacMCPSeedProject(t, env)
 
-	tests := rbacMCPAllRoleCases(env)
+	tests := rbacMCPReadCases(env)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2365,7 +2379,7 @@ func TestRBAC_MCP_AllRoles_Export(t *testing.T) {
 	// Seed "rbac-proj" for each user.
 	rbacMCPSeedProject(t, env)
 
-	tests := rbacMCPAllRoleCases(env)
+	tests := rbacMCPReadCases(env)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

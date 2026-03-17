@@ -48,6 +48,9 @@ func registerMemoryGet(s *Server) {
 }
 
 func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := checkWriteAccess(ctx); err != nil {
+		return err, nil
+	}
 	r := HTTPRequestFromContext(ctx)
 	if r == nil {
 		return mcp.NewToolResultError("no HTTP request in context"), nil

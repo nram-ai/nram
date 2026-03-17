@@ -61,6 +61,9 @@ func registerMemoryStoreBatch(s *Server) {
 }
 
 func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := checkWriteAccess(ctx); err != nil {
+		return err, nil
+	}
 	r := HTTPRequestFromContext(ctx)
 	if r == nil {
 		return mcp.NewToolResultError("no HTTP request in context"), nil
@@ -129,6 +132,9 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 }
 
 func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := checkWriteAccess(ctx); err != nil {
+		return err, nil
+	}
 	r := HTTPRequestFromContext(ctx)
 	if r == nil {
 		return mcp.NewToolResultError("no HTTP request in context"), nil
