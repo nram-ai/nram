@@ -18,42 +18,49 @@ CREATE INDEX idx_entities_namespace ON entities (namespace_id);
 CREATE INDEX idx_entities_type ON entities (namespace_id, entity_type);
 
 -- Entity vector tables (deferred from 000006 due to FK dependency on entities).
-CREATE TABLE entity_vectors_384 (
-  entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
-  embedding vector(384) NOT NULL
-);
-CREATE INDEX idx_ev_384_hnsw ON entity_vectors_384 USING hnsw (embedding vector_cosine_ops);
+-- Only created when pgvector is available.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+    CREATE TABLE IF NOT EXISTS entity_vectors_384 (
+      entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+      embedding vector(384) NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_384_hnsw ON entity_vectors_384 USING hnsw (embedding vector_cosine_ops);
 
-CREATE TABLE entity_vectors_512 (
-  entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
-  embedding vector(512) NOT NULL
-);
-CREATE INDEX idx_ev_512_hnsw ON entity_vectors_512 USING hnsw (embedding vector_cosine_ops);
+    CREATE TABLE IF NOT EXISTS entity_vectors_512 (
+      entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+      embedding vector(512) NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_512_hnsw ON entity_vectors_512 USING hnsw (embedding vector_cosine_ops);
 
-CREATE TABLE entity_vectors_768 (
-  entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
-  embedding vector(768) NOT NULL
-);
-CREATE INDEX idx_ev_768_hnsw ON entity_vectors_768 USING hnsw (embedding vector_cosine_ops);
+    CREATE TABLE IF NOT EXISTS entity_vectors_768 (
+      entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+      embedding vector(768) NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_768_hnsw ON entity_vectors_768 USING hnsw (embedding vector_cosine_ops);
 
-CREATE TABLE entity_vectors_1024 (
-  entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
-  embedding vector(1024) NOT NULL
-);
-CREATE INDEX idx_ev_1024_hnsw ON entity_vectors_1024 USING hnsw (embedding vector_cosine_ops);
+    CREATE TABLE IF NOT EXISTS entity_vectors_1024 (
+      entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+      embedding vector(1024) NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_1024_hnsw ON entity_vectors_1024 USING hnsw (embedding vector_cosine_ops);
 
-CREATE TABLE entity_vectors_1536 (
-  entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
-  embedding vector(1536) NOT NULL
-);
-CREATE INDEX idx_ev_1536_hnsw ON entity_vectors_1536 USING hnsw (embedding vector_cosine_ops);
+    CREATE TABLE IF NOT EXISTS entity_vectors_1536 (
+      entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+      embedding vector(1536) NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_1536_hnsw ON entity_vectors_1536 USING hnsw (embedding vector_cosine_ops);
 
-CREATE TABLE entity_vectors_3072 (
-  entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
-  embedding vector(3072) NOT NULL
-);
--- pgvector HNSW/IVFFlat indexes support up to 2000 dimensions;
--- 3072-dim tables use sequential scan by default.
+    CREATE TABLE IF NOT EXISTS entity_vectors_3072 (
+      entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+      embedding vector(3072) NOT NULL
+    );
+    -- pgvector HNSW/IVFFlat indexes support up to 2000 dimensions;
+    -- 3072-dim tables use sequential scan by default.
+  END IF;
+END;
+$$;
 
 -- Relationships table (knowledge graph edges).
 CREATE TABLE relationships (

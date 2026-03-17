@@ -74,6 +74,7 @@ var migratedTables = []string{
 	"enrichment_queue",
 	"webhooks",
 	"memory_shares",
+	"token_usage",
 	"oauth_clients",
 	"oauth_authorization_codes",
 	"oauth_refresh_tokens",
@@ -104,6 +105,7 @@ func (m *DataMigrator) Run(ctx context.Context) error {
 		{"enrichment_queue", m.migrateEnrichmentQueue},
 		{"webhooks", m.migrateWebhooks},
 		{"memory_shares", m.migrateMemoryShares},
+		{"token_usage", m.migrateTokenUsage},
 		{"oauth_clients", m.migrateOAuthClients},
 		{"oauth_authorization_codes", m.migrateOAuthAuthorizationCodes},
 		{"oauth_refresh_tokens", m.migrateOAuthRefreshTokens},
@@ -986,6 +988,66 @@ func (m *DataMigrator) migrateMemoryShares(ctx context.Context) error {
 	return tx.Commit()
 }
 
+func (m *DataMigrator) migrateTokenUsage(ctx context.Context) error {
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT id, org_id, user_id, project_id, namespace_id, operation, provider, model,
+		       tokens_input, tokens_output, memory_id, api_key_id, latency_ms, created_at
+		FROM token_usage
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	tx, err := m.dst.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id, operation, provider,
+		                         model, tokens_input, tokens_output, memory_id, api_key_id,
+		                         latency_ms, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		ON CONFLICT DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for rows.Next() {
+		var (
+			id, nsID, operation, provider, model string
+			orgID, userID, projectID             sql.NullString
+			tokensInput, tokensOutput            int
+			memoryID, apiKeyID                   sql.NullString
+			latencyMs                            sql.NullInt64
+			createdAt                            string
+		)
+		if err := rows.Scan(&id, &orgID, &userID, &projectID, &nsID, &operation, &provider,
+			&model, &tokensInput, &tokensOutput, &memoryID, &apiKeyID, &latencyMs, &createdAt); err != nil {
+			return err
+		}
+		if _, err := stmt.ExecContext(ctx,
+			id,
+			nullStringToInterface(orgID),
+			nullStringToInterface(userID),
+			nullStringToInterface(projectID),
+			nsID, operation, provider, model,
+			tokensInput, tokensOutput,
+			nullStringToInterface(memoryID),
+			nullStringToInterface(apiKeyID),
+			nullInt64ToInterface(latencyMs),
+			createdAt,
+		); err != nil {
+			return fmt.Errorf("insert token_usage %s: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
 func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 	rows, err := m.src.QueryContext(ctx, `
 		SELECT id, client_id, client_secret, name, redirect_uris, grant_types, org_id,
@@ -1054,7 +1116,7 @@ func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error {
 	rows, err := m.src.QueryContext(ctx, `
 		SELECT code, client_id, user_id, redirect_uri, scope, code_challenge,
-		       code_challenge_method, expires_at, created_at
+		       code_challenge_method, expires_at, created_at, resource
 		FROM oauth_authorization_codes
 	`)
 	if err != nil {
@@ -1071,8 +1133,8 @@ func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope,
 		                                       code_challenge, code_challenge_method,
-		                                       expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		                                       expires_at, created_at, resource)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT DO NOTHING
 	`)
 	if err != nil {
@@ -1087,15 +1149,17 @@ func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error
 			codeChallenge                       sql.NullString
 			codeChallengeMethod                 string
 			expiresAt, createdAt                string
+			resource                            sql.NullString
 		)
 		if err := rows.Scan(&code, &clientID, &userID, &redirectURI, &scope,
-			&codeChallenge, &codeChallengeMethod, &expiresAt, &createdAt); err != nil {
+			&codeChallenge, &codeChallengeMethod, &expiresAt, &createdAt, &resource); err != nil {
 			return err
 		}
 		if _, err := stmt.ExecContext(ctx,
 			code, clientID, userID, redirectURI, scope,
 			nullStringToInterface(codeChallenge),
 			codeChallengeMethod, expiresAt, createdAt,
+			nullStringToInterface(resource),
 		); err != nil {
 			return fmt.Errorf("insert oauth_authorization_code %s: %w", code, err)
 		}
