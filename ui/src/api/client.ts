@@ -49,11 +49,12 @@ async function request<T>(
       const msg = await res.text();
       throw new APIError(403, msg || "forbidden: insufficient permissions");
     }
+    const errText = await res.text();
     let errBody: unknown;
     try {
-      errBody = await res.json();
+      errBody = JSON.parse(errText);
     } catch {
-      errBody = await res.text();
+      errBody = errText;
     }
     throw new APIError(res.status, errBody);
   }
@@ -135,6 +136,7 @@ export interface StoredMemory {
   id: string;
   project_id: string;
   project_slug: string;
+  path: string;
   content: string;
   tags?: string[];
   enriched: boolean;
@@ -166,18 +168,35 @@ export interface Memory {
 export interface RecallResult {
   id: string;
   project_id: string;
+  project_slug: string;
+  path: string;
   content: string;
   tags: string[];
   source: string | null;
   score: number;
   similarity?: number | null;
+  confidence?: number;
+  shared_from?: string | null;
+  access_count?: number;
+  enriched?: boolean;
   metadata: Record<string, unknown>;
   created_at: string;
 }
 
+export interface RecallRelationship {
+  source_id: string;
+  target_id: string;
+  relation: string;
+  weight: number;
+}
+
 export interface RecallResponse {
   memories: RecallResult[];
-  entities?: RecallEntity[];
+  graph?: {
+    entities: RecallEntity[];
+    relationships: RecallRelationship[];
+  };
+  total_searched: number;
   latency_ms: number;
 }
 
@@ -199,12 +218,6 @@ export interface RecallRequest {
 export interface MemoryListParams {
   limit?: number;
   offset?: number;
-  tag?: string;
-  text?: string;
-  from?: string;
-  to?: string;
-  enriched?: string;
-  source?: string;
 }
 
 export interface MemoryListResponse {
@@ -717,9 +730,11 @@ export interface GraphData {
 
 export interface PaginatedResponse<T> {
   data: T[];
-  total: number;
-  page: number;
-  per_page: number;
+  pagination: {
+    total: number;
+    limit: number;
+    offset: number;
+  };
 }
 
 // --- Auth API ---
@@ -756,11 +771,11 @@ export const adminAPI = {
     request<SetupResponse>("POST", "/admin/setup", data),
 
   // Dashboard
-  getDashboard: () => request<DashboardData>("GET", "/admin/dashboard"),
+  getDashboard: () => request<DashboardData>("GET", "/dashboard"),
 
   // Activity
-  getActivity: (limit = 50) =>
-    request<ActivityResponse>("GET", `/admin/activity?limit=${limit}`),
+  getActivity: (limit = 20) =>
+    request<ActivityResponse>("GET", `/activity?limit=${limit}`),
 
   // Organizations
   listOrgs: () => request<{ data: Organization[] }>("GET", "/admin/orgs").then(r => r.data),
@@ -842,7 +857,7 @@ export const adminAPI = {
     ),
 
   // Analytics
-  getAnalytics: () => request<AnalyticsData>("GET", "/admin/analytics"),
+  getAnalytics: () => request<AnalyticsData>("GET", "/analytics"),
   getUsage: (params?: { org?: string; user?: string; project?: string; from?: string; to?: string; group_by?: string }) => {
     const sp = new URLSearchParams();
     if (params?.org) sp.set("org", params.org);
@@ -852,7 +867,7 @@ export const adminAPI = {
     if (params?.to) sp.set("to", params.to);
     if (params?.group_by) sp.set("group_by", params.group_by);
     const qs = sp.toString();
-    return request<UsageReport>("GET", `/admin/usage${qs ? `?${qs}` : ""}`);
+    return request<UsageReport>("GET", `/usage${qs ? `?${qs}` : ""}`);
   },
 
   // Database
@@ -864,17 +879,17 @@ export const adminAPI = {
 
   // Enrichment
   getEnrichmentStatus: () =>
-    request<EnrichmentQueueStatus>("GET", "/admin/enrichment"),
+    request<EnrichmentQueueStatus>("GET", "/enrichment"),
   retryEnrichment: (ids?: string[]) =>
-    request<EnrichmentRetryResponse>("POST", "/admin/enrichment/retry", { ids: ids ?? [] }),
+    request<EnrichmentRetryResponse>("POST", "/enrichment/retry", { ids: ids ?? [] }),
   pauseEnrichment: (paused: boolean) =>
-    request<EnrichmentPauseResponse>("POST", "/admin/enrichment/pause", { paused }),
+    request<EnrichmentPauseResponse>("POST", "/enrichment/pause", { paused }),
   testExtractionPrompt: (
     type: "fact" | "entity",
     prompt: string,
     sampleInput: string,
   ) =>
-    request<ExtractionTestResult>("POST", "/admin/enrichment/test-prompt", {
+    request<ExtractionTestResult>("POST", "/enrichment/test-prompt", {
       type,
       prompt,
       sample_input: sampleInput,
@@ -882,11 +897,11 @@ export const adminAPI = {
 
   // Graph
   getGraph: (projectId: string) =>
-    request<GraphData>("GET", `/admin/graph?project=${encodeURIComponent(projectId)}`),
+    request<GraphData>("GET", `/graph?project=${encodeURIComponent(projectId)}`),
 
   // Namespaces
   getNamespaceTree: () =>
-    request<{ tree: NamespaceNode[] }>("GET", "/admin/namespaces/tree"),
+    request<{ tree: NamespaceNode[] }>("GET", "/namespaces/tree"),
 
   // OAuth Clients
   listOAuthClients: () =>
@@ -932,12 +947,6 @@ export const memoryAPI = {
     const sp = new URLSearchParams();
     if (params?.limit !== undefined) sp.set("limit", String(params.limit));
     if (params?.offset !== undefined) sp.set("offset", String(params.offset));
-    if (params?.tag) sp.set("tag", params.tag);
-    if (params?.text) sp.set("text", params.text);
-    if (params?.from) sp.set("from", params.from);
-    if (params?.to) sp.set("to", params.to);
-    if (params?.enriched) sp.set("enriched", params.enriched);
-    if (params?.source) sp.set("source", params.source);
     const qs = sp.toString();
     return request<MemoryListResponse>(
       "GET",

@@ -72,7 +72,7 @@ export function useDashboard() {
 
 // --- Activity ---
 
-export function useActivity(limit = 50) {
+export function useActivity(limit = 20) {
   return useQuery({
     queryKey: ["admin", "activity", limit],
     queryFn: () => adminAPI.getActivity(limit),

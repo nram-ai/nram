@@ -860,19 +860,10 @@ function MemoryBrowser() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [detailMemoryId, setDetailMemoryId] = useState<string | null>(null);
 
-  // Build list params
+  // Build list params (server only supports limit/offset pagination)
   const listParams: MemoryListParams = useMemo(() => {
-    const p: MemoryListParams = { limit: PAGE_SIZE, offset };
-    if (filters.selectedTags.length > 0)
-      p.tag = filters.selectedTags.join(",");
-    if (filters.dateFrom) p.from = filters.dateFrom;
-    if (filters.dateTo) p.to = filters.dateTo;
-    if (filters.enrichmentFilter !== "all")
-      p.enriched = filters.enrichmentFilter === "enriched" ? "true" : "false";
-    if (filters.sourceFilter) p.source = filters.sourceFilter;
-    if (searchMode === "exact" && debouncedSearch) p.text = debouncedSearch;
-    return p;
-  }, [offset, filters, searchMode, debouncedSearch]);
+    return { limit: PAGE_SIZE, offset };
+  }, [offset]);
 
   // Queries
   const isSemanticSearch = searchMode === "semantic" && debouncedSearch.length > 0;
