@@ -39,6 +39,7 @@ async function request<T>(
     // On 401, the token is invalid or expired — clear it and redirect to login.
     if (res.status === 401) {
       localStorage.removeItem("nram_token");
+      localStorage.removeItem("nram_user");
       if (window.location.pathname !== "/login" && window.location.pathname !== "/setup") {
         window.location.href = "/login";
         return new Promise<T>(() => {}); // never resolves — page is navigating
@@ -982,6 +983,111 @@ export const memoryAPI = {
 
   export: (projectId: string) =>
     request<ExportData>("GET", `/projects/${projectId}/memories/export`),
+};
+
+// --- Me API (self-service, any authenticated user) ---
+
+export interface MeCreateProjectRequest {
+  name: string;
+  slug: string;
+  description?: string;
+  default_tags?: string[];
+  settings?: Partial<ProjectSettings>;
+}
+
+export interface MeCreateAPIKeyRequest {
+  name: string;
+  scopes?: string[];
+  expires_at?: string;
+}
+
+export interface MeCreateAPIKeyResponse {
+  id: string;
+  key: string;
+  key_prefix: string;
+  name: string;
+  created_at: string;
+}
+
+export const meAPI = {
+  listProjects: () =>
+    request<{ data: Project[] }>("GET", "/me/projects").then((r) => r.data),
+  createProject: (data: MeCreateProjectRequest) =>
+    request<Project>("POST", "/me/projects", data),
+
+  listAPIKeys: () =>
+    request<{ data: APIKey[] }>("GET", "/me/api-keys").then((r) => r.data),
+  createAPIKey: (data: MeCreateAPIKeyRequest) =>
+    request<MeCreateAPIKeyResponse>("POST", "/me/api-keys", data),
+  revokeAPIKey: (id: string) =>
+    request<void>("DELETE", `/me/api-keys/${id}`),
+
+  listOAuthClients: () =>
+    request<OAuthClient[]>("GET", "/me/oauth-clients"),
+  createOAuthClient: (data: CreateOAuthClientRequest) =>
+    request<OAuthClientCreated>("POST", "/me/oauth-clients", data),
+  revokeOAuthClient: (id: string) =>
+    request<void>("DELETE", `/me/oauth-clients/${id}`),
+
+  recall: (body: RecallRequest) =>
+    request<RecallResponse>("POST", "/me/memories/recall", body),
+};
+
+// --- Org API (org-scoped endpoints) ---
+
+export interface OrgCreateUserRequest {
+  email: string;
+  display_name?: string;
+  password: string;
+  role: string;
+}
+
+export interface OrgUpdateUserRequest {
+  display_name?: string;
+  role?: string;
+  settings?: Record<string, unknown>;
+}
+
+export const orgAPI = {
+  listUsers: (orgId: string) =>
+    request<{ data: User[] }>("GET", `/orgs/${orgId}/users`).then((r) => r.data),
+  getUser: (orgId: string, userId: string) =>
+    request<User>("GET", `/orgs/${orgId}/users/${userId}`),
+  createUser: (orgId: string, data: OrgCreateUserRequest) =>
+    request<User>("POST", `/orgs/${orgId}/users`, data),
+  updateUser: (orgId: string, userId: string, data: OrgUpdateUserRequest) =>
+    request<User>("PUT", `/orgs/${orgId}/users/${userId}`, data),
+  deleteUser: (orgId: string, userId: string) =>
+    request<void>("DELETE", `/orgs/${orgId}/users/${userId}`),
+
+  listUserAPIKeys: (orgId: string, userId: string) =>
+    request<{ data: APIKey[] }>("GET", `/orgs/${orgId}/users/${userId}/api-keys`).then((r) => r.data),
+  generateUserAPIKey: (orgId: string, userId: string, data: GenerateAPIKeyRequest) =>
+    request<GenerateAPIKeyResponse>("POST", `/orgs/${orgId}/users/${userId}/api-keys`, data),
+  revokeUserAPIKey: (orgId: string, userId: string, keyId: string) =>
+    request<void>("DELETE", `/orgs/${orgId}/users/${userId}/api-keys/${keyId}`),
+
+  listProjects: (orgId: string) =>
+    request<{ data: Project[] }>("GET", `/orgs/${orgId}/projects`).then((r) => r.data),
+
+  getAnalytics: (orgId: string) =>
+    request<AnalyticsData>("GET", `/orgs/${orgId}/analytics`),
+  getUsage: (orgId: string, params?: { from?: string; to?: string; group_by?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.from) sp.set("from", params.from);
+    if (params?.to) sp.set("to", params.to);
+    if (params?.group_by) sp.set("group_by", params.group_by);
+    const qs = sp.toString();
+    return request<UsageReport>("GET", `/orgs/${orgId}/usage${qs ? `?${qs}` : ""}`);
+  },
+
+  recall: (orgId: string, body: RecallRequest) =>
+    request<RecallResponse>("POST", `/orgs/${orgId}/memories/recall`, body),
+
+  getIdP: (orgId: string) =>
+    request<IdPConfig>("GET", `/orgs/${orgId}/idp`),
+  configureIdP: (orgId: string, data: CreateIdPConfigRequest) =>
+    request<IdPConfig>("POST", `/orgs/${orgId}/idp`, data),
 };
 
 // --- Health ---

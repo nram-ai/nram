@@ -1,6 +1,8 @@
 import React from "react";
-import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { useSetupStatus } from "./hooks/useApi";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import RequireRole from "./components/RequireRole";
 import Dashboard from "./pages/Dashboard";
 import SetupWizard from "./pages/SetupWizard";
 import Login from "./pages/Login";
@@ -20,6 +22,7 @@ import WebhookManagement from "./pages/WebhookManagement";
 import OAuthClients from "./pages/OAuthClients";
 import MCPConfigGenerator from "./pages/MCPConfigGenerator";
 import ExtractionPromptEditor from "./pages/ExtractionPromptEditor";
+import MyAccount from "./pages/MyAccount";
 
 // ---------------------------------------------------------------------------
 // Error Boundary
@@ -80,6 +83,8 @@ interface NavItem {
   path: string;
   label: string;
   section: string;
+  minRole?: string;
+  writeOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -88,18 +93,19 @@ const navItems: NavItem[] = [
   { path: "/entities", label: "Entity Browser", section: "Data" },
   { path: "/graph", label: "Graph Visualization", section: "Data" },
   { path: "/projects", label: "Projects", section: "Management" },
-  { path: "/organizations", label: "Organizations", section: "Management" },
-  { path: "/users", label: "Users", section: "Management" },
-  { path: "/providers", label: "Providers", section: "Configuration" },
-  { path: "/settings", label: "Settings", section: "Configuration" },
-  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration" },
-  { path: "/webhooks", label: "Webhooks", section: "Configuration" },
-  { path: "/oauth", label: "OAuth Clients", section: "Configuration" },
+  { path: "/organizations", label: "Organizations", section: "Management", minRole: "org_owner" },
+  { path: "/users", label: "Users", section: "Management", minRole: "org_owner" },
+  { path: "/providers", label: "Providers", section: "Configuration", minRole: "administrator" },
+  { path: "/settings", label: "Settings", section: "Configuration", minRole: "administrator" },
+  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration", minRole: "administrator" },
+  { path: "/webhooks", label: "Webhooks", section: "Configuration", minRole: "administrator" },
+  { path: "/oauth", label: "OAuth Clients", section: "Configuration", minRole: "administrator" },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
-  { path: "/database", label: "Database", section: "System" },
-  { path: "/enrichment", label: "Enrichment Queue", section: "System" },
+  { path: "/database", label: "Database", section: "System", minRole: "administrator" },
+  { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator" },
   { path: "/analytics", label: "Analytics", section: "System" },
-  { path: "/import", label: "Bulk Import", section: "System" },
+  { path: "/import", label: "Bulk Import", section: "System", writeOnly: true },
+  { path: "/account", label: "My Account", section: "Account" },
 ];
 
 function groupBySection(items: NavItem[]): Record<string, NavItem[]> {
@@ -126,11 +132,11 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // If setup is not complete and we are not already on /setup, redirect.
-  // But if a token exists (just completed setup), skip this redirect — the
-  // status query may not have refreshed yet.
-  const hasToken = !!localStorage.getItem("nram_token");
-  if (status && !status.setup_complete && !hasToken && location.pathname !== "/setup") {
+  // If setup is not complete and we are not already on /setup, clear any
+  // stale auth state and redirect to the setup wizard.
+  if (status && !status.setup_complete && location.pathname !== "/setup") {
+    localStorage.removeItem("nram_token");
+    localStorage.removeItem("nram_user");
     return <Navigate to="/setup" replace />;
   }
 
@@ -138,8 +144,8 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
 }
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const token = localStorage.getItem("nram_token");
-  if (!token) {
+  const { user } = useAuth();
+  if (!user) {
     return <Navigate to="/login" replace />;
   }
   return <>{children}</>;
@@ -147,12 +153,18 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 function AppLayout() {
   const { data: setupStatus } = useSetupStatus();
-  const navigate = useNavigate();
+  const auth = useAuth();
 
   const isSQLite = setupStatus?.backend === "sqlite";
 
   const filteredItems = navItems.filter((item) => {
     if (isSQLite && (item.path === "/enrichment" || item.path === "/extraction-prompts")) {
+      return false;
+    }
+    if (item.minRole && !auth.hasMinRole(item.minRole)) {
+      return false;
+    }
+    if (item.writeOnly && !auth.canWrite) {
       return false;
     }
     return true;
@@ -161,8 +173,7 @@ function AppLayout() {
   const sections = groupBySection(filteredItems);
 
   function handleLogout() {
-    localStorage.removeItem("nram_token");
-    navigate("/login");
+    auth.logout();
   }
 
   return (
@@ -170,7 +181,9 @@ function AppLayout() {
       <aside className="w-60 shrink-0 border-r border-border bg-card overflow-y-auto flex flex-col">
         <div className="px-4 py-5">
           <h1 className="text-lg font-semibold tracking-tight">nram</h1>
-          <p className="text-xs text-muted-foreground">Admin Console</p>
+          <p className="text-xs text-muted-foreground">
+            {auth.isAdmin ? "Admin Console" : "Console"}
+          </p>
         </div>
         <nav className="px-2 pb-4 flex-1">
           {Object.entries(sections).map(([section, items]) => (
@@ -222,20 +235,21 @@ function AppLayout() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/memories" element={<MemoryBrowser />} />
               <Route path="/projects" element={<ProjectManagement />} />
-              <Route path="/organizations" element={<OrganizationManagement />} />
-              <Route path="/users" element={<UserManagement />} />
-              <Route path="/providers" element={<ProviderConfiguration />} />
-              <Route path="/settings" element={<SettingsEditor isSQLite={isSQLite} />} />
-              <Route path="/extraction-prompts" element={<ExtractionPromptEditor isSQLite={isSQLite} />} />
-              <Route path="/database" element={<DatabaseManagement />} />
-              <Route path="/enrichment" element={<EnrichmentMonitor />} />
+              <Route path="/organizations" element={<RequireRole minRole="org_owner"><OrganizationManagement /></RequireRole>} />
+              <Route path="/users" element={<RequireRole minRole="org_owner"><UserManagement /></RequireRole>} />
+              <Route path="/providers" element={<RequireRole minRole="administrator"><ProviderConfiguration /></RequireRole>} />
+              <Route path="/settings" element={<RequireRole minRole="administrator"><SettingsEditor isSQLite={isSQLite} /></RequireRole>} />
+              <Route path="/extraction-prompts" element={<RequireRole minRole="administrator"><ExtractionPromptEditor isSQLite={isSQLite} /></RequireRole>} />
+              <Route path="/database" element={<RequireRole minRole="administrator"><DatabaseManagement /></RequireRole>} />
+              <Route path="/enrichment" element={<RequireRole minRole="administrator"><EnrichmentMonitor /></RequireRole>} />
               <Route path="/graph" element={<GraphVisualization />} />
               <Route path="/entities" element={<EntityBrowser />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/import" element={<BulkImport />} />
-              <Route path="/webhooks" element={<WebhookManagement />} />
-              <Route path="/oauth" element={<OAuthClients />} />
+              <Route path="/webhooks" element={<RequireRole minRole="administrator"><WebhookManagement /></RequireRole>} />
+              <Route path="/oauth" element={<RequireRole minRole="administrator"><OAuthClients /></RequireRole>} />
               <Route path="/mcp-config" element={<MCPConfigGenerator />} />
+              <Route path="/account" element={<MyAccount />} />
             </Routes>
           </ErrorBoundary>
         </div>
@@ -246,13 +260,15 @@ function AppLayout() {
 
 function App() {
   return (
-    <SetupGuard>
-      <Routes>
-        <Route path="/setup" element={<SetupWizard />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
-      </Routes>
-    </SetupGuard>
+    <AuthProvider>
+      <SetupGuard>
+        <Routes>
+          <Route path="/setup" element={<SetupWizard />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
+        </Routes>
+      </SetupGuard>
+    </AuthProvider>
   );
 }
 

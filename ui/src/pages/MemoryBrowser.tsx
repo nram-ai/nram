@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   useProjects,
+  useMeProjects,
   useMemoryList,
   useMemoryRecall,
   useMemoryDetail,
@@ -9,6 +10,7 @@ import {
   useForgetMemories,
   useEnrichMemories,
 } from "../hooks/useApi";
+import { useAuth } from "../context/AuthContext";
 import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -428,6 +430,7 @@ function MemoryDetailPanel({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const { canWrite } = useAuth();
   const detail = useMemoryDetail(projectId, memoryId);
   const updateMut = useUpdateMemory();
   const deleteMut = useDeleteMemory();
@@ -530,19 +533,21 @@ function MemoryDetailPanel({
                   <TagChip
                     key={tag}
                     tag={tag}
-                    onRemove={() => handleRemoveTag(tag)}
+                    onRemove={canWrite ? () => handleRemoveTag(tag) : undefined}
                   />
                 ))}
-                {addingTag ? (
-                  <AddTagInput onAdd={handleAddTag} />
-                ) : (
-                  <button
-                    type="button"
-                    className="rounded border border-dashed px-2 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-primary"
-                    onClick={() => setAddingTag(true)}
-                  >
-                    + Add tag
-                  </button>
+                {canWrite && (
+                  addingTag ? (
+                    <AddTagInput onAdd={handleAddTag} />
+                  ) : (
+                    <button
+                      type="button"
+                      className="rounded border border-dashed px-2 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-primary"
+                      onClick={() => setAddingTag(true)}
+                    >
+                      + Add tag
+                    </button>
+                  )
                 )}
               </div>
             </div>
@@ -589,39 +594,41 @@ function MemoryDetailPanel({
               </div>
             )}
 
-            {/* Actions */}
-            <div className="flex items-center gap-3 border-t pt-4">
-              {confirmDelete ? (
-                <>
-                  <span className="text-sm text-red-600 dark:text-red-400">
-                    Confirm delete?
-                  </span>
+            {/* Actions — only show delete for users with write access */}
+            {canWrite && (
+              <div className="flex items-center gap-3 border-t pt-4">
+                {confirmDelete ? (
+                  <>
+                    <span className="text-sm text-red-600 dark:text-red-400">
+                      Confirm delete?
+                    </span>
+                    <button
+                      type="button"
+                      className="rounded bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+                      onClick={handleDelete}
+                      disabled={deleteMut.isPending}
+                    >
+                      {deleteMut.isPending ? "Deleting..." : "Yes, Delete"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
+                      onClick={() => setConfirmDelete(false)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
                   <button
                     type="button"
-                    className="rounded bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
-                    onClick={handleDelete}
-                    disabled={deleteMut.isPending}
+                    className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                    onClick={() => setConfirmDelete(true)}
                   >
-                    {deleteMut.isPending ? "Deleting..." : "Yes, Delete"}
+                    Delete Memory
                   </button>
-                  <button
-                    type="button"
-                    className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
-                    onClick={() => setConfirmDelete(false)}
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  Delete Memory
-                </button>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -644,9 +651,9 @@ function BulkActionsBar({
   isEnriching,
 }: {
   selectedCount: number;
-  onDelete: () => void;
-  onEnrich: () => void;
-  onAddTags: (tags: string[]) => void;
+  onDelete?: () => void;
+  onEnrich?: () => void;
+  onAddTags?: (tags: string[]) => void;
   onExport: () => void;
   onClear: () => void;
   isDeleting: boolean;
@@ -660,7 +667,7 @@ function BulkActionsBar({
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-    if (tags.length > 0) {
+    if (tags.length > 0 && onAddTags) {
       onAddTags(tags);
       setTagInput("");
     }
@@ -673,7 +680,7 @@ function BulkActionsBar({
       </span>
       <div className="h-4 w-px bg-border" />
 
-      {confirmDelete ? (
+      {confirmDelete && onDelete ? (
         <>
           <span className="text-sm text-red-600 dark:text-red-400">
             Delete {selectedCount} memories?
@@ -699,40 +706,46 @@ function BulkActionsBar({
         </>
       ) : (
         <>
-          <button
-            type="button"
-            className="rounded border border-red-300 px-3 py-1 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
-            onClick={() => setConfirmDelete(true)}
-          >
-            Delete
-          </button>
-          <button
-            type="button"
-            className="rounded border px-3 py-1 text-sm hover:bg-muted disabled:opacity-50"
-            onClick={onEnrich}
-            disabled={isEnriching}
-          >
-            {isEnriching ? "Enriching..." : "Enrich"}
-          </button>
-          <div className="flex items-center gap-1">
-            <input
-              type="text"
-              className="w-32 rounded border bg-background px-2 py-1 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-              placeholder="tag1, tag2"
-              value={tagInput}
-              onChange={(e) => setTagInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleAddTags();
-              }}
-            />
+          {onDelete && (
             <button
               type="button"
-              className="rounded border px-2 py-1 text-sm hover:bg-muted"
-              onClick={handleAddTags}
+              className="rounded border border-red-300 px-3 py-1 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+              onClick={() => setConfirmDelete(true)}
             >
-              Add Tags
+              Delete
             </button>
-          </div>
+          )}
+          {onEnrich && (
+            <button
+              type="button"
+              className="rounded border px-3 py-1 text-sm hover:bg-muted disabled:opacity-50"
+              onClick={onEnrich}
+              disabled={isEnriching}
+            >
+              {isEnriching ? "Enriching..." : "Enrich"}
+            </button>
+          )}
+          {onAddTags && (
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                className="w-32 rounded border bg-background px-2 py-1 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                placeholder="tag1, tag2"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAddTags();
+                }}
+              />
+              <button
+                type="button"
+                className="rounded border px-2 py-1 text-sm hover:bg-muted"
+                onClick={handleAddTags}
+              >
+                Add Tags
+              </button>
+            </div>
+          )}
           <button
             type="button"
             className="rounded border px-3 py-1 text-sm hover:bg-muted"
@@ -809,8 +822,12 @@ function Pagination({
 // ---------------------------------------------------------------------------
 
 function MemoryBrowser() {
-  // Project selection
-  const projectsQuery = useProjects();
+  const { isAdmin, canWrite } = useAuth();
+
+  // Project selection — admin uses admin endpoint, non-admin uses /me/projects
+  const adminProjectsQuery = useProjects();
+  const meProjectsQuery = useMeProjects();
+  const projectsQuery = isAdmin ? adminProjectsQuery : meProjectsQuery;
   const projects = projectsQuery.data ?? [];
   const [selectedProjectId, setSelectedProjectId] = useState("");
 
@@ -1162,13 +1179,13 @@ function MemoryBrowser() {
         </div>
       </div>
 
-      {/* Bulk actions bar */}
+      {/* Bulk actions bar — only show write actions if canWrite */}
       {selectedIds.size > 0 && (
         <BulkActionsBar
           selectedCount={selectedIds.size}
-          onDelete={handleBulkDelete}
-          onEnrich={handleBulkEnrich}
-          onAddTags={handleBulkAddTags}
+          onDelete={canWrite ? handleBulkDelete : undefined}
+          onEnrich={canWrite ? handleBulkEnrich : undefined}
+          onAddTags={canWrite ? handleBulkAddTags : undefined}
           onExport={handleBulkExport}
           onClear={clearSelection}
           isDeleting={forgetMut.isPending}

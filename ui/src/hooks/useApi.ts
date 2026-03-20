@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   adminAPI,
+  meAPI,
+  orgAPI,
   memoryAPI,
   healthAPI,
   type SetupRequest,
@@ -29,6 +31,11 @@ import {
   type IdPConfig,
   type CreateIdPConfigRequest,
   type WebhookTestResult,
+  type MeCreateProjectRequest,
+  type MeCreateAPIKeyRequest,
+  type MeCreateAPIKeyResponse,
+  type OrgCreateUserRequest,
+  type OrgUpdateUserRequest,
 } from "../api/client";
 
 // --- Health ---
@@ -669,5 +676,206 @@ export function useDeleteIdPConfig() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "idp-configs"] });
     },
+  });
+}
+
+// --- Me API hooks ---
+
+export function useMeProjects() {
+  return useQuery({
+    queryKey: ["me", "projects"],
+    queryFn: meAPI.listProjects,
+  });
+}
+
+export function useCreateMeProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: MeCreateProjectRequest) => meAPI.createProject(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "projects"] });
+    },
+  });
+}
+
+export function useMeAPIKeys() {
+  return useQuery({
+    queryKey: ["me", "api-keys"],
+    queryFn: meAPI.listAPIKeys,
+  });
+}
+
+export function useCreateMeAPIKey() {
+  const qc = useQueryClient();
+  return useMutation<MeCreateAPIKeyResponse, Error, MeCreateAPIKeyRequest>({
+    mutationFn: (data) => meAPI.createAPIKey(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "api-keys"] });
+    },
+  });
+}
+
+export function useRevokeMeAPIKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => meAPI.revokeAPIKey(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "api-keys"] });
+    },
+  });
+}
+
+export function useMeOAuthClients() {
+  return useQuery({
+    queryKey: ["me", "oauth-clients"],
+    queryFn: meAPI.listOAuthClients,
+  });
+}
+
+export function useCreateMeOAuthClient() {
+  const qc = useQueryClient();
+  return useMutation<OAuthClientCreated, Error, CreateOAuthClientRequest>({
+    mutationFn: (data) => meAPI.createOAuthClient(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "oauth-clients"] });
+    },
+  });
+}
+
+export function useRevokeMeOAuthClient() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => meAPI.revokeOAuthClient(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "oauth-clients"] });
+    },
+  });
+}
+
+// --- Org API hooks ---
+
+export function useOrgUsers(orgId: string) {
+  return useQuery({
+    queryKey: ["org", orgId, "users"],
+    queryFn: () => orgAPI.listUsers(orgId),
+    enabled: !!orgId,
+  });
+}
+
+export function useOrgUser(orgId: string, userId: string) {
+  return useQuery({
+    queryKey: ["org", orgId, "users", userId],
+    queryFn: () => orgAPI.getUser(orgId, userId),
+    enabled: !!orgId && !!userId,
+  });
+}
+
+export function useCreateOrgUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orgId, data }: { orgId: string; data: OrgCreateUserRequest }) =>
+      orgAPI.createUser(orgId, data),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["org", vars.orgId, "users"] });
+    },
+  });
+}
+
+export function useUpdateOrgUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      orgId,
+      userId,
+      data,
+    }: {
+      orgId: string;
+      userId: string;
+      data: OrgUpdateUserRequest;
+    }) => orgAPI.updateUser(orgId, userId, data),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["org", vars.orgId, "users"] });
+      qc.invalidateQueries({ queryKey: ["org", vars.orgId, "users", vars.userId] });
+    },
+  });
+}
+
+export function useDeleteOrgUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orgId, userId }: { orgId: string; userId: string }) =>
+      orgAPI.deleteUser(orgId, userId),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["org", vars.orgId, "users"] });
+    },
+  });
+}
+
+export function useOrgUserAPIKeys(orgId: string, userId: string) {
+  return useQuery({
+    queryKey: ["org", orgId, "users", userId, "api-keys"],
+    queryFn: () => orgAPI.listUserAPIKeys(orgId, userId),
+    enabled: !!orgId && !!userId,
+  });
+}
+
+export function useGenerateOrgUserAPIKey() {
+  const qc = useQueryClient();
+  return useMutation<
+    GenerateAPIKeyResponse,
+    Error,
+    { orgId: string; userId: string; data: GenerateAPIKeyRequest }
+  >({
+    mutationFn: ({ orgId, userId, data }) =>
+      orgAPI.generateUserAPIKey(orgId, userId, data),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({
+        queryKey: ["org", vars.orgId, "users", vars.userId, "api-keys"],
+      });
+    },
+  });
+}
+
+export function useRevokeOrgUserAPIKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      orgId,
+      userId,
+      keyId,
+    }: {
+      orgId: string;
+      userId: string;
+      keyId: string;
+    }) => orgAPI.revokeUserAPIKey(orgId, userId, keyId),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({
+        queryKey: ["org", vars.orgId, "users", vars.userId, "api-keys"],
+      });
+    },
+  });
+}
+
+export function useOrgProjects(orgId: string) {
+  return useQuery({
+    queryKey: ["org", orgId, "projects"],
+    queryFn: () => orgAPI.listProjects(orgId),
+    enabled: !!orgId,
+  });
+}
+
+export function useOrgAnalytics(orgId: string) {
+  return useQuery({
+    queryKey: ["org", orgId, "analytics"],
+    queryFn: () => orgAPI.getAnalytics(orgId),
+    enabled: !!orgId,
+  });
+}
+
+export function useOrgUsage(orgId: string) {
+  return useQuery({
+    queryKey: ["org", orgId, "usage"],
+    queryFn: () => orgAPI.getUsage(orgId),
+    enabled: !!orgId,
   });
 }

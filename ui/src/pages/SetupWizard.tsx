@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSetupStatus, useCompleteSetup } from "../hooks/useApi";
 import type { SetupResponse } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -216,6 +217,7 @@ function CompletionScreen({
 
 function SetupWizard() {
   const navigate = useNavigate();
+  const auth = useAuth();
   const { data: status, isLoading: statusLoading } = useSetupStatus();
   const completeMutation = useCompleteSetup();
 
@@ -274,7 +276,14 @@ function SetupWizard() {
       {
         onSuccess: (data) => {
           if (data.token) {
-            localStorage.setItem("nram_token", data.token);
+            const userInfo = {
+              id: data.user.id,
+              email: data.user.email,
+              display_name: data.user.display_name,
+              role: "administrator",
+              org_id: data.user.org_id ?? "",
+            };
+            auth.login(data.token, userInfo);
           }
           setSetupResult(data);
         },

@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useProjects, useStoreMemory } from "../hooks/useApi";
+import { useProjects, useMeProjects, useStoreMemory } from "../hooks/useApi";
+import { useAuth } from "../context/AuthContext";
 import type { Project, StoreMemoryRequest } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -1023,7 +1024,10 @@ function BulkImport() {
   });
   const [selectedProject, setSelectedProject] = useState("");
 
-  const { data: projects } = useProjects();
+  const { isAdmin, canWrite } = useAuth();
+  const { data: adminProjects } = useProjects();
+  const { data: meProjectsData } = useMeProjects();
+  const projects = isAdmin ? adminProjects : meProjectsData;
 
   const handleFileParsed = useCallback(
     (f: File, recs: ParsedRecord[], fmt: DetectedFormat, flds: string[]) => {
@@ -1053,6 +1057,25 @@ function BulkImport() {
     });
     setSelectedProject("");
   }, []);
+
+  if (!canWrite) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="w-full max-w-md rounded-lg border bg-card p-8 text-center">
+          <h2 className="text-lg font-semibold">Access Denied</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            You don't have permission to import memories.
+          </p>
+          <a
+            href="/"
+            className="mt-4 inline-block rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Go to Dashboard
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>

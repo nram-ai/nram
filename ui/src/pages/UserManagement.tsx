@@ -9,7 +9,10 @@ import {
   useGenerateAPIKey,
   useRevokeAPIKey,
   useSetupStatus,
+  useOrgUsers,
+  useCreateOrgUser,
 } from "../hooks/useApi";
+import { useAuth } from "../context/AuthContext";
 import type {
   User,
   APIKey,
@@ -997,11 +1000,148 @@ function UserDetailPanel({
 // Main UserManagement
 // ---------------------------------------------------------------------------
 
+const ORG_OWNER_ROLES = ["org_owner", "member", "viewer", "service_account"] as const;
+
+function CreateOrgUserDialog({
+  orgId,
+  onClose,
+}: {
+  orgId: string;
+  onClose: () => void;
+}) {
+  const createMut = useCreateOrgUser();
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<string>("member");
+
+  function handleCreate() {
+    if (!email.trim() || !password.trim() || password.length < 8) return;
+    createMut.mutate(
+      {
+        orgId,
+        data: {
+          email: email.trim(),
+          password,
+          role,
+          display_name: displayName.trim() || undefined,
+        },
+      },
+      { onSuccess: () => onClose() },
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-xl">
+        <h2 className="text-lg font-semibold">Create User</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          New user will be added to your organization.
+        </p>
+        <div className="mt-4 space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-muted-foreground">
+              Email <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="email"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="user@example.com"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-muted-foreground">
+              Display Name
+            </label>
+            <input
+              type="text"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Display name (optional)"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-muted-foreground">
+              Password <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="password"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Minimum 8 characters"
+            />
+            {password.length > 0 && password.length < 8 && (
+              <p className="mt-1 text-xs text-red-500">
+                Password must be at least 8 characters.
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-muted-foreground">
+              Role <span className="text-red-500">*</span>
+            </label>
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+            >
+              {ORG_OWNER_ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {createMut.isError && (
+            <p className="text-sm text-red-600 dark:text-red-400">
+              Failed to create: {createMut.error?.message}
+            </p>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              type="button"
+              className="rounded border px-3 py-2 text-sm hover:bg-muted"
+              onClick={onClose}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              onClick={handleCreate}
+              disabled={!email.trim() || !password.trim() || password.length < 8 || createMut.isPending}
+            >
+              {createMut.isPending ? "Creating..." : "Create"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function UserManagement() {
-  const usersQuery = useUsers();
-  const orgsQuery = useOrgs();
+  const auth = useAuth();
+  const orgId = auth.user?.org_id ?? "";
+
+  // Admin: use admin endpoints for all users
+  const adminUsersQuery = useUsers();
+  const adminOrgsQuery = useOrgs();
+
+  // Org owner: use org-scoped endpoints
+  const orgUsersQuery = useOrgUsers(auth.isAdmin ? "" : orgId);
+
+  const usersQuery = auth.isAdmin ? adminUsersQuery : orgUsersQuery;
   const users = usersQuery.data ?? [];
-  const orgs = orgsQuery.data ?? [];
+  const orgs = auth.isAdmin ? (adminOrgsQuery.data ?? []) : [];
 
   const [sortField, setSortField] = useState<SortField>("email");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -1042,7 +1182,9 @@ function UserManagement() {
             User Management
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Manage users, roles, and API keys.
+            {auth.isAdmin
+              ? "Manage users, roles, and API keys."
+              : "Manage users within your organization."}
           </p>
         </div>
       </div>
@@ -1186,9 +1328,15 @@ function UserManagement() {
           </div>
 
           {/* Create Dialog */}
-          {showCreate && (
+          {showCreate && auth.isAdmin && (
             <CreateUserDialog
               orgs={orgs}
+              onClose={() => setShowCreate(false)}
+            />
+          )}
+          {showCreate && !auth.isAdmin && (
+            <CreateOrgUserDialog
+              orgId={orgId}
               onClose={() => setShowCreate(false)}
             />
           )}

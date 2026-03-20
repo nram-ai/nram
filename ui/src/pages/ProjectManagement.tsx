@@ -1,10 +1,13 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import {
   useProjects,
+  useMeProjects,
+  useCreateMeProject,
   useProject,
   useUpdateProject,
   useDeleteProject,
 } from "../hooks/useApi";
+import { useAuth } from "../context/AuthContext";
 import type {
   Project,
   ProjectUpdateRequest,
@@ -664,8 +667,93 @@ function ProjectDetailPanel({
 // Main ProjectManagement
 // ---------------------------------------------------------------------------
 
+function CreateMeProjectDialog({ onClose }: { onClose: () => void }) {
+  const createMut = useCreateMeProject();
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [slugEdited, setSlugEdited] = useState(false);
+
+  useEffect(() => {
+    if (!slugEdited) {
+      setSlug(
+        name
+          .toLowerCase()
+          .replace(/[^a-z0-9\s-]/g, "")
+          .replace(/\s+/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/^-|-$/g, ""),
+      );
+    }
+  }, [name, slugEdited]);
+
+  function handleCreate() {
+    if (!name.trim() || !slug.trim()) return;
+    createMut.mutate(
+      { name: name.trim(), slug: slug.trim() },
+      { onSuccess: () => onClose() },
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-xl">
+        <h2 className="text-lg font-semibold">Create Project</h2>
+        <div className="mt-4 space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-muted-foreground">Name</label>
+            <input
+              type="text"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Project name"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-muted-foreground">Slug</label>
+            <input
+              type="text"
+              className="w-full rounded-md border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              value={slug}
+              onChange={(e) => {
+                setSlugEdited(true);
+                setSlug(e.target.value);
+              }}
+              placeholder="project-slug"
+            />
+          </div>
+          {createMut.isError && (
+            <p className="text-sm text-red-600 dark:text-red-400">
+              Failed: {createMut.error?.message}
+            </p>
+          )}
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button type="button" className="rounded border px-3 py-2 text-sm hover:bg-muted" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              onClick={handleCreate}
+              disabled={!name.trim() || !slug.trim() || createMut.isPending}
+            >
+              {createMut.isPending ? "Creating..." : "Create"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProjectManagement() {
-  const projectsQuery = useProjects();
+  const auth = useAuth();
+  const adminProjectsQuery = useProjects();
+  const meProjectsQuery = useMeProjects();
+
+  const projectsQuery = auth.isAdmin ? adminProjectsQuery : meProjectsQuery;
   const projects = projectsQuery.data ?? [];
 
   const [searchText, setSearchText] = useState("");
@@ -673,6 +761,7 @@ function ProjectManagement() {
   const [sortField, setSortField] = useState<SortField>("memory_count");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
 
   function handleSort(field: SortField) {
     if (sortField === field) {
@@ -716,7 +805,7 @@ function ProjectManagement() {
           </p>
         </div>
 
-        {/* Search */}
+        {/* Search + Create */}
         <div className="flex items-center gap-3">
           <div className="relative flex-1 max-w-md">
             <input
@@ -739,6 +828,15 @@ function ProjectManagement() {
           <span className="text-sm text-muted-foreground">
             {filteredProjects.length} project{filteredProjects.length !== 1 ? "s" : ""}
           </span>
+          {!auth.isAdmin && auth.canWrite && (
+            <button
+              type="button"
+              className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              onClick={() => setShowCreate(true)}
+            >
+              Create Project
+            </button>
+          )}
         </div>
       </div>
 
@@ -843,14 +941,125 @@ function ProjectManagement() {
         </table>
       </div>
 
-      {/* Detail Panel */}
-      {detailProjectId && (
+      {/* Detail Panel — admin gets full edit/delete, non-admin gets read-only view */}
+      {detailProjectId && auth.isAdmin && (
         <ProjectDetailPanel
           projectId={detailProjectId}
           onClose={() => setDetailProjectId(null)}
           onDeleted={() => setDetailProjectId(null)}
         />
       )}
+
+      {/* Non-admin: open detail in read-only mode (just close panel, no edit) */}
+      {detailProjectId && !auth.isAdmin && (
+        <ProjectReadOnlyPanel
+          projectId={detailProjectId}
+          onClose={() => setDetailProjectId(null)}
+        />
+      )}
+
+      {/* Create dialog for non-admin */}
+      {showCreate && <CreateMeProjectDialog onClose={() => setShowCreate(false)} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Read-only project detail panel for non-admin users
+// ---------------------------------------------------------------------------
+
+function ProjectReadOnlyPanel({
+  projectId,
+  onClose,
+}: {
+  projectId: string;
+  onClose: () => void;
+}) {
+  const detailQuery = useProject(projectId);
+  const project = detailQuery.data;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative z-10 flex h-full w-full max-w-2xl flex-col overflow-y-auto border-l bg-background shadow-xl">
+        <div className="flex items-center justify-between border-b px-6 py-4">
+          <h2 className="text-lg font-semibold">Project Detail</h2>
+          <button
+            type="button"
+            className="rounded border px-3 py-1 text-sm hover:bg-muted"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        {detailQuery.isLoading && (
+          <div className="p-6">
+            <div className="animate-pulse space-y-3">
+              <div className="h-4 w-3/4 rounded bg-muted" />
+              <div className="h-4 w-1/2 rounded bg-muted" />
+            </div>
+          </div>
+        )}
+
+        {detailQuery.isError && (
+          <div className="p-6">
+            <p className="text-sm text-red-600 dark:text-red-400">
+              Failed to load project: {detailQuery.error?.message}
+            </p>
+          </div>
+        )}
+
+        {project && (
+          <div className="flex-1 space-y-6 p-6">
+            <div>
+              <span className="text-sm font-medium text-muted-foreground">Name</span>
+              <p className="mt-0.5 text-sm">{project.name || project.slug}</p>
+            </div>
+            <div>
+              <span className="text-sm font-medium text-muted-foreground">Description</span>
+              <p className="mt-0.5 text-sm">{project.description || "-"}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-muted-foreground">Slug: </span>
+                <span className="font-mono">{project.slug}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Path: </span>
+                <span className="font-mono">{project.path || "N/A"}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Memories: </span>
+                <span className="font-semibold">{project.memory_count ?? 0}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Entities: </span>
+                <span className="font-semibold">{project.entity_count ?? 0}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Created: </span>
+                <span>{formatDate(project.created_at)}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Updated: </span>
+                <span>{formatDate(project.updated_at)}</span>
+              </div>
+            </div>
+            {project.default_tags && project.default_tags.length > 0 && (
+              <div>
+                <span className="text-sm font-medium text-muted-foreground">Default Tags</span>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {project.default_tags.map((tag) => (
+                    <TagChip key={tag} tag={tag} />
+                  ))}
+                </div>
+              </div>
+            )}
+            <MCPConfigSnippet slug={project.slug} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

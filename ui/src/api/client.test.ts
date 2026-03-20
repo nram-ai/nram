@@ -50,6 +50,8 @@ import {
   APIError,
   authAPI,
   adminAPI,
+  meAPI,
+  orgAPI,
   memoryAPI,
   healthAPI,
   type SetupResponse,
@@ -73,7 +75,7 @@ const SERVER_URL = `http://localhost:${SERVER_PORT}`;
 let serverProcess: ChildProcess;
 let tmpDir: string;
 let adminToken: string;
-let _adminApiKey: string;
+let adminApiKey: string;
 let adminUserId: string;
 let _adminOrgId: string;
 let adminNamespaceId: string;
@@ -192,7 +194,7 @@ describe("API Client E2E", () => {
 
     const setupData: SetupResponse = await setupRes.json();
     adminToken = setupData.token;
-    _adminApiKey = setupData.api_key;
+    adminApiKey = setupData.api_key;
     adminUserId = setupData.user.id;
     _adminOrgId = setupData.user.org_id;
 
@@ -323,6 +325,11 @@ describe("API Client E2E", () => {
       const s = await adminAPI.getSetupStatus();
       expect(s.setup_complete).toBe(true);
       expect(s.backend).toBe("sqlite");
+    });
+
+    it("setup returned a valid API key", () => {
+      expect(typeof adminApiKey).toBe("string");
+      expect(adminApiKey.length).toBeGreaterThan(0);
     });
   });
 
@@ -998,6 +1005,276 @@ describe("API Client E2E", () => {
       } catch (e) {
         expect(e).toBeInstanceOf(APIError);
       }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // meAPI (self-service endpoints)
+  // -----------------------------------------------------------------------
+
+  describe("meAPI", () => {
+    it("listProjects() returns array", async () => {
+      const projects = await meAPI.listProjects();
+      expect(Array.isArray(projects)).toBe(true);
+    });
+
+    it("createProject() creates a project via /me/projects", async () => {
+      const proj = await meAPI.createProject({
+        name: "Me Test Project",
+        slug: "me-test-project",
+      });
+      expect(proj.name).toBe("Me Test Project");
+      expect(proj.slug).toBe("me-test-project");
+      expect(typeof proj.id).toBe("string");
+
+      // Cleanup
+      await adminAPI.deleteProject(proj.id);
+    });
+
+    it("listAPIKeys() returns array", async () => {
+      const keys = await meAPI.listAPIKeys();
+      expect(Array.isArray(keys)).toBe(true);
+    });
+
+    it("createAPIKey() + revokeAPIKey() lifecycle", async () => {
+      const key = await meAPI.createAPIKey({ name: "me-e2e-key" });
+      expect(typeof key.id).toBe("string");
+      expect(typeof key.key).toBe("string");
+      expect(key.name).toBe("me-e2e-key");
+
+      await meAPI.revokeAPIKey(key.id);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // orgAPI (org-scoped endpoints)
+  // -----------------------------------------------------------------------
+
+  describe("orgAPI", () => {
+    let testOrgId: string;
+    let orgUserId: string;
+
+    beforeAll(async () => {
+      // Create a test org
+      const org = await adminAPI.createOrg({
+        name: "Org API Test",
+        slug: "org-api-test",
+      });
+      testOrgId = org.id;
+    });
+
+    afterAll(async () => {
+      try {
+        await adminAPI.deleteOrg(testOrgId);
+      } catch {
+        // ignore
+      }
+    });
+
+    it("listUsers() returns array", async () => {
+      const users = await orgAPI.listUsers(testOrgId);
+      expect(Array.isArray(users)).toBe(true);
+    });
+
+    it("createUser() creates a user in the org", async () => {
+      const user = await orgAPI.createUser(testOrgId, {
+        email: "orguser@test.com",
+        password: "OrgUserPass123!",
+        role: "member",
+        display_name: "Org User",
+      });
+      expect(user.email).toBe("orguser@test.com");
+      expect(user.role).toBe("member");
+      orgUserId = user.id;
+    });
+
+    it("getUser() retrieves the created user", async () => {
+      const user = await orgAPI.getUser(testOrgId, orgUserId);
+      expect(user.id).toBe(orgUserId);
+      expect(user.email).toBe("orguser@test.com");
+    });
+
+    it("updateUser() updates the user", async () => {
+      const user = await orgAPI.updateUser(testOrgId, orgUserId, {
+        display_name: "Updated Org User",
+      });
+      expect(user.display_name).toBe("Updated Org User");
+    });
+
+    it("listProjects() returns array for org", async () => {
+      const projects = await orgAPI.listProjects(testOrgId);
+      expect(Array.isArray(projects)).toBe(true);
+    });
+
+    it("deleteUser() removes the user", async () => {
+      const result = await orgAPI.deleteUser(testOrgId, orgUserId);
+      expect(result).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Role-based access control
+  // -----------------------------------------------------------------------
+
+  describe("RBAC", () => {
+    let memberToken: string;
+    let readonlyToken: string;
+    let orgOwnerToken: string;
+    let rbacOrgId: string;
+
+    beforeAll(async () => {
+      // Create an org for RBAC tests
+      const org = await adminAPI.createOrg({
+        name: "RBAC Test Org",
+        slug: "rbac-test-org",
+      });
+      rbacOrgId = org.id;
+
+      // Create users with different roles
+      const memberUser = await adminAPI.createUser({
+        email: "member@test.com",
+        password: "MemberPass123!",
+        role: "member",
+        organization_id: rbacOrgId,
+      });
+
+      const readonlyUser = await adminAPI.createUser({
+        email: "readonly@test.com",
+        password: "ReadonlyPass123!",
+        role: "readonly",
+        organization_id: rbacOrgId,
+      });
+
+      const ownerUser = await adminAPI.createUser({
+        email: "orgowner@test.com",
+        password: "OwnerPass123!",
+        role: "org_owner",
+        organization_id: rbacOrgId,
+      });
+
+      // Login each user
+      const memberLogin = await authAPI.login({
+        email: "member@test.com",
+        password: "MemberPass123!",
+      });
+      memberToken = memberLogin.token;
+      expect(memberLogin.user.role).toBe("member");
+
+      const readonlyLogin = await authAPI.login({
+        email: "readonly@test.com",
+        password: "ReadonlyPass123!",
+      });
+      readonlyToken = readonlyLogin.token;
+      expect(readonlyLogin.user.role).toBe("readonly");
+
+      const ownerLogin = await authAPI.login({
+        email: "orgowner@test.com",
+        password: "OwnerPass123!",
+      });
+      orgOwnerToken = ownerLogin.token;
+      expect(ownerLogin.user.role).toBe("org_owner");
+
+      // Restore admin token
+      localStorage.setItem("nram_token", adminToken);
+
+      // Suppress unused variable warnings
+      void memberUser;
+      void readonlyUser;
+      void ownerUser;
+    });
+
+    afterAll(async () => {
+      localStorage.setItem("nram_token", adminToken);
+      try {
+        const users = await adminAPI.listUsers();
+        for (const u of users) {
+          if (["member@test.com", "readonly@test.com", "orgowner@test.com"].includes(u.email)) {
+            await adminAPI.deleteUser(u.id);
+          }
+        }
+        await adminAPI.deleteOrg(rbacOrgId);
+      } catch {
+        // ignore cleanup errors
+      }
+    });
+
+    it("member can access meAPI.listProjects()", async () => {
+      localStorage.setItem("nram_token", memberToken);
+      try {
+        const projects = await meAPI.listProjects();
+        expect(Array.isArray(projects)).toBe(true);
+      } finally {
+        localStorage.setItem("nram_token", adminToken);
+      }
+    });
+
+    it("member can access meAPI.listAPIKeys()", async () => {
+      localStorage.setItem("nram_token", memberToken);
+      try {
+        const keys = await meAPI.listAPIKeys();
+        expect(Array.isArray(keys)).toBe(true);
+      } finally {
+        localStorage.setItem("nram_token", adminToken);
+      }
+    });
+
+    it("member gets 403 on admin endpoints", async () => {
+      localStorage.setItem("nram_token", memberToken);
+      try {
+        await adminAPI.listUsers();
+        expect.fail("should have thrown 403");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+        expect((e as APIError).status).toBe(403);
+      } finally {
+        localStorage.setItem("nram_token", adminToken);
+      }
+    });
+
+    it("readonly gets 403 on admin endpoints", async () => {
+      localStorage.setItem("nram_token", readonlyToken);
+      try {
+        await adminAPI.listUsers();
+        expect.fail("should have thrown 403");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+        expect((e as APIError).status).toBe(403);
+      } finally {
+        localStorage.setItem("nram_token", adminToken);
+      }
+    });
+
+    it("org_owner can access orgAPI.listUsers()", async () => {
+      localStorage.setItem("nram_token", orgOwnerToken);
+      try {
+        const users = await orgAPI.listUsers(rbacOrgId);
+        expect(Array.isArray(users)).toBe(true);
+      } finally {
+        localStorage.setItem("nram_token", adminToken);
+      }
+    });
+
+    it("org_owner gets 403 on admin settings", async () => {
+      localStorage.setItem("nram_token", orgOwnerToken);
+      try {
+        await adminAPI.getSettings();
+        expect.fail("should have thrown 403");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+        expect((e as APIError).status).toBe(403);
+      } finally {
+        localStorage.setItem("nram_token", adminToken);
+      }
+    });
+
+    it("login response includes user role and org_id", async () => {
+      const res = await authAPI.login({
+        email: "member@test.com",
+        password: "MemberPass123!",
+      });
+      expect(res.user.role).toBe("member");
+      expect(typeof res.user.org_id).toBe("string");
+      expect(res.user.org_id).toBe(rbacOrgId);
     });
   });
 

@@ -3,9 +3,11 @@ import {
   useDashboard,
   useActivity,
   useProjects,
+  useMeProjects,
   useProviderSlots,
   useStoreMemory,
 } from "../hooks/useApi";
+import { useAuth } from "../context/AuthContext";
 import type {
   ProjectMemoryCount,
   ActivityEvent,
@@ -488,9 +490,12 @@ function ErrorBanner({
 // ---------------------------------------------------------------------------
 
 function Dashboard() {
+  const auth = useAuth();
   const dashboard = useDashboard();
   const activity = useActivity(20);
-  const projects = useProjects();
+  const adminProjects = useProjects();
+  const meProjects = useMeProjects();
+  const projects = auth.isAdmin ? adminProjects : meProjects;
   const providerSlots = useProviderSlots();
 
   const dashData = dashboard.data;
@@ -508,12 +513,18 @@ function Dashboard() {
     activity.refetch();
   }
 
+  const title = auth.isAdmin
+    ? "System Overview"
+    : auth.isOrgOwner
+      ? "Organization Overview"
+      : "Dashboard";
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          System overview and key metrics.
+          {auth.isAdmin ? "System-wide metrics and activity." : "Your projects and activity."}
         </p>
       </div>
 
@@ -552,11 +563,13 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* Quick store */}
-      <QuickStore
-        projects={projectList}
-        isLoadingProjects={projects.isLoading}
-      />
+      {/* Quick store — only show for users with write access */}
+      {auth.canWrite && (
+        <QuickStore
+          projects={projectList}
+          isLoadingProjects={projects.isLoading}
+        />
+      )}
     </div>
   );
 }

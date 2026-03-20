@@ -2,12 +2,14 @@ import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authAPI } from "../api/client";
 import type { APIError } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 
 type Step = "email" | "password";
 
 function Login() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const auth = useAuth();
 
   const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
@@ -54,7 +56,7 @@ function Login() {
     setLoading(true);
     try {
       const result = await authAPI.login({ email: email.trim(), password });
-      localStorage.setItem("nram_token", result.token);
+      auth.login(result.token, result.user);
       // Set a short-lived session cookie for the OAuth authorize redirect flow
       document.cookie = `nram_session=${result.token}; path=/; max-age=300; SameSite=Lax`;
       const redirect = searchParams.get("redirect");
