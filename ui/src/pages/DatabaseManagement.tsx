@@ -527,17 +527,23 @@ function SQLiteView({
                   </p>
                   <p className="mt-1 text-sm text-green-700 dark:text-green-300">
                     Your data has been successfully migrated to PostgreSQL.
-                    Provider configuration is now available.
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => window.location.reload()}
-                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90"
-              >
-                Refresh Page
-              </button>
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950/30">
+                <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                  Restart Required
+                </p>
+                <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                  The server is still running on SQLite. Restart nram with the Postgres connection URL to complete the switch:
+                </p>
+                <pre className="mt-2 overflow-x-auto rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-mono dark:border-amber-700 dark:bg-amber-950/50">
+                  DATABASE_URL="{dbUrl}" nram
+                </pre>
+                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                  Or set <code className="font-mono">database.url</code> in your config file, then restart.
+                </p>
+              </div>
             </div>
           )}
         </div>

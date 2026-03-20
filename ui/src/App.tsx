@@ -85,24 +85,25 @@ interface NavItem {
   section: string;
   minRole?: string;
   writeOnly?: boolean;
+  postgresOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
   { path: "/", label: "Dashboard", section: "Overview" },
   { path: "/memories", label: "Memory Browser", section: "Data" },
-  { path: "/entities", label: "Entity Browser", section: "Data" },
-  { path: "/graph", label: "Graph Visualization", section: "Data" },
+  { path: "/entities", label: "Entity Browser", section: "Data", postgresOnly: true },
+  { path: "/graph", label: "Graph Visualization", section: "Data", postgresOnly: true },
   { path: "/projects", label: "Projects", section: "Management" },
   { path: "/organizations", label: "Organizations", section: "Management", minRole: "org_owner" },
   { path: "/users", label: "Users", section: "Management", minRole: "org_owner" },
   { path: "/providers", label: "Providers", section: "Configuration", minRole: "administrator" },
   { path: "/settings", label: "Settings", section: "Configuration", minRole: "administrator" },
-  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration", minRole: "administrator" },
+  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration", minRole: "administrator", postgresOnly: true },
   { path: "/webhooks", label: "Webhooks", section: "Configuration", minRole: "administrator" },
   { path: "/oauth", label: "OAuth Clients", section: "Configuration", minRole: "administrator" },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
   { path: "/database", label: "Database", section: "System", minRole: "administrator" },
-  { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator" },
+  { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator", postgresOnly: true },
   { path: "/analytics", label: "Analytics", section: "System" },
   { path: "/import", label: "Bulk Import", section: "System", writeOnly: true },
   { path: "/account", label: "My Account", section: "Account" },
@@ -158,7 +159,7 @@ function AppLayout() {
   const isSQLite = setupStatus?.backend === "sqlite";
 
   const filteredItems = navItems.filter((item) => {
-    if (isSQLite && (item.path === "/enrichment" || item.path === "/extraction-prompts")) {
+    if (isSQLite && item.postgresOnly) {
       return false;
     }
     if (item.minRole && !auth.hasMinRole(item.minRole)) {
