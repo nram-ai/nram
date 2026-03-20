@@ -215,7 +215,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthProtectedResourceMetadata"
 
-  /oauth/authorize:
+  /authorize:
     get:
       operationId: oauthAuthorize
       tags: [OAuth]
@@ -264,7 +264,7 @@ paths:
         "400":
           description: OAuth error response
 
-  /oauth/token:
+  /token:
     post:
       operationId: oauthToken
       tags: [OAuth]
@@ -309,7 +309,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthErrorResponse"
 
-  /oauth/register:
+  /register:
     post:
       operationId: oauthRegisterClient
       tags: [OAuth]
@@ -331,7 +331,7 @@ paths:
         "400":
           description: Invalid request
 
-  /oauth/userinfo:
+  /userinfo:
     get:
       operationId: oauthUserInfo
       tags: [OAuth]
@@ -1465,6 +1465,9 @@ paths:
       operationId: adminListOrgs
       tags: [Admin - Organizations]
       summary: List all organizations
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200":
           description: Organization list
@@ -1477,6 +1480,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Organization"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
 
     post:
       operationId: adminCreateOrg
@@ -1568,6 +1573,9 @@ paths:
       operationId: adminListUsers
       tags: [Admin - Users]
       summary: List all users
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200":
           description: User list
@@ -1580,6 +1588,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/User"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
 
     post:
       operationId: adminCreateUser
@@ -1675,6 +1685,8 @@ paths:
       summary: List API keys for a user
       parameters:
         - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200":
           description: API key list
@@ -1687,6 +1699,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/APIKey"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
 
     post:
       operationId: adminGenerateApiKey
@@ -1745,6 +1759,9 @@ paths:
       operationId: adminListProjects
       tags: [Admin - Projects]
       summary: List all projects
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200":
           description: Project list
@@ -1757,6 +1774,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Project"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
 
     post:
       operationId: adminCreateProject
@@ -1955,6 +1974,9 @@ paths:
       operationId: adminListSettings
       tags: [Admin - Settings]
       summary: List settings or get schema definitions
+      description: |
+        Without ?schema=true: returns paginated settings list (with pagination object).
+        With ?schema=true: returns setting definitions (data array only, no pagination).
       parameters:
         - name: scope
           in: query
@@ -1966,6 +1988,8 @@ paths:
           schema:
             type: string
             enum: ["true"]
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200":
           description: Settings list or schema
@@ -1980,6 +2004,8 @@ paths:
                       oneOf:
                         - $ref: "#/components/schemas/Setting"
                         - $ref: "#/components/schemas/SettingSchema"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
 
     put:
       operationId: adminUpdateSetting
@@ -2017,6 +2043,9 @@ paths:
       operationId: adminListWebhooks
       tags: [Admin - Webhooks]
       summary: List all webhooks
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200":
           description: Webhook list
@@ -2029,6 +2058,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Webhook"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
 
     post:
       operationId: adminCreateWebhook
@@ -2970,6 +3001,8 @@ components:
           format: uuid
         project_slug:
           type: string
+        path:
+          type: string
         content:
           type: string
         tags:
@@ -3142,13 +3175,40 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RecallResult"
-        entities:
-          type: array
-          items:
-            $ref: "#/components/schemas/RecallEntity"
+        graph:
+          type: object
+          properties:
+            entities:
+              type: array
+              items:
+                $ref: "#/components/schemas/RecallEntity"
+            relationships:
+              type: array
+              items:
+                $ref: "#/components/schemas/RecallRelationship"
+        total_searched:
+          type: integer
         latency_ms:
           type: integer
           format: int64
+
+    RecallRelationship:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_id:
+          type: string
+          format: uuid
+        target_id:
+          type: string
+          format: uuid
+        relation:
+          type: string
+        weight:
+          type: number
+          format: double
 
     RecallResult:
       type: object
@@ -3159,6 +3219,10 @@ components:
         project_id:
           type: string
           format: uuid
+        project_slug:
+          type: string
+        path:
+          type: string
         content:
           type: string
         tags:
@@ -3175,6 +3239,16 @@ components:
           type: number
           format: double
           nullable: true
+        confidence:
+          type: number
+          format: double
+        shared_from:
+          type: string
+          nullable: true
+        access_count:
+          type: integer
+        enriched:
+          type: boolean
         metadata:
           type: object
         created_at:
