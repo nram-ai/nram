@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -173,17 +174,49 @@ func NewServer(deps Dependencies) *Server {
 // prevent DNS rebinding attacks."
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[MCP] %s %s from=%s origin=%q auth=%t content-type=%q accept=%q",
+			r.Method, r.URL.Path, r.RemoteAddr,
+			r.Header.Get("Origin"),
+			r.Header.Get("Authorization") != "",
+			r.Header.Get("Content-Type"),
+			r.Header.Get("Accept"))
+
 		if origin := r.Header.Get("Origin"); origin != "" {
 			// Skip origin check for authenticated requests — the OAuth token
 			// validates the client's legitimacy. Only enforce strict same-origin
 			// for unauthenticated requests (DNS rebinding protection).
 			if r.Header.Get("Authorization") == "" && !isAllowedOrigin(origin, r.Host) {
+				log.Printf("[MCP] BLOCKED: unauthenticated cross-origin request from %q", origin)
 				http.Error(w, `{"jsonrpc":"2.0","error":{"code":-32600,"message":"forbidden: invalid origin"}}`, http.StatusForbidden)
 				return
 			}
 		}
-		s.httpHandler.ServeHTTP(w, r)
+
+		// Wrap response writer to capture status code for logging.
+		lw := &loggingResponseWriter{ResponseWriter: w, statusCode: 200}
+		s.httpHandler.ServeHTTP(lw, r)
+		log.Printf("[MCP] response status=%d content-type=%q", lw.statusCode, w.Header().Get("Content-Type"))
 	})
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (lw *loggingResponseWriter) WriteHeader(code int) {
+	lw.statusCode = code
+	lw.ResponseWriter.WriteHeader(code)
+}
+
+func (lw *loggingResponseWriter) Flush() {
+	if f, ok := lw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (lw *loggingResponseWriter) Unwrap() http.ResponseWriter {
+	return lw.ResponseWriter
 }
 
 // isAllowedOrigin checks whether the Origin header matches the server's Host.
