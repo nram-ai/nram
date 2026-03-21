@@ -267,9 +267,6 @@ migrations/
   sqlite/            SQLite migration SQL files
   postgres/          PostgreSQL migration SQL files
 ui/                  React admin UI source (TypeScript, Tailwind)
-sdk/
-  python/            Python SDK (planned)
-  typescript/        TypeScript SDK (planned)
 docs/                OpenAPI specification
 ```
 
