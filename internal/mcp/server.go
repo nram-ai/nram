@@ -98,6 +98,26 @@ func NewServer(deps Dependencies) *Server {
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(false, true), // subscribe=false, listChanged=true
 		server.WithRecovery(),                        // recover from panics in tool handlers
+		server.WithInstructions(`You have access to nram, a persistent memory layer for AI agents. Use it to store and recall information across conversations.
+
+Key concepts:
+- Memories are organized into projects (identified by slug). Projects are auto-created on first use.
+- Each memory has content (the main text), optional tags (for filtering), and optional metadata (key-value pairs).
+- Memories support TTL (time-to-live) for automatic expiration.
+
+Recommended workflow:
+1. Use memory_store to save important context, decisions, user preferences, or facts worth remembering.
+2. Use memory_recall to search for relevant memories using natural language queries. This performs semantic search when embeddings are configured.
+3. Use memory_store_batch when you have multiple related memories to store at once.
+4. Use memory_update to modify existing memories (e.g., to correct or enrich them).
+5. Use memory_forget to remove memories that are no longer relevant.
+6. Use memory_projects to list available projects and their slugs.
+
+Tips:
+- Be specific with tags — they enable precise filtering during recall.
+- When recalling, provide a natural language query describing what you're looking for rather than exact keywords.
+- Store memories proactively: if a user shares preferences, project context, or important decisions, store them immediately.
+- Check for existing memories before storing duplicates — use memory_recall first.`),
 	)
 
 	httpSrv := server.NewStreamableHTTPServer(
