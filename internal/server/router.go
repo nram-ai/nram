@@ -193,6 +193,15 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			}
 		})
 
+		// Mount MCP at root path — Claude.ai and other browser-based MCP
+		// clients POST to the base URL, not /mcp.
+		if handlers.MCP != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(CORSMiddleware)
+				r.Handle("/", handlers.MCP)
+			})
+		}
+
 		// SSE events endpoint.
 		r.Get("/v1/events", handler(handlers.Events))
 
