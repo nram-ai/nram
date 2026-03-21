@@ -137,7 +137,7 @@ function ClaudeCodeTab({ serverUrl }: { serverUrl: string }) {
 }
 
 function ClaudeDesktopTab({ serverUrl }: { serverUrl: string }) {
-  const url = serverUrl;
+  const url = `${serverUrl}/mcp`;
 
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
@@ -158,7 +158,7 @@ function ClaudeDesktopTab({ serverUrl }: { serverUrl: string }) {
 }
 
 function CursorTab({ serverUrl }: { serverUrl: string }) {
-  const url = serverUrl;
+  const url = `${serverUrl}/mcp`;
 
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
@@ -180,7 +180,8 @@ function CursorTab({ serverUrl }: { serverUrl: string }) {
 }
 
 function ChatGPTTab({ serverUrl }: { serverUrl: string }) {
-  const url = serverUrl.replace(/^http:\/\//, "https://");
+  const httpsUrl = serverUrl.replace(/^http:\/\//, "https://");
+  const url = `${httpsUrl}/mcp`;
 
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
