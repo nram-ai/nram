@@ -31,6 +31,7 @@ type OAuthClientManager interface {
 	ListClientsByUser(ctx context.Context, userID uuid.UUID) ([]model.OAuthClient, error)
 	DeleteClient(ctx context.Context, clientID string) error
 	GetClientByID(ctx context.Context, clientID string) (*model.OAuthClient, error)
+	RevokeTokensForUserClient(ctx context.Context, userID uuid.UUID, clientID string) error
 }
 
 // createAPIKeyRequest is the JSON body for POST /v1/me/api-keys.
@@ -297,7 +298,7 @@ func NewMeOAuthClientRevokeHandler(clients OAuthClientManager) http.HandlerFunc 
 			return
 		}
 
-		// Look up all clients for this user and verify ownership by matching the UUID.
+		// Look up all clients visible to this user and verify by matching the UUID.
 		userClients, err := clients.ListClientsByUser(r.Context(), ac.UserID)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to verify oauth client ownership"))
@@ -317,9 +318,19 @@ func NewMeOAuthClientRevokeHandler(clients OAuthClientManager) http.HandlerFunc 
 			return
 		}
 
-		if err := clients.DeleteClient(r.Context(), target.ClientID); err != nil {
-			WriteError(w, ErrInternal("failed to delete oauth client"))
-			return
+		// Self-created clients (user_id matches): delete the client entirely.
+		// Authorized clients (auto-registered or admin-created): revoke the
+		// user's refresh tokens but leave the client for other users.
+		if target.UserID != nil && *target.UserID == ac.UserID {
+			if err := clients.DeleteClient(r.Context(), target.ClientID); err != nil {
+				WriteError(w, ErrInternal("failed to delete oauth client"))
+				return
+			}
+		} else {
+			if err := clients.RevokeTokensForUserClient(r.Context(), ac.UserID, target.ClientID); err != nil {
+				WriteError(w, ErrInternal("failed to revoke oauth client access"))
+				return
+			}
 		}
 
 		writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})

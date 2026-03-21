@@ -93,6 +93,10 @@ func (m *mockOAuthClientManager) GetClientByID(ctx context.Context, clientID str
 	return nil, fmt.Errorf("not found")
 }
 
+func (m *mockOAuthClientManager) RevokeTokensForUserClient(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+
 // --- helpers ---
 
 func doSelfServiceRequest(handler http.HandlerFunc, method, target string, body interface{}, ac *auth.AuthContext) *httptest.ResponseRecorder {
@@ -444,6 +448,7 @@ func TestMeOAuthClients_DeleteSuccess(t *testing.T) {
 					ID:       clientUUID,
 					ClientID: clientIDStr,
 					Name:     "My App",
+					UserID:   &userID,
 				},
 			}, nil
 		},

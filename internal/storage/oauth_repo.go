@@ -94,19 +94,33 @@ func (r *OAuthRepo) getClientByPK(ctx context.Context, id uuid.UUID) (*model.OAu
 	return r.scanClient(row)
 }
 
-// ListClientsByUser returns all OAuth clients belonging to the organization
-// that the given user is a member of.
+// ListClientsByUser returns OAuth clients that the user either created
+// (user_id matches) or has authorized via OAuth (active refresh tokens).
 func (r *OAuthRepo) ListClientsByUser(ctx context.Context, userID uuid.UUID) ([]model.OAuthClient, error) {
 	query := selectOAuthClientColumns + ` FROM oauth_clients
 		WHERE user_id = ?
+		   OR client_id IN (
+		       SELECT DISTINCT client_id FROM oauth_refresh_tokens
+		       WHERE user_id = ? AND revoked_at IS NULL
+		   )
 		ORDER BY created_at DESC`
 	if r.db.Backend() == BackendPostgres {
 		query = selectOAuthClientColumns + ` FROM oauth_clients
 			WHERE user_id = $1
+			   OR client_id IN (
+			       SELECT DISTINCT client_id FROM oauth_refresh_tokens
+			       WHERE user_id = $1 AND revoked_at IS NULL
+			   )
 			ORDER BY created_at DESC`
 	}
 
-	rows, err := r.db.Query(ctx, query, userID.String())
+	args := []interface{}{userID.String()}
+	if r.db.Backend() != BackendPostgres {
+		// SQLite uses positional ? — need two params for the two ?
+		args = append(args, userID.String())
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("oauth client list by user: %w", err)
 	}
@@ -510,6 +524,24 @@ func (r *OAuthRepo) RevokeAllForUser(ctx context.Context, userID uuid.UUID) (int
 	}
 
 	return result.RowsAffected()
+}
+
+// RevokeTokensForUserClient revokes all non-revoked refresh tokens for a
+// specific user + client pair. Used when a user disconnects an authorized app.
+func (r *OAuthRepo) RevokeTokensForUserClient(ctx context.Context, userID uuid.UUID, clientID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	query := `UPDATE oauth_refresh_tokens SET revoked_at = ? WHERE user_id = ? AND client_id = ? AND revoked_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE oauth_refresh_tokens SET revoked_at = $1 WHERE user_id = $2 AND client_id = $3 AND revoked_at IS NULL`
+	}
+
+	_, err := r.db.Exec(ctx, query, now, userID.String(), clientID)
+	if err != nil {
+		return fmt.Errorf("oauth revoke tokens for user+client: %w", err)
+	}
+
+	return nil
 }
 
 // reloadRefreshToken fetches the token and populates the struct in place.
