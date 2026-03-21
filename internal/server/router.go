@@ -138,13 +138,15 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	// OAuth discovery and flow endpoints (public — no auth, no setup guard).
 	// Paths follow MCP spec fallback defaults: /authorize, /token, /register.
 	// CORS middleware is applied so browser-based MCP clients can reach these.
+	// Routes use HandleFunc (all methods) so OPTIONS preflight reaches the
+	// CORS middleware instead of being rejected by chi's method routing.
 	r.Group(func(r chi.Router) {
 		r.Use(CORSMiddleware)
-		r.Get("/.well-known/oauth-authorization-server", handler(handlers.OAuthMetadata))
-		r.Get("/.well-known/oauth-protected-resource", handler(handlers.OAuthProtectedResource))
-		r.Get("/authorize", handler(handlers.OAuthAuthorize))
-		r.Post("/token", handler(handlers.OAuthToken))
-		r.Post("/register", handler(handlers.OAuthRegister))
+		r.HandleFunc("/.well-known/oauth-authorization-server", handler(handlers.OAuthMetadata))
+		r.HandleFunc("/.well-known/oauth-protected-resource", handler(handlers.OAuthProtectedResource))
+		r.HandleFunc("/authorize", handler(handlers.OAuthAuthorize))
+		r.HandleFunc("/token", handler(handlers.OAuthToken))
+		r.HandleFunc("/register", handler(handlers.OAuthRegister))
 	})
 
 	// Semi-public routes: setup guard required but no auth (login flow).
@@ -171,7 +173,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		// OAuth userinfo and MCP endpoints need CORS for browser-based clients.
 		r.Group(func(r chi.Router) {
 			r.Use(CORSMiddleware)
-			r.Get("/userinfo", handler(handlers.OAuthUserInfo))
+			r.HandleFunc("/userinfo", handler(handlers.OAuthUserInfo))
 			if handlers.MCP != nil {
 				r.Handle("/mcp", handlers.MCP)
 				r.Handle("/mcp/*", handlers.MCP)
