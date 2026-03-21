@@ -78,19 +78,19 @@ func (s *AnalyticsStore) GetAnalytics(ctx context.Context, orgID *uuid.UUID) (*a
 
 	// Most recalled (top 10 by access count).
 	var err error
-	data.MostRecalled, err = s.queryRankedMemories(ctx, "ORDER BY access_count DESC", 10, orgID)
+	data.MostRecalled, err = s.queryRankedMemories(ctx, "ORDER BY m.access_count DESC", 10, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("analytics most recalled: %w", err)
 	}
 
 	// Least recalled (bottom 10 by access count, excluding zero).
-	data.LeastRecalled, err = s.queryRankedMemories(ctx, "AND access_count > 0 ORDER BY access_count ASC", 10, orgID)
+	data.LeastRecalled, err = s.queryRankedMemories(ctx, "AND m.access_count > 0 ORDER BY m.access_count ASC", 10, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("analytics least recalled: %w", err)
 	}
 
 	// Dead weight (zero access count, oldest first).
-	data.DeadWeight, err = s.queryRankedMemories(ctx, "AND access_count = 0 ORDER BY created_at ASC", 10, orgID)
+	data.DeadWeight, err = s.queryRankedMemories(ctx, "AND m.access_count = 0 ORDER BY m.created_at ASC", 10, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("analytics dead weight: %w", err)
 	}
@@ -124,8 +124,8 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 	var args []interface{}
 
 	if orgID == nil {
-		query = fmt.Sprintf(`SELECT id, content, access_count, created_at
-			FROM memories WHERE deleted_at IS NULL %s LIMIT %d`, orderClause, limit)
+		query = fmt.Sprintf(`SELECT m.id, m.content, m.access_count, m.created_at
+			FROM memories m WHERE m.deleted_at IS NULL %s LIMIT %d`, orderClause, limit)
 	} else {
 		if s.db.Backend() == storage.BackendPostgres {
 			query = fmt.Sprintf(`SELECT m.id, m.content, m.access_count, m.created_at

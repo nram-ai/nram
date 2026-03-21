@@ -10,7 +10,12 @@ import {
   useRevokeAPIKey,
   useSetupStatus,
   useOrgUsers,
+  useOrgUser,
   useCreateOrgUser,
+  useUpdateOrgUser,
+  useDeleteOrgUser,
+  useGenerateOrgUserAPIKey,
+  useRevokeOrgUserAPIKey,
 } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
 import type {
@@ -309,12 +314,18 @@ function CreateUserDialog({
 
 function GenerateAPIKeyDialog({
   userId,
+  orgId,
+  isAdmin,
   onClose,
 }: {
   userId: string;
+  orgId?: string;
+  isAdmin: boolean;
   onClose: () => void;
 }) {
-  const generateMut = useGenerateAPIKey();
+  const adminGenerateMut = useGenerateAPIKey();
+  const orgGenerateMut = useGenerateOrgUserAPIKey();
+  const generateMut = isAdmin ? adminGenerateMut : orgGenerateMut;
   const [label, setLabel] = useState("");
   const [scopes, setScopes] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
@@ -333,14 +344,25 @@ function GenerateAPIKeyDialog({
     if (expiresAt) {
       data.expires_at = new Date(expiresAt).toISOString();
     }
-    generateMut.mutate(
-      { userId, data },
-      {
-        onSuccess: (resp) => {
-          setGeneratedKey(resp.key);
+    if (isAdmin) {
+      adminGenerateMut.mutate(
+        { userId, data },
+        {
+          onSuccess: (resp) => {
+            setGeneratedKey(resp.key);
+          },
         },
-      },
-    );
+      );
+    } else {
+      orgGenerateMut.mutate(
+        { orgId: orgId!, userId, data },
+        {
+          onSuccess: (resp) => {
+            setGeneratedKey(resp.key);
+          },
+        },
+      );
+    }
   }
 
   function handleCopy() {
@@ -475,19 +497,32 @@ function GenerateAPIKeyDialog({
 function APIKeyTable({
   userId,
   keys,
+  orgId,
+  isAdmin,
 }: {
   userId: string;
   keys: APIKey[];
+  orgId?: string;
+  isAdmin: boolean;
 }) {
-  const revokeMut = useRevokeAPIKey();
+  const adminRevokeMut = useRevokeAPIKey();
+  const orgRevokeMut = useRevokeOrgUserAPIKey();
+  const revokeMut = isAdmin ? adminRevokeMut : orgRevokeMut;
   const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
   const [showGenerate, setShowGenerate] = useState(false);
 
   function handleRevoke(keyId: string) {
-    revokeMut.mutate(
-      { userId, keyId },
-      { onSuccess: () => setConfirmRevokeId(null) },
-    );
+    if (isAdmin) {
+      adminRevokeMut.mutate(
+        { userId, keyId },
+        { onSuccess: () => setConfirmRevokeId(null) },
+      );
+    } else {
+      orgRevokeMut.mutate(
+        { orgId: orgId!, userId, keyId },
+        { onSuccess: () => setConfirmRevokeId(null) },
+      );
+    }
   }
 
   return (
@@ -604,6 +639,8 @@ function APIKeyTable({
       {showGenerate && (
         <GenerateAPIKeyDialog
           userId={userId}
+          orgId={orgId}
+          isAdmin={isAdmin}
           onClose={() => setShowGenerate(false)}
         />
       )}
@@ -620,17 +657,28 @@ function UserDetailPanel({
   userList,
   onClose,
   onDeleted,
+  orgId,
+  isAdmin,
 }: {
   userId: string;
   userList: User[];
   onClose: () => void;
   onDeleted: () => void;
+  orgId?: string;
+  isAdmin: boolean;
 }) {
-  const detailQuery = useUser(userId);
+  const adminDetailQuery = useUser(isAdmin ? userId : "");
+  const orgDetailQuery = useOrgUser(isAdmin ? "" : (orgId ?? ""), isAdmin ? "" : userId);
+  const detailQuery = isAdmin ? adminDetailQuery : orgDetailQuery;
   const setupQuery = useSetupStatus();
-  const updateMut = useUpdateUser();
-  const deleteMut = useDeleteUser();
+  const adminUpdateMut = useUpdateUser();
+  const orgUpdateMut = useUpdateOrgUser();
+  const adminDeleteMut = useDeleteUser();
+  const orgDeleteMut = useDeleteOrgUser();
+  const updateMut = isAdmin ? adminUpdateMut : orgUpdateMut;
+  const deleteMut = isAdmin ? adminDeleteMut : orgDeleteMut;
   const isPostgres = setupQuery.data?.backend === "postgres";
+  const availableRoles = isAdmin ? ROLES : ORG_OWNER_ROLES;
 
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editRole, setEditRole] = useState("");
@@ -691,15 +739,15 @@ function UserDetailPanel({
         },
       },
     };
-    updateMut.mutate(
-      { id: user.id, data },
-      {
-        onSuccess: () => {
-          setSaveSuccess(true);
-          setTimeout(() => setSaveSuccess(false), 2000);
-        },
-      },
-    );
+    const onSuccess = () => {
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+    };
+    if (isAdmin) {
+      adminUpdateMut.mutate({ id: user.id, data }, { onSuccess });
+    } else {
+      orgUpdateMut.mutate({ orgId: orgId!, userId: user.id, data }, { onSuccess });
+    }
   }, [
     user,
     editDisplayName,
@@ -709,17 +757,23 @@ function UserDetailPanel({
     editRecency,
     editRelevance,
     editImportance,
-    updateMut,
+    isAdmin,
+    adminUpdateMut,
+    orgUpdateMut,
+    orgId,
   ]);
 
   function handleDelete() {
     if (!user) return;
-    deleteMut.mutate(user.id, {
-      onSuccess: () => {
-        onDeleted();
-        onClose();
-      },
-    });
+    const onSuccess = () => {
+      onDeleted();
+      onClose();
+    };
+    if (isAdmin) {
+      adminDeleteMut.mutate(user.id, { onSuccess });
+    } else {
+      orgDeleteMut.mutate({ orgId: orgId!, userId: user.id }, { onSuccess });
+    }
   }
 
   const keys: APIKey[] = user?.api_keys ?? [];
@@ -793,7 +847,7 @@ function UserDetailPanel({
                 value={editRole}
                 onChange={(e) => setEditRole(e.target.value)}
               >
-                {ROLES.map((r) => (
+                {availableRoles.map((r) => (
                   <option key={r} value={r}>
                     {r}
                   </option>
@@ -923,7 +977,7 @@ function UserDetailPanel({
             </div>
 
             {/* API Keys */}
-            <APIKeyTable userId={user.id} keys={keys} />
+            <APIKeyTable userId={user.id} keys={keys} orgId={orgId} isAdmin={isAdmin} />
 
             {/* Actions */}
             <div className="flex items-center gap-3 border-t pt-4">
@@ -1132,9 +1186,9 @@ function UserManagement() {
   const auth = useAuth();
   const orgId = auth.user?.org_id ?? "";
 
-  // Admin: use admin endpoints for all users
-  const adminUsersQuery = useUsers();
-  const adminOrgsQuery = useOrgs();
+  // Admin: use admin endpoints for all users (disabled for non-admin to avoid 403)
+  const adminUsersQuery = useUsers(auth.isAdmin);
+  const adminOrgsQuery = useOrgs(auth.isAdmin);
 
   // Org owner: use org-scoped endpoints
   const orgUsersQuery = useOrgUsers(auth.isAdmin ? "" : orgId);
@@ -1348,6 +1402,8 @@ function UserManagement() {
               userList={users}
               onClose={() => setDetailUserId(null)}
               onDeleted={() => setDetailUserId(null)}
+              orgId={orgId}
+              isAdmin={auth.isAdmin}
             />
           )}
         </>

@@ -109,10 +109,11 @@ export function useStoreMemory() {
 
 // --- Organizations ---
 
-export function useOrgs() {
+export function useOrgs(enabled = true) {
   return useQuery({
     queryKey: ["admin", "orgs"],
     queryFn: adminAPI.listOrgs,
+    enabled,
   });
 }
 
@@ -158,10 +159,11 @@ export function useDeleteOrg() {
 
 // --- Users ---
 
-export function useUsers() {
+export function useUsers(enabled = true) {
   return useQuery({
     queryKey: ["admin", "users"],
     queryFn: adminAPI.listUsers,
+    enabled,
   });
 }
 
