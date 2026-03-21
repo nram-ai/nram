@@ -13,8 +13,8 @@ type ProviderAdminStore interface {
 	GetProviderConfig(ctx context.Context) (*ProviderConfigResponse, error)
 	TestProvider(ctx context.Context, req ProviderTestRequest) (*ProviderTestResult, error)
 	UpdateProviderSlot(ctx context.Context, slot string, cfg ProviderSlotConfig) error
-	ListOllamaModels(ctx context.Context) ([]OllamaModel, error)
-	PullOllamaModel(ctx context.Context, model string) error
+	ListOllamaModels(ctx context.Context, ollamaURL string) ([]OllamaModel, error)
+	PullOllamaModel(ctx context.Context, model string, ollamaURL string) error
 }
 
 // ProviderAdminConfig holds the dependencies for the provider admin handler.
@@ -187,9 +187,11 @@ func handleOllamaModels(w http.ResponseWriter, r *http.Request, cfg ProviderAdmi
 		return
 	}
 
-	models, err := cfg.Store.ListOllamaModels(r.Context())
+	ollamaURL := r.URL.Query().Get("url")
+
+	models, err := cfg.Store.ListOllamaModels(r.Context(), ollamaURL)
 	if err != nil {
-		WriteError(w, ErrInternal("failed to list ollama models"))
+		WriteError(w, ErrInternal("failed to list ollama models: "+err.Error()))
 		return
 	}
 
@@ -210,6 +212,7 @@ func handleOllamaPull(w http.ResponseWriter, r *http.Request, cfg ProviderAdminC
 
 	var body struct {
 		Model string `json:"model"`
+		URL   string `json:"url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid JSON body"))
@@ -221,8 +224,8 @@ func handleOllamaPull(w http.ResponseWriter, r *http.Request, cfg ProviderAdminC
 		return
 	}
 
-	if err := cfg.Store.PullOllamaModel(r.Context(), body.Model); err != nil {
-		WriteError(w, ErrInternal("failed to pull ollama model"))
+	if err := cfg.Store.PullOllamaModel(r.Context(), body.Model, body.URL); err != nil {
+		WriteError(w, ErrInternal("failed to pull ollama model: "+err.Error()))
 		return
 	}
 

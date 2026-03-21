@@ -496,15 +496,19 @@ func TestProcessJob_NoProviders(t *testing.T) {
 	job := testJob(mem.ID, mem.NamespaceID)
 
 	err := h.pool.processJob(context.Background(), "w-0", job)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected error when no providers configured")
 	}
 
-	if len(h.queue.completed) != 1 {
-		t.Error("job should be completed even with no providers")
+	// Job should be failed, not completed.
+	if len(h.queue.completed) != 0 {
+		t.Error("job should not be completed with no providers")
 	}
-	if len(h.updater.updated) != 1 || !h.updater.updated[0].Enriched {
-		t.Error("memory should still be marked enriched")
+	if len(h.queue.failed) != 1 {
+		t.Error("job should be marked failed when no providers configured")
+	}
+	if len(h.updater.updated) != 0 {
+		t.Error("memory should not be marked enriched when no providers ran")
 	}
 }
 

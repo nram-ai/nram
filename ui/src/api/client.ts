@@ -826,12 +826,14 @@ export const adminAPI = {
     request<{ status: string }>("PUT", `/admin/providers/${slot}`, data),
   testProviderSlot: (slot: string, config: UpdateProviderSlotRequest) =>
     request<TestProviderResult>("POST", "/admin/providers/test", { slot, config }),
-  getOllamaModels: () =>
-    request<OllamaModel[]>("GET", "/admin/providers/ollama/models").then(
+  getOllamaModels: (ollamaUrl?: string) => {
+    const params = ollamaUrl ? `?url=${encodeURIComponent(ollamaUrl)}` : "";
+    return request<OllamaModel[]>("GET", `/admin/providers/ollama/models${params}`).then(
       (models) => ({ models }),
-    ),
-  pullOllamaModel: (model: string) =>
-    request<{ status: string; model: string }>("POST", "/admin/providers/ollama/pull", { model }),
+    );
+  },
+  pullOllamaModel: (model: string, ollamaUrl?: string) =>
+    request<{ status: string; model: string }>("POST", "/admin/providers/ollama/pull", { model, url: ollamaUrl || undefined }),
 
   // Settings
   getSettings: (scope?: string) => {

@@ -42,11 +42,11 @@ func (m *mockProviderAdminStore) UpdateProviderSlot(_ context.Context, slot stri
 	return m.updateErr
 }
 
-func (m *mockProviderAdminStore) ListOllamaModels(_ context.Context) ([]OllamaModel, error) {
+func (m *mockProviderAdminStore) ListOllamaModels(_ context.Context, _ string) ([]OllamaModel, error) {
 	return m.models, m.modelsErr
 }
 
-func (m *mockProviderAdminStore) PullOllamaModel(_ context.Context, model string) error {
+func (m *mockProviderAdminStore) PullOllamaModel(_ context.Context, model string, _ string) error {
 	m.pulledModel = model
 	return m.pullErr
 }

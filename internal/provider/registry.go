@@ -8,9 +8,12 @@ import (
 
 // Provider type constants identify the backend provider implementation.
 const (
-	ProviderTypeOpenAI    = "openai"
-	ProviderTypeGemini    = "gemini"
-	ProviderTypeAnthropic = "anthropic"
+	ProviderTypeOpenAI     = "openai"
+	ProviderTypeGemini     = "gemini"
+	ProviderTypeAnthropic  = "anthropic"
+	ProviderTypeOllama     = "ollama"
+	ProviderTypeOpenRouter = "openrouter"
+	ProviderTypeCustom     = "custom"
 )
 
 // SlotConfig represents the configuration for a single provider slot as stored
@@ -96,6 +99,13 @@ func (r *Registry) Reload(config RegistryConfig) error {
 	return nil
 }
 
+// GetConfig returns the current registry configuration (read-locked).
+func (r *Registry) GetConfig() RegistryConfig {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config
+}
+
 // IsConfigured returns true if at least the embedding provider is configured.
 func (r *Registry) IsConfigured() bool {
 	r.mu.RLock()
@@ -161,7 +171,7 @@ func slotTimeout(seconds int) time.Duration {
 // the slot configuration's Type field.
 func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 	switch config.Type {
-	case ProviderTypeOpenAI:
+	case ProviderTypeOpenAI, ProviderTypeOllama, ProviderTypeOpenRouter, ProviderTypeCustom:
 		return NewOpenAIProvider(OpenAIConfig{
 			BaseURL:      config.BaseURL,
 			APIKey:       config.APIKey,
@@ -195,7 +205,7 @@ func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 // embeddings, so requesting it returns an error.
 func createEmbeddingProvider(config SlotConfig) (EmbeddingProvider, error) {
 	switch config.Type {
-	case ProviderTypeOpenAI:
+	case ProviderTypeOpenAI, ProviderTypeOllama, ProviderTypeOpenRouter, ProviderTypeCustom:
 		return NewOpenAIProvider(OpenAIConfig{
 			BaseURL:               config.BaseURL,
 			APIKey:                config.APIKey,

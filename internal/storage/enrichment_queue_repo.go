@@ -426,21 +426,34 @@ func (r *EnrichmentQueueRepo) ListRecent(ctx context.Context, limit int) ([]mode
 func (r *EnrichmentQueueRepo) RetryAllFailed(ctx context.Context) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = ?
-		WHERE status = 'failed'`
+	// Reset both failed AND completed jobs (completed jobs may have been
+	// marked done without actual enrichment if providers were missing).
+	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, completed_at = NULL, updated_at = ?
+		WHERE status IN ('failed', 'completed')`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = $1
-			WHERE status = 'failed'`
+		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, completed_at = NULL, updated_at = $1
+			WHERE status IN ('failed', 'completed')`
 	}
 
 	result, err := r.db.Exec(ctx, query, now)
 	if err != nil {
-		return 0, fmt.Errorf("enrichment queue retry all failed: %w", err)
+		return 0, fmt.Errorf("enrichment queue retry all: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("enrichment queue retry all failed rows affected: %w", err)
+		return 0, fmt.Errorf("enrichment queue retry all rows affected: %w", err)
 	}
+
+	// Also reset the enriched flag on memories whose jobs are being retried,
+	// so they get properly re-enriched.
+	memQuery := `UPDATE memories SET enriched = 0, updated_at = ?
+		WHERE enriched = 1 AND id IN (SELECT memory_id FROM enrichment_queue WHERE status = 'pending')`
+	if r.db.Backend() == BackendPostgres {
+		memQuery = `UPDATE memories SET enriched = false, updated_at = $1
+			WHERE enriched = true AND id IN (SELECT memory_id FROM enrichment_queue WHERE status = 'pending')`
+	}
+	_, _ = r.db.Exec(ctx, memQuery, now)
+
 	return int(rows), nil
 }

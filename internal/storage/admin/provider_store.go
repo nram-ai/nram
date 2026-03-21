@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/nram-ai/nram/internal/api"
@@ -26,42 +28,58 @@ func NewProviderAdminStore(registry *provider.Registry, settingsRepo *storage.Se
 
 func (s *ProviderAdminStore) GetProviderConfig(ctx context.Context) (*api.ProviderConfigResponse, error) {
 	resp := &api.ProviderConfigResponse{
-		Embedding: s.slotStatus("embedding"),
-		Fact:      s.slotStatus("fact"),
-		Entity:    s.slotStatus("entity"),
+		Embedding: s.slotStatus(ctx, "embedding"),
+		Fact:      s.slotStatus(ctx, "fact"),
+		Entity:    s.slotStatus(ctx, "entity"),
 	}
 	return resp, nil
 }
 
-func (s *ProviderAdminStore) slotStatus(slot string) api.ProviderSlotStatus {
-	if s.registry == nil {
+func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.ProviderSlotStatus {
+	// Read persisted config from the settings table.
+	var persisted *api.ProviderSlotConfig
+	if s.settingsRepo != nil {
+		setting, err := s.settingsRepo.Get(ctx, "provider."+slot, "global")
+		if err == nil {
+			var cfg api.ProviderSlotConfig
+			if json.Unmarshal(setting.Value, &cfg) == nil && cfg.Type != "" {
+				persisted = &cfg
+			}
+		}
+	}
+
+	// Check if the live provider is loaded in the registry.
+	alive := false
+	if s.registry != nil {
+		switch slot {
+		case "embedding":
+			alive = s.registry.GetEmbedding() != nil
+		case "fact":
+			alive = s.registry.GetFact() != nil
+		case "entity":
+			alive = s.registry.GetEntity() != nil
+		}
+	}
+
+	if persisted == nil {
 		return api.ProviderSlotStatus{
 			Configured: false,
 			Status:     "not_configured",
 		}
 	}
 
-	switch slot {
-	case "embedding":
-		p := s.registry.GetEmbedding()
-		if p == nil {
-			return api.ProviderSlotStatus{Configured: false, Status: "not_configured"}
-		}
-		return api.ProviderSlotStatus{Configured: true, Status: "ok"}
-	case "fact":
-		p := s.registry.GetFact()
-		if p == nil {
-			return api.ProviderSlotStatus{Configured: false, Status: "not_configured"}
-		}
-		return api.ProviderSlotStatus{Configured: true, Status: "ok"}
-	case "entity":
-		p := s.registry.GetEntity()
-		if p == nil {
-			return api.ProviderSlotStatus{Configured: false, Status: "not_configured"}
-		}
-		return api.ProviderSlotStatus{Configured: true, Status: "ok"}
-	default:
-		return api.ProviderSlotStatus{Configured: false, Status: "unknown_slot"}
+	status := "ok"
+	if !alive {
+		status = "error"
+	}
+
+	return api.ProviderSlotStatus{
+		Configured: true,
+		Type:       persisted.Type,
+		URL:        persisted.URL,
+		Model:      persisted.Model,
+		Dimensions: persisted.Dimensions,
+		Status:     status,
 	}
 }
 
@@ -156,13 +174,99 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 		Value: json.RawMessage(value),
 		Scope: "global",
 	}
-	return s.settingsRepo.Set(ctx, setting)
+	if err := s.settingsRepo.Set(ctx, setting); err != nil {
+		return err
+	}
+
+	// Hot-reload: rebuild the registry from persisted settings.
+	if s.registry != nil {
+		newCfg := s.buildRegistryConfigFromDB(ctx)
+		if err := s.registry.Reload(newCfg); err != nil {
+			log.Printf("provider hot-reload failed: %v", err)
+		}
+	}
+
+	return nil
 }
 
-func (s *ProviderAdminStore) ListOllamaModels(ctx context.Context) ([]api.OllamaModel, error) {
-	return []api.OllamaModel{}, nil
+// buildRegistryConfigFromDB reads all three provider slot settings from the
+// database and assembles a RegistryConfig for registry reload.
+func (s *ProviderAdminStore) buildRegistryConfigFromDB(ctx context.Context) provider.RegistryConfig {
+	var cfg provider.RegistryConfig
+	slots := []struct {
+		key  string
+		dest *provider.SlotConfig
+	}{
+		{"provider.embedding", &cfg.Embedding},
+		{"provider.fact", &cfg.Fact},
+		{"provider.entity", &cfg.Entity},
+	}
+	for _, slot := range slots {
+		setting, err := s.settingsRepo.Get(ctx, slot.key, "global")
+		if err != nil {
+			continue
+		}
+		var apiCfg api.ProviderSlotConfig
+		if err := json.Unmarshal(setting.Value, &apiCfg); err != nil {
+			continue
+		}
+		*slot.dest = provider.SlotConfig{
+			Type:    apiCfg.Type,
+			BaseURL: apiCfg.URL,
+			APIKey:  apiCfg.APIKey,
+			Model:   apiCfg.Model,
+		}
+	}
+	return cfg
 }
 
-func (s *ProviderAdminStore) PullOllamaModel(ctx context.Context, modelName string) error {
-	return fmt.Errorf("ollama pull not yet implemented")
+func (s *ProviderAdminStore) ListOllamaModels(ctx context.Context, ollamaURL string) ([]api.OllamaModel, error) {
+	url := s.resolveOllamaURL(ollamaURL)
+	client := provider.NewOllamaClient(provider.OllamaConfig{BaseURL: url})
+
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]api.OllamaModel, len(models))
+	for i, m := range models {
+		result[i] = api.OllamaModel{
+			Name:       m.Name,
+			Size:       m.Size,
+			ModifiedAt: m.ModifiedAt.Format(time.RFC3339),
+		}
+	}
+	return result, nil
+}
+
+func (s *ProviderAdminStore) PullOllamaModel(_ context.Context, modelName string, ollamaURL string) error {
+	url := s.resolveOllamaURL(ollamaURL)
+	client := provider.NewOllamaClient(provider.OllamaConfig{BaseURL: url})
+	// Use a detached context — model pulls can take minutes and must not be
+	// cancelled when the HTTP request completes.
+	return client.PullModel(context.Background(), modelName, nil)
+}
+
+// resolveOllamaURL returns the Ollama server URL to use. If override is
+// non-empty it is used directly. Otherwise, the registry config is inspected
+// for any slot whose BaseURL contains ":11434" or whose Type contains "ollama".
+// Falls back to http://localhost:11434.
+func (s *ProviderAdminStore) resolveOllamaURL(override string) string {
+	if override != "" {
+		return strings.TrimSuffix(strings.TrimSuffix(override, "/"), "/v1")
+	}
+
+	if s.registry != nil {
+		cfg := s.registry.GetConfig()
+		for _, slot := range []provider.SlotConfig{cfg.Embedding, cfg.Fact, cfg.Entity} {
+			if strings.Contains(slot.Type, "ollama") || strings.Contains(slot.BaseURL, ":11434") {
+				if slot.BaseURL != "" {
+					return strings.TrimSuffix(strings.TrimSuffix(slot.BaseURL, "/"), "/v1")
+				}
+			}
+		}
+	}
+
+	return "http://localhost:11434"
 }

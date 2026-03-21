@@ -309,10 +309,10 @@ export function useTestProviderSlot() {
   });
 }
 
-export function useOllamaModels() {
+export function useOllamaModels(ollamaUrl?: string) {
   return useQuery({
-    queryKey: ["admin", "ollama-models"],
-    queryFn: adminAPI.getOllamaModels,
+    queryKey: ["admin", "ollama-models", ollamaUrl],
+    queryFn: () => adminAPI.getOllamaModels(ollamaUrl),
     enabled: false,
   });
 }
@@ -320,7 +320,8 @@ export function useOllamaModels() {
 export function usePullOllamaModel() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (model: string) => adminAPI.pullOllamaModel(model),
+    mutationFn: ({ model, ollamaUrl }: { model: string; ollamaUrl?: string }) =>
+      adminAPI.pullOllamaModel(model, ollamaUrl),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "ollama-models"] });
     },

@@ -6,7 +6,9 @@ package enrichment
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -241,7 +243,10 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 			if ctx.Err() != nil {
 				return
 			}
-			slog.Error("enrichment: claim error", "worker", workerID, "err", err)
+			// No rows = empty queue, not an error.
+			if !errors.Is(err, sql.ErrNoRows) {
+				slog.Error("enrichment: claim error", "worker", workerID, "err", err)
+			}
 			wp.sleep(ctx)
 			continue
 		}
@@ -294,24 +299,34 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 	)
 
 	// b-c. Fact extraction (independent)
-	if fp := wp.factProvider(); fp != nil {
-		facts, factUsage, factModel, factProvider, factErr = wp.extractFacts(ctx, fp, mem.Content)
+	hasFact := wp.factProvider() != nil
+	hasEntity := wp.entityProvider() != nil
+
+	if !hasFact && !hasEntity {
+		// No providers configured — requeue by failing so it can be retried once
+		// providers are set up.
+		_ = wp.queue.Fail(ctx, job.ID, "no LLM providers configured")
+		return fmt.Errorf("no LLM providers configured, job requeued")
+	}
+
+	if hasFact {
+		facts, factUsage, factModel, factProvider, factErr = wp.extractFacts(ctx, wp.factProvider(), mem.Content)
 	}
 
 	// d-e. Entity extraction (independent)
-	if ep := wp.entityProvider(); ep != nil {
-		entResult, entityUsage, entityModel, entityProv, entityErr = wp.extractEntities(ctx, ep, mem.Content)
+	if hasEntity {
+		entResult, entityUsage, entityModel, entityProv, entityErr = wp.extractEntities(ctx, wp.entityProvider(), mem.Content)
 	}
 
-	// If both extractions had providers and both failed, mark the job as failed.
-	if factErr != nil && entityErr != nil {
+	// If all configured providers failed, mark the job as failed.
+	if (hasFact && factErr != nil) && (hasEntity && entityErr != nil) {
 		errMsg := fmt.Sprintf("fact: %v; entity: %v", factErr, entityErr)
 		_ = wp.queue.Fail(ctx, job.ID, errMsg)
 		return fmt.Errorf("all extractions failed: %s", errMsg)
 	}
 
-	// If only fact extraction failed (with a provider), that is a fatal failure.
-	if factErr != nil && wp.factProvider() != nil {
+	// If fact extraction was configured and failed, that is a fatal failure.
+	if hasFact && factErr != nil {
 		_ = wp.queue.Fail(ctx, job.ID, fmt.Sprintf("fact extraction: %v", factErr))
 		return fmt.Errorf("fact extraction: %w", factErr)
 	}
@@ -363,7 +378,7 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 			wp.recordUsage(ctx, mem, "embedding", ep.Name(), "", embedResp.Usage)
 
 			// Store vectors for original memory using first embedding if available.
-			if len(embedResp.Embeddings) > 0 {
+			if len(embedResp.Embeddings) > 0 && wp.vectorStore != nil {
 				dim := len(embedResp.Embeddings[0])
 				if err := wp.vectorStore.Upsert(ctx, mem.ID, mem.NamespaceID, embedResp.Embeddings[0], dim); err != nil {
 					slog.Error("enrichment: upsert vector", "job", job.ID, "err", err)
@@ -530,52 +545,79 @@ func extractJSONBlock(s string) string {
 	return s
 }
 
-// parseFactResponse applies three-tier recovery to parse a fact extraction
-// response: (1) direct JSON parse, (2) strip code fences, (3) regex extract.
+// parseFactResponse applies multi-tier recovery to parse a fact extraction
+// response. It handles: structured fact objects, plain string arrays, code
+// fences, and regex-extracted JSON blocks.
 func parseFactResponse(raw string) ([]extractedFact, error) {
-	var facts []extractedFact
-
-	// Tier 1: direct parse.
-	if err := json.Unmarshal([]byte(raw), &facts); err == nil {
-		return facts, nil
+	candidates := []string{
+		raw,
+		stripCodeFences(raw),
+		extractJSONBlock(stripCodeFences(raw)),
 	}
 
-	// Tier 2: strip fences.
-	stripped := stripCodeFences(raw)
-	if err := json.Unmarshal([]byte(stripped), &facts); err == nil {
-		return facts, nil
+	for _, c := range candidates {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+
+		// Try structured facts first.
+		var facts []extractedFact
+		if err := json.Unmarshal([]byte(c), &facts); err == nil {
+			return facts, nil
+		}
+
+		// Fallback: LLM returned an array of plain strings.
+		var strings []string
+		if err := json.Unmarshal([]byte(c), &strings); err == nil {
+			facts = make([]extractedFact, len(strings))
+			for i, s := range strings {
+				facts[i] = extractedFact{Content: s, Confidence: 0.8}
+			}
+			return facts, nil
+		}
 	}
 
-	// Tier 3: regex extraction.
-	block := extractJSONBlock(stripped)
-	if err := json.Unmarshal([]byte(block), &facts); err != nil {
-		return nil, fmt.Errorf("unable to parse fact JSON: %w", err)
-	}
-	return facts, nil
+	return nil, fmt.Errorf("unable to parse fact JSON from LLM response")
 }
 
-// parseEntityResponse applies three-tier recovery to parse an entity/relationship
-// extraction response.
+// parseEntityResponse applies multi-tier recovery to parse an entity/relationship
+// extraction response. Handles structured objects, code fences, regex-extracted
+// blocks, and NDJSON (newline-delimited) fragments.
 func parseEntityResponse(raw string) (*entityExtractionResult, error) {
-	var result entityExtractionResult
-
-	// Tier 1: direct parse.
-	if err := json.Unmarshal([]byte(raw), &result); err == nil {
-		return &result, nil
+	candidates := []string{
+		raw,
+		stripCodeFences(raw),
+		extractJSONBlock(stripCodeFences(raw)),
 	}
 
-	// Tier 2: strip fences.
+	for _, c := range candidates {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+
+		var result entityExtractionResult
+		if err := json.Unmarshal([]byte(c), &result); err == nil {
+			return &result, nil
+		}
+	}
+
+	// Last resort: try to find any JSON object in the response via line-by-line
+	// scanning. Some models output multiple JSON fragments separated by newlines.
 	stripped := stripCodeFences(raw)
-	if err := json.Unmarshal([]byte(stripped), &result); err == nil {
-		return &result, nil
+	for _, line := range strings.Split(stripped, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var result entityExtractionResult
+		if err := json.Unmarshal([]byte(line), &result); err == nil && len(result.Entities) > 0 {
+			return &result, nil
+		}
 	}
 
-	// Tier 3: regex extraction.
-	block := extractJSONBlock(stripped)
-	if err := json.Unmarshal([]byte(block), &result); err != nil {
-		return nil, fmt.Errorf("unable to parse entity JSON: %w", err)
-	}
-	return &result, nil
+	return nil, fmt.Errorf("unable to parse entity JSON from LLM response")
 }
 
 // ---------------------------------------------------------------------------

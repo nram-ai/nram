@@ -64,6 +64,51 @@ const DEFAULT_URLS: Record<string, string> = {
 
 const CLOUD_PROVIDERS = new Set(["openai", "gemini", "anthropic", "openrouter"]);
 
+// Model suggestions per provider type, keyed by slot name.
+const MODEL_HINTS: Record<string, Record<string, string>> = {
+  openai: {
+    embedding: "e.g. text-embedding-3-small",
+    fact: "e.g. gpt-4o-mini",
+    entity: "e.g. gpt-4o-mini",
+  },
+  ollama: {
+    embedding: "e.g. nomic-embed-text",
+    fact: "e.g. llama3, mistral, gemma2",
+    entity: "e.g. llama3, mistral, gemma2",
+  },
+  gemini: {
+    embedding: "e.g. text-embedding-004",
+    fact: "e.g. gemini-2.0-flash",
+    entity: "e.g. gemini-2.0-flash",
+  },
+  anthropic: {
+    embedding: "Not supported — use OpenAI or Ollama",
+    fact: "e.g. claude-sonnet-4-6-20250514",
+    entity: "e.g. claude-haiku-4-5-20251001",
+  },
+  openrouter: {
+    embedding: "e.g. openai/text-embedding-3-small",
+    fact: "e.g. anthropic/claude-sonnet-4-6",
+    entity: "e.g. anthropic/claude-haiku-4-5",
+  },
+};
+
+const DIMENSION_HINTS: Record<string, string> = {
+  openai: "1536 for text-embedding-3-small",
+  ollama: "768 for nomic-embed-text",
+  gemini: "768 for text-embedding-004",
+  openrouter: "Check the model card",
+};
+
+const DIMENSION_EXAMPLES: Record<string, string> = {
+  openai:
+    "text-embedding-3-small: 1536, text-embedding-3-large: 3072, text-embedding-ada-002: 1536.",
+  ollama:
+    "nomic-embed-text: 768, mxbai-embed-large: 1024, all-minilm: 384, snowflake-arctic-embed: 1024.",
+  gemini: "text-embedding-004: 768.",
+  openrouter: "varies by model — check the model card on OpenRouter.",
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -140,16 +185,27 @@ function TestResultDisplay({ result }: { result: TestProviderResult }) {
 // Ollama Model Picker
 // ---------------------------------------------------------------------------
 
+// Heuristic: model names containing these substrings are embedding-only models.
+const EMBEDDING_MODEL_PATTERNS = ["embed", "bge-", "e5-", "gte-", "minilm", "arctic-embed"];
+
+function isEmbeddingModel(name: string): boolean {
+  const lower = name.toLowerCase();
+  return EMBEDDING_MODEL_PATTERNS.some((p) => lower.includes(p));
+}
+
 function OllamaModelPicker({
   ollamaUrl,
   selectedModel,
   onSelectModel,
+  slotName,
 }: {
   ollamaUrl: string;
   selectedModel: string;
   onSelectModel: (model: string) => void;
+  slotName: string;
 }) {
-  const ollamaModelsQuery = useOllamaModels();
+  const isEmbeddingSlot = slotName === "embedding";
+  const ollamaModelsQuery = useOllamaModels(ollamaUrl);
   const pullMutation = usePullOllamaModel();
   const [pullModelName, setPullModelName] = useState("");
 
@@ -159,13 +215,13 @@ function OllamaModelPicker({
 
   const handlePull = useCallback(() => {
     if (!pullModelName.trim()) return;
-    pullMutation.mutate(pullModelName.trim(), {
+    pullMutation.mutate({ model: pullModelName.trim(), ollamaUrl }, {
       onSuccess: () => {
         setPullModelName("");
         ollamaModelsQuery.refetch();
       },
     });
-  }, [pullModelName, pullMutation, ollamaModelsQuery]);
+  }, [pullModelName, pullMutation, ollamaModelsQuery, ollamaUrl]);
 
   return (
     <div className="space-y-3">
@@ -207,23 +263,44 @@ function OllamaModelPicker({
                 No models found. Pull a model below.
               </p>
             ) : (
-              (ollamaModelsQuery.data?.models ?? []).map((m: OllamaModel) => (
-                <button
-                  key={m.name}
-                  type="button"
-                  onClick={() => onSelectModel(m.name)}
-                  className={`w-full rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                    selectedModel === m.name
-                      ? "bg-orange-100 text-orange-900 dark:bg-orange-900/40 dark:text-orange-200"
-                      : "hover:bg-muted"
-                  }`}
-                >
-                  <span className="font-medium">{m.name}</span>
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    {(m.size / (1024 * 1024 * 1024)).toFixed(1)} GB
-                  </span>
-                </button>
-              ))
+              (ollamaModelsQuery.data?.models ?? []).map((m: OllamaModel) => {
+                const isEmbed = isEmbeddingModel(m.name);
+                const mismatch = isEmbeddingSlot ? !isEmbed : isEmbed;
+                return (
+                  <button
+                    key={m.name}
+                    type="button"
+                    onClick={() => onSelectModel(m.name)}
+                    className={`w-full rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                      selectedModel === m.name
+                        ? "bg-orange-100 text-orange-900 dark:bg-orange-900/40 dark:text-orange-200"
+                        : mismatch
+                          ? "opacity-50 hover:bg-muted"
+                          : "hover:bg-muted"
+                    }`}
+                  >
+                    <span className="font-medium">{m.name}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {(m.size / (1024 * 1024 * 1024)).toFixed(1)} GB
+                    </span>
+                    {isEmbed && (
+                      <span className="ml-2 inline-flex items-center rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                        embedding
+                      </span>
+                    )}
+                    {!isEmbed && (
+                      <span className="ml-2 inline-flex items-center rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">
+                        chat
+                      </span>
+                    )}
+                    {mismatch && (
+                      <span className="ml-1 text-[10px] text-amber-600 dark:text-amber-400">
+                        (wrong type for this slot)
+                      </span>
+                    )}
+                  </button>
+                );
+              })
             )}
           </div>
         </div>
@@ -299,9 +376,8 @@ function ProviderSlotEditForm({
   onCancel: (() => void) | null;
   saving: boolean;
 }) {
-  // slotName available for future use in form-specific logic
-  void slotName;
   const [form, setForm] = useState<EditFormState>(initial);
+  const modelPlaceholder = MODEL_HINTS[form.type]?.[slotName] || "e.g. model-name";
   const [showEmbedWarning, setShowEmbedWarning] = useState(false);
 
   const isCloud = CLOUD_PROVIDERS.has(form.type);
@@ -389,13 +465,14 @@ function ProviderSlotEditForm({
               onChange={(e) =>
                 setForm((p) => ({ ...p, model: e.target.value }))
               }
-              placeholder="e.g. nomic-embed-text"
+              placeholder={modelPlaceholder}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
             <OllamaModelPicker
               ollamaUrl={form.url}
               selectedModel={form.model}
               onSelectModel={(m) => setForm((p) => ({ ...p, model: m }))}
+              slotName={slotName}
             />
           </div>
         ) : (
@@ -405,7 +482,7 @@ function ProviderSlotEditForm({
             onChange={(e) =>
               setForm((p) => ({ ...p, model: e.target.value }))
             }
-            placeholder="e.g. text-embedding-3-small"
+            placeholder={modelPlaceholder}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         )}
@@ -441,10 +518,14 @@ function ProviderSlotEditForm({
             onChange={(e) =>
               setForm((p) => ({ ...p, dimensions: e.target.value }))
             }
-            placeholder="e.g. 1536"
+            placeholder={DIMENSION_HINTS[form.type] || "e.g. 1536"}
             min={1}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
+          <p className="mt-1 text-xs text-muted-foreground">
+            The vector size output by your embedding model. Must match the model&apos;s native output size or a supported shorter dimension. Common values:{" "}
+            {DIMENSION_EXAMPLES[form.type] || "check your model's documentation."}
+          </p>
         </div>
       )}
 

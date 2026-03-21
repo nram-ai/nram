@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -9,11 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"fmt"
-
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/config"
+	"github.com/nram-ai/nram/internal/enrichment"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/mcp"
 	"github.com/nram-ai/nram/internal/migration"
@@ -89,7 +90,9 @@ func main() {
 	enrichmentQueueRepo := storage.NewEnrichmentQueueRepo(db)
 	settingsRepo := storage.NewSettingsRepo(db)
 
-	// Create provider registry (may have no providers configured).
+	// Create provider registry.
+	// First try config file values, then overlay with DB-persisted settings
+	// (providers configured via admin UI are stored in the settings table).
 	var registry *provider.Registry
 	regCfg := provider.RegistryConfig{
 		Embedding: provider.SlotConfig{
@@ -111,6 +114,32 @@ func main() {
 			Model:   cfg.Entity.Model,
 		},
 	}
+
+	// Overlay DB-persisted provider settings (from admin UI) on top of config file.
+	dbSlots := []struct {
+		key  string
+		dest *provider.SlotConfig
+	}{
+		{"provider.embedding", &regCfg.Embedding},
+		{"provider.fact", &regCfg.Fact},
+		{"provider.entity", &regCfg.Entity},
+	}
+	for _, slot := range dbSlots {
+		setting, sErr := settingsRepo.Get(context.Background(), slot.key, "global")
+		if sErr != nil {
+			continue
+		}
+		var apiCfg api.ProviderSlotConfig
+		if json.Unmarshal(setting.Value, &apiCfg) == nil && apiCfg.Type != "" {
+			slot.dest.Type = apiCfg.Type
+			slot.dest.BaseURL = apiCfg.URL
+			if apiCfg.APIKey != "" {
+				slot.dest.APIKey = apiCfg.APIKey
+			}
+			slot.dest.Model = apiCfg.Model
+		}
+	}
+
 	registry, err = provider.NewRegistry(regCfg)
 	if err != nil {
 		log.Printf("warning: provider registry init failed (providers disabled): %v", err)
@@ -124,12 +153,22 @@ func main() {
 		return registry.GetEmbedding()
 	}
 
-	// Create vector store (Qdrant if configured, otherwise nil for SQLite).
+	// Create vector store.
+	// Priority: Qdrant (if configured) > PgVector (if Postgres) > nil (SQLite).
 	var vectorStore storage.VectorStore
 	if cfg.Qdrant.Addr != "" {
 		vectorStore, err = storage.NewQdrantStore(cfg.Qdrant.Addr)
 		if err != nil {
 			log.Printf("warning: qdrant connection failed (vector search disabled): %v", err)
+		}
+	}
+	if vectorStore == nil && db.Backend() == storage.BackendPostgres && cfg.Database.URL != "" {
+		pgvStore, pgvErr := storage.NewPgVectorStore(cfg.Database.URL)
+		if pgvErr != nil {
+			log.Printf("warning: pgvector connection failed (vector search disabled): %v", pgvErr)
+		} else {
+			vectorStore = pgvStore
+			log.Println("pgvector store initialized")
 		}
 	}
 
@@ -242,6 +281,19 @@ func main() {
 			return nil
 		}
 		return registry.GetEntity()
+	}
+
+	// Start enrichment worker pool (Postgres only — needs providers for LLM extraction).
+	if db.Backend() == storage.BackendPostgres {
+		workerPool := enrichment.NewWorkerPool(
+			enrichment.WorkerConfig{},
+			memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
+			entityRepo, relationshipRepo, lineageRepo, tokenUsageRepo, vectorStore,
+			factProvider, entityProvider, embedProvider,
+		)
+		workerPool.Start()
+		defer workerPool.Stop()
+		log.Println("enrichment worker pool started")
 	}
 
 	// Create auth config for login/lookup handlers.
