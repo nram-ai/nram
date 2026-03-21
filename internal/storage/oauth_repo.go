@@ -144,28 +144,54 @@ func (r *OAuthRepo) ListAllClients(ctx context.Context) ([]model.OAuthClient, er
 
 // DeleteClientByPK removes an OAuth client by its primary key UUID.
 func (r *OAuthRepo) DeleteClientByPK(ctx context.Context, id uuid.UUID) error {
+	// Look up the client_id string needed for FK cleanup.
+	client, err := r.getClientByPK(ctx, id)
+	if err != nil {
+		return fmt.Errorf("oauth client not found")
+	}
+
+	// Delete related refresh tokens and auth codes first (FK constraints).
+	delTokens := `DELETE FROM oauth_refresh_tokens WHERE client_id = ?`
+	delCodes := `DELETE FROM oauth_authorization_codes WHERE client_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		delTokens = `DELETE FROM oauth_refresh_tokens WHERE client_id = $1`
+		delCodes = `DELETE FROM oauth_authorization_codes WHERE client_id = $1`
+	}
+	if _, err := r.db.Exec(ctx, delTokens, client.ClientID); err != nil {
+		return fmt.Errorf("oauth client delete tokens: %w", err)
+	}
+	if _, err := r.db.Exec(ctx, delCodes, client.ClientID); err != nil {
+		return fmt.Errorf("oauth client delete codes: %w", err)
+	}
+
 	query := `DELETE FROM oauth_clients WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM oauth_clients WHERE id = $1`
 	}
 
-	result, err := r.db.Exec(ctx, query, id.String())
+	_, err = r.db.Exec(ctx, query, id.String())
 	if err != nil {
 		return fmt.Errorf("oauth client delete by pk: %w", err)
-	}
-
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("oauth client delete by pk rows affected: %w", err)
-	}
-	if affected == 0 {
-		return fmt.Errorf("oauth client not found")
 	}
 	return nil
 }
 
 // DeleteClient removes an OAuth client by its client_id string.
 func (r *OAuthRepo) DeleteClient(ctx context.Context, clientID string) error {
+	// Delete related refresh tokens and auth codes first (FK constraints).
+	delTokens := `DELETE FROM oauth_refresh_tokens WHERE client_id = ?`
+	delCodes := `DELETE FROM oauth_authorization_codes WHERE client_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		delTokens = `DELETE FROM oauth_refresh_tokens WHERE client_id = $1`
+		delCodes = `DELETE FROM oauth_authorization_codes WHERE client_id = $1`
+	}
+	if _, err := r.db.Exec(ctx, delTokens, clientID); err != nil {
+		return fmt.Errorf("oauth client delete tokens: %w", err)
+	}
+	if _, err := r.db.Exec(ctx, delCodes, clientID); err != nil {
+		return fmt.Errorf("oauth client delete codes: %w", err)
+	}
+
 	query := `DELETE FROM oauth_clients WHERE client_id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM oauth_clients WHERE client_id = $1`
