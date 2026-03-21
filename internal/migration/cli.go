@@ -52,6 +52,8 @@ func RunCLI(args []string, db *sql.DB, backend string) (bool, error) {
 		return true, handleMigrateToPostgres(args, db)
 	case "migrate-vectors":
 		return true, handleMigrateVectors(args, db)
+	case "migrate-vectors-reverse":
+		return true, handleMigrateVectorsReverse(args, db)
 	default:
 		return false, nil
 	}
@@ -383,6 +385,17 @@ func ParseMigrateArgs(args []string) (command string, extra string, err error) {
 			}
 		}
 		return "migrate-vectors", qdrantAddr, nil
+	}
+
+	if args[1] == "migrate-vectors-reverse" {
+		qdrantAddr := ""
+		for i, arg := range args {
+			if arg == "--qdrant-addr" && i+1 < len(args) {
+				qdrantAddr = args[i+1]
+				break
+			}
+		}
+		return "migrate-vectors-reverse", qdrantAddr, nil
 	}
 
 	if args[1] != "migrate" {

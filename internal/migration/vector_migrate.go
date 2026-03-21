@@ -199,6 +199,213 @@ func handleMigrateVectors(args []string, db *sql.DB) error {
 	return nil
 }
 
+// formatEmbeddingText formats a []float32 as pgvector text format "[0.1,0.2,0.3]".
+func formatEmbeddingText(embedding []float32) string {
+	parts := make([]string, len(embedding))
+	for i, v := range embedding {
+		parts[i] = strconv.FormatFloat(float64(v), 'f', -1, 32)
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+// vectorMigrateReverseArgs holds the parsed arguments for the migrate-vectors-reverse command.
+type vectorMigrateReverseArgs struct {
+	QdrantAddr string
+	BatchSize  int
+	DryRun     bool
+}
+
+// parseVectorMigrateReverseArgs parses the CLI arguments for the migrate-vectors-reverse command.
+func parseVectorMigrateReverseArgs(args []string) (vectorMigrateReverseArgs, error) {
+	result := vectorMigrateReverseArgs{
+		BatchSize: 1000,
+	}
+
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--qdrant-addr":
+			if i+1 >= len(args) {
+				return result, fmt.Errorf("migrate-vectors-reverse: --qdrant-addr requires a value")
+			}
+			i++
+			result.QdrantAddr = args[i]
+		case "--batch-size":
+			if i+1 >= len(args) {
+				return result, fmt.Errorf("migrate-vectors-reverse: --batch-size requires a value")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 {
+				return result, fmt.Errorf("migrate-vectors-reverse: --batch-size must be a positive integer")
+			}
+			result.BatchSize = n
+		case "--dry-run":
+			result.DryRun = true
+		default:
+			return result, fmt.Errorf("migrate-vectors-reverse: unknown flag %q", args[i])
+		}
+	}
+
+	if result.QdrantAddr == "" {
+		return result, fmt.Errorf("migrate-vectors-reverse: --qdrant-addr is required\nusage: nram migrate-vectors-reverse --qdrant-addr <host:port> [--batch-size N] [--dry-run]")
+	}
+
+	return result, nil
+}
+
+// handleMigrateVectorsReverse migrates vectors from Qdrant back to PostgreSQL pgvector tables.
+func handleMigrateVectorsReverse(args []string, db *sql.DB) error {
+	parsed, err := parseVectorMigrateReverseArgs(args)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+
+	// Verify the destination is Postgres by checking for pgvector tables.
+	var check int
+	err = db.QueryRowContext(ctx, "SELECT 1 FROM information_schema.tables WHERE table_name = 'memory_vectors_384' LIMIT 1").Scan(&check)
+	if err != nil {
+		return fmt.Errorf("migrate-vectors-reverse: destination database does not appear to have pgvector tables (is it Postgres?): %w", err)
+	}
+
+	// Connect to Qdrant.
+	host, port, err := parseQdrantAddr(parsed.QdrantAddr)
+	if err != nil {
+		return fmt.Errorf("migrate-vectors-reverse: invalid Qdrant address %q: %w", parsed.QdrantAddr, err)
+	}
+
+	client, err := qdrant.NewClient(&qdrant.Config{
+		Host: host,
+		Port: port,
+	})
+	if err != nil {
+		return fmt.Errorf("migrate-vectors-reverse: failed to connect to Qdrant at %s: %w", parsed.QdrantAddr, err)
+	}
+	defer client.Close()
+
+	fmt.Printf("connected to Qdrant at %s\n", parsed.QdrantAddr)
+
+	totalMigrated := 0
+
+	for _, dim := range vectorDimensions {
+		collection := qdrantCollectionName(dim)
+		pgTable := fmt.Sprintf("memory_vectors_%d", dim)
+
+		// Check if the collection exists.
+		exists, err := client.CollectionExists(ctx, collection)
+		if err != nil {
+			return fmt.Errorf("migrate-vectors-reverse: failed to check collection %s: %w", collection, err)
+		}
+		if !exists {
+			fmt.Printf("  no collection %s in Qdrant, skipping\n", collection)
+			continue
+		}
+
+		count, err := migrateVectorTableReverse(ctx, db, client, collection, pgTable, parsed.BatchSize, parsed.DryRun)
+		if err != nil {
+			return fmt.Errorf("migrate-vectors-reverse: failed to migrate %s: %w", collection, err)
+		}
+		if count > 0 {
+			if parsed.DryRun {
+				fmt.Printf("  [dry-run] would migrate %d vectors from %s to %s\n", count, collection, pgTable)
+			} else {
+				fmt.Printf("  migrated %d vectors from %s to %s\n", count, collection, pgTable)
+			}
+		} else {
+			fmt.Printf("  no vectors in %s\n", collection)
+		}
+		totalMigrated += count
+	}
+
+	if parsed.DryRun {
+		fmt.Printf("dry run complete: %d total vectors would be migrated to pgvector\n", totalMigrated)
+	} else {
+		fmt.Printf("migration complete: %d total vectors migrated to pgvector\n", totalMigrated)
+	}
+
+	return nil
+}
+
+// migrateVectorTableReverse reads vectors from a Qdrant collection and upserts them into the pgvector table.
+// Returns the number of vectors processed.
+func migrateVectorTableReverse(ctx context.Context, db *sql.DB, client *qdrant.Client, collection string, pgTable string, batchSize int, dryRun bool) (int, error) {
+	total := 0
+	var offset *qdrant.PointId
+
+	upsertSQL := fmt.Sprintf(
+		`INSERT INTO %s (memory_id, embedding) VALUES ($1, $2::vector) ON CONFLICT (memory_id) DO UPDATE SET embedding = EXCLUDED.embedding`,
+		pgTable,
+	)
+
+	for {
+		scrollReq := &qdrant.ScrollPoints{
+			CollectionName: collection,
+			Limit:          qdrant.PtrOf(uint32(batchSize)),
+			WithVectors:    qdrant.NewWithVectors(true),
+			Offset:         offset,
+		}
+
+		points, err := client.Scroll(ctx, scrollReq)
+		if err != nil {
+			return total, fmt.Errorf("scroll failed: %w", err)
+		}
+
+		if len(points) == 0 {
+			break
+		}
+
+		if !dryRun {
+			tx, err := db.BeginTx(ctx, nil)
+			if err != nil {
+				return total, fmt.Errorf("failed to begin transaction: %w", err)
+			}
+
+			stmt, err := tx.PrepareContext(ctx, upsertSQL)
+			if err != nil {
+				tx.Rollback() //nolint:errcheck
+				return total, fmt.Errorf("failed to prepare upsert: %w", err)
+			}
+
+			for _, point := range points {
+				memoryID := point.GetId().GetUuid()
+				if _, err := uuid.Parse(memoryID); err != nil {
+					stmt.Close()
+					tx.Rollback() //nolint:errcheck
+					return total, fmt.Errorf("invalid point ID %q: %w", memoryID, err)
+				}
+
+				embedding := point.GetVectors().GetVector().GetData()
+				embeddingText := formatEmbeddingText(embedding)
+
+				if _, err := stmt.ExecContext(ctx, memoryID, embeddingText); err != nil {
+					stmt.Close()
+					tx.Rollback() //nolint:errcheck
+					return total, fmt.Errorf("failed to upsert vector for memory %s: %w", memoryID, err)
+				}
+			}
+
+			stmt.Close()
+			if err := tx.Commit(); err != nil {
+				return total, fmt.Errorf("failed to commit batch: %w", err)
+			}
+		}
+
+		total += len(points)
+
+		// Use the last point's ID as the offset for the next page.
+		lastPoint := points[len(points)-1]
+		offset = lastPoint.GetId()
+
+		// If we got fewer than the limit, we've reached the end.
+		if len(points) < batchSize {
+			break
+		}
+	}
+
+	return total, nil
+}
+
 // migrateVectorTable reads vectors from a single pgvector dimension table and upserts them into Qdrant.
 // Returns the number of vectors processed.
 func migrateVectorTable(ctx context.Context, db *sql.DB, client *qdrant.Client, pgTable string, collection string, dimension int, batchSize int, dryRun bool) (int, error) {
