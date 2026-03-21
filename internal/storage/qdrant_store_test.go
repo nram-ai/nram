@@ -6,37 +6,38 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/config"
 	"github.com/qdrant/go-client/qdrant"
 )
 
-func setupQdrantTest(t *testing.T) *QdrantStore {
+// ensureQdrantAddr reads QDRANT_TEST_ADDR from the environment and skips the
+// test if it is unset or empty.
+func ensureQdrantAddr(t *testing.T) string {
 	t.Helper()
-
 	addr := os.Getenv("QDRANT_TEST_ADDR")
 	if addr == "" {
 		t.Skip("set QDRANT_TEST_ADDR to run Qdrant tests (e.g. localhost:6334)")
 	}
+	return addr
+}
 
-	host, port, err := parseQdrantAddr(addr)
+func setupQdrantTest(t *testing.T) *QdrantStore {
+	t.Helper()
+
+	addr := ensureQdrantAddr(t)
+
+	store, err := NewQdrantStore(config.QdrantConfig{Addr: addr})
 	if err != nil {
-		t.Fatalf("parseQdrantAddr: %v", err)
+		t.Fatalf("NewQdrantStore: %v", err)
 	}
-
-	client, err := qdrant.NewClient(&qdrant.Config{
-		Host: host,
-		Port: port,
-	})
-	if err != nil {
-		t.Fatalf("qdrant.NewClient: %v", err)
-	}
-
-	store := NewQdrantStoreFromClient(client)
 
 	ctx := context.Background()
 	if err := store.EnsureCollections(ctx); err != nil {
 		store.Close()
 		t.Fatalf("EnsureCollections: %v", err)
 	}
+
+	client := store.Client()
 
 	t.Cleanup(func() {
 		// Clean up all test data from all collections.
@@ -179,10 +180,7 @@ func TestQdrantStore_UpsertBatch(t *testing.T) {
 }
 
 func TestQdrantStore_UpsertBatch_Empty(t *testing.T) {
-	addr := os.Getenv("QDRANT_TEST_ADDR")
-	if addr == "" {
-		t.Skip("set QDRANT_TEST_ADDR to run Qdrant tests")
-	}
+	ensureQdrantAddr(t)
 
 	store := setupQdrantTest(t)
 
@@ -275,10 +273,7 @@ func TestQdrantStore_SearchNamespaceScoping(t *testing.T) {
 }
 
 func TestQdrantStore_Upsert_InvalidDimension(t *testing.T) {
-	addr := os.Getenv("QDRANT_TEST_ADDR")
-	if addr == "" {
-		t.Skip("set QDRANT_TEST_ADDR to run Qdrant tests")
-	}
+	ensureQdrantAddr(t)
 
 	store := setupQdrantTest(t)
 
@@ -289,10 +284,7 @@ func TestQdrantStore_Upsert_InvalidDimension(t *testing.T) {
 }
 
 func TestQdrantStore_Search_InvalidDimension(t *testing.T) {
-	addr := os.Getenv("QDRANT_TEST_ADDR")
-	if addr == "" {
-		t.Skip("set QDRANT_TEST_ADDR to run Qdrant tests")
-	}
+	ensureQdrantAddr(t)
 
 	store := setupQdrantTest(t)
 
@@ -303,10 +295,7 @@ func TestQdrantStore_Search_InvalidDimension(t *testing.T) {
 }
 
 func TestQdrantStore_UpsertBatch_InvalidDimension(t *testing.T) {
-	addr := os.Getenv("QDRANT_TEST_ADDR")
-	if addr == "" {
-		t.Skip("set QDRANT_TEST_ADDR to run Qdrant tests")
-	}
+	ensureQdrantAddr(t)
 
 	store := setupQdrantTest(t)
 
@@ -352,5 +341,141 @@ func TestQdrantCollectionName(t *testing.T) {
 				t.Errorf("qdrantCollectionName(%d) = %q, want %q", tt.dim, name, tt.want)
 			}
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// New E2E tests for config-based construction
+// ---------------------------------------------------------------------------
+
+func TestQdrantStore_NewWithFullConfig(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+
+	store, err := NewQdrantStore(config.QdrantConfig{
+		Addr:             addr,
+		PoolSize:         2,
+		KeepAliveTime:    30,
+		KeepAliveTimeout: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewQdrantStore with full config: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	ctx := context.Background()
+
+	if err := store.Ping(ctx); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+
+	if err := store.EnsureCollections(ctx); err != nil {
+		t.Fatalf("EnsureCollections: %v", err)
+	}
+
+	nsID := uuid.New()
+	memID := uuid.New()
+	dim := 384
+	emb := makeEmbedding(dim, 1.0)
+
+	if err := store.Upsert(ctx, memID, nsID, emb, dim); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	results, err := store.Search(ctx, emb, nsID, dim, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].ID != memID {
+		t.Errorf("result ID = %s, want %s", results[0].ID, memID)
+	}
+
+	// Clean up inserted point.
+	if err := store.Delete(ctx, memID); err != nil {
+		t.Errorf("cleanup Delete: %v", err)
+	}
+}
+
+func TestQdrantStore_NewWithPoolSizeOne(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+
+	store, err := NewQdrantStore(config.QdrantConfig{
+		Addr:     addr,
+		PoolSize: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewQdrantStore with PoolSize=1: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	ctx := context.Background()
+
+	if err := store.Ping(ctx); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+
+	if err := store.EnsureCollections(ctx); err != nil {
+		t.Fatalf("EnsureCollections: %v", err)
+	}
+
+	nsID := uuid.New()
+	memID := uuid.New()
+	dim := 384
+	emb := makeEmbedding(dim, 1.0)
+
+	if err := store.Upsert(ctx, memID, nsID, emb, dim); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	results, err := store.Search(ctx, emb, nsID, dim, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].ID != memID {
+		t.Errorf("result ID = %s, want %s", results[0].ID, memID)
+	}
+
+	// Clean up inserted point.
+	if err := store.Delete(ctx, memID); err != nil {
+		t.Errorf("cleanup Delete: %v", err)
+	}
+}
+
+func TestQdrantStore_NewWithKeepAliveDisabled(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+
+	store, err := NewQdrantStore(config.QdrantConfig{
+		Addr:          addr,
+		KeepAliveTime: -1,
+	})
+	if err != nil {
+		t.Fatalf("NewQdrantStore with KeepAliveTime=-1: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	if err := store.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+}
+
+func TestQdrantStore_NewWithEmptyAPIKey(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+
+	store, err := NewQdrantStore(config.QdrantConfig{
+		Addr:   addr,
+		APIKey: "",
+	})
+	if err != nil {
+		t.Fatalf("NewQdrantStore with empty APIKey: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	if err := store.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
 	}
 }

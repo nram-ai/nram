@@ -25,6 +25,7 @@ const CATEGORY_ORDER = [
   "ranking",
   "rate_limits",
   "auth",
+  "qdrant",
 ];
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -33,6 +34,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   ranking: "Ranking",
   rate_limits: "Rate Limits",
   auth: "Auth",
+  qdrant: "Qdrant Vector Database",
 };
 
 const CATEGORY_DESCRIPTIONS: Record<string, string> = {
@@ -41,6 +43,7 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   ranking: "Weights and thresholds for memory ranking",
   rate_limits: "API rate limiting configuration",
   auth: "Authentication and authorization settings",
+  qdrant: "Connection settings for the Qdrant vector database. Changes require a server restart to take effect.",
 };
 
 const PROMPT_KEYS = new Set([
@@ -65,10 +68,12 @@ function formatValue(value: unknown): string {
 function parseValue(raw: string, type: string): unknown {
   switch (type) {
     case "bool":
+    case "boolean":
       return raw === "true";
     case "int":
       return parseInt(raw, 10);
     case "float":
+    case "number":
       return parseFloat(raw);
     case "json":
       try {
@@ -249,8 +254,10 @@ function InlineSettingEditor({
     [handleSave, handleCancel, schema.type],
   );
 
+  const requiresRestart = schema.description?.toLowerCase().includes("restart");
+
   // Bool toggle (no edit mode needed)
-  if (schema.type === "bool" && !editing) {
+  if ((schema.type === "bool" || schema.type === "boolean") && !editing) {
     const boolVal = currentValue === true || currentValue === "true";
     return (
       <div className="flex items-center justify-between py-3">
@@ -262,6 +269,11 @@ function InlineSettingEditor({
             <ScopeBadge scope={currentScope} />
             {isDefault && (
               <span className="text-xs text-muted-foreground">(default)</span>
+            )}
+            {requiresRestart && (
+              <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-300">
+                Requires restart
+              </span>
             )}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
@@ -290,6 +302,11 @@ function InlineSettingEditor({
             {isDefault && (
               <span className="text-xs text-muted-foreground">(default)</span>
             )}
+            {requiresRestart && (
+              <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-300">
+                Requires restart
+              </span>
+            )}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {schema.description}
@@ -311,9 +328,13 @@ function InlineSettingEditor({
                 : "font-mono"
             }`}
           >
-            {formatValue(currentValue).length > 60
-              ? formatValue(currentValue).slice(0, 60) + "..."
-              : formatValue(currentValue)}
+            {schema.type === "secret" && formatValue(currentValue).length > 0
+              ? formatValue(currentValue).length > 4
+                ? "••••••••" + formatValue(currentValue).slice(-4)
+                : "••••••••"
+              : formatValue(currentValue).length > 60
+                ? formatValue(currentValue).slice(0, 60) + "..."
+                : formatValue(currentValue)}
           </code>
           <button
             type="button"
@@ -375,7 +396,7 @@ function InlineSettingEditor({
             rows={6}
             className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
-        ) : schema.type === "int" || schema.type === "float" ? (
+        ) : schema.type === "int" || schema.type === "float" || schema.type === "number" ? (
           <input
             ref={inputRef as React.RefObject<HTMLInputElement>}
             type="number"
@@ -383,6 +404,15 @@ function InlineSettingEditor({
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
             step={schema.type === "float" ? "0.01" : "1"}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        ) : schema.type === "secret" ? (
+          <input
+            ref={inputRef as React.RefObject<HTMLInputElement>}
+            type="password"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={handleKeyDown}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         ) : (
@@ -707,6 +737,7 @@ function SettingsEditor({ isSQLite }: { isSQLite: boolean }) {
     ? allSchemas.filter(
         (s) =>
           s.category !== "enrichment" &&
+          s.category !== "qdrant" &&
           s.key !== "memory.default_confidence",
       )
     : allSchemas;

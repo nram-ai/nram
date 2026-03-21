@@ -35,7 +35,12 @@ type AdminConfig struct {
 
 // QdrantConfig holds Qdrant vector database connection settings.
 type QdrantConfig struct {
-	Addr string `yaml:"addr"` // gRPC address, e.g. "localhost:6334"
+	Addr             string `yaml:"addr"`              // gRPC address, e.g. "localhost:6334"
+	APIKey           string `yaml:"api_key"`            // API key for authentication
+	UseTLS           bool   `yaml:"use_tls"`            // Enable TLS for the gRPC connection
+	PoolSize         uint   `yaml:"pool_size"`          // Number of gRPC connections (0 = default of 3)
+	KeepAliveTime    int    `yaml:"keepalive_time"`     // Seconds between keepalive pings (0=10s, -1=disabled)
+	KeepAliveTimeout uint   `yaml:"keepalive_timeout"`  // Seconds to wait for keepalive ack (0=2s)
 }
 
 // ProviderConfig holds LLM/embedding provider settings.

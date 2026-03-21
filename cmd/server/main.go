@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -153,11 +154,49 @@ func main() {
 		return registry.GetEmbedding()
 	}
 
+	// Overlay DB-persisted Qdrant settings on top of config file values.
+	qdrantKeys := []struct {
+		key   string
+		apply func(string)
+	}{
+		{service.SettingQdrantAddr, func(v string) { cfg.Qdrant.Addr = v }},
+		{service.SettingQdrantAPIKey, func(v string) { cfg.Qdrant.APIKey = v }},
+		{service.SettingQdrantUseTLS, func(v string) { cfg.Qdrant.UseTLS = v == "true" }},
+		{service.SettingQdrantPoolSize, func(v string) {
+			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+				cfg.Qdrant.PoolSize = uint(n)
+			}
+		}},
+		{service.SettingQdrantKeepAliveTime, func(v string) {
+			if n, err := strconv.Atoi(v); err == nil {
+				cfg.Qdrant.KeepAliveTime = n
+			}
+		}},
+		{service.SettingQdrantKeepAliveTimeout, func(v string) {
+			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+				cfg.Qdrant.KeepAliveTimeout = uint(n)
+			}
+		}},
+	}
+	for _, qk := range qdrantKeys {
+		setting, sErr := settingsRepo.Get(context.Background(), qk.key, "global")
+		if sErr != nil {
+			continue
+		}
+		var val string
+		if json.Unmarshal(setting.Value, &val) != nil {
+			val = string(setting.Value)
+		}
+		if val != "" {
+			qk.apply(val)
+		}
+	}
+
 	// Create vector store.
 	// Priority: Qdrant (if configured) > PgVector (if Postgres) > nil (SQLite).
 	var vectorStore storage.VectorStore
 	if cfg.Qdrant.Addr != "" {
-		vectorStore, err = storage.NewQdrantStore(cfg.Qdrant.Addr)
+		vectorStore, err = storage.NewQdrantStore(cfg.Qdrant)
 		if err != nil {
 			log.Printf("warning: qdrant connection failed (vector search disabled): %v", err)
 		}

@@ -195,6 +195,73 @@ func TestAdminSettingsGetSchema(t *testing.T) {
 	}
 }
 
+func TestAdminSettingsGetSchemaQdrantEntries(t *testing.T) {
+	// Build schemas that include the 6 qdrant entries (matching production GetSettingsSchema).
+	qdrantSchemas := []SettingSchema{
+		{Key: "qdrant.addr", Type: "string", DefaultValue: json.RawMessage(`""`), Description: "Qdrant gRPC address", Category: "qdrant"},
+		{Key: "qdrant.api_key", Type: "secret", DefaultValue: json.RawMessage(`""`), Description: "API key for Qdrant", Category: "qdrant"},
+		{Key: "qdrant.use_tls", Type: "boolean", DefaultValue: json.RawMessage(`false`), Description: "Enable TLS", Category: "qdrant"},
+		{Key: "qdrant.pool_size", Type: "number", DefaultValue: json.RawMessage(`3`), Description: "Pool size", Category: "qdrant"},
+		{Key: "qdrant.keepalive_time", Type: "number", DefaultValue: json.RawMessage(`10`), Description: "Keepalive time", Category: "qdrant"},
+		{Key: "qdrant.keepalive_timeout", Type: "number", DefaultValue: json.RawMessage(`2`), Description: "Keepalive timeout", Category: "qdrant"},
+	}
+
+	// Include a non-qdrant entry to verify filtering.
+	allSchemas := append([]SettingSchema{
+		{Key: "memory.default_confidence", Type: "number", DefaultValue: json.RawMessage(`0.9`), Description: "Default confidence", Category: "memory"},
+	}, qdrantSchemas...)
+
+	store := &mockSettingsAdminStore{schemas: allSchemas}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/settings?schema=true", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp struct {
+		Data []SettingSchema `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Count qdrant entries in response.
+	byKey := make(map[string]SettingSchema)
+	qdrantCount := 0
+	for _, s := range resp.Data {
+		if s.Category == "qdrant" {
+			qdrantCount++
+			byKey[s.Key] = s
+		}
+	}
+
+	if qdrantCount != 6 {
+		t.Fatalf("expected 6 qdrant entries in response, got %d", qdrantCount)
+	}
+
+	// Verify specific types.
+	if s, ok := byKey["qdrant.addr"]; !ok {
+		t.Error("missing qdrant.addr in response")
+	} else if s.Type != "string" {
+		t.Errorf("qdrant.addr: expected type string, got %q", s.Type)
+	}
+
+	if s, ok := byKey["qdrant.api_key"]; !ok {
+		t.Error("missing qdrant.api_key in response")
+	} else if s.Type != "secret" {
+		t.Errorf("qdrant.api_key: expected type secret, got %q", s.Type)
+	}
+
+	if s, ok := byKey["qdrant.use_tls"]; !ok {
+		t.Error("missing qdrant.use_tls in response")
+	} else if s.Type != "boolean" {
+		t.Errorf("qdrant.use_tls: expected type boolean, got %q", s.Type)
+	}
+}
+
 func TestAdminSettingsUpdateSetting(t *testing.T) {
 	store := &mockSettingsAdminStore{}
 	userID := uuid.New()

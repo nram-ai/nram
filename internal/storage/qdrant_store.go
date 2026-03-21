@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/config"
 	"github.com/qdrant/go-client/qdrant"
 )
 
@@ -37,20 +38,24 @@ type QdrantStore struct {
 // Compile-time interface check.
 var _ VectorStore = (*QdrantStore)(nil)
 
-// NewQdrantStore creates a new QdrantStore connected to the given gRPC address.
-// The addr should be in "host:port" format (e.g. "localhost:6334").
-func NewQdrantStore(addr string) (*QdrantStore, error) {
-	host, port, err := parseQdrantAddr(addr)
+// NewQdrantStore creates a new QdrantStore connected using the given configuration.
+func NewQdrantStore(cfg config.QdrantConfig) (*QdrantStore, error) {
+	host, port, err := parseQdrantAddr(cfg.Addr)
 	if err != nil {
-		return nil, fmt.Errorf("qdrant: invalid address %q: %w", addr, err)
+		return nil, fmt.Errorf("qdrant: invalid address %q: %w", cfg.Addr, err)
 	}
 
 	client, err := qdrant.NewClient(&qdrant.Config{
-		Host: host,
-		Port: port,
+		Host:             host,
+		Port:             port,
+		APIKey:           cfg.APIKey,
+		UseTLS:           cfg.UseTLS,
+		PoolSize:         cfg.PoolSize,
+		KeepAliveTime:    cfg.KeepAliveTime,
+		KeepAliveTimeout: cfg.KeepAliveTimeout,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("qdrant: failed to connect to %s: %w", addr, err)
+		return nil, fmt.Errorf("qdrant: failed to connect to %s: %w", cfg.Addr, err)
 	}
 
 	return &QdrantStore{client: client}, nil
@@ -251,6 +256,11 @@ func (s *QdrantStore) Ping(ctx context.Context) error {
 		return fmt.Errorf("qdrant: health check failed: %w", err)
 	}
 	return nil
+}
+
+// Client returns the underlying Qdrant client. Exported for test cleanup.
+func (s *QdrantStore) Client() *qdrant.Client {
+	return s.client
 }
 
 // Close tears down the gRPC connection to Qdrant.

@@ -35,6 +35,13 @@ const (
 	SettingRankWeightFreq   = "ranking.weight.frequency"
 	SettingRankWeightGraph  = "ranking.weight.graph_relevance"
 	SettingTokenRetention   = "usage.token_retention_days"
+
+	SettingQdrantAddr             = "qdrant.addr"
+	SettingQdrantAPIKey           = "qdrant.api_key"
+	SettingQdrantUseTLS           = "qdrant.use_tls"
+	SettingQdrantPoolSize         = "qdrant.pool_size"
+	SettingQdrantKeepAliveTime    = "qdrant.keepalive_time"
+	SettingQdrantKeepAliveTimeout = "qdrant.keepalive_timeout"
 )
 
 // settingDefaults provides built-in default values for well-known settings.
@@ -47,6 +54,10 @@ var settingDefaults = map[string]string{
 	SettingRankWeightFreq:  "0.05",
 	SettingRankWeightGraph: "0.20",
 	SettingTokenRetention:  "365",
+	SettingQdrantUseTLS:           "false",
+	SettingQdrantPoolSize:         "3",
+	SettingQdrantKeepAliveTime:    "10",
+	SettingQdrantKeepAliveTimeout: "2",
 }
 
 // SettingsRepository defines the persistence operations needed by the settings service.
