@@ -271,7 +271,6 @@ sdk/
   python/            Python SDK (planned)
   typescript/        TypeScript SDK (planned)
 docs/                OpenAPI specification
-helm/                Helm chart (planned)
 ```
 
 ## Development
