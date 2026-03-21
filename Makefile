@@ -1,4 +1,8 @@
-.PHONY: build-server build-ui build dev install-ui
+.PHONY: build-server build-ui build dev install-ui clean
+
+clean:
+	rm -f bin/nram
+	go clean -cache
 
 build-server:
 	@mkdir -p bin
