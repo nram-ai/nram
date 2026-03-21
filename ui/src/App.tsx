@@ -20,6 +20,7 @@ import Analytics from "./pages/Analytics";
 import BulkImport from "./pages/BulkImport";
 import WebhookManagement from "./pages/WebhookManagement";
 import OAuthClients from "./pages/OAuthClients";
+import IdPConfiguration from "./pages/IdPConfiguration";
 import MCPConfigGenerator from "./pages/MCPConfigGenerator";
 import ExtractionPromptEditor from "./pages/ExtractionPromptEditor";
 import MyAccount from "./pages/MyAccount";
@@ -101,6 +102,7 @@ const navItems: NavItem[] = [
   { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration", minRole: "administrator", postgresOnly: true },
   { path: "/webhooks", label: "Webhooks", section: "Configuration", minRole: "administrator" },
   { path: "/oauth", label: "OAuth Clients", section: "Configuration", minRole: "administrator" },
+  { path: "/idp", label: "Identity Providers", section: "Configuration", minRole: "org_owner" },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
   { path: "/database", label: "Database", section: "System", minRole: "administrator" },
   { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator", postgresOnly: true },
@@ -249,6 +251,7 @@ function AppLayout() {
               <Route path="/import" element={<BulkImport />} />
               <Route path="/webhooks" element={<RequireRole minRole="administrator"><WebhookManagement /></RequireRole>} />
               <Route path="/oauth" element={<RequireRole minRole="administrator"><OAuthClients /></RequireRole>} />
+              <Route path="/idp" element={<RequireRole minRole="org_owner"><IdPConfiguration /></RequireRole>} />
               <Route path="/mcp-config" element={<MCPConfigGenerator />} />
               <Route path="/account" element={<MyAccount />} />
             </Routes>

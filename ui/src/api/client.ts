@@ -1011,6 +1011,10 @@ export interface MeCreateAPIKeyResponse {
   created_at: string;
 }
 
+export function changePassword(currentPassword: string, newPassword: string): Promise<{ changed: boolean }> {
+  return request("POST", "/me/password", { current_password: currentPassword, new_password: newPassword });
+}
+
 export const meAPI = {
   listProjects: () =>
     request<{ data: Project[] }>("GET", "/me/projects").then((r) => r.data),
@@ -1086,10 +1090,12 @@ export const orgAPI = {
   recall: (orgId: string, body: RecallRequest) =>
     request<RecallResponse>("POST", `/orgs/${orgId}/memories/recall`, body),
 
-  getIdP: (orgId: string) =>
-    request<IdPConfig>("GET", `/orgs/${orgId}/idp`),
+  listOrgIdPs: (orgId: string) =>
+    request<IdPConfig[]>("GET", `/orgs/${orgId}/idp`),
   configureIdP: (orgId: string, data: CreateIdPConfigRequest) =>
     request<IdPConfig>("POST", `/orgs/${orgId}/idp`, data),
+  deleteOrgIdP: (orgId: string, id: string) =>
+    request<void>("DELETE", `/orgs/${orgId}/idp/${id}`),
 };
 
 // --- Health ---

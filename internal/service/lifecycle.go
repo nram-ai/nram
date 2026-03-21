@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -15,6 +16,34 @@ type LifecycleStore interface {
 	ListPurgeable(ctx context.Context, before time.Time, limit int) ([]model.Memory, error)
 	SoftDelete(ctx context.Context, id uuid.UUID) error
 	HardDelete(ctx context.Context, id uuid.UUID) error
+}
+
+// GraphPruner cleans up orphaned graph data (Postgres only).
+type GraphPruner interface {
+	DeleteDanglingRelationships(ctx context.Context) (int64, error)
+	DeleteOrphanedEntities(ctx context.Context) (int64, error)
+}
+
+// graphPrunerAdapter wraps entity and relationship repos into a GraphPruner.
+type graphPrunerAdapter struct {
+	entities      interface{ DeleteOrphaned(ctx context.Context) (int64, error) }
+	relationships interface{ DeleteDangling(ctx context.Context) (int64, error) }
+}
+
+// NewGraphPruner creates a GraphPruner from entity and relationship repos.
+func NewGraphPruner(
+	entities interface{ DeleteOrphaned(ctx context.Context) (int64, error) },
+	relationships interface{ DeleteDangling(ctx context.Context) (int64, error) },
+) GraphPruner {
+	return &graphPrunerAdapter{entities: entities, relationships: relationships}
+}
+
+func (a *graphPrunerAdapter) DeleteDanglingRelationships(ctx context.Context) (int64, error) {
+	return a.relationships.DeleteDangling(ctx)
+}
+
+func (a *graphPrunerAdapter) DeleteOrphanedEntities(ctx context.Context) (int64, error) {
+	return a.entities.DeleteOrphaned(ctx)
 }
 
 // LifecycleConfig controls the behavior of the lifecycle sweep loop.
@@ -38,15 +67,17 @@ func defaultLifecycleConfig() LifecycleConfig {
 type LifecycleService struct {
 	store       LifecycleStore
 	vectorStore VectorDeleter
+	graphPruner GraphPruner // nil on SQLite
 	config      LifecycleConfig
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 }
 
 // NewLifecycleService creates a new LifecycleService. The vectorStore parameter
-// may be nil if no vector store is configured. Zero-value fields in cfg are
-// replaced with defaults.
-func NewLifecycleService(store LifecycleStore, vectorStore VectorDeleter, cfg LifecycleConfig) *LifecycleService {
+// may be nil if no vector store is configured. The graphPruner parameter may be
+// nil if graph data is not available (e.g., SQLite backend). Zero-value fields
+// in cfg are replaced with defaults.
+func NewLifecycleService(store LifecycleStore, vectorStore VectorDeleter, graphPruner GraphPruner, cfg LifecycleConfig) *LifecycleService {
 	defaults := defaultLifecycleConfig()
 	if cfg.SweepInterval <= 0 {
 		cfg.SweepInterval = defaults.SweepInterval
@@ -60,6 +91,7 @@ func NewLifecycleService(store LifecycleStore, vectorStore VectorDeleter, cfg Li
 	return &LifecycleService{
 		store:       store,
 		vectorStore: vectorStore,
+		graphPruner: graphPruner,
 		config:      cfg,
 	}
 }
@@ -138,6 +170,24 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 			_ = s.vectorStore.Delete(ctx, mem.ID)
 		}
 		purged++
+	}
+
+	// Phase 3: Prune orphaned graph data (Postgres only).
+	// Order matters: delete dangling relationships first, then orphaned entities.
+	if s.graphPruner != nil {
+		danglingRels, relErr := s.graphPruner.DeleteDanglingRelationships(ctx)
+		if relErr != nil {
+			log.Printf("lifecycle: failed to delete dangling relationships: %v", relErr)
+		} else if danglingRels > 0 {
+			log.Printf("lifecycle: deleted %d dangling relationships", danglingRels)
+		}
+
+		orphanedEntities, entErr := s.graphPruner.DeleteOrphanedEntities(ctx)
+		if entErr != nil {
+			log.Printf("lifecycle: failed to delete orphaned entities: %v", entErr)
+		} else if orphanedEntities > 0 {
+			log.Printf("lifecycle: deleted %d orphaned entities", orphanedEntities)
+		}
 	}
 
 	return expired, purged, nil

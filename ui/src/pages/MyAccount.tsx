@@ -4,6 +4,7 @@ import {
   useMeAPIKeys,
   useCreateMeAPIKey,
   useRevokeMeAPIKey,
+  useChangePassword,
 } from "../hooks/useApi";
 import type { APIKey } from "../api/client";
 
@@ -169,6 +170,131 @@ function CreateAPIKeyForm({ onCreated }: { onCreated: (key: string) => void }) {
 }
 
 // ---------------------------------------------------------------------------
+// Change Password Card
+// ---------------------------------------------------------------------------
+
+function ChangePasswordCard() {
+  const mutation = useChangePassword();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  const mismatch = confirmPassword !== "" && newPassword !== confirmPassword;
+  const tooShort = newPassword !== "" && newPassword.length < 8;
+  const canSubmit =
+    currentPassword !== "" &&
+    newPassword.length >= 8 &&
+    newPassword === confirmPassword &&
+    !mutation.isPending;
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setFeedback(null);
+    mutation.mutate(
+      { currentPassword, newPassword },
+      {
+        onSuccess: () => {
+          setFeedback({ type: "success", message: "Password changed successfully." });
+          setCurrentPassword("");
+          setNewPassword("");
+          setConfirmPassword("");
+        },
+        onError: (err) => {
+          const msg =
+            err instanceof Error ? err.message : "Failed to change password.";
+          // Try to extract a more specific message from APIError body.
+          let detail = msg;
+          if ("body" in err && typeof (err as Record<string, unknown>).body === "object" && (err as Record<string, unknown>).body !== null) {
+            const body = (err as Record<string, unknown>).body as Record<string, unknown>;
+            if (typeof body.message === "string") {
+              detail = body.message;
+            }
+          }
+          setFeedback({ type: "error", message: detail });
+        },
+      },
+    );
+  }
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="border-b px-4 py-3">
+        <h2 className="text-sm font-semibold">Change Password</h2>
+      </div>
+      <form onSubmit={handleSubmit} className="space-y-4 p-4">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            Current Password
+          </label>
+          <input
+            type="password"
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            autoComplete="current-password"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            New Password
+          </label>
+          <input
+            type="password"
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            autoComplete="new-password"
+          />
+          {tooShort && (
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+              Must be at least 8 characters.
+            </p>
+          )}
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            Confirm New Password
+          </label>
+          <input
+            type="password"
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            autoComplete="new-password"
+          />
+          {mismatch && (
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+              Passwords do not match.
+            </p>
+          )}
+        </div>
+
+        {feedback && (
+          <div
+            className={`rounded-md px-3 py-2 text-sm ${
+              feedback.type === "success"
+                ? "bg-green-50 text-green-800 dark:bg-green-950/30 dark:text-green-300"
+                : "bg-red-50 text-red-800 dark:bg-red-950/30 dark:text-red-300"
+            }`}
+          >
+            {feedback.message}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          disabled={!canSubmit}
+        >
+          {mutation.isPending ? "Changing..." : "Change Password"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main MyAccount
 // ---------------------------------------------------------------------------
 
@@ -262,6 +388,9 @@ function MyAccount() {
           </button>
         </div>
       </div>
+
+      {/* Change Password */}
+      <ChangePasswordCard />
 
       {/* API Keys */}
       <div className="rounded-lg border bg-card">

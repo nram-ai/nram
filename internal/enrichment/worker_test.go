@@ -236,10 +236,13 @@ func (m *mockEmbeddingProvider) Dimensions() []int { return []int{3} }
 // ---------------------------------------------------------------------------
 
 func testMemory() *model.Memory {
+	src := "test-source"
 	return &model.Memory{
 		ID:          uuid.New(),
 		NamespaceID: uuid.New(),
 		Content:     "Alice works at Acme Corp. She is 30 years old.",
+		Source:      &src,
+		Tags:        []string{"parent-tag", "important"},
 		Confidence:  1.0,
 		Importance:  0.5,
 		Enriched:    false,
@@ -380,6 +383,27 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 	// Two child memories (facts).
 	if len(h.creator.created) != 2 {
 		t.Errorf("expected 2 child memories, got %d", len(h.creator.created))
+	}
+
+	// Child memories must inherit parent source and tags.
+	for i, child := range h.creator.created {
+		if child.Source == nil || *child.Source != "test-source" {
+			t.Errorf("child %d: expected source 'test-source', got %v", i, child.Source)
+		}
+		// Must contain parent tags
+		hasParentTag := false
+		for _, tag := range child.Tags {
+			if tag == "parent-tag" {
+				hasParentTag = true
+				break
+			}
+		}
+		if !hasParentTag {
+			t.Errorf("child %d: expected parent tag 'parent-tag' in tags %v", i, child.Tags)
+		}
+		if child.Importance != 0.5 {
+			t.Errorf("child %d: expected importance 0.5, got %f", i, child.Importance)
+		}
 	}
 
 	// Two lineage records.
@@ -699,24 +723,22 @@ func TestParseFactResponse_Direct(t *testing.T) {
 }
 
 func TestParseFactResponse_WithFences(t *testing.T) {
+	// With JSON mode enabled, LLM output should never contain markdown fences.
+	// The parser no longer strips fences, so fenced input is treated as invalid.
 	input := "```json\n" + factJSON() + "\n```"
-	facts, err := parseFactResponse(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(facts) != 2 {
-		t.Errorf("expected 2 facts, got %d", len(facts))
+	_, err := parseFactResponse(input)
+	if err == nil {
+		t.Error("expected error for markdown-fenced input (JSON mode makes fence stripping unnecessary)")
 	}
 }
 
 func TestParseFactResponse_RegexFallback(t *testing.T) {
+	// With JSON mode enabled, LLM output should be pure JSON.
+	// The parser no longer extracts JSON from surrounding text.
 	input := "Here are the facts:\n" + factJSON() + "\nHope that helps!"
-	facts, err := parseFactResponse(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(facts) != 2 {
-		t.Errorf("expected 2 facts, got %d", len(facts))
+	_, err := parseFactResponse(input)
+	if err == nil {
+		t.Error("expected error for text-wrapped input (JSON mode makes extraction unnecessary)")
 	}
 }
 
@@ -734,13 +756,12 @@ func TestParseEntityResponse_Direct(t *testing.T) {
 }
 
 func TestParseEntityResponse_WithFences(t *testing.T) {
+	// With JSON mode enabled, LLM output should never contain markdown fences.
+	// The parser no longer strips fences, so fenced input is treated as invalid.
 	input := "```\n" + entityJSON() + "\n```"
-	result, err := parseEntityResponse(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(result.Entities) != 2 {
-		t.Errorf("expected 2 entities, got %d", len(result.Entities))
+	_, err := parseEntityResponse(input)
+	if err == nil {
+		t.Error("expected error for markdown-fenced input (JSON mode makes fence stripping unnecessary)")
 	}
 }
 

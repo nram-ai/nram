@@ -57,6 +57,19 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 	return r.reload(ctx, usage)
 }
 
+// DeleteByMemoryID removes all token usage records for the given memory.
+func (r *TokenUsageRepo) DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error {
+	query := `DELETE FROM token_usage WHERE memory_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM token_usage WHERE memory_id = $1`
+	}
+	_, err := r.db.Exec(ctx, query, memoryID.String())
+	if err != nil {
+		return fmt.Errorf("token usage delete by memory: %w", err)
+	}
+	return nil
+}
+
 // GetByID returns a token usage record by its UUID.
 func (r *TokenUsageRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.TokenUsage, error) {
 	query := selectTokenUsageColumns + ` FROM token_usage WHERE id = ?`

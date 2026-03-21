@@ -201,8 +201,7 @@ func (r *MemoryRepo) CountByNamespace(ctx context.Context, namespaceID uuid.UUID
 	return count, nil
 }
 
-// Update updates mutable fields of a memory: content, source, tags, metadata, importance.
-// It also bumps updated_at.
+// Update updates all mutable fields of a memory and bumps updated_at.
 func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -220,18 +219,51 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 		source = *mem.Source
 	}
 
-	query := `UPDATE memories SET content = ?, source = ?, tags = ?, metadata = ?,
-		importance = ?, updated_at = ?
+	var embeddingDim interface{}
+	if mem.EmbeddingDim != nil {
+		embeddingDim = *mem.EmbeddingDim
+	}
+
+	var lastAccessed interface{}
+	if mem.LastAccessed != nil {
+		lastAccessed = mem.LastAccessed.UTC().Format(time.RFC3339)
+	}
+
+	var expiresAt interface{}
+	if mem.ExpiresAt != nil {
+		expiresAt = mem.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+
+	var supersededBy interface{}
+	if mem.SupersededBy != nil {
+		supersededBy = mem.SupersededBy.String()
+	}
+
+	var purgeAfter interface{}
+	if mem.PurgeAfter != nil {
+		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
+	}
+
+	enrichedVal := encodeBool(r.db.Backend(), mem.Enriched)
+
+	query := `UPDATE memories SET content = ?, embedding_dim = ?, source = ?, tags = ?,
+		confidence = ?, importance = ?, access_count = ?, last_accessed = ?,
+		expires_at = ?, superseded_by = ?, enriched = ?, metadata = ?,
+		purge_after = ?, updated_at = ?
 		WHERE id = ? AND deleted_at IS NULL`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE memories SET content = $1, source = $2, tags = $3, metadata = $4,
-			importance = $5, updated_at = $6
-			WHERE id = $7 AND deleted_at IS NULL`
+		query = `UPDATE memories SET content = $1, embedding_dim = $2, source = $3, tags = $4,
+			confidence = $5, importance = $6, access_count = $7, last_accessed = $8,
+			expires_at = $9, superseded_by = $10, enriched = $11, metadata = $12,
+			purge_after = $13, updated_at = $14
+			WHERE id = $15 AND deleted_at IS NULL`
 	}
 
 	result, err := r.db.Exec(ctx, query,
-		mem.Content, source, tagsVal, string(mem.Metadata),
-		mem.Importance, now, mem.ID.String(),
+		mem.Content, embeddingDim, source, tagsVal,
+		mem.Confidence, mem.Importance, mem.AccessCount, lastAccessed,
+		expiresAt, supersededBy, enrichedVal, string(mem.Metadata),
+		purgeAfter, now, mem.ID.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("memory update: %w", err)

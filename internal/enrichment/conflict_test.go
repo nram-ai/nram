@@ -468,16 +468,12 @@ func TestParseConflictResponse_CleanJSON(t *testing.T) {
 }
 
 func TestParseConflictResponse_FencedJSON(t *testing.T) {
+	// With JSON mode enabled, LLM output should never contain markdown fences.
+	// The parser no longer strips fences, so fenced input is treated as invalid.
 	raw := "```json\n{\"contradicts\": false, \"explanation\": \"No conflict\"}\n```"
-	contradicts, explanation, err := parseConflictResponse(raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if contradicts {
-		t.Error("expected contradicts=false")
-	}
-	if explanation != "No conflict" {
-		t.Errorf("explanation = %q, want %q", explanation, "No conflict")
+	_, _, err := parseConflictResponse(raw)
+	if err == nil {
+		t.Error("expected error for markdown-fenced input (JSON mode makes fence stripping unnecessary)")
 	}
 }
 
@@ -490,16 +486,12 @@ func TestParseConflictResponse_Malformed(t *testing.T) {
 }
 
 func TestParseConflictResponse_EmbeddedJSON(t *testing.T) {
+	// With JSON mode enabled, LLM output should be pure JSON.
+	// The parser no longer extracts JSON from surrounding text.
 	raw := "Here is my answer: {\"contradicts\": true, \"explanation\": \"Conflict found\"} some trailing text"
-	contradicts, explanation, err := parseConflictResponse(raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !contradicts {
-		t.Error("expected contradicts=true")
-	}
-	if explanation != "Conflict found" {
-		t.Errorf("explanation = %q, want %q", explanation, "Conflict found")
+	_, _, err := parseConflictResponse(raw)
+	if err == nil {
+		t.Error("expected error for text-wrapped input (JSON mode makes extraction unnecessary)")
 	}
 }
 

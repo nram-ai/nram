@@ -370,7 +370,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	forgetSvc := service.NewForgetService(
 		memRepo,
 		projectLookup,
-		nil,
+		nil, nil, nil, nil, nil,
 	)
 
 	updateSvc := service.NewUpdateService(
@@ -1896,7 +1896,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 	forgetSvc := service.NewForgetService(
 		memRepo,
 		projectLookup,
-		nil,
+		nil, nil, nil, nil, nil,
 	)
 
 	updateSvc := service.NewUpdateService(

@@ -950,13 +950,16 @@ function ProjectManagement() {
         />
       )}
 
-      {/* Non-admin: open detail in read-only mode (just close panel, no edit) */}
-      {detailProjectId && !auth.isAdmin && (
-        <ProjectReadOnlyPanel
-          projectId={detailProjectId}
-          onClose={() => setDetailProjectId(null)}
-        />
-      )}
+      {/* Non-admin: open detail in read-only mode using data already in list */}
+      {detailProjectId && !auth.isAdmin && (() => {
+        const proj = projects.find((p) => p.id === detailProjectId);
+        return proj ? (
+          <ProjectReadOnlyPanel
+            project={proj}
+            onClose={() => setDetailProjectId(null)}
+          />
+        ) : null;
+      })()}
 
       {/* Create dialog for non-admin */}
       {showCreate && <CreateMeProjectDialog onClose={() => setShowCreate(false)} />}
@@ -969,15 +972,12 @@ function ProjectManagement() {
 // ---------------------------------------------------------------------------
 
 function ProjectReadOnlyPanel({
-  projectId,
+  project,
   onClose,
 }: {
-  projectId: string;
+  project: Project;
   onClose: () => void;
 }) {
-  const detailQuery = useProject(projectId);
-  const project = detailQuery.data;
-
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
@@ -992,23 +992,6 @@ function ProjectReadOnlyPanel({
             Close
           </button>
         </div>
-
-        {detailQuery.isLoading && (
-          <div className="p-6">
-            <div className="animate-pulse space-y-3">
-              <div className="h-4 w-3/4 rounded bg-muted" />
-              <div className="h-4 w-1/2 rounded bg-muted" />
-            </div>
-          </div>
-        )}
-
-        {detailQuery.isError && (
-          <div className="p-6">
-            <p className="text-sm text-red-600 dark:text-red-400">
-              Failed to load project: {detailQuery.error?.message}
-            </p>
-          </div>
-        )}
 
         {project && (
           <div className="flex-1 space-y-6 p-6">

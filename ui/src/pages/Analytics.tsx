@@ -63,7 +63,7 @@ function formatCost(n: number): string {
 }
 
 function formatPercent(n: number): string {
-  return `${(n * 100).toFixed(1)}%`;
+  return `${n.toFixed(1)}%`;
 }
 
 function truncateContent(content: string, maxLen = 80): string {

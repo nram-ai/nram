@@ -227,6 +227,19 @@ func (r *EnrichmentQueueRepo) Retry(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// DeleteByMemoryID removes all enrichment queue items for the given memory.
+func (r *EnrichmentQueueRepo) DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error {
+	query := `DELETE FROM enrichment_queue WHERE memory_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM enrichment_queue WHERE memory_id = $1`
+	}
+	_, err := r.db.Exec(ctx, query, memoryID.String())
+	if err != nil {
+		return fmt.Errorf("enrichment queue delete by memory: %w", err)
+	}
+	return nil
+}
+
 // GetByID returns an enrichment queue item by its UUID.
 func (r *EnrichmentQueueRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.EnrichmentJob, error) {
 	query := selectEnrichmentQueueColumns + ` FROM enrichment_queue WHERE id = ?`
@@ -426,13 +439,11 @@ func (r *EnrichmentQueueRepo) ListRecent(ctx context.Context, limit int) ([]mode
 func (r *EnrichmentQueueRepo) RetryAllFailed(ctx context.Context) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	// Reset both failed AND completed jobs (completed jobs may have been
-	// marked done without actual enrichment if providers were missing).
 	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, completed_at = NULL, updated_at = ?
-		WHERE status IN ('failed', 'completed')`
+		WHERE status = 'failed'`
 	if r.db.Backend() == BackendPostgres {
 		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, completed_at = NULL, updated_at = $1
-			WHERE status IN ('failed', 'completed')`
+			WHERE status = 'failed'`
 	}
 
 	result, err := r.db.Exec(ctx, query, now)

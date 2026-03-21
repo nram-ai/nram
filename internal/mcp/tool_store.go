@@ -112,6 +112,10 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 		UserID:   &uid,
 		APIKeyID: ac.APIKeyID,
 	}
+	if ac.OrgID != uuid.Nil {
+		oid := ac.OrgID
+		req.OrgID = &oid
+	}
 
 	resp, err := s.Deps().Store.Store(ctx, req)
 	if err != nil {
@@ -180,6 +184,10 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		},
 		UserID:   &uid,
 		APIKeyID: ac.APIKeyID,
+	}
+	if ac.OrgID != uuid.Nil {
+		oid := ac.OrgID
+		req.OrgID = &oid
 	}
 
 	resp, err := s.Deps().BatchStore.BatchStore(ctx, req)

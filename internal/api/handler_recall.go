@@ -87,6 +87,10 @@ func NewRecallHandler(svc RecallServicer) http.HandlerFunc {
 		if ac := auth.FromContext(r.Context()); ac != nil {
 			uid := ac.UserID
 			req.UserID = &uid
+			if ac.OrgID != uuid.Nil {
+				oid := ac.OrgID
+				req.OrgID = &oid
+			}
 			req.APIKeyID = ac.APIKeyID
 		}
 

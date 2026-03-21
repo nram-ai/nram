@@ -11,7 +11,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/storage"
 )
+
+// bestEmbeddingDimension picks the largest dimension that is supported by both
+// the embedding provider and the vector store. Returns 0 if no compatible
+// dimension exists.
+func bestEmbeddingDimension(providerDims []int) int {
+	best := 0
+	for _, d := range providerDims {
+		if storage.SupportedVectorDimensions[d] && d > best {
+			best = d
+		}
+	}
+	return best
+}
 
 // MemoryRepository defines the memory persistence operations needed by the store service.
 type MemoryRepository interface {
@@ -186,15 +200,13 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 	var embeddingUsage *provider.TokenUsage
 	var embeddingModel string
 	var embeddingProviderName string
+	var embeddingVector []float32
+	var embeddingDim int
 
 	if s.embedProvider != nil {
 		ep := s.embedProvider()
 		if ep != nil {
-			dims := ep.Dimensions()
-			dim := 0
-			if len(dims) > 0 {
-				dim = dims[0]
-			}
+			dim := bestEmbeddingDimension(ep.Dimensions())
 
 			embReq := &provider.EmbeddingRequest{
 				Input:     []string{req.Content},
@@ -208,12 +220,9 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 				embeddingModel = resp.Model
 				embeddingProviderName = ep.Name()
 
-				embDim := len(resp.Embeddings[0])
-				mem.EmbeddingDim = &embDim
-
-				if s.vectorStore != nil {
-					_ = s.vectorStore.Upsert(ctx, memID, ns.ID, resp.Embeddings[0], embDim)
-				}
+				embeddingDim = len(resp.Embeddings[0])
+				mem.EmbeddingDim = &embeddingDim
+				embeddingVector = resp.Embeddings[0]
 			}
 			// On embedding error, we still store the memory without embedding.
 		}
@@ -222,6 +231,13 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 	// Persist the memory.
 	if err := s.memories.Create(ctx, mem); err != nil {
 		return nil, fmt.Errorf("failed to create memory: %w", err)
+	}
+
+	// Upsert vector after memory exists (FK constraint requires memory row first).
+	if embeddingDone && embeddingVector != nil && s.vectorStore != nil {
+		if err := s.vectorStore.Upsert(ctx, memID, ns.ID, embeddingVector, embeddingDim); err != nil {
+			fmt.Printf("service: vector upsert failed for memory %s: %v\n", memID, err)
+		}
 	}
 
 	// Record token usage if embedding happened.

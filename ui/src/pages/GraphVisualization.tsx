@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -13,7 +13,8 @@ import ReactFlow, {
   MarkerType,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import { useProjects, useGraph } from "../hooks/useApi";
+import { useProjects, useMeProjects, useGraph } from "../hooks/useApi";
+import { useAuth } from "../context/AuthContext";
 import type { GraphEntity } from "../api/client";
 
 // Color map for entity types
@@ -321,9 +322,19 @@ function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
 }
 
 function GraphVisualization() {
-  const { data: projects, isLoading: projectsLoading } = useProjects();
+  const auth = useAuth();
+  const adminProjects = useProjects();
+  const meProjects = useMeProjects();
+  const projectsQuery = auth.isAdmin ? adminProjects : meProjects;
+  const { data: projects, isLoading: projectsLoading } = projectsQuery;
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
+
+  useEffect(() => {
+    if (!selectedProjectId && projects && projects.length > 0) {
+      setSelectedProjectId(projects[0].id);
+    }
+  }, [projects, selectedProjectId]);
 
   const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 

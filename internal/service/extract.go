@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -26,7 +25,16 @@ type RelationshipCreator interface {
 // ExtractedFact represents a single fact extracted by an LLM.
 type ExtractedFact struct {
 	Fact       string  `json:"fact"`
+	Content    string  `json:"content"` // alternate field name some LLMs use
 	Confidence float64 `json:"confidence"`
+}
+
+// text returns the fact content, preferring "fact" over "content".
+func (f ExtractedFact) text() string {
+	if f.Fact != "" {
+		return f.Fact
+	}
+	return f.Content
 }
 
 // ExtractedEntityData represents a single entity extracted by an LLM.
@@ -304,6 +312,7 @@ func (s *ExtractionService) extractFacts(
 		},
 		MaxTokens:   2048,
 		Temperature: 0.1,
+		JSONMode:    true,
 	}
 
 	resp, err := fp.Complete(ctx, completionReq)
@@ -359,6 +368,7 @@ func (s *ExtractionService) extractEntities(
 		},
 		MaxTokens:   2048,
 		Temperature: 0.1,
+		JSONMode:    true,
 	}
 
 	resp, err := ep.Complete(ctx, completionReq)
@@ -480,11 +490,7 @@ func (s *ExtractionService) embedMemory(
 		return
 	}
 
-	dims := ep.Dimensions()
-	dim := 0
-	if len(dims) > 0 {
-		dim = dims[0]
-	}
+	dim := bestEmbeddingDimension(ep.Dimensions())
 
 	embReq := &provider.EmbeddingRequest{
 		Input:     []string{mem.Content},
@@ -525,79 +531,68 @@ func (s *ExtractionService) embedMemory(
 	_ = s.tokenUsage.Record(ctx, usage)
 }
 
-// parseFactResponse parses an LLM fact extraction response with recovery for markdown fences.
+// parseFactResponse parses an LLM fact extraction response. With JSON mode
+// enabled the LLM is constrained to produce valid JSON, so only direct
+// unmarshal with a string-array fallback is needed.
 func parseFactResponse(raw string) ([]ExtractedFact, error) {
 	raw = strings.TrimSpace(raw)
 
-	// Try direct JSON parse.
+	// Try array of structured facts.
 	var facts []ExtractedFact
-	if err := json.Unmarshal([]byte(raw), &facts); err == nil {
-		return facts, nil
-	}
-
-	// Strip markdown fences and retry.
-	stripped := stripMarkdownFences(raw)
-	if err := json.Unmarshal([]byte(stripped), &facts); err == nil {
-		return facts, nil
-	}
-
-	// Try regex to find JSON array in text.
-	re := regexp.MustCompile(`\[[\s\S]*\]`)
-	match := re.FindString(raw)
-	if match != "" {
-		if err := json.Unmarshal([]byte(match), &facts); err == nil {
-			return facts, nil
+	if err := json.Unmarshal([]byte(raw), &facts); err == nil && len(facts) > 0 {
+		for i := range facts {
+			facts[i].Fact = facts[i].text()
 		}
+		return facts, nil
 	}
 
-	return nil, fmt.Errorf("failed to parse fact extraction response as JSON array")
+	// Single fact object instead of array.
+	var single ExtractedFact
+	if err := json.Unmarshal([]byte(raw), &single); err == nil && single.text() != "" {
+		single.Fact = single.text()
+		return []ExtractedFact{single}, nil
+	}
+
+	// Wrapper object with a "facts" key.
+	var wrapper struct {
+		Facts []ExtractedFact `json:"facts"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapper); err == nil && len(wrapper.Facts) > 0 {
+		for i := range wrapper.Facts {
+			wrapper.Facts[i].Fact = wrapper.Facts[i].text()
+		}
+		return wrapper.Facts, nil
+	}
+
+	// Plain string array.
+	var strs []string
+	if err := json.Unmarshal([]byte(raw), &strs); err == nil && len(strs) > 0 {
+		facts = make([]ExtractedFact, len(strs))
+		for i, s := range strs {
+			facts[i] = ExtractedFact{Fact: s, Confidence: 0.8}
+		}
+		return facts, nil
+	}
+
+	preview := raw
+	if len(preview) > 200 {
+		preview = preview[:200] + "..."
+	}
+	return nil, fmt.Errorf("failed to parse fact extraction response as JSON array: %q", preview)
 }
 
-// parseEntityResponse parses an LLM entity extraction response with recovery for markdown fences.
+// parseEntityResponse parses an LLM entity extraction response. With JSON mode
+// enabled the LLM is constrained to produce valid JSON.
 func parseEntityResponse(raw string) (*EntityExtractionResult, error) {
 	raw = strings.TrimSpace(raw)
 
-	// Try direct JSON parse.
 	var result EntityExtractionResult
-	if err := json.Unmarshal([]byte(raw), &result); err == nil {
-		return &result, nil
-	}
-
-	// Strip markdown fences and retry.
-	stripped := stripMarkdownFences(raw)
-	if err := json.Unmarshal([]byte(stripped), &result); err == nil {
-		return &result, nil
-	}
-
-	// Try regex to find JSON object in text.
-	re := regexp.MustCompile(`\{[\s\S]*\}`)
-	match := re.FindString(raw)
-	if match != "" {
-		if err := json.Unmarshal([]byte(match), &result); err == nil {
-			return &result, nil
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		preview := raw
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
 		}
+		return nil, fmt.Errorf("failed to parse entity extraction response as JSON object: %q", preview)
 	}
-
-	return nil, fmt.Errorf("failed to parse entity extraction response as JSON object")
-}
-
-// stripMarkdownFences removes common markdown code fence wrappers from text.
-func stripMarkdownFences(s string) string {
-	s = strings.TrimSpace(s)
-
-	// Remove ```json ... ``` or ``` ... ```
-	if strings.HasPrefix(s, "```") {
-		// Find end of first line (the opening fence).
-		idx := strings.Index(s, "\n")
-		if idx >= 0 {
-			s = s[idx+1:]
-		}
-		// Remove closing fence.
-		if lastIdx := strings.LastIndex(s, "```"); lastIdx >= 0 {
-			s = s[:lastIdx]
-		}
-		s = strings.TrimSpace(s)
-	}
-
-	return s
+	return &result, nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/service"
@@ -90,6 +91,10 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		GraphDepth:   graphDepth,
 		UserID:       &uid,
 		APIKeyID:     ac.APIKeyID,
+	}
+	if ac.OrgID != uuid.Nil {
+		oid := ac.OrgID
+		req.OrgID = &oid
 	}
 
 	if projectSlug != "" {

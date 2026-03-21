@@ -46,6 +46,7 @@ type Handlers struct {
 	MeAPIKeyRevoke      http.HandlerFunc
 	MeOAuthClients      http.HandlerFunc
 	MeOAuthClientRevoke http.HandlerFunc
+	MeChangePassword    http.HandlerFunc
 
 	// Org-scoped handlers
 	OrgRecall   http.HandlerFunc
@@ -209,6 +210,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Delete("/api-keys/{id}", handler(handlers.MeAPIKeyRevoke))
 			r.HandleFunc("/oauth-clients", handler(handlers.MeOAuthClients))
 			r.Delete("/oauth-clients/{id}", handler(handlers.MeOAuthClientRevoke))
+			r.Post("/password", handler(handlers.MeChangePassword))
 		})
 
 		// Scoped data-viewing routes (all authenticated users — scope auto-applied).

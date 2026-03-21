@@ -73,13 +73,19 @@ type openaiChatMessage struct {
 	Content string `json:"content"`
 }
 
+// openaiResponseFormat specifies the output format for the model.
+type openaiResponseFormat struct {
+	Type string `json:"type"`
+}
+
 // openaiChatRequest is the request body for POST /v1/chat/completions.
 type openaiChatRequest struct {
-	Model       string              `json:"model"`
-	Messages    []openaiChatMessage `json:"messages"`
-	MaxTokens   int                 `json:"max_tokens,omitempty"`
-	Temperature *float64            `json:"temperature,omitempty"`
-	Stop        []string            `json:"stop,omitempty"`
+	Model          string                `json:"model"`
+	Messages       []openaiChatMessage   `json:"messages"`
+	MaxTokens      int                   `json:"max_tokens,omitempty"`
+	Temperature    *float64              `json:"temperature,omitempty"`
+	Stop           []string              `json:"stop,omitempty"`
+	ResponseFormat *openaiResponseFormat `json:"response_format,omitempty"`
 }
 
 // openaiChatChoice is a single choice in a chat completion response.
@@ -169,6 +175,9 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 	if len(req.Stop) > 0 {
 		body.Stop = req.Stop
+	}
+	if req.JSONMode {
+		body.ResponseFormat = &openaiResponseFormat{Type: "json_object"}
 	}
 
 	var chatResp openaiChatResponse

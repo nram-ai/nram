@@ -8,11 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"context"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
-	"context"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // APIKeyManager defines operations on API keys needed by self-service handlers.
@@ -319,6 +321,85 @@ func NewMeOAuthClientRevokeHandler(clients OAuthClientManager) http.HandlerFunc 
 		}
 
 		writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+	}
+}
+
+// PasswordChanger defines operations needed for self-service password change.
+type PasswordChanger interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
+	UpdatePassword(ctx context.Context, id uuid.UUID, newHash string) error
+}
+
+// changePasswordRequest is the JSON body for POST /v1/me/password.
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// NewMeChangePasswordHandler returns an http.HandlerFunc that handles
+// POST /v1/me/password (self-service password change).
+func NewMeChangePasswordHandler(repo PasswordChanger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			WriteError(w, &APIError{
+				Code:    "method_not_allowed",
+				Message: "method not allowed",
+				Status:  http.StatusMethodNotAllowed,
+			})
+			return
+		}
+
+		ac := auth.FromContext(r.Context())
+		if ac == nil {
+			WriteError(w, ErrUnauthorized("authentication required"))
+			return
+		}
+
+		var body changePasswordRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			WriteError(w, ErrBadRequest("invalid request body: "+err.Error()))
+			return
+		}
+
+		if body.CurrentPassword == "" {
+			WriteError(w, ErrBadRequest("current_password is required"))
+			return
+		}
+
+		if len(body.NewPassword) < 8 {
+			WriteError(w, ErrBadRequest("new_password must be at least 8 characters"))
+			return
+		}
+
+		user, err := repo.GetByID(r.Context(), ac.UserID)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to load user"))
+			return
+		}
+
+		if user.PasswordHash == nil {
+			WriteError(w, ErrBadRequest("account does not have a password set (external identity provider)"))
+			return
+		}
+
+		if !storage.VerifyPassword(*user.PasswordHash, body.CurrentPassword) {
+			WriteError(w, ErrBadRequest("current password is incorrect"))
+			return
+		}
+
+		newHash, err := storage.HashPassword(body.NewPassword)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to hash new password"))
+			return
+		}
+
+		if err := repo.UpdatePassword(r.Context(), ac.UserID, newHash); err != nil {
+			WriteError(w, ErrInternal("failed to update password"))
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]bool{"changed": true})
 	}
 }
 

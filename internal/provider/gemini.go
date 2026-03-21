@@ -86,9 +86,10 @@ type geminiContent struct {
 
 // geminiGenerationConfig holds generation parameters for Gemini.
 type geminiGenerationConfig struct {
-	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
-	Temperature     *float64 `json:"temperature,omitempty"`
-	StopSequences   []string `json:"stopSequences,omitempty"`
+	MaxOutputTokens  int      `json:"maxOutputTokens,omitempty"`
+	Temperature      *float64 `json:"temperature,omitempty"`
+	StopSequences    []string `json:"stopSequences,omitempty"`
+	ResponseMimeType string   `json:"responseMimeType,omitempty"`
 }
 
 // geminiGenerateRequest is the request body for generateContent.
@@ -203,7 +204,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		SystemInstruction: systemInstruction,
 	}
 
-	if req.MaxTokens > 0 || req.Temperature != 0 || len(req.Stop) > 0 {
+	if req.MaxTokens > 0 || req.Temperature != 0 || len(req.Stop) > 0 || req.JSONMode {
 		gc := &geminiGenerationConfig{}
 		if req.MaxTokens > 0 {
 			gc.MaxOutputTokens = req.MaxTokens
@@ -214,6 +215,9 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		}
 		if len(req.Stop) > 0 {
 			gc.StopSequences = req.Stop
+		}
+		if req.JSONMode {
+			gc.ResponseMimeType = "application/json"
 		}
 		body.GenerationConfig = gc
 	}

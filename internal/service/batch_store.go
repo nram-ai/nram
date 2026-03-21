@@ -132,11 +132,7 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 	if s.embedProvider != nil {
 		ep := s.embedProvider()
 		if ep != nil {
-			dims := ep.Dimensions()
-			dim := 0
-			if len(dims) > 0 {
-				dim = dims[0]
-			}
+			dim := bestEmbeddingDimension(ep.Dimensions())
 
 			inputs := make([]string, len(req.Items))
 			for i, item := range req.Items {
@@ -191,25 +187,23 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 		if embeddingDone && i < len(embeddings) {
 			embDim := len(embeddings[i])
 			mem.EmbeddingDim = &embDim
-
-			if s.vectorStore != nil {
-				if err := s.vectorStore.Upsert(ctx, memID, ns.ID, embeddings[i], embDim); err != nil {
-					errors = append(errors, BatchStoreError{
-						Index:   i,
-						Message: fmt.Sprintf("vector upsert failed: %v", err),
-					})
-					continue
-				}
-			}
 		}
 
-		// Persist the memory.
+		// Persist the memory first (vector table has FK to memories).
 		if err := s.memories.Create(ctx, mem); err != nil {
 			errors = append(errors, BatchStoreError{
 				Index:   i,
 				Message: fmt.Sprintf("failed to create memory: %v", err),
 			})
 			continue
+		}
+
+		// Upsert vector after memory exists.
+		if embeddingDone && i < len(embeddings) && s.vectorStore != nil {
+			if err := s.vectorStore.Upsert(ctx, memID, ns.ID, embeddings[i], len(embeddings[i])); err != nil {
+				// Log but don't fail — memory was already created.
+				fmt.Printf("service: vector upsert failed for memory %s: %v\n", memID, err)
+			}
 		}
 
 		memoriesCreated++

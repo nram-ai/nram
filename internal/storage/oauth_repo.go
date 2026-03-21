@@ -626,6 +626,44 @@ func (r *OAuthRepo) ListIdPs(ctx context.Context) ([]model.OAuthIdPConfig, error
 	return r.scanIdPs(rows)
 }
 
+// ListIdPsByOrg returns identity providers for a specific organization.
+func (r *OAuthRepo) ListIdPsByOrg(ctx context.Context, orgID uuid.UUID) ([]model.OAuthIdPConfig, error) {
+	query := selectIdPColumns + ` FROM oauth_idp_configs WHERE org_id = ? ORDER BY created_at DESC`
+	if r.db.Backend() == BackendPostgres {
+		query = selectIdPColumns + ` FROM oauth_idp_configs WHERE org_id = $1 ORDER BY created_at DESC`
+	}
+
+	rows, err := r.db.Query(ctx, query, orgID.String())
+	if err != nil {
+		return nil, fmt.Errorf("oauth idp list by org: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanIdPs(rows)
+}
+
+// DeleteIdPByOrg removes an identity provider config only if it belongs to the given org.
+func (r *OAuthRepo) DeleteIdPByOrg(ctx context.Context, id, orgID uuid.UUID) error {
+	query := `DELETE FROM oauth_idp_configs WHERE id = ? AND org_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM oauth_idp_configs WHERE id = $1 AND org_id = $2`
+	}
+
+	res, err := r.db.Exec(ctx, query, id.String(), orgID.String())
+	if err != nil {
+		return fmt.Errorf("oauth idp delete by org: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("oauth idp delete by org rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("idp config not found")
+	}
+	return nil
+}
+
 // DeleteIdP removes an identity provider config by its UUID.
 func (r *OAuthRepo) DeleteIdP(ctx context.Context, id uuid.UUID) error {
 	query := `DELETE FROM oauth_idp_configs WHERE id = ?`

@@ -372,22 +372,31 @@ function MemoryCard({
 }) {
   return (
     <div
-      className={`cursor-pointer rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 ${
-        isSelected ? "ring-2 ring-primary" : ""
+      className={`cursor-pointer rounded-lg border p-4 transition-colors hover:bg-accent/50 ${
+        isSelected ? "border-primary bg-primary/5" : "bg-card"
       }`}
       onClick={onClick}
     >
       <div className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          className="mt-1 shrink-0 rounded border"
-          checked={isSelected}
-          onChange={(e) => {
+        <button
+          type="button"
+          className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded border-2 transition-colors ${
+            isSelected
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-muted-foreground/30 hover:border-primary/50"
+          }`}
+          onClick={(e) => {
             e.stopPropagation();
             onToggleSelect();
           }}
-          onClick={(e) => e.stopPropagation()}
-        />
+          aria-label={isSelected ? "Deselect memory" : "Select memory"}
+        >
+          {isSelected && (
+            <svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3.5 8.5L6.5 11.5L12.5 4.5" />
+            </svg>
+          )}
+        </button>
         <div className="min-w-0 flex-1">
           <p className="text-sm leading-relaxed">{preview(memory.content)}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -581,18 +590,6 @@ function MemoryDetailPanel({
                 <span>{formatDate(memory.updated_at)}</span>
               </div>
             </div>
-
-            {/* Metadata */}
-            {memory.metadata && Object.keys(memory.metadata).length > 0 && (
-              <div>
-                <h3 className="mb-2 text-sm font-medium text-muted-foreground">
-                  Metadata
-                </h3>
-                <pre className="rounded bg-gray-100 p-2 text-xs dark:bg-gray-800">
-                  {JSON.stringify(memory.metadata, null, 2)}
-                </pre>
-              </div>
-            )}
 
             {/* Actions — only show delete for users with write access */}
             {canWrite && (
@@ -919,7 +916,7 @@ function MemoryBrowser() {
         content: r.content,
         tags: r.tags,
         source: r.source,
-        enriched: false,
+        enriched: r.enriched ?? false,
         metadata: r.metadata,
         created_at: r.created_at,
         updated_at: r.created_at,

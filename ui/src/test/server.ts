@@ -114,8 +114,8 @@ const handlers = [
       dead_weight: [],
       enrichment_stats: {
         total_processed: 50,
-        success_rate: 0.95,
-        failure_rate: 0.05,
+        success_rate: 95.0,
+        failure_rate: 5.0,
         avg_latency_ms: 200,
       },
     });
@@ -283,6 +283,7 @@ const handlers = [
           owner_namespace_id: "ns1",
           name: "Test Project",
           slug: "test-project",
+          path: "/org/user/test-project",
           description: "A test",
           default_tags: [],
           settings: {
@@ -294,6 +295,10 @@ const handlers = [
               importance: 0.2,
             },
           },
+          memory_count: 42,
+          entity_count: 10,
+          owner: { id: "u1", email: "admin@test.com" },
+          organization: { id: "org1", name: "Test Org" },
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
         },

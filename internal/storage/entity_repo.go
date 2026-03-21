@@ -97,7 +97,7 @@ func (r *EntityRepo) Upsert(ctx context.Context, entity *model.Entity) error {
 			name = excluded.name,
 			embedding_dim = excluded.embedding_dim,
 			properties = excluded.properties,
-			mention_count = excluded.mention_count,
+			mention_count = mention_count + 1,
 			metadata = excluded.metadata,
 			updated_at = ?`
 	if r.db.Backend() == BackendPostgres {
@@ -107,7 +107,7 @@ func (r *EntityRepo) Upsert(ctx context.Context, entity *model.Entity) error {
 				name = EXCLUDED.name,
 				embedding_dim = EXCLUDED.embedding_dim,
 				properties = EXCLUDED.properties,
-				mention_count = EXCLUDED.mention_count,
+				mention_count = entities.mention_count + 1,
 				metadata = EXCLUDED.metadata,
 				updated_at = $10`
 	}
@@ -187,6 +187,25 @@ func (r *EntityRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID)
 	defer rows.Close()
 
 	return r.scanEntities(rows)
+}
+
+// DeleteOrphaned removes entities that have no relationships (neither as source nor target).
+// Returns the number of entities deleted.
+func (r *EntityRepo) DeleteOrphaned(ctx context.Context) (int64, error) {
+	query := `DELETE FROM entities WHERE id NOT IN (
+		SELECT source_id FROM relationships
+		UNION
+		SELECT target_id FROM relationships
+	)`
+	result, err := r.db.Exec(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("entity delete orphaned: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("entity delete orphaned rows: %w", err)
+	}
+	return rows, nil
 }
 
 // reload fetches the entity by ID and populates the struct in place.

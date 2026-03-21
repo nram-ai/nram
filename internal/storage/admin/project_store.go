@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -129,16 +130,34 @@ func (s *ProjectAdminStore) CountProjectsByOrg(ctx context.Context, orgID uuid.U
 
 // ListProjectsByOrg returns projects under the given organization's namespace with pagination.
 func (s *ProjectAdminStore) ListProjectsByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]model.Project, error) {
-	query := `SELECT p.id, p.namespace_id, p.owner_namespace_id, p.name, p.slug, p.description, p.default_tags, p.settings, p.created_at, p.updated_at
+	query := `SELECT p.id, p.namespace_id, p.owner_namespace_id, p.name, p.slug,
+		COALESCE(pn.path, '') AS path,
+		p.description, p.default_tags, p.settings,
+		COALESCE((SELECT COUNT(*) FROM memories m WHERE m.namespace_id = p.namespace_id AND m.deleted_at IS NULL), 0),
+		COALESCE((SELECT COUNT(*) FROM entities e WHERE e.namespace_id = p.namespace_id), 0),
+		u.id AS owner_id, u.email AS owner_email,
+		org.id AS org_id, org.name AS org_name,
+		p.created_at, p.updated_at
 		FROM projects p
 		JOIN namespaces pn ON p.namespace_id = pn.id
+		LEFT JOIN users u ON u.namespace_id = p.owner_namespace_id
+		LEFT JOIN organizations org ON org.id = u.org_id
 		WHERE pn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
 		ORDER BY p.name
 		LIMIT ? OFFSET ?`
 	if s.db.Backend() == storage.BackendPostgres {
-		query = `SELECT p.id, p.namespace_id, p.owner_namespace_id, p.name, p.slug, p.description, p.default_tags, p.settings, p.created_at, p.updated_at
+		query = `SELECT p.id, p.namespace_id, p.owner_namespace_id, p.name, p.slug,
+			COALESCE(pn.path, '') AS path,
+			p.description, p.default_tags, p.settings,
+			COALESCE((SELECT COUNT(*) FROM memories m WHERE m.namespace_id = p.namespace_id AND m.deleted_at IS NULL), 0),
+			COALESCE((SELECT COUNT(*) FROM entities e WHERE e.namespace_id = p.namespace_id), 0),
+			u.id AS owner_id, u.email AS owner_email,
+			org.id AS org_id, org.name AS org_name,
+			p.created_at, p.updated_at
 			FROM projects p
 			JOIN namespaces pn ON p.namespace_id = pn.id
+			LEFT JOIN users u ON u.namespace_id = p.owner_namespace_id
+			LEFT JOIN organizations org ON org.id = u.org_id
 			WHERE pn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
 			ORDER BY p.name
 			LIMIT $2 OFFSET $3`
@@ -154,8 +173,14 @@ func (s *ProjectAdminStore) ListProjectsByOrg(ctx context.Context, orgID uuid.UU
 		var p model.Project
 		var idStr, nsIDStr, ownerNSIDStr string
 		var tagsStr, settingsStr string
+		var ownerIDStr, ownerEmail sql.NullString
+		var orgIDStr, orgName sql.NullString
 		var createdAtStr, updatedAtStr string
-		if err := rows.Scan(&idStr, &nsIDStr, &ownerNSIDStr, &p.Name, &p.Slug, &p.Description, &tagsStr, &settingsStr, &createdAtStr, &updatedAtStr); err != nil {
+		if err := rows.Scan(&idStr, &nsIDStr, &ownerNSIDStr, &p.Name, &p.Slug, &p.Path,
+			&p.Description, &tagsStr, &settingsStr,
+			&p.MemoryCount, &p.EntityCount,
+			&ownerIDStr, &ownerEmail, &orgIDStr, &orgName,
+			&createdAtStr, &updatedAtStr); err != nil {
 			return nil, fmt.Errorf("project list by org scan: %w", err)
 		}
 		parsedID, err := uuid.Parse(idStr)
@@ -180,6 +205,18 @@ func (s *ProjectAdminStore) ListProjectsByOrg(ctx context.Context, orgID uuid.UU
 			p.DefaultTags = []string{}
 		}
 		p.Settings = json.RawMessage(settingsStr)
+		if ownerIDStr.Valid && ownerEmail.Valid {
+			oID, parseErr := uuid.Parse(ownerIDStr.String)
+			if parseErr == nil {
+				p.Owner = &model.ProjectOwner{ID: oID, Email: ownerEmail.String}
+			}
+		}
+		if orgIDStr.Valid && orgName.Valid {
+			oID, parseErr := uuid.Parse(orgIDStr.String)
+			if parseErr == nil {
+				p.Organization = &model.ProjectOrg{ID: oID, Name: orgName.String}
+			}
+		}
 		createdAt, err := time.Parse(time.RFC3339, createdAtStr)
 		if err != nil {
 			return nil, fmt.Errorf("project list by org parse created_at: %w", err)

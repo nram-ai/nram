@@ -17,6 +17,7 @@ type CompletionRequest struct {
 	MaxTokens   int
 	Temperature float64
 	Stop        []string
+	JSONMode    bool // request JSON-formatted output from the model
 }
 
 // CompletionResponse contains the result of an LLM completion call.

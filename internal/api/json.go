@@ -4,8 +4,18 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/mail"
 	"reflect"
 )
+
+// isValidEmail checks whether the given string is a valid email address.
+func isValidEmail(email string) bool {
+	addr, err := mail.ParseAddress(email)
+	if err != nil {
+		return false
+	}
+	return addr.Address == email
+}
 
 // writeJSON encodes v as JSON and writes it to w with the given HTTP status code.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

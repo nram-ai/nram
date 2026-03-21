@@ -55,13 +55,27 @@ func (r *ProjectRepo) Create(ctx context.Context, project *model.Project) error 
 	return r.reload(ctx, project)
 }
 
+// selectProjectColumns is the common SELECT clause for project queries including
+// namespace path, memory/entity counts, and owner/organization info.
+const selectProjectColumns = `SELECT p.id, p.namespace_id, p.owner_namespace_id, p.name, p.slug,
+	COALESCE(pn.path, '') AS path,
+	p.description, p.default_tags, p.settings,
+	COALESCE((SELECT COUNT(*) FROM memories m WHERE m.namespace_id = p.namespace_id AND m.deleted_at IS NULL), 0) AS memory_count,
+	COALESCE((SELECT COUNT(*) FROM entities e WHERE e.namespace_id = p.namespace_id), 0) AS entity_count,
+	u.id AS owner_id, u.email AS owner_email,
+	o.id AS org_id, o.name AS org_name,
+	p.created_at, p.updated_at`
+
+// projectJoins is the common JOIN clause for project queries.
+const projectJoins = ` LEFT JOIN namespaces pn ON pn.id = p.namespace_id
+	LEFT JOIN users u ON u.namespace_id = p.owner_namespace_id
+	LEFT JOIN organizations o ON o.id = u.org_id`
+
 // GetByID returns a project by its UUID.
 func (r *ProjectRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error) {
-	query := `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
-		FROM projects WHERE id = ?`
+	query := selectProjectColumns + ` FROM projects p` + projectJoins + ` WHERE p.id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
-			FROM projects WHERE id = $1`
+		query = selectProjectColumns + ` FROM projects p` + projectJoins + ` WHERE p.id = $1`
 	}
 
 	row := r.db.QueryRow(ctx, query, id.String())
@@ -70,11 +84,9 @@ func (r *ProjectRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Project
 
 // GetBySlug returns a project by its owner_namespace_id and slug (unique constraint).
 func (r *ProjectRepo) GetBySlug(ctx context.Context, ownerNamespaceID uuid.UUID, slug string) (*model.Project, error) {
-	query := `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
-		FROM projects WHERE owner_namespace_id = ? AND slug = ?`
+	query := selectProjectColumns + ` FROM projects p` + projectJoins + ` WHERE p.owner_namespace_id = ? AND p.slug = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
-			FROM projects WHERE owner_namespace_id = $1 AND slug = $2`
+		query = selectProjectColumns + ` FROM projects p` + projectJoins + ` WHERE p.owner_namespace_id = $1 AND p.slug = $2`
 	}
 
 	row := r.db.QueryRow(ctx, query, ownerNamespaceID.String(), slug)
@@ -83,11 +95,9 @@ func (r *ProjectRepo) GetBySlug(ctx context.Context, ownerNamespaceID uuid.UUID,
 
 // ListByUser returns all projects owned by the given namespace, ordered by name.
 func (r *ProjectRepo) ListByUser(ctx context.Context, ownerNamespaceID uuid.UUID) ([]model.Project, error) {
-	query := `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
-		FROM projects WHERE owner_namespace_id = ? ORDER BY name`
+	query := selectProjectColumns + ` FROM projects p` + projectJoins + ` WHERE p.owner_namespace_id = ? ORDER BY p.name`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
-			FROM projects WHERE owner_namespace_id = $1 ORDER BY name`
+		query = selectProjectColumns + ` FROM projects p` + projectJoins + ` WHERE p.owner_namespace_id = $1 ORDER BY p.name`
 	}
 
 	rows, err := r.db.Query(ctx, query, ownerNamespaceID.String())
@@ -112,8 +122,7 @@ func (r *ProjectRepo) ListByUser(ctx context.Context, ownerNamespaceID uuid.UUID
 
 // ListAll returns all projects ordered by name.
 func (r *ProjectRepo) ListAll(ctx context.Context) ([]model.Project, error) {
-	query := `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
-		FROM projects ORDER BY name`
+	query := selectProjectColumns + ` FROM projects p` + projectJoins + ` ORDER BY p.name`
 
 	rows, err := r.db.Query(ctx, query)
 	if err != nil {
@@ -147,11 +156,9 @@ func (r *ProjectRepo) CountAll(ctx context.Context) (int, error) {
 
 // ListAllPaged returns all projects ordered by name with LIMIT and OFFSET applied.
 func (r *ProjectRepo) ListAllPaged(ctx context.Context, limit, offset int) ([]model.Project, error) {
-	query := `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
-		FROM projects ORDER BY name LIMIT ? OFFSET ?`
+	query := selectProjectColumns + ` FROM projects p` + projectJoins + ` ORDER BY p.name LIMIT ? OFFSET ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at
-			FROM projects ORDER BY name LIMIT $1 OFFSET $2`
+		query = selectProjectColumns + ` FROM projects p` + projectJoins + ` ORDER BY p.name LIMIT $1 OFFSET $2`
 	}
 
 	rows, err := r.db.Query(ctx, query, limit, offset)
@@ -282,56 +289,27 @@ func (r *ProjectRepo) scanProject(row *sql.Row) (*model.Project, error) {
 	var project model.Project
 	var idStr, namespaceIDStr, ownerNamespaceIDStr string
 	var defaultTagsStr, settingsStr string
+	var ownerIDStr, ownerEmail sql.NullString
+	var orgIDStr, orgName sql.NullString
 	var createdAtStr, updatedAtStr string
 
 	err := row.Scan(
 		&idStr, &namespaceIDStr, &ownerNamespaceIDStr,
-		&project.Name, &project.Slug, &project.Description,
-		&defaultTagsStr, &settingsStr, &createdAtStr, &updatedAtStr,
+		&project.Name, &project.Slug, &project.Path,
+		&project.Description,
+		&defaultTagsStr, &settingsStr,
+		&project.MemoryCount, &project.EntityCount,
+		&ownerIDStr, &ownerEmail,
+		&orgIDStr, &orgName,
+		&createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		return nil, fmt.Errorf("project scan parse id: %w", err)
-	}
-	project.ID = id
-
-	nsID, err := uuid.Parse(namespaceIDStr)
-	if err != nil {
-		return nil, fmt.Errorf("project scan parse namespace_id: %w", err)
-	}
-	project.NamespaceID = nsID
-
-	ownerNSID, err := uuid.Parse(ownerNamespaceIDStr)
-	if err != nil {
-		return nil, fmt.Errorf("project scan parse owner_namespace_id: %w", err)
-	}
-	project.OwnerNamespaceID = ownerNSID
-
-	tags, err := decodeStringArray(r.db.Backend(), defaultTagsStr)
-	if err != nil {
-		return nil, fmt.Errorf("project scan parse default_tags: %w", err)
-	}
-	if tags == nil {
-		tags = []string{}
-	}
-	project.DefaultTags = tags
-
-	project.Settings = json.RawMessage(settingsStr)
-
-	project.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
-	if err != nil {
-		return nil, fmt.Errorf("project scan parse created_at: %w", err)
-	}
-	project.UpdatedAt, err = time.Parse(time.RFC3339, updatedAtStr)
-	if err != nil {
-		return nil, fmt.Errorf("project scan parse updated_at: %w", err)
-	}
-
-	return &project, nil
+	return r.populateProject(&project, idStr, namespaceIDStr, ownerNamespaceIDStr,
+		defaultTagsStr, settingsStr, ownerIDStr, ownerEmail, orgIDStr, orgName,
+		createdAtStr, updatedAtStr)
 }
 
 // scanProjectFromRows scans the current row from sql.Rows into a model.Project.
@@ -339,38 +317,59 @@ func (r *ProjectRepo) scanProjectFromRows(rows *sql.Rows) (*model.Project, error
 	var project model.Project
 	var idStr, namespaceIDStr, ownerNamespaceIDStr string
 	var defaultTagsStr, settingsStr string
+	var ownerIDStr, ownerEmail sql.NullString
+	var orgIDStr, orgName sql.NullString
 	var createdAtStr, updatedAtStr string
 
 	err := rows.Scan(
 		&idStr, &namespaceIDStr, &ownerNamespaceIDStr,
-		&project.Name, &project.Slug, &project.Description,
-		&defaultTagsStr, &settingsStr, &createdAtStr, &updatedAtStr,
+		&project.Name, &project.Slug, &project.Path,
+		&project.Description,
+		&defaultTagsStr, &settingsStr,
+		&project.MemoryCount, &project.EntityCount,
+		&ownerIDStr, &ownerEmail,
+		&orgIDStr, &orgName,
+		&createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("project scan rows: %w", err)
 	}
 
+	return r.populateProject(&project, idStr, namespaceIDStr, ownerNamespaceIDStr,
+		defaultTagsStr, settingsStr, ownerIDStr, ownerEmail, orgIDStr, orgName,
+		createdAtStr, updatedAtStr)
+}
+
+// populateProject parses raw scan values into a model.Project.
+func (r *ProjectRepo) populateProject(
+	project *model.Project,
+	idStr, namespaceIDStr, ownerNamespaceIDStr string,
+	defaultTagsStr, settingsStr string,
+	ownerIDStr, ownerEmail sql.NullString,
+	orgIDStr, orgName sql.NullString,
+	createdAtStr, updatedAtStr string,
+) (*model.Project, error) {
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return nil, fmt.Errorf("project scan rows parse id: %w", err)
+		return nil, fmt.Errorf("project parse id: %w", err)
 	}
 	project.ID = id
 
 	nsID, err := uuid.Parse(namespaceIDStr)
 	if err != nil {
-		return nil, fmt.Errorf("project scan rows parse namespace_id: %w", err)
+		return nil, fmt.Errorf("project parse namespace_id: %w", err)
 	}
 	project.NamespaceID = nsID
 
 	ownerNSID, err := uuid.Parse(ownerNamespaceIDStr)
 	if err != nil {
-		return nil, fmt.Errorf("project scan rows parse owner_namespace_id: %w", err)
+		return nil, fmt.Errorf("project parse owner_namespace_id: %w", err)
 	}
 	project.OwnerNamespaceID = ownerNSID
 
 	tags, err := decodeStringArray(r.db.Backend(), defaultTagsStr)
 	if err != nil {
-		return nil, fmt.Errorf("project scan rows parse default_tags: %w", err)
+		return nil, fmt.Errorf("project parse default_tags: %w", err)
 	}
 	if tags == nil {
 		tags = []string{}
@@ -379,14 +378,34 @@ func (r *ProjectRepo) scanProjectFromRows(rows *sql.Rows) (*model.Project, error
 
 	project.Settings = json.RawMessage(settingsStr)
 
+	if ownerIDStr.Valid && ownerEmail.Valid {
+		ownerID, parseErr := uuid.Parse(ownerIDStr.String)
+		if parseErr == nil {
+			project.Owner = &model.ProjectOwner{
+				ID:    ownerID,
+				Email: ownerEmail.String,
+			}
+		}
+	}
+
+	if orgIDStr.Valid && orgName.Valid {
+		oID, parseErr := uuid.Parse(orgIDStr.String)
+		if parseErr == nil {
+			project.Organization = &model.ProjectOrg{
+				ID:   oID,
+				Name: orgName.String,
+			}
+		}
+	}
+
 	project.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
 	if err != nil {
-		return nil, fmt.Errorf("project scan rows parse created_at: %w", err)
+		return nil, fmt.Errorf("project parse created_at: %w", err)
 	}
 	project.UpdatedAt, err = time.Parse(time.RFC3339, updatedAtStr)
 	if err != nil {
-		return nil, fmt.Errorf("project scan rows parse updated_at: %w", err)
+		return nil, fmt.Errorf("project parse updated_at: %w", err)
 	}
 
-	return &project, nil
+	return project, nil
 }

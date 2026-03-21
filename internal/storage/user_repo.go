@@ -349,6 +349,20 @@ func (r *UserRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// UpdatePassword sets a new password hash for the given user.
+func (r *UserRepo) UpdatePassword(ctx context.Context, id uuid.UUID, newHash string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3`
+	}
+	_, err := r.db.Exec(ctx, query, newHash, now, id.String())
+	if err != nil {
+		return fmt.Errorf("user update password: %w", err)
+	}
+	return nil
+}
+
 func (r *UserRepo) reload(ctx context.Context, user *model.User) error {
 	fetched, err := r.GetByID(ctx, user.ID)
 	if err != nil {

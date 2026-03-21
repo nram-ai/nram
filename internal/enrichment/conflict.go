@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -162,6 +163,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 			},
 			MaxTokens:   256,
 			Temperature: 0.1,
+			JSONMode:    true,
 		})
 		if err != nil {
 			// Skip this candidate on LLM error.
@@ -218,22 +220,10 @@ type conflictJSON struct {
 // statements contradict. It applies the same three-tier recovery strategy used
 // elsewhere in the enrichment package.
 func parseConflictResponse(raw string) (bool, string, error) {
+	raw = strings.TrimSpace(raw)
+
 	var result conflictJSON
-
-	// Tier 1: direct parse.
-	if err := json.Unmarshal([]byte(raw), &result); err == nil {
-		return result.Contradicts, result.Explanation, nil
-	}
-
-	// Tier 2: strip code fences.
-	stripped := stripCodeFences(raw)
-	if err := json.Unmarshal([]byte(stripped), &result); err == nil {
-		return result.Contradicts, result.Explanation, nil
-	}
-
-	// Tier 3: regex extraction.
-	block := extractJSONBlock(stripped)
-	if err := json.Unmarshal([]byte(block), &result); err != nil {
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return false, "", fmt.Errorf("unable to parse conflict JSON: %w", err)
 	}
 	return result.Contradicts, result.Explanation, nil

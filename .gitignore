@@ -10,3 +10,4 @@ ui/dist/
 ui/vite.config.js
 ui/vite.config.d.ts
 server.test
+ui/coverage/

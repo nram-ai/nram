@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   useDatabaseInfo,
   useTestDatabaseConnection,
@@ -98,6 +98,164 @@ function DataCountsCard({
 // ---------------------------------------------------------------------------
 
 type MigrationStep = "input" | "review" | "migrating" | "complete";
+
+// ---------------------------------------------------------------------------
+// Migration error display — translates raw backend errors into actionable messages
+// ---------------------------------------------------------------------------
+
+interface FriendlyError {
+  title: string;
+  description: string;
+  hint?: string;
+}
+
+function parseMigrationError(raw: string): FriendlyError {
+  const lower = raw.toLowerCase();
+
+  if (lower.includes('type "vector" does not exist') || lower.includes('42704')) {
+    return {
+      title: "pgvector extension not installed",
+      description:
+        "The PostgreSQL database is missing the pgvector extension, which is required for vector similarity search.",
+      hint: 'Run as a database superuser: CREATE EXTENSION IF NOT EXISTS vector;',
+    };
+  }
+
+  if (lower.includes("permission denied") || lower.includes("42501")) {
+    return {
+      title: "Insufficient database permissions",
+      description:
+        "The database user does not have permission to create tables or extensions.",
+      hint: "Ensure the nram database user has CREATE privileges on the target database, or run migrations as a superuser.",
+    };
+  }
+
+  if (lower.includes("connection refused") || lower.includes("could not connect")) {
+    return {
+      title: "Cannot connect to PostgreSQL",
+      description: "The database server is not reachable. Check that PostgreSQL is running and the connection URL is correct.",
+    };
+  }
+
+  if (lower.includes("password authentication failed") || lower.includes("28p01")) {
+    return {
+      title: "Authentication failed",
+      description: "The database username or password is incorrect.",
+    };
+  }
+
+  if (lower.includes("database") && lower.includes("does not exist")) {
+    return {
+      title: "Database does not exist",
+      description: "The target database has not been created yet.",
+      hint: "Create it first: CREATE DATABASE nram OWNER nram;",
+    };
+  }
+
+  if (lower.includes("dirty database")) {
+    return {
+      title: "Database is in a dirty state",
+      description:
+        "A previous migration was interrupted. The schema_migrations table has a dirty flag set.",
+      hint: "Connect to the database and run: UPDATE schema_migrations SET dirty = false;",
+    };
+  }
+
+  return {
+    title: "Migration failed",
+    description: raw.length > 300 ? raw.slice(0, 300) + "..." : raw,
+  };
+}
+
+function MigratingIndicator() {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  const timeStr =
+    minutes > 0
+      ? `${minutes}m ${seconds.toString().padStart(2, "0")}s`
+      : `${seconds}s`;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Spinner className="h-5 w-5 text-primary" />
+        <div>
+          <p className="text-sm font-medium text-foreground">
+            Migration in progress...
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Transferring data from SQLite to PostgreSQL. Do not close this page.
+          </p>
+        </div>
+        <span className="ml-auto text-xs font-mono text-muted-foreground">
+          {timeStr}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div className="h-full animate-pulse rounded-full bg-primary" />
+      </div>
+      {elapsed > 30 && (
+        <p className="text-xs text-muted-foreground">
+          Large databases may take several minutes. Schema creation and index building can be slow on first run.
+        </p>
+      )}
+      {elapsed > 120 && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          This is taking longer than expected. Check the server logs for errors. If the server process has stopped, you may need to resolve the issue and restart.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MigrationErrorDisplay({ error }: { error: string }) {
+  const parsed = useMemo(() => parseMigrationError(error), [error]);
+
+  return (
+    <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-700 dark:bg-red-900/30">
+      <div className="flex items-start gap-3">
+        <svg
+          className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600 dark:text-red-400"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+        <div className="space-y-1">
+          <p className="text-sm font-semibold text-red-800 dark:text-red-200">
+            {parsed.title}
+          </p>
+          <p className="text-sm text-red-700 dark:text-red-300">
+            {parsed.description}
+          </p>
+          {parsed.hint && (
+            <div className="mt-2 rounded-md border border-red-200 bg-red-100/50 px-3 py-2 dark:border-red-800 dark:bg-red-950/50">
+              <p className="text-xs font-medium text-red-800 dark:text-red-300">
+                How to fix:
+              </p>
+              <code className="mt-1 block text-xs text-red-700 dark:text-red-400">
+                {parsed.hint}
+              </code>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function SQLiteView({
   filePath,
@@ -442,27 +600,7 @@ function SQLiteView({
                 </div>
               </div>
 
-              {migrationError && (
-                <div className="flex items-start gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-900/30 dark:text-red-300">
-                  <svg
-                    className="mt-0.5 h-4 w-4 flex-shrink-0"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                  <span>
-                    <span className="font-medium">Migration failed: </span>
-                    {migrationError}
-                  </span>
-                </div>
-              )}
+              {migrationError && <MigrationErrorDisplay error={migrationError} />}
 
               <div className="flex gap-2">
                 <button
@@ -485,23 +623,7 @@ function SQLiteView({
 
           {/* Step 3: Migrating */}
           {step === "migrating" && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <Spinner className="h-5 w-5 text-primary" />
-                <div>
-                  <p className="text-sm font-medium text-foreground">
-                    Migration in progress...
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Transferring data from SQLite to PostgreSQL. Do not close
-                    this page.
-                  </p>
-                </div>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
-                <div className="h-full animate-pulse rounded-full bg-primary" />
-              </div>
-            </div>
+            <MigratingIndicator />
           )}
 
           {/* Step 4: Complete */}

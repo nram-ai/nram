@@ -118,7 +118,7 @@ func TestSweep_ExpiresMemoriesPastTTL(t *testing.T) {
 	store := newMockLifecycleStore()
 	store.expired = []model.Memory{makeExpiredMemory(id1), makeExpiredMemory(id2)}
 
-	svc := NewLifecycleService(store, nil, LifecycleConfig{})
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{})
 
 	expired, purged, err := svc.Sweep(context.Background())
 	if err != nil {
@@ -142,7 +142,7 @@ func TestSweep_PurgesMemoriesPastPurgeAfter(t *testing.T) {
 	store := newMockLifecycleStore()
 	store.purgeable = []model.Memory{makePurgeableMemory(id1), makePurgeableMemory(id2)}
 
-	svc := NewLifecycleService(store, nil, LifecycleConfig{})
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{})
 
 	expired, purged, err := svc.Sweep(context.Background())
 	if err != nil {
@@ -161,7 +161,7 @@ func TestSweep_PurgesMemoriesPastPurgeAfter(t *testing.T) {
 
 func TestSweep_NoExpiredOrPurgeable(t *testing.T) {
 	store := newMockLifecycleStore()
-	svc := NewLifecycleService(store, nil, LifecycleConfig{})
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{})
 
 	expired, purged, err := svc.Sweep(context.Background())
 	if err != nil {
@@ -179,7 +179,7 @@ func TestSweep_VectorStoreCleanupOnPurge(t *testing.T) {
 	store.purgeable = []model.Memory{makePurgeableMemory(id1)}
 
 	vectors := newMockLifecycleVectorDeleter()
-	svc := NewLifecycleService(store, vectors, LifecycleConfig{})
+	svc := NewLifecycleService(store, vectors, nil, LifecycleConfig{})
 
 	_, purged, err := svc.Sweep(context.Background())
 	if err != nil {
@@ -199,7 +199,7 @@ func TestSweep_NilVectorStoreNoPanic(t *testing.T) {
 	store := newMockLifecycleStore()
 	store.purgeable = []model.Memory{makePurgeableMemory(id1)}
 
-	svc := NewLifecycleService(store, nil, LifecycleConfig{})
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{})
 
 	_, purged, err := svc.Sweep(context.Background())
 	if err != nil {
@@ -215,7 +215,7 @@ func TestSweep_NilVectorStoreNoPanic(t *testing.T) {
 
 func TestStartStop_NoPanicOrHang(t *testing.T) {
 	store := newMockLifecycleStore()
-	svc := NewLifecycleService(store, nil, LifecycleConfig{
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{
 		SweepInterval: 50 * time.Millisecond,
 	})
 
@@ -241,7 +241,7 @@ func TestStartStop_NoPanicOrHang(t *testing.T) {
 
 func TestConfigDefaults(t *testing.T) {
 	store := newMockLifecycleStore()
-	svc := NewLifecycleService(store, nil, LifecycleConfig{})
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{})
 
 	if svc.config.SweepInterval != 5*time.Minute {
 		t.Fatalf("expected default SweepInterval 5m, got %v", svc.config.SweepInterval)
@@ -256,7 +256,7 @@ func TestConfigDefaults(t *testing.T) {
 
 func TestConfigCustom(t *testing.T) {
 	store := newMockLifecycleStore()
-	svc := NewLifecycleService(store, nil, LifecycleConfig{
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{
 		SweepInterval:     10 * time.Minute,
 		BatchSize:         50,
 		DefaultPurgeDelay: 7 * 24 * time.Hour,
@@ -277,7 +277,7 @@ func TestSweep_ListExpiredError(t *testing.T) {
 	store := newMockLifecycleStore()
 	store.expiredErr = fmt.Errorf("db connection failed")
 
-	svc := NewLifecycleService(store, nil, LifecycleConfig{})
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{})
 
 	_, _, err := svc.Sweep(context.Background())
 	if err == nil {
@@ -289,7 +289,7 @@ func TestSweep_ListPurgeableError(t *testing.T) {
 	store := newMockLifecycleStore()
 	store.purgeErr = fmt.Errorf("db connection failed")
 
-	svc := NewLifecycleService(store, nil, LifecycleConfig{})
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{})
 
 	expired, _, err := svc.Sweep(context.Background())
 	if err == nil {
@@ -309,7 +309,7 @@ func TestSweep_SoftDeleteErrorSkipsMemory(t *testing.T) {
 	store.expired = []model.Memory{makeExpiredMemory(id1), makeExpiredMemory(id2)}
 	store.softErr = fmt.Errorf("soft delete failed")
 
-	svc := NewLifecycleService(store, nil, LifecycleConfig{})
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{})
 
 	expired, _, err := svc.Sweep(context.Background())
 	if err != nil {
@@ -328,7 +328,7 @@ func TestSweep_HardDeleteErrorSkipsMemory(t *testing.T) {
 	store.hardErr = fmt.Errorf("hard delete failed")
 
 	vectors := newMockLifecycleVectorDeleter()
-	svc := NewLifecycleService(store, vectors, LifecycleConfig{})
+	svc := NewLifecycleService(store, vectors, nil, LifecycleConfig{})
 
 	_, purged, err := svc.Sweep(context.Background())
 	if err != nil {
@@ -350,7 +350,7 @@ func TestSweep_BatchSizeRespected(t *testing.T) {
 		store.expired = append(store.expired, makeExpiredMemory(uuid.New()))
 	}
 
-	svc := NewLifecycleService(store, nil, LifecycleConfig{
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{
 		BatchSize: 3,
 	})
 
@@ -372,7 +372,7 @@ func TestSweep_BothExpiredAndPurgeable(t *testing.T) {
 	store.purgeable = []model.Memory{makePurgeableMemory(purgeID)}
 
 	vectors := newMockLifecycleVectorDeleter()
-	svc := NewLifecycleService(store, vectors, LifecycleConfig{})
+	svc := NewLifecycleService(store, vectors, nil, LifecycleConfig{})
 
 	expired, purged, err := svc.Sweep(context.Background())
 	if err != nil {

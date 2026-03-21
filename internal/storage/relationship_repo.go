@@ -41,25 +41,51 @@ func (r *RelationshipRepo) Create(ctx context.Context, rel *model.Relationship) 
 		sourceMemory = rel.SourceMemory.String()
 	}
 
-	query := `INSERT INTO relationships (id, namespace_id, source_id, target_id, relation, weight, properties, valid_from, valid_until, source_memory)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO relationships (id, namespace_id, source_id, target_id, relation, weight, properties, valid_from, valid_until, source_memory)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
-	}
-
 	validFrom := rel.ValidFrom
 	if validFrom.IsZero() {
 		validFrom = time.Now().UTC()
 	}
 
-	_, err := r.db.Exec(ctx, query,
-		rel.ID.String(), rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
-		rel.Relation, rel.Weight, string(rel.Properties),
-		validFrom.UTC().Format(time.RFC3339), validUntil, sourceMemory,
-	)
-	if err != nil {
-		return fmt.Errorf("relationship create: %w", err)
+	// Use RETURNING (Postgres) or a follow-up SELECT (SQLite) to get the
+	// actual row ID, which may differ from rel.ID on conflict.
+	if r.db.Backend() == BackendPostgres {
+		query := `INSERT INTO relationships (id, namespace_id, source_id, target_id, relation, weight, properties, valid_from, valid_until, source_memory)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT(namespace_id, source_id, target_id, relation, valid_from) DO UPDATE SET
+				weight = EXCLUDED.weight, properties = EXCLUDED.properties
+			RETURNING id`
+		var actualID string
+		err := r.db.QueryRow(ctx, query,
+			rel.ID.String(), rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
+			rel.Relation, rel.Weight, string(rel.Properties),
+			validFrom.UTC().Format(time.RFC3339), validUntil, sourceMemory,
+		).Scan(&actualID)
+		if err != nil {
+			return fmt.Errorf("relationship create: %w", err)
+		}
+		rel.ID, _ = uuid.Parse(actualID)
+	} else {
+		query := `INSERT INTO relationships (id, namespace_id, source_id, target_id, relation, weight, properties, valid_from, valid_until, source_memory)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(namespace_id, source_id, target_id, relation, valid_from) DO UPDATE SET
+				weight = excluded.weight, properties = excluded.properties`
+		_, err := r.db.Exec(ctx, query,
+			rel.ID.String(), rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
+			rel.Relation, rel.Weight, string(rel.Properties),
+			validFrom.UTC().Format(time.RFC3339), validUntil, sourceMemory,
+		)
+		if err != nil {
+			return fmt.Errorf("relationship create: %w", err)
+		}
+		// On conflict, SQLite doesn't return the existing ID. Look it up.
+		lookupQuery := `SELECT id FROM relationships WHERE namespace_id = ? AND source_id = ? AND target_id = ? AND relation = ? AND valid_from = ?`
+		var existingID string
+		if err := r.db.QueryRow(ctx, lookupQuery,
+			rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
+			rel.Relation, validFrom.UTC().Format(time.RFC3339),
+		).Scan(&existingID); err == nil {
+			rel.ID, _ = uuid.Parse(existingID)
+		}
 	}
 
 	return r.reload(ctx, rel)
@@ -209,6 +235,36 @@ func (r *RelationshipRepo) ListByEntity(ctx context.Context, entityID uuid.UUID)
 	defer rows.Close()
 
 	return r.scanRelationships(rows)
+}
+
+// DeleteBySourceMemory removes all relationships where source_memory matches the given memory ID.
+func (r *RelationshipRepo) DeleteBySourceMemory(ctx context.Context, memoryID uuid.UUID) error {
+	query := `DELETE FROM relationships WHERE source_memory = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM relationships WHERE source_memory = $1`
+	}
+	_, err := r.db.Exec(ctx, query, memoryID.String())
+	if err != nil {
+		return fmt.Errorf("relationship delete by source memory: %w", err)
+	}
+	return nil
+}
+
+// DeleteDangling removes relationships where the source or target entity no longer exists.
+// Returns the number of relationships deleted.
+func (r *RelationshipRepo) DeleteDangling(ctx context.Context) (int64, error) {
+	query := `DELETE FROM relationships WHERE
+		source_id NOT IN (SELECT id FROM entities) OR
+		target_id NOT IN (SELECT id FROM entities)`
+	result, err := r.db.Exec(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("relationship delete dangling: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("relationship delete dangling rows: %w", err)
+	}
+	return rows, nil
 }
 
 // reload fetches the relationship by ID and populates the struct in place.

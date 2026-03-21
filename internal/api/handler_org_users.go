@@ -177,8 +177,13 @@ func handleOrgCreateUser(w http.ResponseWriter, r *http.Request, store OrgUserSt
 		return
 	}
 
-	if strings.TrimSpace(body.Email) == "" {
+	body.Email = strings.TrimSpace(body.Email)
+	if body.Email == "" {
 		WriteError(w, ErrBadRequest("email is required"))
+		return
+	}
+	if !isValidEmail(body.Email) {
+		WriteError(w, ErrBadRequest("invalid email address"))
 		return
 	}
 

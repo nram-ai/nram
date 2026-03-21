@@ -203,6 +203,7 @@ func main() {
 	)
 	forgetSvc := service.NewForgetService(
 		memoryRepo, projectRepo, vectorStore,
+		relationshipRepo, lineageRepo, enrichmentQueueRepo, tokenUsageRepo,
 	)
 	batchGetSvc := service.NewBatchGetService(memoryRepo, projectRepo)
 	batchStoreSvc := service.NewBatchStoreService(
@@ -220,7 +221,12 @@ func main() {
 	_ = service.NewSettingsService(settingsRepo)
 
 	// Create lifecycle service for TTL expiry and purge sweeps.
-	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, service.LifecycleConfig{})
+	// Graph pruning is only available on Postgres (entities/relationships are Postgres-only).
+	var graphPruner service.GraphPruner
+	if db.Backend() == storage.BackendPostgres {
+		graphPruner = service.NewGraphPruner(entityRepo, relationshipRepo)
+	}
+	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, service.LifecycleConfig{})
 	lifecycleSvc.Start()
 	defer lifecycleSvc.Stop()
 
@@ -344,12 +350,13 @@ func main() {
 		MeAPIKeyRevoke:      api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
 		MeOAuthClients:      api.NewMeOAuthClientsHandler(oauthRepo),
 		MeOAuthClientRevoke: api.NewMeOAuthClientRevokeHandler(oauthRepo),
+		MeChangePassword:    api.NewMeChangePasswordHandler(userRepo),
 
 		// Org-scoped handlers
 		OrgRecall:   api.NewOrgRecallHandler(recallSvc, orgRepo, userRepo),
 		OrgUsers:    api.NewOrgUsersHandler(api.OrgUserConfig{Store: userAdminStore}),
 		OrgProjects: api.NewOrgProjectsHandler(api.OrgProjectConfig{Store: projectAdminStore}),
-		OrgIdP:      api.NewOrgIdPHandler(),
+		OrgIdP:      api.NewOrgIdPHandler(oauthRepo),
 
 		// SSE events
 		Events: api.NewEventsHandler(eventBus),

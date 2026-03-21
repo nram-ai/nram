@@ -3,6 +3,7 @@ import {
   adminAPI,
   meAPI,
   orgAPI,
+  changePassword,
   memoryAPI,
   healthAPI,
   type SetupRequest,
@@ -743,6 +744,13 @@ export function useCreateMeOAuthClient() {
   });
 }
 
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (data: { currentPassword: string; newPassword: string }) =>
+      changePassword(data.currentPassword, data.newPassword),
+  });
+}
+
 export function useRevokeMeOAuthClient() {
   const qc = useQueryClient();
   return useMutation({
@@ -878,5 +886,35 @@ export function useOrgUsage(orgId: string) {
     queryKey: ["org", orgId, "usage"],
     queryFn: () => orgAPI.getUsage(orgId),
     enabled: !!orgId,
+  });
+}
+
+export function useOrgIdPConfigs(orgId: string) {
+  return useQuery({
+    queryKey: ["org-idp", orgId],
+    queryFn: () => orgAPI.listOrgIdPs(orgId),
+    enabled: !!orgId,
+  });
+}
+
+export function useCreateOrgIdPConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { orgId: string } & CreateIdPConfigRequest) =>
+      orgAPI.configureIdP(data.orgId, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["org-idp"] });
+    },
+  });
+}
+
+export function useDeleteOrgIdPConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (params: { orgId: string; id: string }) =>
+      orgAPI.deleteOrgIdP(params.orgId, params.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["org-idp"] });
+    },
   });
 }

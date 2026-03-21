@@ -1,6 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useProjects, useGraph } from "../hooks/useApi";
+import { useProjects, useMeProjects, useGraph } from "../hooks/useApi";
+import { useAuth } from "../context/AuthContext";
 import type { GraphEntity } from "../api/client";
 
 const ENTITY_TYPE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
@@ -142,11 +143,21 @@ function DetailPanel({ entity, connections, onClose }: DetailPanelProps) {
 
 function EntityBrowser() {
   const navigate = useNavigate();
-  const { data: projects, isLoading: projectsLoading } = useProjects();
+  const auth = useAuth();
+  const adminProjects = useProjects();
+  const meProjects = useMeProjects();
+  const projectsQuery = auth.isAdmin ? adminProjects : meProjects;
+  const { data: projects, isLoading: projectsLoading } = projectsQuery;
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [searchText, setSearchText] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
+
+  useEffect(() => {
+    if (!selectedProjectId && projects && projects.length > 0) {
+      setSelectedProjectId(projects[0].id);
+    }
+  }, [projects, selectedProjectId]);
 
   const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 
@@ -183,7 +194,7 @@ function EntityBrowser() {
         (e) =>
           e.name.toLowerCase().includes(lower) ||
           e.canonical.toLowerCase().includes(lower) ||
-          e.aliases.some((a) => a.toLowerCase().includes(lower)),
+          (e.aliases ?? []).some((a) => a.toLowerCase().includes(lower)),
       );
     }
 

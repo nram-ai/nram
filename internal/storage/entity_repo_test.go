@@ -245,9 +245,9 @@ func TestEntityRepo_Upsert_Update(t *testing.T) {
 		if entity2.Name != "John D." {
 			t.Fatalf("expected name 'John D.', got %q", entity2.Name)
 		}
-		// MentionCount should be updated
-		if entity2.MentionCount != 5 {
-			t.Fatalf("expected mention_count 5, got %d", entity2.MentionCount)
+		// MentionCount should be incremented (1 from first insert + 1 from second upsert = 2)
+		if entity2.MentionCount != 2 {
+			t.Fatalf("expected mention_count 2, got %d", entity2.MentionCount)
 		}
 		// Properties should be updated
 		if !jsonEqual(string(entity2.Properties), `{"role":"manager"}`) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nram-ai/nram/internal/auth"
@@ -90,8 +91,13 @@ func NewAdminSetupHandler(cfg SetupConfig) http.HandlerFunc {
 		}
 
 		// Validate fields.
+		req.Email = strings.TrimSpace(req.Email)
 		if req.Email == "" {
 			WriteError(w, ErrBadRequest("email is required"))
+			return
+		}
+		if !isValidEmail(req.Email) {
+			WriteError(w, ErrBadRequest("invalid email address"))
 			return
 		}
 		if len(req.Password) < 8 {

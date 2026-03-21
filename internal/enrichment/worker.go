@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -110,8 +109,17 @@ Text:
 
 type extractedFact struct {
 	Content    string   `json:"content"`
+	Fact       string   `json:"fact"` // alternate field name some LLMs use
 	Confidence float64  `json:"confidence"`
 	Tags       []string `json:"tags"`
+}
+
+// text returns the fact content, preferring "content" over "fact".
+func (f extractedFact) text() string {
+	if f.Content != "" {
+		return f.Content
+	}
+	return f.Fact
 }
 
 type extractedEntity struct {
@@ -339,7 +347,9 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 			NamespaceID: mem.NamespaceID,
 			Content:     fact.Content,
 			Confidence:  fact.Confidence,
-			Tags:        fact.Tags,
+			Tags:        mergeTags(mem.Tags, fact.Tags),
+			Source:      mem.Source,
+			Importance:  0.5,
 			Enriched:    false,
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
@@ -430,7 +440,7 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 				Relation:     rel.Relation,
 				Weight:       rel.Weight,
 				SourceMemory: &memID,
-				ValidFrom:    time.Now().UTC(),
+				ValidFrom:    mem.CreatedAt,
 				CreatedAt:    time.Now().UTC(),
 			}
 			if err := wp.relationships.Create(ctx, r); err != nil {
@@ -479,6 +489,7 @@ func (wp *WorkerPool) extractFacts(
 		},
 		MaxTokens:   2048,
 		Temperature: 0.2,
+		JSONMode:    true,
 	})
 	if err != nil {
 		return nil, nil, "", "", fmt.Errorf("fact LLM call: %w", err)
@@ -503,6 +514,7 @@ func (wp *WorkerPool) extractEntities(
 		},
 		MaxTokens:   2048,
 		Temperature: 0.2,
+		JSONMode:    true,
 	})
 	if err != nil {
 		return nil, nil, "", "", fmt.Errorf("entity LLM call: %w", err)
@@ -516,108 +528,73 @@ func (wp *WorkerPool) extractEntities(
 }
 
 // ---------------------------------------------------------------------------
-// Response parsing with three-tier recovery
+// Response parsing (JSON mode guarantees valid JSON from the LLM)
 // ---------------------------------------------------------------------------
 
-// stripCodeFences removes optional markdown code fences from LLM output.
-func stripCodeFences(s string) string {
-	s = strings.TrimSpace(s)
-	re := regexp.MustCompile("(?s)^```(?:json)?\\s*\n?(.*?)\\s*```$")
-	if m := re.FindStringSubmatch(s); len(m) == 2 {
-		return strings.TrimSpace(m[1])
-	}
-	return s
-}
-
-// extractJSONBlock uses a regex to find the first JSON array or object in the
-// string, acting as a last-resort fallback.
-func extractJSONBlock(s string) string {
-	// Try array first.
-	reArr := regexp.MustCompile(`(?s)(\[.*\])`)
-	if m := reArr.FindString(s); m != "" {
-		return m
-	}
-	// Try object.
-	reObj := regexp.MustCompile(`(?s)(\{.*\})`)
-	if m := reObj.FindString(s); m != "" {
-		return m
-	}
-	return s
-}
-
-// parseFactResponse applies multi-tier recovery to parse a fact extraction
-// response. It handles: structured fact objects, plain string arrays, code
-// fences, and regex-extracted JSON blocks.
+// parseFactResponse parses a fact extraction response. With JSON mode enabled
+// the LLM is constrained to produce valid JSON, so only direct unmarshal with
+// a string-array fallback is needed.
 func parseFactResponse(raw string) ([]extractedFact, error) {
-	candidates := []string{
-		raw,
-		stripCodeFences(raw),
-		extractJSONBlock(stripCodeFences(raw)),
+	raw = strings.TrimSpace(raw)
+
+	// Try array of structured facts.
+	var facts []extractedFact
+	if err := json.Unmarshal([]byte(raw), &facts); err == nil && len(facts) > 0 {
+		for i := range facts {
+			facts[i].Content = facts[i].text()
+		}
+		return facts, nil
 	}
 
-	for _, c := range candidates {
-		c = strings.TrimSpace(c)
-		if c == "" {
-			continue
-		}
-
-		// Try structured facts first.
-		var facts []extractedFact
-		if err := json.Unmarshal([]byte(c), &facts); err == nil {
-			return facts, nil
-		}
-
-		// Fallback: LLM returned an array of plain strings.
-		var strings []string
-		if err := json.Unmarshal([]byte(c), &strings); err == nil {
-			facts = make([]extractedFact, len(strings))
-			for i, s := range strings {
-				facts[i] = extractedFact{Content: s, Confidence: 0.8}
-			}
-			return facts, nil
-		}
+	// Single fact object instead of array.
+	var single extractedFact
+	if err := json.Unmarshal([]byte(raw), &single); err == nil && single.text() != "" {
+		single.Content = single.text()
+		return []extractedFact{single}, nil
 	}
 
-	return nil, fmt.Errorf("unable to parse fact JSON from LLM response")
+	// Wrapper object with a "facts" key.
+	var wrapper struct {
+		Facts []extractedFact `json:"facts"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapper); err == nil && len(wrapper.Facts) > 0 {
+		for i := range wrapper.Facts {
+			wrapper.Facts[i].Content = wrapper.Facts[i].text()
+		}
+		return wrapper.Facts, nil
+	}
+
+	// Plain string array.
+	var strs []string
+	if err := json.Unmarshal([]byte(raw), &strs); err == nil && len(strs) > 0 {
+		facts = make([]extractedFact, len(strs))
+		for i, s := range strs {
+			facts[i] = extractedFact{Content: s, Confidence: 0.8}
+		}
+		return facts, nil
+	}
+
+	preview := raw
+	if len(preview) > 200 {
+		preview = preview[:200] + "..."
+	}
+	return nil, fmt.Errorf("unable to parse fact JSON from LLM response: %q", preview)
 }
 
-// parseEntityResponse applies multi-tier recovery to parse an entity/relationship
-// extraction response. Handles structured objects, code fences, regex-extracted
-// blocks, and NDJSON (newline-delimited) fragments.
+// parseEntityResponse parses an entity/relationship extraction response.
+// With JSON mode enabled the LLM is constrained to produce valid JSON.
 func parseEntityResponse(raw string) (*entityExtractionResult, error) {
-	candidates := []string{
-		raw,
-		stripCodeFences(raw),
-		extractJSONBlock(stripCodeFences(raw)),
+	raw = strings.TrimSpace(raw)
+
+	var result entityExtractionResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		preview := raw
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		return nil, fmt.Errorf("unable to parse entity JSON from LLM response: %q", preview)
 	}
-
-	for _, c := range candidates {
-		c = strings.TrimSpace(c)
-		if c == "" {
-			continue
-		}
-
-		var result entityExtractionResult
-		if err := json.Unmarshal([]byte(c), &result); err == nil {
-			return &result, nil
-		}
-	}
-
-	// Last resort: try to find any JSON object in the response via line-by-line
-	// scanning. Some models output multiple JSON fragments separated by newlines.
-	stripped := stripCodeFences(raw)
-	for _, line := range strings.Split(stripped, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "{") {
-			continue
-		}
-		var result entityExtractionResult
-		if err := json.Unmarshal([]byte(line), &result); err == nil && len(result.Entities) > 0 {
-			return &result, nil
-		}
-	}
-
-	return nil, fmt.Errorf("unable to parse entity JSON from LLM response")
+	return &result, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -645,4 +622,22 @@ func (wp *WorkerPool) recordUsage(
 	if err := wp.tokenUsage.Record(ctx, u); err != nil {
 		slog.Error("enrichment: record token usage", "operation", operation, "err", err)
 	}
+}
+
+func mergeTags(parent, child []string) []string {
+	seen := make(map[string]bool, len(parent)+len(child))
+	result := make([]string, 0, len(parent)+len(child))
+	for _, t := range parent {
+		if !seen[t] {
+			seen[t] = true
+			result = append(result, t)
+		}
+	}
+	for _, t := range child {
+		if !seen[t] {
+			seen[t] = true
+			result = append(result, t)
+		}
+	}
+	return result
 }

@@ -245,11 +245,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	if s.embedProvider != nil {
 		ep := s.embedProvider()
 		if ep != nil && s.vectorSearch != nil {
-			dims := ep.Dimensions()
-			dim := 0
-			if len(dims) > 0 {
-				dim = dims[0]
-			}
+			dim := bestEmbeddingDimension(ep.Dimensions())
 
 			embReq := &provider.EmbeddingRequest{
 				Input:     []string{req.Query},

@@ -21,6 +21,17 @@ type VectorUpsertItem struct {
 	Dimension   int       `json:"dimension"`
 }
 
+// SupportedVectorDimensions is the set of embedding dimensions that the vector
+// storage backends support. Both pgvector and Qdrant use this same set.
+var SupportedVectorDimensions = map[int]bool{
+	384:  true,
+	512:  true,
+	768:  true,
+	1024: true,
+	1536: true,
+	3072: true,
+}
+
 // VectorStore abstracts vector storage backends (pgvector, SQLite brute-force, Qdrant).
 type VectorStore interface {
 	// Upsert inserts or updates a single vector associated with a memory.

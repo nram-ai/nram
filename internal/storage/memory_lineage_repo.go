@@ -107,6 +107,20 @@ func (r *MemoryLineageRepo) FindConflicts(ctx context.Context, memoryID uuid.UUI
 	return r.scanLineages(rows)
 }
 
+// DeleteByMemoryID removes all lineage records where the given memory is either
+// the child (memory_id) or the parent (parent_id).
+func (r *MemoryLineageRepo) DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error {
+	query := `DELETE FROM memory_lineage WHERE memory_id = ? OR parent_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM memory_lineage WHERE memory_id = $1 OR parent_id = $2`
+	}
+	_, err := r.db.Exec(ctx, query, memoryID.String(), memoryID.String())
+	if err != nil {
+		return fmt.Errorf("lineage delete by memory: %w", err)
+	}
+	return nil
+}
+
 // reload fetches the lineage by ID and populates the struct in place.
 func (r *MemoryLineageRepo) reload(ctx context.Context, lineage *model.MemoryLineage) error {
 	fetched, err := r.GetByID(ctx, lineage.ID)

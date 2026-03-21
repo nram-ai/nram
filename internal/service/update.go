@@ -135,11 +135,7 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 	if contentChanged && s.embedProvider != nil {
 		ep := s.embedProvider()
 		if ep != nil {
-			dims := ep.Dimensions()
-			dim := 0
-			if len(dims) > 0 {
-				dim = dims[0]
-			}
+			dim := bestEmbeddingDimension(ep.Dimensions())
 
 			embReq := &provider.EmbeddingRequest{
 				Input:     []string{mem.Content},
