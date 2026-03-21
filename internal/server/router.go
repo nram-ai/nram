@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -118,6 +119,18 @@ func handler(h http.HandlerFunc) http.HandlerFunc {
 // NewRouter constructs the chi router with all middleware and route groups.
 func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	r := chi.NewRouter()
+
+	// Request logging — temporary debug middleware to trace all incoming requests.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("[HTTP] %s %s from=%s host=%q content-type=%q accept=%q auth=%t",
+				r.Method, r.URL.Path, r.RemoteAddr, r.Host,
+				r.Header.Get("Content-Type"),
+				r.Header.Get("Accept"),
+				r.Header.Get("Authorization") != "")
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	// Global middleware applied to all routes: panic recovery and metrics.
 	r.Use(api.ErrorMiddleware)
