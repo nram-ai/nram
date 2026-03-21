@@ -23,6 +23,7 @@ func newTestOAuthClient(t *testing.T, ctx context.Context, repo *OAuthRepo, user
 		RedirectURIs:   []string{"https://example.com/callback"},
 		GrantTypes:     []string{"authorization_code", "refresh_token"},
 		OrgID:          &user.OrgID,
+		UserID:         &user.ID,
 		AutoRegistered: false,
 	}
 	if err := repo.CreateClient(ctx, client); err != nil {

@@ -262,6 +262,8 @@ func handleCreateOAuthClient(w http.ResponseWriter, r *http.Request, clients OAu
 		Name:         body.Name,
 		RedirectURIs: body.RedirectURIs,
 		GrantTypes:   body.GrantTypes,
+		UserID:       &ac.UserID,
+		OrgID:        &ac.OrgID,
 	}
 
 	if err := clients.CreateClient(r.Context(), client); err != nil {

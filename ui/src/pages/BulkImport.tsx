@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useProjects, useMeProjects, useStoreMemory } from "../hooks/useApi";
+import { useMeProjects, useStoreMemory } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
 import type { Project, StoreMemoryRequest } from "../api/client";
 
@@ -1024,10 +1024,8 @@ function BulkImport() {
   });
   const [selectedProject, setSelectedProject] = useState("");
 
-  const { isAdmin, canWrite } = useAuth();
-  const { data: adminProjects } = useProjects();
-  const { data: meProjectsData } = useMeProjects();
-  const projects = isAdmin ? adminProjects : meProjectsData;
+  const { canWrite } = useAuth();
+  const { data: projects } = useMeProjects();
 
   const handleFileParsed = useCallback(
     (f: File, recs: ParsedRecord[], fmt: DetectedFormat, flds: string[]) => {

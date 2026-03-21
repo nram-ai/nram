@@ -100,21 +100,21 @@ func TestAdminUsageAllFilters(t *testing.T) {
 	h := NewAdminUsageHandler(UsageConfig{Store: store})
 
 	orgID := uuid.New()
-	userID := uuid.New()
 	projectID := uuid.New()
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
-	url := "/v1/admin/usage?org=" + orgID.String() +
-		"&user=" + userID.String() +
-		"&project=" + projectID.String() +
+	// Admin can filter by project, from, to, group_by.
+	// ?org= and ?user= are no longer accepted (admins are org-scoped via auth context).
+	url := "/v1/admin/usage?" +
+		"project=" + projectID.String() +
 		"&from=" + from.Format(time.RFC3339) +
 		"&to=" + to.Format(time.RFC3339) +
 		"&group_by=user"
 
 	req := httptest.NewRequest(http.MethodGet, url, nil)
-	// Inject admin auth context so ?org= query param is honoured.
-	ac := &auth.AuthContext{UserID: uuid.New(), Role: auth.RoleAdministrator}
+	// Admin with org — scoped to their own org automatically.
+	ac := &auth.AuthContext{UserID: uuid.New(), OrgID: orgID, Role: auth.RoleAdministrator}
 	req = req.WithContext(auth.WithContext(req.Context(), ac))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -124,10 +124,10 @@ func TestAdminUsageAllFilters(t *testing.T) {
 	}
 
 	if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != orgID {
-		t.Errorf("expected OrgID %s, got %v", orgID, store.lastFilter.OrgID)
+		t.Errorf("expected OrgID %s (from auth context), got %v", orgID, store.lastFilter.OrgID)
 	}
-	if store.lastFilter.UserID == nil || *store.lastFilter.UserID != userID {
-		t.Errorf("expected UserID %s, got %v", userID, store.lastFilter.UserID)
+	if store.lastFilter.UserID != nil {
+		t.Errorf("expected nil UserID for admin, got %v", store.lastFilter.UserID)
 	}
 	if store.lastFilter.ProjectID == nil || *store.lastFilter.ProjectID != projectID {
 		t.Errorf("expected ProjectID %s, got %v", projectID, store.lastFilter.ProjectID)

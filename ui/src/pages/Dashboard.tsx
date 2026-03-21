@@ -2,7 +2,6 @@ import { useState, useMemo } from "react";
 import {
   useDashboard,
   useActivity,
-  useProjects,
   useMeProjects,
   useProviderSlots,
   useStoreMemory,
@@ -493,9 +492,7 @@ function Dashboard() {
   const auth = useAuth();
   const dashboard = useDashboard();
   const activity = useActivity(20);
-  const adminProjects = useProjects();
-  const meProjects = useMeProjects();
-  const projects = auth.isAdmin ? adminProjects : meProjects;
+  const projects = useMeProjects();
   const providerSlots = useProviderSlots();
 
   const dashData = dashboard.data;

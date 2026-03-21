@@ -81,6 +81,20 @@ func (s *rrEnrichmentStore) IsPaused(_ context.Context) (bool, error) {
 	return false, nil
 }
 
+type rrOrgIdPStore struct{}
+
+func (s *rrOrgIdPStore) ListIdPsByOrg(_ context.Context, _ uuid.UUID) ([]model.OAuthIdPConfig, error) {
+	return nil, nil
+}
+
+func (s *rrOrgIdPStore) CreateIdP(_ context.Context, _ *model.OAuthIdPConfig) error {
+	return nil
+}
+
+func (s *rrOrgIdPStore) DeleteIdPByOrg(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
 type rrOrgAdminStore struct {
 	db storage.DB
 }
@@ -384,7 +398,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		OrgRecall:   api.NewOrgRecallHandler(recallSvc, orgLookup, userLookup),
 		OrgUsers:    api.NewOrgUsersHandler(api.OrgUserConfig{Store: orgUserStore}),
 		OrgProjects: api.NewOrgProjectsHandler(api.OrgProjectConfig{Store: orgProjectStore}),
-		OrgIdP:      api.NewOrgIdPHandler(),
+		OrgIdP:      api.NewOrgIdPHandler(&rrOrgIdPStore{}),
 
 		AdminDashboard: api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashStore}),
 		AdminActivity:  api.NewAdminActivityHandler(api.DashboardConfig{Store: dashStore}),
@@ -1212,19 +1226,22 @@ func TestRouteRestructure_OrgProjects_MethodNotAllowed(t *testing.T) {
 // Test: Org IdP — Non-GET methods return 501
 // ---------------------------------------------------------------------------
 
-func TestRouteRestructure_OrgIdP_NotImplemented(t *testing.T) {
+func TestRouteRestructure_OrgIdP_Implemented(t *testing.T) {
 	env := newRRTestEnv(t)
 	orgAID := env.OrgA.ID
 	baseURL := fmt.Sprintf("%s/v1/orgs/%s/idp", env.Server.URL, orgAID)
 
-	methods := []string{"POST", "PUT", "DELETE"}
+	// GET should return 200 with an empty list
+	t.Run("GET", func(t *testing.T) {
+		resp := rbacDoRequest(t, "GET", baseURL, env.Admin.JWT, nil)
+		rbacExpectStatus(t, resp, http.StatusOK)
+	})
 
-	for _, method := range methods {
-		t.Run(method, func(t *testing.T) {
-			resp := rbacDoRequest(t, method, baseURL, env.Admin.JWT, nil)
-			rbacExpectStatus(t, resp, http.StatusNotImplemented)
-		})
-	}
+	// PUT is not a supported method, expect 405
+	t.Run("PUT", func(t *testing.T) {
+		resp := rbacDoRequest(t, "PUT", baseURL, env.Admin.JWT, nil)
+		rbacExpectStatus(t, resp, http.StatusMethodNotAllowed)
+	})
 }
 
 // ---------------------------------------------------------------------------

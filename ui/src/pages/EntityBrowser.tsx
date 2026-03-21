@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useProjects, useMeProjects, useGraph } from "../hooks/useApi";
-import { useAuth } from "../context/AuthContext";
+import { useMeProjects, useGraph } from "../hooks/useApi";
 import type { GraphEntity } from "../api/client";
 
 const ENTITY_TYPE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
@@ -143,10 +142,7 @@ function DetailPanel({ entity, connections, onClose }: DetailPanelProps) {
 
 function EntityBrowser() {
   const navigate = useNavigate();
-  const auth = useAuth();
-  const adminProjects = useProjects();
-  const meProjects = useMeProjects();
-  const projectsQuery = auth.isAdmin ? adminProjects : meProjects;
+  const projectsQuery = useMeProjects();
   const { data: projects, isLoading: projectsLoading } = projectsQuery;
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [searchText, setSearchText] = useState("");

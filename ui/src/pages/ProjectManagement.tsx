@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import {
-  useProjects,
   useMeProjects,
   useCreateMeProject,
   useProject,
@@ -750,10 +749,7 @@ function CreateMeProjectDialog({ onClose }: { onClose: () => void }) {
 
 function ProjectManagement() {
   const auth = useAuth();
-  const adminProjectsQuery = useProjects();
-  const meProjectsQuery = useMeProjects();
-
-  const projectsQuery = auth.isAdmin ? adminProjectsQuery : meProjectsQuery;
+  const projectsQuery = useMeProjects();
   const projects = projectsQuery.data ?? [];
 
   const [searchText, setSearchText] = useState("");

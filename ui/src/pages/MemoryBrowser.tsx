@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
-  useProjects,
   useMeProjects,
   useMemoryList,
   useMemoryRecall,
@@ -819,12 +818,9 @@ function Pagination({
 // ---------------------------------------------------------------------------
 
 function MemoryBrowser() {
-  const { isAdmin, canWrite } = useAuth();
+  const { canWrite } = useAuth();
 
-  // Project selection — admin uses admin endpoint, non-admin uses /me/projects
-  const adminProjectsQuery = useProjects();
-  const meProjectsQuery = useMeProjects();
-  const projectsQuery = isAdmin ? adminProjectsQuery : meProjectsQuery;
+  const projectsQuery = useMeProjects();
   const projects = projectsQuery.data ?? [];
   const [selectedProjectId, setSelectedProjectId] = useState("");
 

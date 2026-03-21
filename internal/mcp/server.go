@@ -174,7 +174,10 @@ func NewServer(deps Dependencies) *Server {
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if origin := r.Header.Get("Origin"); origin != "" {
-			if !isAllowedOrigin(origin, r.Host) {
+			// Skip origin check for authenticated requests — the OAuth token
+			// validates the client's legitimacy. Only enforce strict same-origin
+			// for unauthenticated requests (DNS rebinding protection).
+			if r.Header.Get("Authorization") == "" && !isAllowedOrigin(origin, r.Host) {
 				http.Error(w, `{"jsonrpc":"2.0","error":{"code":-32600,"message":"forbidden: invalid origin"}}`, http.StatusForbidden)
 				return
 			}

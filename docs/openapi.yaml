@@ -269,6 +269,9 @@ paths:
       operationId: oauthToken
       tags: [OAuth]
       summary: OAuth token endpoint
+      description: |
+        Supports client_secret_post and none (public client) authentication methods.
+        Confidential clients must include client_secret in the request body.
       security: []
       requestBody:
         required: true
@@ -288,6 +291,9 @@ paths:
                   format: uri
                 client_id:
                   type: string
+                client_secret:
+                  type: string
+                  description: Required for confidential clients using client_secret_post authentication
                 code_verifier:
                   type: string
                 refresh_token:
@@ -898,10 +904,9 @@ paths:
     get:
       operationId: getDashboard
       tags: [Dashboard]
-      summary: Dashboard statistics scoped by role
+      summary: Dashboard statistics scoped by organization
       description: |
-        Returns aggregate stats. Admin sees global data, org_owner sees their org,
-        member/readonly/service see their org's data.
+        Returns aggregate stats scoped to the authenticated user's organization.
       responses:
         "200":
           description: Dashboard stats
@@ -914,7 +919,7 @@ paths:
     get:
       operationId: getActivity
       tags: [Dashboard]
-      summary: Recent activity events scoped by role
+      summary: Recent activity events scoped by organization
       parameters:
         - name: limit
           in: query
@@ -939,7 +944,7 @@ paths:
     get:
       operationId: getAnalytics
       tags: [Analytics]
-      summary: Memory analytics scoped by role
+      summary: Memory analytics scoped by organization
       responses:
         "200":
           description: Analytics data
@@ -954,21 +959,9 @@ paths:
       tags: [Usage]
       summary: Token usage scoped by role
       description: |
-        Admin can filter by ?org=, ?user=, ?project= query params.
-        Non-admin users are restricted to their own org and user.
+        Returns usage data scoped to the authenticated user's organization.
+        Supports ?project= filter to narrow results.
       parameters:
-        - name: org
-          in: query
-          description: Filter by org (admin only)
-          schema:
-            type: string
-            format: uuid
-        - name: user
-          in: query
-          description: Filter by user (admin only)
-          schema:
-            type: string
-            format: uuid
         - name: project
           in: query
           description: Filter by project
@@ -2210,7 +2203,10 @@ paths:
     get:
       operationId: adminListOAuthClients
       tags: [Admin - OAuth]
-      summary: List all OAuth clients
+      summary: List system and auto-registered OAuth clients
+      description: |
+        Returns only system-created and auto-registered (dynamic registration) clients.
+        User-created clients are managed via /v1/me/oauth-clients.
       responses:
         "200":
           description: OAuth client list
@@ -2609,6 +2605,10 @@ components:
           type: string
           format: uuid
           nullable: true
+        user_id:
+          type: string
+          format: uuid
+          nullable: true
         auto_registered:
           type: boolean
         created_at:
@@ -2889,6 +2889,9 @@ components:
           format: uri
         client_id:
           type: string
+        client_secret:
+          type: string
+          description: Required for confidential clients using client_secret_post authentication
         code_verifier:
           type: string
         refresh_token:
@@ -3558,10 +3561,10 @@ components:
           type: array
           items:
             type: string
-        grant_types:
-          type: array
-          items:
-            type: string
+        client_type:
+          type: string
+          enum: [public, confidential]
+          default: confidential
 
     CreateOAuthClientResponse:
       type: object

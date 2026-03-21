@@ -78,37 +78,18 @@ func NewAdminUsageHandler(cfg UsageConfig) http.HandlerFunc {
 		ac := auth.FromContext(r.Context())
 		scope := ScopeFromAuth(ac)
 
-		// Org: URL param > ?org= query (admin only) > auth scope.
+		// All roles are org-scoped via resolveOrgScope (which uses ScopeFromAuth).
 		filter.OrgID = resolveOrgScope(r)
-		if scope.IsAdmin {
-			// Admin: if no org from URL/scope, try ?org= query param.
-			if filter.OrgID == nil {
-				if raw := q.Get("org"); raw != "" {
-					if id, err := uuid.Parse(raw); err == nil {
-						filter.OrgID = &id
-					}
-				}
-			}
-			// Admin can filter by user/project via query params.
-			if raw := q.Get("user"); raw != "" {
-				if id, err := uuid.Parse(raw); err == nil {
-					filter.UserID = &id
-				}
-			}
-			if raw := q.Get("project"); raw != "" {
-				if id, err := uuid.Parse(raw); err == nil {
-					filter.ProjectID = &id
-				}
-			}
-		} else {
-			// Non-admin: org locked from scope (resolveOrgScope already set it).
-			// Member/readonly/service: also restricted to own user.
+
+		// Non-admin member/readonly/service: also restricted to own user.
+		if !scope.IsAdmin {
 			filter.UserID = scope.UserID
-			// Project filter allowed within org scope.
-			if raw := q.Get("project"); raw != "" {
-				if id, err := uuid.Parse(raw); err == nil {
-					filter.ProjectID = &id
-				}
+		}
+
+		// Project filter allowed for all roles within their org scope.
+		if raw := q.Get("project"); raw != "" {
+			if id, err := uuid.Parse(raw); err == nil {
+				filter.ProjectID = &id
 			}
 		}
 

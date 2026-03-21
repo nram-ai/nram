@@ -137,11 +137,15 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 
 	// OAuth discovery and flow endpoints (public — no auth, no setup guard).
 	// Paths follow MCP spec fallback defaults: /authorize, /token, /register.
-	r.Get("/.well-known/oauth-authorization-server", handler(handlers.OAuthMetadata))
-	r.Get("/.well-known/oauth-protected-resource", handler(handlers.OAuthProtectedResource))
-	r.Get("/authorize", handler(handlers.OAuthAuthorize))
-	r.Post("/token", handler(handlers.OAuthToken))
-	r.Post("/register", handler(handlers.OAuthRegister))
+	// CORS middleware is applied so browser-based MCP clients can reach these.
+	r.Group(func(r chi.Router) {
+		r.Use(CORSMiddleware)
+		r.Get("/.well-known/oauth-authorization-server", handler(handlers.OAuthMetadata))
+		r.Get("/.well-known/oauth-protected-resource", handler(handlers.OAuthProtectedResource))
+		r.Get("/authorize", handler(handlers.OAuthAuthorize))
+		r.Post("/token", handler(handlers.OAuthToken))
+		r.Post("/register", handler(handlers.OAuthRegister))
+	})
 
 	// Semi-public routes: setup guard required but no auth (login flow).
 	r.Group(func(r chi.Router) {
@@ -164,17 +168,18 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Use(config.RateLimiter.Handler)
 		}
 
-		// OAuth userinfo (requires authentication).
-		r.Get("/userinfo", handler(handlers.OAuthUserInfo))
+		// OAuth userinfo and MCP endpoints need CORS for browser-based clients.
+		r.Group(func(r chi.Router) {
+			r.Use(CORSMiddleware)
+			r.Get("/userinfo", handler(handlers.OAuthUserInfo))
+			if handlers.MCP != nil {
+				r.Handle("/mcp", handlers.MCP)
+				r.Handle("/mcp/*", handlers.MCP)
+			}
+		})
 
 		// SSE events endpoint.
 		r.Get("/v1/events", handler(handlers.Events))
-
-		// MCP Streamable HTTP endpoint.
-		if handlers.MCP != nil {
-			r.Handle("/mcp", handlers.MCP)
-			r.Handle("/mcp/*", handlers.MCP)
-		}
 
 		// Project-scoped memory routes.
 		r.Route("/v1/projects/{project_id}/memories", func(r chi.Router) {

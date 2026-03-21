@@ -14,6 +14,7 @@ type OAuthClient struct {
 	RedirectURIs   []string   `json:"redirect_uris"`
 	GrantTypes     []string   `json:"grant_types"`
 	OrgID          *uuid.UUID `json:"org_id"`
+	UserID         *uuid.UUID `json:"user_id,omitempty"`
 	AutoRegistered bool       `json:"auto_registered"`
 	CreatedAt      time.Time  `json:"created_at"`
 }

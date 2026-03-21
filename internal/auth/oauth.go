@@ -68,7 +68,7 @@ func (s *OAuthServer) MetadataHandler() http.HandlerFunc {
 			ResponseTypesSupported:            []string{"code"},
 			GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 			CodeChallengeMethodsSupported:     []string{codeChallengeMethodS256},
-			TokenEndpointAuthMethodsSupported: []string{"none"},
+			TokenEndpointAuthMethodsSupported: []string{"client_secret_post", "none"},
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -297,6 +297,7 @@ type tokenRequest struct {
 	Code         string `json:"code"`
 	RedirectURI  string `json:"redirect_uri"`
 	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
 	CodeVerifier string `json:"code_verifier"`
 	RefreshToken string `json:"refresh_token"`
 	// Resource is the RFC 8707 resource indicator sent by the client during
@@ -325,7 +326,7 @@ func (s *OAuthServer) TokenHandler() http.HandlerFunc {
 		// Support both form-encoded and JSON
 		var req tokenRequest
 		contentType := r.Header.Get("Content-Type")
-		if contentType == "application/x-www-form-urlencoded" || contentType == "" {
+		if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") || contentType == "" {
 			if err := r.ParseForm(); err != nil {
 				writeOAuthError(w, http.StatusBadRequest, "invalid_request", "invalid form body")
 				return
@@ -335,6 +336,7 @@ func (s *OAuthServer) TokenHandler() http.HandlerFunc {
 				Code:         r.FormValue("code"),
 				RedirectURI:  r.FormValue("redirect_uri"),
 				ClientID:     r.FormValue("client_id"),
+				ClientSecret: r.FormValue("client_secret"),
 				CodeVerifier: r.FormValue("code_verifier"),
 				RefreshToken: r.FormValue("refresh_token"),
 				Resource:     r.FormValue("resource"),
@@ -373,6 +375,19 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Validate client_secret if provided (client_secret_post auth method)
+	if req.ClientSecret != "" {
+		client, err := s.oauthRepo.GetClientByID(r.Context(), authCode.ClientID)
+		if err != nil {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_client", "unknown client")
+			return
+		}
+		if client.ClientSecret == nil || hashSecret(req.ClientSecret) != *client.ClientSecret {
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "invalid client_secret")
+			return
+		}
+	}
+
 	// Check expiration
 	if time.Now().UTC().After(authCode.ExpiresAt) {
 		// Consume the expired code
@@ -397,17 +412,19 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// RFC 8707: Validate resource parameter.
-	base := baseURLFromRequest(r)
-	canonicalResource := base + "/mcp"
-	if req.Resource != "" && req.Resource != canonicalResource {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant",
-			fmt.Sprintf("resource parameter must be %s", canonicalResource))
-		return
-	}
-	if authCode.Resource != "" && req.Resource != "" && authCode.Resource != req.Resource {
+	// RFC 8707: Validate resource parameter against what was stored in the
+	// auth code. We trust the auth code's resource value (already validated
+	// at authorize time) rather than re-deriving from this request's Host,
+	// which may differ when the token exchange comes from a different origin.
+	if req.Resource != "" && authCode.Resource != "" && req.Resource != authCode.Resource {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "resource parameter mismatch")
 		return
+	}
+
+	// Determine effective resource for JWT audience
+	effectiveResource := authCode.Resource
+	if effectiveResource == "" {
+		effectiveResource = req.Resource
 	}
 
 	// Consume the authorization code (single-use)
@@ -423,16 +440,6 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 	if err == nil {
 		role = user.Role
 		userOrgID = user.OrgID
-	}
-
-	// RFC 8707: Use this server's canonical resource URI as the JWT audience.
-	// The authorize handler already validated that the client-supplied resource
-	// matches the canonical URI, so we use the server's own value. When neither
-	// the auth code nor the token request included a resource, issue a token
-	// without audience (backwards compat).
-	effectiveResource := ""
-	if authCode.Resource != "" || req.Resource != "" {
-		effectiveResource = canonicalResource
 	}
 
 	// Generate access token (JWT), including the audience claim when a resource

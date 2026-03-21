@@ -696,10 +696,12 @@ func TestHTTPStack_MCP_Unauthenticated_Returns401(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: TestHTTPStack_MCP_InvalidOrigin_Returns403
+// Test 5: TestHTTPStack_MCP_InvalidOrigin_Authenticated_Allowed
+// Authenticated requests with a cross-origin Origin header are allowed
+// because the OAuth token proves legitimacy.
 // ---------------------------------------------------------------------------
 
-func TestHTTPStack_MCP_InvalidOrigin_Returns403(t *testing.T) {
+func TestHTTPStack_MCP_InvalidOrigin_Authenticated_Allowed(t *testing.T) {
 	env := newHTTPStackEnv(t)
 	defer env.Close()
 
@@ -724,8 +726,45 @@ func TestHTTPStack_MCP_InvalidOrigin_Returns403(t *testing.T) {
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d (body: %s)", resp.StatusCode, string(bodyBytes))
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatalf("expected authenticated cross-origin request to be allowed, got 403 (body: %s)", string(bodyBytes))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 5b: TestHTTPStack_MCP_InvalidOrigin_Unauthenticated_Blocked
+// Unauthenticated requests with a cross-origin Origin header are blocked.
+// The auth middleware rejects them with 401 before origin validation runs.
+// ---------------------------------------------------------------------------
+
+func TestHTTPStack_MCP_InvalidOrigin_Unauthenticated_Blocked(t *testing.T) {
+	env := newHTTPStackEnv(t)
+	defer env.Close()
+
+	initReq := jsonrpcRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":    map[string]interface{}{},
+			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+		},
+	}
+
+	body, _ := json.Marshal(initReq)
+	headers := map[string]string{
+		"Origin": "http://evil-site.example.com",
+	}
+
+	resp := doRawMCPPost(t, env.Server.URL, body, headers)
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// Auth middleware rejects unauthenticated requests with 401 before
+	// the MCP origin check runs, which is the correct security behavior.
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d (body: %s)", resp.StatusCode, string(bodyBytes))
 	}
 }
 

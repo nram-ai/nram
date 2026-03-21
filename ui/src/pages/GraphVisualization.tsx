@@ -13,8 +13,7 @@ import ReactFlow, {
   MarkerType,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import { useProjects, useMeProjects, useGraph } from "../hooks/useApi";
-import { useAuth } from "../context/AuthContext";
+import { useMeProjects, useGraph } from "../hooks/useApi";
 import type { GraphEntity } from "../api/client";
 
 // Color map for entity types
@@ -322,10 +321,7 @@ function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
 }
 
 function GraphVisualization() {
-  const auth = useAuth();
-  const adminProjects = useProjects();
-  const meProjects = useMeProjects();
-  const projectsQuery = auth.isAdmin ? adminProjects : meProjects;
+  const projectsQuery = useMeProjects();
   const { data: projects, isLoading: projectsLoading } = projectsQuery;
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);

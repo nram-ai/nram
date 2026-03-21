@@ -2959,11 +2959,13 @@ func TestE2E_OAuth_OriginValidation(t *testing.T) {
 	io.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("bad Origin: expected 403, got %d", resp.StatusCode)
+	// Authenticated requests with any Origin are allowed — the OAuth token
+	// proves legitimacy, enabling browser-based clients like Claude.ai.
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatalf("bad Origin with valid token: should be allowed, got 403")
 	}
 
-	// Verify that a good Origin (or no Origin) works
+	// Verify that no Origin header also works
 	t.Log("POST /mcp with valid token and no Origin header (should work)")
 	goodResp := e2eMCPPost(t, baseURL, oauthResult.AccessToken, e2eJSONRPCRequest{
 		JSONRPC: "2.0",
@@ -2983,7 +2985,7 @@ func TestE2E_OAuth_OriginValidation(t *testing.T) {
 	io.ReadAll(goodResp.Body)
 	goodResp.Body.Close()
 
-	t.Log("Origin validation correctly blocks bad origins: PASSED")
+	t.Log("Origin validation allows authenticated cross-origin requests: PASSED")
 }
 
 // ===========================================================================

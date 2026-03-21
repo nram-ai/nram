@@ -48,16 +48,22 @@ func (r *OAuthRepo) CreateClient(ctx context.Context, client *model.OAuthClient)
 		orgID = &s
 	}
 
-	query := `INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris, grant_types, org_id, auto_registered)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	var userID *string
+	if client.UserID != nil {
+		s := client.UserID.String()
+		userID = &s
+	}
+
+	query := `INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris, grant_types, org_id, auto_registered)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+		query = `INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
 		client.ID.String(), client.ClientID, client.ClientSecret, client.Name,
-		redirectVal, grantVal, orgID, autoRegVal,
+		redirectVal, grantVal, orgID, userID, autoRegVal,
 	)
 	if err != nil {
 		return fmt.Errorf("oauth client create: %w", err)
@@ -92,11 +98,11 @@ func (r *OAuthRepo) getClientByPK(ctx context.Context, id uuid.UUID) (*model.OAu
 // that the given user is a member of.
 func (r *OAuthRepo) ListClientsByUser(ctx context.Context, userID uuid.UUID) ([]model.OAuthClient, error) {
 	query := selectOAuthClientColumns + ` FROM oauth_clients
-		WHERE org_id = (SELECT org_id FROM users WHERE id = ?)
+		WHERE user_id = ?
 		ORDER BY created_at DESC`
 	if r.db.Backend() == BackendPostgres {
 		query = selectOAuthClientColumns + ` FROM oauth_clients
-			WHERE org_id = (SELECT org_id FROM users WHERE id = $1)
+			WHERE user_id = $1
 			ORDER BY created_at DESC`
 	}
 
@@ -111,7 +117,7 @@ func (r *OAuthRepo) ListClientsByUser(ctx context.Context, userID uuid.UUID) ([]
 
 // ListAllClients returns all OAuth clients, ordered by created_at DESC.
 func (r *OAuthRepo) ListAllClients(ctx context.Context) ([]model.OAuthClient, error) {
-	query := selectOAuthClientColumns + ` FROM oauth_clients ORDER BY created_at DESC`
+	query := selectOAuthClientColumns + ` FROM oauth_clients WHERE user_id IS NULL ORDER BY created_at DESC`
 
 	rows, err := r.db.Query(ctx, query)
 	if err != nil {
@@ -168,25 +174,26 @@ func (r *OAuthRepo) reloadClient(ctx context.Context, client *model.OAuthClient)
 	return nil
 }
 
-const selectOAuthClientColumns = `SELECT id, client_id, client_secret, name, redirect_uris, grant_types, org_id, auto_registered, created_at`
+const selectOAuthClientColumns = `SELECT id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered, created_at`
 
 func (r *OAuthRepo) scanClient(row *sql.Row) (*model.OAuthClient, error) {
 	var client model.OAuthClient
 	var idStr string
 	var redirectStr, grantStr string
 	var orgIDStr sql.NullString
+	var userIDStr sql.NullString
 	var autoReg bool
 	var createdAtStr string
 
 	err := row.Scan(
 		&idStr, &client.ClientID, &client.ClientSecret, &client.Name,
-		&redirectStr, &grantStr, &orgIDStr, &autoReg, &createdAtStr,
+		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &createdAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, autoReg, createdAtStr)
+	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, autoReg, createdAtStr)
 }
 
 func (r *OAuthRepo) scanClientFromRows(rows *sql.Rows) (*model.OAuthClient, error) {
@@ -194,18 +201,19 @@ func (r *OAuthRepo) scanClientFromRows(rows *sql.Rows) (*model.OAuthClient, erro
 	var idStr string
 	var redirectStr, grantStr string
 	var orgIDStr sql.NullString
+	var userIDStr sql.NullString
 	var autoReg bool
 	var createdAtStr string
 
 	err := rows.Scan(
 		&idStr, &client.ClientID, &client.ClientSecret, &client.Name,
-		&redirectStr, &grantStr, &orgIDStr, &autoReg, &createdAtStr,
+		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &createdAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("oauth client scan rows: %w", err)
 	}
 
-	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, autoReg, createdAtStr)
+	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, autoReg, createdAtStr)
 }
 
 func (r *OAuthRepo) scanClients(rows *sql.Rows) ([]model.OAuthClient, error) {
@@ -226,7 +234,7 @@ func (r *OAuthRepo) scanClients(rows *sql.Rows) ([]model.OAuthClient, error) {
 func (r *OAuthRepo) populateClient(
 	client *model.OAuthClient,
 	idStr, redirectStr, grantStr string,
-	orgIDStr sql.NullString,
+	orgIDStr, userIDStr sql.NullString,
 	autoReg bool,
 	createdAtStr string,
 ) (*model.OAuthClient, error) {
@@ -260,6 +268,14 @@ func (r *OAuthRepo) populateClient(
 			return nil, fmt.Errorf("oauth client parse org_id: %w", err)
 		}
 		client.OrgID = &oid
+	}
+
+	if userIDStr.Valid {
+		uid, err := uuid.Parse(userIDStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("oauth client parse user_id: %w", err)
+		}
+		client.UserID = &uid
 	}
 
 	client.AutoRegistered = autoReg

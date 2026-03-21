@@ -5,8 +5,11 @@ import {
   useCreateMeAPIKey,
   useRevokeMeAPIKey,
   useChangePassword,
+  useMeOAuthClients,
+  useCreateMeOAuthClient,
+  useRevokeMeOAuthClient,
 } from "../hooks/useApi";
-import type { APIKey } from "../api/client";
+import type { APIKey, OAuthClient, OAuthClientCreated } from "../api/client";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -113,6 +116,185 @@ function APIKeyRow({
         )}
       </td>
     </tr>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// OAuth Client Row
+// ---------------------------------------------------------------------------
+
+function OAuthClientRow({
+  client,
+  onRevoke,
+  revoking,
+}: {
+  client: OAuthClient;
+  onRevoke: (id: string) => void;
+  revoking: boolean;
+}) {
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+
+  return (
+    <tr className="border-b last:border-0">
+      <td className="px-4 py-3 text-sm">
+        <span className="font-medium">{client.name}</span>
+      </td>
+      <td className="px-4 py-3 text-sm font-mono text-muted-foreground">
+        {client.client_id}
+      </td>
+      <td className="px-4 py-3 text-sm">
+        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+          client.client_type === "confidential"
+            ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300"
+            : "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300"
+        }`}>
+          {client.client_type}
+        </span>
+      </td>
+      <td className="px-4 py-3 text-xs text-muted-foreground max-w-[200px] truncate" title={client.redirect_uris?.join(", ") || "-"}>
+        {client.redirect_uris?.join(", ") || "-"}
+      </td>
+      <td className="px-4 py-3 text-xs text-muted-foreground">
+        {formatDate(client.created_at)}
+      </td>
+      <td className="px-4 py-3 text-right">
+        {confirmRevoke ? (
+          <span className="inline-flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
+              onClick={() => onRevoke(client.id)}
+              disabled={revoking}
+            >
+              {revoking ? "Revoking..." : "Confirm"}
+            </button>
+            <button
+              type="button"
+              className="rounded border px-2 py-1 text-xs hover:bg-muted"
+              onClick={() => setConfirmRevoke(false)}
+            >
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+            onClick={() => setConfirmRevoke(true)}
+          >
+            Revoke
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Create OAuth Client Form
+// ---------------------------------------------------------------------------
+
+function CreateOAuthClientForm({ onCreated }: { onCreated: (client: OAuthClientCreated) => void }) {
+  const createMut = useCreateMeOAuthClient();
+  const [name, setName] = useState("");
+  const [redirectUris, setRedirectUris] = useState("");
+  const [clientType, setClientType] = useState<"public" | "confidential">("confidential");
+
+  function handleCreate() {
+    if (!name.trim()) return;
+    const uris = redirectUris
+      .split("\n")
+      .map((u) => u.trim())
+      .filter(Boolean);
+    createMut.mutate(
+      {
+        name: name.trim(),
+        redirect_uris: uris.length > 0 ? uris : undefined,
+        client_type: clientType,
+      },
+      {
+        onSuccess: (data) => {
+          onCreated(data);
+          setName("");
+          setRedirectUris("");
+          setClientType("confidential");
+        },
+      },
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-end gap-3">
+        <div className="flex-1">
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            Name
+          </label>
+          <input
+            type="text"
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. my-dev-app"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleCreate();
+              }
+            }}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            Type
+          </label>
+          <div className="inline-flex rounded-md border">
+            <button
+              type="button"
+              className={`px-3 py-2 text-xs font-medium rounded-l-md ${
+                clientType === "confidential"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background hover:bg-muted"
+              }`}
+              onClick={() => setClientType("confidential")}
+            >
+              Confidential
+            </button>
+            <button
+              type="button"
+              className={`px-3 py-2 text-xs font-medium rounded-r-md border-l ${
+                clientType === "public"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background hover:bg-muted"
+              }`}
+              onClick={() => setClientType("public")}
+            >
+              Public
+            </button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <label className="mb-1 block text-xs font-medium text-muted-foreground">
+          Redirect URIs (one per line)
+        </label>
+        <textarea
+          className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          rows={2}
+          value={redirectUris}
+          onChange={(e) => setRedirectUris(e.target.value)}
+          placeholder="https://example.com/callback"
+        />
+      </div>
+      <button
+        type="button"
+        className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        onClick={handleCreate}
+        disabled={!name.trim() || createMut.isPending}
+      >
+        {createMut.isPending ? "Creating..." : "Create OAuth Client"}
+      </button>
+    </div>
   );
 }
 
@@ -310,7 +492,29 @@ function MyAccount() {
   const token = localStorage.getItem("nram_token");
   const expiry = token ? decodeJWTExpiry(token) : null;
 
+  const oauthClientsQuery = useMeOAuthClients();
+  const revokeOAuthMut = useRevokeMeOAuthClient();
+
+  const [newClient, setNewClient] = useState<OAuthClientCreated | null>(null);
+  const [oauthCopied, setOauthCopied] = useState<string | null>(null);
+
   const apiKeys: APIKey[] = apiKeysQuery.data ?? [];
+  const oauthClients: OAuthClient[] = oauthClientsQuery.data ?? [];
+
+  const handleOAuthCopy = useCallback((text: string, field: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setOauthCopied(field);
+      setTimeout(() => setOauthCopied(null), 2000);
+    });
+  }, []);
+
+  function handleRevokeOAuthClient(id: string) {
+    revokeOAuthMut.mutate(id);
+  }
+
+  function handleOAuthClientCreated(client: OAuthClientCreated) {
+    setNewClient(client);
+  }
 
   const handleCopy = useCallback((text: string) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -334,7 +538,7 @@ function MyAccount() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">My Account</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Manage your profile, API keys, and session.
+          Manage your profile, API keys, OAuth clients, and session.
         </p>
       </div>
 
@@ -465,6 +669,107 @@ function MyAccount() {
           {apiKeysQuery.isError && (
             <p className="text-sm text-red-600 dark:text-red-400">
               Failed to load API keys: {apiKeysQuery.error?.message}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* OAuth Clients */}
+      <div className="rounded-lg border bg-card">
+        <div className="border-b px-4 py-3">
+          <h2 className="text-sm font-semibold">OAuth Clients</h2>
+        </div>
+        <div className="p-4 space-y-4">
+          {/* New client banner */}
+          {newClient && (
+            <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-4 dark:border-amber-600 dark:bg-amber-950/30">
+              <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+                New OAuth Client — save these credentials now, they will not be shown again
+              </p>
+              <div className="mt-2 space-y-2">
+                <div>
+                  <span className="text-xs font-medium text-amber-700 dark:text-amber-300">Client ID</span>
+                  <div className="mt-1 flex items-center gap-2">
+                    <code className="flex-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-mono break-all dark:border-amber-700 dark:bg-amber-950/50">
+                      {newClient.client_id}
+                    </code>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded border px-3 py-1.5 text-xs font-medium hover:bg-amber-100 dark:hover:bg-amber-900"
+                      onClick={() => handleOAuthCopy(newClient.client_id, "client_id")}
+                    >
+                      {oauthCopied === "client_id" ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+                {newClient.client_secret && (
+                  <div>
+                    <span className="text-xs font-medium text-amber-700 dark:text-amber-300">Client Secret</span>
+                    <div className="mt-1 flex items-center gap-2">
+                      <code className="flex-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-mono break-all dark:border-amber-700 dark:bg-amber-950/50">
+                        {newClient.client_secret}
+                      </code>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded border px-3 py-1.5 text-xs font-medium hover:bg-amber-100 dark:hover:bg-amber-900"
+                        onClick={() => handleOAuthCopy(newClient.client_secret!, "client_secret")}
+                      >
+                        {oauthCopied === "client_secret" ? "Copied" : "Copy"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="mt-2 text-xs text-amber-700 hover:underline dark:text-amber-300"
+                onClick={() => setNewClient(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {/* Create form */}
+          <CreateOAuthClientForm onCreated={handleOAuthClientCreated} />
+
+          {/* Client list */}
+          {oauthClientsQuery.isLoading ? (
+            <div className="py-4 text-center text-sm text-muted-foreground">Loading...</div>
+          ) : oauthClients.length === 0 ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              No OAuth clients. Create one above.
+            </p>
+          ) : (
+            <div className="overflow-auto rounded-lg border">
+              <table className="w-full">
+                <thead className="border-b bg-muted/50">
+                  <tr>
+                    <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Name</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Client ID</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Type</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Redirect URIs</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Created</th>
+                    <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {oauthClients.map((c) => (
+                    <OAuthClientRow
+                      key={c.id}
+                      client={c}
+                      onRevoke={handleRevokeOAuthClient}
+                      revoking={revokeOAuthMut.isPending}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {oauthClientsQuery.isError && (
+            <p className="text-sm text-red-600 dark:text-red-400">
+              Failed to load OAuth clients: {oauthClientsQuery.error?.message}
             </p>
           )}
         </div>
