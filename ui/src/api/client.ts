@@ -1029,7 +1029,7 @@ export const meAPI = {
     request<void>("DELETE", `/me/api-keys/${id}`),
 
   listOAuthClients: () =>
-    request<OAuthClient[]>("GET", "/me/oauth-clients"),
+    request<{ data: OAuthClient[] }>("GET", "/me/oauth-clients").then((r) => r.data),
   createOAuthClient: (data: CreateOAuthClientRequest) =>
     request<OAuthClientCreated>("POST", "/me/oauth-clients", data),
   revokeOAuthClient: (id: string) =>
