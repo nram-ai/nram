@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -12,6 +13,7 @@ import (
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // ProjectRepo defines the project lookup operations needed by MCP tool handlers.
@@ -88,17 +90,13 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 	return r
 }
 
-// NewServer creates the MCP server foundation with Streamable HTTP transport.
-// Tool registration is deferred to later initialization steps; this function
-// only sets up the server skeleton and HTTP handler.
-func NewServer(deps Dependencies) *Server {
-	mcpSrv := server.NewMCPServer(
-		"nram",
-		"1.0.0",
-		server.WithToolCapabilities(true),
-		server.WithResourceCapabilities(false, true), // subscribe=false, listChanged=true
-		server.WithRecovery(),                        // recover from panics in tool handlers
-		server.WithInstructions(`You have access to nram, a persistent memory layer for AI agents. Use it to store and recall information across conversations.
+// buildInstructions returns the MCP server instructions string, conditionally
+// including Postgres-only tool references (memory_enrich, memory_graph) when
+// the backend is Postgres.
+func buildInstructions(backend string) string {
+	var b strings.Builder
+
+	b.WriteString(`You have access to nram, a persistent memory layer for AI agents. Use it to store and recall information across conversations.
 
 Key concepts:
 - Memories are organized into projects (identified by slug). Projects are auto-created on first use.
@@ -110,14 +108,39 @@ Recommended workflow:
 2. Use memory_recall to search for relevant memories using natural language queries. This performs semantic search when embeddings are configured.
 3. Use memory_store_batch when you have multiple related memories to store at once.
 4. Use memory_update to modify existing memories (e.g., to correct or enrich them).
-5. Use memory_forget to remove memories that are no longer relevant.
-6. Use memory_projects to list available projects and their slugs.
+5. Use memory_get to retrieve specific memories by their IDs when you already know which ones you need.
+6. Use memory_forget to remove memories that are no longer relevant.
+7. Use memory_projects to list available projects and their slugs.
+8. Use memory_export to export all memories from a project for backup or migration.`)
+
+	if backend == storage.BackendPostgres {
+		b.WriteString(`
+9. Use memory_enrich to trigger entity extraction and enrichment on stored memories, enhancing future recall and graph traversal.
+10. Use memory_graph to explore the knowledge graph — find entities and their relationships starting from a name or search query.`)
+	}
+
+	b.WriteString(`
 
 Tips:
 - Be specific with tags — they enable precise filtering during recall.
 - When recalling, provide a natural language query describing what you're looking for rather than exact keywords.
 - Store memories proactively: if a user shares preferences, project context, or important decisions, store them immediately.
-- Check for existing memories before storing duplicates — use memory_recall first.`),
+- Check for existing memories before storing duplicates — use memory_recall first.`)
+
+	return b.String()
+}
+
+// NewServer creates the MCP server foundation with Streamable HTTP transport.
+// Tool registration is deferred to later initialization steps; this function
+// only sets up the server skeleton and HTTP handler.
+func NewServer(deps Dependencies) *Server {
+	mcpSrv := server.NewMCPServer(
+		"nram",
+		"1.0.0",
+		server.WithToolCapabilities(true),
+		server.WithResourceCapabilities(false, true), // subscribe=false, listChanged=true
+		server.WithRecovery(),                        // recover from panics in tool handlers
+		server.WithInstructions(buildInstructions(deps.Backend)),
 	)
 
 	httpSrv := server.NewStreamableHTTPServer(
