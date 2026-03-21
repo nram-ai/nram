@@ -109,8 +109,8 @@ function TabButton({ active, label, onClick }: TabButtonProps) {
 // ---------------------------------------------------------------------------
 
 function ClaudeCodeTab({ serverUrl }: { serverUrl: string }) {
-  const oauthCmd = `claude mcp add --transport http nram ${serverUrl}/mcp`;
-  const explicitCmd = `claude mcp add --transport http nram ${serverUrl}/mcp --client-id <client_id> --client-secret <client_secret>`;
+  const oauthCmd = `claude mcp add --transport http nram ${serverUrl}`;
+  const explicitCmd = `claude mcp add --transport http nram ${serverUrl} --client-id <client_id> --client-secret <client_secret>`;
 
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
@@ -137,7 +137,7 @@ function ClaudeCodeTab({ serverUrl }: { serverUrl: string }) {
 }
 
 function ClaudeDesktopTab({ serverUrl }: { serverUrl: string }) {
-  const url = `${serverUrl}/mcp`;
+  const url = serverUrl;
 
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
@@ -158,7 +158,7 @@ function ClaudeDesktopTab({ serverUrl }: { serverUrl: string }) {
 }
 
 function CursorTab({ serverUrl }: { serverUrl: string }) {
-  const url = `${serverUrl}/mcp`;
+  const url = serverUrl;
 
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
@@ -180,8 +180,7 @@ function CursorTab({ serverUrl }: { serverUrl: string }) {
 }
 
 function ChatGPTTab({ serverUrl }: { serverUrl: string }) {
-  const httpsUrl = serverUrl.replace(/^http:\/\//, "https://");
-  const url = `${httpsUrl}/mcp`;
+  const url = serverUrl.replace(/^http:\/\//, "https://");
 
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
@@ -215,7 +214,7 @@ function ApiKeyTab({ serverUrl, apiKey, setApiKey }: {
     {
       mcpServers: {
         nram: {
-          url: `${serverUrl}/mcp`,
+          url: serverUrl,
           headers: {
             Authorization: `Bearer ${key}`,
           },
@@ -225,7 +224,7 @@ function ApiKeyTab({ serverUrl, apiKey, setApiKey }: {
     null,
     2,
   );
-  const cliCmd = `claude mcp add nram --transport http ${serverUrl}/mcp --header "Authorization: Bearer ${key}"`;
+  const cliCmd = `claude mcp add nram --transport http ${serverUrl} --header "Authorization: Bearer ${key}"`;
 
   return (
     <div className="space-y-4">
@@ -288,7 +287,7 @@ function ApiKeyTab({ serverUrl, apiKey, setApiKey }: {
 // ---------------------------------------------------------------------------
 
 function MCPConfigGenerator() {
-  const [serverUrl, setServerUrl] = useState(() => window.location.origin);
+  const [serverUrl, setServerUrl] = useState(() => window.location.origin + "/mcp");
   const [apiKey, setApiKey] = useState("");
   const [activeTab, setActiveTab] = useState<ToolTab>("claude-code");
 
@@ -324,7 +323,7 @@ function MCPConfigGenerator() {
             type="text"
             value={serverUrl}
             onChange={(e) => setServerUrl(e.target.value)}
-            placeholder="http://localhost:8674"
+            placeholder="http://localhost:8674/mcp"
             className="w-full bg-background border border-border rounded-md px-3 py-1.5 text-sm"
           />
         </div>
