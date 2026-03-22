@@ -446,8 +446,8 @@ function GraphVisualization() {
   const isLoading = projectsLoading || (selectedProjectId && graphLoading);
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
+    <div className="flex flex-col" style={{ height: "calc(100vh - 3rem)" }}>
+      <div className="flex items-center justify-between mb-4 shrink-0">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Graph Visualization</h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -476,7 +476,7 @@ function GraphVisualization() {
       </div>
 
       {!selectedProjectId && (
-        <div className="flex items-center justify-center rounded-lg border border-dashed border-border bg-accent/30 h-[600px]">
+        <div className="flex flex-1 min-h-0 items-center justify-center rounded-lg border border-dashed border-border bg-accent/30">
           <div className="text-center">
             <p className="text-muted-foreground text-sm">
               Select a project to view its entity relationship graph.
@@ -486,7 +486,7 @@ function GraphVisualization() {
       )}
 
       {selectedProjectId && isLoading && (
-        <div className="flex items-center justify-center rounded-lg border border-border bg-accent/30 h-[600px]">
+        <div className="flex flex-1 min-h-0 items-center justify-center rounded-lg border border-border bg-accent/30">
           <div className="text-center">
             <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
             <p className="mt-2 text-sm text-muted-foreground">Loading graph data...</p>
@@ -495,7 +495,7 @@ function GraphVisualization() {
       )}
 
       {selectedProjectId && !isLoading && graphError && (
-        <div className="flex items-center justify-center rounded-lg border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/30 h-[600px]">
+        <div className="flex flex-1 min-h-0 items-center justify-center rounded-lg border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/30">
           <div className="text-center">
             <p className="text-sm text-red-800 dark:text-red-300">
               Failed to load graph data. Please try again.
@@ -509,7 +509,7 @@ function GraphVisualization() {
         !graphError &&
         graphData &&
         (!graphData.entities || graphData.entities.length === 0) && (
-          <div className="flex items-center justify-center rounded-lg border border-dashed border-border bg-accent/30 h-[600px]">
+          <div className="flex flex-1 min-h-0 items-center justify-center rounded-lg border border-dashed border-border bg-accent/30">
             <div className="text-center">
               <p className="text-muted-foreground text-sm">
                 No entities found for this project.
@@ -527,7 +527,7 @@ function GraphVisualization() {
         graphData &&
         graphData.entities &&
         graphData.entities.length > 0 && (
-          <div className="relative rounded-lg border border-border overflow-hidden" style={{ height: "600px" }}>
+          <div className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden">
             <ReactFlow
               nodes={nodes}
               edges={edges}
