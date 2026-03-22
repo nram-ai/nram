@@ -189,6 +189,18 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		}
 	}
 
+	// Filter out expired relationships when include_history is false.
+	if !includeHistory {
+		now := time.Now()
+		filtered := graphRels[:0]
+		for _, rel := range graphRels {
+			if rel.ValidUntil == nil || rel.ValidUntil.After(now) {
+				filtered = append(filtered, rel)
+			}
+		}
+		graphRels = filtered
+	}
+
 	if graphEntities == nil {
 		graphEntities = []graphEntity{}
 	}

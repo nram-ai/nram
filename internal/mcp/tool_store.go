@@ -30,6 +30,7 @@ func registerMemoryStore(s *Server) {
 		mcp.WithString("source", mcp.Description("Origin identifier")),
 		mcp.WithArray("tags", mcp.Description("Labels for filtering")),
 		mcp.WithObject("metadata", mcp.Description("Arbitrary key-value metadata")),
+		mcp.WithString("ttl", mcp.Description("Time-to-live duration (e.g. '24h', '7d', '30m'). Memory expires after this duration.")),
 	}
 	opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue async enrichment (default false)")))
 
@@ -46,6 +47,7 @@ func registerMemoryStoreBatch(s *Server) {
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
 		mcp.WithArray("items", mcp.Required(), mcp.Description("Array of objects with content (required), source, tags, metadata")),
+		mcp.WithString("ttl", mcp.Description("Time-to-live duration (e.g. '24h', '7d', '30m'). All items expire after this duration.")),
 	}
 	opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue enrichment for all items (default false)")))
 
@@ -94,6 +96,8 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 		enrich = v
 	}
 
+	ttl, _ := args["ttl"].(string)
+
 	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to resolve project: %v", err)), nil
@@ -108,6 +112,7 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 		Metadata:  metadata,
 		Options: service.StoreOptions{
 			Enrich: enrich,
+			TTL:    ttl,
 		},
 		UserID:   &uid,
 		APIKeyID: ac.APIKeyID,
@@ -174,6 +179,8 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		enrich = v
 	}
 
+	ttl, _ := args["ttl"].(string)
+
 	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to resolve project: %v", err)), nil
@@ -185,6 +192,7 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		Items:     items,
 		Options: service.StoreOptions{
 			Enrich: enrich,
+			TTL:    ttl,
 		},
 		UserID:   &uid,
 		APIKeyID: ac.APIKeyID,
