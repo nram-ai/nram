@@ -256,6 +256,11 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			if err == nil && len(resp.Embeddings) > 0 {
 				embeddingUsed = true
 
+				// Use the actual returned embedding dimension for search,
+				// not the requested one — some providers (e.g., Ollama)
+				// ignore the dimension parameter and return their native size.
+				actualDim := len(resp.Embeddings[0])
+
 				// Record token usage.
 				if s.tokenUsage != nil {
 					usage := &model.TokenUsage{
@@ -281,7 +286,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					topK = 10
 				}
 
-				results, err := s.vectorSearch.Search(ctx, resp.Embeddings[0], namespaceID, dim, topK)
+				results, err := s.vectorSearch.Search(ctx, resp.Embeddings[0], namespaceID, actualDim, topK)
 				if err == nil {
 					// Build similarity map.
 					simMap := make(map[uuid.UUID]float64, len(results))
