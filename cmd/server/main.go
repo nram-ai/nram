@@ -278,23 +278,27 @@ func main() {
 	defer lifecycleSvc.Stop()
 
 	// Create MCP server.
+	hasEmbed := registry != nil && registry.GetEmbedding() != nil
+	hasEnrich := registry != nil && registry.GetFact() != nil && registry.GetEntity() != nil
 	mcpServer := mcp.NewServer(mcp.Dependencies{
-		Backend:       db.Backend(),
-		Store:         storeSvc,
-		Recall:        recallSvc,
-		Forget:        forgetSvc,
-		Update:        updateSvc,
-		BatchGet:      batchGetSvc,
-		BatchStore:    batchStoreSvc,
-		Enrich:        enrichSvc,
-		Export:        exportSvc,
-		ProjectRepo:   projectRepo,
-		UserRepo:      userRepo,
-		NamespaceRepo: namespaceRepo,
-		OrgRepo:       orgRepo,
-		EntityReader:  entityRepo,
-		Traverser:     relationshipRepo,
-		EventBus:      eventBus,
+		Backend:                db.Backend(),
+		Store:                  storeSvc,
+		Recall:                 recallSvc,
+		Forget:                 forgetSvc,
+		Update:                 updateSvc,
+		BatchGet:               batchGetSvc,
+		BatchStore:             batchStoreSvc,
+		Enrich:                 enrichSvc,
+		Export:                 exportSvc,
+		ProjectRepo:            projectRepo,
+		UserRepo:               userRepo,
+		NamespaceRepo:          namespaceRepo,
+		OrgRepo:                orgRepo,
+		EntityReader:            entityRepo,
+		Traverser:              relationshipRepo,
+		EventBus:               eventBus,
+		HasEmbeddingProvider:   hasEmbed,
+		HasEnrichmentProviders: hasEnrich,
 	})
 
 	// Create metrics.

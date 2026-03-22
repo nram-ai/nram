@@ -68,6 +68,9 @@ type Dependencies struct {
 	EntityReader  EntityReader
 	Traverser     RelationshipTraverser
 	EventBus      events.EventBus
+	// Provider availability flags — used to condition MCP instructions.
+	HasEmbeddingProvider   bool
+	HasEnrichmentProviders bool
 }
 
 // Server wraps an MCP server with its Streamable HTTP transport and dependency context.
@@ -89,9 +92,11 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 	return r
 }
 
-// buildInstructions returns the MCP server instructions string describing all
-// available tools including enrichment and graph features.
-func buildInstructions(_ string) string {
+// buildInstructions returns the MCP server instructions string, conditioned on
+// which providers are configured. Without an embedding provider, semantic search
+// is unavailable; without enrichment providers, memory_enrich and memory_graph
+// are non-functional.
+func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 	var b strings.Builder
 
 	b.WriteString(`You have access to nram, a persistent memory layer for AI agents. Use it to store and recall information across conversations.
@@ -103,8 +108,17 @@ Key concepts:
 - Memories support TTL (time-to-live) for automatic expiration.
 
 Recommended workflow:
-1. Use memory_store to save important context, decisions, user preferences, or facts worth remembering.
-2. Use memory_recall to search for relevant memories using natural language queries. This performs semantic search when embeddings are configured.
+1. Use memory_store to save important context, decisions, user preferences, or facts worth remembering.`)
+
+	if hasEmbedding {
+		b.WriteString(`
+2. Use memory_recall to search for relevant memories using natural language queries. Semantic search is enabled — describe what you're looking for rather than using exact keywords.`)
+	} else {
+		b.WriteString(`
+2. Use memory_recall to search for relevant memories. Note: no embedding provider is configured, so recall uses tag filtering and text matching rather than semantic search. Configure an embedding provider in the admin UI to enable natural language recall.`)
+	}
+
+	b.WriteString(`
 3. Use memory_store_batch when you have multiple related memories to store at once.
 4. Use memory_update to modify existing memories (e.g., to correct or enrich them).
 5. Use memory_get to retrieve specific memories by their IDs when you already know which ones you need.
@@ -112,15 +126,26 @@ Recommended workflow:
 7. Use memory_projects to list available projects and their slugs.
 8. Use memory_export to export all memories from a project for backup or migration.`)
 
-	b.WriteString(`
+	if hasEnrichment {
+		b.WriteString(`
 9. Use memory_enrich to trigger entity extraction and enrichment on stored memories, enhancing future recall and graph traversal.
 10. Use memory_graph to explore the knowledge graph — find entities and their relationships starting from a name or search query.`)
+	}
 
 	b.WriteString(`
 
 Tips:
-- Be specific with tags — they enable precise filtering during recall.
-- When recalling, provide a natural language query describing what you're looking for rather than exact keywords.
+- Be specific with tags — they enable precise filtering during recall.`)
+
+	if hasEmbedding {
+		b.WriteString(`
+- When recalling, provide a natural language query describing what you're looking for rather than exact keywords.`)
+	} else {
+		b.WriteString(`
+- Use tags consistently when storing and recalling, since semantic search is not currently available.`)
+	}
+
+	b.WriteString(`
 - Store memories proactively: if a user shares preferences, project context, or important decisions, store them immediately.
 - Check for existing memories before storing duplicates — use memory_recall first.
 - When recalling without a project, only the global project is searched. To find project-specific memories, specify the project slug.
@@ -139,7 +164,7 @@ func NewServer(deps Dependencies) *Server {
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(false, true), // subscribe=false, listChanged=true
 		server.WithRecovery(),                        // recover from panics in tool handlers
-		server.WithInstructions(buildInstructions(deps.Backend)),
+		server.WithInstructions(buildInstructions(deps.HasEmbeddingProvider, deps.HasEnrichmentProviders)),
 	)
 
 	httpSrv := server.NewStreamableHTTPServer(

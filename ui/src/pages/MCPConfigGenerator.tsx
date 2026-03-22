@@ -64,11 +64,18 @@ You have access to persistent memory via nram. Use it proactively:
 **When to store:** After completing a task, store key decisions, architecture
 choices, configuration details, and anything you'd want to remember next session.
 Store facts, not conversations. Be specific: "API uses JWT RS256 with 1h expiry"
-not "we discussed auth."
+not "we discussed auth." Omit the project parameter to store in your global scope,
+or specify a project slug to organize memories by project.
 
 **When to recall:** At the start of every task, recall memories relevant to the
 current project and topic. Before making architecture decisions, check if prior
 decisions exist. Before asking the user something, check if the answer is in memory.
+If an embedding provider is configured, use natural language queries for semantic
+search. Otherwise, rely on tags for filtering.
+
+**Recall scoping:** Omit the project to search only global memories. Specify a
+project to search that project's memories plus global. Use tags consistently to
+improve recall accuracy regardless of provider configuration.
 
 **Tags:** Use consistent tags for your domain: architecture, config, decision,
 preference, bug, workaround, dependency, deployment.`;
@@ -76,7 +83,9 @@ preference, bug, workaround, dependency, deployment.`;
 const CURSORRULES_SNIPPET = `# Memory
 Use nram memory tools at the start of each task to recall prior context.
 After completing work, store key decisions and technical details as memories.
-Tag memories consistently: architecture, config, decision, preference.`;
+Tag memories consistently: architecture, config, decision, preference.
+Omit the project parameter to use the global scope, or specify a project slug.
+When recalling with a project, global memories are also included.`;
 
 // ---------------------------------------------------------------------------
 // Tab button
