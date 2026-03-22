@@ -7,9 +7,12 @@ import (
 	_ "modernc.org/sqlite" // Pure Go SQLite driver.
 )
 
-// sqliteDB wraps a *sql.DB connected to a SQLite database.
+// sqliteDB wraps separate read and write connection pools for SQLite.
+// The write pool has MaxOpenConns=1 to serialize all writes and eliminate
+// SQLITE_BUSY contention. The read pool allows concurrent readers via WAL mode.
 type sqliteDB struct {
-	db *sql.DB
+	readDB  *sql.DB
+	writeDB *sql.DB
 }
 
 func (s *sqliteDB) Backend() string {
@@ -17,29 +20,45 @@ func (s *sqliteDB) Backend() string {
 }
 
 func (s *sqliteDB) Ping(ctx context.Context) error {
-	return s.db.PingContext(ctx)
+	return s.writeDB.PingContext(ctx)
 }
 
 func (s *sqliteDB) Close() error {
-	return s.db.Close()
+	rerr := s.readDB.Close()
+	werr := s.writeDB.Close()
+	if werr != nil {
+		return werr
+	}
+	return rerr
 }
 
+// Exec routes to the write pool (single connection, serialized).
 func (s *sqliteDB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return s.db.ExecContext(ctx, query, args...)
+	return s.writeDB.ExecContext(ctx, query, args...)
 }
 
+// Query routes to the read pool (multiple connections, concurrent).
 func (s *sqliteDB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return s.db.QueryContext(ctx, query, args...)
+	return s.readDB.QueryContext(ctx, query, args...)
 }
 
+// QueryRow routes to the read pool (multiple connections, concurrent).
 func (s *sqliteDB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return s.db.QueryRowContext(ctx, query, args...)
+	return s.readDB.QueryRowContext(ctx, query, args...)
 }
 
+// BeginTx routes to the write pool (single connection, serialized).
 func (s *sqliteDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-	return s.db.BeginTx(ctx, opts)
+	return s.writeDB.BeginTx(ctx, opts)
 }
 
+// DB returns the read pool for use by migration tools and read-only callers.
 func (s *sqliteDB) DB() *sql.DB {
-	return s.db
+	return s.readDB
+}
+
+// WriteDB returns the write pool (single connection) for callers that need
+// direct write access (e.g., HNSW store, migration runner).
+func (s *sqliteDB) WriteDB() *sql.DB {
+	return s.writeDB
 }

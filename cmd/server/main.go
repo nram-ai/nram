@@ -51,7 +51,7 @@ func main() {
 	log.Printf("database backend: %s", db.Backend())
 
 	// Handle migration CLI commands before starting the server.
-	handled, err := migration.RunCLI(os.Args, db.DB(), db.Backend())
+	handled, err := migration.RunCLI(os.Args, db.WriteDB(), db.Backend())
 	if err != nil {
 		log.Fatalf("migration command failed: %v", err)
 	}
@@ -61,7 +61,7 @@ func main() {
 
 	// Auto-migrate on startup if configured.
 	if cfg.Database.MigrateOnStart {
-		m, err := migration.NewMigrator(db.DB(), db.Backend())
+		m, err := migration.NewMigrator(db.WriteDB(), db.Backend())
 		if err != nil {
 			log.Fatalf("failed to create migrator: %v", err)
 		}
@@ -217,7 +217,7 @@ func main() {
 			EfSearch:         cfg.HNSW.EfSearch,
 			MaxLoadedIndexes: cfg.HNSW.MaxLoadedIndexes,
 		}
-		hnswStore := storage.NewHNSWStore(db.DB(), hnswCfg)
+		hnswStore := storage.NewHNSWStore(db.DB(), db.WriteDB(), hnswCfg)
 		vectorStore = hnswStore
 		defer hnswStore.Close()
 		log.Println("hnsw vector store initialized (SQLite backend)")

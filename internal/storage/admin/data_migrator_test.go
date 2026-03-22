@@ -1477,6 +1477,7 @@ func (d *testSQLiteDB) QueryRow(ctx context.Context, q string, args ...any) *sql
 func (d *testSQLiteDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return d.db.BeginTx(ctx, opts)
 }
+func (d *testSQLiteDB) WriteDB() *sql.DB { return d.db }
 
 type testPostgresDB struct{}
 
@@ -1496,3 +1497,4 @@ func (d *testPostgresDB) QueryRow(_ context.Context, _ string, _ ...any) *sql.Ro
 func (d *testPostgresDB) BeginTx(_ context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+func (d *testPostgresDB) WriteDB() *sql.DB { return nil }

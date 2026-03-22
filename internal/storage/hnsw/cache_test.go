@@ -64,7 +64,7 @@ func insertTestVector(t *testing.T, db *sql.DB, nsID uuid.UUID, dim int, memID u
 
 func TestCacheGetOrCreateEmpty(t *testing.T) {
 	db := setupTestDB(t)
-	cache := NewIndexCache(db, CacheConfig{
+	cache := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour, // no background flush during test
 	})
@@ -90,7 +90,7 @@ func TestCacheGetOrCreateEmpty(t *testing.T) {
 
 func TestCacheGetOrCreateCached(t *testing.T) {
 	db := setupTestDB(t)
-	cache := NewIndexCache(db, CacheConfig{
+	cache := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
@@ -116,7 +116,7 @@ func TestCacheGetOrCreateCached(t *testing.T) {
 
 func TestCacheLRUEviction(t *testing.T) {
 	db := setupTestDB(t)
-	cache := NewIndexCache(db, CacheConfig{
+	cache := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       2,
 		SnapshotInterval: time.Hour,
 	})
@@ -168,7 +168,7 @@ func TestCacheLRUEviction(t *testing.T) {
 
 func TestCacheMarkDirtyAndFlush(t *testing.T) {
 	db := setupTestDB(t)
-	cache := NewIndexCache(db, CacheConfig{
+	cache := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
@@ -234,7 +234,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 	}
 
 	// Create cache and load — should rebuild from memory_vectors.
-	cache := NewIndexCache(db, CacheConfig{
+	cache := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
@@ -263,7 +263,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 	}
 
 	// Create a new cache — should load from snapshot this time.
-	cache2 := NewIndexCache(db, CacheConfig{
+	cache2 := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
@@ -285,7 +285,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 
 func TestCacheClose(t *testing.T) {
 	db := setupTestDB(t)
-	cache := NewIndexCache(db, CacheConfig{
+	cache := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
@@ -327,7 +327,7 @@ func TestCacheClose(t *testing.T) {
 
 func TestCacheRemove(t *testing.T) {
 	db := setupTestDB(t)
-	cache := NewIndexCache(db, CacheConfig{
+	cache := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})

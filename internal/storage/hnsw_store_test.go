@@ -93,7 +93,7 @@ func TestHNSWStoreUpsertAndSearch(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1 // effectively disable background snapshots for tests
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -138,7 +138,7 @@ func TestHNSWStoreUpsertBatch(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -178,7 +178,7 @@ func TestHNSWStoreDelete(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -225,7 +225,7 @@ func TestHNSWStoreNamespaceIsolation(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -275,7 +275,7 @@ func TestHNSWStoreUpsertUpdate(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -316,7 +316,7 @@ func TestHNSWStoreSearchEmptyNamespace(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -337,7 +337,7 @@ func TestHNSWStoreUnsupportedDimension(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -369,7 +369,7 @@ func TestHNSWStorePing(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	if err := store.Ping(context.Background()); err != nil {
@@ -381,7 +381,7 @@ func TestHNSWStoreClose(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 
 	ctx := context.Background()
 	nsID := uuid.New()
@@ -479,7 +479,7 @@ func TestHNSWStoreSnapshotPersistence(t *testing.T) {
 	// Phase 1: Create store, upsert vectors, close to flush snapshots.
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store1 := storage.NewHNSWStore(db, cfg)
+	store1 := storage.NewHNSWStore(db, db, cfg)
 
 	ids := make([]uuid.UUID, 10)
 	vecs := make([][]float32, 10)
@@ -505,7 +505,7 @@ func TestHNSWStoreSnapshotPersistence(t *testing.T) {
 	}
 
 	// Phase 2: Create a NEW store with the same DB (simulates restart).
-	store2 := storage.NewHNSWStore(db, cfg)
+	store2 := storage.NewHNSWStore(db, db, cfg)
 	defer store2.Close()
 
 	// Search should return correct results loaded from the snapshot.
@@ -543,7 +543,7 @@ func TestHNSWStoreLRUEviction(t *testing.T) {
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
 	cfg.MaxLoadedIndexes = 2
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ns1 := uuid.New()
@@ -596,7 +596,7 @@ func TestHNSWStoreConcurrentReadWrite(t *testing.T) {
 	defer db.Close()
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -651,7 +651,7 @@ func TestHNSWStoreDeleteAndSearchConsistency(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -720,7 +720,7 @@ func TestHNSWStoreBatchUpsertMultiNamespace(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store := storage.NewHNSWStore(db, cfg)
+	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
 	ctx := context.Background()
@@ -846,7 +846,7 @@ func TestHNSWStoreRebuildFromVectors(t *testing.T) {
 	// Phase 1: Create store, upsert vectors, close to flush snapshots.
 	cfg := storage.DefaultHNSWConfig()
 	cfg.SnapshotInterval = 1<<63 - 1
-	store1 := storage.NewHNSWStore(db, cfg)
+	store1 := storage.NewHNSWStore(db, db, cfg)
 
 	ids := make([]uuid.UUID, 10)
 	vecs := make([][]float32, 10)
@@ -887,7 +887,7 @@ func TestHNSWStoreRebuildFromVectors(t *testing.T) {
 	}
 
 	// Phase 3: Create a new store — it should rebuild from memory_vectors.
-	store2 := storage.NewHNSWStore(db, cfg)
+	store2 := storage.NewHNSWStore(db, db, cfg)
 	defer store2.Close()
 
 	// Search should return correct results rebuilt from raw vectors.

@@ -19,7 +19,8 @@ type IndexCache struct {
 	indexes          map[indexKey]*indexEntry
 	lruOrder         *list.List
 	maxIndexes       int
-	db               *sql.DB
+	readDB           *sql.DB
+	writeDB          *sql.DB
 	graphOpts        []Option
 	stopCh           chan struct{}
 	wg               sync.WaitGroup
@@ -46,8 +47,9 @@ type CacheConfig struct {
 }
 
 // NewIndexCache creates a new index cache backed by the given SQLite DB.
+// readDB is used for loading snapshots and vectors; writeDB is used for persisting snapshots.
 // It starts a background goroutine that periodically flushes dirty snapshots.
-func NewIndexCache(db *sql.DB, cfg CacheConfig) *IndexCache {
+func NewIndexCache(readDB, writeDB *sql.DB, cfg CacheConfig) *IndexCache {
 	maxIndexes := cfg.MaxIndexes
 	if maxIndexes <= 0 {
 		maxIndexes = 64
@@ -61,7 +63,8 @@ func NewIndexCache(db *sql.DB, cfg CacheConfig) *IndexCache {
 		indexes:          make(map[indexKey]*indexEntry),
 		lruOrder:         list.New(),
 		maxIndexes:       maxIndexes,
-		db:               db,
+		readDB:           readDB,
+		writeDB:          writeDB,
 		graphOpts:        cfg.GraphOpts,
 		stopCh:           make(chan struct{}),
 		snapshotInterval: interval,
@@ -188,7 +191,7 @@ func (c *IndexCache) Remove(namespaceID uuid.UUID, dimension int) {
 func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, error) {
 	// Try snapshot first.
 	var graphData []byte
-	err := c.db.QueryRowContext(ctx,
+	err := c.readDB.QueryRowContext(ctx,
 		"SELECT graph_data FROM hnsw_snapshots WHERE namespace_id = ? AND dimension = ?",
 		key.NamespaceID.String(), key.Dimension,
 	).Scan(&graphData)
@@ -203,7 +206,7 @@ func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, error
 	}
 
 	// Rebuild from memory_vectors.
-	rows, err := c.db.QueryContext(ctx,
+	rows, err := c.readDB.QueryContext(ctx,
 		"SELECT memory_id, embedding FROM memory_vectors WHERE namespace_id = ? AND dimension = ?",
 		key.NamespaceID.String(), key.Dimension,
 	)
@@ -245,7 +248,7 @@ func (c *IndexCache) saveSnapshot(ctx context.Context, key indexKey, g *Graph) e
 		return fmt.Errorf("hnsw: cache: export graph ns=%s dim=%d: %w", key.NamespaceID, key.Dimension, err)
 	}
 
-	_, err := c.db.ExecContext(ctx, `
+	_, err := c.writeDB.ExecContext(ctx, `
 		INSERT INTO hnsw_snapshots (namespace_id, dimension, graph_data, node_count, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(namespace_id, dimension) DO UPDATE SET

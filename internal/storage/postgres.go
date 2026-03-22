@@ -43,3 +43,7 @@ func (p *postgresDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx,
 func (p *postgresDB) DB() *sql.DB {
 	return p.db
 }
+
+func (p *postgresDB) WriteDB() *sql.DB {
+	return p.db
+}

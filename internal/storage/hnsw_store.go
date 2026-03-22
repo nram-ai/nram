@@ -32,17 +32,18 @@ func DefaultHNSWConfig() HNSWConfig {
 
 // HNSWStore implements VectorStore using a pure-Go HNSW index backed by SQLite.
 type HNSWStore struct {
-	db    *sql.DB
-	cache *hnsw.IndexCache
+	readDB  *sql.DB
+	writeDB *sql.DB
+	cache   *hnsw.IndexCache
 }
 
 // Compile-time interface check.
 var _ VectorStore = (*HNSWStore)(nil)
 
 // NewHNSWStore creates a new HNSWStore backed by the given SQLite database.
-// It initializes the IndexCache with translated configuration and starts the
-// background snapshot goroutine.
-func NewHNSWStore(db *sql.DB, cfg HNSWConfig) *HNSWStore {
+// readDB is used for loading vectors; writeDB is used for upserts, deletes,
+// and snapshot persistence.
+func NewHNSWStore(readDB, writeDB *sql.DB, cfg HNSWConfig) *HNSWStore {
 	// Apply defaults for zero-valued config fields.
 	if cfg.M <= 0 {
 		cfg.M = 16
@@ -71,8 +72,9 @@ func NewHNSWStore(db *sql.DB, cfg HNSWConfig) *HNSWStore {
 	}
 
 	return &HNSWStore{
-		db:    db,
-		cache: hnsw.NewIndexCache(db, cacheCfg),
+		readDB:  readDB,
+		writeDB: writeDB,
+		cache:   hnsw.NewIndexCache(readDB, writeDB, cacheCfg),
 	}
 }
 
@@ -85,7 +87,7 @@ func (s *HNSWStore) Upsert(ctx context.Context, id uuid.UUID, namespaceID uuid.U
 	encoded := hnsw.EncodeVector(embedding)
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO memory_vectors (memory_id, namespace_id, dimension, embedding, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(memory_id) DO UPDATE SET
@@ -139,7 +141,7 @@ func (s *HNSWStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem) e
 
 	for gk, group := range groups {
 		// Insert all SQLite rows in a transaction.
-		tx, err := s.db.BeginTx(ctx, nil)
+		tx, err := s.writeDB.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("hnsw: begin transaction: %w", err)
 		}
@@ -227,7 +229,7 @@ func (s *HNSWStore) Delete(ctx context.Context, id uuid.UUID) error {
 	// Look up the memory_vectors row to get namespace_id and dimension.
 	var nsIDStr string
 	var dimension int
-	err := s.db.QueryRowContext(ctx,
+	err := s.readDB.QueryRowContext(ctx,
 		"SELECT namespace_id, dimension FROM memory_vectors WHERE memory_id = ?",
 		id.String(),
 	).Scan(&nsIDStr, &dimension)
@@ -244,7 +246,7 @@ func (s *HNSWStore) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 
 	// Delete from SQLite.
-	_, err = s.db.ExecContext(ctx, "DELETE FROM memory_vectors WHERE memory_id = ?", id.String())
+	_, err = s.writeDB.ExecContext(ctx, "DELETE FROM memory_vectors WHERE memory_id = ?", id.String())
 	if err != nil {
 		return fmt.Errorf("hnsw: delete from memory_vectors: %w", err)
 	}
@@ -266,7 +268,7 @@ func (s *HNSWStore) Delete(ctx context.Context, id uuid.UUID) error {
 
 // Ping checks vector store connectivity by pinging the underlying SQLite database.
 func (s *HNSWStore) Ping(ctx context.Context) error {
-	return s.db.PingContext(ctx)
+	return s.readDB.PingContext(ctx)
 }
 
 // Close stops the background snapshot goroutine and flushes all dirty snapshots.
