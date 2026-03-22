@@ -12,6 +12,7 @@ type Config struct {
 	Fact     ProviderConfig `yaml:"fact"`
 	Entity   ProviderConfig `yaml:"entity"`
 	Qdrant   QdrantConfig   `yaml:"qdrant"`
+	HNSW     HNSWConfig     `yaml:"hnsw"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -51,6 +52,14 @@ type ProviderConfig struct {
 	Model    string `yaml:"model"`
 }
 
+// HNSWConfig holds configuration for the pure-Go HNSW vector index (SQLite backend).
+type HNSWConfig struct {
+	M                int `yaml:"m"`                  // Max neighbors per layer (default 16)
+	EfConstruction   int `yaml:"ef_construction"`    // Construction candidate pool size (default 200)
+	EfSearch         int `yaml:"ef_search"`          // Search candidate pool size (default 50)
+	MaxLoadedIndexes int `yaml:"max_loaded_indexes"` // Max in-memory indexes before LRU eviction (default 64)
+}
+
 // DefaultConfig returns the default configuration values.
 func DefaultConfig() Config {
 	return Config{
@@ -63,5 +72,11 @@ func DefaultConfig() Config {
 			MigrateOnStart: true,
 		},
 		LogLevel: "info",
+		HNSW: HNSWConfig{
+			M:                16,
+			EfConstruction:   200,
+			EfSearch:         50,
+			MaxLoadedIndexes: 64,
+		},
 	}
 }
