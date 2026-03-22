@@ -76,6 +76,19 @@ func main() {
 	memoryRepo := storage.NewMemoryRepo(db)
 	projectRepo := storage.NewProjectRepo(db)
 	namespaceRepo := storage.NewNamespaceRepo(db)
+
+	// Ensure every user has a "global" project. This is idempotent — existing
+	// global projects are skipped. Handles upgrades from versions before the
+	// global project was introduced.
+	{
+		tmpUserRepo := storage.NewUserRepo(db)
+		users, err := tmpUserRepo.ListAll(context.Background())
+		if err == nil {
+			for _, u := range users {
+				_, _ = projectRepo.AutoCreateUnderUser(context.Background(), namespaceRepo, u.NamespaceID, "global")
+			}
+		}
+	}
 	userRepo := storage.NewUserRepo(db)
 	orgRepo := storage.NewOrganizationRepo(db)
 	apiKeyRepo := storage.NewAPIKeyRepo(db)
