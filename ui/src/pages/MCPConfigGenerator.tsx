@@ -1,4 +1,6 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
+import { useProviderSlots } from "../hooks/useApi";
+import type { ProviderSlot } from "../api/client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -57,7 +59,8 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 // Constants
 // ---------------------------------------------------------------------------
 
-const CLAUDE_MD_SNIPPET = `## Memory (nram)
+function buildClaudeMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
+  let snippet = `## Memory (nram)
 
 You have access to persistent memory via nram. Use it proactively:
 
@@ -69,23 +72,59 @@ or specify a project slug to organize memories by project.
 
 **When to recall:** At the start of every task, recall memories relevant to the
 current project and topic. Before making architecture decisions, check if prior
-decisions exist. Before asking the user something, check if the answer is in memory.
-If an embedding provider is configured, use natural language queries for semantic
-search. Otherwise, rely on tags for filtering.
+decisions exist. Before asking the user something, check if the answer is in memory.`;
+
+  if (hasEmbedding) {
+    snippet += `
+Use natural language queries for semantic search — describe what you're looking
+for rather than using exact keywords.`;
+  } else {
+    snippet += `
+Note: no embedding provider is currently configured, so recall uses tag filtering
+and text matching. Use tags consistently when storing to improve recall accuracy.`;
+  }
+
+  snippet += `
 
 **Recall scoping:** Omit the project to search only global memories. Specify a
-project to search that project's memories plus global. Use tags consistently to
-improve recall accuracy regardless of provider configuration.
+project to search that project's memories plus global.`;
+
+  if (hasEnrichment) {
+    snippet += `
+
+**Enrichment:** You can pass \`enrich: true\` when storing memories to trigger
+automatic entity and fact extraction. Use memory_graph to explore the knowledge
+graph built from enriched memories.`;
+  }
+
+  snippet += `
 
 **Tags:** Use consistent tags for your domain: architecture, config, decision,
 preference, bug, workaround, dependency, deployment.`;
 
-const CURSORRULES_SNIPPET = `# Memory
+  return snippet;
+}
+
+function buildCursorRulesSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
+  let snippet = `# Memory
 Use nram memory tools at the start of each task to recall prior context.
 After completing work, store key decisions and technical details as memories.
 Tag memories consistently: architecture, config, decision, preference.
 Omit the project parameter to use the global scope, or specify a project slug.
 When recalling with a project, global memories are also included.`;
+
+  if (!hasEmbedding) {
+    snippet += `
+No embedding provider is configured — rely on tags for filtering during recall.`;
+  }
+
+  if (hasEnrichment) {
+    snippet += `
+Use enrich: true when storing to enable entity/fact extraction and graph features.`;
+  }
+
+  return snippet;
+}
 
 // ---------------------------------------------------------------------------
 // Tab button
@@ -299,6 +338,27 @@ function MCPConfigGenerator() {
   const [serverUrl, setServerUrl] = useState(() => window.location.origin + "/mcp");
   const [apiKey, setApiKey] = useState("");
   const [activeTab, setActiveTab] = useState<ToolTab>("claude-code");
+  const slotsQuery = useProviderSlots();
+
+  const { hasEmbedding, hasEnrichment } = useMemo(() => {
+    const slots: ProviderSlot[] = Array.isArray(slotsQuery.data) ? slotsQuery.data : [];
+    const slotMap = new Map(slots.map((s) => [s.slot, s]));
+    return {
+      hasEmbedding: slotMap.get("embedding")?.configured ?? false,
+      hasEnrichment:
+        (slotMap.get("fact")?.configured ?? false) &&
+        (slotMap.get("entity")?.configured ?? false),
+    };
+  }, [slotsQuery.data]);
+
+  const claudeMdSnippet = useMemo(
+    () => buildClaudeMdSnippet(hasEmbedding, hasEnrichment),
+    [hasEmbedding, hasEnrichment],
+  );
+  const cursorRulesSnippet = useMemo(
+    () => buildCursorRulesSnippet(hasEmbedding, hasEnrichment),
+    [hasEmbedding, hasEnrichment],
+  );
 
   const tabs: { key: ToolTab; label: string }[] = [
     { key: "claude-code", label: "Claude Code" },
@@ -380,7 +440,7 @@ function MCPConfigGenerator() {
               use memory. This provides detailed guidance for proactive memory usage.
             </p>
           </div>
-          <CodeBlock code={CLAUDE_MD_SNIPPET} />
+          <CodeBlock code={claudeMdSnippet} />
         </div>
 
         <div className="bg-card rounded-md border border-border p-4 space-y-4">
@@ -391,7 +451,7 @@ function MCPConfigGenerator() {
               version of the memory instructions suitable for Cursor&apos;s rule format.
             </p>
           </div>
-          <CodeBlock code={CURSORRULES_SNIPPET} />
+          <CodeBlock code={cursorRulesSnippet} />
         </div>
       </div>
     </div>
