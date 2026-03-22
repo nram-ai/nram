@@ -356,7 +356,6 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      userLookup,
 		NamespaceRepo: namespaceLookup,
-		OrgRepo:       orgLookup,
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 
@@ -395,7 +394,6 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		MeAPIKeys:  api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
 
-		OrgRecall:   api.NewOrgRecallHandler(recallSvc, orgLookup, userLookup),
 		OrgUsers:    api.NewOrgUsersHandler(api.OrgUserConfig{Store: orgUserStore}),
 		OrgProjects: api.NewOrgProjectsHandler(api.OrgProjectConfig{Store: orgProjectStore}),
 		OrgIdP:      api.NewOrgIdPHandler(&rrOrgIdPStore{}),
@@ -882,46 +880,6 @@ func TestRouteRestructure_Tier7_RemovedAdminRoutes(t *testing.T) {
 			// Non-admin users still get 403 from RequireRole on the /v1/admin/* group
 			resp := rbacDoRequest(t, "GET", env.Server.URL+path, env.OrgAMember.JWT, nil)
 			rbacExpectStatus(t, resp, http.StatusForbidden)
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Test: Tier 8 — OrgRecall cross-org access control
-// ---------------------------------------------------------------------------
-
-func TestRouteRestructure_Tier8_OrgRecall(t *testing.T) {
-	env := newRRTestEnv(t)
-
-	orgAID := env.OrgA.ID
-	orgBID := env.OrgB.ID
-
-	body := map[string]interface{}{"query": "test recall"}
-
-	cases := []struct {
-		name   string
-		orgID  uuid.UUID
-		token  string
-		expect int
-	}{
-		// Own org recall — all roles should succeed
-		{"admin_own_org", orgAID, env.Admin.JWT, http.StatusOK},
-		{"org_owner_own_org", orgAID, env.OrgAOwner.JWT, http.StatusOK},
-		{"member_own_org", orgAID, env.OrgAMember.JWT, http.StatusOK},
-		{"readonly_own_org", orgAID, env.OrgAReadonly.JWT, http.StatusOK},
-		{"service_own_org", orgAID, env.OrgAService.JWT, http.StatusOK},
-
-		// Cross-org recall — should be denied (except admin)
-		{"admin_cross_org", orgBID, env.Admin.JWT, http.StatusOK},
-		{"org_owner_cross_org", orgBID, env.OrgAOwner.JWT, http.StatusForbidden},
-		{"member_cross_org", orgBID, env.OrgAMember.JWT, http.StatusForbidden},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			url := fmt.Sprintf("%s/v1/orgs/%s/memories/recall", env.Server.URL, tc.orgID)
-			resp := rbacDoRequest(t, "POST", url, tc.token, body)
-			rbacExpectStatus(t, resp, tc.expect)
 		})
 	}
 }

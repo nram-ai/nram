@@ -535,7 +535,6 @@ func TestRecall_TokenUsageRecorded(t *testing.T) {
 	projectID, nsID, projects, namespaces := setupTestFixtures()
 
 	userID := uuid.New()
-	orgID := uuid.New()
 	apiKeyID := uuid.New()
 
 	memID := uuid.New()
@@ -569,7 +568,6 @@ func TestRecall_TokenUsageRecorded(t *testing.T) {
 		ProjectID: projectID,
 		Query:     "search with usage",
 		UserID:    &userID,
-		OrgID:     &orgID,
 		APIKeyID:  &apiKeyID,
 	})
 	if err != nil {
@@ -595,9 +593,6 @@ func TestRecall_TokenUsageRecorded(t *testing.T) {
 	}
 	if *tu.UserID != userID {
 		t.Errorf("expected user ID %s, got %s", userID, *tu.UserID)
-	}
-	if *tu.OrgID != orgID {
-		t.Errorf("expected org ID %s, got %s", orgID, *tu.OrgID)
 	}
 	if *tu.APIKeyID != apiKeyID {
 		t.Errorf("expected API key ID %s, got %s", apiKeyID, *tu.APIKeyID)

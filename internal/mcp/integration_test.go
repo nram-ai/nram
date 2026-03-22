@@ -938,65 +938,7 @@ func TestMCP_RecallEmptyQuery(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 14. TestMCP_RecallOrgScope
-// ---------------------------------------------------------------------------
-
-func TestMCP_RecallOrgScope(t *testing.T) {
-	userID := uuid.New()
-	orgNSID := uuid.New()
-
-	org := &model.Organization{
-		ID:          uuid.New(),
-		NamespaceID: orgNSID,
-		Slug:        "acme-corp",
-	}
-
-	ns := &model.Namespace{ID: orgNSID, Path: "/orgs/acme-corp", Depth: 1}
-
-	recallSvc := service.NewRecallService(
-		&mockMemoryBatchReader{memories: []model.Memory{}},
-		nil,
-		&mockNamespaceLookup{ns: ns},
-		&mockTokenUsageRepo{},
-		nil, nil, nil, nil, nil,
-	)
-
-	deps := Dependencies{
-		Backend:       storage.BackendSQLite,
-		UserRepo:      &mockUserRepoStore{user: &model.User{ID: userID, NamespaceID: uuid.New()}},
-		ProjectRepo:   &mockProjectRepoStore{},
-		NamespaceRepo: &mockNamespaceRepoStore{ns: ns},
-		OrgRepo:       &mockOrgRepo{org: org},
-		Recall:        recallSvc,
-	}
-	srv := NewServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_recall"
-	req.Params.Arguments = map[string]interface{}{
-		"query": "org-wide search",
-		"org":   "acme-corp",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryRecall(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("unexpected tool error: %s", extractText(result))
-	}
-
-	var resp service.RecallResponse
-	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-	// Reaching here means OrgRepo.GetBySlug was called and succeeded.
-	_ = resp
-}
-
-// ---------------------------------------------------------------------------
-// 15. TestMCP_ProjectsList
+// 14. TestMCP_ProjectsList (renumbered from 15 after org-scoped recall removal)
 // ---------------------------------------------------------------------------
 
 func TestMCP_ProjectsList(t *testing.T) {

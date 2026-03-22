@@ -291,7 +291,6 @@ func main() {
 		ProjectRepo:   projectRepo,
 		UserRepo:      userRepo,
 		NamespaceRepo: namespaceRepo,
-		OrgRepo:       orgRepo,
 		EntityReader:  entityRepo,
 		Traverser:     relationshipRepo,
 		EventBus:      eventBus,
@@ -406,7 +405,6 @@ func main() {
 		MeChangePassword:    api.NewMeChangePasswordHandler(userRepo),
 
 		// Org-scoped handlers
-		OrgRecall:   api.NewOrgRecallHandler(recallSvc, orgRepo, userRepo),
 		OrgUsers:    api.NewOrgUsersHandler(api.OrgUserConfig{Store: userAdminStore}),
 		OrgProjects: api.NewOrgProjectsHandler(api.OrgProjectConfig{Store: projectAdminStore}),
 		OrgIdP:      api.NewOrgIdPHandler(oauthRepo),

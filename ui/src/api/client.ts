@@ -1088,9 +1088,6 @@ export const orgAPI = {
     return request<UsageReport>("GET", `/orgs/${orgId}/usage${qs ? `?${qs}` : ""}`);
   },
 
-  recall: (orgId: string, body: RecallRequest) =>
-    request<RecallResponse>("POST", `/orgs/${orgId}/memories/recall`, body),
-
   listOrgIdPs: (orgId: string) =>
     request<IdPConfig[]>("GET", `/orgs/${orgId}/idp`),
   configureIdP: (orgId: string, data: CreateIdPConfigRequest) =>

@@ -519,7 +519,6 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      userLookup,
 		NamespaceRepo: namespaceLookup,
-		OrgRepo:       orgLookup,
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 
@@ -562,9 +561,6 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 		MeProjects: api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
 		MeAPIKeys:  api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
-
-		// Org-scoped
-		OrgRecall: api.NewOrgRecallHandler(recallSvc, orgLookup, userLookup),
 
 		// Admin
 		AdminDashboard: api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashStore}),
@@ -679,10 +675,6 @@ func rbacUpdateURL(baseURL string, projectID, memoryID uuid.UUID) string {
 	return fmt.Sprintf("%s/v1/projects/%s/memories/%s", baseURL, projectID, memoryID)
 }
 
-func rbacOrgRecallURL(baseURL string, orgID uuid.UUID) string {
-	return fmt.Sprintf("%s/v1/orgs/%s/memories/recall", baseURL, orgID)
-}
-
 func rbacStoreMemory(t *testing.T, baseURL string, token string, projectID uuid.UUID) string {
 	t.Helper()
 	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(baseURL, projectID), token, map[string]interface{}{
@@ -787,14 +779,6 @@ func TestRBAC_Admin_CanAccessAnyOrgProject(t *testing.T) {
 	rbacStoreMemory(t, env.Server.URL, env.Admin.JWT, env.ProjectB.ID)
 }
 
-func TestRBAC_Admin_CanRecallFromAnyOrg(t *testing.T) {
-	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacOrgRecallURL(env.Server.URL, env.OrgB.ID), env.Admin.JWT, map[string]interface{}{
-		"query": "test",
-	})
-	rbacExpectStatus(t, resp, http.StatusOK)
-}
-
 func TestRBAC_Admin_CanManageUsers(t *testing.T) {
 	env := newRBACTestEnv(t)
 	resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/admin/users", env.Admin.JWT, nil)
@@ -832,22 +816,6 @@ func TestRBAC_OrgOwner_CannotAccessOtherOrgProjects(t *testing.T) {
 	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectB.ID), env.OrgAOwner.JWT, map[string]interface{}{
 		"content": "should fail",
 		"source":  "rbac-test",
-	})
-	rbacExpectStatus(t, resp, http.StatusForbidden)
-}
-
-func TestRBAC_OrgOwner_CanRecallFromOwnOrg(t *testing.T) {
-	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacOrgRecallURL(env.Server.URL, env.OrgA.ID), env.OrgAOwner.JWT, map[string]interface{}{
-		"query": "test",
-	})
-	rbacExpectStatus(t, resp, http.StatusOK)
-}
-
-func TestRBAC_OrgOwner_CannotRecallFromOtherOrg(t *testing.T) {
-	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacOrgRecallURL(env.Server.URL, env.OrgB.ID), env.OrgAOwner.JWT, map[string]interface{}{
-		"query": "test",
 	})
 	rbacExpectStatus(t, resp, http.StatusForbidden)
 }
@@ -1468,7 +1436,6 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      userLookup,
 		NamespaceRepo: namespaceLookup,
-		OrgRepo:       orgLookup,
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 
@@ -1517,9 +1484,6 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
 		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
-
-		// Org-scoped
-		OrgRecall: api.NewOrgRecallHandler(recallSvc, orgLookup, userLookup),
 
 		// Admin
 		AdminDashboard: api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashStore}),

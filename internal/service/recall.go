@@ -54,7 +54,6 @@ type RecallRequest struct {
 	GraphDepth  int        `json:"graph_depth"`
 	// Caller context
 	UserID   *uuid.UUID `json:"-"`
-	OrgID    *uuid.UUID `json:"-"`
 	APIKeyID *uuid.UUID `json:"-"`
 	// Scope overrides (for user/org-level recall)
 	NamespaceID *uuid.UUID `json:"-"` // if set, search this namespace instead of project's
@@ -268,7 +267,6 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				if s.tokenUsage != nil {
 					usage := &model.TokenUsage{
 						ID:           uuid.New(),
-						OrgID:        req.OrgID,
 						UserID:       req.UserID,
 						ProjectID:    &projectID,
 						NamespaceID:  namespaceID,

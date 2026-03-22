@@ -34,11 +34,6 @@ type NamespaceRepo interface {
 	Create(ctx context.Context, ns *model.Namespace) error
 }
 
-// OrgRepo defines the organization lookup operations needed by MCP tool handlers.
-type OrgRepo interface {
-	GetBySlug(ctx context.Context, slug string) (*model.Organization, error)
-}
-
 // EntityReader provides entity lookup operations for MCP tool handlers.
 type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
@@ -65,7 +60,6 @@ type Dependencies struct {
 	ProjectRepo   ProjectRepo
 	UserRepo      UserRepo
 	NamespaceRepo NamespaceRepo
-	OrgRepo       OrgRepo
 	EntityReader  EntityReader
 	Traverser     RelationshipTraverser
 	EventBus events.EventBus
@@ -144,7 +138,6 @@ memory_store_batch — Store multiple memories in one call.
 memory_recall — Search memories.
   query (required, natural language)
   project (optional — omit to search global only; specify to search project + global)
-  org (optional — search across an entire organization)
   limit (optional, default 10)
   tags (optional, intersection filter: memory must have ALL specified tags)`)
 

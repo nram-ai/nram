@@ -873,32 +873,6 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   # ── Org-Scoped ─────────────────────────────────────────────────────────
-  /v1/orgs/{org_id}/memories/recall:
-    post:
-      operationId: orgRecall
-      tags: [Memories]
-      summary: Org-scoped memory recall
-      parameters:
-        - name: org_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RecallRequest"
-      responses:
-        "200":
-          description: Recall results
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RecallResponse"
-
   # ── Scoped Data Viewing (readonly+) ────────────────────────────────────
   /v1/dashboard:
     get:

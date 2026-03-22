@@ -300,12 +300,6 @@ type e2eLineageCreator struct{}
 
 func (m *e2eLineageCreator) Create(_ context.Context, _ *model.MemoryLineage) error { return nil }
 
-type e2eOrgRepoMCP struct{}
-
-func (m *e2eOrgRepoMCP) GetBySlug(_ context.Context, _ string) (*model.Organization, error) {
-	return nil, fmt.Errorf("not found")
-}
-
 // ---------------------------------------------------------------------------
 // Build the REAL production router for E2E tests
 // ---------------------------------------------------------------------------
@@ -409,7 +403,6 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      &e2eUserRepoMCP{user: user},
 		NamespaceRepo: namespaceLookup,
-		OrgRepo:       &e2eOrgRepoMCP{},
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 
@@ -1935,7 +1928,6 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      &e2eUserRepoMCP{user: user},
 		NamespaceRepo: namespaceLookup,
-		OrgRepo:       &e2eOrgRepoMCP{},
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 

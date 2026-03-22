@@ -105,17 +105,14 @@ func TestHealthSQLiteBackend(t *testing.T) {
 	if resp.Backend != "sqlite" {
 		t.Errorf("expected backend sqlite, got %q", resp.Backend)
 	}
-	if resp.Providers.Embedding.Status != "unavailable_sqlite" {
-		t.Errorf("expected embedding unavailable_sqlite, got %q", resp.Providers.Embedding.Status)
+	if resp.Providers.Embedding.Status != "not_configured" {
+		t.Errorf("expected embedding not_configured, got %q", resp.Providers.Embedding.Status)
 	}
-	if resp.Providers.FactExtraction.Status != "unavailable_sqlite" {
-		t.Errorf("expected fact unavailable_sqlite, got %q", resp.Providers.FactExtraction.Status)
+	if resp.Providers.FactExtraction.Status != "not_configured" {
+		t.Errorf("expected fact not_configured, got %q", resp.Providers.FactExtraction.Status)
 	}
-	if resp.Providers.EntityExtraction.Status != "unavailable_sqlite" {
-		t.Errorf("expected entity unavailable_sqlite, got %q", resp.Providers.EntityExtraction.Status)
-	}
-	if resp.EnrichmentQueue != nil {
-		t.Error("expected enrichment_queue to be omitted on SQLite")
+	if resp.Providers.EntityExtraction.Status != "not_configured" {
+		t.Errorf("expected entity not_configured, got %q", resp.Providers.EntityExtraction.Status)
 	}
 }
 

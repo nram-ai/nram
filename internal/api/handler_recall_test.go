@@ -53,26 +53,6 @@ func (m *mockUserReader) GetByID(ctx context.Context, id uuid.UUID) (*model.User
 	}, nil
 }
 
-// --- mock org reader ---
-
-type mockOrgReader struct {
-	org *model.Organization
-	err error
-}
-
-func (m *mockOrgReader) GetByID(ctx context.Context, id uuid.UUID) (*model.Organization, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	if m.org != nil {
-		return m.org, nil
-	}
-	return &model.Organization{
-		ID:          id,
-		NamespaceID: uuid.New(),
-	}, nil
-}
-
 // --- test helpers ---
 
 func newRecallRouter(handler http.HandlerFunc) *chi.Mux {
@@ -84,12 +64,6 @@ func newRecallRouter(handler http.HandlerFunc) *chi.Mux {
 func newMeRecallRouter(handler http.HandlerFunc) *chi.Mux {
 	r := chi.NewRouter()
 	r.Post("/v1/me/memories/recall", handler)
-	return r
-}
-
-func newOrgRecallRouter(handler http.HandlerFunc) *chi.Mux {
-	r := chi.NewRouter()
-	r.Post("/v1/orgs/{org_id}/memories/recall", handler)
 	return r
 }
 
@@ -271,62 +245,6 @@ func TestMeRecallHandler_Success(t *testing.T) {
 	}
 }
 
-func TestOrgRecallHandler_Success(t *testing.T) {
-	namespaceID := uuid.New()
-	orgID := uuid.New()
-	userID := uuid.New()
-
-	orgs := &mockOrgReader{
-		org: &model.Organization{
-			ID:          orgID,
-			NamespaceID: namespaceID,
-		},
-	}
-
-	// User belongs to orgID — org membership check must pass.
-	users := &mockUserReader{
-		user: &model.User{
-			ID:    userID,
-			OrgID: orgID,
-		},
-	}
-
-	svc := &mockRecallService{
-		recallFn: func(ctx context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
-			if req.NamespaceID == nil {
-				t.Error("expected NamespaceID to be set")
-			} else if *req.NamespaceID != namespaceID {
-				t.Errorf("expected namespace_id %s, got %s", namespaceID, *req.NamespaceID)
-			}
-			if req.OrgID == nil || *req.OrgID != orgID {
-				t.Error("expected OrgID to match URL param")
-			}
-			return &service.RecallResponse{
-				Memories:  []service.RecallResult{},
-				LatencyMs: 3,
-			}, nil
-		},
-	}
-
-	router := newOrgRecallRouter(NewOrgRecallHandler(svc, orgs, users))
-	ac := &auth.AuthContext{UserID: userID, Role: "user"}
-
-	body := map[string]interface{}{
-		"query": "org-wide search",
-	}
-
-	w := doRecallRequest(router, "/v1/orgs/"+orgID.String()+"/memories/recall", body, ac)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp service.RecallResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-}
-
 func TestRecallHandler_ServiceError(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -382,23 +300,6 @@ func TestRecallHandler_ServiceError(t *testing.T) {
 				t.Errorf("expected %s error, got %+v", tt.wantError, envelope.Error)
 			}
 		})
-	}
-}
-
-func TestOrgRecallHandler_InvalidOrgID(t *testing.T) {
-	svc := &mockRecallService{}
-	orgs := &mockOrgReader{}
-	users := &mockUserReader{}
-	router := newOrgRecallRouter(NewOrgRecallHandler(svc, orgs, users))
-
-	body := map[string]interface{}{
-		"query": "test query",
-	}
-
-	w := doRecallRequest(router, "/v1/orgs/not-a-uuid/memories/recall", body, nil)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

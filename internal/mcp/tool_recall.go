@@ -19,7 +19,6 @@ func RegisterRecallTool(s *Server) {
 		mcp.WithDescription("Recall memories matching a natural language query. When a project is specified, both that project's memories and global memories are searched. When omitted, only the global project is searched."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Natural language query")),
 		mcp.WithString("project", mcp.Description("Project slug. Searches this project + global. Omit to search only the global project")),
-		mcp.WithString("org", mcp.Description("Org slug. Search across entire org")),
 		mcp.WithNumber("limit", mcp.Description("Maximum results to return (default 10)")),
 		mcp.WithArray("tags", mcp.Description("Filter by tags (intersection: memory must have ALL)")),
 	}
@@ -56,9 +55,6 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 	projectSlug, _ := args["project"].(string)
 	projectSlug = strings.TrimSpace(projectSlug)
 
-	orgSlug, _ := args["org"].(string)
-	orgSlug = strings.TrimSpace(orgSlug)
-
 	limit := 10
 	if v, ok := args["limit"].(float64); ok && v > 0 {
 		limit = int(v)
@@ -88,10 +84,6 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		UserID:       &uid,
 		APIKeyID:     ac.APIKeyID,
 	}
-	if ac.OrgID != uuid.Nil {
-		oid := ac.OrgID
-		req.OrgID = &oid
-	}
 
 	// Resolve the user's global project namespace for inclusion in all recalls.
 	user, err := deps.UserRepo.GetByID(ctx, ac.UserID)
@@ -120,18 +112,6 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		if projectSlug != "global" {
 			req.GlobalNamespaceID = globalNsID
 		}
-	} else if orgSlug != "" {
-		// Org-scoped recall: resolve org and use its namespace.
-		if deps.OrgRepo == nil {
-			return mcp.NewToolResultError("org lookup not available"), nil
-		}
-
-		org, err := deps.OrgRepo.GetBySlug(ctx, orgSlug)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("org not found: %v", err)), nil
-		}
-
-		req.NamespaceID = &org.NamespaceID
 	} else {
 		// No project specified: search only the global project.
 		if globalProject != nil {

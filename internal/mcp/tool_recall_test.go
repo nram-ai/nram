@@ -15,15 +15,6 @@ import (
 
 // --- mock types for recall tool tests ---
 
-type mockOrgRepo struct {
-	org *model.Organization
-	err error
-}
-
-func (m *mockOrgRepo) GetBySlug(_ context.Context, _ string) (*model.Organization, error) {
-	return m.org, m.err
-}
-
 type mockRecallService struct {
 	resp *service.RecallResponse
 	err  error
@@ -233,79 +224,6 @@ func TestHandleMemoryRecall_UserScoped(t *testing.T) {
 	}
 }
 
-func TestHandleMemoryRecall_OrgScoped(t *testing.T) {
-	userID := uuid.New()
-	orgNSID := uuid.New()
-
-	org := &model.Organization{
-		ID:          uuid.New(),
-		NamespaceID: orgNSID,
-		Slug:        "myorg",
-	}
-
-	recallSvc := newMockRecallSvc()
-
-	deps := Dependencies{
-		Backend:       storage.BackendSQLite,
-		UserRepo:      &mockUserRepoStore{user: &model.User{ID: userID, NamespaceID: uuid.New()}},
-		ProjectRepo:   &mockProjectRepoStore{},
-		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: orgNSID, Path: "/org"}},
-		OrgRepo:       &mockOrgRepo{org: org},
-		Recall:        recallSvc,
-	}
-	srv := NewServer(deps)
-
-	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
-	callReq.Params.Arguments = map[string]interface{}{
-		"query": "org-wide search",
-		"org":   "myorg",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryRecall(ctx, srv, callReq)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("unexpected tool error: %v", result.Content)
-	}
-
-	text := extractText(result)
-	var resp service.RecallResponse
-	if err := json.Unmarshal([]byte(text), &resp); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-}
-
-func TestHandleMemoryRecall_OrgNotFound(t *testing.T) {
-	userID := uuid.New()
-
-	deps := Dependencies{
-		Backend:       storage.BackendSQLite,
-		UserRepo:      &mockUserRepoStore{user: &model.User{ID: userID, NamespaceID: uuid.New()}},
-		ProjectRepo:   &mockProjectRepoStore{},
-		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: uuid.New()}},
-		OrgRepo:       &mockOrgRepo{err: fmt.Errorf("not found")},
-		Recall:        newMockRecallSvc(),
-	}
-	srv := NewServer(deps)
-
-	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
-	callReq.Params.Arguments = map[string]interface{}{
-		"query": "search",
-		"org":   "nonexistent",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryRecall(ctx, srv, callReq)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "org not found")
-}
-
 func TestHandleMemoryRecall_ProjectNotFound(t *testing.T) {
 	userID := uuid.New()
 	nsID := uuid.New()
@@ -336,30 +254,3 @@ func TestHandleMemoryRecall_ProjectNotFound(t *testing.T) {
 	assertToolError(t, result, "project not found")
 }
 
-func TestHandleMemoryRecall_OrgRepoNil(t *testing.T) {
-	userID := uuid.New()
-
-	deps := Dependencies{
-		Backend:       storage.BackendSQLite,
-		UserRepo:      &mockUserRepoStore{user: &model.User{ID: userID, NamespaceID: uuid.New()}},
-		ProjectRepo:   &mockProjectRepoStore{},
-		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: uuid.New()}},
-		Recall:        newMockRecallSvc(),
-		// OrgRepo intentionally nil
-	}
-	srv := NewServer(deps)
-
-	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
-	callReq.Params.Arguments = map[string]interface{}{
-		"query": "search",
-		"org":   "someorg",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryRecall(ctx, srv, callReq)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "org lookup not available")
-}

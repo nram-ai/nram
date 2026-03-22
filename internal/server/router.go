@@ -49,7 +49,6 @@ type Handlers struct {
 	MeChangePassword    http.HandlerFunc
 
 	// Org-scoped handlers
-	OrgRecall   http.HandlerFunc
 	OrgUsers    http.HandlerFunc
 	OrgProjects http.HandlerFunc
 	OrgIdP      http.HandlerFunc
@@ -249,9 +248,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				r.HandleFunc("/idp/*", handler(handlers.OrgIdP))
 			})
 
-			// Keep existing recall route.
-			r.Post("/memories/recall", handler(handlers.OrgRecall))
-		})
+			})
 
 		// Admin routes (require administrator role).
 		r.Route("/v1/admin", func(r chi.Router) {

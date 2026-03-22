@@ -18,11 +18,6 @@ type UserReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
 }
 
-// OrgReader provides read access to organization records for org-scoped handlers.
-type OrgReader interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Organization, error)
-}
-
 // recallRequestBody represents the JSON body for recall endpoints.
 type recallRequestBody struct {
 	Query        string   `json:"query"`
@@ -87,10 +82,6 @@ func NewRecallHandler(svc RecallServicer) http.HandlerFunc {
 		if ac := auth.FromContext(r.Context()); ac != nil {
 			uid := ac.UserID
 			req.UserID = &uid
-			if ac.OrgID != uuid.Nil {
-				oid := ac.OrgID
-				req.OrgID = &oid
-			}
 			req.APIKeyID = ac.APIKeyID
 		}
 
@@ -155,75 +146,3 @@ func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
 	}
 }
 
-// NewOrgRecallHandler returns an http.HandlerFunc for org-scoped memory recall.
-// It parses org_id from the URL, verifies the authenticated user belongs to that
-// organization (or is an administrator), and looks up the organization's namespace.
-func NewOrgRecallHandler(svc RecallServicer, orgs OrgReader, users UserReader) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		orgIDStr := chi.URLParam(r, "org_id")
-		orgID, err := uuid.Parse(orgIDStr)
-		if err != nil {
-			WriteError(w, ErrBadRequest("invalid org_id: must be a valid UUID"))
-			return
-		}
-
-		var body recallRequestBody
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			WriteError(w, ErrBadRequest("invalid request body: "+err.Error()))
-			return
-		}
-
-		if strings.TrimSpace(body.Query) == "" {
-			WriteError(w, ErrBadRequest("query is required"))
-			return
-		}
-
-		ac := auth.FromContext(r.Context())
-		if ac == nil {
-			WriteError(w, ErrUnauthorized("authentication required"))
-			return
-		}
-
-		// Verify the caller belongs to the target org, unless they are an administrator.
-		if ac.Role != auth.RoleAdministrator {
-			user, err := users.GetByID(r.Context(), ac.UserID)
-			if err != nil {
-				WriteError(w, ErrForbidden("user not found"))
-				return
-			}
-			if user.OrgID != orgID {
-				WriteError(w, ErrForbidden("access denied: you are not a member of this organization"))
-				return
-			}
-		}
-
-		org, err := orgs.GetByID(r.Context(), orgID)
-		if err != nil {
-			WriteError(w, ErrNotFound("organization not found"))
-			return
-		}
-
-		req := &service.RecallRequest{
-			Query:        body.Query,
-			Limit:        body.Limit,
-			Threshold:    body.Threshold,
-			Tags:         body.Tags,
-			IncludeGraph: body.IncludeGraph,
-			GraphDepth:   body.GraphDepth,
-			NamespaceID:  &org.NamespaceID,
-			OrgID:        &orgID,
-		}
-
-		uid := ac.UserID
-		req.UserID = &uid
-		req.APIKeyID = ac.APIKeyID
-
-		resp, err := svc.Recall(r.Context(), req)
-		if err != nil {
-			mapRecallError(w, err)
-			return
-		}
-
-		writeJSON(w, http.StatusOK, resp)
-	}
-}
