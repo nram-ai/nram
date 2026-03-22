@@ -25,6 +25,7 @@ func registerMemoryStore(s *Server) {
 	opts := []mcp.ToolOption{
 		mcp.WithDescription("Store a memory in a project. The project is auto-created if it does not exist. Defaults to the 'global' project if omitted."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global'), auto-created if missing")),
+		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to store")),
 		mcp.WithString("source", mcp.Description("Origin identifier")),
 		mcp.WithArray("tags", mcp.Description("Labels for filtering")),
@@ -43,6 +44,7 @@ func registerMemoryStoreBatch(s *Server) {
 	opts := []mcp.ToolOption{
 		mcp.WithDescription("Store multiple memories in a project in a single batch operation. Defaults to the 'global' project if omitted."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
+		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
 		mcp.WithArray("items", mcp.Required(), mcp.Description("Array of objects with content (required), source, tags, metadata")),
 	}
 	opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue enrichment for all items (default false)")))
@@ -75,6 +77,9 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 		projectSlug = "global"
 	}
 
+	projectDesc, _ := args["project_description"].(string)
+	projectDesc = strings.TrimSpace(projectDesc)
+
 	content, ok := args["content"].(string)
 	if !ok || strings.TrimSpace(content) == "" {
 		return mcp.NewToolResultError("content is required"), nil
@@ -89,7 +94,7 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 		enrich = v
 	}
 
-	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug)
+	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to resolve project: %v", err)), nil
 	}
@@ -151,6 +156,9 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		projectSlug = "global"
 	}
 
+	projectDesc, _ := args["project_description"].(string)
+	projectDesc = strings.TrimSpace(projectDesc)
+
 	rawItems, ok := args["items"].([]interface{})
 	if !ok || len(rawItems) == 0 {
 		return mcp.NewToolResultError("items is required and must be a non-empty array"), nil
@@ -166,7 +174,7 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		enrich = v
 	}
 
-	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug)
+	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to resolve project: %v", err)), nil
 	}
@@ -208,7 +216,8 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 
 // resolveOrCreateProject looks up an existing project by slug under the user's
 // namespace. If not found, it auto-creates a child namespace and project.
-func resolveOrCreateProject(ctx context.Context, deps Dependencies, userID uuid.UUID, slug string) (*model.Project, error) {
+// If description is non-empty and the project's description is empty, it is updated.
+func resolveOrCreateProject(ctx context.Context, deps Dependencies, userID uuid.UUID, slug, description string) (*model.Project, error) {
 	user, err := deps.UserRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("user not found: %w", err)
@@ -217,6 +226,11 @@ func resolveOrCreateProject(ctx context.Context, deps Dependencies, userID uuid.
 	// Try existing project first.
 	project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, slug)
 	if err == nil {
+		// Update description if the caller provided one and the project has none.
+		if description != "" && project.Description == "" {
+			_ = deps.ProjectRepo.UpdateDescription(ctx, project.ID, description)
+			project.Description = description
+		}
 		return project, nil
 	}
 
@@ -245,6 +259,7 @@ func resolveOrCreateProject(ctx context.Context, deps Dependencies, userID uuid.
 		OwnerNamespaceID: user.NamespaceID,
 		Name:             slug,
 		Slug:             slug,
+		Description:      description,
 		DefaultTags:      []string{},
 		Settings:         json.RawMessage(`{}`),
 	}

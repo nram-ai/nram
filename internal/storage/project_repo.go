@@ -226,6 +226,19 @@ func (r *ProjectRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// UpdateDescription sets the description of a project by ID.
+func (r *ProjectRepo) UpdateDescription(ctx context.Context, id uuid.UUID, description string) error {
+	query := `UPDATE projects SET description = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE projects SET description = $1, updated_at = NOW() WHERE id = $2`
+	}
+	_, err := r.db.Exec(ctx, query, description, id.String())
+	if err != nil {
+		return fmt.Errorf("project update description: %w", err)
+	}
+	return nil
+}
+
 // AutoCreateUnderUser creates a project with default settings under a user's namespace.
 // It also creates a child namespace for the project. If a project with the given slug
 // already exists under the user's namespace, it returns the existing project.

@@ -1333,6 +1333,16 @@ func (m *nsAwareProjectRepo) Create(_ context.Context, p *model.Project) error {
 	return nil
 }
 
+func (m *nsAwareProjectRepo) UpdateDescription(_ context.Context, id uuid.UUID, desc string) error {
+	for _, p := range m.projects {
+		if p.ID == id {
+			p.Description = desc
+			return nil
+		}
+	}
+	return nil
+}
+
 // nsAwareProjectLookup satisfies service.ProjectRepository (GetByID only).
 type nsAwareProjectLookup struct {
 	repo *nsAwareProjectRepo

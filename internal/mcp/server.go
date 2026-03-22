@@ -20,6 +20,7 @@ type ProjectRepo interface {
 	GetBySlug(ctx context.Context, ownerNamespaceID uuid.UUID, slug string) (*model.Project, error)
 	ListByUser(ctx context.Context, ownerNamespaceID uuid.UUID) ([]model.Project, error)
 	Create(ctx context.Context, project *model.Project) error
+	UpdateDescription(ctx context.Context, id uuid.UUID, description string) error
 }
 
 // UserRepo defines the user lookup operations needed by MCP tool handlers.

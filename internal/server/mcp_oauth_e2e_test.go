@@ -255,6 +255,13 @@ func (m *e2eProjectLookup) Create(_ context.Context, p *model.Project) error {
 	return nil
 }
 
+func (m *e2eProjectLookup) UpdateDescription(_ context.Context, _ uuid.UUID, desc string) error {
+	if m.project != nil {
+		m.project.Description = desc
+	}
+	return nil
+}
+
 type e2eNamespaceLookup struct {
 	ns *model.Namespace
 }

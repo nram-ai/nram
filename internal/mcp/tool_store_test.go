@@ -55,6 +55,10 @@ func (m *mockProjectRepoStore) Create(_ context.Context, p *model.Project) error
 	return nil
 }
 
+func (m *mockProjectRepoStore) UpdateDescription(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+
 type mockNamespaceRepoStore struct {
 	ns        *model.Namespace
 	getErr    error

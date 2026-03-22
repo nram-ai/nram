@@ -197,6 +197,15 @@ func (m *rbacMultiProjectLookup) Create(_ context.Context, p *model.Project) err
 	return nil
 }
 
+func (m *rbacMultiProjectLookup) UpdateDescription(_ context.Context, id uuid.UUID, desc string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.projects[id]; ok {
+		p.Description = desc
+	}
+	return nil
+}
+
 type rbacNamespaceLookup struct {
 	db storage.DB
 }
