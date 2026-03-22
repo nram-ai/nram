@@ -62,13 +62,15 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 function buildClaudeMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
   let snippet = `## Memory (nram)
 
-You have access to persistent memory via nram. Use it proactively:
+You have access to persistent memory via nram. Use it proactively.
 
 **When to store:** After completing a task, store key decisions, architecture
-choices, configuration details, and anything you'd want to remember next session.
+choices, configuration details, and anything worth remembering next session.
 Store facts, not conversations. Be specific: "API uses JWT RS256 with 1h expiry"
-not "we discussed auth." Omit the project parameter to store in your global scope,
-or specify a project slug to organize memories by project.
+not "we discussed auth." Omit the project parameter to use the global scope,
+or specify a project slug to organize by project. Use project_description on
+first store to document a project's purpose. Use ttl (e.g. "7d", "24h") for
+temporary memories that should auto-expire.
 
 **When to recall:** At the start of every task, recall memories relevant to the
 current project and topic. Before making architecture decisions, check if prior
@@ -76,12 +78,12 @@ decisions exist. Before asking the user something, check if the answer is in mem
 
   if (hasEmbedding) {
     snippet += `
-Use natural language queries for semantic search — describe what you're looking
-for rather than using exact keywords.`;
+Use natural language queries for semantic search — describe what you need,
+not exact keywords.`;
   } else {
     snippet += `
-Note: no embedding provider is currently configured, so recall uses tag filtering
-and text matching. Use tags consistently when storing to improve recall accuracy.`;
+No embedding provider is configured — recall uses tag filtering and text matching.
+Use tags consistently when storing to improve recall accuracy.`;
   }
 
   snippet += `
@@ -92,15 +94,23 @@ project to search that project's memories plus global.`;
   if (hasEnrichment) {
     snippet += `
 
-**Enrichment:** You can pass \`enrich: true\` when storing memories to trigger
-automatic entity and fact extraction. Use memory_graph to explore the knowledge
-graph built from enriched memories.`;
+**Enrichment:** Pass \`enrich: true\` when storing to trigger async entity/fact
+extraction. Use memory_enrich to batch-enrich existing memories. Use
+memory_graph to explore the knowledge graph. Recall includes graph context by
+default (include_graph: true, graph_depth: 2).`;
   }
 
   snippet += `
 
-**Tags:** Use consistent tags for your domain: architecture, config, decision,
-preference, bug, workaround, dependency, deployment.`;
+**Tags:** Use consistent tags: architecture, config, decision, preference, bug,
+workaround, dependency, deployment.
+
+**Tool notes:**
+- memory_store / memory_store_batch auto-create projects. All other tools
+  (update, get, forget, export${hasEnrichment ? ", enrich, graph" : ""}) require the project to exist.
+- memory_forget defaults to soft-delete. Pass hard: true for permanent deletion.
+- memory_export supports format: "json" (default) or "ndjson".
+- Use memory_projects to discover available projects before referencing them.`;
 
   return snippet;
 }
@@ -110,17 +120,22 @@ function buildCursorRulesSnippet(hasEmbedding: boolean, hasEnrichment: boolean):
 Use nram memory tools at the start of each task to recall prior context.
 After completing work, store key decisions and technical details as memories.
 Tag memories consistently: architecture, config, decision, preference.
-Omit the project parameter to use the global scope, or specify a project slug.
-When recalling with a project, global memories are also included.`;
+Omit project to use global scope, or specify a project slug.
+Recall with a project searches project + global. Without, searches global only.
+Use ttl (e.g. "7d") for temporary memories. Use project_description on first store.
+Only memory_store/memory_store_batch auto-create projects. Other tools require existing projects.
+memory_forget soft-deletes by default; pass hard: true for permanent deletion.
+memory_export supports format: "json" (default) or "ndjson".`;
 
   if (!hasEmbedding) {
     snippet += `
-No embedding provider is configured — rely on tags for filtering during recall.`;
+No embedding provider — rely on tags for filtering during recall.`;
   }
 
   if (hasEnrichment) {
     snippet += `
-Use enrich: true when storing to enable entity/fact extraction and graph features.`;
+Use enrich: true when storing for entity/fact extraction. Use memory_enrich to batch-enrich.
+Recall includes graph context by default (include_graph, graph_depth).`;
   }
 
   return snippet;

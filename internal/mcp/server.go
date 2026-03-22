@@ -100,58 +100,147 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 	var b strings.Builder
 
-	b.WriteString(`You have access to nram, a persistent memory layer for AI agents. Use it to store and recall information across conversations.
+	b.WriteString(`You have access to nram, a persistent memory layer. Use it to store and recall information across conversations.
 
 Key concepts:
-- Memories are organized into projects (identified by slug). Projects are auto-created on first use.
-- Every user has a "global" project that serves as the default scope. When you omit the project parameter, memories are stored in and recalled from the global project.
-- When creating or first storing to a project, include the project_description parameter to describe its purpose. Use memory_projects to see existing projects and their descriptions.
-- Each memory has content (the main text), optional tags (for filtering), and optional metadata (key-value pairs).
-- Memories support TTL (time-to-live) for automatic expiration.
+- Memories are organized into projects identified by slug. The "global" project is the default when project is omitted.
+- Projects are auto-created on first use by memory_store and memory_store_batch ONLY. All other tools require an existing project.
+- Use project_description when first storing to a project to describe its purpose. It sets the description on create or updates it if currently empty.
+- Use memory_projects to discover existing projects before storing.
+- Each memory has content (main text), optional tags (for filtering), and optional metadata (key-value pairs).
+- Memories support TTL (time-to-live) for automatic expiration, e.g. "24h", "7d", "30m".
 
-Recommended workflow:
-1. Use memory_store to save important context, decisions, user preferences, or facts worth remembering.`)
+Tools:
 
-	if hasEmbedding {
-		b.WriteString(`
-2. Use memory_recall to search for relevant memories using natural language queries. Semantic search is enabled — describe what you're looking for rather than using exact keywords.`)
-	} else {
-		b.WriteString(`
-2. Use memory_recall to search for relevant memories. Note: no embedding provider is configured, so recall uses tag filtering and text matching rather than semantic search. Configure an embedding provider in the admin UI to enable natural language recall.`)
-	}
-
-	b.WriteString(`
-3. Use memory_store_batch when you have multiple related memories to store at once.
-4. Use memory_update to modify existing memories (e.g., to correct or enrich them).
-5. Use memory_get to retrieve specific memories by their IDs when you already know which ones you need.
-6. Use memory_forget to remove memories that are no longer relevant.
-7. Use memory_projects to list available projects and their slugs.
-8. Use memory_export to export all memories from a project for backup or migration.`)
+memory_store — Store a single memory.
+  project (optional, default "global", auto-created if missing)
+  project_description (optional, sets/updates project description)
+  content (required)
+  source (optional, origin identifier)
+  tags (optional, array of labels for filtering)
+  metadata (optional, arbitrary key-value object)
+  ttl (optional, e.g. "7d", "24h", "30m")`)
 
 	if hasEnrichment {
 		b.WriteString(`
-9. Use memory_enrich to trigger entity extraction and enrichment on stored memories, enhancing future recall and graph traversal.
-10. Use memory_graph to explore the knowledge graph — find entities and their relationships starting from a name or search query.`)
+  enrich (optional, boolean, queues async entity/fact extraction)`)
+	}
+
+	b.WriteString(`
+
+memory_store_batch — Store multiple memories in one call.
+  project (optional, default "global", auto-created if missing)
+  project_description (optional)
+  items (required, array of {content, source, tags, metadata})
+  ttl (optional, applies to all items)`)
+
+	if hasEnrichment {
+		b.WriteString(`
+  enrich (optional, boolean, queues enrichment for all items)`)
+	}
+
+	b.WriteString(`
+
+memory_recall — Search memories.
+  query (required, natural language)
+  project (optional — omit to search global only; specify to search project + global)
+  org (optional — search across an entire organization)
+  limit (optional, default 10)
+  tags (optional, intersection filter: memory must have ALL specified tags)`)
+
+	if hasEmbedding {
+		b.WriteString(`
+  Semantic search is enabled — describe what you need rather than using exact keywords.`)
+	} else {
+		b.WriteString(`
+  No embedding provider is configured — recall uses tag filtering and text matching. Use tags consistently.`)
+	}
+
+	if hasEnrichment {
+		b.WriteString(`
+  include_graph (optional, default true — include related graph entities in results)
+  graph_depth (optional, default 2 — graph traversal depth)`)
+	}
+
+	b.WriteString(`
+
+memory_update — Update an existing memory by ID. Project must already exist.
+  id (required)
+  project (optional, default "global")
+  content (optional, new content)
+  tags (optional, replaces tags)
+  metadata (optional, replaces metadata)
+
+memory_get — Retrieve memories by ID. Project must already exist.
+  ids (required, array of memory IDs)
+  project (optional, default "global")
+
+memory_forget — Soft-delete memories. Project must already exist.
+  ids (required, array of memory IDs)
+  project (optional, default "global")
+  hard (optional, boolean, permanent deletion — default false)
+
+memory_projects — List all projects with slugs and descriptions. No parameters.
+
+memory_export — Export all data from a project. Project must already exist.
+  project (optional, default "global")
+  format (optional, "json" or "ndjson", default "json")`)
+
+	if hasEnrichment {
+		b.WriteString(`
+
+memory_enrich — Trigger entity/fact extraction. Project must already exist.
+  project (optional, default "global")
+  ids (optional, specific memory IDs — omit to enrich all un-enriched memories in the project)
+
+memory_graph — Explore the knowledge graph.
+  entity (required, entity name or search query)
+  project (optional, scopes to a project namespace)
+  depth (optional, default 2)
+  include_history (optional, default false — include expired/past relationships when true)`)
 	}
 
 	b.WriteString(`
 
 Tips:
-- Be specific with tags — they enable precise filtering during recall.`)
+- Use consistent, specific tags: architecture, config, decision, preference, bug, workaround.`)
 
 	if hasEmbedding {
 		b.WriteString(`
-- When recalling, provide a natural language query describing what you're looking for rather than exact keywords.`)
+- Use natural language queries for recall — describe what you need, not exact keywords.`)
 	} else {
 		b.WriteString(`
-- Use tags consistently when storing and recalling, since semantic search is not currently available.`)
+- Without an embedding provider, rely on tags for precise filtering during recall.`)
 	}
 
 	b.WriteString(`
-- Store memories proactively: if a user shares preferences, project context, or important decisions, store them immediately.
-- Check for existing memories before storing duplicates — use memory_recall first.
-- When recalling without a project, only the global project is searched. To find project-specific memories, specify the project slug.
-- When recalling with a project, both the project's memories and global memories are included in the results.`)
+- Store proactively: save preferences, decisions, and important context immediately.
+- Check for duplicates before storing — recall first.
+- Recall scoping: no project = global only; with project = project + global.`)
+
+	if hasEnrichment {
+		b.WriteString(`
+- Use enrich: true at store time, or batch-enrich later with memory_enrich.`)
+	}
+
+	b.WriteString(`
+- Use memory_projects to discover available projects before referencing them.
+- Use project_description when creating projects to document their purpose.
+- Only memory_store and memory_store_batch auto-create projects. All other tools (update, get, forget, export, enrich, graph) require the project to exist.`)
+
+	if hasEnrichment {
+		b.WriteString(`
+
+Resources:
+- nram://projects — list all projects
+- nram://projects/{slug}/entities — list entities in a project
+- nram://projects/{slug}/graph — entity relationship graph for a project`)
+	} else {
+		b.WriteString(`
+
+Resources:
+- nram://projects — list all projects`)
+	}
 
 	return b.String()
 }
