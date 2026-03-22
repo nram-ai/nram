@@ -227,14 +227,23 @@ function MemoryRankTable({
 // Enrichment Stats
 // ---------------------------------------------------------------------------
 
-function EnrichmentStatsCard({
+function EnrichmentStatsCards({
   data,
   isLoading,
 }: {
   data: AnalyticsData | undefined;
   isLoading: boolean;
 }) {
-  if (isLoading) return <SkeletonChart />;
+  if (isLoading) {
+    return (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
+    );
+  }
 
   const stats = data?.enrichment_stats ?? {
     total_processed: 0,
@@ -243,35 +252,24 @@ function EnrichmentStatsCard({
     avg_latency_ms: 0,
   };
 
+  const cards = [
+    { label: "Total Processed", value: formatNumber(stats.total_processed), color: "text-blue-600 dark:text-blue-400" },
+    { label: "Success Rate", value: formatPercent(stats.success_rate), color: "text-green-600 dark:text-green-400" },
+    { label: "Failure Rate", value: formatPercent(stats.failure_rate), color: "text-red-600 dark:text-red-400" },
+    { label: "Avg Latency", value: `${stats.avg_latency_ms.toLocaleString()}ms`, color: "text-amber-600 dark:text-amber-400" },
+  ];
+
   return (
-    <div className="rounded-lg border border-border bg-card p-6">
-      <h2 className="text-sm font-semibold">Enrichment Stats</h2>
-      <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div className="text-center">
-          <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-            {formatNumber(stats.total_processed)}
-          </p>
-          <p className="text-xs text-muted-foreground">Total Processed</p>
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {cards.map((c) => (
+        <div
+          key={c.label}
+          className="rounded-lg border border-border bg-card p-4"
+        >
+          <p className="text-sm font-medium text-muted-foreground">{c.label}</p>
+          <p className={`mt-1 text-3xl font-bold tracking-tight ${c.color}`}>{c.value}</p>
         </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-            {formatPercent(stats.success_rate)}
-          </p>
-          <p className="text-xs text-muted-foreground">Success Rate</p>
-        </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-            {formatPercent(stats.failure_rate)}
-          </p>
-          <p className="text-xs text-muted-foreground">Failure Rate</p>
-        </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">
-            {stats.avg_latency_ms.toLocaleString()}ms
-          </p>
-          <p className="text-xs text-muted-foreground">Avg Latency</p>
-        </div>
-      </div>
+      ))}
     </div>
   );
 }
@@ -323,10 +321,10 @@ function TokenUsageSummaryCards({
   }
 
   const cards = [
-    { label: "Total Input Tokens", value: formatNumber(summary.totalInput) },
-    { label: "Total Output Tokens", value: formatNumber(summary.totalOutput) },
-    { label: "Total Calls", value: formatNumber(summary.totalCalls) },
-    { label: "Estimated Cost", value: formatCost(summary.totalCost) },
+    { label: "Total Input Tokens", value: formatNumber(summary.totalInput), color: "text-blue-600 dark:text-blue-400" },
+    { label: "Total Output Tokens", value: formatNumber(summary.totalOutput), color: "text-cyan-600 dark:text-cyan-400" },
+    { label: "Total Calls", value: formatNumber(summary.totalCalls), color: "text-indigo-600 dark:text-indigo-400" },
+    { label: "Estimated Cost", value: formatCost(summary.totalCost), color: "text-emerald-600 dark:text-emerald-400" },
   ];
 
   return (
@@ -337,7 +335,7 @@ function TokenUsageSummaryCards({
           className="rounded-lg border border-border bg-card p-4"
         >
           <p className="text-sm font-medium text-muted-foreground">{c.label}</p>
-          <p className="mt-1 text-3xl font-bold tracking-tight">{c.value}</p>
+          <p className={`mt-1 text-3xl font-bold tracking-tight ${c.color}`}>{c.value}</p>
         </div>
       ))}
     </div>
@@ -748,7 +746,7 @@ function Analytics() {
         />
 
         {/* Enrichment Stats */}
-        <EnrichmentStatsCard
+        <EnrichmentStatsCards
           data={analyticsData}
           isLoading={analytics.isLoading}
         />

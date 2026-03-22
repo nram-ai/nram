@@ -6,6 +6,14 @@ import (
 	"github.com/google/uuid"
 )
 
+// UsageContext holds the ownership IDs for a project namespace, used to
+// attribute token usage records to the correct org/user/project.
+type UsageContext struct {
+	OrgID     *uuid.UUID
+	UserID    *uuid.UUID
+	ProjectID *uuid.UUID
+}
+
 type TokenUsage struct {
 	ID           uuid.UUID  `json:"id"`
 	OrgID        *uuid.UUID `json:"org_id"`

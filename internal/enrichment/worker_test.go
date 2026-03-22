@@ -321,7 +321,7 @@ func newTestHarness(
 	h.pool = NewWorkerPool(
 		WorkerConfig{Workers: 1, PollInterval: 10 * time.Millisecond},
 		h.reader, h.updater, h.creator, h.queue,
-		h.entities, h.rels, h.lineage, h.tokens, h.vectors,
+		h.entities, h.rels, h.lineage, h.tokens, nil, h.vectors,
 		func() provider.LLMProvider { return factLLM },
 		func() provider.LLMProvider { return entityLLM },
 		func() provider.EmbeddingProvider { return embedProv },

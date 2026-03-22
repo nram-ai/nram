@@ -67,6 +67,12 @@ type TokenRecorder interface {
 	Record(ctx context.Context, usage *model.TokenUsage) error
 }
 
+// UsageContextResolver resolves org, user, and project IDs from a project
+// namespace ID so that token usage records can be attributed correctly.
+type UsageContextResolver interface {
+	ResolveUsageContext(ctx context.Context, namespaceID uuid.UUID) (*model.UsageContext, error)
+}
+
 // VectorWriter upserts an embedding vector for a memory or entity.
 type VectorWriter interface {
 	Upsert(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
@@ -178,6 +184,7 @@ type WorkerPool struct {
 	relationships  RelationshipCreator
 	lineage        LineageCreator
 	tokenUsage     TokenRecorder
+	usageCtxRes    UsageContextResolver
 	vectorStore    VectorWriter
 	factProvider   func() provider.LLMProvider
 	entityProvider func() provider.LLMProvider
@@ -199,6 +206,7 @@ func NewWorkerPool(
 	relationships RelationshipCreator,
 	lineage LineageCreator,
 	tokenUsage TokenRecorder,
+	usageCtxRes UsageContextResolver,
 	vectorStore VectorWriter,
 	factProvider func() provider.LLMProvider,
 	entityProvider func() provider.LLMProvider,
@@ -214,6 +222,7 @@ func NewWorkerPool(
 		relationships:  relationships,
 		lineage:        lineage,
 		tokenUsage:     tokenUsage,
+		usageCtxRes:    usageCtxRes,
 		vectorStore:    vectorStore,
 		factProvider:   factProvider,
 		entityProvider: entityProvider,
@@ -658,6 +667,16 @@ func (wp *WorkerPool) recordUsage(
 		MemoryID:     &memID,
 		CreatedAt:    time.Now().UTC(),
 	}
+
+	// Resolve ownership context so the record can be filtered by org/user/project.
+	if wp.usageCtxRes != nil {
+		if uc, err := wp.usageCtxRes.ResolveUsageContext(ctx, mem.NamespaceID); err == nil && uc != nil {
+			u.OrgID = uc.OrgID
+			u.UserID = uc.UserID
+			u.ProjectID = uc.ProjectID
+		}
+	}
+
 	if err := wp.tokenUsage.Record(ctx, u); err != nil {
 		slog.Error("enrichment: record token usage", "operation", operation, "err", err)
 	}

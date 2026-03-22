@@ -360,7 +360,7 @@ func main() {
 	workerPool := enrichment.NewWorkerPool(
 		enrichment.WorkerConfig{Backend: db.Backend()},
 		memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
-		entityRepo, relationshipRepo, lineageRepo, tokenUsageRepo, vectorStore,
+		entityRepo, relationshipRepo, lineageRepo, tokenUsageRepo, namespaceRepo, vectorStore,
 		factProvider, entityProvider, embedProvider,
 	)
 	workerPool.Start()

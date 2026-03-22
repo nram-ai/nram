@@ -316,3 +316,44 @@ func (r *NamespaceRepo) scanNamespaceFromRows(rows *sql.Rows) (*model.Namespace,
 
 	return &ns, nil
 }
+
+// ResolveUsageContext returns the org, user, and project IDs that own the
+// given namespace. This is used by the enrichment worker to attribute token
+// usage records to the correct org/user/project.
+func (r *NamespaceRepo) ResolveUsageContext(ctx context.Context, namespaceID uuid.UUID) (*model.UsageContext, error) {
+	query := `SELECT p.id, u.id, u.org_id
+		FROM projects p
+		JOIN users u ON u.namespace_id = p.owner_namespace_id
+		WHERE p.namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT p.id, u.id, u.org_id
+			FROM projects p
+			JOIN users u ON u.namespace_id = p.owner_namespace_id
+			WHERE p.namespace_id = $1`
+	}
+
+	var projectIDStr, userIDStr, orgIDStr string
+	err := r.db.QueryRow(ctx, query, namespaceID.String()).Scan(&projectIDStr, &userIDStr, &orgIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve usage context: %w", err)
+	}
+
+	projectID, err := uuid.Parse(projectIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve usage context parse project_id: %w", err)
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve usage context parse user_id: %w", err)
+	}
+	orgID, err := uuid.Parse(orgIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve usage context parse org_id: %w", err)
+	}
+
+	return &model.UsageContext{
+		OrgID:     &orgID,
+		UserID:    &userID,
+		ProjectID: &projectID,
+	}, nil
+}
