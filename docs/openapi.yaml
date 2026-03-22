@@ -1322,25 +1322,6 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
-  /v1/orgs/{org_id}/projects:
-    get:
-      operationId: orgListProjects
-      tags: [Org - Projects]
-      summary: List projects in organization (member+)
-      parameters:
-        - $ref: "#/components/parameters/OrgId"
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-      responses:
-        "200":
-          description: Paginated project list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedProjects"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-
   /v1/orgs/{org_id}/analytics:
     get:
       operationId: orgGetAnalytics

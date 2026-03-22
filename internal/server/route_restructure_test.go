@@ -377,7 +377,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 
 	// Real stores backed by test DB for round-trip operations
 	orgUserStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, nsRepo, orgRepo, projRepo)
-	orgProjectStore := adminstore.NewProjectAdminStore(db, projRepo, nsRepo)
+
 
 	handlers := Handlers{
 		MCP: mcpSrv.Handler(),
@@ -394,9 +394,8 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		MeAPIKeys:  api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
 
-		OrgUsers:    api.NewOrgUsersHandler(api.OrgUserConfig{Store: orgUserStore}),
-		OrgProjects: api.NewOrgProjectsHandler(api.OrgProjectConfig{Store: orgProjectStore}),
-		OrgIdP:      api.NewOrgIdPHandler(&rrOrgIdPStore{}),
+		OrgUsers: api.NewOrgUsersHandler(api.OrgUserConfig{Store: orgUserStore}),
+		OrgIdP:   api.NewOrgIdPHandler(&rrOrgIdPStore{}),
 
 		AdminDashboard: api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashStore}),
 		AdminActivity:  api.NewAdminActivityHandler(api.DashboardConfig{Store: dashStore}),
@@ -682,7 +681,6 @@ func TestRouteRestructure_Tier5_OrgData(t *testing.T) {
 	orgAID := env.OrgA.ID
 
 	routes := []string{
-		"/projects",
 		"/analytics",
 		"/usage",
 	}
@@ -891,8 +889,6 @@ func TestRouteRestructure_Tier7_RemovedAdminRoutes(t *testing.T) {
 func TestRouteRestructure_Tier9_APIKeyAuth(t *testing.T) {
 	env := newRRTestEnv(t)
 
-	orgAID := env.OrgA.ID
-
 	// API key auth on scoped data routes
 	t.Run("api_key_dashboard", func(t *testing.T) {
 		resp := rbacDoRequest(t, "GET", env.Server.URL+"/v1/dashboard", env.Admin.APIKey, nil)
@@ -902,19 +898,6 @@ func TestRouteRestructure_Tier9_APIKeyAuth(t *testing.T) {
 	t.Run("api_key_analytics", func(t *testing.T) {
 		resp := rbacDoRequest(t, "GET", env.Server.URL+"/v1/analytics", env.OrgAMember.APIKey, nil)
 		rbacExpectStatus(t, resp, http.StatusOK)
-	})
-
-	// API key auth on org-scoped routes
-	t.Run("api_key_org_projects_own", func(t *testing.T) {
-		url := fmt.Sprintf("%s/v1/orgs/%s/projects", env.Server.URL, orgAID)
-		resp := rbacDoRequest(t, "GET", url, env.OrgAMember.APIKey, nil)
-		rbacExpectStatus(t, resp, http.StatusOK)
-	})
-
-	t.Run("api_key_org_projects_cross", func(t *testing.T) {
-		url := fmt.Sprintf("%s/v1/orgs/%s/projects", env.Server.URL, orgAID)
-		resp := rbacDoRequest(t, "GET", url, env.OrgBMember.APIKey, nil)
-		rbacExpectStatus(t, resp, http.StatusForbidden)
 	})
 
 	// API key auth on admin routes
@@ -957,7 +940,6 @@ func TestRouteRestructure_Tier10_AdminCrossOrgAccess(t *testing.T) {
 		suffix string
 		expect int
 	}{
-		{"GET", "/projects", http.StatusOK},
 		{"GET", "/analytics", http.StatusOK},
 		{"GET", "/usage", http.StatusOK},
 		{"GET", "/users", http.StatusOK},
@@ -1158,26 +1140,6 @@ func TestRouteRestructure_OrgUsers_MethodNotAllowed(t *testing.T) {
 		resp := rbacDoRequest(t, "PATCH", url, env.Admin.JWT, nil)
 		rbacExpectStatus(t, resp, http.StatusBadRequest)
 	})
-}
-
-// ---------------------------------------------------------------------------
-// Test: Org Projects — Method not allowed
-// ---------------------------------------------------------------------------
-
-func TestRouteRestructure_OrgProjects_MethodNotAllowed(t *testing.T) {
-	env := newRRTestEnv(t)
-	orgAID := env.OrgA.ID
-	baseURL := fmt.Sprintf("%s/v1/orgs/%s/projects", env.Server.URL, orgAID)
-
-	// The router uses r.Get() for /projects, so POST/PUT/DELETE get 405 from chi.
-	methods := []string{"POST", "PUT", "DELETE"}
-
-	for _, method := range methods {
-		t.Run(method, func(t *testing.T) {
-			resp := rbacDoRequest(t, method, baseURL, env.Admin.JWT, nil)
-			rbacExpectStatus(t, resp, http.StatusMethodNotAllowed)
-		})
-	}
 }
 
 // ---------------------------------------------------------------------------

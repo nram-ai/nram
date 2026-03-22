@@ -1074,9 +1074,6 @@ export const orgAPI = {
   revokeUserAPIKey: (orgId: string, userId: string, keyId: string) =>
     request<void>("DELETE", `/orgs/${orgId}/users/${userId}/api-keys/${keyId}`),
 
-  listProjects: (orgId: string) =>
-    request<{ data: Project[] }>("GET", `/orgs/${orgId}/projects`).then((r) => r.data),
-
   getAnalytics: (orgId: string) =>
     request<AnalyticsData>("GET", `/orgs/${orgId}/analytics`),
   getUsage: (orgId: string, params?: { from?: string; to?: string; group_by?: string }) => {

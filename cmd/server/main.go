@@ -418,9 +418,8 @@ func main() {
 		MeChangePassword:    api.NewMeChangePasswordHandler(userRepo),
 
 		// Org-scoped handlers
-		OrgUsers:    api.NewOrgUsersHandler(api.OrgUserConfig{Store: userAdminStore}),
-		OrgProjects: api.NewOrgProjectsHandler(api.OrgProjectConfig{Store: projectAdminStore}),
-		OrgIdP:      api.NewOrgIdPHandler(oauthRepo),
+		OrgUsers: api.NewOrgUsersHandler(api.OrgUserConfig{Store: userAdminStore}),
+		OrgIdP:   api.NewOrgIdPHandler(oauthRepo),
 
 		// SSE events
 		Events: api.NewEventsHandler(eventBus),

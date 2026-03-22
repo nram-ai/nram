@@ -95,7 +95,7 @@ const navItems: NavItem[] = [
   { path: "/entities", label: "Entity Browser", section: "Data" },
   { path: "/graph", label: "Graph Visualization", section: "Data" },
   { path: "/projects", label: "Projects", section: "Management" },
-  { path: "/organizations", label: "Organizations", section: "Management", minRole: "org_owner" },
+  { path: "/organizations", label: "Organizations", section: "Management", minRole: "administrator" },
   { path: "/users", label: "Users", section: "Management", minRole: "org_owner" },
   { path: "/providers", label: "Providers", section: "Configuration", minRole: "administrator" },
   { path: "/settings", label: "Settings", section: "Configuration", minRole: "administrator" },
@@ -227,7 +227,7 @@ function AppLayout() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/memories" element={<MemoryBrowser />} />
               <Route path="/projects" element={<ProjectManagement />} />
-              <Route path="/organizations" element={<RequireRole minRole="org_owner"><OrganizationManagement /></RequireRole>} />
+              <Route path="/organizations" element={<RequireRole minRole="administrator"><OrganizationManagement /></RequireRole>} />
               <Route path="/users" element={<RequireRole minRole="org_owner"><UserManagement /></RequireRole>} />
               <Route path="/providers" element={<RequireRole minRole="administrator"><ProviderConfiguration /></RequireRole>} />
               <Route path="/settings" element={<RequireRole minRole="administrator"><SettingsEditor /></RequireRole>} />

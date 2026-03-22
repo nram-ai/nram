@@ -1101,11 +1101,6 @@ describe("API Client E2E", () => {
       expect(user.display_name).toBe("Updated Org User");
     });
 
-    it("listProjects() returns array for org", async () => {
-      const projects = await orgAPI.listProjects(testOrgId);
-      expect(Array.isArray(projects)).toBe(true);
-    });
-
     it("deleteUser() removes the user", async () => {
       const result = await orgAPI.deleteUser(testOrgId, orgUserId);
       expect(result).toBeUndefined();

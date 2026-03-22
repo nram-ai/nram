@@ -49,9 +49,8 @@ type Handlers struct {
 	MeChangePassword    http.HandlerFunc
 
 	// Org-scoped handlers
-	OrgUsers    http.HandlerFunc
-	OrgProjects http.HandlerFunc
-	OrgIdP      http.HandlerFunc
+	OrgUsers http.HandlerFunc
+	OrgIdP   http.HandlerFunc
 
 	// SSE events
 	Events http.HandlerFunc
@@ -234,8 +233,6 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Use(api.OrgAccessMiddleware())
 
 			// Data viewing (member+ in org).
-			r.Get("/projects", handler(handlers.OrgProjects))
-			r.Get("/projects/*", handler(handlers.OrgProjects))
 			r.Get("/analytics", handler(handlers.AdminAnalytics))
 			r.Get("/usage", handler(handlers.AdminUsage))
 

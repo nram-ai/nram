@@ -867,14 +867,6 @@ export function useRevokeOrgUserAPIKey() {
   });
 }
 
-export function useOrgProjects(orgId: string) {
-  return useQuery({
-    queryKey: ["org", orgId, "projects"],
-    queryFn: () => orgAPI.listProjects(orgId),
-    enabled: !!orgId,
-  });
-}
-
 export function useOrgAnalytics(orgId: string) {
   return useQuery({
     queryKey: ["org", orgId, "analytics"],

@@ -5,10 +5,7 @@ import {
   useCreateOrg,
   useUpdateOrg,
   useDeleteOrg,
-  useOrgUsers,
-  useOrgProjects,
 } from "../hooks/useApi";
-import { useAuth } from "../context/AuthContext";
 import type { Organization, OrgUser, UpdateOrgRequest } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -345,7 +342,7 @@ function OrgDetailPanel({
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <div className="rounded-lg border p-4 text-center">
                 <div className="text-2xl font-bold">{org.user_count ?? 0}</div>
                 <div className="text-xs text-muted-foreground">Users</div>
@@ -353,10 +350,6 @@ function OrgDetailPanel({
               <div className="rounded-lg border p-4 text-center">
                 <div className="text-2xl font-bold">{org.memory_count ?? 0}</div>
                 <div className="text-xs text-muted-foreground">Memories</div>
-              </div>
-              <div className="rounded-lg border p-4 text-center">
-                <div className="text-2xl font-bold">{org.project_count ?? 0}</div>
-                <div className="text-xs text-muted-foreground">Projects</div>
               </div>
             </div>
 
@@ -519,130 +512,10 @@ function OrgDetailPanel({
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Org Owner: Single-org view
-// ---------------------------------------------------------------------------
-
-function OrgOwnerView() {
-  const auth = useAuth();
-  const orgId = auth.user?.org_id ?? "";
-
-  const orgUsersQuery = useOrgUsers(orgId);
-  const orgProjectsQuery = useOrgProjects(orgId);
-
-  const users = orgUsersQuery.data ?? [];
-  const projects = orgProjectsQuery.data ?? [];
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          My Organization
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          View your organization details and members.
-        </p>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="rounded-lg border bg-card p-4 text-center">
-          <div className="text-2xl font-bold">{users.length}</div>
-          <div className="text-xs text-muted-foreground">Users</div>
-        </div>
-        <div className="rounded-lg border bg-card p-4 text-center">
-          <div className="text-2xl font-bold">{projects.length}</div>
-          <div className="text-xs text-muted-foreground">Projects</div>
-        </div>
-      </div>
-
-      {/* Users */}
-      <div className="rounded-lg border bg-card">
-        <div className="border-b px-4 py-3">
-          <h2 className="text-sm font-semibold">Members ({users.length})</h2>
-        </div>
-        {orgUsersQuery.isLoading ? (
-          <div className="p-4 text-sm text-muted-foreground">Loading...</div>
-        ) : users.length === 0 ? (
-          <div className="p-4 text-sm text-muted-foreground">No users.</div>
-        ) : (
-          <div className="overflow-auto">
-            <table className="w-full">
-              <thead className="border-b bg-muted/50">
-                <tr>
-                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Email</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Display Name</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Role</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {users.map((u) => (
-                  <tr key={u.id}>
-                    <td className="px-4 py-2 text-sm">{u.email}</td>
-                    <td className="px-4 py-2 text-sm text-muted-foreground">{u.display_name || "-"}</td>
-                    <td className="px-4 py-2">
-                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${roleBadgeClass(u.role)}`}>
-                        {u.role}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Projects */}
-      <div className="rounded-lg border bg-card">
-        <div className="border-b px-4 py-3">
-          <h2 className="text-sm font-semibold">Projects ({projects.length})</h2>
-        </div>
-        {orgProjectsQuery.isLoading ? (
-          <div className="p-4 text-sm text-muted-foreground">Loading...</div>
-        ) : projects.length === 0 ? (
-          <div className="p-4 text-sm text-muted-foreground">No projects.</div>
-        ) : (
-          <div className="overflow-auto">
-            <table className="w-full">
-              <thead className="border-b bg-muted/50">
-                <tr>
-                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Name</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Slug</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Memories</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {projects.map((p) => (
-                  <tr key={p.id}>
-                    <td className="px-4 py-2 text-sm font-medium">{p.name || p.slug}</td>
-                    <td className="px-4 py-2 text-sm font-mono text-muted-foreground">{p.slug}</td>
-                    <td className="px-4 py-2 text-right text-sm font-semibold">{p.memory_count ?? 0}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main: Admin gets full list, org_owner gets single-org view
+// Main: Admin-only organization management
 // ---------------------------------------------------------------------------
 
 function OrganizationManagement() {
-  const auth = useAuth();
-
-  if (!auth.isAdmin) {
-    return <OrgOwnerView />;
-  }
-
-  return <AdminOrganizationView />;
-}
-
-function AdminOrganizationView() {
   const orgsQuery = useOrgs();
   const orgs = orgsQuery.data ?? [];
 
