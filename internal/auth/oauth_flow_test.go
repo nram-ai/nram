@@ -101,7 +101,7 @@ func oauthTestUser(t *testing.T, db storage.DB) *model.User {
 		OrgID:       org.ID,
 		Role:        "admin",
 	}
-	if err := userRepo.Create(ctx, user, nsRepo, orgNS.Path); err != nil {
+	if err := userRepo.Create(ctx, user, nsRepo, nil, orgNS.Path); err != nil {
 		t.Fatalf("oauthTestUser: create user: %v", err)
 	}
 	return user

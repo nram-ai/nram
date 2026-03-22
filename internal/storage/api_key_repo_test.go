@@ -41,7 +41,7 @@ func createTestUser(t *testing.T, ctx context.Context, db DB) *model.User {
 		OrgID:       orgID,
 		Role:        "member",
 	}
-	if err := userRepo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+	if err := userRepo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 		t.Fatalf("failed to create test user: %v", err)
 	}
 	return user

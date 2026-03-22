@@ -133,7 +133,7 @@ func e2eTestUser(t *testing.T, db storage.DB) *model.User {
 		OrgID:       org.ID,
 		Role:        "admin",
 	}
-	if err := userRepo.Create(ctx, user, nsRepo, orgNS.Path); err != nil {
+	if err := userRepo.Create(ctx, user, nsRepo, nil, orgNS.Path); err != nil {
 		t.Fatalf("e2eTestUser: create user: %v", err)
 	}
 	return user
@@ -2844,7 +2844,7 @@ func TestE2E_AdminRoute_WithOAuthToken(t *testing.T) {
 		OrgID:       adminOrg.ID,
 		Role:        "administrator",
 	}
-	if err := userRepo.Create(ctx, adminUser, nsRepo, adminOrgNS.Path); err != nil {
+	if err := userRepo.Create(ctx, adminUser, nsRepo, nil, adminOrgNS.Path); err != nil {
 		t.Fatalf("create admin user: %v", err)
 	}
 
@@ -2897,7 +2897,7 @@ func TestE2E_AdminRoute_WithOAuthToken(t *testing.T) {
 		OrgID:       memberOrg.ID,
 		Role:        "member",
 	}
-	if err := userRepo.Create(ctx, memberUser, nsRepo, memberOrgNS.Path); err != nil {
+	if err := userRepo.Create(ctx, memberUser, nsRepo, nil, memberOrgNS.Path); err != nil {
 		t.Fatalf("create member user: %v", err)
 	}
 

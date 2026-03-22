@@ -108,7 +108,7 @@ func setupOAuthEnv(t *testing.T) *testOAuthEnv {
 		OrgID:       org.ID,
 		Role:        "member",
 	}
-	if err := userRepo.Create(ctx, user, nsRepo, ns.Path); err != nil {
+	if err := userRepo.Create(ctx, user, nsRepo, nil, ns.Path); err != nil {
 		t.Fatalf("failed to create test user: %v", err)
 	}
 

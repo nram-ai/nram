@@ -29,7 +29,7 @@ func NewUserRepo(db DB) *UserRepo {
 	return &UserRepo{db: db}
 }
 
-func (r *UserRepo) Create(ctx context.Context, user *model.User, nsRepo *NamespaceRepo, orgNamespacePath string) error {
+func (r *UserRepo) Create(ctx context.Context, user *model.User, nsRepo *NamespaceRepo, projectRepo *ProjectRepo, orgNamespacePath string) error {
 	if user.ID == uuid.Nil {
 		user.ID = uuid.New()
 	}
@@ -77,6 +77,13 @@ func (r *UserRepo) Create(ctx context.Context, user *model.User, nsRepo *Namespa
 	)
 	if err != nil {
 		return fmt.Errorf("user create: %w", err)
+	}
+
+	// Auto-create a "default" project so the user has one ready immediately.
+	if projectRepo != nil {
+		if _, err := projectRepo.AutoCreateUnderUser(ctx, nsRepo, userNSID, "default"); err != nil {
+			return fmt.Errorf("user create default project: %w", err)
+		}
 	}
 
 	return r.reload(ctx, user)

@@ -13,11 +13,12 @@ import (
 // SetupStore implements api.SetupStore. It creates the initial org, user, namespace
 // hierarchy, and API key during the setup wizard.
 type SetupStore struct {
-	userRepo   *storage.UserRepo
-	nsRepo     *storage.NamespaceRepo
-	orgRepo    *storage.OrganizationRepo
-	apiKeyRepo *storage.APIKeyRepo
-	db         storage.DB
+	userRepo    *storage.UserRepo
+	nsRepo      *storage.NamespaceRepo
+	orgRepo     *storage.OrganizationRepo
+	apiKeyRepo  *storage.APIKeyRepo
+	projectRepo *storage.ProjectRepo
+	db          storage.DB
 }
 
 // NewSetupStore creates a new SetupStore.
@@ -26,14 +27,16 @@ func NewSetupStore(
 	nsRepo *storage.NamespaceRepo,
 	orgRepo *storage.OrganizationRepo,
 	apiKeyRepo *storage.APIKeyRepo,
+	projectRepo *storage.ProjectRepo,
 	db storage.DB,
 ) *SetupStore {
 	return &SetupStore{
-		userRepo:   userRepo,
-		nsRepo:     nsRepo,
-		orgRepo:    orgRepo,
-		apiKeyRepo: apiKeyRepo,
-		db:         db,
+		userRepo:    userRepo,
+		nsRepo:      nsRepo,
+		orgRepo:     orgRepo,
+		apiKeyRepo:  apiKeyRepo,
+		projectRepo: projectRepo,
+		db:          db,
 	}
 }
 
@@ -113,7 +116,7 @@ func (s *SetupStore) CompleteSetup(ctx context.Context, email, password string) 
 		Role:         "administrator",
 		Settings:     json.RawMessage(`{}`),
 	}
-	if err := s.userRepo.Create(ctx, user, s.nsRepo, orgSlug); err != nil {
+	if err := s.userRepo.Create(ctx, user, s.nsRepo, s.projectRepo, orgSlug); err != nil {
 		return nil, "", fmt.Errorf("setup create user: %w", err)
 	}
 

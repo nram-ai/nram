@@ -387,7 +387,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 			OrgID:       org.ID,
 			Role:        role,
 		}
-		if err := userRepo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := userRepo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("create user %s: %v", email, err)
 		}
 
@@ -1319,7 +1319,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 			OrgID:       org.ID,
 			Role:        role,
 		}
-		if err := userRepo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := userRepo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("create user %s: %v", email, err)
 		}
 

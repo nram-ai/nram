@@ -307,9 +307,9 @@ func main() {
 	setupChecker := api.NewSetupChecker(db)
 
 	// Create admin store adapters.
-	setupStore := adminstore.NewSetupStore(userRepo, namespaceRepo, orgRepo, apiKeyRepo, db)
+	setupStore := adminstore.NewSetupStore(userRepo, namespaceRepo, orgRepo, apiKeyRepo, projectRepo, db)
 	orgAdminStore := adminstore.NewOrgAdminStore(orgRepo, namespaceRepo)
-	userAdminStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, namespaceRepo, orgRepo)
+	userAdminStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, namespaceRepo, orgRepo, projectRepo)
 	projectAdminStore := adminstore.NewProjectAdminStore(db, projectRepo, namespaceRepo)
 	webhookAdminStore := adminstore.NewWebhookAdminStore(webhookRepo)
 	settingsAdminStore := adminstore.NewSettingsAdminStore(settingsRepo)

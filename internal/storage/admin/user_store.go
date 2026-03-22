@@ -14,10 +14,11 @@ import (
 // UserAdminStore implements api.UserAdminStore by wrapping UserRepo, APIKeyRepo,
 // NamespaceRepo, and OrganizationRepo.
 type UserAdminStore struct {
-	userRepo   *storage.UserRepo
-	apiKeyRepo *storage.APIKeyRepo
-	nsRepo     *storage.NamespaceRepo
-	orgRepo    *storage.OrganizationRepo
+	userRepo    *storage.UserRepo
+	apiKeyRepo  *storage.APIKeyRepo
+	nsRepo      *storage.NamespaceRepo
+	orgRepo     *storage.OrganizationRepo
+	projectRepo *storage.ProjectRepo
 }
 
 // NewUserAdminStore creates a new UserAdminStore.
@@ -26,12 +27,14 @@ func NewUserAdminStore(
 	apiKeyRepo *storage.APIKeyRepo,
 	nsRepo *storage.NamespaceRepo,
 	orgRepo *storage.OrganizationRepo,
+	projectRepo *storage.ProjectRepo,
 ) *UserAdminStore {
 	return &UserAdminStore{
-		userRepo:   userRepo,
-		apiKeyRepo: apiKeyRepo,
-		nsRepo:     nsRepo,
-		orgRepo:    orgRepo,
+		userRepo:    userRepo,
+		apiKeyRepo:  apiKeyRepo,
+		nsRepo:      nsRepo,
+		orgRepo:     orgRepo,
+		projectRepo: projectRepo,
 	}
 }
 
@@ -71,7 +74,7 @@ func (s *UserAdminStore) CreateUser(ctx context.Context, email, displayName, pas
 		Role:         role,
 		Settings:     json.RawMessage(`{}`),
 	}
-	if err := s.userRepo.Create(ctx, user, s.nsRepo, orgNSPath); err != nil {
+	if err := s.userRepo.Create(ctx, user, s.nsRepo, s.projectRepo, orgNSPath); err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}
 	return user, nil

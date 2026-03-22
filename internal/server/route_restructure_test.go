@@ -256,7 +256,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 			OrgID:       org.ID,
 			Role:        role,
 		}
-		if err := userRepo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := userRepo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("create user %s: %v", email, err)
 		}
 
@@ -377,7 +377,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	userAdminStore := &rbacUserAdminStore{db: db}
 
 	// Real stores backed by test DB for round-trip operations
-	orgUserStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, nsRepo, orgRepo)
+	orgUserStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, nsRepo, orgRepo, projRepo)
 	orgProjectStore := adminstore.NewProjectAdminStore(db, projRepo, nsRepo)
 
 	handlers := Handlers{

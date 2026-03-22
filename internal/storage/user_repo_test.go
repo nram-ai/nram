@@ -72,7 +72,7 @@ func TestUserRepo_Create(t *testing.T) {
 			Role:         "member",
 		}
 
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create user: %v", err)
 		}
 
@@ -124,7 +124,7 @@ func TestUserRepo_Create_GeneratesID(t *testing.T) {
 			Role:        "member",
 		}
 
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create user: %v", err)
 		}
 		if user.ID == uuid.Nil {
@@ -149,7 +149,7 @@ func TestUserRepo_GetByID(t *testing.T) {
 			Role:        "admin",
 			Settings:    json.RawMessage(`{"theme":"dark"}`),
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
@@ -206,7 +206,7 @@ func TestUserRepo_GetByEmail(t *testing.T) {
 			OrgID:       orgID,
 			Role:        "member",
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
@@ -257,7 +257,7 @@ func TestUserRepo_Authenticate_Success(t *testing.T) {
 			OrgID:        orgID,
 			Role:         "member",
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
@@ -300,7 +300,7 @@ func TestUserRepo_Authenticate_WrongPassword(t *testing.T) {
 			OrgID:        orgID,
 			Role:         "member",
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
@@ -332,7 +332,7 @@ func TestUserRepo_Authenticate_Disabled(t *testing.T) {
 			OrgID:        orgID,
 			Role:         "member",
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
@@ -362,7 +362,7 @@ func TestUserRepo_Authenticate_NoPassword(t *testing.T) {
 			OrgID:       orgID,
 			Role:        "member",
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
@@ -391,7 +391,7 @@ func TestUserRepo_ListByOrg(t *testing.T) {
 			OrgID:       orgID,
 			Role:        "member",
 		}
-		if err := repo.Create(ctx, user1, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user1, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create user1: %v", err)
 		}
 
@@ -401,7 +401,7 @@ func TestUserRepo_ListByOrg(t *testing.T) {
 			OrgID:       orgID,
 			Role:        "admin",
 		}
-		if err := repo.Create(ctx, user2, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user2, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create user2: %v", err)
 		}
 
@@ -438,7 +438,7 @@ func TestUserRepo_Update(t *testing.T) {
 			OrgID:       orgID,
 			Role:        "member",
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
@@ -493,7 +493,7 @@ func TestUserRepo_Disable(t *testing.T) {
 			OrgID:       orgID,
 			Role:        "member",
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
@@ -525,7 +525,7 @@ func TestUserRepo_Enable(t *testing.T) {
 			OrgID:       orgID,
 			Role:        "member",
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
@@ -561,7 +561,7 @@ func TestUserRepo_Delete(t *testing.T) {
 			OrgID:       orgID,
 			Role:        "member",
 		}
-		if err := repo.Create(ctx, user, nsRepo, orgNSPath); err != nil {
+		if err := repo.Create(ctx, user, nsRepo, nil, orgNSPath); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
