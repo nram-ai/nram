@@ -5,11 +5,22 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 )
+
+// isSQLiteBusy returns true if the error is a SQLITE_BUSY contention error.
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "SQLITE_BUSY")
+}
 
 // QueueStats holds aggregate counts of enrichment queue items by status.
 type QueueStats struct {
@@ -113,16 +124,26 @@ func (r *EnrichmentQueueRepo) ClaimNext(ctx context.Context, workerID string) (*
 	}
 
 	// SQLite: atomic UPDATE ... WHERE with subquery to claim exactly one row.
-	result, err := r.db.Exec(ctx,
-		`UPDATE enrichment_queue SET status = 'processing', claimed_by = ?, claimed_at = ?, updated_at = ?
-			WHERE id = (
-				SELECT id FROM enrichment_queue
-				WHERE status = 'pending'
-				ORDER BY priority DESC, created_at ASC
-				LIMIT 1
-			)`,
-		workerID, now, now,
-	)
+	// Retry on SQLITE_BUSY since the write pool serializes but the busy_timeout
+	// may not be sufficient under heavy enrichment worker contention.
+	var result sql.Result
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		result, err = r.db.Exec(ctx,
+			`UPDATE enrichment_queue SET status = 'processing', claimed_by = ?, claimed_at = ?, updated_at = ?
+				WHERE id = (
+					SELECT id FROM enrichment_queue
+					WHERE status = 'pending'
+					ORDER BY priority DESC, created_at ASC
+					LIMIT 1
+				)`,
+			workerID, now, now,
+		)
+		if err == nil || !isSQLiteBusy(err) {
+			break
+		}
+		time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // 50ms, 100ms, 200ms
+	}
 	if err != nil {
 		return nil, fmt.Errorf("enrichment queue claim: %w", err)
 	}
