@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 
 	"github.com/google/uuid"
@@ -248,14 +249,10 @@ func (g *Graph) Search(query []float32, k int) ([]SearchResult, error) {
 		}
 	}
 
-	// Sort descending by score using a simple sort.
-	for i := 0; i < len(all); i++ {
-		for j := i + 1; j < len(all); j++ {
-			if all[j].score > all[i].score {
-				all[i], all[j] = all[j], all[i]
-			}
-		}
-	}
+	// Sort descending by score.
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].score > all[j].score
+	})
 
 	results := make([]SearchResult, k)
 	for i := 0; i < k; i++ {
@@ -370,17 +367,21 @@ func (g *Graph) greedyClosest(ep *graphNode, query []float32, queryNorm float32,
 
 // searchLayer performs a beam search at a given layer, returning up to ef closest nodes.
 func (g *Graph) searchLayer(ep *graphNode, query []float32, queryNorm float32, ef int, layer int) []*graphNode {
-	visited := make(map[uuid.UUID]bool)
-	visited[ep.id] = true
+	visited := make(map[*graphNode]bool, ef*2)
+	visited[ep] = true
 
 	epScore := CosineSimilarityWithNorms(query, ep.vector, queryNorm, ep.norm)
 
 	// candidates is a max-heap so we can pop the best (highest similarity) candidate.
-	candidates := &maxHeap{candidate{node: ep, score: epScore}}
+	candidatesSlice := make(maxHeap, 1, ef)
+	candidatesSlice[0] = candidate{node: ep, score: epScore}
+	candidates := &candidatesSlice
 	heap.Init(candidates)
 
 	// results is a min-heap so we can check/pop the worst (lowest similarity) result.
-	results := &minHeap{candidate{node: ep, score: epScore}}
+	resultsSlice := make(minHeap, 1, ef)
+	resultsSlice[0] = candidate{node: ep, score: epScore}
+	results := &resultsSlice
 	heap.Init(results)
 
 	for candidates.Len() > 0 {
@@ -397,10 +398,10 @@ func (g *Graph) searchLayer(ep *graphNode, query []float32, queryNorm float32, e
 		}
 
 		for _, neighbor := range c.node.friends[layer] {
-			if visited[neighbor.id] {
+			if visited[neighbor] {
 				continue
 			}
-			visited[neighbor.id] = true
+			visited[neighbor] = true
 
 			score := CosineSimilarityWithNorms(query, neighbor.vector, queryNorm, neighbor.norm)
 
@@ -446,13 +447,9 @@ func (g *Graph) selectNeighborsHeuristic(target *graphNode, candidates []*graphN
 	}
 
 	// Sort descending by score (closest first).
-	for i := 0; i < len(working); i++ {
-		for j := i + 1; j < len(working); j++ {
-			if working[j].score > working[i].score {
-				working[i], working[j] = working[j], working[i]
-			}
-		}
-	}
+	sort.Slice(working, func(i, j int) bool {
+		return working[i].score > working[j].score
+	})
 
 	selected := make([]*graphNode, 0, maxConn)
 	for _, w := range working {

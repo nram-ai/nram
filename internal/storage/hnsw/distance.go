@@ -4,11 +4,17 @@ import "math"
 
 // Norm computes the L2 norm of a vector.
 func Norm(v []float32) float32 {
-	var sum float64
-	for _, x := range v {
-		sum += float64(x) * float64(x)
+	var sum float32
+	n := len(v)
+	i := 0
+	for ; i <= n-8; i += 8 {
+		sum += v[i]*v[i] + v[i+1]*v[i+1] + v[i+2]*v[i+2] + v[i+3]*v[i+3] +
+			v[i+4]*v[i+4] + v[i+5]*v[i+5] + v[i+6]*v[i+6] + v[i+7]*v[i+7]
 	}
-	return float32(math.Sqrt(sum))
+	for ; i < n; i++ {
+		sum += v[i] * v[i]
+	}
+	return float32(math.Sqrt(float64(sum)))
 }
 
 // CosineSimilarity computes the cosine similarity between two vectors.
@@ -33,11 +39,17 @@ func CosineSimilarityWithNorms(a, b []float32, normA, normB float32) float64 {
 	if normA == 0 || normB == 0 {
 		return 0.0
 	}
-	var dot float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
+	var dot float32
+	n := len(a)
+	i := 0
+	for ; i <= n-8; i += 8 {
+		dot += a[i]*b[i] + a[i+1]*b[i+1] + a[i+2]*b[i+2] + a[i+3]*b[i+3] +
+			a[i+4]*b[i+4] + a[i+5]*b[i+5] + a[i+6]*b[i+6] + a[i+7]*b[i+7]
 	}
-	sim := dot / (float64(normA) * float64(normB))
+	for ; i < n; i++ {
+		dot += a[i] * b[i]
+	}
+	sim := float64(dot) / (float64(normA) * float64(normB))
 	// Clamp to [-1, 1] to handle floating point imprecision.
 	if sim > 1.0 {
 		sim = 1.0
