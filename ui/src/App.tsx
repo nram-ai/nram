@@ -2,6 +2,7 @@ import React from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { useSetupStatus } from "./hooks/useApi";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { ProjectProvider } from "./context/ProjectContext";
 import RequireRole from "./components/RequireRole";
 import Dashboard from "./pages/Dashboard";
 import SetupWizard from "./pages/SetupWizard";
@@ -253,13 +254,15 @@ function AppLayout() {
 function App() {
   return (
     <AuthProvider>
-      <SetupGuard>
-        <Routes>
-          <Route path="/setup" element={<SetupWizard />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
-        </Routes>
-      </SetupGuard>
+      <ProjectProvider>
+        <SetupGuard>
+          <Routes>
+            <Route path="/setup" element={<SetupWizard />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
+          </Routes>
+        </SetupGuard>
+      </ProjectProvider>
     </AuthProvider>
   );
 }

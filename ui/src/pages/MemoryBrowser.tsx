@@ -10,6 +10,7 @@ import {
   useEnrichMemories,
 } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
+import { useSelectedProject } from "../context/ProjectContext";
 import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -822,14 +823,14 @@ function MemoryBrowser() {
 
   const projectsQuery = useMeProjects();
   const projects = projectsQuery.data ?? [];
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const { selectedProjectId, setSelectedProjectId } = useSelectedProject();
 
   // Auto-select first project
   useEffect(() => {
     if (!selectedProjectId && projects.length > 0) {
       setSelectedProjectId(projects[0].id);
     }
-  }, [projects, selectedProjectId]);
+  }, [projects, selectedProjectId, setSelectedProjectId]);
 
   // Search state
   const [searchMode, setSearchMode] = useState<"semantic" | "exact">(

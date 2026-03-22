@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMeProjects, useGraph } from "../hooks/useApi";
+import { useSelectedProject } from "../context/ProjectContext";
 import type { GraphEntity } from "../api/client";
 
 const ENTITY_TYPE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
@@ -144,7 +145,7 @@ function EntityBrowser() {
   const navigate = useNavigate();
   const projectsQuery = useMeProjects();
   const { data: projects, isLoading: projectsLoading } = projectsQuery;
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const { selectedProjectId, setSelectedProjectId } = useSelectedProject();
   const [searchText, setSearchText] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
@@ -153,7 +154,7 @@ function EntityBrowser() {
     if (!selectedProjectId && projects && projects.length > 0) {
       setSelectedProjectId(projects[0].id);
     }
-  }, [projects, selectedProjectId]);
+  }, [projects, selectedProjectId, setSelectedProjectId]);
 
   const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 

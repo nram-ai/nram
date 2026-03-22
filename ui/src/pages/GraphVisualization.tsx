@@ -14,6 +14,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { useMeProjects, useGraph } from "../hooks/useApi";
+import { useSelectedProject } from "../context/ProjectContext";
 import type { GraphEntity } from "../api/client";
 
 // Color map for entity types
@@ -323,14 +324,14 @@ function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
 function GraphVisualization() {
   const projectsQuery = useMeProjects();
   const { data: projects, isLoading: projectsLoading } = projectsQuery;
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const { selectedProjectId, setSelectedProjectId } = useSelectedProject();
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
 
   useEffect(() => {
     if (!selectedProjectId && projects && projects.length > 0) {
       setSelectedProjectId(projects[0].id);
     }
-  }, [projects, selectedProjectId]);
+  }, [projects, selectedProjectId, setSelectedProjectId]);
 
   const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 
