@@ -6,7 +6,7 @@ import type { ProviderSlot } from "../api/client";
 // Types
 // ---------------------------------------------------------------------------
 
-type ToolTab = "claude-code" | "claude-desktop" | "cursor" | "chatgpt" | "api-key";
+type ToolTab = "claude-code" | "claude-desktop" | "cursor" | "codex" | "opencode" | "chatgpt" | "api-key";
 
 interface CopyButtonProps {
   text: string;
@@ -141,6 +141,48 @@ Recall includes graph context by default (include_graph, graph_depth).`;
   return snippet;
 }
 
+function buildAgentsMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
+  let snippet = `## Memory (nram)
+
+Use nram memory tools at the start of each task to recall prior context.
+After completing work, store key decisions, architecture choices, and
+technical details as memories. Be specific — store facts, not conversation
+summaries.
+
+**Storing:** Omit the project parameter for global scope, or specify a
+project slug. Use project_description on first store. Use ttl (e.g. "7d",
+"24h") for temporary memories. Tag consistently: architecture, config,
+decision, preference, bug, workaround.
+
+**Recalling:** Recall with a project searches project + global. Without a
+project, searches global only.`;
+
+  if (hasEmbedding) {
+    snippet += `
+Use natural language queries for semantic search — describe what you need.`;
+  } else {
+    snippet += `
+No embedding provider — rely on tags for filtering during recall.`;
+  }
+
+  if (hasEnrichment) {
+    snippet += `
+
+**Enrichment:** Pass enrich: true when storing for entity/fact extraction.
+Use memory_enrich to batch-enrich. Recall includes graph context by default.`;
+  }
+
+  snippet += `
+
+**Tool notes:**
+- memory_store / memory_store_batch auto-create projects. Other tools require existing projects.
+- memory_forget soft-deletes by default; pass hard: true for permanent deletion.
+- memory_export supports format: "json" (default) or "ndjson".
+- Use memory_projects to discover available projects.`;
+
+  return snippet;
+}
+
 // ---------------------------------------------------------------------------
 // Tab button
 // ---------------------------------------------------------------------------
@@ -237,6 +279,73 @@ function CursorTab({ serverUrl }: { serverUrl: string }) {
       <p className="text-sm text-muted-foreground">
         Cursor supports OAuth-based MCP servers. You will be prompted to
         authenticate when connecting.
+      </p>
+    </div>
+  );
+}
+
+function CodexTab({ serverUrl }: { serverUrl: string }) {
+  const cliCmd = `codex mcp add nram --url ${serverUrl}`;
+  const tomlConfig = `[mcp_servers.nram]
+url = "${serverUrl}"
+# bearer_token_env_var = "NRAM_API_KEY"  # uncomment if not using OAuth
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+enabled = true`;
+
+  return (
+    <div className="bg-card rounded-md border border-border p-4 space-y-4">
+      <div>
+        <p className="text-sm font-medium">CLI (quickest)</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Register the nram MCP server with a single command.
+        </p>
+      </div>
+      <CodeBlock code={cliCmd} label="Run in your terminal" />
+
+      <div className="border-t border-border pt-4">
+        <p className="text-sm font-medium">Manual configuration</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Alternatively, add this to your <span className="font-mono text-xs">~/.codex/config.toml</span> or
+          project-level <span className="font-mono text-xs">.codex/config.toml</span>.
+        </p>
+      </div>
+      <CodeBlock code={tomlConfig} />
+    </div>
+  );
+}
+
+function OpenCodeTab({ serverUrl }: { serverUrl: string }) {
+  const jsonConfig = JSON.stringify(
+    {
+      $schema: "https://opencode.ai/config.json",
+      mcp: {
+        nram: {
+          type: "remote",
+          url: serverUrl,
+          enabled: true,
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+  return (
+    <div className="bg-card rounded-md border border-border p-4 space-y-4">
+      <div>
+        <p className="text-sm font-medium">Add to opencode.json</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Add the nram MCP server to your project&apos;s <span className="font-mono text-xs">opencode.json</span> or
+          global <span className="font-mono text-xs">~/.config/opencode/opencode.json</span>. If you already have
+          other MCP servers configured, merge the nram entry into your
+          existing <span className="font-mono text-xs">mcp</span> object.
+        </p>
+      </div>
+      <CodeBlock code={jsonConfig} />
+      <p className="text-sm text-muted-foreground">
+        OpenCode supports OAuth auto-discovery for remote MCP servers. You will
+        be prompted to authenticate when connecting.
       </p>
     </div>
   );
@@ -374,11 +483,17 @@ function MCPConfigGenerator() {
     () => buildCursorRulesSnippet(hasEmbedding, hasEnrichment),
     [hasEmbedding, hasEnrichment],
   );
+  const agentsMdSnippet = useMemo(
+    () => buildAgentsMdSnippet(hasEmbedding, hasEnrichment),
+    [hasEmbedding, hasEnrichment],
+  );
 
   const tabs: { key: ToolTab; label: string }[] = [
     { key: "claude-code", label: "Claude Code" },
     { key: "claude-desktop", label: "Claude Desktop / Claude.ai" },
     { key: "cursor", label: "Cursor" },
+    { key: "codex", label: "Codex" },
+    { key: "opencode", label: "OpenCode" },
     { key: "chatgpt", label: "ChatGPT" },
     { key: "api-key", label: "API Key Fallback" },
   ];
@@ -431,6 +546,8 @@ function MCPConfigGenerator() {
         {activeTab === "claude-code" && <ClaudeCodeTab serverUrl={serverUrl} />}
         {activeTab === "claude-desktop" && <ClaudeDesktopTab serverUrl={serverUrl} />}
         {activeTab === "cursor" && <CursorTab serverUrl={serverUrl} />}
+        {activeTab === "codex" && <CodexTab serverUrl={serverUrl} />}
+        {activeTab === "opencode" && <OpenCodeTab serverUrl={serverUrl} />}
         {activeTab === "chatgpt" && <ChatGPTTab serverUrl={serverUrl} />}
         {activeTab === "api-key" && (
           <ApiKeyTab serverUrl={serverUrl} apiKey={apiKey} setApiKey={setApiKey} />
@@ -482,6 +599,29 @@ function MCPConfigGenerator() {
         </div>
       )}
 
+      {(activeTab === "codex" || activeTab === "opencode") && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-sm font-medium">System Prompt Snippet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Add this snippet to your project&apos;s AGENTS.md file to guide
+              {activeTab === "codex" ? " Codex" : " OpenCode"} on how to use nram effectively.
+            </p>
+          </div>
+          <div className="bg-card rounded-md border border-border p-4 space-y-4">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">For AGENTS.md</p>
+              <p className="text-sm text-muted-foreground">
+                {activeTab === "codex"
+                  ? "Place this in your project\u2019s AGENTS.md or your global ~/.codex/AGENTS.md file."
+                  : "Place this in your project\u2019s AGENTS.md or your global ~/.config/opencode/AGENTS.md file. OpenCode also reads CLAUDE.md as a fallback."}
+              </p>
+            </div>
+            <CodeBlock code={agentsMdSnippet} />
+          </div>
+        </div>
+      )}
+
       {activeTab === "api-key" && (
         <div className="space-y-4">
           <div>
@@ -508,6 +648,15 @@ function MCPConfigGenerator() {
               </p>
             </div>
             <CodeBlock code={cursorRulesSnippet} />
+          </div>
+          <div className="bg-card rounded-md border border-border p-4 space-y-4">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">For AGENTS.md</p>
+              <p className="text-sm text-muted-foreground">
+                For OpenAI Codex-based tools.
+              </p>
+            </div>
+            <CodeBlock code={agentsMdSnippet} />
           </div>
         </div>
       )}
