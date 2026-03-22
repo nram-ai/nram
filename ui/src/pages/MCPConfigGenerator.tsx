@@ -437,38 +437,80 @@ function MCPConfigGenerator() {
         )}
       </div>
 
-      {/* System prompts */}
-      <div className="space-y-4">
-        <div>
-          <h2 className="text-sm font-medium">System Prompt Snippets</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Add these snippets to your project&apos;s system prompt configuration to guide your AI
-            tool on how to use nram effectively.
-          </p>
-        </div>
-
-        <div className="bg-card rounded-md border border-border p-4 space-y-4">
-          <div className="space-y-1">
-            <p className="text-sm font-medium">For CLAUDE.md</p>
-            <p className="text-sm text-muted-foreground">
-              Add this to your project&apos;s CLAUDE.md file to instruct Claude on when and how to
-              use memory. This provides detailed guidance for proactive memory usage.
+      {/* System prompts — shown only for tools that have a system prompt file */}
+      {(activeTab === "claude-code" || activeTab === "claude-desktop") && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-sm font-medium">System Prompt Snippet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Add this snippet to your project&apos;s CLAUDE.md file to guide Claude on how to use
+              nram effectively.
             </p>
           </div>
-          <CodeBlock code={claudeMdSnippet} />
+          <div className="bg-card rounded-md border border-border p-4 space-y-4">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">For CLAUDE.md</p>
+              <p className="text-sm text-muted-foreground">
+                This provides detailed guidance for proactive memory usage. Place it in
+                your project&apos;s CLAUDE.md or your global ~/.claude/CLAUDE.md file.
+              </p>
+            </div>
+            <CodeBlock code={claudeMdSnippet} />
+          </div>
         </div>
+      )}
 
-        <div className="bg-card rounded-md border border-border p-4 space-y-4">
-          <div className="space-y-1">
-            <p className="text-sm font-medium">For .cursorrules</p>
-            <p className="text-sm text-muted-foreground">
-              Add this to your project&apos;s .cursorrules file for Cursor. This is a condensed
-              version of the memory instructions suitable for Cursor&apos;s rule format.
+      {activeTab === "cursor" && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-sm font-medium">System Prompt Snippet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Add this snippet to your project&apos;s .cursorrules file to guide Cursor on how to
+              use nram effectively.
             </p>
           </div>
-          <CodeBlock code={cursorRulesSnippet} />
+          <div className="bg-card rounded-md border border-border p-4 space-y-4">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">For .cursorrules</p>
+              <p className="text-sm text-muted-foreground">
+                A condensed version of the memory instructions suitable for Cursor&apos;s
+                rule format.
+              </p>
+            </div>
+            <CodeBlock code={cursorRulesSnippet} />
+          </div>
         </div>
-      </div>
+      )}
+
+      {activeTab === "api-key" && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-sm font-medium">System Prompt Snippet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              If your MCP client supports a system prompt or rules file, add the
+              appropriate snippet to instruct the model on how to use nram.
+            </p>
+          </div>
+          <div className="bg-card rounded-md border border-border p-4 space-y-4">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">For CLAUDE.md</p>
+              <p className="text-sm text-muted-foreground">
+                Detailed guidance for Claude-based tools.
+              </p>
+            </div>
+            <CodeBlock code={claudeMdSnippet} />
+          </div>
+          <div className="bg-card rounded-md border border-border p-4 space-y-4">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">For .cursorrules</p>
+              <p className="text-sm text-muted-foreground">
+                Condensed version for Cursor-based tools.
+              </p>
+            </div>
+            <CodeBlock code={cursorRulesSnippet} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
