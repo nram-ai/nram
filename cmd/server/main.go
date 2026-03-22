@@ -193,7 +193,7 @@ func main() {
 	}
 
 	// Create vector store.
-	// Priority: Qdrant (if configured) > PgVector (if Postgres) > nil (SQLite).
+	// Priority: Qdrant (if configured) > PgVector (if Postgres) > HNSWStore (if SQLite).
 	var vectorStore storage.VectorStore
 	if cfg.Qdrant.Addr != "" {
 		vectorStore, err = storage.NewQdrantStore(cfg.Qdrant)
@@ -209,6 +209,18 @@ func main() {
 			vectorStore = pgvStore
 			log.Println("pgvector store initialized")
 		}
+	}
+	if vectorStore == nil && db.Backend() == storage.BackendSQLite {
+		hnswCfg := storage.HNSWConfig{
+			M:                cfg.HNSW.M,
+			EfConstruction:   cfg.HNSW.EfConstruction,
+			EfSearch:         cfg.HNSW.EfSearch,
+			MaxLoadedIndexes: cfg.HNSW.MaxLoadedIndexes,
+		}
+		hnswStore := storage.NewHNSWStore(db.DB(), hnswCfg)
+		vectorStore = hnswStore
+		defer hnswStore.Close()
+		log.Println("hnsw vector store initialized (SQLite backend)")
 	}
 
 	// Create event bus.
