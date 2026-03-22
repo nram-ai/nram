@@ -23,8 +23,8 @@ func RegisterStoreTools(s *Server) {
 
 func registerMemoryStore(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store a memory in a project. The project is auto-created if it does not exist."),
-		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug, auto-created if missing")),
+		mcp.WithDescription("Store a memory in a project. The project is auto-created if it does not exist. Defaults to the 'global' project if omitted."),
+		mcp.WithString("project", mcp.Description("Project slug (default: 'global'), auto-created if missing")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to store")),
 		mcp.WithString("source", mcp.Description("Origin identifier")),
 		mcp.WithArray("tags", mcp.Description("Labels for filtering")),
@@ -41,8 +41,8 @@ func registerMemoryStore(s *Server) {
 
 func registerMemoryStoreBatch(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store multiple memories in a project in a single batch operation."),
-		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug")),
+		mcp.WithDescription("Store multiple memories in a project in a single batch operation. Defaults to the 'global' project if omitted."),
+		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithArray("items", mcp.Required(), mcp.Description("Array of objects with content (required), source, tags, metadata")),
 	}
 	opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue enrichment for all items (default false)")))
@@ -69,9 +69,10 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 
 	args := request.GetArguments()
 
-	projectSlug, ok := args["project"].(string)
-	if !ok || strings.TrimSpace(projectSlug) == "" {
-		return mcp.NewToolResultError("project is required"), nil
+	projectSlug, _ := args["project"].(string)
+	projectSlug = strings.TrimSpace(projectSlug)
+	if projectSlug == "" {
+		projectSlug = "global"
 	}
 
 	content, ok := args["content"].(string)
@@ -144,9 +145,10 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 
 	args := request.GetArguments()
 
-	projectSlug, ok := args["project"].(string)
-	if !ok || strings.TrimSpace(projectSlug) == "" {
-		return mcp.NewToolResultError("project is required"), nil
+	projectSlug, _ := args["project"].(string)
+	projectSlug = strings.TrimSpace(projectSlug)
+	if projectSlug == "" {
+		projectSlug = "global"
 	}
 
 	rawItems, ok := args["items"].([]interface{})

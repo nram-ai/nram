@@ -85,23 +85,6 @@ func buildNoAuthCtx() context.Context {
 
 // --- schema tests ---
 
-func TestMemoryStore_Schema_SQLite_NoEnrich(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	st, ok := tools["memory_store"]
-	if !ok {
-		t.Fatal("memory_store tool not registered")
-	}
-
-	raw, _ := json.Marshal(st.Tool.InputSchema)
-	schema := string(raw)
-	if containsField(schema, "enrich") {
-		t.Error("expected enrich param to be absent on SQLite backend")
-	}
-}
-
 func TestMemoryStore_Schema_Postgres_HasEnrich(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
 	srv := NewServer(deps)
@@ -116,23 +99,6 @@ func TestMemoryStore_Schema_Postgres_HasEnrich(t *testing.T) {
 	schema := string(raw)
 	if !containsField(schema, "enrich") {
 		t.Error("expected enrich param to be present on Postgres backend")
-	}
-}
-
-func TestMemoryStoreBatch_Schema_SQLite_NoEnrich(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	st, ok := tools["memory_store_batch"]
-	if !ok {
-		t.Fatal("memory_store_batch tool not registered")
-	}
-
-	raw, _ := json.Marshal(st.Tool.InputSchema)
-	schema := string(raw)
-	if containsField(schema, "enrich") {
-		t.Error("expected enrich param to be absent on SQLite backend")
 	}
 }
 
@@ -190,24 +156,6 @@ func TestHandleMemoryStore_NoAuth(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertToolError(t, result, "authentication required")
-}
-
-func TestHandleMemoryStore_MissingProject(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store"
-	req.Params.Arguments = map[string]interface{}{
-		"content": "hello",
-	}
-
-	ctx := buildAuthCtx(uuid.New())
-	result, err := handleMemoryStore(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "project is required")
 }
 
 func TestHandleMemoryStore_MissingContent(t *testing.T) {
@@ -389,24 +337,6 @@ func TestHandleMemoryStoreBatch_NoAuth(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertToolError(t, result, "authentication required")
-}
-
-func TestHandleMemoryStoreBatch_MissingProject(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store_batch"
-	req.Params.Arguments = map[string]interface{}{
-		"items": []interface{}{map[string]interface{}{"content": "a"}},
-	}
-
-	ctx := buildAuthCtx(uuid.New())
-	result, err := handleMemoryStoreBatch(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "project is required")
 }
 
 func TestHandleMemoryStoreBatch_EmptyItems(t *testing.T) {

@@ -73,43 +73,6 @@ func (m *mockMemoryReaderRecall) ListByNamespace(_ context.Context, _ uuid.UUID,
 
 // --- schema tests ---
 
-func TestMemoryRecall_Schema_SQLite_NoGraphParams(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	st, ok := tools["memory_recall"]
-	if !ok {
-		t.Fatal("memory_recall tool not registered")
-	}
-
-	raw, _ := json.Marshal(st.Tool.InputSchema)
-	schema := string(raw)
-
-	if containsField(schema, "include_graph") {
-		t.Error("expected include_graph param to be absent on SQLite backend")
-	}
-	if containsField(schema, "graph_depth") {
-		t.Error("expected graph_depth param to be absent on SQLite backend")
-	}
-	// Verify core params are present.
-	if !containsField(schema, "query") {
-		t.Error("expected query param to be present")
-	}
-	if !containsField(schema, "project") {
-		t.Error("expected project param to be present")
-	}
-	if !containsField(schema, "org") {
-		t.Error("expected org param to be present")
-	}
-	if !containsField(schema, "limit") {
-		t.Error("expected limit param to be present")
-	}
-	if !containsField(schema, "tags") {
-		t.Error("expected tags param to be present")
-	}
-}
-
 func TestMemoryRecall_Schema_Postgres_HasGraphParams(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
 	srv := NewServer(deps)

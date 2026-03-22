@@ -79,10 +79,11 @@ func (r *UserRepo) Create(ctx context.Context, user *model.User, nsRepo *Namespa
 		return fmt.Errorf("user create: %w", err)
 	}
 
-	// Auto-create a "default" project so the user has one ready immediately.
+	// Auto-create a "global" project so the user has one ready immediately.
+	// This serves as the implicit scope when MCP tools omit the project parameter.
 	if projectRepo != nil {
-		if _, err := projectRepo.AutoCreateUnderUser(ctx, nsRepo, userNSID, "default"); err != nil {
-			return fmt.Errorf("user create default project: %w", err)
+		if _, err := projectRepo.AutoCreateUnderUser(ctx, nsRepo, userNSID, "global"); err != nil {
+			return fmt.Errorf("user create global project: %w", err)
 		}
 	}
 

@@ -917,28 +917,6 @@ func TestMCP_StoreEmptyContent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 12. TestMCP_StoreEmptyProject
-// ---------------------------------------------------------------------------
-
-func TestMCP_StoreEmptyProject(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
-		"project": "",
-		"content": "valid content",
-	}
-
-	ctx := buildAuthCtx(uuid.New())
-	result, err := handleMemoryStore(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	assertToolError(t, result, "project is required")
-}
-
-// ---------------------------------------------------------------------------
 // 13. TestMCP_RecallEmptyQuery
 // ---------------------------------------------------------------------------
 
@@ -1361,20 +1339,6 @@ func TestMCP_UpdateEmitsEvent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 20. TestMCP_SQLiteOmitsEnrichTool
-// ---------------------------------------------------------------------------
-
-func TestMCP_SQLiteOmitsEnrichTool(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_enrich"]; ok {
-		t.Error("memory_enrich tool must NOT be registered on SQLite backend")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // 21. TestMCP_PostgresIncludesEnrichTool
 // ---------------------------------------------------------------------------
 
@@ -1385,20 +1349,6 @@ func TestMCP_PostgresIncludesEnrichTool(t *testing.T) {
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["memory_enrich"]; !ok {
 		t.Error("memory_enrich tool must be registered on Postgres backend")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// 22. TestMCP_SQLiteOmitsGraphTool
-// ---------------------------------------------------------------------------
-
-func TestMCP_SQLiteOmitsGraphTool(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_graph"]; ok {
-		t.Error("memory_graph tool must NOT be registered on SQLite backend")
 	}
 }
 

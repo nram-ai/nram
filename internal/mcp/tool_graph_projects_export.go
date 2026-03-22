@@ -86,7 +86,7 @@ func registerMemoryProjects(s *Server) {
 func registerMemoryExport(s *Server) {
 	tool := mcp.NewTool("memory_export",
 		mcp.WithDescription("Export all data from a project in JSON or NDJSON format."),
-		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug to export")),
+		mcp.WithString("project", mcp.Description("Project slug to export (default: 'global')")),
 		mcp.WithString("format", mcp.Description("Export format: \"json\" or \"ndjson\" (default \"json\")")),
 	)
 
@@ -264,9 +264,10 @@ func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequ
 
 	args := request.GetArguments()
 
-	projectSlug, ok := args["project"].(string)
-	if !ok || strings.TrimSpace(projectSlug) == "" {
-		return mcp.NewToolResultError("project is required"), nil
+	projectSlug, _ := args["project"].(string)
+	projectSlug = strings.TrimSpace(projectSlug)
+	if projectSlug == "" {
+		projectSlug = "global"
 	}
 
 	format := "json"

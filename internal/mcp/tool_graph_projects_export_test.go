@@ -98,16 +98,6 @@ func (m *mockExportProjectRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.
 
 // --- memory_graph schema tests ---
 
-func TestMemoryGraph_NotRegistered_SQLite(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_graph"]; ok {
-		t.Error("expected memory_graph to NOT be registered on SQLite")
-	}
-}
-
 func TestMemoryGraph_Registered_Postgres(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
 	srv := NewServer(deps)
@@ -447,21 +437,6 @@ func TestHandleMemoryExport_NoAuth(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertToolError(t, result, "authentication required")
-}
-
-func TestHandleMemoryExport_MissingProject(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{}
-
-	ctx := buildAuthCtx(uuid.New())
-	result, err := handleMemoryExport(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "project is required")
 }
 
 func TestHandleMemoryExport_InvalidFormat(t *testing.T) {

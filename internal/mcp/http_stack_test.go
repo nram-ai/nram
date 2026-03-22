@@ -2521,42 +2521,6 @@ func TestHTTPStack_MCP_StoreEmptyContent_Rejected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 26: TestHTTPStack_MCP_StoreEmptyProject_Rejected
-// ---------------------------------------------------------------------------
-
-func TestHTTPStack_MCP_StoreEmptyProject_Rejected(t *testing.T) {
-	userA := uuid.New()
-	nsA := uuid.New()
-	projA := uuid.New()
-
-	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
-		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "test-proj"},
-	})
-	defer env.Close()
-
-	sess := env.sessionFor(t, 0)
-
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
-		"name": "memory_store",
-		"arguments": map[string]interface{}{
-			"project": "",
-			"content": "some content",
-		},
-	})
-	if storeRPC == nil || storeRPC.Error != nil {
-		t.Fatalf("store RPC failed at protocol level")
-	}
-
-	text, isErr := extractToolResultTextRaw(t, storeRPC)
-	if !isErr {
-		t.Fatalf("expected tool error for empty project, got success: %s", text)
-	}
-	if !strings.Contains(strings.ToLower(text), "project") {
-		t.Errorf("expected error about project, got: %s", text)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Test 27: TestHTTPStack_MCP_GetSpecificMemories
 // ---------------------------------------------------------------------------
 

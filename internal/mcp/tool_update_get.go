@@ -24,7 +24,7 @@ func registerMemoryUpdate(s *Server) {
 	tool := mcp.NewTool("memory_update",
 		mcp.WithDescription("Update an existing memory's content, tags, or metadata."),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Memory ID to update")),
-		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug")),
+		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithString("content", mcp.Description("New content (triggers re-embedding on Postgres)")),
 		mcp.WithArray("tags", mcp.Description("Replace tags")),
 		mcp.WithObject("metadata", mcp.Description("Replace metadata")),
@@ -39,7 +39,7 @@ func registerMemoryGet(s *Server) {
 	tool := mcp.NewTool("memory_get",
 		mcp.WithDescription("Retrieve one or more memories by ID."),
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to retrieve")),
-		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug")),
+		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -72,9 +72,10 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError(fmt.Sprintf("invalid memory id: %v", err)), nil
 	}
 
-	projectSlug, ok := args["project"].(string)
-	if !ok || strings.TrimSpace(projectSlug) == "" {
-		return mcp.NewToolResultError("project is required"), nil
+	projectSlug, _ := args["project"].(string)
+	projectSlug = strings.TrimSpace(projectSlug)
+	if projectSlug == "" {
+		projectSlug = "global"
 	}
 
 	// Build optional fields — only set pointers when args are present.
@@ -160,9 +161,10 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 
 	args := request.GetArguments()
 
-	projectSlug, ok := args["project"].(string)
-	if !ok || strings.TrimSpace(projectSlug) == "" {
-		return mcp.NewToolResultError("project is required"), nil
+	projectSlug, _ := args["project"].(string)
+	projectSlug = strings.TrimSpace(projectSlug)
+	if projectSlug == "" {
+		projectSlug = "global"
 	}
 
 	rawIDs, ok := args["ids"].([]interface{})

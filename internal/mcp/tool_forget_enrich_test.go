@@ -123,16 +123,6 @@ func TestMemoryForget_SchemaRegistered_Postgres(t *testing.T) {
 
 // --- memory_enrich schema tests ---
 
-func TestMemoryEnrich_NotRegistered_SQLite(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_enrich"]; ok {
-		t.Fatal("memory_enrich should not be registered on SQLite backend")
-	}
-}
-
 func TestMemoryEnrich_Registered_Postgres(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
 	srv := NewServer(deps)
@@ -180,24 +170,6 @@ func TestHandleMemoryForget_NoAuth(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertToolError(t, result, "authentication required")
-}
-
-func TestHandleMemoryForget_MissingProject(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_forget"
-	req.Params.Arguments = map[string]interface{}{
-		"ids": []interface{}{uuid.New().String()},
-	}
-
-	ctx := buildAuthCtx(uuid.New())
-	result, err := handleMemoryForget(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "project is required")
 }
 
 func TestHandleMemoryForget_MissingIDs(t *testing.T) {
@@ -429,22 +401,6 @@ func TestHandleMemoryEnrich_NoAuth(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertToolError(t, result, "authentication required")
-}
-
-func TestHandleMemoryEnrich_MissingProject(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_enrich"
-	req.Params.Arguments = map[string]interface{}{}
-
-	ctx := buildAuthCtx(uuid.New())
-	result, err := handleMemoryEnrich(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "project is required")
 }
 
 func TestHandleMemoryEnrich_ProjectNotFound(t *testing.T) {

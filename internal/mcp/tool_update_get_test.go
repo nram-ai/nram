@@ -175,24 +175,6 @@ func TestHandleMemoryUpdate_InvalidID(t *testing.T) {
 	assertToolError(t, result, "invalid memory id")
 }
 
-func TestHandleMemoryUpdate_MissingProject(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
-	req.Params.Arguments = map[string]interface{}{
-		"id":      uuid.New().String(),
-		"content": "new content",
-	}
-
-	ctx := buildAuthCtx(uuid.New())
-	result, err := handleMemoryUpdate(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "project is required")
-}
 
 func TestHandleMemoryUpdate_NoFieldsProvided(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
@@ -458,23 +440,6 @@ func TestHandleMemoryGet_InvalidUUID(t *testing.T) {
 	assertToolError(t, result, "not a valid UUID")
 }
 
-func TestHandleMemoryGet_MissingProject(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_get"
-	req.Params.Arguments = map[string]interface{}{
-		"ids": []interface{}{uuid.New().String()},
-	}
-
-	ctx := buildAuthCtx(uuid.New())
-	result, err := handleMemoryGet(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "project is required")
-}
 
 func TestHandleMemoryGet_ProjectNotFound(t *testing.T) {
 	userID := uuid.New()

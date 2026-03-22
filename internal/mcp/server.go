@@ -98,6 +98,7 @@ func buildInstructions(_ string) string {
 
 Key concepts:
 - Memories are organized into projects (identified by slug). Projects are auto-created on first use.
+- Every user has a "global" project that serves as the default scope. When you omit the project parameter, memories are stored in and recalled from the global project.
 - Each memory has content (the main text), optional tags (for filtering), and optional metadata (key-value pairs).
 - Memories support TTL (time-to-live) for automatic expiration.
 
