@@ -1146,6 +1146,28 @@ function MemoryBrowser() {
             </div>
           ) : (
             <>
+              <div className="mb-2 flex items-center gap-3">
+                <button
+                  type="button"
+                  className="rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted"
+                  onClick={() => {
+                    if (selectedIds.size === memories.length) {
+                      setSelectedIds(new Set());
+                    } else {
+                      setSelectedIds(new Set(memories.map((m) => m.id)));
+                    }
+                  }}
+                >
+                  {selectedIds.size === memories.length && memories.length > 0
+                    ? "Deselect All"
+                    : "Select All"}
+                </button>
+                {selectedIds.size > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    {selectedIds.size} of {memories.length} selected
+                  </span>
+                )}
+              </div>
               <div className="flex-1 space-y-3 overflow-y-auto">
                 {memories.map((m) => (
                   <MemoryCard
