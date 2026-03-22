@@ -12,7 +12,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/service"
-	"github.com/nram-ai/nram/internal/storage"
 )
 
 // graphResponse is the JSON envelope returned by the memory_graph tool.
@@ -61,13 +60,8 @@ func RegisterGraphProjectsExportTools(s *Server) {
 }
 
 func registerMemoryGraph(s *Server) {
-	// memory_graph is only available on Postgres.
-	if s.Backend() != storage.BackendPostgres {
-		return
-	}
-
 	tool := mcp.NewTool("memory_graph",
-		mcp.WithDescription("Explore the knowledge graph starting from an entity name or search query. Postgres only."),
+		mcp.WithDescription("Explore the knowledge graph starting from an entity name or search query."),
 		mcp.WithString("entity", mcp.Required(), mcp.Description("Entity name or search query")),
 		mcp.WithString("project", mcp.Description("Project slug to scope the search")),
 		mcp.WithNumber("depth", mcp.Description("Graph traversal depth (default 2)")),

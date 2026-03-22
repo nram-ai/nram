@@ -272,11 +272,7 @@ func main() {
 	_ = service.NewSettingsService(settingsRepo)
 
 	// Create lifecycle service for TTL expiry and purge sweeps.
-	// Graph pruning is only available on Postgres (entities/relationships are Postgres-only).
-	var graphPruner service.GraphPruner
-	if db.Backend() == storage.BackendPostgres {
-		graphPruner = service.NewGraphPruner(entityRepo, relationshipRepo)
-	}
+	graphPruner := service.NewGraphPruner(entityRepo, relationshipRepo)
 	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, service.LifecycleConfig{})
 	lifecycleSvc.Start()
 	defer lifecycleSvc.Stop()
@@ -340,18 +336,16 @@ func main() {
 		return registry.GetEntity()
 	}
 
-	// Start enrichment worker pool (Postgres only — needs providers for LLM extraction).
-	if db.Backend() == storage.BackendPostgres {
-		workerPool := enrichment.NewWorkerPool(
-			enrichment.WorkerConfig{},
-			memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
-			entityRepo, relationshipRepo, lineageRepo, tokenUsageRepo, vectorStore,
-			factProvider, entityProvider, embedProvider,
-		)
-		workerPool.Start()
-		defer workerPool.Stop()
-		log.Println("enrichment worker pool started")
-	}
+	// Start enrichment worker pool — needs providers for LLM extraction.
+	workerPool := enrichment.NewWorkerPool(
+		enrichment.WorkerConfig{},
+		memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
+		entityRepo, relationshipRepo, lineageRepo, tokenUsageRepo, vectorStore,
+		factProvider, entityProvider, embedProvider,
+	)
+	workerPool.Start()
+	defer workerPool.Stop()
+	log.Println("enrichment worker pool started")
 
 	// Create auth config for login/lookup handlers.
 	// JWT secret is loaded later, but we need it here — load it early.

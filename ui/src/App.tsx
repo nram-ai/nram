@@ -86,26 +86,25 @@ interface NavItem {
   section: string;
   minRole?: string;
   writeOnly?: boolean;
-  postgresOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
   { path: "/", label: "Dashboard", section: "Overview" },
   { path: "/memories", label: "Memory Browser", section: "Data" },
-  { path: "/entities", label: "Entity Browser", section: "Data", postgresOnly: true },
-  { path: "/graph", label: "Graph Visualization", section: "Data", postgresOnly: true },
+  { path: "/entities", label: "Entity Browser", section: "Data" },
+  { path: "/graph", label: "Graph Visualization", section: "Data" },
   { path: "/projects", label: "Projects", section: "Management" },
   { path: "/organizations", label: "Organizations", section: "Management", minRole: "org_owner" },
   { path: "/users", label: "Users", section: "Management", minRole: "org_owner" },
   { path: "/providers", label: "Providers", section: "Configuration", minRole: "administrator" },
   { path: "/settings", label: "Settings", section: "Configuration", minRole: "administrator" },
-  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration", minRole: "administrator", postgresOnly: true },
+  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration", minRole: "administrator" },
   { path: "/webhooks", label: "Webhooks", section: "Configuration", minRole: "administrator" },
   { path: "/oauth", label: "OAuth Clients", section: "Configuration", minRole: "administrator" },
   { path: "/idp", label: "Identity Providers", section: "Configuration", minRole: "org_owner" },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
   { path: "/database", label: "Database", section: "System", minRole: "administrator" },
-  { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator", postgresOnly: true },
+  { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator" },
   { path: "/analytics", label: "Analytics", section: "System" },
   { path: "/import", label: "Bulk Import", section: "System", writeOnly: true },
   { path: "/account", label: "My Account", section: "Account" },
@@ -155,15 +154,9 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 }
 
 function AppLayout() {
-  const { data: setupStatus } = useSetupStatus();
   const auth = useAuth();
 
-  const isSQLite = setupStatus?.backend === "sqlite";
-
   const filteredItems = navItems.filter((item) => {
-    if (isSQLite && item.postgresOnly) {
-      return false;
-    }
     if (item.minRole && !auth.hasMinRole(item.minRole)) {
       return false;
     }
@@ -209,11 +202,6 @@ function AppLayout() {
                       }
                     >
                       {item.label}
-                      {isSQLite && item.path === "/providers" && (
-                        <span className="ml-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60">
-                          SQLite
-                        </span>
-                      )}
                     </NavLink>
                   </li>
                 ))}
@@ -241,8 +229,8 @@ function AppLayout() {
               <Route path="/organizations" element={<RequireRole minRole="org_owner"><OrganizationManagement /></RequireRole>} />
               <Route path="/users" element={<RequireRole minRole="org_owner"><UserManagement /></RequireRole>} />
               <Route path="/providers" element={<RequireRole minRole="administrator"><ProviderConfiguration /></RequireRole>} />
-              <Route path="/settings" element={<RequireRole minRole="administrator"><SettingsEditor isSQLite={isSQLite} /></RequireRole>} />
-              <Route path="/extraction-prompts" element={<RequireRole minRole="administrator"><ExtractionPromptEditor isSQLite={isSQLite} /></RequireRole>} />
+              <Route path="/settings" element={<RequireRole minRole="administrator"><SettingsEditor /></RequireRole>} />
+              <Route path="/extraction-prompts" element={<RequireRole minRole="administrator"><ExtractionPromptEditor /></RequireRole>} />
               <Route path="/database" element={<RequireRole minRole="administrator"><DatabaseManagement /></RequireRole>} />
               <Route path="/enrichment" element={<RequireRole minRole="administrator"><EnrichmentMonitor /></RequireRole>} />
               <Route path="/graph" element={<GraphVisualization />} />

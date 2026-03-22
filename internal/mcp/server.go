@@ -13,7 +13,6 @@ import (
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
-	"github.com/nram-ai/nram/internal/storage"
 )
 
 // ProjectRepo defines the project lookup operations needed by MCP tool handlers.
@@ -90,10 +89,9 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 	return r
 }
 
-// buildInstructions returns the MCP server instructions string, conditionally
-// including Postgres-only tool references (memory_enrich, memory_graph) when
-// the backend is Postgres.
-func buildInstructions(backend string) string {
+// buildInstructions returns the MCP server instructions string describing all
+// available tools including enrichment and graph features.
+func buildInstructions(_ string) string {
 	var b strings.Builder
 
 	b.WriteString(`You have access to nram, a persistent memory layer for AI agents. Use it to store and recall information across conversations.
@@ -113,11 +111,9 @@ Recommended workflow:
 7. Use memory_projects to list available projects and their slugs.
 8. Use memory_export to export all memories from a project for backup or migration.`)
 
-	if backend == storage.BackendPostgres {
-		b.WriteString(`
+	b.WriteString(`
 9. Use memory_enrich to trigger entity extraction and enrichment on stored memories, enhancing future recall and graph traversal.
 10. Use memory_graph to explore the knowledge graph — find entities and their relationships starting from a name or search query.`)
-	}
 
 	b.WriteString(`
 

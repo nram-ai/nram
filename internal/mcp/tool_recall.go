@@ -10,12 +10,9 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/service"
-	"github.com/nram-ai/nram/internal/storage"
 )
 
 // RegisterRecallTool registers the memory_recall MCP tool on the given server.
-// On SQLite, the include_graph and graph_depth parameters are omitted since
-// vector/graph features are not available.
 func RegisterRecallTool(s *Server) {
 	opts := []mcp.ToolOption{
 		mcp.WithDescription("Recall memories matching a natural language query. Omit project to search all user projects."),
@@ -25,12 +22,10 @@ func RegisterRecallTool(s *Server) {
 		mcp.WithNumber("limit", mcp.Description("Maximum results to return (default 10)")),
 		mcp.WithArray("tags", mcp.Description("Filter by tags (intersection: memory must have ALL)")),
 	}
-	if s.Backend() == storage.BackendPostgres {
-		opts = append(opts,
-			mcp.WithBoolean("include_graph", mcp.Description("Include graph entities in results (default true)")),
-			mcp.WithNumber("graph_depth", mcp.Description("Graph traversal depth (default 2)")),
-		)
-	}
+	opts = append(opts,
+		mcp.WithBoolean("include_graph", mcp.Description("Include graph entities in results (default true)")),
+		mcp.WithNumber("graph_depth", mcp.Description("Graph traversal depth (default 2)")),
+	)
 
 	tool := mcp.NewTool("memory_recall", opts...)
 

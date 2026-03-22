@@ -102,8 +102,8 @@ func NewHealthHandler(cfg HealthConfig) http.HandlerFunc {
 			UptimeSeconds: int64(time.Since(cfg.StartTime).Seconds()),
 		}
 
-		// Enrichment queue stats (only on Postgres).
-		if backend != storage.BackendSQLite && cfg.Queue != nil {
+		// Enrichment queue stats.
+		if cfg.Queue != nil {
 			stats, err := cfg.Queue.CountByStatus(ctx)
 			if err == nil {
 				resp.EnrichmentQueue = &healthEnrichmentQueue{
@@ -119,16 +119,7 @@ func NewHealthHandler(cfg HealthConfig) http.HandlerFunc {
 }
 
 // buildProviderHealth checks each provider slot and returns health statuses.
-func buildProviderHealth(ctx context.Context, backend string, reg ProviderRegistry) healthProviders {
-	if backend == storage.BackendSQLite {
-		unavailable := healthProviderStatus{Status: "unavailable_sqlite"}
-		return healthProviders{
-			Embedding:        unavailable,
-			FactExtraction:   unavailable,
-			EntityExtraction: unavailable,
-		}
-	}
-
+func buildProviderHealth(ctx context.Context, _ string, reg ProviderRegistry) healthProviders {
 	return healthProviders{
 		Embedding:        checkEmbeddingProvider(ctx, reg),
 		FactExtraction:   checkLLMProvider(ctx, reg, "fact"),

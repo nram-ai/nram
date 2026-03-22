@@ -11,17 +11,13 @@ import (
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/service"
-	"github.com/nram-ai/nram/internal/storage"
 )
 
 // RegisterForgetEnrichTools registers the memory_forget and memory_enrich MCP
-// tools on the given server. memory_enrich is only registered when the backend
-// is Postgres, since SQLite does not support enrichment.
+// tools on the given server.
 func RegisterForgetEnrichTools(s *Server) {
 	registerMemoryForget(s)
-	if s.Backend() == storage.BackendPostgres {
-		registerMemoryEnrich(s)
-	}
+	registerMemoryEnrich(s)
 }
 
 func registerMemoryForget(s *Server) {

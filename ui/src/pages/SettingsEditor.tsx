@@ -687,7 +687,7 @@ function CategoryCard({
 // Main Page
 // ---------------------------------------------------------------------------
 
-function SettingsEditor({ isSQLite }: { isSQLite: boolean }) {
+function SettingsEditor() {
   const settingsQuery = useSettings();
   const schemaQuery = useSettingsSchema();
   const updateMutation = useUpdateSetting();
@@ -732,15 +732,7 @@ function SettingsEditor({ isSQLite }: { isSQLite: boolean }) {
   const settings = settingsQuery.data?.data ?? [];
   const settingsMap = new Map(settings.map((s) => [s.key, s]));
 
-  // On SQLite, filter out enrichment category and confidence key
-  const schemas = isSQLite
-    ? allSchemas.filter(
-        (s) =>
-          s.category !== "enrichment" &&
-          s.category !== "qdrant" &&
-          s.key !== "memory.default_confidence",
-      )
-    : allSchemas;
+  const schemas = allSchemas;
 
   // Group by category
   const categoryMap = new Map<string, SettingWithSchema[]>();
@@ -841,8 +833,8 @@ function SettingsEditor({ isSQLite }: { isSQLite: boolean }) {
             />
           ))}
 
-          {/* Extraction Prompts section (hidden on SQLite) */}
-          {!isSQLite && promptItems.length > 0 && (
+          {/* Extraction Prompts section */}
+          {promptItems.length > 0 && (
             <PromptEditorSection
               items={promptItems}
               onSave={handleSave}

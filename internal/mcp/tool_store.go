@@ -12,12 +12,10 @@ import (
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
-	"github.com/nram-ai/nram/internal/storage"
 )
 
 // RegisterStoreTools registers the memory_store and memory_store_batch MCP tools
-// on the given server. The enrich parameter is only included when the backend is
-// Postgres, since SQLite does not support enrichment.
+// on the given server.
 func RegisterStoreTools(s *Server) {
 	registerMemoryStore(s)
 	registerMemoryStoreBatch(s)
@@ -32,9 +30,7 @@ func registerMemoryStore(s *Server) {
 		mcp.WithArray("tags", mcp.Description("Labels for filtering")),
 		mcp.WithObject("metadata", mcp.Description("Arbitrary key-value metadata")),
 	}
-	if s.Backend() == storage.BackendPostgres {
-		opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue async enrichment (default false)")))
-	}
+	opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue async enrichment (default false)")))
 
 	tool := mcp.NewTool("memory_store", opts...)
 
@@ -49,9 +45,7 @@ func registerMemoryStoreBatch(s *Server) {
 		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug")),
 		mcp.WithArray("items", mcp.Required(), mcp.Description("Array of objects with content (required), source, tags, metadata")),
 	}
-	if s.Backend() == storage.BackendPostgres {
-		opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue enrichment for all items (default false)")))
-	}
+	opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue enrichment for all items (default false)")))
 
 	tool := mcp.NewTool("memory_store_batch", opts...)
 

@@ -1,7 +1,5 @@
 import { useState, useCallback } from "react";
-import { Link } from "react-router-dom";
 import {
-  useSetupStatus,
   useProviderSlots,
   useUpdateProviderSlot,
   useTestProviderSlot,
@@ -791,59 +789,14 @@ function ProviderSlotCard({
 }
 
 // ---------------------------------------------------------------------------
-// SQLite Disabled Banner
-// ---------------------------------------------------------------------------
-
-function SQLiteBanner() {
-  return (
-    <div className="absolute inset-0 z-10 flex items-start justify-center pt-16">
-      <div className="mx-auto max-w-lg rounded-lg border border-amber-300 bg-amber-50 p-6 shadow-lg dark:border-amber-700 dark:bg-amber-950">
-        <div className="flex items-start gap-3">
-          <svg
-            className="mt-0.5 h-6 w-6 flex-shrink-0 text-amber-600 dark:text-amber-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"
-            />
-          </svg>
-          <div>
-            <h3 className="text-base font-semibold text-amber-800 dark:text-amber-200">
-              Upgrade to Postgres
-            </h3>
-            <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-              Vector search and LLM enrichment require Postgres. Go to{" "}
-              <Link
-                to="/database"
-                className="font-medium underline hover:text-amber-900 dark:hover:text-amber-100"
-              >
-                Settings &rarr; Database
-              </Link>{" "}
-              to upgrade.
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
 function ProviderConfiguration() {
-  const setupQuery = useSetupStatus();
   const slotsQuery = useProviderSlots();
 
-  const isSQLite = setupQuery.data?.backend === "sqlite";
-  const isLoading = setupQuery.isLoading || slotsQuery.isLoading;
-  const isError = setupQuery.isError || slotsQuery.isError;
+  const isLoading = slotsQuery.isLoading;
+  const isError = slotsQuery.isError;
 
   // Build slots array, defaulting to unconfigured if API returns nothing
   const defaultSlots: ProviderSlot[] = [
@@ -918,24 +871,14 @@ function ProviderConfiguration() {
 
       {/* Content */}
       {!isLoading && !isError && (
-        <div className="relative">
-          {/* SQLite overlay */}
-          {isSQLite && <SQLiteBanner />}
-
-          {/* Slot cards */}
-          <div
-            className={`grid gap-6 md:grid-cols-1 lg:grid-cols-1 ${
-              isSQLite ? "pointer-events-none opacity-50" : ""
-            }`}
-          >
-            {slots.map((slot) => (
-              <ProviderSlotCard
-                key={slot.slot}
-                slot={slot}
-                disabled={isSQLite}
-              />
-            ))}
-          </div>
+        <div className="grid gap-6 md:grid-cols-1 lg:grid-cols-1">
+          {slots.map((slot) => (
+            <ProviderSlotCard
+              key={slot.slot}
+              slot={slot}
+              disabled={false}
+            />
+          ))}
         </div>
       )}
     </div>
