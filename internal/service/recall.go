@@ -422,9 +422,42 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	graphEntities := []RecallEntity{}
 	graphRelationships := []RecallRelationship{}
 	if req.IncludeGraph && s.entityReader != nil && s.traverser != nil {
-		// Search for entities related to the query.
-		foundEntities, err := s.entityReader.FindBySimilarity(ctx, namespaceID, req.Query, "", 10)
-		if err == nil {
+		// Search for entities related to the query using multiple strategies:
+		// 1. Full query string match
+		// 2. Individual significant words (3+ chars) from the query
+		seenEntityIDs := make(map[uuid.UUID]bool)
+		var foundEntities []model.Entity
+
+		// Strategy 1: full query match
+		if ents, err := s.entityReader.FindBySimilarity(ctx, namespaceID, req.Query, "", 10); err == nil {
+			for _, e := range ents {
+				if !seenEntityIDs[e.ID] {
+					seenEntityIDs[e.ID] = true
+					foundEntities = append(foundEntities, e)
+				}
+			}
+		}
+
+		// Strategy 2: search by individual words (3+ chars, skip common words)
+		if len(foundEntities) < 10 {
+			for _, word := range splitQueryWords(req.Query) {
+				if len(foundEntities) >= 10 {
+					break
+				}
+				ents, err := s.entityReader.FindBySimilarity(ctx, namespaceID, word, "", 5)
+				if err != nil {
+					continue
+				}
+				for _, e := range ents {
+					if !seenEntityIDs[e.ID] {
+						seenEntityIDs[e.ID] = true
+						foundEntities = append(foundEntities, e)
+					}
+				}
+			}
+		}
+
+		if len(foundEntities) > 0 {
 			// Build set of memory IDs connected via graph.
 			graphMemoryRelevance := make(map[uuid.UUID]float64)
 			// Deduplicate relationships by ID.
@@ -600,6 +633,36 @@ func clampScore(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+// splitQueryWords splits a query into individual significant words for entity matching.
+// Filters out common stop words and words shorter than 3 characters.
+func splitQueryWords(query string) []string {
+	stopWords := map[string]bool{
+		"the": true, "and": true, "for": true, "are": true, "but": true,
+		"not": true, "you": true, "all": true, "can": true, "had": true,
+		"her": true, "was": true, "one": true, "our": true, "out": true,
+		"has": true, "his": true, "how": true, "its": true, "let": true,
+		"may": true, "new": true, "now": true, "old": true, "see": true,
+		"way": true, "who": true, "did": true, "get": true, "got": true,
+		"him": true, "hit": true, "say": true, "she": true, "too": true,
+		"use": true, "what": true, "when": true, "where": true, "which": true,
+		"with": true, "this": true, "that": true, "from": true, "have": true,
+		"been": true, "will": true, "about": true, "their": true, "there": true,
+		"would": true, "could": true, "should": true, "does": true, "tell": true,
+		"them": true, "than": true, "then": true, "some": true, "into": true,
+	}
+
+	var words []string
+	for _, word := range strings.Fields(query) {
+		// Strip common punctuation
+		word = strings.Trim(word, ".,;:!?\"'()[]{}—–-")
+		lower := strings.ToLower(word)
+		if len(word) >= 3 && !stopWords[lower] {
+			words = append(words, word)
+		}
+	}
+	return words
 }
 
 // hasAllTags returns true if memTags contains every tag in required.

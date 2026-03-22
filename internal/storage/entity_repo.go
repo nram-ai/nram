@@ -125,21 +125,38 @@ func (r *EntityRepo) Upsert(ctx context.Context, entity *model.Entity) error {
 	return r.reloadByCanonical(ctx, entity)
 }
 
-// FindBySimilarity finds entities with similar names in the same namespace and
-// entity type. Uses case-insensitive LIKE matching with the name.
+// FindBySimilarity finds entities with similar names in the same namespace.
+// If kind is non-empty, results are filtered to that entity type.
+// Uses case-insensitive LIKE matching with the name.
 func (r *EntityRepo) FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error) {
 	pattern := "%" + name + "%"
 
-	query := selectEntityColumns + ` FROM entities
-		WHERE namespace_id = ? AND entity_type = ? AND name LIKE ? COLLATE NOCASE
-		ORDER BY mention_count DESC, created_at DESC LIMIT ?`
-	if r.db.Backend() == BackendPostgres {
+	var query string
+	var args []any
+
+	if kind != "" {
 		query = selectEntityColumns + ` FROM entities
-			WHERE namespace_id = $1 AND entity_type = $2 AND name ILIKE $3
-			ORDER BY mention_count DESC, created_at DESC LIMIT $4`
+			WHERE namespace_id = ? AND entity_type = ? AND name LIKE ? COLLATE NOCASE
+			ORDER BY mention_count DESC, created_at DESC LIMIT ?`
+		if r.db.Backend() == BackendPostgres {
+			query = selectEntityColumns + ` FROM entities
+				WHERE namespace_id = $1 AND entity_type = $2 AND name ILIKE $3
+				ORDER BY mention_count DESC, created_at DESC LIMIT $4`
+		}
+		args = []any{namespaceID.String(), kind, pattern, limit}
+	} else {
+		query = selectEntityColumns + ` FROM entities
+			WHERE namespace_id = ? AND name LIKE ? COLLATE NOCASE
+			ORDER BY mention_count DESC, created_at DESC LIMIT ?`
+		if r.db.Backend() == BackendPostgres {
+			query = selectEntityColumns + ` FROM entities
+				WHERE namespace_id = $1 AND name ILIKE $2
+				ORDER BY mention_count DESC, created_at DESC LIMIT $3`
+		}
+		args = []any{namespaceID.String(), pattern, limit}
 	}
 
-	rows, err := r.db.Query(ctx, query, namespaceID.String(), kind, pattern, limit)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("entity find by similarity: %w", err)
 	}
