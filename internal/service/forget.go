@@ -142,7 +142,7 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 		for _, id := range req.MemoryIDs {
 			ok, err := s.deleteSingle(ctx, id, project.NamespaceID, req.HardDelete)
 			if err != nil {
-				// Skip individual failures gracefully, continue with remaining.
+				log.Printf("forget: delete %s: %v", id, err)
 				continue
 			}
 			if ok {
@@ -210,15 +210,17 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 	}
 
 	if hard {
-		if err := s.memories.HardDelete(ctx, id); err != nil {
-			return false, fmt.Errorf("hard delete failed for %s: %w", id, err)
-		}
-		// Also remove from vector store if available.
+		// Remove FK references BEFORE deleting the memory to avoid
+		// FOREIGN KEY constraint failures (enrichment_queue, token_usage,
+		// memory_lineage, relationships all reference memories without CASCADE).
+		s.cleanupRelatedData(ctx, id)
 		if s.vectorStore != nil {
 			_ = s.vectorStore.Delete(ctx, id)
 		}
-		// Best-effort cascade cleanup of related data.
-		s.cleanupRelatedData(ctx, id)
+
+		if err := s.memories.HardDelete(ctx, id); err != nil {
+			return false, fmt.Errorf("hard delete failed for %s: %w", id, err)
+		}
 	} else {
 		if err := s.memories.SoftDelete(ctx, id); err != nil {
 			return false, fmt.Errorf("soft delete failed for %s: %w", id, err)
