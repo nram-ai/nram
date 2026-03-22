@@ -122,7 +122,9 @@ Tips:
 - Be specific with tags — they enable precise filtering during recall.
 - When recalling, provide a natural language query describing what you're looking for rather than exact keywords.
 - Store memories proactively: if a user shares preferences, project context, or important decisions, store them immediately.
-- Check for existing memories before storing duplicates — use memory_recall first.`)
+- Check for existing memories before storing duplicates — use memory_recall first.
+- When recalling without a project, only the global project is searched. To find project-specific memories, specify the project slug.
+- When recalling with a project, both the project's memories and global memories are included in the results.`)
 
 	return b.String()
 }

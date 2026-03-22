@@ -9,15 +9,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
 
 // RegisterRecallTool registers the memory_recall MCP tool on the given server.
 func RegisterRecallTool(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Recall memories matching a natural language query. Omit project to search all user projects."),
+		mcp.WithDescription("Recall memories matching a natural language query. When a project is specified, both that project's memories and global memories are searched. When omitted, only the global project is searched."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Natural language query")),
-		mcp.WithString("project", mcp.Description("Project slug. Omit to search all user projects")),
+		mcp.WithString("project", mcp.Description("Project slug. Searches this project + global. Omit to search only the global project")),
 		mcp.WithString("org", mcp.Description("Org slug. Search across entire org")),
 		mcp.WithNumber("limit", mcp.Description("Maximum results to return (default 10)")),
 		mcp.WithArray("tags", mcp.Description("Filter by tags (intersection: memory must have ALL)")),
@@ -92,19 +93,33 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		req.OrgID = &oid
 	}
 
-	if projectSlug != "" {
-		// Project-scoped recall: resolve project by slug.
-		user, err := deps.UserRepo.GetByID(ctx, ac.UserID)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("user not found: %v", err)), nil
-		}
+	// Resolve the user's global project namespace for inclusion in all recalls.
+	user, err := deps.UserRepo.GetByID(ctx, ac.UserID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("user not found: %v", err)), nil
+	}
 
+	// Look up the global project to get its namespace.
+	var globalNsID *uuid.UUID
+	var globalProject *model.Project
+	if gp, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, "global"); err == nil && gp != nil {
+		globalProject = gp
+		nsID := gp.NamespaceID
+		globalNsID = &nsID
+	}
+
+	if projectSlug != "" {
+		// Project-scoped recall: search this project + global.
 		project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
 		if err != nil {
 			return mcp.NewToolResultError("project not found"), nil
 		}
 
 		req.ProjectID = project.ID
+		// Include global memories alongside project-specific results.
+		if projectSlug != "global" {
+			req.GlobalNamespaceID = globalNsID
+		}
 	} else if orgSlug != "" {
 		// Org-scoped recall: resolve org and use its namespace.
 		if deps.OrgRepo == nil {
@@ -118,13 +133,13 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 
 		req.NamespaceID = &org.NamespaceID
 	} else {
-		// User-scoped recall: search all user projects via user namespace.
-		user, err := deps.UserRepo.GetByID(ctx, ac.UserID)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("user not found: %v", err)), nil
+		// No project specified: search only the global project.
+		if globalProject != nil {
+			req.ProjectID = globalProject.ID
+		} else {
+			// Fallback: no global project exists, search all user projects.
+			req.NamespaceID = &user.NamespaceID
 		}
-
-		req.NamespaceID = &user.NamespaceID
 	}
 
 	resp, err := deps.Recall.Recall(ctx, req)

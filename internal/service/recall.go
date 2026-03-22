@@ -58,6 +58,9 @@ type RecallRequest struct {
 	APIKeyID *uuid.UUID `json:"-"`
 	// Scope overrides (for user/org-level recall)
 	NamespaceID *uuid.UUID `json:"-"` // if set, search this namespace instead of project's
+	// GlobalNamespaceID, when set, causes the recall to also search the global
+	// project's namespace and merge results with the primary project's results.
+	GlobalNamespaceID *uuid.UUID `json:"-"`
 }
 
 // RecallResult holds a single recalled memory with its computed score.
@@ -286,30 +289,44 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					topK = 10
 				}
 
-				results, err := s.vectorSearch.Search(ctx, resp.Embeddings[0], namespaceID, actualDim, topK)
-				if err == nil {
-					// Build similarity map.
-					simMap := make(map[uuid.UUID]float64, len(results))
-					ids := make([]uuid.UUID, 0, len(results))
-					for _, r := range results {
-						simMap[r.ID] = r.Score
-						ids = append(ids, r.ID)
-					}
+				// Search primary namespace.
+				searchNamespaces := []uuid.UUID{namespaceID}
+				// Also search the global namespace if set and different from primary.
+				if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
+					searchNamespaces = append(searchNamespaces, *req.GlobalNamespaceID)
+				}
 
-					// Fetch full memories.
-					if len(ids) > 0 {
-						memories, err := s.memories.GetBatch(ctx, ids)
-						if err == nil {
-							for _, mem := range memories {
-								sim := simMap[mem.ID]
-								candidates = append(candidates, scoredMemory{
-									memory:        mem,
-									similarity:    sim,
-									projectID:     projectID,
-									projectSlug:   projectSlug,
-									namespacePath: namespacePath,
-								})
-							}
+				simMap := make(map[uuid.UUID]float64)
+				for _, nsID := range searchNamespaces {
+					results, err := s.vectorSearch.Search(ctx, resp.Embeddings[0], nsID, actualDim, topK)
+					if err != nil {
+						continue
+					}
+					for _, r := range results {
+						// Keep the best score if a memory appears in multiple searches.
+						if existing, ok := simMap[r.ID]; !ok || r.Score > existing {
+							simMap[r.ID] = r.Score
+						}
+					}
+				}
+
+				// Fetch full memories.
+				ids := make([]uuid.UUID, 0, len(simMap))
+				for id := range simMap {
+					ids = append(ids, id)
+				}
+				if len(ids) > 0 {
+					memories, err := s.memories.GetBatch(ctx, ids)
+					if err == nil {
+						for _, mem := range memories {
+							sim := simMap[mem.ID]
+							candidates = append(candidates, scoredMemory{
+								memory:        mem,
+								similarity:    sim,
+								projectID:     projectID,
+								projectSlug:   projectSlug,
+								namespacePath: namespacePath,
+							})
 						}
 					}
 				}
@@ -319,15 +336,33 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 	// Fall back to listing by namespace if no embedding was used.
 	if !embeddingUsed {
+		seenIDs := make(map[uuid.UUID]bool)
 		memories, err := s.memories.ListByNamespace(ctx, namespaceID, limit*3, 0)
 		if err == nil {
 			for _, mem := range memories {
+				seenIDs[mem.ID] = true
 				candidates = append(candidates, scoredMemory{
 					memory:        mem,
 					projectID:     projectID,
 					projectSlug:   projectSlug,
 					namespacePath: namespacePath,
 				})
+			}
+		}
+		// Also include global namespace memories in text fallback.
+		if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
+			globalMems, err := s.memories.ListByNamespace(ctx, *req.GlobalNamespaceID, limit*3, 0)
+			if err == nil {
+				for _, mem := range globalMems {
+					if !seenIDs[mem.ID] {
+						candidates = append(candidates, scoredMemory{
+							memory:        mem,
+							projectID:     projectID,
+							projectSlug:   projectSlug,
+							namespacePath: namespacePath,
+						})
+					}
+				}
 			}
 		}
 	}
