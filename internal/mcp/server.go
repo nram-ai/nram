@@ -67,10 +67,10 @@ type Dependencies struct {
 	OrgRepo       OrgRepo
 	EntityReader  EntityReader
 	Traverser     RelationshipTraverser
-	EventBus      events.EventBus
-	// Provider availability flags — used to condition MCP instructions.
-	HasEmbeddingProvider   bool
-	HasEnrichmentProviders bool
+	EventBus events.EventBus
+	// ProviderStatus returns the current provider availability at call time.
+	// This is called per-connection to build dynamic MCP instructions.
+	ProviderStatus func() (hasEmbedding, hasEnrichment bool)
 }
 
 // Server wraps an MCP server with its Streamable HTTP transport and dependency context.
@@ -158,13 +158,31 @@ Tips:
 // Tool registration is deferred to later initialization steps; this function
 // only sets up the server skeleton and HTTP handler.
 func NewServer(deps Dependencies) *Server {
+	// Build initial instructions from current provider state.
+	hasEmbed, hasEnrich := false, false
+	if deps.ProviderStatus != nil {
+		hasEmbed, hasEnrich = deps.ProviderStatus()
+	}
+
+	// Use a hook to rebuild instructions at connection time so they reflect
+	// the current provider configuration, not a boot-time snapshot.
+	hooks := &server.Hooks{}
+	hooks.AddAfterInitialize(func(_ context.Context, _ any, _ *mcp.InitializeRequest, result *mcp.InitializeResult) {
+		he, hr := false, false
+		if deps.ProviderStatus != nil {
+			he, hr = deps.ProviderStatus()
+		}
+		result.Instructions = buildInstructions(he, hr)
+	})
+
 	mcpSrv := server.NewMCPServer(
 		"nram",
 		"1.0.0",
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(false, true), // subscribe=false, listChanged=true
 		server.WithRecovery(),                        // recover from panics in tool handlers
-		server.WithInstructions(buildInstructions(deps.HasEmbeddingProvider, deps.HasEnrichmentProviders)),
+		server.WithInstructions(buildInstructions(hasEmbed, hasEnrich)),
+		server.WithHooks(hooks),
 	)
 
 	httpSrv := server.NewStreamableHTTPServer(
