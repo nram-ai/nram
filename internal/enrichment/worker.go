@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -146,13 +147,18 @@ type entityExtractionResult struct {
 
 // WorkerConfig controls the behavior of the enrichment worker pool.
 type WorkerConfig struct {
-	Workers      int           // number of concurrent workers, default 2
+	Workers      int           // number of concurrent workers (default: 1 for SQLite, 2 for Postgres)
 	PollInterval time.Duration // how often idle workers poll for jobs, default 5s
+	Backend      string        // "sqlite" or "postgres" — used to tune defaults
 }
 
 func (c WorkerConfig) withDefaults() WorkerConfig {
 	if c.Workers <= 0 {
-		c.Workers = 2
+		if c.Backend == "sqlite" {
+			c.Workers = 1 // single writer makes multiple workers pointless on SQLite
+		} else {
+			c.Workers = 2
+		}
 	}
 	if c.PollInterval <= 0 {
 		c.PollInterval = 5 * time.Second
@@ -239,6 +245,11 @@ func (wp *WorkerPool) Stop() {
 
 func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 	defer wp.wg.Done()
+
+	// Consecutive empty polls — used for backoff.
+	emptyPolls := 0
+	const maxBackoff = 30 // seconds
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -255,13 +266,18 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 			if !errors.Is(err, sql.ErrNoRows) {
 				slog.Error("enrichment: claim error", "worker", workerID, "err", err)
 			}
-			wp.sleep(ctx)
+			emptyPolls++
+			wp.sleepWithBackoff(ctx, emptyPolls, maxBackoff)
 			continue
 		}
 		if job == nil {
-			wp.sleep(ctx)
+			emptyPolls++
+			wp.sleepWithBackoff(ctx, emptyPolls, maxBackoff)
 			continue
 		}
+
+		// Reset backoff on successful claim.
+		emptyPolls = 0
 
 		if err := wp.processJob(ctx, workerID, job); err != nil {
 			slog.Error("enrichment: job failed", "worker", workerID, "job", job.ID, "err", err)
@@ -269,8 +285,31 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 	}
 }
 
-func (wp *WorkerPool) sleep(ctx context.Context) {
-	t := time.NewTimer(wp.config.PollInterval)
+// sleepWithBackoff waits for the poll interval plus jitter and exponential
+// backoff based on consecutive empty polls. This reduces contention when the
+// queue is idle and prevents synchronized polling spikes from multiple workers.
+func (wp *WorkerPool) sleepWithBackoff(ctx context.Context, emptyPolls, maxBackoffSec int) {
+	base := wp.config.PollInterval
+
+	// Exponential backoff: double the interval for each consecutive empty poll,
+	// capped at maxBackoffSec.
+	backoff := base
+	for i := 0; i < emptyPolls && i < 5; i++ {
+		backoff *= 2
+	}
+	maxDuration := time.Duration(maxBackoffSec) * time.Second
+	if backoff > maxDuration {
+		backoff = maxDuration
+	}
+
+	// Add jitter: ±25% to prevent synchronized polling.
+	jitter := time.Duration(rand.Int63n(int64(backoff/2))) - backoff/4
+	wait := backoff + jitter
+	if wait < time.Second {
+		wait = time.Second
+	}
+
+	t := time.NewTimer(wait)
 	defer t.Stop()
 	select {
 	case <-ctx.Done():

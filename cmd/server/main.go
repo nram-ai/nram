@@ -345,7 +345,7 @@ func main() {
 
 	// Start enrichment worker pool — needs providers for LLM extraction.
 	workerPool := enrichment.NewWorkerPool(
-		enrichment.WorkerConfig{},
+		enrichment.WorkerConfig{Backend: db.Backend()},
 		memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
 		entityRepo, relationshipRepo, lineageRepo, tokenUsageRepo, vectorStore,
 		factProvider, entityProvider, embedProvider,
