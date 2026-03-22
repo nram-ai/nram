@@ -45,6 +45,28 @@ func (s *DatabaseAdminStore) GetDatabaseInfo(ctx context.Context) (*api.Database
 		}
 	}
 
+	// Vector counts: SQLite has a single memory_vectors table; Postgres has per-dimension tables.
+	if s.db.Backend() == storage.BackendSQLite {
+		row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM memory_vectors")
+		if err := row.Scan(&info.DataCounts.Vectors); err != nil {
+			info.DataCounts.Vectors = 0
+		}
+	} else {
+		pgVectorTables := []string{
+			"memory_vectors_384", "memory_vectors_512", "memory_vectors_768",
+			"memory_vectors_1024", "memory_vectors_1536", "memory_vectors_3072",
+		}
+		var total int
+		for _, vt := range pgVectorTables {
+			var count int
+			row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM "+vt)
+			if row.Scan(&count) == nil {
+				total += count
+			}
+		}
+		info.DataCounts.Vectors = total
+	}
+
 	if s.db.Backend() == storage.BackendSQLite {
 		// SQLite version.
 		row := s.db.QueryRow(ctx, "SELECT sqlite_version()")

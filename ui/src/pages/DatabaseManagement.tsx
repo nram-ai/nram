@@ -64,10 +64,12 @@ function DataCountsCard({
     projects: number;
     users: number;
     organizations: number;
+    vectors: number;
   };
 }) {
   const items = [
     { label: "Memories", value: counts.memories },
+    { label: "Vectors", value: counts.vectors },
     { label: "Entities", value: counts.entities },
     { label: "Projects", value: counts.projects },
     { label: "Users", value: counts.users },
@@ -79,7 +81,7 @@ function DataCountsCard({
       <div className="border-b border-border px-5 py-4">
         <h3 className="text-sm font-semibold text-foreground">Data Counts</h3>
       </div>
-      <div className="grid grid-cols-2 gap-4 px-5 py-4 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 px-5 py-4 sm:grid-cols-3 lg:grid-cols-6">
         {items.map((item) => (
           <div key={item.label} className="text-center">
             <p className="text-2xl font-bold text-foreground">
@@ -270,6 +272,7 @@ function SQLiteView({
     projects: number;
     users: number;
     organizations: number;
+    vectors: number;
   };
 }) {
   const [step, setStep] = useState<MigrationStep>("input");
@@ -565,11 +568,15 @@ function SQLiteView({
                 <p className="mb-2 text-sm font-medium text-foreground">
                   Data to Migrate
                 </p>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
                   {[
                     {
                       label: "Memories",
                       count: dataCounts.memories,
+                    },
+                    {
+                      label: "Vectors",
+                      count: dataCounts.vectors,
                     },
                     {
                       label: "Entities",
@@ -701,6 +708,7 @@ function PostgresView({
     projects: number;
     users: number;
     organizations: number;
+    vectors: number;
   };
 }) {
   return (

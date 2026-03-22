@@ -51,6 +51,7 @@ type DataCounts struct {
 	Projects      int `json:"projects"`
 	Users         int `json:"users"`
 	Organizations int `json:"organizations"`
+	Vectors       int `json:"vectors"`
 }
 
 // ConnectionTestResult holds the outcome of a PostgreSQL connection test.

@@ -5,12 +5,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx stdlib driver
 	"github.com/nram-ai/nram/internal/migration"
 	"github.com/nram-ai/nram/internal/storage"
+	"github.com/nram-ai/nram/internal/storage/hnsw"
+	pgvector "github.com/pgvector/pgvector-go"
 )
 
 // DataMigrator handles copying all data from a SQLite source DB to a Postgres target.
@@ -97,6 +100,7 @@ func (m *DataMigrator) Run(ctx context.Context) error {
 		{"settings", m.migrateSettings},
 		{"system_meta", m.migrateSystemMeta},
 		{"memories", m.migrateMemories},
+		{"memory_vectors", m.migrateMemoryVectors},
 		{"entities", m.migrateEntities},
 		{"entity_aliases", m.migrateEntityAliases},
 		{"relationships", m.migrateRelationships},
@@ -150,7 +154,47 @@ func (m *DataMigrator) validateCounts(ctx context.Context) error {
 			return fmt.Errorf("row count mismatch for %s: sqlite=%d postgres=%d", name, srcCount, dstCount)
 		}
 	}
+
+	// Validate vector counts: SQLite memory_vectors → sum of Postgres memory_vectors_* tables.
+	var srcVectors int
+	if err := m.src.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_vectors").Scan(&srcVectors); err != nil {
+		srcVectors = 0
+	}
+	if srcVectors > 0 {
+		var dstVectors int
+		for _, table := range vectorDimensionTables {
+			var count int
+			if err := m.dst.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
+				return fmt.Errorf("count %s in postgres: %w", table, err)
+			}
+			dstVectors += count
+		}
+		if srcVectors != dstVectors {
+			return fmt.Errorf("row count mismatch for memory_vectors: sqlite=%d postgres(sum)=%d", srcVectors, dstVectors)
+		}
+	}
+
 	return nil
+}
+
+// vectorDimensionTables maps supported dimensions to their Postgres table names.
+var vectorDimensionTables = []string{
+	"memory_vectors_384",
+	"memory_vectors_512",
+	"memory_vectors_768",
+	"memory_vectors_1024",
+	"memory_vectors_1536",
+	"memory_vectors_3072",
+}
+
+// supportedVectorDimensions maps dimension → Postgres table name for vector migration.
+var supportedVectorDimensions = map[int]string{
+	384:  "memory_vectors_384",
+	512:  "memory_vectors_512",
+	768:  "memory_vectors_768",
+	1024: "memory_vectors_1024",
+	1536: "memory_vectors_1536",
+	3072: "memory_vectors_3072",
 }
 
 // ── per-table copy helpers ────────────────────────────────────────────────────
@@ -557,6 +601,87 @@ func (m *DataMigrator) migrateMemories(ctx context.Context) error {
 		}
 	}
 	return tx.Commit()
+}
+
+func (m *DataMigrator) migrateMemoryVectors(ctx context.Context) error {
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT memory_id, namespace_id, dimension, embedding FROM memory_vectors
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	// Group vectors by target dimension table so we can batch-insert per table in a transaction.
+	type vectorRow struct {
+		memoryID string
+		floats   []float32
+	}
+	byTable := make(map[string][]vectorRow)
+	var skipped int
+
+	for rows.Next() {
+		var (
+			memoryID    string
+			namespaceID string
+			dimension   int
+			embedding   []byte
+		)
+		if err := rows.Scan(&memoryID, &namespaceID, &dimension, &embedding); err != nil {
+			return err
+		}
+
+		table, ok := supportedVectorDimensions[dimension]
+		if !ok {
+			log.Printf("migrateMemoryVectors: skipping memory %s with unsupported dimension %d", memoryID, dimension)
+			skipped++
+			continue
+		}
+
+		floats, err := hnsw.DecodeVector(embedding)
+		if err != nil {
+			return fmt.Errorf("decode vector for memory %s: %w", memoryID, err)
+		}
+
+		byTable[table] = append(byTable[table], vectorRow{memoryID: memoryID, floats: floats})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if skipped > 0 {
+		log.Printf("migrateMemoryVectors: skipped %d vectors with unsupported dimensions", skipped)
+	}
+
+	// Insert vectors into each Postgres dimension table.
+	for table, vectors := range byTable {
+		tx, err := m.dst.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback() //nolint:errcheck
+
+		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`
+			INSERT INTO %s (memory_id, embedding) VALUES ($1, $2)
+			ON CONFLICT (memory_id) DO UPDATE SET embedding = EXCLUDED.embedding
+		`, table))
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+
+		for _, v := range vectors {
+			if _, err := stmt.ExecContext(ctx, v.memoryID, pgvector.NewVector(v.floats)); err != nil {
+				return fmt.Errorf("insert vector into %s for memory %s: %w", table, v.memoryID, err)
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit vectors for %s: %w", table, err)
+		}
+	}
+
+	return nil
 }
 
 func (m *DataMigrator) migrateEntities(ctx context.Context) error {

@@ -603,6 +603,7 @@ export interface DataCounts {
   projects: number;
   users: number;
   organizations: number;
+  vectors: number;
 }
 
 export interface DatabaseInfo {

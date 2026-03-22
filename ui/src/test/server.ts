@@ -537,6 +537,7 @@ const handlers = [
         projects: 5,
         users: 3,
         organizations: 2,
+        vectors: 80,
       },
     });
   }),
