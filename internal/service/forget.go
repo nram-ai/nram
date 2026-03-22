@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -194,8 +196,12 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, hard bool) (bool, error) {
 	mem, err := s.memories.GetByID(ctx, id)
 	if err != nil {
-		// Memory not found — skip gracefully.
-		return false, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil // genuinely not found
+		}
+		// Propagate real errors (SQLITE_BUSY, network, etc.) instead of
+		// silently treating them as "not found".
+		return false, fmt.Errorf("forget lookup %s: %w", id, err)
 	}
 
 	// Verify memory belongs to the project's namespace.
