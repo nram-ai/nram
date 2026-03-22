@@ -535,9 +535,9 @@ function Dashboard() {
         isLoading={dashboard.isLoading}
       />
 
-      {/* Middle section: 2/3 left, 1/3 right */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
+      {/* Middle section: 2/3 left, 1/3 right (sidebar only for admins) */}
+      <div className={`grid grid-cols-1 gap-6 ${auth.isAdmin ? "lg:grid-cols-3" : ""}`}>
+        <div className={`space-y-6 ${auth.isAdmin ? "lg:col-span-2" : ""}`}>
           <MemoryCountsTable
             data={dashData?.memories_by_project ?? []}
             isLoading={dashboard.isLoading}
@@ -547,17 +547,19 @@ function Dashboard() {
             isLoading={activity.isLoading}
           />
         </div>
-        <div className="space-y-6">
-          <ProviderHealthCards
-            slots={slotList}
-            isLoading={providerSlots.isLoading}
-          />
-          <EnrichmentQueueCard
-            queue={dashData?.enrichment_queue ?? undefined}
-            hasProviders={hasProviders}
-            isLoading={dashboard.isLoading}
-          />
-        </div>
+        {auth.isAdmin && (
+          <div className="space-y-6">
+            <ProviderHealthCards
+              slots={slotList}
+              isLoading={providerSlots.isLoading}
+            />
+            <EnrichmentQueueCard
+              queue={dashData?.enrichment_queue ?? undefined}
+              hasProviders={hasProviders}
+              isLoading={dashboard.isLoading}
+            />
+          </div>
+        )}
       </div>
 
       {/* Quick store — only show for users with write access */}
