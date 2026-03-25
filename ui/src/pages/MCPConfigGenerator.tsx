@@ -64,6 +64,13 @@ function buildClaudeMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): st
 
 You have access to persistent memory via nram. Use it proactively.
 
+**IMPORTANT — Always prefer nram over local memory:** nram is a centralized
+memory server accessible across all machines and agents. Always store new
+memories in nram (via memory_store / memory_store_batch) instead of local
+file-based memory systems (e.g. MEMORY.md, local databases, or other native
+memory mechanisms). Local memory files are invisible to other machines and
+agents. All new memories must go to nram so they are available everywhere.
+
 **When to store:** After completing a task, store key decisions, architecture
 choices, configuration details, and anything worth remembering next session.
 Store facts, not conversations. Be specific: "API uses JWT RS256 with 1h expiry"
@@ -94,10 +101,19 @@ project to search that project's memories plus global.`;
   if (hasEnrichment) {
     snippet += `
 
-**Enrichment:** Pass \`enrich: true\` when storing to trigger async entity/fact
-extraction. Use memory_enrich to batch-enrich existing memories. Use
-memory_graph to explore the knowledge graph. Recall includes graph context by
-default (include_graph: true, graph_depth: 2).`;
+**Enrichment & Knowledge Graph:** Enrichment uses an LLM to automatically
+extract entities (people, projects, technologies, concepts) and facts
+(relationships between them) from stored memories. These build a knowledge
+graph that connects related information across all memories in a project.
+When recalling, graph context is included automatically (include_graph: true,
+graph_depth: 2), so related entities surface even when memories don't directly
+match your query. This makes nram far more powerful than keyword/tag search
+alone — it builds structured understanding from unstructured memories.
+
+Pass \`enrich: true\` when storing to trigger extraction. Use memory_enrich to
+batch-enrich existing memories. Use memory_graph to explore the graph directly
+— discover connections, trace how concepts relate, and find information you
+might not know to search for.`;
   }
 
   snippet += `
@@ -117,6 +133,9 @@ workaround, dependency, deployment.
 
 function buildCursorRulesSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
   let snippet = `# Memory
+IMPORTANT: Always store memories in nram, not in local file-based memory systems.
+nram is a centralized memory server accessible across all machines and agents.
+Local memory files are invisible to other machines/agents — use nram for everything.
 Use nram memory tools at the start of each task to recall prior context.
 After completing work, store key decisions and technical details as memories.
 Tag memories consistently: architecture, config, decision, preference.
@@ -134,8 +153,11 @@ No embedding provider — rely on tags for filtering during recall.`;
 
   if (hasEnrichment) {
     snippet += `
-Use enrich: true when storing for entity/fact extraction. Use memory_enrich to batch-enrich.
-Recall includes graph context by default (include_graph, graph_depth).`;
+Enrichment uses an LLM to extract entities and facts from memories, building a knowledge
+graph that connects related information. Recall includes graph context automatically, so
+related entities surface even when memories don't directly match your query.
+Use enrich: true when storing. Use memory_enrich to batch-enrich existing memories.
+Use memory_graph to explore connections and discover related context.`;
   }
 
   return snippet;
@@ -143,6 +165,12 @@ Recall includes graph context by default (include_graph, graph_depth).`;
 
 function buildAgentsMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
   let snippet = `## Memory (nram)
+
+**IMPORTANT — Always prefer nram over local memory:** nram is a centralized
+memory server accessible across all machines and agents. Always store new
+memories in nram instead of local file-based memory systems (e.g. MEMORY.md,
+local databases, or native memory mechanisms). Local memory files are invisible
+to other machines and agents — all new memories must go to nram.
 
 Use nram memory tools at the start of each task to recall prior context.
 After completing work, store key decisions, architecture choices, and
@@ -168,8 +196,16 @@ No embedding provider — rely on tags for filtering during recall.`;
   if (hasEnrichment) {
     snippet += `
 
-**Enrichment:** Pass enrich: true when storing for entity/fact extraction.
-Use memory_enrich to batch-enrich. Recall includes graph context by default.`;
+**Enrichment & Knowledge Graph:** Enrichment uses an LLM to automatically
+extract entities (people, projects, technologies, concepts) and facts
+(relationships between them) from stored memories, building a knowledge graph
+that connects related information across all memories in a project. Recall
+includes graph context automatically — related entities surface even when
+memories don't directly match your query. This builds structured understanding
+from unstructured memories.
+
+Pass enrich: true when storing. Use memory_enrich to batch-enrich existing
+memories. Use memory_graph to explore connections and discover related context.`;
   }
 
   snippet += `
