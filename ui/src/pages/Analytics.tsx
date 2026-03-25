@@ -66,6 +66,15 @@ function formatPercent(n: number): string {
   return `${n.toFixed(1)}%`;
 }
 
+/** Returns true when an operation is known not to produce output tokens. */
+function isOutputNA(group: UsageGroup): boolean {
+  return group.tokens_input > 0 && group.tokens_output === 0;
+}
+
+function formatOutputTokens(group: UsageGroup): string {
+  return isOutputNA(group) ? "N/A" : group.tokens_output.toLocaleString();
+}
+
 function truncateContent(content: string, maxLen = 80): string {
   if (content.length <= maxLen) return content;
   return content.slice(0, maxLen) + "...";
@@ -400,8 +409,8 @@ function UsageBreakdownTable({
                   <td className="py-2 text-right font-mono">
                     {g.tokens_input.toLocaleString()}
                   </td>
-                  <td className="py-2 text-right font-mono">
-                    {g.tokens_output.toLocaleString()}
+                  <td className={`py-2 text-right font-mono ${isOutputNA(g) ? "text-muted-foreground" : ""}`}>
+                    {formatOutputTokens(g)}
                   </td>
                   <td className="py-2 text-right font-mono">
                     {g.call_count.toLocaleString()}
@@ -439,7 +448,7 @@ function UsageBarChart({
       .map((g) => ({
         key: g.key,
         tokens_input: g.tokens_input,
-        tokens_output: g.tokens_output,
+        tokens_output: isOutputNA(g) ? null : g.tokens_output,
       }));
   }, [groups]);
 
@@ -463,7 +472,7 @@ function UsageBarChart({
                 borderRadius: "0.5rem",
                 fontSize: "0.75rem",
               }}
-              formatter={(value: number) => value.toLocaleString()}
+              formatter={(value) => value === null ? "N/A" : Number(value).toLocaleString()}
             />
             <Legend wrapperStyle={{ fontSize: "0.75rem" }} />
             <Bar
