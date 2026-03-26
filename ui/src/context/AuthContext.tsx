@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -92,6 +93,7 @@ function loadInitialUser(): UserInfo | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<UserInfo | null>(loadInitialUser);
 
   const login = useCallback((token: string, userInfo: UserInfo) => {
@@ -103,9 +105,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     localStorage.removeItem("nram_token");
     localStorage.removeItem("nram_user");
+    queryClient.clear();
     setUser(null);
     navigate("/login");
-  }, [navigate]);
+  }, [navigate, queryClient]);
 
   const hasMinRole = useCallback(
     (minRole: string): boolean => {
