@@ -424,7 +424,7 @@ function GraphVisualization() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Graph Visualization</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Explore entity relationships in 3D. Drag to rotate, scroll to zoom.
+            Explore entity relationships in 3D.
           </p>
         </div>
 
