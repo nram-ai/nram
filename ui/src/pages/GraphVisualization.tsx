@@ -1,41 +1,29 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
-import ReactFlow, {
-  Background,
-  Controls,
-  MiniMap,
-  Node,
-  Edge,
-  useNodesState,
-  useEdgesState,
-  NodeProps,
-  Handle,
-  Position,
-  MarkerType,
-} from "reactflow";
-import "reactflow/dist/style.css";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import ForceGraph3D, { ForceGraphMethods } from "react-force-graph-3d";
+import * as THREE from "three";
 import { useMeProjects, useGraph } from "../hooks/useApi";
 import { useSelectedProject } from "../context/ProjectContext";
 import type { GraphEntity } from "../api/client";
 
-// Color map for entity types — vibrant, high-contrast for dark backgrounds
-const ENTITY_TYPE_COLORS: Record<string, { bg: string; border: string; text: string; glow: string }> = {
-  person: { bg: "#1e3a5f", border: "#60a5fa", text: "#bfdbfe", glow: "rgba(96,165,250,0.4)" },
-  organization: { bg: "#14532d", border: "#4ade80", text: "#bbf7d0", glow: "rgba(74,222,128,0.4)" },
-  concept: { bg: "#451a03", border: "#fbbf24", text: "#fef3c7", glow: "rgba(251,191,36,0.4)" },
-  location: { bg: "#4a1942", border: "#f472b6", text: "#fce7f3", glow: "rgba(244,114,182,0.4)" },
-  event: { bg: "#312e81", border: "#818cf8", text: "#e0e7ff", glow: "rgba(129,140,248,0.4)" },
-  technology: { bg: "#064e3b", border: "#34d399", text: "#d1fae5", glow: "rgba(52,211,153,0.4)" },
-  product: { bg: "#4c0519", border: "#fb7185", text: "#ffe4e6", glow: "rgba(251,113,133,0.4)" },
-  tool: { bg: "#2e1065", border: "#a78bfa", text: "#ede9fe", glow: "rgba(167,139,250,0.4)" },
+// Color map for entity types — vibrant for dark/holographic background
+const ENTITY_TYPE_COLORS: Record<string, { color: string; emissive: string }> = {
+  person: { color: "#60a5fa", emissive: "#2563eb" },
+  organization: { color: "#4ade80", emissive: "#16a34a" },
+  concept: { color: "#fbbf24", emissive: "#d97706" },
+  location: { color: "#f472b6", emissive: "#db2777" },
+  event: { color: "#818cf8", emissive: "#4f46e5" },
+  technology: { color: "#34d399", emissive: "#059669" },
+  product: { color: "#fb7185", emissive: "#e11d48" },
+  tool: { color: "#a78bfa", emissive: "#7c3aed" },
 };
 
-const DEFAULT_COLOR = { bg: "#1f2937", border: "#6b7280", text: "#d1d5db", glow: "rgba(107,114,128,0.3)" };
+const DEFAULT_TYPE_COLOR = { color: "#6b7280", emissive: "#374151" };
 
-function getEntityColor(entityType: string) {
-  return ENTITY_TYPE_COLORS[entityType.toLowerCase()] || DEFAULT_COLOR;
+function getTypeColor(entityType: string) {
+  return ENTITY_TYPE_COLORS[entityType.toLowerCase()] || DEFAULT_TYPE_COLOR;
 }
 
-// Edge color map for relationship types
+// Relationship colors
 const RELATION_COLORS: Record<string, string> = {
   works_for: "#60a5fa",
   knows: "#4ade80",
@@ -47,205 +35,29 @@ const RELATION_COLORS: Record<string, string> = {
   belongs_to: "#a78bfa",
 };
 
-const DEFAULT_EDGE_COLOR = "#4b5563";
-
 function getRelationColor(relation: string) {
-  return RELATION_COLORS[relation.toLowerCase()] || DEFAULT_EDGE_COLOR;
+  return RELATION_COLORS[relation.toLowerCase()] || "#4b5563";
 }
 
-// Custom entity node component — neural/sci-fi aesthetic
-function EntityNode({ data }: NodeProps) {
-  const colors = getEntityColor(data.entityType);
-  const mentionSize = Math.min(Math.max(data.mentionCount, 1), 10);
-  const scale = 0.85 + mentionSize * 0.03;
-
-  return (
-    <div
-      style={{
-        background: colors.bg,
-        border: `1.5px solid ${colors.border}`,
-        borderRadius: "6px",
-        padding: "6px 10px",
-        minWidth: "100px",
-        maxWidth: "180px",
-        transform: `scale(${scale})`,
-        cursor: "pointer",
-        boxShadow: `0 0 12px ${colors.glow}, 0 0 4px ${colors.glow}`,
-        transition: "box-shadow 0.2s ease",
-      }}
-    >
-      <Handle type="target" position={Position.Top} style={{ background: colors.border, width: 6, height: 6 }} />
-      <div style={{ color: colors.text, fontWeight: 600, fontSize: "12px", marginBottom: "1px", lineHeight: 1.3 }}>
-        {data.label}
-      </div>
-      <div
-        style={{
-          color: colors.text,
-          opacity: 0.6,
-          fontSize: "9px",
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-        }}
-      >
-        {data.entityType}
-      </div>
-      {data.mentionCount > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            top: "-6px",
-            right: "-6px",
-            background: colors.border,
-            color: colors.bg,
-            borderRadius: "9999px",
-            width: "18px",
-            height: "18px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: "9px",
-            fontWeight: 700,
-          }}
-        >
-          {data.mentionCount}
-        </div>
-      )}
-      <Handle type="source" position={Position.Bottom} style={{ background: colors.border, width: 6, height: 6 }} />
-    </div>
-  );
+// Graph data types for 3D force graph
+interface GraphNode {
+  id: string;
+  name: string;
+  entityType: string;
+  mentionCount: number;
+  entity: GraphEntity;
+  // d3 adds x, y, z at runtime
+  x?: number;
+  y?: number;
+  z?: number;
 }
 
-const nodeTypes = { entity: EntityNode };
-
-// Organic force-directed layout with center gravity and type clustering
-function computeLayout(
-  entities: GraphEntity[],
-  relationships: { source_id: string; target_id: string }[],
-): Record<string, { x: number; y: number }> {
-  if (entities.length === 0) return {};
-
-  const positions: Record<string, { x: number; y: number }> = {};
-  const centerX = 0;
-  const centerY = 0;
-
-  // Group entities by type for initial clustering
-  const typeGroups: Record<string, GraphEntity[]> = {};
-  for (const e of entities) {
-    const t = e.entity_type.toLowerCase();
-    if (!typeGroups[t]) typeGroups[t] = [];
-    typeGroups[t].push(e);
-  }
-
-  // Initialize: spread type clusters out with generous spacing
-  const typeKeys = Object.keys(typeGroups);
-  const clusterRadius = 200 + entities.length * 6;
-  typeKeys.forEach((type, ti) => {
-    const clusterAngle = (2 * Math.PI * ti) / typeKeys.length;
-    const cx = centerX + clusterRadius * Math.cos(clusterAngle);
-    const cy = centerY + clusterRadius * Math.sin(clusterAngle);
-    const group = typeGroups[type];
-    group.forEach((e, ei) => {
-      const spread = 60 + group.length * 15;
-      const localAngle = (2 * Math.PI * ei) / group.length;
-      positions[e.id] = {
-        x: cx + spread * Math.cos(localAngle) + (Math.random() - 0.5) * 30,
-        y: cy + spread * Math.sin(localAngle) + (Math.random() - 0.5) * 30,
-      };
-    });
-  });
-
-  // Build adjacency
-  const adjacency: Record<string, Set<string>> = {};
-  for (const e of entities) adjacency[e.id] = new Set();
-  for (const r of relationships) {
-    if (adjacency[r.source_id] && adjacency[r.target_id]) {
-      adjacency[r.source_id].add(r.target_id);
-      adjacency[r.target_id].add(r.source_id);
-    }
-  }
-
-  // Force simulation — spread out, no overlap, organic but readable
-  const iterations = 60;
-  const repulsionBase = 15000;
-  const attractionStrength = 0.02;
-  const idealLength = 280;
-  const centerGravity = 0.001;
-  const minNodeDist = 180; // hard minimum between node centers
-
-  for (let iter = 0; iter < iterations; iter++) {
-    const temp = 1.0 - iter / iterations;
-    const forces: Record<string, { fx: number; fy: number }> = {};
-    for (const e of entities) forces[e.id] = { fx: 0, fy: 0 };
-
-    // Repulsion between all pairs
-    const repulsion = repulsionBase * (0.4 + 0.6 * temp);
-    for (let i = 0; i < entities.length; i++) {
-      for (let j = i + 1; j < entities.length; j++) {
-        const a = entities[i].id;
-        const b = entities[j].id;
-        const dx = positions[a].x - positions[b].x;
-        const dy = positions[a].y - positions[b].y;
-        const distSq = dx * dx + dy * dy;
-        const dist = Math.max(Math.sqrt(distSq), 1);
-
-        // Standard repulsion
-        let force = repulsion / distSq;
-
-        // Strong overlap push when nodes are too close
-        if (dist < minNodeDist) {
-          force += (minNodeDist - dist) * 2;
-        }
-
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
-        forces[a].fx += fx;
-        forces[a].fy += fy;
-        forces[b].fx -= fx;
-        forces[b].fy -= fy;
-      }
-    }
-
-    // Attraction along edges — only pull if beyond ideal length
-    for (const r of relationships) {
-      if (!positions[r.source_id] || !positions[r.target_id]) continue;
-      const dx = positions[r.target_id].x - positions[r.source_id].x;
-      const dy = positions[r.target_id].y - positions[r.source_id].y;
-      const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-      if (dist > idealLength) {
-        const force = attractionStrength * (dist - idealLength);
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
-        forces[r.source_id].fx += fx;
-        forces[r.source_id].fy += fy;
-        forces[r.target_id].fx -= fx;
-        forces[r.target_id].fy -= fy;
-      }
-    }
-
-    // Very gentle center gravity — just prevents infinite drift
-    for (const e of entities) {
-      const dx = centerX - positions[e.id].x;
-      const dy = centerY - positions[e.id].y;
-      forces[e.id].fx += dx * centerGravity;
-      forces[e.id].fy += dy * centerGravity;
-    }
-
-    // Apply forces with displacement cap
-    const cap = 60 * (0.2 + 0.8 * temp);
-    for (const e of entities) {
-      let dx = forces[e.id].fx;
-      let dy = forces[e.id].fy;
-      const mag = Math.sqrt(dx * dx + dy * dy);
-      if (mag > cap && mag > 0) {
-        dx = (dx / mag) * cap;
-        dy = (dy / mag) * cap;
-      }
-      positions[e.id].x += dx;
-      positions[e.id].y += dy;
-    }
-  }
-
-  return positions;
+interface GraphLink {
+  source: string;
+  target: string;
+  relation: string;
+  weight: number;
+  id: string;
 }
 
 interface DetailPanelProps {
@@ -255,7 +67,7 @@ interface DetailPanelProps {
 }
 
 function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
-  const colors = getEntityColor(entity.entity_type);
+  const colors = getTypeColor(entity.entity_type);
 
   return (
     <div className="absolute right-0 top-0 h-full w-80 bg-card border-l border-border shadow-lg z-50 overflow-y-auto">
@@ -272,13 +84,13 @@ function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
 
         <div
           className="rounded-lg p-3 mb-4"
-          style={{ background: colors.bg, border: `1px solid ${colors.border}` }}
+          style={{ background: colors.emissive + "33", border: `1px solid ${colors.color}` }}
         >
-          <div style={{ color: colors.text }} className="font-semibold text-base">
+          <div style={{ color: colors.color }} className="font-semibold text-base">
             {entity.name}
           </div>
           <div
-            style={{ color: colors.text, opacity: 0.7 }}
+            style={{ color: colors.color, opacity: 0.7 }}
             className="text-xs uppercase tracking-wider mt-1"
           >
             {entity.entity_type}
@@ -385,10 +197,10 @@ function LegendPanel() {
           {Object.entries(ENTITY_TYPE_COLORS).map(([type, colors]) => (
             <div key={type} className="flex items-center gap-1.5">
               <div
-                className="w-2.5 h-2.5 rounded-sm"
+                className="w-2.5 h-2.5 rounded-full"
                 style={{
-                  background: colors.border,
-                  boxShadow: `0 0 6px ${colors.glow}`,
+                  background: colors.color,
+                  boxShadow: `0 0 6px ${colors.color}80`,
                 }}
               />
               <span style={{ color: "#9ca3af", fontSize: "10px", textTransform: "capitalize" }}>{type}</span>
@@ -400,11 +212,46 @@ function LegendPanel() {
   );
 }
 
+// Create a text sprite for node labels
+function createTextSprite(text: string, color: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d")!;
+  const fontSize = 48;
+  ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+  const metrics = ctx.measureText(text);
+  const textWidth = metrics.width;
+
+  canvas.width = textWidth + 20;
+  canvas.height = fontSize + 16;
+
+  ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  const spriteMaterial = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(spriteMaterial);
+  sprite.scale.set(canvas.width / 12, canvas.height / 12, 1);
+
+  return sprite;
+}
+
 function GraphVisualization() {
   const projectsQuery = useMeProjects();
   const { data: projects, isLoading: projectsLoading } = projectsQuery;
   const { selectedProjectId, setSelectedProjectId } = useSelectedProject();
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
+  const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const graphRef = useRef<ForceGraphMethods | undefined>();
 
   useEffect(() => {
     if (!selectedProjectId && projects && projects.length > 0) {
@@ -412,10 +259,24 @@ function GraphVisualization() {
     }
   }, [projects, selectedProjectId, setSelectedProjectId]);
 
-  const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
+  // Resize observer for container
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
 
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerSize({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height,
+        });
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 
   // Build entity lookup map
   const entityMap = useMemo(() => {
@@ -437,99 +298,123 @@ function GraphVisualization() {
       if (rel.source_id === selectedEntity.id) {
         const target = entityMap.get(rel.target_id);
         if (target) {
-          connections.push({
-            name: target.name,
-            relation: rel.relation,
-            direction: "outgoing",
-          });
+          connections.push({ name: target.name, relation: rel.relation, direction: "outgoing" });
         }
       } else if (rel.target_id === selectedEntity.id) {
         const source = entityMap.get(rel.source_id);
         if (source) {
-          connections.push({
-            name: source.name,
-            relation: rel.relation,
-            direction: "incoming",
-          });
+          connections.push({ name: source.name, relation: rel.relation, direction: "incoming" });
         }
       }
     }
     return connections;
   }, [selectedEntity, graphData, entityMap]);
 
-  // Update nodes/edges when graph data changes
-  const updateGraph = useCallback(() => {
-    if (!graphData) {
-      setNodes([]);
-      setEdges([]);
-      return;
+  // Build 3D graph data
+  const graph3dData = useMemo(() => {
+    if (!graphData?.entities || graphData.entities.length === 0) {
+      return { nodes: [] as GraphNode[], links: [] as GraphLink[] };
     }
 
-    const entities = graphData.entities || [];
-    const relationships = graphData.relationships || [];
+    const entityIds = new Set(graphData.entities.map((e) => e.id));
 
-    if (entities.length === 0) {
-      setNodes([]);
-      setEdges([]);
-      return;
-    }
-
-    const positions = computeLayout(entities, relationships);
-
-    const newNodes: Node[] = entities.map((entity) => ({
-      id: entity.id,
-      type: "entity",
-      position: positions[entity.id] || { x: 0, y: 0 },
-      data: {
-        label: entity.name,
-        entityType: entity.entity_type,
-        mentionCount: entity.mention_count,
-      },
+    const nodes: GraphNode[] = graphData.entities.map((e) => ({
+      id: e.id,
+      name: e.name,
+      entityType: e.entity_type,
+      mentionCount: e.mention_count,
+      entity: e,
     }));
 
-    const newEdges: Edge[] = relationships.map((rel) => {
-      const color = getRelationColor(rel.relation);
-      return {
-        id: rel.id,
-        source: rel.source_id,
-        target: rel.target_id,
-        label: rel.relation,
-        type: "smoothstep",
-        animated: rel.weight >= 3,
-        style: {
-          stroke: color,
-          strokeWidth: Math.max(0.8, Math.min(rel.weight * 0.8, 3)),
-          opacity: 0.6,
-        },
-        labelStyle: { fontSize: 9, fill: color, opacity: 0.8 },
-        labelBgStyle: { fill: "#0f1117", fillOpacity: 0.8 },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: color,
-          width: 12,
-          height: 12,
-        },
-      };
+    const links: GraphLink[] = (graphData.relationships || [])
+      .filter((r) => entityIds.has(r.source_id) && entityIds.has(r.target_id))
+      .map((r) => ({
+        source: r.source_id,
+        target: r.target_id,
+        relation: r.relation,
+        weight: r.weight,
+        id: r.id,
+      }));
+
+    return { nodes, links };
+  }, [graphData]);
+
+  // Custom node rendering — glowing sphere with label
+  const nodeThreeObject = useCallback((node: GraphNode) => {
+    const colors = getTypeColor(node.entityType);
+    const size = 3 + Math.min(node.mentionCount, 10) * 0.5;
+
+    const group = new THREE.Group();
+
+    // Core sphere
+    const geometry = new THREE.SphereGeometry(size, 20, 20);
+    const material = new THREE.MeshPhongMaterial({
+      color: new THREE.Color(colors.color),
+      emissive: new THREE.Color(colors.emissive),
+      emissiveIntensity: 0.6,
+      shininess: 80,
+      transparent: true,
+      opacity: 0.9,
     });
+    const sphere = new THREE.Mesh(geometry, material);
+    group.add(sphere);
 
-    setNodes(newNodes);
-    setEdges(newEdges);
-  }, [graphData, setNodes, setEdges]);
+    // Outer glow shell
+    const glowGeometry = new THREE.SphereGeometry(size * 1.4, 16, 16);
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(colors.color),
+      transparent: true,
+      opacity: 0.12,
+      side: THREE.BackSide,
+    });
+    const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+    group.add(glow);
 
-  // Trigger layout when graphData changes
-  useMemo(() => {
-    updateGraph();
-  }, [updateGraph]);
+    // Text label
+    const label = createTextSprite(node.name, colors.color);
+    label.position.set(0, size + 4, 0);
+    group.add(label);
+
+    return group;
+  }, []);
 
   const onNodeClick = useCallback(
-    (_event: React.MouseEvent, node: Node) => {
+    (node: GraphNode) => {
       const entity = entityMap.get(node.id);
       if (entity) {
         setSelectedEntity(entity);
       }
+      // Fly camera to clicked node
+      if (graphRef.current && node.x !== undefined && node.y !== undefined && node.z !== undefined) {
+        const distance = 120;
+        const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z || 1);
+        graphRef.current.cameraPosition(
+          { x: node.x * distRatio, y: node.y * distRatio, z: node.z! * distRatio },
+          { x: node.x, y: node.y, z: node.z! },
+          1000,
+        );
+      }
     },
     [entityMap],
   );
+
+  // Configure forces after mount
+  useEffect(() => {
+    if (!graphRef.current) return;
+    const fg = graphRef.current;
+
+    // Increase charge repulsion for spacing
+    const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
+    if (charge?.strength) {
+      charge.strength(-120);
+    }
+
+    // Increase link distance
+    const link = fg.d3Force("link") as unknown as { distance?: (v: number) => void } | undefined;
+    if (link?.distance) {
+      link.distance(60);
+    }
+  }, [graph3dData]);
 
   const isLoading = projectsLoading || (selectedProjectId && graphLoading);
 
@@ -539,7 +424,7 @@ function GraphVisualization() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Graph Visualization</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Explore entity relationships visually.
+            Explore entity relationships in 3D.
           </p>
         </div>
 
@@ -615,43 +500,41 @@ function GraphVisualization() {
         graphData &&
         graphData.entities &&
         graphData.entities.length > 0 && (
-          <div className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden" style={{ background: "#0f1117" }}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onNodeClick={onNodeClick}
-              nodeTypes={nodeTypes}
-              fitView
-              fitViewOptions={{ padding: 0.3, maxZoom: 1.2 }}
-              minZoom={0.05}
-              maxZoom={3}
-              defaultEdgeOptions={{
-                type: "smoothstep",
-              }}
-            >
-              <Background color="#1a1d2e" gap={30} size={1} />
-              <Controls
-                position="bottom-right"
-                style={{ marginBottom: 10, marginRight: 10 }}
-              />
-              <MiniMap
-                position="bottom-left"
-                pannable
-                zoomable
-                nodeStrokeColor={(n) => {
-                  const type = n.data?.entityType || "";
-                  return getEntityColor(type).border;
-                }}
-                nodeColor={(n) => {
-                  const type = n.data?.entityType || "";
-                  return getEntityColor(type).bg;
-                }}
-                maskColor="rgba(0,0,0,0.3)"
-                style={{ background: "#0d0f16", border: "1px solid #1e2030" }}
-              />
-            </ReactFlow>
+          <div ref={containerRef} className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden">
+            <ForceGraph3D
+              ref={graphRef}
+              width={containerSize.width}
+              height={containerSize.height}
+              graphData={graph3dData}
+              backgroundColor="#080a12"
+              nodeThreeObject={((node: GraphNode) => nodeThreeObject(node)) as any}
+              nodeLabel={((node: GraphNode) =>
+                `<div style="background:rgba(0,0,0,0.8);padding:6px 10px;border-radius:6px;border:1px solid ${getTypeColor(node.entityType).color};color:#e5e7eb;font-size:12px;">
+                  <b style="color:${getTypeColor(node.entityType).color}">${node.name}</b><br/>
+                  <span style="opacity:0.7;font-size:10px;text-transform:uppercase">${node.entityType}</span>
+                  ${node.mentionCount > 0 ? `<span style="opacity:0.5;font-size:10px"> · ${node.mentionCount} mentions</span>` : ""}
+                </div>`
+              ) as any}
+              onNodeClick={onNodeClick as any}
+              linkColor={((link: GraphLink) => getRelationColor(link.relation)) as any}
+              linkWidth={((link: GraphLink) => Math.max(0.3, Math.min(link.weight * 0.4, 2))) as any}
+              linkOpacity={0.4}
+              linkCurvature={0.15}
+              linkDirectionalParticles={((link: GraphLink) => link.weight >= 2 ? 2 : 0) as any}
+              linkDirectionalParticleSpeed={0.005}
+              linkDirectionalParticleWidth={1.5}
+              linkDirectionalParticleColor={((link: GraphLink) => getRelationColor(link.relation)) as any}
+              linkDirectionalArrowLength={3}
+              linkDirectionalArrowRelPos={1}
+              linkDirectionalArrowColor={((link: GraphLink) => getRelationColor(link.relation)) as any}
+              linkLabel={((link: GraphLink) =>
+                `<span style="background:rgba(0,0,0,0.8);padding:3px 8px;border-radius:4px;color:#9ca3af;font-size:11px;">${link.relation}</span>`
+              ) as any}
+              warmupTicks={40}
+              cooldownTime={3000}
+              enableNodeDrag={true}
+              showNavInfo={false}
+            />
 
             {selectedEntity && (
               <DetailPanel
@@ -661,8 +544,17 @@ function GraphVisualization() {
               />
             )}
 
-            {/* Legend — collapsible, top-left to avoid overlap with controls */}
             <LegendPanel />
+
+            {/* Navigation hint */}
+            <div
+              className="absolute bottom-3 left-3 z-10 rounded-md px-3 py-1.5"
+              style={{ background: "rgba(15,17,23,0.7)", border: "1px solid #1e2030" }}
+            >
+              <span style={{ color: "#6b7280", fontSize: "10px" }}>
+                Drag to rotate · Scroll to zoom · Right-drag to pan · Click node to inspect
+              </span>
+            </div>
           </div>
         )}
     </div>
