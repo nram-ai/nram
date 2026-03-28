@@ -62,8 +62,9 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 function buildClaudeMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
   let snippet = `## Memory (nram)
 
-Use nram as your PRIMARY memory — not local files, MEMORY.md, or built-in memory.
-nram memories persist across all machines, agents, and conversations.
+nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
+NEVER write local memory files or update MEMORY.md. Store everything in nram.
+Memories persist across all machines, agents, and conversations.
 
 **WHEN TO STORE** (memory_store / memory_store_batch):
 - User states a preference, convention, or decision — store immediately
@@ -118,7 +119,8 @@ Recall scoping: omit project = global only; with project = project + global.`;
 
 function buildCursorRulesSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
   let snippet = `# Memory (nram)
-Use nram as PRIMARY memory — not local files or built-in memory mechanisms.
+nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
+NEVER write local memory files or update MEMORY.md. Store everything in nram.
 STORE: preferences, decisions, corrections, architecture, bugs, workarounds, task summaries.
 RECALL: at task start, before assumptions, before storing (check duplicates).
 Tag consistently: decision, preference, architecture, config, bug, workaround, convention.
@@ -148,8 +150,9 @@ Use memory_graph to explore entity connections and discover related context.`;
 function buildAgentsMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
   let snippet = `## Memory (nram)
 
-Use nram as your PRIMARY memory — not local files, MEMORY.md, or built-in memory.
-nram memories persist across all machines, agents, and conversations.
+nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
+NEVER write local memory files or update MEMORY.md. Store everything in nram.
+Memories persist across all machines, agents, and conversations.
 
 **WHEN TO STORE** (memory_store / memory_store_batch):
 - Preferences, conventions, decisions — store immediately
