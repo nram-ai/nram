@@ -319,6 +319,7 @@ func main() {
 		ProjectRepo:    projectRepo,
 		UserRepo:      userRepo,
 		NamespaceRepo: namespaceRepo,
+		MemoryLister:  memoryRepo,
 		EntityReader:  entityRepo,
 		Traverser:     relationshipRepo,
 		EventBus:      eventBus,

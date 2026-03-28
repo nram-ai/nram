@@ -34,6 +34,12 @@ type NamespaceRepo interface {
 	Create(ctx context.Context, ns *model.Namespace) error
 }
 
+// MemoryLister provides read-only memory listing operations for MCP tool handlers.
+type MemoryLister interface {
+	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
+	CountByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
+}
+
 // EntityReader provides entity lookup operations for MCP tool handlers.
 type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
@@ -62,6 +68,7 @@ type Dependencies struct {
 	ProjectRepo    ProjectRepo
 	UserRepo      UserRepo
 	NamespaceRepo NamespaceRepo
+	MemoryLister  MemoryLister
 	EntityReader  EntityReader
 	Traverser     RelationshipTraverser
 	EventBus events.EventBus
@@ -111,6 +118,8 @@ WHEN TO RECALL (memory_recall):
 - Before assuming preferences or past decisions → recall first
 - Before storing → recall to check for duplicates
 - When you need context you lack → recall before asking the user
+
+Use memory_list to browse/paginate without a query.
 `)
 
 	if hasEmbedding {
@@ -200,6 +209,7 @@ func NewServer(deps Dependencies) *Server {
 	RegisterStoreTools(s)
 	RegisterUpdateGetTools(s)
 	RegisterRecallTool(s)
+	RegisterListTool(s)
 	RegisterForgetEnrichTools(s)
 	RegisterGraphProjectsExportTools(s)
 	RegisterProjectDeleteTool(s)

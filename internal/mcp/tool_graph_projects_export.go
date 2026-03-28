@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -130,22 +131,34 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		return mcp.NewToolResultError(fmt.Sprintf("user not found: %v", err)), nil
 	}
 
-	namespaceID := user.NamespaceID
-
 	projectSlug, _ := args["project"].(string)
 	projectSlug = strings.TrimSpace(projectSlug)
+
+	// Collect namespaces to search: project-scoped + global (consistent with memory_recall).
+	var namespaces []uuid.UUID
 	if projectSlug != "" {
 		project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
 		if err != nil {
 			return mcp.NewToolResultError("project not found"), nil
 		}
-		namespaceID = project.NamespaceID
+		namespaces = append(namespaces, project.NamespaceID)
+		if projectSlug != "global" {
+			if gp, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, "global"); err == nil && gp != nil {
+				namespaces = append(namespaces, gp.NamespaceID)
+			}
+		}
+	} else {
+		namespaces = append(namespaces, user.NamespaceID)
 	}
 
-	// Find matching entities.
-	entities, err := deps.EntityReader.FindBySimilarity(ctx, namespaceID, entityQuery, "", 10)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("entity search failed: %v", err)), nil
+	// Find matching entities across all namespaces.
+	var entities []model.Entity
+	for _, nsID := range namespaces {
+		found, err := deps.EntityReader.FindBySimilarity(ctx, nsID, entityQuery, "", 10)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("entity search failed: %v", err)), nil
+		}
+		entities = append(entities, found...)
 	}
 
 	// Collect entities and traverse relationships.
