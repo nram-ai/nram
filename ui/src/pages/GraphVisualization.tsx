@@ -249,7 +249,7 @@ function GraphVisualization() {
   const { data: projects, isLoading: projectsLoading } = projectsQuery;
   const { selectedProjectId, setSelectedProjectId } = useSelectedProject();
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
-  const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
+  const [containerSize, setContainerSize] = useState<{ width: number; height: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<ForceGraphMethods | undefined>();
 
@@ -259,18 +259,23 @@ function GraphVisualization() {
     }
   }, [projects, selectedProjectId, setSelectedProjectId]);
 
-  // Resize observer for container
+  // Resize observer for container — measure with offsetWidth/Height for accuracy
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setContainerSize({
-          width: entry.contentRect.width,
-          height: entry.contentRect.height,
-        });
-      }
+    const measure = () => {
+      setContainerSize({
+        width: el.offsetWidth,
+        height: el.offsetHeight,
+      });
+    };
+
+    // Immediate measurement
+    measure();
+
+    const observer = new ResizeObserver(() => {
+      measure();
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -500,8 +505,8 @@ function GraphVisualization() {
         graphData &&
         graphData.entities &&
         graphData.entities.length > 0 && (
-          <div ref={containerRef} className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden">
-            <ForceGraph3D
+          <div ref={containerRef} className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden" style={{ contain: "strict" }}>
+            {containerSize && <ForceGraph3D
               ref={graphRef}
               width={containerSize.width}
               height={containerSize.height}
@@ -534,7 +539,7 @@ function GraphVisualization() {
               cooldownTime={3000}
               enableNodeDrag={true}
               showNavInfo={false}
-            />
+            />}
 
             {selectedEntity && (
               <DetailPanel
