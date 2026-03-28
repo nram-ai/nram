@@ -23,8 +23,8 @@ func RegisterStoreTools(s *Server) {
 
 func registerMemoryStore(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store important context to persistent memory. Use proactively: store preferences, decisions, corrections, architecture choices, bugs, workarounds, and task summaries without being asked. Project is auto-created on first use. Tag consistently for easy recall."),
-		mcp.WithString("project", mcp.Description("Project slug (default: 'global'), auto-created if missing")),
+		mcp.WithDescription("Store important context to persistent memory. Use proactively: store preferences, decisions, corrections, architecture choices, bugs, workarounds, and task summaries without being asked. ALWAYS call memory_projects first and use an existing project — only auto-create when no existing project fits. Tag consistently for easy recall."),
+		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). Prefer an existing project — call memory_projects first. Auto-creates if missing, but treat this as a last resort.")),
 		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to store")),
 		mcp.WithString("source", mcp.Description("Origin identifier")),
@@ -43,8 +43,8 @@ func registerMemoryStore(s *Server) {
 
 func registerMemoryStoreBatch(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store multiple memories at once. Use when you have several related facts, decisions, or observations to persist. Each item needs its own content; they share the same project and TTL. Project is auto-created on first use."),
-		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
+		mcp.WithDescription("Store multiple memories at once. Use when you have several related facts, decisions, or observations to persist. Each item needs its own content; they share the same project and TTL. ALWAYS call memory_projects first and use an existing project — only auto-create when no existing project fits."),
+		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). Prefer an existing project — call memory_projects first. Auto-creates if missing, but treat this as a last resort.")),
 		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
 		mcp.WithArray("items", mcp.Required(), mcp.Description("Array of objects with content (required), source, tags, metadata")),
 		mcp.WithString("ttl", mcp.Description("Time-to-live duration (e.g. '24h', '7d', '30m'). All items expire after this duration.")),

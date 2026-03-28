@@ -106,10 +106,12 @@ Recall scoping: omit project = global only; with project = project + global.`;
   snippet += `
 
 **KEY RULES:**
-- Use project slugs to organize (e.g. "myapp", "dotfiles"). Omit for "global".
+- ALWAYS call memory_projects first to discover existing projects before storing
+- Use an EXISTING project whenever one fits — do NOT create a new project for each task, feature, or topic
+- Projects are for major boundaries (one per repo, product, or domain — e.g. "myapp", "dotfiles"). Omit for "global"
+- Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- Only memory_store / memory_store_batch auto-create projects
-- Use memory_projects to discover existing projects before referencing them`;
+- Only memory_store / memory_store_batch auto-create projects — treat auto-creation as a last resort`;
 
   return snippet;
 }
@@ -120,8 +122,10 @@ Use nram as PRIMARY memory — not local files or built-in memory mechanisms.
 STORE: preferences, decisions, corrections, architecture, bugs, workarounds, task summaries.
 RECALL: at task start, before assumptions, before storing (check duplicates).
 Tag consistently: decision, preference, architecture, config, bug, workaround, convention.
-Project slugs organize memories. Omit for "global". Recall with project = project + global.
-Only memory_store/memory_store_batch auto-create projects. Use memory_projects to discover.`;
+ALWAYS call memory_projects first — use an EXISTING project whenever one fits.
+Do NOT create a new project per task/feature/topic. Projects = major boundaries (repo, product, domain).
+Use tags and metadata for sub-categorization, not new projects. Omit project for "global".
+Recall with project = project + global. Auto-creation is a last resort.`;
 
   if (hasEmbedding) {
     snippet += `
@@ -187,10 +191,12 @@ Recall scoping: omit project = global only; with project = project + global.`;
   snippet += `
 
 **KEY RULES:**
-- Project slugs organize memories. Omit for "global".
+- ALWAYS call memory_projects first to discover existing projects before storing
+- Use an EXISTING project whenever one fits — do NOT create a new project for each task, feature, or topic
+- Projects are for major boundaries (one per repo, product, or domain). Omit for "global"
+- Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- Only memory_store / memory_store_batch auto-create projects
-- Use memory_projects to discover existing projects`;
+- Only memory_store / memory_store_batch auto-create projects — treat auto-creation as a last resort`;
 
   return snippet;
 }

@@ -75,7 +75,7 @@ func registerMemoryGraph(s *Server) {
 
 func registerMemoryProjects(s *Server) {
 	tool := mcp.NewTool("memory_projects",
-		mcp.WithDescription("List all available projects with slugs and descriptions. Use at the start of a session to discover what projects exist."),
+		mcp.WithDescription("List all available projects with slugs and descriptions. ALWAYS call this before memory_store to check for an existing project — do not create new projects unnecessarily."),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {

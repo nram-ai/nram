@@ -134,10 +134,12 @@ ENRICHMENT — when to use enrich: true:
 
 	b.WriteString(`
 KEY RULES:
-- Use project slugs to organize memories (e.g. "myapp", "dotfiles"). Omit for "global".
+- ALWAYS call memory_projects first to discover existing projects before storing
+- Use an EXISTING project whenever one fits. Do NOT create a new project for each task, feature, or topic
+- Projects are for major boundaries (one per repo, product, or domain — e.g. "myapp", "dotfiles"). Omit for "global"
+- Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- Use memory_projects to discover existing projects before referencing them
-- Only memory_store and memory_store_batch auto-create projects
+- Only memory_store and memory_store_batch auto-create projects — treat auto-creation as a last resort
 
 Resources:
 - nram://projects — list all projects`)
