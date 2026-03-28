@@ -578,7 +578,7 @@ func (wp *WorkerPool) resolveOrCreateEntity(ctx context.Context, namespaceID uui
 	if err := wp.entities.Upsert(ctx, entity); err != nil {
 		return nil, fmt.Errorf("create stub entity %q: %w", name, err)
 	}
-	slog.Info("enrichment: created stub entity from relationship reference", "entity", name, "id", entity.ID)
+	slog.Debug("enrichment: created stub entity from relationship reference", "entity", name, "id", entity.ID)
 	return entity, nil
 }
 
