@@ -57,8 +57,9 @@ type Dependencies struct {
 	BatchStore    *service.BatchStoreService
 	Enrich        *service.EnrichService
 	Export        *service.ExportService
-	ProjectDelete *service.ProjectDeleteService
-	ProjectRepo   ProjectRepo
+	ProjectDelete  *service.ProjectDeleteService
+	ProjectUpdater ProjectUpdater
+	ProjectRepo    ProjectRepo
 	UserRepo      UserRepo
 	NamespaceRepo NamespaceRepo
 	EntityReader  EntityReader
@@ -200,6 +201,7 @@ func NewServer(deps Dependencies) *Server {
 	RegisterForgetEnrichTools(s)
 	RegisterGraphProjectsExportTools(s)
 	RegisterProjectDeleteTool(s)
+	RegisterProjectUpdateTool(s)
 	RegisterResources(s)
 
 	return s

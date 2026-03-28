@@ -208,6 +208,7 @@ func main() {
 	// Create vector store.
 	// Priority: Qdrant (if configured) > PgVector (if Postgres) > HNSWStore (if SQLite).
 	var vectorStore storage.VectorStore
+	var hnswStore *storage.HNSWStore
 	if cfg.Qdrant.Addr != "" {
 		vectorStore, err = storage.NewQdrantStore(cfg.Qdrant)
 		if err != nil {
@@ -230,7 +231,7 @@ func main() {
 			EfSearch:         cfg.HNSW.EfSearch,
 			MaxLoadedIndexes: cfg.HNSW.MaxLoadedIndexes,
 		}
-		hnswStore := storage.NewHNSWStore(db.DB(), db.WriteDB(), hnswCfg)
+		hnswStore = storage.NewHNSWStore(db.DB(), db.WriteDB(), hnswCfg)
 		vectorStore = hnswStore
 		defer hnswStore.Close()
 		log.Println("hnsw vector store initialized (SQLite backend)")
@@ -275,12 +276,16 @@ func main() {
 		ingestionLogRepo, tokenUsageRepo, enrichmentQueueRepo,
 		vectorStore, embedProvider,
 	)
+	var hnswDeleter service.HNSWSnapshotDeleter
+	if hnswStore != nil {
+		hnswDeleter = hnswStore
+	}
 	projectDeleteSvc := service.NewProjectDeleteService(
 		projectRepo, projectRepo, memoryRepo, memoryRepo,
 		vectorStore, entityRepo, relationshipRepo,
 		relationshipRepo, lineageRepo, enrichmentQueueRepo,
 		tokenUsageRepo, tokenUsageRepo,
-		ingestionLogRepo, shareRepo, namespaceRepo, eventBus,
+		ingestionLogRepo, shareRepo, hnswDeleter, namespaceRepo, eventBus,
 	)
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo)
 	exportSvc := service.NewExportService(
@@ -308,8 +313,9 @@ func main() {
 		BatchStore:    batchStoreSvc,
 		Enrich:        enrichSvc,
 		Export:        exportSvc,
-		ProjectDelete: projectDeleteSvc,
-		ProjectRepo:   projectRepo,
+		ProjectDelete:  projectDeleteSvc,
+		ProjectUpdater: projectRepo,
+		ProjectRepo:    projectRepo,
 		UserRepo:      userRepo,
 		NamespaceRepo: namespaceRepo,
 		EntityReader:  entityRepo,

@@ -266,6 +266,18 @@ func (s *HNSWStore) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// DeleteByNamespace removes all HNSW snapshots for a given namespace.
+func (s *HNSWStore) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+	_, err := s.writeDB.ExecContext(ctx,
+		"DELETE FROM hnsw_snapshots WHERE namespace_id = ?",
+		namespaceID.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("hnsw: delete snapshots by namespace: %w", err)
+	}
+	return nil
+}
+
 // Ping checks vector store connectivity by pinging the underlying SQLite database.
 func (s *HNSWStore) Ping(ctx context.Context) error {
 	return s.readDB.PingContext(ctx)

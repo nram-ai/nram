@@ -937,8 +937,8 @@ function ProjectManagement() {
         </table>
       </div>
 
-      {/* Detail Panel — admin gets full edit/delete, non-admin gets read-only view */}
-      {detailProjectId && auth.isAdmin && (
+      {/* Detail Panel — writable users get full edit/delete, readonly gets read-only view */}
+      {detailProjectId && auth.canWrite && (
         <ProjectDetailPanel
           projectId={detailProjectId}
           onClose={() => setDetailProjectId(null)}
@@ -946,13 +946,13 @@ function ProjectManagement() {
         />
       )}
 
-      {/* Non-admin: open detail with delete option for own projects */}
-      {detailProjectId && !auth.isAdmin && (() => {
+      {/* Readonly users: read-only detail view */}
+      {detailProjectId && !auth.canWrite && (() => {
         const proj = projects.find((p) => p.id === detailProjectId);
         return proj ? (
           <ProjectReadOnlyPanel
             project={proj}
-            canWrite={auth.canWrite}
+            canWrite={false}
             onClose={() => setDetailProjectId(null)}
             onDeleted={() => setDetailProjectId(null)}
           />

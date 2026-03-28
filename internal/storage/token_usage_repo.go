@@ -70,13 +70,14 @@ func (r *TokenUsageRepo) DeleteByMemoryID(ctx context.Context, memoryID uuid.UUI
 	return nil
 }
 
-// ReassignProject updates all token_usage records from one project to another.
-func (r *TokenUsageRepo) ReassignProject(ctx context.Context, fromProjectID, toProjectID uuid.UUID) error {
-	query := `UPDATE token_usage SET project_id = ? WHERE project_id = ?`
+// ReassignProject updates all token_usage records from one project to another,
+// including the namespace_id to avoid FK violations when the old namespace is deleted.
+func (r *TokenUsageRepo) ReassignProject(ctx context.Context, fromProjectID, toProjectID uuid.UUID, toNamespaceID uuid.UUID) error {
+	query := `UPDATE token_usage SET project_id = ?, namespace_id = ? WHERE project_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE token_usage SET project_id = $1 WHERE project_id = $2`
+		query = `UPDATE token_usage SET project_id = $1, namespace_id = $2 WHERE project_id = $3`
 	}
-	_, err := r.db.Exec(ctx, query, toProjectID.String(), fromProjectID.String())
+	_, err := r.db.Exec(ctx, query, toProjectID.String(), toNamespaceID.String(), fromProjectID.String())
 	if err != nil {
 		return fmt.Errorf("token usage reassign project: %w", err)
 	}

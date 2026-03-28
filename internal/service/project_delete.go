@@ -45,7 +45,7 @@ type RelationshipBulkDeleter interface {
 
 // TokenUsageReassigner reassigns token usage records from one project to another.
 type TokenUsageReassigner interface {
-	ReassignProject(ctx context.Context, fromProjectID, toProjectID uuid.UUID) error
+	ReassignProject(ctx context.Context, fromProjectID, toProjectID uuid.UUID, toNamespaceID uuid.UUID) error
 }
 
 // IngestionLogDeleter deletes all ingestion log entries for a namespace.
@@ -61,6 +61,11 @@ type MemoryShareDeleter interface {
 // EnrichmentBulkDeleter deletes enrichment queue entries by namespace and memory.
 type EnrichmentBulkDeleter interface {
 	DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error
+	DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error
+}
+
+// HNSWSnapshotDeleter deletes HNSW snapshots by namespace.
+type HNSWSnapshotDeleter interface {
 	DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error
 }
 
@@ -98,6 +103,7 @@ type ProjectDeleteService struct {
 	tokenUsageCleaner   TokenUsageCleaner
 	ingestionDeleter    IngestionLogDeleter
 	shareDeleter        MemoryShareDeleter
+	hnswDeleter         HNSWSnapshotDeleter
 	namespaceDeleter    NamespaceDeleter
 	eventBus            events.EventBus
 }
@@ -118,6 +124,7 @@ func NewProjectDeleteService(
 	tokenUsageCleaner TokenUsageCleaner,
 	ingestionDeleter IngestionLogDeleter,
 	shareDeleter MemoryShareDeleter,
+	hnswDeleter HNSWSnapshotDeleter,
 	namespaceDeleter NamespaceDeleter,
 	eventBus events.EventBus,
 ) *ProjectDeleteService {
@@ -136,6 +143,7 @@ func NewProjectDeleteService(
 		tokenUsageCleaner:   tokenUsageCleaner,
 		ingestionDeleter:    ingestionDeleter,
 		shareDeleter:        shareDeleter,
+		hnswDeleter:         hnswDeleter,
 		namespaceDeleter:    namespaceDeleter,
 		eventBus:            eventBus,
 	}
@@ -244,9 +252,16 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 		}
 	}
 
-	// 11. Reassign token_usage from deleted project to global project.
+	// 11. Delete HNSW snapshots by namespace.
+	if s.hnswDeleter != nil {
+		if err := s.hnswDeleter.DeleteByNamespace(ctx, project.NamespaceID); err != nil {
+			log.Printf("project delete: hnsw snapshots: %v", err)
+		}
+	}
+
+	// 12. Reassign token_usage from deleted project to global project.
 	if s.tokenUsageReassign != nil && globalProject != nil {
-		if err := s.tokenUsageReassign.ReassignProject(ctx, project.ID, globalProject.ID); err != nil {
+		if err := s.tokenUsageReassign.ReassignProject(ctx, project.ID, globalProject.ID, globalProject.NamespaceID); err != nil {
 			log.Printf("project delete: token usage reassign: %v", err)
 		}
 	}
