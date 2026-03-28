@@ -17,19 +17,19 @@ import { useMeProjects, useGraph } from "../hooks/useApi";
 import { useSelectedProject } from "../context/ProjectContext";
 import type { GraphEntity } from "../api/client";
 
-// Color map for entity types
-const ENTITY_TYPE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  person: { bg: "#dbeafe", border: "#3b82f6", text: "#1e40af" },
-  organization: { bg: "#dcfce7", border: "#22c55e", text: "#166534" },
-  concept: { bg: "#fef3c7", border: "#f59e0b", text: "#92400e" },
-  location: { bg: "#fce7f3", border: "#ec4899", text: "#9d174d" },
-  event: { bg: "#e0e7ff", border: "#6366f1", text: "#3730a3" },
-  technology: { bg: "#f0fdf4", border: "#10b981", text: "#065f46" },
-  product: { bg: "#fff1f2", border: "#f43f5e", text: "#9f1239" },
-  tool: { bg: "#f5f3ff", border: "#8b5cf6", text: "#5b21b6" },
+// Color map for entity types — vibrant, high-contrast for dark backgrounds
+const ENTITY_TYPE_COLORS: Record<string, { bg: string; border: string; text: string; glow: string }> = {
+  person: { bg: "#1e3a5f", border: "#60a5fa", text: "#bfdbfe", glow: "rgba(96,165,250,0.4)" },
+  organization: { bg: "#14532d", border: "#4ade80", text: "#bbf7d0", glow: "rgba(74,222,128,0.4)" },
+  concept: { bg: "#451a03", border: "#fbbf24", text: "#fef3c7", glow: "rgba(251,191,36,0.4)" },
+  location: { bg: "#4a1942", border: "#f472b6", text: "#fce7f3", glow: "rgba(244,114,182,0.4)" },
+  event: { bg: "#312e81", border: "#818cf8", text: "#e0e7ff", glow: "rgba(129,140,248,0.4)" },
+  technology: { bg: "#064e3b", border: "#34d399", text: "#d1fae5", glow: "rgba(52,211,153,0.4)" },
+  product: { bg: "#4c0519", border: "#fb7185", text: "#ffe4e6", glow: "rgba(251,113,133,0.4)" },
+  tool: { bg: "#2e1065", border: "#a78bfa", text: "#ede9fe", glow: "rgba(167,139,250,0.4)" },
 };
 
-const DEFAULT_COLOR = { bg: "#f3f4f6", border: "#9ca3af", text: "#374151" };
+const DEFAULT_COLOR = { bg: "#1f2937", border: "#6b7280", text: "#d1d5db", glow: "rgba(107,114,128,0.3)" };
 
 function getEntityColor(entityType: string) {
   return ENTITY_TYPE_COLORS[entityType.toLowerCase()] || DEFAULT_COLOR;
@@ -37,52 +37,54 @@ function getEntityColor(entityType: string) {
 
 // Edge color map for relationship types
 const RELATION_COLORS: Record<string, string> = {
-  works_for: "#3b82f6",
-  knows: "#22c55e",
-  part_of: "#f59e0b",
-  related_to: "#6366f1",
-  uses: "#ec4899",
-  created_by: "#10b981",
-  located_in: "#f43f5e",
-  belongs_to: "#8b5cf6",
+  works_for: "#60a5fa",
+  knows: "#4ade80",
+  part_of: "#fbbf24",
+  related_to: "#818cf8",
+  uses: "#f472b6",
+  created_by: "#34d399",
+  located_in: "#fb7185",
+  belongs_to: "#a78bfa",
 };
 
-const DEFAULT_EDGE_COLOR = "#9ca3af";
+const DEFAULT_EDGE_COLOR = "#4b5563";
 
 function getRelationColor(relation: string) {
   return RELATION_COLORS[relation.toLowerCase()] || DEFAULT_EDGE_COLOR;
 }
 
-// Custom entity node component
+// Custom entity node component — neural/sci-fi aesthetic
 function EntityNode({ data }: NodeProps) {
   const colors = getEntityColor(data.entityType);
   const mentionSize = Math.min(Math.max(data.mentionCount, 1), 10);
-  const scale = 0.8 + mentionSize * 0.04;
+  const scale = 0.85 + mentionSize * 0.03;
 
   return (
     <div
       style={{
         background: colors.bg,
-        border: `2px solid ${colors.border}`,
-        borderRadius: "8px",
-        padding: "8px 12px",
-        minWidth: "120px",
-        maxWidth: "200px",
+        border: `1.5px solid ${colors.border}`,
+        borderRadius: "6px",
+        padding: "6px 10px",
+        minWidth: "100px",
+        maxWidth: "180px",
         transform: `scale(${scale})`,
         cursor: "pointer",
+        boxShadow: `0 0 12px ${colors.glow}, 0 0 4px ${colors.glow}`,
+        transition: "box-shadow 0.2s ease",
       }}
     >
-      <Handle type="target" position={Position.Top} style={{ background: colors.border }} />
-      <div style={{ color: colors.text, fontWeight: 600, fontSize: "13px", marginBottom: "2px" }}>
+      <Handle type="target" position={Position.Top} style={{ background: colors.border, width: 6, height: 6 }} />
+      <div style={{ color: colors.text, fontWeight: 600, fontSize: "12px", marginBottom: "1px", lineHeight: 1.3 }}>
         {data.label}
       </div>
       <div
         style={{
           color: colors.text,
-          opacity: 0.7,
-          fontSize: "10px",
+          opacity: 0.6,
+          fontSize: "9px",
           textTransform: "uppercase",
-          letterSpacing: "0.05em",
+          letterSpacing: "0.06em",
         }}
       >
         {data.entityType}
@@ -91,56 +93,70 @@ function EntityNode({ data }: NodeProps) {
         <div
           style={{
             position: "absolute",
-            top: "-8px",
-            right: "-8px",
+            top: "-6px",
+            right: "-6px",
             background: colors.border,
-            color: "#fff",
+            color: colors.bg,
             borderRadius: "9999px",
-            width: "20px",
-            height: "20px",
+            width: "18px",
+            height: "18px",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: "10px",
+            fontSize: "9px",
             fontWeight: 700,
           }}
         >
           {data.mentionCount}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} style={{ background: colors.border }} />
+      <Handle type="source" position={Position.Bottom} style={{ background: colors.border, width: 6, height: 6 }} />
     </div>
   );
 }
 
 const nodeTypes = { entity: EntityNode };
 
-// Force-directed layout: simple spring-based positions
+// Organic force-directed layout with center gravity and type clustering
 function computeLayout(
   entities: GraphEntity[],
   relationships: { source_id: string; target_id: string }[],
 ): Record<string, { x: number; y: number }> {
   if (entities.length === 0) return {};
 
-  // Initialize positions in a circle
   const positions: Record<string, { x: number; y: number }> = {};
-  const radius = Math.max(200, entities.length * 40);
-  const centerX = 400;
-  const centerY = 300;
+  const centerX = 0;
+  const centerY = 0;
 
-  entities.forEach((e, i) => {
-    const angle = (2 * Math.PI * i) / entities.length;
-    positions[e.id] = {
-      x: centerX + radius * Math.cos(angle),
-      y: centerY + radius * Math.sin(angle),
-    };
+  // Group entities by type for initial clustering
+  const typeGroups: Record<string, GraphEntity[]> = {};
+  for (const e of entities) {
+    const t = e.entity_type.toLowerCase();
+    if (!typeGroups[t]) typeGroups[t] = [];
+    typeGroups[t].push(e);
+  }
+
+  // Initialize: place type clusters in small arcs near center, with jitter
+  const typeKeys = Object.keys(typeGroups);
+  const clusterRadius = Math.min(150, 40 + entities.length * 3);
+  typeKeys.forEach((type, ti) => {
+    const clusterAngle = (2 * Math.PI * ti) / typeKeys.length;
+    const cx = centerX + clusterRadius * Math.cos(clusterAngle);
+    const cy = centerY + clusterRadius * Math.sin(clusterAngle);
+    const group = typeGroups[type];
+    group.forEach((e, ei) => {
+      const spread = Math.min(80, 20 + group.length * 8);
+      const localAngle = (2 * Math.PI * ei) / group.length;
+      positions[e.id] = {
+        x: cx + spread * Math.cos(localAngle) + (Math.random() - 0.5) * 20,
+        y: cy + spread * Math.sin(localAngle) + (Math.random() - 0.5) * 20,
+      };
+    });
   });
 
-  // Build adjacency for force computation
+  // Build adjacency
   const adjacency: Record<string, Set<string>> = {};
-  for (const e of entities) {
-    adjacency[e.id] = new Set();
-  }
+  for (const e of entities) adjacency[e.id] = new Set();
   for (const r of relationships) {
     if (adjacency[r.source_id] && adjacency[r.target_id]) {
       adjacency[r.source_id].add(r.target_id);
@@ -148,27 +164,52 @@ function computeLayout(
     }
   }
 
-  // Simple iterative force-directed placement
-  const iterations = 50;
-  const repulsionStrength = 5000;
-  const attractionStrength = 0.01;
-  const idealLength = 200;
+  // Degree map for weighting
+  const degree: Record<string, number> = {};
+  for (const e of entities) degree[e.id] = adjacency[e.id].size;
+
+  // Force simulation — tighter, more organic
+  const iterations = 120;
+  const repulsionBase = 2000;
+  const attractionStrength = 0.06;
+  const idealLength = 120;
+  const centerGravity = 0.01;
+  const typeAttractionStrength = 0.002;
+  const maxDisplacement = 50;
+
+  // Precompute type centers for type-clustering force
+  function computeTypeCenters() {
+    const centers: Record<string, { x: number; y: number; count: number }> = {};
+    for (const e of entities) {
+      const t = e.entity_type.toLowerCase();
+      if (!centers[t]) centers[t] = { x: 0, y: 0, count: 0 };
+      centers[t].x += positions[e.id].x;
+      centers[t].y += positions[e.id].y;
+      centers[t].count++;
+    }
+    for (const t of Object.keys(centers)) {
+      centers[t].x /= centers[t].count;
+      centers[t].y /= centers[t].count;
+    }
+    return centers;
+  }
 
   for (let iter = 0; iter < iterations; iter++) {
+    const temp = 1.0 - iter / iterations; // temperature annealing
     const forces: Record<string, { fx: number; fy: number }> = {};
-    for (const e of entities) {
-      forces[e.id] = { fx: 0, fy: 0 };
-    }
+    for (const e of entities) forces[e.id] = { fx: 0, fy: 0 };
 
-    // Repulsion between all pairs
+    // Repulsion between all pairs (scaled by temperature)
+    const repulsion = repulsionBase * (0.3 + 0.7 * temp);
     for (let i = 0; i < entities.length; i++) {
       for (let j = i + 1; j < entities.length; j++) {
         const a = entities[i].id;
         const b = entities[j].id;
         const dx = positions[a].x - positions[b].x;
         const dy = positions[a].y - positions[b].y;
-        const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-        const force = repulsionStrength / (dist * dist);
+        const distSq = dx * dx + dy * dy;
+        const dist = Math.max(Math.sqrt(distSq), 1);
+        const force = repulsion / distSq;
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
         forces[a].fx += fx;
@@ -193,12 +234,41 @@ function computeLayout(
       forces[r.target_id].fy -= fy;
     }
 
-    // Apply forces with damping
-    const damping = 0.9 - iter * 0.015;
-    const clampedDamping = Math.max(damping, 0.1);
+    // Center gravity — pulls everything toward origin
     for (const e of entities) {
-      positions[e.id].x += forces[e.id].fx * clampedDamping;
-      positions[e.id].y += forces[e.id].fy * clampedDamping;
+      const dx = centerX - positions[e.id].x;
+      const dy = centerY - positions[e.id].y;
+      forces[e.id].fx += dx * centerGravity;
+      forces[e.id].fy += dy * centerGravity;
+    }
+
+    // Type clustering — gentle pull toward type centroid
+    if (iter % 5 === 0 || iter < 10) {
+      const typeCenters = computeTypeCenters();
+      for (const e of entities) {
+        const t = e.entity_type.toLowerCase();
+        const tc = typeCenters[t];
+        if (tc && tc.count > 1) {
+          const dx = tc.x - positions[e.id].x;
+          const dy = tc.y - positions[e.id].y;
+          forces[e.id].fx += dx * typeAttractionStrength;
+          forces[e.id].fy += dy * typeAttractionStrength;
+        }
+      }
+    }
+
+    // Apply forces with temperature-based displacement cap
+    const cap = maxDisplacement * temp;
+    for (const e of entities) {
+      let dx = forces[e.id].fx;
+      let dy = forces[e.id].fy;
+      const mag = Math.sqrt(dx * dx + dy * dy);
+      if (mag > cap && mag > 0) {
+        dx = (dx / mag) * cap;
+        dy = (dy / mag) * cap;
+      }
+      positions[e.id].x += dx;
+      positions[e.id].y += dy;
     }
   }
 
@@ -321,6 +391,42 @@ function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
   );
 }
 
+function LegendPanel() {
+  const [collapsed, setCollapsed] = useState(false);
+
+  return (
+    <div
+      className="absolute top-3 left-3 z-10 rounded-lg shadow-lg"
+      style={{ background: "rgba(15,17,23,0.85)", border: "1px solid #1e2030", backdropFilter: "blur(8px)" }}
+    >
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="flex items-center gap-2 px-3 py-2 w-full text-left"
+        style={{ color: "#9ca3af", fontSize: "11px", fontWeight: 500 }}
+      >
+        <span style={{ fontSize: "13px" }}>{collapsed ? "+" : "-"}</span>
+        Entity Types
+      </button>
+      {!collapsed && (
+        <div className="px-3 pb-2 grid grid-cols-2 gap-x-4 gap-y-1">
+          {Object.entries(ENTITY_TYPE_COLORS).map(([type, colors]) => (
+            <div key={type} className="flex items-center gap-1.5">
+              <div
+                className="w-2.5 h-2.5 rounded-sm"
+                style={{
+                  background: colors.border,
+                  boxShadow: `0 0 6px ${colors.glow}`,
+                }}
+              />
+              <span style={{ color: "#9ca3af", fontSize: "10px", textTransform: "capitalize" }}>{type}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GraphVisualization() {
   const projectsQuery = useMeProjects();
   const { data: projects, isLoading: projectsLoading } = projectsQuery;
@@ -408,22 +514,30 @@ function GraphVisualization() {
       },
     }));
 
-    const newEdges: Edge[] = relationships.map((rel) => ({
-      id: rel.id,
-      source: rel.source_id,
-      target: rel.target_id,
-      label: rel.relation,
-      type: "default",
-      animated: false,
-      style: { stroke: getRelationColor(rel.relation), strokeWidth: Math.max(1, Math.min(rel.weight, 4)) },
-      labelStyle: { fontSize: 10, fill: getRelationColor(rel.relation) },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: getRelationColor(rel.relation),
-        width: 15,
-        height: 15,
-      },
-    }));
+    const newEdges: Edge[] = relationships.map((rel) => {
+      const color = getRelationColor(rel.relation);
+      return {
+        id: rel.id,
+        source: rel.source_id,
+        target: rel.target_id,
+        label: rel.relation,
+        type: "smoothstep",
+        animated: rel.weight >= 3,
+        style: {
+          stroke: color,
+          strokeWidth: Math.max(0.8, Math.min(rel.weight * 0.8, 3)),
+          opacity: 0.6,
+        },
+        labelStyle: { fontSize: 9, fill: color, opacity: 0.8 },
+        labelBgStyle: { fill: "#0f1117", fillOpacity: 0.8 },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: color,
+          width: 12,
+          height: 12,
+        },
+      };
+    });
 
     setNodes(newNodes);
     setEdges(newEdges);
@@ -528,7 +642,7 @@ function GraphVisualization() {
         graphData &&
         graphData.entities &&
         graphData.entities.length > 0 && (
-          <div className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden">
+          <div className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden" style={{ background: "#0f1117" }}>
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -537,16 +651,22 @@ function GraphVisualization() {
               onNodeClick={onNodeClick}
               nodeTypes={nodeTypes}
               fitView
-              fitViewOptions={{ padding: 0.2 }}
-              minZoom={0.1}
-              maxZoom={2}
+              fitViewOptions={{ padding: 0.3, maxZoom: 1.2 }}
+              minZoom={0.05}
+              maxZoom={3}
               defaultEdgeOptions={{
-                type: "default",
+                type: "smoothstep",
               }}
             >
-              <Background color="#e5e7eb" gap={20} />
-              <Controls />
+              <Background color="#1a1d2e" gap={30} size={1} />
+              <Controls
+                position="bottom-right"
+                style={{ marginBottom: 10, marginRight: 10 }}
+              />
               <MiniMap
+                position="bottom-left"
+                pannable
+                zoomable
                 nodeStrokeColor={(n) => {
                   const type = n.data?.entityType || "";
                   return getEntityColor(type).border;
@@ -555,7 +675,8 @@ function GraphVisualization() {
                   const type = n.data?.entityType || "";
                   return getEntityColor(type).bg;
                 }}
-                maskColor="rgba(0,0,0,0.1)"
+                maskColor="rgba(0,0,0,0.3)"
+                style={{ background: "#0d0f16", border: "1px solid #1e2030" }}
               />
             </ReactFlow>
 
@@ -567,21 +688,8 @@ function GraphVisualization() {
               />
             )}
 
-            {/* Legend */}
-            <div className="absolute bottom-4 left-4 z-10 bg-card/90 backdrop-blur rounded-lg border border-border p-3 shadow-sm">
-              <div className="text-xs font-medium text-muted-foreground mb-2">Entity Types</div>
-              <div className="flex flex-wrap gap-2">
-                {Object.entries(ENTITY_TYPE_COLORS).map(([type, colors]) => (
-                  <div key={type} className="flex items-center gap-1">
-                    <div
-                      className="w-3 h-3 rounded-sm"
-                      style={{ background: colors.bg, border: `1px solid ${colors.border}` }}
-                    />
-                    <span className="text-xs text-muted-foreground capitalize">{type}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {/* Legend — collapsible, top-left to avoid overlap with controls */}
+            <LegendPanel />
           </div>
         )}
     </div>
