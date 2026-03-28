@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // ProjectLister defines operations on the projects repository needed by the
@@ -202,6 +204,82 @@ func handleCreateProject(w http.ResponseWriter, r *http.Request, projects Projec
 	}
 
 	writeJSON(w, http.StatusCreated, project)
+}
+
+// ProjectDeleteServicer defines the interface for the project delete service.
+type ProjectDeleteServicer interface {
+	Delete(ctx context.Context, req *service.ProjectDeleteRequest) (*service.ProjectDeleteResponse, error)
+}
+
+// ProjectGetterForDelete defines the project lookup needed by the delete handler.
+type ProjectGetterForDelete interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error)
+}
+
+// NewMeProjectDeleteHandler returns an http.HandlerFunc that handles
+// DELETE /v1/me/projects/{id}. Only the project owner can delete their project.
+func NewMeProjectDeleteHandler(deleteSvc ProjectDeleteServicer, projects ProjectGetterForDelete, users UserGetter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.Header().Set("Allow", "DELETE")
+			WriteError(w, &APIError{
+				Code:    "method_not_allowed",
+				Message: "method not allowed",
+				Status:  http.StatusMethodNotAllowed,
+			})
+			return
+		}
+
+		ac := auth.FromContext(r.Context())
+		if ac == nil {
+			WriteError(w, ErrUnauthorized("authentication required"))
+			return
+		}
+
+		// Extract project ID from the URL path.
+		idStr := r.PathValue("id")
+		if idStr == "" {
+			// Fallback: extract from chi URL params.
+			idStr = chi.URLParam(r, "id")
+		}
+		projectID, err := uuid.Parse(idStr)
+		if err != nil {
+			WriteError(w, ErrBadRequest("invalid project id"))
+			return
+		}
+
+		// Look up user to get their namespace.
+		user, err := users.GetByID(r.Context(), ac.UserID)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to resolve user"))
+			return
+		}
+
+		// Look up project and verify ownership.
+		project, err := projects.GetByID(r.Context(), projectID)
+		if err != nil {
+			WriteError(w, ErrNotFound("project not found"))
+			return
+		}
+		if project.OwnerNamespaceID != user.NamespaceID {
+			WriteError(w, ErrForbidden("you can only delete your own projects"))
+			return
+		}
+
+		_, err = deleteSvc.Delete(r.Context(), &service.ProjectDeleteRequest{
+			ProjectID: projectID,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "global") {
+				WriteError(w, ErrBadRequest(err.Error()))
+				return
+			}
+			WriteError(w, ErrInternal("failed to delete project"))
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // parseIntParam parses an integer query parameter, returning def if missing or invalid.

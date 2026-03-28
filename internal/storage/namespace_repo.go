@@ -181,6 +181,19 @@ func (r *NamespaceRepo) CreateIfNotExists(ctx context.Context, ns *model.Namespa
 	return existing, false, nil
 }
 
+// Delete removes a namespace by ID.
+func (r *NamespaceRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	query := `DELETE FROM namespaces WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM namespaces WHERE id = $1`
+	}
+	_, err := r.db.Exec(ctx, query, id.String())
+	if err != nil {
+		return fmt.Errorf("namespace delete: %w", err)
+	}
+	return nil
+}
+
 // ResolvePathPrefix returns all namespace IDs whose path starts with the given prefix.
 // This includes the namespace whose path exactly equals the prefix.
 func (r *NamespaceRepo) ResolvePathPrefix(ctx context.Context, prefix string) ([]uuid.UUID, error) {

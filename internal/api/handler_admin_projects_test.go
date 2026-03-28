@@ -329,40 +329,17 @@ func TestAdminProjects_UpdateProject_NotFound(t *testing.T) {
 	}
 }
 
-func TestAdminProjects_DeleteProject_Success(t *testing.T) {
+func TestAdminProjects_DeleteProject_Forbidden(t *testing.T) {
+	// Admin delete endpoint now returns 403 — deletion is self-service only.
 	projectID := uuid.New()
 
-	store := &mockProjectAdminStore{
-		deleteProjectFunc: func(_ context.Context, id uuid.UUID) error {
-			if id != projectID {
-				t.Errorf("unexpected id: %v", id)
-			}
-			return nil
-		},
-	}
+	store := &mockProjectAdminStore{}
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/projects/"+projectID.String(), nil)
 	rec := httptest.NewRecorder()
 	adminProjectsHandler(store).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", rec.Code)
-	}
-}
-
-func TestAdminProjects_DeleteProject_NotFound(t *testing.T) {
-	store := &mockProjectAdminStore{
-		deleteProjectFunc: func(_ context.Context, _ uuid.UUID) error {
-			return sql.ErrNoRows
-		},
-	}
-
-	id := uuid.New()
-	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/projects/"+id.String(), nil)
-	rec := httptest.NewRecorder()
-	adminProjectsHandler(store).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
 	}
 }

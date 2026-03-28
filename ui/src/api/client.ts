@@ -1021,6 +1021,8 @@ export const meAPI = {
     request<{ data: Project[] }>("GET", "/me/projects").then((r) => r.data),
   createProject: (data: MeCreateProjectRequest) =>
     request<Project>("POST", "/me/projects", data),
+  deleteProject: (id: string) =>
+    request<void>("DELETE", `/me/projects/${id}`),
 
   listAPIKeys: () =>
     request<{ data: APIKey[] }>("GET", "/me/api-keys").then((r) => r.data),

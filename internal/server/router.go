@@ -42,6 +42,7 @@ type Handlers struct {
 	// User-scoped handlers
 	MeRecall            http.HandlerFunc
 	MeProjects          http.HandlerFunc // GET + POST
+	MeProjectDelete     http.HandlerFunc // DELETE /v1/me/projects/{id}
 	MeAPIKeys           http.HandlerFunc // GET + POST
 	MeAPIKeyRevoke      http.HandlerFunc
 	MeOAuthClients      http.HandlerFunc
@@ -211,6 +212,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Route("/v1/me", func(r chi.Router) {
 			r.Post("/memories/recall", handler(handlers.MeRecall))
 			r.HandleFunc("/projects", handler(handlers.MeProjects))
+			r.Delete("/projects/{id}", handler(handlers.MeProjectDelete))
 			r.HandleFunc("/api-keys", handler(handlers.MeAPIKeys))
 			r.Delete("/api-keys/{id}", handler(handlers.MeAPIKeyRevoke))
 			r.HandleFunc("/oauth-clients", handler(handlers.MeOAuthClients))

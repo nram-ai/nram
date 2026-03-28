@@ -318,6 +318,51 @@ func (r *MemoryRepo) HardDelete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// ListIDsByNamespace returns all non-deleted memory IDs in a namespace.
+func (r *MemoryRepo) ListIDsByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]uuid.UUID, error) {
+	query := `SELECT id FROM memories WHERE namespace_id = ? AND deleted_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT id FROM memories WHERE namespace_id = $1 AND deleted_at IS NULL`
+	}
+
+	rows, err := r.db.Query(ctx, query, namespaceID.String())
+	if err != nil {
+		return nil, fmt.Errorf("memory list ids by namespace: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, fmt.Errorf("memory list ids by namespace scan: %w", err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("memory list ids by namespace parse: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory list ids by namespace iteration: %w", err)
+	}
+	return ids, nil
+}
+
+// HardDeleteByNamespace permanently deletes all memories in a namespace.
+func (r *MemoryRepo) HardDeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+	query := `DELETE FROM memories WHERE namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM memories WHERE namespace_id = $1`
+	}
+
+	_, err := r.db.Exec(ctx, query, namespaceID.String())
+	if err != nil {
+		return fmt.Errorf("memory hard delete by namespace: %w", err)
+	}
+	return nil
+}
+
 // ListExpired returns memories whose expires_at is before the given time and are not yet soft-deleted.
 func (r *MemoryRepo) ListExpired(ctx context.Context, before time.Time, limit int) ([]model.Memory, error) {
 	beforeStr := before.UTC().Format(time.RFC3339)

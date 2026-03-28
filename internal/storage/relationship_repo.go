@@ -237,6 +237,19 @@ func (r *RelationshipRepo) ListByEntity(ctx context.Context, entityID uuid.UUID)
 	return r.scanRelationships(rows)
 }
 
+// DeleteByNamespace deletes all relationships in a namespace.
+func (r *RelationshipRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+	query := `DELETE FROM relationships WHERE namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM relationships WHERE namespace_id = $1`
+	}
+	_, err := r.db.Exec(ctx, query, namespaceID.String())
+	if err != nil {
+		return fmt.Errorf("relationship delete by namespace: %w", err)
+	}
+	return nil
+}
+
 // DeleteBySourceMemory removes all relationships where source_memory matches the given memory ID.
 func (r *RelationshipRepo) DeleteBySourceMemory(ctx context.Context, memoryID uuid.UUID) error {
 	query := `DELETE FROM relationships WHERE source_memory = ?`

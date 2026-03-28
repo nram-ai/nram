@@ -214,16 +214,7 @@ func handleAdminUpdateProject(w http.ResponseWriter, r *http.Request, store Proj
 	writeJSON(w, http.StatusOK, project)
 }
 
-func handleAdminDeleteProject(w http.ResponseWriter, r *http.Request, store ProjectAdminStore, id uuid.UUID) {
-	err := store.DeleteProject(r.Context(), id)
-	if err != nil {
-		if isProjectNotFound(err) {
-			WriteError(w, ErrNotFound("project not found"))
-			return
-		}
-		WriteError(w, ErrInternal("failed to delete project"))
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
+func handleAdminDeleteProject(w http.ResponseWriter, _ *http.Request, _ ProjectAdminStore, _ uuid.UUID) {
+	// Project deletion is strictly self-service. Use DELETE /v1/me/projects/{id} instead.
+	WriteError(w, ErrForbidden("project deletion is self-service only — use DELETE /v1/me/projects/{id}"))
 }

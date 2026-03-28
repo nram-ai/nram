@@ -206,6 +206,31 @@ func (r *EntityRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID)
 	return r.scanEntities(rows)
 }
 
+// DeleteByNamespace deletes all entities in a namespace. Entity aliases are removed first
+// to satisfy foreign key constraints.
+func (r *EntityRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+	// Delete entity_aliases for entities in this namespace.
+	aliasQuery := `DELETE FROM entity_aliases WHERE entity_id IN (SELECT id FROM entities WHERE namespace_id = ?)`
+	if r.db.Backend() == BackendPostgres {
+		aliasQuery = `DELETE FROM entity_aliases WHERE entity_id IN (SELECT id FROM entities WHERE namespace_id = $1)`
+	}
+	_, err := r.db.Exec(ctx, aliasQuery, namespaceID.String())
+	if err != nil {
+		return fmt.Errorf("entity delete aliases by namespace: %w", err)
+	}
+
+	// Delete entities.
+	query := `DELETE FROM entities WHERE namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM entities WHERE namespace_id = $1`
+	}
+	_, err = r.db.Exec(ctx, query, namespaceID.String())
+	if err != nil {
+		return fmt.Errorf("entity delete by namespace: %w", err)
+	}
+	return nil
+}
+
 // DeleteOrphaned removes entities that have no relationships (neither as source nor target).
 // Returns the number of entities deleted.
 func (r *EntityRepo) DeleteOrphaned(ctx context.Context) (int64, error) {

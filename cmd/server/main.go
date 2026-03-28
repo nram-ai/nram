@@ -275,6 +275,13 @@ func main() {
 		ingestionLogRepo, tokenUsageRepo, enrichmentQueueRepo,
 		vectorStore, embedProvider,
 	)
+	projectDeleteSvc := service.NewProjectDeleteService(
+		projectRepo, projectRepo, memoryRepo, memoryRepo,
+		vectorStore, entityRepo, relationshipRepo,
+		relationshipRepo, lineageRepo, enrichmentQueueRepo,
+		tokenUsageRepo, tokenUsageRepo,
+		ingestionLogRepo, shareRepo, namespaceRepo, eventBus,
+	)
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo)
 	exportSvc := service.NewExportService(
 		memoryRepo, entityRepo, relationshipRepo, lineageRepo, projectRepo,
@@ -301,6 +308,7 @@ func main() {
 		BatchStore:    batchStoreSvc,
 		Enrich:        enrichSvc,
 		Export:        exportSvc,
+		ProjectDelete: projectDeleteSvc,
 		ProjectRepo:   projectRepo,
 		UserRepo:      userRepo,
 		NamespaceRepo: namespaceRepo,
@@ -411,6 +419,7 @@ func main() {
 		// User-scoped handlers
 		MeRecall:            api.NewMeRecallHandler(recallSvc, userRepo),
 		MeProjects:          api.NewMeProjectsHandler(projectRepo, userRepo, namespaceRepo),
+		MeProjectDelete:     api.NewMeProjectDeleteHandler(projectDeleteSvc, projectRepo, userRepo),
 		MeAPIKeys:           api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke:      api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
 		MeOAuthClients:      api.NewMeOAuthClientsHandler(oauthRepo),

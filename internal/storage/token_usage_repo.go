@@ -70,6 +70,19 @@ func (r *TokenUsageRepo) DeleteByMemoryID(ctx context.Context, memoryID uuid.UUI
 	return nil
 }
 
+// ReassignProject updates all token_usage records from one project to another.
+func (r *TokenUsageRepo) ReassignProject(ctx context.Context, fromProjectID, toProjectID uuid.UUID) error {
+	query := `UPDATE token_usage SET project_id = ? WHERE project_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE token_usage SET project_id = $1 WHERE project_id = $2`
+	}
+	_, err := r.db.Exec(ctx, query, toProjectID.String(), fromProjectID.String())
+	if err != nil {
+		return fmt.Errorf("token usage reassign project: %w", err)
+	}
+	return nil
+}
+
 // GetByID returns a token usage record by its UUID.
 func (r *TokenUsageRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.TokenUsage, error) {
 	query := selectTokenUsageColumns + ` FROM token_usage WHERE id = ?`

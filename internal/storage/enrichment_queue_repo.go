@@ -261,6 +261,19 @@ func (r *EnrichmentQueueRepo) DeleteByMemoryID(ctx context.Context, memoryID uui
 	return nil
 }
 
+// DeleteByNamespace deletes all enrichment queue entries for a namespace.
+func (r *EnrichmentQueueRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+	query := `DELETE FROM enrichment_queue WHERE namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM enrichment_queue WHERE namespace_id = $1`
+	}
+	_, err := r.db.Exec(ctx, query, namespaceID.String())
+	if err != nil {
+		return fmt.Errorf("enrichment queue delete by namespace: %w", err)
+	}
+	return nil
+}
+
 // GetByID returns an enrichment queue item by its UUID.
 func (r *EnrichmentQueueRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.EnrichmentJob, error) {
 	query := selectEnrichmentQueueColumns + ` FROM enrichment_queue WHERE id = ?`

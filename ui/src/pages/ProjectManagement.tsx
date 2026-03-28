@@ -627,7 +627,7 @@ function ProjectDetailPanel({
               {confirmDelete ? (
                 <>
                   <span className="text-sm text-red-600 dark:text-red-400">
-                    This will soft-delete all memories in this project. Continue?
+                    This will permanently delete all memories, vectors, entities, and relationships in this project. This action cannot be undone. Continue?
                   </span>
                   <button
                     type="button"

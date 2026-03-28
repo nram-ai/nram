@@ -16,6 +16,7 @@ const (
 	RelationshipExpired = "relationship.expired"
 	ConflictDetected   = "conflict.detected"
 	EnrichmentFailed   = "enrichment.failed"
+	ProjectDeleted     = "project.deleted"
 )
 
 // Event represents a single event in the system.

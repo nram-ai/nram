@@ -274,9 +274,10 @@ export function useUpdateProject() {
 export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => adminAPI.deleteProject(id),
+    mutationFn: (id: string) => meAPI.deleteProject(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "projects"] });
+      qc.invalidateQueries({ queryKey: ["me", "projects"] });
     },
   });
 }
