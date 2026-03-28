@@ -250,36 +250,34 @@ function GraphVisualization() {
   const { selectedProjectId, setSelectedProjectId } = useSelectedProject();
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
   const [containerSize, setContainerSize] = useState<{ width: number; height: number } | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const observerRef = useRef<ResizeObserver | null>(null);
   const graphRef = useRef<ForceGraphMethods | undefined>();
+
+  // Callback ref — fires when the container div mounts/unmounts
+  const containerRef = useCallback((el: HTMLDivElement | null) => {
+    // Clean up previous observer
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
+
+    if (!el) return;
+
+    const measure = () => {
+      setContainerSize({ width: el.offsetWidth, height: el.offsetHeight });
+    };
+
+    measure();
+
+    observerRef.current = new ResizeObserver(measure);
+    observerRef.current.observe(el);
+  }, []);
 
   useEffect(() => {
     if (!selectedProjectId && projects && projects.length > 0) {
       setSelectedProjectId(projects[0].id);
     }
   }, [projects, selectedProjectId, setSelectedProjectId]);
-
-  // Resize observer for container — measure with offsetWidth/Height for accuracy
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    const measure = () => {
-      setContainerSize({
-        width: el.offsetWidth,
-        height: el.offsetHeight,
-      });
-    };
-
-    // Immediate measurement
-    measure();
-
-    const observer = new ResizeObserver(() => {
-      measure();
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 
@@ -505,7 +503,7 @@ function GraphVisualization() {
         graphData &&
         graphData.entities &&
         graphData.entities.length > 0 && (
-          <div ref={containerRef} className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden" style={{ contain: "strict" }}>
+          <div ref={containerRef} className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden">
             {containerSize && <ForceGraph3D
               ref={graphRef}
               width={containerSize.width}
