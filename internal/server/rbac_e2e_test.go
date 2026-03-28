@@ -495,7 +495,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 		nil, nil, nil, nil, nil,
 	)
 
-	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil)
+	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil, nil)
 
 	updateSvc := service.NewUpdateService(
 		memRepo, projectLookup, &rbacLineageCreator{},
@@ -1224,6 +1224,10 @@ func (m *rbacLineageReader) ListByMemory(_ context.Context, _ uuid.UUID) ([]mode
 	return nil, nil
 }
 
+func (m *rbacLineageReader) IsChild(_ context.Context, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
+
 // rbacFullTestEnv builds a test env with all handlers wired up (List, Detail,
 // BatchGet, Export, Import, Enrich, Events) in addition to those in newRBACTestEnv.
 func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
@@ -1394,7 +1398,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		nil, nil, nil, nil, nil,
 	)
 
-	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil)
+	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil, nil)
 
 	updateSvc := service.NewUpdateService(
 		memRepo, projectLookup, &rbacLineageCreator{},
@@ -1419,7 +1423,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	)
 
 	enrichSvc := service.NewEnrichService(
-		memRepo, projectLookup, &rbacEnrichmentQueueRepo{},
+		memRepo, projectLookup, &rbacEnrichmentQueueRepo{}, &rbacLineageReader{},
 	)
 
 	// --- MCP server ---
@@ -1473,8 +1477,8 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		BulkForget: api.NewBulkForgetHandler(forgetSvc, nil),
 		BatchStore: api.NewBatchStoreHandler(batchStoreSvc, nil),
 		BatchGet:   api.NewBatchGetHandler(batchGetSvc),
-		List:       api.NewListHandler(countingMemRepo, projectLookup),
-		Detail:     api.NewDetailHandler(countingMemRepo, projectLookup),
+		List:       api.NewListHandler(countingMemRepo, projectLookup, nil),
+		Detail:     api.NewDetailHandler(countingMemRepo, projectLookup, nil),
 		Export:     api.NewExportHandler(exportSvc),
 		Import:     api.NewImportHandler(importSvc),
 		Enrich:     api.NewEnrichHandler(enrichSvc, nil),

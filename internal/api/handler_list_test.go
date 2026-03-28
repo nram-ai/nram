@@ -66,8 +66,8 @@ func (m *mockProjectGetter) GetByID(_ context.Context, id uuid.UUID) (*model.Pro
 
 func newListRouter(memRepo MemoryLister, projRepo ProjectGetter) *chi.Mux {
 	r := chi.NewRouter()
-	r.Get("/v1/projects/{project_id}/memories", NewListHandler(memRepo, projRepo))
-	r.Get("/v1/projects/{project_id}/memories/{id}", NewDetailHandler(memRepo, projRepo))
+	r.Get("/v1/projects/{project_id}/memories", NewListHandler(memRepo, projRepo, nil))
+	r.Get("/v1/projects/{project_id}/memories/{id}", NewDetailHandler(memRepo, projRepo, nil))
 	return r
 }
 

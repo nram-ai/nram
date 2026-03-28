@@ -269,6 +269,7 @@ func main() {
 	forgetSvc := service.NewForgetService(
 		memoryRepo, projectRepo, vectorStore,
 		relationshipRepo, lineageRepo, enrichmentQueueRepo, tokenUsageRepo,
+		lineageRepo,
 	)
 	batchGetSvc := service.NewBatchGetService(memoryRepo, projectRepo)
 	batchStoreSvc := service.NewBatchStoreService(
@@ -287,7 +288,7 @@ func main() {
 		tokenUsageRepo, tokenUsageRepo,
 		ingestionLogRepo, shareRepo, hnswDeleter, namespaceRepo, eventBus,
 	)
-	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo)
+	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)
 	exportSvc := service.NewExportService(
 		memoryRepo, entityRepo, relationshipRepo, lineageRepo, projectRepo,
 	)
@@ -410,8 +411,8 @@ func main() {
 
 		// Project-scoped memory handlers
 		Store:      api.NewStoreHandler(storeSvc, eventBus),
-		List:       api.NewListHandler(memoryRepo, projectRepo),
-		Detail:     api.NewDetailHandler(memoryRepo, projectRepo),
+		List:       api.NewListHandler(memoryRepo, projectRepo, lineageRepo),
+		Detail:     api.NewDetailHandler(memoryRepo, projectRepo, lineageRepo),
 		Update:     api.NewUpdateHandler(updateSvc, eventBus),
 		Delete:     api.NewDeleteHandler(forgetSvc, eventBus),
 		BatchStore: api.NewBatchStoreHandler(batchStoreSvc, eventBus),

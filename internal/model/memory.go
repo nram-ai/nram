@@ -26,6 +26,10 @@ type Memory struct {
 	UpdatedAt    time.Time       `json:"updated_at"`
 	DeletedAt    *time.Time      `json:"deleted_at"`
 	PurgeAfter   *time.Time      `json:"purge_after"`
+
+	// ParentID is populated by list/detail handlers from the lineage table.
+	// It is not stored in the memories table.
+	ParentID *uuid.UUID `json:"parent_id,omitempty"`
 }
 
 type SystemMeta struct {

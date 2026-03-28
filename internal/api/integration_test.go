@@ -703,7 +703,7 @@ func TestHTTP_ListMemories_Pagination(t *testing.T) {
 	projRepo := &mockProjectGetter{project: proj}
 
 	router := newIntegrationRouter(t, integrationRouterConfig{
-		list: NewListHandler(memRepo, projRepo),
+		list: NewListHandler(memRepo, projRepo, nil),
 	})
 
 	w := integrationRequest(t, router, http.MethodGet, "/v1/projects/"+projectID.String()+"/memories?limit=5&offset=10", nil, token)
@@ -751,7 +751,7 @@ func TestHTTP_ListMemories_DefaultPagination(t *testing.T) {
 	projRepo := &mockProjectGetter{project: proj}
 
 	router := newIntegrationRouter(t, integrationRouterConfig{
-		list: NewListHandler(memRepo, projRepo),
+		list: NewListHandler(memRepo, projRepo, nil),
 	})
 
 	w := integrationRequest(t, router, http.MethodGet, "/v1/projects/"+projectID.String()+"/memories", nil, token)
@@ -809,7 +809,7 @@ func TestHTTP_DetailMemory_Success(t *testing.T) {
 	projRepo := &mockProjectGetter{project: proj}
 
 	router := newIntegrationRouter(t, integrationRouterConfig{
-		detail: NewDetailHandler(memRepo, projRepo),
+		detail: NewDetailHandler(memRepo, projRepo, nil),
 	})
 
 	w := integrationRequest(t, router, http.MethodGet, "/v1/projects/"+projectID.String()+"/memories/"+memoryID.String(), nil, token)
@@ -846,7 +846,7 @@ func TestHTTP_DetailMemory_NotFound(t *testing.T) {
 	projRepo := &mockProjectGetter{project: proj}
 
 	router := newIntegrationRouter(t, integrationRouterConfig{
-		detail: NewDetailHandler(memRepo, projRepo),
+		detail: NewDetailHandler(memRepo, projRepo, nil),
 	})
 
 	w := integrationRequest(t, router, http.MethodGet, "/v1/projects/"+projectID.String()+"/memories/"+uuid.New().String(), nil, token)
@@ -1119,7 +1119,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 			token:      "", // no token
 			wantStatus: http.StatusUnauthorized,
 			wantCode:   "", // auth middleware uses http.Error, not JSON — skip code check
-			list:       NewListHandler(&mockMemoryLister{}, &mockProjectGetter{}),
+			list:       NewListHandler(&mockMemoryLister{}, &mockProjectGetter{}, nil),
 		},
 		{
 			name:       "detail not found 404",
@@ -1133,7 +1133,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 				getFn: func(_ context.Context, _ uuid.UUID) (*model.Memory, error) {
 					return nil, sql.ErrNoRows
 				},
-			}, &mockProjectGetter{project: &model.Project{ID: projectID, Slug: "t", NamespaceID: uuid.New()}}),
+			}, &mockProjectGetter{project: &model.Project{ID: projectID, Slug: "t", NamespaceID: uuid.New()}}, nil),
 		},
 	}
 

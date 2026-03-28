@@ -25,6 +25,12 @@ type ProjectGetter interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error)
 }
 
+// ParentIDFinder looks up parent memory IDs from the lineage table.
+type ParentIDFinder interface {
+	FindParentIDs(ctx context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	IsChild(ctx context.Context, memoryID uuid.UUID) (bool, error)
+}
+
 const (
 	defaultLimit = 50
 	maxLimit     = 200
@@ -32,7 +38,7 @@ const (
 
 // NewListHandler returns an http.HandlerFunc that serves
 // GET /v1/projects/{project_id}/memories with paginated results.
-func NewListHandler(memRepo MemoryLister, projRepo ProjectGetter) http.HandlerFunc {
+func NewListHandler(memRepo MemoryLister, projRepo ProjectGetter, lineage ParentIDFinder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projectIDStr := chi.URLParam(r, "project_id")
 		projectID, err := uuid.Parse(projectIDStr)
@@ -89,6 +95,22 @@ func NewListHandler(memRepo MemoryLister, projRepo ProjectGetter) http.HandlerFu
 			mems = []model.Memory{}
 		}
 
+		// Populate parent IDs from lineage table.
+		if lineage != nil && len(mems) > 0 {
+			ids := make([]uuid.UUID, len(mems))
+			for i := range mems {
+				ids[i] = mems[i].ID
+			}
+			if parentMap, err := lineage.FindParentIDs(r.Context(), ids); err == nil {
+				for i := range mems {
+					if pid, ok := parentMap[mems[i].ID]; ok {
+						pid := pid // copy for pointer
+						mems[i].ParentID = &pid
+					}
+				}
+			}
+		}
+
 		writeJSON(w, http.StatusOK, model.PaginatedResponse[model.Memory]{
 			Data: mems,
 			Pagination: model.Pagination{
@@ -102,7 +124,7 @@ func NewListHandler(memRepo MemoryLister, projRepo ProjectGetter) http.HandlerFu
 
 // NewDetailHandler returns an http.HandlerFunc that serves
 // GET /v1/projects/{project_id}/memories/{id} returning a single memory.
-func NewDetailHandler(memRepo MemoryLister, projRepo ProjectGetter) http.HandlerFunc {
+func NewDetailHandler(memRepo MemoryLister, projRepo ProjectGetter, lineage ParentIDFinder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projectIDStr := chi.URLParam(r, "project_id")
 		projectID, err := uuid.Parse(projectIDStr)
@@ -141,6 +163,17 @@ func NewDetailHandler(memRepo MemoryLister, projRepo ProjectGetter) http.Handler
 		if mem.NamespaceID != project.NamespaceID {
 			WriteError(w, ErrNotFound("memory not found"))
 			return
+		}
+
+		// Populate parent ID from lineage table.
+		if lineage != nil {
+			if isChild, err := lineage.IsChild(r.Context(), mem.ID); err == nil && isChild {
+				if parentMap, err := lineage.FindParentIDs(r.Context(), []uuid.UUID{mem.ID}); err == nil {
+					if pid, ok := parentMap[mem.ID]; ok {
+						mem.ParentID = &pid
+					}
+				}
+			}
 		}
 
 		writeJSON(w, http.StatusOK, mem)

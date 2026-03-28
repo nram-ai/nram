@@ -24,11 +24,17 @@ type EnrichResponse struct {
 	LatencyMs int64 `json:"latency_ms"`
 }
 
+// LineageChecker determines whether a memory is a child of another memory.
+type LineageChecker interface {
+	IsChild(ctx context.Context, memoryID uuid.UUID) (bool, error)
+}
+
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.
 type EnrichService struct {
 	memories        MemoryReader
 	projects        ProjectRepository
 	enrichmentQueue EnrichmentQueueRepository
+	lineage         LineageChecker
 }
 
 // NewEnrichService creates a new EnrichService with the given dependencies.
@@ -36,11 +42,13 @@ func NewEnrichService(
 	memories MemoryReader,
 	projects ProjectRepository,
 	enrichmentQueue EnrichmentQueueRepository,
+	lineage LineageChecker,
 ) *EnrichService {
 	return &EnrichService{
 		memories:        memories,
 		projects:        projects,
 		enrichmentQueue: enrichmentQueue,
+		lineage:         lineage,
 	}
 }
 
@@ -104,6 +112,13 @@ func (s *EnrichService) Enrich(ctx context.Context, req *EnrichRequest) (*Enrich
 	for i := range memories {
 		mem := &memories[i]
 		if mem.Enriched {
+			skipped++
+			continue
+		}
+
+		// Skip child memories — they are extracted facts and should not
+		// be enriched again to prevent recursive enrichment loops.
+		if isChild, err := s.lineage.IsChild(ctx, mem.ID); err == nil && isChild {
 			skipped++
 			continue
 		}

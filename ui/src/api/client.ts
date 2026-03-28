@@ -164,6 +164,7 @@ export interface Memory {
   updated_at: string;
   deleted_at?: string | null;
   purge_after?: string | null;
+  parent_id?: string | null;
 }
 
 export interface RecallResult {

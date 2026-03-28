@@ -124,7 +124,7 @@ func TestForget_SingleSoftDelete(t *testing.T) {
 	deleter.memories[memID] = makeMemory(memID, nsID, nil)
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil, nil)
 
 	resp, err := svc.Forget(context.Background(), &ForgetRequest{
 		ProjectID: projectID,
@@ -151,7 +151,7 @@ func TestForget_SingleHardDelete(t *testing.T) {
 	deleter.memories[memID] = makeMemory(memID, nsID, nil)
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil, nil)
 
 	resp, err := svc.Forget(context.Background(), &ForgetRequest{
 		ProjectID:  projectID,
@@ -177,7 +177,7 @@ func TestForget_HardDeleteRemovesFromVectorStore(t *testing.T) {
 
 	vectorDeleter := newMockVectorDeleter()
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(deleter, projects, vectorDeleter, nil, nil, nil, nil)
+	svc := NewForgetService(deleter, projects, vectorDeleter, nil, nil, nil, nil, nil)
 
 	resp, err := svc.Forget(context.Background(), &ForgetRequest{
 		ProjectID:  projectID,
@@ -208,7 +208,7 @@ func TestForget_BulkDelete(t *testing.T) {
 	deleter.memories[id3] = makeMemory(id3, nsID, nil)
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil, nil)
 
 	resp, err := svc.Forget(context.Background(), &ForgetRequest{
 		ProjectID: projectID,
@@ -245,7 +245,7 @@ func TestForget_TagBasedDelete(t *testing.T) {
 	deleter.nsList = []model.Memory{*mem1, *mem2, *mem3}
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil, nil)
 
 	// Delete all memories tagged "important".
 	resp, err := svc.Forget(context.Background(), &ForgetRequest{
@@ -271,7 +271,7 @@ func TestForget_TagBasedDelete(t *testing.T) {
 
 func TestForget_ProjectNotFound(t *testing.T) {
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{}}
-	svc := NewForgetService(newMockMemoryDeleter(), projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(newMockMemoryDeleter(), projects, nil, nil, nil, nil, nil, nil)
 
 	memID := uuid.New()
 	_, err := svc.Forget(context.Background(), &ForgetRequest{
@@ -294,7 +294,7 @@ func TestForget_MemoryNotFound_SkipsGracefully(t *testing.T) {
 	// missingID is not in the map
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil, nil)
 
 	resp, err := svc.Forget(context.Background(), &ForgetRequest{
 		ProjectID: projectID,
@@ -312,7 +312,7 @@ func TestForget_NoFilterProvided(t *testing.T) {
 	projectID, _, _, project := forgetTestFixtures()
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(newMockMemoryDeleter(), projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(newMockMemoryDeleter(), projects, nil, nil, nil, nil, nil, nil)
 
 	_, err := svc.Forget(context.Background(), &ForgetRequest{
 		ProjectID: projectID,
@@ -326,7 +326,7 @@ func TestForget_EmptyMemoryIDsList(t *testing.T) {
 	projectID, _, _, project := forgetTestFixtures()
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(newMockMemoryDeleter(), projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(newMockMemoryDeleter(), projects, nil, nil, nil, nil, nil, nil)
 
 	// Empty slice = no filter provided.
 	_, err := svc.Forget(context.Background(), &ForgetRequest{
@@ -345,7 +345,7 @@ func TestForget_LatencyTracked(t *testing.T) {
 	deleter.memories[memID] = makeMemory(memID, nsID, nil)
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil, nil)
 
 	resp, err := svc.Forget(context.Background(), &ForgetRequest{
 		ProjectID: projectID,
@@ -367,7 +367,7 @@ func TestForget_NilVectorStoreNoPanic(t *testing.T) {
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
 	// vectorStore is nil.
-	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil, nil)
 
 	resp, err := svc.Forget(context.Background(), &ForgetRequest{
 		ProjectID:  projectID,
@@ -395,7 +395,7 @@ func TestForget_MemoryWrongNamespace_Skipped(t *testing.T) {
 	deleter.memories[memID] = makeMemory(memID, otherNS, nil) // different namespace
 
 	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
-	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil)
+	svc := NewForgetService(deleter, projects, nil, nil, nil, nil, nil, nil)
 
 	resp, err := svc.Forget(context.Background(), &ForgetRequest{
 		ProjectID: projectID,

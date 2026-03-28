@@ -107,6 +107,83 @@ func (r *MemoryLineageRepo) FindConflicts(ctx context.Context, memoryID uuid.UUI
 	return r.scanLineages(rows)
 }
 
+// IsChild returns true if the given memory has a parent (i.e. it is a child
+// created by enrichment or another derivation process).
+func (r *MemoryLineageRepo) IsChild(ctx context.Context, memoryID uuid.UUID) (bool, error) {
+	query := `SELECT COUNT(*) FROM memory_lineage WHERE memory_id = ? AND parent_id IS NOT NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM memory_lineage WHERE memory_id = $1 AND parent_id IS NOT NULL`
+	}
+	var count int
+	err := r.db.QueryRow(ctx, query, memoryID.String()).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("lineage is child: %w", err)
+	}
+	return count > 0, nil
+}
+
+// FindChildIDs returns the memory IDs of all direct children of the given
+// parent memory.
+func (r *MemoryLineageRepo) FindChildIDs(ctx context.Context, parentID uuid.UUID) ([]uuid.UUID, error) {
+	query := `SELECT memory_id FROM memory_lineage WHERE parent_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT memory_id FROM memory_lineage WHERE parent_id = $1`
+	}
+	rows, err := r.db.Query(ctx, query, parentID.String())
+	if err != nil {
+		return nil, fmt.Errorf("lineage find child ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, fmt.Errorf("lineage find child ids scan: %w", err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("lineage find child ids parse: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("lineage find child ids iteration: %w", err)
+	}
+	return ids, nil
+}
+
+// FindParentIDs returns a map of memory_id → parent_id for all given memory IDs
+// that have a parent in the lineage table.
+func (r *MemoryLineageRepo) FindParentIDs(ctx context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	if len(memoryIDs) == 0 {
+		return nil, nil
+	}
+
+	result := make(map[uuid.UUID]uuid.UUID)
+
+	// Query individually to avoid placeholder generation complexity across backends.
+	query := `SELECT memory_id, parent_id FROM memory_lineage WHERE memory_id = ? AND parent_id IS NOT NULL LIMIT 1`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT memory_id, parent_id FROM memory_lineage WHERE memory_id = $1 AND parent_id IS NOT NULL LIMIT 1`
+	}
+
+	for _, id := range memoryIDs {
+		var memIDStr, parentIDStr string
+		err := r.db.QueryRow(ctx, query, id.String()).Scan(&memIDStr, &parentIDStr)
+		if err != nil {
+			continue // no parent or error — skip
+		}
+		memID, _ := uuid.Parse(memIDStr)
+		parentID, _ := uuid.Parse(parentIDStr)
+		if memID != uuid.Nil && parentID != uuid.Nil {
+			result[memID] = parentID
+		}
+	}
+
+	return result, nil
+}
+
 // DeleteByMemoryID removes all lineage records where the given memory is either
 // the child (memory_id) or the parent (parent_id).
 func (r *MemoryLineageRepo) DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error {

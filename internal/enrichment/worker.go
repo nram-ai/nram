@@ -401,7 +401,7 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 			Tags:        mergeTags(mem.Tags, fact.Tags),
 			Source:      mem.Source,
 			Importance:  0.5,
-			Enriched:    false,
+			Enriched:    true,
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
 		}

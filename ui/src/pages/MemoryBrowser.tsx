@@ -361,12 +361,14 @@ function MemoryCard({
   memory,
   score,
   isSelected,
+  isChild,
   onToggleSelect,
   onClick,
 }: {
   memory: Memory;
   score?: number;
   isSelected: boolean;
+  isChild?: boolean;
   onToggleSelect: () => void;
   onClick: () => void;
 }) {
@@ -374,7 +376,7 @@ function MemoryCard({
     <div
       className={`cursor-pointer rounded-lg border p-4 transition-colors hover:bg-accent/50 ${
         isSelected ? "border-primary bg-primary/5" : "bg-card"
-      }`}
+      } ${isChild ? "ml-8 border-l-4 border-l-muted-foreground/20" : ""}`}
       onClick={onClick}
     >
       <div className="flex items-start gap-3">
@@ -412,9 +414,14 @@ function MemoryCard({
           <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
             <span>{formatDate(memory.created_at)}</span>
             {memory.source && <span>Source: {memory.source}</span>}
-            {memory.enriched && (
+            {memory.enriched && !isChild && (
               <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 dark:bg-green-900 dark:text-green-300">
                 enriched
+              </span>
+            )}
+            {isChild && (
+              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                extracted fact
               </span>
             )}
           </div>
@@ -943,6 +950,27 @@ function MemoryBrowser() {
     ? recallQuery.error?.message
     : listQuery.error?.message;
 
+  // Group memories: parent memories at top level, children nested below.
+  // Children whose parent is not on the current page appear as standalone
+  // entries with a visual indicator.
+  const groupedMemories = useMemo(() => {
+    const parentIds = new Set(memories.filter((m) => !m.parent_id).map((m) => m.id));
+    const childrenByParent = new Map<string, Memory[]>();
+    const topLevel: Memory[] = [];
+
+    for (const m of memories) {
+      if (m.parent_id && parentIds.has(m.parent_id)) {
+        const list = childrenByParent.get(m.parent_id) ?? [];
+        list.push(m);
+        childrenByParent.set(m.parent_id, list);
+      } else {
+        topLevel.push(m);
+      }
+    }
+
+    return { topLevel, childrenByParent };
+  }, [memories]);
+
   // Available tags derived from loaded memories
   const availableTags = useMemo(() => {
     const tagSet = new Set<string>();
@@ -1169,15 +1197,28 @@ function MemoryBrowser() {
                 )}
               </div>
               <div className="flex-1 space-y-3 overflow-y-auto">
-                {memories.map((m) => (
-                  <MemoryCard
-                    key={m.id}
-                    memory={m}
-                    score={scoreMap.get(m.id)}
-                    isSelected={selectedIds.has(m.id)}
-                    onToggleSelect={() => toggleSelect(m.id)}
-                    onClick={() => setDetailMemoryId(m.id)}
-                  />
+                {groupedMemories.topLevel.map((m) => (
+                  <div key={m.id}>
+                    <MemoryCard
+                      memory={m}
+                      score={scoreMap.get(m.id)}
+                      isSelected={selectedIds.has(m.id)}
+                      isChild={!!m.parent_id}
+                      onToggleSelect={() => toggleSelect(m.id)}
+                      onClick={() => setDetailMemoryId(m.id)}
+                    />
+                    {(groupedMemories.childrenByParent.get(m.id) ?? []).map((child) => (
+                      <MemoryCard
+                        key={child.id}
+                        memory={child}
+                        score={scoreMap.get(child.id)}
+                        isSelected={selectedIds.has(child.id)}
+                        isChild
+                        onToggleSelect={() => toggleSelect(child.id)}
+                        onClick={() => setDetailMemoryId(child.id)}
+                      />
+                    ))}
+                  </div>
                 ))}
               </div>
 
