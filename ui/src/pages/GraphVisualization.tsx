@@ -406,16 +406,22 @@ function GraphVisualization() {
     if (!graphRef.current) return;
     const fg = graphRef.current;
 
-    // Light repulsion — just enough to prevent overlap
+    // Light repulsion — just enough to prevent overlap within clusters
     const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
     if (charge?.strength) {
-      charge.strength(-8);
+      charge.strength(-15);
     }
 
-    // Short link distance to keep clusters tight
+    // Short link distance for tight connected nodes
     const link = fg.d3Force("link") as unknown as { distance?: (v: number) => void } | undefined;
     if (link?.distance) {
-      link.distance(8);
+      link.distance(15);
+    }
+
+    // Stronger center gravity — pulls disconnected clusters closer together
+    const center = fg.d3Force("center") as unknown as { strength?: (v: number) => void } | undefined;
+    if (center?.strength) {
+      center.strength(1.5);
     }
   }, [graph3dData]);
 
