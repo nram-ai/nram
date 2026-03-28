@@ -136,20 +136,20 @@ function computeLayout(
     typeGroups[t].push(e);
   }
 
-  // Initialize: place type clusters in small arcs near center, with jitter
+  // Initialize: spread type clusters out with generous spacing
   const typeKeys = Object.keys(typeGroups);
-  const clusterRadius = Math.min(150, 40 + entities.length * 3);
+  const clusterRadius = 200 + entities.length * 6;
   typeKeys.forEach((type, ti) => {
     const clusterAngle = (2 * Math.PI * ti) / typeKeys.length;
     const cx = centerX + clusterRadius * Math.cos(clusterAngle);
     const cy = centerY + clusterRadius * Math.sin(clusterAngle);
     const group = typeGroups[type];
     group.forEach((e, ei) => {
-      const spread = Math.min(80, 20 + group.length * 8);
+      const spread = 60 + group.length * 15;
       const localAngle = (2 * Math.PI * ei) / group.length;
       positions[e.id] = {
-        x: cx + spread * Math.cos(localAngle) + (Math.random() - 0.5) * 20,
-        y: cy + spread * Math.sin(localAngle) + (Math.random() - 0.5) * 20,
+        x: cx + spread * Math.cos(localAngle) + (Math.random() - 0.5) * 30,
+        y: cy + spread * Math.sin(localAngle) + (Math.random() - 0.5) * 30,
       };
     });
   });
@@ -164,43 +164,21 @@ function computeLayout(
     }
   }
 
-  // Degree map for weighting
-  const degree: Record<string, number> = {};
-  for (const e of entities) degree[e.id] = adjacency[e.id].size;
-
-  // Force simulation — tighter, more organic
-  const iterations = 120;
-  const repulsionBase = 2000;
-  const attractionStrength = 0.06;
-  const idealLength = 120;
-  const centerGravity = 0.01;
-  const typeAttractionStrength = 0.002;
-  const maxDisplacement = 50;
-
-  // Precompute type centers for type-clustering force
-  function computeTypeCenters() {
-    const centers: Record<string, { x: number; y: number; count: number }> = {};
-    for (const e of entities) {
-      const t = e.entity_type.toLowerCase();
-      if (!centers[t]) centers[t] = { x: 0, y: 0, count: 0 };
-      centers[t].x += positions[e.id].x;
-      centers[t].y += positions[e.id].y;
-      centers[t].count++;
-    }
-    for (const t of Object.keys(centers)) {
-      centers[t].x /= centers[t].count;
-      centers[t].y /= centers[t].count;
-    }
-    return centers;
-  }
+  // Force simulation — spread out, no overlap, organic but readable
+  const iterations = 60;
+  const repulsionBase = 15000;
+  const attractionStrength = 0.02;
+  const idealLength = 280;
+  const centerGravity = 0.001;
+  const minNodeDist = 180; // hard minimum between node centers
 
   for (let iter = 0; iter < iterations; iter++) {
-    const temp = 1.0 - iter / iterations; // temperature annealing
+    const temp = 1.0 - iter / iterations;
     const forces: Record<string, { fx: number; fy: number }> = {};
     for (const e of entities) forces[e.id] = { fx: 0, fy: 0 };
 
-    // Repulsion between all pairs (scaled by temperature)
-    const repulsion = repulsionBase * (0.3 + 0.7 * temp);
+    // Repulsion between all pairs
+    const repulsion = repulsionBase * (0.4 + 0.6 * temp);
     for (let i = 0; i < entities.length; i++) {
       for (let j = i + 1; j < entities.length; j++) {
         const a = entities[i].id;
@@ -209,7 +187,15 @@ function computeLayout(
         const dy = positions[a].y - positions[b].y;
         const distSq = dx * dx + dy * dy;
         const dist = Math.max(Math.sqrt(distSq), 1);
-        const force = repulsion / distSq;
+
+        // Standard repulsion
+        let force = repulsion / distSq;
+
+        // Strong overlap push when nodes are too close
+        if (dist < minNodeDist) {
+          force += (minNodeDist - dist) * 2;
+        }
+
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
         forces[a].fx += fx;
@@ -219,22 +205,24 @@ function computeLayout(
       }
     }
 
-    // Attraction along edges
+    // Attraction along edges — only pull if beyond ideal length
     for (const r of relationships) {
       if (!positions[r.source_id] || !positions[r.target_id]) continue;
       const dx = positions[r.target_id].x - positions[r.source_id].x;
       const dy = positions[r.target_id].y - positions[r.source_id].y;
       const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-      const force = attractionStrength * (dist - idealLength);
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
-      forces[r.source_id].fx += fx;
-      forces[r.source_id].fy += fy;
-      forces[r.target_id].fx -= fx;
-      forces[r.target_id].fy -= fy;
+      if (dist > idealLength) {
+        const force = attractionStrength * (dist - idealLength);
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        forces[r.source_id].fx += fx;
+        forces[r.source_id].fy += fy;
+        forces[r.target_id].fx -= fx;
+        forces[r.target_id].fy -= fy;
+      }
     }
 
-    // Center gravity — pulls everything toward origin
+    // Very gentle center gravity — just prevents infinite drift
     for (const e of entities) {
       const dx = centerX - positions[e.id].x;
       const dy = centerY - positions[e.id].y;
@@ -242,23 +230,8 @@ function computeLayout(
       forces[e.id].fy += dy * centerGravity;
     }
 
-    // Type clustering — gentle pull toward type centroid
-    if (iter % 5 === 0 || iter < 10) {
-      const typeCenters = computeTypeCenters();
-      for (const e of entities) {
-        const t = e.entity_type.toLowerCase();
-        const tc = typeCenters[t];
-        if (tc && tc.count > 1) {
-          const dx = tc.x - positions[e.id].x;
-          const dy = tc.y - positions[e.id].y;
-          forces[e.id].fx += dx * typeAttractionStrength;
-          forces[e.id].fy += dy * typeAttractionStrength;
-        }
-      }
-    }
-
-    // Apply forces with temperature-based displacement cap
-    const cap = maxDisplacement * temp;
+    // Apply forces with displacement cap
+    const cap = 60 * (0.2 + 0.8 * temp);
     for (const e of entities) {
       let dx = forces[e.id].fx;
       let dy = forces[e.id].fy;
