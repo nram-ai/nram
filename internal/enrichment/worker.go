@@ -481,21 +481,34 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 			// Fallback: look up missing entities in the database — they may
 			// have been created by a prior enrichment job.
 			if !srcOK {
-				if ent, err := wp.resolveEntityByName(ctx, mem.NamespaceID, rel.Source); err == nil && ent != nil {
+				ent, err := wp.resolveEntityByName(ctx, mem.NamespaceID, rel.Source)
+				if err != nil {
+					slog.Warn("enrichment: fallback lookup error", "entity", rel.Source, "err", err)
+				} else if ent != nil {
 					srcID, srcOK = ent.ID, true
 					entityNameToID[rel.Source] = ent.ID
+					slog.Debug("enrichment: resolved entity from DB", "entity", rel.Source, "id", ent.ID)
+				} else {
+					slog.Debug("enrichment: entity not in batch or DB", "entity", rel.Source)
 				}
 			}
 			if !tgtOK {
-				if ent, err := wp.resolveEntityByName(ctx, mem.NamespaceID, rel.Target); err == nil && ent != nil {
+				ent, err := wp.resolveEntityByName(ctx, mem.NamespaceID, rel.Target)
+				if err != nil {
+					slog.Warn("enrichment: fallback lookup error", "entity", rel.Target, "err", err)
+				} else if ent != nil {
 					tgtID, tgtOK = ent.ID, true
 					entityNameToID[rel.Target] = ent.ID
+					slog.Debug("enrichment: resolved entity from DB", "entity", rel.Target, "id", ent.ID)
+				} else {
+					slog.Debug("enrichment: entity not in batch or DB", "entity", rel.Target)
 				}
 			}
 
 			if !srcOK || !tgtOK {
 				slog.Warn("enrichment: skip relationship, entity not found",
-					"source", rel.Source, "target", rel.Target)
+					"source", rel.Source, "srcResolved", srcOK,
+					"target", rel.Target, "tgtResolved", tgtOK)
 				continue
 			}
 			memID := mem.ID
