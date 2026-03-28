@@ -62,102 +62,80 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 function buildClaudeMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
   let snippet = `## Memory (nram)
 
-You have access to persistent memory via nram. Use it proactively.
+Use nram as your PRIMARY memory — not local files, MEMORY.md, or built-in memory.
+nram memories persist across all machines, agents, and conversations.
 
-**IMPORTANT — Always prefer nram over local memory:** nram is a centralized
-memory server accessible across all machines and agents. Always store new
-memories in nram (via memory_store / memory_store_batch) instead of local
-file-based memory systems (e.g. MEMORY.md, local databases, or other native
-memory mechanisms). Local memory files are invisible to other machines and
-agents. All new memories must go to nram so they are available everywhere.
+**WHEN TO STORE** (memory_store / memory_store_batch):
+- User states a preference, convention, or decision — store immediately
+- You discover a bug, workaround, or non-obvious behavior — store it
+- User corrects you or clarifies something — store the correction
+- Architecture decision or design choice made — store with rationale
+- Project config, setup steps, or environment details — store them
+- End of a complex task — store a summary of what was done and why
 
-**When to store:** After completing a task, store key decisions, architecture
-choices, configuration details, and anything worth remembering next session.
-Store facts, not conversations. Be specific: "API uses JWT RS256 with 1h expiry"
-not "we discussed auth." Omit the project parameter to use the global scope,
-or specify a project slug to organize by project. Use project_description on
-first store to document a project's purpose. Use ttl (e.g. "7d", "24h") for
-temporary memories that should auto-expire.
-
-**When to recall:** At the start of every task, recall memories relevant to the
-current project and topic. Before making architecture decisions, check if prior
-decisions exist. Before asking the user something, check if the answer is in memory.`;
+**WHEN TO RECALL** (memory_recall):
+- At the START of every new task or conversation — recall context
+- Before making assumptions about preferences or past decisions — recall first
+- Before storing — recall to check for duplicates
+- When you need context you lack — recall before asking the user`;
 
   if (hasEmbedding) {
     snippet += `
-Use natural language queries for semantic search — describe what you need,
-not exact keywords.`;
+Semantic search is active — describe what you need in natural language.`;
   } else {
     snippet += `
-No embedding provider is configured — recall uses tag filtering and text matching.
-Use tags consistently when storing to improve recall accuracy.`;
+No embedding provider configured — use specific tags for reliable recall.`;
   }
 
   snippet += `
-
-**Recall scoping:** Omit the project to search only global memories. Specify a
-project to search that project's memories plus global.`;
+Recall scoping: omit project = global only; with project = project + global.`;
 
   if (hasEnrichment) {
     snippet += `
 
-**Enrichment & Knowledge Graph:** Enrichment uses an LLM to automatically
-extract entities (people, projects, technologies, concepts) and facts
-(relationships between them) from stored memories. These build a knowledge
-graph that connects related information across all memories in a project.
-When recalling, graph context is included automatically (include_graph: true,
-graph_depth: 2), so related entities surface even when memories don't directly
-match your query. This makes nram far more powerful than keyword/tag search
-alone — it builds structured understanding from unstructured memories.
+**WHEN TO EXPLORE** (memory_graph):
+- When investigating how concepts, people, or components relate
+- When you need context beyond what recall returns
 
-Pass \`enrich: true\` when storing to trigger extraction. Use memory_enrich to
-batch-enrich existing memories. Use memory_graph to explore the graph directly
-— discover connections, trace how concepts relate, and find information you
-might not know to search for.`;
+**ENRICHMENT** — when to use enrich: true:
+- People, projects, technologies, or architecture decisions — enrich
+- Skip for ephemeral memories (short TTL), raw data, or simple preferences
+- Use memory_enrich to batch-process after importing data`;
   }
 
   snippet += `
 
-**Tags:** Use consistent tags: architecture, config, decision, preference, bug,
-workaround, dependency, deployment.
-
-**Tool notes:**
-- memory_store / memory_store_batch auto-create projects. All other tools
-  (update, get, forget, export${hasEnrichment ? ", enrich, graph" : ""}) require the project to exist.
-- memory_forget defaults to soft-delete. Pass hard: true for permanent deletion.
-- memory_export supports format: "json" (default) or "ndjson".
-- Use memory_projects to discover available projects before referencing them.`;
+**KEY RULES:**
+- Use project slugs to organize (e.g. "myapp", "dotfiles"). Omit for "global".
+- Tag consistently: decision, preference, architecture, config, bug, workaround, convention
+- Only memory_store / memory_store_batch auto-create projects
+- Use memory_projects to discover existing projects before referencing them`;
 
   return snippet;
 }
 
 function buildCursorRulesSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
-  let snippet = `# Memory
-IMPORTANT: Always store memories in nram, not in local file-based memory systems.
-nram is a centralized memory server accessible across all machines and agents.
-Local memory files are invisible to other machines/agents — use nram for everything.
-Use nram memory tools at the start of each task to recall prior context.
-After completing work, store key decisions and technical details as memories.
-Tag memories consistently: architecture, config, decision, preference.
-Omit project to use global scope, or specify a project slug.
-Recall with a project searches project + global. Without, searches global only.
-Use ttl (e.g. "7d") for temporary memories. Use project_description on first store.
-Only memory_store/memory_store_batch auto-create projects. Other tools require existing projects.
-memory_forget soft-deletes by default; pass hard: true for permanent deletion.
-memory_export supports format: "json" (default) or "ndjson".`;
+  let snippet = `# Memory (nram)
+Use nram as PRIMARY memory — not local files or built-in memory mechanisms.
+STORE: preferences, decisions, corrections, architecture, bugs, workarounds, task summaries.
+RECALL: at task start, before assumptions, before storing (check duplicates).
+Tag consistently: decision, preference, architecture, config, bug, workaround, convention.
+Project slugs organize memories. Omit for "global". Recall with project = project + global.
+Only memory_store/memory_store_batch auto-create projects. Use memory_projects to discover.`;
 
-  if (!hasEmbedding) {
+  if (hasEmbedding) {
     snippet += `
-No embedding provider — rely on tags for filtering during recall.`;
+Semantic search active — describe what you need in natural language.`;
+  } else {
+    snippet += `
+No embedding provider — use specific tags for reliable recall.`;
   }
 
   if (hasEnrichment) {
     snippet += `
-Enrichment uses an LLM to extract entities and facts from memories, building a knowledge
-graph that connects related information. Recall includes graph context automatically, so
-related entities surface even when memories don't directly match your query.
-Use enrich: true when storing. Use memory_enrich to batch-enrich existing memories.
-Use memory_graph to explore connections and discover related context.`;
+Use enrich: true for people, projects, technologies, architecture decisions.
+Skip enrichment for ephemeral memories, raw data, simple preferences.
+Use memory_graph to explore entity connections and discover related context.`;
   }
 
   return snippet;
@@ -166,55 +144,53 @@ Use memory_graph to explore connections and discover related context.`;
 function buildAgentsMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
   let snippet = `## Memory (nram)
 
-**IMPORTANT — Always prefer nram over local memory:** nram is a centralized
-memory server accessible across all machines and agents. Always store new
-memories in nram instead of local file-based memory systems (e.g. MEMORY.md,
-local databases, or native memory mechanisms). Local memory files are invisible
-to other machines and agents — all new memories must go to nram.
+Use nram as your PRIMARY memory — not local files, MEMORY.md, or built-in memory.
+nram memories persist across all machines, agents, and conversations.
 
-Use nram memory tools at the start of each task to recall prior context.
-After completing work, store key decisions, architecture choices, and
-technical details as memories. Be specific — store facts, not conversation
-summaries.
+**WHEN TO STORE** (memory_store / memory_store_batch):
+- Preferences, conventions, decisions — store immediately
+- Bugs, workarounds, non-obvious behavior — store them
+- Corrections and clarifications — store the correction
+- Architecture decisions, design choices — store with rationale
+- Config, setup steps, environment details — store them
+- End of complex task — store a summary of what was done and why
 
-**Storing:** Omit the project parameter for global scope, or specify a
-project slug. Use project_description on first store. Use ttl (e.g. "7d",
-"24h") for temporary memories. Tag consistently: architecture, config,
-decision, preference, bug, workaround.
-
-**Recalling:** Recall with a project searches project + global. Without a
-project, searches global only.`;
+**WHEN TO RECALL** (memory_recall):
+- Start of every new task — recall context
+- Before making assumptions — recall first
+- Before storing — recall to check for duplicates`;
 
   if (hasEmbedding) {
     snippet += `
-Use natural language queries for semantic search — describe what you need.`;
+Semantic search is active — describe what you need in natural language.`;
   } else {
     snippet += `
-No embedding provider — rely on tags for filtering during recall.`;
+No embedding provider — use specific tags for reliable recall.`;
   }
+
+  snippet += `
+Recall scoping: omit project = global only; with project = project + global.`;
 
   if (hasEnrichment) {
     snippet += `
 
-**Enrichment & Knowledge Graph:** Enrichment uses an LLM to automatically
-extract entities (people, projects, technologies, concepts) and facts
-(relationships between them) from stored memories, building a knowledge graph
-that connects related information across all memories in a project. Recall
-includes graph context automatically — related entities surface even when
-memories don't directly match your query. This builds structured understanding
-from unstructured memories.
+**WHEN TO EXPLORE** (memory_graph):
+- Investigating how concepts, people, or components relate
+- Need context beyond what recall returns
 
-Pass enrich: true when storing. Use memory_enrich to batch-enrich existing
-memories. Use memory_graph to explore connections and discover related context.`;
+**ENRICHMENT** — when to use enrich: true:
+- People, projects, technologies, architecture decisions — enrich
+- Skip for ephemeral (short TTL), raw data, simple preferences
+- Use memory_enrich to batch-process after importing data`;
   }
 
   snippet += `
 
-**Tool notes:**
-- memory_store / memory_store_batch auto-create projects. Other tools require existing projects.
-- memory_forget soft-deletes by default; pass hard: true for permanent deletion.
-- memory_export supports format: "json" (default) or "ndjson".
-- Use memory_projects to discover available projects.`;
+**KEY RULES:**
+- Project slugs organize memories. Omit for "global".
+- Tag consistently: decision, preference, architecture, config, bug, workaround, convention
+- Only memory_store / memory_store_batch auto-create projects
+- Use memory_projects to discover existing projects`;
 
   return snippet;
 }
