@@ -84,6 +84,15 @@ func (r *EntityRepo) Upsert(ctx context.Context, entity *model.Entity) error {
 		entity.Metadata = json.RawMessage(`{}`)
 	}
 
+	// Promote stub entities: if a "unknown"-typed stub exists for the same
+	// (namespace_id, canonical) and we now have a real type, update the stub's
+	// type in place so its ID (and any relationships attached to it) are kept.
+	if entity.EntityType != "unknown" {
+		if err := r.promoteStub(ctx, entity); err != nil {
+			return err
+		}
+	}
+
 	var embeddingDim interface{}
 	if entity.EmbeddingDim != nil {
 		embeddingDim = *entity.EmbeddingDim
@@ -123,6 +132,29 @@ func (r *EntityRepo) Upsert(ctx context.Context, entity *model.Entity) error {
 
 	// Reload to get the actual row (may have existing ID if conflict).
 	return r.reloadByCanonical(ctx, entity)
+}
+
+// promoteStub checks whether a stub entity (entity_type = 'unknown') exists
+// for the same (namespace_id, canonical). If so, it updates the stub's type
+// in place so the original ID and all attached relationships are preserved.
+func (r *EntityRepo) promoteStub(ctx context.Context, entity *model.Entity) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	query := `UPDATE entities SET entity_type = ?, name = ?, updated_at = ?
+		WHERE namespace_id = ? AND canonical = ? AND entity_type = 'unknown'`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE entities SET entity_type = $1, name = $2, updated_at = $3
+			WHERE namespace_id = $4 AND canonical = $5 AND entity_type = 'unknown'`
+	}
+
+	_, err := r.db.Exec(ctx, query,
+		entity.EntityType, entity.Name, now,
+		entity.NamespaceID.String(), entity.Canonical,
+	)
+	if err != nil {
+		return fmt.Errorf("entity promote stub: %w", err)
+	}
+	return nil
 }
 
 // FindBySimilarity finds entities with similar names in the same namespace.
