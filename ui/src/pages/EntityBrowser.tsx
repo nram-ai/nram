@@ -5,17 +5,17 @@ import { useSelectedProject } from "../context/ProjectContext";
 import type { GraphEntity } from "../api/client";
 
 const ENTITY_TYPE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  person: { bg: "#dbeafe", border: "#3b82f6", text: "#1e40af" },
-  organization: { bg: "#dcfce7", border: "#22c55e", text: "#166534" },
-  concept: { bg: "#fef3c7", border: "#f59e0b", text: "#92400e" },
-  location: { bg: "#fce7f3", border: "#ec4899", text: "#9d174d" },
-  event: { bg: "#e0e7ff", border: "#6366f1", text: "#3730a3" },
-  technology: { bg: "#f0fdf4", border: "#10b981", text: "#065f46" },
-  product: { bg: "#fff1f2", border: "#f43f5e", text: "#9f1239" },
-  tool: { bg: "#f5f3ff", border: "#8b5cf6", text: "#5b21b6" },
+  person: { bg: "#1e3a5f", border: "#60a5fa", text: "#bfdbfe" },
+  organization: { bg: "#14532d", border: "#4ade80", text: "#bbf7d0" },
+  concept: { bg: "#451a03", border: "#fbbf24", text: "#fef3c7" },
+  location: { bg: "#4a1942", border: "#f472b6", text: "#fce7f3" },
+  event: { bg: "#312e81", border: "#818cf8", text: "#e0e7ff" },
+  technology: { bg: "#064e3b", border: "#34d399", text: "#d1fae5" },
+  product: { bg: "#4c0519", border: "#fb7185", text: "#ffe4e6" },
+  tool: { bg: "#2e1065", border: "#a78bfa", text: "#ede9fe" },
 };
 
-const DEFAULT_COLOR = { bg: "#f3f4f6", border: "#9ca3af", text: "#374151" };
+const DEFAULT_COLOR = { bg: "#1f2937", border: "#6b7280", text: "#d1d5db" };
 
 function getEntityColor(entityType: string) {
   return ENTITY_TYPE_COLORS[entityType.toLowerCase()] || DEFAULT_COLOR;
