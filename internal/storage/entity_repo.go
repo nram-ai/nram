@@ -135,25 +135,104 @@ func (r *EntityRepo) Upsert(ctx context.Context, entity *model.Entity) error {
 }
 
 // promoteStub checks whether a stub entity (entity_type = 'unknown') exists
-// for the same (namespace_id, canonical). If so, it updates the stub's type
-// in place so the original ID and all attached relationships are preserved.
+// for the same (namespace_id, canonical). If the real type does NOT already
+// exist, the stub is promoted in place (type updated). If the real type DOES
+// already exist, the stub's relationships and aliases are reassigned to the
+// real entity and the stub is deleted.
 func (r *EntityRepo) promoteStub(ctx context.Context, entity *model.Entity) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	query := `UPDATE entities SET entity_type = ?, name = ?, updated_at = ?
+	// Find the stub.
+	stubQuery := selectEntityColumns + ` FROM entities
 		WHERE namespace_id = ? AND canonical = ? AND entity_type = 'unknown'`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE entities SET entity_type = $1, name = $2, updated_at = $3
-			WHERE namespace_id = $4 AND canonical = $5 AND entity_type = 'unknown'`
+		stubQuery = selectEntityColumns + ` FROM entities
+			WHERE namespace_id = $1 AND canonical = $2 AND entity_type = 'unknown'`
+	}
+	row := r.db.QueryRow(ctx, stubQuery, entity.NamespaceID.String(), entity.Canonical)
+	stub, err := r.scanEntity(row)
+	if err != nil {
+		// No stub exists — nothing to do.
+		return nil
 	}
 
-	_, err := r.db.Exec(ctx, query,
-		entity.EntityType, entity.Name, now,
-		entity.NamespaceID.String(), entity.Canonical,
-	)
-	if err != nil {
-		return fmt.Errorf("entity promote stub: %w", err)
+	// Check whether the real-typed entity already exists.
+	realQuery := selectEntityColumns + ` FROM entities
+		WHERE namespace_id = ? AND canonical = ? AND entity_type = ?`
+	if r.db.Backend() == BackendPostgres {
+		realQuery = selectEntityColumns + ` FROM entities
+			WHERE namespace_id = $1 AND canonical = $2 AND entity_type = $3`
 	}
+	row = r.db.QueryRow(ctx, realQuery, entity.NamespaceID.String(), entity.Canonical, entity.EntityType)
+	real, realErr := r.scanEntity(row)
+
+	if realErr != nil {
+		// Real entity doesn't exist — promote the stub in place.
+		now := time.Now().UTC().Format(time.RFC3339)
+		updateQuery := `UPDATE entities SET entity_type = ?, name = ?, updated_at = ?
+			WHERE id = ?`
+		if r.db.Backend() == BackendPostgres {
+			updateQuery = `UPDATE entities SET entity_type = $1, name = $2, updated_at = $3
+				WHERE id = $4`
+		}
+		_, err := r.db.Exec(ctx, updateQuery,
+			entity.EntityType, entity.Name, now, stub.ID.String(),
+		)
+		if err != nil {
+			return fmt.Errorf("entity promote stub: %w", err)
+		}
+		return nil
+	}
+
+	// Both stub and real entity exist — merge stub into the real entity.
+	stubID := stub.ID.String()
+	realID := real.ID.String()
+
+	// Reassign relationships (source_id).
+	srcQuery := `UPDATE relationships SET source_id = ? WHERE source_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		srcQuery = `UPDATE relationships SET source_id = $1 WHERE source_id = $2`
+	}
+	if _, err := r.db.Exec(ctx, srcQuery, realID, stubID); err != nil {
+		return fmt.Errorf("entity promote stub: reassign source relationships: %w", err)
+	}
+
+	// Reassign relationships (target_id).
+	tgtQuery := `UPDATE relationships SET target_id = ? WHERE target_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		tgtQuery = `UPDATE relationships SET target_id = $1 WHERE target_id = $2`
+	}
+	if _, err := r.db.Exec(ctx, tgtQuery, realID, stubID); err != nil {
+		return fmt.Errorf("entity promote stub: reassign target relationships: %w", err)
+	}
+
+	// Reassign aliases.
+	aliasQuery := `UPDATE entity_aliases SET entity_id = ? WHERE entity_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		aliasQuery = `UPDATE entity_aliases SET entity_id = $1 WHERE entity_id = $2`
+	}
+	if _, err := r.db.Exec(ctx, aliasQuery, realID, stubID); err != nil {
+		return fmt.Errorf("entity promote stub: reassign aliases: %w", err)
+	}
+
+	// Delete the stub.
+	delQuery := `DELETE FROM entities WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		delQuery = `DELETE FROM entities WHERE id = $1`
+	}
+	if _, err := r.db.Exec(ctx, delQuery, stubID); err != nil {
+		return fmt.Errorf("entity promote stub: delete stub: %w", err)
+	}
+
+	// Bump mention count on the real entity.
+	real.MentionCount += stub.MentionCount
+	now := time.Now().UTC().Format(time.RFC3339)
+	countQuery := `UPDATE entities SET mention_count = ?, updated_at = ? WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		countQuery = `UPDATE entities SET mention_count = $1, updated_at = $2 WHERE id = $3`
+	}
+	if _, err := r.db.Exec(ctx, countQuery, real.MentionCount, now, realID); err != nil {
+		return fmt.Errorf("entity promote stub: update mention count: %w", err)
+	}
+
 	return nil
 }
 
