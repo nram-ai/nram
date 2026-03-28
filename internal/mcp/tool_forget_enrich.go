@@ -22,7 +22,7 @@ func RegisterForgetEnrichTools(s *Server) {
 
 func registerMemoryForget(s *Server) {
 	tool := mcp.NewTool("memory_forget",
-		mcp.WithDescription("Forget (delete) one or more memories from a project."),
+		mcp.WithDescription("Delete memories that are outdated, incorrect, or superseded. Soft-deletes by default; use hard: true for permanent removal. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to forget")),
 		mcp.WithBoolean("hard", mcp.Description("Hard delete vs soft delete (default false)")),
@@ -35,7 +35,7 @@ func registerMemoryForget(s *Server) {
 
 func registerMemoryEnrich(s *Server) {
 	tool := mcp.NewTool("memory_enrich",
-		mcp.WithDescription("Queue enrichment for memories in a project."),
+		mcp.WithDescription("Extract entities and relationships from memories into the knowledge graph. Use after storing without enrich: true, or to batch-process a project. Omit IDs to enrich all un-enriched. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithArray("ids", mcp.Description("Specific memory IDs to enrich; omit to enrich all un-enriched")),
 	)

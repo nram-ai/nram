@@ -61,7 +61,7 @@ func RegisterGraphProjectsExportTools(s *Server) {
 
 func registerMemoryGraph(s *Server) {
 	tool := mcp.NewTool("memory_graph",
-		mcp.WithDescription("Explore the knowledge graph starting from an entity name or search query."),
+		mcp.WithDescription("Explore entity relationships in the knowledge graph. Use to discover how people, technologies, and concepts connect — especially when recall alone does not surface enough context."),
 		mcp.WithString("entity", mcp.Required(), mcp.Description("Entity name or search query")),
 		mcp.WithString("project", mcp.Description("Project slug to scope the search")),
 		mcp.WithNumber("depth", mcp.Description("Graph traversal depth (default 2)")),
@@ -75,7 +75,7 @@ func registerMemoryGraph(s *Server) {
 
 func registerMemoryProjects(s *Server) {
 	tool := mcp.NewTool("memory_projects",
-		mcp.WithDescription("List all projects for the authenticated user."),
+		mcp.WithDescription("List all available projects with slugs and descriptions. Use at the start of a session to discover what projects exist."),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -85,7 +85,7 @@ func registerMemoryProjects(s *Server) {
 
 func registerMemoryExport(s *Server) {
 	tool := mcp.NewTool("memory_export",
-		mcp.WithDescription("Export all data from a project in JSON or NDJSON format."),
+		mcp.WithDescription("Export all memories from a project for backup, migration, or analysis. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug to export (default: 'global')")),
 		mcp.WithString("format", mcp.Description("Export format: \"json\" or \"ndjson\" (default \"json\")")),
 	)

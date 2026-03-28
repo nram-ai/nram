@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nram-ai/nram/internal/storage"
@@ -154,6 +155,128 @@ func TestIsAllowedOrigin(t *testing.T) {
 		got := isAllowedOrigin(tt.origin, tt.host)
 		if got != tt.want {
 			t.Errorf("isAllowedOrigin(%q, %q) = %v, want %v", tt.origin, tt.host, got, tt.want)
+		}
+	}
+}
+
+func TestBuildInstructions_UnderSizeLimit(t *testing.T) {
+	// The full variant (both providers) must stay under 2000 bytes
+	// to avoid truncation by Claude Code and similar MCP clients.
+	full := buildInstructions(true, true)
+	if len(full) > 2000 {
+		t.Errorf("full instructions are %d bytes, must be under 2000", len(full))
+	}
+}
+
+func TestBuildInstructions_AllVariants(t *testing.T) {
+	tests := []struct {
+		name           string
+		hasEmbedding   bool
+		hasEnrichment  bool
+		mustContain    []string
+		mustNotContain []string
+	}{
+		{
+			name:          "both providers",
+			hasEmbedding:  true,
+			hasEnrichment: true,
+			mustContain: []string{
+				"WHEN TO STORE",
+				"WHEN TO RECALL",
+				"WHEN TO EXPLORE",
+				"ENRICHMENT",
+				"memory_graph",
+				"memory_enrich",
+				"Semantic search",
+				"nram://projects/{slug}/graph",
+			},
+			mustNotContain: []string{
+				"No embedding provider",
+				"use specific tags for reliable recall",
+			},
+		},
+		{
+			name:          "embedding only",
+			hasEmbedding:  true,
+			hasEnrichment: false,
+			mustContain: []string{
+				"WHEN TO STORE",
+				"WHEN TO RECALL",
+				"Semantic search",
+			},
+			mustNotContain: []string{
+				"WHEN TO EXPLORE",
+				"ENRICHMENT",
+				"memory_enrich",
+				"memory_graph",
+				"nram://projects/{slug}/graph",
+				"nram://projects/{slug}/entities",
+			},
+		},
+		{
+			name:          "enrichment only",
+			hasEmbedding:  false,
+			hasEnrichment: true,
+			mustContain: []string{
+				"WHEN TO STORE",
+				"WHEN TO RECALL",
+				"WHEN TO EXPLORE",
+				"ENRICHMENT",
+				"use specific tags for reliable recall",
+			},
+			mustNotContain: []string{
+				"Semantic search",
+			},
+		},
+		{
+			name:          "neither provider",
+			hasEmbedding:  false,
+			hasEnrichment: false,
+			mustContain: []string{
+				"WHEN TO STORE",
+				"WHEN TO RECALL",
+				"use specific tags for reliable recall",
+			},
+			mustNotContain: []string{
+				"WHEN TO EXPLORE",
+				"ENRICHMENT",
+				"Semantic search",
+				"memory_enrich",
+				"memory_graph",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildInstructions(tt.hasEmbedding, tt.hasEnrichment)
+			for _, s := range tt.mustContain {
+				if !strings.Contains(result, s) {
+					t.Errorf("expected instructions to contain %q", s)
+				}
+			}
+			for _, s := range tt.mustNotContain {
+				if strings.Contains(result, s) {
+					t.Errorf("expected instructions NOT to contain %q", s)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildInstructions_BehavioralTriggers(t *testing.T) {
+	full := buildInstructions(true, true)
+	triggers := []string{
+		"preference",
+		"decision",
+		"At the START",
+		"before making assumptions",
+		"recall to check for duplicates",
+		"store immediately",
+	}
+	for _, trigger := range triggers {
+		if !strings.Contains(full, trigger) {
+			t.Errorf("expected behavioral trigger %q in instructions", trigger)
 		}
 	}
 }

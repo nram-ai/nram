@@ -16,7 +16,7 @@ import (
 // RegisterRecallTool registers the memory_recall MCP tool on the given server.
 func RegisterRecallTool(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Recall memories matching a natural language query. When a project is specified, both that project's memories and global memories are searched. When omitted, only the global project is searched."),
+		mcp.WithDescription("Search persistent memory. ALWAYS recall at the start of a new task to load context. Recall before making assumptions and before storing to avoid duplicates. Use natural language queries. Specifying a project searches that project plus global; omitting searches global only."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Natural language query")),
 		mcp.WithString("project", mcp.Description("Project slug. Searches this project + global. Omit to search only the global project")),
 		mcp.WithNumber("limit", mcp.Description("Maximum results to return (default 10)")),

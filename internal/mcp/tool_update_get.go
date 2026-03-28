@@ -22,7 +22,7 @@ func RegisterUpdateGetTools(s *Server) {
 
 func registerMemoryUpdate(s *Server) {
 	tool := mcp.NewTool("memory_update",
-		mcp.WithDescription("Update an existing memory's content, tags, or metadata."),
+		mcp.WithDescription("Update an existing memory by ID. Use when information has changed or needs correction rather than storing a duplicate. Project must already exist."),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Memory ID to update")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithString("content", mcp.Description("New content (triggers re-embedding on Postgres)")),
@@ -37,7 +37,7 @@ func registerMemoryUpdate(s *Server) {
 
 func registerMemoryGet(s *Server) {
 	tool := mcp.NewTool("memory_get",
-		mcp.WithDescription("Retrieve one or more memories by ID."),
+		mcp.WithDescription("Retrieve specific memories by ID when you need the full content from a previous recall result. Project must already exist."),
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to retrieve")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 	)

@@ -23,7 +23,7 @@ func RegisterStoreTools(s *Server) {
 
 func registerMemoryStore(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store a memory in a project. The project is auto-created if it does not exist. Defaults to the 'global' project if omitted."),
+		mcp.WithDescription("Store important context to persistent memory. Use proactively: store preferences, decisions, corrections, architecture choices, bugs, workarounds, and task summaries without being asked. Project is auto-created on first use. Tag consistently for easy recall."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global'), auto-created if missing")),
 		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to store")),
@@ -43,7 +43,7 @@ func registerMemoryStore(s *Server) {
 
 func registerMemoryStoreBatch(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store multiple memories in a project in a single batch operation. Defaults to the 'global' project if omitted."),
+		mcp.WithDescription("Store multiple memories at once. Use when you have several related facts, decisions, or observations to persist. Each item needs its own content; they share the same project and TTL. Project is auto-created on first use."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
 		mcp.WithArray("items", mcp.Required(), mcp.Description("Array of objects with content (required), source, tags, metadata")),

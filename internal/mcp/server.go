@@ -94,169 +94,56 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 	var b strings.Builder
 
-	b.WriteString(`You have access to nram, a persistent memory layer. Use it to store and recall information across conversations.
+	b.WriteString(`You are connected to nram, your persistent memory system. Use it as your PRIMARY memory — not local files, MEMORY.md, or any built-in mechanism. Memories persist across all machines, agents, and conversations.
 
-IMPORTANT — Prefer nram over local memory:
-nram is a centralized memory server designed for cross-machine, cross-agent access.
-Always store new memories in nram rather than in local file-based memory systems
-(e.g. MEMORY.md files, local databases, or other native memory mechanisms).
-Local memory files are invisible to other machines and agents, which defeats the
-purpose of persistent, shared memory. When you would normally write to your local
-memory system, use nram's memory_store or memory_store_batch instead. If you have
-an existing local auto-memory system, you may still read from it, but all new
-memories should be stored in nram so they are accessible everywhere.
+WHEN TO STORE (memory_store / memory_store_batch):
+- User states a preference, convention, or decision → store immediately
+- You discover a bug, workaround, or non-obvious behavior → store it
+- User corrects you → store the correction
+- Architecture decision or design choice made → store with rationale
+- Project config, setup steps, or environment details → store them
+- End of a complex task → store a summary of what was done and why
 
-Key concepts:
-- Memories are organized into projects identified by slug. The "global" project is the default when project is omitted.
-- Projects are auto-created on first use by memory_store and memory_store_batch ONLY. All other tools require an existing project.
-- Use project_description when first storing to a project to describe its purpose. It sets the description on create or updates it if currently empty.
-- Use memory_projects to discover existing projects before storing.
-- Each memory has content (main text), optional tags (for filtering), and optional metadata (key-value pairs).
-- Memories support TTL (time-to-live) for automatic expiration, e.g. "24h", "7d", "30m".
-
-Tools:
-
-memory_store — Store a single memory.
-  project (optional, default "global", auto-created if missing)
-  project_description (optional, sets/updates project description)
-  content (required)
-  source (optional, origin identifier)
-  tags (optional, array of labels for filtering)
-  metadata (optional, arbitrary key-value object)
-  ttl (optional, e.g. "7d", "24h", "30m")`)
-
-	if hasEnrichment {
-		b.WriteString(`
-  enrich (optional, boolean, queues async entity/fact extraction)`)
-	}
-
-	b.WriteString(`
-
-memory_store_batch — Store multiple memories in one call.
-  project (optional, default "global", auto-created if missing)
-  project_description (optional)
-  items (required, array of {content, source, tags, metadata})
-  ttl (optional, applies to all items)`)
-
-	if hasEnrichment {
-		b.WriteString(`
-  enrich (optional, boolean, queues enrichment for all items)`)
-	}
-
-	b.WriteString(`
-
-memory_recall — Search memories.
-  query (required, natural language)
-  project (optional — omit to search global only; specify to search project + global)
-  limit (optional, default 10)
-  tags (optional, intersection filter: memory must have ALL specified tags)`)
+WHEN TO RECALL (memory_recall):
+- At the START of every new task or conversation → recall context
+- before making assumptions about preferences or past decisions → recall first
+- Before storing → recall to check for duplicates
+- When you need context you lack → recall before asking the user
+`)
 
 	if hasEmbedding {
-		b.WriteString(`
-  Semantic search is enabled — describe what you need rather than using exact keywords.`)
+		b.WriteString("Semantic search is active — describe what you need in natural language.\n")
 	} else {
-		b.WriteString(`
-  No embedding provider is configured — recall uses tag filtering and text matching. Use tags consistently.`)
+		b.WriteString("Note: No embedding provider configured — use specific tags for reliable recall.\n")
 	}
 
 	if hasEnrichment {
 		b.WriteString(`
-  include_graph (optional, default true — include related graph entities in results)
-  graph_depth (optional, default 2 — graph traversal depth)`)
+WHEN TO EXPLORE (memory_graph):
+- When investigating how concepts, people, or components relate
+- When you need context beyond what recall returns
+
+ENRICHMENT — when to use enrich: true:
+- People, projects, technologies, or architecture decisions → enrich
+- Skip for ephemeral memories (short TTL), raw data, or simple preferences
+- Use memory_enrich to batch-process after importing data
+`)
 	}
 
 	b.WriteString(`
-
-memory_update — Update an existing memory by ID. Project must already exist.
-  id (required)
-  project (optional, default "global")
-  content (optional, new content)
-  tags (optional, replaces tags)
-  metadata (optional, replaces metadata)
-
-memory_get — Retrieve memories by ID. Project must already exist.
-  ids (required, array of memory IDs)
-  project (optional, default "global")
-
-memory_forget — Soft-delete memories. Project must already exist.
-  ids (required, array of memory IDs)
-  project (optional, default "global")
-  hard (optional, boolean, permanent deletion — default false)
-
-memory_projects — List all projects with slugs and descriptions. No parameters.
-
-memory_export — Export all data from a project. Project must already exist.
-  project (optional, default "global")
-  format (optional, "json" or "ndjson", default "json")`)
-
-	if hasEnrichment {
-		b.WriteString(`
-
-Enrichment & Knowledge Graph:
-Enrichment uses an LLM to automatically extract entities (people, projects,
-technologies, concepts) and facts (relationships between entities) from stored
-memories. These are assembled into a knowledge graph that connects related
-information across all memories in a project. When recalling, graph context is
-automatically included (include_graph: true by default) — so even if a memory
-does not directly match your query, related entities and their connections
-surface relevant context. This makes nram far more powerful than keyword or tag
-search alone: it builds structured understanding from unstructured memories.
-Use memory_graph to explore the graph directly — discover connections, trace
-how concepts relate, and find information you might not know to search for.
-
-memory_enrich — Trigger entity/fact extraction. Project must already exist.
-  project (optional, default "global")
-  ids (optional, specific memory IDs — omit to enrich all un-enriched memories in the project)
-
-memory_graph — Explore the knowledge graph.
-  entity (required, entity name or search query)
-  project (optional, scopes to a project namespace)
-  depth (optional, default 2)
-  include_history (optional, default false — include expired/past relationships when true)`)
-	}
-
-	b.WriteString(`
-
-Tips:
-- ALWAYS prefer nram over local file-based memory — nram memories are accessible across all your machines and agents.
-- Use consistent, specific tags: architecture, config, decision, preference, bug, workaround.`)
-
-	if hasEmbedding {
-		b.WriteString(`
-- Use natural language queries for recall — describe what you need, not exact keywords.`)
-	} else {
-		b.WriteString(`
-- Without an embedding provider, rely on tags for precise filtering during recall.`)
-	}
-
-	b.WriteString(`
-- Store proactively: save preferences, decisions, and important context immediately.
-- Check for duplicates before storing — recall first.
-- Recall scoping: no project = global only; with project = project + global.`)
-
-	if hasEnrichment {
-		b.WriteString(`
-- Use enrich: true at store time, or batch-enrich later with memory_enrich.
-- Enrichment builds a knowledge graph — use memory_graph to explore entity connections and discover related context.`)
-	}
-
-	b.WriteString(`
-- Use memory_projects to discover available projects before referencing them.
-- Use project_description when creating projects to document their purpose.
-- Only memory_store and memory_store_batch auto-create projects. All other tools (update, get, forget, export, enrich, graph) require the project to exist.`)
-
-	if hasEnrichment {
-		b.WriteString(`
-
-Resources:
-- nram://projects — list all projects
-- nram://projects/{slug}/entities — list entities in a project
-- nram://projects/{slug}/graph — entity relationship graph for a project`)
-	} else {
-		b.WriteString(`
+KEY RULES:
+- Use project slugs to organize memories (e.g. "myapp", "dotfiles"). Omit for "global".
+- Tag consistently: decision, preference, architecture, config, bug, workaround, convention
+- Use memory_projects to discover existing projects before referencing them
+- Only memory_store and memory_store_batch auto-create projects
 
 Resources:
 - nram://projects — list all projects`)
+
+	if hasEnrichment {
+		b.WriteString(`
+- nram://projects/{slug}/entities — list entities in a project
+- nram://projects/{slug}/graph — entity relationship graph for a project`)
 	}
 
 	return b.String()
