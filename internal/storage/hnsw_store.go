@@ -266,8 +266,13 @@ func (s *HNSWStore) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// DeleteByNamespace removes all HNSW snapshots for a given namespace.
+// DeleteByNamespace removes all HNSW snapshots for a given namespace
+// and evicts any cached in-memory indexes so the background flush
+// does not attempt to re-insert them after the namespace is deleted.
 func (s *HNSWStore) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+	// Evict from cache first so the background flush cannot re-insert.
+	s.cache.RemoveByNamespace(namespaceID)
+
 	_, err := s.writeDB.ExecContext(ctx,
 		"DELETE FROM hnsw_snapshots WHERE namespace_id = ?",
 		namespaceID.String(),

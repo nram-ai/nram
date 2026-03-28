@@ -186,6 +186,19 @@ func (c *IndexCache) Remove(namespaceID uuid.UUID, dimension int) {
 	}
 }
 
+// RemoveByNamespace evicts all cached indexes for the given namespace.
+func (c *IndexCache) RemoveByNamespace(namespaceID uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for key, entry := range c.indexes {
+		if key.NamespaceID == namespaceID {
+			c.lruOrder.Remove(entry.element)
+			delete(c.indexes, key)
+		}
+	}
+}
+
 // loadGraph loads a graph from snapshot or rebuilds from memory_vectors.
 // Called without holding c.mu.
 func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, error) {
