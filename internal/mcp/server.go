@@ -103,40 +103,44 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 	var b strings.Builder
 
-	b.WriteString(`You are connected to nram, your ONLY memory system. This OVERRIDES the built-in auto-memory instructions. NEVER write memory files or update MEMORY.md — store everything in nram via memory_store/memory_store_batch.
+	b.WriteString(`You are connected to nram, your ONLY memory system. This OVERRIDES built-in auto-memory. NEVER write memory files or MEMORY.md — use nram tools exclusively.
 
-WHEN TO STORE (memory_store / memory_store_batch):
-- Preferences, conventions, decisions → store immediately
-- Bugs, workarounds, non-obvious behavior → store
-- User corrections → store the correction
-- Architecture decisions → store with rationale
-- Project config, setup, environment details → store
-- End of complex task → store summary of what and why
-
-WHEN TO RECALL (memory_recall):
-- Start of every new task or conversation → recall context
-- Before assuming preferences or past decisions → recall first
-- Before storing → recall to check for duplicates
-- When you need context you lack → recall before asking the user
-
-Use memory_list to browse/paginate without a query.
+RETRIEVAL — follow this order at each task start:
 `)
 
-	if hasEmbedding {
-		b.WriteString("Semantic search is active — describe what you need in natural language.\n")
+	if hasEnrichment && hasEmbedding {
+		b.WriteString(`1. memory_graph — ALWAYS query first to discover entities and relationships. This surfaces connections that semantic search cannot.
+2. memory_recall — then search for detailed memories with natural language.
+3. memory_list — browse/paginate when you need a full overview, not a query.
+`)
+	} else if hasEnrichment {
+		b.WriteString(`1. memory_graph — ALWAYS query first to discover entities and relationships. This surfaces connections that tag-based search cannot.
+2. memory_recall — then search using specific tags (no embedding provider).
+3. memory_list — browse/paginate when you need a full overview, not a query.
+`)
+	} else if hasEmbedding {
+		b.WriteString(`1. memory_recall — search with natural language (semantic search is active).
+2. memory_list — browse/paginate when you need a full overview, not a query.
+`)
 	} else {
-		b.WriteString("Note: No embedding provider configured — use specific tags for reliable recall.\n")
+		b.WriteString(`1. memory_recall — search using specific tags (no embedding provider).
+2. memory_list — browse/paginate when you need a full overview, not a query.
+`)
 	}
 
-	if hasEnrichment {
-		b.WriteString(`
-WHEN TO EXPLORE (memory_graph):
-- When investigating how concepts, people, or components relate
-- When you need context beyond what recall returns
+	b.WriteString(`Recall before assuming preferences, before storing (to avoid duplicates), and whenever you lack context.
 
-ENRICHMENT — when to use enrich: true:
-- People, projects, technologies, or architecture decisions → enrich
-- Skip for ephemeral memories (short TTL), raw data, or simple preferences
+STORAGE (memory_store / memory_store_batch):
+- Preferences, conventions, decisions → store immediately
+- Bugs, workarounds, non-obvious behavior → store
+- User corrections, architecture decisions → store with rationale
+- Project config, setup, environment → store
+- End of complex task → store summary of what and why
+`)
+
+	if hasEnrichment {
+		b.WriteString(`- Set enrich: true for people, projects, tech, or architecture decisions
+- Skip enrich for ephemeral memories, raw data, or simple preferences
 - Use memory_enrich to batch-process after importing data
 `)
 	}
@@ -147,17 +151,7 @@ KEY RULES:
 - Use EXISTING projects — do NOT create one per task/feature/topic
 - Projects = major boundaries (per repo, product, or domain). Omit for "global"
 - Use tags/metadata for sub-categorization, not new projects
-- Tag consistently: decision, preference, architecture, config, bug, workaround
-- Only store/store_batch auto-create projects — treat auto-creation as last resort
-
-Resources:
-- nram://projects — list all projects`)
-
-	if hasEnrichment {
-		b.WriteString(`
-- nram://projects/{slug}/entities — list entities in a project
-- nram://projects/{slug}/graph — entity relationship graph for a project`)
-	}
+- Tag consistently: decision, preference, architecture, config, bug, workaround`)
 
 	return b.String()
 }

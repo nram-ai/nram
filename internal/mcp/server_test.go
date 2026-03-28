@@ -204,18 +204,19 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			hasEmbedding:  true,
 			hasEnrichment: true,
 			mustContain: []string{
-				"WHEN TO STORE",
-				"WHEN TO RECALL",
-				"WHEN TO EXPLORE",
-				"ENRICHMENT",
+				"STORAGE",
+				"RETRIEVAL",
 				"memory_graph",
+				"ALWAYS query first",
+				"memory_recall",
+				"memory_list",
 				"memory_enrich",
-				"Semantic search",
-				"nram://projects/{slug}/graph",
+				"enrich: true",
 			},
 			mustNotContain: []string{
 				"No embedding provider",
-				"use specific tags for reliable recall",
+				"no embedding provider",
+				"specific tags",
 			},
 		},
 		{
@@ -223,17 +224,16 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			hasEmbedding:  true,
 			hasEnrichment: false,
 			mustContain: []string{
-				"WHEN TO STORE",
-				"WHEN TO RECALL",
-				"Semantic search",
+				"STORAGE",
+				"RETRIEVAL",
+				"memory_recall",
+				"memory_list",
+				"semantic search",
 			},
 			mustNotContain: []string{
-				"WHEN TO EXPLORE",
-				"ENRICHMENT",
-				"memory_enrich",
 				"memory_graph",
-				"nram://projects/{slug}/graph",
-				"nram://projects/{slug}/entities",
+				"memory_enrich",
+				"enrich: true",
 			},
 		},
 		{
@@ -241,14 +241,16 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			hasEmbedding:  false,
 			hasEnrichment: true,
 			mustContain: []string{
-				"WHEN TO STORE",
-				"WHEN TO RECALL",
-				"WHEN TO EXPLORE",
-				"ENRICHMENT",
-				"use specific tags for reliable recall",
+				"STORAGE",
+				"RETRIEVAL",
+				"memory_graph",
+				"ALWAYS query first",
+				"memory_recall",
+				"memory_enrich",
+				"specific tags",
 			},
 			mustNotContain: []string{
-				"Semantic search",
+				"semantic search",
 			},
 		},
 		{
@@ -256,16 +258,17 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			hasEmbedding:  false,
 			hasEnrichment: false,
 			mustContain: []string{
-				"WHEN TO STORE",
-				"WHEN TO RECALL",
-				"use specific tags for reliable recall",
+				"STORAGE",
+				"RETRIEVAL",
+				"memory_recall",
+				"memory_list",
+				"specific tags",
 			},
 			mustNotContain: []string{
-				"WHEN TO EXPLORE",
-				"ENRICHMENT",
-				"Semantic search",
-				"memory_enrich",
 				"memory_graph",
+				"memory_enrich",
+				"enrich: true",
+				"semantic search",
 			},
 		},
 	}
@@ -287,14 +290,32 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 	}
 }
 
+func TestBuildInstructions_RetrievalPrecedence(t *testing.T) {
+	// With enrichment: graph must come before recall, recall before list.
+	full := buildInstructions(true, true)
+	graphIdx := strings.Index(full, "memory_graph")
+	recallIdx := strings.Index(full, "memory_recall")
+	listIdx := strings.Index(full, "memory_list")
+
+	if graphIdx < 0 || recallIdx < 0 || listIdx < 0 {
+		t.Fatal("expected all three retrieval tools to be mentioned")
+	}
+	if graphIdx >= recallIdx {
+		t.Error("memory_graph must appear before memory_recall in retrieval order")
+	}
+	if recallIdx >= listIdx {
+		t.Error("memory_recall must appear before memory_list in retrieval order")
+	}
+}
+
 func TestBuildInstructions_BehavioralTriggers(t *testing.T) {
 	full := buildInstructions(true, true)
 	triggers := []string{
 		"preference",
 		"decision",
-		"Start of every new task",
-		"Before assuming preferences",
-		"recall to check for duplicates",
+		"each task start",
+		"before storing",
+		"avoid duplicates",
 		"store immediately",
 	}
 	for _, trigger := range triggers {
