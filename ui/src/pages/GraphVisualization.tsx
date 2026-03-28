@@ -403,28 +403,28 @@ function GraphVisualization() {
     if (!graphRef.current) return;
     const fg = graphRef.current;
 
-    // Increase charge repulsion for spacing
+    // Moderate charge — enough to not overlap, not so much they fly apart
     const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
     if (charge?.strength) {
-      charge.strength(-120);
+      charge.strength(-40);
     }
 
-    // Increase link distance
+    // Keep connected nodes at a readable but close distance
     const link = fg.d3Force("link") as unknown as { distance?: (v: number) => void } | undefined;
     if (link?.distance) {
-      link.distance(60);
+      link.distance(30);
     }
   }, [graph3dData]);
 
   const isLoading = projectsLoading || (selectedProjectId && graphLoading);
 
   return (
-    <div className="flex flex-col" style={{ height: "calc(100vh - 3rem)" }}>
-      <div className="flex items-center justify-between mb-4 shrink-0">
+    <div className="flex flex-col h-full" style={{ height: "calc(100vh - 3rem)" }}>
+      <div className="flex items-center justify-between mb-2 shrink-0">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Graph Visualization</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Explore entity relationships in 3D.
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Explore entity relationships in 3D. Drag to rotate, scroll to zoom.
           </p>
         </div>
 
@@ -545,16 +545,6 @@ function GraphVisualization() {
             )}
 
             <LegendPanel />
-
-            {/* Navigation hint */}
-            <div
-              className="absolute bottom-3 left-3 z-10 rounded-md px-3 py-1.5"
-              style={{ background: "rgba(15,17,23,0.7)", border: "1px solid #1e2030" }}
-            >
-              <span style={{ color: "#6b7280", fontSize: "10px" }}>
-                Drag to rotate · Scroll to zoom · Right-drag to pan · Click node to inspect
-              </span>
-            </div>
           </div>
         )}
     </div>
