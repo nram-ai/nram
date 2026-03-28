@@ -133,6 +133,10 @@ func (m *mockEntityUpserter) Upsert(_ context.Context, entity *model.Entity) err
 	return nil
 }
 
+func (m *mockEntityUpserter) FindBySimilarity(_ context.Context, _ uuid.UUID, _ string, _ string, _ int) ([]model.Entity, error) {
+	return nil, nil
+}
+
 type mockRelationshipCreator struct {
 	mu      sync.Mutex
 	created []*model.Relationship

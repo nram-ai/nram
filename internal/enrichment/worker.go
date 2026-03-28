@@ -47,9 +47,12 @@ type QueueClaimer interface {
 	Fail(ctx context.Context, id uuid.UUID, errMsg string) error
 }
 
-// EntityUpserter creates or updates an entity record.
+// EntityUpserter creates or updates an entity record and supports lookup
+// by name similarity so that relationship resolution can find entities
+// created by prior enrichment jobs.
 type EntityUpserter interface {
 	Upsert(ctx context.Context, entity *model.Entity) error
+	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
 }
 
 // RelationshipCreator persists a new relationship between entities.
@@ -474,6 +477,22 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 		for _, rel := range entResult.Relationships {
 			srcID, srcOK := entityNameToID[rel.Source]
 			tgtID, tgtOK := entityNameToID[rel.Target]
+
+			// Fallback: look up missing entities in the database — they may
+			// have been created by a prior enrichment job.
+			if !srcOK {
+				if ent, err := wp.resolveEntityByName(ctx, mem.NamespaceID, rel.Source); err == nil && ent != nil {
+					srcID, srcOK = ent.ID, true
+					entityNameToID[rel.Source] = ent.ID
+				}
+			}
+			if !tgtOK {
+				if ent, err := wp.resolveEntityByName(ctx, mem.NamespaceID, rel.Target); err == nil && ent != nil {
+					tgtID, tgtOK = ent.ID, true
+					entityNameToID[rel.Target] = ent.ID
+				}
+			}
+
 			if !srcOK || !tgtOK {
 				slog.Warn("enrichment: skip relationship, entity not found",
 					"source", rel.Source, "target", rel.Target)
@@ -519,6 +538,22 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 	}
 
 	return nil
+}
+
+// resolveEntityByName looks up an existing entity in the database by canonical
+// name within the given namespace. Returns nil if no exact match is found.
+func (wp *WorkerPool) resolveEntityByName(ctx context.Context, namespaceID uuid.UUID, name string) (*model.Entity, error) {
+	canonical := strings.ToLower(strings.TrimSpace(name))
+	similar, err := wp.entities.FindBySimilarity(ctx, namespaceID, canonical, "", 10)
+	if err != nil {
+		return nil, err
+	}
+	for i := range similar {
+		if similar[i].Canonical == canonical {
+			return &similar[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // ---------------------------------------------------------------------------
