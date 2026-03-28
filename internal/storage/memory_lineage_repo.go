@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -107,21 +108,6 @@ func (r *MemoryLineageRepo) FindConflicts(ctx context.Context, memoryID uuid.UUI
 	return r.scanLineages(rows)
 }
 
-// IsChild returns true if the given memory has a parent (i.e. it is a child
-// created by enrichment or another derivation process).
-func (r *MemoryLineageRepo) IsChild(ctx context.Context, memoryID uuid.UUID) (bool, error) {
-	query := `SELECT COUNT(*) FROM memory_lineage WHERE memory_id = ? AND parent_id IS NOT NULL`
-	if r.db.Backend() == BackendPostgres {
-		query = `SELECT COUNT(*) FROM memory_lineage WHERE memory_id = $1 AND parent_id IS NOT NULL`
-	}
-	var count int
-	err := r.db.QueryRow(ctx, query, memoryID.String()).Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("lineage is child: %w", err)
-	}
-	return count > 0, nil
-}
-
 // FindChildIDs returns the memory IDs of all direct children of the given
 // parent memory.
 func (r *MemoryLineageRepo) FindChildIDs(ctx context.Context, parentID uuid.UUID) ([]uuid.UUID, error) {
@@ -154,31 +140,53 @@ func (r *MemoryLineageRepo) FindChildIDs(ctx context.Context, parentID uuid.UUID
 }
 
 // FindParentIDs returns a map of memory_id → parent_id for all given memory IDs
-// that have a parent in the lineage table.
+// that have a parent in the lineage table. Uses a single batch query.
 func (r *MemoryLineageRepo) FindParentIDs(ctx context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
 	if len(memoryIDs) == 0 {
 		return nil, nil
 	}
 
-	result := make(map[uuid.UUID]uuid.UUID)
-
-	// Query individually to avoid placeholder generation complexity across backends.
-	query := `SELECT memory_id, parent_id FROM memory_lineage WHERE memory_id = ? AND parent_id IS NOT NULL LIMIT 1`
-	if r.db.Backend() == BackendPostgres {
-		query = `SELECT memory_id, parent_id FROM memory_lineage WHERE memory_id = $1 AND parent_id IS NOT NULL LIMIT 1`
+	// Build IN clause with appropriate placeholders.
+	placeholders := make([]string, len(memoryIDs))
+	args := make([]any, len(memoryIDs))
+	for i, id := range memoryIDs {
+		args[i] = id.String()
+		if r.db.Backend() == BackendPostgres {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+		} else {
+			placeholders[i] = "?"
+		}
 	}
 
-	for _, id := range memoryIDs {
+	query := fmt.Sprintf(
+		`SELECT memory_id, parent_id FROM memory_lineage WHERE memory_id IN (%s) AND parent_id IS NOT NULL`,
+		strings.Join(placeholders, ", "),
+	)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("lineage find parent ids: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID]uuid.UUID)
+	for rows.Next() {
 		var memIDStr, parentIDStr string
-		err := r.db.QueryRow(ctx, query, id.String()).Scan(&memIDStr, &parentIDStr)
+		if err := rows.Scan(&memIDStr, &parentIDStr); err != nil {
+			return nil, fmt.Errorf("lineage find parent ids scan: %w", err)
+		}
+		memID, err := uuid.Parse(memIDStr)
 		if err != nil {
-			continue // no parent or error — skip
+			return nil, fmt.Errorf("lineage find parent ids parse memory_id: %w", err)
 		}
-		memID, _ := uuid.Parse(memIDStr)
-		parentID, _ := uuid.Parse(parentIDStr)
-		if memID != uuid.Nil && parentID != uuid.Nil {
-			result[memID] = parentID
+		parentID, err := uuid.Parse(parentIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("lineage find parent ids parse parent_id: %w", err)
 		}
+		result[memID] = parentID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("lineage find parent ids iteration: %w", err)
 	}
 
 	return result, nil

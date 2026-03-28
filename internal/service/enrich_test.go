@@ -67,12 +67,22 @@ func (m *enrichQueueRepo) Enqueue(_ context.Context, item *model.EnrichmentJob) 
 	return nil
 }
 
-type enrichLineageChecker struct {
-	children map[uuid.UUID]bool
+type enrichLineageQuerier struct {
+	children map[uuid.UUID]uuid.UUID // child → parent
 }
 
-func (m *enrichLineageChecker) IsChild(_ context.Context, memoryID uuid.UUID) (bool, error) {
-	return m.children[memoryID], nil
+func (m *enrichLineageQuerier) FindParentIDs(_ context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	result := make(map[uuid.UUID]uuid.UUID)
+	for _, id := range memoryIDs {
+		if pid, ok := m.children[id]; ok {
+			result[id] = pid
+		}
+	}
+	return result, nil
+}
+
+func (m *enrichLineageQuerier) FindChildIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
 }
 
 // --- Test helpers ---
@@ -130,7 +140,7 @@ func TestEnrich_SpecificIDs_MixedEnriched(t *testing.T) {
 	}
 
 	queue := &enrichQueueRepo{}
-	svc := NewEnrichService(reader, projects, queue, &enrichLineageChecker{children: map[uuid.UUID]bool{}})
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
 
 	resp, err := svc.Enrich(context.Background(), &EnrichRequest{
 		ProjectID: projectID,
@@ -182,7 +192,7 @@ func TestEnrich_AllUnEnriched(t *testing.T) {
 	}
 
 	queue := &enrichQueueRepo{}
-	svc := NewEnrichService(reader, projects, queue, &enrichLineageChecker{children: map[uuid.UUID]bool{}})
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
 
 	resp, err := svc.Enrich(context.Background(), &EnrichRequest{
 		ProjectID: projectID,
@@ -217,7 +227,7 @@ func TestEnrich_AllAlreadyEnriched(t *testing.T) {
 	}
 
 	queue := &enrichQueueRepo{}
-	svc := NewEnrichService(reader, projects, queue, &enrichLineageChecker{children: map[uuid.UUID]bool{}})
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
 
 	resp, err := svc.Enrich(context.Background(), &EnrichRequest{
 		ProjectID: projectID,
@@ -245,7 +255,7 @@ func TestEnrich_ProjectNotFound(t *testing.T) {
 
 	reader := &enrichMemoryReader{}
 	queue := &enrichQueueRepo{}
-	svc := NewEnrichService(reader, projects, queue, &enrichLineageChecker{children: map[uuid.UUID]bool{}})
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
 
 	_, err := svc.Enrich(context.Background(), &EnrichRequest{
 		ProjectID: uuid.New(),
@@ -261,7 +271,7 @@ func TestEnrich_NoFilterError(t *testing.T) {
 
 	reader := &enrichMemoryReader{}
 	queue := &enrichQueueRepo{}
-	svc := NewEnrichService(reader, projects, queue, &enrichLineageChecker{children: map[uuid.UUID]bool{}})
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
 
 	_, err := svc.Enrich(context.Background(), &EnrichRequest{
 		ProjectID: projectID,
@@ -289,7 +299,7 @@ func TestEnrich_MemoriesInWrongNamespaceSkipped(t *testing.T) {
 	}
 
 	queue := &enrichQueueRepo{}
-	svc := NewEnrichService(reader, projects, queue, &enrichLineageChecker{children: map[uuid.UUID]bool{}})
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
 
 	resp, err := svc.Enrich(context.Background(), &EnrichRequest{
 		ProjectID: projectID,
@@ -322,7 +332,7 @@ func TestEnrich_LatencyTracked(t *testing.T) {
 	}
 
 	queue := &enrichQueueRepo{}
-	svc := NewEnrichService(reader, projects, queue, &enrichLineageChecker{children: map[uuid.UUID]bool{}})
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
 
 	resp, err := svc.Enrich(context.Background(), &EnrichRequest{
 		ProjectID: projectID,
@@ -341,7 +351,7 @@ func TestEnrich_ProjectIDRequired(t *testing.T) {
 	reader := &enrichMemoryReader{}
 	projects := &enrichProjectRepo{projects: map[uuid.UUID]*model.Project{}}
 	queue := &enrichQueueRepo{}
-	svc := NewEnrichService(reader, projects, queue, &enrichLineageChecker{children: map[uuid.UUID]bool{}})
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
 
 	_, err := svc.Enrich(context.Background(), &EnrichRequest{
 		All: true,

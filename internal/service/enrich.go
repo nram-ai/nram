@@ -24,9 +24,10 @@ type EnrichResponse struct {
 	LatencyMs int64 `json:"latency_ms"`
 }
 
-// LineageChecker determines whether a memory is a child of another memory.
-type LineageChecker interface {
-	IsChild(ctx context.Context, memoryID uuid.UUID) (bool, error)
+// LineageQuerier provides read-only lineage lookups used by multiple services.
+type LineageQuerier interface {
+	FindParentIDs(ctx context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	FindChildIDs(ctx context.Context, parentID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.
@@ -34,7 +35,7 @@ type EnrichService struct {
 	memories        MemoryReader
 	projects        ProjectRepository
 	enrichmentQueue EnrichmentQueueRepository
-	lineage         LineageChecker
+	lineage         LineageQuerier
 }
 
 // NewEnrichService creates a new EnrichService with the given dependencies.
@@ -42,7 +43,7 @@ func NewEnrichService(
 	memories MemoryReader,
 	projects ProjectRepository,
 	enrichmentQueue EnrichmentQueueRepository,
-	lineage LineageChecker,
+	lineage LineageQuerier,
 ) *EnrichService {
 	return &EnrichService{
 		memories:        memories,
@@ -104,21 +105,28 @@ func (s *EnrichService) Enrich(ctx context.Context, req *EnrichRequest) (*Enrich
 		}
 	}
 
-	// Enqueue un-enriched memories.
+	// Batch-lookup which memories are children to skip them.
+	childSet := make(map[uuid.UUID]bool)
+	if s.lineage != nil {
+		ids := make([]uuid.UUID, len(memories))
+		for i := range memories {
+			ids[i] = memories[i].ID
+		}
+		if parentMap, err := s.lineage.FindParentIDs(ctx, ids); err == nil {
+			for childID := range parentMap {
+				childSet[childID] = true
+			}
+		}
+	}
+
+	// Enqueue un-enriched, non-child memories.
 	queued := 0
 	skipped := 0
 	now := time.Now()
 
 	for i := range memories {
 		mem := &memories[i]
-		if mem.Enriched {
-			skipped++
-			continue
-		}
-
-		// Skip child memories — they are extracted facts and should not
-		// be enriched again to prevent recursive enrichment loops.
-		if isChild, err := s.lineage.IsChild(ctx, mem.ID); err == nil && isChild {
+		if mem.Enriched || childSet[mem.ID] {
 			skipped++
 			continue
 		}

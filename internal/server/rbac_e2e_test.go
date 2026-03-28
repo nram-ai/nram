@@ -1224,8 +1224,12 @@ func (m *rbacLineageReader) ListByMemory(_ context.Context, _ uuid.UUID) ([]mode
 	return nil, nil
 }
 
-func (m *rbacLineageReader) IsChild(_ context.Context, _ uuid.UUID) (bool, error) {
-	return false, nil
+func (m *rbacLineageReader) FindParentIDs(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	return nil, nil
+}
+
+func (m *rbacLineageReader) FindChildIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
 }
 
 // rbacFullTestEnv builds a test env with all handlers wired up (List, Detail,

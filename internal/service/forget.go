@@ -63,11 +63,6 @@ type ForgetResponse struct {
 	LatencyMs int64 `json:"latency_ms"`
 }
 
-// ChildFinder returns the IDs of direct child memories for a given parent.
-type ChildFinder interface {
-	FindChildIDs(ctx context.Context, parentID uuid.UUID) ([]uuid.UUID, error)
-}
-
 // ForgetService orchestrates memory deletion: soft delete, hard delete,
 // single ID delete, bulk delete, and filter-based delete.
 type ForgetService struct {
@@ -78,7 +73,7 @@ type ForgetService struct {
 	lineageCleaner       LineageCleaner
 	enrichmentCleaner    EnrichmentQueueCleaner
 	tokenUsageCleaner    TokenUsageCleaner
-	childFinder          ChildFinder
+	lineageQuerier       LineageQuerier
 }
 
 // NewForgetService creates a new ForgetService with the given dependencies.
@@ -90,7 +85,7 @@ func NewForgetService(
 	lineageCleaner LineageCleaner,
 	enrichmentCleaner EnrichmentQueueCleaner,
 	tokenUsageCleaner TokenUsageCleaner,
-	childFinder ChildFinder,
+	lineageQuerier LineageQuerier,
 ) *ForgetService {
 	return &ForgetService{
 		memories:            memories,
@@ -100,7 +95,7 @@ func NewForgetService(
 		lineageCleaner:      lineageCleaner,
 		enrichmentCleaner:   enrichmentCleaner,
 		tokenUsageCleaner:   tokenUsageCleaner,
-		childFinder:         childFinder,
+		lineageQuerier:      lineageQuerier,
 	}
 }
 
@@ -218,13 +213,12 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 	}
 
 	// Cascade: delete child memories (extracted facts) before the parent.
-	if s.childFinder != nil {
-		childIDs, err := s.childFinder.FindChildIDs(ctx, id)
+	if s.lineageQuerier != nil {
+		childIDs, err := s.lineageQuerier.FindChildIDs(ctx, id)
 		if err != nil {
 			log.Printf("cascade: find children for %s: %v", id, err)
 		}
 		for _, childID := range childIDs {
-			// Recursive call handles grandchildren and cleanup.
 			if _, err := s.deleteSingle(ctx, childID, namespaceID, hard); err != nil {
 				log.Printf("cascade: delete child %s of %s: %v", childID, id, err)
 			}

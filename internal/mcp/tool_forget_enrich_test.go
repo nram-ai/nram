@@ -90,10 +90,14 @@ func newMockForgetService(nsID uuid.UUID, memories map[uuid.UUID]*model.Memory) 
 	)
 }
 
-type mockLineageChecker struct{}
+type mockLineageQuerier struct{}
 
-func (m *mockLineageChecker) IsChild(_ context.Context, _ uuid.UUID) (bool, error) {
-	return false, nil
+func (m *mockLineageQuerier) FindParentIDs(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	return nil, nil
+}
+
+func (m *mockLineageQuerier) FindChildIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
 }
 
 func newMockEnrichService(nsID uuid.UUID, memories []model.Memory) *service.EnrichService {
@@ -102,7 +106,7 @@ func newMockEnrichService(nsID uuid.UUID, memories []model.Memory) *service.Enri
 		&mockEnrichMemoryReader{memories: memories},
 		&mockProjectLookup{project: &model.Project{ID: projectID, NamespaceID: nsID}},
 		&mockEnrichmentQueueRepo{},
-		&mockLineageChecker{},
+		&mockLineageQuerier{},
 	)
 }
 

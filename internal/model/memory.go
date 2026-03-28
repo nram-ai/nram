@@ -27,8 +27,7 @@ type Memory struct {
 	DeletedAt    *time.Time      `json:"deleted_at"`
 	PurgeAfter   *time.Time      `json:"purge_after"`
 
-	// ParentID is populated by list/detail handlers from the lineage table.
-	// It is not stored in the memories table.
+	// Derived from lineage table at read time; not persisted in memories table.
 	ParentID *uuid.UUID `json:"parent_id,omitempty"`
 }
 

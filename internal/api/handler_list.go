@@ -28,7 +28,6 @@ type ProjectGetter interface {
 // ParentIDFinder looks up parent memory IDs from the lineage table.
 type ParentIDFinder interface {
 	FindParentIDs(ctx context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
-	IsChild(ctx context.Context, memoryID uuid.UUID) (bool, error)
 }
 
 const (
@@ -167,11 +166,10 @@ func NewDetailHandler(memRepo MemoryLister, projRepo ProjectGetter, lineage Pare
 
 		// Populate parent ID from lineage table.
 		if lineage != nil {
-			if isChild, err := lineage.IsChild(r.Context(), mem.ID); err == nil && isChild {
-				if parentMap, err := lineage.FindParentIDs(r.Context(), []uuid.UUID{mem.ID}); err == nil {
-					if pid, ok := parentMap[mem.ID]; ok {
-						mem.ParentID = &pid
-					}
+			if parentMap, err := lineage.FindParentIDs(r.Context(), []uuid.UUID{mem.ID}); err == nil {
+				if pid, ok := parentMap[mem.ID]; ok {
+					pid := pid
+					mem.ParentID = &pid
 				}
 			}
 		}
