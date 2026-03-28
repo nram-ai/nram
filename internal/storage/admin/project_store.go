@@ -104,14 +104,4 @@ func (s *ProjectAdminStore) UpdateProject(ctx context.Context, id uuid.UUID, nam
 	return project, nil
 }
 
-func (s *ProjectAdminStore) DeleteProject(ctx context.Context, id uuid.UUID) error {
-	project, err := s.projectRepo.GetByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("project not found: %w", err)
-	}
-	if project.Slug == "global" {
-		return fmt.Errorf("the global project cannot be deleted")
-	}
-	return s.projectRepo.Delete(ctx, id)
-}
 

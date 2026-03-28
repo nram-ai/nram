@@ -812,9 +812,6 @@ export const adminAPI = {
     request<Project>("POST", "/admin/projects", data),
   updateProject: (id: string, data: ProjectUpdateRequest) =>
     request<Project>("PUT", `/admin/projects/${id}`, data),
-  deleteProject: (id: string) =>
-    request<void>("DELETE", `/admin/projects/${id}`),
-
   // Provider slots — backend returns { embedding: {...}, fact: {...}, entity: {...} }
   getProviderSlots: () =>
     request<ProviderConfigResponse>("GET", "/admin/providers").then((r) => {

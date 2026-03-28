@@ -530,7 +530,7 @@ describe("API Client E2E", () => {
     });
 
     it("deleteProject() removes the project", async () => {
-      const result = await adminAPI.deleteProject(createdProjectId);
+      const result = await meAPI.deleteProject(createdProjectId);
       expect(result).toBeUndefined();
     });
   });
@@ -554,7 +554,7 @@ describe("API Client E2E", () => {
 
     afterAll(async () => {
       try {
-        await adminAPI.deleteProject(memProjectId);
+        await meAPI.deleteProject(memProjectId);
       } catch {
         // ignore
       }
@@ -912,7 +912,7 @@ describe("API Client E2E", () => {
 
     afterAll(async () => {
       try {
-        await adminAPI.deleteProject(graphProjectId);
+        await meAPI.deleteProject(graphProjectId);
       } catch {
         // ignore
       }
@@ -1028,7 +1028,7 @@ describe("API Client E2E", () => {
       expect(typeof proj.id).toBe("string");
 
       // Cleanup
-      await adminAPI.deleteProject(proj.id);
+      await meAPI.deleteProject(proj.id);
     });
 
     it("listAPIKeys() returns array", async () => {

@@ -20,7 +20,6 @@ type ProjectAdminStore interface {
 	CreateProject(ctx context.Context, name, slug, description string, ownerNamespaceID uuid.UUID, defaultTags []string, settings json.RawMessage) (*model.Project, error)
 	GetProject(ctx context.Context, id uuid.UUID) (*model.Project, error)
 	UpdateProject(ctx context.Context, id uuid.UUID, name, slug, description string, defaultTags []string, settings json.RawMessage) (*model.Project, error)
-	DeleteProject(ctx context.Context, id uuid.UUID) error
 }
 
 // ProjectAdminConfig holds the dependencies for the admin projects handler.
@@ -86,8 +85,6 @@ func NewAdminProjectsHandler(cfg ProjectAdminConfig) http.HandlerFunc {
 			handleAdminGetProject(w, r, cfg.Store, id)
 		case http.MethodPut:
 			handleAdminUpdateProject(w, r, cfg.Store, id)
-		case http.MethodDelete:
-			handleAdminDeleteProject(w, r, cfg.Store, id)
 		default:
 			WriteError(w, ErrBadRequest("method not allowed"))
 		}
@@ -214,7 +211,3 @@ func handleAdminUpdateProject(w http.ResponseWriter, r *http.Request, store Proj
 	writeJSON(w, http.StatusOK, project)
 }
 
-func handleAdminDeleteProject(w http.ResponseWriter, _ *http.Request, _ ProjectAdminStore, _ uuid.UUID) {
-	// Project deletion is strictly self-service. Use DELETE /v1/me/projects/{id} instead.
-	WriteError(w, ErrForbidden("project deletion is self-service only — use DELETE /v1/me/projects/{id}"))
-}

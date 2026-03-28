@@ -22,7 +22,6 @@ type mockProjectAdminStore struct {
 	createProjectFunc func(ctx context.Context, name, slug, description string, ownerNamespaceID uuid.UUID, defaultTags []string, settings json.RawMessage) (*model.Project, error)
 	getProjectFunc    func(ctx context.Context, id uuid.UUID) (*model.Project, error)
 	updateProjectFunc func(ctx context.Context, id uuid.UUID, name, slug, description string, defaultTags []string, settings json.RawMessage) (*model.Project, error)
-	deleteProjectFunc func(ctx context.Context, id uuid.UUID) error
 }
 
 func (m *mockProjectAdminStore) CountProjects(ctx context.Context) (int, error) {
@@ -48,9 +47,6 @@ func (m *mockProjectAdminStore) UpdateProject(ctx context.Context, id uuid.UUID,
 	return m.updateProjectFunc(ctx, id, name, slug, description, defaultTags, settings)
 }
 
-func (m *mockProjectAdminStore) DeleteProject(ctx context.Context, id uuid.UUID) error {
-	return m.deleteProjectFunc(ctx, id)
-}
 
 // --- helpers ---
 
@@ -329,8 +325,8 @@ func TestAdminProjects_UpdateProject_NotFound(t *testing.T) {
 	}
 }
 
-func TestAdminProjects_DeleteProject_Forbidden(t *testing.T) {
-	// Admin delete endpoint now returns 403 — deletion is self-service only.
+func TestAdminProjects_DeleteProject_NotAllowed(t *testing.T) {
+	// Admin delete endpoint was removed — deletion is self-service only via /v1/me/projects/{id}.
 	projectID := uuid.New()
 
 	store := &mockProjectAdminStore{}
@@ -339,7 +335,7 @@ func TestAdminProjects_DeleteProject_Forbidden(t *testing.T) {
 	rec := httptest.NewRecorder()
 	adminProjectsHandler(store).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 (method not allowed), got %d", rec.Code)
 	}
 }

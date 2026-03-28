@@ -744,6 +744,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/me/projects/{id}:
+    delete:
+      operationId: meDeleteProject
+      tags: [User]
+      summary: Delete a project
+      description: >-
+        Permanently delete a project and all its memories, entities, relationships,
+        and vectors. Only the project owner can delete their own projects. The
+        'global' project cannot be deleted. Token usage records are preserved by
+        reassigning them to the global project.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: No Content
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Not the project owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /v1/me/api-keys:
     get:
       operationId: meListApiKeys
@@ -1794,18 +1825,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Project"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-    delete:
-      operationId: adminDeleteProject
-      tags: [Admin - Projects]
-      summary: Delete a project
-      parameters:
-        - $ref: "#/components/parameters/ResourceId"
-      responses:
-        "204":
-          description: Project deleted
         "404":
           $ref: "#/components/responses/NotFound"
 
