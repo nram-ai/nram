@@ -419,6 +419,7 @@ func main() {
 		// User-scoped handlers
 		MeRecall:            api.NewMeRecallHandler(recallSvc, userRepo),
 		MeProjects:          api.NewMeProjectsHandler(projectRepo, userRepo, namespaceRepo),
+		MeProjectItem:       api.NewMeProjectItemHandler(projectRepo, userRepo),
 		MeProjectDelete:     api.NewMeProjectDeleteHandler(projectDeleteSvc, projectRepo, userRepo),
 		MeAPIKeys:           api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke:      api.NewMeAPIKeyRevokeHandler(apiKeyRepo),

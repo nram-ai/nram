@@ -516,14 +516,14 @@ describe("API Client E2E", () => {
     });
 
     it("getProject() retrieves the created project", async () => {
-      const proj = await adminAPI.getProject(createdProjectId);
+      const proj = await meAPI.getProject(createdProjectId);
       expect(proj.id).toBe(createdProjectId);
       expect(proj.name).toBe("E2E Project");
       expect(proj.description).toBe("Integration test project");
     });
 
     it("updateProject() updates the project description", async () => {
-      const proj = await adminAPI.updateProject(createdProjectId, {
+      const proj = await meAPI.updateProject(createdProjectId, {
         description: "Updated description",
       });
       expect(proj.description).toBe("Updated description");
@@ -1335,7 +1335,7 @@ describe("API Client E2E", () => {
 
     it("404 for nonexistent project", async () => {
       try {
-        await adminAPI.getProject("00000000-0000-0000-0000-000000000000");
+        await meAPI.getProject("00000000-0000-0000-0000-000000000000");
         expect.fail("should have thrown");
       } catch (e) {
         expect(e).toBeInstanceOf(APIError);

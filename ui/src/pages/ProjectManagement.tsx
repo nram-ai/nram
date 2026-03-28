@@ -946,13 +946,15 @@ function ProjectManagement() {
         />
       )}
 
-      {/* Non-admin: open detail in read-only mode using data already in list */}
+      {/* Non-admin: open detail with delete option for own projects */}
       {detailProjectId && !auth.isAdmin && (() => {
         const proj = projects.find((p) => p.id === detailProjectId);
         return proj ? (
           <ProjectReadOnlyPanel
             project={proj}
+            canWrite={auth.canWrite}
             onClose={() => setDetailProjectId(null)}
+            onDeleted={() => setDetailProjectId(null)}
           />
         ) : null;
       })()}
@@ -969,11 +971,29 @@ function ProjectManagement() {
 
 function ProjectReadOnlyPanel({
   project,
+  canWrite,
   onClose,
+  onDeleted,
 }: {
   project: Project;
+  canWrite: boolean;
   onClose: () => void;
+  onDeleted: () => void;
 }) {
+  const deleteMut = useDeleteProject();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  function handleDelete() {
+    deleteMut.mutate(project.id, {
+      onSuccess: () => {
+        onDeleted();
+        onClose();
+      },
+    });
+  }
+
+  const canDelete = canWrite && project.slug !== "global";
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
@@ -1036,6 +1056,42 @@ function ProjectReadOnlyPanel({
               </div>
             )}
             <MCPConfigSnippet slug={project.slug} />
+
+            {canDelete && (
+              <div className="flex items-center gap-3 border-t pt-4">
+                <div className="flex-1" />
+                {confirmDelete ? (
+                  <>
+                    <span className="text-sm text-red-600 dark:text-red-400">
+                      This will permanently delete all memories, vectors, entities, and relationships in this project. This action cannot be undone. Continue?
+                    </span>
+                    <button
+                      type="button"
+                      className="rounded bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+                      onClick={handleDelete}
+                      disabled={deleteMut.isPending}
+                    >
+                      {deleteMut.isPending ? "Deleting..." : "Yes, Delete"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
+                      onClick={() => setConfirmDelete(false)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                    onClick={() => setConfirmDelete(true)}
+                  >
+                    Delete Project
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

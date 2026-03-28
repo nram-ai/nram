@@ -74,34 +74,5 @@ func (s *ProjectAdminStore) CreateProject(ctx context.Context, name, slug, descr
 	return project, nil
 }
 
-func (s *ProjectAdminStore) GetProject(ctx context.Context, id uuid.UUID) (*model.Project, error) {
-	return s.projectRepo.GetByID(ctx, id)
-}
-
-func (s *ProjectAdminStore) UpdateProject(ctx context.Context, id uuid.UUID, name, slug, description string, defaultTags []string, settings json.RawMessage) (*model.Project, error) {
-	project, err := s.projectRepo.GetByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	if name != "" {
-		project.Name = name
-	}
-	if slug != "" {
-		project.Slug = slug
-	}
-	project.Description = description
-	if defaultTags != nil {
-		project.DefaultTags = defaultTags
-	}
-	if settings != nil {
-		project.Settings = settings
-	}
-
-	if err := s.projectRepo.Update(ctx, project); err != nil {
-		return nil, err
-	}
-	return project, nil
-}
 
 

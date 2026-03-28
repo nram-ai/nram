@@ -243,8 +243,8 @@ export function useProjects() {
 
 export function useProject(id: string) {
   return useQuery({
-    queryKey: ["admin", "projects", id],
-    queryFn: () => adminAPI.getProject(id),
+    queryKey: ["me", "projects", id],
+    queryFn: () => meAPI.getProject(id),
     enabled: !!id,
   });
 }
@@ -263,10 +263,11 @@ export function useUpdateProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: ProjectUpdateRequest }) =>
-      adminAPI.updateProject(id, data),
+      meAPI.updateProject(id, data),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["admin", "projects"] });
-      qc.invalidateQueries({ queryKey: ["admin", "projects", vars.id] });
+      qc.invalidateQueries({ queryKey: ["me", "projects"] });
+      qc.invalidateQueries({ queryKey: ["me", "projects", vars.id] });
     },
   });
 }

@@ -206,6 +206,148 @@ func handleCreateProject(w http.ResponseWriter, r *http.Request, projects Projec
 	writeJSON(w, http.StatusCreated, project)
 }
 
+// ProjectItemStore defines operations needed by the self-service project item handler.
+type ProjectItemStore interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error)
+	Update(ctx context.Context, project *model.Project) error
+}
+
+// meUpdateProjectRequest is the JSON body for PUT /v1/me/projects/{id}.
+type meUpdateProjectRequest struct {
+	Name        string          `json:"name"`
+	Slug        string          `json:"slug"`
+	Description string          `json:"description"`
+	DefaultTags []string        `json:"default_tags"`
+	Settings    json.RawMessage `json:"settings"`
+}
+
+// NewMeProjectItemHandler returns an http.HandlerFunc that handles
+// GET /v1/me/projects/{id} and PUT /v1/me/projects/{id}.
+// Only the project owner can access their own projects.
+func NewMeProjectItemHandler(projects ProjectItemStore, users UserGetter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleMeGetProject(w, r, projects, users)
+		case http.MethodPut:
+			handleMeUpdateProject(w, r, projects, users)
+		default:
+			w.Header().Set("Allow", "GET, PUT")
+			WriteError(w, &APIError{
+				Code:    "method_not_allowed",
+				Message: "method not allowed",
+				Status:  http.StatusMethodNotAllowed,
+			})
+		}
+	}
+}
+
+func handleMeGetProject(w http.ResponseWriter, r *http.Request, projects ProjectItemStore, users UserGetter) {
+	ac := auth.FromContext(r.Context())
+	if ac == nil {
+		WriteError(w, ErrUnauthorized("authentication required"))
+		return
+	}
+
+	idStr := r.PathValue("id")
+	if idStr == "" {
+		idStr = chi.URLParam(r, "id")
+	}
+	projectID, err := uuid.Parse(idStr)
+	if err != nil {
+		WriteError(w, ErrBadRequest("invalid project id"))
+		return
+	}
+
+	user, err := users.GetByID(r.Context(), ac.UserID)
+	if err != nil {
+		WriteError(w, ErrInternal("failed to resolve user"))
+		return
+	}
+
+	project, err := projects.GetByID(r.Context(), projectID)
+	if err != nil {
+		WriteError(w, ErrNotFound("project not found"))
+		return
+	}
+
+	if project.OwnerNamespaceID != user.NamespaceID {
+		WriteError(w, ErrForbidden("you can only view your own projects"))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, project)
+}
+
+func handleMeUpdateProject(w http.ResponseWriter, r *http.Request, projects ProjectItemStore, users UserGetter) {
+	ac := auth.FromContext(r.Context())
+	if ac == nil {
+		WriteError(w, ErrUnauthorized("authentication required"))
+		return
+	}
+
+	idStr := r.PathValue("id")
+	if idStr == "" {
+		idStr = chi.URLParam(r, "id")
+	}
+	projectID, err := uuid.Parse(idStr)
+	if err != nil {
+		WriteError(w, ErrBadRequest("invalid project id"))
+		return
+	}
+
+	user, err := users.GetByID(r.Context(), ac.UserID)
+	if err != nil {
+		WriteError(w, ErrInternal("failed to resolve user"))
+		return
+	}
+
+	project, err := projects.GetByID(r.Context(), projectID)
+	if err != nil {
+		WriteError(w, ErrNotFound("project not found"))
+		return
+	}
+
+	if project.OwnerNamespaceID != user.NamespaceID {
+		WriteError(w, ErrForbidden("you can only update your own projects"))
+		return
+	}
+
+	var body meUpdateProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid request body: "+err.Error()))
+		return
+	}
+
+	if body.Name != "" {
+		project.Name = body.Name
+	}
+	if body.Slug != "" {
+		project.Slug = body.Slug
+	}
+	project.Description = body.Description
+	if body.DefaultTags != nil {
+		project.DefaultTags = body.DefaultTags
+	}
+	if body.Settings != nil {
+		project.Settings = body.Settings
+	}
+
+	if err := projects.Update(r.Context(), project); err != nil {
+		WriteError(w, ErrInternal("failed to update project"))
+		return
+	}
+
+	// Re-fetch to get updated timestamps and computed fields.
+	updated, err := projects.GetByID(r.Context(), projectID)
+	if err != nil {
+		WriteError(w, ErrInternal("failed to retrieve updated project"))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updated)
+}
+
 // ProjectDeleteServicer defines the interface for the project delete service.
 type ProjectDeleteServicer interface {
 	Delete(ctx context.Context, req *service.ProjectDeleteRequest) (*service.ProjectDeleteResponse, error)

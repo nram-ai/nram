@@ -807,11 +807,8 @@ export const adminAPI = {
 
   // Projects
   listProjects: () => request<{ data: Project[] }>("GET", "/admin/projects").then(r => r.data),
-  getProject: (id: string) => request<Project>("GET", `/admin/projects/${id}`),
   createProject: (data: AdminCreateProjectRequest) =>
     request<Project>("POST", "/admin/projects", data),
-  updateProject: (id: string, data: ProjectUpdateRequest) =>
-    request<Project>("PUT", `/admin/projects/${id}`, data),
   // Provider slots — backend returns { embedding: {...}, fact: {...}, entity: {...} }
   getProviderSlots: () =>
     request<ProviderConfigResponse>("GET", "/admin/providers").then((r) => {
@@ -1016,8 +1013,12 @@ export function changePassword(currentPassword: string, newPassword: string): Pr
 export const meAPI = {
   listProjects: () =>
     request<{ data: Project[] }>("GET", "/me/projects").then((r) => r.data),
+  getProject: (id: string) =>
+    request<Project>("GET", `/me/projects/${id}`),
   createProject: (data: MeCreateProjectRequest) =>
     request<Project>("POST", "/me/projects", data),
+  updateProject: (id: string, data: ProjectUpdateRequest) =>
+    request<Project>("PUT", `/me/projects/${id}`, data),
   deleteProject: (id: string) =>
     request<void>("DELETE", `/me/projects/${id}`),
 

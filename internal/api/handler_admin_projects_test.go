@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,8 +19,6 @@ type mockProjectAdminStore struct {
 	countProjectsFunc func(ctx context.Context) (int, error)
 	listProjectsFunc  func(ctx context.Context, limit, offset int) ([]model.Project, error)
 	createProjectFunc func(ctx context.Context, name, slug, description string, ownerNamespaceID uuid.UUID, defaultTags []string, settings json.RawMessage) (*model.Project, error)
-	getProjectFunc    func(ctx context.Context, id uuid.UUID) (*model.Project, error)
-	updateProjectFunc func(ctx context.Context, id uuid.UUID, name, slug, description string, defaultTags []string, settings json.RawMessage) (*model.Project, error)
 }
 
 func (m *mockProjectAdminStore) CountProjects(ctx context.Context) (int, error) {
@@ -37,14 +34,6 @@ func (m *mockProjectAdminStore) ListProjects(ctx context.Context, limit, offset 
 
 func (m *mockProjectAdminStore) CreateProject(ctx context.Context, name, slug, description string, ownerNamespaceID uuid.UUID, defaultTags []string, settings json.RawMessage) (*model.Project, error) {
 	return m.createProjectFunc(ctx, name, slug, description, ownerNamespaceID, defaultTags, settings)
-}
-
-func (m *mockProjectAdminStore) GetProject(ctx context.Context, id uuid.UUID) (*model.Project, error) {
-	return m.getProjectFunc(ctx, id)
-}
-
-func (m *mockProjectAdminStore) UpdateProject(ctx context.Context, id uuid.UUID, name, slug, description string, defaultTags []string, settings json.RawMessage) (*model.Project, error) {
-	return m.updateProjectFunc(ctx, id, name, slug, description, defaultTags, settings)
 }
 
 
@@ -215,127 +204,19 @@ func TestAdminProjects_CreateProject_MissingOwnerNamespaceID(t *testing.T) {
 	}
 }
 
-func TestAdminProjects_GetProject_Found(t *testing.T) {
-	project := newTestProject("Alpha", "alpha")
-
-	store := &mockProjectAdminStore{
-		getProjectFunc: func(_ context.Context, id uuid.UUID) (*model.Project, error) {
-			if id != project.ID {
-				t.Errorf("unexpected id: %v", id)
-			}
-			return &project, nil
-		},
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/projects/"+project.ID.String(), nil)
-	rec := httptest.NewRecorder()
-	adminProjectsHandler(store).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-
-	var resp model.Project
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if resp.ID != project.ID {
-		t.Errorf("expected id %v, got %v", project.ID, resp.ID)
-	}
-}
-
-func TestAdminProjects_GetProject_NotFound(t *testing.T) {
-	store := &mockProjectAdminStore{
-		getProjectFunc: func(_ context.Context, _ uuid.UUID) (*model.Project, error) {
-			return nil, sql.ErrNoRows
-		},
-	}
-
-	id := uuid.New()
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/projects/"+id.String(), nil)
-	rec := httptest.NewRecorder()
-	adminProjectsHandler(store).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", rec.Code)
-	}
-}
-
-func TestAdminProjects_GetProject_InvalidUUID(t *testing.T) {
+func TestAdminProjects_ItemRoutes_NotAllowed(t *testing.T) {
+	// All item routes (GET, PUT, DELETE on /projects/{id}) are no longer served
+	// by the admin handler — they return 400 method not allowed.
+	projectID := uuid.New()
 	store := &mockProjectAdminStore{}
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/projects/not-a-uuid", nil)
-	rec := httptest.NewRecorder()
-	adminProjectsHandler(store).ServeHTTP(rec, req)
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/v1/admin/projects/"+projectID.String(), nil)
+		rec := httptest.NewRecorder()
+		adminProjectsHandler(store).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
-	}
-}
-
-func TestAdminProjects_UpdateProject_Success(t *testing.T) {
-	projectID := uuid.New()
-	updated := newTestProject("Updated", "updated")
-	updated.ID = projectID
-
-	store := &mockProjectAdminStore{
-		updateProjectFunc: func(_ context.Context, id uuid.UUID, name, slug, description string, defaultTags []string, settings json.RawMessage) (*model.Project, error) {
-			if id != projectID {
-				t.Errorf("unexpected id: %v", id)
-			}
-			return &updated, nil
-		},
-	}
-
-	body := `{"name":"Updated","slug":"updated","description":"updated desc","default_tags":["go"],"settings":{"foo":"bar"}}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/admin/projects/"+projectID.String(), strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	adminProjectsHandler(store).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-
-	var resp model.Project
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if resp.Name != "Updated" {
-		t.Errorf("expected name 'Updated', got %q", resp.Name)
-	}
-}
-
-func TestAdminProjects_UpdateProject_NotFound(t *testing.T) {
-	store := &mockProjectAdminStore{
-		updateProjectFunc: func(_ context.Context, _ uuid.UUID, _, _, _ string, _ []string, _ json.RawMessage) (*model.Project, error) {
-			return nil, sql.ErrNoRows
-		},
-	}
-
-	id := uuid.New()
-	body := `{"name":"X","slug":"x"}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/admin/projects/"+id.String(), strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	adminProjectsHandler(store).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", rec.Code)
-	}
-}
-
-func TestAdminProjects_DeleteProject_NotAllowed(t *testing.T) {
-	// Admin delete endpoint was removed — deletion is self-service only via /v1/me/projects/{id}.
-	projectID := uuid.New()
-
-	store := &mockProjectAdminStore{}
-
-	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/projects/"+projectID.String(), nil)
-	rec := httptest.NewRecorder()
-	adminProjectsHandler(store).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 (method not allowed), got %d", rec.Code)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d", method, rec.Code)
+		}
 	}
 }

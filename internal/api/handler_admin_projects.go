@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,8 +16,6 @@ type ProjectAdminStore interface {
 	CountProjects(ctx context.Context) (int, error)
 	ListProjects(ctx context.Context, limit, offset int) ([]model.Project, error)
 	CreateProject(ctx context.Context, name, slug, description string, ownerNamespaceID uuid.UUID, defaultTags []string, settings json.RawMessage) (*model.Project, error)
-	GetProject(ctx context.Context, id uuid.UUID) (*model.Project, error)
-	UpdateProject(ctx context.Context, id uuid.UUID, name, slug, description string, defaultTags []string, settings json.RawMessage) (*model.Project, error)
 }
 
 // ProjectAdminConfig holds the dependencies for the admin projects handler.
@@ -35,15 +31,6 @@ type adminCreateProjectRequest struct {
 	OwnerNamespaceID string          `json:"owner_namespace_id"`
 	DefaultTags      []string        `json:"default_tags"`
 	Settings         json.RawMessage `json:"settings"`
-}
-
-// adminUpdateProjectRequest is the JSON body for PUT /v1/admin/projects/{id}.
-type adminUpdateProjectRequest struct {
-	Name        string          `json:"name"`
-	Slug        string          `json:"slug"`
-	Description string          `json:"description"`
-	DefaultTags []string        `json:"default_tags"`
-	Settings    json.RawMessage `json:"settings"`
 }
 
 // NewAdminProjectsHandler returns an http.HandlerFunc that handles admin
@@ -73,30 +60,10 @@ func NewAdminProjectsHandler(cfg ProjectAdminConfig) http.HandlerFunc {
 			return
 		}
 
-		// Item routes: GET, PUT, DELETE on /projects/{id}.
-		id, err := uuid.Parse(sub)
-		if err != nil {
-			WriteError(w, ErrBadRequest("invalid project id"))
-			return
-		}
-
-		switch r.Method {
-		case http.MethodGet:
-			handleAdminGetProject(w, r, cfg.Store, id)
-		case http.MethodPut:
-			handleAdminUpdateProject(w, r, cfg.Store, id)
-		default:
-			WriteError(w, ErrBadRequest("method not allowed"))
-		}
+		// Item routes are no longer served here — GET and PUT are self-service
+		// via /v1/me/projects/{id}. Admin delete was removed previously.
+		WriteError(w, ErrBadRequest("method not allowed"))
 	}
-}
-
-// isProjectNotFound returns true if the error represents a not-found condition.
-func isProjectNotFound(err error) bool {
-	if errors.Is(err, sql.ErrNoRows) {
-		return true
-	}
-	return strings.Contains(err.Error(), "not found")
 }
 
 func handleAdminListProjects(w http.ResponseWriter, r *http.Request, store ProjectAdminStore) {
@@ -175,39 +142,5 @@ func handleAdminCreateProject(w http.ResponseWriter, r *http.Request, store Proj
 	}
 
 	writeJSON(w, http.StatusCreated, project)
-}
-
-func handleAdminGetProject(w http.ResponseWriter, r *http.Request, store ProjectAdminStore, id uuid.UUID) {
-	project, err := store.GetProject(r.Context(), id)
-	if err != nil {
-		if isProjectNotFound(err) {
-			WriteError(w, ErrNotFound("project not found"))
-			return
-		}
-		WriteError(w, ErrInternal("failed to get project"))
-		return
-	}
-
-	writeJSON(w, http.StatusOK, project)
-}
-
-func handleAdminUpdateProject(w http.ResponseWriter, r *http.Request, store ProjectAdminStore, id uuid.UUID) {
-	var body adminUpdateProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		WriteError(w, ErrBadRequest("invalid request body"))
-		return
-	}
-
-	project, err := store.UpdateProject(r.Context(), id, body.Name, body.Slug, body.Description, body.DefaultTags, body.Settings)
-	if err != nil {
-		if isProjectNotFound(err) {
-			WriteError(w, ErrNotFound("project not found"))
-			return
-		}
-		WriteError(w, ErrInternal("failed to update project"))
-		return
-	}
-
-	writeJSON(w, http.StatusOK, project)
 }
 
