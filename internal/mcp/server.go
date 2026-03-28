@@ -96,19 +96,19 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 	var b strings.Builder
 
-	b.WriteString(`You are connected to nram, your persistent memory system. Use it as your PRIMARY memory — not local files, MEMORY.md, or any built-in mechanism. Memories persist across all machines, agents, and conversations.
+	b.WriteString(`You are connected to nram, your persistent memory system. Use it as PRIMARY memory — not local files or MEMORY.md. Memories persist across all machines, agents, and conversations.
 
 WHEN TO STORE (memory_store / memory_store_batch):
-- User states a preference, convention, or decision → store immediately
-- You discover a bug, workaround, or non-obvious behavior → store it
-- User corrects you → store the correction
-- Architecture decision or design choice made → store with rationale
-- Project config, setup steps, or environment details → store them
-- End of a complex task → store a summary of what was done and why
+- Preferences, conventions, decisions → store immediately
+- Bugs, workarounds, non-obvious behavior → store
+- User corrections → store the correction
+- Architecture decisions → store with rationale
+- Project config, setup, environment details → store
+- End of complex task → store summary of what and why
 
 WHEN TO RECALL (memory_recall):
-- At the START of every new task or conversation → recall context
-- before making assumptions about preferences or past decisions → recall first
+- Start of every new task or conversation → recall context
+- Before assuming preferences or past decisions → recall first
 - Before storing → recall to check for duplicates
 - When you need context you lack → recall before asking the user
 `)
@@ -135,11 +135,11 @@ ENRICHMENT — when to use enrich: true:
 	b.WriteString(`
 KEY RULES:
 - ALWAYS call memory_projects first to discover existing projects before storing
-- Use an EXISTING project whenever one fits. Do NOT create a new project for each task, feature, or topic
-- Projects are for major boundaries (one per repo, product, or domain — e.g. "myapp", "dotfiles"). Omit for "global"
-- Use tags and metadata for sub-categorization within a project, not new projects
-- Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- Only memory_store and memory_store_batch auto-create projects — treat auto-creation as a last resort
+- Use EXISTING projects — do NOT create one per task/feature/topic
+- Projects = major boundaries (per repo, product, or domain). Omit for "global"
+- Use tags/metadata for sub-categorization, not new projects
+- Tag consistently: decision, preference, architecture, config, bug, workaround
+- Only store/store_batch auto-create projects — treat auto-creation as last resort
 
 Resources:
 - nram://projects — list all projects`)

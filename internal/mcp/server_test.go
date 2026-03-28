@@ -160,11 +160,34 @@ func TestIsAllowedOrigin(t *testing.T) {
 }
 
 func TestBuildInstructions_UnderSizeLimit(t *testing.T) {
-	// The full variant (both providers) must stay under 2000 bytes
-	// to avoid truncation by Claude Code and similar MCP clients.
+	// Claude Code truncates server instructions at 2048 characters.
+	// The full variant (both providers) is the longest and must fit.
+	const maxChars = 2048
+
 	full := buildInstructions(true, true)
-	if len(full) > 2000 {
-		t.Errorf("full instructions are %d bytes, must be under 2000", len(full))
+	if len(full) > maxChars {
+		t.Errorf("full instructions are %d chars, must be under %d (over by %d)",
+			len(full), maxChars, len(full)-maxChars)
+	}
+}
+
+func TestToolDescriptions_UnderSizeLimit(t *testing.T) {
+	// Claude Desktop truncates individual tool descriptions at 2048 bytes.
+	// Test both backends since Postgres registers additional tools.
+	const maxDescBytes = 2048
+
+	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
+		deps := Dependencies{Backend: backend}
+		srv := NewServer(deps)
+		tools := srv.MCPServer().ListTools()
+
+		for name, st := range tools {
+			desc := st.Tool.Description
+			if len(desc) > maxDescBytes {
+				t.Errorf("[%s] tool %q description is %d bytes, must be under %d",
+					backend, name, len(desc), maxDescBytes)
+			}
+		}
 	}
 }
 
@@ -269,8 +292,8 @@ func TestBuildInstructions_BehavioralTriggers(t *testing.T) {
 	triggers := []string{
 		"preference",
 		"decision",
-		"At the START",
-		"before making assumptions",
+		"Start of every new task",
+		"Before assuming preferences",
 		"recall to check for duplicates",
 		"store immediately",
 	}
