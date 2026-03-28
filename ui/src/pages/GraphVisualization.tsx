@@ -545,6 +545,16 @@ function GraphVisualization() {
             )}
 
             <LegendPanel />
+
+            {/* Navigation hint */}
+            <div
+              className="absolute bottom-3 right-3 z-10 rounded-md px-3 py-1.5"
+              style={{ background: "rgba(0,0,0,0.75)", border: "1px solid #2a2d3a", backdropFilter: "blur(4px)" }}
+            >
+              <span style={{ color: "#d1d5db", fontSize: "11px", letterSpacing: "0.02em" }}>
+                Drag to rotate · Scroll to zoom · Right-drag to pan · Click node to inspect
+              </span>
+            </div>
           </div>
         )}
     </div>
