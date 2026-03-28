@@ -745,6 +745,74 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 
   /v1/me/projects/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: meGetProject
+      tags: [User]
+      summary: Get a project
+      description: Retrieve a project by ID. Only the project owner can view their own projects.
+      responses:
+        "200":
+          description: Project detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "403":
+          description: Not the project owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      operationId: meUpdateProject
+      tags: [User]
+      summary: Update a project
+      description: Update a project's name, slug, description, default tags, or settings. Only the project owner can update their own projects.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                description:
+                  type: string
+                default_tags:
+                  type: array
+                  items:
+                    type: string
+                settings:
+                  type: object
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Not the project owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
     delete:
       operationId: meDeleteProject
       tags: [User]
@@ -754,13 +822,6 @@ paths:
         and vectors. Only the project owner can delete their own projects. The
         'global' project cannot be deleted. Token usage records are preserved by
         reassigning them to the global project.
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
       responses:
         "204":
           description: No Content
@@ -1775,58 +1836,6 @@ paths:
                 $ref: "#/components/schemas/Project"
         "400":
           $ref: "#/components/responses/BadRequest"
-
-  /v1/admin/projects/{id}:
-    get:
-      operationId: adminGetProject
-      tags: [Admin - Projects]
-      summary: Get project by ID
-      parameters:
-        - $ref: "#/components/parameters/ResourceId"
-      responses:
-        "200":
-          description: Project detail
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Project"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-    put:
-      operationId: adminUpdateProject
-      tags: [Admin - Projects]
-      summary: Update a project
-      parameters:
-        - $ref: "#/components/parameters/ResourceId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                name:
-                  type: string
-                slug:
-                  type: string
-                description:
-                  type: string
-                default_tags:
-                  type: array
-                  items:
-                    type: string
-                settings:
-                  type: object
-      responses:
-        "200":
-          description: Project updated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Project"
-        "404":
-          $ref: "#/components/responses/NotFound"
 
   # ── Admin: Providers ───────────────────────────────────────────────────
   /v1/admin/providers:
