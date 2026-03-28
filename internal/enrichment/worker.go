@@ -478,35 +478,29 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 			srcID, srcOK := entityNameToID[rel.Source]
 			tgtID, tgtOK := entityNameToID[rel.Target]
 
-			// Fallback: look up missing entities in the database — they may
-			// have been created by a prior enrichment job.
+			// Resolve missing entities — look up in DB or create stubs so
+			// that relationships extracted by the LLM are never dropped.
 			if !srcOK {
-				ent, err := wp.resolveEntityByName(ctx, mem.NamespaceID, rel.Source)
+				ent, err := wp.resolveOrCreateEntity(ctx, mem.NamespaceID, rel.Source)
 				if err != nil {
-					slog.Warn("enrichment: fallback lookup error", "entity", rel.Source, "err", err)
-				} else if ent != nil {
+					slog.Error("enrichment: resolve source entity", "entity", rel.Source, "err", err)
+				} else {
 					srcID, srcOK = ent.ID, true
 					entityNameToID[rel.Source] = ent.ID
-					slog.Debug("enrichment: resolved entity from DB", "entity", rel.Source, "id", ent.ID)
-				} else {
-					slog.Debug("enrichment: entity not in batch or DB", "entity", rel.Source)
 				}
 			}
 			if !tgtOK {
-				ent, err := wp.resolveEntityByName(ctx, mem.NamespaceID, rel.Target)
+				ent, err := wp.resolveOrCreateEntity(ctx, mem.NamespaceID, rel.Target)
 				if err != nil {
-					slog.Warn("enrichment: fallback lookup error", "entity", rel.Target, "err", err)
-				} else if ent != nil {
+					slog.Error("enrichment: resolve target entity", "entity", rel.Target, "err", err)
+				} else {
 					tgtID, tgtOK = ent.ID, true
 					entityNameToID[rel.Target] = ent.ID
-					slog.Debug("enrichment: resolved entity from DB", "entity", rel.Target, "id", ent.ID)
-				} else {
-					slog.Debug("enrichment: entity not in batch or DB", "entity", rel.Target)
 				}
 			}
 
 			if !srcOK || !tgtOK {
-				slog.Warn("enrichment: skip relationship, entity not found",
+				slog.Warn("enrichment: skip relationship, entity resolution failed",
 					"source", rel.Source, "srcResolved", srcOK,
 					"target", rel.Target, "tgtResolved", tgtOK)
 				continue
@@ -553,9 +547,10 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 	return nil
 }
 
-// resolveEntityByName looks up an existing entity in the database by canonical
-// name within the given namespace. Returns nil if no exact match is found.
-func (wp *WorkerPool) resolveEntityByName(ctx context.Context, namespaceID uuid.UUID, name string) (*model.Entity, error) {
+// resolveOrCreateEntity looks up an existing entity in the database by
+// canonical name within the given namespace. If no match is found, it creates
+// a stub entity so that relationships extracted by the LLM are never dropped.
+func (wp *WorkerPool) resolveOrCreateEntity(ctx context.Context, namespaceID uuid.UUID, name string) (*model.Entity, error) {
 	canonical := strings.ToLower(strings.TrimSpace(name))
 	similar, err := wp.entities.FindBySimilarity(ctx, namespaceID, canonical, "", 10)
 	if err != nil {
@@ -566,7 +561,25 @@ func (wp *WorkerPool) resolveEntityByName(ctx context.Context, namespaceID uuid.
 			return &similar[i], nil
 		}
 	}
-	return nil, nil
+
+	// Entity doesn't exist — create it so the relationship is preserved.
+	now := time.Now().UTC()
+	entity := &model.Entity{
+		ID:           uuid.New(),
+		NamespaceID:  namespaceID,
+		Name:         name,
+		Canonical:    canonical,
+		EntityType:   "unknown",
+		Properties:   json.RawMessage(`{}`),
+		MentionCount: 1,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := wp.entities.Upsert(ctx, entity); err != nil {
+		return nil, fmt.Errorf("create stub entity %q: %w", name, err)
+	}
+	slog.Info("enrichment: created stub entity from relationship reference", "entity", name, "id", entity.ID)
+	return entity, nil
 }
 
 // ---------------------------------------------------------------------------
