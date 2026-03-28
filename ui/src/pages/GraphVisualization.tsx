@@ -409,13 +409,13 @@ function GraphVisualization() {
     // Light repulsion — just enough to prevent overlap
     const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
     if (charge?.strength) {
-      charge.strength(-15);
+      charge.strength(-8);
     }
 
     // Short link distance to keep clusters tight
     const link = fg.d3Force("link") as unknown as { distance?: (v: number) => void } | undefined;
     if (link?.distance) {
-      link.distance(15);
+      link.distance(8);
     }
   }, [graph3dData]);
 
