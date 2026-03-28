@@ -406,16 +406,16 @@ function GraphVisualization() {
     if (!graphRef.current) return;
     const fg = graphRef.current;
 
-    // Moderate charge — enough to not overlap, not so much they fly apart
+    // Light repulsion — just enough to prevent overlap
     const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
     if (charge?.strength) {
-      charge.strength(-40);
+      charge.strength(-15);
     }
 
-    // Keep connected nodes at a readable but close distance
+    // Short link distance to keep clusters tight
     const link = fg.d3Force("link") as unknown as { distance?: (v: number) => void } | undefined;
     if (link?.distance) {
-      link.distance(30);
+      link.distance(15);
     }
   }, [graph3dData]);
 
