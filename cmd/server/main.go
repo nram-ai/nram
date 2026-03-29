@@ -399,6 +399,14 @@ func main() {
 		JWTSecret: jwtSecret,
 	}
 
+	// Create IdP SSO handler for external identity provider flows.
+	idpHandler := auth.NewIdPHandler(auth.IdPHandlerConfig{
+		IdPRepo:    oauthRepo,
+		UserRepo:   userRepo,
+		UserCreate: userAdminStore,
+		JWTSecret:  jwtSecret,
+	})
+
 	// Assemble handlers.
 	handlers := server.Handlers{
 		// Health
@@ -459,6 +467,10 @@ func main() {
 		OAuthUserInfo:          oauthServer.UserInfoHandler(),
 		OAuthMetadata:          oauthServer.MetadataHandler(),
 		OAuthProtectedResource: oauthServer.ProtectedResourceHandler(),
+
+		// IdP SSO handlers
+		IdPLogin:    idpHandler.LoginHandler(),
+		IdPCallback: idpHandler.CallbackHandler(),
 
 		// Admin handlers
 		AdminSetupStatus: api.NewAdminSetupStatusHandler(api.SetupConfig{Store: setupStore}),

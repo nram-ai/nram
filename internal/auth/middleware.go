@@ -119,6 +119,11 @@ func writeUnauthorized(w http.ResponseWriter, r *http.Request, msg string) {
 	http.Error(w, msg, http.StatusUnauthorized)
 }
 
+// requestIsSecure returns true if the request is over TLS or behind an HTTPS proxy.
+func requestIsSecure(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
 // baseURL derives the external base URL from the request's Host header.
 // The Host header includes the port when non-standard (e.g. "localhost:8674").
 // X-Forwarded-Proto is respected for TLS detection behind reverse proxies.

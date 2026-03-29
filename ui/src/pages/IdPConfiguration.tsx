@@ -39,6 +39,9 @@ const IDP_TYPES = [
   { value: "saml" as const, label: "SAML" },
 ];
 
+// The callback URL that must be registered with the external IdP.
+const IDP_CALLBACK_URL = `${window.location.origin}/auth/idp/callback`;
+
 // ---------------------------------------------------------------------------
 // Delete Confirmation Dialog
 // ---------------------------------------------------------------------------
@@ -385,6 +388,37 @@ function CreateOrgIdPDialog({
 // Shared form fields (used by both create dialogs)
 // ---------------------------------------------------------------------------
 
+function CallbackUrlField() {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(IDP_CALLBACK_URL).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, []);
+
+  return (
+    <div className="rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950">
+      <label className="text-xs font-medium text-blue-700 dark:text-blue-300">
+        Callback URL (enter this in your IdP)
+      </label>
+      <div className="mt-1 flex items-center gap-2">
+        <code className="flex-1 rounded bg-white px-2 py-1 text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100">
+          {IDP_CALLBACK_URL}
+        </code>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="shrink-0 rounded-md border border-blue-300 bg-white px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800"
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function renderIdPFormFields({
   providerType,
   setProviderType,
@@ -414,6 +448,8 @@ function renderIdPFormFields({
 }) {
   return (
     <>
+      <CallbackUrlField />
+
       <div>
         <label className="text-xs font-medium text-muted-foreground">
           Provider Type

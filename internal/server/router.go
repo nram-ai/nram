@@ -78,6 +78,10 @@ type Handlers struct {
 	OAuthMetadata          http.HandlerFunc
 	OAuthProtectedResource http.HandlerFunc
 
+	// IdP SSO handlers (public — no auth required)
+	IdPLogin    http.HandlerFunc
+	IdPCallback http.HandlerFunc
+
 	// Admin handlers
 	AdminSetupStatus http.HandlerFunc
 	AdminSetup       http.HandlerFunc
@@ -156,6 +160,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		}
 		r.Post("/v1/auth/login", handler(handlers.AuthLogin))
 		r.Post("/v1/auth/lookup", handler(handlers.AuthLookup))
+
+		// IdP SSO flow (public — user is not yet authenticated).
+		r.Get("/auth/idp/login", handler(handlers.IdPLogin))
+		r.Get("/auth/idp/callback", handler(handlers.IdPCallback))
 	})
 
 	// Authenticated routes.
