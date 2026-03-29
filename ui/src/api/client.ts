@@ -778,6 +778,7 @@ export interface LookupRequest {
 export interface LookupResponse {
   method: "local" | "idp" | "unknown";
   idp_id?: string;
+  password_fallback?: boolean;
 }
 
 export const authAPI = {

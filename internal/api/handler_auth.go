@@ -57,8 +57,9 @@ type lookupRequest struct {
 }
 
 type lookupResponse struct {
-	Method string  `json:"method"`
-	IdPID  *string `json:"idp_id,omitempty"`
+	Method           string  `json:"method"`
+	IdPID            *string `json:"idp_id,omitempty"`
+	PasswordFallback bool    `json:"password_fallback,omitempty"`
 }
 
 // NewLoginHandler returns an http.HandlerFunc that authenticates a user by
@@ -158,22 +159,30 @@ func NewLookupHandler(cfg AuthConfig) http.HandlerFunc {
 			return
 		}
 
-		// Known user with a password → local login.
+		// Resolve IdP: check the user's org first, then scan all configs
+		// by email domain for unknown users.
+		idpID := resolveIdPForEmail(r.Context(), cfg, user, req.Email)
+
+		if idpID != "" {
+			// An IdP is configured — it is authoritative for the org.
+			// Org owners and admins get a password fallback for break-glass access.
+			resp := lookupResponse{Method: "idp", IdPID: &idpID}
+			if user != nil && user.PasswordHash != nil {
+				if user.Role == "org_owner" || user.Role == "administrator" {
+					resp.PasswordFallback = true
+				}
+			}
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+
+		// No IdP configured. Use local password if available.
 		if user != nil && user.PasswordHash != nil {
 			writeJSON(w, http.StatusOK, lookupResponse{Method: "local"})
 			return
 		}
 
-		// Try to find an IdP for this user. If the user exists, check their
-		// org's IdP configs. If the user doesn't exist, scan all IdP configs
-		// for one whose allowed_domains matches the email domain.
-		if idpID := resolveIdPForEmail(r.Context(), cfg, user, req.Email); idpID != "" {
-			writeJSON(w, http.StatusOK, lookupResponse{Method: "idp", IdPID: &idpID})
-			return
-		}
-
-		// Known user without password and no IdP configured — still report idp
-		// so the frontend doesn't offer password login.
+		// Known user without password and no IdP — broken state.
 		if user != nil {
 			writeJSON(w, http.StatusOK, lookupResponse{Method: "idp"})
 			return

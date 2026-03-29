@@ -4,7 +4,7 @@ import { authAPI } from "../api/client";
 import type { APIError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 
-type Step = "email" | "password";
+type Step = "email" | "password" | "idp-redirect";
 
 function Login() {
   const navigate = useNavigate();
@@ -16,6 +16,13 @@ function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [idpId, setIdpId] = useState<string | null>(null);
+  const [passwordFallback, setPasswordFallback] = useState(false);
+
+  function redirectToIdP(idp: string) {
+    const redirect = searchParams.get("redirect") ?? "/";
+    window.location.href = `/auth/idp/login?idp_id=${encodeURIComponent(idp)}&redirect=${encodeURIComponent(redirect)}`;
+  }
 
   async function handleEmailSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -28,16 +35,22 @@ function Login() {
     setLoading(true);
     try {
       const result = await authAPI.lookup({ email: trimmed });
-      if (result.method === "local") {
-        setStep("password");
-      } else if (result.method === "idp" && result.idp_id) {
-        // Redirect to the external IdP for SSO authentication.
-        const redirect = searchParams.get("redirect") ?? "/";
-        window.location.href = `/auth/idp/login?idp_id=${encodeURIComponent(result.idp_id)}&redirect=${encodeURIComponent(redirect)}`;
+      if (result.method === "idp" && result.idp_id) {
+        if (result.password_fallback) {
+          // Org owner/admin: show option to use password instead.
+          setIdpId(result.idp_id);
+          setPasswordFallback(true);
+          setStep("idp-redirect");
+        } else {
+          // Regular user: redirect immediately.
+          redirectToIdP(result.idp_id);
+        }
       } else if (result.method === "idp") {
         setError(
           "Your organization uses external authentication but no identity provider is configured. Contact your administrator.",
         );
+      } else if (result.method === "local") {
+        setStep("password");
       } else {
         setError("User not found. Contact your administrator.");
       }
@@ -95,9 +108,10 @@ function Login() {
         <div className="text-center">
           <h1 className="text-2xl font-semibold tracking-tight">Sign in to nram</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {step === "email"
-              ? "Enter your email address to continue."
-              : "Enter your password to sign in."}
+            {step === "email" && "Enter your email address to continue."}
+            {step === "password" && "Enter your password to sign in."}
+            {step === "idp-redirect" &&
+              "Your organization uses external authentication."}
           </p>
         </div>
 
@@ -107,7 +121,7 @@ function Login() {
           </div>
         )}
 
-        {step === "email" ? (
+        {step === "email" && (
           <form onSubmit={handleEmailSubmit} className="mt-8 space-y-5">
             <div>
               <label htmlFor="login-email" className="block text-sm font-medium text-foreground">
@@ -129,7 +143,45 @@ function Login() {
               {loading ? "Checking..." : "Continue"}
             </button>
           </form>
-        ) : (
+        )}
+
+        {step === "idp-redirect" && (
+          <div className="mt-8 space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-foreground">Email</label>
+              <p className="mt-1.5 text-sm text-muted-foreground">{email.trim()}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => idpId && redirectToIdP(idpId)}
+              className={buttonClass}
+            >
+              Continue with SSO
+            </button>
+            {passwordFallback && (
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => setStep("password")}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Sign in with password instead
+                </button>
+              </div>
+            )}
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={handleBack}
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Back
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === "password" && (
           <form onSubmit={handlePasswordSubmit} className="mt-8 space-y-5">
             <div>
               <label className="block text-sm font-medium text-foreground">Email</label>
