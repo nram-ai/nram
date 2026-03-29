@@ -524,7 +524,7 @@ function CallbackUrlField() {
 type EndpointMode = "discovery" | "manual";
 
 function IdPFormFields({
-  providerType: _providerType,
+  providerType,
   setProviderType,
   clientId,
   setClientId,
@@ -572,7 +572,9 @@ function IdPFormFields({
   const initialMode: EndpointMode =
     authorizeUrl.trim() || tokenUrl.trim() ? "manual" : "discovery";
   const [endpointMode, setEndpointMode] = useState<EndpointMode>(initialMode);
-  const [selectedPreset, setSelectedPreset] = useState("custom");
+  const [selectedPreset, setSelectedPreset] = useState(
+    providerType && providerType in IDP_PRESETS ? providerType : "custom",
+  );
 
   const applyPreset = useCallback(
     (key: string) => {
@@ -951,7 +953,8 @@ function IdPTable({
   showOrgColumn: boolean;
   orgNames?: Record<string, string>;
 }) {
-  const providerLabel = (type: string) => type.toUpperCase();
+  const providerLabel = (type: string) =>
+    IDP_PRESETS[type]?.label ?? type.toUpperCase();
   const orgLabel = (orgId?: string | null) => {
     if (!orgId) return "-";
     return orgNames?.[orgId] ?? orgId;
