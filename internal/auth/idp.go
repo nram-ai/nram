@@ -224,7 +224,9 @@ func (h *IdPHandler) LoginHandler() http.HandlerFunc {
 		q.Set("scope", scopesForProvider(idpCfg.ProviderType))
 		q.Set("state", stateKey)
 		q.Set("nonce", nonce)
-		authURL.RawQuery = q.Encode()
+		// Colons in scope values (e.g. "read:user") must stay literal.
+		// url.Values.Encode() percent-encodes them, which GitHub rejects.
+		authURL.RawQuery = strings.ReplaceAll(q.Encode(), "%3A", ":")
 
 		http.Redirect(w, r, authURL.String(), http.StatusFound)
 	}
