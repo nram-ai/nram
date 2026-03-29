@@ -31,6 +31,7 @@ import {
   type CreateOAuthClientRequest,
   type IdPConfig,
   type CreateIdPConfigRequest,
+  type UpdateIdPConfigRequest,
   type WebhookTestResult,
   type MeCreateProjectRequest,
   type MeCreateAPIKeyRequest,
@@ -675,6 +676,17 @@ export function useCreateIdPConfig() {
   });
 }
 
+export function useUpdateIdPConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateIdPConfigRequest }) =>
+      adminAPI.updateIdPConfig(id, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "idp-configs"] });
+    },
+  });
+}
+
 export function useDeleteIdPConfig() {
   const qc = useQueryClient();
   return useMutation({
@@ -898,6 +910,17 @@ export function useCreateOrgIdPConfig() {
   return useMutation({
     mutationFn: (data: { orgId: string } & CreateIdPConfigRequest) =>
       orgAPI.configureIdP(data.orgId, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["org-idp"] });
+    },
+  });
+}
+
+export function useUpdateOrgIdPConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (params: { orgId: string; id: string; data: UpdateIdPConfigRequest }) =>
+      orgAPI.updateOrgIdP(params.orgId, params.id, params.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["org-idp"] });
     },

@@ -49,6 +49,9 @@ type OAuthIdPConfig struct {
 	ClientID       string     `json:"client_id"`
 	ClientSecret   string     `json:"-"`
 	IssuerURL      *string    `json:"issuer_url"`
+	AuthorizeURL   *string    `json:"authorize_url"`
+	TokenURL       *string    `json:"token_url"`
+	UserinfoURL    *string    `json:"userinfo_url"`
 	AllowedDomains []string   `json:"allowed_domains"`
 	AutoProvision  bool       `json:"auto_provision"`
 	DefaultRole    string     `json:"default_role"`

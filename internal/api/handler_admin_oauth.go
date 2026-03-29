@@ -17,6 +17,7 @@ type OAuthAdminStore interface {
 	DeleteClient(ctx context.Context, id uuid.UUID) error
 	ListIdPs(ctx context.Context) ([]model.OAuthIdPConfig, error)
 	CreateIdP(ctx context.Context, req CreateIdPRequest) (*model.OAuthIdPConfig, error)
+	UpdateIdP(ctx context.Context, id uuid.UUID, req UpdateIdPRequest) (*model.OAuthIdPConfig, error)
 	DeleteIdP(ctx context.Context, id uuid.UUID) error
 }
 
@@ -32,8 +33,26 @@ type CreateIdPRequest struct {
 	ClientID       string   `json:"client_id"`
 	ClientSecret   string   `json:"client_secret"`
 	IssuerURL      *string  `json:"issuer_url"`
+	AuthorizeURL   *string  `json:"authorize_url"`
+	TokenURL       *string  `json:"token_url"`
+	UserinfoURL    *string  `json:"userinfo_url"`
 	AllowedDomains []string `json:"allowed_domains"`
 	AutoProvision  bool     `json:"auto_provision"`
+	DefaultRole    string   `json:"default_role"`
+}
+
+// UpdateIdPRequest is the parsed request body for PUT /oauth/idp/{id}.
+// All fields are optional; only non-nil fields are applied.
+type UpdateIdPRequest struct {
+	ClientID       *string  `json:"client_id"`
+	ClientSecret   *string  `json:"client_secret"`
+	IssuerURL      *string  `json:"issuer_url"`
+	AuthorizeURL   *string  `json:"authorize_url"`
+	TokenURL       *string  `json:"token_url"`
+	UserinfoURL    *string  `json:"userinfo_url"`
+	AllowedDomains []string `json:"allowed_domains"`
+	AutoProvision  *bool    `json:"auto_provision"`
+	DefaultRole    *string  `json:"default_role"`
 }
 
 // oauthClientResponse is the JSON shape returned to the UI for an OAuth client.
@@ -121,11 +140,14 @@ func NewAdminOAuthHandler(cfg OAuthAdminConfig) http.HandlerFunc {
 				WriteError(w, ErrBadRequest("invalid idp id"))
 				return
 			}
-			if r.Method == http.MethodDelete {
+			switch r.Method {
+			case http.MethodPut:
+				handleUpdateIdP(w, r, cfg, parsed)
+			case http.MethodDelete:
 				handleDeleteIdP(w, r, cfg, parsed)
-				return
+			default:
+				WriteError(w, ErrBadRequest("method not allowed"))
 			}
-			WriteError(w, ErrBadRequest("method not allowed"))
 
 		default:
 			WriteError(w, ErrBadRequest("unknown oauth sub-path"))
@@ -298,6 +320,23 @@ func handleCreateIdP(w http.ResponseWriter, r *http.Request, cfg OAuthAdminConfi
 	}
 
 	writeJSON(w, http.StatusCreated, idp)
+}
+
+// handleUpdateIdP handles PUT /oauth/idp/{id}.
+func handleUpdateIdP(w http.ResponseWriter, r *http.Request, cfg OAuthAdminConfig, id uuid.UUID) {
+	var body UpdateIdPRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+
+	idp, err := cfg.Store.UpdateIdP(r.Context(), id, body)
+	if err != nil {
+		WriteError(w, mapOAuthError(err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, idp)
 }
 
 // handleDeleteIdP handles DELETE /oauth/idp/{id}.

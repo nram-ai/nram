@@ -28,6 +28,7 @@ type mockOAuthAdminStore struct {
 	deleteClientErr error
 	listIdPsErr     error
 	createIdPErr    error
+	updateIdPErr    error
 	deleteIdPErr    error
 
 	// capture args
@@ -36,6 +37,8 @@ type mockOAuthAdminStore struct {
 	createdClientType   string
 	deletedClientID     uuid.UUID
 	createdIdPReq       CreateIdPRequest
+	updatedIdPID        uuid.UUID
+	updatedIdPReq       UpdateIdPRequest
 	deletedIdPID        uuid.UUID
 }
 
@@ -62,6 +65,12 @@ func (m *mockOAuthAdminStore) ListIdPs(_ context.Context) ([]model.OAuthIdPConfi
 func (m *mockOAuthAdminStore) CreateIdP(_ context.Context, req CreateIdPRequest) (*model.OAuthIdPConfig, error) {
 	m.createdIdPReq = req
 	return m.idp, m.createIdPErr
+}
+
+func (m *mockOAuthAdminStore) UpdateIdP(_ context.Context, id uuid.UUID, req UpdateIdPRequest) (*model.OAuthIdPConfig, error) {
+	m.updatedIdPID = id
+	m.updatedIdPReq = req
+	return m.idp, m.updateIdPErr
 }
 
 func (m *mockOAuthAdminStore) DeleteIdP(_ context.Context, id uuid.UUID) error {

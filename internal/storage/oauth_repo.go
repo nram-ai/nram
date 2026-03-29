@@ -658,16 +658,17 @@ func (r *OAuthRepo) CreateIdP(ctx context.Context, idp *model.OAuthIdPConfig) er
 		orgID = &s
 	}
 
-	query := `INSERT INTO oauth_idp_configs (id, org_id, provider_type, client_id, client_secret, issuer_url, allowed_domains, auto_provision, default_role)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO oauth_idp_configs (id, org_id, provider_type, client_id, client_secret, issuer_url, authorize_url, token_url, userinfo_url, allowed_domains, auto_provision, default_role)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO oauth_idp_configs (id, org_id, provider_type, client_id, client_secret, issuer_url, allowed_domains, auto_provision, default_role)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+		query = `INSERT INTO oauth_idp_configs (id, org_id, provider_type, client_id, client_secret, issuer_url, authorize_url, token_url, userinfo_url, allowed_domains, auto_provision, default_role)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
 		idp.ID.String(), orgID, idp.ProviderType, idp.ClientID, idp.ClientSecret,
-		idp.IssuerURL, domainsVal, autoProvVal, idp.DefaultRole,
+		idp.IssuerURL, idp.AuthorizeURL, idp.TokenURL, idp.UserinfoURL,
+		domainsVal, autoProvVal, idp.DefaultRole,
 	)
 	if err != nil {
 		return fmt.Errorf("oauth idp create: %w", err)
@@ -752,6 +753,92 @@ func (r *OAuthRepo) DeleteIdP(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// UpdateIdP updates a mutable subset of an identity provider configuration.
+func (r *OAuthRepo) UpdateIdP(ctx context.Context, idp *model.OAuthIdPConfig) error {
+	domainsVal := encodeStringArray(r.db.Backend(), idp.AllowedDomains)
+	autoProvVal := encodeBool(r.db.Backend(), idp.AutoProvision)
+
+	query := `UPDATE oauth_idp_configs
+		SET client_id = ?, client_secret = ?, issuer_url = ?,
+		    authorize_url = ?, token_url = ?, userinfo_url = ?,
+		    allowed_domains = ?, auto_provision = ?, default_role = ?,
+		    updated_at = ?
+		WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE oauth_idp_configs
+			SET client_id = $1, client_secret = $2, issuer_url = $3,
+			    authorize_url = $4, token_url = $5, userinfo_url = $6,
+			    allowed_domains = $7, auto_provision = $8, default_role = $9,
+			    updated_at = $10
+			WHERE id = $11`
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	res, err := r.db.Exec(ctx, query,
+		idp.ClientID, idp.ClientSecret, idp.IssuerURL,
+		idp.AuthorizeURL, idp.TokenURL, idp.UserinfoURL,
+		domainsVal, autoProvVal, idp.DefaultRole,
+		now, idp.ID.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("oauth idp update: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("oauth idp update rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("idp config not found")
+	}
+
+	return r.reloadIdP(ctx, idp)
+}
+
+// UpdateIdPByOrg updates an identity provider config only if it belongs to the given org.
+func (r *OAuthRepo) UpdateIdPByOrg(ctx context.Context, idp *model.OAuthIdPConfig, orgID uuid.UUID) error {
+	domainsVal := encodeStringArray(r.db.Backend(), idp.AllowedDomains)
+	autoProvVal := encodeBool(r.db.Backend(), idp.AutoProvision)
+
+	query := `UPDATE oauth_idp_configs
+		SET client_id = ?, client_secret = ?, issuer_url = ?,
+		    authorize_url = ?, token_url = ?, userinfo_url = ?,
+		    allowed_domains = ?, auto_provision = ?, default_role = ?,
+		    updated_at = ?
+		WHERE id = ? AND org_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE oauth_idp_configs
+			SET client_id = $1, client_secret = $2, issuer_url = $3,
+			    authorize_url = $4, token_url = $5, userinfo_url = $6,
+			    allowed_domains = $7, auto_provision = $8, default_role = $9,
+			    updated_at = $10
+			WHERE id = $11 AND org_id = $12`
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	res, err := r.db.Exec(ctx, query,
+		idp.ClientID, idp.ClientSecret, idp.IssuerURL,
+		idp.AuthorizeURL, idp.TokenURL, idp.UserinfoURL,
+		domainsVal, autoProvVal, idp.DefaultRole,
+		now, idp.ID.String(), orgID.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("oauth idp update by org: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("oauth idp update by org rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("idp config not found")
+	}
+
+	return r.reloadIdP(ctx, idp)
+}
+
 // reloadIdP fetches the IdP by ID and populates the struct in place.
 func (r *OAuthRepo) reloadIdP(ctx context.Context, idp *model.OAuthIdPConfig) error {
 	fetched, err := r.GetIdPByID(ctx, idp.ID)
@@ -762,48 +849,50 @@ func (r *OAuthRepo) reloadIdP(ctx context.Context, idp *model.OAuthIdPConfig) er
 	return nil
 }
 
-const selectIdPColumns = `SELECT id, org_id, provider_type, client_id, client_secret, issuer_url, allowed_domains, auto_provision, default_role, created_at, updated_at`
+const selectIdPColumns = `SELECT id, org_id, provider_type, client_id, client_secret, issuer_url, authorize_url, token_url, userinfo_url, allowed_domains, auto_provision, default_role, created_at, updated_at`
 
 func (r *OAuthRepo) scanIdP(row *sql.Row) (*model.OAuthIdPConfig, error) {
 	var idp model.OAuthIdPConfig
 	var idStr string
 	var orgIDStr sql.NullString
-	var issuerURL sql.NullString
+	var issuerURL, authorizeURL, tokenURL, userinfoURL sql.NullString
 	var domainsStr string
 	var autoProv bool
 	var createdAtStr, updatedAtStr string
 
 	err := row.Scan(
 		&idStr, &orgIDStr, &idp.ProviderType, &idp.ClientID, &idp.ClientSecret,
-		&issuerURL, &domainsStr, &autoProv, &idp.DefaultRole,
+		&issuerURL, &authorizeURL, &tokenURL, &userinfoURL,
+		&domainsStr, &autoProv, &idp.DefaultRole,
 		&createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return r.populateIdP(&idp, idStr, orgIDStr, issuerURL, domainsStr, autoProv, createdAtStr, updatedAtStr)
+	return r.populateIdP(&idp, idStr, orgIDStr, issuerURL, authorizeURL, tokenURL, userinfoURL, domainsStr, autoProv, createdAtStr, updatedAtStr)
 }
 
 func (r *OAuthRepo) scanIdPFromRows(rows *sql.Rows) (*model.OAuthIdPConfig, error) {
 	var idp model.OAuthIdPConfig
 	var idStr string
 	var orgIDStr sql.NullString
-	var issuerURL sql.NullString
+	var issuerURL, authorizeURL, tokenURL, userinfoURL sql.NullString
 	var domainsStr string
 	var autoProv bool
 	var createdAtStr, updatedAtStr string
 
 	err := rows.Scan(
 		&idStr, &orgIDStr, &idp.ProviderType, &idp.ClientID, &idp.ClientSecret,
-		&issuerURL, &domainsStr, &autoProv, &idp.DefaultRole,
+		&issuerURL, &authorizeURL, &tokenURL, &userinfoURL,
+		&domainsStr, &autoProv, &idp.DefaultRole,
 		&createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("oauth idp scan rows: %w", err)
 	}
 
-	return r.populateIdP(&idp, idStr, orgIDStr, issuerURL, domainsStr, autoProv, createdAtStr, updatedAtStr)
+	return r.populateIdP(&idp, idStr, orgIDStr, issuerURL, authorizeURL, tokenURL, userinfoURL, domainsStr, autoProv, createdAtStr, updatedAtStr)
 }
 
 func (r *OAuthRepo) scanIdPs(rows *sql.Rows) ([]model.OAuthIdPConfig, error) {
@@ -824,7 +913,7 @@ func (r *OAuthRepo) scanIdPs(rows *sql.Rows) ([]model.OAuthIdPConfig, error) {
 func (r *OAuthRepo) populateIdP(
 	idp *model.OAuthIdPConfig,
 	idStr string,
-	orgIDStr, issuerURL sql.NullString,
+	orgIDStr, issuerURL, authorizeURL, tokenURL, userinfoURL sql.NullString,
 	domainsStr string,
 	autoProv bool,
 	createdAtStr, updatedAtStr string,
@@ -845,6 +934,15 @@ func (r *OAuthRepo) populateIdP(
 
 	if issuerURL.Valid {
 		idp.IssuerURL = &issuerURL.String
+	}
+	if authorizeURL.Valid {
+		idp.AuthorizeURL = &authorizeURL.String
+	}
+	if tokenURL.Valid {
+		idp.TokenURL = &tokenURL.String
+	}
+	if userinfoURL.Valid {
+		idp.UserinfoURL = &userinfoURL.String
 	}
 
 	domains, err := decodeStringArray(r.db.Backend(), domainsStr)

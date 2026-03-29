@@ -690,6 +690,9 @@ export interface IdPConfig {
   provider_type: string;
   client_id: string;
   issuer_url?: string | null;
+  authorize_url?: string | null;
+  token_url?: string | null;
+  userinfo_url?: string | null;
   allowed_domains: string[];
   auto_provision: boolean;
   default_role?: string;
@@ -703,8 +706,24 @@ export interface CreateIdPConfigRequest {
   client_id: string;
   client_secret: string;
   issuer_url?: string;
+  authorize_url?: string;
+  token_url?: string;
+  userinfo_url?: string;
   allowed_domains?: string[];
   auto_provision?: boolean;
+  default_role?: string;
+}
+
+export interface UpdateIdPConfigRequest {
+  client_id?: string;
+  client_secret?: string;
+  issuer_url?: string | null;
+  authorize_url?: string | null;
+  token_url?: string | null;
+  userinfo_url?: string | null;
+  allowed_domains?: string[];
+  auto_provision?: boolean;
+  default_role?: string;
 }
 
 export interface GraphEntity {
@@ -915,6 +934,8 @@ export const adminAPI = {
     request<IdPConfig[]>("GET", "/admin/oauth/idp"),
   createIdPConfig: (data: CreateIdPConfigRequest) =>
     request<IdPConfig>("POST", "/admin/oauth/idp", data),
+  updateIdPConfig: (id: string, data: UpdateIdPConfigRequest) =>
+    request<IdPConfig>("PUT", `/admin/oauth/idp/${id}`, data),
   deleteIdPConfig: (id: string) =>
     request<void>("DELETE", `/admin/oauth/idp/${id}`),
 };
@@ -1090,6 +1111,8 @@ export const orgAPI = {
     request<IdPConfig[]>("GET", `/orgs/${orgId}/idp`),
   configureIdP: (orgId: string, data: CreateIdPConfigRequest) =>
     request<IdPConfig>("POST", `/orgs/${orgId}/idp`, data),
+  updateOrgIdP: (orgId: string, id: string, data: UpdateIdPConfigRequest) =>
+    request<IdPConfig>("PUT", `/orgs/${orgId}/idp/${id}`, data),
   deleteOrgIdP: (orgId: string, id: string) =>
     request<void>("DELETE", `/orgs/${orgId}/idp/${id}`),
 };

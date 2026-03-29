@@ -91,6 +91,14 @@ func (s *rrOrgIdPStore) CreateIdP(_ context.Context, _ *model.OAuthIdPConfig) er
 	return nil
 }
 
+func (s *rrOrgIdPStore) UpdateIdPByOrg(_ context.Context, _ *model.OAuthIdPConfig, _ uuid.UUID) error {
+	return nil
+}
+
+func (s *rrOrgIdPStore) GetIdPByID(_ context.Context, _ uuid.UUID) (*model.OAuthIdPConfig, error) {
+	return nil, nil
+}
+
 func (s *rrOrgIdPStore) DeleteIdPByOrg(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }

@@ -60,14 +60,22 @@ func (s *OAuthAdminStore) ListIdPs(ctx context.Context) ([]model.OAuthIdPConfig,
 }
 
 func (s *OAuthAdminStore) CreateIdP(ctx context.Context, req api.CreateIdPRequest) (*model.OAuthIdPConfig, error) {
+	defaultRole := req.DefaultRole
+	if defaultRole == "" {
+		defaultRole = "member"
+	}
+
 	idp := &model.OAuthIdPConfig{
 		ProviderType:   req.ProviderType,
 		ClientID:       req.ClientID,
 		ClientSecret:   req.ClientSecret,
 		IssuerURL:      req.IssuerURL,
+		AuthorizeURL:   req.AuthorizeURL,
+		TokenURL:       req.TokenURL,
+		UserinfoURL:    req.UserinfoURL,
 		AllowedDomains: req.AllowedDomains,
 		AutoProvision:  req.AutoProvision,
-		DefaultRole:    "member",
+		DefaultRole:    defaultRole,
 	}
 
 	if req.OrgID != "" {
@@ -80,6 +88,47 @@ func (s *OAuthAdminStore) CreateIdP(ctx context.Context, req api.CreateIdPReques
 
 	if err := s.oauthRepo.CreateIdP(ctx, idp); err != nil {
 		return nil, fmt.Errorf("create idp: %w", err)
+	}
+
+	return idp, nil
+}
+
+func (s *OAuthAdminStore) UpdateIdP(ctx context.Context, id uuid.UUID, req api.UpdateIdPRequest) (*model.OAuthIdPConfig, error) {
+	idp, err := s.oauthRepo.GetIdPByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get idp: %w", err)
+	}
+
+	if req.ClientID != nil {
+		idp.ClientID = *req.ClientID
+	}
+	if req.ClientSecret != nil {
+		idp.ClientSecret = *req.ClientSecret
+	}
+	if req.IssuerURL != nil {
+		idp.IssuerURL = req.IssuerURL
+	}
+	if req.AuthorizeURL != nil {
+		idp.AuthorizeURL = req.AuthorizeURL
+	}
+	if req.TokenURL != nil {
+		idp.TokenURL = req.TokenURL
+	}
+	if req.UserinfoURL != nil {
+		idp.UserinfoURL = req.UserinfoURL
+	}
+	if req.AllowedDomains != nil {
+		idp.AllowedDomains = req.AllowedDomains
+	}
+	if req.AutoProvision != nil {
+		idp.AutoProvision = *req.AutoProvision
+	}
+	if req.DefaultRole != nil {
+		idp.DefaultRole = *req.DefaultRole
+	}
+
+	if err := s.oauthRepo.UpdateIdP(ctx, idp); err != nil {
+		return nil, fmt.Errorf("update idp: %w", err)
 	}
 
 	return idp, nil

@@ -190,14 +190,9 @@ func (h *IdPHandler) LoginHandler() http.HandlerFunc {
 			return
 		}
 
-		if idpCfg.IssuerURL == nil || *idpCfg.IssuerURL == "" {
-			http.Error(w, "identity provider has no issuer URL configured", http.StatusBadRequest)
-			return
-		}
-
-		disco, err := h.discoverOIDC(r.Context(), *idpCfg.IssuerURL)
+		disco, err := h.resolveEndpoints(r.Context(), idpCfg)
 		if err != nil {
-			http.Error(w, "OIDC discovery failed", http.StatusBadGateway)
+			http.Error(w, "failed to resolve IdP endpoints", http.StatusBadGateway)
 			return
 		}
 
@@ -270,14 +265,9 @@ func (h *IdPHandler) CallbackHandler() http.HandlerFunc {
 			return
 		}
 
-		if idpCfg.IssuerURL == nil || *idpCfg.IssuerURL == "" {
-			http.Error(w, "identity provider has no issuer URL", http.StatusBadRequest)
-			return
-		}
-
-		disco, err := h.discoverOIDC(r.Context(), *idpCfg.IssuerURL)
+		disco, err := h.resolveEndpoints(r.Context(), idpCfg)
 		if err != nil {
-			http.Error(w, "OIDC discovery failed", http.StatusBadGateway)
+			http.Error(w, "failed to resolve IdP endpoints", http.StatusBadGateway)
 			return
 		}
 
@@ -343,6 +333,30 @@ func (h *IdPHandler) CallbackHandler() http.HandlerFunc {
 		}
 		http.Redirect(w, r, redirectTarget, http.StatusFound)
 	}
+}
+
+// resolveEndpoints returns OIDC endpoints by using explicit URLs from the config
+// when available, falling back to OIDC discovery via issuer_url.
+func (h *IdPHandler) resolveEndpoints(ctx context.Context, cfg *model.OAuthIdPConfig) (*oidcDiscovery, error) {
+	// If explicit endpoint URLs are configured, use them directly.
+	if cfg.AuthorizeURL != nil && *cfg.AuthorizeURL != "" &&
+		cfg.TokenURL != nil && *cfg.TokenURL != "" {
+		disco := &oidcDiscovery{
+			AuthorizationEndpoint: *cfg.AuthorizeURL,
+			TokenEndpoint:         *cfg.TokenURL,
+		}
+		if cfg.UserinfoURL != nil {
+			disco.UserinfoEndpoint = *cfg.UserinfoURL
+		}
+		return disco, nil
+	}
+
+	// Fall back to OIDC discovery.
+	if cfg.IssuerURL == nil || *cfg.IssuerURL == "" {
+		return nil, fmt.Errorf("identity provider has no issuer URL or explicit endpoint URLs configured")
+	}
+
+	return h.discoverOIDC(ctx, *cfg.IssuerURL)
 }
 
 // discoverOIDC fetches and caches the OIDC discovery document from the issuer.

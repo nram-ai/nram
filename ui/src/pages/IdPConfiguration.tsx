@@ -3,14 +3,17 @@ import {
   useIdPConfigs,
   useCreateIdPConfig,
   useDeleteIdPConfig,
+  useUpdateIdPConfig,
   useOrgs,
   useOrgIdPConfigs,
   useCreateOrgIdPConfig,
   useDeleteOrgIdPConfig,
+  useUpdateOrgIdPConfig,
 } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
 import type {
   CreateIdPConfigRequest,
+  UpdateIdPConfigRequest,
   IdPConfig,
   Organization,
 } from "../api/client";
@@ -112,8 +115,12 @@ function CreateIdPDialog({
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [issuerUrl, setIssuerUrl] = useState("");
+  const [authorizeUrl, setAuthorizeUrl] = useState("");
+  const [tokenUrl, setTokenUrl] = useState("");
+  const [userinfoUrl, setUserinfoUrl] = useState("");
   const [allowedDomains, setAllowedDomains] = useState("");
   const [autoProvision, setAutoProvision] = useState(false);
+  const [defaultRole, setDefaultRole] = useState("");
   const [error, setError] = useState("");
 
   const resetForm = useCallback(() => {
@@ -122,8 +129,12 @@ function CreateIdPDialog({
     setClientId("");
     setClientSecret("");
     setIssuerUrl("");
+    setAuthorizeUrl("");
+    setTokenUrl("");
+    setUserinfoUrl("");
     setAllowedDomains("");
     setAutoProvision(false);
+    setDefaultRole("");
     setError("");
   }, []);
 
@@ -154,11 +165,12 @@ function CreateIdPDialog({
       client_secret: clientSecret.trim(),
       allowed_domains: domains,
       auto_provision: autoProvision,
+      ...(issuerUrl.trim() ? { issuer_url: issuerUrl.trim() } : {}),
+      authorize_url: authorizeUrl.trim() || undefined,
+      token_url: tokenUrl.trim() || undefined,
+      userinfo_url: userinfoUrl.trim() || undefined,
+      default_role: defaultRole.trim() || undefined,
     };
-
-    if (issuerUrl.trim()) {
-      data.issuer_url = issuerUrl.trim();
-    }
 
     try {
       await createMutation.mutateAsync(data);
@@ -173,8 +185,12 @@ function CreateIdPDialog({
     clientSecret,
     providerType,
     issuerUrl,
+    authorizeUrl,
+    tokenUrl,
+    userinfoUrl,
     allowedDomains,
     autoProvision,
+    defaultRole,
     createMutation,
     resetForm,
     onClose,
@@ -220,10 +236,18 @@ function CreateIdPDialog({
             setClientSecret,
             issuerUrl,
             setIssuerUrl,
+            authorizeUrl,
+            setAuthorizeUrl,
+            tokenUrl,
+            setTokenUrl,
+            userinfoUrl,
+            setUserinfoUrl,
             allowedDomains,
             setAllowedDomains,
             autoProvision,
             setAutoProvision,
+            defaultRole,
+            setDefaultRole,
           })}
         </div>
 
@@ -270,8 +294,12 @@ function CreateOrgIdPDialog({
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [issuerUrl, setIssuerUrl] = useState("");
+  const [authorizeUrl, setAuthorizeUrl] = useState("");
+  const [tokenUrl, setTokenUrl] = useState("");
+  const [userinfoUrl, setUserinfoUrl] = useState("");
   const [allowedDomains, setAllowedDomains] = useState("");
   const [autoProvision, setAutoProvision] = useState(false);
+  const [defaultRole, setDefaultRole] = useState("");
   const [error, setError] = useState("");
 
   const resetForm = useCallback(() => {
@@ -279,8 +307,12 @@ function CreateOrgIdPDialog({
     setClientId("");
     setClientSecret("");
     setIssuerUrl("");
+    setAuthorizeUrl("");
+    setTokenUrl("");
+    setUserinfoUrl("");
     setAllowedDomains("");
     setAutoProvision(false);
+    setDefaultRole("");
     setError("");
   }, []);
 
@@ -309,6 +341,10 @@ function CreateOrgIdPDialog({
       allowed_domains: domains,
       auto_provision: autoProvision,
       ...(issuerUrl.trim() ? { issuer_url: issuerUrl.trim() } : {}),
+      authorize_url: authorizeUrl.trim() || undefined,
+      token_url: tokenUrl.trim() || undefined,
+      userinfo_url: userinfoUrl.trim() || undefined,
+      default_role: defaultRole.trim() || undefined,
     };
 
     try {
@@ -324,8 +360,12 @@ function CreateOrgIdPDialog({
     clientSecret,
     providerType,
     issuerUrl,
+    authorizeUrl,
+    tokenUrl,
+    userinfoUrl,
     allowedDomains,
     autoProvision,
+    defaultRole,
     createMutation,
     resetForm,
     onClose,
@@ -353,10 +393,18 @@ function CreateOrgIdPDialog({
             setClientSecret,
             issuerUrl,
             setIssuerUrl,
+            authorizeUrl,
+            setAuthorizeUrl,
+            tokenUrl,
+            setTokenUrl,
+            userinfoUrl,
+            setUserinfoUrl,
             allowedDomains,
             setAllowedDomains,
             autoProvision,
             setAutoProvision,
+            defaultRole,
+            setDefaultRole,
           })}
         </div>
 
@@ -385,7 +433,7 @@ function CreateOrgIdPDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Shared form fields (used by both create dialogs)
+// Shared form fields (used by create and edit dialogs)
 // ---------------------------------------------------------------------------
 
 function CallbackUrlField() {
@@ -426,12 +474,21 @@ function renderIdPFormFields({
   setClientId,
   clientSecret,
   setClientSecret,
+  clientSecretPlaceholder,
   issuerUrl,
   setIssuerUrl,
+  authorizeUrl,
+  setAuthorizeUrl,
+  tokenUrl,
+  setTokenUrl,
+  userinfoUrl,
+  setUserinfoUrl,
   allowedDomains,
   setAllowedDomains,
   autoProvision,
   setAutoProvision,
+  defaultRole,
+  setDefaultRole,
 }: {
   providerType: "oidc" | "saml";
   setProviderType: (v: "oidc" | "saml") => void;
@@ -439,12 +496,21 @@ function renderIdPFormFields({
   setClientId: (v: string) => void;
   clientSecret: string;
   setClientSecret: (v: string) => void;
+  clientSecretPlaceholder?: string;
   issuerUrl: string;
   setIssuerUrl: (v: string) => void;
+  authorizeUrl: string;
+  setAuthorizeUrl: (v: string) => void;
+  tokenUrl: string;
+  setTokenUrl: (v: string) => void;
+  userinfoUrl: string;
+  setUserinfoUrl: (v: string) => void;
   allowedDomains: string;
   setAllowedDomains: (v: string) => void;
   autoProvision: boolean;
   setAutoProvision: (v: boolean) => void;
+  defaultRole: string;
+  setDefaultRole: (v: string) => void;
 }) {
   return (
     <>
@@ -489,7 +555,7 @@ function renderIdPFormFields({
           value={clientSecret}
           onChange={(e) => setClientSecret(e.target.value)}
           className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-          placeholder="External IdP client secret"
+          placeholder={clientSecretPlaceholder ?? "External IdP client secret"}
         />
       </div>
 
@@ -503,6 +569,50 @@ function renderIdPFormFields({
           onChange={(e) => setIssuerUrl(e.target.value)}
           className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
           placeholder="https://idp.example.com"
+        />
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Or specify endpoints directly (for providers like GitHub that don't
+        support OIDC discovery):
+      </p>
+
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">
+          Authorize URL
+        </label>
+        <input
+          type="url"
+          value={authorizeUrl}
+          onChange={(e) => setAuthorizeUrl(e.target.value)}
+          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+          placeholder="https://github.com/login/oauth/authorize"
+        />
+      </div>
+
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">
+          Token URL
+        </label>
+        <input
+          type="url"
+          value={tokenUrl}
+          onChange={(e) => setTokenUrl(e.target.value)}
+          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+          placeholder="https://github.com/login/oauth/access_token"
+        />
+      </div>
+
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">
+          Userinfo URL
+        </label>
+        <input
+          type="url"
+          value={userinfoUrl}
+          onChange={(e) => setUserinfoUrl(e.target.value)}
+          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+          placeholder="https://api.github.com/user"
         />
       </div>
 
@@ -531,7 +641,180 @@ function renderIdPFormFields({
           Auto-provision users on first login
         </label>
       </div>
+
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">
+          Default Role
+        </label>
+        <input
+          type="text"
+          value={defaultRole}
+          onChange={(e) => setDefaultRole(e.target.value)}
+          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+          placeholder="member"
+        />
+      </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Edit IdP Dialog
+// ---------------------------------------------------------------------------
+
+function EditIdPDialog({
+  config,
+  onClose,
+  onSave,
+  isPending,
+}: {
+  config: IdPConfig;
+  onClose: () => void;
+  onSave: (data: UpdateIdPConfigRequest) => void;
+  isPending: boolean;
+}) {
+  const [providerType, setProviderType] = useState<"oidc" | "saml">(
+    config.provider_type as "oidc" | "saml"
+  );
+  const [clientId, setClientId] = useState(config.client_id);
+  const [clientSecret, setClientSecret] = useState("");
+  const [issuerUrl, setIssuerUrl] = useState(config.issuer_url ?? "");
+  const [authorizeUrl, setAuthorizeUrl] = useState(config.authorize_url ?? "");
+  const [tokenUrl, setTokenUrl] = useState(config.token_url ?? "");
+  const [userinfoUrl, setUserinfoUrl] = useState(config.userinfo_url ?? "");
+  const [allowedDomains, setAllowedDomains] = useState(
+    (config.allowed_domains ?? []).join(", ")
+  );
+  const [autoProvision, setAutoProvision] = useState(config.auto_provision);
+  const [defaultRole, setDefaultRole] = useState(config.default_role ?? "");
+  const [error, setError] = useState("");
+
+  const handleSave = useCallback(() => {
+    setError("");
+
+    const data: UpdateIdPConfigRequest = {};
+
+    if (clientId.trim() !== config.client_id) {
+      data.client_id = clientId.trim();
+    }
+    if (clientSecret.trim()) {
+      data.client_secret = clientSecret.trim();
+    }
+
+    const newIssuer = issuerUrl.trim() || null;
+    if (newIssuer !== (config.issuer_url ?? null)) {
+      data.issuer_url = newIssuer;
+    }
+
+    const newAuthorize = authorizeUrl.trim() || null;
+    if (newAuthorize !== (config.authorize_url ?? null)) {
+      data.authorize_url = newAuthorize;
+    }
+
+    const newToken = tokenUrl.trim() || null;
+    if (newToken !== (config.token_url ?? null)) {
+      data.token_url = newToken;
+    }
+
+    const newUserinfo = userinfoUrl.trim() || null;
+    if (newUserinfo !== (config.userinfo_url ?? null)) {
+      data.userinfo_url = newUserinfo;
+    }
+
+    const newDomains = allowedDomains
+      .split(",")
+      .map((d) => d.trim())
+      .filter(Boolean);
+    const oldDomains = config.allowed_domains ?? [];
+    if (JSON.stringify(newDomains) !== JSON.stringify(oldDomains)) {
+      data.allowed_domains = newDomains;
+    }
+
+    if (autoProvision !== config.auto_provision) {
+      data.auto_provision = autoProvision;
+    }
+
+    const newDefaultRole = defaultRole.trim() || undefined;
+    if ((newDefaultRole ?? "") !== (config.default_role ?? "")) {
+      data.default_role = newDefaultRole;
+    }
+
+    if (Object.keys(data).length === 0) {
+      setError("No changes detected.");
+      return;
+    }
+
+    onSave(data);
+  }, [
+    clientId,
+    clientSecret,
+    issuerUrl,
+    authorizeUrl,
+    tokenUrl,
+    userinfoUrl,
+    allowedDomains,
+    autoProvision,
+    defaultRole,
+    config,
+    onSave,
+  ]);
+
+  // providerType is read-only in edit mode (shown but not changeable)
+  void providerType;
+  void setProviderType;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="mx-4 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-lg">
+        <h3 className="text-lg font-semibold">Edit Identity Provider</h3>
+
+        <div className="mt-4 space-y-3">
+          {renderIdPFormFields({
+            providerType: config.provider_type as "oidc" | "saml",
+            setProviderType: () => {},
+            clientId,
+            setClientId,
+            clientSecret,
+            setClientSecret,
+            clientSecretPlaceholder: "Leave blank to keep current",
+            issuerUrl,
+            setIssuerUrl,
+            authorizeUrl,
+            setAuthorizeUrl,
+            tokenUrl,
+            setTokenUrl,
+            userinfoUrl,
+            setUserinfoUrl,
+            allowedDomains,
+            setAllowedDomains,
+            autoProvision,
+            setAutoProvision,
+            defaultRole,
+            setDefaultRole,
+          })}
+        </div>
+
+        {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={isPending}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {isPending ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -542,10 +825,12 @@ function renderIdPFormFields({
 function IdPTable({
   configs,
   onDelete,
+  onEdit,
   showOrgColumn,
 }: {
   configs: IdPConfig[];
   onDelete: (cfg: IdPConfig) => void;
+  onEdit: (cfg: IdPConfig) => void;
   showOrgColumn: boolean;
 }) {
   const providerLabel = (type: string) => {
@@ -612,7 +897,14 @@ function IdPTable({
               <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
                 {formatDate(cfg.created_at)}
               </td>
-              <td className="px-4 py-2">
+              <td className="flex gap-2 px-4 py-2">
+                <button
+                  type="button"
+                  onClick={() => onEdit(cfg)}
+                  className="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-muted"
+                >
+                  Edit
+                </button>
                 <button
                   type="button"
                   onClick={() => onDelete(cfg)}
@@ -637,9 +929,11 @@ function AdminIdPView() {
   const { data: configs, isLoading, error } = useIdPConfigs();
   const { data: orgs } = useOrgs();
   const deleteMutation = useDeleteIdPConfig();
+  const updateMutation = useUpdateIdPConfig();
 
   const [showCreate, setShowCreate] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<IdPConfig | null>(null);
+  const [editTarget, setEditTarget] = useState<IdPConfig | null>(null);
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
@@ -650,6 +944,19 @@ function AdminIdPView() {
       // error handled by mutation state
     }
   }, [deleteTarget, deleteMutation]);
+
+  const handleUpdate = useCallback(
+    async (data: UpdateIdPConfigRequest) => {
+      if (!editTarget) return;
+      try {
+        await updateMutation.mutateAsync({ id: editTarget.id, data });
+        setEditTarget(null);
+      } catch {
+        // error handled by mutation state
+      }
+    },
+    [editTarget, updateMutation]
+  );
 
   return (
     <div className="space-y-8">
@@ -691,6 +998,7 @@ function AdminIdPView() {
         <IdPTable
           configs={configs}
           onDelete={setDeleteTarget}
+          onEdit={setEditTarget}
           showOrgColumn={true}
         />
       )}
@@ -700,6 +1008,15 @@ function AdminIdPView() {
         onClose={() => setShowCreate(false)}
         orgs={orgs ?? []}
       />
+
+      {editTarget && (
+        <EditIdPDialog
+          config={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSave={handleUpdate}
+          isPending={updateMutation.isPending}
+        />
+      )}
 
       {deleteTarget && (
         <DeleteIdPDialog
@@ -720,9 +1037,11 @@ function AdminIdPView() {
 function OrgOwnerIdPView({ orgId }: { orgId: string }) {
   const { data: configs, isLoading, error } = useOrgIdPConfigs(orgId);
   const deleteMutation = useDeleteOrgIdPConfig();
+  const updateMutation = useUpdateOrgIdPConfig();
 
   const [showCreate, setShowCreate] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<IdPConfig | null>(null);
+  const [editTarget, setEditTarget] = useState<IdPConfig | null>(null);
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
@@ -733,6 +1052,19 @@ function OrgOwnerIdPView({ orgId }: { orgId: string }) {
       // error handled by mutation state
     }
   }, [deleteTarget, deleteMutation, orgId]);
+
+  const handleUpdate = useCallback(
+    async (data: UpdateIdPConfigRequest) => {
+      if (!editTarget) return;
+      try {
+        await updateMutation.mutateAsync({ orgId, id: editTarget.id, data });
+        setEditTarget(null);
+      } catch {
+        // error handled by mutation state
+      }
+    },
+    [editTarget, updateMutation, orgId]
+  );
 
   return (
     <div className="space-y-8">
@@ -775,6 +1107,7 @@ function OrgOwnerIdPView({ orgId }: { orgId: string }) {
         <IdPTable
           configs={configs}
           onDelete={setDeleteTarget}
+          onEdit={setEditTarget}
           showOrgColumn={false}
         />
       )}
@@ -784,6 +1117,15 @@ function OrgOwnerIdPView({ orgId }: { orgId: string }) {
         onClose={() => setShowCreate(false)}
         orgId={orgId}
       />
+
+      {editTarget && (
+        <EditIdPDialog
+          config={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSave={handleUpdate}
+          isPending={updateMutation.isPending}
+        />
+      )}
 
       {deleteTarget && (
         <DeleteIdPDialog
