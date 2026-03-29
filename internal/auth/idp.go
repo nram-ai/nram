@@ -321,8 +321,7 @@ func (h *IdPHandler) CallbackHandler() http.HandlerFunc {
 			Name:     "nram_session",
 			Value:    sessionToken,
 			Path:     "/",
-			MaxAge:   int(idpSessionExpiry.Seconds()),
-			HttpOnly: true,
+			MaxAge:   300, // Short-lived: SPA reads it on load and moves to localStorage.
 			SameSite: http.SameSiteLaxMode,
 			Secure:   requestIsSecure(r),
 		})

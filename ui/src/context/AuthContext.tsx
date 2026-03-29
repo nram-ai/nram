@@ -71,7 +71,29 @@ function decodeUserFromJWT(token: string): UserInfo | null {
 // Initial user from localStorage
 // ---------------------------------------------------------------------------
 
+// Check for nram_session cookie set by the IdP callback and bootstrap
+// localStorage auth from it. The cookie is short-lived and non-HttpOnly
+// so the SPA can read it exactly once.
+function bootstrapFromIdPCookie(): void {
+  const match = document.cookie.match(/(?:^|;\s*)nram_session=([^;]+)/);
+  if (!match) return;
+  const token = match[1];
+  if (!token) return;
+
+  // Move to localStorage.
+  localStorage.setItem("nram_token", token);
+  const user = decodeUserFromJWT(token);
+  if (user) {
+    localStorage.setItem("nram_user", JSON.stringify(user));
+  }
+
+  // Clear the cookie.
+  document.cookie = "nram_session=; path=/; max-age=0";
+}
+
 function loadInitialUser(): UserInfo | null {
+  bootstrapFromIdPCookie();
+
   const raw = localStorage.getItem("nram_user");
   if (raw) {
     try {
