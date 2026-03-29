@@ -929,13 +929,58 @@ function MemoryBrowser() {
     return listQuery.data?.data ?? [];
   }, [isSemanticSearch, recallQuery.data, listQuery.data]);
 
+  // Apply client-side filters (tags, date range, enrichment, source, text search in list mode)
+  const filteredMemories: Memory[] = useMemo(() => {
+    let result = memories;
+
+    // Text search in list (exact) mode — filter client-side
+    if (!isSemanticSearch && debouncedSearch.length > 0) {
+      const lower = debouncedSearch.toLowerCase();
+      result = result.filter((m) => m.content.toLowerCase().includes(lower));
+    }
+
+    // Tag filter
+    if (filters.selectedTags.length > 0) {
+      result = result.filter((m) =>
+        filters.selectedTags.every((t) => m.tags.includes(t)),
+      );
+    }
+
+    // Date range filter
+    if (filters.dateFrom) {
+      const from = new Date(filters.dateFrom).getTime();
+      result = result.filter((m) => new Date(m.created_at).getTime() >= from);
+    }
+    if (filters.dateTo) {
+      const to = new Date(filters.dateTo).getTime() + 86400000; // include the entire day
+      result = result.filter((m) => new Date(m.created_at).getTime() < to);
+    }
+
+    // Enrichment filter
+    if (filters.enrichmentFilter === "enriched") {
+      result = result.filter((m) => m.enriched);
+    } else if (filters.enrichmentFilter === "not_enriched") {
+      result = result.filter((m) => !m.enriched);
+    }
+
+    // Source filter
+    if (filters.sourceFilter) {
+      const lower = filters.sourceFilter.toLowerCase();
+      result = result.filter(
+        (m) => m.source && m.source.toLowerCase().includes(lower),
+      );
+    }
+
+    return result;
+  }, [memories, filters, isSemanticSearch, debouncedSearch]);
+
   const scoreMap = useMemo(() => {
     if (!isSemanticSearch || !recallQuery.data) return new Map<string, number>();
     return new Map(recallQuery.data.memories.map((r) => [r.id, r.score]));
   }, [isSemanticSearch, recallQuery.data]);
 
   const total = isSemanticSearch
-    ? memories.length
+    ? filteredMemories.length
     : (listQuery.data?.pagination?.total ?? 0);
 
   const isLoading = isSemanticSearch
@@ -954,11 +999,11 @@ function MemoryBrowser() {
   // Children whose parent is not on the current page appear as standalone
   // entries with a visual indicator.
   const groupedMemories = useMemo(() => {
-    const parentIds = new Set(memories.filter((m) => !m.parent_id).map((m) => m.id));
+    const parentIds = new Set(filteredMemories.filter((m) => !m.parent_id).map((m) => m.id));
     const childrenByParent = new Map<string, Memory[]>();
     const topLevel: Memory[] = [];
 
-    for (const m of memories) {
+    for (const m of filteredMemories) {
       if (m.parent_id && parentIds.has(m.parent_id)) {
         const list = childrenByParent.get(m.parent_id) ?? [];
         list.push(m);
@@ -969,9 +1014,9 @@ function MemoryBrowser() {
     }
 
     return { topLevel, childrenByParent };
-  }, [memories]);
+  }, [filteredMemories]);
 
-  // Available tags derived from loaded memories
+  // Available tags derived from unfiltered memories so options don't disappear
   const availableTags = useMemo(() => {
     const tagSet = new Set<string>();
     for (const m of memories) {
@@ -1019,7 +1064,7 @@ function MemoryBrowser() {
   function handleBulkAddTags(tags: string[]) {
     if (!selectedProjectId || selectedIds.size === 0) return;
     const promises = Array.from(selectedIds).map((memoryId) => {
-      const mem = memories.find((m) => m.id === memoryId);
+      const mem = filteredMemories.find((m) => m.id === memoryId);
       const existingTags = mem?.tags ?? [];
       const merged = Array.from(new Set([...existingTags, ...tags]));
       return updateMut.mutateAsync({
@@ -1032,7 +1077,7 @@ function MemoryBrowser() {
   }
 
   function handleBulkExport() {
-    const selected = memories.filter((m) => selectedIds.has(m.id));
+    const selected = filteredMemories.filter((m) => selectedIds.has(m.id));
     downloadJson(selected, "memories-export.json");
   }
 
@@ -1164,11 +1209,11 @@ function MemoryBrowser() {
                 <SkeletonCard key={i} />
               ))}
             </div>
-          ) : memories.length === 0 ? (
+          ) : filteredMemories.length === 0 ? (
             <div className="flex flex-1 items-center justify-center">
               <p className="text-sm text-muted-foreground">
-                {debouncedSearch
-                  ? "No memories found matching your search."
+                {debouncedSearch || filters.selectedTags.length > 0 || filters.dateFrom || filters.dateTo || filters.enrichmentFilter !== "all" || filters.sourceFilter
+                  ? "No memories found matching your filters."
                   : "No memories in this project yet."}
               </p>
             </div>
@@ -1179,20 +1224,20 @@ function MemoryBrowser() {
                   type="button"
                   className="rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted"
                   onClick={() => {
-                    if (selectedIds.size === memories.length) {
+                    if (selectedIds.size === filteredMemories.length) {
                       setSelectedIds(new Set());
                     } else {
-                      setSelectedIds(new Set(memories.map((m) => m.id)));
+                      setSelectedIds(new Set(filteredMemories.map((m) => m.id)));
                     }
                   }}
                 >
-                  {selectedIds.size === memories.length && memories.length > 0
+                  {selectedIds.size === filteredMemories.length && filteredMemories.length > 0
                     ? "Deselect All"
                     : "Select All"}
                 </button>
                 {selectedIds.size > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {selectedIds.size} of {memories.length} selected
+                    {selectedIds.size} of {filteredMemories.length} selected
                   </span>
                 )}
               </div>
