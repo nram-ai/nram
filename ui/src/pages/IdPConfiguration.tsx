@@ -227,28 +227,28 @@ function CreateIdPDialog({
             </select>
           </div>
 
-          {renderIdPFormFields({
-            providerType,
-            setProviderType,
-            clientId,
-            setClientId,
-            clientSecret,
-            setClientSecret,
-            issuerUrl,
-            setIssuerUrl,
-            authorizeUrl,
-            setAuthorizeUrl,
-            tokenUrl,
-            setTokenUrl,
-            userinfoUrl,
-            setUserinfoUrl,
-            allowedDomains,
-            setAllowedDomains,
-            autoProvision,
-            setAutoProvision,
-            defaultRole,
-            setDefaultRole,
-          })}
+          <IdPFormFields
+            providerType={providerType}
+            setProviderType={setProviderType}
+            clientId={clientId}
+            setClientId={setClientId}
+            clientSecret={clientSecret}
+            setClientSecret={setClientSecret}
+            issuerUrl={issuerUrl}
+            setIssuerUrl={setIssuerUrl}
+            authorizeUrl={authorizeUrl}
+            setAuthorizeUrl={setAuthorizeUrl}
+            tokenUrl={tokenUrl}
+            setTokenUrl={setTokenUrl}
+            userinfoUrl={userinfoUrl}
+            setUserinfoUrl={setUserinfoUrl}
+            allowedDomains={allowedDomains}
+            setAllowedDomains={setAllowedDomains}
+            autoProvision={autoProvision}
+            setAutoProvision={setAutoProvision}
+            defaultRole={defaultRole}
+            setDefaultRole={setDefaultRole}
+          />
         </div>
 
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
@@ -384,28 +384,28 @@ function CreateOrgIdPDialog({
         <h3 className="text-lg font-semibold">Add Identity Provider</h3>
 
         <div className="mt-4 space-y-3">
-          {renderIdPFormFields({
-            providerType,
-            setProviderType,
-            clientId,
-            setClientId,
-            clientSecret,
-            setClientSecret,
-            issuerUrl,
-            setIssuerUrl,
-            authorizeUrl,
-            setAuthorizeUrl,
-            tokenUrl,
-            setTokenUrl,
-            userinfoUrl,
-            setUserinfoUrl,
-            allowedDomains,
-            setAllowedDomains,
-            autoProvision,
-            setAutoProvision,
-            defaultRole,
-            setDefaultRole,
-          })}
+          <IdPFormFields
+            providerType={providerType}
+            setProviderType={setProviderType}
+            clientId={clientId}
+            setClientId={setClientId}
+            clientSecret={clientSecret}
+            setClientSecret={setClientSecret}
+            issuerUrl={issuerUrl}
+            setIssuerUrl={setIssuerUrl}
+            authorizeUrl={authorizeUrl}
+            setAuthorizeUrl={setAuthorizeUrl}
+            tokenUrl={tokenUrl}
+            setTokenUrl={setTokenUrl}
+            userinfoUrl={userinfoUrl}
+            setUserinfoUrl={setUserinfoUrl}
+            allowedDomains={allowedDomains}
+            setAllowedDomains={setAllowedDomains}
+            autoProvision={autoProvision}
+            setAutoProvision={setAutoProvision}
+            defaultRole={defaultRole}
+            setDefaultRole={setDefaultRole}
+          />
         </div>
 
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
@@ -467,7 +467,9 @@ function CallbackUrlField() {
   );
 }
 
-function renderIdPFormFields({
+type EndpointMode = "discovery" | "manual";
+
+function IdPFormFields({
   providerType,
   setProviderType,
   clientId,
@@ -512,6 +514,11 @@ function renderIdPFormFields({
   defaultRole: string;
   setDefaultRole: (v: string) => void;
 }) {
+  // Infer initial mode: if explicit endpoints are filled in, start in manual mode.
+  const initialMode: EndpointMode =
+    authorizeUrl.trim() || tokenUrl.trim() ? "manual" : "discovery";
+  const [endpointMode, setEndpointMode] = useState<EndpointMode>(initialMode);
+
   return (
     <>
       <CallbackUrlField />
@@ -542,7 +549,7 @@ function renderIdPFormFields({
           value={clientId}
           onChange={(e) => setClientId(e.target.value)}
           className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-          placeholder="External IdP client ID"
+          placeholder="Client ID"
         />
       </div>
 
@@ -555,66 +562,101 @@ function renderIdPFormFields({
           value={clientSecret}
           onChange={(e) => setClientSecret(e.target.value)}
           className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-          placeholder={clientSecretPlaceholder ?? "External IdP client secret"}
+          placeholder={clientSecretPlaceholder ?? "Client secret"}
         />
       </div>
 
+      {/* Endpoint configuration mode toggle */}
       <div>
         <label className="text-xs font-medium text-muted-foreground">
-          Issuer URL
+          Endpoint Configuration
         </label>
-        <input
-          type="url"
-          value={issuerUrl}
-          onChange={(e) => setIssuerUrl(e.target.value)}
-          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-          placeholder="https://idp.example.com"
-        />
+        <div className="mt-1 flex rounded-md border border-input">
+          <button
+            type="button"
+            onClick={() => setEndpointMode("discovery")}
+            className={`flex-1 px-3 py-1.5 text-sm font-medium transition-colors ${
+              endpointMode === "discovery"
+                ? "bg-primary text-primary-foreground"
+                : "bg-background text-muted-foreground hover:bg-muted"
+            } rounded-l-md`}
+          >
+            OIDC Discovery
+          </button>
+          <button
+            type="button"
+            onClick={() => setEndpointMode("manual")}
+            className={`flex-1 px-3 py-1.5 text-sm font-medium transition-colors ${
+              endpointMode === "manual"
+                ? "bg-primary text-primary-foreground"
+                : "bg-background text-muted-foreground hover:bg-muted"
+            } rounded-r-md`}
+          >
+            Manual
+          </button>
+        </div>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        Or specify endpoints directly (for providers like GitHub that don't
-        support OIDC discovery):
-      </p>
+      {endpointMode === "discovery" ? (
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">
+            Issuer URL
+          </label>
+          <input
+            type="url"
+            value={issuerUrl}
+            onChange={(e) => setIssuerUrl(e.target.value)}
+            className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+            placeholder="https://accounts.google.com"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Endpoints will be resolved automatically via{" "}
+            <code className="text-xs">.well-known/openid-configuration</code>
+          </p>
+        </div>
+      ) : (
+        <>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">
+              Authorize URL
+            </label>
+            <input
+              type="url"
+              value={authorizeUrl}
+              onChange={(e) => setAuthorizeUrl(e.target.value)}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+              placeholder="https://example.com/oauth/authorize"
+            />
+          </div>
 
-      <div>
-        <label className="text-xs font-medium text-muted-foreground">
-          Authorize URL
-        </label>
-        <input
-          type="url"
-          value={authorizeUrl}
-          onChange={(e) => setAuthorizeUrl(e.target.value)}
-          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-          placeholder="https://github.com/login/oauth/authorize"
-        />
-      </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">
+              Token URL
+            </label>
+            <input
+              type="url"
+              value={tokenUrl}
+              onChange={(e) => setTokenUrl(e.target.value)}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+              placeholder="https://example.com/oauth/token"
+            />
+          </div>
 
-      <div>
-        <label className="text-xs font-medium text-muted-foreground">
-          Token URL
-        </label>
-        <input
-          type="url"
-          value={tokenUrl}
-          onChange={(e) => setTokenUrl(e.target.value)}
-          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-          placeholder="https://github.com/login/oauth/access_token"
-        />
-      </div>
-
-      <div>
-        <label className="text-xs font-medium text-muted-foreground">
-          Userinfo URL
-        </label>
-        <input
-          type="url"
-          value={userinfoUrl}
-          onChange={(e) => setUserinfoUrl(e.target.value)}
-          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-          placeholder="https://api.github.com/user"
-        />
-      </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">
+              Userinfo URL{" "}
+              <span className="font-normal text-muted-foreground">(optional)</span>
+            </label>
+            <input
+              type="url"
+              value={userinfoUrl}
+              onChange={(e) => setUserinfoUrl(e.target.value)}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+              placeholder="https://example.com/oauth/userinfo"
+            />
+          </div>
+        </>
+      )}
 
       <div>
         <label className="text-xs font-medium text-muted-foreground">
@@ -769,29 +811,29 @@ function EditIdPDialog({
         <h3 className="text-lg font-semibold">Edit Identity Provider</h3>
 
         <div className="mt-4 space-y-3">
-          {renderIdPFormFields({
-            providerType: config.provider_type as "oidc" | "saml",
-            setProviderType: () => {},
-            clientId,
-            setClientId,
-            clientSecret,
-            setClientSecret,
-            clientSecretPlaceholder: "Leave blank to keep current",
-            issuerUrl,
-            setIssuerUrl,
-            authorizeUrl,
-            setAuthorizeUrl,
-            tokenUrl,
-            setTokenUrl,
-            userinfoUrl,
-            setUserinfoUrl,
-            allowedDomains,
-            setAllowedDomains,
-            autoProvision,
-            setAutoProvision,
-            defaultRole,
-            setDefaultRole,
-          })}
+          <IdPFormFields
+            providerType={config.provider_type as "oidc" | "saml"}
+            setProviderType={() => {}}
+            clientId={clientId}
+            setClientId={setClientId}
+            clientSecret={clientSecret}
+            setClientSecret={setClientSecret}
+            clientSecretPlaceholder="Leave blank to keep current"
+            issuerUrl={issuerUrl}
+            setIssuerUrl={setIssuerUrl}
+            authorizeUrl={authorizeUrl}
+            setAuthorizeUrl={setAuthorizeUrl}
+            tokenUrl={tokenUrl}
+            setTokenUrl={setTokenUrl}
+            userinfoUrl={userinfoUrl}
+            setUserinfoUrl={setUserinfoUrl}
+            allowedDomains={allowedDomains}
+            setAllowedDomains={setAllowedDomains}
+            autoProvision={autoProvision}
+            setAutoProvision={setAutoProvision}
+            defaultRole={defaultRole}
+            setDefaultRole={setDefaultRole}
+          />
         </div>
 
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
