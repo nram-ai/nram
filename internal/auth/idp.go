@@ -481,7 +481,20 @@ func (h *IdPHandler) getUserInfo(ctx context.Context, tokenResp *idpTokenRespons
 		return nil, fmt.Errorf("no id_token and no userinfo endpoint available")
 	}
 
-	return h.fetchUserInfo(ctx, userinfoEndpoint, tokenResp.AccessToken)
+	info, err := h.fetchUserInfo(ctx, userinfoEndpoint, tokenResp.AccessToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// Some providers (e.g. GitHub) return a null email when the user's email
+	// is private. Try fetching from a /emails endpoint as a fallback.
+	if info.Email == "" {
+		if email, err := h.fetchPrimaryEmail(ctx, userinfoEndpoint, tokenResp.AccessToken); err == nil && email != "" {
+			info.Email = email
+		}
+	}
+
+	return info, nil
 }
 
 func (h *IdPHandler) parseIDTokenClaims(idToken string) (*idpUserInfo, error) {
@@ -524,6 +537,62 @@ func (h *IdPHandler) fetchUserInfo(ctx context.Context, userinfoEndpoint, access
 	}
 
 	return extractUserInfoFromClaims(claims), nil
+}
+
+// fetchPrimaryEmail tries to get the user's primary email from a provider's
+// email list endpoint. Derives the URL by appending "/emails" to the userinfo
+// endpoint path (e.g. https://api.github.com/user -> /user/emails). Returns
+// the first primary+verified email, or the first verified email, or the first
+// email in the list.
+func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, accessToken string) (string, error) {
+	emailsURL := strings.TrimRight(userinfoEndpoint, "/") + "/emails"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, emailsURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("emails endpoint returned %d", resp.StatusCode)
+	}
+
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&emails); err != nil {
+		return "", err
+	}
+
+	// Prefer primary+verified, then verified, then any.
+	var verified, any string
+	for _, e := range emails {
+		if e.Email == "" {
+			continue
+		}
+		if any == "" {
+			any = e.Email
+		}
+		if e.Verified && verified == "" {
+			verified = e.Email
+		}
+		if e.Primary && e.Verified {
+			return e.Email, nil
+		}
+	}
+	if verified != "" {
+		return verified, nil
+	}
+	return any, nil
 }
 
 // extractUserInfoFromClaims extracts email and display name from OIDC claims.
