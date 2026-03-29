@@ -37,10 +37,67 @@ function formatDate(iso?: string | null): string {
 // Provider type options
 // ---------------------------------------------------------------------------
 
-const IDP_TYPES = [{ value: "oidc" as const, label: "OIDC" }];
-
 // The callback URL that must be registered with the external IdP.
 const IDP_CALLBACK_URL = `${window.location.origin}/auth/idp/callback`;
+
+// Provider presets auto-fill endpoint configuration.
+interface IdPPreset {
+  label: string;
+  mode: "discovery" | "manual";
+  issuerUrl?: string;
+  authorizeUrl?: string;
+  tokenUrl?: string;
+  userinfoUrl?: string;
+}
+
+const IDP_PRESETS: Record<string, IdPPreset> = {
+  google: {
+    label: "Google",
+    mode: "discovery",
+    issuerUrl: "https://accounts.google.com",
+  },
+  microsoft: {
+    label: "Microsoft Entra ID",
+    mode: "discovery",
+    issuerUrl: "https://login.microsoftonline.com/{tenant}/v2.0",
+  },
+  okta: {
+    label: "Okta",
+    mode: "discovery",
+    issuerUrl: "https://{your-domain}.okta.com",
+  },
+  auth0: {
+    label: "Auth0",
+    mode: "discovery",
+    issuerUrl: "https://{your-domain}.auth0.com",
+  },
+  keycloak: {
+    label: "Keycloak",
+    mode: "discovery",
+    issuerUrl: "https://{host}/realms/{realm}",
+  },
+  onelogin: {
+    label: "OneLogin",
+    mode: "discovery",
+    issuerUrl: "https://{your-domain}.onelogin.com/oidc/2",
+  },
+  github: {
+    label: "GitHub",
+    mode: "manual",
+    authorizeUrl: "https://github.com/login/oauth/authorize",
+    tokenUrl: "https://github.com/login/oauth/access_token",
+    userinfoUrl: "https://api.github.com/user",
+  },
+  gitlab: {
+    label: "GitLab",
+    mode: "discovery",
+    issuerUrl: "https://gitlab.com",
+  },
+  custom: {
+    label: "Custom",
+    mode: "discovery",
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Delete Confirmation Dialog
@@ -467,7 +524,7 @@ function CallbackUrlField() {
 type EndpointMode = "discovery" | "manual";
 
 function IdPFormFields({
-  providerType,
+  providerType: _providerType,
   setProviderType,
   clientId,
   setClientId,
@@ -511,10 +568,27 @@ function IdPFormFields({
   defaultRole: string;
   setDefaultRole: (v: string) => void;
 }) {
-  // Infer initial mode: if explicit endpoints are filled in, start in manual mode.
+  // Infer initial mode from existing endpoint values.
   const initialMode: EndpointMode =
     authorizeUrl.trim() || tokenUrl.trim() ? "manual" : "discovery";
   const [endpointMode, setEndpointMode] = useState<EndpointMode>(initialMode);
+  const [selectedPreset, setSelectedPreset] = useState("custom");
+
+  const applyPreset = useCallback(
+    (key: string) => {
+      setSelectedPreset(key);
+      const preset = IDP_PRESETS[key];
+      if (!preset) return;
+
+      setProviderType("oidc");
+      setEndpointMode(preset.mode);
+      setIssuerUrl(preset.issuerUrl ?? "");
+      setAuthorizeUrl(preset.authorizeUrl ?? "");
+      setTokenUrl(preset.tokenUrl ?? "");
+      setUserinfoUrl(preset.userinfoUrl ?? "");
+    },
+    [setProviderType, setIssuerUrl, setAuthorizeUrl, setTokenUrl, setUserinfoUrl],
+  );
 
   return (
     <>
@@ -522,16 +596,16 @@ function IdPFormFields({
 
       <div>
         <label className="text-xs font-medium text-muted-foreground">
-          Provider Type
+          Provider
         </label>
         <select
-          value={providerType}
-          onChange={(e) => setProviderType(e.target.value as string)}
+          value={selectedPreset}
+          onChange={(e) => applyPreset(e.target.value)}
           className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
         >
-          {IDP_TYPES.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
+          {Object.entries(IDP_PRESETS).map(([key, preset]) => (
+            <option key={key} value={key}>
+              {preset.label}
             </option>
           ))}
         </select>
@@ -872,10 +946,7 @@ function IdPTable({
   onEdit: (cfg: IdPConfig) => void;
   showOrgColumn: boolean;
 }) {
-  const providerLabel = (type: string) => {
-    const match = IDP_TYPES.find((t) => t.value === type);
-    return match ? match.label : type;
-  };
+  const providerLabel = (type: string) => type.toUpperCase();
 
   return (
     <div className="overflow-x-auto rounded-md border border-border">
