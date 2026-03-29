@@ -396,6 +396,7 @@ func main() {
 
 	authCfg := api.AuthConfig{
 		UserRepo:  userRepo,
+		IdPRepo:   oauthRepo,
 		JWTSecret: jwtSecret,
 	}
 

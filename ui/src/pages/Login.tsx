@@ -30,9 +30,13 @@ function Login() {
       const result = await authAPI.lookup({ email: trimmed });
       if (result.method === "local") {
         setStep("password");
+      } else if (result.method === "idp" && result.idp_id) {
+        // Redirect to the external IdP for SSO authentication.
+        const redirect = searchParams.get("redirect") ?? "/";
+        window.location.href = `/auth/idp/login?idp_id=${encodeURIComponent(result.idp_id)}&redirect=${encodeURIComponent(redirect)}`;
       } else if (result.method === "idp") {
         setError(
-          "Your organization uses external authentication. IdP login is not yet available.",
+          "Your organization uses external authentication but no identity provider is configured. Contact your administrator.",
         );
       } else {
         setError("User not found. Contact your administrator.");

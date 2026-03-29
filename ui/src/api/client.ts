@@ -777,6 +777,7 @@ export interface LookupRequest {
 
 export interface LookupResponse {
   method: "local" | "idp" | "unknown";
+  idp_id?: string;
 }
 
 export const authAPI = {

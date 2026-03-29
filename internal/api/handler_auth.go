@@ -21,9 +21,16 @@ type AuthUserRepo interface {
 	UpdateLastLogin(ctx context.Context, userID uuid.UUID) error
 }
 
+// AuthIdPRepo defines the IdP repository methods needed by the auth handlers.
+type AuthIdPRepo interface {
+	ListIdPsByOrg(ctx context.Context, orgID uuid.UUID) ([]model.OAuthIdPConfig, error)
+	ListIdPs(ctx context.Context) ([]model.OAuthIdPConfig, error)
+}
+
 // AuthConfig holds dependencies for the auth handlers.
 type AuthConfig struct {
 	UserRepo  AuthUserRepo
+	IdPRepo   AuthIdPRepo
 	JWTSecret []byte
 }
 
@@ -50,7 +57,8 @@ type lookupRequest struct {
 }
 
 type lookupResponse struct {
-	Method string `json:"method"`
+	Method string  `json:"method"`
+	IdPID  *string `json:"idp_id,omitempty"`
 }
 
 // NewLoginHandler returns an http.HandlerFunc that authenticates a user by
@@ -145,20 +153,90 @@ func NewLookupHandler(cfg AuthConfig) http.HandlerFunc {
 		}
 
 		user, err := cfg.UserRepo.GetByEmail(r.Context(), req.Email)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				writeJSON(w, http.StatusOK, lookupResponse{Method: "unknown"})
-				return
-			}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			WriteError(w, ErrInternal("failed to look up user"))
 			return
 		}
 
-		if user.PasswordHash != nil {
+		// Known user with a password → local login.
+		if user != nil && user.PasswordHash != nil {
 			writeJSON(w, http.StatusOK, lookupResponse{Method: "local"})
 			return
 		}
 
-		writeJSON(w, http.StatusOK, lookupResponse{Method: "idp"})
+		// Try to find an IdP for this user. If the user exists, check their
+		// org's IdP configs. If the user doesn't exist, scan all IdP configs
+		// for one whose allowed_domains matches the email domain.
+		if idpID := resolveIdPForEmail(r.Context(), cfg, user, req.Email); idpID != "" {
+			writeJSON(w, http.StatusOK, lookupResponse{Method: "idp", IdPID: &idpID})
+			return
+		}
+
+		// Known user without password and no IdP configured — still report idp
+		// so the frontend doesn't offer password login.
+		if user != nil {
+			writeJSON(w, http.StatusOK, lookupResponse{Method: "idp"})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, lookupResponse{Method: "unknown"})
 	}
+}
+
+// resolveIdPForEmail finds the best IdP config for the given email. For known
+// users it checks their org's IdP configs first. For unknown users (or if no
+// org-scoped IdP matched) it scans all IdP configs by email domain.
+func resolveIdPForEmail(ctx context.Context, cfg AuthConfig, user *model.User, email string) string {
+	if cfg.IdPRepo == nil {
+		return ""
+	}
+
+	domain := emailDomain(email)
+
+	// If the user exists, prefer their org's IdP.
+	if user != nil && user.OrgID != uuid.Nil {
+		idps, err := cfg.IdPRepo.ListIdPsByOrg(ctx, user.OrgID)
+		if err == nil {
+			for _, idp := range idps {
+				if matchesDomain(idp, domain) {
+					return idp.ID.String()
+				}
+			}
+		}
+	}
+
+	// Scan all IdP configs for a domain match.
+	idps, err := cfg.IdPRepo.ListIdPs(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, idp := range idps {
+		if matchesDomain(idp, domain) {
+			return idp.ID.String()
+		}
+	}
+
+	return ""
+}
+
+// matchesDomain returns true if the IdP config accepts the given email domain.
+// An empty allowed_domains list means all domains are accepted.
+func matchesDomain(idp model.OAuthIdPConfig, domain string) bool {
+	if len(idp.AllowedDomains) == 0 {
+		return true
+	}
+	for _, d := range idp.AllowedDomains {
+		if strings.EqualFold(d, domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func emailDomain(email string) string {
+	parts := strings.SplitN(email, "@", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return strings.ToLower(parts[1])
 }
