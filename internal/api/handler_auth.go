@@ -172,6 +172,11 @@ func NewLookupHandler(cfg AuthConfig) http.HandlerFunc {
 			if user != nil && user.PasswordHash != nil {
 				if user.Role == "org_owner" || user.Role == "administrator" {
 					resp.PasswordFallback = true
+					if cfg.PasskeyRepo != nil {
+						if has, err := cfg.PasskeyRepo.HasCredentials(r.Context(), user.ID); err == nil && has {
+							resp.HasPasskeys = true
+						}
+					}
 				}
 			}
 			writeJSON(w, http.StatusOK, resp)

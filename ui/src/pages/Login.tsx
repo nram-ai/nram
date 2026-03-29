@@ -20,6 +20,7 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const [idpId, setIdpId] = useState<string | null>(null);
   const [passwordFallback, setPasswordFallback] = useState(false);
+  const [hasPasskeys, setHasPasskeys] = useState(false);
   const passkeyLoginMut = usePasskeyLogin();
 
   function redirectToIdP(idp: string) {
@@ -40,9 +41,9 @@ function Login() {
       const result = await authAPI.lookup({ email: trimmed });
       if (result.method === "idp" && result.idp_id) {
         if (result.password_fallback) {
-          // Org owner/admin: show option to use password instead.
           setIdpId(result.idp_id);
           setPasswordFallback(true);
+          setHasPasskeys(!!result.has_passkeys && isWebAuthnAvailable());
           setStep("idp-redirect");
         } else {
           // Regular user: redirect immediately.
@@ -220,6 +221,18 @@ function Login() {
             >
               Continue with SSO
             </button>
+            {hasPasskeys && (
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={handlePasskeyLogin}
+                  disabled={loading}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Sign in with passkey
+                </button>
+              </div>
+            )}
             {passwordFallback && (
               <div className="text-center">
                 <button
