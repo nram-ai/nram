@@ -36,6 +36,19 @@ export function isWebAuthnAvailable(): boolean {
   );
 }
 
+// Module-level AbortController to cancel any pending WebAuthn ceremony
+// before starting a new one. Browsers only allow one active
+// navigator.credentials.get()/create() at a time.
+let activeController: AbortController | null = null;
+
+function getAbortSignal(): AbortSignal {
+  if (activeController) {
+    activeController.abort();
+  }
+  activeController = new AbortController();
+  return activeController.signal;
+}
+
 /**
  * Prepare the server's CredentialCreationOptions for navigator.credentials.create().
  * Decodes base64url fields to ArrayBuffers as the browser API requires.
@@ -62,6 +75,7 @@ export function prepareCreationOptions(
         }),
       ),
     },
+    signal: getAbortSignal(),
   };
 }
 
@@ -87,6 +101,7 @@ export function prepareRequestOptions(
         }),
       ),
     },
+    signal: getAbortSignal(),
   };
 }
 
