@@ -8,8 +8,12 @@ import {
   useMeOAuthClients,
   useCreateMeOAuthClient,
   useRevokeMeOAuthClient,
+  useMePasskeys,
+  useRegisterPasskey,
+  useDeletePasskey,
 } from "../hooks/useApi";
-import type { APIKey, OAuthClient, OAuthClientCreated } from "../api/client";
+import type { APIKey, OAuthClient, OAuthClientCreated, Passkey } from "../api/client";
+import { isWebAuthnAvailable } from "../api/webauthn";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -477,6 +481,128 @@ function ChangePasswordCard() {
 }
 
 // ---------------------------------------------------------------------------
+// Passkey Row
+// ---------------------------------------------------------------------------
+
+function PasskeyRow({
+  passkey,
+  onDelete,
+  deleting,
+}: {
+  passkey: Passkey;
+  onDelete: (id: string) => void;
+  deleting: boolean;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  return (
+    <tr className="border-b last:border-0">
+      <td className="px-4 py-3 text-sm">
+        <span className="font-medium">{passkey.name}</span>
+      </td>
+      <td className="px-4 py-3 text-xs text-muted-foreground">
+        {formatDate(passkey.created_at)}
+      </td>
+      <td className="px-4 py-3 text-xs text-muted-foreground">
+        {passkey.last_used_at ? formatDate(passkey.last_used_at) : "Never"}
+      </td>
+      <td className="px-4 py-3 text-right">
+        {confirmDelete ? (
+          <span className="inline-flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
+              onClick={() => onDelete(passkey.id)}
+              disabled={deleting}
+            >
+              {deleting ? "Deleting..." : "Confirm"}
+            </button>
+            <button
+              type="button"
+              className="rounded border px-2 py-1 text-xs hover:bg-muted"
+              onClick={() => setConfirmDelete(false)}
+            >
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+            onClick={() => setConfirmDelete(true)}
+          >
+            Delete
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Create Passkey Form
+// ---------------------------------------------------------------------------
+
+function CreatePasskeyForm({ onCreated }: { onCreated: () => void }) {
+  const registerMut = useRegisterPasskey();
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  function handleCreate() {
+    if (!name.trim()) return;
+    setError(null);
+    registerMut.mutate(
+      { name: name.trim() },
+      {
+        onSuccess: () => {
+          onCreated();
+          setName("");
+        },
+        onError: (err) => {
+          setError(err.message || "Failed to register passkey.");
+        },
+      },
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-end gap-3">
+        <div className="flex-1">
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            Name
+          </label>
+          <input
+            type="text"
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. MacBook Touch ID"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleCreate();
+              }
+            }}
+          />
+        </div>
+        <button
+          type="button"
+          className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          onClick={handleCreate}
+          disabled={!name.trim() || registerMut.isPending}
+        >
+          {registerMut.isPending ? "Registering..." : "Register Passkey"}
+        </button>
+      </div>
+      {error && (
+        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main MyAccount
 // ---------------------------------------------------------------------------
 
@@ -491,6 +617,9 @@ function MyAccount() {
   const user = auth.user;
   const token = localStorage.getItem("nram_token");
   const expiry = token ? decodeJWTExpiry(token) : null;
+
+  const passkeysQuery = useMePasskeys();
+  const deletePasskeyMut = useDeletePasskey();
 
   const oauthClientsQuery = useMeOAuthClients();
   const revokeOAuthMut = useRevokeMeOAuthClient();
@@ -595,6 +724,55 @@ function MyAccount() {
 
       {/* Change Password */}
       <ChangePasswordCard />
+
+      {/* Passkeys */}
+      {isWebAuthnAvailable() && (
+        <div className="rounded-lg border bg-card">
+          <div className="border-b px-4 py-3">
+            <h2 className="text-sm font-semibold">Passkeys</h2>
+          </div>
+          <div className="p-4 space-y-4">
+            <CreatePasskeyForm onCreated={() => {}} />
+
+            {passkeysQuery.isLoading ? (
+              <div className="py-4 text-center text-sm text-muted-foreground">Loading...</div>
+            ) : (passkeysQuery.data ?? []).length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                No passkeys registered. Create one above.
+              </p>
+            ) : (
+              <div className="overflow-auto rounded-lg border">
+                <table className="w-full">
+                  <thead className="border-b bg-muted/50">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Name</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Created</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Last Used</th>
+                      <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(passkeysQuery.data ?? []).map((p: Passkey) => (
+                      <PasskeyRow
+                        key={p.id}
+                        passkey={p}
+                        onDelete={(id) => deletePasskeyMut.mutate(id)}
+                        deleting={deletePasskeyMut.isPending}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {passkeysQuery.isError && (
+              <p className="text-sm text-red-600 dark:text-red-400">
+                Failed to load passkeys: {passkeysQuery.error?.message}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* API Keys */}
       <div className="rounded-lg border bg-card">

@@ -23,10 +23,12 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
+  extraHeaders?: Record<string, string>,
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...getAuthHeaders(),
+    ...extraHeaders,
   };
 
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -779,11 +781,35 @@ export interface LookupResponse {
   method: "local" | "idp" | "unknown";
   idp_id?: string;
   password_fallback?: boolean;
+  has_passkeys?: boolean;
+}
+
+export interface Passkey {
+  id: string;
+  user_id: string;
+  name: string;
+  credential_id: string;
+  aaguid: string;
+  sign_count: number;
+  transports: string[];
+  user_verified: boolean;
+  backup_eligible: boolean;
+  backup_state: boolean;
+  attestation_type: string;
+  created_at: string;
+  last_used_at?: string | null;
 }
 
 export const authAPI = {
   login: (data: LoginRequest) => request<LoginResponse>("POST", "/auth/login", data),
   lookup: (data: LookupRequest) => request<LookupResponse>("POST", "/auth/lookup", data),
+  passkeyBegin: (data: { email: string }) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    request<any>("POST", "/auth/passkey/begin", data),
+  passkeyFinish: (body: unknown, sessionKey: string) =>
+    request<LoginResponse>("POST", "/auth/passkey/finish", body, {
+      "X-Webauthn-Session": sessionKey,
+    }),
 };
 
 // --- Admin API client ---
@@ -1035,6 +1061,17 @@ export function changePassword(currentPassword: string, newPassword: string): Pr
 }
 
 export const meAPI = {
+  listPasskeys: () =>
+    request<{ data: Passkey[] }>("GET", "/me/passkeys").then((r) => r.data),
+  registerPasskeyBegin: (data: { name: string }) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    request<any>("POST", "/me/passkeys/register/begin", data),
+  registerPasskeyFinish: (body: unknown, name: string) =>
+    request<Passkey>("POST", "/me/passkeys/register/finish", body, {
+      "X-Passkey-Name": name,
+    }),
+  deletePasskey: (id: string) => request<void>("DELETE", `/me/passkeys/${id}`),
+
   listProjects: () =>
     request<{ data: Project[] }>("GET", "/me/projects").then((r) => r.data),
   getProject: (id: string) =>

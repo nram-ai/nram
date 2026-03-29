@@ -3,8 +3,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { authAPI } from "../api/client";
 import type { APIError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { usePasskeyLogin } from "../hooks/useApi";
+import { isWebAuthnAvailable } from "../api/webauthn";
 
-type Step = "email" | "password" | "idp-redirect";
+type Step = "email" | "password" | "idp-redirect" | "passkey-or-password";
 
 function Login() {
   const navigate = useNavigate();
@@ -18,6 +20,7 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const [idpId, setIdpId] = useState<string | null>(null);
   const [passwordFallback, setPasswordFallback] = useState(false);
+  const passkeyLoginMut = usePasskeyLogin();
 
   function redirectToIdP(idp: string) {
     const redirect = searchParams.get("redirect") ?? "/";
@@ -50,7 +53,11 @@ function Login() {
           "Your organization uses external authentication but no identity provider is configured. Contact your administrator.",
         );
       } else if (result.method === "local") {
-        setStep("password");
+        if (result.has_passkeys && isWebAuthnAvailable()) {
+          setStep("passkey-or-password");
+        } else {
+          setStep("password");
+        }
       } else {
         setError("User not found. Contact your administrator.");
       }
@@ -60,6 +67,17 @@ function Login() {
       setError(body?.error ?? apiErr.message ?? "Failed to look up user.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function completeLogin(token: string, user: { id: string; email: string; display_name: string; role: string; org_id: string }) {
+    auth.login(token, user);
+    document.cookie = `nram_session=${token}; path=/; max-age=300; SameSite=Lax`;
+    const redirect = searchParams.get("redirect");
+    if (redirect) {
+      window.location.href = redirect;
+    } else {
+      navigate("/", { replace: true });
     }
   }
 
@@ -73,19 +91,26 @@ function Login() {
     setLoading(true);
     try {
       const result = await authAPI.login({ email: email.trim(), password });
-      auth.login(result.token, result.user);
-      // Set a short-lived session cookie for the OAuth authorize redirect flow
-      document.cookie = `nram_session=${result.token}; path=/; max-age=300; SameSite=Lax`;
-      const redirect = searchParams.get("redirect");
-      if (redirect) {
-        window.location.href = redirect;
-      } else {
-        navigate("/", { replace: true });
-      }
+      completeLogin(result.token, result.user);
     } catch (err) {
       const apiErr = err as APIError;
       const body = apiErr.body as { error?: string } | undefined;
       setError(body?.error ?? apiErr.message ?? "Invalid credentials.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handlePasskeyLogin() {
+    setError(null);
+    setLoading(true);
+    try {
+      const result = await passkeyLoginMut.mutateAsync({ email: email.trim() });
+      completeLogin(result.token, result.user);
+    } catch (err) {
+      const apiErr = err as APIError;
+      const body = apiErr.body as { error?: string } | undefined;
+      setError(body?.error ?? (err as Error).message ?? "Passkey authentication failed.");
     } finally {
       setLoading(false);
     }
@@ -110,6 +135,8 @@ function Login() {
           <p className="mt-2 text-sm text-muted-foreground">
             {step === "email" && "Enter your email address to continue."}
             {step === "password" && "Enter your password to sign in."}
+            {step === "passkey-or-password" &&
+              "Choose how you want to sign in."}
             {step === "idp-redirect" &&
               "Your organization uses external authentication."}
           </p>
@@ -143,6 +170,41 @@ function Login() {
               {loading ? "Checking..." : "Continue"}
             </button>
           </form>
+        )}
+
+        {step === "passkey-or-password" && (
+          <div className="mt-8 space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-foreground">Email</label>
+              <p className="mt-1.5 text-sm text-muted-foreground">{email.trim()}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handlePasskeyLogin}
+              disabled={loading}
+              className={buttonClass}
+            >
+              {loading ? "Authenticating..." : "Sign in with passkey"}
+            </button>
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => setStep("password")}
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Sign in with password instead
+              </button>
+            </div>
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={handleBack}
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Back
+              </button>
+            </div>
+          </div>
         )}
 
         {step === "idp-redirect" && (

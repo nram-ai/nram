@@ -72,6 +72,19 @@ func stringsToUUIDs(ss []string) ([]uuid.UUID, error) {
 	return out, nil
 }
 
+// decodeBoolVal converts a scanned interface{} (bool or int64) to a Go bool.
+// Postgres returns native bool; SQLite returns int64 (0/1).
+func decodeBoolVal(v interface{}) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	case int64:
+		return b != 0
+	default:
+		return false
+	}
+}
+
 // encodeUUIDArray converts a UUID slice for storage.
 // SQLite: JSON string. Postgres: UUID[] literal {uuid1,uuid2}.
 func encodeUUIDArray(backend string, ids []uuid.UUID) string {

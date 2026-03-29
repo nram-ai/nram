@@ -3,6 +3,7 @@ import {
   adminAPI,
   meAPI,
   orgAPI,
+  authAPI,
   changePassword,
   memoryAPI,
   healthAPI,
@@ -38,7 +39,16 @@ import {
   type MeCreateAPIKeyResponse,
   type OrgCreateUserRequest,
   type OrgUpdateUserRequest,
+  type Passkey,
+  type LoginResponse,
 } from "../api/client";
+import {
+  isWebAuthnAvailable,
+  prepareCreationOptions,
+  prepareRequestOptions,
+  serializeCreationResponse,
+  serializeAssertionResponse,
+} from "../api/webauthn";
 
 // --- Health ---
 
@@ -773,6 +783,81 @@ export function useRevokeMeOAuthClient() {
     mutationFn: (id: string) => meAPI.revokeOAuthClient(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["me", "oauth-clients"] });
+    },
+  });
+}
+
+// --- Passkey hooks ---
+
+export function useMePasskeys() {
+  return useQuery({
+    queryKey: ["me", "passkeys"],
+    queryFn: meAPI.listPasskeys,
+  });
+}
+
+export function useRegisterPasskey() {
+  const qc = useQueryClient();
+  return useMutation<Passkey, Error, { name: string }>({
+    mutationFn: async ({ name }) => {
+      if (!isWebAuthnAvailable()) {
+        throw new Error("WebAuthn is not supported in this browser");
+      }
+
+      // Step 1: Begin registration.
+      const serverOptions = await meAPI.registerPasskeyBegin({ name });
+
+      // Step 2: Create credential via browser API.
+      const options = prepareCreationOptions(serverOptions);
+      const credential = (await navigator.credentials.create(
+        options,
+      )) as PublicKeyCredential | null;
+      if (!credential) {
+        throw new Error("Passkey registration was cancelled");
+      }
+
+      // Step 3: Send attestation to server.
+      const serialized = serializeCreationResponse(credential);
+      return meAPI.registerPasskeyFinish(serialized, name);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "passkeys"] });
+    },
+  });
+}
+
+export function useDeletePasskey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => meAPI.deletePasskey(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "passkeys"] });
+    },
+  });
+}
+
+export function usePasskeyLogin() {
+  return useMutation<LoginResponse, Error, { email: string }>({
+    mutationFn: async ({ email }) => {
+      if (!isWebAuthnAvailable()) {
+        throw new Error("WebAuthn is not supported in this browser");
+      }
+
+      // Step 1: Begin login.
+      const beginResult = await authAPI.passkeyBegin({ email });
+
+      // Step 2: Get assertion via browser API.
+      const options = prepareRequestOptions(beginResult);
+      const credential = (await navigator.credentials.get(
+        options,
+      )) as PublicKeyCredential | null;
+      if (!credential) {
+        throw new Error("Passkey authentication was cancelled");
+      }
+
+      // Step 3: Send assertion to server.
+      const serialized = serializeAssertionResponse(credential);
+      return authAPI.passkeyFinish(serialized, beginResult.session_key);
     },
   });
 }

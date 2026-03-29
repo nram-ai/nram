@@ -66,9 +66,17 @@ type Handlers struct {
 	// Health
 	Health http.HandlerFunc
 
+	// User-scoped passkey management
+	MePasskeysList          http.HandlerFunc
+	MePasskeyRegisterBegin  http.HandlerFunc
+	MePasskeyRegisterFinish http.HandlerFunc
+	MePasskeyDelete         http.HandlerFunc
+
 	// Auth handlers (semi-public: setup guard, no auth)
-	AuthLogin  http.HandlerFunc
-	AuthLookup http.HandlerFunc
+	AuthLogin        http.HandlerFunc
+	AuthLookup       http.HandlerFunc
+	AuthPasskeyBegin  http.HandlerFunc
+	AuthPasskeyFinish http.HandlerFunc
 
 	// OAuth handlers
 	OAuthAuthorize         http.HandlerFunc
@@ -161,6 +169,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Post("/v1/auth/login", handler(handlers.AuthLogin))
 		r.Post("/v1/auth/lookup", handler(handlers.AuthLookup))
 
+		// Passkey login flow (public — user is not yet authenticated).
+		r.Post("/v1/auth/passkey/begin", handler(handlers.AuthPasskeyBegin))
+		r.Post("/v1/auth/passkey/finish", handler(handlers.AuthPasskeyFinish))
+
 		// IdP SSO flow (public — user is not yet authenticated).
 		r.Get("/auth/idp/login", handler(handlers.IdPLogin))
 		r.Get("/auth/idp/callback", handler(handlers.IdPCallback))
@@ -229,6 +241,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/oauth-clients", handler(handlers.MeOAuthClients))
 			r.Delete("/oauth-clients/{id}", handler(handlers.MeOAuthClientRevoke))
 			r.Post("/password", handler(handlers.MeChangePassword))
+			r.Get("/passkeys", handler(handlers.MePasskeysList))
+			r.Post("/passkeys/register/begin", handler(handlers.MePasskeyRegisterBegin))
+			r.Post("/passkeys/register/finish", handler(handlers.MePasskeyRegisterFinish))
+			r.Delete("/passkeys/{id}", handler(handlers.MePasskeyDelete))
 		})
 
 		// Scoped data-viewing routes (all authenticated users — scope auto-applied).

@@ -29,9 +29,10 @@ type AuthIdPRepo interface {
 
 // AuthConfig holds dependencies for the auth handlers.
 type AuthConfig struct {
-	UserRepo  AuthUserRepo
-	IdPRepo   AuthIdPRepo
-	JWTSecret []byte
+	UserRepo    AuthUserRepo
+	IdPRepo     AuthIdPRepo
+	PasskeyRepo AuthPasskeyChecker
+	JWTSecret   []byte
 }
 
 type loginRequest struct {
@@ -60,6 +61,7 @@ type lookupResponse struct {
 	Method           string  `json:"method"`
 	IdPID            *string `json:"idp_id,omitempty"`
 	PasswordFallback bool    `json:"password_fallback,omitempty"`
+	HasPasskeys      bool    `json:"has_passkeys,omitempty"`
 }
 
 // NewLoginHandler returns an http.HandlerFunc that authenticates a user by
@@ -178,7 +180,13 @@ func NewLookupHandler(cfg AuthConfig) http.HandlerFunc {
 
 		// No IdP configured. Use local password if available.
 		if user != nil && user.PasswordHash != nil {
-			writeJSON(w, http.StatusOK, lookupResponse{Method: "local"})
+			resp := lookupResponse{Method: "local"}
+			if cfg.PasskeyRepo != nil {
+				if has, err := cfg.PasskeyRepo.HasCredentials(r.Context(), user.ID); err == nil && has {
+					resp.HasPasskeys = true
+				}
+			}
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 

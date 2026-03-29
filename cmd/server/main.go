@@ -92,6 +92,7 @@ func main() {
 	userRepo := storage.NewUserRepo(db)
 	orgRepo := storage.NewOrganizationRepo(db)
 	apiKeyRepo := storage.NewAPIKeyRepo(db)
+	webauthnRepo := storage.NewWebAuthnRepo(db)
 	oauthRepo := storage.NewOAuthRepo(db)
 	entityRepo := storage.NewEntityRepo(db)
 	entityAliasRepo := storage.NewEntityAliasRepo(db)
@@ -395,10 +396,19 @@ func main() {
 	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret)
 
 	authCfg := api.AuthConfig{
-		UserRepo:  userRepo,
-		IdPRepo:   oauthRepo,
-		JWTSecret: jwtSecret,
+		UserRepo:    userRepo,
+		IdPRepo:     oauthRepo,
+		PasskeyRepo: webauthnRepo,
+		JWTSecret:   jwtSecret,
 	}
+
+	// Create WebAuthn handler for passkey registration and login.
+	webauthnHandler := auth.NewWebAuthnHandler(auth.WebAuthnHandlerConfig{
+		CredRepo:  webauthnRepo,
+		UserRepo:  userRepo,
+		JWTSecret: jwtSecret,
+	})
+	defer webauthnHandler.Close()
 
 	// Create IdP SSO handler for external identity provider flows.
 	idpHandler := auth.NewIdPHandler(auth.IdPHandlerConfig{
@@ -444,6 +454,12 @@ func main() {
 		MeOAuthClientRevoke: api.NewMeOAuthClientRevokeHandler(oauthRepo),
 		MeChangePassword:    api.NewMeChangePasswordHandler(userRepo),
 
+		// Passkey management handlers
+		MePasskeysList:          api.NewMePasskeysListHandler(webauthnRepo),
+		MePasskeyRegisterBegin:  webauthnHandler.RegisterBeginHandler(),
+		MePasskeyRegisterFinish: webauthnHandler.RegisterFinishHandler(),
+		MePasskeyDelete:         api.NewMePasskeyDeleteHandler(webauthnRepo),
+
 		// Org-scoped handlers
 		OrgUsers: api.NewOrgUsersHandler(api.OrgUserConfig{Store: userAdminStore}),
 		OrgIdP:   api.NewOrgIdPHandler(oauthRepo),
@@ -458,8 +474,10 @@ func main() {
 		UI: ui.Handler(),
 
 		// Auth handlers
-		AuthLogin:  api.NewLoginHandler(authCfg),
-		AuthLookup: api.NewLookupHandler(authCfg),
+		AuthLogin:         api.NewLoginHandler(authCfg),
+		AuthLookup:        api.NewLookupHandler(authCfg),
+		AuthPasskeyBegin:  webauthnHandler.LoginBeginHandler(),
+		AuthPasskeyFinish: webauthnHandler.LoginFinishHandler(),
 
 		// OAuth handlers
 		OAuthAuthorize:         oauthServer.AuthorizeHandler(),
