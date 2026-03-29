@@ -37,10 +37,7 @@ function formatDate(iso?: string | null): string {
 // Provider type options
 // ---------------------------------------------------------------------------
 
-const IDP_TYPES = [
-  { value: "oidc" as const, label: "OIDC" },
-  { value: "saml" as const, label: "SAML" },
-];
+const IDP_TYPES = [{ value: "oidc" as const, label: "OIDC" }];
 
 // The callback URL that must be registered with the external IdP.
 const IDP_CALLBACK_URL = `${window.location.origin}/auth/idp/callback`;
@@ -111,7 +108,7 @@ function CreateIdPDialog({
   const createMutation = useCreateIdPConfig();
 
   const [orgId, setOrgId] = useState("");
-  const [providerType, setProviderType] = useState<"oidc" | "saml">("oidc");
+  const [providerType, setProviderType] = useState<string>("oidc");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [issuerUrl, setIssuerUrl] = useState("");
@@ -290,7 +287,7 @@ function CreateOrgIdPDialog({
 }) {
   const createMutation = useCreateOrgIdPConfig();
 
-  const [providerType, setProviderType] = useState<"oidc" | "saml">("oidc");
+  const [providerType, setProviderType] = useState<string>("oidc");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [issuerUrl, setIssuerUrl] = useState("");
@@ -492,8 +489,8 @@ function IdPFormFields({
   defaultRole,
   setDefaultRole,
 }: {
-  providerType: "oidc" | "saml";
-  setProviderType: (v: "oidc" | "saml") => void;
+  providerType: string;
+  setProviderType: (v: string) => void;
   clientId: string;
   setClientId: (v: string) => void;
   clientSecret: string;
@@ -529,7 +526,7 @@ function IdPFormFields({
         </label>
         <select
           value={providerType}
-          onChange={(e) => setProviderType(e.target.value as "oidc" | "saml")}
+          onChange={(e) => setProviderType(e.target.value as string)}
           className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
         >
           {IDP_TYPES.map((t) => (
@@ -715,8 +712,8 @@ function EditIdPDialog({
   onSave: (data: UpdateIdPConfigRequest) => void;
   isPending: boolean;
 }) {
-  const [providerType, setProviderType] = useState<"oidc" | "saml">(
-    config.provider_type as "oidc" | "saml"
+  const [providerType, setProviderType] = useState<string>(
+    config.provider_type as string
   );
   const [clientId, setClientId] = useState(config.client_id);
   const [clientSecret, setClientSecret] = useState("");
@@ -812,7 +809,7 @@ function EditIdPDialog({
 
         <div className="mt-4 space-y-3">
           <IdPFormFields
-            providerType={config.provider_type as "oidc" | "saml"}
+            providerType={config.provider_type as string}
             setProviderType={() => {}}
             clientId={clientId}
             setClientId={setClientId}
