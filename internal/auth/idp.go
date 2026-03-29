@@ -532,7 +532,7 @@ func (h *IdPHandler) fetchUserInfo(ctx context.Context, userinfoEndpoint, access
 	}
 
 	var claims map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&claims); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 256*1024)).Decode(&claims); err != nil {
 		return nil, fmt.Errorf("decode userinfo response: %w", err)
 	}
 
@@ -545,7 +545,12 @@ func (h *IdPHandler) fetchUserInfo(ctx context.Context, userinfoEndpoint, access
 // the first primary+verified email, or the first verified email, or the first
 // email in the list.
 func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, accessToken string) (string, error) {
-	emailsURL := strings.TrimRight(userinfoEndpoint, "/") + "/emails"
+	u, err := url.Parse(userinfoEndpoint)
+	if err != nil {
+		return "", err
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/emails"
+	emailsURL := u.String()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, emailsURL, nil)
 	if err != nil {
@@ -569,18 +574,18 @@ func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, ac
 		Primary  bool   `json:"primary"`
 		Verified bool   `json:"verified"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&emails); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 256*1024)).Decode(&emails); err != nil {
 		return "", err
 	}
 
 	// Prefer primary+verified, then verified, then any.
-	var verified, any string
+	var verified, fallback string
 	for _, e := range emails {
 		if e.Email == "" {
 			continue
 		}
-		if any == "" {
-			any = e.Email
+		if fallback == "" {
+			fallback = e.Email
 		}
 		if e.Verified && verified == "" {
 			verified = e.Email
@@ -592,7 +597,7 @@ func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, ac
 	if verified != "" {
 		return verified, nil
 	}
-	return any, nil
+	return fallback, nil
 }
 
 // extractUserInfoFromClaims extracts email and display name from OIDC claims.
