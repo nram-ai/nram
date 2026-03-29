@@ -576,6 +576,20 @@ function IdPFormFields({
     providerType && providerType in IDP_PRESETS ? providerType : "custom",
   );
 
+  const switchMode = useCallback(
+    (mode: EndpointMode) => {
+      setEndpointMode(mode);
+      if (mode === "manual") {
+        setIssuerUrl("");
+      } else {
+        setAuthorizeUrl("");
+        setTokenUrl("");
+        setUserinfoUrl("");
+      }
+    },
+    [setIssuerUrl, setAuthorizeUrl, setTokenUrl, setUserinfoUrl],
+  );
+
   const applyPreset = useCallback(
     (key: string) => {
       setSelectedPreset(key);
@@ -583,13 +597,16 @@ function IdPFormFields({
       if (!preset) return;
 
       setProviderType(key);
-      setEndpointMode(preset.mode);
-      setIssuerUrl(preset.issuerUrl ?? "");
-      setAuthorizeUrl(preset.authorizeUrl ?? "");
-      setTokenUrl(preset.tokenUrl ?? "");
-      setUserinfoUrl(preset.userinfoUrl ?? "");
+      switchMode(preset.mode);
+      if (preset.mode === "discovery") {
+        setIssuerUrl(preset.issuerUrl ?? "");
+      } else {
+        setAuthorizeUrl(preset.authorizeUrl ?? "");
+        setTokenUrl(preset.tokenUrl ?? "");
+        setUserinfoUrl(preset.userinfoUrl ?? "");
+      }
     },
-    [setProviderType, setIssuerUrl, setAuthorizeUrl, setTokenUrl, setUserinfoUrl],
+    [setProviderType, switchMode, setIssuerUrl, setAuthorizeUrl, setTokenUrl, setUserinfoUrl],
   );
 
   return (
@@ -647,7 +664,7 @@ function IdPFormFields({
         <div className="mt-1 flex rounded-md border border-input">
           <button
             type="button"
-            onClick={() => setEndpointMode("discovery")}
+            onClick={() => switchMode("discovery")}
             className={`flex-1 px-3 py-1.5 text-sm font-medium transition-colors ${
               endpointMode === "discovery"
                 ? "bg-primary text-primary-foreground"
@@ -658,7 +675,7 @@ function IdPFormFields({
           </button>
           <button
             type="button"
-            onClick={() => setEndpointMode("manual")}
+            onClick={() => switchMode("manual")}
             className={`flex-1 px-3 py-1.5 text-sm font-medium transition-colors ${
               endpointMode === "manual"
                 ? "bg-primary text-primary-foreground"
