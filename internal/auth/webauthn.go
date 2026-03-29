@@ -191,8 +191,9 @@ func newWebAuthn(r *http.Request) (*webauthn.WebAuthn, error) {
 		RPDisplayName: "nram",
 		RPOrigins:     []string{base},
 		AuthenticatorSelection: protocol.AuthenticatorSelection{
-			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
-			UserVerification: protocol.VerificationPreferred,
+			AuthenticatorAttachment: protocol.Platform,
+			ResidentKey:             protocol.ResidentKeyRequirementPreferred,
+			UserVerification:        protocol.VerificationPreferred,
 		},
 		AttestationPreference: protocol.PreferNoAttestation,
 	})
