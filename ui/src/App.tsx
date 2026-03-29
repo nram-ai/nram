@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { useSetupStatus } from "./hooks/useApi";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -156,6 +156,13 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 function AppLayout() {
   const auth = useAuth();
+  const location = useLocation();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Close sidebar on route change (mobile)
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
 
   const filteredItems = navItems.filter((item) => {
     if (item.minRole && !auth.hasMinRole(item.minRole)) {
@@ -175,12 +182,55 @@ function AppLayout() {
 
   return (
     <div className="flex h-screen">
-      <aside className="w-60 shrink-0 border-r border-border bg-card overflow-y-auto flex flex-col">
-        <div className="px-4 py-5">
-          <h1 className="text-lg font-semibold tracking-tight">nram</h1>
-          <p className="text-xs text-muted-foreground">
-            {auth.isAdmin ? "Admin Console" : "Console"}
-          </p>
+      {/* Mobile header bar */}
+      <div className="fixed top-0 left-0 right-0 z-40 flex items-center border-b border-border bg-card px-4 py-3 md:hidden">
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          className="mr-3 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+          aria-label="Open navigation"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+        <h1 className="text-lg font-semibold tracking-tight">nram</h1>
+      </div>
+
+      {/* Backdrop overlay (mobile) */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-60 border-r border-border bg-card overflow-y-auto flex flex-col transform transition-transform duration-200 ease-in-out md:static md:translate-x-0 md:shrink-0 ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="flex items-center justify-between px-4 py-5">
+          <div>
+            <h1 className="text-lg font-semibold tracking-tight">nram</h1>
+            <p className="text-xs text-muted-foreground">
+              {auth.isAdmin ? "Admin Console" : "Console"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(false)}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground md:hidden"
+            aria-label="Close navigation"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </div>
         <nav className="px-2 pb-4 flex-1">
           {Object.entries(sections).map(([section, items]) => (
@@ -195,7 +245,7 @@ function AppLayout() {
                       to={item.path}
                       end={item.path === "/"}
                       className={({ isActive }) =>
-                        `block rounded-md px-2 py-1.5 text-sm transition-colors ${
+                        `block rounded-md px-2 py-2.5 md:py-1.5 text-sm transition-colors ${
                           isActive
                             ? "bg-accent text-accent-foreground font-medium"
                             : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
@@ -214,14 +264,14 @@ function AppLayout() {
           <button
             type="button"
             onClick={handleLogout}
-            className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+            className="block w-full rounded-md px-2 py-2.5 md:py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
           >
             Logout
           </button>
         </div>
       </aside>
-      <main className="flex-1 overflow-y-auto">
-        <div className="p-6">
+      <main className="flex-1 overflow-y-auto pt-14 md:pt-0">
+        <div className="p-4 sm:p-6">
           <ErrorBoundary>
             <Routes>
               <Route path="/" element={<Dashboard />} />

@@ -1254,11 +1254,11 @@ function UserManagement() {
       {!usersQuery.isLoading && (
         <>
           {/* Toolbar */}
-          <div className="flex items-center justify-between gap-4 pb-4">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col gap-3 pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
               <input
                 type="text"
-                className="w-64 rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                className="w-full sm:w-64 rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search users..."
@@ -1269,7 +1269,7 @@ function UserManagement() {
             </div>
             <button
               type="button"
-              className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              className="w-full sm:w-auto rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
               onClick={() => setShowCreate(true)}
             >
               Create User

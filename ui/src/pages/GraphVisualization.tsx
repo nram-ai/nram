@@ -70,7 +70,7 @@ function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
   const colors = getTypeColor(entity.entity_type);
 
   return (
-    <div className="absolute right-0 top-0 h-full w-80 bg-card border-l border-border shadow-lg z-50 overflow-y-auto">
+    <div className="absolute right-0 top-0 h-full w-full sm:w-80 bg-card border-l border-border shadow-lg z-50 overflow-y-auto">
       <div className="p-4">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Entity Details</h3>
@@ -429,9 +429,9 @@ function GraphVisualization() {
 
   return (
     <div className="flex flex-col h-full" style={{ height: "calc(100vh - 3rem)" }}>
-      <div className="flex items-center justify-between mb-2 shrink-0">
+      <div className="flex flex-col gap-2 mb-2 shrink-0 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Graph Visualization</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Graph Visualization</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Explore entity relationships in 3D.
           </p>
@@ -445,7 +445,7 @@ function GraphVisualization() {
               setSelectedProjectId(e.target.value);
               setSelectedEntity(null);
             }}
-            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring flex-1 min-w-0 sm:flex-none"
           >
             <option value="">Select a project</option>
             {projects?.map((project) => (

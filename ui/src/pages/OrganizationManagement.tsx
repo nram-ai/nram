@@ -564,13 +564,13 @@ function OrganizationManagement() {
       {!orgsQuery.isLoading && (
         <>
           {/* Toolbar */}
-          <div className="flex items-center justify-between pb-4">
+          <div className="flex flex-col gap-3 pb-4 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-sm text-muted-foreground">
               {sortedOrgs.length} organization{sortedOrgs.length !== 1 ? "s" : ""}
             </span>
             <button
               type="button"
-              className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              className="w-full sm:w-auto rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
               onClick={() => setShowCreate(true)}
             >
               Create Organization

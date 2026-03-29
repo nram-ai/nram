@@ -39,7 +39,7 @@ function DetailPanel({ entity, connections, onClose }: DetailPanelProps) {
   const colors = getEntityColor(entity.entity_type);
 
   return (
-    <div className="fixed inset-y-0 right-0 w-96 bg-card border-l border-border shadow-lg z-50 overflow-y-auto">
+    <div className="fixed inset-y-0 right-0 w-full sm:w-96 bg-card border-l border-border shadow-lg z-50 overflow-y-auto">
       <div className="p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Entity Details</h3>
@@ -221,7 +221,7 @@ function EntityBrowser() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Entity Browser</h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -229,7 +229,7 @@ function EntityBrowser() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {selectedProjectId && graphData?.entities && graphData.entities.length > 0 && (
             <button
               onClick={() => navigate("/graph")}
@@ -247,7 +247,7 @@ function EntityBrowser() {
               setSearchText("");
               setTypeFilter("");
             }}
-            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring flex-1 min-w-0 sm:flex-none"
           >
             <option value="">Select a project</option>
             {projects?.map((project) => (
@@ -312,32 +312,89 @@ function EntityBrowser() {
         graphData.entities &&
         graphData.entities.length > 0 && (
           <>
-            <div className="flex items-center gap-3 mb-4">
+            <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center">
               <input
                 type="text"
                 placeholder="Search entities by name or alias..."
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
-                className="rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring flex-1 max-w-sm"
+                className="rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring w-full sm:flex-1 sm:max-w-sm"
               />
-              <select
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-                className="rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              >
-                <option value="">All types</option>
-                {entityTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-              <span className="text-sm text-muted-foreground">
-                {filteredEntities.length} of {graphData.entities.length} entities
-              </span>
+              <div className="flex items-center gap-3">
+                <select
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring flex-1 sm:flex-none"
+                >
+                  <option value="">All types</option>
+                  {entityTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-sm text-muted-foreground whitespace-nowrap">
+                  {filteredEntities.length} of {graphData.entities.length} entities
+                </span>
+              </div>
             </div>
 
-            <div className="rounded-lg border border-border overflow-hidden">
+            {/* Mobile card layout */}
+            <div className="space-y-3 md:hidden">
+              {filteredEntities.map((entity) => {
+                const colors = getEntityColor(entity.entity_type);
+                return (
+                  <div
+                    key={entity.id}
+                    onClick={() => setSelectedEntity(entity)}
+                    className="rounded-lg border border-border p-4 cursor-pointer hover:bg-accent/50 transition-colors active:bg-accent/70"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-sm">{entity.name}</span>
+                      <span
+                        className="inline-block rounded-full px-2 py-0.5 text-xs font-medium capitalize"
+                        style={{
+                          background: colors.bg,
+                          color: colors.text,
+                          border: `1px solid ${colors.border}`,
+                        }}
+                      >
+                        {entity.entity_type}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span>{entity.mention_count} mentions</span>
+                      <span>{formatDate(entity.updated_at)}</span>
+                    </div>
+                    {(entity.aliases ?? []).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {(entity.aliases ?? []).slice(0, 3).map((alias, i) => (
+                          <span
+                            key={i}
+                            className="inline-block rounded-full bg-accent px-2 py-0.5 text-xs text-accent-foreground"
+                          >
+                            {alias}
+                          </span>
+                        ))}
+                        {(entity.aliases ?? []).length > 3 && (
+                          <span className="text-xs text-muted-foreground">
+                            +{(entity.aliases ?? []).length - 3} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {filteredEntities.length === 0 && (
+                <div className="px-4 py-8 text-center text-muted-foreground text-sm">
+                  No entities match the current filters.
+                </div>
+              )}
+            </div>
+
+            {/* Desktop table layout */}
+            <div className="hidden md:block rounded-lg border border-border overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border bg-muted/50">

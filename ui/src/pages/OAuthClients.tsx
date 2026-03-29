@@ -668,7 +668,7 @@ function OAuthClientsSection() {
 
   return (
     <section>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold">OAuth Clients</h2>
           <p className="text-sm text-muted-foreground">
@@ -678,7 +678,7 @@ function OAuthClientsSection() {
         <button
           type="button"
           onClick={() => setShowCreate(true)}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          className="w-full sm:w-auto rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
         >
           Create Client
         </button>
@@ -802,7 +802,7 @@ function IdPSection() {
 
   return (
     <section>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold">Identity Providers</h2>
           <p className="text-sm text-muted-foreground">
@@ -813,7 +813,7 @@ function IdPSection() {
         <button
           type="button"
           onClick={() => setShowAdd(true)}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          className="w-full sm:w-auto rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
         >
           Add Provider
         </button>

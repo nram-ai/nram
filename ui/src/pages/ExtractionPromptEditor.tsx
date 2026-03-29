@@ -295,7 +295,7 @@ function PromptEditorCard({
     <div className="rounded-lg border border-border bg-card shadow-sm">
       {/* Header */}
       <div className="border-b border-border px-5 py-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-foreground">{title}</h2>
             <p className="mt-1 text-xs text-muted-foreground">{description}</p>

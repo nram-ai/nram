@@ -224,7 +224,7 @@ function FilterSidebar({
 
   return (
     <div
-      className={`shrink-0 rounded-lg border bg-card transition-all ${collapsed ? "w-10" : "w-64"}`}
+      className={`hidden md:block shrink-0 rounded-lg border bg-card transition-all ${collapsed ? "w-10" : "w-64"}`}
     >
       <div className="flex items-center justify-between border-b px-3 py-2">
         {!collapsed && (
@@ -678,7 +678,7 @@ function BulkActionsBar({
   }
 
   return (
-    <div className="sticky bottom-0 z-40 flex items-center gap-3 border-t bg-card px-4 py-3 shadow-lg">
+    <div className="sticky bottom-0 z-40 flex flex-wrap items-center gap-2 sm:gap-3 border-t bg-card px-3 sm:px-4 py-3 shadow-lg">
       <span className="text-sm font-medium">
         {selectedCount} selected
       </span>
@@ -791,7 +791,7 @@ function Pagination({
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
   return (
-    <div className="flex items-center justify-between px-1 py-3">
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between px-1 py-3">
       <p className="text-xs text-muted-foreground">
         Showing {Math.min(offset + 1, total)}-{Math.min(offset + limit, total)}{" "}
         of {total}
@@ -854,7 +854,9 @@ function MemoryBrowser() {
     enrichmentFilter: "all",
     sourceFilter: "",
   });
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    typeof window !== "undefined" && window.innerWidth < 768,
+  );
 
   // Pagination
   const [offset, setOffset] = useState(0);
@@ -1184,9 +1186,103 @@ function MemoryBrowser() {
         </div>
       </div>
 
+      {/* Mobile filter toggle */}
+      <div className="flex items-center gap-2 pb-3 md:hidden">
+        <button
+          type="button"
+          className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted"
+          onClick={() => setSidebarCollapsed((c) => !c)}
+        >
+          {sidebarCollapsed ? "Show Filters" : "Hide Filters"}
+          {filters.selectedTags.length > 0 || filters.dateFrom || filters.dateTo || filters.enrichmentFilter !== "all" || filters.sourceFilter ? (
+            <span className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary text-xs text-primary-foreground">
+              !
+            </span>
+          ) : null}
+        </button>
+      </div>
+
+      {/* Mobile filter panel */}
+      {!sidebarCollapsed && (
+        <div className="mb-3 rounded-lg border bg-card p-3 md:hidden">
+          <div className="space-y-4">
+            {/* Tags */}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Tags</label>
+              {availableTags.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No tags found</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {availableTags.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+                        filters.selectedTags.includes(tag)
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground"
+                      }`}
+                      onClick={() => {
+                        const next = filters.selectedTags.includes(tag)
+                          ? filters.selectedTags.filter((t) => t !== tag)
+                          : [...filters.selectedTags, tag];
+                        setFilters({ ...filters, selectedTags: next });
+                      }}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Enrichment */}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Enrichment</label>
+              <div className="flex gap-2">
+                {([["all", "All"], ["enriched", "Enriched"], ["not_enriched", "Not Enriched"]] as const).map(([val, label]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                      filters.enrichmentFilter === val
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "hover:bg-muted"
+                    }`}
+                    onClick={() => setFilters({ ...filters, enrichmentFilter: val })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Date + Source row */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">From</label>
+                <input type="date" className="w-full rounded border bg-background px-2 py-1.5 text-xs" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">To</label>
+                <input type="date" className="w-full rounded border bg-background px-2 py-1.5 text-xs" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} />
+              </div>
+            </div>
+            <button
+              type="button"
+              className="w-full rounded border px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+              onClick={() => {
+                setFilters({ selectedTags: [], dateFrom: "", dateTo: "", enrichmentFilter: "all", sourceFilter: "" });
+                setSidebarCollapsed(true);
+              }}
+            >
+              Clear Filters
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main content: sidebar + list */}
       <div className="flex flex-1 gap-4 overflow-hidden">
-        {/* Filter sidebar */}
+        {/* Filter sidebar (desktop) */}
         <FilterSidebar
           availableTags={availableTags}
           filters={filters}
