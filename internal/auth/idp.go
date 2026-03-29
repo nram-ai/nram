@@ -221,7 +221,7 @@ func (h *IdPHandler) LoginHandler() http.HandlerFunc {
 		q.Set("client_id", idpCfg.ClientID)
 		q.Set("redirect_uri", callbackURL)
 		q.Set("response_type", "code")
-		q.Set("scope", "openid email profile")
+		q.Set("scope", scopesForProvider(idpCfg.ProviderType))
 		q.Set("state", stateKey)
 		q.Set("nonce", nonce)
 		authURL.RawQuery = q.Encode()
@@ -657,6 +657,19 @@ func (h *IdPHandler) findOrCreateUser(ctx context.Context, idpCfg *model.OAuthId
 	}
 
 	return user, nil
+}
+
+// scopesForProvider returns the OAuth scopes appropriate for the given
+// provider type. Non-OIDC providers like GitHub use their own scope names.
+func scopesForProvider(providerType string) string {
+	switch strings.ToLower(providerType) {
+	case "github":
+		return "read:user user:email"
+	case "gitlab":
+		return "openid email profile read_user"
+	default:
+		return "openid email profile"
+	}
 }
 
 func emailDomainOf(email string) string {
