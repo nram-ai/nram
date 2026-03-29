@@ -221,7 +221,7 @@ func (h *IdPHandler) LoginHandler() http.HandlerFunc {
 		q.Set("client_id", idpCfg.ClientID)
 		q.Set("redirect_uri", callbackURL)
 		q.Set("response_type", "code")
-		q.Set("scope", scopesForProvider(idpCfg.ProviderType))
+		q.Set("scope", scopesForProvider(idpCfg.ProviderType, disco.AuthorizationEndpoint))
 		q.Set("state", stateKey)
 		q.Set("nonce", nonce)
 		// Colons in scope values (e.g. "read:user") must stay literal.
@@ -662,9 +662,22 @@ func (h *IdPHandler) findOrCreateUser(ctx context.Context, idpCfg *model.OAuthId
 }
 
 // scopesForProvider returns the OAuth scopes appropriate for the given
-// provider type. Non-OIDC providers like GitHub use their own scope names.
-func scopesForProvider(providerType string) string {
-	switch strings.ToLower(providerType) {
+// provider. Checks provider_type first, then falls back to detecting the
+// provider from the authorize URL hostname for configs that were saved
+// with a generic type.
+func scopesForProvider(providerType string, authorizeURL string) string {
+	provider := strings.ToLower(providerType)
+
+	// Fall back to hostname detection when provider_type is generic.
+	if provider == "oidc" || provider == "oauth" || provider == "" {
+		if strings.Contains(authorizeURL, "github.com") {
+			provider = "github"
+		} else if strings.Contains(authorizeURL, "gitlab.com") || strings.Contains(authorizeURL, "gitlab") {
+			provider = "gitlab"
+		}
+	}
+
+	switch provider {
 	case "github":
 		return "read:user user:email"
 	case "gitlab":

@@ -580,7 +580,7 @@ function IdPFormFields({
       const preset = IDP_PRESETS[key];
       if (!preset) return;
 
-      setProviderType("oidc");
+      setProviderType(key);
       setEndpointMode(preset.mode);
       setIssuerUrl(preset.issuerUrl ?? "");
       setAuthorizeUrl(preset.authorizeUrl ?? "");
