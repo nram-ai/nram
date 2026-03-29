@@ -943,13 +943,19 @@ function IdPTable({
   onDelete,
   onEdit,
   showOrgColumn,
+  orgNames,
 }: {
   configs: IdPConfig[];
   onDelete: (cfg: IdPConfig) => void;
   onEdit: (cfg: IdPConfig) => void;
   showOrgColumn: boolean;
+  orgNames?: Record<string, string>;
 }) {
   const providerLabel = (type: string) => type.toUpperCase();
+  const orgLabel = (orgId?: string | null) => {
+    if (!orgId) return "-";
+    return orgNames?.[orgId] ?? orgId;
+  };
 
   return (
     <div className="overflow-x-auto rounded-md border border-border">
@@ -972,7 +978,7 @@ function IdPTable({
             <tr key={cfg.id} className="hover:bg-muted/30">
               {showOrgColumn && (
                 <td className="px-4 py-2 text-muted-foreground">
-                  {cfg.org_id || "-"}
+                  {orgLabel(cfg.org_id)}
                 </td>
               )}
               <td className="px-4 py-2 font-medium">
@@ -1113,6 +1119,9 @@ function AdminIdPView() {
           onDelete={setDeleteTarget}
           onEdit={setEditTarget}
           showOrgColumn={true}
+          orgNames={Object.fromEntries(
+            (orgs ?? []).map((o) => [o.id, o.name]),
+          )}
         />
       )}
 
