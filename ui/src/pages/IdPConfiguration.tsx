@@ -759,13 +759,16 @@ function IdPFormFields({
         <label className="text-xs font-medium text-muted-foreground">
           Default Role
         </label>
-        <input
-          type="text"
-          value={defaultRole}
+        <select
+          value={defaultRole || "member"}
           onChange={(e) => setDefaultRole(e.target.value)}
           className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
-          placeholder="member"
-        />
+        >
+          <option value="member">Member</option>
+          <option value="readonly">Read-only</option>
+          <option value="org_owner">Org Owner</option>
+          <option value="administrator">Administrator</option>
+        </select>
       </div>
     </>
   );
