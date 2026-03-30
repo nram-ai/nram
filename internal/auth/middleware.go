@@ -52,8 +52,10 @@ func WithContext(ctx context.Context, ac *AuthContext) context.Context {
 // Claims defines the JWT claims used by nram.
 type Claims struct {
 	jwt.RegisteredClaims
-	Role  string `json:"role"`
-	OrgID string `json:"org_id,omitempty"`
+	Role        string `json:"role"`
+	OrgID       string `json:"org_id,omitempty"`
+	Email       string `json:"email,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 // AuthMiddleware validates Bearer tokens from the Authorization header.
@@ -229,6 +231,31 @@ func containsAudience(aud jwt.ClaimStrings, expected string) bool {
 // Use generateJWTWithAudience when an RFC 8707 resource indicator must be bound.
 func GenerateJWT(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration) (string, error) {
 	return generateJWTWithAudience(userID, orgID, role, secret, expiry, "")
+}
+
+// GenerateSessionJWT creates a signed JWT that includes user profile claims
+// (email, display_name) so the SPA can bootstrap session info from the token
+// alone (e.g. after an IdP callback redirect).
+func GenerateSessionJWT(userID uuid.UUID, orgID uuid.UUID, role, email, displayName string, secret []byte, expiry time.Duration) (string, error) {
+	now := time.Now().UTC()
+	var orgIDStr string
+	if orgID != uuid.Nil {
+		orgIDStr = orgID.String()
+	}
+	claims := Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   userID.String(),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(expiry)),
+			Issuer:    "nram",
+		},
+		Role:        role,
+		OrgID:       orgIDStr,
+		Email:       email,
+		DisplayName: displayName,
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(secret)
 }
 
 // generateJWTWithAudience creates a signed JWT. When resource is non-empty it

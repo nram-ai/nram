@@ -539,7 +539,7 @@ func (h *WebAuthnHandler) LoginFinishHandler() http.HandlerFunc {
 			_ = h.credRepo.UpdateSignCount(r.Context(), storedCred.ID, credential.Authenticator.SignCount)
 		}
 
-		token, err := GenerateJWT(user.ID, user.OrgID, user.Role, h.jwtSecret, webauthnSessionExpiry)
+		token, err := GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, h.jwtSecret, webauthnSessionExpiry)
 		if err != nil {
 			http.Error(w, "failed to create session", http.StatusInternalServerError)
 			return

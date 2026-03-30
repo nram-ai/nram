@@ -311,7 +311,7 @@ func (h *IdPHandler) CallbackHandler() http.HandlerFunc {
 			return
 		}
 
-		sessionToken, err := GenerateJWT(user.ID, user.OrgID, user.Role, h.jwtSecret, idpSessionExpiry)
+		sessionToken, err := GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, h.jwtSecret, idpSessionExpiry)
 		if err != nil {
 			http.Error(w, "failed to create session", http.StatusInternalServerError)
 			return
