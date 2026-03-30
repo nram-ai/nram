@@ -95,8 +95,8 @@ func orgIdPCreate(w http.ResponseWriter, r *http.Request, store OrgIdPStore, org
 	}
 
 	// Validate required fields.
-	if req.ProviderType != "oidc" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider_type must be 'oidc'"})
+	if req.ProviderType == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider_type is required"})
 		return
 	}
 	if req.ClientID == "" {
