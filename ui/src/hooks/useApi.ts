@@ -463,6 +463,52 @@ export function useTriggerMigration() {
   });
 }
 
+// --- Dreaming ---
+
+export function useDreamingStatus() {
+  return useQuery({
+    queryKey: ["admin", "dreaming"],
+    queryFn: adminAPI.getDreamingStatus,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useDreamingCycles(projectId?: string) {
+  return useQuery({
+    queryKey: ["admin", "dreaming", "cycles", projectId],
+    queryFn: () => adminAPI.getDreamingCycles(projectId),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useDreamingCycleDetail(cycleId: string | null) {
+  return useQuery({
+    queryKey: ["admin", "dreaming", "cycle", cycleId],
+    queryFn: () => adminAPI.getDreamingCycleDetail(cycleId!),
+    enabled: !!cycleId,
+  });
+}
+
+export function useSetDreamingEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) => adminAPI.setDreamingEnabled(enabled),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+    },
+  });
+}
+
+export function useRollbackDreamCycle() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cycleId: string) => adminAPI.rollbackDreamCycle(cycleId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+    },
+  });
+}
+
 // --- Enrichment ---
 
 export function useEnrichmentStatus() {

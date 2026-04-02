@@ -99,6 +99,7 @@ func NewStoreHandler(svc *service.StoreService, bus events.EventBus) http.Handle
 		events.Emit(r.Context(), bus, events.MemoryCreated, "project:"+projectID.String(), map[string]string{
 			"memory_id":  resp.ID.String(),
 			"project_id": projectID.String(),
+			"source":     body.Source,
 		})
 
 		writeJSON(w, http.StatusCreated, resp)

@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -193,6 +194,8 @@ type WorkerPool struct {
 	entityProvider func() provider.LLMProvider
 	embedProvider  func() provider.EmbeddingProvider
 
+	idleWorkers atomic.Int32
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -255,6 +258,11 @@ func (wp *WorkerPool) Stop() {
 	wp.wg.Wait()
 }
 
+// IsIdle returns true when all workers are sleeping (no jobs being processed).
+func (wp *WorkerPool) IsIdle() bool {
+	return wp.idleWorkers.Load() == int32(wp.config.Workers)
+}
+
 func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 	defer wp.wg.Done()
 
@@ -279,12 +287,16 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 				slog.Error("enrichment: claim error", "worker", workerID, "err", err)
 			}
 			emptyPolls++
+			wp.idleWorkers.Add(1)
 			wp.sleepWithBackoff(ctx, emptyPolls, maxBackoff)
+			wp.idleWorkers.Add(-1)
 			continue
 		}
 		if job == nil {
 			emptyPolls++
+			wp.idleWorkers.Add(1)
 			wp.sleepWithBackoff(ctx, emptyPolls, maxBackoff)
+			wp.idleWorkers.Add(-1)
 			continue
 		}
 

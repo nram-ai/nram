@@ -15,6 +15,7 @@ import (
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/config"
+	"github.com/nram-ai/nram/internal/dreaming"
 	"github.com/nram-ai/nram/internal/enrichment"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/mcp"
@@ -296,7 +297,7 @@ func main() {
 	importSvc := service.NewImportService(
 		memoryRepo, projectRepo, namespaceRepo, ingestionLogRepo,
 	)
-	_ = service.NewSettingsService(settingsRepo)
+	settingsSvc := service.NewSettingsService(settingsRepo)
 
 	// Create lifecycle service for TTL expiry and purge sweeps.
 	graphPruner := service.NewGraphPruner(entityRepo, relationshipRepo)
@@ -383,6 +384,49 @@ func main() {
 	workerPool.Start()
 	defer workerPool.Stop()
 	log.Println("enrichment worker pool started")
+
+	// Create dreaming system.
+	dreamCycleRepo := storage.NewDreamCycleRepo(db)
+	dreamLogRepo := storage.NewDreamLogRepo(db)
+	dreamDirtyRepo := storage.NewDreamDirtyRepo(db)
+
+	dreamRunner := dreaming.NewRunner(
+		dreamCycleRepo, dreamLogRepo, workerPool,
+		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo),
+		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
+		dreaming.NewContradictionPhase(memoryRepo, lineageRepo, factProvider, settingsSvc),
+		dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, settingsSvc),
+		dreaming.NewPruningPhase(memoryRepo, memoryRepo),
+		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo),
+	)
+
+	dreamRollback := dreaming.NewRollbackService(
+		dreamLogRepo, dreamCycleRepo, dreamDirtyRepo,
+		memoryRepo, memoryRepo, relationshipRepo, entityRepo, entityRepo,
+	)
+
+	dreamRetention := dreaming.NewRetentionSweeper(dreamLogRepo, dreamCycleRepo, settingsSvc)
+
+	// Start dirty tracker (event subscriber).
+	dirtyTracker := dreaming.NewDirtyTracker(eventBus, dreamDirtyRepo)
+	trackerCtx, trackerCancel := context.WithCancel(context.Background())
+	defer trackerCancel()
+	if err := dirtyTracker.Start(trackerCtx); err != nil {
+		log.Printf("dream dirty tracker failed to start: %v", err)
+	}
+	defer dirtyTracker.Stop()
+
+	// Start dream scheduler.
+	dreamScheduler := dreaming.NewScheduler(
+		dreaming.SchedulerConfig{},
+		settingsSvc, dreamDirtyRepo, dreamCycleRepo,
+		projectRepo, workerPool, dreamRunner, eventBus, dreamRetention,
+	)
+	dreamScheduler.Start()
+	defer dreamScheduler.Stop()
+	log.Println("dream scheduler started")
+
+	dreamAdminStore := adminstore.NewDreamAdminStore(dreamCycleRepo, dreamLogRepo, dreamDirtyRepo, settingsRepo)
 
 	// Create auth config for login/lookup handlers.
 	// JWT secret is loaded later, but we need it here — load it early.
@@ -523,6 +567,10 @@ func main() {
 			Aliases:       entityAliasRepo,
 			Namespaces:    namespaceRepo,
 			Orgs:          orgRepo,
+		}),
+		AdminDreaming: api.NewAdminDreamingHandler(api.DreamAdminConfig{
+			Store:    dreamAdminStore,
+			Rollback: dreamRollback,
 		}),
 	}
 

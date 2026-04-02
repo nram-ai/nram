@@ -5,6 +5,7 @@ import {
   useMeProjects,
   useProviderSlots,
   useStoreMemory,
+  useDreamingStatus,
 } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
 import type {
@@ -325,6 +326,53 @@ function EnrichmentQueueCard({
   );
 }
 
+function DreamingStatusCard({ isLoading }: { isLoading: boolean }) {
+  const { data: status } = useDreamingStatus();
+
+  if (isLoading || !status) return null;
+
+  const recentCycles = status.recent_cycles ?? [];
+  const running = recentCycles.filter((c) => c.status === "running").length;
+  const completed = recentCycles.filter((c) => c.status === "completed").length;
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <h2 className="text-sm font-semibold">Dreaming</h2>
+        <span
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+            status.enabled
+              ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+              : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+          }`}
+        >
+          {status.enabled ? "Enabled" : "Disabled"}
+        </span>
+      </div>
+      <div className="flex gap-4 p-4">
+        <div className="flex-1 text-center">
+          <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
+            {status.dirty_count}
+          </p>
+          <p className="text-xs text-muted-foreground">Dirty</p>
+        </div>
+        <div className="flex-1 text-center">
+          <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+            {running}
+          </p>
+          <p className="text-xs text-muted-foreground">Active</p>
+        </div>
+        <div className="flex-1 text-center">
+          <p className="text-2xl font-bold text-green-600 dark:text-green-400">
+            {completed}
+          </p>
+          <p className="text-xs text-muted-foreground">Completed</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function QuickStore({
   projects,
   isLoadingProjects,
@@ -558,6 +606,7 @@ function Dashboard() {
               hasProviders={hasProviders}
               isLoading={dashboard.isLoading}
             />
+            <DreamingStatusCard isLoading={dashboard.isLoading} />
           </div>
         )}
       </div>

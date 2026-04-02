@@ -108,6 +108,7 @@ type Handlers struct {
 	AdminNamespaces  http.HandlerFunc
 	AdminDatabase    http.HandlerFunc
 	AdminGraph       http.HandlerFunc
+	AdminDreaming    http.HandlerFunc
 }
 
 // notImplemented returns a handler that responds with 501 Not Implemented.
@@ -256,6 +257,8 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Get("/v1/namespaces/tree", handler(handlers.AdminNamespaces))
 		r.HandleFunc("/v1/enrichment", handler(handlers.AdminEnrichment))
 		r.HandleFunc("/v1/enrichment/*", handler(handlers.AdminEnrichment))
+		r.HandleFunc("/v1/dreaming", handler(handlers.AdminDreaming))
+		r.HandleFunc("/v1/dreaming/*", handler(handlers.AdminDreaming))
 
 		// Org-scoped routes.
 		r.Route("/v1/orgs/{org_id}", func(r chi.Router) {

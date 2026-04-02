@@ -49,6 +49,44 @@ Respond ONLY as JSON, no markdown fences, no preamble:
   "relationships": [{"source": "...", "target": "...", "relation": "...", "temporal": "current"}]
 }`;
 
+const DREAM_CONTRADICTION_PROMPT_KEYS = [
+  "dreaming.contradiction_prompt",
+];
+
+const DREAM_SYNTHESIS_PROMPT_KEYS = [
+  "dreaming.synthesis_prompt",
+];
+
+const DREAM_ALIGNMENT_PROMPT_KEYS = [
+  "dreaming.alignment_prompt",
+];
+
+const DEFAULT_CONTRADICTION_PROMPT = `Analyze whether these two statements contradict each other.
+Respond with JSON only: {"contradicts": true/false, "explanation": "brief reason"}
+
+Statement A: %s
+
+Statement B: %s`;
+
+const DEFAULT_SYNTHESIS_PROMPT = `Synthesize the following related pieces of information into a single, concise memory that captures all key facts without losing important details.
+
+Information to synthesize:
+%s
+
+Respond with ONLY the synthesized text, no explanations or metadata.`;
+
+const DEFAULT_ALIGNMENT_PROMPT = `Evaluate how strongly the following evidence supports or contradicts this synthesis.
+
+Synthesis: %s
+
+Evidence:
+%s
+
+Respond with JSON only: {"alignment": <float from -1.0 to 1.0>, "reasoning": "brief explanation"}
+- 1.0 = strong support/confirmation
+- 0.0 = neutral/unrelated
+- -1.0 = strong contradiction`;
+
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:
 
 "John Smith works at Acme Corp as a senior engineer. He joined in January 2025 and primarily works with Python and Go. The company is headquartered in San Francisco and recently expanded to Austin, Texas."`;
@@ -102,16 +140,26 @@ function resolvePromptData(
   }
 
   // If no schema key found, use the first key with a hardcoded default.
+  let description = "System prompt";
+  if (keys[0].includes("fact")) {
+    description = "System prompt for extracting structured facts from memory content";
+  } else if (keys[0].includes("entity")) {
+    description = "System prompt for extracting entities and relationships from memory content";
+  } else if (keys[0].includes("contradiction")) {
+    description = "Prompt for detecting contradictions between pairs of memories";
+  } else if (keys[0].includes("synthesis")) {
+    description = "Prompt for synthesizing clusters of related memories into consolidated knowledge";
+  } else if (keys[0].includes("alignment")) {
+    description = "Prompt for scoring how strongly new evidence supports or contradicts existing syntheses";
+  }
+
   return {
     key: keys[0],
     currentValue: fallbackDefault,
     defaultValue: fallbackDefault,
     scope: "global",
     isModified: false,
-    description:
-      keys[0].includes("fact")
-        ? "System prompt for extracting structured facts from memory content"
-        : "System prompt for extracting entities and relationships from memory content",
+    description,
   };
 }
 
@@ -484,6 +532,142 @@ function PromptEditorCard({
 }
 
 // ---------------------------------------------------------------------------
+// Simple Prompt Editor Card (no test section)
+// ---------------------------------------------------------------------------
+
+function SimplePromptEditorCard({
+  title,
+  description,
+  promptData,
+  onSave,
+  saving,
+}: {
+  title: string;
+  description: string;
+  promptData: PromptData;
+  onSave: (key: string, value: string, scope: string) => void;
+  saving: boolean;
+}) {
+  const [editValue, setEditValue] = useState(promptData.currentValue);
+  const [editScope, setEditScope] = useState(promptData.scope);
+  const [showDefault, setShowDefault] = useState(false);
+
+  useEffect(() => {
+    setEditValue(promptData.currentValue);
+    setEditScope(promptData.scope);
+  }, [promptData.currentValue, promptData.scope]);
+
+  const hasChanges = editValue !== promptData.currentValue;
+  const isCustomized = editValue !== promptData.defaultValue;
+
+  return (
+    <div className="rounded-lg border border-border bg-card shadow-sm">
+      <div className="border-b border-border px-5 py-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-foreground">{title}</h3>
+            <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {isCustomized && (
+              <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                Customized
+              </span>
+            )}
+            {!isCustomized && (
+              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                Default
+              </span>
+            )}
+            <span className="text-xs text-muted-foreground">
+              Key: <code className="font-mono">{promptData.key}</code>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-5 py-4 space-y-4">
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-medium text-muted-foreground">
+            Scope:
+          </label>
+          <select
+            value={editScope}
+            onChange={(e) => setEditScope(e.target.value)}
+            className="rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="global">Global</option>
+          </select>
+        </div>
+
+        <LineNumberedTextarea
+          value={editValue}
+          onChange={setEditValue}
+          rows={10}
+          placeholder="Enter prompt..."
+        />
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onSave(promptData.key, editValue, editScope)}
+              disabled={saving || !hasChanges}
+              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? (
+                <span className="flex items-center gap-1.5">
+                  <Spinner className="h-3.5 w-3.5" />
+                  Saving...
+                </span>
+              ) : (
+                "Save Prompt"
+              )}
+            </button>
+            {hasChanges && (
+              <button
+                type="button"
+                onClick={() => setEditValue(promptData.currentValue)}
+                className="rounded-md border border-input px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted"
+              >
+                Discard Changes
+              </button>
+            )}
+            {isCustomized && (
+              <button
+                type="button"
+                onClick={() => setEditValue(promptData.defaultValue)}
+                className="rounded-md border border-input px-3 py-1.5 text-sm font-medium text-muted-foreground shadow-sm hover:bg-muted"
+              >
+                Reset to Default
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowDefault(!showDefault)}
+            className="text-xs text-muted-foreground hover:text-foreground underline"
+          >
+            {showDefault ? "Hide default prompt" : "Show default prompt"}
+          </button>
+        </div>
+
+        {showDefault && (
+          <div className="rounded-md border border-border bg-muted/30 p-4">
+            <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Default Prompt
+            </h4>
+            <pre className="whitespace-pre-wrap font-mono text-xs text-foreground leading-relaxed">
+              {promptData.defaultValue}
+            </pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -565,6 +749,26 @@ export default function ExtractionPromptEditor() {
     DEFAULT_ENTITY_PROMPT,
   );
 
+  // Dreaming prompt data.
+  const contradictionPromptData = resolvePromptData(
+    DREAM_CONTRADICTION_PROMPT_KEYS,
+    schemas,
+    settingsMap,
+    DEFAULT_CONTRADICTION_PROMPT,
+  );
+  const synthesisPromptData = resolvePromptData(
+    DREAM_SYNTHESIS_PROMPT_KEYS,
+    schemas,
+    settingsMap,
+    DEFAULT_SYNTHESIS_PROMPT,
+  );
+  const alignmentPromptData = resolvePromptData(
+    DREAM_ALIGNMENT_PROMPT_KEYS,
+    schemas,
+    settingsMap,
+    DEFAULT_ALIGNMENT_PROMPT,
+  );
+
   // Keep refs updated for test calls.
   if (factPromptData) {
     factPromptRef.current = factPromptData.currentValue;
@@ -634,12 +838,13 @@ export default function ExtractionPromptEditor() {
       {/* Page header */}
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Extraction Prompt Editor
+          Prompt Editor
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Edit the system prompts used by the enrichment pipeline to extract
-          facts and entities from stored memories. Use the test feature to
-          validate prompt changes against sample input before saving.
+          Edit the system prompts used by the enrichment and dreaming pipelines.
+          Extraction prompts control how facts and entities are extracted from
+          memories. Dreaming prompts control how the system consolidates
+          knowledge during background processing.
         </p>
       </div>
 
@@ -693,6 +898,54 @@ export default function ExtractionPromptEditor() {
               onSampleInputChange={setEntitySampleInput}
             />
           )}
+
+          {/* Dreaming Prompts Section */}
+          <div className="border-t border-border pt-8">
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold tracking-tight">
+                Dreaming Prompts
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                These prompts are used by the dreaming system during background
+                memory consolidation. They control how the LLM detects
+                contradictions, synthesizes related memories, and scores alignment
+                between new evidence and existing knowledge. Prompts use %s
+                placeholders for content injection.
+              </p>
+            </div>
+
+            <div className="space-y-6">
+              {contradictionPromptData && (
+                <SimplePromptEditorCard
+                  title="Contradiction Detection Prompt"
+                  description="Used to determine whether two memories contradict each other. Should return JSON with a contradicts boolean and explanation. Uses two %s placeholders for Statement A and Statement B."
+                  promptData={contradictionPromptData}
+                  onSave={handleSave}
+                  saving={updateMutation.isPending}
+                />
+              )}
+
+              {synthesisPromptData && (
+                <SimplePromptEditorCard
+                  title="Memory Synthesis Prompt"
+                  description="Used to consolidate a cluster of related memories into a single, concise synthesis. Should return only the synthesized text. Uses one %s placeholder for the combined memory content."
+                  promptData={synthesisPromptData}
+                  onSave={handleSave}
+                  saving={updateMutation.isPending}
+                />
+              )}
+
+              {alignmentPromptData && (
+                <SimplePromptEditorCard
+                  title="Alignment Scoring Prompt"
+                  description="Used to evaluate how strongly new evidence supports or contradicts an existing synthesis. Should return JSON with an alignment float (-1.0 to 1.0) and reasoning. Uses two %s placeholders for synthesis and evidence."
+                  promptData={alignmentPromptData}
+                  onSave={handleSave}
+                  saving={updateMutation.isPending}
+                />
+              )}
+            </div>
+          </div>
         </div>
       )}
 

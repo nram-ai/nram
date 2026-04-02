@@ -263,6 +263,32 @@ func (r *RelationshipRepo) DeleteBySourceMemory(ctx context.Context, memoryID uu
 	return nil
 }
 
+// UpdateWeight sets the weight of a relationship to a specific value.
+func (r *RelationshipRepo) UpdateWeight(ctx context.Context, id uuid.UUID, weight float64) error {
+	query := `UPDATE relationships SET weight = ? WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE relationships SET weight = $1 WHERE id = $2`
+	}
+	_, err := r.db.Exec(ctx, query, weight, id.String())
+	if err != nil {
+		return fmt.Errorf("relationship update weight: %w", err)
+	}
+	return nil
+}
+
+// DeleteByID removes a single relationship by its ID.
+func (r *RelationshipRepo) DeleteByID(ctx context.Context, id uuid.UUID) error {
+	query := `DELETE FROM relationships WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM relationships WHERE id = $1`
+	}
+	_, err := r.db.Exec(ctx, query, id.String())
+	if err != nil {
+		return fmt.Errorf("relationship delete by id: %w", err)
+	}
+	return nil
+}
+
 // DeleteDangling removes relationships where the source or target entity no longer exists.
 // Returns the number of relationships deleted.
 func (r *RelationshipRepo) DeleteDangling(ctx context.Context) (int64, error) {

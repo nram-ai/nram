@@ -24,6 +24,7 @@ import OAuthClients from "./pages/OAuthClients";
 import IdPConfiguration from "./pages/IdPConfiguration";
 import MCPConfigGenerator from "./pages/MCPConfigGenerator";
 import ExtractionPromptEditor from "./pages/ExtractionPromptEditor";
+import DreamingMonitor from "./pages/DreamingMonitor";
 import MyAccount from "./pages/MyAccount";
 
 // ---------------------------------------------------------------------------
@@ -106,6 +107,7 @@ const navItems: NavItem[] = [
   { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
   { path: "/database", label: "Database", section: "System", minRole: "administrator" },
   { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator" },
+  { path: "/dreaming", label: "Dreaming", section: "System", minRole: "administrator" },
   { path: "/analytics", label: "Analytics", section: "System" },
   { path: "/import", label: "Bulk Import", section: "System", writeOnly: true },
   { path: "/account", label: "My Account", section: "Account" },
@@ -284,6 +286,7 @@ function AppLayout() {
               <Route path="/extraction-prompts" element={<RequireRole minRole="administrator"><ExtractionPromptEditor /></RequireRole>} />
               <Route path="/database" element={<RequireRole minRole="administrator"><DatabaseManagement /></RequireRole>} />
               <Route path="/enrichment" element={<RequireRole minRole="administrator"><EnrichmentMonitor /></RequireRole>} />
+              <Route path="/dreaming" element={<RequireRole minRole="administrator"><DreamingMonitor /></RequireRole>} />
               <Route path="/graph" element={<GraphVisualization />} />
               <Route path="/entities" element={<EntityBrowser />} />
               <Route path="/analytics" element={<Analytics />} />

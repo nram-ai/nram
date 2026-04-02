@@ -36,6 +36,20 @@ const (
 	SettingRankWeightGraph  = "ranking.weight.graph_relevance"
 	SettingTokenRetention   = "usage.token_retention_days"
 
+	// Dreaming system-level settings (global scope).
+	SettingDreamingEnabled            = "dreaming.enabled"
+	SettingDreamMaxTokensPerCycle     = "dreaming.max_tokens_per_cycle"
+	SettingDreamMaxTokensPerCall      = "dreaming.max_tokens_per_call"
+	SettingDreamCooldown              = "dreaming.cooldown_seconds"
+	SettingDreamMinInterval           = "dreaming.min_interval_seconds"
+	SettingDreamInitialConfidence     = "dreaming.initial_confidence"
+	SettingDreamSupersessionThreshold = "dreaming.supersession_threshold"
+	SettingDreamLogRetention          = "dreaming.log_retention_days"
+	SettingDreamProjectEnabled        = "dreaming.project.enabled"
+	SettingDreamContradictionPrompt   = "dreaming.contradiction_prompt"
+	SettingDreamSynthesisPrompt       = "dreaming.synthesis_prompt"
+	SettingDreamAlignmentPrompt       = "dreaming.alignment_prompt"
+
 	SettingQdrantAddr             = "qdrant.addr"
 	SettingQdrantAPIKey           = "qdrant.api_key"
 	SettingQdrantUseTLS           = "qdrant.use_tls"
@@ -54,6 +68,37 @@ var settingDefaults = map[string]string{
 	SettingRankWeightFreq:  "0.05",
 	SettingRankWeightGraph: "0.20",
 	SettingTokenRetention:  "365",
+	SettingDreamingEnabled:            "false",
+	SettingDreamMaxTokensPerCycle:     "10000",
+	SettingDreamMaxTokensPerCall:      "2048",
+	SettingDreamCooldown:              "300",
+	SettingDreamMinInterval:           "3600",
+	SettingDreamInitialConfidence:     "0.3",
+	SettingDreamSupersessionThreshold: "0.85",
+	SettingDreamLogRetention:          "30",
+	SettingDreamContradictionPrompt: `Analyze whether these two statements contradict each other.
+Respond with JSON only: {"contradicts": true/false, "explanation": "brief reason"}
+
+Statement A: %s
+
+Statement B: %s`,
+	SettingDreamSynthesisPrompt: `Synthesize the following related pieces of information into a single, concise memory that captures all key facts without losing important details.
+
+Information to synthesize:
+%s
+
+Respond with ONLY the synthesized text, no explanations or metadata.`,
+	SettingDreamAlignmentPrompt: `Evaluate how strongly the following evidence supports or contradicts this synthesis.
+
+Synthesis: %s
+
+Evidence:
+%s
+
+Respond with JSON only: {"alignment": <float from -1.0 to 1.0>, "reasoning": "brief explanation"}
+- 1.0 = strong support/confirmation
+- 0.0 = neutral/unrelated
+- -1.0 = strong contradiction`,
 	SettingQdrantUseTLS:           "false",
 	SettingQdrantPoolSize:         "3",
 	SettingQdrantKeepAliveTime:    "10",

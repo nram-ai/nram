@@ -629,6 +629,59 @@ export interface MigrationStatus {
   message: string;
 }
 
+// --- Dreaming Types ---
+
+export interface DreamCycle {
+  id: string;
+  project_id: string;
+  namespace_id: string;
+  status: string;
+  phase: string;
+  tokens_used: number;
+  token_budget: number;
+  phase_summary: unknown;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DreamLog {
+  id: string;
+  cycle_id: string;
+  project_id: string;
+  phase: string;
+  operation: string;
+  target_type: string;
+  target_id: string;
+  before_state: Record<string, unknown>;
+  after_state: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface DreamStatusResponse {
+  enabled: boolean;
+  dirty_count: number;
+  recent_cycles: DreamCycle[];
+}
+
+export interface DreamCycleDetail {
+  cycle: DreamCycle;
+  logs: DreamLog[];
+}
+
+export interface DreamEnableResponse {
+  enabled: boolean;
+}
+
+export interface DreamRollbackResponse {
+  status: string;
+  cycle_id: string;
+}
+
+// --- Enrichment Types ---
+
 export interface EnrichmentQueueCounts {
   pending: number;
   processing: number;
@@ -922,6 +975,25 @@ export const adminAPI = {
     request<ConnectionTestResult>("POST", "/admin/database/test", { url }),
   triggerMigration: (url: string) =>
     request<MigrationStatus>("POST", "/admin/database/migrate", { url }),
+
+  // Dreaming
+  getDreamingStatus: () =>
+    request<DreamStatusResponse>("GET", "/dreaming"),
+  getDreamingCycles: (projectId?: string) => {
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+    return request<DreamCycle[]>("GET", `/dreaming/cycles${qs}`);
+  },
+  getDreamingCycleDetail: (cycleId: string) =>
+    request<DreamCycleDetail>("GET", `/dreaming/cycles/${cycleId}`),
+  setDreamingEnabled: (enabled: boolean) =>
+    request<DreamEnableResponse>("POST", "/dreaming/enable", { enabled }),
+  setProjectDreamingEnabled: (projectId: string, enabled: boolean) =>
+    request<{ project_id: string; enabled: boolean }>("POST", "/dreaming/project/enable", {
+      project_id: projectId,
+      enabled,
+    }),
+  rollbackDreamCycle: (cycleId: string) =>
+    request<DreamRollbackResponse>("POST", "/dreaming/rollback", { cycle_id: cycleId }),
 
   // Enrichment
   getEnrichmentStatus: () =>

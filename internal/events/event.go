@@ -17,6 +17,12 @@ const (
 	ConflictDetected   = "conflict.detected"
 	EnrichmentFailed   = "enrichment.failed"
 	ProjectDeleted     = "project.deleted"
+
+	// Dream lifecycle events.
+	DreamCycleStarted    = "dream.cycle.started"
+	DreamCycleCompleted  = "dream.cycle.completed"
+	DreamCycleFailed     = "dream.cycle.failed"
+	DreamCycleRolledBack = "dream.cycle.rolled_back"
 )
 
 // Event represents a single event in the system.
