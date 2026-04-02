@@ -214,7 +214,7 @@ func (s *Scheduler) runCycle(ctx context.Context, project *model.Project) {
 	slog.Info("dreaming: starting cycle", "cycle", cycle.ID, "project", project.Slug)
 
 	budget := NewTokenBudget(maxTokens, maxPerCall)
-	err := s.runner.Execute(ctx, cycle, budget)
+	allCompleted, err := s.runner.Execute(ctx, cycle, budget)
 
 	if err != nil {
 		slog.Error("dreaming: cycle failed", "cycle", cycle.ID, "err", err)
@@ -226,7 +226,7 @@ func (s *Scheduler) runCycle(ctx context.Context, project *model.Project) {
 			})
 	} else {
 		slog.Info("dreaming: cycle completed", "cycle", cycle.ID,
-			"tokens_used", budget.Used())
+			"tokens_used", budget.Used(), "all_phases", allCompleted)
 		events.Emit(ctx, s.eventBus, events.DreamCycleCompleted, "project:"+project.ID.String(),
 			map[string]string{
 				"cycle_id":   cycle.ID.String(),
@@ -234,9 +234,13 @@ func (s *Scheduler) runCycle(ctx context.Context, project *model.Project) {
 			})
 	}
 
-	// Clear dirty flag and update last dream time.
-	if err := s.dirtyRepo.ClearDirty(ctx, project.ID); err != nil {
-		slog.Error("dreaming: failed to clear dirty flag", "project", project.ID, "err", err)
+	// Only clear dirty if all phases completed. If budget was exhausted
+	// mid-pipeline, keep the project dirty so the next cycle picks up
+	// where this one left off.
+	if allCompleted {
+		if err := s.dirtyRepo.ClearDirty(ctx, project.ID); err != nil {
+			slog.Error("dreaming: failed to clear dirty flag", "project", project.ID, "err", err)
+		}
 	}
 	if err := s.dirtyRepo.SetLastDreamAt(ctx, project.ID, time.Now().UTC()); err != nil {
 		slog.Error("dreaming: failed to set last dream time", "project", project.ID, "err", err)

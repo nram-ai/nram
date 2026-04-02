@@ -61,19 +61,20 @@ func NewRunner(
 }
 
 // Execute runs the dream phase pipeline for the given cycle.
-// It updates the cycle status throughout and returns any fatal error.
-func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget) error {
-	// Mark cycle as running.
+// Returns (allPhasesCompleted, error). When budget is exhausted mid-pipeline,
+// allPhasesCompleted is false but error is nil — the cycle completed successfully
+// but has remaining work for a future cycle.
+func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget) (bool, error) {
 	if err := r.cycleRepo.Start(ctx, cycle.ID); err != nil {
-		return fmt.Errorf("dream runner start cycle: %w", err)
+		return false, fmt.Errorf("dream runner start cycle: %w", err)
 	}
 
 	logger := NewDreamLogWriter(r.logRepo, cycle.ID, cycle.ProjectID)
 	summaries := make([]PhaseSummaryEntry, 0, len(r.phases))
+	completedPhases := 0
 
 	var lastErr error
 	for _, phase := range r.phases {
-		// Check if enrichment woke up between phases — yield if so.
 		if r.idleCheck != nil && !r.idleCheck.IsIdle() {
 			slog.Info("dreaming: enrichment active, aborting before phase",
 				"phase", phase.Name(), "cycle", cycle.ID)
@@ -134,6 +135,7 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 			break
 		}
 
+		completedPhases++
 		summaries = append(summaries, entry)
 		slog.Info("dreaming: phase completed", "phase", phase.Name(),
 			"cycle", cycle.ID, "tokens", tokensConsumed, "duration_ms", elapsed.Milliseconds())
@@ -145,16 +147,18 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		summaryJSON = []byte(`[]`)
 	}
 
+	allCompleted := completedPhases == len(r.phases)
+
 	if lastErr != nil {
-		if err := r.cycleRepo.Fail(ctx, cycle.ID, lastErr.Error()); err != nil {
+		if err := r.cycleRepo.Fail(ctx, cycle.ID, lastErr.Error(), budget.Used()); err != nil {
 			slog.Error("dreaming: failed to mark cycle as failed", "err", err)
 		}
-		return lastErr
+		return false, lastErr
 	}
 
-	if err := r.cycleRepo.Complete(ctx, cycle.ID, summaryJSON); err != nil {
-		return fmt.Errorf("dream runner complete cycle: %w", err)
+	if err := r.cycleRepo.Complete(ctx, cycle.ID, summaryJSON, budget.Used()); err != nil {
+		return allCompleted, fmt.Errorf("dream runner complete cycle: %w", err)
 	}
 
-	return nil
+	return allCompleted, nil
 }

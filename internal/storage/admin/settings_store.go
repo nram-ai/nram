@@ -61,6 +61,16 @@ func (s *SettingsAdminStore) GetSettingsSchema(ctx context.Context) ([]api.Setti
 		{Key: "qdrant.pool_size", Type: "number", DefaultValue: json.RawMessage(`3`), Description: "Number of gRPC connections in the pool (1 = no pool). Changes require server restart.", Category: "qdrant"},
 		{Key: "qdrant.keepalive_time", Type: "number", DefaultValue: json.RawMessage(`10`), Description: "Seconds between keepalive pings (0 = 10s default, -1 = disabled). Changes require server restart.", Category: "qdrant"},
 		{Key: "qdrant.keepalive_timeout", Type: "number", DefaultValue: json.RawMessage(`2`), Description: "Seconds to wait for keepalive response before closing connection. Changes require server restart.", Category: "qdrant"},
+
+		// Dreaming settings
+		{Key: "dreaming.enabled", Type: "boolean", DefaultValue: json.RawMessage(`false`), Description: "Enable background dreaming (memory consolidation and graph improvement)", Category: "dreaming"},
+		{Key: "dreaming.max_tokens_per_cycle", Type: "number", DefaultValue: json.RawMessage(`10000`), Description: "Maximum total tokens per dream cycle across all phases", Category: "dreaming"},
+		{Key: "dreaming.max_tokens_per_call", Type: "number", DefaultValue: json.RawMessage(`2048`), Description: "Maximum tokens for any single LLM call during dreaming", Category: "dreaming"},
+		{Key: "dreaming.cooldown_seconds", Type: "number", DefaultValue: json.RawMessage(`300`), Description: "Seconds to wait after the last user change before dreaming (prevents dreaming on partial data)", Category: "dreaming"},
+		{Key: "dreaming.min_interval_seconds", Type: "number", DefaultValue: json.RawMessage(`3600`), Description: "Minimum seconds between dream cycles for the same project", Category: "dreaming"},
+		{Key: "dreaming.initial_confidence", Type: "number", DefaultValue: json.RawMessage(`0.3`), Description: "Starting confidence for dream-synthesized memories (0.0-1.0)", Category: "dreaming"},
+		{Key: "dreaming.supersession_threshold", Type: "number", DefaultValue: json.RawMessage(`0.85`), Description: "Confidence level at which a synthesis supersedes its source memories (0.0-1.0)", Category: "dreaming"},
+		{Key: "dreaming.log_retention_days", Type: "number", DefaultValue: json.RawMessage(`30`), Description: "Days to retain detailed dream logs before compressing to summaries", Category: "dreaming"},
 	}
 	return schemas, nil
 }

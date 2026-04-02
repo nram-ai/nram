@@ -94,32 +94,32 @@ func (r *DreamCycleRepo) Start(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// Complete marks a dream cycle as completed with a phase summary.
-func (r *DreamCycleRepo) Complete(ctx context.Context, id uuid.UUID, summary json.RawMessage) error {
+// Complete marks a dream cycle as completed with a phase summary and final token count.
+func (r *DreamCycleRepo) Complete(ctx context.Context, id uuid.UUID, summary json.RawMessage, tokensUsed int) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE dream_cycles SET status = ?, phase_summary = ?, completed_at = ?, updated_at = ? WHERE id = ?`
+	query := `UPDATE dream_cycles SET status = ?, phase_summary = ?, tokens_used = ?, completed_at = ?, updated_at = ? WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE dream_cycles SET status = $1, phase_summary = $2, completed_at = $3, updated_at = $4 WHERE id = $5`
+		query = `UPDATE dream_cycles SET status = $1, phase_summary = $2, tokens_used = $3, completed_at = $4, updated_at = $5 WHERE id = $6`
 	}
 
-	_, err := r.db.Exec(ctx, query, model.DreamStatusCompleted, string(summary), now, now, id.String())
+	_, err := r.db.Exec(ctx, query, model.DreamStatusCompleted, string(summary), tokensUsed, now, now, id.String())
 	if err != nil {
 		return fmt.Errorf("dream cycle complete: %w", err)
 	}
 	return nil
 }
 
-// Fail marks a dream cycle as failed with an error message.
-func (r *DreamCycleRepo) Fail(ctx context.Context, id uuid.UUID, errMsg string) error {
+// Fail marks a dream cycle as failed with an error message and final token count.
+func (r *DreamCycleRepo) Fail(ctx context.Context, id uuid.UUID, errMsg string, tokensUsed int) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE dream_cycles SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?`
+	query := `UPDATE dream_cycles SET status = ?, error = ?, tokens_used = ?, completed_at = ?, updated_at = ? WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE dream_cycles SET status = $1, error = $2, completed_at = $3, updated_at = $4 WHERE id = $5`
+		query = `UPDATE dream_cycles SET status = $1, error = $2, tokens_used = $3, completed_at = $4, updated_at = $5 WHERE id = $6`
 	}
 
-	_, err := r.db.Exec(ctx, query, model.DreamStatusFailed, errMsg, now, now, id.String())
+	_, err := r.db.Exec(ctx, query, model.DreamStatusFailed, errMsg, tokensUsed, now, now, id.String())
 	if err != nil {
 		return fmt.Errorf("dream cycle fail: %w", err)
 	}
