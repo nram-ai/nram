@@ -51,7 +51,7 @@ var (
 func NewOpenAIProvider(config OpenAIConfig) *OpenAIProvider {
 	timeout := config.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = 120 * time.Second
 	}
 
 	// Normalize BaseURL: strip trailing slash.

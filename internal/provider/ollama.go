@@ -63,7 +63,7 @@ type ollamaPullRequest struct {
 func NewOllamaClient(config OllamaConfig) *OllamaClient {
 	timeout := config.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = 120 * time.Second
 	}
 
 	if config.PullTimeout == 0 {

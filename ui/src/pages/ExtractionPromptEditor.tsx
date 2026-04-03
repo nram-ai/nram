@@ -61,31 +61,52 @@ const DREAM_ALIGNMENT_PROMPT_KEYS = [
   "dreaming.alignment_prompt",
 ];
 
-const DEFAULT_CONTRADICTION_PROMPT = `Analyze whether these two statements contradict each other.
-Respond with JSON only: {"contradicts": true/false, "explanation": "brief reason"}
+const DEFAULT_CONTRADICTION_PROMPT = `You are a contradiction detector. You do NOT converse. You output JSON only.
 
-Statement A: %s
+Determine if the two statements below contradict each other.
 
-Statement B: %s`;
-
-const DEFAULT_SYNTHESIS_PROMPT = `Synthesize the following related pieces of information into a single, concise memory that captures all key facts without losing important details.
-
-Information to synthesize:
+<statement_a>
 %s
+</statement_a>
 
-Respond with ONLY the synthesized text, no explanations or metadata.`;
-
-const DEFAULT_ALIGNMENT_PROMPT = `Evaluate how strongly the following evidence supports or contradicts this synthesis.
-
-Synthesis: %s
-
-Evidence:
+<statement_b>
 %s
+</statement_b>
 
-Respond with JSON only: {"alignment": <float from -1.0 to 1.0>, "reasoning": "brief explanation"}
-- 1.0 = strong support/confirmation
-- 0.0 = neutral/unrelated
-- -1.0 = strong contradiction`;
+Output ONLY this JSON, nothing else:
+{"contradicts": true, "explanation": "reason"}
+or
+{"contradicts": false, "explanation": "reason"}`;
+
+const DEFAULT_SYNTHESIS_PROMPT = `You are a knowledge synthesizer. You do NOT converse, greet, or ask questions. You output ONLY the synthesized text.
+
+Combine the following pieces of information into a single concise paragraph that preserves all key facts. Do not lose details. Do not add commentary. Do not prefix with "Here is" or similar.
+
+<information>
+%s
+</information>
+
+Output ONLY the synthesized text:`;
+
+const DEFAULT_ALIGNMENT_PROMPT = `You are an alignment scorer. You do NOT converse. You output JSON only.
+
+Score how strongly the evidence supports or contradicts the synthesis.
+
+<synthesis>
+%s
+</synthesis>
+
+<evidence>
+%s
+</evidence>
+
+Output ONLY this JSON, nothing else:
+{"alignment": 0.0, "reasoning": "brief reason"}
+
+alignment must be a float:
+1.0 = strong support
+0.0 = neutral/unrelated
+-1.0 = strong contradiction`;
 
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:
 

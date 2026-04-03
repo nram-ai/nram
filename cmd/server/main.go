@@ -153,6 +153,9 @@ func main() {
 				slot.dest.APIKey = apiCfg.APIKey
 			}
 			slot.dest.Model = apiCfg.Model
+			if apiCfg.Timeout != nil {
+				slot.dest.Timeout = *apiCfg.Timeout
+			}
 		}
 	}
 

@@ -48,7 +48,7 @@ var (
 func NewGeminiProvider(config GeminiConfig) *GeminiProvider {
 	timeout := config.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = 120 * time.Second
 	}
 
 	if config.BaseURL == "" {

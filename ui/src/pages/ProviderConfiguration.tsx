@@ -355,6 +355,7 @@ interface EditFormState {
   model: string;
   api_key: string;
   dimensions: string;
+  timeout: string;
 }
 
 function ProviderSlotEditForm({
@@ -388,6 +389,7 @@ function ProviderSlotEditForm({
       url: DEFAULT_URLS[newType] || "",
       model: "",
       api_key: "",
+      timeout: "",
     }));
   };
 
@@ -411,6 +413,9 @@ function ProviderSlotEditForm({
     }
     if (isEmbedding && form.dimensions) {
       req.dimensions = parseInt(form.dimensions, 10);
+    }
+    if (form.timeout) {
+      req.timeout = parseInt(form.timeout, 10);
     }
     onSave(req);
   };
@@ -526,6 +531,26 @@ function ProviderSlotEditForm({
           </p>
         </div>
       )}
+
+      {/* Timeout */}
+      <div>
+        <label className="mb-1 block text-sm font-medium text-foreground">
+          Timeout (seconds)
+        </label>
+        <input
+          type="number"
+          value={form.timeout}
+          onChange={(e) =>
+            setForm((p) => ({ ...p, timeout: e.target.value }))
+          }
+          placeholder="120"
+          min={5}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          HTTP request timeout for LLM calls. Increase for local models (Ollama) or large prompts. Default: 120 seconds.
+        </p>
+      </div>
 
       {/* Embedding change warning */}
       {showEmbedWarning && (
@@ -650,6 +675,7 @@ function ProviderSlotCard({
     model: slot.configured ? slot.model : "",
     api_key: "",
     dimensions: slot.dimensions != null ? String(slot.dimensions) : "",
+    timeout: slot.timeout != null ? String(slot.timeout) : "",
   };
 
   return (

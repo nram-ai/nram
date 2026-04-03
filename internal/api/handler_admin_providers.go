@@ -37,6 +37,7 @@ type ProviderSlotStatus struct {
 	URL        string `json:"url,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Dimensions *int   `json:"dimensions,omitempty"`
+	Timeout    *int   `json:"timeout,omitempty"`
 	Status     string `json:"status"`
 	LatencyMs  *int64 `json:"latency_ms,omitempty"`
 }
@@ -54,6 +55,7 @@ type ProviderSlotConfig struct {
 	APIKey     string `json:"api_key,omitempty"`
 	Model      string `json:"model"`
 	Dimensions *int   `json:"dimensions,omitempty"`
+	Timeout    *int   `json:"timeout,omitempty"` // seconds, 0 = default (120s)
 }
 
 // ProviderTestResult is the response body for POST /providers/test.

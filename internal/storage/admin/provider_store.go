@@ -79,6 +79,7 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 		URL:        persisted.URL,
 		Model:      persisted.Model,
 		Dimensions: persisted.Dimensions,
+		Timeout:    persisted.Timeout,
 		Status:     status,
 	}
 }
@@ -92,6 +93,9 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 		BaseURL: req.Config.URL,
 		APIKey:  req.Config.APIKey,
 		Model:   req.Config.Model,
+	}
+	if req.Config.Timeout != nil {
+		slotCfg.Timeout = *req.Config.Timeout
 	}
 
 	switch req.Slot {
@@ -210,12 +214,16 @@ func (s *ProviderAdminStore) buildRegistryConfigFromDB(ctx context.Context) prov
 		if err := json.Unmarshal(setting.Value, &apiCfg); err != nil {
 			continue
 		}
-		*slot.dest = provider.SlotConfig{
+		sc := provider.SlotConfig{
 			Type:    apiCfg.Type,
 			BaseURL: apiCfg.URL,
 			APIKey:  apiCfg.APIKey,
 			Model:   apiCfg.Model,
 		}
+		if apiCfg.Timeout != nil {
+			sc.Timeout = *apiCfg.Timeout
+		}
+		*slot.dest = sc
 	}
 	return cfg
 }

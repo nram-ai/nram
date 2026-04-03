@@ -485,6 +485,7 @@ export interface ProviderSlot {
   url: string;
   model: string;
   dimensions?: number | null;
+  timeout?: number | null;
   status?: string;
   latency_ms?: number | null;
 }
@@ -495,6 +496,7 @@ export interface UpdateProviderSlotRequest {
   model?: string;
   api_key?: string;
   dimensions?: number;
+  timeout?: number;
 }
 
 export interface ProviderConfigResponse {
