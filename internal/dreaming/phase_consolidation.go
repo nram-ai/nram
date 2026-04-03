@@ -358,6 +358,7 @@ func (p *ConsolidationPhase) consolidate(
 			Source:      &source,
 			Confidence:  initialConfidence,
 			Importance:  0.5,
+			Enriched:    true,
 			Metadata:    metadata,
 		}
 
