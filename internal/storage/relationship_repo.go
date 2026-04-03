@@ -276,6 +276,62 @@ func (r *RelationshipRepo) UpdateWeight(ctx context.Context, id uuid.UUID, weigh
 	return nil
 }
 
+// FindActiveByTriple returns an active (non-expired) relationship matching the
+// given (namespace, source, target, relation) triple, or nil if none exists.
+func (r *RelationshipRepo) FindActiveByTriple(ctx context.Context, namespaceID, sourceID, targetID uuid.UUID, relation string) (*model.Relationship, error) {
+	query := selectRelationshipColumns + ` FROM relationships
+		WHERE namespace_id = ? AND source_id = ? AND target_id = ? AND relation = ? AND valid_until IS NULL
+		ORDER BY weight DESC LIMIT 1`
+	if r.db.Backend() == BackendPostgres {
+		query = selectRelationshipColumns + ` FROM relationships
+			WHERE namespace_id = $1 AND source_id = $2 AND target_id = $3 AND relation = $4 AND valid_until IS NULL
+			ORDER BY weight DESC LIMIT 1`
+	}
+
+	row := r.db.QueryRow(ctx, query, namespaceID.String(), sourceID.String(), targetID.String(), relation)
+	rel, err := r.scanRelationship(row)
+	if err != nil {
+		return nil, err
+	}
+	return rel, nil
+}
+
+// CountActiveByNamespace returns the number of active (non-expired) relationships in a namespace.
+func (r *RelationshipRepo) CountActiveByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error) {
+	query := `SELECT COUNT(*) FROM relationships WHERE namespace_id = ? AND valid_until IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM relationships WHERE namespace_id = $1 AND valid_until IS NULL`
+	}
+
+	var count int
+	err := r.db.QueryRow(ctx, query, namespaceID.String()).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("relationship count by namespace: %w", err)
+	}
+	return count, nil
+}
+
+// ExpireLowWeight expires all active relationships in a namespace with weight below the threshold.
+// Returns the number of relationships expired.
+func (r *RelationshipRepo) ExpireLowWeight(ctx context.Context, namespaceID uuid.UUID, threshold float64) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	query := `UPDATE relationships SET valid_until = ? WHERE namespace_id = ? AND valid_until IS NULL AND weight < ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE relationships SET valid_until = $1 WHERE namespace_id = $2 AND valid_until IS NULL AND weight < $3`
+	}
+
+	result, err := r.db.Exec(ctx, query, now, namespaceID.String(), threshold)
+	if err != nil {
+		return 0, fmt.Errorf("relationship expire low weight: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("relationship expire low weight rows: %w", err)
+	}
+	return rows, nil
+}
+
 // DeleteByID removes a single relationship by its ID.
 func (r *RelationshipRepo) DeleteByID(ctx context.Context, id uuid.UUID) error {
 	query := `DELETE FROM relationships WHERE id = ?`

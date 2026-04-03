@@ -578,8 +578,8 @@ func TestAnthropicModels(t *testing.T) {
 
 func TestAnthropicDefaultTimeout(t *testing.T) {
 	p := NewAnthropicProvider(AnthropicConfig{})
-	if p.client.Timeout != 30*time.Second {
-		t.Errorf("default timeout = %v, want %v", p.client.Timeout, 30*time.Second)
+	if p.client.Timeout != 120*time.Second {
+		t.Errorf("default timeout = %v, want %v", p.client.Timeout, 120*time.Second)
 	}
 }
 

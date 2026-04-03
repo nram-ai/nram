@@ -154,6 +154,14 @@ func (m *mockRelationshipCreator) Create(_ context.Context, rel *model.Relations
 	return nil
 }
 
+func (m *mockRelationshipCreator) FindActiveByTriple(_ context.Context, _, _, _ uuid.UUID, _ string) (*model.Relationship, error) {
+	return nil, nil
+}
+
+func (m *mockRelationshipCreator) UpdateWeight(_ context.Context, _ uuid.UUID, _ float64) error {
+	return nil
+}
+
 type mockLineageCreator struct {
 	mu      sync.Mutex
 	created []*model.MemoryLineage

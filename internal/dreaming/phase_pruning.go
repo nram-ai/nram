@@ -8,28 +8,51 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
+const (
+	// pruneRelationshipWeightThreshold — active relationships with weight
+	// below this value are expired during pruning.
+	pruneRelationshipWeightThreshold = 0.05
+)
+
 // PruningPhase removes low-value content from the knowledge graph:
 // - Superseded memories with zero access since supersession
-// - Very low confidence memories past a minimum age
-// - Expired relationships
+// - Very low confidence dream-originated memories past a minimum age
+// - Low-weight relationships (below pruneRelationshipWeightThreshold)
+// - Dangling relationships pointing to non-existent entities
 //
 // This phase has zero token cost (heuristic-based).
 type PruningPhase struct {
-	memories MemoryReader
+	memories  MemoryReader
 	memWriter MemoryWriter
+	relWriter RelationshipWriter
 }
 
 // NewPruningPhase creates a new pruning phase.
-func NewPruningPhase(memories MemoryReader, memWriter MemoryWriter) *PruningPhase {
+func NewPruningPhase(memories MemoryReader, memWriter MemoryWriter, relWriter RelationshipWriter) *PruningPhase {
 	return &PruningPhase{
 		memories:  memories,
 		memWriter: memWriter,
+		relWriter: relWriter,
 	}
 }
 
 func (p *PruningPhase) Name() string { return model.DreamPhasePruning }
 
 func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) error {
+	// Phase 1: Prune memories.
+	if err := p.pruneMemories(ctx, cycle, logger); err != nil {
+		slog.Warn("dreaming: memory pruning had errors", "err", err)
+	}
+
+	// Phase 2: Expire low-weight relationships.
+	if err := p.pruneRelationships(ctx, cycle, logger); err != nil {
+		slog.Warn("dreaming: relationship pruning had errors", "err", err)
+	}
+
+	return nil
+}
+
+func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycle, logger *DreamLogWriter) error {
 	memories, err := p.memories.ListByNamespace(ctx, cycle.NamespaceID, 1000, 0)
 	if err != nil {
 		return err
@@ -63,6 +86,26 @@ func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, bud
 
 	if pruned > 0 {
 		slog.Info("dreaming: pruned memories", "count", pruned, "cycle", cycle.ID)
+	}
+
+	return nil
+}
+
+func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.DreamCycle, logger *DreamLogWriter) error {
+	expired, err := p.relWriter.ExpireLowWeight(ctx, cycle.NamespaceID, pruneRelationshipWeightThreshold)
+	if err != nil {
+		return err
+	}
+
+	if expired > 0 {
+		_ = logger.LogOperation(ctx, model.DreamPhasePruning,
+			model.DreamOpRelationshipExpired, "namespace", cycle.NamespaceID,
+			nil, map[string]interface{}{
+				"expired_count": expired,
+				"threshold":     pruneRelationshipWeightThreshold,
+			})
+		slog.Info("dreaming: pruned low-weight relationships",
+			"count", expired, "threshold", pruneRelationshipWeightThreshold, "cycle", cycle.ID)
 	}
 
 	return nil

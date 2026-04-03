@@ -328,8 +328,8 @@ func TestOllamaDefaultConfigValues(t *testing.T) {
 	if c.config.BaseURL != "http://localhost:11434" {
 		t.Errorf("BaseURL = %q, want %q", c.config.BaseURL, "http://localhost:11434")
 	}
-	if c.client.Timeout != 30*time.Second {
-		t.Errorf("Timeout = %v, want %v", c.client.Timeout, 30*time.Second)
+	if c.client.Timeout != 120*time.Second {
+		t.Errorf("Timeout = %v, want %v", c.client.Timeout, 120*time.Second)
 	}
 	if c.config.PullTimeout != 10*time.Minute {
 		t.Errorf("PullTimeout = %v, want %v", c.config.PullTimeout, 10*time.Minute)

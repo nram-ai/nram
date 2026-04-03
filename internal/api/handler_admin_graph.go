@@ -3,12 +3,15 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
 )
+
+const defaultGraphMinWeight = 0.1
 
 // GraphEntity represents an entity node for graph visualization.
 type GraphEntity struct {
@@ -102,6 +105,14 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 				"error": "invalid project ID",
 			})
 			return
+		}
+
+		// Parse optional min_weight filter (default 0.1).
+		minWeight := defaultGraphMinWeight
+		if mwStr := r.URL.Query().Get("min_weight"); mwStr != "" {
+			if parsed, err := strconv.ParseFloat(mwStr, 64); err == nil && parsed >= 0 {
+				minWeight = parsed
+			}
 		}
 
 		project, err := cfg.Projects.GetByID(r.Context(), projectID)
@@ -207,6 +218,14 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 
 		graphRelationships := make([]GraphRelationship, 0, len(relationships))
 		for _, rel := range relationships {
+			// Skip expired relationships.
+			if rel.ValidUntil != nil {
+				continue
+			}
+			// Skip relationships below the minimum weight threshold.
+			if rel.Weight < minWeight {
+				continue
+			}
 			srcID := rel.SourceID.String()
 			tgtID := rel.TargetID.String()
 			// Only include relationships where both ends are in the entity set.

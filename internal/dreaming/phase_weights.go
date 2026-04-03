@@ -64,6 +64,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 	}
 
 	adjusted := 0
+	expired := 0
 	now := time.Now().UTC()
 
 	for _, rel := range rels {
@@ -73,6 +74,23 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 
 		newWeight := p.calculateWeight(&rel, now, sourceMemories)
 		if newWeight == rel.Weight {
+			continue
+		}
+
+		// Expire relationships that have decayed below the pruning threshold
+		// rather than keeping them alive at near-zero weight.
+		if newWeight < 0.05 {
+			if err := p.relWriter.Expire(ctx, rel.ID); err != nil {
+				slog.Warn("dreaming: expire decayed relationship failed", "relationship", rel.ID, "err", err)
+				continue
+			}
+			if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust,
+				model.DreamOpRelationshipExpired, "relationship", rel.ID,
+				map[string]interface{}{"weight": rel.Weight},
+				map[string]interface{}{"weight": newWeight, "reason": "decayed_below_threshold"}); err != nil {
+				slog.Warn("dreaming: log operation failed", "err", err)
+			}
+			expired++
 			continue
 		}
 
@@ -94,8 +112,8 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 	// Reuse loaded relationships for mention count recalibration.
 	p.recalibrateMentionCounts(ctx, cycle.NamespaceID, rels, logger)
 
-	if adjusted > 0 {
-		slog.Info("dreaming: weight adjustments", "count", adjusted, "cycle", cycle.ID)
+	if adjusted > 0 || expired > 0 {
+		slog.Info("dreaming: weight adjustments", "adjusted", adjusted, "expired", expired, "cycle", cycle.ID)
 	}
 
 	return nil
@@ -124,8 +142,8 @@ func (p *WeightAdjustmentPhase) calculateWeight(rel *model.Relationship, now tim
 		}
 	}
 
-	if weight < 0.01 {
-		weight = 0.01
+	if weight < 0 {
+		weight = 0
 	}
 	if weight > 2.0 {
 		weight = 2.0

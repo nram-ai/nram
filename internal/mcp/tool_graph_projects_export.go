@@ -66,6 +66,7 @@ func registerMemoryGraph(s *Server) {
 		mcp.WithString("entity", mcp.Required(), mcp.Description("Entity name or search query")),
 		mcp.WithString("project", mcp.Description("Project slug to scope the search")),
 		mcp.WithNumber("depth", mcp.Description("Graph traversal depth (default 2)")),
+		mcp.WithNumber("min_weight", mcp.Description("Minimum relationship weight to include (default 0.1). Set to 0 to include all.")),
 		mcp.WithBoolean("include_history", mcp.Description("Include expired/past relationships (default false)")),
 	)
 
@@ -116,6 +117,11 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	depth := 2
 	if v, ok := args["depth"].(float64); ok && v > 0 {
 		depth = int(v)
+	}
+
+	minWeight := 0.1
+	if v, ok := args["min_weight"].(float64); ok && v >= 0 {
+		minWeight = v
 	}
 
 	includeHistory := false
@@ -202,14 +208,20 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		}
 	}
 
-	// Filter out expired relationships when include_history is false.
-	if !includeHistory {
+	// Filter relationships by expiry and minimum weight.
+	{
 		now := time.Now()
 		filtered := graphRels[:0]
 		for _, rel := range graphRels {
-			if rel.ValidUntil == nil || rel.ValidUntil.After(now) {
-				filtered = append(filtered, rel)
+			// Skip expired unless include_history is set.
+			if !includeHistory && rel.ValidUntil != nil && !rel.ValidUntil.After(now) {
+				continue
 			}
+			// Skip relationships below the minimum weight threshold.
+			if rel.Weight < minWeight {
+				continue
+			}
+			filtered = append(filtered, rel)
 		}
 		graphRels = filtered
 	}

@@ -40,6 +40,7 @@ const (
 	DreamOpMemoryDeleted         = "memory_deleted"
 	DreamOpMemorySuperseded      = "memory_superseded"
 	DreamOpConfidenceAdjusted    = "confidence_adjusted"
+	DreamOpRelationshipExpired   = "relationship_expired"
 )
 
 // MemorySource returns the source string for a memory, or empty string if nil.

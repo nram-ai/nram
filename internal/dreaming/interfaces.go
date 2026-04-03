@@ -45,6 +45,8 @@ type RelationshipReader interface {
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.Relationship, error)
 	ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.Relationship, error)
 	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops int) ([]model.Relationship, error)
+	FindActiveByTriple(ctx context.Context, namespaceID, sourceID, targetID uuid.UUID, relation string) (*model.Relationship, error)
+	CountActiveByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
 }
 
 // RelationshipWriter creates and modifies relationships.
@@ -54,6 +56,7 @@ type RelationshipWriter interface {
 	Expire(ctx context.Context, id uuid.UUID) error
 	DeleteByID(ctx context.Context, id uuid.UUID) error
 	UpdateWeight(ctx context.Context, id uuid.UUID, weight float64) error
+	ExpireLowWeight(ctx context.Context, namespaceID uuid.UUID, threshold float64) (int64, error)
 }
 
 // LineageWriter creates memory lineage records.

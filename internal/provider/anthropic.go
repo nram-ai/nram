@@ -22,7 +22,7 @@ type AnthropicConfig struct {
 	// BaseURL is the base URL of the Anthropic API. Defaults to "https://api.anthropic.com".
 	BaseURL string
 
-	// Timeout is the HTTP client timeout. Defaults to 30s if zero.
+	// Timeout is the HTTP client timeout. Defaults to 120s if zero.
 	Timeout time.Duration
 }
 

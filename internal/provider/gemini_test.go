@@ -637,8 +637,8 @@ func TestGeminiDimensions(t *testing.T) {
 
 func TestGeminiDefaultTimeout(t *testing.T) {
 	p := NewGeminiProvider(GeminiConfig{})
-	if p.client.Timeout != 30*time.Second {
-		t.Errorf("default timeout = %v, want %v", p.client.Timeout, 30*time.Second)
+	if p.client.Timeout != 120*time.Second {
+		t.Errorf("default timeout = %v, want %v", p.client.Timeout, 120*time.Second)
 	}
 }
 

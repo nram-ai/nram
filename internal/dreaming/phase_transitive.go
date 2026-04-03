@@ -2,15 +2,42 @@ package dreaming
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 )
 
+const (
+	// transitiveMinWeight is the minimum product-weight for a transitive
+	// relationship to be created. This prevents near-zero-weight noise edges
+	// from accumulating (e.g. 0.01 * 0.01 = 0.0001).
+	transitiveMinWeight = 0.1
+
+	// transitiveMaxPerCycle caps new relationships per dream cycle to prevent
+	// runaway graph growth in dense namespaces.
+	transitiveMaxPerCycle = 200
+
+	// transitiveHardCap is the absolute maximum number of active relationships
+	// in a namespace. Transitive creation stops entirely when this is exceeded.
+	transitiveHardCap = 5000
+
+	// transitivePropertySource is stored in the Properties JSON of transitive
+	// relationships so future cycles can identify and exclude them from input.
+	transitivePropertySource = "transitive"
+)
+
 // TransitivePhase discovers implied relationships by traversing the knowledge
 // graph. If A→B and B→C exist but A→C does not, a transitive relationship
 // is created with weight = product of intermediate weights.
+//
+// Guards against relationship explosion:
+//   - Excludes previously-inferred transitive edges from input (no chaining)
+//   - Requires product-weight >= transitiveMinWeight
+//   - Caps new relationships per cycle at transitiveMaxPerCycle
+//   - Stops entirely when namespace exceeds transitiveHardCap active relationships
+//
 // This phase has zero token cost (pure graph traversal).
 type TransitivePhase struct {
 	entities      EntityReader
@@ -43,6 +70,17 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		return nil
 	}
 
+	// Hard cap: if namespace already has too many relationships, skip entirely.
+	totalActive, err := p.relationships.CountActiveByNamespace(ctx, cycle.NamespaceID)
+	if err != nil {
+		return err
+	}
+	if totalActive >= transitiveHardCap {
+		slog.Info("dreaming: transitive phase skipped, namespace at hard cap",
+			"active", totalActive, "cap", transitiveHardCap, "cycle", cycle.ID)
+		return nil
+	}
+
 	// Build adjacency map for quick lookup.
 	allRels, err := p.relationships.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
@@ -55,7 +93,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		relation       string
 	}
 	edges := make(map[edgeKey]*model.Relationship, len(allRels))
-	// Outgoing edges per entity.
+	// Outgoing edges per entity — only from non-transitive, non-expired relationships.
 	outgoing := make(map[uuid.UUID][]model.Relationship)
 
 	for i := range allRels {
@@ -65,18 +103,28 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		}
 		key := edgeKey{rel.SourceID, rel.TargetID, rel.Relation}
 		edges[key] = rel
+
+		// Exclude previously-inferred transitive edges from input so they
+		// cannot chain into further transitive inferences (A→C transitive
+		// should not produce A→D just because C→D exists).
+		if isTransitiveRelationship(rel) {
+			continue
+		}
 		outgoing[rel.SourceID] = append(outgoing[rel.SourceID], *rel)
 	}
 
-	// Cap new relationships to prevent explosion on dense graphs.
-	// Allow up to 2x the current relationship count or 500, whichever is smaller.
-	maxNew := len(allRels) * 2
-	if maxNew > 500 {
-		maxNew = 500
+	// Per-cycle cap.
+	maxNew := transitiveMaxPerCycle
+	// Also respect hard cap headroom.
+	headroom := transitiveHardCap - totalActive
+	if headroom < maxNew {
+		maxNew = headroom
 	}
-	if maxNew < 10 {
-		maxNew = 10
+	if maxNew <= 0 {
+		return nil
 	}
+
+	transitiveProps := json.RawMessage(`{"source":"` + transitivePropertySource + `"}`)
 
 	created := 0
 	for _, entityA := range entities {
@@ -112,8 +160,13 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 					continue
 				}
 
-				// Create transitive relationship.
+				// Minimum weight threshold to avoid near-zero noise.
 				transitiveWeight := relAB.Weight * relBC.Weight
+				if transitiveWeight < transitiveMinWeight {
+					continue
+				}
+
+				// Create transitive relationship, marked as such.
 				newRel := &model.Relationship{
 					ID:           uuid.New(),
 					NamespaceID:  cycle.NamespaceID,
@@ -121,6 +174,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 					TargetID:     entityC,
 					Relation:     relAB.Relation,
 					Weight:       transitiveWeight,
+					Properties:   transitiveProps,
 					SourceMemory: relAB.SourceMemory,
 					ValidFrom:    relAB.ValidFrom,
 				}
@@ -147,4 +201,18 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	}
 
 	return nil
+}
+
+// isTransitiveRelationship checks whether a relationship was created by the
+// transitive closure phase by inspecting its Properties JSON.
+func isTransitiveRelationship(rel *model.Relationship) bool {
+	if rel.Properties == nil || len(rel.Properties) == 0 {
+		return false
+	}
+	var props map[string]interface{}
+	if err := json.Unmarshal(rel.Properties, &props); err != nil {
+		return false
+	}
+	src, _ := props["source"].(string)
+	return src == transitivePropertySource
 }

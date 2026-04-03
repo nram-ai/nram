@@ -399,7 +399,7 @@ func main() {
 		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
 		dreaming.NewContradictionPhase(memoryRepo, lineageRepo, factProvider, settingsSvc),
 		dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, settingsSvc),
-		dreaming.NewPruningPhase(memoryRepo, memoryRepo),
+		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo),
 		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo),
 	)
 

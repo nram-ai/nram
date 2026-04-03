@@ -17,7 +17,7 @@ type OllamaConfig struct {
 	// BaseURL is the base URL of the Ollama API. Defaults to "http://localhost:11434".
 	BaseURL string
 
-	// Timeout is the HTTP client timeout for regular operations. Defaults to 30s if zero.
+	// Timeout is the HTTP client timeout for regular operations. Defaults to 120s if zero.
 	Timeout time.Duration
 
 	// PullTimeout is the HTTP client timeout for model pull operations. Defaults to 10 minutes if zero.

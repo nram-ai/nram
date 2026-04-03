@@ -28,7 +28,7 @@ type OpenAIConfig struct {
 	// Organization is an optional organization identifier sent via the OpenAI-Organization header.
 	Organization string
 
-	// Timeout is the HTTP client timeout. Defaults to 30s if zero.
+	// Timeout is the HTTP client timeout. Defaults to 120s if zero.
 	Timeout time.Duration
 }
 

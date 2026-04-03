@@ -411,8 +411,8 @@ func TestOpenAIDimensions(t *testing.T) {
 
 func TestOpenAIDefaultTimeout(t *testing.T) {
 	p := NewOpenAIProvider(OpenAIConfig{})
-	if p.client.Timeout != 30*time.Second {
-		t.Errorf("default timeout = %v, want %v", p.client.Timeout, 30*time.Second)
+	if p.client.Timeout != 120*time.Second {
+		t.Errorf("default timeout = %v, want %v", p.client.Timeout, 120*time.Second)
 	}
 }
 

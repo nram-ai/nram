@@ -56,9 +56,12 @@ type EntityUpserter interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
 }
 
-// RelationshipCreator persists a new relationship between entities.
+// RelationshipCreator persists a new relationship between entities, with
+// dedup support to avoid creating duplicate edges.
 type RelationshipCreator interface {
 	Create(ctx context.Context, rel *model.Relationship) error
+	FindActiveByTriple(ctx context.Context, namespaceID, sourceID, targetID uuid.UUID, relation string) (*model.Relationship, error)
+	UpdateWeight(ctx context.Context, id uuid.UUID, weight float64) error
 }
 
 // LineageCreator records parent-child lineage between memories.
@@ -517,6 +520,23 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 					"target", rel.Target, "tgtResolved", tgtOK)
 				continue
 			}
+
+			// Deduplicate: if an active relationship with the same triple exists,
+			// reinforce its weight instead of creating a duplicate.
+			existing, _ := wp.relationships.FindActiveByTriple(ctx, mem.NamespaceID, srcID, tgtID, rel.Relation)
+			if existing != nil {
+				newWeight := existing.Weight
+				if rel.Weight > newWeight {
+					newWeight = rel.Weight
+				}
+				if newWeight != existing.Weight {
+					if err := wp.relationships.UpdateWeight(ctx, existing.ID, newWeight); err != nil {
+						slog.Error("enrichment: update existing relationship weight", "job", job.ID, "err", err)
+					}
+				}
+				continue
+			}
+
 			memID := mem.ID
 			r := &model.Relationship{
 				ID:           uuid.New(),
