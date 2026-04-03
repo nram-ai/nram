@@ -252,11 +252,12 @@ func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*Ex
 
 			// Create lineage: child extracted_from parent.
 			lineageRecord := &model.MemoryLineage{
-				ID:        uuid.New(),
-				MemoryID:  childID,
-				ParentID:  &rawMemID,
-				Relation:  "extracted_from",
-				CreatedAt: time.Now(),
+				ID:          uuid.New(),
+				NamespaceID: ns.ID,
+				MemoryID:    childID,
+				ParentID:    &rawMemID,
+				Relation:    model.LineageExtractedFrom,
+				CreatedAt:   time.Now(),
 			}
 			_ = s.lineage.Create(ctx, lineageRecord)
 

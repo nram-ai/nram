@@ -206,14 +206,14 @@ func (m *e2eMemoryRepo) Update(_ context.Context, mem *model.Memory) error {
 	return nil
 }
 
-func (m *e2eMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID) error {
+func (m *e2eMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.memories, id)
 	return nil
 }
 
-func (m *e2eMemoryRepo) HardDelete(_ context.Context, id uuid.UUID) error {
+func (m *e2eMemoryRepo) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.memories, id)

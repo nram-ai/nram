@@ -219,7 +219,7 @@ func TestRelationshipRepo_Expire(t *testing.T) {
 			t.Fatal("expected nil valid_until before expire")
 		}
 
-		if err := repo.Expire(ctx, rel.ID); err != nil {
+		if err := repo.Expire(ctx, rel.ID, nsID); err != nil {
 			t.Fatalf("failed to expire: %v", err)
 		}
 
@@ -239,7 +239,7 @@ func TestRelationshipRepo_Expire_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewRelationshipRepo(db)
 
-		err := repo.Expire(ctx, uuid.New())
+		err := repo.Expire(ctx, uuid.New(), uuid.New())
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}
@@ -263,7 +263,7 @@ func TestRelationshipRepo_Reinforce(t *testing.T) {
 			t.Fatalf("expected initial weight 1.0, got %f", rel.Weight)
 		}
 
-		if err := repo.Reinforce(ctx, rel.ID); err != nil {
+		if err := repo.Reinforce(ctx, rel.ID, nsID); err != nil {
 			t.Fatalf("failed to reinforce: %v", err)
 		}
 
@@ -277,7 +277,7 @@ func TestRelationshipRepo_Reinforce(t *testing.T) {
 		}
 
 		// Reinforce again
-		if err := repo.Reinforce(ctx, rel.ID); err != nil {
+		if err := repo.Reinforce(ctx, rel.ID, nsID); err != nil {
 			t.Fatalf("failed to reinforce second time: %v", err)
 		}
 
@@ -297,7 +297,7 @@ func TestRelationshipRepo_Reinforce_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewRelationshipRepo(db)
 
-		err := repo.Reinforce(ctx, uuid.New())
+		err := repo.Reinforce(ctx, uuid.New(), uuid.New())
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}

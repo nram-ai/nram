@@ -186,12 +186,13 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 			"explanation": explanation,
 		})
 		lin := &model.MemoryLineage{
-			ID:        uuid.New(),
-			MemoryID:  memory.ID,
-			ParentID:  &conflictingID,
-			Relation:  "conflicts_with",
-			Context:   lineageCtx,
-			CreatedAt: time.Now().UTC(),
+			ID:          uuid.New(),
+			NamespaceID: memory.NamespaceID,
+			MemoryID:    memory.ID,
+			ParentID:    &conflictingID,
+			Relation:    model.LineageConflictsWith,
+			Context:     lineageCtx,
+			CreatedAt:   time.Now().UTC(),
 		}
 		if err := cd.lineage.Create(ctx, lin); err != nil {
 			return nil, fmt.Errorf("conflict: create lineage: %w", err)

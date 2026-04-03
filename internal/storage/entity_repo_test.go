@@ -23,14 +23,14 @@ func newTestEntity(namespaceID uuid.UUID) *model.Entity {
 	}
 }
 
-func createTestEntityAlias(t *testing.T, ctx context.Context, db DB, entityID uuid.UUID, alias, aliasType string) uuid.UUID {
+func createTestEntityAlias(t *testing.T, ctx context.Context, db DB, namespaceID, entityID uuid.UUID, alias, aliasType string) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
-	query := `INSERT INTO entity_aliases (id, entity_id, alias, alias_type) VALUES (?, ?, ?, ?)`
+	query := `INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type) VALUES (?, ?, ?, ?, ?)`
 	if db.Backend() == BackendPostgres {
-		query = `INSERT INTO entity_aliases (id, entity_id, alias, alias_type) VALUES ($1, $2, $3, $4)`
+		query = `INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type) VALUES ($1, $2, $3, $4, $5)`
 	}
-	_, err := db.Exec(ctx, query, id.String(), entityID.String(), alias, aliasType)
+	_, err := db.Exec(ctx, query, id.String(), namespaceID.String(), entityID.String(), alias, aliasType)
 	if err != nil {
 		t.Fatalf("failed to create test entity alias: %v", err)
 	}
@@ -365,8 +365,8 @@ func TestEntityRepo_FindByAlias(t *testing.T) {
 		}
 
 		// Create aliases
-		createTestEntityAlias(t, ctx, db, entity.ID, "JD", "abbreviation")
-		createTestEntityAlias(t, ctx, db, entity.ID, "Johnny", "nickname")
+		createTestEntityAlias(t, ctx, db, nsID, entity.ID, "JD", "abbreviation")
+		createTestEntityAlias(t, ctx, db, nsID, entity.ID, "Johnny", "nickname")
 
 		// Find by alias
 		results, err := repo.FindByAlias(ctx, nsID, "JD")
@@ -411,7 +411,7 @@ func TestEntityRepo_FindByAlias_CaseInsensitive(t *testing.T) {
 			t.Fatalf("failed to create entity: %v", err)
 		}
 
-		createTestEntityAlias(t, ctx, db, entity.ID, "JohnDoe", "username")
+		createTestEntityAlias(t, ctx, db, nsID, entity.ID, "JohnDoe", "username")
 
 		// Case-insensitive search
 		results, err := repo.FindByAlias(ctx, nsID, "johndoe")

@@ -12,9 +12,8 @@ import (
 )
 
 // createTestMemoryForLineage creates a memory record suitable for FK references.
-func createTestMemoryForLineage(t *testing.T, ctx context.Context, db DB) uuid.UUID {
+func createTestMemoryForLineage(t *testing.T, ctx context.Context, db DB, nsID uuid.UUID) uuid.UUID {
 	t.Helper()
-	nsID := createTestNamespace(t, ctx, db)
 	repo := NewMemoryRepo(db)
 	mem := newTestMemory(nsID)
 	if err := repo.Create(ctx, mem); err != nil {
@@ -27,15 +26,17 @@ func TestMemoryLineageRepo_Create(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
 
-		memID := createTestMemoryForLineage(t, ctx, db)
-		parentID := createTestMemoryForLineage(t, ctx, db)
+		memID := createTestMemoryForLineage(t, ctx, db, nsID)
+		parentID := createTestMemoryForLineage(t, ctx, db, nsID)
 
 		lineage := &model.MemoryLineage{
-			MemoryID: memID,
-			ParentID: &parentID,
-			Relation: "derived_from",
-			Context:  json.RawMessage(`{"reason":"update"}`),
+			NamespaceID: nsID,
+			MemoryID:    memID,
+			ParentID:    &parentID,
+			Relation:    "derived_from",
+			Context:     json.RawMessage(`{"reason":"update"}`),
 		}
 		if err := repo.Create(ctx, lineage); err != nil {
 			t.Fatalf("failed to create lineage: %v", err)
@@ -66,12 +67,14 @@ func TestMemoryLineageRepo_Create_GeneratesID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
 
-		memID := createTestMemoryForLineage(t, ctx, db)
+		memID := createTestMemoryForLineage(t, ctx, db, nsID)
 
 		lineage := &model.MemoryLineage{
-			MemoryID: memID,
-			Relation: "root",
+			NamespaceID: nsID,
+			MemoryID:    memID,
+			Relation:    "root",
 		}
 		if err := repo.Create(ctx, lineage); err != nil {
 			t.Fatalf("failed to create: %v", err)
@@ -86,12 +89,14 @@ func TestMemoryLineageRepo_Create_NilDefaults(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
 
-		memID := createTestMemoryForLineage(t, ctx, db)
+		memID := createTestMemoryForLineage(t, ctx, db, nsID)
 
 		lineage := &model.MemoryLineage{
-			MemoryID: memID,
-			Relation: "root",
+			NamespaceID: nsID,
+			MemoryID:    memID,
+			Relation:    "root",
 		}
 		if err := repo.Create(ctx, lineage); err != nil {
 			t.Fatalf("failed to create: %v", err)
@@ -109,14 +114,16 @@ func TestMemoryLineageRepo_Create_WithExplicitID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
 
-		memID := createTestMemoryForLineage(t, ctx, db)
+		memID := createTestMemoryForLineage(t, ctx, db, nsID)
 		explicitID := uuid.New()
 
 		lineage := &model.MemoryLineage{
-			ID:       explicitID,
-			MemoryID: memID,
-			Relation: "root",
+			ID:          explicitID,
+			NamespaceID: nsID,
+			MemoryID:    memID,
+			Relation:    "root",
 		}
 		if err := repo.Create(ctx, lineage); err != nil {
 			t.Fatalf("failed to create: %v", err)
@@ -131,15 +138,17 @@ func TestMemoryLineageRepo_GetByID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
 
-		memID := createTestMemoryForLineage(t, ctx, db)
-		parentID := createTestMemoryForLineage(t, ctx, db)
+		memID := createTestMemoryForLineage(t, ctx, db, nsID)
+		parentID := createTestMemoryForLineage(t, ctx, db, nsID)
 
 		lineage := &model.MemoryLineage{
-			MemoryID: memID,
-			ParentID: &parentID,
-			Relation: "supersedes",
-			Context:  json.RawMessage(`{"v":2}`),
+			NamespaceID: nsID,
+			MemoryID:    memID,
+			ParentID:    &parentID,
+			Relation:    "supersedes",
+			Context:     json.RawMessage(`{"v":2}`),
 		}
 		if err := repo.Create(ctx, lineage); err != nil {
 			t.Fatalf("failed to create: %v", err)
@@ -181,16 +190,18 @@ func TestMemoryLineageRepo_ListByMemory(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
 
-		memA := createTestMemoryForLineage(t, ctx, db)
-		memB := createTestMemoryForLineage(t, ctx, db)
-		memC := createTestMemoryForLineage(t, ctx, db)
+		memA := createTestMemoryForLineage(t, ctx, db, nsID)
+		memB := createTestMemoryForLineage(t, ctx, db, nsID)
+		memC := createTestMemoryForLineage(t, ctx, db, nsID)
 
 		// memB derived from memA
 		l1 := &model.MemoryLineage{
-			MemoryID: memB,
-			ParentID: &memA,
-			Relation: "derived_from",
+			NamespaceID: nsID,
+			MemoryID:    memB,
+			ParentID:    &memA,
+			Relation:    "derived_from",
 		}
 		if err := repo.Create(ctx, l1); err != nil {
 			t.Fatalf("failed to create l1: %v", err)
@@ -198,9 +209,10 @@ func TestMemoryLineageRepo_ListByMemory(t *testing.T) {
 
 		// memC supersedes memA
 		l2 := &model.MemoryLineage{
-			MemoryID: memC,
-			ParentID: &memA,
-			Relation: "supersedes",
+			NamespaceID: nsID,
+			MemoryID:    memC,
+			ParentID:    &memA,
+			Relation:    "supersedes",
 		}
 		if err := repo.Create(ctx, l2); err != nil {
 			t.Fatalf("failed to create l2: %v", err)
@@ -208,16 +220,17 @@ func TestMemoryLineageRepo_ListByMemory(t *testing.T) {
 
 		// memC contradicts memB (memA not involved)
 		l3 := &model.MemoryLineage{
-			MemoryID: memC,
-			ParentID: &memB,
-			Relation: "contradicts",
+			NamespaceID: nsID,
+			MemoryID:    memC,
+			ParentID:    &memB,
+			Relation:    model.LineageConflictsWith,
 		}
 		if err := repo.Create(ctx, l3); err != nil {
 			t.Fatalf("failed to create l3: %v", err)
 		}
 
 		// ListByMemory for memA should return l1 and l2 (memA is parent in both)
-		results, err := repo.ListByMemory(ctx, memA)
+		results, err := repo.ListByMemory(ctx, nsID, memA)
 		if err != nil {
 			t.Fatalf("failed to list by memory for memA: %v", err)
 		}
@@ -226,7 +239,7 @@ func TestMemoryLineageRepo_ListByMemory(t *testing.T) {
 		}
 
 		// ListByMemory for memB should return l1 (as memory_id) and l3 (as parent_id)
-		results, err = repo.ListByMemory(ctx, memB)
+		results, err = repo.ListByMemory(ctx, nsID, memB)
 		if err != nil {
 			t.Fatalf("failed to list by memory for memB: %v", err)
 		}
@@ -235,7 +248,7 @@ func TestMemoryLineageRepo_ListByMemory(t *testing.T) {
 		}
 
 		// ListByMemory for memC should return l2 and l3 (as memory_id in both)
-		results, err = repo.ListByMemory(ctx, memC)
+		results, err = repo.ListByMemory(ctx, nsID, memC)
 		if err != nil {
 			t.Fatalf("failed to list by memory for memC: %v", err)
 		}
@@ -250,7 +263,7 @@ func TestMemoryLineageRepo_ListByMemory_Empty(t *testing.T) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
 
-		results, err := repo.ListByMemory(ctx, uuid.New())
+		results, err := repo.ListByMemory(ctx, uuid.New(), uuid.New())
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -264,16 +277,18 @@ func TestMemoryLineageRepo_FindConflicts(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
 
-		memA := createTestMemoryForLineage(t, ctx, db)
-		memB := createTestMemoryForLineage(t, ctx, db)
-		memC := createTestMemoryForLineage(t, ctx, db)
+		memA := createTestMemoryForLineage(t, ctx, db, nsID)
+		memB := createTestMemoryForLineage(t, ctx, db, nsID)
+		memC := createTestMemoryForLineage(t, ctx, db, nsID)
 
 		// memB contradicts memA
 		l1 := &model.MemoryLineage{
-			MemoryID: memB,
-			ParentID: &memA,
-			Relation: "contradicts",
+			NamespaceID: nsID,
+			MemoryID:    memB,
+			ParentID:    &memA,
+			Relation:    model.LineageConflictsWith,
 		}
 		if err := repo.Create(ctx, l1); err != nil {
 			t.Fatalf("failed to create l1: %v", err)
@@ -281,9 +296,10 @@ func TestMemoryLineageRepo_FindConflicts(t *testing.T) {
 
 		// memC derived from memA (not a conflict)
 		l2 := &model.MemoryLineage{
-			MemoryID: memC,
-			ParentID: &memA,
-			Relation: "derived_from",
+			NamespaceID: nsID,
+			MemoryID:    memC,
+			ParentID:    &memA,
+			Relation:    "derived_from",
 		}
 		if err := repo.Create(ctx, l2); err != nil {
 			t.Fatalf("failed to create l2: %v", err)
@@ -291,16 +307,17 @@ func TestMemoryLineageRepo_FindConflicts(t *testing.T) {
 
 		// memC contradicts memB
 		l3 := &model.MemoryLineage{
-			MemoryID: memC,
-			ParentID: &memB,
-			Relation: "contradicts",
+			NamespaceID: nsID,
+			MemoryID:    memC,
+			ParentID:    &memB,
+			Relation:    model.LineageConflictsWith,
 		}
 		if err := repo.Create(ctx, l3); err != nil {
 			t.Fatalf("failed to create l3: %v", err)
 		}
 
 		// FindConflicts for memA should return l1 (memA is parent_id)
-		conflicts, err := repo.FindConflicts(ctx, memA)
+		conflicts, err := repo.FindConflicts(ctx, nsID, memA)
 		if err != nil {
 			t.Fatalf("failed to find conflicts for memA: %v", err)
 		}
@@ -312,7 +329,7 @@ func TestMemoryLineageRepo_FindConflicts(t *testing.T) {
 		}
 
 		// FindConflicts for memB should return l1 (as memory_id) and l3 (as parent_id)
-		conflicts, err = repo.FindConflicts(ctx, memB)
+		conflicts, err = repo.FindConflicts(ctx, nsID, memB)
 		if err != nil {
 			t.Fatalf("failed to find conflicts for memB: %v", err)
 		}
@@ -321,7 +338,7 @@ func TestMemoryLineageRepo_FindConflicts(t *testing.T) {
 		}
 
 		// FindConflicts for memC should return l3 (as memory_id)
-		conflicts, err = repo.FindConflicts(ctx, memC)
+		conflicts, err = repo.FindConflicts(ctx, nsID, memC)
 		if err != nil {
 			t.Fatalf("failed to find conflicts for memC: %v", err)
 		}
@@ -338,21 +355,23 @@ func TestMemoryLineageRepo_FindConflicts_None(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
 
-		memA := createTestMemoryForLineage(t, ctx, db)
-		memB := createTestMemoryForLineage(t, ctx, db)
+		memA := createTestMemoryForLineage(t, ctx, db, nsID)
+		memB := createTestMemoryForLineage(t, ctx, db, nsID)
 
 		// Only non-conflict relations
 		l1 := &model.MemoryLineage{
-			MemoryID: memB,
-			ParentID: &memA,
-			Relation: "derived_from",
+			NamespaceID: nsID,
+			MemoryID:    memB,
+			ParentID:    &memA,
+			Relation:    "derived_from",
 		}
 		if err := repo.Create(ctx, l1); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		conflicts, err := repo.FindConflicts(ctx, memA)
+		conflicts, err := repo.FindConflicts(ctx, nsID, memA)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -366,12 +385,14 @@ func TestMemoryLineageRepo_NilParentID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
 
-		memID := createTestMemoryForLineage(t, ctx, db)
+		memID := createTestMemoryForLineage(t, ctx, db, nsID)
 
 		lineage := &model.MemoryLineage{
-			MemoryID: memID,
-			Relation: "root",
+			NamespaceID: nsID,
+			MemoryID:    memID,
+			Relation:    "root",
 		}
 		if err := repo.Create(ctx, lineage); err != nil {
 			t.Fatalf("failed to create with nil parent: %v", err)

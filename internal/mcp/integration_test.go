@@ -82,12 +82,12 @@ func (m *trackingMemoryDeleter) GetByID(_ context.Context, id uuid.UUID) (*model
 	return mem, nil
 }
 
-func (m *trackingMemoryDeleter) SoftDelete(_ context.Context, id uuid.UUID) error {
+func (m *trackingMemoryDeleter) SoftDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.softDeleted = append(m.softDeleted, id)
 	return nil
 }
 
-func (m *trackingMemoryDeleter) HardDelete(_ context.Context, id uuid.UUID) error {
+func (m *trackingMemoryDeleter) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.hardDeleted = append(m.hardDeleted, id)
 	return nil
 }

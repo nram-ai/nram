@@ -371,10 +371,11 @@ func (p *ConsolidationPhase) consolidate(
 		for _, srcMem := range cluster {
 			parentID := srcMem.ID
 			_ = p.lineage.Create(ctx, &model.MemoryLineage{
-				ID:       uuid.New(),
-				MemoryID: synthMemory.ID,
-				ParentID: &parentID,
-				Relation: "synthesized_from",
+				ID:          uuid.New(),
+				NamespaceID: cycle.NamespaceID,
+				MemoryID:    synthMemory.ID,
+				ParentID:    &parentID,
+				Relation:    model.LineageSynthesizedFrom,
 			})
 		}
 

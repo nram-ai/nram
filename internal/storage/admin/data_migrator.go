@@ -738,7 +738,7 @@ func (m *DataMigrator) migrateEntities(ctx context.Context) error {
 
 func (m *DataMigrator) migrateEntityAliases(ctx context.Context) error {
 	rows, err := m.src.QueryContext(ctx, `
-		SELECT id, entity_id, alias, alias_type, created_at FROM entity_aliases
+		SELECT id, namespace_id, entity_id, alias, alias_type, created_at FROM entity_aliases
 	`)
 	if err != nil {
 		return err
@@ -752,8 +752,8 @@ func (m *DataMigrator) migrateEntityAliases(ctx context.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO entity_aliases (id, entity_id, alias, alias_type, created_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT DO NOTHING
 	`)
 	if err != nil {
@@ -762,11 +762,11 @@ func (m *DataMigrator) migrateEntityAliases(ctx context.Context) error {
 	defer stmt.Close()
 
 	for rows.Next() {
-		var id, entityID, alias, aliasType, createdAt string
-		if err := rows.Scan(&id, &entityID, &alias, &aliasType, &createdAt); err != nil {
+		var id, namespaceID, entityID, alias, aliasType, createdAt string
+		if err := rows.Scan(&id, &namespaceID, &entityID, &alias, &aliasType, &createdAt); err != nil {
 			return err
 		}
-		if _, err := stmt.ExecContext(ctx, id, entityID, alias, aliasType, createdAt); err != nil {
+		if _, err := stmt.ExecContext(ctx, id, namespaceID, entityID, alias, aliasType, createdAt); err != nil {
 			return fmt.Errorf("insert entity_alias %s: %w", id, err)
 		}
 	}
@@ -828,7 +828,7 @@ func (m *DataMigrator) migrateRelationships(ctx context.Context) error {
 
 func (m *DataMigrator) migrateMemoryLineage(ctx context.Context) error {
 	rows, err := m.src.QueryContext(ctx, `
-		SELECT id, memory_id, parent_id, relation, context, created_at FROM memory_lineage
+		SELECT id, namespace_id, memory_id, parent_id, relation, context, created_at FROM memory_lineage
 	`)
 	if err != nil {
 		return err
@@ -842,8 +842,8 @@ func (m *DataMigrator) migrateMemoryLineage(ctx context.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO memory_lineage (id, memory_id, parent_id, relation, context, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO memory_lineage (id, namespace_id, memory_id, parent_id, relation, context, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT DO NOTHING
 	`)
 	if err != nil {
@@ -853,15 +853,15 @@ func (m *DataMigrator) migrateMemoryLineage(ctx context.Context) error {
 
 	for rows.Next() {
 		var (
-			id, memoryID, relation string
-			parentID               sql.NullString
-			context                string
-			createdAt              string
+			id, namespaceID, memoryID, relation string
+			parentID                             sql.NullString
+			context                              string
+			createdAt                            string
 		)
-		if err := rows.Scan(&id, &memoryID, &parentID, &relation, &context, &createdAt); err != nil {
+		if err := rows.Scan(&id, &namespaceID, &memoryID, &parentID, &relation, &context, &createdAt); err != nil {
 			return err
 		}
-		if _, err := stmt.ExecContext(ctx, id, memoryID,
+		if _, err := stmt.ExecContext(ctx, id, namespaceID, memoryID,
 			nullStringToInterface(parentID),
 			relation, context, createdAt,
 		); err != nil {

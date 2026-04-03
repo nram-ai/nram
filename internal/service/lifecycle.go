@@ -14,8 +14,8 @@ import (
 type LifecycleStore interface {
 	ListExpired(ctx context.Context, before time.Time, limit int) ([]model.Memory, error)
 	ListPurgeable(ctx context.Context, before time.Time, limit int) ([]model.Memory, error)
-	SoftDelete(ctx context.Context, id uuid.UUID) error
-	HardDelete(ctx context.Context, id uuid.UUID) error
+	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
+	HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 }
 
 // GraphPruner cleans up orphaned graph data (Postgres only).
@@ -150,7 +150,7 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 		return 0, 0, err
 	}
 	for _, mem := range expiredMemories {
-		if err := s.store.SoftDelete(ctx, mem.ID); err != nil {
+		if err := s.store.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			continue
 		}
 		expired++
@@ -163,7 +163,7 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 		return expired, 0, err
 	}
 	for _, mem := range purgeableMemories {
-		if err := s.store.HardDelete(ctx, mem.ID); err != nil {
+		if err := s.store.HardDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			continue
 		}
 		if s.vectorStore != nil {

@@ -19,12 +19,12 @@ type mockMemoryDeleter struct {
 	memories map[uuid.UUID]*model.Memory
 }
 
-func (m *mockMemoryDeleter) SoftDelete(_ context.Context, id uuid.UUID) error {
+func (m *mockMemoryDeleter) SoftDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	delete(m.memories, id)
 	return nil
 }
 
-func (m *mockMemoryDeleter) HardDelete(_ context.Context, id uuid.UUID) error {
+func (m *mockMemoryDeleter) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	delete(m.memories, id)
 	return nil
 }
@@ -92,11 +92,11 @@ func newMockForgetService(nsID uuid.UUID, memories map[uuid.UUID]*model.Memory) 
 
 type mockLineageQuerier struct{}
 
-func (m *mockLineageQuerier) FindParentIDs(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+func (m *mockLineageQuerier) FindParentIDs(_ context.Context, _ uuid.UUID, _ []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
 	return nil, nil
 }
 
-func (m *mockLineageQuerier) FindChildIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+func (m *mockLineageQuerier) FindChildIDs(_ context.Context, _ uuid.UUID, _ uuid.UUID) ([]uuid.UUID, error) {
 	return nil, nil
 }
 

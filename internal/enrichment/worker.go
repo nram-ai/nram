@@ -61,7 +61,7 @@ type EntityUpserter interface {
 type RelationshipCreator interface {
 	Create(ctx context.Context, rel *model.Relationship) error
 	FindActiveByTriple(ctx context.Context, namespaceID, sourceID, targetID uuid.UUID, relation string) (*model.Relationship, error)
-	UpdateWeight(ctx context.Context, id uuid.UUID, weight float64) error
+	UpdateWeight(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, weight float64) error
 }
 
 // LineageCreator records parent-child lineage between memories.
@@ -427,11 +427,12 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 
 		parentID := mem.ID
 		lin := &model.MemoryLineage{
-			ID:        uuid.New(),
-			MemoryID:  childID,
-			ParentID:  &parentID,
-			Relation:  "extracted_fact",
-			CreatedAt: time.Now().UTC(),
+			ID:          uuid.New(),
+			NamespaceID: mem.NamespaceID,
+			MemoryID:    childID,
+			ParentID:    &parentID,
+			Relation:    model.LineageExtractedFact,
+			CreatedAt:   time.Now().UTC(),
 		}
 		if err := wp.lineage.Create(ctx, lin); err != nil {
 			slog.Error("enrichment: create lineage", "job", job.ID, "err", err)
@@ -530,7 +531,7 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 					newWeight = rel.Weight
 				}
 				if newWeight != existing.Weight {
-					if err := wp.relationships.UpdateWeight(ctx, existing.ID, newWeight); err != nil {
+					if err := wp.relationships.UpdateWeight(ctx, existing.ID, mem.NamespaceID, newWeight); err != nil {
 						slog.Error("enrichment: update existing relationship weight", "job", job.ID, "err", err)
 					}
 				}

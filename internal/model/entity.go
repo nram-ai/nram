@@ -22,9 +22,10 @@ type Entity struct {
 }
 
 type EntityAlias struct {
-	ID        uuid.UUID `json:"id"`
-	EntityID  uuid.UUID `json:"entity_id"`
-	Alias     string    `json:"alias"`
-	AliasType string    `json:"alias_type"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          uuid.UUID `json:"id"`
+	NamespaceID uuid.UUID `json:"namespace_id"`
+	EntityID    uuid.UUID `json:"entity_id"`
+	Alias       string    `json:"alias"`
+	AliasType   string    `json:"alias_type"`
+	CreatedAt   time.Time `json:"created_at"`
 }

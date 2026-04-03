@@ -70,7 +70,7 @@ func (s *RollbackService) Rollback(ctx context.Context, cycleID uuid.UUID) error
 
 	var rollbackErrors []error
 	for _, entry := range entries {
-		if err := s.reverseOperation(ctx, &entry); err != nil {
+		if err := s.reverseOperation(ctx, cycle.NamespaceID, &entry); err != nil {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf(
 				"op=%s target=%s: %w", entry.Operation, entry.TargetID, err))
 		}
@@ -92,10 +92,10 @@ func (s *RollbackService) Rollback(ctx context.Context, cycleID uuid.UUID) error
 	return nil
 }
 
-func (s *RollbackService) reverseOperation(ctx context.Context, entry *model.DreamLog) error {
+func (s *RollbackService) reverseOperation(ctx context.Context, namespaceID uuid.UUID, entry *model.DreamLog) error {
 	switch entry.Operation {
 	case model.DreamOpMemoryCreated:
-		return s.memWriter.HardDelete(ctx, entry.TargetID)
+		return s.memWriter.HardDelete(ctx, entry.TargetID, namespaceID)
 
 	case model.DreamOpMemoryDeleted:
 		return s.restoreMemory(ctx, entry.BeforeState)
@@ -107,10 +107,10 @@ func (s *RollbackService) reverseOperation(ctx context.Context, entry *model.Dre
 		return s.reverseEntityMerge(ctx, entry)
 
 	case model.DreamOpRelationshipCreated:
-		return s.relWriter.DeleteByID(ctx, entry.TargetID)
+		return s.relWriter.DeleteByID(ctx, entry.TargetID, namespaceID)
 
 	case model.DreamOpRelationshipUpdated:
-		return s.reverseRelationshipUpdate(ctx, entry)
+		return s.reverseRelationshipUpdate(ctx, namespaceID, entry)
 
 	case model.DreamOpEntityUpdated:
 		return s.reverseEntityUpdate(ctx, entry)
@@ -160,7 +160,7 @@ func (s *RollbackService) reverseEntityMerge(ctx context.Context, entry *model.D
 
 // reverseRelationshipUpdate restores a relationship's weight from before_state.
 // before_state = {"weight": <old_weight>}
-func (s *RollbackService) reverseRelationshipUpdate(ctx context.Context, entry *model.DreamLog) error {
+func (s *RollbackService) reverseRelationshipUpdate(ctx context.Context, namespaceID uuid.UUID, entry *model.DreamLog) error {
 	var fields map[string]interface{}
 	if err := json.Unmarshal(entry.BeforeState, &fields); err != nil {
 		return fmt.Errorf("unmarshal relationship before state: %w", err)
@@ -176,7 +176,7 @@ func (s *RollbackService) reverseRelationshipUpdate(ctx context.Context, entry *
 		return fmt.Errorf("relationship weight is not a number")
 	}
 
-	return s.relWriter.UpdateWeight(ctx, entry.TargetID, weight)
+	return s.relWriter.UpdateWeight(ctx, entry.TargetID, namespaceID, weight)
 }
 
 // reverseEntityUpdate restores an entity's mention count from before_state.

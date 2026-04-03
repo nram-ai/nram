@@ -37,15 +37,15 @@ func (r *MemoryLineageRepo) Create(ctx context.Context, lineage *model.MemoryLin
 		parentID = lineage.ParentID.String()
 	}
 
-	query := `INSERT INTO memory_lineage (id, memory_id, parent_id, relation, context)
-		VALUES (?, ?, ?, ?, ?)`
+	query := `INSERT INTO memory_lineage (id, namespace_id, memory_id, parent_id, relation, context)
+		VALUES (?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO memory_lineage (id, memory_id, parent_id, relation, context)
-			VALUES ($1, $2, $3, $4, $5)`
+		query = `INSERT INTO memory_lineage (id, namespace_id, memory_id, parent_id, relation, context)
+			VALUES ($1, $2, $3, $4, $5, $6)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
-		lineage.ID.String(), lineage.MemoryID.String(), parentID,
+		lineage.ID.String(), lineage.NamespaceID.String(), lineage.MemoryID.String(), parentID,
 		lineage.Relation, string(lineage.Context),
 	)
 	if err != nil {
@@ -68,17 +68,17 @@ func (r *MemoryLineageRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.M
 
 // ListByMemory returns all lineage records for a memory, both as parent and
 // child, ordered by created_at DESC.
-func (r *MemoryLineageRepo) ListByMemory(ctx context.Context, memoryID uuid.UUID) ([]model.MemoryLineage, error) {
+func (r *MemoryLineageRepo) ListByMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) ([]model.MemoryLineage, error) {
 	query := selectLineageColumns + ` FROM memory_lineage
-		WHERE memory_id = ? OR parent_id = ?
+		WHERE namespace_id = ? AND (memory_id = ? OR parent_id = ?)
 		ORDER BY created_at DESC`
 	if r.db.Backend() == BackendPostgres {
 		query = selectLineageColumns + ` FROM memory_lineage
-			WHERE memory_id = $1 OR parent_id = $2
+			WHERE namespace_id = $1 AND (memory_id = $2 OR parent_id = $3)
 			ORDER BY created_at DESC`
 	}
 
-	rows, err := r.db.Query(ctx, query, memoryID.String(), memoryID.String())
+	rows, err := r.db.Query(ctx, query, namespaceID.String(), memoryID.String(), memoryID.String())
 	if err != nil {
 		return nil, fmt.Errorf("memory lineage list by memory: %w", err)
 	}
@@ -87,19 +87,19 @@ func (r *MemoryLineageRepo) ListByMemory(ctx context.Context, memoryID uuid.UUID
 	return r.scanLineages(rows)
 }
 
-// FindConflicts returns lineage records with relation_type = 'contradicts'
+// FindConflicts returns lineage records with relation = 'conflicts_with'
 // involving the given memory (as either memory_id or parent_id).
-func (r *MemoryLineageRepo) FindConflicts(ctx context.Context, memoryID uuid.UUID) ([]model.MemoryLineage, error) {
+func (r *MemoryLineageRepo) FindConflicts(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) ([]model.MemoryLineage, error) {
 	query := selectLineageColumns + ` FROM memory_lineage
-		WHERE relation = 'contradicts' AND (memory_id = ? OR parent_id = ?)
+		WHERE namespace_id = ? AND relation = ? AND (memory_id = ? OR parent_id = ?)
 		ORDER BY created_at DESC`
 	if r.db.Backend() == BackendPostgres {
 		query = selectLineageColumns + ` FROM memory_lineage
-			WHERE relation = 'contradicts' AND (memory_id = $1 OR parent_id = $2)
+			WHERE namespace_id = $1 AND relation = $2 AND (memory_id = $3 OR parent_id = $4)
 			ORDER BY created_at DESC`
 	}
 
-	rows, err := r.db.Query(ctx, query, memoryID.String(), memoryID.String())
+	rows, err := r.db.Query(ctx, query, namespaceID.String(), model.LineageConflictsWith, memoryID.String(), memoryID.String())
 	if err != nil {
 		return nil, fmt.Errorf("memory lineage find conflicts: %w", err)
 	}
@@ -110,12 +110,12 @@ func (r *MemoryLineageRepo) FindConflicts(ctx context.Context, memoryID uuid.UUI
 
 // FindChildIDs returns the memory IDs of all direct children of the given
 // parent memory.
-func (r *MemoryLineageRepo) FindChildIDs(ctx context.Context, parentID uuid.UUID) ([]uuid.UUID, error) {
-	query := `SELECT memory_id FROM memory_lineage WHERE parent_id = ?`
+func (r *MemoryLineageRepo) FindChildIDs(ctx context.Context, namespaceID uuid.UUID, parentID uuid.UUID) ([]uuid.UUID, error) {
+	query := `SELECT memory_id FROM memory_lineage WHERE namespace_id = ? AND parent_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT memory_id FROM memory_lineage WHERE parent_id = $1`
+		query = `SELECT memory_id FROM memory_lineage WHERE namespace_id = $1 AND parent_id = $2`
 	}
-	rows, err := r.db.Query(ctx, query, parentID.String())
+	rows, err := r.db.Query(ctx, query, namespaceID.String(), parentID.String())
 	if err != nil {
 		return nil, fmt.Errorf("lineage find child ids: %w", err)
 	}
@@ -141,27 +141,36 @@ func (r *MemoryLineageRepo) FindChildIDs(ctx context.Context, parentID uuid.UUID
 
 // FindParentIDs returns a map of memory_id → parent_id for all given memory IDs
 // that have a parent in the lineage table. Uses a single batch query.
-func (r *MemoryLineageRepo) FindParentIDs(ctx context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+func (r *MemoryLineageRepo) FindParentIDs(ctx context.Context, namespaceID uuid.UUID, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
 	if len(memoryIDs) == 0 {
 		return nil, nil
 	}
 
 	// Build IN clause with appropriate placeholders.
 	placeholders := make([]string, len(memoryIDs))
-	args := make([]any, len(memoryIDs))
+	args := make([]any, 1+len(memoryIDs))
+	args[0] = namespaceID.String()
 	for i, id := range memoryIDs {
-		args[i] = id.String()
+		args[i+1] = id.String()
 		if r.db.Backend() == BackendPostgres {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			placeholders[i] = fmt.Sprintf("$%d", i+2)
 		} else {
 			placeholders[i] = "?"
 		}
 	}
 
-	query := fmt.Sprintf(
-		`SELECT memory_id, parent_id FROM memory_lineage WHERE memory_id IN (%s) AND parent_id IS NOT NULL`,
-		strings.Join(placeholders, ", "),
-	)
+	var query string
+	if r.db.Backend() == BackendPostgres {
+		query = fmt.Sprintf(
+			`SELECT memory_id, parent_id FROM memory_lineage WHERE namespace_id = $1 AND memory_id IN (%s) AND parent_id IS NOT NULL`,
+			strings.Join(placeholders, ", "),
+		)
+	} else {
+		query = fmt.Sprintf(
+			`SELECT memory_id, parent_id FROM memory_lineage WHERE namespace_id = ? AND memory_id IN (%s) AND parent_id IS NOT NULL`,
+			strings.Join(placeholders, ", "),
+		)
+	}
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -194,12 +203,12 @@ func (r *MemoryLineageRepo) FindParentIDs(ctx context.Context, memoryIDs []uuid.
 
 // DeleteByMemoryID removes all lineage records where the given memory is either
 // the child (memory_id) or the parent (parent_id).
-func (r *MemoryLineageRepo) DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error {
-	query := `DELETE FROM memory_lineage WHERE memory_id = ? OR parent_id = ?`
+func (r *MemoryLineageRepo) DeleteByMemoryID(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) error {
+	query := `DELETE FROM memory_lineage WHERE namespace_id = ? AND (memory_id = ? OR parent_id = ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM memory_lineage WHERE memory_id = $1 OR parent_id = $2`
+		query = `DELETE FROM memory_lineage WHERE namespace_id = $1 AND (memory_id = $2 OR parent_id = $3)`
 	}
-	_, err := r.db.Exec(ctx, query, memoryID.String(), memoryID.String())
+	_, err := r.db.Exec(ctx, query, namespaceID.String(), memoryID.String(), memoryID.String())
 	if err != nil {
 		return fmt.Errorf("lineage delete by memory: %w", err)
 	}
@@ -216,42 +225,42 @@ func (r *MemoryLineageRepo) reload(ctx context.Context, lineage *model.MemoryLin
 	return nil
 }
 
-const selectLineageColumns = `SELECT id, memory_id, parent_id, relation, context, created_at`
+const selectLineageColumns = `SELECT id, namespace_id, memory_id, parent_id, relation, context, created_at`
 
 func (r *MemoryLineageRepo) scanLineage(row *sql.Row) (*model.MemoryLineage, error) {
 	var lineage model.MemoryLineage
-	var idStr, memoryIDStr string
+	var idStr, namespaceIDStr, memoryIDStr string
 	var parentIDStr sql.NullString
 	var contextStr string
 	var createdAtStr string
 
 	err := row.Scan(
-		&idStr, &memoryIDStr, &parentIDStr, &lineage.Relation,
+		&idStr, &namespaceIDStr, &memoryIDStr, &parentIDStr, &lineage.Relation,
 		&contextStr, &createdAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return r.populateLineage(&lineage, idStr, memoryIDStr, parentIDStr, contextStr, createdAtStr)
+	return r.populateLineage(&lineage, idStr, namespaceIDStr, memoryIDStr, parentIDStr, contextStr, createdAtStr)
 }
 
 func (r *MemoryLineageRepo) scanLineageFromRows(rows *sql.Rows) (*model.MemoryLineage, error) {
 	var lineage model.MemoryLineage
-	var idStr, memoryIDStr string
+	var idStr, namespaceIDStr, memoryIDStr string
 	var parentIDStr sql.NullString
 	var contextStr string
 	var createdAtStr string
 
 	err := rows.Scan(
-		&idStr, &memoryIDStr, &parentIDStr, &lineage.Relation,
+		&idStr, &namespaceIDStr, &memoryIDStr, &parentIDStr, &lineage.Relation,
 		&contextStr, &createdAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("memory lineage scan rows: %w", err)
 	}
 
-	return r.populateLineage(&lineage, idStr, memoryIDStr, parentIDStr, contextStr, createdAtStr)
+	return r.populateLineage(&lineage, idStr, namespaceIDStr, memoryIDStr, parentIDStr, contextStr, createdAtStr)
 }
 
 func (r *MemoryLineageRepo) scanLineages(rows *sql.Rows) ([]model.MemoryLineage, error) {
@@ -271,7 +280,7 @@ func (r *MemoryLineageRepo) scanLineages(rows *sql.Rows) ([]model.MemoryLineage,
 
 func (r *MemoryLineageRepo) populateLineage(
 	lineage *model.MemoryLineage,
-	idStr, memoryIDStr string,
+	idStr, namespaceIDStr, memoryIDStr string,
 	parentIDStr sql.NullString,
 	contextStr, createdAtStr string,
 ) (*model.MemoryLineage, error) {
@@ -282,6 +291,12 @@ func (r *MemoryLineageRepo) populateLineage(
 		return nil, fmt.Errorf("memory lineage parse id: %w", err)
 	}
 	lineage.ID = id
+
+	nsID, err := uuid.Parse(namespaceIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("memory lineage parse namespace_id: %w", err)
+	}
+	lineage.NamespaceID = nsID
 
 	memID, err := uuid.Parse(memoryIDStr)
 	if err != nil {

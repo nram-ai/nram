@@ -19,8 +19,8 @@ type MemoryReader interface {
 type MemoryWriter interface {
 	Create(ctx context.Context, mem *model.Memory) error
 	Update(ctx context.Context, mem *model.Memory) error
-	SoftDelete(ctx context.Context, id uuid.UUID) error
-	HardDelete(ctx context.Context, id uuid.UUID) error
+	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
+	HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 }
 
 // EntityReader reads entity data.
@@ -52,10 +52,10 @@ type RelationshipReader interface {
 // RelationshipWriter creates and modifies relationships.
 type RelationshipWriter interface {
 	Create(ctx context.Context, rel *model.Relationship) error
-	Reinforce(ctx context.Context, id uuid.UUID) error
-	Expire(ctx context.Context, id uuid.UUID) error
-	DeleteByID(ctx context.Context, id uuid.UUID) error
-	UpdateWeight(ctx context.Context, id uuid.UUID, weight float64) error
+	Reinforce(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
+	Expire(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
+	DeleteByID(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
+	UpdateWeight(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, weight float64) error
 	ExpireLowWeight(ctx context.Context, namespaceID uuid.UUID, threshold float64) (int64, error)
 }
 
@@ -66,7 +66,7 @@ type LineageWriter interface {
 
 // LineageReader reads memory lineage records.
 type LineageReader interface {
-	FindConflicts(ctx context.Context, memoryID uuid.UUID) ([]model.MemoryLineage, error)
+	FindConflicts(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) ([]model.MemoryLineage, error)
 }
 
 // LLMProviderFunc returns an LLM provider or nil if unavailable.

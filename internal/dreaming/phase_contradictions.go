@@ -84,10 +84,11 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 		// Record the contradiction as a lineage entry.
 		lineageEntry := &model.MemoryLineage{
-			ID:       uuid.New(),
-			MemoryID: pair[0].ID,
-			ParentID: &pair[1].ID,
-			Relation: "conflicts_with",
+			ID:          uuid.New(),
+			NamespaceID: cycle.NamespaceID,
+			MemoryID:    pair[0].ID,
+			ParentID:    &pair[1].ID,
+			Relation:    model.LineageConflictsWith,
 		}
 		if err := p.lineage.Create(ctx, lineageEntry); err != nil {
 			slog.Warn("dreaming: lineage creation failed", "err", err)

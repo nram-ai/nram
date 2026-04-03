@@ -35,9 +35,10 @@ func TestEntityAliasRepo_Create(t *testing.T) {
 		repo := NewEntityAliasRepo(db)
 
 		alias := &model.EntityAlias{
-			EntityID:  entity.ID,
-			Alias:     "Al",
-			AliasType: "nickname",
+			NamespaceID: nsID,
+			EntityID:    entity.ID,
+			Alias:       "Al",
+			AliasType:   "nickname",
 		}
 		if err := repo.Create(ctx, alias); err != nil {
 			t.Fatalf("failed to create alias: %v", err)
@@ -69,9 +70,10 @@ func TestEntityAliasRepo_Create_GeneratesID(t *testing.T) {
 		repo := NewEntityAliasRepo(db)
 
 		alias := &model.EntityAlias{
-			EntityID:  entity.ID,
-			Alias:     "Bobby",
-			AliasType: "nickname",
+			NamespaceID: nsID,
+			EntityID:    entity.ID,
+			Alias:       "Bobby",
+			AliasType:   "nickname",
 		}
 		if err := repo.Create(ctx, alias); err != nil {
 			t.Fatalf("failed to create: %v", err)
@@ -91,10 +93,11 @@ func TestEntityAliasRepo_Create_ExplicitID(t *testing.T) {
 
 		explicitID := uuid.New()
 		alias := &model.EntityAlias{
-			ID:        explicitID,
-			EntityID:  entity.ID,
-			Alias:     "Chuck",
-			AliasType: "nickname",
+			ID:          explicitID,
+			NamespaceID: nsID,
+			EntityID:    entity.ID,
+			Alias:       "Chuck",
+			AliasType:   "nickname",
 		}
 		if err := repo.Create(ctx, alias); err != nil {
 			t.Fatalf("failed to create: %v", err)
@@ -113,9 +116,10 @@ func TestEntityAliasRepo_Create_DefaultAliasType(t *testing.T) {
 		repo := NewEntityAliasRepo(db)
 
 		alias := &model.EntityAlias{
-			EntityID:  entity.ID,
-			Alias:     "David",
-			AliasType: "name",
+			NamespaceID: nsID,
+			EntityID:    entity.ID,
+			Alias:       "David",
+			AliasType:   "name",
 		}
 		if err := repo.Create(ctx, alias); err != nil {
 			t.Fatalf("failed to create: %v", err)
@@ -134,8 +138,8 @@ func TestEntityAliasRepo_FindByAlias(t *testing.T) {
 		repo := NewEntityAliasRepo(db)
 
 		// Create two aliases for the same entity
-		a1 := &model.EntityAlias{EntityID: entity.ID, Alias: "Evie", AliasType: "nickname"}
-		a2 := &model.EntityAlias{EntityID: entity.ID, Alias: "E", AliasType: "abbreviation"}
+		a1 := &model.EntityAlias{NamespaceID: nsID, EntityID: entity.ID, Alias: "Evie", AliasType: "nickname"}
+		a2 := &model.EntityAlias{NamespaceID: nsID, EntityID: entity.ID, Alias: "E", AliasType: "abbreviation"}
 		if err := repo.Create(ctx, a1); err != nil {
 			t.Fatalf("failed to create alias 1: %v", err)
 		}
@@ -185,7 +189,7 @@ func TestEntityAliasRepo_FindByAlias_CaseInsensitive(t *testing.T) {
 		entity := createEntityForAliasTest(t, ctx, db, nsID, "frank")
 		repo := NewEntityAliasRepo(db)
 
-		a := &model.EntityAlias{EntityID: entity.ID, Alias: "Frankie", AliasType: "nickname"}
+		a := &model.EntityAlias{NamespaceID: nsID, EntityID: entity.ID, Alias: "Frankie", AliasType: "nickname"}
 		if err := repo.Create(ctx, a); err != nil {
 			t.Fatalf("failed to create alias: %v", err)
 		}
@@ -219,8 +223,8 @@ func TestEntityAliasRepo_FindByAlias_NamespaceIsolation(t *testing.T) {
 		repo := NewEntityAliasRepo(db)
 
 		// Same alias text in different namespaces
-		a1 := &model.EntityAlias{EntityID: entity1.ID, Alias: "Gracie", AliasType: "nickname"}
-		a2 := &model.EntityAlias{EntityID: entity2.ID, Alias: "Gracie", AliasType: "nickname"}
+		a1 := &model.EntityAlias{NamespaceID: nsID1, EntityID: entity1.ID, Alias: "Gracie", AliasType: "nickname"}
+		a2 := &model.EntityAlias{NamespaceID: nsID2, EntityID: entity2.ID, Alias: "Gracie", AliasType: "nickname"}
 		if err := repo.Create(ctx, a1); err != nil {
 			t.Fatalf("failed to create alias in ns1: %v", err)
 		}
@@ -271,7 +275,7 @@ func TestEntityAliasRepo_ListByEntity(t *testing.T) {
 			{"Heidi M.", "formal"},
 		}
 		for _, a := range aliases {
-			ea := &model.EntityAlias{EntityID: entity.ID, Alias: a.alias, AliasType: a.aliasType}
+			ea := &model.EntityAlias{NamespaceID: nsID, EntityID: entity.ID, Alias: a.alias, AliasType: a.aliasType}
 			if err := repo.Create(ctx, ea); err != nil {
 				t.Fatalf("failed to create alias %q: %v", a.alias, err)
 			}
@@ -318,13 +322,13 @@ func TestEntityAliasRepo_ListByEntity_Isolation(t *testing.T) {
 		repo := NewEntityAliasRepo(db)
 
 		// Aliases for entity1
-		a1 := &model.EntityAlias{EntityID: entity1.ID, Alias: "Ivy", AliasType: "nickname"}
+		a1 := &model.EntityAlias{NamespaceID: nsID, EntityID: entity1.ID, Alias: "Ivy", AliasType: "nickname"}
 		if err := repo.Create(ctx, a1); err != nil {
 			t.Fatalf("failed to create alias for entity1: %v", err)
 		}
 
 		// Aliases for entity2
-		a2 := &model.EntityAlias{EntityID: entity2.ID, Alias: "Jules", AliasType: "nickname"}
+		a2 := &model.EntityAlias{NamespaceID: nsID, EntityID: entity2.ID, Alias: "Jules", AliasType: "nickname"}
 		if err := repo.Create(ctx, a2); err != nil {
 			t.Fatalf("failed to create alias for entity2: %v", err)
 		}

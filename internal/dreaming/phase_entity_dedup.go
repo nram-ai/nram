@@ -152,10 +152,11 @@ func (p *EntityDedupPhase) mergeEntities(
 
 	// Create alias from candidate name to primary.
 	alias := &model.EntityAlias{
-		ID:        uuid.New(),
-		EntityID:  primary.ID,
-		Alias:     candidate.Name,
-		AliasType: "dream_dedup",
+		ID:          uuid.New(),
+		NamespaceID: primary.NamespaceID,
+		EntityID:    primary.ID,
+		Alias:       candidate.Name,
+		AliasType:   "dream_dedup",
 	}
 	if err := p.aliases.Create(ctx, alias); err != nil {
 		slog.Warn("dreaming: alias creation failed (may already exist)", "err", err)
@@ -184,14 +185,14 @@ func (p *EntityDedupPhase) mergeEntities(
 
 		// Skip self-referential relationships that would result from merge.
 		if newRel.SourceID == newRel.TargetID {
-			if err := p.relWriter.Expire(ctx, rel.ID); err != nil {
+			if err := p.relWriter.Expire(ctx, rel.ID, rel.NamespaceID); err != nil {
 				slog.Warn("dreaming: expire self-referential relationship failed", "err", err)
 			}
 			continue
 		}
 
 		// Expire old relationship.
-		if err := p.relWriter.Expire(ctx, rel.ID); err != nil {
+		if err := p.relWriter.Expire(ctx, rel.ID, rel.NamespaceID); err != nil {
 			slog.Warn("dreaming: expire relationship failed", "rel", rel.ID, "err", err)
 			continue
 		}

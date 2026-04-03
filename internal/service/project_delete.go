@@ -184,12 +184,12 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 	// 4. For each memory: cleanup related data + vector deletion.
 	for _, memID := range memoryIDs {
 		if s.relationshipCleaner != nil {
-			if err := s.relationshipCleaner.DeleteBySourceMemory(ctx, memID); err != nil {
+			if err := s.relationshipCleaner.DeleteBySourceMemory(ctx, project.NamespaceID, memID); err != nil {
 				log.Printf("project delete: relationships for memory %s: %v", memID, err)
 			}
 		}
 		if s.lineageCleaner != nil {
-			if err := s.lineageCleaner.DeleteByMemoryID(ctx, memID); err != nil {
+			if err := s.lineageCleaner.DeleteByMemoryID(ctx, project.NamespaceID, memID); err != nil {
 				log.Printf("project delete: lineage for memory %s: %v", memID, err)
 			}
 		}

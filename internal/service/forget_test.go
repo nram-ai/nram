@@ -50,12 +50,12 @@ func (m *mockMemoryDeleter) ListByNamespace(_ context.Context, _ uuid.UUID, limi
 	return m.nsList[offset:end], nil
 }
 
-func (m *mockMemoryDeleter) SoftDelete(_ context.Context, id uuid.UUID) error {
+func (m *mockMemoryDeleter) SoftDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.softDeleted[id] = true
 	return nil
 }
 
-func (m *mockMemoryDeleter) HardDelete(_ context.Context, id uuid.UUID) error {
+func (m *mockMemoryDeleter) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.hardDeleted[id] = true
 	return nil
 }

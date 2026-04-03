@@ -26,15 +26,15 @@ func (r *EntityAliasRepo) Create(ctx context.Context, alias *model.EntityAlias) 
 		alias.ID = uuid.New()
 	}
 
-	query := `INSERT INTO entity_aliases (id, entity_id, alias, alias_type)
-		VALUES (?, ?, ?, ?)`
+	query := `INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type)
+		VALUES (?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO entity_aliases (id, entity_id, alias, alias_type)
-			VALUES ($1, $2, $3, $4)`
+		query = `INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type)
+			VALUES ($1, $2, $3, $4, $5)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
-		alias.ID.String(), alias.EntityID.String(), alias.Alias, alias.AliasType,
+		alias.ID.String(), alias.NamespaceID.String(), alias.EntityID.String(), alias.Alias, alias.AliasType,
 	)
 	if err != nil {
 		return fmt.Errorf("entity alias create: %w", err)
@@ -48,14 +48,21 @@ func (r *EntityAliasRepo) Create(ctx context.Context, alias *model.EntityAlias) 
 func (r *EntityAliasRepo) FindByAlias(ctx context.Context, namespaceID uuid.UUID, alias string) ([]model.EntityAlias, error) {
 	query := selectEntityAliasColumns + ` FROM entity_aliases ea
 		INNER JOIN entities e ON ea.entity_id = e.id
-		WHERE e.namespace_id = ? AND ea.alias = ? COLLATE NOCASE`
+		WHERE e.namespace_id = ? AND ea.namespace_id = ? AND ea.alias = ? COLLATE NOCASE`
 	if r.db.Backend() == BackendPostgres {
 		query = selectEntityAliasColumns + ` FROM entity_aliases ea
 			INNER JOIN entities e ON ea.entity_id = e.id
-			WHERE e.namespace_id = $1 AND LOWER(ea.alias) = LOWER($2)`
+			WHERE e.namespace_id = $1 AND ea.namespace_id = $1 AND LOWER(ea.alias) = LOWER($2)`
 	}
 
-	rows, err := r.db.Query(ctx, query, namespaceID.String(), alias)
+	var args []any
+	if r.db.Backend() == BackendPostgres {
+		args = []any{namespaceID.String(), alias}
+	} else {
+		args = []any{namespaceID.String(), namespaceID.String(), alias}
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("entity alias find by alias: %w", err)
 	}
@@ -100,32 +107,32 @@ func (r *EntityAliasRepo) reload(ctx context.Context, alias *model.EntityAlias) 
 	return nil
 }
 
-const selectEntityAliasColumns = `SELECT ea.id, ea.entity_id, ea.alias, ea.alias_type, ea.created_at`
+const selectEntityAliasColumns = `SELECT ea.id, ea.namespace_id, ea.entity_id, ea.alias, ea.alias_type, ea.created_at`
 
 func (r *EntityAliasRepo) scanAlias(row *sql.Row) (*model.EntityAlias, error) {
 	var alias model.EntityAlias
-	var idStr, entityIDStr string
+	var idStr, namespaceIDStr, entityIDStr string
 	var createdAtStr string
 
-	err := row.Scan(&idStr, &entityIDStr, &alias.Alias, &alias.AliasType, &createdAtStr)
+	err := row.Scan(&idStr, &namespaceIDStr, &entityIDStr, &alias.Alias, &alias.AliasType, &createdAtStr)
 	if err != nil {
 		return nil, err
 	}
 
-	return r.populateAlias(&alias, idStr, entityIDStr, createdAtStr)
+	return r.populateAlias(&alias, idStr, namespaceIDStr, entityIDStr, createdAtStr)
 }
 
 func (r *EntityAliasRepo) scanAliasFromRows(rows *sql.Rows) (*model.EntityAlias, error) {
 	var alias model.EntityAlias
-	var idStr, entityIDStr string
+	var idStr, namespaceIDStr, entityIDStr string
 	var createdAtStr string
 
-	err := rows.Scan(&idStr, &entityIDStr, &alias.Alias, &alias.AliasType, &createdAtStr)
+	err := rows.Scan(&idStr, &namespaceIDStr, &entityIDStr, &alias.Alias, &alias.AliasType, &createdAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("entity alias scan rows: %w", err)
 	}
 
-	return r.populateAlias(&alias, idStr, entityIDStr, createdAtStr)
+	return r.populateAlias(&alias, idStr, namespaceIDStr, entityIDStr, createdAtStr)
 }
 
 func (r *EntityAliasRepo) scanAliases(rows *sql.Rows) ([]model.EntityAlias, error) {
@@ -145,13 +152,19 @@ func (r *EntityAliasRepo) scanAliases(rows *sql.Rows) ([]model.EntityAlias, erro
 
 func (r *EntityAliasRepo) populateAlias(
 	alias *model.EntityAlias,
-	idStr, entityIDStr, createdAtStr string,
+	idStr, namespaceIDStr, entityIDStr, createdAtStr string,
 ) (*model.EntityAlias, error) {
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return nil, fmt.Errorf("entity alias parse id: %w", err)
 	}
 	alias.ID = id
+
+	nsID, err := uuid.Parse(namespaceIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("entity alias parse namespace_id: %w", err)
+	}
+	alias.NamespaceID = nsID
 
 	entityID, err := uuid.Parse(entityIDStr)
 	if err != nil {

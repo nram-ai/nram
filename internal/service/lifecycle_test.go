@@ -50,7 +50,7 @@ func (m *mockLifecycleStore) ListPurgeable(_ context.Context, _ time.Time, limit
 	return m.purgeable[:limit], nil
 }
 
-func (m *mockLifecycleStore) SoftDelete(_ context.Context, id uuid.UUID) error {
+func (m *mockLifecycleStore) SoftDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	if m.softErr != nil {
 		return m.softErr
 	}
@@ -58,7 +58,7 @@ func (m *mockLifecycleStore) SoftDelete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (m *mockLifecycleStore) HardDelete(_ context.Context, id uuid.UUID) error {
+func (m *mockLifecycleStore) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	if m.hardErr != nil {
 		return m.hardErr
 	}

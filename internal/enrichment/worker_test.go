@@ -158,7 +158,7 @@ func (m *mockRelationshipCreator) FindActiveByTriple(_ context.Context, _, _, _ 
 	return nil, nil
 }
 
-func (m *mockRelationshipCreator) UpdateWeight(_ context.Context, _ uuid.UUID, _ float64) error {
+func (m *mockRelationshipCreator) UpdateWeight(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ float64) error {
 	return nil
 }
 

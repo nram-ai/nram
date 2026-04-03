@@ -231,18 +231,21 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 		        '2025-01-17T10:30:00Z', '2025-01-17T10:30:00Z')`)
 
 	// ── entity_aliases ─────────────────────────────────────────────────────
-	mustExec(`INSERT INTO entity_aliases (id, entity_id, alias, alias_type, created_at)
+	mustExec(`INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type, created_at)
 		VALUES ('22222222-0000-0000-0000-000000000001',
+		        'aaaaaaaa-0000-0000-0000-000000000002',
 		        '11111111-0000-0000-0000-000000000001', 'Ali', 'nickname',
 		        '2025-01-15T10:30:00Z')`)
 
-	mustExec(`INSERT INTO entity_aliases (id, entity_id, alias, alias_type, created_at)
+	mustExec(`INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type, created_at)
 		VALUES ('22222222-0000-0000-0000-000000000002',
+		        'aaaaaaaa-0000-0000-0000-000000000002',
 		        '11111111-0000-0000-0000-000000000001', 'Алиса', 'translation',
 		        '2025-01-16T10:30:00Z')`)
 
-	mustExec(`INSERT INTO entity_aliases (id, entity_id, alias, alias_type, created_at)
+	mustExec(`INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type, created_at)
 		VALUES ('22222222-0000-0000-0000-000000000003',
+		        'aaaaaaaa-0000-0000-0000-000000000002',
 		        '11111111-0000-0000-0000-000000000002', 'Bob', 'shortname',
 		        '2025-01-16T10:30:00Z')`)
 
@@ -273,14 +276,16 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 
 	// ── memory_lineage ─────────────────────────────────────────────────────
 	// Lineage 1: parent_id NULL (root origin)
-	mustExec(`INSERT INTO memory_lineage (id, memory_id, parent_id, relation, context, created_at)
+	mustExec(`INSERT INTO memory_lineage (id, namespace_id, memory_id, parent_id, relation, context, created_at)
 		VALUES ('44444444-0000-0000-0000-000000000001',
+		        'aaaaaaaa-0000-0000-0000-000000000002',
 		        'ffffffff-0000-0000-0000-000000000001', NULL, 'origin', '{}',
 		        '2025-01-15T10:30:00Z')`)
 
 	// Lineage 2: parent_id set, context JSON
-	mustExec(`INSERT INTO memory_lineage (id, memory_id, parent_id, relation, context, created_at)
+	mustExec(`INSERT INTO memory_lineage (id, namespace_id, memory_id, parent_id, relation, context, created_at)
 		VALUES ('44444444-0000-0000-0000-000000000002',
+		        'aaaaaaaa-0000-0000-0000-000000000002',
 		        'ffffffff-0000-0000-0000-000000000002',
 		        'ffffffff-0000-0000-0000-000000000001',
 		        'derived', '{"reason":"summarized"}',
@@ -1048,18 +1053,21 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 		verifyRows(t, pgConn, "entity_aliases", []map[string]interface{}{
 			{
 				"id": "22222222-0000-0000-0000-000000000001",
+				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
 				"entity_id": "11111111-0000-0000-0000-000000000001",
 				"alias": "Ali", "alias_type": "nickname",
 				"created_at": "2025-01-15T10:30:00Z",
 			},
 			{
 				"id": "22222222-0000-0000-0000-000000000002",
+				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
 				"entity_id": "11111111-0000-0000-0000-000000000001",
 				"alias": "Алиса", "alias_type": "translation",
 				"created_at": "2025-01-16T10:30:00Z",
 			},
 			{
 				"id": "22222222-0000-0000-0000-000000000003",
+				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
 				"entity_id": "11111111-0000-0000-0000-000000000002",
 				"alias": "Bob", "alias_type": "shortname",
 				"created_at": "2025-01-16T10:30:00Z",
@@ -1100,6 +1108,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 		verifyRows(t, pgConn, "memory_lineage", []map[string]interface{}{
 			{
 				"id": "44444444-0000-0000-0000-000000000001",
+				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
 				"memory_id": "ffffffff-0000-0000-0000-000000000001",
 				"parent_id": nil, "relation": "origin",
 				"context":    "{}",
@@ -1107,6 +1116,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 			},
 			{
 				"id": "44444444-0000-0000-0000-000000000002",
+				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
 				"memory_id": "ffffffff-0000-0000-0000-000000000002",
 				"parent_id": "ffffffff-0000-0000-0000-000000000001",
 				"relation":  "derived",

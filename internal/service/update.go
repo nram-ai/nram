@@ -177,12 +177,13 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 	// Create supersedes lineage record if content changed.
 	if contentChanged {
 		lineageRecord := &model.MemoryLineage{
-			ID:        uuid.New(),
-			MemoryID:  mem.ID,
-			ParentID:  &mem.ID,
-			Relation:  "supersedes",
-			Context:   json.RawMessage(fmt.Sprintf(`{"previous_content":%q}`, previousContent)),
-			CreatedAt: time.Now(),
+			ID:          uuid.New(),
+			NamespaceID: mem.NamespaceID,
+			MemoryID:    mem.ID,
+			ParentID:    &mem.ID,
+			Relation:    model.LineageSupersedes,
+			Context:     json.RawMessage(fmt.Sprintf(`{"previous_content":%q}`, previousContent)),
+			CreatedAt:   time.Now(),
 		}
 		_ = s.lineage.Create(ctx, lineageRecord)
 	}

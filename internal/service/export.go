@@ -31,7 +31,7 @@ type RelationshipLister interface {
 
 // LineageReader provides listing of lineage records for a memory.
 type LineageReader interface {
-	ListByMemory(ctx context.Context, memoryID uuid.UUID) ([]model.MemoryLineage, error)
+	ListByMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) ([]model.MemoryLineage, error)
 }
 
 // ExportRequest contains the parameters for a project data export.
@@ -159,7 +159,7 @@ func (s *ExportService) Export(ctx context.Context, req *ExportRequest) (*Export
 	exportMemories := make([]ExportMemory, 0, len(allMemories))
 	for _, mem := range allMemories {
 		em := toExportMemory(mem)
-		lineageRecords, err := s.lineage.ListByMemory(ctx, mem.ID)
+		lineageRecords, err := s.lineage.ListByMemory(ctx, mem.NamespaceID, mem.ID)
 		if err == nil && len(lineageRecords) > 0 {
 			em.Lineage = make([]ExportLineage, 0, len(lineageRecords))
 			for _, lr := range lineageRecords {
@@ -269,7 +269,7 @@ func (s *ExportService) ExportNDJSON(ctx context.Context, req *ExportRequest, w 
 
 	for _, mem := range allMemories {
 		em := toExportMemory(mem)
-		lineageRecords, lErr := s.lineage.ListByMemory(ctx, mem.ID)
+		lineageRecords, lErr := s.lineage.ListByMemory(ctx, mem.NamespaceID, mem.ID)
 		if lErr == nil && len(lineageRecords) > 0 {
 			em.Lineage = make([]ExportLineage, 0, len(lineageRecords))
 			for _, lr := range lineageRecords {

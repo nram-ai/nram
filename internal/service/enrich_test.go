@@ -71,7 +71,7 @@ type enrichLineageQuerier struct {
 	children map[uuid.UUID]uuid.UUID // child → parent
 }
 
-func (m *enrichLineageQuerier) FindParentIDs(_ context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+func (m *enrichLineageQuerier) FindParentIDs(_ context.Context, _ uuid.UUID, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
 	result := make(map[uuid.UUID]uuid.UUID)
 	for _, id := range memoryIDs {
 		if pid, ok := m.children[id]; ok {
@@ -81,7 +81,7 @@ func (m *enrichLineageQuerier) FindParentIDs(_ context.Context, memoryIDs []uuid
 	return result, nil
 }
 
-func (m *enrichLineageQuerier) FindChildIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+func (m *enrichLineageQuerier) FindChildIDs(_ context.Context, _ uuid.UUID, _ uuid.UUID) ([]uuid.UUID, error) {
 	return nil, nil
 }
 

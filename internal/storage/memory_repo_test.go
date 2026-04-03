@@ -203,7 +203,7 @@ func TestMemoryRepo_GetByID_ExcludesSoftDeleted(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		if err := repo.SoftDelete(ctx, mem.ID); err != nil {
+		if err := repo.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			t.Fatalf("failed to soft delete: %v", err)
 		}
 
@@ -271,7 +271,7 @@ func TestMemoryRepo_GetBatch_ExcludesSoftDeleted(t *testing.T) {
 		}
 
 		// Soft-delete mem1
-		if err := repo.SoftDelete(ctx, mem1.ID); err != nil {
+		if err := repo.SoftDelete(ctx, mem1.ID, mem1.NamespaceID); err != nil {
 			t.Fatalf("failed to soft delete: %v", err)
 		}
 
@@ -368,7 +368,7 @@ func TestMemoryRepo_ListByNamespace_ExcludesSoftDeleted(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		if err := repo.SoftDelete(ctx, mem.ID); err != nil {
+		if err := repo.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			t.Fatalf("failed to soft delete: %v", err)
 		}
 
@@ -464,7 +464,7 @@ func TestMemoryRepo_Update_SoftDeletedFails(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		if err := repo.SoftDelete(ctx, mem.ID); err != nil {
+		if err := repo.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			t.Fatalf("failed to soft delete: %v", err)
 		}
 
@@ -489,7 +489,7 @@ func TestMemoryRepo_SoftDelete(t *testing.T) {
 
 		beforeDelete := time.Now().UTC().Add(-time.Second)
 
-		if err := repo.SoftDelete(ctx, mem.ID); err != nil {
+		if err := repo.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			t.Fatalf("failed to soft delete: %v", err)
 		}
 
@@ -518,7 +518,7 @@ func TestMemoryRepo_SoftDelete_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewMemoryRepo(db)
 
-		err := repo.SoftDelete(ctx, uuid.New())
+		err := repo.SoftDelete(ctx, uuid.New(), uuid.New())
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}
@@ -536,12 +536,12 @@ func TestMemoryRepo_SoftDelete_AlreadyDeleted(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		if err := repo.SoftDelete(ctx, mem.ID); err != nil {
+		if err := repo.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			t.Fatalf("failed to soft delete first time: %v", err)
 		}
 
 		// Second soft delete should fail (already deleted)
-		err := repo.SoftDelete(ctx, mem.ID)
+		err := repo.SoftDelete(ctx, mem.ID, mem.NamespaceID)
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows for double soft delete, got %v", err)
 		}
@@ -559,7 +559,7 @@ func TestMemoryRepo_HardDelete(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		if err := repo.HardDelete(ctx, mem.ID); err != nil {
+		if err := repo.HardDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			t.Fatalf("failed to hard delete: %v", err)
 		}
 
@@ -582,11 +582,11 @@ func TestMemoryRepo_HardDelete_SoftDeletedFirst(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		if err := repo.SoftDelete(ctx, mem.ID); err != nil {
+		if err := repo.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			t.Fatalf("failed to soft delete: %v", err)
 		}
 
-		if err := repo.HardDelete(ctx, mem.ID); err != nil {
+		if err := repo.HardDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			t.Fatalf("failed to hard delete after soft delete: %v", err)
 		}
 
@@ -685,7 +685,7 @@ func TestMemoryRepo_ListPurgeable(t *testing.T) {
 		}
 
 		// Soft delete it
-		if err := memRepo.SoftDelete(ctx, mem.ID); err != nil {
+		if err := memRepo.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			t.Fatalf("failed to soft delete: %v", err)
 		}
 

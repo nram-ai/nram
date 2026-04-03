@@ -76,7 +76,7 @@ func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycl
 			model.DreamOpMemoryDeleted, "memory", mem.ID,
 			&mem, map[string]string{"reason": reason})
 
-		if err := p.memWriter.SoftDelete(ctx, mem.ID); err != nil {
+		if err := p.memWriter.SoftDelete(ctx, mem.ID, cycle.NamespaceID); err != nil {
 			slog.Warn("dreaming: prune failed", "memory", mem.ID, "err", err)
 			continue
 		}

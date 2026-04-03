@@ -250,20 +250,20 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 		confidence = ?, importance = ?, access_count = ?, last_accessed = ?,
 		expires_at = ?, superseded_by = ?, enriched = ?, metadata = ?,
 		purge_after = ?, updated_at = ?
-		WHERE id = ? AND deleted_at IS NULL`
+		WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
 	if r.db.Backend() == BackendPostgres {
 		query = `UPDATE memories SET content = $1, embedding_dim = $2, source = $3, tags = $4,
 			confidence = $5, importance = $6, access_count = $7, last_accessed = $8,
 			expires_at = $9, superseded_by = $10, enriched = $11, metadata = $12,
 			purge_after = $13, updated_at = $14
-			WHERE id = $15 AND deleted_at IS NULL`
+			WHERE id = $15 AND namespace_id = $16 AND deleted_at IS NULL`
 	}
 
 	result, err := r.db.Exec(ctx, query,
 		mem.Content, embeddingDim, source, tagsVal,
 		mem.Confidence, mem.Importance, mem.AccessCount, lastAccessed,
 		expiresAt, supersededBy, enrichedVal, string(mem.Metadata),
-		purgeAfter, now, mem.ID.String(),
+		purgeAfter, now, mem.ID.String(), mem.NamespaceID.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("memory update: %w", err)
@@ -281,15 +281,15 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 }
 
 // SoftDelete sets the deleted_at timestamp on a memory.
-func (r *MemoryRepo) SoftDelete(ctx context.Context, id uuid.UUID) error {
+func (r *MemoryRepo) SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE memories SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`
+	query := `UPDATE memories SET deleted_at = ?, updated_at = ? WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE memories SET deleted_at = $1, updated_at = $2 WHERE id = $3 AND deleted_at IS NULL`
+		query = `UPDATE memories SET deleted_at = $1, updated_at = $2 WHERE id = $3 AND namespace_id = $4 AND deleted_at IS NULL`
 	}
 
-	result, err := r.db.Exec(ctx, query, now, now, id.String())
+	result, err := r.db.Exec(ctx, query, now, now, id.String(), namespaceID.String())
 	if err != nil {
 		return fmt.Errorf("memory soft delete: %w", err)
 	}
@@ -305,13 +305,13 @@ func (r *MemoryRepo) SoftDelete(ctx context.Context, id uuid.UUID) error {
 }
 
 // HardDelete permanently removes a memory from the table.
-func (r *MemoryRepo) HardDelete(ctx context.Context, id uuid.UUID) error {
-	query := `DELETE FROM memories WHERE id = ?`
+func (r *MemoryRepo) HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
+	query := `DELETE FROM memories WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM memories WHERE id = $1`
+		query = `DELETE FROM memories WHERE id = $1 AND namespace_id = $2`
 	}
 
-	_, err := r.db.Exec(ctx, query, id.String())
+	_, err := r.db.Exec(ctx, query, id.String(), namespaceID.String())
 	if err != nil {
 		return fmt.Errorf("memory hard delete: %w", err)
 	}

@@ -14,12 +14,12 @@ import (
 
 // RelationshipCleaner deletes relationships associated with a memory.
 type RelationshipCleaner interface {
-	DeleteBySourceMemory(ctx context.Context, memoryID uuid.UUID) error
+	DeleteBySourceMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) error
 }
 
 // LineageCleaner deletes lineage records associated with a memory.
 type LineageCleaner interface {
-	DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error
+	DeleteByMemoryID(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) error
 }
 
 // EnrichmentQueueCleaner deletes enrichment queue items associated with a memory.
@@ -34,8 +34,8 @@ type TokenUsageCleaner interface {
 
 // MemoryDeleter provides delete and read operations needed by the forget service.
 type MemoryDeleter interface {
-	SoftDelete(ctx context.Context, id uuid.UUID) error
-	HardDelete(ctx context.Context, id uuid.UUID) error
+	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
+	HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
 }
@@ -214,7 +214,7 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 
 	// Cascade: delete child memories (extracted facts) before the parent.
 	if s.lineageQuerier != nil {
-		childIDs, err := s.lineageQuerier.FindChildIDs(ctx, id)
+		childIDs, err := s.lineageQuerier.FindChildIDs(ctx, namespaceID, id)
 		if err != nil {
 			log.Printf("cascade: find children for %s: %v", id, err)
 		}
@@ -229,16 +229,16 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 		// Remove FK references BEFORE deleting the memory to avoid
 		// FOREIGN KEY constraint failures (enrichment_queue, token_usage,
 		// memory_lineage, relationships all reference memories without CASCADE).
-		s.cleanupRelatedData(ctx, id)
+		s.cleanupRelatedData(ctx, namespaceID, id)
 		if s.vectorStore != nil {
 			_ = s.vectorStore.Delete(ctx, id)
 		}
 
-		if err := s.memories.HardDelete(ctx, id); err != nil {
+		if err := s.memories.HardDelete(ctx, id, namespaceID); err != nil {
 			return false, fmt.Errorf("hard delete failed for %s: %w", id, err)
 		}
 	} else {
-		if err := s.memories.SoftDelete(ctx, id); err != nil {
+		if err := s.memories.SoftDelete(ctx, id, namespaceID); err != nil {
 			return false, fmt.Errorf("soft delete failed for %s: %w", id, err)
 		}
 	}
@@ -248,14 +248,14 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 
 // cleanupRelatedData performs best-effort removal of data associated with a
 // deleted memory. Errors are logged but do not cause the delete to fail.
-func (s *ForgetService) cleanupRelatedData(ctx context.Context, memoryID uuid.UUID) {
+func (s *ForgetService) cleanupRelatedData(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) {
 	if s.relationshipCleaner != nil {
-		if err := s.relationshipCleaner.DeleteBySourceMemory(ctx, memoryID); err != nil {
+		if err := s.relationshipCleaner.DeleteBySourceMemory(ctx, namespaceID, memoryID); err != nil {
 			log.Printf("cascade cleanup: relationships for memory %s: %v", memoryID, err)
 		}
 	}
 	if s.lineageCleaner != nil {
-		if err := s.lineageCleaner.DeleteByMemoryID(ctx, memoryID); err != nil {
+		if err := s.lineageCleaner.DeleteByMemoryID(ctx, namespaceID, memoryID); err != nil {
 			log.Printf("cascade cleanup: lineage for memory %s: %v", memoryID, err)
 		}
 	}

@@ -1243,7 +1243,7 @@ func (m *nsAwareMemoryRepo) ListByNamespace(_ context.Context, nsID uuid.UUID, l
 	return out, nil
 }
 
-func (m *nsAwareMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID) error {
+func (m *nsAwareMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	mem, ok := m.memories[id]
@@ -1255,7 +1255,7 @@ func (m *nsAwareMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (m *nsAwareMemoryRepo) HardDelete(_ context.Context, id uuid.UUID) error {
+func (m *nsAwareMemoryRepo) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.memories, id)

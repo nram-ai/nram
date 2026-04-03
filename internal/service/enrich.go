@@ -26,8 +26,8 @@ type EnrichResponse struct {
 
 // LineageQuerier provides read-only lineage lookups used by multiple services.
 type LineageQuerier interface {
-	FindParentIDs(ctx context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
-	FindChildIDs(ctx context.Context, parentID uuid.UUID) ([]uuid.UUID, error)
+	FindParentIDs(ctx context.Context, namespaceID uuid.UUID, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	FindChildIDs(ctx context.Context, namespaceID uuid.UUID, parentID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.
@@ -112,7 +112,7 @@ func (s *EnrichService) Enrich(ctx context.Context, req *EnrichRequest) (*Enrich
 		for i := range memories {
 			ids[i] = memories[i].ID
 		}
-		if parentMap, err := s.lineage.FindParentIDs(ctx, ids); err == nil {
+		if parentMap, err := s.lineage.FindParentIDs(ctx, namespaceID, ids); err == nil {
 			for childID := range parentMap {
 				childSet[childID] = true
 			}

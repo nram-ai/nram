@@ -103,15 +103,15 @@ func (r *RelationshipRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Re
 }
 
 // Expire sets valid_until to the current time for the given relationship.
-func (r *RelationshipRepo) Expire(ctx context.Context, id uuid.UUID) error {
+func (r *RelationshipRepo) Expire(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE relationships SET valid_until = ? WHERE id = ?`
+	query := `UPDATE relationships SET valid_until = ? WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE relationships SET valid_until = $1 WHERE id = $2`
+		query = `UPDATE relationships SET valid_until = $1 WHERE id = $2 AND namespace_id = $3`
 	}
 
-	result, err := r.db.Exec(ctx, query, now, id.String())
+	result, err := r.db.Exec(ctx, query, now, id.String(), namespaceID.String())
 	if err != nil {
 		return fmt.Errorf("relationship expire: %w", err)
 	}
@@ -128,13 +128,13 @@ func (r *RelationshipRepo) Expire(ctx context.Context, id uuid.UUID) error {
 }
 
 // Reinforce increments the weight of a relationship by 1.
-func (r *RelationshipRepo) Reinforce(ctx context.Context, id uuid.UUID) error {
-	query := `UPDATE relationships SET weight = weight + 1 WHERE id = ?`
+func (r *RelationshipRepo) Reinforce(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
+	query := `UPDATE relationships SET weight = weight + 1 WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE relationships SET weight = weight + 1 WHERE id = $1`
+		query = `UPDATE relationships SET weight = weight + 1 WHERE id = $1 AND namespace_id = $2`
 	}
 
-	result, err := r.db.Exec(ctx, query, id.String())
+	result, err := r.db.Exec(ctx, query, id.String(), namespaceID.String())
 	if err != nil {
 		return fmt.Errorf("relationship reinforce: %w", err)
 	}
@@ -251,12 +251,12 @@ func (r *RelationshipRepo) DeleteByNamespace(ctx context.Context, namespaceID uu
 }
 
 // DeleteBySourceMemory removes all relationships where source_memory matches the given memory ID.
-func (r *RelationshipRepo) DeleteBySourceMemory(ctx context.Context, memoryID uuid.UUID) error {
-	query := `DELETE FROM relationships WHERE source_memory = ?`
+func (r *RelationshipRepo) DeleteBySourceMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) error {
+	query := `DELETE FROM relationships WHERE namespace_id = ? AND source_memory = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM relationships WHERE source_memory = $1`
+		query = `DELETE FROM relationships WHERE namespace_id = $1 AND source_memory = $2`
 	}
-	_, err := r.db.Exec(ctx, query, memoryID.String())
+	_, err := r.db.Exec(ctx, query, namespaceID.String(), memoryID.String())
 	if err != nil {
 		return fmt.Errorf("relationship delete by source memory: %w", err)
 	}
@@ -264,12 +264,12 @@ func (r *RelationshipRepo) DeleteBySourceMemory(ctx context.Context, memoryID uu
 }
 
 // UpdateWeight sets the weight of a relationship to a specific value.
-func (r *RelationshipRepo) UpdateWeight(ctx context.Context, id uuid.UUID, weight float64) error {
-	query := `UPDATE relationships SET weight = ? WHERE id = ?`
+func (r *RelationshipRepo) UpdateWeight(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, weight float64) error {
+	query := `UPDATE relationships SET weight = ? WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE relationships SET weight = $1 WHERE id = $2`
+		query = `UPDATE relationships SET weight = $1 WHERE id = $2 AND namespace_id = $3`
 	}
-	_, err := r.db.Exec(ctx, query, weight, id.String())
+	_, err := r.db.Exec(ctx, query, weight, id.String(), namespaceID.String())
 	if err != nil {
 		return fmt.Errorf("relationship update weight: %w", err)
 	}
@@ -333,12 +333,12 @@ func (r *RelationshipRepo) ExpireLowWeight(ctx context.Context, namespaceID uuid
 }
 
 // DeleteByID removes a single relationship by its ID.
-func (r *RelationshipRepo) DeleteByID(ctx context.Context, id uuid.UUID) error {
-	query := `DELETE FROM relationships WHERE id = ?`
+func (r *RelationshipRepo) DeleteByID(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
+	query := `DELETE FROM relationships WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM relationships WHERE id = $1`
+		query = `DELETE FROM relationships WHERE id = $1 AND namespace_id = $2`
 	}
-	_, err := r.db.Exec(ctx, query, id.String())
+	_, err := r.db.Exec(ctx, query, id.String(), namespaceID.String())
 	if err != nil {
 		return fmt.Errorf("relationship delete by id: %w", err)
 	}

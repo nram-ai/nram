@@ -80,7 +80,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 		// Expire relationships that have decayed below the pruning threshold
 		// rather than keeping them alive at near-zero weight.
 		if newWeight < 0.05 {
-			if err := p.relWriter.Expire(ctx, rel.ID); err != nil {
+			if err := p.relWriter.Expire(ctx, rel.ID, rel.NamespaceID); err != nil {
 				slog.Warn("dreaming: expire decayed relationship failed", "relationship", rel.ID, "err", err)
 				continue
 			}
@@ -94,7 +94,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 			continue
 		}
 
-		if err := p.relWriter.UpdateWeight(ctx, rel.ID, newWeight); err != nil {
+		if err := p.relWriter.UpdateWeight(ctx, rel.ID, rel.NamespaceID, newWeight); err != nil {
 			slog.Warn("dreaming: weight update failed", "relationship", rel.ID, "err", err)
 			continue
 		}

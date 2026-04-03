@@ -77,7 +77,7 @@ type mockLineageReader struct {
 	lineage map[uuid.UUID][]model.MemoryLineage // keyed by memoryID
 }
 
-func (m *mockLineageReader) ListByMemory(_ context.Context, memoryID uuid.UUID) ([]model.MemoryLineage, error) {
+func (m *mockLineageReader) ListByMemory(_ context.Context, _ uuid.UUID, memoryID uuid.UUID) ([]model.MemoryLineage, error) {
 	return m.lineage[memoryID], nil
 }
 

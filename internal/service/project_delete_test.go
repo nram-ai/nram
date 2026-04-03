@@ -92,7 +92,7 @@ type mockRelCleaner struct {
 	called []uuid.UUID
 }
 
-func (m *mockRelCleaner) DeleteBySourceMemory(_ context.Context, memoryID uuid.UUID) error {
+func (m *mockRelCleaner) DeleteBySourceMemory(_ context.Context, _ uuid.UUID, memoryID uuid.UUID) error {
 	m.called = append(m.called, memoryID)
 	return nil
 }
@@ -101,7 +101,7 @@ type mockLineageCleaner struct {
 	called []uuid.UUID
 }
 
-func (m *mockLineageCleaner) DeleteByMemoryID(_ context.Context, memoryID uuid.UUID) error {
+func (m *mockLineageCleaner) DeleteByMemoryID(_ context.Context, _ uuid.UUID, memoryID uuid.UUID) error {
 	m.called = append(m.called, memoryID)
 	return nil
 }

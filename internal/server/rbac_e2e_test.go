@@ -121,14 +121,14 @@ func (m *rbacMemoryRepo) Update(_ context.Context, mem *model.Memory) error {
 	return nil
 }
 
-func (m *rbacMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID) error {
+func (m *rbacMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.memories, id)
 	return nil
 }
 
-func (m *rbacMemoryRepo) HardDelete(_ context.Context, id uuid.UUID) error {
+func (m *rbacMemoryRepo) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.memories, id)
@@ -1220,15 +1220,15 @@ func (m *rbacRelationshipLister) ListByEntity(_ context.Context, _ uuid.UUID) ([
 // rbacLineageReader is a no-op lineage reader for export.
 type rbacLineageReader struct{}
 
-func (m *rbacLineageReader) ListByMemory(_ context.Context, _ uuid.UUID) ([]model.MemoryLineage, error) {
+func (m *rbacLineageReader) ListByMemory(_ context.Context, _, _ uuid.UUID) ([]model.MemoryLineage, error) {
 	return nil, nil
 }
 
-func (m *rbacLineageReader) FindParentIDs(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+func (m *rbacLineageReader) FindParentIDs(_ context.Context, _ uuid.UUID, _ []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
 	return nil, nil
 }
 
-func (m *rbacLineageReader) FindChildIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+func (m *rbacLineageReader) FindChildIDs(_ context.Context, _, _ uuid.UUID) ([]uuid.UUID, error) {
 	return nil, nil
 }
 

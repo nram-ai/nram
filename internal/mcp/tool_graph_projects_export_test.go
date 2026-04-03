@@ -81,7 +81,7 @@ func (m *mockExportRelLister) ListByEntity(_ context.Context, _ uuid.UUID) ([]mo
 
 type mockExportLineageReader struct{}
 
-func (m *mockExportLineageReader) ListByMemory(_ context.Context, _ uuid.UUID) ([]model.MemoryLineage, error) {
+func (m *mockExportLineageReader) ListByMemory(_ context.Context, _ uuid.UUID, _ uuid.UUID) ([]model.MemoryLineage, error) {
 	return nil, nil
 }
 
