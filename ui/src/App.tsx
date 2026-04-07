@@ -5,11 +5,12 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ProjectProvider } from "./context/ProjectContext";
 import RequireRole from "./components/RequireRole";
 import Dashboard from "./pages/Dashboard";
+// Dashboard, Login, and SetupWizard stay eager: they are the only pages an
+// unauthenticated/cold-start user can land on, and a Suspense flash on the
+// auth path is worse than the few KB they add to the entry chunk.
+import Login from "./pages/Login";
+import SetupWizard from "./pages/SetupWizard";
 
-// All non-landing pages are lazy-loaded so each route ships its own chunk
-// instead of bloating the initial bundle.
-const SetupWizard = React.lazy(() => import("./pages/SetupWizard"));
-const Login = React.lazy(() => import("./pages/Login"));
 const MemoryBrowser = React.lazy(() => import("./pages/MemoryBrowser"));
 const ProjectManagement = React.lazy(() => import("./pages/ProjectManagement"));
 const OrganizationManagement = React.lazy(() => import("./pages/OrganizationManagement"));
@@ -30,10 +31,11 @@ const ExtractionPromptEditor = React.lazy(() => import("./pages/ExtractionPrompt
 const DreamingMonitor = React.lazy(() => import("./pages/DreamingMonitor"));
 const MyAccount = React.lazy(() => import("./pages/MyAccount"));
 
-function RouteFallback() {
+function RouteFallback({ fullScreen = false }: { fullScreen?: boolean }) {
+  const sizing = fullScreen ? "h-screen" : "h-full min-h-[40vh]";
   return (
-    <div className="flex h-full min-h-[40vh] items-center justify-center">
-      <div className="text-sm text-muted-foreground">Loading...</div>
+    <div className={`flex ${sizing} items-center justify-center text-sm text-muted-foreground`}>
+      Loading...
     </div>
   );
 }
@@ -139,13 +141,8 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const { data: status, isLoading } = useSetupStatus();
 
-  // While loading, show a minimal loading indicator
   if (isLoading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-sm text-muted-foreground">Loading...</div>
-      </div>
-    );
+    return <RouteFallback fullScreen />;
   }
 
   // If setup is not complete and we are not already on /setup, clear any
@@ -287,28 +284,28 @@ function AppLayout() {
         <div className="p-4 sm:p-6">
           <ErrorBoundary>
             <Suspense fallback={<RouteFallback />}>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/memories" element={<MemoryBrowser />} />
-              <Route path="/projects" element={<ProjectManagement />} />
-              <Route path="/organizations" element={<RequireRole minRole="administrator"><OrganizationManagement /></RequireRole>} />
-              <Route path="/users" element={<RequireRole minRole="org_owner"><UserManagement /></RequireRole>} />
-              <Route path="/providers" element={<RequireRole minRole="administrator"><ProviderConfiguration /></RequireRole>} />
-              <Route path="/settings" element={<RequireRole minRole="administrator"><SettingsEditor /></RequireRole>} />
-              <Route path="/extraction-prompts" element={<RequireRole minRole="administrator"><ExtractionPromptEditor /></RequireRole>} />
-              <Route path="/database" element={<RequireRole minRole="administrator"><DatabaseManagement /></RequireRole>} />
-              <Route path="/enrichment" element={<RequireRole minRole="administrator"><EnrichmentMonitor /></RequireRole>} />
-              <Route path="/dreaming" element={<RequireRole minRole="administrator"><DreamingMonitor /></RequireRole>} />
-              <Route path="/graph" element={<GraphVisualization />} />
-              <Route path="/entities" element={<EntityBrowser />} />
-              <Route path="/analytics" element={<Analytics />} />
-              <Route path="/import" element={<BulkImport />} />
-              <Route path="/webhooks" element={<RequireRole minRole="administrator"><WebhookManagement /></RequireRole>} />
-              <Route path="/oauth" element={<RequireRole minRole="administrator"><OAuthClients /></RequireRole>} />
-              <Route path="/idp" element={<RequireRole minRole="org_owner"><IdPConfiguration /></RequireRole>} />
-              <Route path="/mcp-config" element={<MCPConfigGenerator />} />
-              <Route path="/account" element={<MyAccount />} />
-            </Routes>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/memories" element={<MemoryBrowser />} />
+                <Route path="/projects" element={<ProjectManagement />} />
+                <Route path="/organizations" element={<RequireRole minRole="administrator"><OrganizationManagement /></RequireRole>} />
+                <Route path="/users" element={<RequireRole minRole="org_owner"><UserManagement /></RequireRole>} />
+                <Route path="/providers" element={<RequireRole minRole="administrator"><ProviderConfiguration /></RequireRole>} />
+                <Route path="/settings" element={<RequireRole minRole="administrator"><SettingsEditor /></RequireRole>} />
+                <Route path="/extraction-prompts" element={<RequireRole minRole="administrator"><ExtractionPromptEditor /></RequireRole>} />
+                <Route path="/database" element={<RequireRole minRole="administrator"><DatabaseManagement /></RequireRole>} />
+                <Route path="/enrichment" element={<RequireRole minRole="administrator"><EnrichmentMonitor /></RequireRole>} />
+                <Route path="/dreaming" element={<RequireRole minRole="administrator"><DreamingMonitor /></RequireRole>} />
+                <Route path="/graph" element={<GraphVisualization />} />
+                <Route path="/entities" element={<EntityBrowser />} />
+                <Route path="/analytics" element={<Analytics />} />
+                <Route path="/import" element={<BulkImport />} />
+                <Route path="/webhooks" element={<RequireRole minRole="administrator"><WebhookManagement /></RequireRole>} />
+                <Route path="/oauth" element={<RequireRole minRole="administrator"><OAuthClients /></RequireRole>} />
+                <Route path="/idp" element={<RequireRole minRole="org_owner"><IdPConfiguration /></RequireRole>} />
+                <Route path="/mcp-config" element={<MCPConfigGenerator />} />
+                <Route path="/account" element={<MyAccount />} />
+              </Routes>
             </Suspense>
           </ErrorBoundary>
         </div>
@@ -322,13 +319,11 @@ function App() {
     <AuthProvider>
       <ProjectProvider>
         <SetupGuard>
-          <Suspense fallback={<RouteFallback />}>
-            <Routes>
-              <Route path="/setup" element={<SetupWizard />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
-            </Routes>
-          </Suspense>
+          <Routes>
+            <Route path="/setup" element={<SetupWizard />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
+          </Routes>
         </SetupGuard>
       </ProjectProvider>
     </AuthProvider>
