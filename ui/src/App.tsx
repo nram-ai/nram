@@ -1,31 +1,42 @@
-import React, { useState, useEffect } from "react";
+import React, { Suspense, useState, useEffect } from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { useSetupStatus } from "./hooks/useApi";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ProjectProvider } from "./context/ProjectContext";
 import RequireRole from "./components/RequireRole";
 import Dashboard from "./pages/Dashboard";
-import SetupWizard from "./pages/SetupWizard";
-import Login from "./pages/Login";
-import MemoryBrowser from "./pages/MemoryBrowser";
-import ProjectManagement from "./pages/ProjectManagement";
-import OrganizationManagement from "./pages/OrganizationManagement";
-import UserManagement from "./pages/UserManagement";
-import ProviderConfiguration from "./pages/ProviderConfiguration";
-import SettingsEditor from "./pages/SettingsEditor";
-import DatabaseManagement from "./pages/DatabaseManagement";
-import EnrichmentMonitor from "./pages/EnrichmentMonitor";
-import GraphVisualization from "./pages/GraphVisualization";
-import EntityBrowser from "./pages/EntityBrowser";
-import Analytics from "./pages/Analytics";
-import BulkImport from "./pages/BulkImport";
-import WebhookManagement from "./pages/WebhookManagement";
-import OAuthClients from "./pages/OAuthClients";
-import IdPConfiguration from "./pages/IdPConfiguration";
-import MCPConfigGenerator from "./pages/MCPConfigGenerator";
-import ExtractionPromptEditor from "./pages/ExtractionPromptEditor";
-import DreamingMonitor from "./pages/DreamingMonitor";
-import MyAccount from "./pages/MyAccount";
+
+// All non-landing pages are lazy-loaded so each route ships its own chunk
+// instead of bloating the initial bundle.
+const SetupWizard = React.lazy(() => import("./pages/SetupWizard"));
+const Login = React.lazy(() => import("./pages/Login"));
+const MemoryBrowser = React.lazy(() => import("./pages/MemoryBrowser"));
+const ProjectManagement = React.lazy(() => import("./pages/ProjectManagement"));
+const OrganizationManagement = React.lazy(() => import("./pages/OrganizationManagement"));
+const UserManagement = React.lazy(() => import("./pages/UserManagement"));
+const ProviderConfiguration = React.lazy(() => import("./pages/ProviderConfiguration"));
+const SettingsEditor = React.lazy(() => import("./pages/SettingsEditor"));
+const DatabaseManagement = React.lazy(() => import("./pages/DatabaseManagement"));
+const EnrichmentMonitor = React.lazy(() => import("./pages/EnrichmentMonitor"));
+const GraphVisualization = React.lazy(() => import("./pages/GraphVisualization"));
+const EntityBrowser = React.lazy(() => import("./pages/EntityBrowser"));
+const Analytics = React.lazy(() => import("./pages/Analytics"));
+const BulkImport = React.lazy(() => import("./pages/BulkImport"));
+const WebhookManagement = React.lazy(() => import("./pages/WebhookManagement"));
+const OAuthClients = React.lazy(() => import("./pages/OAuthClients"));
+const IdPConfiguration = React.lazy(() => import("./pages/IdPConfiguration"));
+const MCPConfigGenerator = React.lazy(() => import("./pages/MCPConfigGenerator"));
+const ExtractionPromptEditor = React.lazy(() => import("./pages/ExtractionPromptEditor"));
+const DreamingMonitor = React.lazy(() => import("./pages/DreamingMonitor"));
+const MyAccount = React.lazy(() => import("./pages/MyAccount"));
+
+function RouteFallback() {
+  return (
+    <div className="flex h-full min-h-[40vh] items-center justify-center">
+      <div className="text-sm text-muted-foreground">Loading...</div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Error Boundary
@@ -275,6 +286,7 @@ function AppLayout() {
       <main className="flex-1 overflow-y-auto pt-14 md:pt-0">
         <div className="p-4 sm:p-6">
           <ErrorBoundary>
+            <Suspense fallback={<RouteFallback />}>
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/memories" element={<MemoryBrowser />} />
@@ -297,6 +309,7 @@ function AppLayout() {
               <Route path="/mcp-config" element={<MCPConfigGenerator />} />
               <Route path="/account" element={<MyAccount />} />
             </Routes>
+            </Suspense>
           </ErrorBoundary>
         </div>
       </main>
@@ -309,11 +322,13 @@ function App() {
     <AuthProvider>
       <ProjectProvider>
         <SetupGuard>
-          <Routes>
-            <Route path="/setup" element={<SetupWizard />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
-          </Routes>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/setup" element={<SetupWizard />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
+            </Routes>
+          </Suspense>
         </SetupGuard>
       </ProjectProvider>
     </AuthProvider>
