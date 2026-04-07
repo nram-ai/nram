@@ -479,6 +479,7 @@ func main() {
 		// Project-scoped memory handlers
 		Store:      api.NewStoreHandler(storeSvc, eventBus),
 		List:       api.NewListHandler(memoryRepo, projectRepo, lineageRepo),
+		ListIDs:    api.NewListIDsHandler(memoryRepo, projectRepo),
 		Detail:     api.NewDetailHandler(memoryRepo, projectRepo, lineageRepo),
 		Update:     api.NewUpdateHandler(updateSvc, eventBus),
 		Delete:     api.NewDeleteHandler(forgetSvc, eventBus),

@@ -19,6 +19,21 @@ import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
 
 const PAGE_SIZE = 20;
 const DEBOUNCE_MS = 300;
+// Cap on parallel API calls inside bulk operations. With "select all matching"
+// the selection can include thousands of memories, and firing one in-flight
+// request per ID would overwhelm both the browser and the server.
+const BULK_CHUNK_SIZE = 25;
+
+async function runInChunks<T>(
+  items: T[],
+  chunkSize: number,
+  worker: (item: T) => Promise<unknown>,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    await Promise.all(chunk.map(worker));
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -873,20 +888,48 @@ function MemoryBrowser() {
     if (prevFilterKeyRef.current !== filterKey) {
       prevFilterKeyRef.current = filterKey;
       setOffset(0);
+      // Matching set changed — drop stale selections from the prior filter.
+      setSelectedIds(new Set());
+      setSelectionScope("page");
+      setAllMatchingTruncation(null);
     }
   }, [filterKey]);
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // "page" = selection only mirrors what's on the current page; "all-matching"
+  // = the user has explicitly opted into selecting every memory matching the
+  // current filters (across pages). Any filter/search/project change resets to
+  // "page" because the matching set has changed.
+  const [selectionScope, setSelectionScope] = useState<"page" | "all-matching">("page");
   const [detailMemoryId, setDetailMemoryId] = useState<string | null>(null);
-
-  // Build list params (server only supports limit/offset pagination)
-  const listParams: MemoryListParams = useMemo(() => {
-    return { limit: PAGE_SIZE, offset };
-  }, [offset]);
 
   // Queries
   const isSemanticSearch = searchMode === "semantic" && debouncedSearch.length > 0;
+
+  // Server-side filter shape. Independent of pagination so it stays stable
+  // across page navigation — important because it's the cache key for
+  // "select all matching".
+  const filterOnlyParams: MemoryListParams = useMemo(() => {
+    return {
+      tags: filters.selectedTags.length > 0 ? filters.selectedTags : undefined,
+      date_from: filters.dateFrom || undefined,
+      date_to: filters.dateTo || undefined,
+      enriched:
+        filters.enrichmentFilter === "enriched"
+          ? "true"
+          : filters.enrichmentFilter === "not_enriched"
+            ? "false"
+            : undefined,
+      source: filters.sourceFilter || undefined,
+      search: !isSemanticSearch && debouncedSearch ? debouncedSearch : undefined,
+    };
+  }, [filters, debouncedSearch, isSemanticSearch]);
+
+  const listParams: MemoryListParams = useMemo(
+    () => ({ ...filterOnlyParams, limit: PAGE_SIZE, offset }),
+    [filterOnlyParams, offset],
+  );
 
   const listQuery = useMemoryList(
     selectedProjectId,
@@ -913,6 +956,32 @@ function MemoryBrowser() {
   const enrichMut = useEnrichMemories();
   const updateMut = useUpdateMemory();
 
+  // "Select all matching" — fetched directly on user click rather than via a
+  // gated useQuery, since the result is consumed once and stored in
+  // selectedIds. Tracks fetch-in-progress + truncation info for the UI.
+  const [selectingAllMatching, setSelectingAllMatching] = useState(false);
+  const [allMatchingTruncation, setAllMatchingTruncation] = useState<
+    { shown: number; total: number } | null
+  >(null);
+
+  async function handleSelectAllMatching() {
+    if (!selectedProjectId || isSemanticSearch) return;
+    setSelectingAllMatching(true);
+    try {
+      const resp = await memoryAPI.listIDs(selectedProjectId, {
+        ...filterOnlyParams,
+        max: 10000,
+      });
+      setSelectedIds(new Set(resp.ids));
+      setSelectionScope("all-matching");
+      setAllMatchingTruncation(
+        resp.truncated ? { shown: resp.ids.length, total: resp.total_matching } : null,
+      );
+    } finally {
+      setSelectingAllMatching(false);
+    }
+  }
+
   // Derived data
   const memories: Memory[] = useMemo(() => {
     if (isSemanticSearch) {
@@ -931,41 +1000,35 @@ function MemoryBrowser() {
     return listQuery.data?.data ?? [];
   }, [isSemanticSearch, recallQuery.data, listQuery.data]);
 
-  // Apply client-side filters (tags, date range, enrichment, source, text search in list mode)
+  // For list mode all filtering is server-side; the response is already
+  // narrowed. For semantic recall mode, the recall RPC only knows about tags,
+  // so we still apply date/enrichment/source narrowing client-side over the
+  // recall results.
   const filteredMemories: Memory[] = useMemo(() => {
+    if (!isSemanticSearch) return memories;
+
     let result = memories;
 
-    // Text search in list (exact) mode — filter client-side
-    if (!isSemanticSearch && debouncedSearch.length > 0) {
-      const lower = debouncedSearch.toLowerCase();
-      result = result.filter((m) => m.content.toLowerCase().includes(lower));
-    }
-
-    // Tag filter
+    // Tag filter (recall already supports this server-side, but apply
+    // defensively in case the threshold lets near-misses through).
     if (filters.selectedTags.length > 0) {
       result = result.filter((m) =>
         filters.selectedTags.every((t) => m.tags.includes(t)),
       );
     }
-
-    // Date range filter
     if (filters.dateFrom) {
       const from = new Date(filters.dateFrom).getTime();
       result = result.filter((m) => new Date(m.created_at).getTime() >= from);
     }
     if (filters.dateTo) {
-      const to = new Date(filters.dateTo).getTime() + 86400000; // include the entire day
+      const to = new Date(filters.dateTo).getTime() + 86400000;
       result = result.filter((m) => new Date(m.created_at).getTime() < to);
     }
-
-    // Enrichment filter
     if (filters.enrichmentFilter === "enriched") {
       result = result.filter((m) => m.enriched);
     } else if (filters.enrichmentFilter === "not_enriched") {
       result = result.filter((m) => !m.enriched);
     }
-
-    // Source filter
     if (filters.sourceFilter) {
       const lower = filters.sourceFilter.toLowerCase();
       result = result.filter(
@@ -974,7 +1037,7 @@ function MemoryBrowser() {
     }
 
     return result;
-  }, [memories, filters, isSemanticSearch, debouncedSearch]);
+  }, [memories, filters, isSemanticSearch]);
 
   const scoreMap = useMemo(() => {
     if (!isSemanticSearch || !recallQuery.data) return new Map<string, number>();
@@ -1027,6 +1090,18 @@ function MemoryBrowser() {
     return Array.from(tagSet).sort();
   }, [memories]);
 
+  const currentPageIds = useMemo(
+    () => filteredMemories.map((m) => m.id),
+    [filteredMemories],
+  );
+
+  const allCurrentPageSelected = useMemo(
+    () =>
+      currentPageIds.length > 0 &&
+      currentPageIds.every((id) => selectedIds.has(id)),
+    [currentPageIds, selectedIds],
+  );
+
   // Handlers
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -1039,6 +1114,7 @@ function MemoryBrowser() {
 
   function clearSelection() {
     setSelectedIds(new Set());
+    setSelectionScope("page");
   }
 
   function handleBulkDelete() {
@@ -1063,22 +1139,54 @@ function MemoryBrowser() {
     );
   }
 
-  function handleBulkAddTags(tags: string[]) {
+  async function handleBulkAddTags(tags: string[]) {
     if (!selectedProjectId || selectedIds.size === 0) return;
-    const promises = Array.from(selectedIds).map((memoryId) => {
-      const mem = filteredMemories.find((m) => m.id === memoryId);
-      const existingTags = mem?.tags ?? [];
+    const projectId = selectedProjectId;
+    // For items on the current page we already have the existing tag set;
+    // items selected via "select all matching" must be fetched so we don't
+    // clobber their tags with just the new ones.
+    const onPage = new Map<string, Memory>();
+    for (const m of filteredMemories) onPage.set(m.id, m);
+
+    const ids = Array.from(selectedIds);
+    await runInChunks(ids, BULK_CHUNK_SIZE, async (memoryId) => {
+      let existingTags: string[];
+      const cached = onPage.get(memoryId);
+      if (cached) {
+        existingTags = cached.tags ?? [];
+      } else {
+        try {
+          const fetched = await memoryAPI.get(projectId, memoryId);
+          existingTags = fetched.tags ?? [];
+        } catch {
+          return;
+        }
+      }
       const merged = Array.from(new Set([...existingTags, ...tags]));
-      return updateMut.mutateAsync({
-        projectId: selectedProjectId,
+      await updateMut.mutateAsync({
+        projectId,
         memoryId,
         data: { tags: merged },
       });
     });
-    Promise.all(promises).then(() => clearSelection());
+    clearSelection();
   }
 
-  function handleBulkExport() {
+  async function handleBulkExport() {
+    if (selectionScope === "all-matching" && selectedProjectId) {
+      const projectId = selectedProjectId;
+      const ids = Array.from(selectedIds);
+      const items: Memory[] = [];
+      await runInChunks(ids, BULK_CHUNK_SIZE, async (id) => {
+        try {
+          items.push(await memoryAPI.get(projectId, id));
+        } catch {
+          // skip
+        }
+      });
+      downloadJson(items, "memories-export.json");
+      return;
+    }
     const selected = filteredMemories.filter((m) => selectedIds.has(m.id));
     downloadJson(selected, "memories-export.json");
   }
@@ -1315,28 +1423,69 @@ function MemoryBrowser() {
             </div>
           ) : (
             <>
-              <div className="mb-2 flex items-center gap-3">
+              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <button
                   type="button"
                   className="rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted"
                   onClick={() => {
-                    if (selectedIds.size === filteredMemories.length) {
+                    if (allCurrentPageSelected) {
+                      // Deselect everything (page + any cross-page selection).
                       setSelectedIds(new Set());
+                      setSelectionScope("page");
                     } else {
-                      setSelectedIds(new Set(filteredMemories.map((m) => m.id)));
+                      // Add current page IDs to existing selection.
+                      setSelectedIds((prev) => {
+                        const next = new Set(prev);
+                        for (const id of currentPageIds) next.add(id);
+                        return next;
+                      });
+                      setSelectionScope("page");
                     }
                   }}
                 >
-                  {selectedIds.size === filteredMemories.length && filteredMemories.length > 0
-                    ? "Deselect All"
-                    : "Select All"}
+                  {allCurrentPageSelected ? "Deselect Page" : "Select Page"}
                 </button>
+
                 {selectedIds.size > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {selectedIds.size} of {filteredMemories.length} selected
+                    {selectionScope === "all-matching"
+                      ? `${selectedIds.size} matching memories selected`
+                      : `${selectedIds.size} selected${total > currentPageIds.length ? ` (this page only)` : ""}`}
+                  </span>
+                )}
+
+                {!isSemanticSearch &&
+                  selectionScope === "page" &&
+                  allCurrentPageSelected &&
+                  total > currentPageIds.length && (
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-primary underline-offset-2 hover:underline disabled:opacity-50"
+                      disabled={selectingAllMatching}
+                      onClick={handleSelectAllMatching}
+                    >
+                      {selectingAllMatching
+                        ? "Loading…"
+                        : `Select all ${total} matching memories`}
+                    </button>
+                  )}
+
+                {selectionScope === "all-matching" && allMatchingTruncation && (
+                  <span className="text-xs text-amber-600 dark:text-amber-400">
+                    (capped at {allMatchingTruncation.shown} of {allMatchingTruncation.total})
                   </span>
                 )}
               </div>
+
+              {!isSemanticSearch && total > 0 && (
+                <Pagination
+                  offset={offset}
+                  limit={PAGE_SIZE}
+                  total={total}
+                  onPageChange={setOffset}
+                />
+              )}
+
               <div className="flex-1 space-y-3 overflow-y-auto">
                 {groupedMemories.topLevel.map((m) => (
                   <div key={m.id}>
@@ -1363,7 +1512,7 @@ function MemoryBrowser() {
                 ))}
               </div>
 
-              {/* Pagination (only for list mode, not semantic) */}
+              {/* Bottom pagination (only for list mode, not semantic) */}
               {!isSemanticSearch && total > 0 && (
                 <Pagination
                   offset={offset}

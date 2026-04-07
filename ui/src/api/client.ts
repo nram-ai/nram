@@ -222,6 +222,24 @@ export interface RecallRequest {
 export interface MemoryListParams {
   limit?: number;
   offset?: number;
+  /** AND semantics — memory must contain all listed tags */
+  tags?: string[];
+  /** RFC3339 or YYYY-MM-DD */
+  date_from?: string;
+  /** RFC3339 or YYYY-MM-DD; inclusive of the entire day when YYYY-MM-DD */
+  date_to?: string;
+  /** "true" → enriched only, "false" → not-enriched only, undefined → no filter */
+  enriched?: "true" | "false";
+  /** case-insensitive substring against the source column */
+  source?: string;
+  /** case-insensitive substring against the content column */
+  search?: string;
+}
+
+export interface ListIDsResponse {
+  ids: string[];
+  truncated: boolean;
+  total_matching: number;
 }
 
 export interface MemoryListResponse {
@@ -1061,18 +1079,48 @@ export interface WebhookTestResult {
 
 // --- Memory API (project-scoped) ---
 
+function memoryListSearchParams(params?: MemoryListParams): URLSearchParams {
+  const sp = new URLSearchParams();
+  if (!params) return sp;
+  if (params.limit !== undefined) sp.set("limit", String(params.limit));
+  if (params.offset !== undefined) sp.set("offset", String(params.offset));
+  if (params.tags && params.tags.length > 0) {
+    for (const t of params.tags) sp.append("tag", t);
+  }
+  if (params.date_from) sp.set("date_from", params.date_from);
+  if (params.date_to) sp.set("date_to", params.date_to);
+  if (params.enriched) sp.set("enriched", params.enriched);
+  if (params.source) sp.set("source", params.source);
+  if (params.search) sp.set("search", params.search);
+  return sp;
+}
+
+function buildMemoryListQuery(params?: MemoryListParams): string {
+  return memoryListSearchParams(params).toString();
+}
+
 export const memoryAPI = {
   store: (projectId: string, data: StoreMemoryRequest) =>
     request<StoredMemory>("POST", `/projects/${projectId}/memories`, data),
 
   list: (projectId: string, params?: MemoryListParams) => {
-    const sp = new URLSearchParams();
-    if (params?.limit !== undefined) sp.set("limit", String(params.limit));
-    if (params?.offset !== undefined) sp.set("offset", String(params.offset));
-    const qs = sp.toString();
+    const qs = buildMemoryListQuery(params);
     return request<MemoryListResponse>(
       "GET",
       `/projects/${projectId}/memories${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  listIDs: (
+    projectId: string,
+    params?: MemoryListParams & { max?: number },
+  ) => {
+    const sp = memoryListSearchParams(params);
+    if (params?.max !== undefined) sp.set("max", String(params.max));
+    const qs = sp.toString();
+    return request<ListIDsResponse>(
+      "GET",
+      `/projects/${projectId}/memories/ids${qs ? `?${qs}` : ""}`,
     );
   },
 

@@ -155,19 +155,128 @@ func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Mem
 	return result, nil
 }
 
-// ListByNamespace returns memories in a namespace, paginated, ordered by created_at DESC.
-// Soft-deleted records are excluded.
-func (r *MemoryRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error) {
-	query := selectMemoryColumns + ` FROM memories
-		WHERE namespace_id = ? AND deleted_at IS NULL
-		ORDER BY created_at DESC LIMIT ? OFFSET ?`
-	if r.db.Backend() == BackendPostgres {
-		query = selectMemoryColumns + ` FROM memories
-			WHERE namespace_id = $1 AND deleted_at IS NULL
-			ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+// MemoryListFilters narrows a memory listing. All fields are optional; the
+// zero value means "no filter on this dimension". Tag matching uses AND
+// semantics — a memory must contain ALL listed tags. Source and Search are
+// case-insensitive substring matches against the source and content columns
+// respectively. Tag SQL is backend-specific because SQLite stores tags as a
+// JSON-encoded TEXT column and Postgres stores them as TEXT[].
+type MemoryListFilters struct {
+	Tags     []string
+	DateFrom *time.Time
+	DateTo   *time.Time
+	// Enriched is a tri-state filter: nil = no filter, *true = enriched only,
+	// *false = not-enriched only.
+	Enriched *bool
+	Source   string
+	Search   string
+}
+
+// IsZero reports whether no filter dimensions are active.
+func (f MemoryListFilters) IsZero() bool {
+	return len(f.Tags) == 0 && f.DateFrom == nil && f.DateTo == nil &&
+		f.Enriched == nil && f.Source == "" && f.Search == ""
+}
+
+// whereBuilder accumulates WHERE clause fragments and their bind values while
+// generating backend-appropriate placeholders ($N for Postgres, ? for SQLite).
+type whereBuilder struct {
+	postgres bool
+	clauses  []string
+	args     []interface{}
+}
+
+func (w *whereBuilder) placeholder() string {
+	if w.postgres {
+		return fmt.Sprintf("$%d", len(w.args)+1)
+	}
+	return "?"
+}
+
+func (w *whereBuilder) add(clauseFmt string, value interface{}) {
+	w.clauses = append(w.clauses, fmt.Sprintf(clauseFmt, w.placeholder()))
+	w.args = append(w.args, value)
+}
+
+func (w *whereBuilder) where() string {
+	return strings.Join(w.clauses, " AND ")
+}
+
+// buildFilterWhere produces a WHERE clause + arg slice for the given filters,
+// always anchored on namespace_id and deleted_at IS NULL. The returned args
+// can be appended with limit/offset/etc. as needed.
+func (r *MemoryRepo) buildFilterWhere(namespaceID uuid.UUID, filters MemoryListFilters) (string, []interface{}) {
+	wb := &whereBuilder{postgres: r.db.Backend() == BackendPostgres}
+	wb.add("namespace_id = %s", namespaceID.String())
+	wb.clauses = append(wb.clauses, "deleted_at IS NULL")
+
+	// Tag filter — AND semantics.
+	if len(filters.Tags) > 0 {
+		if wb.postgres {
+			// Build ARRAY[$n, $n+1, ...]::text[] and use the @> contains operator.
+			placeholders := make([]string, len(filters.Tags))
+			for i, t := range filters.Tags {
+				placeholders[i] = wb.placeholder()
+				wb.args = append(wb.args, t)
+			}
+			wb.clauses = append(wb.clauses,
+				fmt.Sprintf("tags @> ARRAY[%s]::text[]", strings.Join(placeholders, ",")))
+		} else {
+			// SQLite: tags is a JSON-encoded TEXT column. Match each tag with a
+			// LIKE against the JSON string-quoted form.
+			for _, t := range filters.Tags {
+				wb.add(`tags LIKE %s ESCAPE '\'`, `%"`+escapeLike(t)+`"%`)
+			}
+		}
 	}
 
-	rows, err := r.db.Query(ctx, query, namespaceID.String(), limit, offset)
+	if filters.DateFrom != nil {
+		wb.add("created_at >= %s", filters.DateFrom.UTC().Format(time.RFC3339))
+	}
+	if filters.DateTo != nil {
+		wb.add("created_at < %s", filters.DateTo.UTC().Format(time.RFC3339))
+	}
+
+	if filters.Enriched != nil {
+		wb.add("enriched = %s", encodeBool(r.db.Backend(), *filters.Enriched))
+	}
+
+	if filters.Source != "" {
+		wb.add(`LOWER(COALESCE(source, '')) LIKE %s ESCAPE '\'`, "%"+strings.ToLower(escapeLike(filters.Source))+"%")
+	}
+
+	if filters.Search != "" {
+		wb.add(`LOWER(content) LIKE %s ESCAPE '\'`, "%"+strings.ToLower(escapeLike(filters.Search))+"%")
+	}
+
+	return wb.where(), wb.args
+}
+
+// ListByNamespace returns memories in a namespace, paginated, ordered by created_at DESC.
+// Soft-deleted records are excluded. This is a thin wrapper around
+// ListByNamespaceFiltered with no filters set.
+func (r *MemoryRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error) {
+	return r.ListByNamespaceFiltered(ctx, namespaceID, MemoryListFilters{}, limit, offset)
+}
+
+// ListByNamespaceFiltered returns memories in a namespace narrowed by the
+// given filters, paginated and ordered by created_at DESC. Soft-deleted
+// records are always excluded.
+func (r *MemoryRepo) ListByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	where, args := r.buildFilterWhere(namespaceID, filters)
+
+	limitPH := "?"
+	offsetPH := "?"
+	if r.db.Backend() == BackendPostgres {
+		limitPH = fmt.Sprintf("$%d", len(args)+1)
+		offsetPH = fmt.Sprintf("$%d", len(args)+2)
+	}
+	args = append(args, limit, offset)
+
+	query := selectMemoryColumns + ` FROM memories WHERE ` + where +
+		` ORDER BY created_at DESC LIMIT ` + limitPH + ` OFFSET ` + offsetPH
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("memory list by namespace: %w", err)
 	}
@@ -188,17 +297,66 @@ func (r *MemoryRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID,
 }
 
 // CountByNamespace returns the total number of non-deleted memories in a namespace.
+// Thin wrapper around CountByNamespaceFiltered with no filters set.
 func (r *MemoryRepo) CountByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error) {
-	query := `SELECT COUNT(*) FROM memories WHERE namespace_id = ? AND deleted_at IS NULL`
-	if r.db.Backend() == BackendPostgres {
-		query = `SELECT COUNT(*) FROM memories WHERE namespace_id = $1 AND deleted_at IS NULL`
-	}
-	row := r.db.QueryRow(ctx, query, namespaceID.String())
+	return r.CountByNamespaceFiltered(ctx, namespaceID, MemoryListFilters{})
+}
+
+// CountByNamespaceFiltered returns the count of non-deleted memories in a
+// namespace that match the given filters.
+func (r *MemoryRepo) CountByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters MemoryListFilters) (int, error) {
+	where, args := r.buildFilterWhere(namespaceID, filters)
+	query := `SELECT COUNT(*) FROM memories WHERE ` + where
+	row := r.db.QueryRow(ctx, query, args...)
 	var count int
 	if err := row.Scan(&count); err != nil {
 		return 0, fmt.Errorf("memory count by namespace: %w", err)
 	}
 	return count, nil
+}
+
+// ListIDsByNamespaceFiltered returns up to maxIDs memory IDs matching the
+// given filters, ordered by created_at DESC. Used by the admin UI to power
+// "select all matching" affordances. The cap exists to bound response size;
+// callers can detect truncation by comparing the returned length against the
+// total count from CountByNamespaceFiltered.
+func (r *MemoryRepo) ListIDsByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters MemoryListFilters, maxIDs int) ([]uuid.UUID, error) {
+	if maxIDs <= 0 {
+		return []uuid.UUID{}, nil
+	}
+	where, args := r.buildFilterWhere(namespaceID, filters)
+
+	limitPH := "?"
+	if r.db.Backend() == BackendPostgres {
+		limitPH = fmt.Sprintf("$%d", len(args)+1)
+	}
+	args = append(args, maxIDs)
+
+	query := `SELECT id FROM memories WHERE ` + where +
+		` ORDER BY created_at DESC LIMIT ` + limitPH
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory list ids by namespace: %w", err)
+	}
+	defer rows.Close()
+
+	result := []uuid.UUID{}
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, fmt.Errorf("memory list ids scan: %w", err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("memory list ids parse: %w", err)
+		}
+		result = append(result, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory list ids iteration: %w", err)
+	}
+	return result, nil
 }
 
 // Update updates all mutable fields of a memory and bumps updated_at.

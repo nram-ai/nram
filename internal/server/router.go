@@ -28,6 +28,7 @@ type Handlers struct {
 	// Project-scoped memory handlers
 	Store      http.HandlerFunc
 	List       http.HandlerFunc
+	ListIDs    http.HandlerFunc
 	Detail     http.HandlerFunc
 	Update     http.HandlerFunc
 	Delete     http.HandlerFunc
@@ -212,6 +213,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 
 			// Read operations — accessible to all authenticated roles including readonly.
 			r.Get("/", handler(handlers.List))
+			r.Get("/ids", handler(handlers.ListIDs))
 			r.Get("/{id}", handler(handlers.Detail))
 			r.Post("/get", handler(handlers.BatchGet))
 			r.Post("/recall", handler(handlers.Recall))

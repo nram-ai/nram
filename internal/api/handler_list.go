@@ -6,17 +6,22 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // MemoryLister abstracts read-only memory repository operations for the list
 // and detail handlers.
 type MemoryLister interface {
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
+	ListByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
 	CountByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
+	CountByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters) (int, error)
+	ListIDsByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, maxIDs int) ([]uuid.UUID, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
 }
 
@@ -31,9 +36,79 @@ type ParentIDFinder interface {
 }
 
 const (
-	defaultLimit = 50
-	maxLimit     = 200
+	defaultLimit       = 50
+	maxLimit           = 200
+	defaultMaxListIDs  = 10000
+	hardCapListIDs     = 50000
 )
+
+// parseMemoryFilters extracts filter parameters from a request URL. It accepts:
+//   - tag (repeatable, AND semantics): ?tag=foo&tag=bar
+//   - date_from / date_to (RFC3339 or YYYY-MM-DD)
+//   - enriched ("true" | "false"; absent or any other value = no filter)
+//   - source (case-insensitive substring)
+//   - search (case-insensitive substring against content)
+//
+// Returns an APIError on parse failure.
+func parseMemoryFilters(r *http.Request) (storage.MemoryListFilters, *APIError) {
+	q := r.URL.Query()
+	var filters storage.MemoryListFilters
+
+	if tags := q["tag"]; len(tags) > 0 {
+		// Drop empty entries to be lenient.
+		out := make([]string, 0, len(tags))
+		for _, t := range tags {
+			if t != "" {
+				out = append(out, t)
+			}
+		}
+		filters.Tags = out
+	}
+
+	if v := q.Get("date_from"); v != "" {
+		t, err := parseFilterDate(v)
+		if err != nil {
+			return filters, ErrBadRequest("invalid date_from: " + err.Error())
+		}
+		filters.DateFrom = &t
+	}
+	if v := q.Get("date_to"); v != "" {
+		t, err := parseFilterDate(v)
+		if err != nil {
+			return filters, ErrBadRequest("invalid date_to: " + err.Error())
+		}
+		// Make date_to inclusive of the entire day when only YYYY-MM-DD given.
+		if len(v) == 10 {
+			t = t.Add(24 * time.Hour)
+		}
+		filters.DateTo = &t
+	}
+
+	switch q.Get("enriched") {
+	case "true":
+		t := true
+		filters.Enriched = &t
+	case "false":
+		f := false
+		filters.Enriched = &f
+	}
+
+	filters.Source = q.Get("source")
+	filters.Search = q.Get("search")
+
+	return filters, nil
+}
+
+// parseFilterDate accepts both RFC3339 and YYYY-MM-DD formats.
+func parseFilterDate(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, errors.New("expected RFC3339 or YYYY-MM-DD")
+}
 
 // NewListHandler returns an http.HandlerFunc that serves
 // GET /v1/projects/{project_id}/memories with paginated results.
@@ -69,6 +144,12 @@ func NewListHandler(memRepo MemoryLister, projRepo ProjectGetter, lineage Parent
 			offset = parsed
 		}
 
+		filters, ferr := parseMemoryFilters(r)
+		if ferr != nil {
+			WriteError(w, ferr)
+			return
+		}
+
 		project, err := projRepo.GetByID(r.Context(), projectID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -79,13 +160,13 @@ func NewListHandler(memRepo MemoryLister, projRepo ProjectGetter, lineage Parent
 			return
 		}
 
-		total, err := memRepo.CountByNamespace(r.Context(), project.NamespaceID)
+		total, err := memRepo.CountByNamespaceFiltered(r.Context(), project.NamespaceID, filters)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to count memories"))
 			return
 		}
 
-		mems, err := memRepo.ListByNamespace(r.Context(), project.NamespaceID, limit, offset)
+		mems, err := memRepo.ListByNamespaceFiltered(r.Context(), project.NamespaceID, filters, limit, offset)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to list memories"))
 			return
@@ -175,5 +256,80 @@ func NewDetailHandler(memRepo MemoryLister, projRepo ProjectGetter, lineage Pare
 		}
 
 		writeJSON(w, http.StatusOK, mem)
+	}
+}
+
+// ListIDsResponse is the JSON envelope returned by the IDs endpoint.
+type ListIDsResponse struct {
+	IDs           []string `json:"ids"`
+	Truncated     bool     `json:"truncated"`
+	TotalMatching int      `json:"total_matching"`
+}
+
+// NewListIDsHandler returns an http.HandlerFunc that serves
+// GET /v1/projects/{project_id}/memories/ids returning the IDs of all
+// memories matching the given filters, capped at `max` (default 10000,
+// hard-capped at 50000). Used by the admin UI to power "select all matching"
+// across pages.
+func NewListIDsHandler(memRepo MemoryLister, projRepo ProjectGetter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectIDStr := chi.URLParam(r, "project_id")
+		projectID, err := uuid.Parse(projectIDStr)
+		if err != nil {
+			WriteError(w, ErrBadRequest("invalid project_id: must be a valid UUID"))
+			return
+		}
+
+		max := defaultMaxListIDs
+		if v := r.URL.Query().Get("max"); v != "" {
+			parsed, err := strconv.Atoi(v)
+			if err != nil || parsed < 0 {
+				WriteError(w, ErrBadRequest("max must be a non-negative integer"))
+				return
+			}
+			max = parsed
+		}
+		if max > hardCapListIDs {
+			max = hardCapListIDs
+		}
+
+		filters, ferr := parseMemoryFilters(r)
+		if ferr != nil {
+			WriteError(w, ferr)
+			return
+		}
+
+		project, err := projRepo.GetByID(r.Context(), projectID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				WriteError(w, ErrNotFound("project not found"))
+				return
+			}
+			WriteError(w, ErrInternal("failed to look up project"))
+			return
+		}
+
+		total, err := memRepo.CountByNamespaceFiltered(r.Context(), project.NamespaceID, filters)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to count memories"))
+			return
+		}
+
+		ids, err := memRepo.ListIDsByNamespaceFiltered(r.Context(), project.NamespaceID, filters, max)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to list memory ids"))
+			return
+		}
+
+		strs := make([]string, len(ids))
+		for i, id := range ids {
+			strs[i] = id.String()
+		}
+
+		writeJSON(w, http.StatusOK, ListIDsResponse{
+			IDs:           strs,
+			Truncated:     len(ids) < total,
+			TotalMatching: total,
+		})
 	}
 }

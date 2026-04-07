@@ -397,6 +397,277 @@ func TestMemoryRepo_ListByNamespace_EmptyNamespace(t *testing.T) {
 	})
 }
 
+// seedFilterMemories inserts a fixed set of memories used by the filter
+// tests in a deterministic order (alpha → beta → gamma → delta) so that
+// created_at-based assertions don't depend on map iteration order.
+func seedFilterMemories(t *testing.T, ctx context.Context, repo *MemoryRepo, nsID uuid.UUID) map[string]*model.Memory {
+	t.Helper()
+
+	srcA := "ingest-pipeline"
+	srcB := "manual-entry"
+
+	type seed struct {
+		label string
+		mem   *model.Memory
+	}
+	order := []seed{
+		{"alpha", &model.Memory{
+			NamespaceID: nsID,
+			Content:     "Alpha content about cats",
+			Source:      &srcA,
+			Tags:        []string{"animals", "cat"},
+			Confidence:  0.9, Importance: 0.5,
+			Enriched: true,
+		}},
+		{"beta", &model.Memory{
+			NamespaceID: nsID,
+			Content:     "Beta content about dogs",
+			Source:      &srcA,
+			Tags:        []string{"animals", "dog"},
+			Confidence:  0.8, Importance: 0.5,
+			Enriched: false,
+		}},
+		{"gamma", &model.Memory{
+			NamespaceID: nsID,
+			Content:     "Gamma content about birds",
+			Source:      &srcB,
+			Tags:        []string{"animals", "bird"},
+			Confidence:  0.7, Importance: 0.5,
+			Enriched: true,
+		}},
+		{"delta", &model.Memory{
+			NamespaceID: nsID,
+			Content:     "Delta content unrelated",
+			Source:      &srcB,
+			Tags:        []string{"misc"},
+			Confidence:  0.6, Importance: 0.5,
+			Enriched: false,
+		}},
+	}
+
+	mems := make(map[string]*model.Memory, len(order))
+	for _, s := range order {
+		if err := repo.Create(ctx, s.mem); err != nil {
+			t.Fatalf("failed to create memory %s: %v", s.label, err)
+		}
+		mems[s.label] = s.mem
+		// Stagger created_at to make ordering deterministic. The repo stores
+		// timestamps with second-level resolution, so sleep just over 1s.
+		time.Sleep(1100 * time.Millisecond)
+	}
+	return mems
+}
+
+func TestMemoryRepo_ListByNamespaceFiltered_Tags(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		seedFilterMemories(t, ctx, repo, nsID)
+
+		// Single-tag filter: animals → 3 matches
+		results, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Tags: []string{"animals"},
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("filter by single tag: %v", err)
+		}
+		if len(results) != 3 {
+			t.Fatalf("expected 3 animals, got %d", len(results))
+		}
+
+		// Multi-tag filter (AND): animals + dog → 1 match
+		results, err = repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Tags: []string{"animals", "dog"},
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("filter by multi tag: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 dog, got %d", len(results))
+		}
+		if results[0].Content != "Beta content about dogs" {
+			t.Fatalf("unexpected match: %q", results[0].Content)
+		}
+
+		// Tag with no matches
+		results, err = repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Tags: []string{"nonexistent"},
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("filter by missing tag: %v", err)
+		}
+		if len(results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(results))
+		}
+	})
+}
+
+func TestMemoryRepo_ListByNamespaceFiltered_Enriched(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		seedFilterMemories(t, ctx, repo, nsID)
+
+		yes, no := true, false
+		enriched, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Enriched: &yes,
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("enriched filter: %v", err)
+		}
+		if len(enriched) != 2 {
+			t.Fatalf("expected 2 enriched, got %d", len(enriched))
+		}
+
+		notEnriched, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Enriched: &no,
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("not-enriched filter: %v", err)
+		}
+		if len(notEnriched) != 2 {
+			t.Fatalf("expected 2 not-enriched, got %d", len(notEnriched))
+		}
+	})
+}
+
+func TestMemoryRepo_ListByNamespaceFiltered_Source(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		seedFilterMemories(t, ctx, repo, nsID)
+
+		results, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Source: "INGEST", // case-insensitive substring
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("source filter: %v", err)
+		}
+		if len(results) != 2 {
+			t.Fatalf("expected 2 ingest results, got %d", len(results))
+		}
+	})
+}
+
+func TestMemoryRepo_ListByNamespaceFiltered_Search(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		seedFilterMemories(t, ctx, repo, nsID)
+
+		results, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Search: "DOGS",
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("search filter: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 search result, got %d", len(results))
+		}
+		if results[0].Content != "Beta content about dogs" {
+			t.Fatalf("unexpected search match: %q", results[0].Content)
+		}
+	})
+}
+
+func TestMemoryRepo_ListByNamespaceFiltered_DateRange(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		mems := seedFilterMemories(t, ctx, repo, nsID)
+
+		// Filter to memories created at or after gamma's timestamp.
+		gammaTime := mems["gamma"].CreatedAt
+		results, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			DateFrom: &gammaTime,
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("date_from filter: %v", err)
+		}
+		// gamma + delta = 2
+		if len(results) != 2 {
+			t.Fatalf("expected 2 results from gamma onwards, got %d", len(results))
+		}
+	})
+}
+
+func TestMemoryRepo_CountByNamespaceFiltered_MatchesList(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		seedFilterMemories(t, ctx, repo, nsID)
+
+		filters := MemoryListFilters{Tags: []string{"animals"}}
+		listResults, err := repo.ListByNamespaceFiltered(ctx, nsID, filters, 100, 0)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		count, err := repo.CountByNamespaceFiltered(ctx, nsID, filters)
+		if err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if count != len(listResults) {
+			t.Fatalf("count %d != list length %d", count, len(listResults))
+		}
+		if count != 3 {
+			t.Fatalf("expected count=3, got %d", count)
+		}
+	})
+}
+
+func TestMemoryRepo_ListIDsByNamespaceFiltered_RespectsCap(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		seedFilterMemories(t, ctx, repo, nsID)
+
+		// Cap below total — should truncate.
+		ids, err := repo.ListIDsByNamespaceFiltered(ctx, nsID, MemoryListFilters{}, 2)
+		if err != nil {
+			t.Fatalf("list ids: %v", err)
+		}
+		if len(ids) != 2 {
+			t.Fatalf("expected 2 ids capped, got %d", len(ids))
+		}
+
+		// Cap above total — should return everything.
+		ids, err = repo.ListIDsByNamespaceFiltered(ctx, nsID, MemoryListFilters{}, 100)
+		if err != nil {
+			t.Fatalf("list ids unbounded: %v", err)
+		}
+		if len(ids) != 4 {
+			t.Fatalf("expected 4 ids, got %d", len(ids))
+		}
+
+		// With filter
+		ids, err = repo.ListIDsByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Tags: []string{"animals"},
+		}, 100)
+		if err != nil {
+			t.Fatalf("list ids filtered: %v", err)
+		}
+		if len(ids) != 3 {
+			t.Fatalf("expected 3 filtered ids, got %d", len(ids))
+		}
+
+		// Zero cap → empty
+		ids, err = repo.ListIDsByNamespaceFiltered(ctx, nsID, MemoryListFilters{}, 0)
+		if err != nil {
+			t.Fatalf("list ids zero cap: %v", err)
+		}
+		if len(ids) != 0 {
+			t.Fatalf("expected 0 ids with zero cap, got %d", len(ids))
+		}
+	})
+}
+
 func TestMemoryRepo_Update(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

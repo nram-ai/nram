@@ -12,17 +12,30 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- mock implementations for list/detail tests ---
 
 type mockMemoryLister struct {
-	listFn  func(ctx context.Context, nsID uuid.UUID, limit, offset int) ([]model.Memory, error)
-	countFn func(ctx context.Context, nsID uuid.UUID) (int, error)
-	getFn   func(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	listFn       func(ctx context.Context, nsID uuid.UUID, limit, offset int) ([]model.Memory, error)
+	countFn      func(ctx context.Context, nsID uuid.UUID) (int, error)
+	listIDsFn    func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, max int) ([]uuid.UUID, error)
+	getFn        func(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	lastFilters  storage.MemoryListFilters
+	filtersSeen  bool
 }
 
 func (m *mockMemoryLister) ListByNamespace(ctx context.Context, nsID uuid.UUID, limit, offset int) ([]model.Memory, error) {
+	if m.listFn != nil {
+		return m.listFn(ctx, nsID, limit, offset)
+	}
+	return nil, nil
+}
+
+func (m *mockMemoryLister) ListByNamespaceFiltered(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	m.lastFilters = filters
+	m.filtersSeen = true
 	if m.listFn != nil {
 		return m.listFn(ctx, nsID, limit, offset)
 	}
@@ -34,6 +47,22 @@ func (m *mockMemoryLister) CountByNamespace(ctx context.Context, nsID uuid.UUID)
 		return m.countFn(ctx, nsID)
 	}
 	return 0, nil
+}
+
+func (m *mockMemoryLister) CountByNamespaceFiltered(ctx context.Context, nsID uuid.UUID, _ storage.MemoryListFilters) (int, error) {
+	if m.countFn != nil {
+		return m.countFn(ctx, nsID)
+	}
+	return 0, nil
+}
+
+func (m *mockMemoryLister) ListIDsByNamespaceFiltered(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, max int) ([]uuid.UUID, error) {
+	m.lastFilters = filters
+	m.filtersSeen = true
+	if m.listIDsFn != nil {
+		return m.listIDsFn(ctx, nsID, filters, max)
+	}
+	return nil, nil
 }
 
 func (m *mockMemoryLister) GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error) {
@@ -421,5 +450,136 @@ func TestDetailHandler_InvalidID(t *testing.T) {
 	}
 	if env.Error == nil || env.Error.Code != "bad_request" {
 		t.Errorf("expected bad_request, got %+v", env.Error)
+	}
+}
+
+// --- filter parsing + IDs handler ---
+
+func TestListHandler_FiltersForwardedToRepo(t *testing.T) {
+	nsID := uuid.New()
+	projectID := uuid.New()
+	proj := &model.Project{ID: projectID, Slug: "test", NamespaceID: nsID}
+
+	memRepo := &mockMemoryLister{
+		countFn: func(_ context.Context, _ uuid.UUID) (int, error) { return 0, nil },
+		listFn: func(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
+			return nil, nil
+		},
+	}
+	router := newListRouter(memRepo, &mockProjectGetter{project: proj})
+
+	w := doListRequest(router, projectID.String(),
+		"tag=alpha&tag=beta&date_from=2026-01-01&date_to=2026-12-31&enriched=true&source=ingest&search=hello")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if !memRepo.filtersSeen {
+		t.Fatal("expected filtered repo methods to be called")
+	}
+	got := memRepo.lastFilters
+	if len(got.Tags) != 2 || got.Tags[0] != "alpha" || got.Tags[1] != "beta" {
+		t.Errorf("tags = %v", got.Tags)
+	}
+	if got.DateFrom == nil || got.DateFrom.Year() != 2026 || got.DateFrom.Month() != 1 {
+		t.Errorf("date_from = %v", got.DateFrom)
+	}
+	if got.DateTo == nil {
+		t.Errorf("date_to = nil")
+	}
+	if got.Enriched == nil || !*got.Enriched {
+		t.Errorf("expected Enriched=*true, got %+v", got.Enriched)
+	}
+	if got.Source != "ingest" {
+		t.Errorf("source = %q", got.Source)
+	}
+	if got.Search != "hello" {
+		t.Errorf("search = %q", got.Search)
+	}
+}
+
+func TestListHandler_InvalidDateFilter(t *testing.T) {
+	projectID := uuid.New()
+	router := newListRouter(&mockMemoryLister{}, &mockProjectGetter{
+		project: &model.Project{ID: projectID, NamespaceID: uuid.New()},
+	})
+
+	w := doListRequest(router, projectID.String(), "date_from=not-a-date")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestListIDsHandler_Success(t *testing.T) {
+	nsID := uuid.New()
+	projectID := uuid.New()
+	proj := &model.Project{ID: projectID, Slug: "test", NamespaceID: nsID}
+
+	wantIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	memRepo := &mockMemoryLister{
+		countFn: func(_ context.Context, _ uuid.UUID) (int, error) { return 5, nil },
+		listIDsFn: func(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters, max int) ([]uuid.UUID, error) {
+			if max != defaultMaxListIDs {
+				t.Errorf("expected default max %d, got %d", defaultMaxListIDs, max)
+			}
+			return wantIDs, nil
+		},
+	}
+
+	r := chi.NewRouter()
+	r.Get("/v1/projects/{project_id}/memories/ids", NewListIDsHandler(memRepo, &mockProjectGetter{project: proj}))
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/projects/"+projectID.String()+"/memories/ids?tag=foo", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp ListIDsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.IDs) != 3 {
+		t.Errorf("expected 3 ids, got %d", len(resp.IDs))
+	}
+	if !resp.Truncated {
+		t.Errorf("expected truncated=true (3 ids of 5 total)")
+	}
+	if resp.TotalMatching != 5 {
+		t.Errorf("expected total_matching=5, got %d", resp.TotalMatching)
+	}
+	if !memRepo.filtersSeen || len(memRepo.lastFilters.Tags) != 1 {
+		t.Errorf("expected tag filter forwarded; got %+v", memRepo.lastFilters)
+	}
+}
+
+func TestListIDsHandler_HonorsHardCap(t *testing.T) {
+	nsID := uuid.New()
+	projectID := uuid.New()
+	proj := &model.Project{ID: projectID, Slug: "test", NamespaceID: nsID}
+
+	memRepo := &mockMemoryLister{
+		countFn: func(_ context.Context, _ uuid.UUID) (int, error) { return 0, nil },
+		listIDsFn: func(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters, max int) ([]uuid.UUID, error) {
+			if max != hardCapListIDs {
+				t.Errorf("expected hard cap %d, got %d", hardCapListIDs, max)
+			}
+			return nil, nil
+		},
+	}
+
+	r := chi.NewRouter()
+	r.Get("/v1/projects/{project_id}/memories/ids", NewListIDsHandler(memRepo, &mockProjectGetter{project: proj}))
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/projects/"+projectID.String()+"/memories/ids?max=999999", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }

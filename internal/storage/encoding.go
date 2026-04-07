@@ -50,6 +50,16 @@ func encodeBool(backend string, val bool) interface{} {
 	return 0
 }
 
+// escapeLike escapes the SQL LIKE wildcards %, _ and the escape backslash so
+// that user-supplied substrings match literally. Pair with `ESCAPE '\'` in
+// the LIKE clause for both SQLite and Postgres.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
 // uuidsToStrings converts a UUID slice to a string slice.
 func uuidsToStrings(ids []uuid.UUID) []string {
 	out := make([]string, len(ids))
