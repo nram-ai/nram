@@ -157,10 +157,5 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		},
 	}
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(resp, newListReducer(resp))
 }

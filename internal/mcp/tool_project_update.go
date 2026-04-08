@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -98,14 +97,9 @@ func handleProjectUpdate(ctx context.Context, s *Server, request mcp.CallToolReq
 		return mcp.NewToolResultError(fmt.Sprintf("update failed: %v", err)), nil
 	}
 
-	out, err := json.Marshal(map[string]interface{}{
+	return wrapToolResult(map[string]interface{}{
 		"project":     project.Slug,
 		"name":        project.Name,
 		"description": project.Description,
-	})
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	}, nil)
 }

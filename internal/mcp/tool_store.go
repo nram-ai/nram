@@ -132,12 +132,7 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 		"project_id": project.ID.String(),
 	})
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(resp, nil)
 }
 
 func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -214,12 +209,7 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		})
 	}
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(resp, nil)
 }
 
 // resolveOrCreateProject looks up an existing project by slug under the user's

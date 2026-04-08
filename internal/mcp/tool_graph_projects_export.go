@@ -241,12 +241,7 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		IncludeHistory: includeHistory,
 	}
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(resp, newGraphReducer(resp))
 }
 
 func handleMemoryProjects(ctx context.Context, s *Server, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -281,12 +276,7 @@ func handleMemoryProjects(ctx context.Context, s *Server, _ mcp.CallToolRequest)
 		})
 	}
 
-	out, err := json.Marshal(items)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(items, nil)
 }
 
 func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -338,7 +328,7 @@ func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequ
 		if err := exportSvc.ExportNDJSON(ctx, req, &buf); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("export failed: %v", err)), nil
 		}
-		return mcp.NewToolResultText(buf.String()), nil
+		return wrapToolResultText(buf.String())
 	}
 
 	req := &service.ExportRequest{
@@ -350,10 +340,5 @@ func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError(fmt.Sprintf("export failed: %v", err)), nil
 	}
 
-	out, err := json.Marshal(data)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(data, newExportReducer(data))
 }

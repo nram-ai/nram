@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -78,10 +77,5 @@ func handleProjectDelete(ctx context.Context, s *Server, request mcp.CallToolReq
 		return mcp.NewToolResultError(fmt.Sprintf("delete failed: %v", err)), nil
 	}
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(resp, nil)
 }

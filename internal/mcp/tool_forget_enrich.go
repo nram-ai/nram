@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -119,12 +118,7 @@ func handleMemoryForget(ctx context.Context, s *Server, request mcp.CallToolRequ
 		"deleted":    fmt.Sprintf("%d", resp.Deleted),
 	})
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(resp, nil)
 }
 
 func handleMemoryEnrich(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -191,10 +185,5 @@ func handleMemoryEnrich(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError(fmt.Sprintf("enrich failed: %v", err)), nil
 	}
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(resp, nil)
 }

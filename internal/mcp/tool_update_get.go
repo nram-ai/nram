@@ -141,12 +141,7 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		"project_id": project.ID.String(),
 	})
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(resp, nil)
 }
 
 func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -207,10 +202,5 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 		return mcp.NewToolResultError(fmt.Sprintf("batch get failed: %v", err)), nil
 	}
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(out)), nil
+	return wrapToolResult(resp, nil)
 }
