@@ -1,27 +1,28 @@
-# nram — Neural RAM
+# nram - Neural RAM
 
 > **Work in Progress:** This project is under active development. Some features may be incomplete, unstable, or subject to change. Contributions and feedback are welcome, but expect rough edges as things continue to evolve.
 
 Persistent memory layer for AI agents. Store, recall, and enrich memories with vector embeddings, knowledge graphs, and a built-in admin UI.
 
-nram provides a self-hosted server that any AI agent can use to persist long-term memory across conversations. It supports semantic search via vector embeddings, automatic fact and entity extraction, a knowledge graph, and multi-tenant organization management — all accessible through a REST API, MCP (Model Context Protocol), or the built-in web UI.
+nram provides a self-hosted server that any AI agent can use to persist long-term memory across conversations. It supports semantic search via vector embeddings, automatic fact and entity extraction, a knowledge graph, and multi-tenant organization management - all accessible through a REST API, MCP (Model Context Protocol), or the built-in web UI.
 
 ## Features
 
-- **Persistent Memory** — Store, retrieve, update, and soft-delete memories with tags, metadata, TTL, and supersession tracking
-- **Semantic Search** — Vector embedding support via pgvector (PostgreSQL) or Qdrant for similarity-based recall
-- **Enrichment Pipeline** — Background workers extract facts, entities, and relationships from stored memories using configurable LLM providers
-- **Knowledge Graph** — Automatically constructed from enriched entities and relationships with multi-hop traversal (PostgreSQL)
-- **Model Context Protocol (MCP)** — Full MCP server at `/mcp` with tools for store, recall, batch, enrich, graph, and export
-- **OAuth 2.0** — Authorization Code + PKCE, dynamic client registration (RFC 7591), resource indicators (RFC 8707), discovery metadata (RFC 8414, RFC 9728)
-- **RBAC** — Five roles (administrator, org_owner, member, readonly, service) enforced across REST and MCP
-- **Multi-Tenancy** — Organizations, hierarchical namespaces, and projects for memory isolation
-- **Real-Time Events** — Server-Sent Events (SSE) with scope filtering and reconnection replay; webhook delivery with HMAC-SHA256 signatures
-- **Admin UI** — React-based dashboard for managing organizations, users, projects, providers, enrichment, OAuth clients, and analytics
-- **Dual Database Support** — SQLite (zero-config default) or PostgreSQL (with pgvector, LISTEN/NOTIFY, and full enrichment)
-- **LLM Provider Agnostic** — OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint
-- **Import/Export** — JSON and NDJSON formats for full project snapshots
-- **Prometheus Metrics** — `/metrics` endpoint for monitoring
+- **Persistent Memory** - Store, retrieve, update, and soft-delete memories with tags, metadata, TTL, and supersession tracking
+- **Semantic Search** - Vector embedding support via pgvector (PostgreSQL), pure-Go HNSW (SQLite), or Qdrant for similarity-based recall
+- **Enrichment Pipeline** - Background workers extract facts, entities, and relationships from stored memories using configurable LLM providers
+- **Knowledge Graph** - Automatically constructed from enriched entities and relationships with multi-hop traversal
+- **Dreaming** - Offline background process that consolidates entities, resolves contradictions, deduplicates, prunes stale data, infers transitive relationships, and recalculates weights
+- **Model Context Protocol (MCP)** - Full MCP server at `/mcp` with tools for store, recall, batch, enrich, graph, and export
+- **OAuth 2.0** - Authorization Code + PKCE, dynamic client registration (RFC 7591), resource indicators (RFC 8707), discovery metadata (RFC 8414, RFC 9728)
+- **RBAC** - Five roles (administrator, org_owner, member, readonly, service) enforced across REST and MCP
+- **Multi-Tenancy** - Organizations, hierarchical namespaces, and projects for memory isolation
+- **Real-Time Events** - Server-Sent Events (SSE) with scope filtering and reconnection replay; webhook delivery with HMAC-SHA256 signatures
+- **Admin UI** - React-based dashboard for managing organizations, users, projects, providers, enrichment, OAuth clients, and analytics
+- **Dual Database Support** - SQLite (zero-config default) or PostgreSQL (with pgvector and LISTEN/NOTIFY); both support enrichment and knowledge graph
+- **LLM Provider Agnostic** - OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint
+- **Import/Export** - JSON and NDJSON formats for full project snapshots
+- **Prometheus Metrics** - `/metrics` endpoint for monitoring
 
 ## Quick Start
 
@@ -90,14 +91,14 @@ embed:
   key: ""                    # API key
   model: ""                  # Model name
 
-# Fact extraction provider (optional, PostgreSQL only)
+# Fact extraction provider (optional)
 fact:
   provider: ""
   url: ""
   key: ""
   model: ""
 
-# Entity extraction provider (optional, PostgreSQL only)
+# Entity extraction provider (optional)
 entity:
   provider: ""
   url: ""
@@ -107,6 +108,13 @@ entity:
 # External vector database (optional)
 qdrant:
   addr: ""                   # gRPC address, e.g. localhost:6334
+
+# Pure-Go HNSW vector index settings (SQLite backend)
+hnsw:
+  m: 16                      # Max neighbors per layer
+  ef_construction: 200       # Construction candidate pool size
+  ef_search: 50              # Search candidate pool size
+  max_loaded_indexes: 64     # Max in-memory indexes before LRU eviction
 ```
 
 YAML values support environment variable interpolation: `${VAR_NAME:-default}`.
@@ -122,6 +130,7 @@ YAML values support environment variable interpolation: `${VAR_NAME:-default}`.
 | `NRAM_ADMIN_PASS` | Initial admin password |
 | `NRAM_EMBED_PROVIDER` | Embedding provider name |
 | `NRAM_EMBED_URL` | Embedding provider base URL |
+| `NRAM_EMBED_KEY` | Embedding provider API key |
 | `NRAM_EMBED_MODEL` | Embedding model name |
 | `NRAM_FACT_PROVIDER` | Fact extraction provider |
 | `NRAM_FACT_KEY` | Fact extraction API key |
@@ -136,7 +145,7 @@ YAML values support environment variable interpolation: `${VAR_NAME:-default}`.
 
 No configuration required. Creates `nram.db` in the working directory with WAL mode, foreign keys, and FTS5 full-text search.
 
-SQLite mode disables enrichment pipeline features (fact/entity extraction, knowledge graph) since these require pgvector.
+SQLite mode uses a pure-Go HNSW index for vector search and FTS5 for full-text search. Enrichment, knowledge graph, and all MCP tools are fully supported.
 
 ### PostgreSQL
 
@@ -146,7 +155,7 @@ Set `DATABASE_URL` or `database.url` in your config file:
 DATABASE_URL=postgres://nram:password@localhost:5432/nram ./bin/nram
 ```
 
-PostgreSQL enables the full feature set including pgvector for semantic search, LISTEN/NOTIFY for multi-instance event propagation, and the enrichment pipeline.
+PostgreSQL enables pgvector for semantic search and LISTEN/NOTIFY for multi-instance event propagation.
 
 ### Qdrant (Optional)
 
@@ -175,8 +184,8 @@ Full OpenAPI 3.1.0 specification available at [`docs/openapi.yaml`](docs/openapi
 
 All API requests require authentication via one of:
 
-- **Bearer token** — JWT obtained from `/v1/auth/login` or OAuth flow
-- **API key** — Generated per-user via `/v1/me/api-keys`, sent as `Authorization: Bearer <key>`
+- **Bearer token** - JWT obtained from `/v1/auth/login` or OAuth flow
+- **API key** - Generated per-user via `/v1/me/api-keys`, sent as `Authorization: Bearer <key>`
 
 ### Core Endpoints
 
@@ -217,13 +226,15 @@ The MCP server is available at `POST /mcp` using Streamable HTTP transport.
 | `memory_store_batch` | Batch store memories |
 | `memory_update` | Update a memory |
 | `memory_get` | Retrieve a memory by ID |
+| `memory_list` | List memories with filtering |
 | `memory_recall` | Semantic search |
 | `memory_forget` | Soft-delete a memory |
-| `memory_enrich` | Trigger enrichment (PostgreSQL) |
-| `memory_graph` | Knowledge graph traversal (PostgreSQL) |
+| `memory_enrich` | Trigger enrichment |
+| `memory_graph` | Knowledge graph traversal |
 | `memory_projects` | List projects |
+| `memory_update_project` | Update a project |
+| `memory_delete_project` | Delete a project |
 | `memory_export` | Export project data |
-| `memory_import` | Import project data |
 
 **Resources:**
 
@@ -255,6 +266,7 @@ internal/
   api/               HTTP handlers
   auth/              OAuth 2.0, JWT, RBAC
   config/            Configuration loading
+  dreaming/          Offline consolidation, dedup, pruning, and inference
   enrichment/        Background enrichment workers
   events/            Event bus, SSE, webhooks
   mcp/               MCP server and tool handlers
