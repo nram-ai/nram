@@ -1,5 +1,7 @@
 # nram — Neural RAM
 
+> **Work in Progress:** This project is under active development. Some features may be incomplete, unstable, or subject to change. Contributions and feedback are welcome, but expect rough edges as things continue to evolve.
+
 Persistent memory layer for AI agents. Store, recall, and enrich memories with vector embeddings, knowledge graphs, and a built-in admin UI.
 
 nram provides a self-hosted server that any AI agent can use to persist long-term memory across conversations. It supports semantic search via vector embeddings, automatic fact and entity extraction, a knowledge graph, and multi-tenant organization management — all accessible through a REST API, MCP (Model Context Protocol), or the built-in web UI.
