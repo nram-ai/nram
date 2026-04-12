@@ -46,7 +46,7 @@ func TestWrapToolResultUnderBudget(t *testing.T) {
 }
 
 func TestWrapToolResultHardTruncationWhenNoReducer(t *testing.T) {
-	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "100") // 400 byte budget
+	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "100") // 200 byte budget
 	big := strings.Repeat("x", 5000)
 	res, err := wrapToolResult(map[string]string{"data": big}, nil)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestWrapToolResultHardTruncationWhenNoReducer(t *testing.T) {
 }
 
 func TestWrapToolResultUsesReducer(t *testing.T) {
-	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "200") // 800 byte budget
+	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400") // 800 byte budget
 	// Build a recall response that will overflow.
 	mems := make([]service.RecallResult, 50)
 	for i := range mems {
@@ -106,7 +106,7 @@ func TestWrapToolResultUsesReducer(t *testing.T) {
 }
 
 func TestNewListReducerProducesValidPagination(t *testing.T) {
-	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "200")
+	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400") // 800 byte budget
 	items := make([]listMemoryItem, 100)
 	for i := range items {
 		items[i] = listMemoryItem{

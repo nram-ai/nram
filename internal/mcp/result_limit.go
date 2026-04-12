@@ -15,11 +15,14 @@ import (
 // minimum of those ceilings minus a safety margin so that JSON-RPC envelope,
 // content-block framing, and tokenizer drift cannot push us over the line.
 //
-// 22,000 tokens × 4 chars/token ≈ 88 KB. Operators running clients with a
-// raised MAX_MCP_OUTPUT_TOKENS can override via NRAM_MCP_MAX_RESULT_TOKENS.
+// 22,000 tokens × 2 chars/token ≈ 44 KB. Structured JSON (short keys, UUIDs,
+// timestamps) tokenizes at ~2–3 chars/token, well below the 4 chars/token of
+// English prose. The conservative estimate ensures the reducer fires before
+// MCP clients reject the result. Operators running clients with a raised
+// MAX_MCP_OUTPUT_TOKENS can override via NRAM_MCP_MAX_RESULT_TOKENS.
 const (
 	defaultMaxResultTokens = 22000
-	charsPerTokenEstimate  = 4
+	charsPerTokenEstimate  = 2
 	maxReducerIterations   = 32
 	truncationSuffix       = "... [TRUNCATED: response exceeded MCP token budget; use pagination, narrower query, or REST API for full data]"
 )

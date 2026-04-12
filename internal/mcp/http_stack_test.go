@@ -3007,6 +3007,10 @@ func TestHTTPStack_MCP_ConcurrentStoresFromDifferentUsers(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHTTPStack_MCP_LargeContent(t *testing.T) {
+	// Raise the MCP result budget so that the 50KB content round-trips
+	// without triggering the server-side truncation.
+	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "50000")
+
 	userA := uuid.New()
 	nsA := uuid.New()
 	projA := uuid.New()
