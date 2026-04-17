@@ -422,7 +422,8 @@ func (m *DataMigrator) migrateNamespaces(ctx context.Context) error {
 			}
 			pgParent = parentID.String
 		}
-		if _, err := stmt.ExecContext(ctx, id, name, slug, kind, pgParent, path, depth, metadata, createdAt, updatedAt); err != nil {
+		if _, err := stmt.ExecContext(ctx, id, name, slug, kind, pgParent, path, depth,
+			sanitizeJSONB(metadata, "{}"), createdAt, updatedAt); err != nil {
 			return fmt.Errorf("insert namespace %s: %w", id, err)
 		}
 		m.markInserted("namespaces", id)
@@ -465,7 +466,8 @@ func (m *DataMigrator) migrateOrganizations(ctx context.Context) error {
 			m.skipOrphan("organizations", "namespace_id")
 			continue
 		}
-		if _, err := stmt.ExecContext(ctx, id, nsID, name, slug, settings, createdAt, updatedAt); err != nil {
+		if _, err := stmt.ExecContext(ctx, id, nsID, name, slug,
+			sanitizeJSONB(settings, "{}"), createdAt, updatedAt); err != nil {
 			return fmt.Errorf("insert org %s: %w", id, err)
 		}
 		m.markInserted("organizations", id)
@@ -523,7 +525,7 @@ func (m *DataMigrator) migrateUsers(ctx context.Context) error {
 		}
 		if _, err := stmt.ExecContext(ctx, id, email, displayName,
 			nullStringToInterface(passwordHash),
-			orgID, nsID, role, settings, createdAt, updatedAt,
+			orgID, nsID, role, sanitizeJSONB(settings, "{}"), createdAt, updatedAt,
 			nullStringToInterface(lastLogin),
 			nullStringToInterface(disabledAt),
 		); err != nil {
@@ -642,7 +644,7 @@ func (m *DataMigrator) migrateProjects(ctx context.Context) error {
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx, id, nsID, ownerNsID, name, slug, description,
-			pgTags, settings, createdAt, updatedAt); err != nil {
+			pgTags, sanitizeJSONB(settings, "{}"), createdAt, updatedAt); err != nil {
 			return fmt.Errorf("insert project %s: %w", id, err)
 		}
 		m.markInserted("projects", id)
@@ -690,7 +692,7 @@ func (m *DataMigrator) migrateSettings(ctx context.Context) error {
 			m.skipOrphan("settings", "updated_by")
 			continue
 		}
-		if _, err := stmt.ExecContext(ctx, key, value, scope,
+		if _, err := stmt.ExecContext(ctx, key, sanitizeJSONB(value, "null"), scope,
 			nullStringToInterface(updatedBy), updatedAt); err != nil {
 			return fmt.Errorf("insert setting %s/%s: %w", key, scope, err)
 		}
@@ -819,7 +821,7 @@ func (m *DataMigrator) migrateMemories(ctx context.Context) error {
 			nullStringToInterface(lastAccessed),
 			nullStringToInterface(expiresAt),
 			pgEnriched,
-			metadata, createdAt, updatedAt,
+			sanitizeJSONB(metadata, "{}"), createdAt, updatedAt,
 			nullStringToInterface(deletedAt),
 			nullStringToInterface(purgeAfter),
 		); err != nil {
@@ -1013,7 +1015,8 @@ func (m *DataMigrator) migrateEntities(ctx context.Context) error {
 		if _, err := stmt.ExecContext(ctx,
 			id, nsID, name, canonical, entityType,
 			nullInt64ToInterface(embeddingDim),
-			properties, mentionCount, metadata, createdAt, updatedAt,
+			sanitizeJSONB(properties, "{}"), mentionCount,
+			sanitizeJSONB(metadata, "{}"), createdAt, updatedAt,
 		); err != nil {
 			return fmt.Errorf("insert entity %s: %w", id, err)
 		}
@@ -1126,7 +1129,8 @@ func (m *DataMigrator) migrateRelationships(ctx context.Context) error {
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx,
-			id, nsID, srcID, tgtID, relation, weight, properties, validFrom,
+			id, nsID, srcID, tgtID, relation, weight,
+			sanitizeJSONB(properties, "{}"), validFrom,
 			nullStringToInterface(validUntil),
 			nullStringToInterface(sourceMemory),
 			createdAt,
@@ -1187,7 +1191,7 @@ func (m *DataMigrator) migrateMemoryLineage(ctx context.Context) error {
 		}
 		if _, err := stmt.ExecContext(ctx, id, namespaceID, memoryID,
 			nullStringToInterface(parentID),
-			relation, context, createdAt,
+			relation, sanitizeJSONB(context, "{}"), createdAt,
 		); err != nil {
 			return fmt.Errorf("insert memory_lineage %s: %w", id, err)
 		}
@@ -1254,7 +1258,8 @@ func (m *DataMigrator) migrateIngestionLog(ctx context.Context) error {
 		if _, err := stmt.ExecContext(ctx,
 			id, nsID, source,
 			nullStringToInterface(contentHash),
-			rawContent, pgMemoryIDs, status, pgErr, metadata, createdAt,
+			rawContent, pgMemoryIDs, status, pgErr,
+			sanitizeJSONB(metadata, "{}"), createdAt,
 		); err != nil {
 			return fmt.Errorf("insert ingestion_log %s: %w", id, err)
 		}
@@ -1326,7 +1331,8 @@ func (m *DataMigrator) migrateEnrichmentQueue(ctx context.Context) error {
 			id, memoryID, nsID, status, priority,
 			nullStringToInterface(claimedAt),
 			nullStringToInterface(claimedBy),
-			attempts, maxAttempts, pgLastError, stepsCompleted,
+			attempts, maxAttempts, pgLastError,
+			sanitizeJSONB(stepsCompleted, "[]"),
 			nullStringToInterface(completedAt),
 			createdAt, updatedAt,
 		); err != nil {
@@ -1871,16 +1877,12 @@ func (m *DataMigrator) migrateDreamCycles(ctx context.Context) error {
 			m.skipOrphan("dream_cycles", "namespace_id")
 			continue
 		}
-		pgPhaseSummary := "{}"
-		if phaseSummary.Valid && phaseSummary.String != "" {
-			pgPhaseSummary = phaseSummary.String
-		}
 		if _, err := stmt.ExecContext(ctx,
 			id, projectID, nsID, status,
 			nullStringToInterface(phase),
 			nullInt64ToInterface(tokensUsed),
 			nullInt64ToInterface(tokenBudget),
-			pgPhaseSummary,
+			sanitizeJSONB(phaseSummary.String, "{}"),
 			nullStringToInterface(errorText),
 			nullStringToInterface(startedAt),
 			nullStringToInterface(completedAt),
@@ -1947,17 +1949,10 @@ func (m *DataMigrator) migrateDreamLogs(ctx context.Context) error {
 			m.skipOrphan("dream_logs", "project_id")
 			continue
 		}
-		before := "{}"
-		if beforeState.Valid && beforeState.String != "" {
-			before = beforeState.String
-		}
-		after := "{}"
-		if afterState.Valid && afterState.String != "" {
-			after = afterState.String
-		}
 		if _, err := stmt.ExecContext(ctx,
 			id, cycleID, projectID, phase, operation, targetType, targetID,
-			before, after,
+			sanitizeJSONB(beforeState.String, "{}"),
+			sanitizeJSONB(afterState.String, "{}"),
 			nullStringToInterface(createdAt),
 		); err != nil {
 			return fmt.Errorf("insert dream_log %s: %w", id, err)
@@ -2016,12 +2011,9 @@ func (m *DataMigrator) migrateDreamLogSummaries(ctx context.Context) error {
 			m.skipOrphan("dream_log_summaries", "project_id")
 			continue
 		}
-		summaryJSON := "{}"
-		if summary.Valid && summary.String != "" {
-			summaryJSON = summary.String
-		}
 		if _, err := stmt.ExecContext(ctx,
-			id, cycleID, projectID, summaryJSON,
+			id, cycleID, projectID,
+			sanitizeJSONB(summary.String, "{}"),
 			nullStringToInterface(createdAt),
 		); err != nil {
 			return fmt.Errorf("insert dream_log_summary %s: %w", id, err)
@@ -2087,26 +2079,22 @@ func (m *DataMigrator) migrateDreamProjectDirty(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// migrateWebauthnCredentials copies the webauthn_credentials table. Skips rows
-// whose user_id references a missing user.
+// migrateWebauthnCredentials copies the webauthn_credentials table, converting
+// SQLite's INTEGER booleans to Postgres BOOL and its JSON-text transports
+// column to a Postgres TEXT[]. Skips rows whose user_id references a missing
+// user. No-op if the source predates the webauthn schema (SQLite migration 15).
 func (m *DataMigrator) migrateWebauthnCredentials(ctx context.Context) error {
-	// Probe the SQLite schema for column names; the v1 webauthn table was added
-	// in migration 15 with a minimal shape, and the production schema may differ.
-	// Use SELECT * to tolerate column-order drift between deployments; only the
-	// intersection of columns with Postgres is actually written below.
-	cols, err := sqliteColumnList(ctx, m.src, "webauthn_credentials")
-	if err != nil {
+	if ok, err := m.sourceTableExists(ctx, "webauthn_credentials"); err != nil {
 		return err
-	}
-	if len(cols) == 0 {
-		// Table not present on this source — nothing to migrate.
+	} else if !ok {
 		return nil
 	}
-
-	// Core columns we expect; missing ones become NULL.
-	selectList := strings.Join(cols, ", ")
-	rows, err := m.src.QueryContext(ctx,
-		fmt.Sprintf("SELECT %s FROM webauthn_credentials", selectList))
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT id, user_id, name, credential_id, public_key, aaguid, sign_count,
+		       transports, user_verified, backup_eligible, backup_state,
+		       attestation_type, created_at, last_used_at
+		FROM webauthn_credentials
+	`)
 	if err != nil {
 		return err
 	}
@@ -2118,138 +2106,53 @@ func (m *DataMigrator) migrateWebauthnCredentials(ctx context.Context) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	pgCols, err := postgresColumnList(ctx, m.dst, "webauthn_credentials")
-	if err != nil {
-		return err
-	}
-	commonCols := intersectCols(cols, pgCols)
-	if len(commonCols) == 0 {
-		return nil
-	}
-	placeholders := make([]string, len(commonCols))
-	for i := range commonCols {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-	}
-	insertSQL := fmt.Sprintf(
-		"INSERT INTO webauthn_credentials (%s) VALUES (%s) ON CONFLICT DO NOTHING",
-		strings.Join(commonCols, ", "), strings.Join(placeholders, ", "),
-	)
-	stmt, err := tx.PrepareContext(ctx, insertSQL)
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO webauthn_credentials (id, user_id, name, credential_id, public_key,
+		                                  aaguid, sign_count, transports, user_verified,
+		                                  backup_eligible, backup_state, attestation_type,
+		                                  created_at, last_used_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text[], $9, $10, $11, $12, $13, $14)
+		ON CONFLICT DO NOTHING
+	`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
-	// Map src column name → index in SELECT list.
-	srcIndex := make(map[string]int, len(cols))
-	for i, c := range cols {
-		srcIndex[c] = i
-	}
-
-	rawDest := make([]any, len(cols))
-	raw := make([]sql.NullString, len(cols))
-	for i := range raw {
-		rawDest[i] = &raw[i]
-	}
-
-	userIDIdx, hasUserID := srcIndex["user_id"]
-	idIdx, hasID := srcIndex["id"]
-
 	for rows.Next() {
-		if err := rows.Scan(rawDest...); err != nil {
+		var (
+			id, userID, name, credentialID, publicKey, aaguid, attestationType string
+			signCount                                                          int64
+			transportsJSON                                                     string
+			userVerified, backupEligible, backupState                          int
+			createdAt                                                          string
+			lastUsedAt                                                         sql.NullString
+		)
+		if err := rows.Scan(&id, &userID, &name, &credentialID, &publicKey, &aaguid,
+			&signCount, &transportsJSON, &userVerified, &backupEligible, &backupState,
+			&attestationType, &createdAt, &lastUsedAt); err != nil {
 			return err
 		}
-		if hasUserID {
-			userID := raw[userIDIdx].String
-			if !m.hasInserted("users", userID) {
-				m.skipOrphan("webauthn_credentials", "user_id")
-				continue
-			}
+		if !m.hasInserted("users", userID) {
+			m.skipOrphan("webauthn_credentials", "user_id")
+			continue
 		}
-		args := make([]any, len(commonCols))
-		for i, c := range commonCols {
-			idx := srcIndex[c]
-			if raw[idx].Valid {
-				args[i] = raw[idx].String
-			} else {
-				args[i] = nil
-			}
+		pgTransports, err := jsonArrayToPostgresTextArray(transportsJSON)
+		if err != nil {
+			return fmt.Errorf("convert transports for webauthn_credential %s: %w", id, err)
 		}
-		if _, err := stmt.ExecContext(ctx, args...); err != nil {
-			rowID := "?"
-			if hasID {
-				rowID = raw[idIdx].String
-			}
-			return fmt.Errorf("insert webauthn_credential %s: %w", rowID, err)
+		if _, err := stmt.ExecContext(ctx,
+			id, userID, name, credentialID, publicKey, aaguid, signCount,
+			pgTransports,
+			userVerified != 0, backupEligible != 0, backupState != 0,
+			attestationType, createdAt,
+			nullStringToInterface(lastUsedAt),
+		); err != nil {
+			return fmt.Errorf("insert webauthn_credential %s: %w", id, err)
 		}
-		if hasID {
-			m.markInserted("webauthn_credentials", raw[idIdx].String)
-		} else {
-			m.markInsertedAnon("webauthn_credentials")
-		}
+		m.markInserted("webauthn_credentials", id)
 	}
 	return tx.Commit()
-}
-
-// sqliteColumnList returns the ordered column names for a SQLite table, or nil
-// if the table does not exist.
-func sqliteColumnList(ctx context.Context, db *sql.DB, table string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", identQuoteSQLite(table)))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var cols []string
-	for rows.Next() {
-		// PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
-		var cid int
-		var name, ctype string
-		var notnull int
-		var dflt sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return nil, err
-		}
-		cols = append(cols, name)
-	}
-	return cols, rows.Err()
-}
-
-// postgresColumnList returns the ordered column names for a Postgres table in the current schema.
-func postgresColumnList(ctx context.Context, db *sql.DB, table string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT column_name FROM information_schema.columns
-		WHERE table_schema = current_schema() AND table_name = $1
-		ORDER BY ordinal_position
-	`, table)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var cols []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		cols = append(cols, name)
-	}
-	return cols, rows.Err()
-}
-
-// intersectCols returns the columns in `src` that also appear in `dst`, preserving src order.
-func intersectCols(src, dst []string) []string {
-	have := make(map[string]bool, len(dst))
-	for _, c := range dst {
-		have[c] = true
-	}
-	var out []string
-	for _, c := range src {
-		if have[c] {
-			out = append(out, c)
-		}
-	}
-	return out
 }
 
 // ── conversion helpers ────────────────────────────────────────────────────────
@@ -2301,6 +2204,28 @@ func nullInt64ToInterface(ni sql.NullInt64) interface{} {
 		return nil
 	}
 	return ni.Int64
+}
+
+// sanitizeJSONB returns a value safe to send to a Postgres JSONB column for a
+// SQLite TEXT value that is expected to contain JSON. Empty strings and
+// malformed JSON are replaced with fallback (e.g. "{}" for object columns,
+// "[]" for array columns). Null bytes are stripped because Postgres JSONB
+// rejects \u0000 even when validly JSON-escaped.
+//
+// Use this for metadata / properties / settings / context columns where the
+// schema has a JSON default. Use textToJSONB for nullable error columns where
+// plain text should be wrapped as a JSON string.
+func sanitizeJSONB(raw, fallback string) string {
+	s := strings.ReplaceAll(raw, "\x00", "")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fallback
+	}
+	var probe json.RawMessage
+	if err := json.Unmarshal([]byte(s), &probe); err != nil {
+		return fallback
+	}
+	return s
 }
 
 // textToJSONB converts a nullable SQLite TEXT column into a value safe to send

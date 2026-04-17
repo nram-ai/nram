@@ -54,6 +54,34 @@ func TestTextToJSONB_HandlesProblematicText(t *testing.T) {
 	}
 }
 
+func TestSanitizeJSONB(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		fallback string
+		want     string
+	}{
+		{"empty string falls back", "", "{}", "{}"},
+		{"whitespace falls back", "   \t\n  ", "{}", "{}"},
+		{"null bytes stripped and empty falls back", "\x00\x00", "{}", "{}"},
+		{"malformed json falls back", "not json", "{}", "{}"},
+		{"truncated object falls back", `{"a":`, "{}", "{}"},
+		{"valid object passes", `{"a":1}`, "{}", `{"a":1}`},
+		{"valid array passes", `[1,2,3]`, "[]", `[1,2,3]`},
+		{"valid with null bytes stripped", "\x00{\"a\":1}\x00", "{}", `{"a":1}`},
+		{"nested object", `{"a":{"b":[1,2]}}`, "{}", `{"a":{"b":[1,2]}}`},
+		{"array fallback for bad input", "garbage", "[]", "[]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeJSONB(tc.input, tc.fallback)
+			if got != tc.want {
+				t.Errorf("sanitizeJSONB(%q, %q) = %q, want %q", tc.input, tc.fallback, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTextToJSONB_NullAndEmpty(t *testing.T) {
 	v, err := textToJSONB(sql.NullString{Valid: false})
 	if err != nil || v != nil {
