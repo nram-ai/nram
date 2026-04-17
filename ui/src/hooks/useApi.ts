@@ -463,6 +463,25 @@ export function useTriggerMigration() {
   });
 }
 
+export function usePreflightDatabase() {
+  return useMutation({
+    mutationFn: (url: string) => adminAPI.preflightDatabase(url),
+  });
+}
+
+export function useResetDatabase() {
+  return useMutation({
+    mutationFn: ({ url, mode }: { url: string; mode: "truncate" | "drop_schema" }) =>
+      adminAPI.resetDatabase(url, mode),
+  });
+}
+
+export function useMigrationAudit() {
+  return useMutation({
+    mutationFn: () => adminAPI.migrationAudit(),
+  });
+}
+
 // --- Dreaming ---
 
 export function useDreamingStatus() {

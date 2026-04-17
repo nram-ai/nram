@@ -169,14 +169,30 @@ func (s *DatabaseAdminStore) TriggerMigration(ctx context.Context, url string) (
 	defer dm.Close()
 
 	if err := dm.Run(ctx); err != nil {
+		stats := dm.Stats()
 		return &api.MigrationStatus{
 			Status:  "error",
 			Message: fmt.Sprintf("migration failed: %v", err),
+			Stats: &api.MigrationStats{
+				Inserted:       stats.Inserted,
+				SkippedOrphans: stats.SkippedOrphans,
+				SkippedUpdates: stats.SkippedUpdates,
+			},
 		}, nil
 	}
 
+	stats := dm.Stats()
+	message := "all data successfully migrated to postgres"
+	if len(stats.SkippedOrphans) > 0 {
+		message = fmt.Sprintf("%s (orphan rows dropped: see stats.skipped_orphans)", message)
+	}
 	return &api.MigrationStatus{
 		Status:  "complete",
-		Message: "all data successfully migrated to postgres",
+		Message: message,
+		Stats: &api.MigrationStats{
+			Inserted:       stats.Inserted,
+			SkippedOrphans: stats.SkippedOrphans,
+			SkippedUpdates: stats.SkippedUpdates,
+		},
 	}, nil
 }

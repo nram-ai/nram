@@ -13,16 +13,25 @@ import (
 // --- mock DatabaseAdminStore ---
 
 type mockDatabaseAdminStore struct {
-	info      *DatabaseInfo
-	infoErr   error
-	testRes   *ConnectionTestResult
-	testErr   error
+	info       *DatabaseInfo
+	infoErr    error
+	testRes    *ConnectionTestResult
+	testErr    error
 	migrateRes *MigrationStatus
 	migrateErr error
+	preflightRes *PreflightReport
+	preflightErr error
+	resetRes   *ResetResult
+	resetErr   error
+	auditRes   *MigrationAudit
+	auditErr   error
 
 	// capture args
-	testURL    string
-	migrateURL string
+	testURL      string
+	migrateURL   string
+	preflightURL string
+	resetURL     string
+	resetMode    string
 }
 
 func (m *mockDatabaseAdminStore) GetDatabaseInfo(_ context.Context) (*DatabaseInfo, error) {
@@ -37,6 +46,21 @@ func (m *mockDatabaseAdminStore) TestConnection(_ context.Context, url string) (
 func (m *mockDatabaseAdminStore) TriggerMigration(_ context.Context, url string) (*MigrationStatus, error) {
 	m.migrateURL = url
 	return m.migrateRes, m.migrateErr
+}
+
+func (m *mockDatabaseAdminStore) Preflight(_ context.Context, url string) (*PreflightReport, error) {
+	m.preflightURL = url
+	return m.preflightRes, m.preflightErr
+}
+
+func (m *mockDatabaseAdminStore) ResetTarget(_ context.Context, url, mode string) (*ResetResult, error) {
+	m.resetURL = url
+	m.resetMode = mode
+	return m.resetRes, m.resetErr
+}
+
+func (m *mockDatabaseAdminStore) MigrationAudit(_ context.Context) (*MigrationAudit, error) {
+	return m.auditRes, m.auditErr
 }
 
 // --- tests ---
@@ -375,6 +399,207 @@ func TestAdminDatabaseTriggerMigrationStoreError(t *testing.T) {
 	}
 	if resp.Error.Code != "internal_error" {
 		t.Errorf("expected code internal_error, got %q", resp.Error.Code)
+	}
+}
+
+func TestAdminDatabasePreflightSuccess(t *testing.T) {
+	store := &mockDatabaseAdminStore{
+		preflightRes: &PreflightReport{
+			OK: true,
+			Checks: []PreflightCheck{
+				{Name: "connection", Status: PreflightStatusOK, Message: "connected successfully"},
+				{Name: "pgvector", Status: PreflightStatusOK, Message: "pgvector 0.7.0 enabled"},
+				{Name: "target_state", Status: PreflightStatusOK, Message: "target database is empty (no nram tables found)"},
+			},
+		},
+	}
+
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+	body := `{"url":"postgres://user:pass@localhost:5432/nram"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/database/preflight", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	var resp PreflightReport
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.OK {
+		t.Error("expected ok=true")
+	}
+	if len(resp.Checks) != 3 {
+		t.Errorf("expected 3 checks, got %d", len(resp.Checks))
+	}
+	if store.preflightURL != "postgres://user:pass@localhost:5432/nram" {
+		t.Errorf("store did not receive url; got %q", store.preflightURL)
+	}
+}
+
+func TestAdminDatabasePreflightMissingURL(t *testing.T) {
+	store := &mockDatabaseAdminStore{}
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+
+	body := `{"url":""}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/database/preflight", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAdminDatabasePreflightStoreError(t *testing.T) {
+	store := &mockDatabaseAdminStore{preflightErr: errors.New("boom")}
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+
+	body := `{"url":"postgres://localhost/nram"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/database/preflight", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestAdminDatabaseResetSuccessTruncate(t *testing.T) {
+	store := &mockDatabaseAdminStore{
+		resetRes: &ResetResult{
+			Status:  "ok",
+			Mode:    ResetModeTruncate,
+			Message: "truncated 5 nram tables",
+		},
+	}
+
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+	body := `{"url":"postgres://localhost/nram","mode":"truncate"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/database/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.resetMode != "truncate" {
+		t.Errorf("expected mode truncate, got %q", store.resetMode)
+	}
+}
+
+func TestAdminDatabaseResetSuccessDropSchema(t *testing.T) {
+	store := &mockDatabaseAdminStore{
+		resetRes: &ResetResult{Status: "ok", Mode: ResetModeDropSchema, Message: "dropped 5 nram tables"},
+	}
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+	body := `{"url":"postgres://localhost/nram","mode":"drop_schema"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/database/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.resetMode != "drop_schema" {
+		t.Errorf("expected mode drop_schema, got %q", store.resetMode)
+	}
+}
+
+func TestAdminDatabaseResetRejectsMissingMode(t *testing.T) {
+	store := &mockDatabaseAdminStore{}
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+
+	body := `{"url":"postgres://localhost/nram"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/database/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	if store.resetURL != "" {
+		t.Error("store should not have been called")
+	}
+}
+
+func TestAdminDatabaseResetRejectsInvalidMode(t *testing.T) {
+	store := &mockDatabaseAdminStore{}
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+
+	body := `{"url":"postgres://localhost/nram","mode":"nuke"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/database/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAdminDatabaseResetRejectsMissingURL(t *testing.T) {
+	store := &mockDatabaseAdminStore{}
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+
+	body := `{"url":"","mode":"truncate"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/database/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAdminDatabaseMigrationAuditSuccess(t *testing.T) {
+	store := &mockDatabaseAdminStore{
+		auditRes: &MigrationAudit{
+			Backend:      "sqlite",
+			TotalOrphans: 5,
+			Orphans: []OrphanCount{
+				{Table: "memories", Column: "superseded_by", References: "memories.id", Count: 3},
+				{Table: "relationships", Column: "source_memory", References: "memories.id", Count: 2},
+			},
+		},
+	}
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/database/migration-audit", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	var resp MigrationAudit
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.TotalOrphans != 5 {
+		t.Errorf("expected 5 total orphans, got %d", resp.TotalOrphans)
+	}
+	if len(resp.Orphans) != 2 {
+		t.Errorf("expected 2 orphan entries, got %d", len(resp.Orphans))
+	}
+}
+
+func TestAdminDatabaseMigrationAuditStoreError(t *testing.T) {
+	store := &mockDatabaseAdminStore{auditErr: errors.New("boom")}
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/database/migration-audit", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
 	}
 }
 

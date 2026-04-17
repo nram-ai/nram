@@ -1,10 +1,17 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   useDatabaseInfo,
-  useTestDatabaseConnection,
+  useMigrationAudit,
+  usePreflightDatabase,
+  useResetDatabase,
   useTriggerMigration,
 } from "../hooks/useApi";
-import type { ConnectionTestResult } from "../api/client";
+import type {
+  MigrationAudit,
+  MigrationStats,
+  PreflightReport,
+  ResetMode,
+} from "../api/client";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -99,7 +106,12 @@ function DataCountsCard({
 // SQLite View
 // ---------------------------------------------------------------------------
 
-type MigrationStep = "input" | "review" | "migrating" | "complete";
+type MigrationStep =
+  | "input"
+  | "preflight"
+  | "audit"
+  | "migrating"
+  | "complete";
 
 // ---------------------------------------------------------------------------
 // Migration error display — translates raw backend errors into actionable messages
@@ -277,63 +289,125 @@ function SQLiteView({
 }) {
   const [step, setStep] = useState<MigrationStep>("input");
   const [dbUrl, setDbUrl] = useState("");
-  const [testResult, setTestResult] = useState<ConnectionTestResult | null>(
+  const [preflight, setPreflight] = useState<PreflightReport | null>(null);
+  const [audit, setAudit] = useState<MigrationAudit | null>(null);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+  const [migrationStats, setMigrationStats] = useState<MigrationStats | null>(
     null,
   );
-  const [migrationError, setMigrationError] = useState<string | null>(null);
 
-  const testMutation = useTestDatabaseConnection();
+  const preflightMutation = usePreflightDatabase();
+  const resetMutation = useResetDatabase();
+  const auditMutation = useMigrationAudit();
   const migrateMutation = useTriggerMigration();
 
-  const handleTestConnection = useCallback(() => {
-    setTestResult(null);
-    testMutation.mutate(dbUrl, {
-      onSuccess: (result) => {
-        setTestResult(result);
-        if (result.success) {
-          setStep("review");
-        }
+  const handleRunPreflight = useCallback(() => {
+    setPreflight(null);
+    setMigrationError(null);
+    preflightMutation.mutate(dbUrl, {
+      onSuccess: (report) => {
+        setPreflight(report);
+        setStep("preflight");
       },
-      onError: () => {
-        setTestResult({
-          success: false,
-          message: "Failed to test connection. Check the URL and try again.",
-          pgvector_installed: false,
-          latency_ms: 0,
+      onError: (err) => {
+        setPreflight({
+          ok: false,
+          checks: [
+            {
+              name: "connection",
+              status: "error",
+              message: err instanceof Error ? err.message : "Preflight request failed",
+              remediation: "Check that the server is reachable and the URL is valid.",
+            },
+          ],
         });
+        setStep("preflight");
       },
     });
-  }, [dbUrl, testMutation]);
+  }, [dbUrl, preflightMutation]);
+
+  const handleReset = useCallback(
+    (mode: ResetMode) => {
+      if (
+        !window.confirm(
+          mode === "truncate"
+            ? "Truncate all nram tables in the target database? Existing data will be wiped but the schema and pgvector extension will be preserved."
+            : "Drop all nram tables in the target database? The schema will be recreated on the next migration. This is destructive — continue?",
+        )
+      ) {
+        return;
+      }
+      resetMutation.mutate(
+        { url: dbUrl, mode },
+        {
+          onSuccess: () => {
+            // Re-run preflight so the target_state check reflects the reset.
+            handleRunPreflight();
+          },
+          onError: (err) => {
+            setMigrationError(
+              err instanceof Error ? err.message : "Reset failed",
+            );
+          },
+        },
+      );
+    },
+    [dbUrl, resetMutation, handleRunPreflight],
+  );
+
+  const handleRunAudit = useCallback(() => {
+    auditMutation.mutate(undefined, {
+      onSuccess: (result) => {
+        setAudit(result);
+        setStep("audit");
+      },
+      onError: (err) => {
+        setMigrationError(
+          err instanceof Error ? err.message : "Audit failed",
+        );
+      },
+    });
+  }, [auditMutation]);
 
   const handleStartMigration = useCallback(() => {
     setMigrationError(null);
+    setMigrationStats(null);
     setStep("migrating");
     migrateMutation.mutate(dbUrl, {
       onSuccess: (data) => {
+        setMigrationStats(data.stats ?? null);
         if (data.status === "complete") {
           setStep("complete");
-        } else if (data.status === "in_progress") {
-          // Server is processing asynchronously — stay on the migrating step.
         } else {
           setMigrationError(data.message || "Migration failed");
-          setStep("review");
+          setStep("audit");
         }
       },
       onError: (error) => {
         setMigrationError(
           error instanceof Error ? error.message : "Migration failed",
         );
-        setStep("review");
+        setStep("audit");
       },
     });
   }, [dbUrl, migrateMutation]);
 
-  const handleReset = useCallback(() => {
+  const handleStartOver = useCallback(() => {
     setStep("input");
     setDbUrl("");
-    setTestResult(null);
+    setPreflight(null);
+    setAudit(null);
     setMigrationError(null);
+    setMigrationStats(null);
   }, []);
+
+  const preflightTargetState = preflight?.checks.find(
+    (c) => c.name === "target_state",
+  );
+  const preflightBlocking =
+    preflight?.checks.some(
+      (c) => c.status === "error" && c.name !== "target_state",
+    ) ?? false;
 
   return (
     <div className="space-y-6">
@@ -408,26 +482,27 @@ function SQLiteView({
         </div>
         <div className="px-5 py-4">
           {/* Step indicators */}
-          <div className="mb-6 flex items-center gap-2">
+          <div className="mb-6 flex items-center gap-2 flex-wrap">
             {(
               [
                 { key: "input", label: "1. Connect" },
-                { key: "review", label: "2. Review" },
-                { key: "migrating", label: "3. Migrate" },
+                { key: "preflight", label: "2. Preflight" },
+                { key: "audit", label: "3. Audit orphans" },
+                { key: "migrating", label: "4. Migrate" },
               ] as const
             ).map((s, i) => {
+              const order = ["input", "preflight", "audit", "migrating", "complete"];
+              const curIdx = order.indexOf(step);
+              const sIdx = order.indexOf(s.key);
               const isActive =
                 step === s.key ||
                 (step === "complete" && s.key === "migrating");
-              const isPast =
-                (s.key === "input" && step !== "input") ||
-                (s.key === "review" &&
-                  (step === "migrating" || step === "complete"));
+              const isPast = curIdx > sIdx;
               return (
                 <div key={s.key} className="flex items-center gap-2">
                   {i > 0 && (
                     <div
-                      className={`h-px w-8 ${isPast || isActive ? "bg-primary" : "bg-border"}`}
+                      className={`h-px w-6 ${isPast || isActive ? "bg-primary" : "bg-border"}`}
                     />
                   )}
                   <span
@@ -473,7 +548,7 @@ function SQLiteView({
                   value={dbUrl}
                   onChange={(e) => {
                     setDbUrl(e.target.value);
-                    setTestResult(null);
+                    setPreflight(null);
                   }}
                   placeholder="postgres://user:password@host:5432/dbname?sslmode=disable"
                   className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -485,112 +560,97 @@ function SQLiteView({
               </div>
               <button
                 type="button"
-                onClick={handleTestConnection}
-                disabled={!dbUrl.trim() || testMutation.isPending}
+                onClick={handleRunPreflight}
+                disabled={!dbUrl.trim() || preflightMutation.isPending}
                 className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {testMutation.isPending ? (
+                {preflightMutation.isPending ? (
                   <span className="flex items-center gap-1.5">
                     <Spinner className="h-3.5 w-3.5" />
-                    Testing...
+                    Running preflight...
                   </span>
                 ) : (
-                  "Test Connection"
+                  "Run Preflight Checks"
                 )}
               </button>
+              <p className="text-xs text-muted-foreground">
+                Checks connection, pgvector, privileges, and any data left over
+                from prior migration attempts.
+              </p>
+            </div>
+          )}
 
-              {/* Test result */}
-              {testResult && (
-                <div
-                  className={`flex items-start gap-2 rounded-md px-3 py-2 text-sm ${
-                    testResult.success
-                      ? "bg-green-50 text-green-800 dark:bg-green-900/30 dark:text-green-300"
-                      : "bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-300"
-                  }`}
+          {/* Step 2: Preflight checklist */}
+          {step === "preflight" && preflight && (
+            <div className="space-y-4">
+              <PreflightChecklist report={preflight} />
+
+              {/* Reset options if target has leftover data */}
+              {preflightTargetState?.status === "warn" && (
+                <ResetOptions
+                  targetCounts={preflightTargetState.table_counts}
+                  pending={resetMutation.isPending}
+                  onReset={handleReset}
+                />
+              )}
+
+              {migrationError && <MigrationErrorDisplay error={migrationError} />}
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleRunAudit}
+                  disabled={preflightBlocking || auditMutation.isPending}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <svg
-                    className="mt-0.5 h-4 w-4 flex-shrink-0"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    {testResult.success ? (
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M5 13l4 4L19 7"
-                      />
-                    ) : (
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    )}
-                  </svg>
-                  <div>
-                    <p>{testResult.message}</p>
-                    {testResult.success && (
-                      <p className="mt-1 text-xs">
-                        Latency: {testResult.latency_ms}ms | pgvector:{" "}
-                        {testResult.pgvector_installed
-                          ? "installed"
-                          : "not found"}
-                      </p>
-                    )}
-                  </div>
-                </div>
+                  {auditMutation.isPending ? (
+                    <span className="flex items-center gap-1.5">
+                      <Spinner className="h-3.5 w-3.5" />
+                      Scanning SQLite...
+                    </span>
+                  ) : (
+                    "Scan for Orphans"
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRunPreflight}
+                  disabled={preflightMutation.isPending}
+                  className="rounded-md border border-input px-4 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-muted"
+                >
+                  Re-run Preflight
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartOver}
+                  className="rounded-md border border-input px-4 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-muted"
+                >
+                  Back
+                </button>
+              </div>
+              {preflightBlocking && (
+                <p className="text-xs text-red-600 dark:text-red-400">
+                  Resolve the preflight errors above before proceeding.
+                </p>
               )}
             </div>
           )}
 
-          {/* Step 2: Review */}
-          {step === "review" && (
+          {/* Step 3: Orphan audit */}
+          {step === "audit" && audit && (
             <div className="space-y-4">
-              <div className="rounded-md bg-muted/50 p-4">
-                <p className="text-sm font-medium text-foreground">
-                  Connection Verified
-                </p>
-                <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-                  {dbUrl}
-                </p>
-                {testResult && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Latency: {testResult.latency_ms}ms | pgvector:{" "}
-                    {testResult.pgvector_installed ? "installed" : "not found"}
-                  </p>
-                )}
-              </div>
+              <OrphanAuditSummary audit={audit} />
 
-              <div>
-                <p className="mb-2 text-sm font-medium text-foreground">
-                  Data to Migrate
-                </p>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="rounded-md bg-muted/50 p-4">
+                <p className="text-sm font-medium text-foreground">Source data summary</p>
+                <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
                   {[
-                    {
-                      label: "Memories",
-                      count: dataCounts.memories,
-                    },
-                    {
-                      label: "Vectors",
-                      count: dataCounts.vectors,
-                    },
-                    {
-                      label: "Entities",
-                      count: dataCounts.entities,
-                    },
-                    {
-                      label: "Projects",
-                      count: dataCounts.projects,
-                    },
+                    { label: "Memories", count: dataCounts.memories },
+                    { label: "Vectors", count: dataCounts.vectors },
+                    { label: "Entities", count: dataCounts.entities },
+                    { label: "Projects", count: dataCounts.projects },
                     { label: "Users", count: dataCounts.users },
-                    {
-                      label: "Organizations",
-                      count: dataCounts.organizations,
-                    },
+                    { label: "Organizations", count: dataCounts.organizations },
                   ].map((item) => (
                     <div
                       key={item.label}
@@ -599,9 +659,7 @@ function SQLiteView({
                       <p className="text-lg font-bold text-foreground">
                         {item.count.toLocaleString()}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        {item.label}
-                      </p>
+                      <p className="text-xs text-muted-foreground">{item.label}</p>
                     </div>
                   ))}
                 </div>
@@ -615,11 +673,13 @@ function SQLiteView({
                   onClick={handleStartMigration}
                   className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90"
                 >
-                  Confirm Migration
+                  {audit.total_orphans > 0
+                    ? `Drop ${audit.total_orphans} orphan${audit.total_orphans === 1 ? "" : "s"} and migrate`
+                    : "Confirm Migration"}
                 </button>
                 <button
                   type="button"
-                  onClick={handleReset}
+                  onClick={() => setStep("preflight")}
                   className="rounded-md border border-input px-4 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-muted"
                 >
                   Back
@@ -628,12 +688,10 @@ function SQLiteView({
             </div>
           )}
 
-          {/* Step 3: Migrating */}
-          {step === "migrating" && (
-            <MigratingIndicator />
-          )}
+          {/* Step 4: Migrating */}
+          {step === "migrating" && <MigratingIndicator />}
 
-          {/* Step 4: Complete */}
+          {/* Step 5: Complete */}
           {step === "complete" && (
             <div className="space-y-4">
               <div className="flex items-start gap-3 rounded-md bg-green-50 p-4 dark:bg-green-900/30">
@@ -659,6 +717,9 @@ function SQLiteView({
                   </p>
                 </div>
               </div>
+
+              {migrationStats && <MigrationStatsPanel stats={migrationStats} />}
+
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950/30">
                 <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
                   Restart Required
@@ -677,6 +738,271 @@ function SQLiteView({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Preflight / Audit / Stats sub-components
+// ---------------------------------------------------------------------------
+
+function PreflightChecklist({ report }: { report: PreflightReport }) {
+  return (
+    <div className="rounded-md border border-border bg-background">
+      <div className="border-b border-border px-4 py-2">
+        <p className="text-sm font-medium text-foreground">
+          Preflight Results{" "}
+          <span
+            className={`ml-2 text-xs ${report.ok ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}
+          >
+            {report.ok ? "ALL OK" : "ISSUES FOUND"}
+          </span>
+        </p>
+      </div>
+      <ul className="divide-y divide-border">
+        {report.checks.map((c) => {
+          const color =
+            c.status === "ok"
+              ? "text-green-600 dark:text-green-400"
+              : c.status === "warn"
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-red-600 dark:text-red-400";
+          return (
+            <li key={c.name} className="px-4 py-3">
+              <div className="flex items-start gap-3">
+                <span className={`mt-0.5 text-xs font-bold uppercase ${color}`}>
+                  {c.status}
+                </span>
+                <div className="flex-1 space-y-1">
+                  <p className="text-sm font-medium text-foreground">
+                    {prettifyCheckName(c.name)}
+                  </p>
+                  <p className="text-sm text-muted-foreground">{c.message}</p>
+                  {c.remediation && (
+                    <p className="text-xs text-foreground">
+                      <span className="font-medium">Fix:</span>{" "}
+                      <code className="font-mono">{c.remediation}</code>
+                    </p>
+                  )}
+                  {c.table_counts && Object.keys(c.table_counts).length > 0 && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-xs text-muted-foreground">
+                        Table counts (click to expand)
+                      </summary>
+                      <div className="mt-1 grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-4 text-xs font-mono">
+                        {Object.entries(c.table_counts)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([t, n]) => (
+                            <div key={t} className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">{t}</span>
+                              <span className="text-foreground">{n}</span>
+                            </div>
+                          ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function prettifyCheckName(name: string): string {
+  switch (name) {
+    case "connection":
+      return "Connection";
+    case "server_version":
+      return "Server Version";
+    case "pgvector":
+      return "pgvector Extension";
+    case "privileges":
+      return "Privileges";
+    case "target_state":
+      return "Target Database State";
+    default:
+      return name;
+  }
+}
+
+function ResetOptions({
+  targetCounts,
+  pending,
+  onReset,
+}: {
+  targetCounts: Record<string, number> | undefined;
+  pending: boolean;
+  onReset: (mode: ResetMode) => void;
+}) {
+  const total = targetCounts
+    ? Object.values(targetCounts).reduce((a, b) => a + b, 0)
+    : 0;
+  return (
+    <div className="rounded-md border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
+      <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+        Leftover data detected
+      </p>
+      <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+        The target database already contains {total.toLocaleString()} nram rows.
+        Migration will not insert duplicates but row-count validation will fail.
+        Choose a reset strategy:
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => onReset("truncate")}
+          className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50"
+        >
+          {pending ? "Resetting..." : "TRUNCATE (preserve schema)"}
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => onReset("drop_schema")}
+          className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-50"
+        >
+          {pending ? "Resetting..." : "DROP TABLES (rebuild schema)"}
+        </button>
+      </div>
+      <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+        TRUNCATE is usually what you want — fast, keeps pgvector enabled, owner
+        privileges are sufficient. DROP TABLES is heavier and requires the
+        migration to recreate the schema on the next run.
+      </p>
+    </div>
+  );
+}
+
+function OrphanAuditSummary({ audit }: { audit: MigrationAudit }) {
+  if (audit.total_orphans === 0) {
+    return (
+      <div className="rounded-md bg-green-50 p-4 dark:bg-green-900/30">
+        <p className="text-sm font-medium text-green-800 dark:text-green-200">
+          No orphans found
+        </p>
+        <p className="mt-1 text-sm text-green-700 dark:text-green-300">
+          Every FK in the source database points at a valid parent. Migration
+          should complete without dropping any rows.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
+      <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+        {audit.total_orphans.toLocaleString()} orphan row
+        {audit.total_orphans === 1 ? "" : "s"} will be dropped
+      </p>
+      <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+        These rows reference a parent (namespace, memory, entity, etc.) that no
+        longer exists in SQLite. They would cause Postgres FK violations. The
+        migrator will skip them and record each skip in the final report.
+        Confirmed by you: drop policy = skip-on-read (SQLite is not modified).
+      </p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="min-w-full divide-y divide-amber-300 text-xs dark:divide-amber-700">
+          <thead>
+            <tr className="text-left text-amber-800 dark:text-amber-200">
+              <th className="py-1 pr-4">Table.Column</th>
+              <th className="py-1 pr-4">References</th>
+              <th className="py-1 text-right">Count</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-amber-200 font-mono dark:divide-amber-800">
+            {audit.orphans.map((o) => (
+              <tr key={`${o.table}.${o.column}`}>
+                <td className="py-1 pr-4">
+                  {o.table}.{o.column}
+                </td>
+                <td className="py-1 pr-4 text-amber-700 dark:text-amber-400">
+                  {o.references}
+                </td>
+                <td className="py-1 text-right font-bold">
+                  {o.count.toLocaleString()}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {audit.errors && audit.errors.length > 0 && (
+        <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+          {audit.errors.length} FK relation
+          {audit.errors.length === 1 ? " was" : "s were"} not audited (see
+          server logs).
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MigrationStatsPanel({ stats }: { stats: MigrationStats }) {
+  const skippedEntries = Object.entries(stats.skipped_orphans ?? {}).sort(
+    ([, a], [, b]) => b - a,
+  );
+  const updateEntries = Object.entries(stats.skipped_updates ?? {});
+  const insertedEntries = Object.entries(stats.inserted ?? {}).sort(
+    ([, a], [, b]) => b - a,
+  );
+  if (!skippedEntries.length && !updateEntries.length && !insertedEntries.length) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-md border border-border bg-background p-4">
+      <p className="text-sm font-medium text-foreground">Migration Report</p>
+      {insertedEntries.length > 0 && (
+        <details className="mt-2" open={false}>
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            Inserted rows by table ({insertedEntries.length} tables)
+          </summary>
+          <div className="mt-1 grid grid-cols-2 gap-1 sm:grid-cols-3 text-xs font-mono">
+            {insertedEntries.map(([t, n]) => (
+              <div key={t} className="flex justify-between gap-2">
+                <span className="text-muted-foreground">{t}</span>
+                <span className="text-foreground">{n.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {skippedEntries.length > 0 && (
+        <details className="mt-2" open>
+          <summary className="cursor-pointer text-xs font-medium text-amber-700 dark:text-amber-400">
+            Orphan rows dropped ({skippedEntries.length} FK relations)
+          </summary>
+          <div className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2 text-xs font-mono">
+            {skippedEntries.map(([k, n]) => (
+              <div key={k} className="flex justify-between gap-2">
+                <span className="text-muted-foreground">{k}</span>
+                <span className="text-amber-700 dark:text-amber-400">
+                  {n.toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {updateEntries.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            Column updates skipped (self-ref orphans) ({updateEntries.length})
+          </summary>
+          <div className="mt-1 text-xs font-mono">
+            {updateEntries.map(([k, n]) => (
+              <div key={k} className="flex justify-between gap-2">
+                <span className="text-muted-foreground">{k}</span>
+                <span className="text-foreground">{n.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

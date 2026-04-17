@@ -515,6 +515,11 @@ func cleanPostgres(t *testing.T, db *sql.DB) {
 	ctx := context.Background()
 	// Reverse of migratedTables order to respect FK constraints.
 	tables := []string{
+		"dream_project_dirty",
+		"dream_log_summaries",
+		"dream_logs",
+		"dream_cycles",
+		"webauthn_credentials",
 		"oauth_idp_configs",
 		"oauth_refresh_tokens",
 		"oauth_authorization_codes",

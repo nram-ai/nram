@@ -644,9 +644,58 @@ export interface ConnectionTestResult {
   latency_ms: number;
 }
 
+export interface MigrationStats {
+  inserted?: Record<string, number>;
+  skipped_orphans?: Record<string, number>;
+  skipped_updates?: Record<string, number>;
+}
+
 export interface MigrationStatus {
   status: string;
   message: string;
+  stats?: MigrationStats;
+}
+
+export interface PreflightCheck {
+  name: string;
+  status: "ok" | "warn" | "error";
+  message: string;
+  remediation?: string;
+  table_counts?: Record<string, number>;
+}
+
+export interface PreflightReport {
+  ok: boolean;
+  checks: PreflightCheck[];
+}
+
+export type ResetMode = "truncate" | "drop_schema";
+
+export interface ResetResult {
+  status: string;
+  message: string;
+  mode: ResetMode;
+  tables_dropped?: string[];
+}
+
+export interface OrphanCount {
+  table: string;
+  column: string;
+  references: string;
+  count: number;
+}
+
+export interface AuditError {
+  table: string;
+  column: string;
+  message: string;
+}
+
+export interface MigrationAudit {
+  backend: string;
+  total_orphans: number;
+  orphans: OrphanCount[];
+  errors?: AuditError[];
 }
 
 // --- Dreaming Types ---
@@ -993,6 +1042,12 @@ export const adminAPI = {
   getDatabaseInfo: () => request<DatabaseInfo>("GET", "/admin/database"),
   testDatabaseConnection: (url: string) =>
     request<ConnectionTestResult>("POST", "/admin/database/test", { url }),
+  preflightDatabase: (url: string) =>
+    request<PreflightReport>("POST", "/admin/database/preflight", { url }),
+  resetDatabase: (url: string, mode: ResetMode) =>
+    request<ResetResult>("POST", "/admin/database/reset", { url, mode }),
+  migrationAudit: () =>
+    request<MigrationAudit>("GET", "/admin/database/migration-audit"),
   triggerMigration: (url: string) =>
     request<MigrationStatus>("POST", "/admin/database/migrate", { url }),
 

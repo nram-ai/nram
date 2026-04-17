@@ -166,6 +166,18 @@ func (s *rrDatabaseStore) TriggerMigration(_ context.Context, _ string) (*api.Mi
 	return nil, fmt.Errorf("not implemented in test")
 }
 
+func (s *rrDatabaseStore) Preflight(_ context.Context, _ string) (*api.PreflightReport, error) {
+	return nil, fmt.Errorf("not implemented in test")
+}
+
+func (s *rrDatabaseStore) ResetTarget(_ context.Context, _, _ string) (*api.ResetResult, error) {
+	return nil, fmt.Errorf("not implemented in test")
+}
+
+func (s *rrDatabaseStore) MigrationAudit(_ context.Context) (*api.MigrationAudit, error) {
+	return nil, fmt.Errorf("not implemented in test")
+}
+
 
 
 // ---------------------------------------------------------------------------
