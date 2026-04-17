@@ -692,7 +692,14 @@ func (m *DataMigrator) migrateSettings(ctx context.Context) error {
 			m.skipOrphan("settings", "updated_by")
 			continue
 		}
-		if _, err := stmt.ExecContext(ctx, key, sanitizeJSONB(value, "null"), scope,
+		pgValue, err := textToJSONB(sql.NullString{String: value, Valid: true})
+		if err != nil {
+			return fmt.Errorf("encode value for setting %s/%s: %w", key, scope, err)
+		}
+		if pgValue == nil {
+			pgValue = "null"
+		}
+		if _, err := stmt.ExecContext(ctx, key, pgValue, scope,
 			nullStringToInterface(updatedBy), updatedAt); err != nil {
 			return fmt.Errorf("insert setting %s/%s: %w", key, scope, err)
 		}
@@ -2216,46 +2223,47 @@ func nullInt64ToInterface(ni sql.NullInt64) interface{} {
 // schema has a JSON default. Use textToJSONB for nullable error columns where
 // plain text should be wrapped as a JSON string.
 func sanitizeJSONB(raw, fallback string) string {
-	s := strings.ReplaceAll(raw, "\x00", "")
-	s = strings.TrimSpace(s)
+	s := strings.TrimSpace(stripNullBytes(raw))
 	if s == "" {
 		return fallback
 	}
-	var probe json.RawMessage
-	if err := json.Unmarshal([]byte(s), &probe); err != nil {
+	if !json.Valid([]byte(s)) {
 		return fallback
 	}
 	return s
 }
 
 // textToJSONB converts a nullable SQLite TEXT column into a value safe to send
-// to a Postgres JSONB column.
-//
-// Returns nil for SQL NULL and empty strings (Postgres treats empty JSONB as
-// invalid). If the stored text parses as JSON, it is passed through verbatim
-// so structured errors survive round-tripping. Otherwise the text is marshalled
-// as a JSON string literal — using json.Marshal, not manual quoting, so
-// backslashes, newlines, and control characters are escaped correctly
-// (SQLSTATE 22P02 bait).
+// to a Postgres JSONB column. Returns nil for SQL NULL and empty strings
+// (Postgres treats empty JSONB as invalid). If the stored text parses as JSON
+// it is passed through verbatim so structured errors survive round-tripping;
+// otherwise json.Marshal wraps it as a JSON string literal (manual quoting
+// would miss backslashes, newlines, and control chars).
 func textToJSONB(ns sql.NullString) (interface{}, error) {
 	if !ns.Valid || ns.String == "" {
 		return nil, nil
 	}
-	// Postgres JSONB rejects \u0000 even when validly JSON-escaped — strip null
-	// bytes defensively. Other control chars are fine once json.Marshal escapes them.
-	s := strings.ReplaceAll(ns.String, "\x00", "")
+	s := stripNullBytes(ns.String)
 	if s == "" {
 		return nil, nil
 	}
-	// If the value is already valid JSON, pass it through.
-	var probe json.RawMessage
-	if err := json.Unmarshal([]byte(s), &probe); err == nil {
+	if json.Valid([]byte(s)) {
 		return s, nil
 	}
-	// Otherwise wrap as a JSON string.
 	encoded, err := json.Marshal(s)
 	if err != nil {
 		return nil, err
 	}
 	return string(encoded), nil
+}
+
+// stripNullBytes removes \x00 from s. Postgres JSONB rejects \u0000 even when
+// validly JSON-escaped, so every TEXT bound for a JSONB column needs this pass.
+// Fast path: if no null byte is present, the original string is returned with
+// no allocation.
+func stripNullBytes(s string) string {
+	if !strings.ContainsRune(s, 0) {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x00", "")
 }
