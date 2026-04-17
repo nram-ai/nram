@@ -1243,10 +1243,9 @@ func (m *DataMigrator) migrateIngestionLog(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("convert memory_ids for ingestion_log %s: %w", id, err)
 		}
-		// Postgres error column is JSONB; wrap plain text in a JSON string if present.
-		var pgErr interface{}
-		if errText.Valid && errText.String != "" {
-			pgErr = `"` + strings.ReplaceAll(errText.String, `"`, `\"`) + `"`
+		pgErr, err := textToJSONB(errText)
+		if err != nil {
+			return fmt.Errorf("encode error for ingestion_log %s: %w", id, err)
 		}
 		if !m.hasInserted("namespaces", nsID) {
 			m.skipOrphan("ingestion_log", "namespace_id")
@@ -1311,10 +1310,9 @@ func (m *DataMigrator) migrateEnrichmentQueue(ctx context.Context) error {
 			&createdAt, &updatedAt); err != nil {
 			return err
 		}
-		// last_error is JSONB in Postgres; wrap plain text.
-		var pgLastError interface{}
-		if lastError.Valid && lastError.String != "" {
-			pgLastError = `"` + strings.ReplaceAll(lastError.String, `"`, `\"`) + `"`
+		pgLastError, err := textToJSONB(lastError)
+		if err != nil {
+			return fmt.Errorf("encode last_error for enrichment_queue %s: %w", id, err)
 		}
 		if !m.hasInserted("memories", memoryID) {
 			m.skipOrphan("enrichment_queue", "memory_id")
@@ -2303,4 +2301,36 @@ func nullInt64ToInterface(ni sql.NullInt64) interface{} {
 		return nil
 	}
 	return ni.Int64
+}
+
+// textToJSONB converts a nullable SQLite TEXT column into a value safe to send
+// to a Postgres JSONB column.
+//
+// Returns nil for SQL NULL and empty strings (Postgres treats empty JSONB as
+// invalid). If the stored text parses as JSON, it is passed through verbatim
+// so structured errors survive round-tripping. Otherwise the text is marshalled
+// as a JSON string literal — using json.Marshal, not manual quoting, so
+// backslashes, newlines, and control characters are escaped correctly
+// (SQLSTATE 22P02 bait).
+func textToJSONB(ns sql.NullString) (interface{}, error) {
+	if !ns.Valid || ns.String == "" {
+		return nil, nil
+	}
+	// Postgres JSONB rejects \u0000 even when validly JSON-escaped — strip null
+	// bytes defensively. Other control chars are fine once json.Marshal escapes them.
+	s := strings.ReplaceAll(ns.String, "\x00", "")
+	if s == "" {
+		return nil, nil
+	}
+	// If the value is already valid JSON, pass it through.
+	var probe json.RawMessage
+	if err := json.Unmarshal([]byte(s), &probe); err == nil {
+		return s, nil
+	}
+	// Otherwise wrap as a JSON string.
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	return string(encoded), nil
 }

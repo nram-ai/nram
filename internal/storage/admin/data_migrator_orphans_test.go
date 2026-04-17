@@ -8,6 +8,63 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// TestTextToJSONB_HandlesProblematicText verifies the JSONB encoder survives
+// the inputs that broke the initial migrator on production data:
+// backslashes, newlines, embedded quotes, and control characters that must
+// be escaped in a JSON string but were being passed through verbatim by the
+// old manual-quoting approach (SQLSTATE 22P02).
+func TestTextToJSONB_HandlesProblematicText(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"backslash", `C:\path\to\file`},
+		{"newline", "line one\nline two"},
+		{"tab and quote", "tab\there and \"quote\""},
+		{"null byte stripped", "\x00before\x00after\x00"},
+		{"control chars", "\x01\x02\x07\x1b"},
+		{"mixed", "ERROR: failed to parse \"C:\\x\": unexpected\ntoken"},
+		{"unicode", "café — 日本語"},
+		{"already valid json", `{"code":"X","detail":"y"}`},
+		{"json array", `["a","b"]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := textToJSONB(sql.NullString{String: tc.input, Valid: true})
+			if err != nil {
+				t.Fatalf("textToJSONB err: %v", err)
+			}
+			s, ok := v.(string)
+			if !ok {
+				t.Fatalf("expected string, got %T", v)
+			}
+			// Round-trip through Postgres to prove JSONB accepts it.
+			db, err := sql.Open("pgx", resolvedPostgresURL)
+			if err != nil {
+				t.Fatalf("open pg: %v", err)
+			}
+			defer db.Close()
+			var got string
+			if err := db.QueryRowContext(context.Background(),
+				"SELECT $1::jsonb::text", s,
+			).Scan(&got); err != nil {
+				t.Fatalf("postgres rejected encoded jsonb: %v\nencoded: %q", err, s)
+			}
+		})
+	}
+}
+
+func TestTextToJSONB_NullAndEmpty(t *testing.T) {
+	v, err := textToJSONB(sql.NullString{Valid: false})
+	if err != nil || v != nil {
+		t.Errorf("NULL -> want (nil, nil), got (%v, %v)", v, err)
+	}
+	v, err = textToJSONB(sql.NullString{String: "", Valid: true})
+	if err != nil || v != nil {
+		t.Errorf("empty string -> want (nil, nil), got (%v, %v)", v, err)
+	}
+}
+
 // TestDataMigrator_DropsOrphansAndSetsSupersededBy verifies the Phase 3 fixes:
 //   - orphan rows pointing at missing FK parents are skipped, not errored
 //   - self-referential memories.superseded_by is populated in pass 2
