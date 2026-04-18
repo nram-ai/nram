@@ -40,7 +40,8 @@ func NewEnrichmentQueueRepo(db DB) *EnrichmentQueueRepo {
 }
 
 // Enqueue inserts a new item into the enrichment queue with status "pending".
-// ID is generated if zero-valued. StepsCompleted defaults to `[]` if nil.
+// Zero-valued ID / CreatedAt / UpdatedAt are filled from Go; StepsCompleted
+// defaults to `[]`.
 func (r *EnrichmentQueueRepo) Enqueue(ctx context.Context, item *model.EnrichmentJob) error {
 	if item.ID == uuid.Nil {
 		item.ID = uuid.New()
@@ -54,29 +55,40 @@ func (r *EnrichmentQueueRepo) Enqueue(ctx context.Context, item *model.Enrichmen
 	if item.MaxAttempts == 0 {
 		item.MaxAttempts = 3
 	}
+	now := time.Now().UTC()
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = now
+	}
+	if item.UpdatedAt.IsZero() {
+		item.UpdatedAt = now
+	}
 
 	var lastError interface{}
 	if item.LastError != nil && string(item.LastError) != "null" {
 		lastError = string(item.LastError)
 	}
 
-	query := `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, last_error, steps_completed)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	createdAtStr := item.CreatedAt.UTC().Format(time.RFC3339)
+	updatedAtStr := item.UpdatedAt.UTC().Format(time.RFC3339)
+
+	query := `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, last_error, steps_completed, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, last_error, steps_completed)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+		query = `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, last_error, steps_completed, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
 		item.ID.String(), item.MemoryID.String(), item.NamespaceID.String(),
 		item.Status, item.Priority, item.Attempts, item.MaxAttempts,
 		lastError, string(item.StepsCompleted),
+		createdAtStr, updatedAtStr,
 	)
 	if err != nil {
 		return fmt.Errorf("enrichment queue enqueue: %w", err)
 	}
 
-	return r.reload(ctx, item)
+	return nil
 }
 
 // ClaimNext atomically claims the next pending item in the enrichment queue,
@@ -162,6 +174,108 @@ func (r *EnrichmentQueueRepo) ClaimNext(ctx context.Context, workerID string) (*
 		ORDER BY updated_at DESC LIMIT 1`
 	row := r.db.QueryRow(ctx, query, workerID)
 	return r.scanItem(row)
+}
+
+// ClaimNextBatch atomically claims up to `max` pending items and assigns
+// them to workerID. Returns sql.ErrNoRows if the queue is empty. On Postgres
+// this runs in a single SELECT ... FOR UPDATE SKIP LOCKED transaction so
+// concurrent workers claim disjoint sets; on SQLite the write pool
+// serializes writes and we loop ClaimNext up to `max` times.
+func (r *EnrichmentQueueRepo) ClaimNextBatch(ctx context.Context, workerID string, max int) ([]*model.EnrichmentJob, error) {
+	if max <= 0 {
+		return nil, fmt.Errorf("enrichment queue claim batch: max must be positive, got %d", max)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if r.db.Backend() == BackendPostgres {
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("enrichment queue claim batch begin tx: %w", err)
+		}
+		defer tx.Rollback() //nolint:errcheck
+
+		rows, err := tx.Query(
+			`SELECT id FROM enrichment_queue
+				WHERE status = 'pending'
+				ORDER BY priority DESC, created_at ASC
+				LIMIT $1
+				FOR UPDATE SKIP LOCKED`,
+			max,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("enrichment queue claim batch select: %w", err)
+		}
+
+		ids := make([]string, 0, max)
+		for rows.Next() {
+			var idStr string
+			if err := rows.Scan(&idStr); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("enrichment queue claim batch scan: %w", err)
+			}
+			ids = append(ids, idStr)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("enrichment queue claim batch rows: %w", err)
+		}
+		if len(ids) == 0 {
+			return nil, sql.ErrNoRows
+		}
+
+		// Build the UPDATE with a placeholder list of ids.
+		placeholders := make([]string, len(ids))
+		args := make([]interface{}, 0, len(ids)+3)
+		args = append(args, workerID, now, now)
+		for i, id := range ids {
+			placeholders[i] = fmt.Sprintf("$%d", i+4)
+			args = append(args, id)
+		}
+		updateSQL := fmt.Sprintf(
+			`UPDATE enrichment_queue SET status = 'processing', claimed_by = $1, claimed_at = $2, updated_at = $3
+				WHERE id IN (%s)`,
+			strings.Join(placeholders, ","),
+		)
+		if _, err := tx.Exec(updateSQL, args...); err != nil {
+			return nil, fmt.Errorf("enrichment queue claim batch update: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("enrichment queue claim batch commit: %w", err)
+		}
+
+		items := make([]*model.EnrichmentJob, 0, len(ids))
+		for _, idStr := range ids {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				return nil, fmt.Errorf("enrichment queue claim batch parse id: %w", err)
+			}
+			item, err := r.GetByID(ctx, id)
+			if err != nil {
+				return nil, fmt.Errorf("enrichment queue claim batch get: %w", err)
+			}
+			items = append(items, item)
+		}
+		return items, nil
+	}
+
+	items := make([]*model.EnrichmentJob, 0, max)
+	for i := 0; i < max; i++ {
+		item, err := r.ClaimNext(ctx, workerID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				break
+			}
+			if len(items) == 0 {
+				return nil, err
+			}
+			return items, nil
+		}
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return items, nil
 }
 
 // Complete marks an enrichment queue item as "completed" and sets completed_at.

@@ -73,6 +73,25 @@ func main() {
 		log.Println("migrations applied successfully")
 	}
 
+	for _, arg := range os.Args[1:] {
+		if arg == "--backfill-embeddings" {
+			n, err := storage.BackfillEmbedJobs(context.Background(), db)
+			if err != nil {
+				log.Fatalf("backfill embed jobs failed: %v", err)
+			}
+			log.Printf("backfill: enqueued %d embed jobs", n)
+			return
+		}
+	}
+
+	if os.Getenv("NRAM_ENABLE_EMBED_BACKFILL") == "1" {
+		n, err := storage.BackfillEmbedJobs(context.Background(), db)
+		if err != nil {
+			log.Fatalf("startup embed backfill failed: %v", err)
+		}
+		log.Printf("backfill: enqueued %d embed jobs at startup (NRAM_ENABLE_EMBED_BACKFILL=1)", n)
+	}
+
 	// Create repositories.
 	memoryRepo := storage.NewMemoryRepo(db)
 	projectRepo := storage.NewProjectRepo(db)
@@ -259,8 +278,7 @@ func main() {
 	// Create services.
 	storeSvc := service.NewStoreService(
 		memoryRepo, projectRepo, namespaceRepo,
-		ingestionLogRepo, tokenUsageRepo, enrichmentQueueRepo,
-		vectorStore, embedProvider,
+		ingestionLogRepo, enrichmentQueueRepo,
 	)
 	recallSvc := service.NewRecallService(
 		memoryRepo, projectRepo, namespaceRepo,
@@ -279,8 +297,7 @@ func main() {
 	batchGetSvc := service.NewBatchGetService(memoryRepo, projectRepo)
 	batchStoreSvc := service.NewBatchStoreService(
 		memoryRepo, projectRepo, namespaceRepo,
-		ingestionLogRepo, tokenUsageRepo, enrichmentQueueRepo,
-		vectorStore, embedProvider,
+		ingestionLogRepo, enrichmentQueueRepo,
 	)
 	var hnswDeleter service.HNSWSnapshotDeleter
 	if hnswStore != nil {

@@ -346,8 +346,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 
 	storeSvc := service.NewStoreService(
 		memRepo, projectLookup, namespaceLookup,
-		&rbacIngestionLogRepo{}, &rbacTokenUsageRepo{}, &rbacEnrichmentQueueRepo{},
-		nil, nil,
+		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
 	)
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, namespaceLookup,
@@ -361,8 +360,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	)
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
-		&rbacIngestionLogRepo{}, &rbacTokenUsageRepo{}, &rbacEnrichmentQueueRepo{},
-		nil, nil,
+		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
 	)
 
 	// --- MCP server ---

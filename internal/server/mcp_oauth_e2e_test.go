@@ -355,9 +355,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		projectLookup,
 		namespaceLookup,
 		&e2eIngestionLogRepo{},
-		&e2eTokenUsageRepo{},
 		&e2eEnrichmentQueueRepo{},
-		nil, nil,
 	)
 
 	recallSvc := service.NewRecallService(
@@ -388,9 +386,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		projectLookup,
 		namespaceLookup,
 		&e2eIngestionLogRepo{},
-		&e2eTokenUsageRepo{},
 		&e2eEnrichmentQueueRepo{},
-		nil, nil,
 	)
 
 	mcpDeps := mcp.Dependencies{
@@ -1880,9 +1876,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 		projectLookup,
 		namespaceLookup,
 		&e2eIngestionLogRepo{},
-		&e2eTokenUsageRepo{},
 		&e2eEnrichmentQueueRepo{},
-		nil, nil,
 	)
 
 	recallSvc := service.NewRecallService(
@@ -1913,9 +1907,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 		projectLookup,
 		namespaceLookup,
 		&e2eIngestionLogRepo{},
-		&e2eTokenUsageRepo{},
 		&e2eEnrichmentQueueRepo{},
-		nil, nil,
 	)
 
 	mcpDeps := mcp.Dependencies{

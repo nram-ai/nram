@@ -1409,13 +1409,11 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 
 	storeSvc := service.NewStoreService(
 		memRepo, projectLookup, nsLookup,
-		&mockIngestionLogRepo{}, &mockTokenUsageRepo{}, &mockEnrichmentQueueRepo{},
-		nil, nil,
+		&mockIngestionLogRepo{}, &mockEnrichmentQueueRepo{},
 	)
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, nsLookup,
-		&mockIngestionLogRepo{}, &mockTokenUsageRepo{}, &mockEnrichmentQueueRepo{},
-		nil, nil,
+		&mockIngestionLogRepo{}, &mockEnrichmentQueueRepo{},
 	)
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, nsLookup,

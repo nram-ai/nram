@@ -34,6 +34,15 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 	if mem.Metadata == nil {
 		mem.Metadata = json.RawMessage(`{}`)
 	}
+	// Fill zero timestamps from Go so the caller's struct matches the DB row
+	// without a reload SELECT after INSERT.
+	now := time.Now().UTC()
+	if mem.CreatedAt.IsZero() {
+		mem.CreatedAt = now
+	}
+	if mem.UpdatedAt.IsZero() {
+		mem.UpdatedAt = now
+	}
 
 	tagsVal := encodeStringArray(r.db.Backend(), mem.Tags)
 
@@ -68,28 +77,31 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 	}
 
 	enrichedVal := encodeBool(r.db.Backend(), mem.Enriched)
+	createdAtStr := mem.CreatedAt.UTC().Format(time.RFC3339)
+	updatedAtStr := mem.UpdatedAt.UTC().Format(time.RFC3339)
 
 	query := `INSERT INTO memories (id, namespace_id, content, embedding_dim, source, tags,
 		confidence, importance, access_count, last_accessed, expires_at, superseded_by,
-		enriched, metadata, purge_after)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		enriched, metadata, purge_after, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
 		query = `INSERT INTO memories (id, namespace_id, content, embedding_dim, source, tags,
 			confidence, importance, access_count, last_accessed, expires_at, superseded_by,
-			enriched, metadata, purge_after)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`
+			enriched, metadata, purge_after, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
 		mem.ID.String(), mem.NamespaceID.String(), mem.Content, embeddingDim, source,
 		tagsVal, mem.Confidence, mem.Importance, mem.AccessCount,
 		lastAccessed, expiresAt, supersededBy, enrichedVal, string(mem.Metadata), purgeAfter,
+		createdAtStr, updatedAtStr,
 	)
 	if err != nil {
 		return fmt.Errorf("memory create: %w", err)
 	}
 
-	return r.reload(ctx, mem)
+	return nil
 }
 
 // GetByID returns a memory by its UUID. Soft-deleted records are excluded.

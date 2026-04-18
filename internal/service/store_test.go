@@ -12,6 +12,25 @@ import (
 	"github.com/nram-ai/nram/internal/provider"
 )
 
+// mockEmbeddingProvider is shared by extract, recall, and update service
+// tests; StoreService does not use it.
+type mockEmbeddingProvider struct {
+	name       string
+	dimensions []int
+	resp       *provider.EmbeddingResponse
+	err        error
+}
+
+func (m *mockEmbeddingProvider) Embed(_ context.Context, _ *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.resp, nil
+}
+
+func (m *mockEmbeddingProvider) Name() string      { return m.name }
+func (m *mockEmbeddingProvider) Dimensions() []int { return m.dimensions }
+
 // --- Mock implementations ---
 
 type mockMemoryRepo struct {
@@ -106,23 +125,6 @@ func (m *mockVectorStore) Upsert(_ context.Context, id uuid.UUID, namespaceID uu
 	return nil
 }
 
-type mockEmbeddingProvider struct {
-	name       string
-	dimensions []int
-	resp       *provider.EmbeddingResponse
-	err        error
-}
-
-func (m *mockEmbeddingProvider) Embed(_ context.Context, _ *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.resp, nil
-}
-
-func (m *mockEmbeddingProvider) Name() string      { return m.name }
-func (m *mockEmbeddingProvider) Dimensions() []int  { return m.dimensions }
-
 // --- Test helpers ---
 
 func setupTestFixtures() (uuid.UUID, uuid.UUID, *mockProjectRepo, *mockNamespaceRepo) {
@@ -158,23 +160,20 @@ func setupTestFixtures() (uuid.UUID, uuid.UUID, *mockProjectRepo, *mockNamespace
 func newTestService(
 	projects *mockProjectRepo,
 	namespaces *mockNamespaceRepo,
-	embedFn func() provider.EmbeddingProvider,
-) (*StoreService, *mockMemoryRepo, *mockIngestionLogRepo, *mockTokenUsageRepo, *mockEnrichmentQueueRepo, *mockVectorStore) {
+) (*StoreService, *mockMemoryRepo, *mockIngestionLogRepo, *mockEnrichmentQueueRepo) {
 	memories := &mockMemoryRepo{}
 	ingestion := &mockIngestionLogRepo{}
-	tokenUsage := &mockTokenUsageRepo{}
 	enrichment := &mockEnrichmentQueueRepo{}
-	vectors := &mockVectorStore{}
 
-	svc := NewStoreService(memories, projects, namespaces, ingestion, tokenUsage, enrichment, vectors, embedFn)
-	return svc, memories, ingestion, tokenUsage, enrichment, vectors
+	svc := NewStoreService(memories, projects, namespaces, ingestion, enrichment)
+	return svc, memories, ingestion, enrichment
 }
 
 // --- Tests ---
 
-func TestStore_SuccessWithoutEmbedding(t *testing.T) {
+func TestStore_Success(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
-	svc, memories, ingestion, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, memories, ingestion, enrichment := newTestService(projects, namespaces)
 
 	resp, err := svc.Store(context.Background(), &StoreRequest{
 		ProjectID: projectID,
@@ -218,80 +217,57 @@ func TestStore_SuccessWithoutEmbedding(t *testing.T) {
 		t.Errorf("expected importance 0.5, got %f", mem.Importance)
 	}
 	if mem.EmbeddingDim != nil {
-		t.Error("expected nil EmbeddingDim without provider")
+		t.Error("expected nil EmbeddingDim — service layer no longer embeds")
 	}
 
 	if len(ingestion.logs) != 1 {
 		t.Fatalf("expected 1 ingestion log, got %d", len(ingestion.logs))
 	}
+
+	// Every store must enqueue exactly one enrichment job, regardless of the
+	// Options.Enrich flag. The worker is responsible for embedding, fact/entity
+	// extraction, and token-usage recording.
+	if len(enrichment.jobs) != 1 {
+		t.Fatalf("expected 1 enrichment job enqueued, got %d", len(enrichment.jobs))
+	}
+	if !resp.EnrichmentQueued {
+		t.Error("expected EnrichmentQueued=true")
+	}
+	job := enrichment.jobs[0]
+	if job.MemoryID != resp.ID {
+		t.Errorf("expected job memory ID %s, got %s", resp.ID, job.MemoryID)
+	}
+	if job.Status != "pending" {
+		t.Errorf("expected status 'pending', got %q", job.Status)
+	}
+	if job.MaxAttempts != 3 {
+		t.Errorf("expected max_attempts 3, got %d", job.MaxAttempts)
+	}
 }
 
-func TestStore_SuccessWithEmbedding(t *testing.T) {
+func TestStore_EnqueuesRegardlessOfEnrichFlag(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
 
-	embProvider := &mockEmbeddingProvider{
-		name:       "test-provider",
-		dimensions: []int{384},
-		resp: &provider.EmbeddingResponse{
-			Embeddings: [][]float32{make([]float32, 384)},
-			Model:      "test-model",
-			Usage:      provider.TokenUsage{PromptTokens: 10, TotalTokens: 10},
-		},
-	}
-
-	svc, memories, _, tokenUsage, _, vectors := newTestService(projects, namespaces, func() provider.EmbeddingProvider {
-		return embProvider
-	})
-
-	resp, err := svc.Store(context.Background(), &StoreRequest{
+	// Enrich=false should still produce a job — the flag is on a deprecation
+	// path and must not gate the async embedding/enrichment work.
+	svc, _, _, enrichment := newTestService(projects, namespaces)
+	_, err := svc.Store(context.Background(), &StoreRequest{
 		ProjectID: projectID,
-		Content:   "Embedded content",
+		Content:   "no-flag",
 		Source:    "test",
+		Options:   StoreOptions{Enrich: false},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if resp.ID == uuid.Nil {
-		t.Error("expected non-nil ID")
-	}
-
-	mem := memories.created[0]
-	if mem.EmbeddingDim == nil {
-		t.Fatal("expected EmbeddingDim to be set")
-	}
-	if *mem.EmbeddingDim != 384 {
-		t.Errorf("expected EmbeddingDim 384, got %d", *mem.EmbeddingDim)
-	}
-
-	if len(vectors.upserted) != 1 {
-		t.Fatalf("expected 1 vector upsert, got %d", len(vectors.upserted))
-	}
-	if vectors.upserted[0].Dimension != 384 {
-		t.Errorf("expected dimension 384, got %d", vectors.upserted[0].Dimension)
-	}
-
-	if len(tokenUsage.usages) != 1 {
-		t.Fatalf("expected 1 token usage record, got %d", len(tokenUsage.usages))
-	}
-	tu := tokenUsage.usages[0]
-	if tu.Operation != "embedding" {
-		t.Errorf("expected operation 'embedding', got %q", tu.Operation)
-	}
-	if tu.Provider != "test-provider" {
-		t.Errorf("expected provider 'test-provider', got %q", tu.Provider)
-	}
-	if tu.Model != "test-model" {
-		t.Errorf("expected model 'test-model', got %q", tu.Model)
-	}
-	if tu.TokensInput != 10 {
-		t.Errorf("expected 10 input tokens, got %d", tu.TokensInput)
+	if len(enrichment.jobs) != 1 {
+		t.Fatalf("expected 1 job even when Enrich=false, got %d", len(enrichment.jobs))
 	}
 }
 
 func TestStore_WithTagsAndMetadata(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
-	svc, memories, _, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, memories, _, _ := newTestService(projects, namespaces)
 
 	meta := json.RawMessage(`{"key":"value"}`)
 	tags := []string{"tag1", "tag2"}
@@ -322,7 +298,7 @@ func TestStore_WithTagsAndMetadata(t *testing.T) {
 
 func TestStore_WithTTL(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
-	svc, memories, _, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, memories, _, _ := newTestService(projects, namespaces)
 
 	before := time.Now()
 
@@ -349,43 +325,9 @@ func TestStore_WithTTL(t *testing.T) {
 	}
 }
 
-func TestStore_WithEnrich(t *testing.T) {
-	projectID, _, projects, namespaces := setupTestFixtures()
-	svc, _, _, _, enrichment, _ := newTestService(projects, namespaces, nil)
-
-	resp, err := svc.Store(context.Background(), &StoreRequest{
-		ProjectID: projectID,
-		Content:   "Enrich me",
-		Source:    "test",
-		Options:   StoreOptions{Enrich: true},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !resp.EnrichmentQueued {
-		t.Error("expected EnrichmentQueued=true")
-	}
-
-	if len(enrichment.jobs) != 1 {
-		t.Fatalf("expected 1 enrichment job, got %d", len(enrichment.jobs))
-	}
-
-	job := enrichment.jobs[0]
-	if job.Status != "pending" {
-		t.Errorf("expected status 'pending', got %q", job.Status)
-	}
-	if job.MaxAttempts != 3 {
-		t.Errorf("expected max_attempts 3, got %d", job.MaxAttempts)
-	}
-	if job.MemoryID != resp.ID {
-		t.Errorf("expected job memory ID %s, got %s", resp.ID, job.MemoryID)
-	}
-}
-
 func TestStore_InvalidTTL(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
-	svc, _, _, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, _, _, _ := newTestService(projects, namespaces)
 
 	cases := []struct {
 		name string
@@ -414,7 +356,7 @@ func TestStore_InvalidTTL(t *testing.T) {
 
 func TestStore_EmptyContent(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
-	svc, _, _, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, _, _, _ := newTestService(projects, namespaces)
 
 	_, err := svc.Store(context.Background(), &StoreRequest{
 		ProjectID: projectID,
@@ -437,7 +379,7 @@ func TestStore_EmptyContent(t *testing.T) {
 
 func TestStore_ProjectNotFound(t *testing.T) {
 	_, _, projects, namespaces := setupTestFixtures()
-	svc, _, _, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, _, _, _ := newTestService(projects, namespaces)
 
 	_, err := svc.Store(context.Background(), &StoreRequest{
 		ProjectID: uuid.New(), // non-existent
@@ -449,106 +391,9 @@ func TestStore_ProjectNotFound(t *testing.T) {
 	}
 }
 
-func TestStore_EmbeddingProviderError(t *testing.T) {
-	projectID, _, projects, namespaces := setupTestFixtures()
-
-	embProvider := &mockEmbeddingProvider{
-		name:       "failing-provider",
-		dimensions: []int{384},
-		err:        fmt.Errorf("embedding service unavailable"),
-	}
-
-	svc, memories, _, tokenUsage, _, vectors := newTestService(projects, namespaces, func() provider.EmbeddingProvider {
-		return embProvider
-	})
-
-	resp, err := svc.Store(context.Background(), &StoreRequest{
-		ProjectID: projectID,
-		Content:   "Content despite embedding failure",
-		Source:    "test",
-	})
-	if err != nil {
-		t.Fatalf("store should succeed even when embedding fails, got: %v", err)
-	}
-
-	if resp.ID == uuid.Nil {
-		t.Error("expected non-nil ID")
-	}
-
-	// Memory should be created without embedding.
-	if len(memories.created) != 1 {
-		t.Fatalf("expected 1 memory, got %d", len(memories.created))
-	}
-	if memories.created[0].EmbeddingDim != nil {
-		t.Error("expected nil EmbeddingDim on embedding failure")
-	}
-
-	// No vector should be upserted.
-	if len(vectors.upserted) != 0 {
-		t.Errorf("expected 0 vector upserts, got %d", len(vectors.upserted))
-	}
-
-	// No token usage should be recorded.
-	if len(tokenUsage.usages) != 0 {
-		t.Errorf("expected 0 token usage records, got %d", len(tokenUsage.usages))
-	}
-}
-
-func TestStore_TokenUsageRecorded(t *testing.T) {
-	projectID, _, projects, namespaces := setupTestFixtures()
-
-	userID := uuid.New()
-	orgID := uuid.New()
-	apiKeyID := uuid.New()
-
-	embProvider := &mockEmbeddingProvider{
-		name:       "test-provider",
-		dimensions: []int{256},
-		resp: &provider.EmbeddingResponse{
-			Embeddings: [][]float32{make([]float32, 256)},
-			Model:      "embed-model",
-			Usage:      provider.TokenUsage{PromptTokens: 5, CompletionTokens: 0, TotalTokens: 5},
-		},
-	}
-
-	svc, _, _, tokenUsage, _, _ := newTestService(projects, namespaces, func() provider.EmbeddingProvider {
-		return embProvider
-	})
-
-	_, err := svc.Store(context.Background(), &StoreRequest{
-		ProjectID: projectID,
-		Content:   "track usage",
-		Source:    "test",
-		UserID:    &userID,
-		OrgID:     &orgID,
-		APIKeyID:  &apiKeyID,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(tokenUsage.usages) != 1 {
-		t.Fatalf("expected 1 usage record, got %d", len(tokenUsage.usages))
-	}
-
-	tu := tokenUsage.usages[0]
-	if *tu.UserID != userID {
-		t.Errorf("expected user ID %s, got %s", userID, *tu.UserID)
-	}
-	if *tu.OrgID != orgID {
-		t.Errorf("expected org ID %s, got %s", orgID, *tu.OrgID)
-	}
-	if *tu.APIKeyID != apiKeyID {
-		t.Errorf("expected API key ID %s, got %s", apiKeyID, *tu.APIKeyID)
-	}
-	if tu.MemoryID == nil {
-		t.Error("expected memory ID to be set")
-	}
-}
-
 func TestStore_IngestionLogCreated(t *testing.T) {
 	projectID, nsID, projects, namespaces := setupTestFixtures()
-	svc, _, ingestion, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, _, ingestion, _ := newTestService(projects, namespaces)
 
 	resp, err := svc.Store(context.Background(), &StoreRequest{
 		ProjectID: projectID,
@@ -583,7 +428,7 @@ func TestStore_IngestionLogCreated(t *testing.T) {
 
 func TestStore_LatencyTracking(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
-	svc, _, _, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, _, _, _ := newTestService(projects, namespaces)
 
 	resp, err := svc.Store(context.Background(), &StoreRequest{
 		ProjectID: projectID,
@@ -639,7 +484,7 @@ func TestParseTTL(t *testing.T) {
 
 func TestStore_NilProjectID(t *testing.T) {
 	_, _, projects, namespaces := setupTestFixtures()
-	svc, _, _, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, _, _, _ := newTestService(projects, namespaces)
 
 	_, err := svc.Store(context.Background(), &StoreRequest{
 		ProjectID: uuid.Nil,
@@ -651,17 +496,17 @@ func TestStore_NilProjectID(t *testing.T) {
 	}
 }
 
-func TestStore_EnrichAndExtractRejected(t *testing.T) {
+func TestStore_ExtractRejected(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
-	svc, _, _, _, _, _ := newTestService(projects, namespaces, nil)
+	svc, _, _, _ := newTestService(projects, namespaces)
 
 	_, err := svc.Store(context.Background(), &StoreRequest{
 		ProjectID: projectID,
 		Content:   "test",
 		Source:    "test",
-		Options:   StoreOptions{Enrich: true, Extract: true},
+		Options:   StoreOptions{Extract: true},
 	})
 	if err == nil {
-		t.Error("expected error when both enrich and extract are true")
+		t.Error("expected error when Extract=true (not yet implemented)")
 	}
 }

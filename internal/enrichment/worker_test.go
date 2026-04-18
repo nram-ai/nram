@@ -2,6 +2,7 @@ package enrichment
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // ---------------------------------------------------------------------------
@@ -100,6 +102,25 @@ func (m *mockQueueClaimer) ClaimNext(_ context.Context, _ string) (*model.Enrich
 	j := m.jobs[0]
 	m.jobs = m.jobs[1:]
 	return j, nil
+}
+
+func (m *mockQueueClaimer) ClaimNextBatch(_ context.Context, _ string, max int) ([]*model.EnrichmentJob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.claimErr != nil {
+		return nil, m.claimErr
+	}
+	if len(m.jobs) == 0 {
+		return nil, sql.ErrNoRows
+	}
+	n := max
+	if n > len(m.jobs) {
+		n = len(m.jobs)
+	}
+	batch := make([]*model.EnrichmentJob, n)
+	copy(batch, m.jobs[:n])
+	m.jobs = m.jobs[n:]
+	return batch, nil
 }
 
 func (m *mockQueueClaimer) Complete(_ context.Context, id uuid.UUID) error {
@@ -216,6 +237,18 @@ func (m *mockVectorWriter) Upsert(_ context.Context, id, nsID uuid.UUID, emb []f
 		return m.err
 	}
 	m.vectors = append(m.vectors, vectorEntry{ID: id, NamespaceID: nsID, Embedding: emb, Dimension: dim})
+	return nil
+}
+
+func (m *mockVectorWriter) UpsertBatch(_ context.Context, items []storage.VectorUpsertItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	for _, it := range items {
+		m.vectors = append(m.vectors, vectorEntry{ID: it.ID, NamespaceID: it.NamespaceID, Embedding: it.Embedding, Dimension: it.Dimension})
+	}
 	return nil
 }
 
@@ -451,9 +484,16 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 		}
 	}
 
-	// Vector upserted for original memory.
-	if len(h.vectors.vectors) != 1 {
-		t.Errorf("expected 1 vector upsert, got %d", len(h.vectors.vectors))
+	// Vectors upserted for the parent memory and each extracted-fact child.
+	// Fixture produces 2 facts, so we expect 3 total upserts (parent + 2).
+	if len(h.vectors.vectors) != 3 {
+		t.Errorf("expected 3 vector upserts (parent + 2 facts), got %d", len(h.vectors.vectors))
+	}
+	// First upsert must be the parent memory itself, not a fact — guards
+	// against the old bug where the first fact's embedding was stored under
+	// the parent's ID.
+	if len(h.vectors.vectors) > 0 && h.vectors.vectors[0].ID != mem.ID {
+		t.Errorf("first vector upsert should target parent memory %s, got %s", mem.ID, h.vectors.vectors[0].ID)
 	}
 
 	// Token usage: fact_extraction + entity_extraction + embedding = 3 records.
@@ -718,6 +758,80 @@ func TestWorkerPool_StartStop(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	h.pool.Stop()
 	// If we reach here without panic or hang, the test passes.
+}
+
+// TestProcessBatch_SingleSharedEmbed verifies the batched path runs ONE embed
+// call for N jobs and distributes the returned vectors back to the right
+// parent + child IDs. This is the throughput-preservation guarantee from the
+// 60s-bug fix: removing sync embed from the write path must not turn a
+// 100-item batch_store into 100 embed API calls.
+func TestProcessBatch_SingleSharedEmbed(t *testing.T) {
+	// Count embed invocations and capture the batched input size.
+	var embedCallCount int
+	var lastInputSize int
+	embedProv := &mockEmbeddingProvider{name: "test-embed", respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+		embedCallCount++
+		lastInputSize = len(req.Input)
+		embs := make([][]float32, len(req.Input))
+		for i := range req.Input {
+			embs[i] = []float32{float32(i), float32(i) + 0.1, float32(i) + 0.2}
+		}
+		return &provider.EmbeddingResponse{
+			Embeddings: embs,
+			Model:      "embed-model",
+			Usage:      provider.TokenUsage{PromptTokens: 40, TotalTokens: 40},
+		}, nil
+	}}
+
+	// Embed-only worker (no fact/entity providers) so each job produces
+	// exactly one input (the parent's own content).
+	h := newTestHarness(nil, nil, embedProv)
+
+	jobs := make([]*model.EnrichmentJob, 0, 3)
+	wantParentIDs := make(map[uuid.UUID]bool, 3)
+	for i := 0; i < 3; i++ {
+		mem := testMemory()
+		mem.ID = uuid.New()
+		mem.Content = fmt.Sprintf("memory-content-%d", i)
+		h.reader.byID[mem.ID] = mem
+		wantParentIDs[mem.ID] = true
+		jobs = append(jobs, testJob(mem.ID, mem.NamespaceID))
+	}
+
+	h.pool.processBatch(context.Background(), "w-0", jobs)
+
+	if embedCallCount != 1 {
+		t.Fatalf("expected 1 shared embed call for %d jobs, got %d", len(jobs), embedCallCount)
+	}
+	if lastInputSize != len(jobs) {
+		t.Fatalf("expected batched embed input size %d (one per parent), got %d", len(jobs), lastInputSize)
+	}
+
+	if len(h.vectors.vectors) != len(jobs) {
+		t.Fatalf("expected %d vector upserts, got %d", len(jobs), len(h.vectors.vectors))
+	}
+	for _, v := range h.vectors.vectors {
+		if !wantParentIDs[v.ID] {
+			t.Errorf("unexpected vector upsert for id %s (not in parent set)", v.ID)
+		}
+	}
+
+	// Every job must be marked complete.
+	if len(h.queue.completed) != len(jobs) {
+		t.Errorf("expected %d completed jobs, got %d", len(jobs), len(h.queue.completed))
+	}
+
+	// Embedding usage records are split per-job (one record each) so
+	// downstream billing can attribute by parent memory.
+	var embedRecords int
+	for _, r := range h.tokens.records {
+		if r.Operation == "embedding" {
+			embedRecords++
+		}
+	}
+	if embedRecords != len(jobs) {
+		t.Errorf("expected %d per-job embedding usage records, got %d", len(jobs), embedRecords)
+	}
 }
 
 // ---------------------------------------------------------------------------

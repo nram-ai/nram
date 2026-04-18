@@ -32,6 +32,19 @@ var SupportedVectorDimensions = map[int]bool{
 	3072: true,
 }
 
+// BestEmbeddingDimension picks the largest dimension that is supported by both
+// the embedding provider and the vector store. Returns 0 if none of the
+// provider's dimensions are supported.
+func BestEmbeddingDimension(providerDims []int) int {
+	best := 0
+	for _, d := range providerDims {
+		if SupportedVectorDimensions[d] && d > best {
+			best = d
+		}
+	}
+	return best
+}
+
 // VectorStore abstracts vector storage backends (pgvector, SQLite brute-force, Qdrant).
 type VectorStore interface {
 	// Upsert inserts or updates a single vector associated with a memory.

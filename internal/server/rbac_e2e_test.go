@@ -485,8 +485,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 
 	storeSvc := service.NewStoreService(
 		memRepo, projectLookup, namespaceLookup,
-		&rbacIngestionLogRepo{}, &rbacTokenUsageRepo{}, &rbacEnrichmentQueueRepo{},
-		nil, nil,
+		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
 	)
 
 	recallSvc := service.NewRecallService(
@@ -504,8 +503,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
-		&rbacIngestionLogRepo{}, &rbacTokenUsageRepo{}, &rbacEnrichmentQueueRepo{},
-		nil, nil,
+		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
 	)
 
 	// --- MCP server ---
@@ -1415,8 +1413,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 
 	storeSvc := service.NewStoreService(
 		memRepo, projectLookup, namespaceLookup,
-		&rbacIngestionLogRepo{}, &rbacTokenUsageRepo{}, &rbacEnrichmentQueueRepo{},
-		nil, nil,
+		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
 	)
 
 	recallSvc := service.NewRecallService(
@@ -1434,8 +1431,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
-		&rbacIngestionLogRepo{}, &rbacTokenUsageRepo{}, &rbacEnrichmentQueueRepo{},
-		nil, nil,
+		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
 	)
 
 	batchGetSvc := service.NewBatchGetService(memRepo, projectLookup)

@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
-	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -356,10 +355,7 @@ func TestStoreHandler_NilMetadata_ReturnsEmptyObject(t *testing.T) {
 		&mockProjectRepo{},
 		&mockNamespaceRepo{},
 		&mockIngestionLogRepo{},
-		&mockTokenUsageRepo{},
 		&mockEnrichmentQueueRepo{},
-		&mockVectorStore{},
-		func() provider.EmbeddingProvider { return nil },
 	)
 
 	router := newTestRouter(NewStoreHandler(svc, nil))

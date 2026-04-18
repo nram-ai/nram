@@ -588,10 +588,7 @@ func newMockStoreService(memID, projectID uuid.UUID, slug string) *service.Store
 		&mockProjectLookup{project: &model.Project{ID: projectID, Slug: slug, NamespaceID: uuid.New()}},
 		&mockNamespaceLookup{ns: &model.Namespace{ID: uuid.New()}},
 		&mockIngestionLogRepo{},
-		&mockTokenUsageRepo{},
 		&mockEnrichmentQueueRepo{},
-		nil, // no vector store
-		nil, // no embed provider
 	)
 }
 
@@ -602,10 +599,7 @@ func newMockBatchStoreService(memoriesCreated int) *service.BatchStoreService {
 		&mockProjectLookup{project: &model.Project{ID: uuid.New(), Slug: "test", NamespaceID: nsID}},
 		&mockNamespaceLookup{ns: &model.Namespace{ID: nsID}},
 		&mockIngestionLogRepo{},
-		&mockTokenUsageRepo{},
 		&mockEnrichmentQueueRepo{},
-		nil,
-		nil,
 	)
 }
 

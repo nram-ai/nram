@@ -20,7 +20,25 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/storage"
 )
+
+// workerEmbedTimeout bounds a single embed HTTP call inside the worker.
+const workerEmbedTimeout = 30 * time.Second
+
+// batchClaimSize caps the jobs claimed per worker iteration; one claim
+// produces one shared embed call.
+const batchClaimSize = 16
+
+// preEmbedConcurrency caps fan-out of per-job fact/entity LLM calls inside a
+// single processBatch invocation. Small enough to stay under per-minute rate
+// limits on typical accounts.
+const preEmbedConcurrency = 4
+
+// embedInputCap caps inputs per provider call; larger batches are chunked.
+// Conservative vs. OpenAI's 2048-input limit to account for per-input token
+// ceilings on nearest providers.
+const embedInputCap = 256
 
 // ---------------------------------------------------------------------------
 // Dependency-inversion interfaces
@@ -44,6 +62,7 @@ type MemoryCreator interface {
 // QueueClaimer manages enrichment job lifecycle in the queue.
 type QueueClaimer interface {
 	ClaimNext(ctx context.Context, workerID string) (*model.EnrichmentJob, error)
+	ClaimNextBatch(ctx context.Context, workerID string, max int) ([]*model.EnrichmentJob, error)
 	Complete(ctx context.Context, id uuid.UUID) error
 	Fail(ctx context.Context, id uuid.UUID, errMsg string) error
 }
@@ -80,9 +99,10 @@ type UsageContextResolver interface {
 	ResolveUsageContext(ctx context.Context, namespaceID uuid.UUID) (*model.UsageContext, error)
 }
 
-// VectorWriter upserts an embedding vector for a memory or entity.
+// VectorWriter upserts embedding vectors for memories and entities.
 type VectorWriter interface {
 	Upsert(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
+	UpsertBatch(ctx context.Context, items []storage.VectorUpsertItem) error
 }
 
 // ---------------------------------------------------------------------------
@@ -280,7 +300,7 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 		default:
 		}
 
-		job, err := wp.queue.ClaimNext(ctx, workerID)
+		jobs, err := wp.queue.ClaimNextBatch(ctx, workerID, batchClaimSize)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -295,7 +315,7 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 			wp.idleWorkers.Add(-1)
 			continue
 		}
-		if job == nil {
+		if len(jobs) == 0 {
 			emptyPolls++
 			wp.idleWorkers.Add(1)
 			wp.sleepWithBackoff(ctx, emptyPolls, maxBackoff)
@@ -306,9 +326,7 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 		// Reset backoff on successful claim.
 		emptyPolls = 0
 
-		if err := wp.processJob(ctx, workerID, job); err != nil {
-			slog.Error("enrichment: job failed", "worker", workerID, "job", job.ID, "err", err)
-		}
+		wp.processBatch(ctx, workerID, jobs)
 	}
 }
 
@@ -345,67 +363,133 @@ func (wp *WorkerPool) sleepWithBackoff(ctx context.Context, emptyPolls, maxBacko
 }
 
 // ---------------------------------------------------------------------------
-// processJob — the full enrichment pipeline for a single job
+// processJob / processBatch — the enrichment pipeline
 // ---------------------------------------------------------------------------
 
+type childFact struct {
+	id      uuid.UUID
+	content string
+}
+
+// pendingJob is the per-job state carried between pre-embed, embed, and
+// finalize phases. embedStart/embedCount index into the shared batched embed
+// response.
+type pendingJob struct {
+	job          *model.EnrichmentJob
+	mem          *model.Memory
+	children     []childFact
+	factUsage    *provider.TokenUsage
+	factModel    string
+	factProvider string
+	entityUsage  *provider.TokenUsage
+	entityModel  string
+	entityProv   string
+	embedStart   int
+	embedCount   int
+}
+
 func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *model.EnrichmentJob) error {
-	// a. Fetch the memory
+	p, err := wp.runPreEmbed(ctx, job)
+	if err != nil {
+		return err
+	}
+	wp.runEmbedBatch(ctx, []*pendingJob{p})
+	return wp.finalizeJob(ctx, p)
+}
+
+// processBatch runs pre-embed in parallel across claimed jobs (bounded by
+// preEmbedConcurrency), then makes one shared embed call, then finalizes
+// each. Bounded concurrency keeps LLM provider rate limits safe.
+func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []*model.EnrichmentJob) {
+	results := make([]*pendingJob, len(jobs))
+	sem := make(chan struct{}, preEmbedConcurrency)
+	var wg sync.WaitGroup
+	for i, job := range jobs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, job *model.EnrichmentJob) {
+			defer func() { <-sem; wg.Done() }()
+			p, err := wp.runPreEmbed(ctx, job)
+			if err != nil {
+				slog.Error("enrichment: batch pre-embed failed", "worker", workerID, "job", job.ID, "err", err)
+				return
+			}
+			results[i] = p
+		}(i, job)
+	}
+	wg.Wait()
+
+	pendings := make([]*pendingJob, 0, len(jobs))
+	for _, p := range results {
+		if p != nil {
+			pendings = append(pendings, p)
+		}
+	}
+	if len(pendings) == 0 {
+		return
+	}
+	wp.runEmbedBatch(ctx, pendings)
+	for _, p := range pendings {
+		if err := wp.finalizeJob(ctx, p); err != nil {
+			slog.Error("enrichment: batch finalize failed", "worker", workerID, "job", p.job.ID, "err", err)
+		}
+	}
+}
+
+// runPreEmbed runs fact/entity extraction, child-memory creation, and
+// entity/relationship upsert for a single job. On fatal failure it marks the
+// job failed and returns an error; on success returns a pendingJob with
+// parent+children ready for the shared embed step.
+func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob) (*pendingJob, error) {
 	mem, err := wp.memories.GetByID(ctx, job.MemoryID)
 	if err != nil {
 		failErr := wp.queue.Fail(ctx, job.ID, fmt.Sprintf("memory lookup: %v", err))
 		if failErr != nil {
 			slog.Error("enrichment: fail-mark error", "job", job.ID, "err", failErr)
 		}
-		return fmt.Errorf("memory lookup: %w", err)
+		return nil, fmt.Errorf("memory lookup: %w", err)
+	}
+
+	hasFact := wp.factProvider() != nil
+	hasEntity := wp.entityProvider() != nil
+	hasEmbed := wp.embedProvider() != nil
+
+	if !hasFact && !hasEntity && !hasEmbed {
+		_ = wp.queue.Fail(ctx, job.ID, "no providers configured")
+		return nil, fmt.Errorf("no providers configured, job requeued")
 	}
 
 	var (
-		facts         []extractedFact
-		entResult     *entityExtractionResult
-		factUsage     *provider.TokenUsage
-		entityUsage   *provider.TokenUsage
-		factModel     string
-		entityModel   string
-		factProvider  string
-		entityProv    string
-		factErr       error
-		entityErr     error
+		facts        []extractedFact
+		entResult    *entityExtractionResult
+		factUsage    *provider.TokenUsage
+		entityUsage  *provider.TokenUsage
+		factModel    string
+		entityModel  string
+		factProvider string
+		entityProv   string
+		factErr      error
+		entityErr    error
 	)
-
-	// b-c. Fact extraction (independent)
-	hasFact := wp.factProvider() != nil
-	hasEntity := wp.entityProvider() != nil
-
-	if !hasFact && !hasEntity {
-		// No providers configured — requeue by failing so it can be retried once
-		// providers are set up.
-		_ = wp.queue.Fail(ctx, job.ID, "no LLM providers configured")
-		return fmt.Errorf("no LLM providers configured, job requeued")
-	}
 
 	if hasFact {
 		facts, factUsage, factModel, factProvider, factErr = wp.extractFacts(ctx, wp.factProvider(), mem.Content)
 	}
-
-	// d-e. Entity extraction (independent)
 	if hasEntity {
 		entResult, entityUsage, entityModel, entityProv, entityErr = wp.extractEntities(ctx, wp.entityProvider(), mem.Content)
 	}
 
-	// If all configured providers failed, mark the job as failed.
 	if (hasFact && factErr != nil) && (hasEntity && entityErr != nil) {
 		errMsg := fmt.Sprintf("fact: %v; entity: %v", factErr, entityErr)
 		_ = wp.queue.Fail(ctx, job.ID, errMsg)
-		return fmt.Errorf("all extractions failed: %s", errMsg)
+		return nil, fmt.Errorf("all extractions failed: %s", errMsg)
 	}
-
-	// If fact extraction was configured and failed, that is a fatal failure.
 	if hasFact && factErr != nil {
 		_ = wp.queue.Fail(ctx, job.ID, fmt.Sprintf("fact extraction: %v", factErr))
-		return fmt.Errorf("fact extraction: %w", factErr)
+		return nil, fmt.Errorf("fact extraction: %w", factErr)
 	}
 
-	// f. Create child memories and lineage for each extracted fact.
+	children := make([]childFact, 0, len(facts))
 	for _, fact := range facts {
 		childID := uuid.New()
 		child := &model.Memory{
@@ -424,6 +508,7 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 			slog.Error("enrichment: create child memory", "job", job.ID, "err", err)
 			continue
 		}
+		children = append(children, childFact{id: childID, content: fact.Content})
 
 		parentID := mem.ID
 		lin := &model.MemoryLineage{
@@ -439,141 +524,291 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 		}
 	}
 
-	// g. Embed extracted facts (if embedding provider available).
-	if ep := wp.embedProvider(); ep != nil && len(facts) > 0 {
-		texts := make([]string, len(facts))
-		for i, f := range facts {
-			texts[i] = f.Content
-		}
-		embedResp, embedErr := ep.Embed(ctx, &provider.EmbeddingRequest{
-			Input: texts,
-		})
-		if embedErr != nil {
-			slog.Error("enrichment: embed facts", "job", job.ID, "err", embedErr)
-		} else {
-			// Record embedding token usage.
-			wp.recordUsage(ctx, mem, "embedding", ep.Name(), "", embedResp.Usage)
+	wp.upsertEntitiesAndRelationships(ctx, job, mem, entResult)
 
-			// Store vectors for original memory using first embedding if available.
-			if len(embedResp.Embeddings) > 0 && wp.vectorStore != nil {
-				dim := len(embedResp.Embeddings[0])
-				if err := wp.vectorStore.Upsert(ctx, mem.ID, mem.NamespaceID, embedResp.Embeddings[0], dim); err != nil {
-					slog.Error("enrichment: upsert vector", "job", job.ID, "err", err)
-				}
-			}
-		}
+	return &pendingJob{
+		job:          job,
+		mem:          mem,
+		children:     children,
+		factUsage:    factUsage,
+		factModel:    factModel,
+		factProvider: factProvider,
+		entityUsage:  entityUsage,
+		entityModel:  entityModel,
+		entityProv:   entityProv,
+	}, nil
+}
+
+// upsertEntitiesAndRelationships persists extracted entities and relationships,
+// resolving missing references against the DB and dedup-ing against existing edges.
+func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *model.EnrichmentJob, mem *model.Memory, entResult *entityExtractionResult) {
+	if entResult == nil {
+		return
 	}
 
-	// h-i. Upsert entities and create relationships.
 	entityNameToID := make(map[string]uuid.UUID)
-	if entResult != nil {
-		for idx := range entResult.Entities {
-			ent := &entResult.Entities[idx]
-			entID := uuid.New()
-			props, _ := json.Marshal(ent.Properties)
+	for idx := range entResult.Entities {
+		ent := &entResult.Entities[idx]
+		entID := uuid.New()
+		props, _ := json.Marshal(ent.Properties)
 
-			modelEntity := &model.Entity{
-				ID:           entID,
-				NamespaceID:  mem.NamespaceID,
-				Name:         ent.Name,
-				Canonical:    strings.ToLower(ent.Name),
-				EntityType:   ent.Type,
-				Properties:   props,
-				MentionCount: 1,
-				CreatedAt:    time.Now().UTC(),
-				UpdatedAt:    time.Now().UTC(),
+		modelEntity := &model.Entity{
+			ID:           entID,
+			NamespaceID:  mem.NamespaceID,
+			Name:         ent.Name,
+			Canonical:    strings.ToLower(ent.Name),
+			EntityType:   ent.Type,
+			Properties:   props,
+			MentionCount: 1,
+			CreatedAt:    time.Now().UTC(),
+			UpdatedAt:    time.Now().UTC(),
+		}
+		if err := wp.entities.Upsert(ctx, modelEntity); err != nil {
+			slog.Error("enrichment: upsert entity", "job", job.ID, "entity", ent.Name, "err", err)
+			continue
+		}
+		entityNameToID[ent.Name] = modelEntity.ID
+	}
+
+	for _, rel := range entResult.Relationships {
+		srcID, srcOK := entityNameToID[rel.Source]
+		tgtID, tgtOK := entityNameToID[rel.Target]
+
+		if !srcOK {
+			ent, err := wp.resolveOrCreateEntity(ctx, mem.NamespaceID, rel.Source)
+			if err != nil {
+				slog.Error("enrichment: resolve source entity", "entity", rel.Source, "err", err)
+			} else {
+				srcID, srcOK = ent.ID, true
+				entityNameToID[rel.Source] = ent.ID
 			}
-			if err := wp.entities.Upsert(ctx, modelEntity); err != nil {
-				slog.Error("enrichment: upsert entity", "job", job.ID, "entity", ent.Name, "err", err)
-				continue
+		}
+		if !tgtOK {
+			ent, err := wp.resolveOrCreateEntity(ctx, mem.NamespaceID, rel.Target)
+			if err != nil {
+				slog.Error("enrichment: resolve target entity", "entity", rel.Target, "err", err)
+			} else {
+				tgtID, tgtOK = ent.ID, true
+				entityNameToID[rel.Target] = ent.ID
 			}
-			entityNameToID[ent.Name] = modelEntity.ID
 		}
 
-		for _, rel := range entResult.Relationships {
-			srcID, srcOK := entityNameToID[rel.Source]
-			tgtID, tgtOK := entityNameToID[rel.Target]
+		if !srcOK || !tgtOK {
+			slog.Warn("enrichment: skip relationship, entity resolution failed",
+				"source", rel.Source, "srcResolved", srcOK,
+				"target", rel.Target, "tgtResolved", tgtOK)
+			continue
+		}
 
-			// Resolve missing entities — look up in DB or create stubs so
-			// that relationships extracted by the LLM are never dropped.
-			if !srcOK {
-				ent, err := wp.resolveOrCreateEntity(ctx, mem.NamespaceID, rel.Source)
-				if err != nil {
-					slog.Error("enrichment: resolve source entity", "entity", rel.Source, "err", err)
-				} else {
-					srcID, srcOK = ent.ID, true
-					entityNameToID[rel.Source] = ent.ID
+		existing, _ := wp.relationships.FindActiveByTriple(ctx, mem.NamespaceID, srcID, tgtID, rel.Relation)
+		if existing != nil {
+			newWeight := existing.Weight
+			if rel.Weight > newWeight {
+				newWeight = rel.Weight
+			}
+			if newWeight != existing.Weight {
+				if err := wp.relationships.UpdateWeight(ctx, existing.ID, mem.NamespaceID, newWeight); err != nil {
+					slog.Error("enrichment: update existing relationship weight", "job", job.ID, "err", err)
 				}
 			}
-			if !tgtOK {
-				ent, err := wp.resolveOrCreateEntity(ctx, mem.NamespaceID, rel.Target)
-				if err != nil {
-					slog.Error("enrichment: resolve target entity", "entity", rel.Target, "err", err)
-				} else {
-					tgtID, tgtOK = ent.ID, true
-					entityNameToID[rel.Target] = ent.ID
-				}
-			}
+			continue
+		}
 
-			if !srcOK || !tgtOK {
-				slog.Warn("enrichment: skip relationship, entity resolution failed",
-					"source", rel.Source, "srcResolved", srcOK,
-					"target", rel.Target, "tgtResolved", tgtOK)
-				continue
-			}
+		memID := mem.ID
+		r := &model.Relationship{
+			ID:           uuid.New(),
+			NamespaceID:  mem.NamespaceID,
+			SourceID:     srcID,
+			TargetID:     tgtID,
+			Relation:     rel.Relation,
+			Weight:       rel.Weight,
+			SourceMemory: &memID,
+			ValidFrom:    mem.CreatedAt,
+			CreatedAt:    time.Now().UTC(),
+		}
+		if err := wp.relationships.Create(ctx, r); err != nil {
+			slog.Error("enrichment: create relationship", "job", job.ID, "err", err)
+		}
+	}
+}
 
-			// Deduplicate: if an active relationship with the same triple exists,
-			// reinforce its weight instead of creating a duplicate.
-			existing, _ := wp.relationships.FindActiveByTriple(ctx, mem.NamespaceID, srcID, tgtID, rel.Relation)
-			if existing != nil {
-				newWeight := existing.Weight
-				if rel.Weight > newWeight {
-					newWeight = rel.Weight
-				}
-				if newWeight != existing.Weight {
-					if err := wp.relationships.UpdateWeight(ctx, existing.ID, mem.NamespaceID, newWeight); err != nil {
-						slog.Error("enrichment: update existing relationship weight", "job", job.ID, "err", err)
-					}
-				}
-				continue
-			}
+// runEmbedBatch runs one embed provider call covering every pendingJob's
+// parent + child-fact contents, chunking at embedInputCap, then writes all
+// vectors via UpsertBatch. Per-job token usage is attributed with a
+// largest-remainder allocation so the per-job rows sum to exactly the
+// provider-billed aggregate.
+func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob) {
+	if len(pendings) == 0 {
+		return
+	}
+	if wp.embedProvider == nil || wp.vectorStore == nil {
+		return
+	}
+	ep := wp.embedProvider()
+	if ep == nil {
+		return
+	}
 
-			memID := mem.ID
-			r := &model.Relationship{
-				ID:           uuid.New(),
-				NamespaceID:  mem.NamespaceID,
-				SourceID:     srcID,
-				TargetID:     tgtID,
-				Relation:     rel.Relation,
-				Weight:       rel.Weight,
-				SourceMemory: &memID,
-				ValidFrom:    mem.CreatedAt,
-				CreatedAt:    time.Now().UTC(),
+	inputs := make([]string, 0, len(pendings)*2)
+	for _, p := range pendings {
+		p.embedStart = len(inputs)
+		inputs = append(inputs, p.mem.Content)
+		for _, c := range p.children {
+			inputs = append(inputs, c.content)
+		}
+		p.embedCount = 1 + len(p.children)
+	}
+
+	dim := storage.BestEmbeddingDimension(ep.Dimensions())
+	embeddings, usage, model, err := wp.embedChunked(ctx, ep, inputs, dim)
+	if err != nil {
+		slog.Error("enrichment: batched embed", "jobs", len(pendings), "err", err)
+		return
+	}
+	if len(embeddings) == 0 {
+		return
+	}
+
+	wp.attributeEmbedUsage(ctx, pendings, ep.Name(), model, usage, len(inputs))
+
+	items := make([]storage.VectorUpsertItem, 0, len(inputs))
+	for _, p := range pendings {
+		if p.embedStart < len(embeddings) {
+			parentVec := embeddings[p.embedStart]
+			if d := len(parentVec); d > 0 {
+				items = append(items, storage.VectorUpsertItem{
+					ID:          p.mem.ID,
+					NamespaceID: p.mem.NamespaceID,
+					Embedding:   parentVec,
+					Dimension:   d,
+				})
 			}
-			if err := wp.relationships.Create(ctx, r); err != nil {
-				slog.Error("enrichment: create relationship", "job", job.ID, "err", err)
+		}
+		for i, c := range p.children {
+			idx := p.embedStart + 1 + i
+			if idx >= len(embeddings) {
+				break
+			}
+			vec := embeddings[idx]
+			if d := len(vec); d > 0 {
+				items = append(items, storage.VectorUpsertItem{
+					ID:          c.id,
+					NamespaceID: p.mem.NamespaceID,
+					Embedding:   vec,
+					Dimension:   d,
+				})
 			}
 		}
 	}
+	if len(items) == 0 {
+		return
+	}
+	if err := wp.vectorStore.UpsertBatch(ctx, items); err != nil {
+		slog.Error("enrichment: upsert vectors batch", "jobs", len(pendings), "items", len(items), "err", err)
+	}
+}
 
-	// j. Mark original memory as enriched.
-	mem.Enriched = true
-	mem.UpdatedAt = time.Now().UTC()
-	if err := wp.memUpdater.Update(ctx, mem); err != nil {
-		_ = wp.queue.Fail(ctx, job.ID, fmt.Sprintf("update memory enriched: %v", err))
+// embedChunked makes one or more Embed calls so each request respects
+// embedInputCap. Returned embeddings preserve input order; returned usage is
+// the sum across chunks; returned model is the last non-empty model string.
+func (wp *WorkerPool) embedChunked(ctx context.Context, ep provider.EmbeddingProvider, inputs []string, dim int) ([][]float32, provider.TokenUsage, string, error) {
+	var (
+		out   = make([][]float32, 0, len(inputs))
+		usage provider.TokenUsage
+		model string
+	)
+	for start := 0; start < len(inputs); start += embedInputCap {
+		end := start + embedInputCap
+		if end > len(inputs) {
+			end = len(inputs)
+		}
+		embedCtx, cancel := context.WithTimeout(ctx, workerEmbedTimeout)
+		resp, err := ep.Embed(embedCtx, &provider.EmbeddingRequest{
+			Input:     inputs[start:end],
+			Dimension: dim,
+		})
+		cancel()
+		if err != nil {
+			return nil, provider.TokenUsage{}, "", err
+		}
+		out = append(out, resp.Embeddings...)
+		usage.PromptTokens += resp.Usage.PromptTokens
+		usage.CompletionTokens += resp.Usage.CompletionTokens
+		usage.TotalTokens += resp.Usage.TotalTokens
+		if resp.Model != "" {
+			model = resp.Model
+		}
+	}
+	return out, usage, model, nil
+}
+
+// attributeEmbedUsage splits aggregate embed usage across pendings using
+// largest-remainder allocation so the per-job rows sum to exactly the
+// provider-billed aggregate (no truncation drift).
+func (wp *WorkerPool) attributeEmbedUsage(ctx context.Context, pendings []*pendingJob, providerName, model string, usage provider.TokenUsage, totalInputs int) {
+	if totalInputs <= 0 {
+		return
+	}
+	allocate := func(total int) []int {
+		alloc := make([]int, len(pendings))
+		rem := make([]float64, len(pendings))
+		sum := 0
+		for i, p := range pendings {
+			exact := float64(total) * float64(p.embedCount) / float64(totalInputs)
+			alloc[i] = int(exact)
+			rem[i] = exact - float64(alloc[i])
+			sum += alloc[i]
+		}
+		// Distribute leftover tokens to the pendings with the largest
+		// fractional remainders until the totals match.
+		for sum < total {
+			maxIdx := 0
+			for i := 1; i < len(rem); i++ {
+				if rem[i] > rem[maxIdx] {
+					maxIdx = i
+				}
+			}
+			alloc[maxIdx]++
+			rem[maxIdx] = -1 // exclude from further rounds
+			sum++
+		}
+		return alloc
+	}
+
+	prompt := allocate(usage.PromptTokens)
+	completion := allocate(usage.CompletionTokens)
+	total := allocate(usage.TotalTokens)
+
+	for i, p := range pendings {
+		if p.embedCount == 0 {
+			continue
+		}
+		wp.recordUsage(ctx, p.mem, "embedding", providerName, model, provider.TokenUsage{
+			PromptTokens:     prompt[i],
+			CompletionTokens: completion[i],
+			TotalTokens:      total[i],
+		})
+	}
+}
+
+// finalizeJob marks the memory enriched, records LLM token usage, and
+// completes the queue row.
+func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
+	p.mem.Enriched = true
+	p.mem.UpdatedAt = time.Now().UTC()
+	if err := wp.memUpdater.Update(ctx, p.mem); err != nil {
+		_ = wp.queue.Fail(ctx, p.job.ID, fmt.Sprintf("update memory enriched: %v", err))
 		return fmt.Errorf("update memory: %w", err)
 	}
 
-	// k. Record token usage for LLM calls.
-	if factUsage != nil {
-		wp.recordUsage(ctx, mem, "fact_extraction", factProvider, factModel, *factUsage)
+	if p.factUsage != nil {
+		wp.recordUsage(ctx, p.mem, "fact_extraction", p.factProvider, p.factModel, *p.factUsage)
 	}
-	if entityUsage != nil {
-		wp.recordUsage(ctx, mem, "entity_extraction", entityProv, entityModel, *entityUsage)
+	if p.entityUsage != nil {
+		wp.recordUsage(ctx, p.mem, "entity_extraction", p.entityProv, p.entityModel, *p.entityUsage)
 	}
 
-	// l. Mark job complete.
-	if err := wp.queue.Complete(ctx, job.ID); err != nil {
+	if err := wp.queue.Complete(ctx, p.job.ID); err != nil {
 		return fmt.Errorf("complete job: %w", err)
 	}
 

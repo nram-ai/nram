@@ -14,7 +14,6 @@ import (
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
-	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -96,10 +95,7 @@ func newTestStoreService(projectRepo service.ProjectRepository) *service.StoreSe
 		projectRepo,
 		&mockNamespaceRepo{},
 		&mockIngestionLogRepo{},
-		&mockTokenUsageRepo{},
 		&mockEnrichmentQueueRepo{},
-		&mockVectorStore{},
-		func() provider.EmbeddingProvider { return nil },
 	)
 }
 
@@ -248,10 +244,7 @@ func TestStoreHandler_ServiceError_Internal(t *testing.T) {
 		&mockProjectRepo{},
 		&mockNamespaceRepo{},
 		&mockIngestionLogRepo{},
-		&mockTokenUsageRepo{},
 		&mockEnrichmentQueueRepo{},
-		&mockVectorStore{},
-		func() provider.EmbeddingProvider { return nil },
 	)
 	router := newTestRouter(NewStoreHandler(svc, nil))
 

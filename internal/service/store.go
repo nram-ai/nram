@@ -10,21 +10,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
-	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
-// bestEmbeddingDimension picks the largest dimension that is supported by both
-// the embedding provider and the vector store. Returns 0 if no compatible
-// dimension exists.
+// bestEmbeddingDimension forwards to storage.BestEmbeddingDimension so existing
+// service-package call sites keep the short name. Single source of truth lives
+// beside SupportedVectorDimensions in the storage package.
 func bestEmbeddingDimension(providerDims []int) int {
-	best := 0
-	for _, d := range providerDims {
-		if storage.SupportedVectorDimensions[d] && d > best {
-			best = d
-		}
-	}
-	return best
+	return storage.BestEmbeddingDimension(providerDims)
 }
 
 // MemoryRepository defines the memory persistence operations needed by the store service.
@@ -97,17 +90,15 @@ type StoreResponse struct {
 	LatencyMs        int64     `json:"latency_ms"`
 }
 
-// StoreService orchestrates memory creation, embedding, ingestion logging,
-// token usage tracking, and enrichment queueing.
+// StoreService persists a memory, logs ingestion, and enqueues an enrichment
+// job. Embedding, vector upsert, and token-usage recording happen async on
+// the enrichment worker so the write path never blocks on an embed provider.
 type StoreService struct {
 	memories        MemoryRepository
 	projects        ProjectRepository
 	namespaces      NamespaceRepository
 	ingestionLogs   IngestionLogRepository
-	tokenUsage      TokenUsageRepository
 	enrichmentQueue EnrichmentQueueRepository
-	vectorStore     VectorStoreWriter
-	embedProvider   func() provider.EmbeddingProvider // function to get current provider (may be nil)
 }
 
 // NewStoreService creates a new StoreService with the given dependencies.
@@ -116,24 +107,18 @@ func NewStoreService(
 	projects ProjectRepository,
 	namespaces NamespaceRepository,
 	ingestionLogs IngestionLogRepository,
-	tokenUsage TokenUsageRepository,
 	enrichmentQueue EnrichmentQueueRepository,
-	vectorStore VectorStoreWriter,
-	embedProvider func() provider.EmbeddingProvider,
 ) *StoreService {
 	return &StoreService{
 		memories:        memories,
 		projects:        projects,
 		namespaces:      namespaces,
 		ingestionLogs:   ingestionLogs,
-		tokenUsage:      tokenUsage,
 		enrichmentQueue: enrichmentQueue,
-		vectorStore:     vectorStore,
-		embedProvider:   embedProvider,
 	}
 }
 
-// Store creates a new memory, optionally embeds it, logs ingestion, and queues enrichment.
+// Store persists the memory and enqueues one enrichment job.
 func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResponse, error) {
 	start := time.Now()
 
@@ -145,9 +130,8 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 		return nil, fmt.Errorf("project_id is required")
 	}
 
-	// Reject unsupported extract+enrich combination (deferred to Task 54).
-	if req.Options.Enrich && req.Options.Extract {
-		return nil, fmt.Errorf("enrich and extract cannot both be true; extract support is not yet implemented")
+	if req.Options.Extract {
+		return nil, fmt.Errorf("extract support is not yet implemented")
 	}
 
 	// Look up project.
@@ -195,70 +179,9 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 		ExpiresAt:   expiresAt,
 	}
 
-	// Attempt embedding if a provider is available.
-	var embeddingDone bool
-	var embeddingUsage *provider.TokenUsage
-	var embeddingModel string
-	var embeddingProviderName string
-	var embeddingVector []float32
-	var embeddingDim int
-
-	if s.embedProvider != nil {
-		ep := s.embedProvider()
-		if ep != nil {
-			dim := bestEmbeddingDimension(ep.Dimensions())
-
-			embReq := &provider.EmbeddingRequest{
-				Input:     []string{req.Content},
-				Dimension: dim,
-			}
-
-			resp, embErr := ep.Embed(ctx, embReq)
-			if embErr == nil && len(resp.Embeddings) > 0 {
-				embeddingDone = true
-				embeddingUsage = &resp.Usage
-				embeddingModel = resp.Model
-				embeddingProviderName = ep.Name()
-
-				embeddingDim = len(resp.Embeddings[0])
-				mem.EmbeddingDim = &embeddingDim
-				embeddingVector = resp.Embeddings[0]
-			}
-			// On embedding error, we still store the memory without embedding.
-		}
-	}
-
 	// Persist the memory.
 	if err := s.memories.Create(ctx, mem); err != nil {
 		return nil, fmt.Errorf("failed to create memory: %w", err)
-	}
-
-	// Upsert vector after memory exists (FK constraint requires memory row first).
-	if embeddingDone && embeddingVector != nil && s.vectorStore != nil {
-		if err := s.vectorStore.Upsert(ctx, memID, ns.ID, embeddingVector, embeddingDim); err != nil {
-			fmt.Printf("service: vector upsert failed for memory %s: %v\n", memID, err)
-		}
-	}
-
-	// Record token usage if embedding happened.
-	if embeddingDone && embeddingUsage != nil {
-		projectID := project.ID
-		usage := &model.TokenUsage{
-			ID:           uuid.New(),
-			OrgID:        req.OrgID,
-			UserID:       req.UserID,
-			ProjectID:    &projectID,
-			NamespaceID:  ns.ID,
-			Operation:    "embedding",
-			Provider:     embeddingProviderName,
-			Model:        embeddingModel,
-			TokensInput:  embeddingUsage.PromptTokens,
-			TokensOutput: embeddingUsage.CompletionTokens,
-			MemoryID:     &memID,
-			APIKeyID:     req.APIKeyID,
-			CreatedAt:    time.Now(),
-		}
-		_ = s.tokenUsage.Record(ctx, usage)
 	}
 
 	// Create ingestion log.
@@ -274,23 +197,20 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 	}
 	_ = s.ingestionLogs.Create(ctx, ingLog)
 
-	// Queue enrichment if requested.
 	enrichmentQueued := false
-	if req.Options.Enrich {
-		job := &model.EnrichmentJob{
-			ID:          uuid.New(),
-			MemoryID:    memID,
-			NamespaceID: ns.ID,
-			Status:      "pending",
-			Priority:    0,
-			Attempts:    0,
-			MaxAttempts: 3,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-		}
-		if err := s.enrichmentQueue.Enqueue(ctx, job); err == nil {
-			enrichmentQueued = true
-		}
+	job := &model.EnrichmentJob{
+		ID:          uuid.New(),
+		MemoryID:    memID,
+		NamespaceID: ns.ID,
+		Status:      "pending",
+		Priority:    0,
+		Attempts:    0,
+		MaxAttempts: 3,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := s.enrichmentQueue.Enqueue(ctx, job); err == nil {
+		enrichmentQueued = true
 	}
 
 	latency := time.Since(start).Milliseconds()

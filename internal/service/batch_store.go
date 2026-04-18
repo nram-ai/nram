@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
-	"github.com/nram-ai/nram/internal/provider"
 )
 
 // BatchStoreItem represents a single item in a batch store request.
@@ -44,17 +43,15 @@ type BatchStoreResponse struct {
 	LatencyMs       int64             `json:"latency_ms"`
 }
 
-// BatchStoreService orchestrates batch memory creation with parallel embedding,
-// per-item independent transactions, and per-item error reporting.
+// BatchStoreService persists multiple memories and enqueues one enrichment
+// job per successful insert. Embedding, vector upsert, and token-usage
+// recording are handled async by the enrichment worker.
 type BatchStoreService struct {
 	memories        MemoryRepository
 	projects        ProjectRepository
 	namespaces      NamespaceRepository
 	ingestionLogs   IngestionLogRepository
-	tokenUsage      TokenUsageRepository
 	enrichmentQueue EnrichmentQueueRepository
-	vectorStore     VectorStoreWriter
-	embedProvider   func() provider.EmbeddingProvider
 }
 
 // NewBatchStoreService creates a new BatchStoreService with the given dependencies.
@@ -63,28 +60,22 @@ func NewBatchStoreService(
 	projects ProjectRepository,
 	namespaces NamespaceRepository,
 	ingestionLogs IngestionLogRepository,
-	tokenUsage TokenUsageRepository,
 	enrichmentQueue EnrichmentQueueRepository,
-	vectorStore VectorStoreWriter,
-	embedProvider func() provider.EmbeddingProvider,
 ) *BatchStoreService {
 	return &BatchStoreService{
 		memories:        memories,
 		projects:        projects,
 		namespaces:      namespaces,
 		ingestionLogs:   ingestionLogs,
-		tokenUsage:      tokenUsage,
 		enrichmentQueue: enrichmentQueue,
-		vectorStore:     vectorStore,
-		embedProvider:   embedProvider,
 	}
 }
 
 // maxBatchItems is the maximum number of items allowed in a single batch store request.
 const maxBatchItems = 100
 
-// BatchStore creates multiple memories in a single batch operation with optional embedding.
-// Each item is processed independently; failure of one item does not affect others.
+// BatchStore persists items independently; failure of one item does not
+// affect others.
 func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreRequest) (*BatchStoreResponse, error) {
 	start := time.Now()
 
@@ -97,6 +88,9 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 	}
 	if len(req.Items) > maxBatchItems {
 		return nil, fmt.Errorf("too many items: %d exceeds maximum of %d", len(req.Items), maxBatchItems)
+	}
+	if req.Options.Extract {
+		return nil, fmt.Errorf("extract support is not yet implemented")
 	}
 
 	// Look up project (once for all items).
@@ -122,39 +116,7 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 		expiresAt = &t
 	}
 
-	// Batch embed ALL contents at once if a provider is available.
-	var embeddings [][]float32
-	var embeddingDone bool
-	var embeddingUsage *provider.TokenUsage
-	var embeddingModel string
-	var embeddingProviderName string
-
-	if s.embedProvider != nil {
-		ep := s.embedProvider()
-		if ep != nil {
-			dim := bestEmbeddingDimension(ep.Dimensions())
-
-			inputs := make([]string, len(req.Items))
-			for i, item := range req.Items {
-				inputs[i] = item.Content
-			}
-
-			embReq := &provider.EmbeddingRequest{
-				Input:     inputs,
-				Dimension: dim,
-			}
-
-			resp, embErr := ep.Embed(ctx, embReq)
-			if embErr == nil && len(resp.Embeddings) == len(req.Items) {
-				embeddingDone = true
-				embeddings = resp.Embeddings
-				embeddingUsage = &resp.Usage
-				embeddingModel = resp.Model
-				embeddingProviderName = ep.Name()
-			}
-			// On embedding error or length mismatch, continue without embeddings.
-		}
-	}
+	_ = project // retained for future attribution fields on the response
 
 	// Process each item independently.
 	errors := []BatchStoreError{}
@@ -183,27 +145,13 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 			ExpiresAt:   expiresAt,
 		}
 
-		// Set embedding dimension if we have embeddings for this item.
-		if embeddingDone && i < len(embeddings) {
-			embDim := len(embeddings[i])
-			mem.EmbeddingDim = &embDim
-		}
-
-		// Persist the memory first (vector table has FK to memories).
+		// Persist the memory.
 		if err := s.memories.Create(ctx, mem); err != nil {
 			errors = append(errors, BatchStoreError{
 				Index:   i,
 				Message: fmt.Sprintf("failed to create memory: %v", err),
 			})
 			continue
-		}
-
-		// Upsert vector after memory exists.
-		if embeddingDone && i < len(embeddings) && s.vectorStore != nil {
-			if err := s.vectorStore.Upsert(ctx, memID, ns.ID, embeddings[i], len(embeddings[i])); err != nil {
-				// Log but don't fail — memory was already created.
-				fmt.Printf("service: vector upsert failed for memory %s: %v\n", memID, err)
-			}
 		}
 
 		memoriesCreated++
@@ -221,41 +169,18 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 		}
 		_ = s.ingestionLogs.Create(ctx, ingLog)
 
-		// Queue enrichment if requested.
-		if req.Options.Enrich {
-			job := &model.EnrichmentJob{
-				ID:          uuid.New(),
-				MemoryID:    memID,
-				NamespaceID: ns.ID,
-				Status:      "pending",
-				Priority:    0,
-				Attempts:    0,
-				MaxAttempts: 3,
-				CreatedAt:   time.Now(),
-				UpdatedAt:   time.Now(),
-			}
-			_ = s.enrichmentQueue.Enqueue(ctx, job)
+		job := &model.EnrichmentJob{
+			ID:          uuid.New(),
+			MemoryID:    memID,
+			NamespaceID: ns.ID,
+			Status:      "pending",
+			Priority:    0,
+			Attempts:    0,
+			MaxAttempts: 3,
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
 		}
-	}
-
-	// Record token usage once for the entire batch embedding call.
-	if embeddingDone && embeddingUsage != nil {
-		projectID := project.ID
-		usage := &model.TokenUsage{
-			ID:           uuid.New(),
-			OrgID:        req.OrgID,
-			UserID:       req.UserID,
-			ProjectID:    &projectID,
-			NamespaceID:  ns.ID,
-			Operation:    "embedding",
-			Provider:     embeddingProviderName,
-			Model:        embeddingModel,
-			TokensInput:  embeddingUsage.PromptTokens,
-			TokensOutput: embeddingUsage.CompletionTokens,
-			APIKeyID:     req.APIKeyID,
-			CreatedAt:    time.Now(),
-		}
-		_ = s.tokenUsage.Record(ctx, usage)
+		_ = s.enrichmentQueue.Enqueue(ctx, job)
 	}
 
 	latency := time.Since(start).Milliseconds()
