@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -521,6 +523,89 @@ func TestRelationshipRepo_TraverseFromEntity_NoRelationships(t *testing.T) {
 		}
 		if len(results) != 0 {
 			t.Fatalf("expected 0 results for isolated entity, got %d", len(results))
+		}
+	})
+}
+
+// TestRelationshipRepo_Create_ConcurrentWeightMerge pins the invariant that
+// concurrent Create calls with the same (namespace, src, tgt, relation,
+// valid_from) triple but different weights converge on max(inputs). If
+// ON CONFLICT DO UPDATE regressed to last-writer-wins the final weight
+// would match the weight of whichever goroutine's write happened to land
+// second, not the maximum.
+func TestRelationshipRepo_Create_ConcurrentWeightMerge(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		tgtID := createTestEntity(t, ctx, db, nsID, "acme")
+
+		// Weights chosen so max is unambiguous and interior values are
+		// non-monotonic (max is not simply the last or first in the slice).
+		weights := []float64{0.10, 0.55, 0.99, 0.33, 0.72, 0.21, 0.88, 0.44,
+			0.63, 0.17, 0.91, 0.38, 0.77, 0.29, 0.82, 0.50}
+		wantMax := 0.0
+		for _, w := range weights {
+			if w > wantMax {
+				wantMax = w
+			}
+		}
+
+		validFrom, err := time.Parse(time.RFC3339, "2026-04-01T12:00:00Z")
+		if err != nil {
+			t.Fatalf("parse valid_from: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		errs := make(chan error, len(weights))
+		for _, w := range weights {
+			wg.Add(1)
+			go func(weight float64) {
+				defer wg.Done()
+				rel := &model.Relationship{
+					NamespaceID: nsID,
+					SourceID:    srcID,
+					TargetID:    tgtID,
+					Relation:    "works_at",
+					Weight:      weight,
+					Properties:  json.RawMessage(`{}`),
+					ValidFrom:   validFrom,
+				}
+				if err := repo.Create(ctx, rel); err != nil {
+					errs <- err
+				}
+			}(w)
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatalf("concurrent Create failed: %v", err)
+		}
+
+		// Exactly one row should exist for the triple.
+		countQuery := `SELECT COUNT(*), MAX(weight) FROM relationships
+			WHERE namespace_id = ? AND source_id = ? AND target_id = ?
+			  AND relation = ? AND valid_from = ?`
+		if db.Backend() == BackendPostgres {
+			countQuery = `SELECT COUNT(*), MAX(weight) FROM relationships
+				WHERE namespace_id = $1 AND source_id = $2 AND target_id = $3
+				  AND relation = $4 AND valid_from = $5`
+		}
+		var count int
+		var gotWeight float64
+		row := db.QueryRow(ctx, countQuery,
+			nsID.String(), srcID.String(), tgtID.String(),
+			"works_at", validFrom.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		)
+		if err := row.Scan(&count, &gotWeight); err != nil {
+			t.Fatalf("scan count: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("expected exactly 1 row for triple, got %d", count)
+		}
+		if gotWeight != wantMax {
+			t.Fatalf("expected weight == max(inputs)=%.2f, got %.2f (last-writer-wins regression?)", wantMax, gotWeight)
 		}
 	})
 }

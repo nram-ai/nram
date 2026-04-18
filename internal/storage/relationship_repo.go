@@ -21,14 +21,23 @@ func NewRelationshipRepo(db DB) *RelationshipRepo {
 	return &RelationshipRepo{db: db}
 }
 
-// Create inserts a new relationship. ID is generated if zero-valued.
-// Properties defaults to `{}` if nil.
+// Create inserts a new relationship. ID/ValidFrom/CreatedAt default from Go
+// when zero. Properties defaults to `{}` if nil. Concurrent calls with the
+// same (namespace, src, tgt, relation, valid_from) triple converge on
+// max(inputs) for weight and last-writer-wins for properties.
 func (r *RelationshipRepo) Create(ctx context.Context, rel *model.Relationship) error {
 	if rel.ID == uuid.Nil {
 		rel.ID = uuid.New()
 	}
 	if rel.Properties == nil {
 		rel.Properties = json.RawMessage(`{}`)
+	}
+	now := time.Now().UTC()
+	if rel.ValidFrom.IsZero() {
+		rel.ValidFrom = now
+	}
+	if rel.CreatedAt.IsZero() {
+		rel.CreatedAt = now
 	}
 
 	var validUntil interface{}
@@ -41,54 +50,37 @@ func (r *RelationshipRepo) Create(ctx context.Context, rel *model.Relationship) 
 		sourceMemory = rel.SourceMemory.String()
 	}
 
-	validFrom := rel.ValidFrom
-	if validFrom.IsZero() {
-		validFrom = time.Now().UTC()
-	}
+	validFromStr := rel.ValidFrom.UTC().Format(time.RFC3339)
+	createdAtStr := rel.CreatedAt.UTC().Format(time.RFC3339)
 
-	// Use RETURNING (Postgres) or a follow-up SELECT (SQLite) to get the
-	// actual row ID, which may differ from rel.ID on conflict.
+	var query string
 	if r.db.Backend() == BackendPostgres {
-		query := `INSERT INTO relationships (id, namespace_id, source_id, target_id, relation, weight, properties, valid_from, valid_until, source_memory)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		query = `INSERT INTO relationships (id, namespace_id, source_id, target_id, relation, weight, properties, valid_from, valid_until, source_memory, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 			ON CONFLICT(namespace_id, source_id, target_id, relation, valid_from) DO UPDATE SET
-				weight = EXCLUDED.weight, properties = EXCLUDED.properties
+				weight = GREATEST(relationships.weight, EXCLUDED.weight),
+				properties = EXCLUDED.properties
 			RETURNING id`
-		var actualID string
-		err := r.db.QueryRow(ctx, query,
-			rel.ID.String(), rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
-			rel.Relation, rel.Weight, string(rel.Properties),
-			validFrom.UTC().Format(time.RFC3339), validUntil, sourceMemory,
-		).Scan(&actualID)
-		if err != nil {
-			return fmt.Errorf("relationship create: %w", err)
-		}
-		rel.ID, _ = uuid.Parse(actualID)
 	} else {
-		query := `INSERT INTO relationships (id, namespace_id, source_id, target_id, relation, weight, properties, valid_from, valid_until, source_memory)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		query = `INSERT INTO relationships (id, namespace_id, source_id, target_id, relation, weight, properties, valid_from, valid_until, source_memory, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(namespace_id, source_id, target_id, relation, valid_from) DO UPDATE SET
-				weight = excluded.weight, properties = excluded.properties`
-		_, err := r.db.Exec(ctx, query,
-			rel.ID.String(), rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
-			rel.Relation, rel.Weight, string(rel.Properties),
-			validFrom.UTC().Format(time.RFC3339), validUntil, sourceMemory,
-		)
-		if err != nil {
-			return fmt.Errorf("relationship create: %w", err)
-		}
-		// On conflict, SQLite doesn't return the existing ID. Look it up.
-		lookupQuery := `SELECT id FROM relationships WHERE namespace_id = ? AND source_id = ? AND target_id = ? AND relation = ? AND valid_from = ?`
-		var existingID string
-		if err := r.db.QueryRow(ctx, lookupQuery,
-			rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
-			rel.Relation, validFrom.UTC().Format(time.RFC3339),
-		).Scan(&existingID); err == nil {
-			rel.ID, _ = uuid.Parse(existingID)
-		}
+				weight = MAX(weight, excluded.weight),
+				properties = excluded.properties
+			RETURNING id`
 	}
 
-	return r.reload(ctx, rel)
+	var actualID string
+	err := r.db.QueryRow(ctx, query,
+		rel.ID.String(), rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
+		rel.Relation, rel.Weight, string(rel.Properties),
+		validFromStr, validUntil, sourceMemory, createdAtStr,
+	).Scan(&actualID)
+	if err != nil {
+		return fmt.Errorf("relationship create: %w", err)
+	}
+	rel.ID, _ = uuid.Parse(actualID)
+	return nil
 }
 
 // GetByID returns a relationship by its UUID.

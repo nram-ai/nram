@@ -600,20 +600,6 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 			continue
 		}
 
-		existing, _ := wp.relationships.FindActiveByTriple(ctx, mem.NamespaceID, srcID, tgtID, rel.Relation)
-		if existing != nil {
-			newWeight := existing.Weight
-			if rel.Weight > newWeight {
-				newWeight = rel.Weight
-			}
-			if newWeight != existing.Weight {
-				if err := wp.relationships.UpdateWeight(ctx, existing.ID, mem.NamespaceID, newWeight); err != nil {
-					slog.Error("enrichment: update existing relationship weight", "job", job.ID, "err", err)
-				}
-			}
-			continue
-		}
-
 		memID := mem.ID
 		r := &model.Relationship{
 			ID:           uuid.New(),
