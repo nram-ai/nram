@@ -12,14 +12,17 @@ nram provides a self-hosted server that any AI agent can use to persist long-ter
 - **Semantic Search** - Vector embedding support via pgvector (PostgreSQL), pure-Go HNSW (SQLite), or Qdrant for similarity-based recall
 - **Enrichment Pipeline** - Background workers extract facts, entities, and relationships from stored memories using configurable LLM providers
 - **Knowledge Graph** - Automatically constructed from enriched entities and relationships with multi-hop traversal
-- **Dreaming** - Offline background process that consolidates entities, resolves contradictions, deduplicates, prunes stale data, infers transitive relationships, and recalculates weights
-- **Model Context Protocol (MCP)** - Full MCP server at `/mcp` with tools for store, recall, batch, enrich, graph, and export
+- **Dreaming** - Offline background process with six phases: entity dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation
+- **Adaptive Confidence** - Optional reconsolidation hook on recall nudges `access_count`, `last_accessed`, and `confidence` on surfaced memories; the pruning phase applies a complementary confidence decay so unused memories fade over time. Shadow mode by default for observable-only rollout.
+- **Model Context Protocol (MCP)** - Full MCP server at `/mcp` (Streamable HTTP) with 13 tools covering store, recall, update, get, list, forget, enrich, graph traversal, project management, and export
+- **Authentication** - JWT (password login), per-user API keys, WebAuthn passkeys, and per-organization OIDC single sign-on
 - **OAuth 2.0** - Authorization Code + PKCE, dynamic client registration (RFC 7591), resource indicators (RFC 8707), discovery metadata (RFC 8414, RFC 9728)
 - **RBAC** - Five roles (administrator, org_owner, member, readonly, service) enforced across REST and MCP
 - **Multi-Tenancy** - Organizations, hierarchical namespaces, and projects for memory isolation
 - **Real-Time Events** - Server-Sent Events (SSE) with scope filtering and reconnection replay; webhook delivery with HMAC-SHA256 signatures
-- **Admin UI** - React-based dashboard for managing organizations, users, projects, providers, enrichment, OAuth clients, and analytics
+- **Admin UI** - React-based dashboard for managing organizations, users, projects, providers, enrichment, dreaming, OAuth clients, webhooks, SSO, database, and analytics
 - **Dual Database Support** - SQLite (zero-config default) or PostgreSQL (with pgvector and LISTEN/NOTIFY); both support enrichment and knowledge graph
+- **Migration Tooling** - SQLite-to-Postgres migration with preflight checks (connectivity, pgvector, privileges, target row counts), orphan audit against foreign-key relationships, and gated reset (truncate or drop-schema)
 - **LLM Provider Agnostic** - OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint
 - **Import/Export** - JSON and NDJSON formats for full project snapshots
 - **Prometheus Metrics** - `/metrics` endpoint for monitoring
@@ -178,30 +181,36 @@ Migrations run automatically on startup when `migrate_on_start: true` (the defau
 
 ## API
 
-Full OpenAPI 3.1.0 specification available at [`docs/openapi.yaml`](docs/openapi.yaml).
+An OpenAPI 3.1.0 specification lives at [`docs/openapi.yaml`](docs/openapi.yaml). It may lag the code — the tables below reflect the current router source of truth.
 
 ### Authentication
 
-All API requests require authentication via one of:
+All authenticated API requests carry a Bearer token via the `Authorization` header. A token can be:
 
-- **Bearer token** - JWT obtained from `/v1/auth/login` or OAuth flow
-- **API key** - Generated per-user via `/v1/me/api-keys`, sent as `Authorization: Bearer <key>`
+- A JWT obtained from `POST /v1/auth/login` (password) or the passkey / OIDC flows
+- A per-user API key generated via `/v1/me/api-keys` (prefix `nram_k_`)
+- An OAuth 2.0 access token from `/token`
 
-### Core Endpoints
+Setup-guarded routes return 503 until the initial admin has been created via the setup wizard.
+
+### Health & Observability
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/v1/health` | Health check |
 | `GET` | `/metrics` | Prometheus metrics |
-| `POST` | `/v1/auth/login` | Authenticate and receive JWT |
-| `POST` | `/v1/projects/{id}/memories` | Store a memory |
-| `GET` | `/v1/projects/{id}/memories` | List memories |
-| `POST` | `/v1/projects/{id}/memories/recall` | Semantic search / recall |
-| `POST` | `/v1/projects/{id}/memories/batch` | Batch store or retrieve |
-| `POST` | `/v1/projects/{id}/memories/enrich` | Trigger enrichment |
-| `POST` | `/v1/projects/{id}/memories/export` | Export project data |
-| `GET` | `/v1/me/recall` | Cross-project recall for current user |
-| `GET` | `/v1/events` | SSE event stream |
+| `GET` | `/v1/events` | Server-Sent Events stream (scope filter + replay) |
+
+### Login & Account Bootstrap
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/admin/setup/status` | Whether the initial admin has been provisioned |
+| `POST` | `/v1/admin/setup` | Complete first-run setup (creates the administrator) |
+| `POST` | `/v1/auth/lookup` | Resolve an email to its available login methods |
+| `POST` | `/v1/auth/login` | Password login → JWT |
+| `POST` | `/v1/auth/passkey/begin` / `/finish` | WebAuthn login challenge + completion |
+| `GET` | `/auth/idp/login` / `/auth/idp/callback` | Per-organization OIDC single sign-on |
 
 ### OAuth 2.0
 
@@ -212,7 +221,83 @@ All API requests require authentication via one of:
 | `/authorize` | Authorization endpoint (PKCE required) |
 | `/token` | Token endpoint |
 | `/register` | Dynamic client registration (RFC 7591) |
-| `/userinfo` | User info endpoint |
+| `/userinfo` | OpenID userinfo endpoint |
+
+### Memories (project-scoped)
+
+All under `/v1/projects/{project_id}/memories`. Read operations are available to any authenticated role; write operations require non-readonly.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | List memories (filters: tags, date range, source, search, enriched) |
+| `GET` | `/ids` | List matching memory IDs (for "select all") |
+| `GET` | `/{id}` | Get a memory by ID |
+| `POST` | `/get` | Batch-get by ID list |
+| `POST` | `/recall` | Semantic recall (vector + graph + ranking; fires reconsolidation) |
+| `GET` | `/export` | Export as JSON / NDJSON |
+| `POST` | `/` | Store a memory |
+| `PUT` | `/{id}` | Update a memory |
+| `DELETE` | `/{id}` | Soft-delete a memory |
+| `POST` | `/batch` | Batch store |
+| `POST` | `/forget` | Bulk soft-delete |
+| `POST` | `/enrich` | Trigger enrichment |
+| `POST` | `/import` | Import a project snapshot |
+
+### User Self-Service
+
+All under `/v1/me`.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/memories/recall` | Cross-project recall for the current user |
+| `GET` / `POST` | `/projects` | List or create projects owned by the user |
+| `GET` / `PUT` / `DELETE` | `/projects/{id}` | Manage a specific project |
+| `GET` / `POST` | `/api-keys` | List or mint API keys |
+| `DELETE` | `/api-keys/{id}` | Revoke an API key |
+| `GET` / `POST` | `/oauth-clients` | List or register OAuth clients |
+| `DELETE` | `/oauth-clients/{id}` | Revoke an OAuth client |
+| `POST` | `/password` | Change password |
+| `GET` | `/passkeys` | List registered passkeys |
+| `POST` | `/passkeys/register/begin` / `/finish` | Register a new passkey |
+| `DELETE` | `/passkeys/{id}` | Remove a passkey |
+
+### Scoped Views (authenticated; results scoped to caller's role)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/dashboard` | Counts and headline metrics |
+| `GET` | `/v1/activity` | Recent memory activity |
+| `GET` | `/v1/analytics` | Memory, recall, and enrichment analytics |
+| `GET` | `/v1/usage` | Token usage aggregation |
+| `GET` | `/v1/graph` | Knowledge graph data |
+| `GET` | `/v1/namespaces/tree` | Namespace hierarchy |
+| `*` | `/v1/enrichment/...` | Enrichment queue monitoring and retry |
+| `*` | `/v1/dreaming/...` | Dream cycle inspection and triggers |
+
+### Organization Management
+
+All under `/v1/orgs/{org_id}`, gated by org membership.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/analytics` / `/usage` | Org-scoped views (member+) |
+| `*` | `/users/...` | Manage users in the org (org_owner+) |
+| `*` | `/idp/...` | Manage per-org OIDC configuration (org_owner+) |
+
+### Administration
+
+All under `/v1/admin`, gated by `administrator` role.
+
+| Method | Path | Description |
+|---|---|---|
+| `*` | `/orgs/...` | Organization CRUD |
+| `*` | `/users/...` | Global user CRUD |
+| `*` | `/projects/...` | Global project CRUD |
+| `*` | `/providers/...` | LLM / embedding provider configuration |
+| `*` | `/settings` | Global settings (including reconsolidation tunables) |
+| `*` | `/oauth/...` | OAuth client administration |
+| `*` | `/webhooks/...` | Webhook registration and delivery audit |
+| `*` | `/database/...` | Database info, test, preflight, migration audit, reset |
 
 ### MCP (Model Context Protocol)
 
@@ -251,12 +336,15 @@ The embedded web UI is served at the root path (`/`). It provides:
 - Setup wizard for initial configuration
 - Organization and user management
 - Project management
-- LLM/embedding provider configuration with hot-reload
-- Enrichment queue monitoring
+- LLM / embedding provider configuration with hot-reload
+- Settings editor (including reconsolidation mode and decay tuning)
+- Enrichment queue monitoring and retry
+- Dreaming cycle inspection and manual triggers
 - Knowledge graph visualization
-- OAuth client management
-- Token usage analytics
-- Real-time activity feed
+- OAuth client management, webhook management, per-org OIDC SSO configuration
+- Passkey management (per-user registration and removal)
+- Database management (info, test, preflight, migration audit, reset)
+- Token usage analytics and real-time activity feed
 
 ## Project Structure
 
