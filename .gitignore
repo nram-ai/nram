@@ -11,3 +11,9 @@ ui/vite.config.js
 ui/vite.config.d.ts
 server.test
 ui/coverage/
+
+# Built UI output copied in by `make build-ui` and embedded via go:embed.
+# .gitkeep is tracked so the directory exists for a fresh-clone `go build`
+# before the UI has been built.
+internal/ui/dist/*
+!internal/ui/dist/.gitkeep
