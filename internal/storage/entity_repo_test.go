@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -542,6 +543,190 @@ func TestEntityRepo_Create_WithEmbeddingDim(t *testing.T) {
 		}
 		if fetched.EmbeddingDim == nil || *fetched.EmbeddingDim != 768 {
 			t.Fatalf("expected embedding_dim 768, got %v", fetched.EmbeddingDim)
+		}
+	})
+}
+
+// TestEntityRepo_Upsert_PromoteStub_MergesConflicts verifies that when
+// promoteStub runs against a stub whose relationships and aliases collide
+// with ones already owned by the real entity, the merge absorbs the
+// conflicts (taking max(weight), dropping duplicate aliases) instead of
+// crashing on UNIQUE constraint violations. Server previously emitted
+// `entity promote stub: reassign target relationships: duplicate key`
+// warnings every time this happened.
+func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		relRepo := NewRelationshipRepo(db)
+		aliasRepo := NewEntityAliasRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		// Stub entity for "apple" — created as type=unknown.
+		stub := &model.Entity{
+			NamespaceID: nsID,
+			Name:        "apple",
+			Canonical:   "apple",
+			EntityType:  "unknown",
+		}
+		if err := repo.Create(ctx, stub); err != nil {
+			t.Fatalf("create stub: %v", err)
+		}
+
+		// Real entity for "apple" as type=organization. Create directly so
+		// we can seed state before triggering promoteStub via Upsert below.
+		real := &model.Entity{
+			NamespaceID: nsID,
+			Name:        "Apple Inc.",
+			Canonical:   "apple",
+			EntityType:  "organization",
+		}
+		if err := repo.Create(ctx, real); err != nil {
+			t.Fatalf("create real: %v", err)
+		}
+
+		// A third entity to connect relationships to.
+		acquirer := &model.Entity{
+			NamespaceID: nsID,
+			Name:        "microsoft",
+			Canonical:   "microsoft",
+			EntityType:  "organization",
+		}
+		if err := repo.Create(ctx, acquirer); err != nil {
+			t.Fatalf("create acquirer: %v", err)
+		}
+
+		validFrom, err := time.Parse(time.RFC3339, "2026-04-01T00:00:00Z")
+		if err != nil {
+			t.Fatalf("parse valid_from: %v", err)
+		}
+
+		// Conflicting relationship: microsoft --acquired--> apple, both as
+		// stub-target and real-target, same valid_from. Stub has the
+		// larger weight — the merge must preserve it, not regress.
+		if err := relRepo.Create(ctx, &model.Relationship{
+			NamespaceID: nsID, SourceID: acquirer.ID, TargetID: stub.ID,
+			Relation: "acquired", Weight: 0.95, ValidFrom: validFrom,
+		}); err != nil {
+			t.Fatalf("seed stub-target rel: %v", err)
+		}
+		if err := relRepo.Create(ctx, &model.Relationship{
+			NamespaceID: nsID, SourceID: acquirer.ID, TargetID: real.ID,
+			Relation: "acquired", Weight: 0.50, ValidFrom: validFrom,
+		}); err != nil {
+			t.Fatalf("seed real-target rel: %v", err)
+		}
+
+		// Stub-only relationship: apple --competes_with--> microsoft.
+		// No conflict on real side — must migrate cleanly.
+		if err := relRepo.Create(ctx, &model.Relationship{
+			NamespaceID: nsID, SourceID: stub.ID, TargetID: acquirer.ID,
+			Relation: "competes_with", Weight: 0.40, ValidFrom: validFrom,
+		}); err != nil {
+			t.Fatalf("seed stub-source rel: %v", err)
+		}
+
+		// Overlapping alias — both hold "Apple". Plus a stub-only alias.
+		if err := aliasRepo.Create(ctx, &model.EntityAlias{
+			NamespaceID: nsID, EntityID: stub.ID, Alias: "Apple", AliasType: "variant",
+		}); err != nil {
+			t.Fatalf("seed stub alias: %v", err)
+		}
+		if err := aliasRepo.Create(ctx, &model.EntityAlias{
+			NamespaceID: nsID, EntityID: real.ID, Alias: "Apple", AliasType: "variant",
+		}); err != nil {
+			t.Fatalf("seed real alias: %v", err)
+		}
+		if err := aliasRepo.Create(ctx, &model.EntityAlias{
+			NamespaceID: nsID, EntityID: stub.ID, Alias: "AAPL", AliasType: "ticker",
+		}); err != nil {
+			t.Fatalf("seed stub-only alias: %v", err)
+		}
+
+		// Trigger promoteStub: Upsert the real-shaped entity again.
+		trigger := &model.Entity{
+			NamespaceID: nsID,
+			Name:        "Apple Inc.",
+			Canonical:   "apple",
+			EntityType:  "organization",
+		}
+		if err := repo.Upsert(ctx, trigger); err != nil {
+			t.Fatalf("upsert trigger (this is the bug path): %v", err)
+		}
+
+		// Stub must be gone.
+		if _, err := repo.GetByID(ctx, stub.ID); err == nil {
+			t.Errorf("expected stub %s deleted after promote, still exists", stub.ID)
+		}
+
+		// Relationship collision: exactly one microsoft --acquired--> apple
+		// row remains, targeting real, with the larger weight (0.95) preserved.
+		var acqCount int
+		var acqWeight float64
+		countQuery := `SELECT COUNT(*), COALESCE(MAX(weight), 0) FROM relationships
+			WHERE namespace_id = ? AND source_id = ? AND relation = 'acquired'`
+		if db.Backend() == BackendPostgres {
+			countQuery = `SELECT COUNT(*), COALESCE(MAX(weight), 0) FROM relationships
+				WHERE namespace_id = $1 AND source_id = $2 AND relation = 'acquired'`
+		}
+		if err := db.QueryRow(ctx, countQuery, nsID.String(), acquirer.ID.String()).Scan(&acqCount, &acqWeight); err != nil {
+			t.Fatalf("count acquired rels: %v", err)
+		}
+		if acqCount != 1 {
+			t.Errorf("expected 1 acquired relationship after merge, got %d", acqCount)
+		}
+		if acqWeight != 0.95 {
+			t.Errorf("expected merged weight 0.95 (max of stub 0.95 and real 0.50), got %f", acqWeight)
+		}
+
+		// Target of the surviving acquired row must be real.
+		var acqTargetStr string
+		tgtQuery := `SELECT target_id FROM relationships
+			WHERE namespace_id = ? AND source_id = ? AND relation = 'acquired'`
+		if db.Backend() == BackendPostgres {
+			tgtQuery = `SELECT target_id FROM relationships
+				WHERE namespace_id = $1 AND source_id = $2 AND relation = 'acquired'`
+		}
+		if err := db.QueryRow(ctx, tgtQuery, nsID.String(), acquirer.ID.String()).Scan(&acqTargetStr); err != nil {
+			t.Fatalf("read acquired rel target: %v", err)
+		}
+		if acqTargetStr != real.ID.String() {
+			t.Errorf("expected surviving acquired rel to point at real (%s), got %s", real.ID, acqTargetStr)
+		}
+
+		// Stub-only relationship must be reassigned to real.
+		var compCount int
+		var compSrcStr string
+		compQuery := `SELECT COUNT(*), COALESCE(MAX(CAST(source_id AS TEXT)), '') FROM relationships
+			WHERE namespace_id = ? AND target_id = ? AND relation = 'competes_with'`
+		if db.Backend() == BackendPostgres {
+			compQuery = `SELECT COUNT(*), COALESCE(MAX(source_id::text), '') FROM relationships
+				WHERE namespace_id = $1 AND target_id = $2 AND relation = 'competes_with'`
+		}
+		if err := db.QueryRow(ctx, compQuery, nsID.String(), acquirer.ID.String()).Scan(&compCount, &compSrcStr); err != nil {
+			t.Fatalf("count competes_with rels: %v", err)
+		}
+		if compCount != 1 {
+			t.Errorf("expected 1 competes_with relationship after reassign, got %d", compCount)
+		}
+		if compSrcStr != real.ID.String() {
+			t.Errorf("expected competes_with source to be real (%s), got %s", real.ID, compSrcStr)
+		}
+
+		// Aliases on real: "Apple" (deduped) + "AAPL" (migrated). Exactly 2.
+		aliases, err := aliasRepo.ListByEntity(ctx, real.ID)
+		if err != nil {
+			t.Fatalf("list real aliases: %v", err)
+		}
+		if len(aliases) != 2 {
+			t.Errorf("expected 2 aliases on real after merge, got %d: %+v", len(aliases), aliases)
+		}
+		seen := map[string]bool{}
+		for _, a := range aliases {
+			seen[a.Alias] = true
+		}
+		if !seen["Apple"] || !seen["AAPL"] {
+			t.Errorf("expected aliases 'Apple' and 'AAPL' on real, got %v", seen)
 		}
 	})
 }

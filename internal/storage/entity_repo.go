@@ -186,30 +186,13 @@ func (r *EntityRepo) promoteStub(ctx context.Context, entity *model.Entity) erro
 	stubID := stub.ID.String()
 	realID := real.ID.String()
 
-	// Reassign relationships (source_id).
-	srcQuery := `UPDATE relationships SET source_id = ? WHERE source_id = ?`
-	if r.db.Backend() == BackendPostgres {
-		srcQuery = `UPDATE relationships SET source_id = $1 WHERE source_id = $2`
-	}
-	if _, err := r.db.Exec(ctx, srcQuery, realID, stubID); err != nil {
+	if err := r.mergeRelationshipsByEndpoint(ctx, "source_id", stubID, realID); err != nil {
 		return fmt.Errorf("entity promote stub: reassign source relationships: %w", err)
 	}
-
-	// Reassign relationships (target_id).
-	tgtQuery := `UPDATE relationships SET target_id = ? WHERE target_id = ?`
-	if r.db.Backend() == BackendPostgres {
-		tgtQuery = `UPDATE relationships SET target_id = $1 WHERE target_id = $2`
-	}
-	if _, err := r.db.Exec(ctx, tgtQuery, realID, stubID); err != nil {
+	if err := r.mergeRelationshipsByEndpoint(ctx, "target_id", stubID, realID); err != nil {
 		return fmt.Errorf("entity promote stub: reassign target relationships: %w", err)
 	}
-
-	// Reassign aliases.
-	aliasQuery := `UPDATE entity_aliases SET entity_id = ? WHERE entity_id = ?`
-	if r.db.Backend() == BackendPostgres {
-		aliasQuery = `UPDATE entity_aliases SET entity_id = $1 WHERE entity_id = $2`
-	}
-	if _, err := r.db.Exec(ctx, aliasQuery, realID, stubID); err != nil {
+	if err := r.mergeAliasesToEntity(ctx, stubID, realID); err != nil {
 		return fmt.Errorf("entity promote stub: reassign aliases: %w", err)
 	}
 
@@ -233,6 +216,138 @@ func (r *EntityRepo) promoteStub(ctx context.Context, entity *model.Entity) erro
 		return fmt.Errorf("entity promote stub: update mention count: %w", err)
 	}
 
+	return nil
+}
+
+// mergeRelationshipsByEndpoint repoints stub-owned relationships at one
+// endpoint (source_id or target_id) to real. Where the repoint would
+// collide with an existing real-owned relationship on the UNIQUE
+// (namespace_id, source_id, target_id, relation, valid_from) key, the
+// real row's weight is pulled up to max(real, stub) and the stub row is
+// deleted. Remaining stub rows are reassigned via UPDATE.
+func (r *EntityRepo) mergeRelationshipsByEndpoint(ctx context.Context, endpoint, stubID, realID string) error {
+	if endpoint != "source_id" && endpoint != "target_id" {
+		return fmt.Errorf("mergeRelationshipsByEndpoint: invalid endpoint %q", endpoint)
+	}
+	// Sibling endpoint fills out the UNIQUE-key match: when reassigning
+	// source_id we're looking for rows that agree on target_id/relation/
+	// valid_from with a row already owned by real, and vice versa.
+	sibling := "target_id"
+	if endpoint == "target_id" {
+		sibling = "source_id"
+	}
+
+	// Step 1: bring max(weight) onto the real row for each (sibling, relation,
+	// valid_from) triple that both stub and real already hold.
+	var mergeQuery string
+	if r.db.Backend() == BackendPostgres {
+		mergeQuery = fmt.Sprintf(`UPDATE relationships realrel
+			SET weight = GREATEST(realrel.weight, stubrel.weight)
+			FROM relationships stubrel
+			WHERE realrel.%[1]s = $1
+			  AND stubrel.%[1]s = $2
+			  AND realrel.namespace_id = stubrel.namespace_id
+			  AND realrel.%[2]s = stubrel.%[2]s
+			  AND realrel.relation = stubrel.relation
+			  AND realrel.valid_from = stubrel.valid_from`, endpoint, sibling)
+	} else {
+		mergeQuery = fmt.Sprintf(`UPDATE relationships
+			SET weight = MAX(weight, (
+				SELECT s.weight FROM relationships s
+				WHERE s.%[1]s = ?
+				  AND s.namespace_id = relationships.namespace_id
+				  AND s.%[2]s = relationships.%[2]s
+				  AND s.relation = relationships.relation
+				  AND s.valid_from = relationships.valid_from
+			))
+			WHERE %[1]s = ?
+			  AND EXISTS (
+				SELECT 1 FROM relationships s
+				WHERE s.%[1]s = ?
+				  AND s.namespace_id = relationships.namespace_id
+				  AND s.%[2]s = relationships.%[2]s
+				  AND s.relation = relationships.relation
+				  AND s.valid_from = relationships.valid_from
+			  )`, endpoint, sibling)
+	}
+	if r.db.Backend() == BackendPostgres {
+		if _, err := r.db.Exec(ctx, mergeQuery, realID, stubID); err != nil {
+			return fmt.Errorf("merge weights: %w", err)
+		}
+	} else {
+		if _, err := r.db.Exec(ctx, mergeQuery, stubID, realID, stubID); err != nil {
+			return fmt.Errorf("merge weights: %w", err)
+		}
+	}
+
+	// Step 2: delete the now-redundant stub rows.
+	var deleteQuery string
+	if r.db.Backend() == BackendPostgres {
+		deleteQuery = fmt.Sprintf(`DELETE FROM relationships stubrel
+			USING relationships realrel
+			WHERE stubrel.%[1]s = $1
+			  AND realrel.%[1]s = $2
+			  AND realrel.namespace_id = stubrel.namespace_id
+			  AND realrel.%[2]s = stubrel.%[2]s
+			  AND realrel.relation = stubrel.relation
+			  AND realrel.valid_from = stubrel.valid_from`, endpoint, sibling)
+	} else {
+		deleteQuery = fmt.Sprintf(`DELETE FROM relationships
+			WHERE %[1]s = ?
+			  AND EXISTS (
+				SELECT 1 FROM relationships r
+				WHERE r.%[1]s = ?
+				  AND r.namespace_id = relationships.namespace_id
+				  AND r.%[2]s = relationships.%[2]s
+				  AND r.relation = relationships.relation
+				  AND r.valid_from = relationships.valid_from
+			  )`, endpoint, sibling)
+	}
+	if r.db.Backend() == BackendPostgres {
+		if _, err := r.db.Exec(ctx, deleteQuery, stubID, realID); err != nil {
+			return fmt.Errorf("delete conflicting stub rows: %w", err)
+		}
+	} else {
+		if _, err := r.db.Exec(ctx, deleteQuery, stubID, realID); err != nil {
+			return fmt.Errorf("delete conflicting stub rows: %w", err)
+		}
+	}
+
+	// Step 3: reassign the remaining stub rows to real — no conflicts possible now.
+	reassignQuery := fmt.Sprintf(`UPDATE relationships SET %s = ? WHERE %s = ?`, endpoint, endpoint)
+	if r.db.Backend() == BackendPostgres {
+		reassignQuery = fmt.Sprintf(`UPDATE relationships SET %s = $1 WHERE %s = $2`, endpoint, endpoint)
+	}
+	if _, err := r.db.Exec(ctx, reassignQuery, realID, stubID); err != nil {
+		return fmt.Errorf("reassign remaining stub rows: %w", err)
+	}
+	return nil
+}
+
+// mergeAliasesToEntity repoints stub-owned aliases to real, dropping any that
+// would duplicate an alias already registered against real.
+func (r *EntityRepo) mergeAliasesToEntity(ctx context.Context, stubID, realID string) error {
+	// Delete conflicting stub aliases.
+	delQuery := `DELETE FROM entity_aliases
+		WHERE entity_id = ?
+		  AND alias IN (SELECT alias FROM entity_aliases WHERE entity_id = ?)`
+	if r.db.Backend() == BackendPostgres {
+		delQuery = `DELETE FROM entity_aliases
+			WHERE entity_id = $1
+			  AND alias IN (SELECT alias FROM entity_aliases WHERE entity_id = $2)`
+	}
+	if _, err := r.db.Exec(ctx, delQuery, stubID, realID); err != nil {
+		return fmt.Errorf("delete conflicting stub aliases: %w", err)
+	}
+
+	// Reassign the rest.
+	reassignQuery := `UPDATE entity_aliases SET entity_id = ? WHERE entity_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		reassignQuery = `UPDATE entity_aliases SET entity_id = $1 WHERE entity_id = $2`
+	}
+	if _, err := r.db.Exec(ctx, reassignQuery, realID, stubID); err != nil {
+		return fmt.Errorf("reassign remaining stub aliases: %w", err)
+	}
 	return nil
 }
 

@@ -358,3 +358,43 @@ func TestEntityAliasRepo_ListByEntity_Isolation(t *testing.T) {
 		}
 	})
 }
+
+// TestEntityAliasRepo_Create_IdempotentOnDuplicate pins the
+// ON CONFLICT DO NOTHING contract added to silence the
+// `dreaming: alias creation failed (may already exist)` warning spam.
+// Re-registering the same (entity_id, alias) mapping must return nil, not
+// a unique-constraint error, and must leave exactly one row in the table.
+func TestEntityAliasRepo_Create_IdempotentOnDuplicate(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		entity := createEntityForAliasTest(t, ctx, db, nsID, "alice")
+		repo := NewEntityAliasRepo(db)
+
+		first := &model.EntityAlias{
+			NamespaceID: nsID, EntityID: entity.ID,
+			Alias: "Al", AliasType: "nickname",
+		}
+		if err := repo.Create(ctx, first); err != nil {
+			t.Fatalf("first create: %v", err)
+		}
+
+		// Same (entity_id, alias) with a different proposed ID + alias_type.
+		// Must be absorbed silently.
+		second := &model.EntityAlias{
+			NamespaceID: nsID, EntityID: entity.ID,
+			Alias: "Al", AliasType: "dream_dedup",
+		}
+		if err := repo.Create(ctx, second); err != nil {
+			t.Fatalf("duplicate create must not error: %v", err)
+		}
+
+		results, err := repo.ListByEntity(ctx, entity.ID)
+		if err != nil {
+			t.Fatalf("list aliases: %v", err)
+		}
+		if len(results) != 1 {
+			t.Errorf("expected exactly 1 alias row after duplicate insert, got %d: %+v", len(results), results)
+		}
+	})
+}

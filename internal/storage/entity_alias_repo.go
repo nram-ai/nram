@@ -20,27 +20,34 @@ func NewEntityAliasRepo(db DB) *EntityAliasRepo {
 	return &EntityAliasRepo{db: db}
 }
 
-// Create inserts a new entity alias. ID is generated if zero-valued.
+// Create registers an (entity_id, alias) mapping. Idempotent: duplicate
+// inserts are absorbed via ON CONFLICT DO NOTHING since aliases are
+// immutable pointers with no per-row state worth merging.
 func (r *EntityAliasRepo) Create(ctx context.Context, alias *model.EntityAlias) error {
 	if alias.ID == uuid.Nil {
 		alias.ID = uuid.New()
 	}
+	if alias.CreatedAt.IsZero() {
+		alias.CreatedAt = time.Now().UTC()
+	}
+	createdAtStr := alias.CreatedAt.UTC().Format(time.RFC3339)
 
-	query := `INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type)
-		VALUES (?, ?, ?, ?, ?)`
+	query := `INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(entity_id, alias) DO NOTHING`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type)
-			VALUES ($1, $2, $3, $4, $5)`
+		query = `INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT(entity_id, alias) DO NOTHING`
 	}
 
-	_, err := r.db.Exec(ctx, query,
-		alias.ID.String(), alias.NamespaceID.String(), alias.EntityID.String(), alias.Alias, alias.AliasType,
-	)
-	if err != nil {
+	if _, err := r.db.Exec(ctx, query,
+		alias.ID.String(), alias.NamespaceID.String(), alias.EntityID.String(),
+		alias.Alias, alias.AliasType, createdAtStr,
+	); err != nil {
 		return fmt.Errorf("entity alias create: %w", err)
 	}
-
-	return r.reload(ctx, alias)
+	return nil
 }
 
 // FindByAlias finds entity aliases matching the alias text (case-insensitive),
@@ -91,36 +98,7 @@ func (r *EntityAliasRepo) ListByEntity(ctx context.Context, entityID uuid.UUID) 
 	return r.scanAliases(rows)
 }
 
-// reload fetches the alias by ID and populates the struct in place.
-func (r *EntityAliasRepo) reload(ctx context.Context, alias *model.EntityAlias) error {
-	query := selectEntityAliasColumns + ` FROM entity_aliases ea WHERE ea.id = ?`
-	if r.db.Backend() == BackendPostgres {
-		query = selectEntityAliasColumns + ` FROM entity_aliases ea WHERE ea.id = $1`
-	}
-
-	row := r.db.QueryRow(ctx, query, alias.ID.String())
-	fetched, err := r.scanAlias(row)
-	if err != nil {
-		return fmt.Errorf("entity alias reload: %w", err)
-	}
-	*alias = *fetched
-	return nil
-}
-
 const selectEntityAliasColumns = `SELECT ea.id, ea.namespace_id, ea.entity_id, ea.alias, ea.alias_type, ea.created_at`
-
-func (r *EntityAliasRepo) scanAlias(row *sql.Row) (*model.EntityAlias, error) {
-	var alias model.EntityAlias
-	var idStr, namespaceIDStr, entityIDStr string
-	var createdAtStr string
-
-	err := row.Scan(&idStr, &namespaceIDStr, &entityIDStr, &alias.Alias, &alias.AliasType, &createdAtStr)
-	if err != nil {
-		return nil, err
-	}
-
-	return r.populateAlias(&alias, idStr, namespaceIDStr, entityIDStr, createdAtStr)
-}
 
 func (r *EntityAliasRepo) scanAliasFromRows(rows *sql.Rows) (*model.EntityAlias, error) {
 	var alias model.EntityAlias
