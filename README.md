@@ -39,20 +39,20 @@ make build
 
 # Or build components separately
 make build-ui       # Build React UI and embed into Go binary
-make build-server   # Compile Go server to bin/nram
+make build-server   # Compile Go server to ./nram
 ```
 
 ### Run
 
 ```bash
 # Start with defaults (SQLite, port 8674)
-./bin/nram
+./nram
 
 # Start with a config file
-./bin/nram --config config.yaml
+./nram --config config.yaml
 
 # Start with environment variables
-DATABASE_URL=postgres://user:pass@localhost/nram PORT=8674 ./bin/nram
+DATABASE_URL=postgres://user:pass@localhost/nram PORT=8674 ./nram
 ```
 
 On first launch, navigate to `http://localhost:8674` to complete the setup wizard (create the initial admin account).
@@ -152,7 +152,7 @@ SQLite mode uses a pure-Go HNSW index for vector search and FTS5 for full-text s
 Set `DATABASE_URL` or `database.url` in your config file:
 
 ```bash
-DATABASE_URL=postgres://nram:password@localhost:5432/nram ./bin/nram
+DATABASE_URL=postgres://nram:password@localhost:5432/nram ./nram
 ```
 
 PostgreSQL enables pgvector for semantic search and LISTEN/NOTIFY for multi-instance event propagation.
@@ -171,9 +171,9 @@ qdrant:
 Migrations run automatically on startup when `migrate_on_start: true` (the default). Manual control:
 
 ```bash
-./bin/nram migrate up       # Apply pending migrations
-./bin/nram migrate down     # Roll back one migration
-./bin/nram migrate version  # Show current migration version
+./nram migrate up       # Apply pending migrations
+./nram migrate down     # Roll back one migration
+./nram migrate version  # Show current migration version
 ```
 
 ## API
@@ -297,7 +297,7 @@ make dev
 make build
 
 # Run the server
-./bin/nram --config config.yaml
+./nram --config config.yaml
 ```
 
 ## License
