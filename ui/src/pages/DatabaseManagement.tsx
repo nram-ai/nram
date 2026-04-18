@@ -949,7 +949,13 @@ function MigrationStatsPanel({ stats }: { stats: MigrationStats }) {
   const insertedEntries = Object.entries(stats.inserted ?? {}).sort(
     ([, a], [, b]) => b - a,
   );
-  if (!skippedEntries.length && !updateEntries.length && !insertedEntries.length) {
+  const resetEntries = Object.entries(stats.reset_stuck ?? {});
+  if (
+    !skippedEntries.length &&
+    !updateEntries.length &&
+    !insertedEntries.length &&
+    !resetEntries.length
+  ) {
     return null;
   }
 
@@ -998,6 +1004,29 @@ function MigrationStatsPanel({ stats }: { stats: MigrationStats }) {
               <div key={k} className="flex justify-between gap-2">
                 <span className="text-muted-foreground">{k}</span>
                 <span className="text-foreground">{n.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {resetEntries.length > 0 && (
+        <details className="mt-2" open>
+          <summary className="cursor-pointer text-xs font-medium text-blue-700 dark:text-blue-400">
+            In-flight jobs normalized ({resetEntries.length})
+          </summary>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Rows that were mid-flight on the SQLite instance were reset so the
+            Postgres deployment doesn&apos;t wait on a worker that no longer
+            exists. enrichment_queue rows returned to the queue;
+            dream_cycles rows marked as failed.
+          </p>
+          <div className="mt-1 text-xs font-mono">
+            {resetEntries.map(([k, n]) => (
+              <div key={k} className="flex justify-between gap-2">
+                <span className="text-muted-foreground">{k}</span>
+                <span className="text-blue-700 dark:text-blue-400">
+                  {n.toLocaleString()}
+                </span>
               </div>
             ))}
           </div>

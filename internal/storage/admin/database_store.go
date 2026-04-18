@@ -177,6 +177,7 @@ func (s *DatabaseAdminStore) TriggerMigration(ctx context.Context, url string) (
 				Inserted:       stats.Inserted,
 				SkippedOrphans: stats.SkippedOrphans,
 				SkippedUpdates: stats.SkippedUpdates,
+				ResetStuck:     stats.ResetStuck,
 			},
 		}, nil
 	}

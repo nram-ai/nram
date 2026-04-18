@@ -52,6 +52,10 @@ type DataMigrator struct {
 
 	// tableCounts["table"] = total rows inserted into that table (for stats).
 	tableCounts map[string]int
+
+	// resetStuck["table"] = number of rows whose transient state was normalized
+	// by finalizeStuckJobs (e.g. processing→pending, running→failed).
+	resetStuck map[string]int
 }
 
 // markInserted records that (table, id) was successfully written to Postgres.
@@ -75,6 +79,52 @@ func (m *DataMigrator) hasInserted(table, id string) bool {
 // the id column may be absent).
 func (m *DataMigrator) markInsertedAnon(table string) {
 	m.tableCounts[table]++
+}
+
+// finalizeStuckJobs normalizes transient in-flight state that was carried
+// verbatim from SQLite. A worker on the source instance may have claimed an
+// enrichment row or started a dream cycle seconds before the migration; those
+// rows land in Postgres with status=processing/running and no worker to finish
+// them. Leaving them alone means they sit stuck forever.
+//
+// Policy:
+//   - enrichment_queue: processing → pending, clearing claimed_by/claimed_at
+//     so the next worker poll picks them up.
+//   - dream_cycles: pending/running → failed, with a clear error message and
+//     a completed_at stamp, so the scheduler doesn't retry partial work and
+//     the monitor UI shows them as canceled.
+//
+// Counts are recorded in m.resetStuck and surfaced through Stats().
+func (m *DataMigrator) finalizeStuckJobs(ctx context.Context) error {
+	res, err := m.dst.ExecContext(ctx, `
+		UPDATE enrichment_queue
+		   SET status = 'pending', claimed_by = NULL, claimed_at = NULL,
+		       updated_at = now()
+		 WHERE status = 'processing'
+	`)
+	if err != nil {
+		return fmt.Errorf("reset stuck enrichment jobs: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n > 0 {
+		m.resetStuck["enrichment_queue"] = int(n)
+	}
+
+	res, err = m.dst.ExecContext(ctx, `
+		UPDATE dream_cycles
+		   SET status = 'failed',
+		       error = 'stuck after SQLite to Postgres migration; worker on prior instance is gone',
+		       completed_at = now(),
+		       updated_at = now()
+		 WHERE status NOT IN ('completed', 'failed')
+	`)
+	if err != nil {
+		return fmt.Errorf("reset stuck dream cycles: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n > 0 {
+		m.resetStuck["dream_cycles"] = int(n)
+	}
+
+	return nil
 }
 
 // sourceTableExists returns true if the given table exists in the SQLite source.
@@ -125,10 +175,15 @@ func (m *DataMigrator) Stats() MigrationStats {
 	for k, v := range m.skippedUpdates {
 		updates[k] = v
 	}
+	reset := make(map[string]int, len(m.resetStuck))
+	for k, v := range m.resetStuck {
+		reset[k] = v
+	}
 	return MigrationStats{
 		Inserted:       inserted,
 		SkippedOrphans: skipped,
 		SkippedUpdates: updates,
+		ResetStuck:     reset,
 	}
 }
 
@@ -143,6 +198,10 @@ type MigrationStats struct {
 	// due to orphan FK (row itself was inserted, but a self-ref column such
 	// as memories.superseded_by could not be populated).
 	SkippedUpdates map[string]int `json:"skipped_updates,omitempty"`
+	// ResetStuck["table"] = number of rows whose transient state was normalized
+	// after the copy because the source's in-flight worker does not exist on
+	// the Postgres instance (processing enrichment jobs, pending dream cycles).
+	ResetStuck map[string]int `json:"reset_stuck,omitempty"`
 }
 
 // newDataMigrator opens a Postgres connection to targetURL, runs schema migrations,
@@ -181,6 +240,7 @@ func newDataMigrator(ctx context.Context, src *sql.DB, targetURL string) (*DataM
 		skipped:            make(map[string]int),
 		skippedUpdates:     make(map[string]int),
 		tableCounts:        make(map[string]int),
+		resetStuck:         make(map[string]int),
 	}, nil
 }
 
@@ -268,6 +328,14 @@ func (m *DataMigrator) Run(ctx context.Context) error {
 	// Validate row counts before writing the extra system_meta marker so the
 	// counts stay comparable.
 	if err := m.validateCounts(ctx); err != nil {
+		return err
+	}
+
+	// Reset in-flight work that was owned by a worker on the SQLite instance.
+	// The row values are copied verbatim above to preserve history; this step
+	// fixes up transient state so the Postgres deployment isn't stuck waiting
+	// for a worker that no longer exists.
+	if err := m.finalizeStuckJobs(ctx); err != nil {
 		return err
 	}
 

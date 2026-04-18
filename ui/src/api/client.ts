@@ -648,6 +648,7 @@ export interface MigrationStats {
   inserted?: Record<string, number>;
   skipped_orphans?: Record<string, number>;
   skipped_updates?: Record<string, number>;
+  reset_stuck?: Record<string, number>;
 }
 
 export interface MigrationStatus {

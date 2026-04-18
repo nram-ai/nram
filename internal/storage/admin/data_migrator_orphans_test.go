@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -51,6 +52,134 @@ func TestTextToJSONB_HandlesProblematicText(t *testing.T) {
 				t.Fatalf("postgres rejected encoded jsonb: %v\nencoded: %q", err, s)
 			}
 		})
+	}
+}
+
+// TestDataMigrator_FinalizesStuckJobs verifies the post-copy finalization
+// resets enrichment_queue processing rows back to pending and marks
+// non-terminal dream_cycles as failed, so the Postgres instance isn't stuck
+// waiting on workers that no longer exist.
+func TestDataMigrator_FinalizesStuckJobs(t *testing.T) {
+	ctx := context.Background()
+
+	srcDB := openSQLiteInMemory(t)
+	defer srcDB.Close()
+	if _, err := srcDB.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable FKs: %v", err)
+	}
+
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := srcDB.ExecContext(ctx, q, args...); err != nil {
+			t.Fatalf("seed: %s\nerr: %v", q, err)
+		}
+	}
+	mustExec(`INSERT INTO namespaces (id, name, slug, kind, path, depth, metadata, created_at, updated_at)
+		VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'NS', 'ns', 'organization', 'ns', 1, '{}', '2025-01-01', '2025-01-01')`)
+	mustExec(`INSERT INTO namespaces (id, name, slug, kind, parent_id, path, depth, metadata, created_at, updated_at)
+		VALUES ('aaaaaaaa-0000-0000-0000-000000000002', 'PNS', 'pns', 'project',
+		        'aaaaaaaa-0000-0000-0000-000000000001', 'ns/pns', 2, '{}', '2025-01-01', '2025-01-01')`)
+	mustExec(`INSERT INTO projects (id, namespace_id, owner_namespace_id, name, slug, description, default_tags, settings, created_at, updated_at)
+		VALUES ('dddddddd-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000002',
+		        'aaaaaaaa-0000-0000-0000-000000000001', 'P', 'p', '', '[]', '{}', '2025-01-01', '2025-01-01')`)
+	mustExec(`INSERT INTO memories (id, namespace_id, content, confidence, importance, access_count, enriched, metadata, created_at, updated_at)
+		VALUES ('33333333-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000001',
+		        'm', 1.0, 0.5, 0, 0, '{}', '2025-01-01', '2025-01-01')`)
+
+	// 2 stuck enrichment jobs + 1 already-pending (should stay pending) + 1 completed (untouched).
+	mustExec(`INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, claimed_at, claimed_by, attempts, steps_completed, created_at, updated_at)
+		VALUES ('77777777-0000-0000-0000-000000000001', '33333333-0000-0000-0000-000000000001',
+		        'aaaaaaaa-0000-0000-0000-000000000001', 'processing', 0, '2025-01-01', 'worker-1', 0, '[]', '2025-01-01', '2025-01-01')`)
+	mustExec(`INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, claimed_at, claimed_by, attempts, steps_completed, created_at, updated_at)
+		VALUES ('77777777-0000-0000-0000-000000000002', '33333333-0000-0000-0000-000000000001',
+		        'aaaaaaaa-0000-0000-0000-000000000001', 'processing', 0, '2025-01-01', 'worker-2', 0, '[]', '2025-01-01', '2025-01-01')`)
+	mustExec(`INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, steps_completed, created_at, updated_at)
+		VALUES ('77777777-0000-0000-0000-000000000003', '33333333-0000-0000-0000-000000000001',
+		        'aaaaaaaa-0000-0000-0000-000000000001', 'pending', 0, 0, '[]', '2025-01-01', '2025-01-01')`)
+	mustExec(`INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, steps_completed, completed_at, created_at, updated_at)
+		VALUES ('77777777-0000-0000-0000-000000000004', '33333333-0000-0000-0000-000000000001',
+		        'aaaaaaaa-0000-0000-0000-000000000001', 'completed', 0, 0, '[]', '2025-01-01', '2025-01-01', '2025-01-01')`)
+
+	// 3 stuck dream cycles (2 running, 1 pending) + 1 completed (untouched).
+	for i, st := range []string{"running", "running", "pending"} {
+		mustExec(`INSERT INTO dream_cycles (id, project_id, namespace_id, status, phase, tokens_used, token_budget, phase_summary, created_at, updated_at)
+			VALUES (?, 'dddddddd-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000002',
+			        ?, 'analyze', 0, 1000, '{}', '2025-01-01', '2025-01-01')`,
+			fmt.Sprintf("88888888-0000-0000-0000-00000000000%d", i+1), st)
+	}
+	mustExec(`INSERT INTO dream_cycles (id, project_id, namespace_id, status, phase, tokens_used, token_budget, phase_summary, completed_at, created_at, updated_at)
+		VALUES ('88888888-0000-0000-0000-000000000099', 'dddddddd-0000-0000-0000-000000000001',
+		        'aaaaaaaa-0000-0000-0000-000000000002', 'completed', 'done', 500, 1000, '{}',
+		        '2025-01-02', '2025-01-01', '2025-01-02')`)
+
+	pgDB, err := sql.Open("pgx", resolvedPostgresURL)
+	if err != nil {
+		t.Fatalf("open pg: %v", err)
+	}
+	cleanPostgres(t, pgDB)
+	pgDB.Close()
+
+	dm, err := newDataMigrator(ctx, srcDB, resolvedPostgresURL)
+	if err != nil {
+		t.Fatalf("newDataMigrator: %v", err)
+	}
+	defer dm.Close()
+	if err := dm.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	stats := dm.Stats()
+	if stats.ResetStuck["enrichment_queue"] != 2 {
+		t.Errorf("enrichment reset = %d, want 2 (full: %+v)", stats.ResetStuck["enrichment_queue"], stats.ResetStuck)
+	}
+	if stats.ResetStuck["dream_cycles"] != 3 {
+		t.Errorf("dream_cycles reset = %d, want 3 (full: %+v)", stats.ResetStuck["dream_cycles"], stats.ResetStuck)
+	}
+
+	pg, err := sql.Open("pgx", resolvedPostgresURL)
+	if err != nil {
+		t.Fatalf("reopen pg: %v", err)
+	}
+	defer pg.Close()
+
+	// Previously-processing rows are now pending with cleared claim fields.
+	var pending int
+	if err := pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM enrichment_queue
+		 WHERE status = 'pending' AND claimed_at IS NULL AND claimed_by IS NULL`,
+	).Scan(&pending); err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+	if pending != 3 {
+		t.Errorf("pending enrichment rows = %d, want 3 (2 reset + 1 originally pending)", pending)
+	}
+
+	// Completed rows were left alone.
+	var completed int
+	if err := pg.QueryRowContext(ctx, `SELECT COUNT(*) FROM enrichment_queue WHERE status = 'completed'`).Scan(&completed); err != nil {
+		t.Fatalf("count completed: %v", err)
+	}
+	if completed != 1 {
+		t.Errorf("completed enrichment rows = %d, want 1", completed)
+	}
+
+	// Stuck dream cycles are now failed with an error message; the completed one is untouched.
+	var failed, dreamsCompleted int
+	if err := pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM dream_cycles WHERE status = 'failed' AND error IS NOT NULL`,
+	).Scan(&failed); err != nil {
+		t.Fatalf("count failed dreams: %v", err)
+	}
+	if failed != 3 {
+		t.Errorf("failed dream_cycles = %d, want 3", failed)
+	}
+	if err := pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM dream_cycles WHERE status = 'completed'`,
+	).Scan(&dreamsCompleted); err != nil {
+		t.Fatalf("count completed dreams: %v", err)
+	}
+	if dreamsCompleted != 1 {
+		t.Errorf("completed dream_cycles = %d, want 1", dreamsCompleted)
 	}
 }
 

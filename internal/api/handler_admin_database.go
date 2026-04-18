@@ -81,6 +81,7 @@ type MigrationStats struct {
 	Inserted       map[string]int `json:"inserted,omitempty"`
 	SkippedOrphans map[string]int `json:"skipped_orphans,omitempty"`
 	SkippedUpdates map[string]int `json:"skipped_updates,omitempty"`
+	ResetStuck     map[string]int `json:"reset_stuck,omitempty"`
 }
 
 // PreflightReport summarizes all pre-migration checks against a target Postgres URL.

@@ -673,6 +673,9 @@ func expectedValToString(v interface{}) string {
 // valuesMatch compares want vs got strings, handling timestamp format differences
 // and Postgres array format differences.
 func valuesMatch(want, got string) bool {
+	if want == "<ANY>" {
+		return true
+	}
 	if want == got {
 		return true
 	}
@@ -1184,16 +1187,19 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at": "2025-01-15T10:30:00Z", "updated_at": "2025-01-15T10:30:00Z",
 			},
 			{
+				// Seeded as 'processing' with worker-1 owning it; finalizeStuckJobs
+				// resets it to pending with cleared claim fields and bumps updated_at
+				// so the Postgres deployment doesn't wait on a worker that's gone.
 				"id": "66666666-0000-0000-0000-000000000002",
 				"memory_id": "ffffffff-0000-0000-0000-000000000002",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"status": "processing", "priority": int(0),
-				"claimed_at": "2025-02-01T09:00:00Z", "claimed_by": "worker-1",
+				"status": "pending", "priority": int(0),
+				"claimed_at": nil, "claimed_by": nil,
 				"attempts": int(0), "max_attempts": int(3),
 				"last_error": nil,
 				"steps_completed": `["embedding","entity_extraction"]`,
 				"completed_at":    nil,
-				"created_at": "2025-02-01T08:00:00Z", "updated_at": "2025-02-01T09:00:00Z",
+				"created_at": "2025-02-01T08:00:00Z", "updated_at": "<ANY>",
 			},
 			{
 				"id": "66666666-0000-0000-0000-000000000003",
