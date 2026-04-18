@@ -56,6 +56,27 @@ const (
 	SettingQdrantPoolSize         = "qdrant.pool_size"
 	SettingQdrantKeepAliveTime    = "qdrant.keepalive_time"
 	SettingQdrantKeepAliveTimeout = "qdrant.keepalive_timeout"
+
+	// Reconsolidation settings. Reinforcement on recall is the first biological
+	// intervention on the recall path: surfaced memories get their access_count,
+	// last_accessed, and confidence nudged asynchronously. Decay is the
+	// complementary sleep-side process: unused memories lose confidence over
+	// time so the signal stays meaningful.
+	SettingReconsolidationMode          = "reconsolidation.mode"
+	SettingReconsolidationFactor        = "reconsolidation.factor"
+	SettingConfidenceDecayEnabled       = "reconsolidation.decay_enabled"
+	SettingConfidenceDecayThresholdDays = "reconsolidation.decay_threshold_days"
+	SettingConfidenceDecayRatePerCycle  = "reconsolidation.decay_rate_per_cycle"
+	SettingConfidenceFloor              = "reconsolidation.confidence_floor"
+)
+
+// Reconsolidation mode values. Default is shadow so the first real deployment
+// is observable-only: events are emitted, but no database values change until
+// the operator flips the mode to persist.
+const (
+	ReconsolidationModeOff     = "off"
+	ReconsolidationModeShadow  = "shadow"
+	ReconsolidationModePersist = "persist"
 )
 
 // settingDefaults provides built-in default values for well-known settings.
@@ -124,6 +145,13 @@ alignment must be a float:
 	SettingQdrantPoolSize:         "3",
 	SettingQdrantKeepAliveTime:    "10",
 	SettingQdrantKeepAliveTimeout: "2",
+
+	SettingReconsolidationMode:          ReconsolidationModeShadow,
+	SettingReconsolidationFactor:        "0.02",
+	SettingConfidenceDecayEnabled:       "false",
+	SettingConfidenceDecayThresholdDays: "14",
+	SettingConfidenceDecayRatePerCycle:  "0.02",
+	SettingConfidenceFloor:              "0.05",
 }
 
 // SettingsRepository defines the persistence operations needed by the settings service.
@@ -196,6 +224,17 @@ func (s *SettingsService) ResolveInt(ctx context.Context, key string, scope stri
 		return 0, fmt.Errorf("setting %q is not a valid int: %w", key, err)
 	}
 	return i, nil
+}
+
+// ResolveBool resolves a setting and interprets it as a boolean. "true" and
+// "1" are treated as true; every other value (including empty and errors) is
+// false. Matches the precedent set by the dream scheduler's enable check.
+func (s *SettingsService) ResolveBool(ctx context.Context, key string, scope string) bool {
+	val, err := s.Resolve(ctx, key, scope)
+	if err != nil {
+		return false
+	}
+	return val == "true" || val == "1"
 }
 
 // Set writes a setting at the given scope.

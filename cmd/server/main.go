@@ -302,6 +302,17 @@ func main() {
 	)
 	settingsSvc := service.NewSettingsService(settingsRepo)
 
+	// Reconsolidation hook on recall. Mode defaults to shadow (observable-only
+	// via events.MemoryReinforced) so the first deployment emits without
+	// mutating the DB; flip to persist via the reconsolidation.mode setting
+	// once the shadow run looks right.
+	recallSvc.SetReinforcement(&service.ReinforcementDeps{
+		Writer:   memoryRepo,
+		Settings: settingsSvc,
+		Bus:      eventBus,
+		Scope:    "global",
+	})
+
 	// Create lifecycle service for TTL expiry and purge sweeps.
 	graphPruner := service.NewGraphPruner(entityRepo, relationshipRepo)
 	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, service.LifecycleConfig{})
@@ -399,7 +410,7 @@ func main() {
 		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
 		dreaming.NewContradictionPhase(memoryRepo, lineageRepo, factProvider, settingsSvc),
 		dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, settingsSvc),
-		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo),
+		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo, settingsSvc),
 		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo),
 	)
 

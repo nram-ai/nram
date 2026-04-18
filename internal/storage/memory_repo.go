@@ -115,22 +115,31 @@ func (r *MemoryRepo) getByIDIncludeDeleted(ctx context.Context, id uuid.UUID) (*
 	return r.scanMemory(row)
 }
 
+// uuidPlaceholders returns N placeholders and stringified UUIDs for an IN-list.
+// startIndex is the first Postgres placeholder number ($N); it is ignored for
+// SQLite (which always uses "?"). Returned ids are stringified so callers can
+// append directly to the Exec/Query args slice.
+func (r *MemoryRepo) uuidPlaceholders(ids []uuid.UUID, startIndex int) ([]string, []interface{}) {
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		if r.db.Backend() == BackendPostgres {
+			placeholders[i] = fmt.Sprintf("$%d", startIndex+i)
+		} else {
+			placeholders[i] = "?"
+		}
+		args[i] = id.String()
+	}
+	return placeholders, args
+}
+
 // GetBatch returns multiple memories by their UUIDs. Soft-deleted records are excluded.
 func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error) {
 	if len(ids) == 0 {
 		return []model.Memory{}, nil
 	}
 
-	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		if r.db.Backend() == BackendPostgres {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-		} else {
-			placeholders[i] = "?"
-		}
-		args[i] = id.String()
-	}
+	placeholders, args := r.uuidPlaceholders(ids, 1)
 
 	query := selectMemoryColumns + ` FROM memories WHERE id IN (` +
 		strings.Join(placeholders, ", ") + `) AND deleted_at IS NULL`
@@ -436,6 +445,98 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 	}
 
 	return r.reload(ctx, mem)
+}
+
+// BumpReinforcement atomically bumps access_count, last_accessed, and
+// multiplicatively nudges confidence (capped at 1.0) for the given memory IDs
+// that are not soft-deleted. factor is the multiplicative reinforcement term:
+// confidence becomes MIN(1.0, confidence * (1.0 + factor)). Unknown IDs and
+// soft-deleted rows are silently skipped. Returns the number of rows updated.
+//
+// This is the read-path write used by reconsolidation: every recall that
+// surfaces a memory nudges these three fields asynchronously so memories the
+// system actually uses accumulate real signal, and memories it does not use
+// fade under the complementary decay performed by the pruning phase.
+func (r *MemoryRepo) BumpReinforcement(ctx context.Context, ids []uuid.UUID, now time.Time, factor float64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	nowStr := now.UTC().Format(time.RFC3339)
+
+	// Two fixed args come first (last_accessed, factor). IDs follow starting at $3.
+	placeholders, idArgs := r.uuidPlaceholders(ids, 3)
+	args := make([]interface{}, 0, 2+len(ids))
+	args = append(args, nowStr, factor)
+	args = append(args, idArgs...)
+
+	var query string
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories
+			SET access_count = access_count + 1,
+			    last_accessed = $1,
+			    confidence = LEAST(1.0, confidence * (1.0 + $2))
+			WHERE id IN (` + strings.Join(placeholders, ", ") + `) AND deleted_at IS NULL`
+	} else {
+		query = `UPDATE memories
+			SET access_count = access_count + 1,
+			    last_accessed = ?,
+			    confidence = MIN(1.0, confidence * (1.0 + ?))
+			WHERE id IN (` + strings.Join(placeholders, ", ") + `) AND deleted_at IS NULL`
+	}
+
+	result, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("memory bump reinforcement: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("memory bump reinforcement rows affected: %w", err)
+	}
+	return rows, nil
+}
+
+// DecayConfidence multiplicatively scales confidence for the given memory IDs,
+// clamped to the given floor. multiplier should be in (0, 1] — values less
+// than 1 shrink confidence, 1 is a no-op. Soft-deleted rows are skipped.
+// Returns rows updated.
+//
+// Used by the dreaming pruning phase to make idle memories fade, complementing
+// the read-path reinforcement performed by BumpReinforcement.
+func (r *MemoryRepo) DecayConfidence(ctx context.Context, ids []uuid.UUID, multiplier, floor float64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	// Arg layout (both backends): (floor, multiplier, ...ids). Postgres's
+	// GREATEST and SQLite's MAX are both variadic scalar functions returning
+	// the largest argument, so the SQL reads the same way with matching
+	// placeholder positions.
+	placeholders, idArgs := r.uuidPlaceholders(ids, 3)
+	args := make([]interface{}, 0, 2+len(ids))
+	args = append(args, floor, multiplier)
+	args = append(args, idArgs...)
+
+	var query string
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories
+			SET confidence = GREATEST($1, confidence * $2)
+			WHERE id IN (` + strings.Join(placeholders, ", ") + `) AND deleted_at IS NULL`
+	} else {
+		query = `UPDATE memories
+			SET confidence = MAX(?, confidence * ?)
+			WHERE id IN (` + strings.Join(placeholders, ", ") + `) AND deleted_at IS NULL`
+	}
+
+	result, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("memory decay confidence: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("memory decay confidence rows affected: %w", err)
+	}
+	return rows, nil
 }
 
 // SoftDelete sets the deleted_at timestamp on a memory.

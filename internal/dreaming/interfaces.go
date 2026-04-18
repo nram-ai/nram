@@ -21,6 +21,9 @@ type MemoryWriter interface {
 	Update(ctx context.Context, mem *model.Memory) error
 	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
+	// DecayConfidence multiplicatively scales confidence for the given IDs,
+	// clamped to floor. Used by the pruning phase to fade idle memories.
+	DecayConfidence(ctx context.Context, ids []uuid.UUID, multiplier, floor float64) (int64, error)
 }
 
 // EntityReader reads entity data.
@@ -77,4 +80,5 @@ type SettingsResolver interface {
 	Resolve(ctx context.Context, key string, scope string) (string, error)
 	ResolveFloat(ctx context.Context, key string, scope string) (float64, error)
 	ResolveInt(ctx context.Context, key string, scope string) (int, error)
+	ResolveBool(ctx context.Context, key string, scope string) bool
 }

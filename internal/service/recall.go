@@ -142,6 +142,11 @@ type RecallService struct {
 	shares        MemoryShareReader
 	embedProvider func() provider.EmbeddingProvider
 	weights       RankingWeights
+	// reinforcement is optional. When nil (the default, matching all existing
+	// callers), recall has no read-path write. When wired via SetReinforcement,
+	// every successful recall asynchronously bumps access_count, last_accessed,
+	// and confidence on the surfaced memories — the reconsolidation hook.
+	reinforcement *ReinforcementDeps
 }
 
 // NewRecallService creates a new RecallService with the given dependencies.
@@ -590,6 +595,21 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 	if results == nil {
 		results = []RecallResult{}
+	}
+
+	// Reconsolidation hook. Fire-and-forget goroutine that cannot panic or
+	// error its way back into the recall response — this is a read-path write
+	// and must never affect the caller's outcome. Gated by SetReinforcement;
+	// when reinforcement is not wired, reinforce returns immediately.
+	if s.reinforcement != nil && len(results) > 0 {
+		ids := make([]uuid.UUID, 0, len(results))
+		for _, r := range results {
+			ids = append(ids, r.ID)
+		}
+		go func(ids []uuid.UUID) {
+			defer func() { _ = recover() }()
+			s.reinforce(context.Background(), ids)
+		}(ids)
 	}
 
 	latency := time.Since(start).Milliseconds()

@@ -11,6 +11,7 @@ const (
 	MemoryEnriched     = "memory.enriched"
 	MemoryUpdated      = "memory.updated"
 	MemoryDeleted      = "memory.deleted"
+	MemoryReinforced   = "memory.reinforced"
 	EntityCreated      = "entity.created"
 	RelationshipCreated = "relationship.created"
 	RelationshipExpired = "relationship.expired"
