@@ -6,12 +6,19 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 )
+
+// maxContradictionPairs hard-caps the number of pair comparisons per cycle
+// regardless of budget state. Each pair costs one LLM call, and on a local
+// provider that can be ~25s; cap keeps a single phase bounded even when
+// zero-usage responses prevent the budget from advancing.
+const maxContradictionPairs = 30
 
 // ContradictionPhase detects contradictions between memories that reference
 // the same entities. It uses vector similarity to find candidate pairs,
@@ -21,6 +28,8 @@ type ContradictionPhase struct {
 	lineage     LineageWriter
 	llmProvider LLMProviderFunc
 	settings    SettingsResolver
+	tokens      TokenRecorder
+	usageCtx    UsageContextResolver
 }
 
 // NewContradictionPhase creates a new contradiction detection phase.
@@ -29,12 +38,16 @@ func NewContradictionPhase(
 	lineage LineageWriter,
 	llmProvider LLMProviderFunc,
 	settings SettingsResolver,
+	tokens TokenRecorder,
+	usageCtx UsageContextResolver,
 ) *ContradictionPhase {
 	return &ContradictionPhase{
 		memories:    memories,
 		lineage:     lineage,
 		llmProvider: llmProvider,
 		settings:    settings,
+		tokens:      tokens,
+		usageCtx:    usageCtx,
 	}
 }
 
@@ -60,13 +73,28 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	// Compare pairs using LLM with pairwise comparison capped to a reasonable limit.
 	pairs := p.findCandidatePairs(memories)
 
+	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamContradictionPrompt, "global")
+
 	contradictions := 0
 	for _, pair := range pairs {
 		if budget.Exhausted() {
 			break
 		}
 
-		found, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], budget)
+		// Pre-flight budget check using the 4-bytes-per-token heuristic on
+		// the prompt plus the per-call output cap. Local providers that
+		// omit usage fields will still advance the budget via the post-call
+		// fallback below, so this guard prevents starting calls we can't
+		// afford to record.
+		estPrompt := fmt.Sprintf(promptTemplate, pair[0].Content, pair[1].Content)
+		estCost := EstimateTokens(estPrompt) + budget.PerCallCap()
+		if budget.Remaining() < estCost {
+			slog.Info("dreaming: contradiction call skipped (estimated cost exceeds remaining budget)",
+				"estimate", estCost, "remaining", budget.Remaining())
+			break
+		}
+
+		found, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
 		if err != nil {
 			slog.Warn("dreaming: contradiction check failed", "err", err)
 			continue
@@ -74,8 +102,10 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 		if usage != nil {
 			if err := budget.Spend(usage.TotalTokens); err != nil {
+				p.record(ctx, llm, cycle, &pair[0], usage)
 				break
 			}
+			p.record(ctx, llm, cycle, &pair[0], usage)
 		}
 
 		if !found {
@@ -115,24 +145,18 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 }
 
 // findCandidatePairs identifies pairs of memories that might contradict,
-// using pairwise comparison capped to a reasonable limit.
+// using pairwise comparison capped to maxContradictionPairs. The cap check
+// is inside the inner loop so the count stops exactly at the cap rather
+// than overshooting by a full row of j iterations.
 func (p *ContradictionPhase) findCandidatePairs(memories []model.Memory) [][2]model.Memory {
-	var pairs [][2]model.Memory
+	pairs := make([][2]model.Memory, 0, maxContradictionPairs)
 
-	// Simple pairwise comparison with a reasonable limit.
-	limit := len(memories)
-	if limit > 50 {
-		limit = 50
-	}
-
-	for i := 0; i < limit; i++ {
-		for j := i + 1; j < limit; j++ {
+	for i := 0; i < len(memories); i++ {
+		for j := i + 1; j < len(memories); j++ {
+			if len(pairs) >= maxContradictionPairs {
+				return pairs
+			}
 			pairs = append(pairs, [2]model.Memory{memories[i], memories[j]})
-		}
-
-		// Cap total pairs to prevent runaway LLM calls.
-		if len(pairs) > 100 {
-			break
 		}
 	}
 
@@ -143,11 +167,9 @@ func (p *ContradictionPhase) checkContradiction(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	a, b *model.Memory,
+	prompt string,
 	budget *TokenBudget,
 ) (bool, string, *provider.TokenUsage, error) {
-	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamContradictionPrompt, "global")
-	prompt := fmt.Sprintf(promptTemplate, a.Content, b.Content)
-
 	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
@@ -160,6 +182,20 @@ func (p *ContradictionPhase) checkContradiction(
 		return false, "", nil, err
 	}
 
+	usage := resp.Usage
+	// Fall back to the 4-bytes-per-token heuristic when the provider omits
+	// the usage field (e.g. Ollama's OpenAI-compat endpoint). Otherwise the
+	// budget never advances and the cycle burns through every candidate.
+	if usage.TotalTokens == 0 {
+		if budget.MarkZeroUsageWarned() {
+			slog.Warn("dreaming: provider returned zero token usage; estimating from prompt/response length",
+				"provider", llm.Name(), "phase", model.DreamPhaseContradictions)
+		}
+		usage.PromptTokens = EstimateTokens(prompt)
+		usage.CompletionTokens = EstimateTokens(resp.Content)
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+
 	var result struct {
 		Contradicts bool   `json:"contradicts"`
 		Explanation string `json:"explanation"`
@@ -167,8 +203,41 @@ func (p *ContradictionPhase) checkContradiction(
 
 	content := strings.TrimSpace(resp.Content)
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return false, "", &resp.Usage, fmt.Errorf("parse contradiction response: %w", err)
+		return false, "", &usage, fmt.Errorf("parse contradiction response: %w", err)
 	}
 
-	return result.Contradicts, result.Explanation, &resp.Usage, nil
+	return result.Contradicts, result.Explanation, &usage, nil
+}
+
+// record persists a token usage row for the contradiction check.
+func (p *ContradictionPhase) record(
+	ctx context.Context,
+	llm provider.LLMProvider,
+	cycle *model.DreamCycle,
+	mem *model.Memory,
+	usage *provider.TokenUsage,
+) {
+	if p.tokens == nil || usage == nil {
+		return
+	}
+	rec := &model.TokenUsage{
+		ID:           uuid.New(),
+		NamespaceID:  cycle.NamespaceID,
+		Operation:    "dream_contradiction",
+		Provider:     llm.Name(),
+		TokensInput:  usage.PromptTokens,
+		TokensOutput: usage.CompletionTokens,
+		MemoryID:     &mem.ID,
+		CreatedAt:    time.Now().UTC(),
+	}
+	if p.usageCtx != nil {
+		if uc, err := p.usageCtx.ResolveUsageContext(ctx, cycle.NamespaceID); err == nil && uc != nil {
+			rec.OrgID = uc.OrgID
+			rec.UserID = uc.UserID
+			rec.ProjectID = uc.ProjectID
+		}
+	}
+	if err := p.tokens.Record(ctx, rec); err != nil {
+		slog.Warn("dreaming: token usage record failed", "phase", model.DreamPhaseContradictions, "err", err)
+	}
 }

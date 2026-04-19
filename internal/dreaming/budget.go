@@ -14,10 +14,11 @@ var ErrExceedsPerCallCap = errors.New("dream call exceeds per-call token cap")
 // TokenBudget tracks token consumption within a single dream cycle.
 // It is safe for concurrent use.
 type TokenBudget struct {
-	total     int
-	used      int
-	perCallCap int
-	mu        sync.Mutex
+	total             int
+	used              int
+	perCallCap        int
+	zeroUsageWarned   bool
+	mu                sync.Mutex
 }
 
 // NewTokenBudget creates a new TokenBudget with the given total budget
@@ -82,4 +83,25 @@ func (b *TokenBudget) Exhausted() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.used >= b.total
+}
+
+// MarkZeroUsageWarned returns true the first time it is called on this
+// budget instance, and false thereafter. Phases use it to emit a single
+// warning per cycle when the LLM provider returns zero-usage responses
+// (e.g. Ollama's OpenAI-compat endpoint, which omits the usage field).
+func (b *TokenBudget) MarkZeroUsageWarned() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.zeroUsageWarned {
+		return false
+	}
+	b.zeroUsageWarned = true
+	return true
+}
+
+// EstimateTokens returns a rough token count for a text using the
+// 4-bytes-per-token heuristic. Used as a fallback when the LLM provider
+// does not report usage in its response.
+func EstimateTokens(text string) int {
+	return len(text) / 4
 }

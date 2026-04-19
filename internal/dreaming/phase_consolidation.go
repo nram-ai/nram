@@ -29,6 +29,8 @@ type ConsolidationPhase struct {
 	lineage       LineageWriter
 	llmProvider   LLMProviderFunc
 	settings      SettingsResolver
+	tokens        TokenRecorder
+	usageCtx      UsageContextResolver
 }
 
 // NewConsolidationPhase creates a new consolidation and reinforcement phase.
@@ -38,6 +40,8 @@ func NewConsolidationPhase(
 	lineage LineageWriter,
 	llmProvider LLMProviderFunc,
 	settings SettingsResolver,
+	tokens TokenRecorder,
+	usageCtx UsageContextResolver,
 ) *ConsolidationPhase {
 	return &ConsolidationPhase{
 		memories:    memories,
@@ -45,6 +49,8 @@ func NewConsolidationPhase(
 		lineage:     lineage,
 		llmProvider: llmProvider,
 		settings:    settings,
+		tokens:      tokens,
+		usageCtx:    usageCtx,
 	}
 }
 
@@ -115,6 +121,8 @@ func (p *ConsolidationPhase) reinforce(
 		supersessionThreshold = 0.85
 	}
 
+	alignmentPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamAlignmentPrompt, "global")
+
 	for _, synthesis := range syntheses {
 		if budget.Exhausted() {
 			break
@@ -126,14 +134,25 @@ func (p *ConsolidationPhase) reinforce(
 			continue
 		}
 
-		alignment, usage, err := p.scoreAlignment(ctx, llm, &synthesis, sample, budget)
+		// Pre-flight budget check using the same prompt we'll send.
+		prompt := renderAlignmentPrompt(alignmentPromptTemplate, &synthesis, sample)
+		estCost := EstimateTokens(prompt) + budget.PerCallCap()
+		if budget.Remaining() < estCost {
+			slog.Info("dreaming: alignment call skipped (estimated cost exceeds remaining budget)",
+				"estimate", estCost, "remaining", budget.Remaining())
+			break
+		}
+
+		alignment, usage, err := p.scoreAlignment(ctx, llm, prompt, budget)
 		if err != nil {
 			slog.Warn("dreaming: alignment scoring failed", "synthesis", synthesis.ID, "err", err)
 			continue
 		}
 
 		if usage != nil {
-			if err := budget.Spend(usage.TotalTokens); err != nil {
+			spendErr := budget.Spend(usage.TotalTokens)
+			p.record(ctx, llm, cycle, "dream_alignment_scoring", &synthesis.ID, usage)
+			if spendErr != nil {
 				break
 			}
 		}
@@ -176,24 +195,25 @@ func (p *ConsolidationPhase) reinforce(
 	return nil
 }
 
+// renderAlignmentPrompt builds the alignment-scoring prompt so it can be
+// inspected for budget estimation before the LLM call.
+func renderAlignmentPrompt(template string, synthesis *model.Memory, evidence []model.Memory) string {
+	var evidenceTexts []string
+	for _, e := range evidence {
+		evidenceTexts = append(evidenceTexts, e.Content)
+	}
+	return fmt.Sprintf(template, synthesis.Content, strings.Join(evidenceTexts, "\n---\n"))
+}
+
 // scoreAlignment asks the LLM how strongly recent evidence supports or
 // contradicts an existing synthesis. Returns a value from -1.0 (strong
 // contradiction) to 1.0 (strong support).
 func (p *ConsolidationPhase) scoreAlignment(
 	ctx context.Context,
 	llm provider.LLMProvider,
-	synthesis *model.Memory,
-	evidence []model.Memory,
+	prompt string,
 	budget *TokenBudget,
 ) (float64, *provider.TokenUsage, error) {
-	var evidenceTexts []string
-	for _, e := range evidence {
-		evidenceTexts = append(evidenceTexts, e.Content)
-	}
-
-	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamAlignmentPrompt, "global")
-	prompt := fmt.Sprintf(promptTemplate, synthesis.Content, strings.Join(evidenceTexts, "\n---\n"))
-
 	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
@@ -206,12 +226,23 @@ func (p *ConsolidationPhase) scoreAlignment(
 		return 0, nil, err
 	}
 
+	usage := resp.Usage
+	if usage.TotalTokens == 0 {
+		if budget.MarkZeroUsageWarned() {
+			slog.Warn("dreaming: provider returned zero token usage; estimating from prompt/response length",
+				"provider", llm.Name(), "phase", model.DreamPhaseConsolidation)
+		}
+		usage.PromptTokens = EstimateTokens(prompt)
+		usage.CompletionTokens = EstimateTokens(resp.Content)
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+
 	var result struct {
 		Alignment float64 `json:"alignment"`
 		Reasoning string  `json:"reasoning"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(resp.Content)), &result); err != nil {
-		return 0, &resp.Usage, fmt.Errorf("parse alignment response: %w", err)
+		return 0, &usage, fmt.Errorf("parse alignment response: %w", err)
 	}
 
 	// Clamp to [-1, 1].
@@ -222,7 +253,41 @@ func (p *ConsolidationPhase) scoreAlignment(
 		result.Alignment = 1
 	}
 
-	return result.Alignment, &resp.Usage, nil
+	return result.Alignment, &usage, nil
+}
+
+// record persists a token usage row for a consolidation-phase LLM call.
+func (p *ConsolidationPhase) record(
+	ctx context.Context,
+	llm provider.LLMProvider,
+	cycle *model.DreamCycle,
+	operation string,
+	memoryID *uuid.UUID,
+	usage *provider.TokenUsage,
+) {
+	if p.tokens == nil || usage == nil {
+		return
+	}
+	rec := &model.TokenUsage{
+		ID:           uuid.New(),
+		NamespaceID:  cycle.NamespaceID,
+		Operation:    operation,
+		Provider:     llm.Name(),
+		TokensInput:  usage.PromptTokens,
+		TokensOutput: usage.CompletionTokens,
+		MemoryID:     memoryID,
+		CreatedAt:    time.Now().UTC(),
+	}
+	if p.usageCtx != nil {
+		if uc, err := p.usageCtx.ResolveUsageContext(ctx, cycle.NamespaceID); err == nil && uc != nil {
+			rec.OrgID = uc.OrgID
+			rec.UserID = uc.UserID
+			rec.ProjectID = uc.ProjectID
+		}
+	}
+	if err := p.tokens.Record(ctx, rec); err != nil {
+		slog.Warn("dreaming: token usage record failed", "phase", model.DreamPhaseConsolidation, "operation", operation, "err", err)
+	}
 }
 
 // supersedeOriginals marks the source memories of a synthesis as superseded
@@ -314,6 +379,8 @@ func (p *ConsolidationPhase) consolidate(
 		initialConfidence = 0.3
 	}
 
+	synthesisPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamSynthesisPrompt, "global")
+
 	for _, cluster := range clusters {
 		if budget.Exhausted() {
 			break
@@ -323,14 +390,24 @@ func (p *ConsolidationPhase) consolidate(
 			continue
 		}
 
-		synthesisContent, usage, err := p.synthesize(ctx, llm, cluster, budget)
+		prompt := renderSynthesisPrompt(synthesisPromptTemplate, cluster)
+		estCost := EstimateTokens(prompt) + budget.PerCallCap()
+		if budget.Remaining() < estCost {
+			slog.Info("dreaming: synthesis call skipped (estimated cost exceeds remaining budget)",
+				"estimate", estCost, "remaining", budget.Remaining())
+			break
+		}
+
+		synthesisContent, usage, err := p.synthesize(ctx, llm, prompt, budget)
 		if err != nil {
 			slog.Warn("dreaming: synthesis failed", "err", err)
 			continue
 		}
 
 		if usage != nil {
-			if err := budget.Spend(usage.TotalTokens); err != nil {
+			spendErr := budget.Spend(usage.TotalTokens)
+			p.record(ctx, llm, cycle, "dream_synthesis", nil, usage)
+			if spendErr != nil {
 				break
 			}
 		}
@@ -388,21 +465,23 @@ func (p *ConsolidationPhase) consolidate(
 	return nil
 }
 
+// renderSynthesisPrompt builds the synthesis prompt so it can be inspected
+// for budget estimation before the LLM call.
+func renderSynthesisPrompt(template string, cluster []model.Memory) string {
+	contents := make([]string, 0, len(cluster))
+	for _, m := range cluster {
+		contents = append(contents, m.Content)
+	}
+	return fmt.Sprintf(template, strings.Join(contents, "\n---\n"))
+}
+
 // synthesize asks the LLM to produce a consolidated summary from a cluster.
 func (p *ConsolidationPhase) synthesize(
 	ctx context.Context,
 	llm provider.LLMProvider,
-	cluster []model.Memory,
+	prompt string,
 	budget *TokenBudget,
 ) (string, *provider.TokenUsage, error) {
-	var contents []string
-	for _, m := range cluster {
-		contents = append(contents, m.Content)
-	}
-
-	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamSynthesisPrompt, "global")
-	prompt := fmt.Sprintf(promptTemplate, strings.Join(contents, "\n---\n"))
-
 	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
@@ -414,7 +493,18 @@ func (p *ConsolidationPhase) synthesize(
 		return "", nil, err
 	}
 
-	return strings.TrimSpace(resp.Content), &resp.Usage, nil
+	usage := resp.Usage
+	if usage.TotalTokens == 0 {
+		if budget.MarkZeroUsageWarned() {
+			slog.Warn("dreaming: provider returned zero token usage; estimating from prompt/response length",
+				"provider", llm.Name(), "phase", model.DreamPhaseConsolidation)
+		}
+		usage.PromptTokens = EstimateTokens(prompt)
+		usage.CompletionTokens = EstimateTokens(resp.Content)
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+
+	return strings.TrimSpace(resp.Content), &usage, nil
 }
 
 // clusterMemories groups related memories using simple content overlap.
