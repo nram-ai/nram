@@ -131,6 +131,64 @@ func TestContradictionPhase_PairCapEnforced(t *testing.T) {
 	}
 }
 
+// malformedResponseLLM returns an unparseable body so the contradiction
+// phase exercises its parse-error path.
+type malformedResponseLLM struct {
+	calls atomic.Int32
+}
+
+func (m *malformedResponseLLM) Complete(_ context.Context, _ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+	m.calls.Add(1)
+	return &provider.CompletionResponse{
+		Content: "sure thing boss — not json",
+		Model:   "local-model",
+		Usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+	}, nil
+}
+func (m *malformedResponseLLM) Name() string     { return "ollama-malformed" }
+func (m *malformedResponseLLM) Models() []string { return []string{"local-model"} }
+
+// TestContradictionPhase_ParseErrorStillAccountsUsage verifies that when the
+// LLM call succeeds but the response body is unparseable, the budget still
+// advances and a token_usage record is still written. Otherwise a chatty
+// small model that can't emit valid JSON would burn calls for free.
+func TestContradictionPhase_ParseErrorStillAccountsUsage(t *testing.T) {
+	llm := &malformedResponseLLM{}
+	recorder := &recordingTokenRecorder{}
+	memories := makeMemories(6)
+	reader := &fakeMemoryReader{list: memories}
+
+	phase := NewContradictionPhase(
+		reader,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		stubSettings{},
+		recorder,
+		stubUsageCtxResolver{},
+	)
+
+	budget := NewTokenBudget(10000, 2048)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: memories[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	if err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if llm.calls.Load() == 0 {
+		t.Fatal("expected LLM calls to happen")
+	}
+	if budget.Used() == 0 {
+		t.Fatalf("budget must advance on parse-error path, got used=%d", budget.Used())
+	}
+	if len(recorder.records) == 0 {
+		t.Fatal("expected token_usage records even when responses fail to parse")
+	}
+	if int(llm.calls.Load()) != len(recorder.records) {
+		t.Errorf("expected one record per call; got calls=%d records=%d", llm.calls.Load(), len(recorder.records))
+	}
+}
+
 // TestContradictionPhase_PreflightStopsWhenBudgetTooSmall verifies the
 // pre-flight CanAfford check prevents calls when the estimated cost exceeds
 // remaining budget.

@@ -144,17 +144,25 @@ func (p *ConsolidationPhase) reinforce(
 		}
 
 		alignment, usage, err := p.scoreAlignment(ctx, llm, prompt, budget)
-		if err != nil {
-			slog.Warn("dreaming: alignment scoring failed", "synthesis", synthesis.ID, "err", err)
-			continue
+
+		// Account for usage before handling the error. scoreAlignment returns
+		// non-nil usage on parse errors too (the LLM call already happened).
+		var spendErr error
+		if usage != nil {
+			spendErr = budget.Spend(usage.TotalTokens)
+			p.record(ctx, llm, cycle, "dream_alignment_scoring", &synthesis.ID, usage)
 		}
 
-		if usage != nil {
-			spendErr := budget.Spend(usage.TotalTokens)
-			p.record(ctx, llm, cycle, "dream_alignment_scoring", &synthesis.ID, usage)
+		if err != nil {
+			slog.Warn("dreaming: alignment scoring failed", "synthesis", synthesis.ID, "err", err)
 			if spendErr != nil {
 				break
 			}
+			continue
+		}
+
+		if spendErr != nil {
+			break
 		}
 
 		// Adjust confidence proportionally.

@@ -95,17 +95,26 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		}
 
 		found, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
+
+		// Account for usage before handling the error. Parse-error paths
+		// still return non-nil usage from the LLM call, and we must record
+		// what it cost even if we can't use the result.
+		var spendErr error
+		if usage != nil {
+			spendErr = budget.Spend(usage.TotalTokens)
+			p.record(ctx, llm, cycle, &pair[0], usage)
+		}
+
 		if err != nil {
 			slog.Warn("dreaming: contradiction check failed", "err", err)
+			if spendErr != nil {
+				break
+			}
 			continue
 		}
 
-		if usage != nil {
-			if err := budget.Spend(usage.TotalTokens); err != nil {
-				p.record(ctx, llm, cycle, &pair[0], usage)
-				break
-			}
-			p.record(ctx, llm, cycle, &pair[0], usage)
+		if spendErr != nil {
+			break
 		}
 
 		if !found {
