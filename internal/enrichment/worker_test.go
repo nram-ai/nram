@@ -502,6 +502,69 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 	}
 }
 
+func TestProcessJob_SkipsLLMWhenAlreadyEnriched(t *testing.T) {
+	var factCalls, entityCalls, embedCalls int
+	var mu sync.Mutex
+
+	factLLM := &mockLLMProvider{name: "test-fact", respond: func(req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		mu.Lock()
+		factCalls++
+		mu.Unlock()
+		return &provider.CompletionResponse{Content: factJSON(), Model: "fact-model"}, nil
+	}}
+	entityLLM := &mockLLMProvider{name: "test-entity", respond: func(req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		mu.Lock()
+		entityCalls++
+		mu.Unlock()
+		return &provider.CompletionResponse{Content: entityJSON(), Model: "entity-model"}, nil
+	}}
+	embedProv := &mockEmbeddingProvider{name: "test-embed", respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+		mu.Lock()
+		embedCalls++
+		mu.Unlock()
+		embs := make([][]float32, len(req.Input))
+		for i := range req.Input {
+			embs[i] = []float32{0.1, 0.2, 0.3}
+		}
+		return &provider.EmbeddingResponse{Embeddings: embs, Model: "embed-model"}, nil
+	}}
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	mem := testMemory()
+	mem.Enriched = true
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+
+	if factCalls != 0 {
+		t.Errorf("expected 0 fact extraction calls for already-enriched memory, got %d", factCalls)
+	}
+	if entityCalls != 0 {
+		t.Errorf("expected 0 entity extraction calls for already-enriched memory, got %d", entityCalls)
+	}
+	if embedCalls != 1 {
+		t.Errorf("expected 1 embed call, got %d", embedCalls)
+	}
+	if len(h.creator.created) != 0 {
+		t.Errorf("expected 0 child memories for enriched re-run, got %d", len(h.creator.created))
+	}
+	if len(h.lineage.created) != 0 {
+		t.Errorf("expected 0 new lineage rows for enriched re-run, got %d", len(h.lineage.created))
+	}
+	if len(h.entities.upserted) != 0 {
+		t.Errorf("expected 0 new entity upserts for enriched re-run, got %d", len(h.entities.upserted))
+	}
+	if len(h.queue.completed) != 1 || h.queue.completed[0] != job.ID {
+		t.Errorf("expected job completed, got %v", h.queue.completed)
+	}
+	if len(h.vectors.vectors) != 1 || h.vectors.vectors[0].ID != mem.ID {
+		t.Errorf("expected 1 vector upsert for parent memory, got %+v", h.vectors.vectors)
+	}
+}
+
 func TestProcessJob_FactExtractionOnly(t *testing.T) {
 	factLLM := &mockLLMProvider{name: "fact", respond: func(req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
 		return &provider.CompletionResponse{

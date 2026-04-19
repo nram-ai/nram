@@ -459,6 +459,13 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		return nil, fmt.Errorf("no providers configured, job requeued")
 	}
 
+	// Skip LLM extractions when the memory has already been enriched.
+	// finalizeJob sets mem.Enriched=true only after fact and entity
+	// extraction have been persisted, so re-running them would duplicate
+	// lineage and token spend. Backfill jobs enqueued to populate missing
+	// embeddings fall straight through to the shared embed step.
+	skipLLM := mem.Enriched
+
 	var (
 		facts        []extractedFact
 		entResult    *entityExtractionResult
@@ -472,10 +479,10 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		entityErr    error
 	)
 
-	if hasFact {
+	if hasFact && !skipLLM {
 		facts, factUsage, factModel, factProvider, factErr = wp.extractFacts(ctx, wp.factProvider(), mem.Content)
 	}
-	if hasEntity {
+	if hasEntity && !skipLLM {
 		entResult, entityUsage, entityModel, entityProv, entityErr = wp.extractEntities(ctx, wp.entityProvider(), mem.Content)
 	}
 
