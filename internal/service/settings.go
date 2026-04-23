@@ -50,6 +50,17 @@ const (
 	SettingDreamSynthesisPrompt       = "dreaming.synthesis_prompt"
 	SettingDreamAlignmentPrompt       = "dreaming.alignment_prompt"
 
+	// Novelty audit. A dream synthesis must contain at least one fact not
+	// present in any of its source memories. Hybrid check: max-cosine
+	// embedding similarity vs sources gates whether the LLM judge runs.
+	// Backfill applies the same rule to historical dream rows incrementally.
+	SettingDreamNoveltyEnabled            = "dreaming.novelty.enabled"
+	SettingDreamNoveltyEmbedHighThreshold = "dreaming.novelty.embed_high_threshold"
+	SettingDreamNoveltyEmbedLowThreshold  = "dreaming.novelty.embed_low_threshold"
+	SettingDreamNoveltyJudgePrompt        = "dreaming.novelty.judge_prompt"
+	SettingDreamNoveltyJudgeMaxTokens     = "dreaming.novelty.judge_max_tokens"
+	SettingDreamNoveltyBackfillPerCycle   = "dreaming.novelty.backfill_per_cycle"
+
 	SettingQdrantAddr             = "qdrant.addr"
 	SettingQdrantAPIKey           = "qdrant.api_key"
 	SettingQdrantUseTLS           = "qdrant.use_tls"
@@ -141,6 +152,27 @@ alignment must be a float:
 1.0 = strong support
 0.0 = neutral/unrelated
 -1.0 = strong contradiction`,
+	SettingDreamNoveltyEnabled:            "true",
+	SettingDreamNoveltyEmbedHighThreshold: "0.97",
+	SettingDreamNoveltyEmbedLowThreshold:  "0.85",
+	SettingDreamNoveltyJudgeMaxTokens:     "512",
+	SettingDreamNoveltyBackfillPerCycle:   "50",
+	SettingDreamNoveltyJudgePrompt: `You are a novelty auditor. You do NOT converse. You output JSON only.
+
+Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.
+
+<synthesis>
+%s
+</synthesis>
+
+<sources>
+%s
+</sources>
+
+Output ONLY this JSON, nothing else:
+{"novel_facts": ["fact 1", "fact 2"]}
+
+Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingQdrantUseTLS:           "false",
 	SettingQdrantPoolSize:         "3",
 	SettingQdrantKeepAliveTime:    "10",

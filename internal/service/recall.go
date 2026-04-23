@@ -555,6 +555,16 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// Apply threshold filter.
 	var results []RecallResult
 	for _, c := range candidates {
+		// Skip dream syntheses demoted by the novelty audit.
+		if c.memory.Source != nil && *c.memory.Source == model.DreamSource {
+			if c.memory.Confidence == 0 {
+				continue
+			}
+			if isLowNovelty(c.memory.Metadata) {
+				continue
+			}
+		}
+
 		score := computeScore(c, s.weights, now, maxAccess)
 		if score < threshold {
 			continue
@@ -681,6 +691,24 @@ func splitQueryWords(query string) []string {
 		}
 	}
 	return words
+}
+
+// isLowNovelty reports whether a memory carries the low_novelty marker set by
+// the dream novelty audit. Falsy on missing or unparseable metadata.
+func isLowNovelty(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	v, ok := m["low_novelty"]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	return ok && b
 }
 
 // hasAllTags returns true if memTags contains every tag in required.

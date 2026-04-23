@@ -426,7 +426,7 @@ func main() {
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo),
 		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
 		dreaming.NewContradictionPhase(memoryRepo, lineageRepo, factProvider, settingsSvc, tokenUsageRepo, namespaceRepo),
-		dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, settingsSvc, tokenUsageRepo, namespaceRepo),
+		dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, tokenUsageRepo, namespaceRepo),
 		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo, settingsSvc),
 		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo),
 	)

@@ -26,6 +26,19 @@ func (f *fakeMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memo
 	}
 	return nil, fmt.Errorf("not found")
 }
+func (f *fakeMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+	want := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	out := make([]model.Memory, 0, len(ids))
+	for i := range f.list {
+		if _, ok := want[f.list[i].ID]; ok {
+			out = append(out, f.list[i])
+		}
+	}
+	return out, nil
+}
 func (f *fakeMemoryReader) ListByNamespace(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
 	return f.list, nil
 }
@@ -63,6 +76,7 @@ func (r *recordingMemoryWriter) DecayConfidence(_ context.Context, ids []uuid.UU
 type staticDreamSettings struct {
 	values map[string]string
 	floats map[string]float64
+	ints   map[string]int
 }
 
 func (s *staticDreamSettings) Resolve(_ context.Context, key string, _ string) (string, error) {
@@ -77,7 +91,10 @@ func (s *staticDreamSettings) ResolveFloat(_ context.Context, key string, _ stri
 	}
 	return 0, errors.New("unused")
 }
-func (s *staticDreamSettings) ResolveInt(_ context.Context, _ string, _ string) (int, error) {
+func (s *staticDreamSettings) ResolveInt(_ context.Context, key string, _ string) (int, error) {
+	if v, ok := s.ints[key]; ok {
+		return v, nil
+	}
 	return 0, errors.New("unused")
 }
 func (s *staticDreamSettings) ResolveBool(_ context.Context, key string, _ string) bool {

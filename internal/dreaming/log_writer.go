@@ -29,13 +29,19 @@ func NewDreamLogWriter(repo *storage.DreamLogRepo, cycleID, projectID uuid.UUID)
 }
 
 // LogOperation records a single mutation performed during a dream phase.
-// before and after are marshaled to JSON for the snapshot fields.
+// before and after are marshaled to JSON for the snapshot fields. A nil repo
+// makes the call a counted no-op (tests construct writers with nil repos).
 func (w *DreamLogWriter) LogOperation(
 	ctx context.Context,
 	phase, operation, targetType string,
 	targetID uuid.UUID,
 	before, after interface{},
 ) error {
+	if w.repo == nil {
+		w.opCount++
+		return nil
+	}
+
 	beforeJSON, err := marshalState(before)
 	if err != nil {
 		return fmt.Errorf("dream log marshal before state: %w", err)

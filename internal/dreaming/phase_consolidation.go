@@ -12,6 +12,7 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
 
 // ConsolidationPhase consolidates clusters of related memories into synthesis
@@ -24,33 +25,39 @@ import (
 // confidence proportionally. When confidence crosses the supersession threshold,
 // originals are superseded.
 type ConsolidationPhase struct {
-	memories      MemoryReader
-	memWriter     MemoryWriter
-	lineage       LineageWriter
-	llmProvider   LLMProviderFunc
-	settings      SettingsResolver
-	tokens        TokenRecorder
-	usageCtx      UsageContextResolver
+	memories         MemoryReader
+	memWriter        MemoryWriter
+	lineage          LineageWriter
+	llmProvider      LLMProviderFunc
+	embedderProvider EmbeddingProviderFunc
+	settings         SettingsResolver
+	tokens           TokenRecorder
+	usageCtx         UsageContextResolver
 }
 
 // NewConsolidationPhase creates a new consolidation and reinforcement phase.
+// embedderProvider may be nil; when nil, the novelty audit degrades to LLM-only
+// judgement (every borderline call), and pre-write audits will fail closed if
+// the embedding provider is unavailable.
 func NewConsolidationPhase(
 	memories MemoryReader,
 	memWriter MemoryWriter,
 	lineage LineageWriter,
 	llmProvider LLMProviderFunc,
+	embedderProvider EmbeddingProviderFunc,
 	settings SettingsResolver,
 	tokens TokenRecorder,
 	usageCtx UsageContextResolver,
 ) *ConsolidationPhase {
 	return &ConsolidationPhase{
-		memories:    memories,
-		memWriter:   memWriter,
-		lineage:     lineage,
-		llmProvider: llmProvider,
-		settings:    settings,
-		tokens:      tokens,
-		usageCtx:    usageCtx,
+		memories:         memories,
+		memWriter:        memWriter,
+		lineage:          lineage,
+		llmProvider:      llmProvider,
+		embedderProvider: embedderProvider,
+		settings:         settings,
+		tokens:           tokens,
+		usageCtx:         usageCtx,
 	}
 }
 
@@ -72,6 +79,16 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	// Run reinforcement first (evaluates existing syntheses).
 	if err := p.reinforce(ctx, cycle, budget, logger, llm, allMemories); err != nil {
 		slog.Warn("dreaming: reinforcement sub-phase had errors", "err", err)
+	}
+
+	// Backfill the novelty audit on historical dream memories. Bounded per
+	// cycle by SettingDreamNoveltyBackfillPerCycle and resumable across
+	// cycles via the metadata.novelty_audited_at marker, so a large backlog
+	// drains incrementally without shocking the per-cycle token budget.
+	if !budget.Exhausted() {
+		if err := p.auditExistingDreams(ctx, cycle, budget, logger, llm, allMemories); err != nil {
+			slog.Warn("dreaming: backfill audit had errors", "err", err)
+		}
 	}
 
 	// Then consolidation (creates new syntheses).
@@ -306,32 +323,7 @@ func (p *ConsolidationPhase) supersedeOriginals(
 	synthesis *model.Memory,
 	logger *DreamLogWriter,
 ) {
-	// Extract source memory IDs from metadata.
-	var meta map[string]interface{}
-	if synthesis.Metadata != nil {
-		_ = json.Unmarshal(synthesis.Metadata, &meta)
-	}
-
-	sourceIDsRaw, ok := meta["source_memory_ids"]
-	if !ok {
-		return
-	}
-
-	sourceIDs, ok := sourceIDsRaw.([]interface{})
-	if !ok {
-		return
-	}
-
-	for _, idRaw := range sourceIDs {
-		idStr, ok := idRaw.(string)
-		if !ok {
-			continue
-		}
-		memID, err := uuid.Parse(idStr)
-		if err != nil {
-			continue
-		}
-
+	for _, memID := range extractSourceMemoryIDs(decodeMetadata(synthesis.Metadata)) {
 		original, err := p.memories.GetByID(ctx, memID)
 		if err != nil || original.SupersededBy != nil {
 			continue
@@ -351,6 +343,210 @@ func (p *ConsolidationPhase) supersedeOriginals(
 			slog.Warn("dreaming: log supersession failed", "err", err)
 		}
 	}
+}
+
+// auditExistingDreams applies the novelty audit to historical dream memories
+// that were created before the audit existed (or before the user enabled it).
+// Bounded by SettingDreamNoveltyBackfillPerCycle so the work drains across
+// cycles rather than torching a single cycle's token budget on a large
+// backlog. Idempotency comes from the metadata.novelty_audited_at marker —
+// once audited, a memory is never reconsidered.
+//
+// On audit failure the memory is demoted in place: Confidence is set to 0 and
+// metadata.low_novelty is set to true (with a reason). The recall service
+// excludes such memories from competitive ranking.
+//
+// Backfill is limited to the cycle's working set (allMemories). When the
+// dreaming pipeline gets broader pagination, backfill benefits automatically.
+func (p *ConsolidationPhase) auditExistingDreams(
+	ctx context.Context,
+	cycle *model.DreamCycle,
+	budget *TokenBudget,
+	logger *DreamLogWriter,
+	llm provider.LLMProvider,
+	allMemories []model.Memory,
+) error {
+	if !p.settings.ResolveBool(ctx, service.SettingDreamNoveltyEnabled, "global") {
+		return nil
+	}
+
+	perCycleCap, _ := p.settings.ResolveInt(ctx, service.SettingDreamNoveltyBackfillPerCycle, "global")
+	if perCycleCap <= 0 {
+		return nil
+	}
+
+	processed := 0
+	for i := range allMemories {
+		if processed >= perCycleCap {
+			break
+		}
+		if budget.Exhausted() {
+			break
+		}
+
+		mem := allMemories[i]
+		if mem.DeletedAt != nil {
+			continue
+		}
+		if model.MemorySource(&mem) != model.DreamSource {
+			continue
+		}
+
+		meta := decodeMetadata(mem.Metadata)
+		if _, alreadyAudited := meta["novelty_audited_at"]; alreadyAudited {
+			continue
+		}
+
+		processed++
+
+		sourceIDs := extractSourceMemoryIDs(meta)
+		if len(sourceIDs) == 0 {
+			// Orphan synthesis: no recoverable lineage to compare against.
+			p.demoteDream(ctx, logger, &mem, meta, "orphan_no_sources")
+			continue
+		}
+
+		fetched, err := p.memories.GetBatch(ctx, sourceIDs)
+		if err != nil {
+			slog.Warn("dreaming: backfill source fetch failed",
+				"memory", mem.ID, "err", err)
+			continue
+		}
+		sources := make([]model.Memory, 0, len(fetched))
+		for _, src := range fetched {
+			if src.DeletedAt == nil {
+				sources = append(sources, src)
+			}
+		}
+		if len(sources) == 0 {
+			p.demoteDream(ctx, logger, &mem, meta, "orphan_sources_missing")
+			continue
+		}
+
+		passed, reason, auditUsage, auditErr := p.auditNovelty(ctx, llm, mem.Content, sources)
+		if auditUsage != nil {
+			_ = budget.Spend(auditUsage.TotalTokens)
+			p.record(ctx, llm, cycle, "dream_novelty_backfill", &mem.ID, auditUsage)
+		}
+		if auditErr != nil {
+			slog.Warn("dreaming: backfill novelty audit error",
+				"memory", mem.ID, "err", auditErr, "reason", reason)
+			// Do not stamp on hard error; let a later cycle retry.
+			continue
+		}
+
+		if passed {
+			p.stampAudited(ctx, &mem, meta, reason)
+			continue
+		}
+
+		p.demoteDream(ctx, logger, &mem, meta, reason)
+	}
+
+	return nil
+}
+
+// stampAudited records that a dream memory passed the novelty audit so
+// future cycles skip it. Mutates only the metadata field.
+func (p *ConsolidationPhase) stampAudited(ctx context.Context, mem *model.Memory, meta map[string]interface{}, reason string) {
+	p.writeAuditDecision(ctx, nil, mem, meta, reason, false)
+}
+
+// demoteDream zeroes Confidence and stamps low_novelty so the recall service
+// excludes the row from competitive ranking. Logs DreamOpMemoryDemoted.
+func (p *ConsolidationPhase) demoteDream(ctx context.Context, logger *DreamLogWriter, mem *model.Memory, meta map[string]interface{}, reason string) {
+	p.writeAuditDecision(ctx, logger, mem, meta, reason, true)
+}
+
+// writeAuditDecision is the shared write path for stampAudited and demoteDream.
+// When demote is true, Confidence is zeroed and low_novelty markers are added;
+// when logger is non-nil and demote fired, DreamOpMemoryDemoted is recorded.
+func (p *ConsolidationPhase) writeAuditDecision(
+	ctx context.Context,
+	logger *DreamLogWriter,
+	mem *model.Memory,
+	meta map[string]interface{},
+	reason string,
+	demote bool,
+) {
+	if meta == nil {
+		meta = map[string]interface{}{}
+	}
+	beforeConfidence := mem.Confidence
+
+	now := time.Now().UTC()
+	meta["novelty_audited_at"] = now.Format(time.RFC3339)
+	meta["novelty_audit_reason"] = reason
+	if demote {
+		meta["low_novelty"] = true
+		meta["low_novelty_reason"] = reason
+	}
+
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		slog.Warn("dreaming: audit metadata marshal failed", "memory", mem.ID, "err", err)
+		return
+	}
+	mem.Metadata = encoded
+	if demote {
+		mem.Confidence = 0
+	}
+	mem.UpdatedAt = now
+	if err := p.memWriter.Update(ctx, mem); err != nil {
+		slog.Warn("dreaming: audit update failed", "memory", mem.ID, "demote", demote, "err", err)
+		return
+	}
+
+	if demote && logger != nil {
+		_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+			model.DreamOpMemoryDemoted, "memory", mem.ID,
+			map[string]interface{}{"confidence": beforeConfidence},
+			map[string]interface{}{
+				"confidence":  0,
+				"low_novelty": true,
+				"reason":      reason,
+			})
+	}
+}
+
+// decodeMetadata returns a mutable map from the raw JSON metadata, or an empty
+// map if the bytes are missing or unparseable.
+func decodeMetadata(raw json.RawMessage) map[string]interface{} {
+	if len(raw) == 0 {
+		return map[string]interface{}{}
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+		return map[string]interface{}{}
+	}
+	return m
+}
+
+// extractSourceMemoryIDs pulls the source_memory_ids array out of a decoded
+// metadata map and returns it as parsed UUIDs. Skips entries that are not
+// strings or do not parse as UUIDs.
+func extractSourceMemoryIDs(meta map[string]interface{}) []uuid.UUID {
+	raw, ok := meta["source_memory_ids"]
+	if !ok {
+		return nil
+	}
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]uuid.UUID, 0, len(arr))
+	for _, item := range arr {
+		s, ok := item.(string)
+		if !ok {
+			continue
+		}
+		id, err := uuid.Parse(s)
+		if err != nil {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // consolidate clusters related memories and creates synthesis memories.
@@ -388,6 +584,7 @@ func (p *ConsolidationPhase) consolidate(
 	}
 
 	synthesisPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamSynthesisPrompt, "global")
+	noveltyEnabled := p.settings.ResolveBool(ctx, service.SettingDreamNoveltyEnabled, "global")
 
 	for _, cluster := range clusters {
 		if budget.Exhausted() {
@@ -422,6 +619,38 @@ func (p *ConsolidationPhase) consolidate(
 
 		if synthesisContent == "" {
 			continue
+		}
+
+		// Novelty audit: drop the synthesis if it does not contain at least
+		// one fact absent from the source cluster. The audit charges its own
+		// LLM usage against the dream budget when the borderline judge fires.
+		if noveltyEnabled {
+			passed, reason, auditUsage, auditErr := p.auditNovelty(ctx, llm, synthesisContent, cluster)
+			if auditUsage != nil {
+				_ = budget.Spend(auditUsage.TotalTokens)
+				p.record(ctx, llm, cycle, "dream_novelty_audit", nil, auditUsage)
+			}
+			if auditErr != nil {
+				slog.Warn("dreaming: novelty audit error",
+					"err", auditErr, "reason", reason)
+				continue
+			}
+			if !passed {
+				rejectedSources := make([]string, len(cluster))
+				for i, m := range cluster {
+					rejectedSources[i] = m.ID.String()
+				}
+				_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+					model.DreamOpMemoryRejected, "memory", uuid.Nil,
+					nil,
+					map[string]interface{}{
+						"reason":            reason,
+						"source_memory_ids": rejectedSources,
+					})
+				slog.Info("dreaming: synthesis rejected by novelty audit",
+					"reason", reason, "sources", len(cluster))
+				continue
+			}
 		}
 
 		// Collect source memory IDs.
@@ -513,6 +742,132 @@ func (p *ConsolidationPhase) synthesize(
 	}
 
 	return strings.TrimSpace(resp.Content), &usage, nil
+}
+
+// auditNovelty checks whether a candidate synthesis contains at least one fact
+// not present in any of its source memories. Hybrid path:
+//   - Compute max cosine similarity between candidate and source embeddings.
+//   - maxSim >= high threshold ⇒ reject (clearly duplicative).
+//   - maxSim <= low threshold  ⇒ accept (clearly novel).
+//   - otherwise call the LLM judge and trust its JSON verdict.
+//
+// Failure modes are closed: on embedding error or judge JSON parse failure the
+// audit returns (false, ...). usage may be non-nil even on failure when the
+// LLM call already happened, so callers must spend it before handling err.
+func (p *ConsolidationPhase) auditNovelty(
+	ctx context.Context,
+	llm provider.LLMProvider,
+	candidate string,
+	sources []model.Memory,
+) (passed bool, reason string, usage *provider.TokenUsage, err error) {
+	if len(sources) == 0 {
+		return false, "no_sources", nil, nil
+	}
+
+	high, _ := p.settings.ResolveFloat(ctx, service.SettingDreamNoveltyEmbedHighThreshold, "global")
+	if high <= 0 {
+		high = 0.97
+	}
+	low, _ := p.settings.ResolveFloat(ctx, service.SettingDreamNoveltyEmbedLowThreshold, "global")
+	if low <= 0 {
+		low = 0.85
+	}
+
+	var embedder provider.EmbeddingProvider
+	if p.embedderProvider != nil {
+		embedder = p.embedderProvider()
+	}
+
+	if embedder != nil {
+		// Batch embed candidate + every source in one call so we pay one
+		// network round-trip per audit instead of N+1.
+		inputs := make([]string, 0, len(sources)+1)
+		inputs = append(inputs, candidate)
+		for _, s := range sources {
+			inputs = append(inputs, s.Content)
+		}
+		resp, embErr := embedder.Embed(ctx, &provider.EmbeddingRequest{
+			Input:     inputs,
+			Dimension: pickEmbedderDim(embedder.Dimensions()),
+		})
+		if embErr != nil || resp == nil || len(resp.Embeddings) != len(inputs) {
+			return false, "embed_error", nil, embErr
+		}
+		candEmb := resp.Embeddings[0]
+		maxSim := 0.0
+		for i := 1; i < len(resp.Embeddings); i++ {
+			sim := hnsw.CosineSimilarity(candEmb, resp.Embeddings[i])
+			if sim > maxSim {
+				maxSim = sim
+			}
+		}
+		if maxSim >= high {
+			return false, "embed_high_sim", nil, nil
+		}
+		if maxSim <= low {
+			return true, "embed_low_sim", nil, nil
+		}
+		// Borderline ⇒ fall through to the LLM judge.
+	}
+
+	promptTpl, _ := p.settings.Resolve(ctx, service.SettingDreamNoveltyJudgePrompt, "global")
+	if promptTpl == "" {
+		// Without a judge prompt we cannot adjudicate borderline cases.
+		// Fail closed when the embedder pre-filter did not already decide.
+		return false, "no_judge_prompt", nil, nil
+	}
+
+	sourceTexts := make([]string, 0, len(sources))
+	for _, s := range sources {
+		sourceTexts = append(sourceTexts, s.Content)
+	}
+	prompt := fmt.Sprintf(promptTpl, candidate, strings.Join(sourceTexts, "\n---\n"))
+
+	maxTokens, _ := p.settings.ResolveInt(ctx, service.SettingDreamNoveltyJudgeMaxTokens, "global")
+	if maxTokens <= 0 {
+		maxTokens = 512
+	}
+
+	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
+		Messages: []provider.Message{
+			{Role: "user", Content: prompt},
+		},
+		MaxTokens:   maxTokens,
+		Temperature: 0.1,
+		JSONMode:    true,
+	})
+	if err != nil {
+		return false, "judge_call_error", nil, err
+	}
+
+	u := resp.Usage
+	if u.TotalTokens == 0 {
+		u.PromptTokens = EstimateTokens(prompt)
+		u.CompletionTokens = EstimateTokens(resp.Content)
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	}
+
+	var parsed struct {
+		NovelFacts []string `json:"novel_facts"`
+	}
+	if jerr := json.Unmarshal([]byte(strings.TrimSpace(resp.Content)), &parsed); jerr != nil {
+		return false, "judge_parse_error", &u, nil
+	}
+	return len(parsed.NovelFacts) > 0, "llm_judge", &u, nil
+}
+
+// pickEmbedderDim returns the largest dimension reported by the provider, or
+// 0 to let the provider use its native default. Audits only need internal
+// consistency between candidate and source vectors, not compatibility with
+// the vector store.
+func pickEmbedderDim(dims []int) int {
+	best := 0
+	for _, d := range dims {
+		if d > best {
+			best = d
+		}
+	}
+	return best
 }
 
 // clusterMemories groups related memories using simple content overlap.

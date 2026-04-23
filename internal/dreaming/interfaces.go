@@ -11,6 +11,7 @@ import (
 // MemoryReader retrieves memories.
 type MemoryReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
 	CountByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
 }
@@ -74,6 +75,9 @@ type LineageReader interface {
 
 // LLMProviderFunc returns an LLM provider or nil if unavailable.
 type LLMProviderFunc func() provider.LLMProvider
+
+// EmbeddingProviderFunc returns an embedding provider or nil if unavailable.
+type EmbeddingProviderFunc func() provider.EmbeddingProvider
 
 // SettingsResolver resolves configuration values.
 type SettingsResolver interface {
