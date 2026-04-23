@@ -1495,6 +1495,9 @@ func (d *testSQLiteDB) Query(ctx context.Context, q string, args ...any) (*sql.R
 func (d *testSQLiteDB) QueryRow(ctx context.Context, q string, args ...any) *sql.Row {
 	return d.db.QueryRowContext(ctx, q, args...)
 }
+func (d *testSQLiteDB) WriteQueryRow(ctx context.Context, q string, args ...any) *sql.Row {
+	return d.db.QueryRowContext(ctx, q, args...)
+}
 func (d *testSQLiteDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return d.db.BeginTx(ctx, opts)
 }
@@ -1513,6 +1516,9 @@ func (d *testPostgresDB) Query(_ context.Context, _ string, _ ...any) (*sql.Rows
 	return nil, fmt.Errorf("not implemented")
 }
 func (d *testPostgresDB) QueryRow(_ context.Context, _ string, _ ...any) *sql.Row {
+	return nil
+}
+func (d *testPostgresDB) WriteQueryRow(_ context.Context, _ string, _ ...any) *sql.Row {
 	return nil
 }
 func (d *testPostgresDB) BeginTx(_ context.Context, _ *sql.TxOptions) (*sql.Tx, error) {

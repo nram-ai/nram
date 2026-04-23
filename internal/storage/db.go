@@ -35,6 +35,10 @@ type DB interface {
 	// QueryRow executes a read query returning one row (routed to read pool for SQLite).
 	QueryRow(ctx context.Context, query string, args ...any) *sql.Row
 
+	// WriteQueryRow executes a write that returns one row, e.g.
+	// INSERT … RETURNING. Routed to the write pool for SQLite.
+	WriteQueryRow(ctx context.Context, query string, args ...any) *sql.Row
+
 	// BeginTx starts a write transaction (routed to write pool for SQLite).
 	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 

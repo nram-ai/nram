@@ -71,7 +71,7 @@ func (r *RelationshipRepo) Create(ctx context.Context, rel *model.Relationship) 
 	}
 
 	var actualID string
-	err := r.db.QueryRow(ctx, query,
+	err := r.db.WriteQueryRow(ctx, query,
 		rel.ID.String(), rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
 		rel.Relation, rel.Weight, string(rel.Properties),
 		validFromStr, validUntil, sourceMemory, createdAtStr,

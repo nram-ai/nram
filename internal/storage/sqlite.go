@@ -47,6 +47,12 @@ func (s *sqliteDB) QueryRow(ctx context.Context, query string, args ...any) *sql
 	return s.readDB.QueryRowContext(ctx, query, args...)
 }
 
+// WriteQueryRow routes to the write pool (single connection, serialized) for
+// statements that mutate but return a row, like INSERT … RETURNING.
+func (s *sqliteDB) WriteQueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+	return s.writeDB.QueryRowContext(ctx, query, args...)
+}
+
 // BeginTx routes to the write pool (single connection, serialized).
 func (s *sqliteDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return s.writeDB.BeginTx(ctx, opts)
