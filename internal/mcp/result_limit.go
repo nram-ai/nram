@@ -184,13 +184,21 @@ func buildRecallPayload(orig *service.RecallResponse, memories []service.RecallR
 			Relationships: []service.RecallRelationship{},
 		}
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"memories":       memories,
 		"graph":          graph,
 		"total_searched": orig.TotalSearched,
 		"latency_ms":     orig.LatencyMs,
 		"_truncated":     info,
 	}
+	// coverage_gaps is bounded by the number of distinct prefix-groups in the
+	// candidate pool (typically tens of entries) and is load-bearing metadata
+	// for callers using diversify_by_tag_prefix — pass it through verbatim,
+	// never shed under token pressure.
+	if len(orig.CoverageGaps) > 0 {
+		payload["coverage_gaps"] = orig.CoverageGaps
+	}
+	return payload
 }
 
 // newListReducer builds a stateful reducer for memory_list responses.

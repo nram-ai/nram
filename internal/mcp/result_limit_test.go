@@ -105,6 +105,87 @@ func TestWrapToolResultUsesReducer(t *testing.T) {
 	}
 }
 
+// TestRecallReducerPreservesCoverageGaps asserts that coverage_gaps, which is
+// load-bearing diagnostic data for callers using diversify_by_tag_prefix,
+// passes through the reducer verbatim even when the rest of the payload is
+// aggressively shrunk.
+func TestRecallReducerPreservesCoverageGaps(t *testing.T) {
+	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400") // 800 byte budget, forces reduction
+
+	mems := make([]service.RecallResult, 50)
+	for i := range mems {
+		mems[i] = service.RecallResult{
+			ID:        uuid.New(),
+			Content:   strings.Repeat("lorem ipsum ", 80),
+			Tags:      []string{"category-a"},
+			Score:     float64(50 - i),
+			CreatedAt: time.Now(),
+		}
+	}
+	gaps := []service.CoverageGap{
+		{GroupKey: "category-b", Cause: "limit"},
+		{GroupKey: "category-c", Cause: "threshold"},
+		{GroupKey: "category-d", Cause: "tag_filter"},
+	}
+	resp := &service.RecallResponse{
+		Memories:     mems,
+		CoverageGaps: gaps,
+		LatencyMs:    7,
+	}
+
+	res, err := wrapToolResult(resp, newRecallReducer(resp))
+	if err != nil {
+		t.Fatalf("wrapToolResult err = %v", err)
+	}
+	text := extractText(res)
+	if len(text) > maxResultBytes() {
+		t.Fatalf("reduced result %d bytes still exceeds budget %d", len(text), maxResultBytes())
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+		t.Fatalf("reduced result is not valid JSON: %v\nbody: %s", err, text)
+	}
+	raw, ok := decoded["coverage_gaps"]
+	if !ok {
+		t.Fatalf("coverage_gaps dropped by reducer; decoded=%v", decoded)
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("coverage_gaps wrong shape: %T", raw)
+	}
+	if len(arr) != 3 {
+		t.Errorf("expected 3 coverage_gaps, got %d", len(arr))
+	}
+}
+
+// TestRecallReducerOmitsCoverageGapsWhenEmpty confirms that responses not
+// using diversification do not gain a spurious coverage_gaps field.
+func TestRecallReducerOmitsCoverageGapsWhenEmpty(t *testing.T) {
+	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400")
+
+	mems := make([]service.RecallResult, 50)
+	for i := range mems {
+		mems[i] = service.RecallResult{
+			ID:        uuid.New(),
+			Content:   strings.Repeat("x", 200),
+			Tags:      []string{"a"},
+			Score:     float64(50 - i),
+			CreatedAt: time.Now(),
+		}
+	}
+	resp := &service.RecallResponse{Memories: mems, LatencyMs: 1}
+
+	res, err := wrapToolResult(resp, newRecallReducer(resp))
+	if err != nil {
+		t.Fatalf("wrapToolResult err = %v", err)
+	}
+	text := extractText(res)
+	if strings.Contains(text, "coverage_gaps") {
+		t.Errorf("coverage_gaps should be absent when unset, got %s", text)
+	}
+}
+
 func TestNewListReducerProducesValidPagination(t *testing.T) {
 	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400") // 800 byte budget
 	items := make([]listMemoryItem, 100)

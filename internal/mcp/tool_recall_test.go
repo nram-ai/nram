@@ -85,6 +85,22 @@ func TestMemoryRecall_Schema_Postgres_HasGraphParams(t *testing.T) {
 	}
 }
 
+func TestMemoryRecall_Schema_HasDiversifyByTagPrefix(t *testing.T) {
+	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
+		deps := Dependencies{Backend: backend}
+		srv := NewServer(deps)
+		tools := srv.MCPServer().ListTools()
+		st, ok := tools["memory_recall"]
+		if !ok {
+			t.Fatalf("backend %s: memory_recall tool not registered", backend)
+		}
+		raw, _ := json.Marshal(st.Tool.InputSchema)
+		if !containsField(string(raw), "diversify_by_tag_prefix") {
+			t.Errorf("backend %s: expected diversify_by_tag_prefix param in schema, got %s", backend, string(raw))
+		}
+	}
+}
+
 // --- handler tests ---
 
 func TestHandleMemoryRecall_NoHTTPRequest(t *testing.T) {

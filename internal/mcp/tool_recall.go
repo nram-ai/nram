@@ -20,6 +20,7 @@ func RegisterRecallTool(s *Server) {
 		mcp.WithString("project", mcp.Description("Project slug. Searches this project + global. Omit to search only the global project")),
 		mcp.WithNumber("limit", mcp.Description("Maximum results to return (default 10)")),
 		mcp.WithArray("tags", mcp.Description("Filter by tags (intersection: memory must have ALL)")),
+		mcp.WithString("diversify_by_tag_prefix", mcp.Description("Post-rerank the ranked candidates to spread results across a tag axis. When set (e.g. \"category-\"), groups candidates by the first tag matching this prefix and round-robins across groups up to limit. Candidates with no prefix-matching tag are excluded. Response includes coverage_gaps listing groups that dropped out due to tag filtering, threshold, or limit.")),
 	}
 	opts = append(opts,
 		mcp.WithBoolean("include_graph", mcp.Description("Include graph entities in results (default true)")),
@@ -71,17 +72,20 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		graphDepth = int(v)
 	}
 
+	diversifyPrefix, _ := args["diversify_by_tag_prefix"].(string)
+
 	deps := s.Deps()
 	uid := ac.UserID
 
 	req := &service.RecallRequest{
-		Query:        query,
-		Limit:        limit,
-		Tags:         tags,
-		IncludeGraph: includeGraph,
-		GraphDepth:   graphDepth,
-		UserID:       &uid,
-		APIKeyID:     ac.APIKeyID,
+		Query:                query,
+		Limit:                limit,
+		Tags:                 tags,
+		IncludeGraph:         includeGraph,
+		GraphDepth:           graphDepth,
+		DiversifyByTagPrefix: diversifyPrefix,
+		UserID:               &uid,
+		APIKeyID:             ac.APIKeyID,
 	}
 
 	// Resolve the user's global project namespace for inclusion in all recalls.

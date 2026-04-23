@@ -20,12 +20,13 @@ type UserReader interface {
 
 // recallRequestBody represents the JSON body for recall endpoints.
 type recallRequestBody struct {
-	Query        string   `json:"query"`
-	Limit        int      `json:"limit"`
-	Threshold    float64  `json:"threshold"`
-	Tags         []string `json:"tags"`
-	IncludeGraph bool     `json:"include_graph"`
-	GraphDepth   int      `json:"graph_depth"`
+	Query                string   `json:"query"`
+	Limit                int      `json:"limit"`
+	Threshold            float64  `json:"threshold"`
+	Tags                 []string `json:"tags"`
+	IncludeGraph         bool     `json:"include_graph"`
+	GraphDepth           int      `json:"graph_depth"`
+	DiversifyByTagPrefix string   `json:"diversify_by_tag_prefix"`
 }
 
 // RecallServicer defines the interface for recall operations, allowing mocking in tests.
@@ -70,13 +71,14 @@ func NewRecallHandler(svc RecallServicer) http.HandlerFunc {
 		}
 
 		req := &service.RecallRequest{
-			ProjectID:    projectID,
-			Query:        body.Query,
-			Limit:        body.Limit,
-			Threshold:    body.Threshold,
-			Tags:         body.Tags,
-			IncludeGraph: body.IncludeGraph,
-			GraphDepth:   body.GraphDepth,
+			ProjectID:            projectID,
+			Query:                body.Query,
+			Limit:                body.Limit,
+			Threshold:            body.Threshold,
+			Tags:                 body.Tags,
+			IncludeGraph:         body.IncludeGraph,
+			GraphDepth:           body.GraphDepth,
+			DiversifyByTagPrefix: body.DiversifyByTagPrefix,
 		}
 
 		if ac := auth.FromContext(r.Context()); ac != nil {
@@ -123,13 +125,14 @@ func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
 		}
 
 		req := &service.RecallRequest{
-			Query:        body.Query,
-			Limit:        body.Limit,
-			Threshold:    body.Threshold,
-			Tags:         body.Tags,
-			IncludeGraph: body.IncludeGraph,
-			GraphDepth:   body.GraphDepth,
-			NamespaceID:  &user.NamespaceID,
+			Query:                body.Query,
+			Limit:                body.Limit,
+			Threshold:            body.Threshold,
+			Tags:                 body.Tags,
+			IncludeGraph:         body.IncludeGraph,
+			GraphDepth:           body.GraphDepth,
+			DiversifyByTagPrefix: body.DiversifyByTagPrefix,
+			NamespaceID:          &user.NamespaceID,
 		}
 
 		uid := ac.UserID

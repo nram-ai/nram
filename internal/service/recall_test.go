@@ -715,3 +715,350 @@ func TestRecall_EmptyResults(t *testing.T) {
 		t.Errorf("expected 0 memories, got %d", len(resp.Memories))
 	}
 }
+
+// --- diversify_by_tag_prefix tests ---
+
+// diversifySeed is a compact per-memory fixture used by the diversification
+// tests: deterministic id, tag list, and vector-search similarity score.
+type diversifySeed struct {
+	id    uuid.UUID
+	tags  []string
+	score float64
+}
+
+// buildDiversifyService wires a RecallService using vector search so the
+// similarity scores driving ranking are deterministic and directly controlled
+// by the seed list's score field.
+func buildDiversifyService(
+	t *testing.T,
+	projects *mockProjectRepo,
+	namespaces *mockNamespaceRepo,
+	nsID uuid.UUID,
+	seeds []diversifySeed,
+) (*RecallService, uuid.UUID) {
+	t.Helper()
+	now := time.Now()
+	memoryMap := make(map[uuid.UUID]*model.Memory, len(seeds))
+	vecResults := make([]storage.VectorSearchResult, 0, len(seeds))
+	for _, s := range seeds {
+		memoryMap[s.id] = makeTestMemory(s.id, nsID, "content", s.tags, 0.5, 0, now)
+		vecResults = append(vecResults, storage.VectorSearchResult{ID: s.id, Score: s.score, NamespaceID: nsID})
+	}
+	memReader := &mockMemoryReader{memories: memoryMap}
+	vs := &mockVectorSearcher{results: vecResults}
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-embed",
+		dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 128)},
+			Model:      "test-model",
+			Usage:      provider.TokenUsage{PromptTokens: 1, TotalTokens: 1},
+		},
+	}
+	svc, _ := newRecallService(memReader, projects, namespaces, vs, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	return svc, uuid.Nil
+}
+
+func TestRecall_DiversifyByTagPrefix_RoundRobin(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	// 3 groups × 3 items + 2 ungrouped. Similarity strictly descending so
+	// ranking is deterministic regardless of the composite-score tiebreaker.
+	a0, a1, a2 := uuid.New(), uuid.New(), uuid.New()
+	b0, b1, b2 := uuid.New(), uuid.New(), uuid.New()
+	c0, c1, c2 := uuid.New(), uuid.New(), uuid.New()
+	u0, u1 := uuid.New(), uuid.New()
+	seeds := []diversifySeed{
+		{a0, []string{"category-a", "x"}, 0.99},
+		{a1, []string{"category-a", "y"}, 0.96},
+		{a2, []string{"category-a", "z"}, 0.93},
+		{b0, []string{"category-b", "x"}, 0.90},
+		{b1, []string{"category-b", "y"}, 0.87},
+		{b2, []string{"category-b", "z"}, 0.84},
+		{c0, []string{"category-c", "x"}, 0.81},
+		{c1, []string{"category-c", "y"}, 0.78},
+		{c2, []string{"category-c", "z"}, 0.75},
+		{u0, []string{"other"}, 0.72},
+		{u1, []string{"unrelated", "misc"}, 0.69},
+	}
+
+	svc, _ := buildDiversifyService(t, projects, namespaces, nsID, seeds)
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:            projectID,
+		Query:                "q",
+		Limit:                6,
+		DiversifyByTagPrefix: "category-",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(resp.Memories) != 6 {
+		t.Fatalf("expected 6 memories, got %d", len(resp.Memories))
+	}
+
+	// Round-robin in first-seen group order: a, b, c, a, b, c.
+	wantGroups := []string{"category-a", "category-b", "category-c", "category-a", "category-b", "category-c"}
+	for i, want := range wantGroups {
+		got := firstTagWithPrefix(resp.Memories[i].Tags, "category-")
+		if got != want {
+			t.Errorf("memory %d: expected group %s, got %s (tags=%v)", i, want, got, resp.Memories[i].Tags)
+		}
+	}
+
+	// Ungrouped memories must not appear.
+	for _, m := range resp.Memories {
+		if firstTagWithPrefix(m.Tags, "category-") == "" {
+			t.Errorf("ungrouped memory returned: tags=%v", m.Tags)
+		}
+	}
+
+	// All 3 groups represented → no coverage gaps.
+	if len(resp.CoverageGaps) != 0 {
+		t.Errorf("expected no coverage gaps, got %+v", resp.CoverageGaps)
+	}
+}
+
+func TestRecall_DiversifyByTagPrefix_LimitCausesGap(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	a0, b0, c0 := uuid.New(), uuid.New(), uuid.New()
+	seeds := []diversifySeed{
+		{a0, []string{"category-a"}, 0.99},
+		{b0, []string{"category-b"}, 0.96},
+		{c0, []string{"category-c"}, 0.93},
+	}
+	svc, _ := buildDiversifyService(t, projects, namespaces, nsID, seeds)
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:            projectID,
+		Query:                "q",
+		Limit:                2,
+		DiversifyByTagPrefix: "category-",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories (limit), got %d", len(resp.Memories))
+	}
+
+	returned := map[string]bool{}
+	for _, m := range resp.Memories {
+		returned[firstTagWithPrefix(m.Tags, "category-")] = true
+	}
+	if !returned["category-a"] || !returned["category-b"] {
+		t.Errorf("expected a and b to be returned first, got %v", returned)
+	}
+	if returned["category-c"] {
+		t.Error("did not expect category-c to be returned at limit=2")
+	}
+
+	if len(resp.CoverageGaps) != 1 {
+		t.Fatalf("expected 1 coverage gap, got %d: %+v", len(resp.CoverageGaps), resp.CoverageGaps)
+	}
+	if resp.CoverageGaps[0].GroupKey != "category-c" {
+		t.Errorf("expected gap for category-c, got %s", resp.CoverageGaps[0].GroupKey)
+	}
+	if resp.CoverageGaps[0].Cause != CoverageCauseLimit {
+		t.Errorf("expected cause=%s, got %s", CoverageCauseLimit, resp.CoverageGaps[0].Cause)
+	}
+}
+
+func TestRecall_DiversifyByTagPrefix_ThresholdCausesGap(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	a0 := uuid.New()
+	b0 := uuid.New()
+	// a0 at 0.99 will produce a composite score well above 0.5. b0 at 0.02 —
+	// with Similarity weight 0.5 contributing 0.01 — will be below even the
+	// recency/importance floor. Confirm: b0 composite ≤ 0.5*0.02 + 0.15*~1 +
+	// 0.10*0.5 + 0 + 0 ≈ 0.21, comfortably below threshold=0.5.
+	seeds := []diversifySeed{
+		{a0, []string{"category-a"}, 0.99},
+		{b0, []string{"category-b"}, 0.02},
+	}
+	svc, _ := buildDiversifyService(t, projects, namespaces, nsID, seeds)
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:            projectID,
+		Query:                "q",
+		Limit:                10,
+		Threshold:            0.5,
+		DiversifyByTagPrefix: "category-",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(resp.Memories) != 1 {
+		t.Fatalf("expected 1 memory above threshold, got %d", len(resp.Memories))
+	}
+	if firstTagWithPrefix(resp.Memories[0].Tags, "category-") != "category-a" {
+		t.Errorf("expected only category-a to survive threshold")
+	}
+
+	if len(resp.CoverageGaps) != 1 {
+		t.Fatalf("expected 1 coverage gap, got %d: %+v", len(resp.CoverageGaps), resp.CoverageGaps)
+	}
+	if resp.CoverageGaps[0].GroupKey != "category-b" || resp.CoverageGaps[0].Cause != CoverageCauseThreshold {
+		t.Errorf("expected category-b threshold gap, got %+v", resp.CoverageGaps[0])
+	}
+}
+
+func TestRecall_DiversifyByTagPrefix_TagFilterCausesGap(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	a0 := uuid.New()
+	b0 := uuid.New()
+	seeds := []diversifySeed{
+		{a0, []string{"required", "category-a"}, 0.99},
+		{b0, []string{"category-b"}, 0.96}, // missing "required"
+	}
+	svc, _ := buildDiversifyService(t, projects, namespaces, nsID, seeds)
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:            projectID,
+		Query:                "q",
+		Limit:                10,
+		Tags:                 []string{"required"},
+		DiversifyByTagPrefix: "category-",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(resp.Memories) != 1 {
+		t.Fatalf("expected 1 memory after tag filter, got %d", len(resp.Memories))
+	}
+	if firstTagWithPrefix(resp.Memories[0].Tags, "category-") != "category-a" {
+		t.Errorf("expected category-a to pass tag filter")
+	}
+
+	if len(resp.CoverageGaps) != 1 {
+		t.Fatalf("expected 1 coverage gap, got %d: %+v", len(resp.CoverageGaps), resp.CoverageGaps)
+	}
+	if resp.CoverageGaps[0].GroupKey != "category-b" || resp.CoverageGaps[0].Cause != CoverageCauseTagFilter {
+		t.Errorf("expected category-b tag_filter gap, got %+v", resp.CoverageGaps[0])
+	}
+}
+
+func TestRecall_DiversifyByTagPrefix_Unset_NoGaps(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	a0, b0 := uuid.New(), uuid.New()
+	seeds := []diversifySeed{
+		{a0, []string{"category-a"}, 0.99},
+		{b0, []string{"category-b"}, 0.96},
+	}
+	svc, _ := buildDiversifyService(t, projects, namespaces, nsID, seeds)
+
+	// Omitting DiversifyByTagPrefix → existing behavior, no CoverageGaps.
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID: projectID,
+		Query:     "q",
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(resp.Memories) != 1 {
+		t.Fatalf("expected 1 memory, got %d", len(resp.Memories))
+	}
+	if resp.CoverageGaps != nil {
+		t.Errorf("expected nil CoverageGaps when diversify unset, got %+v", resp.CoverageGaps)
+	}
+}
+
+func TestRecall_DiversifyByTagPrefix_NoMatchingCandidates(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	u0, u1 := uuid.New(), uuid.New()
+	seeds := []diversifySeed{
+		{u0, []string{"misc"}, 0.99},
+		{u1, []string{"other"}, 0.96},
+	}
+	svc, _ := buildDiversifyService(t, projects, namespaces, nsID, seeds)
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:            projectID,
+		Query:                "q",
+		Limit:                10,
+		DiversifyByTagPrefix: "category-",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(resp.Memories) != 0 {
+		t.Errorf("expected 0 memories (no prefix matches), got %d", len(resp.Memories))
+	}
+	if len(resp.CoverageGaps) != 0 {
+		t.Errorf("expected no coverage gaps (no observed groups), got %+v", resp.CoverageGaps)
+	}
+}
+
+func TestRecall_DiversifyByTagPrefix_Deterministic(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	// 4 groups × 2 items, limit=3 → c and d must both surface as gaps; order
+	// must be sorted by group key on every run regardless of map iteration.
+	ids := make([]uuid.UUID, 8)
+	for i := range ids {
+		ids[i] = uuid.New()
+	}
+	seeds := []diversifySeed{
+		{ids[0], []string{"category-a"}, 0.99},
+		{ids[1], []string{"category-a"}, 0.98},
+		{ids[2], []string{"category-b"}, 0.97},
+		{ids[3], []string{"category-b"}, 0.96},
+		{ids[4], []string{"category-c"}, 0.95},
+		{ids[5], []string{"category-c"}, 0.94},
+		{ids[6], []string{"category-d"}, 0.93},
+		{ids[7], []string{"category-d"}, 0.92},
+	}
+	svc, _ := buildDiversifyService(t, projects, namespaces, nsID, seeds)
+
+	var first *RecallResponse
+	for i := 0; i < 2; i++ {
+		resp, err := svc.Recall(context.Background(), &RecallRequest{
+			ProjectID:            projectID,
+			Query:                "q",
+			Limit:                3,
+			DiversifyByTagPrefix: "category-",
+		})
+		if err != nil {
+			t.Fatalf("iteration %d: unexpected error: %v", i, err)
+		}
+		if first == nil {
+			first = resp
+			continue
+		}
+		if len(resp.Memories) != len(first.Memories) {
+			t.Fatalf("iteration %d: memory count drift: %d vs %d", i, len(resp.Memories), len(first.Memories))
+		}
+		for j := range resp.Memories {
+			if resp.Memories[j].ID != first.Memories[j].ID {
+				t.Errorf("iteration %d, position %d: non-deterministic memory order", i, j)
+			}
+		}
+		if len(resp.CoverageGaps) != len(first.CoverageGaps) {
+			t.Fatalf("iteration %d: coverage-gap count drift", i)
+		}
+		for j := range resp.CoverageGaps {
+			if resp.CoverageGaps[j] != first.CoverageGaps[j] {
+				t.Errorf("iteration %d, gap %d: non-deterministic gap order", i, j)
+			}
+		}
+	}
+
+	// Sanity: gaps are sorted ascending.
+	for i := 1; i < len(first.CoverageGaps); i++ {
+		if first.CoverageGaps[i-1].GroupKey > first.CoverageGaps[i].GroupKey {
+			t.Errorf("coverage_gaps not sorted: %+v", first.CoverageGaps)
+		}
+	}
+}

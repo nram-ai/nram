@@ -52,6 +52,12 @@ type RecallRequest struct {
 	Tags        []string   `json:"tags"`
 	IncludeGraph bool      `json:"include_graph"`
 	GraphDepth  int        `json:"graph_depth"`
+	// DiversifyByTagPrefix, when non-empty, post-processes the ranked candidate
+	// set by grouping results by the first tag matching this prefix and
+	// round-robin-picking across groups up to Limit. Candidates with no
+	// prefix-matching tag are excluded from the diversified output. Vector
+	// search and graph traversal are unchanged — this is a pure rerank step.
+	DiversifyByTagPrefix string `json:"diversify_by_tag_prefix,omitempty"`
 	// Caller context
 	UserID   *uuid.UUID `json:"-"`
 	APIKeyID *uuid.UUID `json:"-"`
@@ -93,7 +99,29 @@ type RecallResponse struct {
 	Graph         RecallGraph    `json:"graph"`
 	TotalSearched int            `json:"total_searched"`
 	LatencyMs     int64          `json:"latency_ms"`
+	// CoverageGaps surfaces prefix-matching tag values that were observed in
+	// the unfiltered candidate pool but produced zero memories in the returned
+	// results. Populated only when DiversifyByTagPrefix is set. Each gap
+	// carries a cause attributing the hole to the pipeline stage where the
+	// group's last surviving candidate died: "tag_filter", "threshold", or
+	// "limit".
+	CoverageGaps []CoverageGap `json:"coverage_gaps,omitempty"`
 }
+
+// CoverageGap describes a prefix-group observed in the candidate pool but
+// absent from the returned memories, and why.
+type CoverageGap struct {
+	GroupKey string `json:"group_key"`
+	Cause    string `json:"cause"` // one of CoverageCause* constants
+}
+
+// Coverage-gap cause codes attribute a missing prefix-group to the pipeline
+// stage where its last surviving candidate was dropped.
+const (
+	CoverageCauseTagFilter = "tag_filter"
+	CoverageCauseThreshold = "threshold"
+	CoverageCauseLimit     = "limit"
+)
 
 // RecallEntity represents an entity found during graph traversal.
 type RecallEntity struct {
@@ -410,6 +438,15 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// Track total candidates searched (before tag/threshold filtering).
 	totalSearched := len(candidates)
 
+	// Snapshot the pre-tag-filter prefix-group set so coverage_gaps can
+	// attribute groups stripped by the intersection filter. Storing the set
+	// directly (instead of copying candidates) avoids a slice allocation
+	// proportional to the search pool.
+	var rawGroups map[string]struct{}
+	if req.DiversifyByTagPrefix != "" {
+		rawGroups = prefixGroups(candidates, scoredMemoryTags, req.DiversifyByTagPrefix)
+	}
+
 	// Filter by tags (intersection: memory must have ALL requested tags).
 	if len(req.Tags) > 0 {
 		filtered := candidates[:0]
@@ -419,6 +456,11 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			}
 		}
 		candidates = filtered
+	}
+
+	var postTagGroups map[string]struct{}
+	if req.DiversifyByTagPrefix != "" {
+		postTagGroups = prefixGroups(candidates, scoredMemoryTags, req.DiversifyByTagPrefix)
 	}
 
 	// Graph traversal if requested.
@@ -552,8 +594,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		return si > sj
 	})
 
-	// Apply threshold filter.
-	var results []RecallResult
+	// Apply threshold filter to build the post-threshold ranked list. Limit is
+	// applied later — diversification needs the full passing set to group over.
+	var passing []RecallResult
 	for _, c := range candidates {
 		// Skip dream syntheses demoted by the novelty audit.
 		if c.memory.Source != nil && *c.memory.Source == model.DreamSource {
@@ -580,7 +623,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		if tags == nil {
 			tags = []string{}
 		}
-		results = append(results, RecallResult{
+		passing = append(passing, RecallResult{
 			ID:          c.memory.ID,
 			ProjectID:   c.projectID,
 			ProjectSlug: c.projectSlug,
@@ -597,10 +640,19 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			Metadata:    c.memory.Metadata,
 			CreatedAt:   c.memory.CreatedAt,
 		})
+	}
 
-		if len(results) >= limit {
-			break
-		}
+	var results []RecallResult
+	var coverageGaps []CoverageGap
+	if req.DiversifyByTagPrefix != "" {
+		passingGroups := prefixGroups(passing, recallResultTags, req.DiversifyByTagPrefix)
+		results = diversifyByTagPrefix(passing, req.DiversifyByTagPrefix, limit)
+		returnedGroups := prefixGroups(results, recallResultTags, req.DiversifyByTagPrefix)
+		coverageGaps = computeCoverageGaps(rawGroups, postTagGroups, passingGroups, returnedGroups)
+	} else if len(passing) > limit {
+		results = passing[:limit]
+	} else {
+		results = passing
 	}
 
 	if results == nil {
@@ -632,6 +684,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		},
 		TotalSearched: totalSearched,
 		LatencyMs:     latency,
+		CoverageGaps:  coverageGaps,
 	}, nil
 }
 
@@ -724,3 +777,95 @@ func hasAllTags(memTags, required []string) bool {
 	}
 	return true
 }
+
+// firstTagWithPrefix returns the first tag in tags that begins with prefix,
+// preserving slice order. Returns the empty string when no tag matches.
+func firstTagWithPrefix(tags []string, prefix string) string {
+	for _, t := range tags {
+		if strings.HasPrefix(t, prefix) {
+			return t
+		}
+	}
+	return ""
+}
+
+// diversifyByTagPrefix groups passing by firstTagWithPrefix(tags, prefix),
+// drops candidates with no prefix-matching tag, and round-robins across groups
+// in first-seen order (preserving ranking within each group) up to limit.
+func diversifyByTagPrefix(passing []RecallResult, prefix string, limit int) []RecallResult {
+	if limit <= 0 || len(passing) == 0 {
+		return []RecallResult{}
+	}
+	var groupOrder []string
+	groups := make(map[string][]RecallResult)
+	for _, r := range passing {
+		g := firstTagWithPrefix(r.Tags, prefix)
+		if g == "" {
+			continue
+		}
+		if _, seen := groups[g]; !seen {
+			groupOrder = append(groupOrder, g)
+		}
+		groups[g] = append(groups[g], r)
+	}
+	out := make([]RecallResult, 0, limit)
+	for len(out) < limit {
+		picked := false
+		for _, g := range groupOrder {
+			if len(groups[g]) == 0 {
+				continue
+			}
+			out = append(out, groups[g][0])
+			groups[g] = groups[g][1:]
+			picked = true
+			if len(out) >= limit {
+				break
+			}
+		}
+		if !picked {
+			break
+		}
+	}
+	return out
+}
+
+// computeCoverageGaps produces the coverage-gap list for a diversified recall,
+// attributing each observed-but-absent group key to the pipeline stage where
+// its last surviving candidate was dropped. Output is sorted by group key for
+// deterministic responses.
+func computeCoverageGaps(raw, postTag, postThreshold, returned map[string]struct{}) []CoverageGap {
+	if len(raw) == 0 {
+		return nil
+	}
+	var gaps []CoverageGap
+	for g := range raw {
+		if _, ok := returned[g]; ok {
+			continue
+		}
+		cause := CoverageCauseLimit
+		if _, ok := postTag[g]; !ok {
+			cause = CoverageCauseTagFilter
+		} else if _, ok := postThreshold[g]; !ok {
+			cause = CoverageCauseThreshold
+		}
+		gaps = append(gaps, CoverageGap{GroupKey: g, Cause: cause})
+	}
+	sort.Slice(gaps, func(i, j int) bool { return gaps[i].GroupKey < gaps[j].GroupKey })
+	return gaps
+}
+
+// prefixGroups returns the set of distinct tags-with-prefix observed across
+// items, keyed by the first prefix-matching tag of each item (via tags()).
+// Items whose tag list contains no prefix match contribute no key.
+func prefixGroups[T any](items []T, tags func(T) []string, prefix string) map[string]struct{} {
+	s := make(map[string]struct{})
+	for _, it := range items {
+		if g := firstTagWithPrefix(tags(it), prefix); g != "" {
+			s[g] = struct{}{}
+		}
+	}
+	return s
+}
+
+func scoredMemoryTags(c scoredMemory) []string { return c.memory.Tags }
+func recallResultTags(r RecallResult) []string { return r.Tags }

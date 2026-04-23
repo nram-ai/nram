@@ -303,6 +303,109 @@ func TestRecallHandler_ServiceError(t *testing.T) {
 	}
 }
 
+func TestRecallHandler_DiversifyByTagPrefix_Forwarded(t *testing.T) {
+	projectID := uuid.New()
+
+	var captured *service.RecallRequest
+	svc := &mockRecallService{
+		recallFn: func(ctx context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
+			captured = req
+			return &service.RecallResponse{
+				Memories: []service.RecallResult{},
+				CoverageGaps: []service.CoverageGap{
+					{GroupKey: "category-c", Cause: "limit"},
+				},
+				LatencyMs: 1,
+			}, nil
+		},
+	}
+
+	router := newRecallRouter(NewRecallHandler(svc))
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+
+	body := map[string]interface{}{
+		"query":                   "q",
+		"limit":                   2,
+		"diversify_by_tag_prefix": "category-",
+	}
+
+	w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall", body, ac)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if captured == nil {
+		t.Fatal("service not called")
+	}
+	if captured.DiversifyByTagPrefix != "category-" {
+		t.Errorf("expected DiversifyByTagPrefix=category-, got %q", captured.DiversifyByTagPrefix)
+	}
+
+	var resp service.RecallResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.CoverageGaps) != 1 || resp.CoverageGaps[0].GroupKey != "category-c" || resp.CoverageGaps[0].Cause != "limit" {
+		t.Errorf("coverage_gaps not round-tripped: %+v", resp.CoverageGaps)
+	}
+}
+
+func TestMeRecallHandler_DiversifyByTagPrefix_Forwarded(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	users := &mockUserReader{user: &model.User{ID: userID, NamespaceID: nsID}}
+
+	var captured *service.RecallRequest
+	svc := &mockRecallService{
+		recallFn: func(ctx context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
+			captured = req
+			return &service.RecallResponse{Memories: []service.RecallResult{}, LatencyMs: 1}, nil
+		},
+	}
+
+	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
+	ac := &auth.AuthContext{UserID: userID, Role: "user"}
+
+	body := map[string]interface{}{
+		"query":                   "q",
+		"diversify_by_tag_prefix": "category-",
+	}
+
+	w := doRecallRequest(router, "/v1/me/memories/recall", body, ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if captured == nil || captured.DiversifyByTagPrefix != "category-" {
+		t.Errorf("DiversifyByTagPrefix not forwarded from /me handler: %+v", captured)
+	}
+}
+
+// TestRecallHandler_DiversifyByTagPrefix_OmittedFromJSON confirms that an
+// empty CoverageGaps slice is elided from the wire format via omitempty, so
+// existing clients see no schema drift when the feature is unused.
+func TestRecallHandler_DiversifyByTagPrefix_OmittedFromJSON(t *testing.T) {
+	projectID := uuid.New()
+	svc := &mockRecallService{
+		recallFn: func(_ context.Context, _ *service.RecallRequest) (*service.RecallResponse, error) {
+			return &service.RecallResponse{
+				Memories:  []service.RecallResult{},
+				LatencyMs: 1,
+			}, nil
+		},
+	}
+	router := newRecallRouter(NewRecallHandler(svc))
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+	body := map[string]interface{}{"query": "q"}
+
+	w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall", body, ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("coverage_gaps")) {
+		t.Errorf("coverage_gaps should be omitted when empty, body=%s", w.Body.String())
+	}
+}
+
 func TestMeRecallHandler_NoAuth(t *testing.T) {
 	svc := &mockRecallService{}
 	users := &mockUserReader{}
