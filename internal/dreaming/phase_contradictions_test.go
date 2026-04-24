@@ -96,7 +96,7 @@ func TestContradictionPhase_ZeroUsageBudgetAdvances(t *testing.T) {
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: memories[0].NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 
-	if err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
 
@@ -125,9 +125,12 @@ func TestContradictionPhase_ZeroUsageBudgetAdvances(t *testing.T) {
 // completing a full inner loop row.
 func TestContradictionPhase_PairCapEnforced(t *testing.T) {
 	phase := &ContradictionPhase{}
-	pairs := phase.findCandidatePairs(makeMemories(200))
+	pairs, truncated := phase.findCandidatePairs(makeMemories(200))
 	if len(pairs) != maxContradictionPairs {
 		t.Errorf("expected exactly %d pairs, got %d", maxContradictionPairs, len(pairs))
+	}
+	if !truncated {
+		t.Error("expected truncated=true when input exceeds cap")
 	}
 }
 
@@ -171,7 +174,7 @@ func TestContradictionPhase_ParseErrorStillAccountsUsage(t *testing.T) {
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: memories[0].NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 
-	if err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
 
@@ -212,7 +215,7 @@ func TestContradictionPhase_PreflightStopsWhenBudgetTooSmall(t *testing.T) {
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: memories[0].NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 
-	if err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
 	if llm.calls.Load() != 0 {

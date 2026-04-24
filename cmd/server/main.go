@@ -338,24 +338,24 @@ func main() {
 
 	// Create MCP server.
 	mcpServer := mcp.NewServer(mcp.Dependencies{
-		Backend:       db.Backend(),
-		Store:         storeSvc,
-		Recall:        recallSvc,
-		Forget:        forgetSvc,
-		Update:        updateSvc,
-		BatchGet:      batchGetSvc,
-		BatchStore:    batchStoreSvc,
-		Enrich:        enrichSvc,
-		Export:        exportSvc,
+		Backend:        db.Backend(),
+		Store:          storeSvc,
+		Recall:         recallSvc,
+		Forget:         forgetSvc,
+		Update:         updateSvc,
+		BatchGet:       batchGetSvc,
+		BatchStore:     batchStoreSvc,
+		Enrich:         enrichSvc,
+		Export:         exportSvc,
 		ProjectDelete:  projectDeleteSvc,
 		ProjectUpdater: projectRepo,
 		ProjectRepo:    projectRepo,
-		UserRepo:      userRepo,
-		NamespaceRepo: namespaceRepo,
-		MemoryLister:  memoryRepo,
-		EntityReader:  entityRepo,
-		Traverser:     relationshipRepo,
-		EventBus:      eventBus,
+		UserRepo:       userRepo,
+		NamespaceRepo:  namespaceRepo,
+		MemoryLister:   memoryRepo,
+		EntityReader:   entityRepo,
+		Traverser:      relationshipRepo,
+		EventBus:       eventBus,
 		ProviderStatus: func() (bool, bool) {
 			if registry == nil {
 				return false, false
@@ -421,12 +421,20 @@ func main() {
 	dreamLogRepo := storage.NewDreamLogRepo(db)
 	dreamDirtyRepo := storage.NewDreamDirtyRepo(db)
 
+	consolidationPhase := dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, tokenUsageRepo, namespaceRepo)
+	// Wire the active vector store into dream-side state transitions so that
+	// demotion and supersession purge vectors alongside the row-level update.
+	if vectorStore != nil {
+		consolidationPhase.AttachVectorPurger(vectorStore)
+		memoryRepo.AttachVectorStore(vectorStore)
+	}
+
 	dreamRunner := dreaming.NewRunner(
 		dreamCycleRepo, dreamLogRepo, workerPool,
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo),
 		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
 		dreaming.NewContradictionPhase(memoryRepo, lineageRepo, factProvider, settingsSvc, tokenUsageRepo, namespaceRepo),
-		dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, tokenUsageRepo, namespaceRepo),
+		consolidationPhase,
 		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo, settingsSvc),
 		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo),
 	)
@@ -436,7 +444,7 @@ func main() {
 		memoryRepo, memoryRepo, relationshipRepo, entityRepo, entityRepo,
 	)
 
-	dreamRetention := dreaming.NewRetentionSweeper(dreamLogRepo, dreamCycleRepo, settingsSvc)
+	dreamRetention := dreaming.NewRetentionSweeper(dreamLogRepo, dreamCycleRepo, memoryRepo, settingsSvc)
 
 	// Start dirty tracker (event subscriber).
 	dirtyTracker := dreaming.NewDirtyTracker(eventBus, dreamDirtyRepo)
@@ -574,13 +582,13 @@ func main() {
 			JWTSecret:  jwtSecret,
 			OnComplete: setupChecker.MarkComplete,
 		}),
-		AdminDashboard:   api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashboardStore}),
-		AdminActivity:    api.NewAdminActivityHandler(api.DashboardConfig{Store: dashboardStore}),
-		AdminOrgs:        api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore}),
-		AdminUsers:       api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore}),
-		AdminProjects:    api.NewAdminProjectsHandler(api.ProjectAdminConfig{Store: projectAdminStore}),
-		AdminProviders:   api.NewAdminProvidersHandler(api.ProviderAdminConfig{Store: providerAdminStore}),
-		AdminSettings:    api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
+		AdminDashboard: api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashboardStore}),
+		AdminActivity:  api.NewAdminActivityHandler(api.DashboardConfig{Store: dashboardStore}),
+		AdminOrgs:      api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore}),
+		AdminUsers:     api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore}),
+		AdminProjects:  api.NewAdminProjectsHandler(api.ProjectAdminConfig{Store: projectAdminStore}),
+		AdminProviders: api.NewAdminProvidersHandler(api.ProviderAdminConfig{Store: providerAdminStore}),
+		AdminSettings:  api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
 		AdminEnrichment: api.NewAdminEnrichmentHandler(api.EnrichmentAdminConfig{
 			Store:          enrichmentAdminStore,
 			FactProvider:   factProvider,

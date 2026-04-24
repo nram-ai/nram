@@ -59,7 +59,7 @@ func NewPruningPhase(memories MemoryReader, memWriter MemoryWriter, relWriter Re
 
 func (p *PruningPhase) Name() string { return model.DreamPhasePruning }
 
-func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) error {
+func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
 	memories, err := p.memories.ListByNamespace(ctx, cycle.NamespaceID, 1000, 0)
 	if err != nil {
 		slog.Warn("dreaming: pruning failed to list memories", "err", err)
@@ -78,7 +78,9 @@ func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, bud
 		slog.Warn("dreaming: relationship pruning had errors", "err", err)
 	}
 
-	return nil
+	// Pruning is deterministic per cycle: it visits every memory and
+	// expires every low-weight relationship in one pass. No residual.
+	return false, nil
 }
 
 // applyConfidenceDecay scales confidence of memories whose last_accessed is

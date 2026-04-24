@@ -842,6 +842,165 @@ func TestMemoryRepo_HardDelete(t *testing.T) {
 	})
 }
 
+// recordingVectorStore satisfies the VectorStore interface and records each
+// Delete call so tests can assert the purge hook fired.
+type recordingVectorStore struct {
+	deletes []uuid.UUID
+}
+
+func (r *recordingVectorStore) Upsert(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ []float32, _ int) error {
+	return nil
+}
+func (r *recordingVectorStore) UpsertBatch(_ context.Context, _ []VectorUpsertItem) error {
+	return nil
+}
+func (r *recordingVectorStore) Search(_ context.Context, _ []float32, _ uuid.UUID, _ int, _ int) ([]VectorSearchResult, error) {
+	return nil, nil
+}
+func (r *recordingVectorStore) Delete(_ context.Context, id uuid.UUID) error {
+	r.deletes = append(r.deletes, id)
+	return nil
+}
+func (r *recordingVectorStore) Ping(_ context.Context) error { return nil }
+
+// TestMemoryRepo_SoftDelete_PurgesVector verifies that soft-delete asks
+// the attached vector store to drop the vector alongside the row-level
+// state change. This is the load-bearing hook for keeping the HNSW and
+// pgvector indexes in sync with the recall-visible memory set.
+func TestMemoryRepo_SoftDelete_PurgesVector(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		vs := &recordingVectorStore{}
+		repo.AttachVectorStore(vs)
+
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		mem := newTestMemory(nsID)
+		if err := repo.Create(ctx, mem); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		if err := repo.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
+			t.Fatalf("soft delete: %v", err)
+		}
+
+		if len(vs.deletes) != 1 || vs.deletes[0] != mem.ID {
+			t.Errorf("expected vector store Delete called with %s, got %v", mem.ID, vs.deletes)
+		}
+	})
+}
+
+// TestMemoryRepo_HardDelete_PurgesVector verifies the same hook fires on
+// hard delete so the in-memory HNSW graph drops the node (FK CASCADE
+// handles persisted vector rows; the in-memory index needs an explicit
+// call).
+func TestMemoryRepo_HardDelete_PurgesVector(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		vs := &recordingVectorStore{}
+		repo.AttachVectorStore(vs)
+
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		mem := newTestMemory(nsID)
+		if err := repo.Create(ctx, mem); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		if err := repo.HardDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
+			t.Fatalf("hard delete: %v", err)
+		}
+
+		if len(vs.deletes) != 1 || vs.deletes[0] != mem.ID {
+			t.Errorf("expected vector store Delete called with %s, got %v", mem.ID, vs.deletes)
+		}
+	})
+}
+
+// TestMemoryRepo_SoftDelete_NoVectorStore_NoPanic verifies the purge hook
+// gracefully handles the nil-vectorStore case so callers that never
+// AttachVectorStore still function.
+func TestMemoryRepo_SoftDelete_NoVectorStore_NoPanic(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		// Deliberately do not AttachVectorStore.
+
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		mem := newTestMemory(nsID)
+		if err := repo.Create(ctx, mem); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := repo.SoftDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
+			t.Fatalf("soft delete: %v", err)
+		}
+	})
+}
+
+// TestMemoryRepo_HardDeleteSoftDeletedBefore_RetentionSweep verifies the
+// retention sweep hard-deletes only rows whose deleted_at is past the
+// cutoff, and returns the count of rows removed.
+func TestMemoryRepo_HardDeleteSoftDeletedBefore_RetentionSweep(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		old := newTestMemory(nsID)
+		recent := newTestMemory(nsID)
+		live := newTestMemory(nsID)
+		for _, m := range []*model.Memory{old, recent, live} {
+			if err := repo.Create(ctx, m); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+		}
+
+		if err := repo.SoftDelete(ctx, old.ID, nsID); err != nil {
+			t.Fatalf("soft delete old: %v", err)
+		}
+		if err := repo.SoftDelete(ctx, recent.ID, nsID); err != nil {
+			t.Fatalf("soft delete recent: %v", err)
+		}
+
+		// Set deleted_at directly to put old well before cutoff and recent
+		// well after it; avoids relying on wall-clock spacing, which
+		// produces flaky results under concurrent test load.
+		backdate := time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339)
+		updateSQL := `UPDATE memories SET deleted_at = ? WHERE id = ?`
+		if db.Backend() == BackendPostgres {
+			updateSQL = `UPDATE memories SET deleted_at = $1 WHERE id = $2`
+		}
+		if _, err := db.Exec(ctx, updateSQL, backdate, old.ID.String()); err != nil {
+			t.Fatalf("backdate old: %v", err)
+		}
+
+		cutoff := time.Now().UTC().Add(-1 * time.Hour)
+		deleted, err := repo.HardDeleteSoftDeletedBefore(ctx, cutoff, 1000)
+		if err != nil {
+			t.Fatalf("hard delete soft-deleted before: %v", err)
+		}
+		if deleted != 1 {
+			t.Errorf("expected 1 row hard-deleted (the old one), got %d", deleted)
+		}
+
+		// The old memory is fully gone; the recent one is still soft-deleted;
+		// the live one is unchanged.
+		if _, err := repo.getByIDIncludeDeleted(ctx, old.ID); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("expected old to be hard-deleted, got err=%v", err)
+		}
+		fetchedRecent, err := repo.getByIDIncludeDeleted(ctx, recent.ID)
+		if err != nil {
+			t.Fatalf("recent should still exist (soft-deleted): %v", err)
+		}
+		if fetchedRecent.DeletedAt == nil {
+			t.Error("recent should still be soft-deleted")
+		}
+		if _, err := repo.GetByID(ctx, live.ID); err != nil {
+			t.Errorf("live memory should still be readable: %v", err)
+		}
+	})
+}
+
 func TestMemoryRepo_HardDelete_SoftDeletedFirst(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

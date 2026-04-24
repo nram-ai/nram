@@ -11,24 +11,30 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
-// RetentionSweeper compresses old dream logs into summaries and removes
-// detailed log entries past the retention window.
+// RetentionSweeper compresses old dream logs into summaries, removes
+// detailed log entries past the retention window, and hard-deletes
+// soft-deleted memories whose retention window has also elapsed.
 type RetentionSweeper struct {
-	logRepo   *storage.DreamLogRepo
-	cycleRepo *storage.DreamCycleRepo
-	settings  SettingsResolver
+	logRepo       *storage.DreamLogRepo
+	cycleRepo     *storage.DreamCycleRepo
+	memoryDeleter MemoryHardDeleter
+	settings      SettingsResolver
 }
 
-// NewRetentionSweeper creates a new RetentionSweeper.
+// NewRetentionSweeper creates a new RetentionSweeper. memoryDeleter may be
+// nil, in which case the soft-delete hard-purge pass is skipped and only
+// dream-log compression runs.
 func NewRetentionSweeper(
 	logRepo *storage.DreamLogRepo,
 	cycleRepo *storage.DreamCycleRepo,
+	memoryDeleter MemoryHardDeleter,
 	settings SettingsResolver,
 ) *RetentionSweeper {
 	return &RetentionSweeper{
-		logRepo:   logRepo,
-		cycleRepo: cycleRepo,
-		settings:  settings,
+		logRepo:       logRepo,
+		cycleRepo:     cycleRepo,
+		memoryDeleter: memoryDeleter,
+		settings:      settings,
 	}
 }
 
@@ -99,6 +105,25 @@ func (s *RetentionSweeper) Sweep(ctx context.Context) error {
 
 	if compressed > 0 {
 		slog.Info("dreaming: retention sweep compressed cycles", "count", compressed)
+	}
+
+	// Hard-delete soft-deleted memories past their own retention window.
+	// The memory_vectors_* FK CASCADE reclaims persisted vector rows; any
+	// still-attached VectorStore saw the in-memory node dropped at
+	// soft-delete time. Bounded per sweep so a single call cannot stall on
+	// a backlog.
+	if s.memoryDeleter != nil {
+		memRetentionDays, err := s.settings.ResolveInt(ctx, service.SettingMemorySoftDeleteRetentionDays, "global")
+		if err != nil || memRetentionDays <= 0 {
+			memRetentionDays = 30
+		}
+		memCutoff := time.Now().UTC().AddDate(0, 0, -memRetentionDays)
+		if deleted, derr := s.memoryDeleter.HardDeleteSoftDeletedBefore(ctx, memCutoff, 1000); derr != nil {
+			slog.Warn("dreaming: retention sweep hard-delete memories failed", "err", derr)
+		} else if deleted > 0 {
+			slog.Info("dreaming: retention sweep hard-deleted memories",
+				"count", deleted, "retention_days", memRetentionDays)
+		}
 	}
 
 	return nil

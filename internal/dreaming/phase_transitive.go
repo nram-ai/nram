@@ -60,31 +60,33 @@ func NewTransitivePhase(
 
 func (p *TransitivePhase) Name() string { return model.DreamPhaseTransitive }
 
-func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) error {
+func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
 	entities, err := p.entities.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if len(entities) < 3 {
-		return nil
+		return false, nil
 	}
 
 	// Hard cap: if namespace already has too many relationships, skip entirely.
+	// Treat this as a no-residual condition — more cycles won't help, only
+	// pruning the graph or raising the cap will unstick it.
 	totalActive, err := p.relationships.CountActiveByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if totalActive >= transitiveHardCap {
 		slog.Info("dreaming: transitive phase skipped, namespace at hard cap",
 			"active", totalActive, "cap", transitiveHardCap, "cycle", cycle.ID)
-		return nil
+		return false, nil
 	}
 
 	// Build adjacency map for quick lookup.
 	allRels, err := p.relationships.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Build edge lookup: (sourceID, targetID, relation) → relationship.
@@ -121,14 +123,19 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		maxNew = headroom
 	}
 	if maxNew <= 0 {
-		return nil
+		return false, nil
 	}
 
 	transitiveProps := json.RawMessage(`{"source":"` + transitivePropertySource + `"}`)
 
 	created := 0
+	// truncated tracks whether we stopped iterating because of the per-cycle
+	// cap with more potential inferences still available. When true, the
+	// phase reports residual so the next cycle picks up the rest.
+	truncated := false
 	for _, entityA := range entities {
 		if created >= maxNew {
+			truncated = true
 			break
 		}
 
@@ -136,6 +143,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 
 		for _, relAB := range relsAB {
 			if created >= maxNew {
+				truncated = true
 				break
 			}
 
@@ -144,6 +152,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 
 			for _, relBC := range relsBC {
 				if created >= maxNew {
+					truncated = true
 					break
 				}
 
@@ -197,10 +206,10 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 
 	if created > 0 {
 		slog.Info("dreaming: transitive discovery created relationships",
-			"count", created, "cycle", cycle.ID)
+			"count", created, "cycle", cycle.ID, "truncated", truncated)
 	}
 
-	return nil
+	return truncated, nil
 }
 
 // isTransitiveRelationship checks whether a relationship was created by the

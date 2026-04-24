@@ -14,27 +14,27 @@ import (
 
 // Well-known setting keys.
 const (
-	SettingEmbedProvider    = "provider.embedding.type"
-	SettingEmbedURL         = "provider.embedding.url"
-	SettingEmbedKey         = "provider.embedding.key"
-	SettingEmbedModel       = "provider.embedding.model"
-	SettingFactProvider     = "provider.fact.type"
-	SettingFactURL          = "provider.fact.url"
-	SettingFactKey          = "provider.fact.key"
-	SettingFactModel        = "provider.fact.model"
-	SettingEntityProvider   = "provider.entity.type"
-	SettingEntityURL        = "provider.entity.url"
-	SettingEntityKey        = "provider.entity.key"
-	SettingEntityModel      = "provider.entity.model"
-	SettingDedupThreshold   = "enrichment.dedup_threshold"
-	SettingFactPrompt       = "enrichment.fact_prompt"
-	SettingEntityPrompt     = "enrichment.entity_prompt"
-	SettingRankWeightSim    = "ranking.weight.similarity"
-	SettingRankWeightRec    = "ranking.weight.recency"
-	SettingRankWeightImp    = "ranking.weight.importance"
-	SettingRankWeightFreq   = "ranking.weight.frequency"
-	SettingRankWeightGraph  = "ranking.weight.graph_relevance"
-	SettingTokenRetention   = "usage.token_retention_days"
+	SettingEmbedProvider   = "provider.embedding.type"
+	SettingEmbedURL        = "provider.embedding.url"
+	SettingEmbedKey        = "provider.embedding.key"
+	SettingEmbedModel      = "provider.embedding.model"
+	SettingFactProvider    = "provider.fact.type"
+	SettingFactURL         = "provider.fact.url"
+	SettingFactKey         = "provider.fact.key"
+	SettingFactModel       = "provider.fact.model"
+	SettingEntityProvider  = "provider.entity.type"
+	SettingEntityURL       = "provider.entity.url"
+	SettingEntityKey       = "provider.entity.key"
+	SettingEntityModel     = "provider.entity.model"
+	SettingDedupThreshold  = "enrichment.dedup_threshold"
+	SettingFactPrompt      = "enrichment.fact_prompt"
+	SettingEntityPrompt    = "enrichment.entity_prompt"
+	SettingRankWeightSim   = "ranking.weight.similarity"
+	SettingRankWeightRec   = "ranking.weight.recency"
+	SettingRankWeightImp   = "ranking.weight.importance"
+	SettingRankWeightFreq  = "ranking.weight.frequency"
+	SettingRankWeightGraph = "ranking.weight.graph_relevance"
+	SettingTokenRetention  = "usage.token_retention_days"
 
 	// Dreaming system-level settings (global scope).
 	SettingDreamingEnabled            = "dreaming.enabled"
@@ -60,6 +60,28 @@ const (
 	SettingDreamNoveltyJudgePrompt        = "dreaming.novelty.judge_prompt"
 	SettingDreamNoveltyJudgeMaxTokens     = "dreaming.novelty.judge_max_tokens"
 	SettingDreamNoveltyBackfillPerCycle   = "dreaming.novelty.backfill_per_cycle"
+	// Backfill path uses a more aggressive auto-reject threshold than
+	// synthesis-time auditing. These are historical rows already written;
+	// a more confident "this is duplicative" cutoff lets the sweep clean
+	// up clear dupes without burning LLM-judge calls where the judge has
+	// been observed to let obvious duplicates through. Override the
+	// synthesis-path SettingDreamNoveltyEmbedHighThreshold when set; if
+	// unset or <= 0, the backfill path uses the synthesis threshold.
+	SettingDreamNoveltyBackfillEmbedHighThreshold = "dreaming.novelty.backfill_embed_high_threshold"
+
+	// Consolidation sub-phase budget fractions. The three sub-phases (audit,
+	// reinforce, consolidate) each get a reserved slice of the cycle's
+	// remaining budget at entry so one sub-phase cannot starve another.
+	// Fractions are interpreted relative to the parent budget's remaining
+	// tokens at sub-phase entry; oversubscription is permitted (the root cap
+	// always wins) but starves later sub-slices.
+	SettingDreamConsolidationAuditFraction       = "dreaming.consolidation.audit_budget_fraction"
+	SettingDreamConsolidationReinforceFraction   = "dreaming.consolidation.reinforce_budget_fraction"
+	SettingDreamConsolidationConsolidateFraction = "dreaming.consolidation.consolidate_budget_fraction"
+
+	// Retention for soft-deleted memories. Rows past this age are hard-deleted
+	// by the retention sweeper and their vector rows are CASCADEd alongside.
+	SettingMemorySoftDeleteRetentionDays = "memory.soft_delete_retention_days"
 
 	SettingQdrantAddr             = "qdrant.addr"
 	SettingQdrantAPIKey           = "qdrant.api_key"
@@ -93,13 +115,13 @@ const (
 // settingDefaults provides built-in default values for well-known settings.
 // These are used when a setting is not found at any scope in the database.
 var settingDefaults = map[string]string{
-	SettingDedupThreshold:  "0.92",
-	SettingRankWeightSim:   "0.5",
-	SettingRankWeightRec:   "0.15",
-	SettingRankWeightImp:   "0.10",
-	SettingRankWeightFreq:  "0.05",
-	SettingRankWeightGraph: "0.20",
-	SettingTokenRetention:  "365",
+	SettingDedupThreshold:             "0.92",
+	SettingRankWeightSim:              "0.5",
+	SettingRankWeightRec:              "0.15",
+	SettingRankWeightImp:              "0.10",
+	SettingRankWeightFreq:             "0.05",
+	SettingRankWeightGraph:            "0.20",
+	SettingTokenRetention:             "365",
 	SettingDreamingEnabled:            "false",
 	SettingDreamMaxTokensPerCycle:     "10000",
 	SettingDreamMaxTokensPerCall:      "2048",
@@ -152,14 +174,28 @@ alignment must be a float:
 1.0 = strong support
 0.0 = neutral/unrelated
 -1.0 = strong contradiction`,
-	SettingDreamNoveltyEnabled:            "true",
-	SettingDreamNoveltyEmbedHighThreshold: "0.97",
-	SettingDreamNoveltyEmbedLowThreshold:  "0.85",
-	SettingDreamNoveltyJudgeMaxTokens:     "512",
-	SettingDreamNoveltyBackfillPerCycle:   "50",
+	SettingDreamNoveltyEnabled:                    "true",
+	SettingDreamNoveltyEmbedHighThreshold:         "0.97",
+	SettingDreamNoveltyEmbedLowThreshold:          "0.85",
+	SettingDreamNoveltyJudgeMaxTokens:             "512",
+	SettingDreamNoveltyBackfillPerCycle:           "500",
+	SettingDreamNoveltyBackfillEmbedHighThreshold: "0.93",
+
+	SettingDreamConsolidationAuditFraction:       "0.35",
+	SettingDreamConsolidationReinforceFraction:   "0.35",
+	SettingDreamConsolidationConsolidateFraction: "0.30",
+
+	SettingMemorySoftDeleteRetentionDays: "30",
 	SettingDreamNoveltyJudgePrompt: `You are a novelty auditor. You do NOT converse. You output JSON only.
 
 Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.
+
+Hard rules:
+- Rewording is NEVER novelty. If the synthesis says the same thing with different words, it is not novel.
+- Reorganization is NEVER novelty. Reordering, combining, or restructuring source content is not novel.
+- Summarization is NEVER novelty. Compressing or generalizing source content is not novel.
+- A fact is novel ONLY if it introduces a new entity, relationship, quantity, date, cause, or consequence absent from every source.
+- When in doubt, return an empty array.
 
 <synthesis>
 %s

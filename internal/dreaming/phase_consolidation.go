@@ -16,6 +16,12 @@ import (
 	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
 
+// NoveltyAuditStampKey is the metadata key stamped on dream memories once
+// the novelty audit has visited them. Declared here so the CLI and any
+// other external caller can test for the marker without duplicating the
+// string literal.
+const NoveltyAuditStampKey = "novelty_audited_at"
+
 // ConsolidationPhase consolidates clusters of related memories into synthesis
 // memories and reinforces/erodes existing syntheses based on new evidence.
 //
@@ -34,6 +40,15 @@ type ConsolidationPhase struct {
 	settings         SettingsResolver
 	tokens           TokenRecorder
 	usageCtx         UsageContextResolver
+	vectorPurger     VectorPurger
+}
+
+// AttachVectorPurger wires a VectorPurger so dream-side state transitions
+// that hide a memory from recall (demotion, supersession) also drop the
+// associated vector from the active store. Nil is safe and disables the
+// purge hook — behaviour reverts to leaving stale vectors indexed.
+func (p *ConsolidationPhase) AttachVectorPurger(vp VectorPurger) {
+	p.vectorPurger = vp
 }
 
 // NewConsolidationPhase creates a new consolidation and reinforcement phase.
@@ -64,46 +79,79 @@ func NewConsolidationPhase(
 
 func (p *ConsolidationPhase) Name() string { return model.DreamPhaseConsolidation }
 
-func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) error {
+func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
 	llm := p.llmProvider()
 	if llm == nil {
 		slog.Info("dreaming: no LLM provider for consolidation, skipping")
-		return nil
+		return false, nil
 	}
 
-	// Load all memories once for both sub-phases.
+	// Load all memories once for all three sub-phases.
 	allMemories, err := p.memories.ListByNamespace(ctx, cycle.NamespaceID, 1000, 0)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	// Run reinforcement first (evaluates existing syntheses).
-	if err := p.reinforce(ctx, cycle, budget, logger, llm, allMemories); err != nil {
-		slog.Warn("dreaming: reinforcement sub-phase had errors", "err", err)
-	}
+	auditFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationAuditFraction, 0.35)
+	reinforceFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationReinforceFraction, 0.35)
+	consolidateFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationConsolidateFraction, 0.30)
 
-	// Backfill the novelty audit on historical dream memories. Bounded per
-	// cycle by SettingDreamNoveltyBackfillPerCycle and resumable across
-	// cycles via the metadata.novelty_audited_at marker, so a large backlog
-	// drains incrementally without shocking the per-cycle token budget.
+	residual := false
+
+	// Audit first so backlog drain cannot be starved by reinforce. Each
+	// sub-slice cap is recomputed against current Remaining so unspent
+	// budget from an earlier sub-phase grows the next sub-phase's slice.
 	if !budget.Exhausted() {
-		if err := p.auditExistingDreams(ctx, cycle, budget, logger, llm, allMemories); err != nil {
-			slog.Warn("dreaming: backfill audit had errors", "err", err)
+		perCycleCap, _ := p.settings.ResolveInt(ctx, service.SettingDreamNoveltyBackfillPerCycle, "global")
+		auditBudget := budget.SubSlice(int(float64(budget.Remaining()) * auditFrac))
+		auditResid, aerr := p.AuditExistingDreams(ctx, cycle, auditBudget, logger, llm, allMemories, perCycleCap)
+		if aerr != nil {
+			slog.Warn("dreaming: backfill audit had errors", "err", aerr)
+		}
+		if auditResid {
+			residual = true
 		}
 	}
 
-	// Then consolidation (creates new syntheses).
 	if !budget.Exhausted() {
-		if err := p.consolidate(ctx, cycle, budget, logger, llm, allMemories); err != nil {
-			return err
+		reinforceBudget := budget.SubSlice(int(float64(budget.Remaining()) * reinforceFrac))
+		reinResid, rerr := p.reinforce(ctx, cycle, reinforceBudget, logger, llm, allMemories)
+		if rerr != nil {
+			slog.Warn("dreaming: reinforcement sub-phase had errors", "err", rerr)
+		}
+		if reinResid {
+			residual = true
 		}
 	}
 
-	return nil
+	if !budget.Exhausted() {
+		consolidateBudget := budget.SubSlice(int(float64(budget.Remaining()) * consolidateFrac))
+		consResid, cerr := p.consolidate(ctx, cycle, consolidateBudget, logger, llm, allMemories)
+		if cerr != nil {
+			return residual, cerr
+		}
+		if consResid {
+			residual = true
+		}
+	}
+
+	return residual, nil
+}
+
+// resolveFraction resolves a fractional setting, clamping to (0,1]. On error
+// or out-of-range value it returns the supplied default.
+func resolveFraction(ctx context.Context, settings SettingsResolver, key string, fallback float64) float64 {
+	v, err := settings.ResolveFloat(ctx, key, "global")
+	if err != nil || v <= 0 || v > 1 {
+		return fallback
+	}
+	return v
 }
 
 // reinforce evaluates existing dream-originated synthesis memories against
-// new evidence, adjusting confidence proportionally.
+// new evidence, adjusting confidence proportionally. Returns true for the
+// residual flag when the sub-phase visited fewer syntheses than existed
+// (for example, when the per-sub-slice budget was exhausted mid-pass).
 func (p *ConsolidationPhase) reinforce(
 	ctx context.Context,
 	cycle *model.DreamCycle,
@@ -111,7 +159,7 @@ func (p *ConsolidationPhase) reinforce(
 	logger *DreamLogWriter,
 	llm provider.LLMProvider,
 	allMemories []model.Memory,
-) error {
+) (bool, error) {
 	var syntheses []model.Memory
 	var userMemories []model.Memory
 	for _, m := range allMemories {
@@ -144,7 +192,7 @@ func (p *ConsolidationPhase) reinforce(
 			"cycle", cycle.ID, "syntheses", len(syntheses),
 			"user_memories", len(userMemories), "budget_remaining", budget.Remaining())
 		p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-		return nil
+		return false, nil
 	}
 
 	slog.Info("dreaming: reinforce starting",
@@ -162,11 +210,13 @@ func (p *ConsolidationPhase) reinforce(
 
 	alignmentPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamAlignmentPrompt, "global")
 
+	visited := 0
 	for _, synthesis := range syntheses {
 		if budget.Exhausted() {
 			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
 			break
 		}
+		visited++
 
 		// Get a sample of user memories to evaluate against.
 		sample := sampleMemories(userMemories, 5)
@@ -257,7 +307,7 @@ func (p *ConsolidationPhase) reinforce(
 	}
 
 	p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-	return nil
+	return visited < len(syntheses), nil
 }
 
 // renderAlignmentPrompt builds the alignment-scoring prompt so it can be
@@ -390,12 +440,26 @@ func (p *ConsolidationPhase) supersedeOriginals(
 			continue
 		}
 
+		// Recall should surface the synthesis, not its sources. Row
+		// remains addressable by ID for lineage/rollback.
+		p.purgeVector(ctx, memID)
+
 		if err := logger.LogOperation(ctx, model.DreamPhaseConsolidation,
 			model.DreamOpMemorySuperseded, "memory", memID,
 			map[string]interface{}{"superseded_by": nil},
 			map[string]interface{}{"superseded_by": synthesis.ID.String()}); err != nil {
 			slog.Warn("dreaming: log supersession failed", "err", err)
 		}
+	}
+}
+
+// purgeVector drops the vector. Best-effort; errors are logged.
+func (p *ConsolidationPhase) purgeVector(ctx context.Context, id uuid.UUID) {
+	if p.vectorPurger == nil {
+		return
+	}
+	if err := p.vectorPurger.Delete(ctx, id); err != nil {
+		slog.Warn("dreaming: vector purge failed", "memory", id, "err", err)
 	}
 }
 
@@ -412,28 +476,34 @@ func (p *ConsolidationPhase) supersedeOriginals(
 //
 // Backfill is limited to the cycle's working set (allMemories). When the
 // dreaming pipeline gets broader pagination, backfill benefits automatically.
-func (p *ConsolidationPhase) auditExistingDreams(
+// AuditExistingDreams applies the novelty audit to historical dream memories
+// up to the supplied per-invocation cap. perCycleCap <= 0 disables the
+// pass (returns residual=false). Respects SettingDreamNoveltyEnabled and
+// the supplied token budget. Callers: the regular dream cycle (Execute)
+// reads SettingDreamNoveltyBackfillPerCycle; the one-shot backfill CLI
+// passes an explicit value.
+func (p *ConsolidationPhase) AuditExistingDreams(
 	ctx context.Context,
 	cycle *model.DreamCycle,
 	budget *TokenBudget,
 	logger *DreamLogWriter,
 	llm provider.LLMProvider,
 	allMemories []model.Memory,
-) error {
+	perCycleCap int,
+) (bool, error) {
 	if !p.settings.ResolveBool(ctx, service.SettingDreamNoveltyEnabled, "global") {
-		return nil
+		return false, nil
 	}
 
-	perCycleCap, _ := p.settings.ResolveInt(ctx, service.SettingDreamNoveltyBackfillPerCycle, "global")
 	if perCycleCap <= 0 {
-		return nil
+		return false, nil
 	}
 
 	// Count candidates (unstamped dream memories) via a byte-level substring
 	// check on the raw metadata so we avoid a JSON unmarshal per memory. The
 	// stamp key is only ever written by writeAuditDecision so collisions with
 	// user-supplied metadata are vanishingly rare.
-	stampMarker := []byte("novelty_audited_at")
+	stampMarker := []byte(NoveltyAuditStampKey)
 	eligible := 0
 	for i := range allMemories {
 		m := &allMemories[i]
@@ -470,12 +540,19 @@ func (p *ConsolidationPhase) auditExistingDreams(
 
 	if eligible == 0 {
 		p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-		return nil
+		return false, nil
 	}
 
+	// Hoisted out of the loop: a single settings lookup per call rather
+	// than per memory. Falls through to the synthesis threshold inside
+	// auditNovelty when zero.
+	backfillHigh, _ := p.settings.ResolveFloat(ctx, service.SettingDreamNoveltyBackfillEmbedHighThreshold, "global")
+
 	processed := 0
+	capHit := false
 	for i := range allMemories {
 		if processed >= perCycleCap {
+			capHit = true
 			break
 		}
 		if budget.Exhausted() {
@@ -492,7 +569,7 @@ func (p *ConsolidationPhase) auditExistingDreams(
 		}
 
 		meta := decodeMetadata(mem.Metadata)
-		if _, alreadyAudited := meta["novelty_audited_at"]; alreadyAudited {
+		if _, alreadyAudited := meta[NoveltyAuditStampKey]; alreadyAudited {
 			continue
 		}
 
@@ -535,7 +612,7 @@ func (p *ConsolidationPhase) auditExistingDreams(
 		}
 
 		callStart := time.Now()
-		passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, mem.Content, sources)
+		passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, mem.Content, sources, backfillHigh)
 		llmTokens := 0
 		if auditUsage != nil {
 			llmTokens = auditUsage.TotalTokens
@@ -577,7 +654,7 @@ func (p *ConsolidationPhase) auditExistingDreams(
 	}
 
 	p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-	return nil
+	return capHit || processed < eligible, nil
 }
 
 // stampAudited records that a dream memory passed the novelty audit so
@@ -609,7 +686,7 @@ func (p *ConsolidationPhase) writeAuditDecision(
 	beforeConfidence := mem.Confidence
 
 	now := time.Now().UTC()
-	meta["novelty_audited_at"] = now.Format(time.RFC3339)
+	meta[NoveltyAuditStampKey] = now.Format(time.RFC3339)
 	meta["novelty_audit_reason"] = reason
 	if demote {
 		meta["low_novelty"] = true
@@ -631,15 +708,20 @@ func (p *ConsolidationPhase) writeAuditDecision(
 		return
 	}
 
-	if demote && logger != nil {
-		_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
-			model.DreamOpMemoryDemoted, "memory", mem.ID,
-			map[string]interface{}{"confidence": beforeConfidence},
-			map[string]interface{}{
-				"confidence":  0,
-				"low_novelty": true,
-				"reason":      reason,
-			})
+	if demote {
+		// Demoted dreams are excluded from recall via isLowNovelty, so
+		// the vector is dead weight in the index.
+		p.purgeVector(ctx, mem.ID)
+		if logger != nil {
+			_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+				model.DreamOpMemoryDemoted, "memory", mem.ID,
+				map[string]interface{}{"confidence": beforeConfidence},
+				map[string]interface{}{
+					"confidence":  0,
+					"low_novelty": true,
+					"reason":      reason,
+				})
+		}
 	}
 }
 
@@ -684,6 +766,8 @@ func extractSourceMemoryIDs(meta map[string]interface{}) []uuid.UUID {
 }
 
 // consolidate clusters related memories and creates synthesis memories.
+// Returns residual=true when the sub-phase left eligible clusters
+// unvisited (typically because the sub-slice budget was exhausted).
 func (p *ConsolidationPhase) consolidate(
 	ctx context.Context,
 	cycle *model.DreamCycle,
@@ -691,7 +775,7 @@ func (p *ConsolidationPhase) consolidate(
 	logger *DreamLogWriter,
 	llm provider.LLMProvider,
 	allMemories []model.Memory,
-) error {
+) (bool, error) {
 	// Filter to non-deleted, non-dream, non-superseded memories.
 	var candidates []model.Memory
 	for _, m := range allMemories {
@@ -729,7 +813,7 @@ func (p *ConsolidationPhase) consolidate(
 			"cycle", cycle.ID, "candidates", len(candidates),
 			"budget_remaining", budget.Remaining())
 		p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-		return nil
+		return false, nil
 	}
 
 	// Simple clustering: group by overlapping content (batches of related memories).
@@ -756,6 +840,7 @@ func (p *ConsolidationPhase) consolidate(
 	synthesisPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamSynthesisPrompt, "global")
 	noveltyEnabled := p.settings.ResolveBool(ctx, service.SettingDreamNoveltyEnabled, "global")
 
+	clustersVisited := 0
 	for _, cluster := range clusters {
 		if budget.Exhausted() {
 			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
@@ -765,6 +850,7 @@ func (p *ConsolidationPhase) consolidate(
 		if len(cluster) < 2 {
 			continue
 		}
+		clustersVisited++
 
 		prompt := renderSynthesisPrompt(synthesisPromptTemplate, cluster)
 		estCost := EstimateTokens(prompt) + budget.PerCallCap()
@@ -811,7 +897,7 @@ func (p *ConsolidationPhase) consolidate(
 		// LLM usage against the dream budget when the borderline judge fires.
 		if noveltyEnabled {
 			auditStart := time.Now()
-			passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, synthesisContent, cluster)
+			passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, synthesisContent, cluster, 0)
 			llmTokens := 0
 			if auditUsage != nil {
 				llmTokens = auditUsage.TotalTokens
@@ -908,7 +994,7 @@ func (p *ConsolidationPhase) consolidate(
 	}
 
 	p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-	return nil
+	return clustersVisited < eligibleClusters, nil
 }
 
 // renderSynthesisPrompt builds the synthesis prompt so it can be inspected
@@ -953,30 +1039,38 @@ func (p *ConsolidationPhase) synthesize(
 	return strings.TrimSpace(resp.Content), &usage, nil
 }
 
-// auditNovelty checks whether a candidate synthesis contains at least one fact
-// not present in any of its source memories. Hybrid path:
+// auditNovelty checks whether a candidate synthesis contains at least one
+// fact not present in any of its source memories. Hybrid path:
 //   - Compute max cosine similarity between candidate and source embeddings.
 //   - maxSim >= high threshold ⇒ reject (clearly duplicative).
 //   - maxSim <= low threshold  ⇒ accept (clearly novel).
 //   - otherwise call the LLM judge and trust its JSON verdict.
 //
-// Failure modes are closed: on embedding error or judge JSON parse failure the
-// audit returns (false, ...). usage may be non-nil even on failure when the
-// LLM call already happened, so callers must spend it before handling err.
-// embedTokens is reported (estimated or provider-reported) on every path that
-// performed the embedding call so callers can charge it to the dream budget.
+// embedHighOverride > 0 substitutes for SettingDreamNoveltyEmbedHighThreshold
+// (the backfill path passes SettingDreamNoveltyBackfillEmbedHighThreshold to
+// pull the auto-reject cut earlier than synthesis-time auditing).
+//
+// Failure modes are closed: on embedding error or judge JSON parse failure
+// the audit returns (false, ...). usage may be non-nil even on failure when
+// the LLM call already happened, so callers must spend it before handling
+// err. embedTokens is reported on every path that performed the embedding
+// call so callers can charge it to the dream budget.
 func (p *ConsolidationPhase) auditNovelty(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	budget *TokenBudget,
 	candidate string,
 	sources []model.Memory,
+	embedHighOverride float64,
 ) (passed bool, reason string, usage *provider.TokenUsage, embedTokens int, err error) {
 	if len(sources) == 0 {
 		return false, "no_sources", nil, 0, nil
 	}
 
-	high, _ := p.settings.ResolveFloat(ctx, service.SettingDreamNoveltyEmbedHighThreshold, "global")
+	high := embedHighOverride
+	if high <= 0 {
+		high, _ = p.settings.ResolveFloat(ctx, service.SettingDreamNoveltyEmbedHighThreshold, "global")
+	}
 	if high <= 0 {
 		high = 0.97
 	}

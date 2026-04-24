@@ -53,31 +53,33 @@ func NewContradictionPhase(
 
 func (p *ContradictionPhase) Name() string { return model.DreamPhaseContradictions }
 
-func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) error {
+func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
 	llm := p.llmProvider()
 	if llm == nil {
 		slog.Info("dreaming: no LLM provider for contradiction detection, skipping")
-		return nil
+		return false, nil
 	}
 
 	// List all memories in the namespace.
 	memories, err := p.memories.ListByNamespace(ctx, cycle.NamespaceID, 500, 0)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if len(memories) < 2 {
-		return nil
+		return false, nil
 	}
 
 	// Compare pairs using LLM with pairwise comparison capped to a reasonable limit.
-	pairs := p.findCandidatePairs(memories)
+	pairs, pairsTruncated := p.findCandidatePairs(memories)
 
 	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamContradictionPrompt, "global")
 
 	contradictions := 0
+	budgetStopped := false
 	for _, pair := range pairs {
 		if budget.Exhausted() {
+			budgetStopped = true
 			break
 		}
 
@@ -91,6 +93,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		if budget.Remaining() < estCost {
 			slog.Info("dreaming: contradiction call skipped (estimated cost exceeds remaining budget)",
 				"estimate", estCost, "remaining", budget.Remaining())
+			budgetStopped = true
 			break
 		}
 
@@ -108,12 +111,14 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		if err != nil {
 			slog.Warn("dreaming: contradiction check failed", "err", err)
 			if spendErr != nil {
+				budgetStopped = true
 				break
 			}
 			continue
 		}
 
 		if spendErr != nil {
+			budgetStopped = true
 			break
 		}
 
@@ -147,29 +152,32 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 	if contradictions > 0 {
 		slog.Info("dreaming: contradictions detected",
-			"count", contradictions, "cycle", cycle.ID)
+			"count", contradictions, "cycle", cycle.ID,
+			"pairs_truncated", pairsTruncated, "budget_stopped", budgetStopped)
 	}
 
-	return nil
+	residual := pairsTruncated || budgetStopped
+	return residual, nil
 }
 
 // findCandidatePairs identifies pairs of memories that might contradict,
-// using pairwise comparison capped to maxContradictionPairs. The cap check
-// is inside the inner loop so the count stops exactly at the cap rather
-// than overshooting by a full row of j iterations.
-func (p *ContradictionPhase) findCandidatePairs(memories []model.Memory) [][2]model.Memory {
+// using pairwise comparison capped to maxContradictionPairs. The second
+// return is true when there were more candidate pairs than the cap — the
+// cap-check lives inside the inner loop so the count stops exactly at the
+// cap rather than overshooting by a full row of j iterations.
+func (p *ContradictionPhase) findCandidatePairs(memories []model.Memory) ([][2]model.Memory, bool) {
 	pairs := make([][2]model.Memory, 0, maxContradictionPairs)
 
 	for i := 0; i < len(memories); i++ {
 		for j := i + 1; j < len(memories); j++ {
 			if len(pairs) >= maxContradictionPairs {
-				return pairs
+				return pairs, true
 			}
 			pairs = append(pairs, [2]model.Memory{memories[i], memories[j]})
 		}
 	}
 
-	return pairs
+	return pairs, false
 }
 
 func (p *ContradictionPhase) checkContradiction(

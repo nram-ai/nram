@@ -42,10 +42,10 @@ func NewWeightAdjustmentPhase(
 
 func (p *WeightAdjustmentPhase) Name() string { return model.DreamPhaseWeightAdjust }
 
-func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) error {
+func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
 	rels, err := p.relationships.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Pre-fetch all source memories to avoid N+1 queries.
@@ -116,7 +116,9 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 		slog.Info("dreaming: weight adjustments", "adjusted", adjusted, "expired", expired, "cycle", cycle.ID)
 	}
 
-	return nil
+	// Weight adjustment scans every active relationship in one pass; no
+	// residual work can be left behind.
+	return false, nil
 }
 
 func (p *WeightAdjustmentPhase) calculateWeight(rel *model.Relationship, now time.Time, sourceMemories map[uuid.UUID]*model.Memory) float64 {

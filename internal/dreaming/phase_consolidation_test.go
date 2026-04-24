@@ -162,7 +162,7 @@ func TestAuditNovelty_EmbedHighSim_AutoReject(t *testing.T) {
 	phase := newAuditPhase(emb, llm, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
+	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src}, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -180,13 +180,73 @@ func TestAuditNovelty_EmbedHighSim_AutoReject(t *testing.T) {
 	}
 }
 
+// TestAuditNovelty_BackfillThresholdOverride_RejectsEarlier verifies that
+// passing a more aggressive override pushes a previously-borderline
+// similarity into the auto-reject band without reaching the LLM judge.
+// This is the load-bearing path for backfill-specific tightening.
+func TestAuditNovelty_BackfillThresholdOverride_RejectsEarlier(t *testing.T) {
+	// cosine({1,0,0}, {0.95, 0.31, 0}) ≈ 0.95. With the default 0.97 high
+	// threshold this would fall through to the LLM judge. With a backfill
+	// override of 0.93, it auto-rejects without calling the judge.
+	emb := &staticEmbedder{vectors: [][]float32{{1, 0, 0}, {0.95, 0.31, 0}}}
+	llm := &scriptedJudgeLLM{}
+	phase := newAuditPhase(emb, llm, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
+
+	src := model.Memory{ID: uuid.New(), Content: "source"}
+	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src}, 0.93)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if passed {
+		t.Fatalf("expected reject under backfill override, got pass")
+	}
+	if reason != "embed_high_sim" {
+		t.Fatalf("expected embed_high_sim reason under override, got %q", reason)
+	}
+	if usage != nil {
+		t.Fatalf("expected nil usage on pre-filter rejection, got %+v", usage)
+	}
+	if llm.calls.Load() != 0 {
+		t.Fatalf("expected no LLM calls under auto-reject, got %d", llm.calls.Load())
+	}
+}
+
+// TestAuditNovelty_OverrideZeroFallsBackToSetting verifies that passing
+// embedHighOverride == 0 reverts to the default 0.97 threshold, so
+// existing callers are unaffected.
+func TestAuditNovelty_OverrideZeroFallsBackToSetting(t *testing.T) {
+	// Same similarity as above (~0.95). With override=0 the default 0.97
+	// applies, so this falls through to the LLM judge rather than
+	// auto-rejecting.
+	emb := &staticEmbedder{vectors: [][]float32{{1, 0, 0}, {0.95, 0.31, 0}}}
+	llm := &scriptedJudgeLLM{
+		content: `{"novel_facts": ["x"]}`,
+	}
+	phase := newAuditPhase(emb, llm, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
+
+	src := model.Memory{ID: uuid.New(), Content: "source"}
+	passed, reason, _, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src}, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !passed {
+		t.Fatalf("expected LLM judge pass (novel_facts present), got reject")
+	}
+	if reason != "llm_judge" {
+		t.Fatalf("expected llm_judge reason under default threshold, got %q", reason)
+	}
+	if llm.calls.Load() == 0 {
+		t.Fatalf("expected LLM to be consulted when override is 0 and sim is borderline")
+	}
+}
+
 func TestAuditNovelty_EmbedLowSim_AutoAccept(t *testing.T) {
 	emb := &staticEmbedder{vectors: [][]float32{{1, 0, 0}, {0, 1, 0}}}
 	llm := &scriptedJudgeLLM{}
 	phase := newAuditPhase(emb, llm, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
+	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src}, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -216,7 +276,7 @@ func TestAuditNovelty_BorderlineJudgePass(t *testing.T) {
 	phase := newAuditPhase(emb, llm, settings, &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
+	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src}, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -245,7 +305,7 @@ func TestAuditNovelty_BorderlineJudgeFail(t *testing.T) {
 	phase := newAuditPhase(emb, llm, settings, &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, _, _ := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
+	passed, reason, usage, _, _ := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src}, 0)
 	if passed {
 		t.Fatalf("expected reject when judge returns empty novel_facts, got pass")
 	}
@@ -263,7 +323,7 @@ func TestAuditNovelty_EmbedError_FailClosed(t *testing.T) {
 	phase := newAuditPhase(emb, llm, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, _, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
+	passed, reason, _, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src}, 0)
 	if passed {
 		t.Fatalf("embedding error must fail closed (reject), got pass")
 	}
@@ -289,7 +349,7 @@ func TestAuditNovelty_JudgeParseError_FailClosed(t *testing.T) {
 	phase := newAuditPhase(emb, llm, settings, &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
+	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src}, 0)
 	if passed {
 		t.Fatalf("parse error must fail closed (reject), got pass")
 	}
@@ -306,7 +366,7 @@ func TestAuditNovelty_JudgeParseError_FailClosed(t *testing.T) {
 
 func TestAuditNovelty_NoSources_Rejected(t *testing.T) {
 	phase := newAuditPhase(nil, &scriptedJudgeLLM{}, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
-	passed, reason, _, _, _ := phase.auditNovelty(context.Background(), &scriptedJudgeLLM{}, nil, "candidate", nil)
+	passed, reason, _, _, _ := phase.auditNovelty(context.Background(), &scriptedJudgeLLM{}, nil, "candidate", nil, 0)
 	if passed {
 		t.Fatalf("audit with zero sources cannot verify novelty and must reject")
 	}
@@ -361,7 +421,7 @@ func TestAuditExistingDreams_DemotesDuplicateAndStampsNovel(t *testing.T) {
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 	budget := NewTokenBudget(10000, 2048)
 
-	if err := phase.auditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, reader.list); err != nil {
+	if _, err := phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, reader.list, settings.ints[service.SettingDreamNoveltyBackfillPerCycle]); err != nil {
 		t.Fatalf("auditExistingDreams returned error: %v", err)
 	}
 
@@ -426,7 +486,7 @@ func TestAuditExistingDreams_RespectsPerCycleCap(t *testing.T) {
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 	budget := NewTokenBudget(10000, 2048)
 
-	if err := phase.auditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, memories); err != nil {
+	if _, err := phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, memories, settings.ints[service.SettingDreamNoveltyBackfillPerCycle]); err != nil {
 		t.Fatalf("auditExistingDreams returned error: %v", err)
 	}
 	if len(writer.updates) != 3 {
@@ -458,7 +518,7 @@ func TestAuditExistingDreams_SkipsAlreadyStamped(t *testing.T) {
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 	budget := NewTokenBudget(10000, 2048)
 
-	_ = phase.auditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, memories)
+	_, _ = phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, memories, settings.ints[service.SettingDreamNoveltyBackfillPerCycle])
 
 	if len(writer.updates) != 0 {
 		t.Fatalf("already-audited dream must not be updated, got %d updates", len(writer.updates))
@@ -482,7 +542,7 @@ func TestAuditExistingDreams_DisabledByZeroCap(t *testing.T) {
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: dream.NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 	budget := NewTokenBudget(10000, 2048)
-	_ = phase.auditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, []model.Memory{src, dream})
+	_, _ = phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, []model.Memory{src, dream}, settings.ints[service.SettingDreamNoveltyBackfillPerCycle])
 
 	if len(writer.updates) != 0 {
 		t.Fatalf("backfill must be a no-op when per-cycle cap is 0, got %d updates", len(writer.updates))
@@ -509,7 +569,7 @@ func TestAuditExistingDreams_OrphanGetsDemoted(t *testing.T) {
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: orphan.NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 	budget := NewTokenBudget(10000, 2048)
-	_ = phase.auditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, []model.Memory{orphan})
+	_, _ = phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, []model.Memory{orphan}, settings.ints[service.SettingDreamNoveltyBackfillPerCycle])
 
 	if len(writer.updates) != 1 {
 		t.Fatalf("orphan dream must be demoted, got %d updates", len(writer.updates))
@@ -536,6 +596,146 @@ func hasAuditMarker(raw json.RawMessage) bool {
 	_ = json.Unmarshal(raw, &m)
 	_, ok := m["novelty_audited_at"]
 	return ok
+}
+
+// recordingVectorPurger is a VectorPurger stub that records every memory
+// id passed to Delete. Returning no error on all calls.
+type recordingVectorPurger struct {
+	deleted []uuid.UUID
+}
+
+func (p *recordingVectorPurger) Delete(_ context.Context, id uuid.UUID) error {
+	p.deleted = append(p.deleted, id)
+	return nil
+}
+
+func containsUUID(ids []uuid.UUID, target uuid.UUID) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAuditExistingDreams_DemotePurgesVector asserts that demoting a dream
+// via the novelty backfill also drops its vector. This is the load-bearing
+// hook for keeping recall from traversing entries excluded by isLowNovelty.
+func TestAuditExistingDreams_DemotePurgesVector(t *testing.T) {
+	srcA := model.Memory{ID: uuid.New(), Content: "source A content"}
+	dupDream := dreamMemory("near duplicate of source A", []uuid.UUID{srcA.ID})
+
+	reader := &fakeMemoryReader{list: []model.Memory{srcA, dupDream}}
+	writer := &updatingMemoryWriter{}
+
+	emb := &scriptedEmbedder{
+		next: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+			out := make([][]float32, len(req.Input))
+			for i := range out {
+				out[i] = []float32{1, 0}
+			}
+			return &provider.EmbeddingResponse{Embeddings: out}, nil
+		},
+		dim: 2,
+	}
+
+	settings := noveltySettings(true)
+	settings.ints[service.SettingDreamNoveltyBackfillPerCycle] = 10
+	phase := newAuditPhase(emb, &scriptedJudgeLLM{}, settings, writer, reader)
+
+	purger := &recordingVectorPurger{}
+	phase.AttachVectorPurger(purger)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: dupDream.NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, reader.list, settings.ints[service.SettingDreamNoveltyBackfillPerCycle]); err != nil {
+		t.Fatalf("auditExistingDreams error: %v", err)
+	}
+
+	if !containsUUID(purger.deleted, dupDream.ID) {
+		t.Errorf("expected demoted dream id %s in purger.deleted, got %v", dupDream.ID, purger.deleted)
+	}
+}
+
+// TestAuditExistingDreams_PassDoesNotPurgeVector asserts that a dream that
+// passes the novelty audit retains its vector — stamping only, no purge.
+func TestAuditExistingDreams_PassDoesNotPurgeVector(t *testing.T) {
+	srcA := model.Memory{ID: uuid.New(), Content: "source A content"}
+	novelDream := dreamMemory("genuinely new content", []uuid.UUID{srcA.ID})
+
+	reader := &fakeMemoryReader{list: []model.Memory{srcA, novelDream}}
+	writer := &updatingMemoryWriter{}
+
+	emb := &scriptedEmbedder{
+		next: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+			// Orthogonal vectors → low sim → auto-accept path.
+			return &provider.EmbeddingResponse{Embeddings: [][]float32{{1, 0}, {0, 1}}}, nil
+		},
+		dim: 2,
+	}
+
+	settings := noveltySettings(true)
+	settings.ints[service.SettingDreamNoveltyBackfillPerCycle] = 10
+	phase := newAuditPhase(emb, &scriptedJudgeLLM{}, settings, writer, reader)
+
+	purger := &recordingVectorPurger{}
+	phase.AttachVectorPurger(purger)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: novelDream.NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, reader.list, settings.ints[service.SettingDreamNoveltyBackfillPerCycle]); err != nil {
+		t.Fatalf("auditExistingDreams error: %v", err)
+	}
+
+	if containsUUID(purger.deleted, novelDream.ID) {
+		t.Errorf("pass should not purge vector; got %v", purger.deleted)
+	}
+}
+
+// TestSupersedeOriginals_PurgesOriginalVectors asserts that when a synthesis
+// supersedes its source memories, the source vectors are purged. The
+// synthesis itself retains its vector (that's the one recall should surface).
+func TestSupersedeOriginals_PurgesOriginalVectors(t *testing.T) {
+	srcA := model.Memory{ID: uuid.New(), Content: "source A"}
+	srcB := model.Memory{ID: uuid.New(), Content: "source B"}
+
+	// Build a synthesis whose metadata lists srcA and srcB as source memories.
+	src := model.DreamSource
+	meta, _ := json.Marshal(map[string]interface{}{
+		"source_memory_ids": []string{srcA.ID.String(), srcB.ID.String()},
+	})
+	synthesis := &model.Memory{
+		ID:         uuid.New(),
+		Source:     &src,
+		Confidence: 0.9,
+		Metadata:   meta,
+	}
+
+	reader := &fakeMemoryReader{list: []model.Memory{srcA, srcB}}
+	writer := &updatingMemoryWriter{}
+	phase := newAuditPhase(nil, &scriptedJudgeLLM{}, noveltySettings(true), writer, reader)
+
+	purger := &recordingVectorPurger{}
+	phase.AttachVectorPurger(purger)
+
+	cycle := &model.DreamCycle{ID: uuid.New()}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	phase.supersedeOriginals(context.Background(), cycle, synthesis, logger)
+
+	if !containsUUID(purger.deleted, srcA.ID) {
+		t.Errorf("supersede should purge srcA vector; got %v", purger.deleted)
+	}
+	if !containsUUID(purger.deleted, srcB.ID) {
+		t.Errorf("supersede should purge srcB vector; got %v", purger.deleted)
+	}
+	if containsUUID(purger.deleted, synthesis.ID) {
+		t.Errorf("synthesis vector should NOT be purged; got %v", purger.deleted)
+	}
 }
 
 // scriptedEmbedder lets tests provide a per-call embedding response so the

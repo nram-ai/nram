@@ -14,12 +14,23 @@ import (
 
 // MemoryRepo provides CRUD operations for the memories table.
 type MemoryRepo struct {
-	db DB
+	db          DB
+	vectorStore VectorStore
 }
 
 // NewMemoryRepo creates a new MemoryRepo backed by the given DB.
 func NewMemoryRepo(db DB) *MemoryRepo {
 	return &MemoryRepo{db: db}
+}
+
+// AttachVectorStore wires a VectorStore into the repo so soft-delete and
+// hard-delete also purge the associated vector. Passing nil disables the
+// hook. Best-effort: Delete errors are swallowed because the row-level
+// state change is the load-bearing invariant; a stale vector will cost
+// some HNSW/pgvector search cycles until the next retention sweep at
+// worst.
+func (r *MemoryRepo) AttachVectorStore(vs VectorStore) {
+	r.vectorStore = vs
 }
 
 // Create inserts a new memory. ID is generated if zero-valued.
@@ -551,7 +562,13 @@ func (r *MemoryRepo) DecayConfidence(ctx context.Context, ids []uuid.UUID, multi
 	return rows, nil
 }
 
-// SoftDelete sets the deleted_at timestamp on a memory.
+// SoftDelete sets the deleted_at timestamp on a memory and purges the
+// associated vector from the attached vector store (if any). The SQL row
+// is retained so rollback and retention windows remain intact, but it is
+// excluded from recall via the deleted_at IS NULL filter everywhere. Vector
+// purge errors are not propagated — the row-level state change is the
+// load-bearing invariant; a stale vector will cost some HNSW/pgvector
+// search cycles until the next retention sweep at worst.
 func (r *MemoryRepo) SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -572,10 +589,13 @@ func (r *MemoryRepo) SoftDelete(ctx context.Context, id uuid.UUID, namespaceID u
 	if rowsAffected == 0 {
 		return sql.ErrNoRows
 	}
+	r.purgeVector(ctx, id)
 	return nil
 }
 
-// HardDelete permanently removes a memory from the table.
+// HardDelete permanently removes a memory from the table. The memory_vectors_*
+// FK cascades the persisted vector row; this call also fires the attached
+// vector store's Delete so in-memory indexes (HNSW) drop the node.
 func (r *MemoryRepo) HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
 	query := `DELETE FROM memories WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
@@ -586,7 +606,51 @@ func (r *MemoryRepo) HardDelete(ctx context.Context, id uuid.UUID, namespaceID u
 	if err != nil {
 		return fmt.Errorf("memory hard delete: %w", err)
 	}
+	r.purgeVector(ctx, id)
 	return nil
+}
+
+// purgeVector asks the attached vector store to drop the row-level vector
+// and the in-memory HNSW graph node (if any). No-op when no vector store
+// is attached. Errors are swallowed so they cannot stall the row-level
+// lifecycle — the vector store is an index, not the source of truth.
+func (r *MemoryRepo) purgeVector(ctx context.Context, id uuid.UUID) {
+	if r.vectorStore == nil {
+		return
+	}
+	_ = r.vectorStore.Delete(ctx, id)
+}
+
+// HardDeleteSoftDeletedBefore hard-deletes rows whose deleted_at is older
+// than cutoff, up to limit rows per call. Vector rows cascade via the
+// memory_vectors_* ON DELETE CASCADE constraint. Returns the number of
+// rows removed. A non-positive limit means "no cap" (caller-bounded).
+func (r *MemoryRepo) HardDeleteSoftDeletedBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	cutoffStr := cutoff.UTC().Format(time.RFC3339)
+	pg := r.db.Backend() == BackendPostgres
+
+	cutoffPh, limitPh := "?", "?"
+	if pg {
+		cutoffPh, limitPh = "$1", "$2"
+	}
+
+	args := []interface{}{cutoffStr}
+	inner := `SELECT id FROM memories WHERE deleted_at IS NOT NULL AND deleted_at < ` + cutoffPh
+	if limit > 0 {
+		inner += ` LIMIT ` + limitPh
+		args = append(args, limit)
+	}
+	query := `DELETE FROM memories WHERE id IN (` + inner + `)`
+
+	result, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("memory hard delete soft-deleted before: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("memory hard delete soft-deleted before rows affected: %w", err)
+	}
+	return rows, nil
 }
 
 // ListIDsByNamespace returns all non-deleted memory IDs in a namespace.
