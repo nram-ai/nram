@@ -124,6 +124,10 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		return false, nil
 	}
 
+	slog.Info("dreaming: contradiction phase starting",
+		"cycle", cycle.ID, "memories", len(memories), "stale", len(stale),
+		"cap", cap, "neighbors_per_anchor", defaultContradictionNeighbors)
+
 	pairs, fullyDispatched, embedTokens, selErr := p.selectNeighborPairs(ctx, stale, memories, cap)
 	if selErr != nil {
 		slog.Warn("dreaming: neighbour selection failed; degrading to ID-ordered walk",
@@ -144,7 +148,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 	contradictions := 0
 	budgetStopped := false
-	for _, pair := range pairs {
+	for idx, pair := range pairs {
 		if budget.Exhausted() {
 			budgetStopped = true
 			break
@@ -162,26 +166,39 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			break
 		}
 
+		pairStart := time.Now()
 		found, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
+		pairDur := time.Since(pairStart)
 
 		// Account for usage before handling the error. Parse-error paths
 		// still return non-nil usage from the LLM call, and we must record
 		// what it cost even if we can't use the result.
 		var spendErr error
+		callTokens := 0
 		if usage != nil {
+			callTokens = usage.TotalTokens
 			spendErr = budget.Spend(usage.TotalTokens)
 			p.record(ctx, cycle, "dream_contradiction", llm.Name(), &pair[0].ID,
 				usage.PromptTokens, usage.CompletionTokens)
 		}
 
 		if err != nil {
-			slog.Warn("dreaming: contradiction check failed", "err", err)
+			slog.Warn("dreaming: contradiction check failed",
+				"cycle", cycle.ID, "pair", idx+1, "of", len(pairs),
+				"a", pair[0].ID, "b", pair[1].ID,
+				"duration_ms", pairDur.Milliseconds(), "tokens", callTokens, "err", err)
 			if spendErr != nil {
 				budgetStopped = true
 				break
 			}
 			continue
 		}
+
+		slog.Info("dreaming: contradiction check",
+			"cycle", cycle.ID, "pair", idx+1, "of", len(pairs),
+			"a", pair[0].ID, "b", pair[1].ID,
+			"found", found, "duration_ms", pairDur.Milliseconds(),
+			"tokens", callTokens, "budget_remaining", budget.Remaining())
 
 		if spendErr != nil {
 			budgetStopped = true
@@ -323,12 +340,18 @@ func (p *ContradictionPhase) selectNeighborPairs(
 		for i := range allMemories {
 			inputs[i] = allMemories[i].Content
 		}
+		slog.Info("dreaming: embedding memories for neighbour selection",
+			"provider", embedder.Name(), "count", len(inputs))
+		embedStart := time.Now()
 		resp, err := embedder.Embed(ctx, &provider.EmbeddingRequest{
 			Input:     inputs,
 			Dimension: pickEmbedderDim(embedder.Dimensions()),
 		})
+		embedDur := time.Since(embedStart)
 		if err != nil || resp == nil || len(resp.Embeddings) != len(allMemories) {
 			selErr = err
+			slog.Warn("dreaming: neighbour embedding failed",
+				"provider", embedder.Name(), "duration_ms", embedDur.Milliseconds(), "err", err)
 		} else {
 			embeddings = resp.Embeddings
 			embedTokens = resp.Usage.TotalTokens
@@ -337,6 +360,9 @@ func (p *ContradictionPhase) selectNeighborPairs(
 					embedTokens += EstimateTokens(s)
 				}
 			}
+			slog.Info("dreaming: neighbour embedding complete",
+				"provider", embedder.Name(), "count", len(inputs),
+				"duration_ms", embedDur.Milliseconds(), "tokens", embedTokens)
 		}
 	}
 
