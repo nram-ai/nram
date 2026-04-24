@@ -49,18 +49,6 @@ Respond ONLY as JSON, no markdown fences, no preamble:
   "relationships": [{"source": "...", "target": "...", "relation": "...", "temporal": "current"}]
 }`;
 
-const DREAM_CONTRADICTION_PROMPT_KEYS = [
-  "dreaming.contradiction_prompt",
-];
-
-const DREAM_SYNTHESIS_PROMPT_KEYS = [
-  "dreaming.synthesis_prompt",
-];
-
-const DREAM_ALIGNMENT_PROMPT_KEYS = [
-  "dreaming.alignment_prompt",
-];
-
 const DEFAULT_CONTRADICTION_PROMPT = `You are a contradiction detector. You do NOT converse. You output JSON only.
 
 Determine if the two statements below contradict each other.
@@ -107,6 +95,68 @@ alignment must be a float:
 1.0 = strong support
 0.0 = neutral/unrelated
 -1.0 = strong contradiction`;
+
+const DEFAULT_NOVELTY_JUDGE_PROMPT = `You are a novelty auditor. You do NOT converse. You output JSON only.
+
+Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.
+
+Hard rules:
+- Rewording is NEVER novelty. If the synthesis says the same thing with different words, it is not novel.
+- Reorganization is NEVER novelty. Reordering, combining, or restructuring source content is not novel.
+- Summarization is NEVER novelty. Compressing or generalizing source content is not novel.
+- A fact is novel ONLY if it introduces a new entity, relationship, quantity, date, cause, or consequence absent from every source.
+- When in doubt, return an empty array.
+
+<synthesis>
+%s
+</synthesis>
+
+<sources>
+%s
+</sources>
+
+Output ONLY this JSON, nothing else:
+{"novel_facts": ["fact 1", "fact 2"]}
+
+Empty array if every fact in the synthesis is already present in the sources.`;
+
+interface DreamingPromptSpec {
+  key: string;
+  defaultPrompt: string;
+  title: string;
+  description: string;
+}
+
+const DREAMING_PROMPTS: DreamingPromptSpec[] = [
+  {
+    key: "dreaming.contradiction_prompt",
+    defaultPrompt: DEFAULT_CONTRADICTION_PROMPT,
+    title: "Contradiction Detection Prompt",
+    description:
+      "Used to determine whether two memories contradict each other. Should return JSON with a contradicts boolean and explanation. Uses two %s placeholders for Statement A and Statement B.",
+  },
+  {
+    key: "dreaming.synthesis_prompt",
+    defaultPrompt: DEFAULT_SYNTHESIS_PROMPT,
+    title: "Memory Synthesis Prompt",
+    description:
+      "Used to consolidate a cluster of related memories into a single, concise synthesis. Should return only the synthesized text. Uses one %s placeholder for the combined memory content.",
+  },
+  {
+    key: "dreaming.alignment_prompt",
+    defaultPrompt: DEFAULT_ALIGNMENT_PROMPT,
+    title: "Alignment Scoring Prompt",
+    description:
+      "Used to evaluate how strongly new evidence supports or contradicts an existing synthesis. Should return JSON with an alignment float (-1.0 to 1.0) and reasoning. Uses two %s placeholders for synthesis and evidence.",
+  },
+  {
+    key: "dreaming.novelty.judge_prompt",
+    defaultPrompt: DEFAULT_NOVELTY_JUDGE_PROMPT,
+    title: "Novelty Judge Prompt",
+    description:
+      "Used to decide whether a dream synthesis introduces genuinely new facts over its source memories. Should return JSON with a novel_facts array (empty when the synthesis is duplicative). Uses two %s placeholders for synthesis and sources.",
+  },
+];
 
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:
 
@@ -160,18 +210,11 @@ function resolvePromptData(
     }
   }
 
-  // If no schema key found, use the first key with a hardcoded default.
   let description = "System prompt";
   if (keys[0].includes("fact")) {
     description = "System prompt for extracting structured facts from memory content";
   } else if (keys[0].includes("entity")) {
     description = "System prompt for extracting entities and relationships from memory content";
-  } else if (keys[0].includes("contradiction")) {
-    description = "Prompt for detecting contradictions between pairs of memories";
-  } else if (keys[0].includes("synthesis")) {
-    description = "Prompt for synthesizing clusters of related memories into consolidated knowledge";
-  } else if (keys[0].includes("alignment")) {
-    description = "Prompt for scoring how strongly new evidence supports or contradicts existing syntheses";
   }
 
   return {
@@ -181,6 +224,26 @@ function resolvePromptData(
     scope: "global",
     isModified: false,
     description,
+  };
+}
+
+function resolveDreamingPrompt(
+  spec: DreamingPromptSpec,
+  settingsMap: Map<string, Setting>,
+): PromptData {
+  const setting = settingsMap.get(spec.key);
+  const currentValue = setting
+    ? typeof setting.value === "string"
+      ? setting.value
+      : JSON.stringify(setting.value)
+    : spec.defaultPrompt;
+  return {
+    key: spec.key,
+    currentValue,
+    defaultValue: spec.defaultPrompt,
+    scope: setting?.scope ?? "global",
+    isModified: setting !== null && setting !== undefined,
+    description: spec.description,
   };
 }
 
@@ -770,25 +833,10 @@ export default function ExtractionPromptEditor() {
     DEFAULT_ENTITY_PROMPT,
   );
 
-  // Dreaming prompt data.
-  const contradictionPromptData = resolvePromptData(
-    DREAM_CONTRADICTION_PROMPT_KEYS,
-    schemas,
-    settingsMap,
-    DEFAULT_CONTRADICTION_PROMPT,
-  );
-  const synthesisPromptData = resolvePromptData(
-    DREAM_SYNTHESIS_PROMPT_KEYS,
-    schemas,
-    settingsMap,
-    DEFAULT_SYNTHESIS_PROMPT,
-  );
-  const alignmentPromptData = resolvePromptData(
-    DREAM_ALIGNMENT_PROMPT_KEYS,
-    schemas,
-    settingsMap,
-    DEFAULT_ALIGNMENT_PROMPT,
-  );
+  const dreamingPrompts = DREAMING_PROMPTS.map((spec) => ({
+    spec,
+    data: resolveDreamingPrompt(spec, settingsMap),
+  }));
 
   // Keep refs updated for test calls.
   if (factPromptData) {
@@ -929,42 +977,24 @@ export default function ExtractionPromptEditor() {
               <p className="mt-1 text-sm text-muted-foreground">
                 These prompts are used by the dreaming system during background
                 memory consolidation. They control how the LLM detects
-                contradictions, synthesizes related memories, and scores alignment
-                between new evidence and existing knowledge. Prompts use %s
-                placeholders for content injection.
+                contradictions, synthesizes related memories, scores alignment
+                between new evidence and existing knowledge, and audits the
+                novelty of each synthesis. Prompts use %s placeholders for
+                content injection.
               </p>
             </div>
 
             <div className="space-y-6">
-              {contradictionPromptData && (
+              {dreamingPrompts.map(({ spec, data }) => (
                 <SimplePromptEditorCard
-                  title="Contradiction Detection Prompt"
-                  description="Used to determine whether two memories contradict each other. Should return JSON with a contradicts boolean and explanation. Uses two %s placeholders for Statement A and Statement B."
-                  promptData={contradictionPromptData}
+                  key={spec.key}
+                  title={spec.title}
+                  description={spec.description}
+                  promptData={data}
                   onSave={handleSave}
                   saving={updateMutation.isPending}
                 />
-              )}
-
-              {synthesisPromptData && (
-                <SimplePromptEditorCard
-                  title="Memory Synthesis Prompt"
-                  description="Used to consolidate a cluster of related memories into a single, concise synthesis. Should return only the synthesized text. Uses one %s placeholder for the combined memory content."
-                  promptData={synthesisPromptData}
-                  onSave={handleSave}
-                  saving={updateMutation.isPending}
-                />
-              )}
-
-              {alignmentPromptData && (
-                <SimplePromptEditorCard
-                  title="Alignment Scoring Prompt"
-                  description="Used to evaluate how strongly new evidence supports or contradicts an existing synthesis. Should return JSON with an alignment float (-1.0 to 1.0) and reasoning. Uses two %s placeholders for synthesis and evidence."
-                  promptData={alignmentPromptData}
-                  onSave={handleSave}
-                  saving={updateMutation.isPending}
-                />
-              )}
+              ))}
             </div>
           </div>
         </div>

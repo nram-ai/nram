@@ -549,6 +549,7 @@ export interface SettingSchema {
   default_value: unknown;
   description: string;
   category: string;
+  enum_values?: string[];
 }
 
 export interface Webhook {

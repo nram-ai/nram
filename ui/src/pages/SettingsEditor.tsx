@@ -20,28 +20,40 @@ interface SettingWithSchema {
 // ---------------------------------------------------------------------------
 
 const CATEGORY_ORDER = [
-  "memory_defaults",
+  "memory",
   "enrichment",
+  "dreaming",
+  "dreaming_novelty",
+  "dreaming_consolidation",
+  "reconsolidation",
   "ranking",
-  "rate_limits",
+  "api",
   "auth",
   "qdrant",
 ];
 
 const CATEGORY_LABELS: Record<string, string> = {
-  memory_defaults: "Memory Defaults",
+  memory: "Memory",
   enrichment: "Enrichment",
+  dreaming: "Dreaming",
+  dreaming_novelty: "Dreaming — Novelty Audit",
+  dreaming_consolidation: "Dreaming — Consolidation Budget",
+  reconsolidation: "Reconsolidation",
   ranking: "Ranking",
-  rate_limits: "Rate Limits",
+  api: "API",
   auth: "Auth",
   qdrant: "Qdrant Vector Database",
 };
 
 const CATEGORY_DESCRIPTIONS: Record<string, string> = {
-  memory_defaults: "Default values for memory storage and retrieval",
+  memory: "Default values and retention for memory storage",
   enrichment: "Configuration for LLM-based enrichment pipeline",
+  dreaming: "Background consolidation scheduler, token budgets, and synthesis thresholds",
+  dreaming_novelty: "Gates whether dream syntheses are kept based on how much genuinely new content they introduce over their sources",
+  dreaming_consolidation: "Per-sub-phase budget fractions so audit, reinforce, and consolidate cannot starve each other",
+  reconsolidation: "Recall-time reinforcement and sleep-time confidence decay for stored memories",
   ranking: "Weights and thresholds for memory ranking",
-  rate_limits: "API rate limiting configuration",
+  api: "API rate limiting and request configuration",
   auth: "Authentication and authorization settings",
   qdrant: "Connection settings for the Qdrant vector database. Changes require a server restart to take effect.",
 };
@@ -192,6 +204,115 @@ function Toggle({
         }`}
       />
     </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Value Input
+// ---------------------------------------------------------------------------
+
+const INPUT_CLASS =
+  "w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring";
+const TEXTAREA_CLASS = `${INPUT_CLASS} font-mono`;
+
+interface RenderValueInputProps {
+  schema: SettingSchema;
+  isPrompt: boolean;
+  editValue: string;
+  setEditValue: (v: string) => void;
+  onKeyDown: (e: React.KeyboardEvent) => void;
+  inputRef: React.RefObject<HTMLInputElement | HTMLTextAreaElement>;
+}
+
+function renderValueInput({
+  schema,
+  isPrompt,
+  editValue,
+  setEditValue,
+  onKeyDown,
+  inputRef,
+}: RenderValueInputProps) {
+  const onChange = (
+    e:
+      | React.ChangeEvent<HTMLInputElement>
+      | React.ChangeEvent<HTMLTextAreaElement>
+      | React.ChangeEvent<HTMLSelectElement>,
+  ) => setEditValue(e.target.value);
+
+  if (schema.type === "text" || isPrompt) {
+    return (
+      <textarea
+        ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+        value={editValue}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        rows={8}
+        className={TEXTAREA_CLASS}
+      />
+    );
+  }
+  if (schema.type === "json") {
+    return (
+      <textarea
+        ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+        value={editValue}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        rows={6}
+        className={TEXTAREA_CLASS}
+      />
+    );
+  }
+  if (schema.type === "int" || schema.type === "float" || schema.type === "number") {
+    return (
+      <input
+        ref={inputRef as React.RefObject<HTMLInputElement>}
+        type="number"
+        value={editValue}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        step={schema.type === "float" ? "0.01" : "1"}
+        className={INPUT_CLASS}
+      />
+    );
+  }
+  if (schema.type === "secret") {
+    return (
+      <input
+        ref={inputRef as React.RefObject<HTMLInputElement>}
+        type="password"
+        value={editValue}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        className={INPUT_CLASS}
+      />
+    );
+  }
+  if (schema.type === "enum" && schema.enum_values && schema.enum_values.length > 0) {
+    return (
+      <select
+        value={editValue}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        className={INPUT_CLASS}
+      >
+        {schema.enum_values.map((v) => (
+          <option key={v} value={v}>
+            {v}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  return (
+    <input
+      ref={inputRef as React.RefObject<HTMLInputElement>}
+      type="text"
+      value={editValue}
+      onChange={onChange}
+      onKeyDown={onKeyDown}
+      className={INPUT_CLASS}
+    />
   );
 }
 
@@ -378,53 +499,14 @@ function InlineSettingEditor({
         <label className="mb-1 block text-xs font-medium text-muted-foreground">
           Value
         </label>
-        {schema.type === "text" || isPrompt ? (
-          <textarea
-            ref={inputRef as React.RefObject<HTMLTextAreaElement>}
-            value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={8}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        ) : schema.type === "json" ? (
-          <textarea
-            ref={inputRef as React.RefObject<HTMLTextAreaElement>}
-            value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={6}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        ) : schema.type === "int" || schema.type === "float" || schema.type === "number" ? (
-          <input
-            ref={inputRef as React.RefObject<HTMLInputElement>}
-            type="number"
-            value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            step={schema.type === "float" ? "0.01" : "1"}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        ) : schema.type === "secret" ? (
-          <input
-            ref={inputRef as React.RefObject<HTMLInputElement>}
-            type="password"
-            value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        ) : (
-          <input
-            ref={inputRef as React.RefObject<HTMLInputElement>}
-            type="text"
-            value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        )}
+        {renderValueInput({
+          schema,
+          isPrompt,
+          editValue,
+          setEditValue,
+          onKeyDown: handleKeyDown,
+          inputRef,
+        })}
       </div>
 
       {/* Default reference */}

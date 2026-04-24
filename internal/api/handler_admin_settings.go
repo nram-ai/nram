@@ -32,6 +32,7 @@ type SettingSchema struct {
 	DefaultValue json.RawMessage `json:"default_value"`
 	Description  string          `json:"description"`
 	Category     string          `json:"category"`
+	EnumValues   []string        `json:"enum_values,omitempty"`
 }
 
 // settingUpdateRequest is the request body for PUT /settings.
