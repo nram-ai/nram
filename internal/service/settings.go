@@ -79,6 +79,13 @@ const (
 	SettingDreamConsolidationReinforceFraction   = "dreaming.consolidation.reinforce_budget_fraction"
 	SettingDreamConsolidationConsolidateFraction = "dreaming.consolidation.consolidate_budget_fraction"
 
+	// Contradiction-detection cap. Bounds LLM pair-check calls per cycle so
+	// the phase cannot starve the rest of the pipeline. Residual is driven
+	// by the per-memory contradictions_checked_at stamp, not by this cap; the
+	// cap exists purely as a budget guard. Operators bump this during first
+	// pass drains on namespaces with large unstamped backlogs.
+	SettingDreamContradictionCap = "dreaming.contradiction.cap_per_cycle"
+
 	// Retention for soft-deleted memories. Rows past this age are hard-deleted
 	// by the retention sweeper and their vector rows are CASCADEd alongside.
 	SettingMemorySoftDeleteRetentionDays = "memory.soft_delete_retention_days"
@@ -184,6 +191,8 @@ alignment must be a float:
 	SettingDreamConsolidationAuditFraction:       "0.35",
 	SettingDreamConsolidationReinforceFraction:   "0.35",
 	SettingDreamConsolidationConsolidateFraction: "0.30",
+
+	SettingDreamContradictionCap: "30",
 
 	SettingMemorySoftDeleteRetentionDays: "30",
 	SettingDreamNoveltyJudgePrompt: `You are a novelty auditor. You do NOT converse. You output JSON only.

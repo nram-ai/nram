@@ -2,8 +2,11 @@ package dreaming
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -73,6 +76,21 @@ func makeMemories(n int) []model.Memory {
 	return out
 }
 
+func stampedMemories(n int, stamp, updatedAt time.Time) []model.Memory {
+	mems := makeMemories(n)
+	for i := range mems {
+		meta := map[string]interface{}{
+			ContradictionsCheckedStampKey: stamp.Format(time.RFC3339Nano),
+		}
+		raw, _ := json.Marshal(meta)
+		mems[i].Metadata = raw
+		mems[i].UpdatedAt = updatedAt
+	}
+	return mems
+}
+
+func nilEmbedder() provider.EmbeddingProvider { return nil }
+
 // TestContradictionPhase_ZeroUsageBudgetAdvances verifies the critical fix:
 // when the provider reports Usage{TotalTokens: 0} (Ollama behaviour), the
 // phase falls back to the len(prompt)/4 estimate so the TokenBudget still
@@ -85,8 +103,10 @@ func TestContradictionPhase_ZeroUsageBudgetAdvances(t *testing.T) {
 
 	phase := NewContradictionPhase(
 		reader,
+		&updatingMemoryWriter{},
 		stubLineageWriter{},
 		func() provider.LLMProvider { return llm },
+		nilEmbedder,
 		stubSettings{},
 		recorder,
 		stubUsageCtxResolver{},
@@ -119,21 +139,6 @@ func TestContradictionPhase_ZeroUsageBudgetAdvances(t *testing.T) {
 	}
 }
 
-// TestContradictionPhase_PairCapEnforced verifies findCandidatePairs caps
-// at maxContradictionPairs even with many input memories. Regression guard
-// against the old off-by-several-pairs bug where the cap check ran after
-// completing a full inner loop row.
-func TestContradictionPhase_PairCapEnforced(t *testing.T) {
-	phase := &ContradictionPhase{}
-	pairs, truncated := phase.findCandidatePairs(makeMemories(200))
-	if len(pairs) != maxContradictionPairs {
-		t.Errorf("expected exactly %d pairs, got %d", maxContradictionPairs, len(pairs))
-	}
-	if !truncated {
-		t.Error("expected truncated=true when input exceeds cap")
-	}
-}
-
 // malformedResponseLLM returns an unparseable body so the contradiction
 // phase exercises its parse-error path.
 type malformedResponseLLM struct {
@@ -163,8 +168,10 @@ func TestContradictionPhase_ParseErrorStillAccountsUsage(t *testing.T) {
 
 	phase := NewContradictionPhase(
 		reader,
+		&updatingMemoryWriter{},
 		stubLineageWriter{},
 		func() provider.LLMProvider { return llm },
+		nilEmbedder,
 		stubSettings{},
 		recorder,
 		stubUsageCtxResolver{},
@@ -187,8 +194,18 @@ func TestContradictionPhase_ParseErrorStillAccountsUsage(t *testing.T) {
 	if len(recorder.records) == 0 {
 		t.Fatal("expected token_usage records even when responses fail to parse")
 	}
-	if int(llm.calls.Load()) != len(recorder.records) {
-		t.Errorf("expected one record per call; got calls=%d records=%d", llm.calls.Load(), len(recorder.records))
+	// One record per successful LLM call; recorder may also carry a
+	// dream_contradiction_embedding row when an embedder is wired, so count
+	// only the dream_contradiction entries here.
+	contradictionRecords := 0
+	for _, r := range recorder.records {
+		if r.Operation == "dream_contradiction" {
+			contradictionRecords++
+		}
+	}
+	if int(llm.calls.Load()) != contradictionRecords {
+		t.Errorf("expected one dream_contradiction record per LLM call; got calls=%d records=%d",
+			llm.calls.Load(), contradictionRecords)
 	}
 }
 
@@ -203,8 +220,10 @@ func TestContradictionPhase_PreflightStopsWhenBudgetTooSmall(t *testing.T) {
 
 	phase := NewContradictionPhase(
 		reader,
+		&updatingMemoryWriter{},
 		stubLineageWriter{},
 		func() provider.LLMProvider { return llm },
+		nilEmbedder,
 		stubSettings{},
 		recorder,
 		stubUsageCtxResolver{},
@@ -221,4 +240,442 @@ func TestContradictionPhase_PreflightStopsWhenBudgetTooSmall(t *testing.T) {
 	if llm.calls.Load() != 0 {
 		t.Errorf("expected 0 LLM calls when pre-flight fails, got %d", llm.calls.Load())
 	}
+}
+
+// TestContradictionPhase_NoStaleReturnsResidualFalse is the primary
+// acceptance test for the stop-signal fix. All memories carry a stamp
+// newer than UpdatedAt, so the phase must short-circuit to residual=false
+// with zero LLM, Update, or embedder calls.
+func TestContradictionPhase_NoStaleReturnsResidualFalse(t *testing.T) {
+	now := time.Now().UTC()
+	mems := stampedMemories(20, now, now.Add(-time.Minute))
+	reader := &fakeMemoryReader{list: mems}
+	writer := &updatingMemoryWriter{}
+	llm := &zeroUsageLLM{}
+	emb := &staticEmbedder{}
+	recorder := &recordingTokenRecorder{}
+
+	phase := NewContradictionPhase(
+		reader,
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return emb },
+		stubSettings{},
+		recorder,
+		stubUsageCtxResolver{},
+	)
+
+	budget := NewTokenBudget(10000, 2048)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if residual {
+		t.Fatal("expected residual=false when no memories are stale")
+	}
+	if llm.calls.Load() != 0 {
+		t.Errorf("expected 0 LLM calls, got %d", llm.calls.Load())
+	}
+	if emb.calls.Load() != 0 {
+		t.Errorf("expected 0 embedder calls when no stale memories, got %d", emb.calls.Load())
+	}
+	if len(writer.updates) != 0 {
+		t.Errorf("expected 0 Update calls, got %d", len(writer.updates))
+	}
+}
+
+// TestContradictionPhase_StampsDispatchedAndReportsResidualWhenCapHit
+// verifies that when more stale memories exist than the cap can fully
+// cover, the phase stamps the subset it dispatched and reports residual=true.
+func TestContradictionPhase_StampsDispatchedAndReportsResidualWhenCapHit(t *testing.T) {
+	llm := &zeroUsageLLM{}
+	recorder := &recordingTokenRecorder{}
+	mems := makeMemories(100)
+	reader := &fakeMemoryReader{list: mems}
+	writer := &updatingMemoryWriter{}
+
+	phase := NewContradictionPhase(
+		reader,
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		nilEmbedder,
+		stubSettings{}, // cap defaults to 30, K defaults to 4
+		recorder,
+		stubUsageCtxResolver{},
+	)
+
+	budget := NewTokenBudget(1_000_000, 2048)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !residual {
+		t.Fatal("expected residual=true when stale memories exceed cap")
+	}
+	if int(llm.calls.Load()) > 30 {
+		t.Errorf("cap=30 was violated: %d calls", llm.calls.Load())
+	}
+	if len(writer.updates) == 0 {
+		t.Fatal("expected some memories to be stamped")
+	}
+	if len(writer.updates) >= len(mems) {
+		t.Errorf("expected fewer stamps than total memories; got %d of %d", len(writer.updates), len(mems))
+	}
+	for _, u := range writer.updates {
+		meta := map[string]interface{}{}
+		if err := json.Unmarshal(u.Metadata, &meta); err != nil {
+			t.Fatalf("stamped memory has unparseable metadata: %v", err)
+		}
+		if _, ok := meta[ContradictionsCheckedStampKey]; !ok {
+			t.Errorf("stamped memory missing %q in metadata", ContradictionsCheckedStampKey)
+		}
+	}
+}
+
+// TestContradictionPhase_UpdatedAtInvalidatesStamp verifies that when a
+// memory's UpdatedAt moves past its contradictions_checked_at stamp, it is
+// considered stale and gets re-processed.
+func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
+	now := time.Now().UTC()
+	// Most memories are fresh (stamp newer than UpdatedAt).
+	mems := stampedMemories(10, now, now.Add(-time.Hour))
+	// One memory has an older stamp than its UpdatedAt.
+	staleStamp := now.Add(-2 * time.Hour)
+	freshUpdated := now.Add(-time.Minute)
+	meta := map[string]interface{}{
+		ContradictionsCheckedStampKey: staleStamp.Format(time.RFC3339Nano),
+	}
+	raw, _ := json.Marshal(meta)
+	mems[0].Metadata = raw
+	mems[0].UpdatedAt = freshUpdated
+
+	reader := &fakeMemoryReader{list: mems}
+	writer := &updatingMemoryWriter{}
+	llm := &zeroUsageLLM{}
+	recorder := &recordingTokenRecorder{}
+
+	phase := NewContradictionPhase(
+		reader,
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		nilEmbedder,
+		stubSettings{},
+		recorder,
+		stubUsageCtxResolver{},
+	)
+
+	budget := NewTokenBudget(100_000, 2048)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if residual {
+		t.Error("expected residual=false after draining the single stale memory")
+	}
+	if len(writer.updates) != 1 {
+		t.Errorf("expected exactly 1 stamp update, got %d", len(writer.updates))
+	}
+	if len(writer.updates) > 0 && writer.updates[0].ID != mems[0].ID {
+		t.Errorf("expected the stale memory to be stamped, got %s", writer.updates[0].ID)
+	}
+}
+
+// TestContradictionPhase_StampingIsIdempotent is the forward-progress
+// acceptance criterion: once the phase drains to residual=false, a
+// subsequent pass on the same input must be a complete no-op. Drains may
+// take multiple passes when the stale set exceeds cap*K — the invariant
+// is that stability, once reached, is preserved.
+func TestContradictionPhase_StampingIsIdempotent(t *testing.T) {
+	llm := &zeroUsageLLM{}
+	recorder := &recordingTokenRecorder{}
+	mems := makeMemories(10) // all stale
+	store := &mutableMemoryStore{memories: mems}
+
+	phase := NewContradictionPhase(
+		store,
+		store,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		nilEmbedder,
+		stubSettings{},
+		recorder,
+		stubUsageCtxResolver{},
+	)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	// Drain to stability. Must terminate within a bounded number of passes.
+	const maxDrainPasses = 8
+	var drainedAt int
+	for pass := 0; pass < maxDrainPasses; pass++ {
+		residual, err := phase.Execute(context.Background(), cycle,
+			NewTokenBudget(1_000_000, 2048), logger)
+		if err != nil {
+			t.Fatalf("drain pass %d: %v", pass, err)
+		}
+		if !residual {
+			drainedAt = pass
+			break
+		}
+		if pass == maxDrainPasses-1 {
+			t.Fatalf("phase failed to drain in %d passes", maxDrainPasses)
+		}
+	}
+	if llm.calls.Load() == 0 {
+		t.Fatal("drain should have made LLM calls")
+	}
+	if store.updateCount() == 0 {
+		t.Fatal("drain should have stamped memories")
+	}
+
+	callsAfterDrain := llm.calls.Load()
+	updatesAfterDrain := store.updateCount()
+
+	// Verify idempotency: another cycle on the drained state is a no-op.
+	residual, err := phase.Execute(context.Background(), cycle,
+		NewTokenBudget(1_000_000, 2048), logger)
+	if err != nil {
+		t.Fatalf("post-drain pass: %v", err)
+	}
+	if residual {
+		t.Error("post-drain pass expected residual=false")
+	}
+	if llm.calls.Load() != callsAfterDrain {
+		t.Errorf("post-drain pass should be LLM no-op; additional calls = %d",
+			llm.calls.Load()-callsAfterDrain)
+	}
+	if store.updateCount() != updatesAfterDrain {
+		t.Errorf("post-drain pass should be Update no-op; additional updates = %d",
+			store.updateCount()-updatesAfterDrain)
+	}
+	t.Logf("drained in %d passes; %d LLM calls, %d stamps",
+		drainedAt+1, callsAfterDrain, updatesAfterDrain)
+}
+
+// TestIsStale_StampEqualsUpdatedAt_NotStale is the strict-less-than
+// invariant: a just-stamped memory (stamp == UpdatedAt) must not look stale
+// on the next cycle, or stamping becomes self-defeating.
+func TestIsStale_StampEqualsUpdatedAt_NotStale(t *testing.T) {
+	now := time.Now().UTC()
+	meta := map[string]interface{}{
+		ContradictionsCheckedStampKey: now.Format(time.RFC3339Nano),
+	}
+	mem := model.Memory{UpdatedAt: now}
+
+	if isStale(&mem, meta) {
+		t.Fatal("stamp time == UpdatedAt must be considered fresh")
+	}
+}
+
+// TestContradictionPhase_TooFewMemoriesIsNoOp confirms the guard at the top
+// of Execute short-circuits when the namespace can't produce any pair.
+func TestContradictionPhase_TooFewMemoriesIsNoOp(t *testing.T) {
+	for _, n := range []int{0, 1} {
+		llm := &zeroUsageLLM{}
+		writer := &updatingMemoryWriter{}
+		mems := makeMemories(n)
+		reader := &fakeMemoryReader{list: mems}
+
+		phase := NewContradictionPhase(
+			reader,
+			writer,
+			stubLineageWriter{},
+			func() provider.LLMProvider { return llm },
+			nilEmbedder,
+			stubSettings{},
+			&recordingTokenRecorder{},
+			stubUsageCtxResolver{},
+		)
+
+		ns := uuid.New()
+		if n > 0 {
+			ns = mems[0].NamespaceID
+		}
+		residual, err := phase.Execute(
+			context.Background(),
+			&model.DreamCycle{ID: uuid.New(), NamespaceID: ns},
+			NewTokenBudget(10000, 2048),
+			NewDreamLogWriter(nil, uuid.New(), uuid.UUID{}),
+		)
+		if err != nil {
+			t.Fatalf("n=%d: %v", n, err)
+		}
+		if residual {
+			t.Errorf("n=%d: expected residual=false", n)
+		}
+		if llm.calls.Load() != 0 {
+			t.Errorf("n=%d: expected 0 LLM calls", n)
+		}
+		if len(writer.updates) != 0 {
+			t.Errorf("n=%d: expected 0 Update calls", n)
+		}
+	}
+}
+
+// TestContradictionPhase_EmbedderNilDegradesSafely confirms the phase still
+// terminates and stamps memories when no embedder is available.
+func TestContradictionPhase_EmbedderNilDegradesSafely(t *testing.T) {
+	llm := &zeroUsageLLM{}
+	writer := &updatingMemoryWriter{}
+	mems := makeMemories(8)
+	reader := &fakeMemoryReader{list: mems}
+
+	phase := NewContradictionPhase(
+		reader,
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		nilEmbedder,
+		stubSettings{},
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+
+	budget := NewTokenBudget(1_000_000, 2048)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	// 8 memories * K=4 = 32 candidate pairs but dedup reduces that; cap=30
+	// may or may not be hit depending on overlap. Either way, Update must
+	// have been called on at least one memory (the degradation path must
+	// not abort stamping).
+	if len(writer.updates) == 0 {
+		t.Fatal("expected degradation path to still stamp memories")
+	}
+	if residual && len(writer.updates) == len(mems) {
+		t.Error("residual=true with every memory stamped is contradictory")
+	}
+	if llm.calls.Load() == 0 {
+		t.Fatal("expected LLM calls from the degradation path")
+	}
+}
+
+// erroringEmbedder simulates a failing embedder so the phase exercises its
+// embedder-error degradation path.
+type erroringEmbedder struct {
+	calls atomic.Int32
+}
+
+func (e *erroringEmbedder) Embed(_ context.Context, _ *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+	e.calls.Add(1)
+	return nil, errors.New("embedder offline")
+}
+func (e *erroringEmbedder) Name() string       { return "erroring" }
+func (e *erroringEmbedder) Dimensions() []int  { return []int{64} }
+
+// TestContradictionPhase_EmbedderErrorDegradesSafely confirms that an
+// embedder error falls back to the deterministic walk rather than aborting
+// the cycle, and still stamps visited memories.
+func TestContradictionPhase_EmbedderErrorDegradesSafely(t *testing.T) {
+	llm := &zeroUsageLLM{}
+	writer := &updatingMemoryWriter{}
+	emb := &erroringEmbedder{}
+	mems := makeMemories(8)
+	reader := &fakeMemoryReader{list: mems}
+
+	phase := NewContradictionPhase(
+		reader,
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return emb },
+		stubSettings{},
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+
+	budget := NewTokenBudget(1_000_000, 2048)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if emb.calls.Load() == 0 {
+		t.Fatal("expected the embedder to be called once")
+	}
+	if len(writer.updates) == 0 {
+		t.Fatal("expected stamping to still happen on embedder error")
+	}
+	if llm.calls.Load() == 0 {
+		t.Fatal("expected LLM calls via the degradation path")
+	}
+}
+
+// mutableMemoryStore is a combined reader+writer that applies Update
+// mutations back into the in-memory list so cycle-to-cycle idempotency
+// tests can observe persisted stamps on subsequent reads.
+type mutableMemoryStore struct {
+	memories []model.Memory
+	updates  int
+}
+
+func (m *mutableMemoryStore) updateCount() int { return m.updates }
+
+func (m *mutableMemoryStore) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+	for i := range m.memories {
+		if m.memories[i].ID == id {
+			return &m.memories[i], nil
+		}
+	}
+	return nil, errors.New("not found")
+}
+func (m *mutableMemoryStore) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+	want := map[uuid.UUID]struct{}{}
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	out := []model.Memory{}
+	for i := range m.memories {
+		if _, ok := want[m.memories[i].ID]; ok {
+			out = append(out, m.memories[i])
+		}
+	}
+	return out, nil
+}
+func (m *mutableMemoryStore) ListByNamespace(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
+	return m.memories, nil
+}
+func (m *mutableMemoryStore) CountByNamespace(_ context.Context, _ uuid.UUID) (int, error) {
+	return len(m.memories), nil
+}
+func (m *mutableMemoryStore) Create(_ context.Context, mem *model.Memory) error {
+	m.memories = append(m.memories, *mem)
+	return nil
+}
+func (m *mutableMemoryStore) Update(_ context.Context, mem *model.Memory) error {
+	for i := range m.memories {
+		if m.memories[i].ID == mem.ID {
+			m.memories[i] = *mem
+			m.updates++
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+func (m *mutableMemoryStore) SoftDelete(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
+	return nil
+}
+func (m *mutableMemoryStore) HardDelete(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
+	return nil
+}
+func (m *mutableMemoryStore) DecayConfidence(_ context.Context, ids []uuid.UUID, _, _ float64) (int64, error) {
+	return int64(len(ids)), nil
 }

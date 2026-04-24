@@ -433,7 +433,7 @@ func main() {
 		dreamCycleRepo, dreamLogRepo, workerPool,
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo),
 		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
-		dreaming.NewContradictionPhase(memoryRepo, lineageRepo, factProvider, settingsSvc, tokenUsageRepo, namespaceRepo),
+		dreaming.NewContradictionPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, tokenUsageRepo, namespaceRepo),
 		consolidationPhase,
 		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo, settingsSvc),
 		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo),

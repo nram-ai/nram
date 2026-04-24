@@ -1,10 +1,12 @@
 package dreaming
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,46 +14,89 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
 
-// maxContradictionPairs hard-caps the number of pair comparisons per cycle
-// regardless of budget state. Each pair costs one LLM call, and on a local
-// provider that can be ~25s; cap keeps a single phase bounded even when
-// zero-usage responses prevent the budget from advancing.
-const maxContradictionPairs = 30
+// ContradictionsCheckedStampKey is the metadata key stamped on memories once
+// they have been compared against their top-K semantic neighbours in a cycle.
+// A memory is considered fresh for contradiction purposes when the stamp
+// exists and is not strictly before its UpdatedAt; any other state marks the
+// memory as stale and eligible for re-checking.
+const ContradictionsCheckedStampKey = "contradictions_checked_at"
 
-// ContradictionPhase detects contradictions between memories that reference
-// the same entities. It uses vector similarity to find candidate pairs,
-// then an LLM to verify whether they actually contradict.
+// defaultContradictionCap bounds the number of pair-check LLM calls the
+// phase may issue per cycle. Exposed as SettingDreamContradictionCap so
+// operators can raise it during a first-pass drain and restore it after.
+const defaultContradictionCap = 30
+
+// defaultContradictionNeighbors bounds the per-memory work. A memory is
+// compared against at most K semantic neighbours per visit. K is deliberately
+// small so "fully dispatched" is reachable under defaultContradictionCap for
+// namespaces of realistic size (K*anchors_per_cycle ≤ cap).
+const defaultContradictionNeighbors = 4
+
+// ContradictionPhase detects contradictions between semantically-close pairs
+// of memories. Per-memory work is bounded via an embedding top-K prefilter;
+// progress across cycles is tracked via the ContradictionsCheckedStampKey
+// metadata marker so the phase can report residual=false once every memory
+// has been visited since its last update.
 type ContradictionPhase struct {
-	memories    MemoryReader
-	lineage     LineageWriter
-	llmProvider LLMProviderFunc
-	settings    SettingsResolver
-	tokens      TokenRecorder
-	usageCtx    UsageContextResolver
+	memories         MemoryReader
+	memWriter        MemoryWriter
+	lineage          LineageWriter
+	llmProvider      LLMProviderFunc
+	embedderProvider EmbeddingProviderFunc
+	settings         SettingsResolver
+	tokens           TokenRecorder
+	usageCtx         UsageContextResolver
 }
 
 // NewContradictionPhase creates a new contradiction detection phase.
+// When embedderProvider returns nil (either absent or transiently failed),
+// the phase degrades to a deterministic ID-ordered neighbour walk.
 func NewContradictionPhase(
 	memories MemoryReader,
+	memWriter MemoryWriter,
 	lineage LineageWriter,
 	llmProvider LLMProviderFunc,
+	embedderProvider EmbeddingProviderFunc,
 	settings SettingsResolver,
 	tokens TokenRecorder,
 	usageCtx UsageContextResolver,
 ) *ContradictionPhase {
 	return &ContradictionPhase{
-		memories:    memories,
-		lineage:     lineage,
-		llmProvider: llmProvider,
-		settings:    settings,
-		tokens:      tokens,
-		usageCtx:    usageCtx,
+		memories:         memories,
+		memWriter:        memWriter,
+		lineage:          lineage,
+		llmProvider:      llmProvider,
+		embedderProvider: embedderProvider,
+		settings:         settings,
+		tokens:           tokens,
+		usageCtx:         usageCtx,
 	}
 }
 
 func (p *ContradictionPhase) Name() string { return model.DreamPhaseContradictions }
+
+// staleMemory carries a memory alongside its pre-decoded metadata so the
+// stamp-write path does not have to re-parse on completion.
+type staleMemory struct {
+	Mem  model.Memory
+	Meta map[string]interface{}
+}
+
+// pairKey canonicalises a pair of memory IDs so (A,B) and (B,A) dedupe.
+type pairKey struct {
+	low  uuid.UUID
+	high uuid.UUID
+}
+
+func orderedPairKey(a, b uuid.UUID) pairKey {
+	if bytes.Compare(a[:], b[:]) <= 0 {
+		return pairKey{low: a, high: b}
+	}
+	return pairKey{low: b, high: a}
+}
 
 func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
 	llm := p.llmProvider()
@@ -60,7 +105,6 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		return false, nil
 	}
 
-	// List all memories in the namespace.
 	memories, err := p.memories.ListByNamespace(ctx, cycle.NamespaceID, 500, 0)
 	if err != nil {
 		return false, err
@@ -70,8 +114,31 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		return false, nil
 	}
 
-	// Compare pairs using LLM with pairwise comparison capped to a reasonable limit.
-	pairs, pairsTruncated := p.findCandidatePairs(memories)
+	cap, _ := p.settings.ResolveInt(ctx, service.SettingDreamContradictionCap, "global")
+	if cap <= 0 {
+		cap = defaultContradictionCap
+	}
+
+	stale := p.collectStale(memories)
+	if len(stale) == 0 {
+		return false, nil
+	}
+
+	pairs, fullyDispatched, embedTokens, selErr := p.selectNeighborPairs(ctx, stale, memories, cap)
+	if selErr != nil {
+		slog.Warn("dreaming: neighbour selection failed; degrading to ID-ordered walk",
+			"cycle", cycle.ID, "err", selErr)
+	}
+	if embedTokens > 0 {
+		_ = budget.Spend(embedTokens)
+		embedderName := ""
+		if p.embedderProvider != nil {
+			if emb := p.embedderProvider(); emb != nil {
+				embedderName = emb.Name()
+			}
+		}
+		p.record(ctx, cycle, "dream_contradiction_embedding", embedderName, nil, embedTokens, 0)
+	}
 
 	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamContradictionPrompt, "global")
 
@@ -84,10 +151,8 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		}
 
 		// Pre-flight budget check using the 4-bytes-per-token heuristic on
-		// the prompt plus the per-call output cap. Local providers that
-		// omit usage fields will still advance the budget via the post-call
-		// fallback below, so this guard prevents starting calls we can't
-		// afford to record.
+		// the prompt plus the per-call output cap. Prevents starting calls
+		// we can't afford to record.
 		estPrompt := fmt.Sprintf(promptTemplate, pair[0].Content, pair[1].Content)
 		estCost := EstimateTokens(estPrompt) + budget.PerCallCap()
 		if budget.Remaining() < estCost {
@@ -105,7 +170,8 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		var spendErr error
 		if usage != nil {
 			spendErr = budget.Spend(usage.TotalTokens)
-			p.record(ctx, llm, cycle, &pair[0], usage)
+			p.record(ctx, cycle, "dream_contradiction", llm.Name(), &pair[0].ID,
+				usage.PromptTokens, usage.CompletionTokens)
 		}
 
 		if err != nil {
@@ -126,7 +192,6 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			continue
 		}
 
-		// Record the contradiction as a lineage entry.
 		lineageEntry := &model.MemoryLineage{
 			ID:          uuid.New(),
 			NamespaceID: cycle.NamespaceID,
@@ -139,7 +204,6 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			continue
 		}
 
-		// Log the operation.
 		_ = logger.LogOperation(ctx, model.DreamPhaseContradictions,
 			model.DreamOpContradictionDetected, "memory", pair[0].ID,
 			nil, map[string]interface{}{
@@ -150,34 +214,256 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		contradictions++
 	}
 
-	if contradictions > 0 {
-		slog.Info("dreaming: contradictions detected",
-			"count", contradictions, "cycle", cycle.ID,
-			"pairs_truncated", pairsTruncated, "budget_stopped", budgetStopped)
+	// Stamp every stale anchor whose full K-slice was emitted (or deduped
+	// against already-emitted pairs) before the cap tripped. Anchors that
+	// were partially dispatched remain stale so the next cycle picks them
+	// up. Stamping even when the budget stopped mid-loop is still safe:
+	// the pairs we DID run covered this anchor's neighbour window.
+	stamped := 0
+	for i := range stale {
+		if !fullyDispatched[stale[i].Mem.ID] {
+			continue
+		}
+		if err := p.stampContradictionsChecked(ctx, &stale[i].Mem, stale[i].Meta); err != nil {
+			slog.Warn("dreaming: contradiction stamp failed",
+				"memory", stale[i].Mem.ID, "err", err)
+			continue
+		}
+		stamped++
 	}
 
-	residual := pairsTruncated || budgetStopped
+	if contradictions > 0 || stamped > 0 {
+		slog.Info("dreaming: contradiction phase summary",
+			"cycle", cycle.ID, "contradictions", contradictions,
+			"stale", len(stale), "stamped", stamped,
+			"budget_stopped", budgetStopped)
+	}
+
+	residual := budgetStopped || len(stale) > len(fullyDispatched)
 	return residual, nil
 }
 
-// findCandidatePairs identifies pairs of memories that might contradict,
-// using pairwise comparison capped to maxContradictionPairs. The second
-// return is true when there were more candidate pairs than the cap — the
-// cap-check lives inside the inner loop so the count stops exactly at the
-// cap rather than overshooting by a full row of j iterations.
-func (p *ContradictionPhase) findCandidatePairs(memories []model.Memory) ([][2]model.Memory, bool) {
-	pairs := make([][2]model.Memory, 0, maxContradictionPairs)
+// collectStale returns the subset of memories whose contradictions_checked_at
+// stamp is missing or strictly before their UpdatedAt. The byte-level marker
+// check up-front skips the JSON decode for any memory that cannot possibly be
+// fresh (i.e. has no stamp at all).
+func (p *ContradictionPhase) collectStale(memories []model.Memory) []staleMemory {
+	stampMarker := []byte(ContradictionsCheckedStampKey)
+	stale := make([]staleMemory, 0, len(memories))
+	for i := range memories {
+		m := memories[i]
+		if m.DeletedAt != nil {
+			continue
+		}
+		if !bytes.Contains(m.Metadata, stampMarker) {
+			stale = append(stale, staleMemory{Mem: m, Meta: map[string]interface{}{}})
+			continue
+		}
+		meta := decodeMetadata(m.Metadata)
+		if isStale(&m, meta) {
+			stale = append(stale, staleMemory{Mem: m, Meta: meta})
+		}
+	}
+	return stale
+}
 
-	for i := 0; i < len(memories); i++ {
-		for j := i + 1; j < len(memories); j++ {
-			if len(pairs) >= maxContradictionPairs {
-				return pairs, true
+// isStale reports whether a memory needs a contradiction pass. A memory is
+// stale when it has no stamp at all, the stamp is malformed, or the stamp
+// time is strictly before the memory's UpdatedAt. Equal stamp and UpdatedAt
+// are considered fresh — the stamping path sets both to the same instant
+// and we don't want a just-stamped memory to look stale on the next cycle.
+func isStale(mem *model.Memory, meta map[string]interface{}) bool {
+	raw, ok := meta[ContradictionsCheckedStampKey]
+	if !ok {
+		return true
+	}
+	s, ok := raw.(string)
+	if !ok || s == "" {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		// Accept the older RFC3339 form as a fallback so data written by
+		// an earlier version does not get continuously re-stamped.
+		t, err = time.Parse(time.RFC3339, s)
+		if err != nil {
+			return true
+		}
+	}
+	return t.Before(mem.UpdatedAt)
+}
+
+// selectNeighborPairs picks pairs involving stale anchors. When an embedder
+// is available, each anchor's K candidates are its top-K cosine-similar
+// peers in the namespace; otherwise candidates are the K next memories by
+// ID order. Returns the pairs in dispatch order, the set of anchors whose
+// full K-slice was considered (emitted-or-deduped) before the cap was
+// reached, and the embedding-token cost to charge to the cycle budget.
+func (p *ContradictionPhase) selectNeighborPairs(
+	ctx context.Context,
+	stale []staleMemory,
+	allMemories []model.Memory,
+	cap int,
+) ([][2]model.Memory, map[uuid.UUID]bool, int, error) {
+	idxByID := make(map[uuid.UUID]int, len(allMemories))
+	for i := range allMemories {
+		idxByID[allMemories[i].ID] = i
+	}
+
+	var embedder provider.EmbeddingProvider
+	if p.embedderProvider != nil {
+		embedder = p.embedderProvider()
+	}
+
+	var embeddings [][]float32
+	embedTokens := 0
+	var selErr error
+	if embedder != nil {
+		inputs := make([]string, len(allMemories))
+		for i := range allMemories {
+			inputs[i] = allMemories[i].Content
+		}
+		resp, err := embedder.Embed(ctx, &provider.EmbeddingRequest{
+			Input:     inputs,
+			Dimension: pickEmbedderDim(embedder.Dimensions()),
+		})
+		if err != nil || resp == nil || len(resp.Embeddings) != len(allMemories) {
+			selErr = err
+		} else {
+			embeddings = resp.Embeddings
+			embedTokens = resp.Usage.TotalTokens
+			if embedTokens == 0 {
+				for _, s := range inputs {
+					embedTokens += EstimateTokens(s)
+				}
 			}
-			pairs = append(pairs, [2]model.Memory{memories[i], memories[j]})
 		}
 	}
 
+	pairs := make([][2]model.Memory, 0, cap)
+	seen := make(map[pairKey]struct{}, cap)
+	fullyDispatched := make(map[uuid.UUID]bool, len(stale))
+
+	for i := range stale {
+		anchor := stale[i].Mem
+		anchorIdx, ok := idxByID[anchor.ID]
+		if !ok {
+			continue
+		}
+
+		var candidates []int
+		if embeddings != nil {
+			candidates = topKNeighbors(anchorIdx, embeddings, defaultContradictionNeighbors)
+		} else {
+			candidates = idOrderedNeighbors(anchorIdx, len(allMemories), defaultContradictionNeighbors)
+		}
+
+		var capHit bool
+		pairs, capHit = dispatchCandidates(anchor, candidates, allMemories, pairs, seen, cap)
+		if !capHit {
+			// Anchor's full K-slice was processed (emitted or deduped).
+			// Later anchors whose candidates all dedupe against earlier
+			// work are still fully dispatched; do not break the loop.
+			fullyDispatched[anchor.ID] = true
+		}
+	}
+
+	return pairs, fullyDispatched, embedTokens, selErr
+}
+
+// topKNeighbors returns the indices of the K most cosine-similar memories to
+// the anchor, excluding the anchor itself.
+func topKNeighbors(anchorIdx int, embeddings [][]float32, k int) []int {
+	type scored struct {
+		idx int
+		sim float64
+	}
+	scores := make([]scored, 0, len(embeddings))
+	anchorEmb := embeddings[anchorIdx]
+	for j := range embeddings {
+		if j == anchorIdx {
+			continue
+		}
+		scores = append(scores, scored{idx: j, sim: hnsw.CosineSimilarity(anchorEmb, embeddings[j])})
+	}
+	sort.Slice(scores, func(a, b int) bool { return scores[a].sim > scores[b].sim })
+	if len(scores) > k {
+		scores = scores[:k]
+	}
+	out := make([]int, len(scores))
+	for i, s := range scores {
+		out[i] = s.idx
+	}
+	return out
+}
+
+// idOrderedNeighbors returns the K indices after anchorIdx in the memory
+// list, wrapping around. Used when no embedder is available.
+func idOrderedNeighbors(anchorIdx, total, k int) []int {
+	if total <= 1 {
+		return nil
+	}
+	if k > total-1 {
+		k = total - 1
+	}
+	out := make([]int, 0, k)
+	for offset := 1; len(out) < k && offset < total; offset++ {
+		j := (anchorIdx + offset) % total
+		if j == anchorIdx {
+			continue
+		}
+		out = append(out, j)
+	}
+	return out
+}
+
+// dispatchCandidates emits (anchor, partner) pairs for each candidate index
+// that hasn't already been seen, respecting cap. Returns the updated pairs
+// slice and whether the cap was hit mid-slice.
+func dispatchCandidates(
+	anchor model.Memory,
+	candidates []int,
+	allMemories []model.Memory,
+	pairs [][2]model.Memory,
+	seen map[pairKey]struct{},
+	cap int,
+) ([][2]model.Memory, bool) {
+	for _, idx := range candidates {
+		partner := allMemories[idx]
+		key := orderedPairKey(anchor.ID, partner.ID)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		if len(pairs) >= cap {
+			return pairs, true
+		}
+		seen[key] = struct{}{}
+		pairs = append(pairs, [2]model.Memory{anchor, partner})
+	}
 	return pairs, false
+}
+
+// stampContradictionsChecked writes ContradictionsCheckedStampKey onto the
+// memory's metadata. UpdatedAt and the stamp are set to the same now so the
+// strict-less-than staleness check does not immediately invalidate the
+// stamp.
+func (p *ContradictionPhase) stampContradictionsChecked(ctx context.Context, mem *model.Memory, meta map[string]interface{}) error {
+	if meta == nil {
+		meta = map[string]interface{}{}
+	}
+	now := time.Now().UTC()
+	meta[ContradictionsCheckedStampKey] = now.Format(time.RFC3339Nano)
+
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal contradiction stamp metadata: %w", err)
+	}
+	mem.Metadata = encoded
+	mem.UpdatedAt = now
+	if err := p.memWriter.Update(ctx, mem); err != nil {
+		return fmt.Errorf("persist contradiction stamp: %w", err)
+	}
+	return nil
 }
 
 func (p *ContradictionPhase) checkContradiction(
@@ -226,25 +512,27 @@ func (p *ContradictionPhase) checkContradiction(
 	return result.Contradicts, result.Explanation, &usage, nil
 }
 
-// record persists a token usage row for the contradiction check.
+// record persists a token_usage row for a dreaming operation. Shared by
+// the per-pair LLM contradiction check and the per-cycle embedding call
+// that powers neighbour selection.
 func (p *ContradictionPhase) record(
 	ctx context.Context,
-	llm provider.LLMProvider,
 	cycle *model.DreamCycle,
-	mem *model.Memory,
-	usage *provider.TokenUsage,
+	operation, providerName string,
+	memoryID *uuid.UUID,
+	tokensIn, tokensOut int,
 ) {
-	if p.tokens == nil || usage == nil {
+	if p.tokens == nil || (tokensIn == 0 && tokensOut == 0) {
 		return
 	}
 	rec := &model.TokenUsage{
 		ID:           uuid.New(),
 		NamespaceID:  cycle.NamespaceID,
-		Operation:    "dream_contradiction",
-		Provider:     llm.Name(),
-		TokensInput:  usage.PromptTokens,
-		TokensOutput: usage.CompletionTokens,
-		MemoryID:     &mem.ID,
+		Operation:    operation,
+		Provider:     providerName,
+		TokensInput:  tokensIn,
+		TokensOutput: tokensOut,
+		MemoryID:     memoryID,
 		CreatedAt:    time.Now().UTC(),
 	}
 	if p.usageCtx != nil {
@@ -255,6 +543,7 @@ func (p *ContradictionPhase) record(
 		}
 	}
 	if err := p.tokens.Record(ctx, rec); err != nil {
-		slog.Warn("dreaming: token usage record failed", "phase", model.DreamPhaseContradictions, "err", err)
+		slog.Warn("dreaming: token usage record failed",
+			"phase", model.DreamPhaseContradictions, "operation", operation, "err", err)
 	}
 }
