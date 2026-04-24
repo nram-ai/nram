@@ -97,6 +97,26 @@ func main() {
 	projectRepo := storage.NewProjectRepo(db)
 	namespaceRepo := storage.NewNamespaceRepo(db)
 
+	// Populate content_hash for legacy rows synchronously so MemoryRepo.Create
+	// can rely on the column from the first request.
+	{
+		ctx := context.Background()
+		total := 0
+		for {
+			n, err := memoryRepo.BackfillContentHashes(ctx, 1000)
+			if err != nil {
+				log.Fatalf("content_hash backfill failed after %d rows: %v", total, err)
+			}
+			if n == 0 {
+				break
+			}
+			total += n
+		}
+		if total > 0 {
+			log.Printf("content_hash backfill: populated %d rows", total)
+		}
+	}
+
 	// Ensure every user has a "global" project. This is idempotent — existing
 	// global projects are skipped. Handles upgrades from versions before the
 	// global project was introduced.

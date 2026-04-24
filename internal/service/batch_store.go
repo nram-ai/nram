@@ -2,12 +2,16 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // BatchStoreItem represents a single item in a batch store request.
@@ -119,10 +123,39 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 	_ = project // retained for future attribution fields on the response
 
 	// Process each item independently.
-	errors := []BatchStoreError{}
+	errs := []BatchStoreError{}
 	memoriesCreated := 0
+	// In-batch dedup: collapse items whose content hash already appeared earlier
+	// in the same batch so we do not race ourselves into duplicates.
+	seenHashes := make(map[string]uuid.UUID, len(req.Items))
 
 	for i, item := range req.Items {
+		hash := storage.HashContent(item.Content)
+
+		// Same-batch collision: an earlier item already created (or matched) this
+		// content. Skip the insert.
+		if _, ok := seenHashes[hash]; ok {
+			slog.Info("batch_store: dedup hit (in-batch)",
+				"namespace", ns.ID, "index", i, "hash", hash)
+			continue
+		}
+
+		// Cross-batch collision: a live row already has this content. Skip.
+		existing, lookupErr := s.memories.LookupByContentHash(ctx, ns.ID, hash)
+		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+			errs = append(errs, BatchStoreError{
+				Index:   i,
+				Message: fmt.Sprintf("dedup lookup: %v", lookupErr),
+			})
+			continue
+		}
+		if existing != nil {
+			slog.Info("batch_store: dedup hit",
+				"namespace", ns.ID, "index", i, "memory", existing.ID, "hash", hash)
+			seenHashes[hash] = existing.ID
+			continue
+		}
+
 		memID := uuid.New()
 		now := time.Now()
 
@@ -130,11 +163,11 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 		if item.Source != "" {
 			source = &item.Source
 		}
-
 		mem := &model.Memory{
 			ID:          memID,
 			NamespaceID: ns.ID,
 			Content:     item.Content,
+			ContentHash: hash,
 			Source:      source,
 			Tags:        item.Tags,
 			Confidence:  1.0,
@@ -147,13 +180,14 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 
 		// Persist the memory.
 		if err := s.memories.Create(ctx, mem); err != nil {
-			errors = append(errors, BatchStoreError{
+			errs = append(errs, BatchStoreError{
 				Index:   i,
 				Message: fmt.Sprintf("failed to create memory: %v", err),
 			})
 			continue
 		}
 
+		seenHashes[hash] = memID
 		memoriesCreated++
 
 		// Create ingestion log for this item.
@@ -188,7 +222,7 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 	return &BatchStoreResponse{
 		Processed:       len(req.Items),
 		MemoriesCreated: memoriesCreated,
-		Errors:          errors,
+		Errors:          errs,
 		LatencyMs:       latency,
 	}, nil
 }

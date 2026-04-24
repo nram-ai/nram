@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -54,6 +55,22 @@ func (m *mockMemoryRepoWithContent) GetByID(_ context.Context, id uuid.UUID) (*m
 		return nil, errors.New("not found")
 	}
 	return mem, nil
+}
+
+func (m *mockMemoryRepoWithContent) LookupByContentHash(_ context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error) {
+	for _, mem := range m.memories {
+		if mem.NamespaceID != namespaceID {
+			continue
+		}
+		memHash := mem.ContentHash
+		if memHash == "" {
+			memHash = storage.HashContent(mem.Content)
+		}
+		if memHash == hash {
+			return mem, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 // trackingMemoryDeleter wraps the real deletion operations but records which

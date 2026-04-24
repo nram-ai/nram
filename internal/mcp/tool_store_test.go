@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -616,6 +617,10 @@ func (m *mockMemoryRepo) Create(_ context.Context, mem *model.Memory) error {
 
 func (m *mockMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
 	return &model.Memory{ID: id}, nil
+}
+
+func (m *mockMemoryRepo) LookupByContentHash(_ context.Context, _ uuid.UUID, _ string) (*model.Memory, error) {
+	return nil, sql.ErrNoRows
 }
 
 type mockProjectLookup struct {

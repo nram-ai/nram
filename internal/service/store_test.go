@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // mockEmbeddingProvider is shared by extract, recall, and update service
@@ -53,6 +55,22 @@ func (m *mockMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory
 		}
 	}
 	return nil, fmt.Errorf("not found")
+}
+
+func (m *mockMemoryRepo) LookupByContentHash(_ context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error) {
+	for _, mem := range m.created {
+		if mem.NamespaceID != namespaceID {
+			continue
+		}
+		memHash := mem.ContentHash
+		if memHash == "" {
+			memHash = storage.HashContent(mem.Content)
+		}
+		if memHash == hash {
+			return mem, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 type mockProjectRepo struct {

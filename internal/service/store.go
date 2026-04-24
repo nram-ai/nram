@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +27,7 @@ func bestEmbeddingDimension(providerDims []int) int {
 type MemoryRepository interface {
 	Create(ctx context.Context, mem *model.Memory) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	LookupByContentHash(ctx context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error)
 }
 
 // ProjectRepository defines the project lookup operations needed by the store service.
@@ -157,6 +161,37 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 		expiresAt = &t
 	}
 
+	// Exact-content dedup: if a live row in this namespace already has the same
+	// content, return its ID instead of inserting a duplicate. The check is
+	// best-effort; the underlying index is non-unique, so a concurrent racer
+	// with identical content can still produce a duplicate. Operator-side merge
+	// is a separate tool.
+	contentHash := storage.HashContent(req.Content)
+	existing, err := s.memories.LookupByContentHash(ctx, ns.ID, contentHash)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("dedup lookup: %w", err)
+	}
+	if existing != nil {
+		slog.Info("store: dedup hit",
+			"namespace", ns.ID, "memory", existing.ID, "hash", contentHash)
+		latency := time.Since(start).Milliseconds()
+		tags := existing.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		return &StoreResponse{
+			ID:               existing.ID,
+			ProjectID:        project.ID,
+			ProjectSlug:      project.Slug,
+			Path:             ns.Path,
+			Content:          existing.Content,
+			Tags:             tags,
+			Enriched:         existing.Enriched,
+			EnrichmentQueued: false,
+			LatencyMs:        latency,
+		}, nil
+	}
+
 	// Build memory model.
 	memID := uuid.New()
 	now := time.Now()
@@ -164,11 +199,11 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 	if req.Source != "" {
 		source = &req.Source
 	}
-
 	mem := &model.Memory{
 		ID:          memID,
 		NamespaceID: ns.ID,
 		Content:     req.Content,
+		ContentHash: contentHash,
 		Source:      source,
 		Tags:        req.Tags,
 		Confidence:  1.0,

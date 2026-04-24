@@ -598,11 +598,15 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// applied later — diversification needs the full passing set to group over.
 	var passing []RecallResult
 	for _, c := range candidates {
-		// Skip dream syntheses demoted by the novelty audit.
+		// Confidence-zero is the explicit kill signal regardless of source. The
+		// pruning phase will soft-delete the row after the 7d grace window, but
+		// recall stops surfacing it immediately.
+		if c.memory.Confidence == 0 {
+			continue
+		}
+		// isLowNovelty stays gated on dream-source because the metadata key is
+		// only written by the dream novelty audit.
 		if c.memory.Source != nil && *c.memory.Source == model.DreamSource {
-			if c.memory.Confidence == 0 {
-				continue
-			}
 			if isLowNovelty(c.memory.Metadata) {
 				continue
 			}

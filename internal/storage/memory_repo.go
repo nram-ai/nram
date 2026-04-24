@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -11,6 +13,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 )
+
+// HashContent returns the canonical sha256 hex digest used for exact-content
+// dedup at ingest. Callers that want to look up potential duplicates without
+// going through Create can use this directly.
+func HashContent(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
 
 // MemoryRepo provides CRUD operations for the memories table.
 type MemoryRepo struct {
@@ -82,6 +92,15 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 		supersededBy = mem.SupersededBy.String()
 	}
 
+	var supersededAt interface{}
+	if mem.SupersededAt != nil {
+		supersededAt = mem.SupersededAt.UTC().Format(time.RFC3339)
+	}
+
+	if mem.ContentHash == "" {
+		mem.ContentHash = HashContent(mem.Content)
+	}
+
 	var purgeAfter interface{}
 	if mem.PurgeAfter != nil {
 		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
@@ -91,21 +110,21 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 	createdAtStr := mem.CreatedAt.UTC().Format(time.RFC3339)
 	updatedAtStr := mem.UpdatedAt.UTC().Format(time.RFC3339)
 
-	query := `INSERT INTO memories (id, namespace_id, content, embedding_dim, source, tags,
-		confidence, importance, access_count, last_accessed, expires_at, superseded_by,
+	query := `INSERT INTO memories (id, namespace_id, content, content_hash, embedding_dim, source, tags,
+		confidence, importance, access_count, last_accessed, expires_at, superseded_by, superseded_at,
 		enriched, metadata, purge_after, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO memories (id, namespace_id, content, embedding_dim, source, tags,
-			confidence, importance, access_count, last_accessed, expires_at, superseded_by,
+		query = `INSERT INTO memories (id, namespace_id, content, content_hash, embedding_dim, source, tags,
+			confidence, importance, access_count, last_accessed, expires_at, superseded_by, superseded_at,
 			enriched, metadata, purge_after, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
-		mem.ID.String(), mem.NamespaceID.String(), mem.Content, embeddingDim, source,
-		tagsVal, mem.Confidence, mem.Importance, mem.AccessCount,
-		lastAccessed, expiresAt, supersededBy, enrichedVal, string(mem.Metadata), purgeAfter,
+		mem.ID.String(), mem.NamespaceID.String(), mem.Content, mem.ContentHash,
+		embeddingDim, source, tagsVal, mem.Confidence, mem.Importance, mem.AccessCount,
+		lastAccessed, expiresAt, supersededBy, supersededAt, enrichedVal, string(mem.Metadata), purgeAfter,
 		createdAtStr, updatedAtStr,
 	)
 	if err != nil {
@@ -136,6 +155,92 @@ func (r *MemoryRepo) getByIDIncludeDeleted(ctx context.Context, id uuid.UUID) (*
 
 	row := r.db.QueryRow(ctx, query, id.String())
 	return r.scanMemory(row)
+}
+
+// LookupByContentHash returns the live memory in the namespace that matches the
+// given sha256 content hash, or sql.ErrNoRows if none exists. The index is
+// non-unique (legacy duplicates exist), so LIMIT 1 keeps behavior deterministic.
+func (r *MemoryRepo) LookupByContentHash(ctx context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error) {
+	query := selectMemoryColumns + ` FROM memories
+		WHERE namespace_id = ? AND content_hash = ? AND deleted_at IS NULL
+		ORDER BY created_at ASC LIMIT 1`
+	if r.db.Backend() == BackendPostgres {
+		query = selectMemoryColumns + ` FROM memories
+			WHERE namespace_id = $1 AND content_hash = $2 AND deleted_at IS NULL
+			ORDER BY created_at ASC LIMIT 1`
+	}
+
+	row := r.db.QueryRow(ctx, query, namespaceID.String(), hash)
+	return r.scanMemory(row)
+}
+
+// BackfillContentHashes populates content_hash for up to batchSize live rows
+// where the column is NULL. Returns the number of rows updated. Callers loop
+// until 0 to drain. Idempotent: rows that already have a hash are skipped by
+// the WHERE clause.
+func (r *MemoryRepo) BackfillContentHashes(ctx context.Context, batchSize int) (int, error) {
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+
+	selectQuery := `SELECT id, content FROM memories
+		WHERE content_hash IS NULL AND deleted_at IS NULL
+		LIMIT ?`
+	if r.db.Backend() == BackendPostgres {
+		selectQuery = `SELECT id, content FROM memories
+			WHERE content_hash IS NULL AND deleted_at IS NULL
+			LIMIT $1`
+	}
+
+	rows, err := r.db.Query(ctx, selectQuery, batchSize)
+	if err != nil {
+		return 0, fmt.Errorf("backfill select: %w", err)
+	}
+
+	type pending struct {
+		id      string
+		content string
+	}
+	var batch []pending
+	for rows.Next() {
+		var p pending
+		if err := rows.Scan(&p.id, &p.content); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("backfill scan: %w", err)
+		}
+		batch = append(batch, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("backfill iter: %w", err)
+	}
+	if len(batch) == 0 {
+		return 0, nil
+	}
+
+	updateQuery := `UPDATE memories SET content_hash = ?
+		WHERE id = ? AND content_hash IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		updateQuery = `UPDATE memories SET content_hash = $1
+			WHERE id = $2 AND content_hash IS NULL`
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("backfill begin: %w", err)
+	}
+	processed := 0
+	for _, p := range batch {
+		if _, err := tx.ExecContext(ctx, updateQuery, HashContent(p.content), p.id); err != nil {
+			_ = tx.Rollback()
+			return processed, fmt.Errorf("backfill update %s: %w", p.id, err)
+		}
+		processed++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("backfill commit: %w", err)
+	}
+	return processed, nil
 }
 
 // uuidPlaceholders returns N placeholders and stringified UUIDs for an IN-list.
@@ -429,6 +534,14 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 		supersededBy = mem.SupersededBy.String()
 	}
 
+	var supersededAt interface{}
+	if mem.SupersededAt != nil {
+		supersededAt = mem.SupersededAt.UTC().Format(time.RFC3339)
+	}
+
+	// Recompute content hash on update so in-place content edits stay truthful.
+	mem.ContentHash = HashContent(mem.Content)
+
 	var purgeAfter interface{}
 	if mem.PurgeAfter != nil {
 		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
@@ -436,23 +549,23 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 
 	enrichedVal := encodeBool(r.db.Backend(), mem.Enriched)
 
-	query := `UPDATE memories SET content = ?, embedding_dim = ?, source = ?, tags = ?,
+	query := `UPDATE memories SET content = ?, content_hash = ?, embedding_dim = ?, source = ?, tags = ?,
 		confidence = ?, importance = ?, access_count = ?, last_accessed = ?,
-		expires_at = ?, superseded_by = ?, enriched = ?, metadata = ?,
+		expires_at = ?, superseded_by = ?, superseded_at = ?, enriched = ?, metadata = ?,
 		purge_after = ?, updated_at = ?
 		WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE memories SET content = $1, embedding_dim = $2, source = $3, tags = $4,
-			confidence = $5, importance = $6, access_count = $7, last_accessed = $8,
-			expires_at = $9, superseded_by = $10, enriched = $11, metadata = $12,
-			purge_after = $13, updated_at = $14
-			WHERE id = $15 AND namespace_id = $16 AND deleted_at IS NULL`
+		query = `UPDATE memories SET content = $1, content_hash = $2, embedding_dim = $3, source = $4, tags = $5,
+			confidence = $6, importance = $7, access_count = $8, last_accessed = $9,
+			expires_at = $10, superseded_by = $11, superseded_at = $12, enriched = $13, metadata = $14,
+			purge_after = $15, updated_at = $16
+			WHERE id = $17 AND namespace_id = $18 AND deleted_at IS NULL`
 	}
 
 	result, err := r.db.Exec(ctx, query,
-		mem.Content, embeddingDim, source, tagsVal,
+		mem.Content, mem.ContentHash, embeddingDim, source, tagsVal,
 		mem.Confidence, mem.Importance, mem.AccessCount, lastAccessed,
-		expiresAt, supersededBy, enrichedVal, string(mem.Metadata),
+		expiresAt, supersededBy, supersededAt, enrichedVal, string(mem.Metadata),
 		purgeAfter, now, mem.ID.String(), mem.NamespaceID.String(),
 	)
 	if err != nil {
@@ -777,7 +890,7 @@ func (r *MemoryRepo) reload(ctx context.Context, mem *model.Memory) error {
 
 const selectMemoryColumns = `SELECT id, namespace_id, content, embedding_dim, source, tags,
 	confidence, importance, access_count, last_accessed, expires_at, superseded_by,
-	enriched, metadata, created_at, updated_at, deleted_at, purge_after`
+	superseded_at, enriched, metadata, content_hash, created_at, updated_at, deleted_at, purge_after`
 
 func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 	var mem model.Memory
@@ -787,14 +900,14 @@ func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 	var embeddingDim sql.NullInt64
 	var source sql.NullString
 	var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
-	var supersededByStr sql.NullString
+	var supersededByStr, supersededAtStr, contentHashStr sql.NullString
 	var enrichedBool bool
 
 	err := row.Scan(
 		&idStr, &namespaceIDStr, &mem.Content, &embeddingDim, &source, &tagsStr,
 		&mem.Confidence, &mem.Importance, &mem.AccessCount, &lastAccessedStr,
-		&expiresAtStr, &supersededByStr, &enrichedBool, &metadataStr,
-		&createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
+		&expiresAtStr, &supersededByStr, &supersededAtStr, &enrichedBool, &metadataStr,
+		&contentHashStr, &createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
 	)
 	if err != nil {
 		return nil, err
@@ -802,7 +915,8 @@ func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 
 	return r.populateMemory(&mem, idStr, namespaceIDStr, tagsStr, metadataStr,
 		createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
-		expiresAtStr, supersededByStr, enrichedBool, deletedAtStr, purgeAfterStr)
+		expiresAtStr, supersededByStr, supersededAtStr, contentHashStr,
+		enrichedBool, deletedAtStr, purgeAfterStr)
 }
 
 func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
@@ -813,14 +927,14 @@ func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
 	var embeddingDim sql.NullInt64
 	var source sql.NullString
 	var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
-	var supersededByStr sql.NullString
+	var supersededByStr, supersededAtStr, contentHashStr sql.NullString
 	var enrichedBool bool
 
 	err := rows.Scan(
 		&idStr, &namespaceIDStr, &mem.Content, &embeddingDim, &source, &tagsStr,
 		&mem.Confidence, &mem.Importance, &mem.AccessCount, &lastAccessedStr,
-		&expiresAtStr, &supersededByStr, &enrichedBool, &metadataStr,
-		&createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
+		&expiresAtStr, &supersededByStr, &supersededAtStr, &enrichedBool, &metadataStr,
+		&contentHashStr, &createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("memory scan rows: %w", err)
@@ -828,14 +942,15 @@ func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
 
 	return r.populateMemory(&mem, idStr, namespaceIDStr, tagsStr, metadataStr,
 		createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
-		expiresAtStr, supersededByStr, enrichedBool, deletedAtStr, purgeAfterStr)
+		expiresAtStr, supersededByStr, supersededAtStr, contentHashStr,
+		enrichedBool, deletedAtStr, purgeAfterStr)
 }
 
 func (r *MemoryRepo) populateMemory(
 	mem *model.Memory,
 	idStr, namespaceIDStr, tagsStr, metadataStr, createdAtStr, updatedAtStr string,
 	embeddingDim sql.NullInt64,
-	source, lastAccessedStr, expiresAtStr, supersededByStr sql.NullString,
+	source, lastAccessedStr, expiresAtStr, supersededByStr, supersededAtStr, contentHashStr sql.NullString,
 	enrichedBool bool,
 	deletedAtStr, purgeAfterStr sql.NullString,
 ) (*model.Memory, error) {
@@ -906,6 +1021,18 @@ func (r *MemoryRepo) populateMemory(
 			return nil, fmt.Errorf("memory parse superseded_by: %w", err)
 		}
 		mem.SupersededBy = &u
+	}
+
+	if supersededAtStr.Valid {
+		t, err := time.Parse(time.RFC3339, supersededAtStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("memory parse superseded_at: %w", err)
+		}
+		mem.SupersededAt = &t
+	}
+
+	if contentHashStr.Valid {
+		mem.ContentHash = contentHashStr.String
 	}
 
 	if deletedAtStr.Valid {

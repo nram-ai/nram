@@ -20,8 +20,10 @@ type Memory struct {
 	LastAccessed *time.Time      `json:"last_accessed"`
 	ExpiresAt    *time.Time      `json:"expires_at"`
 	SupersededBy *uuid.UUID      `json:"superseded_by"`
+	SupersededAt *time.Time      `json:"superseded_at"`
 	Enriched     bool            `json:"enriched"`
 	Metadata     json.RawMessage `json:"metadata"`
+	ContentHash  string          `json:"content_hash,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
 	DeletedAt    *time.Time      `json:"deleted_at"`

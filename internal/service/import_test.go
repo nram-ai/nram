@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- Import-specific mock with create error support ---
@@ -36,6 +38,22 @@ func (m *mockMemoryRepoForImport) GetByID(_ context.Context, id uuid.UUID) (*mod
 		}
 	}
 	return nil, fmt.Errorf("not found")
+}
+
+func (m *mockMemoryRepoForImport) LookupByContentHash(_ context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error) {
+	for _, mem := range m.created {
+		if mem.NamespaceID != namespaceID {
+			continue
+		}
+		memHash := mem.ContentHash
+		if memHash == "" {
+			memHash = storage.HashContent(mem.Content)
+		}
+		if memHash == hash {
+			return mem, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 // --- Helper to build standard test fixtures ---

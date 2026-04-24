@@ -26,6 +26,14 @@ const (
 	defaultConfidenceFloor = 0.05
 )
 
+// Prune reasons emitted by shouldPrune. Logged and surfaced upstream; pin them
+// as constants so the strings stay refactor-safe.
+const (
+	pruneReasonSuperseded     = "superseded_no_access"
+	pruneReasonZeroConfidence = "zero_confidence"
+	pruneReasonLowConfidence  = "low_confidence_dream"
+)
+
 // PruningPhase removes low-value content from the knowledge graph:
 // - Decays confidence of memories untouched beyond a threshold (if enabled)
 // - Soft-deletes superseded memories with zero access since supersession
@@ -209,18 +217,28 @@ func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.Drea
 }
 
 func (p *PruningPhase) shouldPrune(mem *model.Memory, now time.Time) (bool, string) {
-	// Superseded memories with zero access since they were superseded.
+	// Superseded memories with zero access since they were superseded. The
+	// supersede clock reads SupersededAt so unrelated row touches that bump
+	// UpdatedAt do not reset the 7d countdown. UpdatedAt is the fallback for
+	// rows that predate the SupersededAt column.
 	if mem.SupersededBy != nil && mem.AccessCount == 0 {
-		// Only prune if superseded for at least 7 days.
-		if now.Sub(mem.UpdatedAt) > 7*24*time.Hour {
-			return true, "superseded_no_access"
+		since := mem.UpdatedAt
+		if mem.SupersededAt != nil {
+			since = *mem.SupersededAt
+		}
+		if now.Sub(since) > 7*24*time.Hour {
+			return true, pruneReasonSuperseded
 		}
 	}
 
-	// Very low confidence dream-originated memories older than 30 days.
+	// Hard zero-confidence is the explicit kill signal regardless of source.
+	if mem.Confidence == 0 && now.Sub(mem.UpdatedAt) > 7*24*time.Hour {
+		return true, pruneReasonZeroConfidence
+	}
+
 	src := model.MemorySource(mem)
 	if src == model.DreamSource && mem.Confidence < 0.1 && now.Sub(mem.CreatedAt) > 30*24*time.Hour {
-		return true, "low_confidence_dream"
+		return true, pruneReasonLowConfidence
 	}
 
 	return false, ""

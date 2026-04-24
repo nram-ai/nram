@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1214,6 +1215,25 @@ func (m *nsAwareMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Mem
 		return nil, fmt.Errorf("not found")
 	}
 	return mem, nil
+}
+
+func (m *nsAwareMemoryRepo) LookupByContentHash(_ context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, mem := range m.memories {
+		if mem.NamespaceID != namespaceID {
+			continue
+		}
+		memHash := mem.ContentHash
+		if memHash == "" {
+			memHash = storage.HashContent(mem.Content)
+		}
+		if memHash == hash {
+			clone := *mem
+			return &clone, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (m *nsAwareMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
@@ -3897,12 +3917,12 @@ func TestHTTPStack_MCP_StoreDuplicateContent(t *testing.T) {
 		t.Fatalf("unmarshal 2: %v", err)
 	}
 
-	// Verify different IDs.
-	if storeResp1.ID == storeResp2.ID {
-		t.Error("expected different IDs for duplicate content, got same")
+	// Dedup hit: same ID returned for identical content in the same namespace.
+	if storeResp1.ID != storeResp2.ID {
+		t.Errorf("expected dedup to return same ID, got %s and %s", storeResp1.ID, storeResp2.ID)
 	}
 
-	// Recall — should return both.
+	// Recall — only one row exists, so only one result.
 	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
 		"name": "memory_recall",
 		"arguments": map[string]interface{}{
@@ -3919,8 +3939,8 @@ func TestHTTPStack_MCP_StoreDuplicateContent(t *testing.T) {
 	if err := json.Unmarshal([]byte(recallText), &recallResp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(recallResp.Memories) != 2 {
-		t.Errorf("expected 2 memories for duplicate content, got %d", len(recallResp.Memories))
+	if len(recallResp.Memories) != 1 {
+		t.Errorf("expected 1 memory after dedup, got %d", len(recallResp.Memories))
 	}
 }
 

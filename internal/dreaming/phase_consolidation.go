@@ -433,8 +433,10 @@ func (p *ConsolidationPhase) supersedeOriginals(
 			continue
 		}
 
+		now := time.Now().UTC()
 		original.SupersededBy = &synthesis.ID
-		original.UpdatedAt = time.Now().UTC()
+		original.SupersededAt = &now
+		original.UpdatedAt = now
 		if err := p.memWriter.Update(ctx, original); err != nil {
 			slog.Warn("dreaming: supersession update failed", "memory", memID, "err", err)
 			continue

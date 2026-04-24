@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -87,6 +88,25 @@ func (m *rbacMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory
 	}
 	clone := *mem
 	return &clone, nil
+}
+
+func (m *rbacMemoryRepo) LookupByContentHash(_ context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, mem := range m.memories {
+		if mem.NamespaceID != namespaceID {
+			continue
+		}
+		memHash := mem.ContentHash
+		if memHash == "" {
+			memHash = storage.HashContent(mem.Content)
+		}
+		if memHash == hash {
+			clone := *mem
+			return &clone, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (m *rbacMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {

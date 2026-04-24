@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -172,6 +173,25 @@ func (m *e2eMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory,
 	}
 	clone := *mem
 	return &clone, nil
+}
+
+func (m *e2eMemoryRepo) LookupByContentHash(_ context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, mem := range m.memories {
+		if mem.NamespaceID != namespaceID {
+			continue
+		}
+		memHash := mem.ContentHash
+		if memHash == "" {
+			memHash = storage.HashContent(mem.Content)
+		}
+		if memHash == hash {
+			clone := *mem
+			return &clone, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (m *e2eMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {

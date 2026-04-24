@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- Batch-specific mock helpers ---
@@ -36,6 +38,22 @@ func (m *mockMemoryRepoWithFailures) GetByID(_ context.Context, id uuid.UUID) (*
 		}
 	}
 	return nil, fmt.Errorf("not found")
+}
+
+func (m *mockMemoryRepoWithFailures) LookupByContentHash(_ context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error) {
+	for _, mem := range m.created {
+		if mem.NamespaceID != namespaceID {
+			continue
+		}
+		memHash := mem.ContentHash
+		if memHash == "" {
+			memHash = storage.HashContent(mem.Content)
+		}
+		if memHash == hash {
+			return mem, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func newBatchTestService(

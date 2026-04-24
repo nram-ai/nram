@@ -3,14 +3,18 @@ package service
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // ImportFormat defines the source format for data import.
@@ -151,6 +155,27 @@ func (s *ImportService) Import(ctx context.Context, req *ImportRequest) (*Import
 			continue
 		}
 
+		hash := storage.HashContent(item.Content)
+
+		// Skip imports whose content already exists in the namespace. The
+		// importer is the most likely producer of duplicates because operators
+		// re-run imports with overlapping data.
+		existing, lookupErr := s.memories.LookupByContentHash(ctx, ns.ID, hash)
+		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+			resp.Skipped++
+			resp.Errors = append(resp.Errors, ImportError{
+				Index:   i,
+				Message: fmt.Sprintf("dedup lookup: %v", lookupErr),
+			})
+			continue
+		}
+		if existing != nil {
+			slog.Info("import: dedup hit",
+				"namespace", ns.ID, "index", i, "memory", existing.ID, "hash", hash)
+			resp.Skipped++
+			continue
+		}
+
 		memID := uuid.New()
 		now := time.Now()
 
@@ -168,11 +193,11 @@ func (s *ImportService) Import(ctx context.Context, req *ImportRequest) (*Import
 		if importance <= 0 {
 			importance = 0.5
 		}
-
 		mem := &model.Memory{
 			ID:          memID,
 			NamespaceID: ns.ID,
 			Content:     item.Content,
+			ContentHash: hash,
 			Source:      item.Source,
 			Tags:        item.Tags,
 			Confidence:  confidence,

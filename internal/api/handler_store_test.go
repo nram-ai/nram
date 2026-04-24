@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- mock repositories ---
@@ -37,6 +39,12 @@ func (m *mockMemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Memo
 	}
 	return &model.Memory{ID: id}, nil
 }
+
+func (m *mockMemoryRepo) LookupByContentHash(_ context.Context, _ uuid.UUID, _ string) (*model.Memory, error) {
+	return nil, sql.ErrNoRows
+}
+
+var _ = storage.HashContent // ensure storage import is referenced even if dedup hit never asserted in this file
 
 type mockProjectRepo struct {
 	project *model.Project

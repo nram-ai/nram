@@ -37,6 +37,7 @@ func assertNoNullCollections(t *testing.T, body string) {
 		"last_accessed": true,
 		"expires_at":    true,
 		"superseded_by": true,
+		"superseded_at": true,
 		"deleted_at":    true,
 		"purge_after":   true,
 		"embedding_dim": true,
