@@ -162,7 +162,7 @@ func TestAuditNovelty_EmbedHighSim_AutoReject(t *testing.T) {
 	phase := newAuditPhase(emb, llm, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, err := phase.auditNovelty(context.Background(), llm, "candidate", []model.Memory{src})
+	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestAuditNovelty_EmbedLowSim_AutoAccept(t *testing.T) {
 	phase := newAuditPhase(emb, llm, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, err := phase.auditNovelty(context.Background(), llm, "candidate", []model.Memory{src})
+	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestAuditNovelty_BorderlineJudgePass(t *testing.T) {
 	phase := newAuditPhase(emb, llm, settings, &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, err := phase.auditNovelty(context.Background(), llm, "candidate", []model.Memory{src})
+	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestAuditNovelty_BorderlineJudgeFail(t *testing.T) {
 	phase := newAuditPhase(emb, llm, settings, &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, _ := phase.auditNovelty(context.Background(), llm, "candidate", []model.Memory{src})
+	passed, reason, usage, _, _ := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
 	if passed {
 		t.Fatalf("expected reject when judge returns empty novel_facts, got pass")
 	}
@@ -263,7 +263,7 @@ func TestAuditNovelty_EmbedError_FailClosed(t *testing.T) {
 	phase := newAuditPhase(emb, llm, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, _, err := phase.auditNovelty(context.Background(), llm, "candidate", []model.Memory{src})
+	passed, reason, _, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
 	if passed {
 		t.Fatalf("embedding error must fail closed (reject), got pass")
 	}
@@ -289,7 +289,7 @@ func TestAuditNovelty_JudgeParseError_FailClosed(t *testing.T) {
 	phase := newAuditPhase(emb, llm, settings, &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}
-	passed, reason, usage, err := phase.auditNovelty(context.Background(), llm, "candidate", []model.Memory{src})
+	passed, reason, usage, _, err := phase.auditNovelty(context.Background(), llm, nil, "candidate", []model.Memory{src})
 	if passed {
 		t.Fatalf("parse error must fail closed (reject), got pass")
 	}
@@ -306,7 +306,7 @@ func TestAuditNovelty_JudgeParseError_FailClosed(t *testing.T) {
 
 func TestAuditNovelty_NoSources_Rejected(t *testing.T) {
 	phase := newAuditPhase(nil, &scriptedJudgeLLM{}, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
-	passed, reason, _, _ := phase.auditNovelty(context.Background(), &scriptedJudgeLLM{}, "candidate", nil)
+	passed, reason, _, _, _ := phase.auditNovelty(context.Background(), &scriptedJudgeLLM{}, nil, "candidate", nil)
 	if passed {
 		t.Fatalf("audit with zero sources cannot verify novelty and must reject")
 	}

@@ -43,6 +43,7 @@ const (
 	DreamOpRelationshipExpired   = "relationship_expired"
 	DreamOpMemoryRejected        = "memory_rejected"
 	DreamOpMemoryDemoted         = "memory_demoted"
+	DreamOpPhaseSummary          = "phase_summary"
 )
 
 // MemorySource returns the source string for a memory, or empty string if nil.

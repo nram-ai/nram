@@ -86,8 +86,9 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		}
 
 		if budget.Exhausted() {
-			slog.Info("dreaming: budget exhausted, stopping pipeline",
-				"cycle", cycle.ID, "used", budget.Used(), "total", budget.Total())
+			slog.Info("dreaming: phase skipped, budget exhausted",
+				"phase", phase.Name(), "cycle", cycle.ID,
+				"used", budget.Used(), "total", budget.Total())
 			summaries = append(summaries, PhaseSummaryEntry{
 				Phase:   phase.Name(),
 				Skipped: true,
