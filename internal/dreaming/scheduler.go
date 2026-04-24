@@ -150,6 +150,15 @@ func (s *Scheduler) poll(ctx context.Context) {
 			return
 		}
 
+		// Re-check the global enable flag between projects so operators
+		// can quiesce the scheduler mid-poll ahead of a deploy without
+		// having to wait out every dirty project started by this poll.
+		enabledStr, _ := s.settings.Resolve(ctx, service.SettingDreamingEnabled, "global")
+		if enabledStr != "true" && enabledStr != "1" {
+			slog.Info("dreaming: disabled mid-poll, stopping scheduler loop")
+			return
+		}
+
 		if ctx.Err() != nil {
 			return
 		}
