@@ -13,6 +13,7 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
 
@@ -1096,7 +1097,7 @@ func (p *ConsolidationPhase) auditNovelty(
 		}
 		resp, embErr := embedder.Embed(ctx, &provider.EmbeddingRequest{
 			Input:     inputs,
-			Dimension: pickEmbedderDim(embedder.Dimensions()),
+			Dimension: storage.BestEmbeddingDimension(embedder.Dimensions()),
 		})
 		if embErr != nil || resp == nil || len(resp.Embeddings) != len(inputs) {
 			return false, "embed_error", nil, 0, embErr
@@ -1173,20 +1174,6 @@ func (p *ConsolidationPhase) auditNovelty(
 		return false, "judge_parse_error", &u, embedTokens, nil
 	}
 	return len(parsed.NovelFacts) > 0, "llm_judge", &u, embedTokens, nil
-}
-
-// pickEmbedderDim returns the largest dimension reported by the provider, or
-// 0 to let the provider use its native default. Audits only need internal
-// consistency between candidate and source vectors, not compatibility with
-// the vector store.
-func pickEmbedderDim(dims []int) int {
-	best := 0
-	for _, d := range dims {
-		if d > best {
-			best = d
-		}
-	}
-	return best
 }
 
 // clusterMemories groups related memories using simple content overlap.

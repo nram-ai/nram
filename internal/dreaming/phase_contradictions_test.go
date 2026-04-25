@@ -1024,8 +1024,11 @@ func TestContradictionPhase_VectorStoreHitsAvoidEmbedding(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	if emb.calls.Load() != 0 {
-		t.Errorf("expected zero embedder calls when every vector is in the store, got %d", emb.calls.Load())
+	// The phase issues one probe call to learn the embedder's actual output
+	// dim before reading from the store; everything beyond that should be
+	// avoided when every vector is already stored.
+	if emb.calls.Load() != 1 {
+		t.Errorf("expected exactly 1 embedder call (dim probe) when every vector is in the store, got %d", emb.calls.Load())
 	}
 	if vs.getCalls == 0 {
 		t.Error("expected at least one GetByIDs call")
@@ -1067,14 +1070,23 @@ func TestContradictionPhase_VectorStoreMissesTriggerEmbed(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	if emb.calls.Load() != 1 {
-		t.Errorf("expected exactly 1 embedder call (one batched miss-set), got %d", emb.calls.Load())
+	// One probe call to learn the dim, plus one batched miss-set call.
+	if emb.calls.Load() != 2 {
+		t.Errorf("expected exactly 2 embedder calls (dim probe + batched miss-set), got %d", emb.calls.Load())
 	}
 	if vs.upsertCalls == 0 {
 		t.Error("expected self-heal UpsertBatch to be called for the miss set")
 	}
 	if len(vs.upsertItems) != 2 {
 		t.Errorf("expected 2 upsert items (one per miss), got %d", len(vs.upsertItems))
+	}
+	// Self-heal must key the upsert on the actual returned vector length, not
+	// on a requested dim that the provider may ignore. This is the regression
+	// guard for the bug where 768-dim vectors were routed into memory_vectors_3072.
+	for i, it := range vs.upsertItems {
+		if it.Dimension != len(it.Embedding) {
+			t.Errorf("upsert item %d: Dimension=%d does not match len(Embedding)=%d", i, it.Dimension, len(it.Embedding))
+		}
 	}
 }
 

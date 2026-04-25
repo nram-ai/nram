@@ -488,13 +488,33 @@ func (p *ContradictionPhase) selectNeighborPairs(
 		embedder = p.embedderProvider()
 	}
 
-	dim := 0
-	if embedder != nil {
-		dim = pickEmbedderDim(embedder.Dimensions())
-	}
-
 	embedTokens := 0
 	var selErr error
+
+	// Probe the embedder to learn the dim it actually returns. Provider
+	// Dimensions() advertises what the model can be configured for, but
+	// OpenAI-compatible endpoints (Ollama, vLLM, local proxies) routinely
+	// ignore the `dimensions` request parameter and emit their native size.
+	// Using the requested dim as the storage key sends short vectors to a
+	// wider table and pgvector rejects the upsert; using the probed dim
+	// matches what the service write path stores via len(vec).
+	dim := 0
+	if embedder != nil {
+		probeResp, probeErr := embedder.Embed(ctx, &provider.EmbeddingRequest{
+			Input: []string{"probe"},
+		})
+		if probeErr != nil || probeResp == nil || len(probeResp.Embeddings) == 0 || len(probeResp.Embeddings[0]) == 0 {
+			slog.Warn("dreaming: embedder dim probe failed; skipping vector-store optimization",
+				"provider", embedder.Name(), "err", probeErr)
+		} else {
+			dim = len(probeResp.Embeddings[0])
+			if probeResp.Usage.TotalTokens > 0 {
+				embedTokens += probeResp.Usage.TotalTokens
+			} else {
+				embedTokens += EstimateTokens("probe")
+			}
+		}
+	}
 
 	// Phase 1: read whatever vectors are already in the store. A missing or
 	// erroring vector store leaves stored=nil and the path falls through to
@@ -568,7 +588,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 						ID:          allMemories[i].ID,
 						NamespaceID: allMemories[i].NamespaceID,
 						Embedding:   resp.Embeddings[j],
-						Dimension:   dim,
+						Dimension:   len(resp.Embeddings[j]),
 					}
 				}
 				if uerr := p.vectorStore.UpsertBatch(ctx, items); uerr != nil {
