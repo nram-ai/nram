@@ -56,6 +56,15 @@ type VectorStore interface {
 	// Search finds the nearest neighbor vectors within a namespace, returning up to topK results.
 	Search(ctx context.Context, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]VectorSearchResult, error)
 
+	// GetByIDs returns the stored embeddings for the given memory IDs at the
+	// specified dimension. Missing IDs (no stored vector at this dimension)
+	// are simply absent from the returned map; this is not an error. Callers
+	// treat the absence as a miss and re-embed at the current dim. Vectors
+	// stored at other dimensions are also absent — there is no cross-dim
+	// retrieval, so a provider switch self-heals on the next pass that runs
+	// at the new dim.
+	GetByIDs(ctx context.Context, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error)
+
 	// Delete removes a vector by its associated memory ID.
 	Delete(ctx context.Context, id uuid.UUID) error
 

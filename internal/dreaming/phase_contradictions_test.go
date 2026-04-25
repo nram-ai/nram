@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 type zeroUsageLLM struct {
@@ -894,5 +896,414 @@ func TestContradictionPhase_LowConfidenceWinnerNoSupersede(t *testing.T) {
 	}
 	if loser.SupersededBy != nil {
 		t.Errorf("expected SupersededBy nil for low-confidence winner; got %s", *loser.SupersededBy)
+	}
+}
+
+// --- vector-store-first contradiction phase tests ---
+
+// fakeContradictionVectorStore is a flexible double for the
+// vector-store-first selectNeighborPairs path. Tests seed vectorsByID with
+// the embeddings they want the phase to read, optionally set getErr /
+// searchErr to drive failure paths, and inspect the recorded calls.
+type fakeContradictionVectorStore struct {
+	vectorsByID map[uuid.UUID][]float32
+	getErr      error
+	searchErr   error
+
+	getCalls    int
+	upsertCalls int
+	upsertItems []storage.VectorUpsertItem
+	deleteCalls int
+	deleted     []uuid.UUID
+	searchCalls int
+}
+
+func (f *fakeContradictionVectorStore) Upsert(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ []float32, _ int) error {
+	return nil
+}
+func (f *fakeContradictionVectorStore) UpsertBatch(_ context.Context, items []storage.VectorUpsertItem) error {
+	f.upsertCalls++
+	f.upsertItems = append(f.upsertItems, items...)
+	if f.vectorsByID == nil {
+		f.vectorsByID = make(map[uuid.UUID][]float32, len(items))
+	}
+	for _, it := range items {
+		cp := make([]float32, len(it.Embedding))
+		copy(cp, it.Embedding)
+		f.vectorsByID[it.ID] = cp
+	}
+	return nil
+}
+func (f *fakeContradictionVectorStore) Search(_ context.Context, _ []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
+	f.searchCalls++
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
+	// Tests that exercise the Search path care only that it runs and that
+	// the count is observable; downstream candidate selection works equally
+	// well from the in-process top-K fallback the empty result triggers.
+	return nil, nil
+}
+func (f *fakeContradictionVectorStore) GetByIDs(_ context.Context, ids []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
+	f.getCalls++
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	out := make(map[uuid.UUID][]float32, len(ids))
+	for _, id := range ids {
+		if v, ok := f.vectorsByID[id]; ok {
+			cp := make([]float32, len(v))
+			copy(cp, v)
+			out[id] = cp
+		}
+	}
+	return out, nil
+}
+func (f *fakeContradictionVectorStore) Delete(_ context.Context, id uuid.UUID) error {
+	f.deleteCalls++
+	f.deleted = append(f.deleted, id)
+	return nil
+}
+func (f *fakeContradictionVectorStore) Ping(_ context.Context) error { return nil }
+
+// paraphraseSettings returns a settings stub that turns paraphrase fast-path
+// on at the configured threshold and supplies the contradiction prompt
+// template the phase fmt.Sprintfs onto pair contents. Threshold defaults
+// to 0.97 to mirror the production default.
+func paraphraseSettings(enabled bool, threshold float64) *staticDreamSettings {
+	values := map[string]string{
+		service.SettingDreamContradictionPrompt: "Compare:\nA: %s\nB: %s\nReturn JSON.",
+	}
+	if enabled {
+		values[service.SettingDreamContradictionParaphraseEnabled] = "true"
+	}
+	floats := map[string]float64{
+		service.SettingDreamContradictionParaphraseThreshold: threshold,
+		service.SettingDreamContradictionLoserHaircut:        0.85,
+		service.SettingDreamContradictionWinnerHaircut:       0.97,
+		service.SettingDreamContradictionTieHaircut:          0.92,
+		service.SettingDreamSupersessionThreshold:            0.85,
+	}
+	return &staticDreamSettings{values: values, floats: floats, ints: map[string]int{}}
+}
+
+// vectorOffsetAt produces a unit-direction vector that points along axis
+// `axis`, used to drive cosine similarity ≈ 0 between memories so the
+// paraphrase fast-path does NOT trigger (every off-axis pair is orthogonal).
+func vectorOffsetAt(dim, axis int) []float32 {
+	v := make([]float32, dim)
+	v[axis%dim] = 1.0
+	return v
+}
+
+func TestContradictionPhase_VectorStoreHitsAvoidEmbedding(t *testing.T) {
+	mems := makeMemories(4)
+	dim := 4
+	vs := &fakeContradictionVectorStore{vectorsByID: map[uuid.UUID][]float32{}}
+	for i := range mems {
+		vs.vectorsByID[mems[i].ID] = vectorOffsetAt(dim, i)
+	}
+	emb := &staticEmbedder{vectors: [][]float32{vectorOffsetAt(dim, 0)}}
+	llm := &zeroUsageLLM{}
+
+	phase := NewContradictionPhase(
+		&fakeMemoryReader{list: mems},
+		&updatingMemoryWriter{},
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return emb },
+		paraphraseSettings(false, 0.97), // disabled — exercise only the read path
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+	phase.AttachVectorStore(vs)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1_000_000, 2048),
+		NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if emb.calls.Load() != 0 {
+		t.Errorf("expected zero embedder calls when every vector is in the store, got %d", emb.calls.Load())
+	}
+	if vs.getCalls == 0 {
+		t.Error("expected at least one GetByIDs call")
+	}
+	if vs.upsertCalls != 0 {
+		t.Errorf("expected zero self-heal upserts when no misses, got %d", vs.upsertCalls)
+	}
+}
+
+func TestContradictionPhase_VectorStoreMissesTriggerEmbed(t *testing.T) {
+	mems := makeMemories(4)
+	dim := 4
+	vs := &fakeContradictionVectorStore{vectorsByID: map[uuid.UUID][]float32{}}
+	// Half the memories are stored, half are misses.
+	for i := 0; i < 2; i++ {
+		vs.vectorsByID[mems[i].ID] = vectorOffsetAt(dim, i)
+	}
+	emb := &staticEmbedder{vectors: [][]float32{
+		vectorOffsetAt(dim, 2),
+		vectorOffsetAt(dim, 3),
+	}}
+	llm := &zeroUsageLLM{}
+
+	phase := NewContradictionPhase(
+		&fakeMemoryReader{list: mems},
+		&updatingMemoryWriter{},
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return emb },
+		paraphraseSettings(false, 0.97),
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+	phase.AttachVectorStore(vs)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1_000_000, 2048),
+		NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if emb.calls.Load() != 1 {
+		t.Errorf("expected exactly 1 embedder call (one batched miss-set), got %d", emb.calls.Load())
+	}
+	if vs.upsertCalls == 0 {
+		t.Error("expected self-heal UpsertBatch to be called for the miss set")
+	}
+	if len(vs.upsertItems) != 2 {
+		t.Errorf("expected 2 upsert items (one per miss), got %d", len(vs.upsertItems))
+	}
+}
+
+func TestContradictionPhase_VectorStoreErrorFallsBackToFullEmbed(t *testing.T) {
+	mems := makeMemories(4)
+	dim := 4
+	vs := &fakeContradictionVectorStore{
+		vectorsByID: map[uuid.UUID][]float32{},
+		getErr:      errors.New("vector-store offline"),
+	}
+	emb := &staticEmbedder{vectors: [][]float32{
+		vectorOffsetAt(dim, 0),
+		vectorOffsetAt(dim, 1),
+		vectorOffsetAt(dim, 2),
+		vectorOffsetAt(dim, 3),
+	}}
+	llm := &zeroUsageLLM{}
+
+	phase := NewContradictionPhase(
+		&fakeMemoryReader{list: mems},
+		&updatingMemoryWriter{},
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return emb },
+		paraphraseSettings(false, 0.97),
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+	phase.AttachVectorStore(vs)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1_000_000, 2048),
+		NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if emb.calls.Load() == 0 {
+		t.Error("expected embedder to be called when GetByIDs errors (full re-embed fallback)")
+	}
+	if llm.calls.Load() == 0 {
+		t.Error("expected LLM calls — phase must still emit pairs after store failure")
+	}
+}
+
+func TestContradictionPhase_ParaphraseAutoSupersede(t *testing.T) {
+	mems := makeMemories(2)
+	mems[0].Confidence = 0.9
+	mems[1].Confidence = 0.5
+	dim := 4
+	dup := vectorOffsetAt(dim, 0) // both vectors identical → cosine = 1.0
+	vs := &fakeContradictionVectorStore{
+		vectorsByID: map[uuid.UUID][]float32{
+			mems[0].ID: dup,
+			mems[1].ID: dup,
+		},
+	}
+	emb := &staticEmbedder{vectors: [][]float32{dup}}
+	llm := &decidingLLM{winner: WinnerSideA} // would also be reached if fast-path skipped
+
+	writer := &updatingMemoryWriter{}
+	phase := NewContradictionPhase(
+		&fakeMemoryReader{list: mems},
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return emb },
+		paraphraseSettings(true, 0.97),
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+	phase.AttachVectorStore(vs)
+	phase.AttachVectorPurger(vs)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1_000_000, 2048),
+		NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if llm.calls.Load() != 0 {
+		t.Errorf("expected LLM judge skipped on paraphrase fast-path, got %d calls", llm.calls.Load())
+	}
+
+	// The lower-confidence side (mems[1]) must be the loser.
+	loser := findUpdate(writer.updates, mems[1].ID)
+	if loser == nil {
+		t.Fatalf("expected update for loser memory %s", mems[1].ID)
+	}
+	if loser.SupersededBy == nil {
+		t.Fatal("expected loser.SupersededBy to be set")
+	}
+	if *loser.SupersededBy != mems[0].ID {
+		t.Errorf("loser.SupersededBy = %s, want winner %s", *loser.SupersededBy, mems[0].ID)
+	}
+	if loser.SupersededAt == nil {
+		t.Error("expected loser.SupersededAt to be set")
+	}
+
+	if vs.deleteCalls == 0 || vs.deleted[0] != mems[1].ID {
+		t.Errorf("expected vector purger Delete on loser %s, got deletes=%v", mems[1].ID, vs.deleted)
+	}
+}
+
+func TestContradictionPhase_ParaphraseDisabledKeepsLLMPath(t *testing.T) {
+	mems := makeMemories(2)
+	mems[0].Confidence = 0.9
+	mems[1].Confidence = 0.5
+	dim := 4
+	dup := vectorOffsetAt(dim, 0)
+	vs := &fakeContradictionVectorStore{
+		vectorsByID: map[uuid.UUID][]float32{
+			mems[0].ID: dup,
+			mems[1].ID: dup,
+		},
+	}
+	emb := &staticEmbedder{vectors: [][]float32{dup}}
+	llm := &decidingLLM{winner: WinnerSideA}
+
+	phase := NewContradictionPhase(
+		&fakeMemoryReader{list: mems},
+		&updatingMemoryWriter{},
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return emb },
+		paraphraseSettings(false, 0.97),
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+	phase.AttachVectorStore(vs)
+	phase.AttachVectorPurger(vs)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1_000_000, 2048),
+		NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if llm.calls.Load() == 0 {
+		t.Error("expected LLM judge to run when paraphrase fast-path is disabled")
+	}
+}
+
+func TestContradictionPhase_ParaphraseTiebreakOlderWins(t *testing.T) {
+	mems := makeMemories(2)
+	// Equal confidence; older CreatedAt should survive.
+	mems[0].Confidence = 0.7
+	mems[1].Confidence = 0.7
+	older := time.Now().UTC().Add(-2 * time.Hour)
+	newer := time.Now().UTC().Add(-1 * time.Hour)
+	mems[0].CreatedAt = newer
+	mems[1].CreatedAt = older
+	dim := 4
+	dup := vectorOffsetAt(dim, 0)
+	vs := &fakeContradictionVectorStore{
+		vectorsByID: map[uuid.UUID][]float32{
+			mems[0].ID: dup,
+			mems[1].ID: dup,
+		},
+	}
+	emb := &staticEmbedder{vectors: [][]float32{dup}}
+
+	writer := &updatingMemoryWriter{}
+	phase := NewContradictionPhase(
+		&fakeMemoryReader{list: mems},
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return &zeroUsageLLM{} },
+		func() provider.EmbeddingProvider { return emb },
+		paraphraseSettings(true, 0.97),
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+	phase.AttachVectorStore(vs)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1_000_000, 2048),
+		NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// mems[1] is older → winner; mems[0] (newer) is loser.
+	loser := findUpdate(writer.updates, mems[0].ID)
+	if loser == nil {
+		t.Fatalf("expected update for loser %s (newer CreatedAt)", mems[0].ID)
+	}
+	if loser.SupersededBy == nil || *loser.SupersededBy != mems[1].ID {
+		got := "<nil>"
+		if loser.SupersededBy != nil {
+			got = loser.SupersededBy.String()
+		}
+		t.Errorf("expected loser.SupersededBy=%s (older), got %s", mems[1].ID, got)
+	}
+}
+
+func TestContradictionPhase_SearchFailureUsesInProcessTopK(t *testing.T) {
+	mems := makeMemories(4)
+	dim := 4
+	vs := &fakeContradictionVectorStore{
+		vectorsByID: map[uuid.UUID][]float32{},
+		searchErr:   errors.New("index unavailable"),
+	}
+	for i := range mems {
+		vs.vectorsByID[mems[i].ID] = vectorOffsetAt(dim, i)
+	}
+	emb := &staticEmbedder{vectors: [][]float32{vectorOffsetAt(dim, 0)}}
+	llm := &zeroUsageLLM{}
+
+	phase := NewContradictionPhase(
+		&fakeMemoryReader{list: mems},
+		&updatingMemoryWriter{},
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return emb },
+		paraphraseSettings(false, 0.97),
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+	phase.AttachVectorStore(vs)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1_000_000, 2048),
+		NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if vs.searchCalls == 0 {
+		t.Error("expected at least one Search attempt before fallback")
+	}
+	if llm.calls.Load() == 0 {
+		t.Error("expected pairs to still be dispatched via in-process top-K fallback")
 	}
 }

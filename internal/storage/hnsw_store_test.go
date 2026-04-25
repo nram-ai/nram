@@ -931,3 +931,143 @@ func TestHNSWStoreRebuildFromVectors(t *testing.T) {
 		}
 	}
 }
+
+// vectorsApproxEqual checks slice equality within a small tolerance to
+// absorb the float32 round-trip through the HNSW serializer / Qdrant /
+// pgvector encodings.
+func vectorsApproxEqual(a, b []float32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		d := a[i] - b[i]
+		if d < 0 {
+			d = -d
+		}
+		if d > 1e-5 {
+			return false
+		}
+	}
+	return true
+}
+
+func TestHNSWStoreGetByIDs_RoundTrip(t *testing.T) {
+	db := setupHNSWTestDB(t)
+	cfg := storage.DefaultHNSWConfig()
+	cfg.SnapshotInterval = 1<<63 - 1
+	store := storage.NewHNSWStore(db, db, cfg)
+	defer store.Close()
+
+	ctx := context.Background()
+	nsID := uuid.New()
+	dim := 384
+
+	items := make([]storage.VectorUpsertItem, 8)
+	for i := range items {
+		items[i] = storage.VectorUpsertItem{
+			ID:          uuid.New(),
+			NamespaceID: nsID,
+			Embedding:   normalizeVector(randomVector(dim, int64(i+200))),
+			Dimension:   dim,
+		}
+	}
+	if err := store.UpsertBatch(ctx, items); err != nil {
+		t.Fatalf("upsert batch: %v", err)
+	}
+
+	ids := make([]uuid.UUID, len(items))
+	for i, it := range items {
+		ids[i] = it.ID
+	}
+
+	got, err := store.GetByIDs(ctx, ids, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs: %v", err)
+	}
+	if len(got) != len(items) {
+		t.Errorf("expected %d vectors, got %d", len(items), len(got))
+	}
+	for _, it := range items {
+		v, ok := got[it.ID]
+		if !ok {
+			t.Errorf("missing id %s in result", it.ID)
+			continue
+		}
+		if !vectorsApproxEqual(v, it.Embedding) {
+			t.Errorf("vector mismatch for id %s", it.ID)
+		}
+	}
+}
+
+func TestHNSWStoreGetByIDs_PartialHit(t *testing.T) {
+	db := setupHNSWTestDB(t)
+	cfg := storage.DefaultHNSWConfig()
+	cfg.SnapshotInterval = 1<<63 - 1
+	store := storage.NewHNSWStore(db, db, cfg)
+	defer store.Close()
+
+	ctx := context.Background()
+	nsID := uuid.New()
+	dim := 384
+
+	stored := uuid.New()
+	if err := store.Upsert(ctx, stored, nsID, normalizeVector(randomVector(dim, 1)), dim); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	missing := uuid.New()
+	got, err := store.GetByIDs(ctx, []uuid.UUID{stored, missing}, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 hit, got %d", len(got))
+	}
+	if _, ok := got[stored]; !ok {
+		t.Errorf("expected stored id %s in result", stored)
+	}
+	if _, ok := got[missing]; ok {
+		t.Errorf("did not expect missing id %s in result", missing)
+	}
+}
+
+func TestHNSWStoreGetByIDs_EmptyInput(t *testing.T) {
+	db := setupHNSWTestDB(t)
+	cfg := storage.DefaultHNSWConfig()
+	cfg.SnapshotInterval = 1<<63 - 1
+	store := storage.NewHNSWStore(db, db, cfg)
+	defer store.Close()
+
+	got, err := store.GetByIDs(context.Background(), nil, 384)
+	if err != nil {
+		t.Fatalf("GetByIDs(nil): %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(got))
+	}
+}
+
+func TestHNSWStoreGetByIDs_WrongDimension(t *testing.T) {
+	db := setupHNSWTestDB(t)
+	cfg := storage.DefaultHNSWConfig()
+	cfg.SnapshotInterval = 1<<63 - 1
+	store := storage.NewHNSWStore(db, db, cfg)
+	defer store.Close()
+
+	ctx := context.Background()
+	nsID := uuid.New()
+	id := uuid.New()
+	if err := store.Upsert(ctx, id, nsID, normalizeVector(randomVector(384, 7)), 384); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Stored at 384, query at 768 — must return empty without error.
+	got, err := store.GetByIDs(ctx, []uuid.UUID{id}, 768)
+	if err != nil {
+		t.Fatalf("GetByIDs at wrong dim: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 hits at wrong dim, got %d", len(got))
+	}
+}
+

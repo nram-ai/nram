@@ -93,9 +93,11 @@ const (
 	// Loser is the side the LLM judge marks as less likely correct; winner
 	// takes a smaller haircut acknowledging some uncertainty in any judgment;
 	// tie applies the same haircut to both sides when the judge cannot pick.
-	SettingDreamContradictionLoserHaircut  = "dreaming.contradiction.loser_haircut"
-	SettingDreamContradictionWinnerHaircut = "dreaming.contradiction.winner_haircut"
-	SettingDreamContradictionTieHaircut    = "dreaming.contradiction.tie_haircut"
+	SettingDreamContradictionLoserHaircut        = "dreaming.contradiction.loser_haircut"
+	SettingDreamContradictionWinnerHaircut       = "dreaming.contradiction.winner_haircut"
+	SettingDreamContradictionTieHaircut          = "dreaming.contradiction.tie_haircut"
+	SettingDreamContradictionParaphraseEnabled   = "dreaming.contradiction.paraphrase_enabled"
+	SettingDreamContradictionParaphraseThreshold = "dreaming.contradiction.paraphrase_threshold"
 
 	// Retention for soft-deleted memories. Rows past this age are hard-deleted
 	// by the retention sweeper and their vector rows are CASCADEd alongside.
@@ -209,10 +211,12 @@ alignment must be a float:
 	SettingDreamConsolidationReinforceFraction:   "0.35",
 	SettingDreamConsolidationConsolidateFraction: "0.30",
 
-	SettingDreamContradictionCap:           "30",
-	SettingDreamContradictionLoserHaircut:  "0.85",
-	SettingDreamContradictionWinnerHaircut: "0.97",
-	SettingDreamContradictionTieHaircut:    "0.92",
+	SettingDreamContradictionCap:                 "30",
+	SettingDreamContradictionLoserHaircut:        "0.85",
+	SettingDreamContradictionWinnerHaircut:       "0.97",
+	SettingDreamContradictionTieHaircut:          "0.92",
+	SettingDreamContradictionParaphraseEnabled:   "true",
+	SettingDreamContradictionParaphraseThreshold: "0.97",
 
 	SettingMemorySoftDeleteRetentionDays: "30",
 	SettingDreamNoveltyJudgePrompt: `You are a novelty auditor. You do NOT converse. You output JSON only.

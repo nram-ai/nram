@@ -36,6 +36,7 @@ const (
 	DreamOpRelationshipUpdated   = "relationship_updated"
 	DreamOpEntityUpdated         = "entity_updated"
 	DreamOpContradictionDetected = "contradiction_detected"
+	DreamOpParaphraseSuperseded  = "paraphrase_superseded"
 	DreamOpMemoryCreated         = "memory_created"
 	DreamOpMemoryDeleted         = "memory_deleted"
 	DreamOpMemorySuperseded      = "memory_superseded"

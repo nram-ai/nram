@@ -113,6 +113,29 @@ func (g *Graph) Has(id uuid.UUID) bool {
 	return ok
 }
 
+// GetVectors returns defensive copies of the stored vectors for the given
+// IDs. Missing IDs (no node in the graph) are absent from the returned map.
+// Copies are made under the read lock so callers cannot observe partial
+// mutations from a concurrent Add or Delete.
+func (g *Graph) GetVectors(ids []uuid.UUID) map[uuid.UUID][]float32 {
+	out := make(map[uuid.UUID][]float32, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for _, id := range ids {
+		n, ok := g.nodes[id]
+		if !ok {
+			continue
+		}
+		cp := make([]float32, len(n.vector))
+		copy(cp, n.vector)
+		out[id] = cp
+	}
+	return out
+}
+
 // Add inserts one or more nodes into the graph. Thread-safe.
 // Returns ErrEmptyVector if any vector is empty, ErrDimensionMismatch if dimensions don't match.
 func (g *Graph) Add(nodes ...Node) error {

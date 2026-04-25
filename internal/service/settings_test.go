@@ -205,6 +205,43 @@ func TestSetWritesToDatabase(t *testing.T) {
 	}
 }
 
+func TestResolveDreamContradictionParaphraseDefaults(t *testing.T) {
+	repo := newMockSettingsRepo()
+	svc := NewSettingsService(repo)
+
+	enabled := svc.ResolveBool(context.Background(), SettingDreamContradictionParaphraseEnabled, "global")
+	if !enabled {
+		t.Errorf("expected paraphrase_enabled default true, got false")
+	}
+
+	threshold, err := svc.ResolveFloat(context.Background(), SettingDreamContradictionParaphraseThreshold, "global")
+	if err != nil {
+		t.Fatalf("ResolveFloat: %v", err)
+	}
+	if threshold != 0.97 {
+		t.Errorf("expected paraphrase_threshold default 0.97, got %f", threshold)
+	}
+}
+
+func TestResolveDreamContradictionParaphraseOverride(t *testing.T) {
+	repo := newMockSettingsRepo()
+	repo.put(SettingDreamContradictionParaphraseEnabled, "global", "false")
+	repo.put(SettingDreamContradictionParaphraseThreshold, "global", "0.93")
+	svc := NewSettingsService(repo)
+
+	if svc.ResolveBool(context.Background(), SettingDreamContradictionParaphraseEnabled, "global") {
+		t.Errorf("expected paraphrase_enabled override false, got true")
+	}
+
+	threshold, err := svc.ResolveFloat(context.Background(), SettingDreamContradictionParaphraseThreshold, "global")
+	if err != nil {
+		t.Fatalf("ResolveFloat: %v", err)
+	}
+	if threshold != 0.93 {
+		t.Errorf("expected override 0.93, got %f", threshold)
+	}
+}
+
 func TestDeleteRemovesFromDatabase(t *testing.T) {
 	repo := newMockSettingsRepo()
 	repo.put("custom.key", "global", "some-value")

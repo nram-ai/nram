@@ -189,6 +189,38 @@ func (s *PgVectorStore) Search(ctx context.Context, embedding []float32, namespa
 	return results, nil
 }
 
+func (s *PgVectorStore) GetByIDs(ctx context.Context, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID][]float32{}, nil
+	}
+	table, err := tableName(dimension)
+	if err != nil {
+		return nil, err
+	}
+
+	query := fmt.Sprintf(`SELECT memory_id, embedding FROM %s WHERE memory_id = ANY($1)`, table)
+	rows, err := s.pool.Query(ctx, query, ids)
+	if err != nil {
+		return nil, fmt.Errorf("pgvector: get-by-ids query failed for table %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	out := make(map[uuid.UUID][]float32, len(ids))
+	for rows.Next() {
+		var id uuid.UUID
+		var vec pgvector.Vector
+		if err := rows.Scan(&id, &vec); err != nil {
+			return nil, fmt.Errorf("pgvector: get-by-ids scan failed: %w", err)
+		}
+		out[id] = vec.Slice()
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pgvector: get-by-ids rows error: %w", err)
+	}
+
+	return out, nil
+}
+
 // Delete removes a vector from all dimension tables since the dimension is unknown.
 func (s *PgVectorStore) Delete(ctx context.Context, id uuid.UUID) error {
 	batch := &pgx.Batch{}

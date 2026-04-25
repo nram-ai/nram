@@ -15,6 +15,7 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
 
@@ -59,6 +60,23 @@ type ContradictionPhase struct {
 	settings         SettingsResolver
 	tokens           TokenRecorder
 	usageCtx         UsageContextResolver
+	vectorStore      storage.VectorStore
+	vectorPurger     VectorPurger
+}
+
+// AttachVectorStore wires a VectorStore so the phase reads stored embeddings
+// instead of re-embedding the namespace every cycle. Nil disables the read
+// path and falls back to the legacy embed-everything branch.
+func (p *ContradictionPhase) AttachVectorStore(vs storage.VectorStore) {
+	p.vectorStore = vs
+}
+
+// AttachVectorPurger wires a VectorPurger so paraphrase auto-supersede also
+// drops the loser's vector. Without it, a superseded loser remains in the
+// active index and can resurface as a neighbour for later anchors in the
+// same cycle.
+func (p *ContradictionPhase) AttachVectorPurger(vp VectorPurger) {
+	p.vectorPurger = vp
 }
 
 // NewContradictionPhase creates a new contradiction detection phase.
@@ -93,6 +111,21 @@ func (p *ContradictionPhase) Name() string { return model.DreamPhaseContradictio
 type staleMemory struct {
 	Mem  model.Memory
 	Meta map[string]interface{}
+}
+
+// mirrorToStale propagates the latest writable fields from mem back into the
+// stale-index entry so the post-loop stamp Update — which serializes every
+// column from stale[i].Mem — does not clobber haircut confidence or
+// supersession markers written earlier in the cycle.
+func mirrorToStale(staleByID map[uuid.UUID]*model.Memory, mem *model.Memory) {
+	s, ok := staleByID[mem.ID]
+	if !ok {
+		return
+	}
+	s.Confidence = mem.Confidence
+	s.UpdatedAt = mem.UpdatedAt
+	s.SupersededBy = mem.SupersededBy
+	s.SupersededAt = mem.SupersededAt
 }
 
 // pairKey canonicalises a pair of memory IDs so (A,B) and (B,A) dedupe.
@@ -138,7 +171,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		"cycle", cycle.ID, "memories", len(memories), "stale", len(stale),
 		"cap", cap, "neighbors_per_anchor", defaultContradictionNeighbors)
 
-	pairs, fullyDispatched, embedTokens, selErr := p.selectNeighborPairs(ctx, stale, memories, cap)
+	pairs, fullyDispatched, embedTokens, vectorsByID, selErr := p.selectNeighborPairs(ctx, stale, memories, cap)
 	if selErr != nil {
 		slog.Warn("dreaming: neighbour selection failed; degrading to ID-ordered walk",
 			"cycle", cycle.ID, "err", selErr)
@@ -171,13 +204,31 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	winnerBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionWinnerHaircut, 0.97)
 	tieBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionTieHaircut, 0.92)
 	supersedeThreshold := resolveFraction(ctx, p.settings, service.SettingDreamSupersessionThreshold, 0.85)
+	paraphraseEnabled := p.settings.ResolveBool(ctx, service.SettingDreamContradictionParaphraseEnabled, "global")
+	paraphraseThreshold := resolveFraction(ctx, p.settings, service.SettingDreamContradictionParaphraseThreshold, 0.97)
 
 	contradictions := 0
+	paraphrasesSuperseded := 0
 	budgetStopped := false
 	for idx, pair := range pairs {
 		if budget.Exhausted() {
 			budgetStopped = true
 			break
+		}
+
+		// Skip the LLM judge for near-duplicate paraphrases — the strict
+		// contradiction prompt is intentionally blind to them.
+		if paraphraseEnabled && vectorsByID != nil {
+			va, okA := vectorsByID[pair[0].ID]
+			vb, okB := vectorsByID[pair[1].ID]
+			if okA && okB && len(va) == len(vb) && len(va) > 0 {
+				sim := hnsw.CosineSimilarity(va, vb)
+				if float64(sim) >= paraphraseThreshold {
+					p.paraphraseSupersede(ctx, cycle, logger, &pair[0], &pair[1], float64(sim), staleByID)
+					paraphrasesSuperseded++
+					continue
+				}
+			}
 		}
 
 		// Pre-flight budget check using the 4-bytes-per-token heuristic on
@@ -282,18 +333,6 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			loserMem.SupersededAt = &now
 		}
 
-		// Mirror writes into the stale index so the post-loop stamp Update,
-		// which serializes every column from stale[i].Mem, preserves the
-		// haircut and any supersession marker we wrote.
-		mirrorToStale := func(mem *model.Memory) {
-			if s, ok := staleByID[mem.ID]; ok {
-				s.Confidence = mem.Confidence
-				s.UpdatedAt = mem.UpdatedAt
-				s.SupersededBy = mem.SupersededBy
-				s.SupersededAt = mem.SupersededAt
-			}
-		}
-
 		applyHaircut := func(mem *model.Memory, factor float64) {
 			mem.Confidence = math.Max(0.0, mem.Confidence*factor)
 			mem.UpdatedAt = now
@@ -301,7 +340,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 				slog.Warn("dreaming: contradiction haircut update failed",
 					"memory", mem.ID, "err", err)
 			}
-			mirrorToStale(mem)
+			mirrorToStale(staleByID, mem)
 		}
 
 		if normalized == WinnerTie {
@@ -361,9 +400,10 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		stamped++
 	}
 
-	if contradictions > 0 || stamped > 0 {
+	if contradictions > 0 || stamped > 0 || paraphrasesSuperseded > 0 {
 		slog.Info("dreaming: contradiction phase summary",
 			"cycle", cycle.ID, "contradictions", contradictions,
+			"paraphrases_superseded", paraphrasesSuperseded,
 			"stale", len(stale), "stamped", stamped,
 			"budget_stopped", budgetStopped)
 	}
@@ -422,18 +462,22 @@ func isStale(mem *model.Memory, meta map[string]interface{}) bool {
 	return t.Before(mem.UpdatedAt)
 }
 
-// selectNeighborPairs picks pairs involving stale anchors. When an embedder
-// is available, each anchor's K candidates are its top-K cosine-similar
-// peers in the namespace; otherwise candidates are the K next memories by
-// ID order. Returns the pairs in dispatch order, the set of anchors whose
-// full K-slice was considered (emitted-or-deduped) before the cap was
-// reached, and the embedding-token cost to charge to the cycle budget.
+// selectNeighborPairs picks pairs involving stale anchors. Stored vectors
+// are read from the attached VectorStore first; misses are embedded once at
+// the current dim and self-healed back into the store via UpsertBatch. With
+// stored vectors available, each anchor's K candidates come from a
+// namespace-scoped VectorStore.Search; on Search failure or unavailable
+// vector the path falls back to in-process top-K over the loaded vectors,
+// and finally to ID-ordered walk. Returns: the pairs in dispatch order, the
+// set of anchors whose full K-slice was processed before the cap, the
+// embedding-token cost to charge to the cycle budget, and the per-ID vector
+// map so the paraphrase fast-path can compute cosine without re-embedding.
 func (p *ContradictionPhase) selectNeighborPairs(
 	ctx context.Context,
 	stale []staleMemory,
 	allMemories []model.Memory,
 	cap int,
-) ([][2]model.Memory, map[uuid.UUID]bool, int, error) {
+) ([][2]model.Memory, map[uuid.UUID]bool, int, map[uuid.UUID][]float32, error) {
 	idxByID := make(map[uuid.UUID]int, len(allMemories))
 	for i := range allMemories {
 		idxByID[allMemories[i].ID] = i
@@ -444,28 +488,66 @@ func (p *ContradictionPhase) selectNeighborPairs(
 		embedder = p.embedderProvider()
 	}
 
-	var embeddings [][]float32
+	dim := 0
+	if embedder != nil {
+		dim = pickEmbedderDim(embedder.Dimensions())
+	}
+
 	embedTokens := 0
 	var selErr error
-	if embedder != nil {
-		inputs := make([]string, len(allMemories))
+
+	// Phase 1: read whatever vectors are already in the store. A missing or
+	// erroring vector store leaves stored=nil and the path falls through to
+	// the legacy embed-everything branch below.
+	var stored map[uuid.UUID][]float32
+	if p.vectorStore != nil && dim > 0 {
+		ids := make([]uuid.UUID, len(allMemories))
 		for i := range allMemories {
-			inputs[i] = allMemories[i].Content
+			ids[i] = allMemories[i].ID
 		}
-		slog.Info("dreaming: embedding memories for neighbour selection",
-			"provider", embedder.Name(), "count", len(inputs))
+		fetched, err := p.vectorStore.GetByIDs(ctx, ids, dim)
+		if err != nil {
+			slog.Warn("dreaming: vector-store fetch failed; falling back to full re-embed",
+				"err", err)
+		} else {
+			stored = fetched
+		}
+	}
+
+	// Phase 2: identify misses (memories with no stored vector at this dim)
+	// and embed them in one batch. On embedder-only-path (no store), all
+	// memories are misses — preserves the legacy behavior.
+	missIdx := make([]int, 0)
+	for i := range allMemories {
+		if _, ok := stored[allMemories[i].ID]; !ok {
+			missIdx = append(missIdx, i)
+		}
+	}
+
+	if len(missIdx) > 0 && embedder != nil {
+		inputs := make([]string, len(missIdx))
+		for j, i := range missIdx {
+			inputs[j] = allMemories[i].Content
+		}
+		slog.Info("dreaming: embedding miss set for neighbour selection",
+			"provider", embedder.Name(), "misses", len(inputs), "total", len(allMemories))
 		embedStart := time.Now()
 		resp, err := embedder.Embed(ctx, &provider.EmbeddingRequest{
 			Input:     inputs,
-			Dimension: pickEmbedderDim(embedder.Dimensions()),
+			Dimension: dim,
 		})
 		embedDur := time.Since(embedStart)
-		if err != nil || resp == nil || len(resp.Embeddings) != len(allMemories) {
+		if err != nil || resp == nil || len(resp.Embeddings) != len(inputs) {
 			selErr = err
 			slog.Warn("dreaming: neighbour embedding failed",
 				"provider", embedder.Name(), "duration_ms", embedDur.Milliseconds(), "err", err)
 		} else {
-			embeddings = resp.Embeddings
+			if stored == nil {
+				stored = make(map[uuid.UUID][]float32, len(missIdx))
+			}
+			for j, vec := range resp.Embeddings {
+				stored[allMemories[missIdx[j]].ID] = vec
+			}
 			embedTokens = resp.Usage.TotalTokens
 			if embedTokens == 0 {
 				for _, s := range inputs {
@@ -475,6 +557,25 @@ func (p *ContradictionPhase) selectNeighborPairs(
 			slog.Info("dreaming: neighbour embedding complete",
 				"provider", embedder.Name(), "count", len(inputs),
 				"duration_ms", embedDur.Milliseconds(), "tokens", embedTokens)
+
+			// Self-heal: write the freshly-embedded vectors back so the next
+			// cycle finds them already cached. Best-effort; log + continue
+			// on error so a transient write failure doesn't block this cycle.
+			if p.vectorStore != nil {
+				items := make([]storage.VectorUpsertItem, len(missIdx))
+				for j, i := range missIdx {
+					items[j] = storage.VectorUpsertItem{
+						ID:          allMemories[i].ID,
+						NamespaceID: allMemories[i].NamespaceID,
+						Embedding:   resp.Embeddings[j],
+						Dimension:   dim,
+					}
+				}
+				if uerr := p.vectorStore.UpsertBatch(ctx, items); uerr != nil {
+					slog.Warn("dreaming: self-heal vector upsert failed; will retry next cycle",
+						"err", uerr, "count", len(items))
+				}
+			}
 		}
 	}
 
@@ -489,12 +590,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 			continue
 		}
 
-		var candidates []int
-		if embeddings != nil {
-			candidates = topKNeighbors(anchorIdx, embeddings, defaultContradictionNeighbors)
-		} else {
-			candidates = idOrderedNeighbors(anchorIdx, len(allMemories), defaultContradictionNeighbors)
-		}
+		candidates := p.candidatesFor(ctx, anchor, anchorIdx, allMemories, idxByID, stored, dim)
 
 		var capHit bool
 		pairs, capHit = dispatchCandidates(anchor, candidates, allMemories, pairs, seen, cap)
@@ -506,23 +602,87 @@ func (p *ContradictionPhase) selectNeighborPairs(
 		}
 	}
 
-	return pairs, fullyDispatched, embedTokens, selErr
+	return pairs, fullyDispatched, embedTokens, stored, selErr
 }
 
-// topKNeighbors returns the indices of the K most cosine-similar memories to
-// the anchor, excluding the anchor itself.
-func topKNeighbors(anchorIdx int, embeddings [][]float32, k int) []int {
+// candidatesFor returns the K nearest-neighbour candidate indices for an
+// anchor, in priority order:
+//  1. VectorStore.Search if both the store and the anchor's vector are
+//     available — this is the cheap path that scales with the index.
+//  2. In-process top-K over the loaded `stored` map — used when Search is
+//     unavailable or returns an error so we still benefit from the work
+//     spent loading vectors.
+//  3. ID-ordered walk — final degradation when no vector data exists at all.
+func (p *ContradictionPhase) candidatesFor(
+	ctx context.Context,
+	anchor model.Memory,
+	anchorIdx int,
+	allMemories []model.Memory,
+	idxByID map[uuid.UUID]int,
+	stored map[uuid.UUID][]float32,
+	dim int,
+) []int {
+	anchorVec, hasVec := stored[anchor.ID]
+
+	if p.vectorStore != nil && hasVec && dim > 0 {
+		// topK+1 because Search will return the anchor itself (cosine 1.0)
+		// at rank 0; we filter it out below.
+		results, err := p.vectorStore.Search(ctx, anchorVec, anchor.NamespaceID, dim, defaultContradictionNeighbors+1)
+		if err == nil {
+			out := make([]int, 0, defaultContradictionNeighbors)
+			for _, r := range results {
+				if r.ID == anchor.ID {
+					continue
+				}
+				if i, ok := idxByID[r.ID]; ok {
+					out = append(out, i)
+				}
+				if len(out) >= defaultContradictionNeighbors {
+					break
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+			// Search returned nothing usable (e.g. empty index right after
+			// a snapshot rebuild) — fall through to the next tier.
+		} else {
+			slog.Warn("dreaming: vector-store Search failed; degrading to in-process top-K",
+				"anchor", anchor.ID, "err", err)
+		}
+	}
+
+	if hasVec && len(stored) > 1 {
+		return topKNeighborsFromMap(anchor.ID, allMemories, stored, defaultContradictionNeighbors)
+	}
+
+	return idOrderedNeighbors(anchorIdx, len(allMemories), defaultContradictionNeighbors)
+}
+
+// topKNeighborsFromMap returns the indices of the K most cosine-similar
+// memories to the anchor, restricted to those whose vectors are present in
+// the loaded map. Used as the Search-failed fallback so we don't have to
+// re-embed if VectorStore.Search transiently errors.
+func topKNeighborsFromMap(anchorID uuid.UUID, allMemories []model.Memory, stored map[uuid.UUID][]float32, k int) []int {
+	anchorVec, ok := stored[anchorID]
+	if !ok {
+		return nil
+	}
+	anchorNorm := hnsw.Norm(anchorVec)
 	type scored struct {
 		idx int
 		sim float64
 	}
-	scores := make([]scored, 0, len(embeddings))
-	anchorEmb := embeddings[anchorIdx]
-	for j := range embeddings {
-		if j == anchorIdx {
+	scores := make([]scored, 0, len(stored))
+	for i := range allMemories {
+		if allMemories[i].ID == anchorID {
 			continue
 		}
-		scores = append(scores, scored{idx: j, sim: hnsw.CosineSimilarity(anchorEmb, embeddings[j])})
+		v, ok := stored[allMemories[i].ID]
+		if !ok {
+			continue
+		}
+		scores = append(scores, scored{idx: i, sim: hnsw.CosineSimilarityWithNorms(anchorVec, v, anchorNorm, hnsw.Norm(v))})
 	}
 	sort.Slice(scores, func(a, b int) bool { return scores[a].sim > scores[b].sim })
 	if len(scores) > k {
@@ -579,6 +739,66 @@ func dispatchCandidates(
 		pairs = append(pairs, [2]model.Memory{anchor, partner})
 	}
 	return pairs, false
+}
+
+// paraphraseSupersede picks the lower-confidence side of a near-duplicate
+// pair and supersedes it without invoking the LLM judge. Tiebreak when the
+// confidences are equal: the older CreatedAt survives — older memories are
+// more likely to have downstream lineage edges, so preserving them avoids
+// orphaning history.
+//
+// The loser is mirrored back into staleByID so the post-loop stamp Update
+// preserves SupersededBy / SupersededAt. The vector purger drops the loser
+// from the active store so it cannot resurface as a top-K neighbour for
+// later anchors in the same cycle.
+func (p *ContradictionPhase) paraphraseSupersede(
+	ctx context.Context,
+	cycle *model.DreamCycle,
+	logger *DreamLogWriter,
+	a, b *model.Memory,
+	cosine float64,
+	staleByID map[uuid.UUID]*model.Memory,
+) {
+	winner, loser := a, b
+	winnerSide := "a"
+	if b.Confidence > a.Confidence {
+		winner, loser = b, a
+		winnerSide = "b"
+	} else if a.Confidence == b.Confidence {
+		// Equal confidence: prefer the older CreatedAt as the survivor.
+		if b.CreatedAt.Before(a.CreatedAt) {
+			winner, loser = b, a
+			winnerSide = "b"
+		}
+	}
+
+	now := time.Now().UTC()
+	loser.SupersededBy = &winner.ID
+	loser.SupersededAt = &now
+	loser.UpdatedAt = now
+
+	if err := p.memWriter.Update(ctx, loser); err != nil {
+		slog.Warn("dreaming: paraphrase supersede update failed",
+			"memory", loser.ID, "err", err)
+		return
+	}
+	mirrorToStale(staleByID, loser)
+
+	if p.vectorPurger != nil {
+		if err := p.vectorPurger.Delete(ctx, loser.ID); err != nil {
+			slog.Warn("dreaming: paraphrase vector purge failed",
+				"memory", loser.ID, "err", err)
+		}
+	}
+
+	_ = logger.LogOperation(ctx, model.DreamPhaseContradictions,
+		model.DreamOpParaphraseSuperseded, "memory", loser.ID,
+		nil, map[string]interface{}{
+			"superseded_by": winner.ID.String(),
+			"winner":        winnerSide,
+			"cosine":        cosine,
+			"reason":        "high_cosine_paraphrase",
+		})
 }
 
 // stampContradictionsChecked writes ContradictionsCheckedStampKey onto the

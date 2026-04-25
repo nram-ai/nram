@@ -442,10 +442,15 @@ func main() {
 	dreamDirtyRepo := storage.NewDreamDirtyRepo(db)
 
 	consolidationPhase := dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, tokenUsageRepo, namespaceRepo)
+	contradictionPhase := dreaming.NewContradictionPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, tokenUsageRepo, namespaceRepo)
 	// Wire the active vector store into dream-side state transitions so that
-	// demotion and supersession purge vectors alongside the row-level update.
+	// demotion and supersession purge vectors alongside the row-level update,
+	// and so the contradiction phase reads stored vectors instead of
+	// re-embedding the namespace every cycle.
 	if vectorStore != nil {
 		consolidationPhase.AttachVectorPurger(vectorStore)
+		contradictionPhase.AttachVectorStore(vectorStore)
+		contradictionPhase.AttachVectorPurger(vectorStore)
 		memoryRepo.AttachVectorStore(vectorStore)
 	}
 
@@ -453,7 +458,7 @@ func main() {
 		dreamCycleRepo, dreamLogRepo, workerPool,
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo),
 		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
-		dreaming.NewContradictionPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, tokenUsageRepo, namespaceRepo),
+		contradictionPhase,
 		consolidationPhase,
 		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo, settingsSvc),
 		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo),

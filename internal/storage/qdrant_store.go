@@ -232,6 +232,51 @@ func (s *QdrantStore) Search(ctx context.Context, embedding []float32, namespace
 	return results, nil
 }
 
+func (s *QdrantStore) GetByIDs(ctx context.Context, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID][]float32{}, nil
+	}
+	collection, err := qdrantCollectionName(dimension)
+	if err != nil {
+		return nil, err
+	}
+
+	pointIDs := make([]*qdrant.PointId, len(ids))
+	for i, id := range ids {
+		pointIDs[i] = qdrant.NewID(id.String())
+	}
+
+	points, err := s.client.Get(ctx, &qdrant.GetPoints{
+		CollectionName: collection,
+		Ids:            pointIDs,
+		WithVectors:    qdrant.NewWithVectorsEnable(true),
+		WithPayload:    qdrant.NewWithPayloadEnable(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("qdrant: get-by-ids failed for collection %s: %w", collection, err)
+	}
+
+	out := make(map[uuid.UUID][]float32, len(points))
+	for _, pt := range points {
+		id, err := pointIDToUUID(pt.GetId())
+		if err != nil {
+			return nil, fmt.Errorf("qdrant: invalid point ID in get-by-ids result: %w", err)
+		}
+		vec := pt.GetVectors().GetVector().GetData()
+		if len(vec) == 0 {
+			// Sparse or named-vector points are not produced by this store;
+			// skip rather than return a zero-length slice that callers would
+			// have to special-case.
+			continue
+		}
+		// Defensive copy so callers can't mutate proto-owned memory.
+		cp := make([]float32, len(vec))
+		copy(cp, vec)
+		out[id] = cp
+	}
+	return out, nil
+}
+
 // Delete removes a vector from all dimension collections since the dimension is unknown at delete time.
 // Does not error if the point does not exist in a collection.
 func (s *QdrantStore) Delete(ctx context.Context, id uuid.UUID) error {

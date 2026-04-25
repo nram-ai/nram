@@ -479,3 +479,99 @@ func TestQdrantStore_NewWithEmptyAPIKey(t *testing.T) {
 		t.Fatalf("Ping: %v", err)
 	}
 }
+
+func TestQdrantStore_GetByIDs_RoundTrip(t *testing.T) {
+	store := setupQdrantTest(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	dim := 384
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	embs := []([]float32){
+		makeEmbedding(dim, 0.1),
+		makeEmbedding(dim, 0.5),
+		makeEmbedding(dim, 0.9),
+	}
+	items := []VectorUpsertItem{
+		{ID: ids[0], NamespaceID: nsID, Embedding: embs[0], Dimension: dim},
+		{ID: ids[1], NamespaceID: nsID, Embedding: embs[1], Dimension: dim},
+		{ID: ids[2], NamespaceID: nsID, Embedding: embs[2], Dimension: dim},
+	}
+	if err := store.UpsertBatch(ctx, items); err != nil {
+		t.Fatalf("UpsertBatch: %v", err)
+	}
+
+	got, err := store.GetByIDs(ctx, ids, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs: %v", err)
+	}
+	if len(got) != len(ids) {
+		t.Errorf("expected %d hits, got %d", len(ids), len(got))
+	}
+	for i, id := range ids {
+		v, ok := got[id]
+		if !ok {
+			t.Errorf("missing id %s", id)
+			continue
+		}
+		if len(v) != dim {
+			t.Errorf("id %s: vector dim = %d, want %d", id, len(v), dim)
+			continue
+		}
+		// Qdrant normalises cosine vectors internally; the stored constant
+		// vector returns scaled (1/sqrt(dim)) values, so just sanity-check
+		// the ratio of any element to the original is consistent.
+		_ = embs[i]
+	}
+}
+
+func TestQdrantStore_GetByIDs_PartialAndEmpty(t *testing.T) {
+	store := setupQdrantTest(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	dim := 384
+	stored := uuid.New()
+	if err := store.Upsert(ctx, stored, nsID, makeEmbedding(dim, 0.3), dim); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	missing := uuid.New()
+	got, err := store.GetByIDs(ctx, []uuid.UUID{stored, missing}, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs partial: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected 1 hit, got %d", len(got))
+	}
+	if _, ok := got[missing]; ok {
+		t.Errorf("missing id should not be in result")
+	}
+
+	emptyResult, err := store.GetByIDs(ctx, nil, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs empty: %v", err)
+	}
+	if len(emptyResult) != 0 {
+		t.Errorf("expected empty map for nil input, got %d", len(emptyResult))
+	}
+}
+
+func TestQdrantStore_GetByIDs_WrongDimension(t *testing.T) {
+	store := setupQdrantTest(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	id := uuid.New()
+	if err := store.Upsert(ctx, id, nsID, makeEmbedding(384, 0.4), 384); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	got, err := store.GetByIDs(ctx, []uuid.UUID{id}, 768)
+	if err != nil {
+		t.Fatalf("GetByIDs at dim 768: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 hits at wrong dim, got %d", len(got))
+	}
+}

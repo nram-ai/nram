@@ -224,6 +224,83 @@ func (s *HNSWStore) Search(ctx context.Context, embedding []float32, namespaceID
 	return out, nil
 }
 
+// GetByIDs resolves namespace_id from memory_vectors first, then copies
+// vectors out of each loaded graph — the HNSW index is partitioned by
+// (namespace_id, dimension) but callers pass a flat ID list.
+func (s *HNSWStore) GetByIDs(ctx context.Context, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID][]float32{}, nil
+	}
+	if !SupportedVectorDimensions[dimension] {
+		return nil, fmt.Errorf("hnsw: unsupported dimension %d", dimension)
+	}
+
+	// Build a placeholder list and arg slice for the IN clause. Bounded by
+	// the caller (one dream cycle's full namespace ≤ ListByNamespace's 500
+	// limit), so a single query is fine.
+	placeholders := make([]byte, 0, 2*len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, dimension)
+	for i, id := range ids {
+		if i > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		args = append(args, id.String())
+	}
+
+	query := "SELECT memory_id, namespace_id FROM memory_vectors WHERE dimension = ? AND memory_id IN (" + string(placeholders) + ")"
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("hnsw: get-by-ids lookup: %w", err)
+	}
+
+	type idRef struct {
+		id uuid.UUID
+		ns uuid.UUID
+	}
+	byNamespace := make(map[uuid.UUID][]idRef)
+	for rows.Next() {
+		var idStr, nsStr string
+		if err := rows.Scan(&idStr, &nsStr); err != nil {
+			rows.Close() //nolint:errcheck
+			return nil, fmt.Errorf("hnsw: get-by-ids scan: %w", err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			rows.Close() //nolint:errcheck
+			return nil, fmt.Errorf("hnsw: parse memory_id %q: %w", idStr, err)
+		}
+		ns, err := uuid.Parse(nsStr)
+		if err != nil {
+			rows.Close() //nolint:errcheck
+			return nil, fmt.Errorf("hnsw: parse namespace_id %q: %w", nsStr, err)
+		}
+		byNamespace[ns] = append(byNamespace[ns], idRef{id: id, ns: ns})
+	}
+	rows.Close() //nolint:errcheck
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("hnsw: get-by-ids rows: %w", err)
+	}
+
+	out := make(map[uuid.UUID][]float32, len(ids))
+	for ns, refs := range byNamespace {
+		graph, err := s.cache.GetOrCreate(ctx, ns, dimension)
+		if err != nil {
+			return nil, fmt.Errorf("hnsw: get-by-ids load index for ns=%s dim=%d: %w", ns, dimension, err)
+		}
+		want := make([]uuid.UUID, len(refs))
+		for i, r := range refs {
+			want[i] = r.id
+		}
+		got := graph.GetVectors(want)
+		for k, v := range got {
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
 // Delete removes a vector by its associated memory ID.
 func (s *HNSWStore) Delete(ctx context.Context, id uuid.UUID) error {
 	// Look up the memory_vectors row to get namespace_id and dimension.

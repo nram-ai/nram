@@ -464,3 +464,136 @@ func TestPgVectorStore_Search_InvalidDimension(t *testing.T) {
 		t.Fatal("expected error for unsupported dimension 128, got nil")
 	}
 }
+
+// approxEqualVec compares float32 slices within a tolerance large enough to
+// absorb the pgvector wire-encoding round-trip.
+func approxEqualVec(a, b []float32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		d := a[i] - b[i]
+		if d < 0 {
+			d = -d
+		}
+		if d > 1e-5 {
+			return false
+		}
+	}
+	return true
+}
+
+func TestPgVectorStore_GetByIDs_RoundTrip(t *testing.T) {
+	store := setupPgVectorTestWithSchema(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	pool := store.pool
+	if _, err := pool.Exec(ctx, "INSERT INTO namespaces (id, name) VALUES ($1, $2)", nsID, "getbyids-ns"); err != nil {
+		t.Fatalf("insert namespace: %v", err)
+	}
+
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	for i, id := range ids {
+		if _, err := pool.Exec(ctx, "INSERT INTO memories (id, namespace_id, content) VALUES ($1, $2, $3)", id, nsID, "m"+string(rune('A'+i))); err != nil {
+			t.Fatalf("insert memory %d: %v", i, err)
+		}
+	}
+
+	dim := 384
+	embs := []([]float32){
+		makeEmbedding(dim, 0.1),
+		makeEmbedding(dim, 0.5),
+		makeEmbedding(dim, 0.9),
+	}
+	items := []VectorUpsertItem{
+		{ID: ids[0], NamespaceID: nsID, Embedding: embs[0], Dimension: dim},
+		{ID: ids[1], NamespaceID: nsID, Embedding: embs[1], Dimension: dim},
+		{ID: ids[2], NamespaceID: nsID, Embedding: embs[2], Dimension: dim},
+	}
+	if err := store.UpsertBatch(ctx, items); err != nil {
+		t.Fatalf("UpsertBatch: %v", err)
+	}
+
+	got, err := store.GetByIDs(ctx, ids, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs: %v", err)
+	}
+	if len(got) != len(ids) {
+		t.Errorf("expected %d hits, got %d", len(ids), len(got))
+	}
+	for i, id := range ids {
+		v, ok := got[id]
+		if !ok {
+			t.Errorf("missing id %s", id)
+			continue
+		}
+		if !approxEqualVec(v, embs[i]) {
+			t.Errorf("vector mismatch for id %s", id)
+		}
+	}
+}
+
+func TestPgVectorStore_GetByIDs_PartialAndEmpty(t *testing.T) {
+	store := setupPgVectorTestWithSchema(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	pool := store.pool
+	if _, err := pool.Exec(ctx, "INSERT INTO namespaces (id, name) VALUES ($1, $2)", nsID, "partial-ns"); err != nil {
+		t.Fatalf("insert namespace: %v", err)
+	}
+	stored := uuid.New()
+	if _, err := pool.Exec(ctx, "INSERT INTO memories (id, namespace_id, content) VALUES ($1, $2, $3)", stored, nsID, "stored"); err != nil {
+		t.Fatalf("insert memory: %v", err)
+	}
+	dim := 384
+	if err := store.Upsert(ctx, stored, nsID, makeEmbedding(dim, 0.3), dim); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	missing := uuid.New()
+	got, err := store.GetByIDs(ctx, []uuid.UUID{stored, missing}, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs partial: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected 1 hit, got %d", len(got))
+	}
+	if _, ok := got[missing]; ok {
+		t.Errorf("missing id should not appear in result")
+	}
+
+	emptyResult, err := store.GetByIDs(ctx, nil, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs empty: %v", err)
+	}
+	if len(emptyResult) != 0 {
+		t.Errorf("expected empty map for nil input, got %d", len(emptyResult))
+	}
+}
+
+func TestPgVectorStore_GetByIDs_WrongDimension(t *testing.T) {
+	store := setupPgVectorTestWithSchema(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	pool := store.pool
+	if _, err := pool.Exec(ctx, "INSERT INTO namespaces (id, name) VALUES ($1, $2)", nsID, "dim-ns"); err != nil {
+		t.Fatalf("insert namespace: %v", err)
+	}
+	id := uuid.New()
+	if _, err := pool.Exec(ctx, "INSERT INTO memories (id, namespace_id, content) VALUES ($1, $2, $3)", id, nsID, "x"); err != nil {
+		t.Fatalf("insert memory: %v", err)
+	}
+	if err := store.Upsert(ctx, id, nsID, makeEmbedding(384, 0.4), 384); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	got, err := store.GetByIDs(ctx, []uuid.UUID{id}, 768)
+	if err != nil {
+		t.Fatalf("GetByIDs at dim 768: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 hits at wrong dim, got %d", len(got))
+	}
+}
