@@ -12,9 +12,6 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
-// ReembedEntitiesResult summarizes the outcome of a ReembedAllEntities run.
-// Used by both the cascade handler and the operator-facing CLI so progress
-// can be surfaced in either context.
 type ReembedEntitiesResult struct {
 	Total       int
 	Reembedded  int
@@ -24,25 +21,11 @@ type ReembedEntitiesResult struct {
 	LastErrText string
 }
 
-// ReembedAllEntities walks every entity across every namespace and
-// re-embeds each one's canonical name through the configured embedder,
-// upserting the new vector into the entity vector store and stamping the
-// entity row with the new dim. Used by the embedding-model switch cascade
-// (entities are not driven by the enrichment_queue, so they need their
-// own re-embed loop).
-//
-// Batches are sized to embedInputCap (matches the worker pool's per-call
-// cap so we share the same embedder concurrency budget). Within each
-// batch a single Embed call returns all vectors; on partial failure the
-// batch counts as an error and is skipped (operator can re-run the loop;
-// the next pass picks up where this one left off because successfully
-// stamped entities have a non-NULL embedding_dim).
-//
-// Returns counts and a short error description from the last failed
-// batch. A non-nil error is returned only on infrastructure failure
-// (database unreachable mid-walk); per-batch embed errors are accumulated
-// in the result and the loop continues so a single broken batch does not
-// halt the entire migration.
+// ReembedAllEntities re-embeds every entity's canonical name and writes
+// the new vector. Used by the embedding-model switch cascade — entities
+// don't go through the enrichment_queue. Per-batch embed/upsert errors
+// are accumulated in the result and the loop continues; a non-nil error
+// return means infrastructure failure (db unreachable mid-walk).
 func ReembedAllEntities(
 	ctx context.Context,
 	repo *storage.EntityRepo,
@@ -108,9 +91,6 @@ func ReembedAllEntities(
 			continue
 		}
 
-		// All vectors in a batch share a width — embedders return fixed
-		// dim per call. Capture the first non-zero width as the batch
-		// dim; any item with a different (or zero) length is skipped.
 		batchDim := 0
 		for _, vec := range resp.Embeddings {
 			if d := len(vec); d > 0 {

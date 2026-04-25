@@ -53,14 +53,9 @@ type ProviderConfigResponse struct {
 	Entity    ProviderSlotStatus `json:"entity"`
 }
 
-// ProviderSlotStatus describes the current state of a single provider slot.
-//
-// Dimensions is the embedder's native output dimension as discovered by a
-// runtime probe (Embed("probe") → len(resp.Embeddings[0])). It is NOT a
-// user-configurable input — the registry probes the live embedder once
-// after each config change and surfaces the result here for display.
-// Always nil for non-embedding slots (LLMs do not have a meaningful
-// "dim").
+// ProviderSlotStatus describes the current state of a single provider
+// slot. Dimensions is the embedder's probed output dim (Registry.EmbeddingDim);
+// nil for non-embedding slots and on probe failure.
 type ProviderSlotStatus struct {
 	Configured bool   `json:"configured"`
 	Type       string `json:"type,omitempty"`
@@ -78,13 +73,10 @@ type ProviderTestRequest struct {
 	Config ProviderSlotConfig `json:"config"`
 }
 
-// ProviderSlotConfig describes the desired configuration for a provider slot.
-//
-// The embedding provider's output dimension is intentionally NOT included
-// here — it's discovered by probing the live embedder via the registry
-// (see provider.Registry.EmbeddingDim). Letting the user pick a dim that
-// disagrees with the embedder's actual output is a footgun: vectors land
-// in a table the recall path doesn't query, and the failure is silent.
+// ProviderSlotConfig is the desired configuration for a provider slot.
+// Dimensions is intentionally absent — it's discovered by Registry.EmbeddingDim,
+// not user-configurable (a mismatched dim sends vectors to the wrong
+// per-dim table and recall silently breaks).
 type ProviderSlotConfig struct {
 	Type    string `json:"type"`
 	URL     string `json:"url"`
@@ -191,12 +183,9 @@ func handleProviderTest(w http.ResponseWriter, r *http.Request, cfg ProviderAdmi
 	writeJSON(w, http.StatusOK, result)
 }
 
-// handleProviderSlotUpdate handles PUT /providers/{slot} — updates a provider
-// slot. For the embedding slot, a model change additionally triggers the
-// invalidate-and-re-embed cascade; the cascade is gated on a
-// confirm_invalidate flag in the request body so the UI must show a
-// destructive-action modal first. Without confirmation the handler
-// returns 409 Conflict carrying the row counts that would be touched.
+// handleProviderSlotUpdate handles PUT /providers/{slot}. An embedding-model
+// change is gated on confirm_invalidate=true; without it the handler
+// returns 409 Conflict with the row counts the UI shows in its modal.
 func handleProviderSlotUpdate(w http.ResponseWriter, r *http.Request, cfg ProviderAdminConfig, slot string) {
 	if r.Method != http.MethodPut {
 		WriteError(w, ErrBadRequest("method not allowed"))

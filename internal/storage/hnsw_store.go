@@ -414,15 +414,12 @@ func (s *HNSWStore) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID
 }
 
 // TruncateAllVectors evicts every cached graph and clears every persisted
-// vector and snapshot row. The HNSW backend stores all dims in a single
-// vector table per kind (with a `dimension` column), so a single DELETE
-// per table covers the whole "all dims" requirement; same for the
-// snapshot tables. After this call, any subsequent search reloads from
-// the (empty) backing tables and finds nothing — by design, since the
-// embedding-model switch invalidates the entire prior vector space.
+// vector and snapshot row. HNSW stores all dims in a single vector table
+// per kind (with a dimension column), so one DELETE per table covers
+// every dim.
 func (s *HNSWStore) TruncateAllVectors(ctx context.Context) error {
-	// Evict cache before deleting persisted rows so the background flush
-	// cannot re-insert stale graphs after the wipe.
+	// Evict cache first so the background flush cannot re-insert stale
+	// graphs after the wipe.
 	s.cache.RemoveAll()
 
 	for _, spec := range hnswSpecs {

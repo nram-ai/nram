@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -646,12 +647,8 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 				"persistent", persistent)
 			stats["audit_errors"] = stats["audit_errors"].(int) + 1
 			if persistent {
-				// Stamp with a persistent-failure reason so the synthesis
-				// exits eligibility. Without this, every cycle re-audits
-				// the same memory, the same call fails, and the project's
-				// dirty flag never clears (consolidation always reports
-				// has_residual=true). Transient errors fall through and
-				// retry next cycle as before.
+				// Without stamping, has_residual=true loops forever and the
+				// project dirty flag never clears (scheduler.go:251).
 				p.writeAuditDecision(ctx, logger, &mem, meta, "embed_error_persistent", false)
 				stats["persistent_audit_errors"] = stats["persistent_audit_errors"].(int) + 1
 			}
@@ -678,48 +675,36 @@ func (p *ConsolidationPhase) stampAudited(ctx context.Context, mem *model.Memory
 	p.writeAuditDecision(ctx, nil, mem, meta, reason, false)
 }
 
-// isPersistentEmbedError classifies an embedder error as persistent (will
-// fail identically on retry without operator intervention) vs transient
-// (worth retrying next cycle). The audit caller stamps persistent errors
-// so the synthesis exits eligibility; without that stamp every cycle
-// re-audits the same memory, the same call fails, and the project's
-// dirty flag never clears.
-//
-// Classification rules, in order:
-//  1. HTTP 4xx in the wrapped error string → persistent (client-side
-//     problem: input too large, malformed request, missing model).
-//  2. Common context-overflow phrases → persistent (defensive belt for
-//     providers that don't surface the status code in the error string).
-//  3. HTTP 5xx, network/timeout/connection errors, anything else → transient.
-//
-// The OpenAI provider wraps embed failures as
-//
-//	"openai: embedding request failed: API error (NNN): ... [type=..., code=...]"
-//
-// (see internal/provider/openai.go:336), which makes pattern matching on
-// the rendered string a stable signal across the OpenAI-compatible
-// providers we use today (OpenAI itself, Ollama via the OpenAI adapter).
+// persistentEmbedErrorRegex matches HTTP 4xx in OpenAI-shaped error
+// messages (provider/openai.go:336 wraps as "API error (NNN): ...").
+var persistentEmbedErrorRegex = regexp.MustCompile(`API error \(4\d{2}\)`)
+
+// persistentEmbedPhrases catches context-overflow shapes from providers
+// whose errors do not surface the HTTP status code in the message.
+var persistentEmbedPhrases = []string{
+	"context length",
+	"maximum context",
+	"context window",
+	"too long",
+	"token limit",
+	"exceeds the maximum",
+	"input is too large",
+}
+
+// isPersistentEmbedError returns true for embed errors that will fail
+// identically on retry (HTTP 4xx, context overflow). Persistent errors
+// are stamped on the synthesis so it exits eligibility; transient ones
+// (5xx, network, timeout) fall through and retry next cycle.
 func isPersistentEmbedError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
-	for code := 400; code < 500; code++ {
-		if strings.Contains(msg, fmt.Sprintf("API error (%d)", code)) {
-			return true
-		}
+	if persistentEmbedErrorRegex.MatchString(msg) {
+		return true
 	}
 	lower := strings.ToLower(msg)
-	persistentPhrases := []string{
-		"context length",
-		"maximum context",
-		"context window",
-		"too long",
-		"token limit",
-		"exceeds the maximum",
-		"input is too large",
-	}
-	for _, phrase := range persistentPhrases {
+	for _, phrase := range persistentEmbedPhrases {
 		if strings.Contains(lower, phrase) {
 			return true
 		}

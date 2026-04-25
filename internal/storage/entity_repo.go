@@ -255,10 +255,19 @@ func (r *EntityRepo) UpdateEmbeddingDimBatch(ctx context.Context, ids []uuid.UUI
 	return nil
 }
 
-// ClearAllEmbeddingDims sets embedding_dim = NULL for every row in the
-// entities table. Used by the embedding-model switch cascade so the
-// re-embed pipeline treats every entity as needing fresh vectors. Returns
-// the count of rows affected.
+// CountWithEmbeddingDim returns the number of entities that currently
+// have a non-NULL embedding_dim.
+func (r *EntityRepo) CountWithEmbeddingDim(ctx context.Context) (int64, error) {
+	query := `SELECT COUNT(*) FROM entities WHERE embedding_dim IS NOT NULL`
+	var n int64
+	if err := r.db.QueryRow(ctx, query).Scan(&n); err != nil {
+		return 0, fmt.Errorf("entity count with embedding_dim: %w", err)
+	}
+	return n, nil
+}
+
+// ClearAllEmbeddingDims sets embedding_dim = NULL for every entity.
+// Returns the count of rows affected.
 func (r *EntityRepo) ClearAllEmbeddingDims(ctx context.Context) (int64, error) {
 	query := `UPDATE entities SET embedding_dim = NULL WHERE embedding_dim IS NOT NULL`
 	res, err := r.db.Exec(ctx, query)
@@ -502,10 +511,8 @@ func (r *EntityRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID)
 	return r.scanEntities(rows)
 }
 
-// ListAll returns a page of entities across every namespace, ordered by id
-// for stable pagination. Used by maintenance tooling that needs to walk the
-// entire entities table (re-embed, schema migrations). Pass limit=0 to use
-// a sensible default page size (500).
+// ListAll returns a page of entities across every namespace, id-ordered
+// for stable pagination. limit=0 uses 500.
 func (r *EntityRepo) ListAll(ctx context.Context, limit, offset int) ([]model.Entity, error) {
 	if limit <= 0 {
 		limit = 500

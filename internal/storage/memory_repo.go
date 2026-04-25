@@ -496,10 +496,20 @@ func (r *MemoryRepo) ListIDsByNamespaceFiltered(ctx context.Context, namespaceID
 	return result, nil
 }
 
-// ClearAllEmbeddingDims sets embedding_dim = NULL for every live row in
-// the memories table. Used by the embedding-model switch cascade so the
-// enrichment worker treats every memory as needing fresh vectors. Returns
-// the count of rows affected.
+// CountWithEmbeddingDim returns the number of live memories that
+// currently have a non-NULL embedding_dim.
+func (r *MemoryRepo) CountWithEmbeddingDim(ctx context.Context) (int64, error) {
+	query := `SELECT COUNT(*) FROM memories WHERE embedding_dim IS NOT NULL AND deleted_at IS NULL`
+	var n int64
+	if err := r.db.QueryRow(ctx, query).Scan(&n); err != nil {
+		return 0, fmt.Errorf("memory count with embedding_dim: %w", err)
+	}
+	return n, nil
+}
+
+// ClearAllEmbeddingDims sets embedding_dim = NULL for every live memory.
+// Returns the count of rows affected. Used by the embedding-model switch
+// cascade so re-embed treats every row as fresh.
 func (r *MemoryRepo) ClearAllEmbeddingDims(ctx context.Context) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	query := `UPDATE memories SET embedding_dim = NULL, updated_at = ? WHERE embedding_dim IS NOT NULL AND deleted_at IS NULL`

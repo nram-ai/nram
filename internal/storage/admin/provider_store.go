@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nram-ai/nram/internal/api"
@@ -16,39 +17,32 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
-// ProviderAdminStore implements api.ProviderAdminStore by wrapping the provider
-// Registry and SettingsRepo for persistent configuration. The cascade deps
-// (memoryRepo, entityRepo, vectorStore, db) are required for the
-// embedding-model switch path; passing nil disables that path with a
-// runtime error.
-type ProviderAdminStore struct {
-	registry     *provider.Registry
-	settingsRepo *storage.SettingsRepo
-	memoryRepo   *storage.MemoryRepo
-	entityRepo   *storage.EntityRepo
-	vectorStore  storage.VectorStore
-	db           storage.DB
+// ProviderAdminDeps groups the dependencies for ProviderAdminStore.
+// memoryRepo, entityRepo, vectorStore, and db are only required for the
+// embedding-model switch cascade; tests that don't exercise it may leave
+// them nil.
+type ProviderAdminDeps struct {
+	Registry     *provider.Registry
+	SettingsRepo *storage.SettingsRepo
+	MemoryRepo   *storage.MemoryRepo
+	EntityRepo   *storage.EntityRepo
+	VectorStore  storage.VectorStore
+	DB           storage.DB
+
+	// CascadeCtx, if set, is passed to the detached entity-re-embed
+	// goroutine launched after a confirmed model switch. Without it the
+	// goroutine would survive server shutdown and write to a closed pool.
+	CascadeCtx context.Context
 }
 
-// NewProviderAdminStore creates a new ProviderAdminStore. memoryRepo,
-// entityRepo, vectorStore, and db may be nil in test contexts that do
-// not exercise the embedding-model switch cascade.
-func NewProviderAdminStore(
-	registry *provider.Registry,
-	settingsRepo *storage.SettingsRepo,
-	memoryRepo *storage.MemoryRepo,
-	entityRepo *storage.EntityRepo,
-	vectorStore storage.VectorStore,
-	db storage.DB,
-) *ProviderAdminStore {
-	return &ProviderAdminStore{
-		registry:     registry,
-		settingsRepo: settingsRepo,
-		memoryRepo:   memoryRepo,
-		entityRepo:   entityRepo,
-		vectorStore:  vectorStore,
-		db:           db,
-	}
+type ProviderAdminStore struct {
+	deps ProviderAdminDeps
+
+	cascadeMu sync.Mutex // serializes destructive embedding-model swaps
+}
+
+func NewProviderAdminStore(deps ProviderAdminDeps) *ProviderAdminStore {
+	return &ProviderAdminStore{deps: deps}
 }
 
 func (s *ProviderAdminStore) GetProviderConfig(ctx context.Context) (*api.ProviderConfigResponse, error) {
@@ -63,8 +57,8 @@ func (s *ProviderAdminStore) GetProviderConfig(ctx context.Context) (*api.Provid
 func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.ProviderSlotStatus {
 	// Read persisted config from the settings table.
 	var persisted *api.ProviderSlotConfig
-	if s.settingsRepo != nil {
-		setting, err := s.settingsRepo.Get(ctx, "provider."+slot, "global")
+	if s.deps.SettingsRepo != nil {
+		setting, err := s.deps.SettingsRepo.Get(ctx, "provider."+slot, "global")
 		if err == nil {
 			var cfg api.ProviderSlotConfig
 			if json.Unmarshal(setting.Value, &cfg) == nil && cfg.Type != "" {
@@ -75,14 +69,14 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 
 	// Check if the live provider is loaded in the registry.
 	alive := false
-	if s.registry != nil {
+	if s.deps.Registry != nil {
 		switch slot {
 		case "embedding":
-			alive = s.registry.GetEmbedding() != nil
+			alive = s.deps.Registry.GetEmbedding() != nil
 		case "fact":
-			alive = s.registry.GetFact() != nil
+			alive = s.deps.Registry.GetFact() != nil
 		case "entity":
-			alive = s.registry.GetEntity() != nil
+			alive = s.deps.Registry.GetEntity() != nil
 		}
 	}
 
@@ -98,14 +92,10 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 		status = "error"
 	}
 
-	// For the embedding slot, surface the probed dim from the live registry
-	// rather than echoing whatever the user might have typed in a previous
-	// version. Probe failures (provider down, model mid-load) leave the
-	// field nil rather than misleading the UI; the status field carries the
-	// alive/error signal separately.
+	// Probe failures leave Dimensions nil; alive/error is carried by status.
 	var dimensions *int
-	if slot == "embedding" && alive && s.registry != nil {
-		if d, err := s.registry.EmbeddingDim(ctx); err == nil && d > 0 {
+	if slot == "embedding" && alive && s.deps.Registry != nil {
+		if d, err := s.deps.Registry.EmbeddingDim(ctx); err == nil && d > 0 {
 			dimensions = &d
 		}
 	}
@@ -204,11 +194,8 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 }
 
 func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string, cfg api.ProviderSlotConfig, opts api.UpdateProviderSlotOpts) (*api.UpdateProviderSlotResult, error) {
-	// Detect an embedding-model swap before persisting. If the model
-	// changed, route through the destructive cascade (gated on
-	// confirm_invalidate). Non-embedding slot updates and embedding
-	// updates that don't touch the model field bypass the cascade
-	// entirely.
+	// An embedding-model change routes through the destructive cascade.
+	// Same-model edits (URL, key, timeout) bypass it.
 	if slot == "embedding" {
 		oldModel := s.currentEmbeddingModel(ctx)
 		if oldModel != "" && cfg.Model != "" && cfg.Model != oldModel {
@@ -222,14 +209,13 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 	return nil, nil
 }
 
-// currentEmbeddingModel reads the persisted provider.embedding setting
-// and returns its model field. Empty string means no embedding slot is
-// configured yet (treat any incoming model as a fresh setup, not a swap).
+// currentEmbeddingModel returns "" when no embedding slot is persisted —
+// callers treat that as a fresh setup, not a model swap.
 func (s *ProviderAdminStore) currentEmbeddingModel(ctx context.Context) string {
-	if s.settingsRepo == nil {
+	if s.deps.SettingsRepo == nil {
 		return ""
 	}
-	setting, err := s.settingsRepo.Get(ctx, "provider.embedding", "global")
+	setting, err := s.deps.SettingsRepo.Get(ctx, "provider.embedding", "global")
 	if err != nil || setting == nil {
 		return ""
 	}
@@ -240,9 +226,6 @@ func (s *ProviderAdminStore) currentEmbeddingModel(ctx context.Context) string {
 	return current.Model
 }
 
-// persistAndReload writes the slot config to settings and triggers a
-// registry hot-reload. Used for both non-cascade updates and the
-// post-truncate persist step in switchEmbeddingModel.
 func (s *ProviderAdminStore) persistAndReload(ctx context.Context, slot string, cfg api.ProviderSlotConfig) error {
 	value, err := json.Marshal(cfg)
 	if err != nil {
@@ -254,55 +237,41 @@ func (s *ProviderAdminStore) persistAndReload(ctx context.Context, slot string, 
 		Value: json.RawMessage(value),
 		Scope: "global",
 	}
-	if err := s.settingsRepo.Set(ctx, setting); err != nil {
+	if err := s.deps.SettingsRepo.Set(ctx, setting); err != nil {
 		return err
 	}
 
-	if s.registry != nil {
+	if s.deps.Registry != nil {
 		newCfg := s.buildRegistryConfigFromDB(ctx)
-		if err := s.registry.Reload(newCfg); err != nil {
+		if err := s.deps.Registry.Reload(newCfg); err != nil {
 			log.Printf("provider hot-reload failed: %v", err)
 		}
 	}
 	return nil
 }
 
-// switchEmbeddingModel runs the destructive cascade triggered by an
-// embedding-model change. Sequence:
-//   1. Gate: require ConfirmInvalidate=true. Without it, return
-//      NeedsConfirmation=true so the UI shows the modal.
-//   2. Truncate every memory_vectors_* and entity_vectors_* table/
-//      collection — vectors generated by the old model are invalid in
-//      the new model's vector space (no cross-model retrieval).
-//   3. NULL out memories.embedding_dim and entities.embedding_dim so
-//      the re-embed pipeline treats every row as needing fresh vectors.
-//   4. Persist the new config and reload the registry. The next
-//      EmbeddingDim probe runs against the new embedder.
-//   5. Enqueue all live memories via BackfillReembedAllJobs (workers
-//      drain in the background).
-//   6. Kick off ReembedAllEntities in a goroutine (entities are not
-//      driven by the enrichment_queue; they need their own loop).
-//
-// The HTTP request returns immediately after step 5; entity re-embed
-// continues in the background. The result carries row counts so the UI
-// can display "N memories invalidated, M entities invalidated" and a
-// "re-embed in progress" status.
+// switchEmbeddingModel runs the destructive cascade for an
+// embedding-model change. Without ConfirmInvalidate it returns row
+// counts and NeedsConfirmation=true; with it, truncates every vector
+// table/collection (no cross-model retrieval), NULLs embedding_dim,
+// persists the new config, force-enqueues memories, and kicks off the
+// entity re-embed in a detached goroutine.
 func (s *ProviderAdminStore) switchEmbeddingModel(
 	ctx context.Context,
 	oldModel string,
 	cfg api.ProviderSlotConfig,
 	opts api.UpdateProviderSlotOpts,
 ) (*api.UpdateProviderSlotResult, error) {
-	if s.memoryRepo == nil || s.entityRepo == nil || s.vectorStore == nil || s.db == nil {
+	if s.deps.MemoryRepo == nil || s.deps.EntityRepo == nil || s.deps.VectorStore == nil || s.deps.DB == nil {
 		return nil, fmt.Errorf("embedding-model switch cascade requires memoryRepo, entityRepo, vectorStore, and db; one or more is nil")
 	}
 
-	// Pre-count rows that would be invalidated. Used both for the
-	// confirmation modal payload and for the post-cascade response.
-	memCount, _ := s.countEmbeddingDimNotNull(ctx, "memories", true)
-	entCount, _ := s.countEmbeddingDimNotNull(ctx, "entities", false)
-
 	if !opts.ConfirmInvalidate {
+		// Counts are only useful in the confirmation-modal payload. The
+		// confirmed branch gets exact counts back from the UPDATEs and
+		// does not need this pre-count.
+		memCount, _ := s.deps.MemoryRepo.CountWithEmbeddingDim(ctx)
+		entCount, _ := s.deps.EntityRepo.CountWithEmbeddingDim(ctx)
 		return &api.UpdateProviderSlotResult{
 			NeedsConfirmation: true,
 			OldModel:          oldModel,
@@ -312,15 +281,22 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 		}, nil
 	}
 
-	if err := s.vectorStore.TruncateAllVectors(ctx); err != nil {
+	// Serialize destructive cascades — concurrent swaps would race on
+	// UpdateEmbeddingDimBatch and the goroutine launches below.
+	if !s.cascadeMu.TryLock() {
+		return nil, fmt.Errorf("an embedding-model switch is already in progress")
+	}
+	defer s.cascadeMu.Unlock()
+
+	if err := s.deps.VectorStore.TruncateAllVectors(ctx); err != nil {
 		return nil, fmt.Errorf("cascade: truncate vectors: %w", err)
 	}
 
-	memNulled, err := s.memoryRepo.ClearAllEmbeddingDims(ctx)
+	memNulled, err := s.deps.MemoryRepo.ClearAllEmbeddingDims(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cascade: NULL memory embedding_dim: %w", err)
 	}
-	entNulled, err := s.entityRepo.ClearAllEmbeddingDims(ctx)
+	entNulled, err := s.deps.EntityRepo.ClearAllEmbeddingDims(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cascade: NULL entity embedding_dim: %w", err)
 	}
@@ -329,19 +305,22 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 		return nil, fmt.Errorf("cascade: persist + reload: %w", err)
 	}
 
-	// Force-enqueue every live memory. Workers drain in the background.
-	jobs, err := storage.BackfillReembedAllJobs(ctx, s.db)
+	jobs, err := storage.BackfillReembedAllJobs(ctx, s.deps.DB)
 	if err != nil {
 		return nil, fmt.Errorf("cascade: enqueue memory re-embed jobs: %w", err)
 	}
 
-	// Entity re-embed runs in a detached goroutine so the HTTP request
-	// returns promptly. A request-scoped context would be cancelled when
-	// the response is written; use Background() so the loop survives.
-	if s.registry != nil {
-		if embedder := s.registry.GetEmbedding(); embedder != nil {
+	// Detached so the HTTP request returns promptly. Use the
+	// server-lifecycle context if available so the loop is cancelled on
+	// shutdown rather than writing to a closed pool.
+	if s.deps.Registry != nil {
+		if embedder := s.deps.Registry.GetEmbedding(); embedder != nil {
+			bgCtx := s.deps.CascadeCtx
+			if bgCtx == nil {
+				bgCtx = context.Background()
+			}
 			go func(emb provider.EmbeddingProvider) {
-				if _, rerr := enrichment.ReembedAllEntities(context.Background(), s.entityRepo, s.vectorStore, emb); rerr != nil {
+				if _, rerr := enrichment.ReembedAllEntities(bgCtx, s.deps.EntityRepo, s.deps.VectorStore, emb); rerr != nil {
 					slog.Error("cascade: entity re-embed loop failed", "err", rerr)
 				}
 			}(embedder)
@@ -358,21 +337,6 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 	}, nil
 }
 
-// countEmbeddingDimNotNull returns the count of rows in `table` that
-// currently have a non-NULL embedding_dim. liveOnly excludes soft-deleted
-// rows when the table has a deleted_at column.
-func (s *ProviderAdminStore) countEmbeddingDimNotNull(ctx context.Context, table string, liveOnly bool) (int64, error) {
-	q := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE embedding_dim IS NOT NULL", table)
-	if liveOnly {
-		q += " AND deleted_at IS NULL"
-	}
-	var count int64
-	if err := s.db.QueryRow(ctx, q).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count %s embedding_dim: %w", table, err)
-	}
-	return count, nil
-}
-
 // buildRegistryConfigFromDB reads all three provider slot settings from the
 // database and assembles a RegistryConfig for registry reload.
 func (s *ProviderAdminStore) buildRegistryConfigFromDB(ctx context.Context) provider.RegistryConfig {
@@ -386,7 +350,7 @@ func (s *ProviderAdminStore) buildRegistryConfigFromDB(ctx context.Context) prov
 		{"provider.entity", &cfg.Entity},
 	}
 	for _, slot := range slots {
-		setting, err := s.settingsRepo.Get(ctx, slot.key, "global")
+		setting, err := s.deps.SettingsRepo.Get(ctx, slot.key, "global")
 		if err != nil {
 			continue
 		}
@@ -445,8 +409,8 @@ func (s *ProviderAdminStore) resolveOllamaURL(override string) string {
 		return strings.TrimSuffix(strings.TrimSuffix(override, "/"), "/v1")
 	}
 
-	if s.registry != nil {
-		cfg := s.registry.GetConfig()
+	if s.deps.Registry != nil {
+		cfg := s.deps.Registry.GetConfig()
 		for _, slot := range []provider.SlotConfig{cfg.Embedding, cfg.Fact, cfg.Entity} {
 			if strings.Contains(slot.Type, "ollama") || strings.Contains(slot.BaseURL, ":11434") {
 				if slot.BaseURL != "" {

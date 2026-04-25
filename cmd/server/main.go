@@ -415,7 +415,14 @@ func main() {
 	usageStore := adminstore.NewUsageStore(db)
 	databaseAdminStore := adminstore.NewDatabaseAdminStore(db)
 	namespaceAdminStore := adminstore.NewNamespaceAdminStore(db)
-	providerAdminStore := adminstore.NewProviderAdminStore(registry, settingsRepo, memoryRepo, entityRepo, vectorStore, db)
+	providerAdminStore := adminstore.NewProviderAdminStore(adminstore.ProviderAdminDeps{
+		Registry:     registry,
+		SettingsRepo: settingsRepo,
+		MemoryRepo:   memoryRepo,
+		EntityRepo:   entityRepo,
+		VectorStore:  vectorStore,
+		DB:           db,
+	})
 	oauthAdminStore := adminstore.NewOAuthAdminStore(oauthRepo)
 	enrichmentAdminStore := adminstore.NewEnrichmentAdminStore(enrichmentQueueRepo, settingsRepo, db)
 

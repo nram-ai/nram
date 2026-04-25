@@ -63,6 +63,12 @@ func NewRegistry(config RegistryConfig) (*Registry, error) {
 	if err := r.load(config); err != nil {
 		return nil, err
 	}
+	// Eagerly probe the embedder dim so the first downstream caller does
+	// not pay the round-trip latency. Failures are non-fatal — the cache
+	// stays empty and EmbeddingDim retries on demand.
+	if r.embedding != nil {
+		_, _ = r.probeAndCache(context.Background(), r.embedding)
+	}
 	return r, nil
 }
 
@@ -89,16 +95,15 @@ func (r *Registry) GetEntity() LLMProvider {
 
 // Reload recreates all providers from a new configuration, swapping them
 // atomically under the write lock. Invalidates the cached embedding
-// dimension; the next EmbeddingDim call re-probes against the new
-// embedder.
+// dimension and immediately re-probes the new embedder so the first
+// downstream EmbeddingDim caller does not pay the round-trip latency.
+// Probe failures are non-fatal — the cache stays empty and a later
+// EmbeddingDim call will retry.
 func (r *Registry) Reload(config RegistryConfig) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Build everything into temporaries first so that a partial failure does
-	// not leave the registry in a half-updated state.
 	tmp := &Registry{}
 	if err := tmp.load(config); err != nil {
+		r.mu.Unlock()
 		return err
 	}
 
@@ -107,23 +112,20 @@ func (r *Registry) Reload(config RegistryConfig) error {
 	r.entity = tmp.entity
 	r.config = tmp.config
 	r.embDim = 0
+	embedder := r.embedding
+	r.mu.Unlock()
+
+	if embedder != nil {
+		_, _ = r.probeAndCache(context.Background(), embedder)
+	}
 	return nil
 }
 
-// EmbeddingDim returns the embedding provider's native output dimension,
-// discovered via a one-shot probe (Embed("probe")) and cached. Reload
-// invalidates the cache. Returns 0 if the embedder is not configured;
-// returns an error if the probe fails (caller may retry on a later call).
-//
-// Cross-provider design: the probe sends a request and measures the
-// response length. It does not ask the provider what dimensions it
-// supports. This works identically for OpenAI, Gemini, Ollama (via the
-// OpenAI adapter), OpenRouter, and any custom OpenAI-compatible endpoint.
-//
-// Concurrency: the probe Embed call happens OUTSIDE the registry lock so
-// a slow upstream does not block other registry operations. A racing
-// concurrent caller may also probe; the first writer wins and the second
-// discards its result.
+// EmbeddingDim returns the embedding provider's native output dimension.
+// Discovered by sending Embed("probe") and reading len(resp.Embeddings[0])
+// — works identically across every provider because it measures the
+// response rather than asking the provider what it supports. Cached;
+// Reload invalidates and re-probes eagerly. Probe errors are not cached.
 func (r *Registry) EmbeddingDim(ctx context.Context) (int, error) {
 	r.mu.RLock()
 	if r.embDim > 0 {
@@ -137,7 +139,14 @@ func (r *Registry) EmbeddingDim(ctx context.Context) (int, error) {
 	if embedder == nil {
 		return 0, fmt.Errorf("registry: embedding provider not configured")
 	}
+	return r.probeAndCache(ctx, embedder)
+}
 
+// probeAndCache runs the dim probe outside the lock (Embed is a network
+// call), then takes the write lock to install the result. If a Reload
+// swapped the embedder mid-probe, the measured dim belongs to the old
+// provider and is discarded.
+func (r *Registry) probeAndCache(ctx context.Context, embedder EmbeddingProvider) (int, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	resp, err := embedder.Embed(probeCtx, &EmbeddingRequest{Input: []string{"probe"}})
@@ -151,12 +160,9 @@ func (r *Registry) EmbeddingDim(ctx context.Context) (int, error) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Discard if a Reload swapped the embedder under us — the dim we
-	// measured belongs to the old provider.
 	if r.embedding != embedder {
 		return 0, fmt.Errorf("registry: provider changed during probe; retry")
 	}
-	// First writer wins. If another caller already populated, use their value.
 	if r.embDim > 0 {
 		return r.embDim, nil
 	}

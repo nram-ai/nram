@@ -5,16 +5,46 @@ import (
 	"fmt"
 )
 
-// BackfillEmbedJobs enqueues a pending enrichment job (priority -1) for every
-// live memory that does not already have a pending or running job. Priority
-// -1 drains after live-store jobs. Idempotent: the LEFT JOIN guard means
-// repeated runs insert zero new rows.
-//
-// Exposed via NRAM_ENABLE_EMBED_BACKFILL=1 (startup) and
-// --backfill-embeddings (CLI) on cmd/server.
+// buildEnqueueLiveMemoriesQuery returns the SQL that inserts a priority-(-1)
+// pending enrichment job for every live memory. When dedupe is true, memories
+// that already have a pending or running job are skipped via a LEFT JOIN
+// guard. Both backends share this builder so the column list, dialect
+// quirks, and `deleted_at IS NULL` filter stay in lockstep.
+func buildEnqueueLiveMemoriesQuery(backend string, dedupe bool) (string, error) {
+	var insertCols, idExpr, nowExpr string
+	switch backend {
+	case BackendPostgres:
+		insertCols = "(id, memory_id, namespace_id, status, priority, attempts, max_attempts, created_at, updated_at)"
+		idExpr = "gen_random_uuid()"
+		nowExpr = "now()"
+	case BackendSQLite:
+		insertCols = "(id, memory_id, namespace_id, status, priority, attempts, max_attempts, created_at, updated_at)"
+		idExpr = "lower(hex(randomblob(16)))"
+		nowExpr = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+	default:
+		return "", fmt.Errorf("unsupported backend %s", backend)
+	}
+
+	q := fmt.Sprintf(`INSERT INTO enrichment_queue %s
+		SELECT %s, m.id, m.namespace_id, 'pending', -1, 0, 3, %s, %s
+		FROM memories m`, insertCols, idExpr, nowExpr, nowExpr)
+	if dedupe {
+		q += `
+		LEFT JOIN enrichment_queue q
+		  ON q.memory_id = m.id AND q.status IN ('pending','running')
+		WHERE m.deleted_at IS NULL AND q.id IS NULL`
+	} else {
+		q += `
+		WHERE m.deleted_at IS NULL`
+	}
+	return q, nil
+}
+
+// BackfillEmbedJobs enqueues a priority-(-1) job for every live memory that
+// does not already have a pending or running job. Idempotent. Exposed via
+// NRAM_ENABLE_EMBED_BACKFILL=1 (startup) and --backfill-embeddings (CLI).
 func BackfillEmbedJobs(ctx context.Context, db DB) (int64, error) {
-	// Short-circuit if there is nothing to enqueue. Avoids the full-table
-	// INSERT ... SELECT in steady state when cron re-runs the backfill.
+	// Short-circuit avoids the full-table INSERT...SELECT in steady state.
 	present, err := hasUncoveredMemory(ctx, db)
 	if err != nil {
 		return 0, err
@@ -23,35 +53,10 @@ func BackfillEmbedJobs(ctx context.Context, db DB) (int64, error) {
 		return 0, nil
 	}
 
-	var query string
-	switch db.Backend() {
-	case BackendPostgres:
-		query = `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, created_at, updated_at)
-			SELECT gen_random_uuid(), m.id, m.namespace_id, 'pending', -1, 0, 3, now(), now()
-			FROM memories m
-			LEFT JOIN enrichment_queue q
-			  ON q.memory_id = m.id AND q.status IN ('pending','running')
-			WHERE m.deleted_at IS NULL AND q.id IS NULL`
-	case BackendSQLite:
-		query = `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, created_at, updated_at)
-			SELECT
-			  lower(hex(randomblob(16))),
-			  m.id,
-			  m.namespace_id,
-			  'pending',
-			  -1,
-			  0,
-			  3,
-			  strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-			  strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-			FROM memories m
-			LEFT JOIN enrichment_queue q
-			  ON q.memory_id = m.id AND q.status IN ('pending','running')
-			WHERE m.deleted_at IS NULL AND q.id IS NULL`
-	default:
-		return 0, fmt.Errorf("backfill embed jobs: unsupported backend %s", db.Backend())
+	query, err := buildEnqueueLiveMemoriesQuery(db.Backend(), true)
+	if err != nil {
+		return 0, fmt.Errorf("backfill embed jobs: %w", err)
 	}
-
 	result, err := db.Exec(ctx, query)
 	if err != nil {
 		return 0, fmt.Errorf("backfill embed jobs: %w", err)
@@ -79,49 +84,15 @@ func hasUncoveredMemory(ctx context.Context, db DB) (bool, error) {
 	return rows.Next(), rows.Err()
 }
 
-// BackfillReembedAllJobs enqueues a pending enrichment job (priority -1) for
-// every live memory unconditionally, including memories that already have a
-// pending or running job. Used by the embedding-model switch cascade so the
-// worker pool re-embeds the entire corpus under the new model. Returns the
-// number of new rows inserted.
-//
-// Idempotency note: the enrichment_queue does NOT have a UNIQUE constraint
-// on memory_id, so repeated calls insert duplicate rows. The worker pool
-// handles duplicates by short-circuiting on memories whose embedding_dim
-// already matches the current provider dim. For a one-shot cascade after a
-// model switch (where embedding_dim has been NULLed) this is the desired
-// behavior — every memory needs exactly one job to land.
-//
-// Callers MUST ensure dependent state is consistent before invoking:
-// memories.embedding_dim should be NULL'd and the corresponding
-// memory_vectors_* tables truncated, otherwise the worker may skip
-// memories whose old vectors are still indexed under a stale dim.
+// BackfillReembedAllJobs enqueues a priority-(-1) job for every live memory
+// unconditionally. Used by the embedding-model switch cascade after the
+// vector tables have been truncated and embedding_dim NULL'd — duplicates
+// against in-flight jobs are expected and handled by the worker.
 func BackfillReembedAllJobs(ctx context.Context, db DB) (int64, error) {
-	var query string
-	switch db.Backend() {
-	case BackendPostgres:
-		query = `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, created_at, updated_at)
-			SELECT gen_random_uuid(), m.id, m.namespace_id, 'pending', -1, 0, 3, now(), now()
-			FROM memories m
-			WHERE m.deleted_at IS NULL`
-	case BackendSQLite:
-		query = `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, created_at, updated_at)
-			SELECT
-			  lower(hex(randomblob(16))),
-			  m.id,
-			  m.namespace_id,
-			  'pending',
-			  -1,
-			  0,
-			  3,
-			  strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-			  strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-			FROM memories m
-			WHERE m.deleted_at IS NULL`
-	default:
-		return 0, fmt.Errorf("backfill reembed all jobs: unsupported backend %s", db.Backend())
+	query, err := buildEnqueueLiveMemoriesQuery(db.Backend(), false)
+	if err != nil {
+		return 0, fmt.Errorf("backfill reembed all jobs: %w", err)
 	}
-
 	result, err := db.Exec(ctx, query)
 	if err != nil {
 		return 0, fmt.Errorf("backfill reembed all jobs: %w", err)

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -301,30 +302,20 @@ func (s *PgVectorStore) Delete(ctx context.Context, kind VectorKind, id uuid.UUI
 	return nil
 }
 
-// TruncateAllVectors clears every memory_vectors_<dim> and entity_vectors_<dim>
-// table in a single transaction so an embedding-model switch leaves no
-// orphaned vectors behind. Schema is preserved (TRUNCATE, not DROP) so
-// re-population begins immediately under the new dim.
+// TruncateAllVectors clears every memory_vectors_<dim> and
+// entity_vectors_<dim> table in one statement. Schema is preserved
+// (TRUNCATE, not DROP). Multi-table TRUNCATE is atomic and acquires the
+// table locks in one phase, so no explicit transaction wrapper is needed.
 func (s *PgVectorStore) TruncateAllVectors(ctx context.Context) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("pgvector: truncate begin tx: %w", err)
+	tables := make([]string, 0, len(supportedMemoryDimensions)+len(supportedEntityDimensions))
+	for _, t := range supportedMemoryDimensions {
+		tables = append(tables, t)
 	}
-	defer tx.Rollback(ctx)
-
-	for _, table := range supportedMemoryDimensions {
-		if _, err := tx.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", table)); err != nil {
-			return fmt.Errorf("pgvector: truncate %s: %w", table, err)
-		}
+	for _, t := range supportedEntityDimensions {
+		tables = append(tables, t)
 	}
-	for _, table := range supportedEntityDimensions {
-		if _, err := tx.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", table)); err != nil {
-			return fmt.Errorf("pgvector: truncate %s: %w", table, err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("pgvector: truncate commit: %w", err)
+	if _, err := s.pool.Exec(ctx, "TRUNCATE TABLE "+strings.Join(tables, ", ")); err != nil {
+		return fmt.Errorf("pgvector: truncate all vector tables: %w", err)
 	}
 	return nil
 }
