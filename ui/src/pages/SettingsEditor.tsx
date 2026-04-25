@@ -66,6 +66,10 @@ const PROMPT_KEYS = new Set([
   "enrichment.entity_prompt",
   "enrichment.fact_extraction_prompt",
   "enrichment.entity_extraction_prompt",
+  "dreaming.contradiction_prompt",
+  "dreaming.synthesis_prompt",
+  "dreaming.alignment_prompt",
+  "dreaming.novelty.judge_prompt",
 ]);
 
 // ---------------------------------------------------------------------------

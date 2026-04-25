@@ -255,6 +255,15 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingConfidenceFloor:              "0.05",
 }
 
+// GetDefault returns the built-in default for the given setting key. The
+// boolean reports whether the key is registered. Used by callers that need
+// the same fallback the runtime cascade lands on (e.g. the schema admin
+// surface) so they cannot drift from the values applied at Resolve time.
+func GetDefault(key string) (string, bool) {
+	v, ok := settingDefaults[key]
+	return v, ok
+}
+
 // SettingsRepository defines the persistence operations needed by the settings service.
 type SettingsRepository interface {
 	Get(ctx context.Context, key string, scope string) (*model.Setting, error)

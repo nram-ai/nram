@@ -49,113 +49,19 @@ Respond ONLY as JSON, no markdown fences, no preamble:
   "relationships": [{"source": "...", "target": "...", "relation": "...", "temporal": "current"}]
 }`;
 
-const DEFAULT_CONTRADICTION_PROMPT = `You are a contradiction detector. You do NOT converse. You output JSON only.
-
-Determine if the two statements below contradict each other.
-
-<statement_a>
-%s
-</statement_a>
-
-<statement_b>
-%s
-</statement_b>
-
-Output ONLY this JSON, nothing else:
-{"contradicts": true, "explanation": "reason"}
-or
-{"contradicts": false, "explanation": "reason"}`;
-
-const DEFAULT_SYNTHESIS_PROMPT = `You are a knowledge synthesizer. You do NOT converse, greet, or ask questions. You output ONLY the synthesized text.
-
-Combine the following pieces of information into a single concise paragraph that preserves all key facts. Do not lose details. Do not add commentary. Do not prefix with "Here is" or similar.
-
-<information>
-%s
-</information>
-
-Output ONLY the synthesized text:`;
-
-const DEFAULT_ALIGNMENT_PROMPT = `You are an alignment scorer. You do NOT converse. You output JSON only.
-
-Score how strongly the evidence supports or contradicts the synthesis.
-
-<synthesis>
-%s
-</synthesis>
-
-<evidence>
-%s
-</evidence>
-
-Output ONLY this JSON, nothing else:
-{"alignment": 0.0, "reasoning": "brief reason"}
-
-alignment must be a float:
-1.0 = strong support
-0.0 = neutral/unrelated
--1.0 = strong contradiction`;
-
-const DEFAULT_NOVELTY_JUDGE_PROMPT = `You are a novelty auditor. You do NOT converse. You output JSON only.
-
-Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.
-
-Hard rules:
-- Rewording is NEVER novelty. If the synthesis says the same thing with different words, it is not novel.
-- Reorganization is NEVER novelty. Reordering, combining, or restructuring source content is not novel.
-- Summarization is NEVER novelty. Compressing or generalizing source content is not novel.
-- A fact is novel ONLY if it introduces a new entity, relationship, quantity, date, cause, or consequence absent from every source.
-- When in doubt, return an empty array.
-
-<synthesis>
-%s
-</synthesis>
-
-<sources>
-%s
-</sources>
-
-Output ONLY this JSON, nothing else:
-{"novel_facts": ["fact 1", "fact 2"]}
-
-Empty array if every fact in the synthesis is already present in the sources.`;
-
 interface DreamingPromptSpec {
   key: string;
-  defaultPrompt: string;
   title: string;
-  description: string;
 }
 
+// Title is UI-only; the prompt body default and the per-key description are
+// resolved from the admin settings schema at render time so the editor
+// cannot drift from the runtime cascade in service.GetDefault.
 const DREAMING_PROMPTS: DreamingPromptSpec[] = [
-  {
-    key: "dreaming.contradiction_prompt",
-    defaultPrompt: DEFAULT_CONTRADICTION_PROMPT,
-    title: "Contradiction Detection Prompt",
-    description:
-      "Used to determine whether two memories contradict each other. Should return JSON with a contradicts boolean and explanation. Uses two %s placeholders for Statement A and Statement B.",
-  },
-  {
-    key: "dreaming.synthesis_prompt",
-    defaultPrompt: DEFAULT_SYNTHESIS_PROMPT,
-    title: "Memory Synthesis Prompt",
-    description:
-      "Used to consolidate a cluster of related memories into a single, concise synthesis. Should return only the synthesized text. Uses one %s placeholder for the combined memory content.",
-  },
-  {
-    key: "dreaming.alignment_prompt",
-    defaultPrompt: DEFAULT_ALIGNMENT_PROMPT,
-    title: "Alignment Scoring Prompt",
-    description:
-      "Used to evaluate how strongly new evidence supports or contradicts an existing synthesis. Should return JSON with an alignment float (-1.0 to 1.0) and reasoning. Uses two %s placeholders for synthesis and evidence.",
-  },
-  {
-    key: "dreaming.novelty.judge_prompt",
-    defaultPrompt: DEFAULT_NOVELTY_JUDGE_PROMPT,
-    title: "Novelty Judge Prompt",
-    description:
-      "Used to decide whether a dream synthesis introduces genuinely new facts over its source memories. Should return JSON with a novel_facts array (empty when the synthesis is duplicative). Uses two %s placeholders for synthesis and sources.",
-  },
+  { key: "dreaming.contradiction_prompt", title: "Contradiction Detection Prompt" },
+  { key: "dreaming.synthesis_prompt", title: "Memory Synthesis Prompt" },
+  { key: "dreaming.alignment_prompt", title: "Alignment Scoring Prompt" },
+  { key: "dreaming.novelty.judge_prompt", title: "Novelty Judge Prompt" },
 ];
 
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:
@@ -229,21 +135,27 @@ function resolvePromptData(
 
 function resolveDreamingPrompt(
   spec: DreamingPromptSpec,
+  schemas: SettingSchema[],
   settingsMap: Map<string, Setting>,
 ): PromptData {
+  const schema = schemas.find((s) => s.key === spec.key);
+  const defaultValue =
+    schema && typeof schema.default_value === "string"
+      ? schema.default_value
+      : "";
   const setting = settingsMap.get(spec.key);
   const currentValue = setting
     ? typeof setting.value === "string"
       ? setting.value
       : JSON.stringify(setting.value)
-    : spec.defaultPrompt;
+    : defaultValue;
   return {
     key: spec.key,
     currentValue,
-    defaultValue: spec.defaultPrompt,
+    defaultValue,
     scope: setting?.scope ?? "global",
     isModified: setting !== null && setting !== undefined,
-    description: spec.description,
+    description: schema?.description ?? "",
   };
 }
 
@@ -835,7 +747,7 @@ export default function ExtractionPromptEditor() {
 
   const dreamingPrompts = DREAMING_PROMPTS.map((spec) => ({
     spec,
-    data: resolveDreamingPrompt(spec, settingsMap),
+    data: resolveDreamingPrompt(spec, schemas, settingsMap),
   }));
 
   // Keep refs updated for test calls.
@@ -989,7 +901,7 @@ export default function ExtractionPromptEditor() {
                 <SimplePromptEditorCard
                   key={spec.key}
                   title={spec.title}
-                  description={spec.description}
+                  description={data.description}
                   promptData={data}
                   onSave={handleSave}
                   saving={updateMutation.isPending}

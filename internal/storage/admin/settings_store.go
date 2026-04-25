@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -91,6 +92,36 @@ var settingsSchemas = []api.SettingSchema{
 	{Key: "reconsolidation.decay_threshold_days", Type: "number", DefaultValue: json.RawMessage(`14`), Description: "Days since last recall before a memory starts losing confidence to decay", Category: "reconsolidation"},
 	{Key: "reconsolidation.decay_rate_per_cycle", Type: "number", DefaultValue: json.RawMessage(`0.02`), Description: "Confidence loss per dream cycle applied to decay-eligible memories (0.0-1.0)", Category: "reconsolidation"},
 	{Key: "reconsolidation.confidence_floor", Type: "number", DefaultValue: json.RawMessage(`0.05`), Description: "Minimum confidence decay will not push below (0.0-1.0)", Category: "reconsolidation"},
+}
+
+// promptSchemaEntries describes the dreaming-phase prompts surfaced through
+// the schema endpoint. Their DefaultValue is filled in at init time from
+// service.GetDefault so the value the UI shows as the "default" cannot drift
+// from the value the runtime cascade falls back to in service.Resolve.
+var promptSchemaEntries = []api.SettingSchema{
+	{Key: service.SettingDreamContradictionPrompt, Type: "prompt", Description: "LLM prompt used by the contradiction-detection phase. Two %s placeholders for Statement A and Statement B. Must return JSON with `contradicts`, `winner` (\"a\"/\"b\"/\"tie\"/null), and `explanation`.", Category: "dreaming_prompts"},
+	{Key: service.SettingDreamSynthesisPrompt, Type: "prompt", Description: "LLM prompt used by the consolidation phase to merge a cluster of memories into a single synthesis. One %s placeholder for the combined source content. Must return only the synthesized text.", Category: "dreaming_prompts"},
+	{Key: service.SettingDreamAlignmentPrompt, Type: "prompt", Description: "LLM prompt used to score how strongly new evidence supports or contradicts an existing synthesis. Two %s placeholders for synthesis and evidence. Must return JSON with an `alignment` float in [-1.0, 1.0] and `reasoning`.", Category: "dreaming_prompts"},
+	{Key: service.SettingDreamNoveltyJudgePrompt, Type: "prompt", Description: "LLM prompt used by the novelty audit to decide whether a synthesis introduces facts not present in its sources. Two %s placeholders for synthesis and sources. Must return JSON with a `novel_facts` array (empty when the synthesis is duplicative).", Category: "dreaming_prompts"},
+}
+
+func init() {
+	for _, entry := range promptSchemaEntries {
+		def, ok := service.GetDefault(entry.Key)
+		if !ok {
+			// Defensive: a registered prompt schema with no runtime default
+			// would make the editor's "reset to default" reset to an empty
+			// string. Surface the inconsistency at startup rather than at
+			// first edit.
+			panic("settings_store: no service default registered for prompt key " + entry.Key)
+		}
+		raw, err := json.Marshal(def)
+		if err != nil {
+			panic("settings_store: failed to encode default for " + entry.Key + ": " + err.Error())
+		}
+		entry.DefaultValue = raw
+		settingsSchemas = append(settingsSchemas, entry)
+	}
 }
 
 func (s *SettingsAdminStore) GetSettingsSchema(ctx context.Context) ([]api.SettingSchema, error) {
