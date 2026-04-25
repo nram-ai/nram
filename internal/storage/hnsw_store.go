@@ -413,6 +413,31 @@ func (s *HNSWStore) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID
 	return nil
 }
 
+// TruncateAllVectors evicts every cached graph and clears every persisted
+// vector and snapshot row. The HNSW backend stores all dims in a single
+// vector table per kind (with a `dimension` column), so a single DELETE
+// per table covers the whole "all dims" requirement; same for the
+// snapshot tables. After this call, any subsequent search reloads from
+// the (empty) backing tables and finds nothing — by design, since the
+// embedding-model switch invalidates the entire prior vector space.
+func (s *HNSWStore) TruncateAllVectors(ctx context.Context) error {
+	// Evict cache before deleting persisted rows so the background flush
+	// cannot re-insert stale graphs after the wipe.
+	s.cache.RemoveAll()
+
+	for _, spec := range hnswSpecs {
+		if _, err := s.writeDB.ExecContext(ctx,
+			fmt.Sprintf("DELETE FROM %s", spec.vectorTable)); err != nil {
+			return fmt.Errorf("hnsw: truncate %s: %w", spec.vectorTable, err)
+		}
+		if _, err := s.writeDB.ExecContext(ctx,
+			fmt.Sprintf("DELETE FROM %s", spec.snapshotTable)); err != nil {
+			return fmt.Errorf("hnsw: truncate %s: %w", spec.snapshotTable, err)
+		}
+	}
+	return nil
+}
+
 // Ping checks vector store connectivity by pinging the underlying SQLite database.
 func (s *HNSWStore) Ping(ctx context.Context) error {
 	return s.readDB.PingContext(ctx)

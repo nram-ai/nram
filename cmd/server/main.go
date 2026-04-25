@@ -82,6 +82,14 @@ func main() {
 			log.Printf("backfill: enqueued %d embed jobs", n)
 			return
 		}
+		if arg == "--reembed-all-memories" {
+			n, err := storage.BackfillReembedAllJobs(context.Background(), db)
+			if err != nil {
+				log.Fatalf("reembed all memories failed: %v", err)
+			}
+			log.Printf("reembed: enqueued %d memory re-embed jobs (force, every live memory)", n)
+			return
+		}
 	}
 
 	if os.Getenv("NRAM_ENABLE_EMBED_BACKFILL") == "1" {
@@ -407,7 +415,7 @@ func main() {
 	usageStore := adminstore.NewUsageStore(db)
 	databaseAdminStore := adminstore.NewDatabaseAdminStore(db)
 	namespaceAdminStore := adminstore.NewNamespaceAdminStore(db)
-	providerAdminStore := adminstore.NewProviderAdminStore(registry, settingsRepo)
+	providerAdminStore := adminstore.NewProviderAdminStore(registry, settingsRepo, memoryRepo, entityRepo, vectorStore, db)
 	oauthAdminStore := adminstore.NewOAuthAdminStore(oauthRepo)
 	enrichmentAdminStore := adminstore.NewEnrichmentAdminStore(enrichmentQueueRepo, settingsRepo, db)
 

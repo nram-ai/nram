@@ -255,6 +255,23 @@ func (r *EntityRepo) UpdateEmbeddingDimBatch(ctx context.Context, ids []uuid.UUI
 	return nil
 }
 
+// ClearAllEmbeddingDims sets embedding_dim = NULL for every row in the
+// entities table. Used by the embedding-model switch cascade so the
+// re-embed pipeline treats every entity as needing fresh vectors. Returns
+// the count of rows affected.
+func (r *EntityRepo) ClearAllEmbeddingDims(ctx context.Context) (int64, error) {
+	query := `UPDATE entities SET embedding_dim = NULL WHERE embedding_dim IS NOT NULL`
+	res, err := r.db.Exec(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("entity clear all embedding_dim: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("entity clear all embedding_dim: rows affected: %w", err)
+	}
+	return n, nil
+}
+
 // UpdateEmbeddingDim sets the entity's embedding_dim column without bumping
 // mention_count or otherwise re-running the Upsert merge logic. Used by the
 // enrichment worker to record the dim that an entity vector was written at,
@@ -482,6 +499,30 @@ func (r *EntityRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID)
 	}
 	defer rows.Close()
 
+	return r.scanEntities(rows)
+}
+
+// ListAll returns a page of entities across every namespace, ordered by id
+// for stable pagination. Used by maintenance tooling that needs to walk the
+// entire entities table (re-embed, schema migrations). Pass limit=0 to use
+// a sensible default page size (500).
+func (r *EntityRepo) ListAll(ctx context.Context, limit, offset int) ([]model.Entity, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	query := selectEntityColumns + ` FROM entities
+		ORDER BY id
+		LIMIT ? OFFSET ?`
+	if r.db.Backend() == BackendPostgres {
+		query = selectEntityColumns + ` FROM entities
+			ORDER BY id
+			LIMIT $1 OFFSET $2`
+	}
+	rows, err := r.db.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("entity list all: %w", err)
+	}
+	defer rows.Close()
 	return r.scanEntities(rows)
 }
 

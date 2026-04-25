@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -727,6 +728,122 @@ func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
 		}
 		if !seen["Apple"] || !seen["AAPL"] {
 			t.Errorf("expected aliases 'Apple' and 'AAPL' on real, got %v", seen)
+		}
+	})
+}
+
+// TestEntityRepo_ListAll exercises the cross-namespace pagination used by
+// the embedding-model switch cascade's entity re-embed loop.
+func TestEntityRepo_ListAll(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		ns1 := createTestNamespace(t, ctx, db)
+		ns2 := createTestNamespace(t, ctx, db)
+
+		// Seed 5 entities across two namespaces.
+		want := 5
+		for i := 0; i < 3; i++ {
+			e := newTestEntity(ns1)
+			e.Canonical = fmt.Sprintf("ns1_e%d", i)
+			if err := repo.Create(ctx, e); err != nil {
+				t.Fatalf("create ns1 entity: %v", err)
+			}
+		}
+		for i := 0; i < 2; i++ {
+			e := newTestEntity(ns2)
+			e.Canonical = fmt.Sprintf("ns2_e%d", i)
+			if err := repo.Create(ctx, e); err != nil {
+				t.Fatalf("create ns2 entity: %v", err)
+			}
+		}
+
+		// First page covers all 5 — pageSize default is 500.
+		page, err := repo.ListAll(ctx, 0, 0)
+		if err != nil {
+			t.Fatalf("list all: %v", err)
+		}
+		if len(page) != want {
+			t.Errorf("page 0: want %d entities, got %d", want, len(page))
+		}
+
+		// Pagination: limit=2 returns first 2; offset=2 returns next 2; offset=4 returns 1.
+		first, _ := repo.ListAll(ctx, 2, 0)
+		if len(first) != 2 {
+			t.Errorf("limit=2 offset=0: want 2, got %d", len(first))
+		}
+		next, _ := repo.ListAll(ctx, 2, 2)
+		if len(next) != 2 {
+			t.Errorf("limit=2 offset=2: want 2, got %d", len(next))
+		}
+		last, _ := repo.ListAll(ctx, 2, 4)
+		if len(last) != 1 {
+			t.Errorf("limit=2 offset=4: want 1, got %d", len(last))
+		}
+
+		// Stable order: same call returns same id sequence.
+		again, _ := repo.ListAll(ctx, 0, 0)
+		if len(again) != want {
+			t.Fatalf("re-list size mismatch: %d vs %d", len(again), want)
+		}
+		for i := range page {
+			if page[i].ID != again[i].ID {
+				t.Errorf("ListAll order is not stable: pos=%d id1=%s id2=%s", i, page[i].ID, again[i].ID)
+			}
+		}
+	})
+}
+
+// TestEntityRepo_ClearAllEmbeddingDims is the load-bearing assertion for
+// the cascade: every row's embedding_dim must be NULL'd in one call so
+// the re-embed pipeline treats every entity as needing fresh vectors.
+func TestEntityRepo_ClearAllEmbeddingDims(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		ns := createTestNamespace(t, ctx, db)
+
+		// 3 entities with embedding_dim set, 1 with NULL.
+		dim := 768
+		var ids []uuid.UUID
+		for i := 0; i < 3; i++ {
+			e := newTestEntity(ns)
+			e.Canonical = fmt.Sprintf("e%d", i)
+			e.EmbeddingDim = &dim
+			if err := repo.Create(ctx, e); err != nil {
+				t.Fatalf("create with dim: %v", err)
+			}
+			ids = append(ids, e.ID)
+		}
+		eNull := newTestEntity(ns)
+		eNull.Canonical = "e_null"
+		if err := repo.Create(ctx, eNull); err != nil {
+			t.Fatalf("create null: %v", err)
+		}
+
+		n, err := repo.ClearAllEmbeddingDims(ctx)
+		if err != nil {
+			t.Fatalf("clear: %v", err)
+		}
+		if n != 3 {
+			t.Errorf("expected 3 rows affected (only the non-NULL ones), got %d", n)
+		}
+
+		// Every entity now has NULL embedding_dim.
+		page, _ := repo.ListAll(ctx, 0, 0)
+		for _, e := range page {
+			if e.EmbeddingDim != nil {
+				t.Errorf("entity %s embedding_dim should be NULL after clear, got %d", e.ID, *e.EmbeddingDim)
+			}
+		}
+
+		// Idempotent: second call affects 0 rows.
+		n2, err := repo.ClearAllEmbeddingDims(ctx)
+		if err != nil {
+			t.Fatalf("second clear: %v", err)
+		}
+		if n2 != 0 {
+			t.Errorf("second clear should be a no-op, affected %d rows", n2)
 		}
 	})
 }

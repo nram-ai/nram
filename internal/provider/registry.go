@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -44,6 +45,13 @@ type Registry struct {
 	fact      LLMProvider
 	entity    LLMProvider
 	config    RegistryConfig
+
+	// Cached result of probing the embedding provider for its native output
+	// dimension. The probe sends a tiny "probe" string through Embed and
+	// reads len(resp.Embeddings[0]). Cached on first successful probe;
+	// invalidated on Reload. Probe errors are NOT cached so a transient
+	// failure does not pin the dim to 0 forever.
+	embDim int
 }
 
 // NewRegistry instantiates providers from config, wraps each in a circuit
@@ -80,7 +88,9 @@ func (r *Registry) GetEntity() LLMProvider {
 }
 
 // Reload recreates all providers from a new configuration, swapping them
-// atomically under the write lock.
+// atomically under the write lock. Invalidates the cached embedding
+// dimension; the next EmbeddingDim call re-probes against the new
+// embedder.
 func (r *Registry) Reload(config RegistryConfig) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -96,7 +106,62 @@ func (r *Registry) Reload(config RegistryConfig) error {
 	r.fact = tmp.fact
 	r.entity = tmp.entity
 	r.config = tmp.config
+	r.embDim = 0
 	return nil
+}
+
+// EmbeddingDim returns the embedding provider's native output dimension,
+// discovered via a one-shot probe (Embed("probe")) and cached. Reload
+// invalidates the cache. Returns 0 if the embedder is not configured;
+// returns an error if the probe fails (caller may retry on a later call).
+//
+// Cross-provider design: the probe sends a request and measures the
+// response length. It does not ask the provider what dimensions it
+// supports. This works identically for OpenAI, Gemini, Ollama (via the
+// OpenAI adapter), OpenRouter, and any custom OpenAI-compatible endpoint.
+//
+// Concurrency: the probe Embed call happens OUTSIDE the registry lock so
+// a slow upstream does not block other registry operations. A racing
+// concurrent caller may also probe; the first writer wins and the second
+// discards its result.
+func (r *Registry) EmbeddingDim(ctx context.Context) (int, error) {
+	r.mu.RLock()
+	if r.embDim > 0 {
+		d := r.embDim
+		r.mu.RUnlock()
+		return d, nil
+	}
+	embedder := r.embedding
+	r.mu.RUnlock()
+
+	if embedder == nil {
+		return 0, fmt.Errorf("registry: embedding provider not configured")
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := embedder.Embed(probeCtx, &EmbeddingRequest{Input: []string{"probe"}})
+	if err != nil {
+		return 0, fmt.Errorf("registry: embedding probe failed: %w", err)
+	}
+	if len(resp.Embeddings) == 0 || len(resp.Embeddings[0]) == 0 {
+		return 0, fmt.Errorf("registry: embedding probe returned no vector")
+	}
+	probedDim := len(resp.Embeddings[0])
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Discard if a Reload swapped the embedder under us — the dim we
+	// measured belongs to the old provider.
+	if r.embedding != embedder {
+		return 0, fmt.Errorf("registry: provider changed during probe; retry")
+	}
+	// First writer wins. If another caller already populated, use their value.
+	if r.embDim > 0 {
+		return r.embDim, nil
+	}
+	r.embDim = probedDim
+	return probedDim, nil
 }
 
 // GetConfig returns the current registry configuration (read-locked).

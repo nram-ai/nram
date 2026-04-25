@@ -13,18 +13,20 @@ import (
 // --- mock ProviderAdminStore ---
 
 type mockProviderAdminStore struct {
-	config     *ProviderConfigResponse
-	configErr  error
-	testResult *ProviderTestResult
-	testErr    error
-	updateErr  error
-	models     []OllamaModel
-	modelsErr  error
-	pullErr    error
+	config       *ProviderConfigResponse
+	configErr    error
+	testResult   *ProviderTestResult
+	testErr      error
+	updateErr    error
+	updateResult *UpdateProviderSlotResult
+	models       []OllamaModel
+	modelsErr    error
+	pullErr      error
 
 	// capture args
 	updatedSlot string
 	updatedCfg  ProviderSlotConfig
+	updatedOpts UpdateProviderSlotOpts
 	pulledModel string
 }
 
@@ -36,10 +38,11 @@ func (m *mockProviderAdminStore) TestProvider(_ context.Context, req ProviderTes
 	return m.testResult, m.testErr
 }
 
-func (m *mockProviderAdminStore) UpdateProviderSlot(_ context.Context, slot string, cfg ProviderSlotConfig) error {
+func (m *mockProviderAdminStore) UpdateProviderSlot(_ context.Context, slot string, cfg ProviderSlotConfig, opts UpdateProviderSlotOpts) (*UpdateProviderSlotResult, error) {
 	m.updatedSlot = slot
 	m.updatedCfg = cfg
-	return m.updateErr
+	m.updatedOpts = opts
+	return m.updateResult, m.updateErr
 }
 
 func (m *mockProviderAdminStore) ListOllamaModels(_ context.Context, _ string) ([]OllamaModel, error) {

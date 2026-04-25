@@ -964,7 +964,8 @@ func (f *fakeContradictionVectorStore) Delete(_ context.Context, _ storage.Vecto
 	f.deleted = append(f.deleted, id)
 	return nil
 }
-func (f *fakeContradictionVectorStore) Ping(_ context.Context) error { return nil }
+func (f *fakeContradictionVectorStore) TruncateAllVectors(_ context.Context) error { return nil }
+func (f *fakeContradictionVectorStore) Ping(_ context.Context) error                { return nil }
 
 // paraphraseSettings returns a settings stub that turns paraphrase fast-path
 // on at the configured threshold and supplies the contradiction prompt

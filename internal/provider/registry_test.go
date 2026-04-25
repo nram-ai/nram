@@ -1,7 +1,10 @@
 package provider
 
 import (
+	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -311,5 +314,130 @@ func TestCreateEmbeddingProviderTypes(t *testing.T) {
 				t.Fatal("expected non-nil provider")
 			}
 		})
+	}
+}
+
+// probeEmbedder is a configurable EmbeddingProvider for the EmbeddingDim
+// tests. It returns a vector of `dim` zeros (or `err` if set), and counts
+// how many times Embed has been called so the cache behavior is testable.
+type probeEmbedder struct {
+	dim   int
+	err   error
+	calls atomic.Int32
+}
+
+func (p *probeEmbedder) Embed(_ context.Context, _ *EmbeddingRequest) (*EmbeddingResponse, error) {
+	p.calls.Add(1)
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &EmbeddingResponse{Embeddings: [][]float32{make([]float32, p.dim)}}, nil
+}
+func (p *probeEmbedder) Name() string      { return "probe" }
+func (p *probeEmbedder) Dimensions() []int { return []int{p.dim} }
+
+func TestRegistryEmbeddingDim_ProbesAndCaches(t *testing.T) {
+	emb := &probeEmbedder{dim: 768}
+	r := &Registry{embedding: emb}
+
+	d1, err := r.EmbeddingDim(context.Background())
+	if err != nil {
+		t.Fatalf("first probe failed: %v", err)
+	}
+	if d1 != 768 {
+		t.Errorf("first probe dim = %d, want 768", d1)
+	}
+	if got := emb.calls.Load(); got != 1 {
+		t.Fatalf("first call should produce 1 probe, got %d", got)
+	}
+
+	d2, err := r.EmbeddingDim(context.Background())
+	if err != nil {
+		t.Fatalf("cached call failed: %v", err)
+	}
+	if d2 != 768 {
+		t.Errorf("cached dim = %d, want 768", d2)
+	}
+	if got := emb.calls.Load(); got != 1 {
+		t.Fatalf("second call must use cache, got %d probes total", got)
+	}
+}
+
+func TestRegistryEmbeddingDim_NotConfigured(t *testing.T) {
+	r := &Registry{}
+	if _, err := r.EmbeddingDim(context.Background()); err == nil {
+		t.Fatal("expected error when embedding provider not configured")
+	}
+}
+
+func TestRegistryEmbeddingDim_ProbeErrorNotCached(t *testing.T) {
+	emb := &probeEmbedder{err: errors.New("network blip")}
+	r := &Registry{embedding: emb}
+
+	if _, err := r.EmbeddingDim(context.Background()); err == nil {
+		t.Fatal("expected error from failing probe")
+	}
+	_, _ = r.EmbeddingDim(context.Background())
+	if got := emb.calls.Load(); got != 2 {
+		t.Fatalf("probe error must not be cached; expected 2 probes, got %d", got)
+	}
+
+	emb.err = nil
+	emb.dim = 1024
+	d, err := r.EmbeddingDim(context.Background())
+	if err != nil {
+		t.Fatalf("recovered probe failed: %v", err)
+	}
+	if d != 1024 {
+		t.Errorf("recovered dim = %d, want 1024", d)
+	}
+	if got := emb.calls.Load(); got != 3 {
+		t.Errorf("expected 3 total probes after recovery, got %d", got)
+	}
+	_, _ = r.EmbeddingDim(context.Background())
+	if got := emb.calls.Load(); got != 3 {
+		t.Errorf("post-recovery cache must hold; got %d probes", got)
+	}
+}
+
+func TestRegistryEmbeddingDim_ReloadInvalidatesCache(t *testing.T) {
+	cfg := RegistryConfig{
+		Embedding: SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k", Model: "m"},
+	}
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry error: %v", err)
+	}
+
+	r.mu.Lock()
+	emb1 := &probeEmbedder{dim: 768}
+	r.embedding = emb1
+	r.embDim = 0
+	r.mu.Unlock()
+
+	if d, err := r.EmbeddingDim(context.Background()); err != nil || d != 768 {
+		t.Fatalf("first probe: dim=%d err=%v", d, err)
+	}
+	if got := emb1.calls.Load(); got != 1 {
+		t.Fatalf("expected 1 probe on first call, got %d", got)
+	}
+
+	if err := r.Reload(cfg); err != nil {
+		t.Fatalf("Reload error: %v", err)
+	}
+	r.mu.Lock()
+	emb2 := &probeEmbedder{dim: 1024}
+	r.embedding = emb2
+	r.mu.Unlock()
+
+	d, err := r.EmbeddingDim(context.Background())
+	if err != nil {
+		t.Fatalf("post-reload probe failed: %v", err)
+	}
+	if d != 1024 {
+		t.Errorf("post-reload dim = %d, want 1024 (cache should have been invalidated)", d)
+	}
+	if got := emb2.calls.Load(); got != 1 {
+		t.Errorf("expected exactly 1 probe of new embedder, got %d", got)
 	}
 }

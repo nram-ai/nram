@@ -496,6 +496,27 @@ func (r *MemoryRepo) ListIDsByNamespaceFiltered(ctx context.Context, namespaceID
 	return result, nil
 }
 
+// ClearAllEmbeddingDims sets embedding_dim = NULL for every live row in
+// the memories table. Used by the embedding-model switch cascade so the
+// enrichment worker treats every memory as needing fresh vectors. Returns
+// the count of rows affected.
+func (r *MemoryRepo) ClearAllEmbeddingDims(ctx context.Context) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE memories SET embedding_dim = NULL, updated_at = ? WHERE embedding_dim IS NOT NULL AND deleted_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories SET embedding_dim = NULL, updated_at = $1 WHERE embedding_dim IS NOT NULL AND deleted_at IS NULL`
+	}
+	res, err := r.db.Exec(ctx, query, now)
+	if err != nil {
+		return 0, fmt.Errorf("memory clear all embedding_dim: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("memory clear all embedding_dim: rows affected: %w", err)
+	}
+	return n, nil
+}
+
 // UpdateEmbeddingDim sets a memory's embedding_dim without rewriting every
 // other column. Used by the enrichment worker to record the dim that a
 // child memory's vector was written at.

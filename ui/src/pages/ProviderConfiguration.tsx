@@ -9,9 +9,11 @@ import {
 import type {
   ProviderSlot,
   UpdateProviderSlotRequest,
+  UpdateProviderSlotResult,
   TestProviderResult,
   OllamaModel,
 } from "../api/client";
+import { APIError } from "../api/client";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -89,22 +91,6 @@ const MODEL_HINTS: Record<string, Record<string, string>> = {
     fact: "e.g. anthropic/claude-sonnet-4-6",
     entity: "e.g. anthropic/claude-haiku-4-5",
   },
-};
-
-const DIMENSION_HINTS: Record<string, string> = {
-  openai: "1536 for text-embedding-3-small",
-  ollama: "768 for nomic-embed-text",
-  gemini: "768 for text-embedding-004",
-  openrouter: "Check the model card",
-};
-
-const DIMENSION_EXAMPLES: Record<string, string> = {
-  openai:
-    "text-embedding-3-small: 1536, text-embedding-3-large: 3072, text-embedding-ada-002: 1536.",
-  ollama:
-    "nomic-embed-text: 768, mxbai-embed-large: 1024, all-minilm: 384, snowflake-arctic-embed: 1024.",
-  gemini: "text-embedding-004: 768.",
-  openrouter: "varies by model — check the model card on OpenRouter.",
 };
 
 // ---------------------------------------------------------------------------
@@ -354,14 +340,12 @@ interface EditFormState {
   url: string;
   model: string;
   api_key: string;
-  dimensions: string;
   timeout: string;
 }
 
 function ProviderSlotEditForm({
   slotName,
   initial,
-  isEmbedding,
   wasConfigured,
   onSave,
   onCancel,
@@ -377,7 +361,6 @@ function ProviderSlotEditForm({
 }) {
   const [form, setForm] = useState<EditFormState>(initial);
   const modelPlaceholder = MODEL_HINTS[form.type]?.[slotName] || "e.g. model-name";
-  const [showEmbedWarning, setShowEmbedWarning] = useState(false);
 
   const isCloud = CLOUD_PROVIDERS.has(form.type);
   const isOllama = form.type === "ollama";
@@ -393,16 +376,11 @@ function ProviderSlotEditForm({
     }));
   };
 
+  // Submit without confirm_invalidate. The server returns 409 + row counts
+  // when the embedding-model swap would invalidate stored vectors; the
+  // parent ProviderSlotCard catches that, shows a destructive-action
+  // modal, and re-submits with confirm_invalidate=true on confirm.
   const handleSave = () => {
-    if (isEmbedding && wasConfigured) {
-      setShowEmbedWarning(true);
-      return;
-    }
-    submitSave();
-  };
-
-  const submitSave = () => {
-    setShowEmbedWarning(false);
     const req: UpdateProviderSlotRequest = {
       type: form.type,
       url: form.url,
@@ -410,9 +388,6 @@ function ProviderSlotEditForm({
     };
     if (form.api_key) {
       req.api_key = form.api_key;
-    }
-    if (isEmbedding && form.dimensions) {
-      req.dimensions = parseInt(form.dimensions, 10);
     }
     if (form.timeout) {
       req.timeout = parseInt(form.timeout, 10);
@@ -509,29 +484,6 @@ function ProviderSlotEditForm({
         </div>
       )}
 
-      {/* Dimensions (embedding only) */}
-      {isEmbedding && (
-        <div>
-          <label className="mb-1 block text-sm font-medium text-foreground">
-            Dimensions
-          </label>
-          <input
-            type="number"
-            value={form.dimensions}
-            onChange={(e) =>
-              setForm((p) => ({ ...p, dimensions: e.target.value }))
-            }
-            placeholder={DIMENSION_HINTS[form.type] || "e.g. 1536"}
-            min={1}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-          <p className="mt-1 text-xs text-muted-foreground">
-            The vector size output by your embedding model. Must match the model&apos;s native output size or a supported shorter dimension. Common values:{" "}
-            {DIMENSION_EXAMPLES[form.type] || "check your model's documentation."}
-          </p>
-        </div>
-      )}
-
       {/* Timeout */}
       <div>
         <label className="mb-1 block text-sm font-medium text-foreground">
@@ -551,32 +503,6 @@ function ProviderSlotEditForm({
           HTTP request timeout for LLM calls. Increase for local models (Ollama) or large prompts. Default: 120 seconds.
         </p>
       </div>
-
-      {/* Embedding change warning */}
-      {showEmbedWarning && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-900/30">
-          <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-            Changing the embedding model may require re-embedding all memories.
-            Dimensions must match or all vectors will be re-generated.
-          </p>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              onClick={submitSave}
-              className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700"
-            >
-              Confirm Change
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowEmbedWarning(false)}
-              className="rounded-md border border-amber-300 px-3 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-200 dark:hover:bg-amber-900/50"
-            >
-              Go Back
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Actions */}
       <div className="flex gap-2">
@@ -644,7 +570,6 @@ function ProviderSlotCard({
           type: slot.type,
           url: slot.url,
           model: slot.model,
-          dimensions: slot.dimensions ?? undefined,
         },
       },
       {
@@ -659,22 +584,74 @@ function ProviderSlotCard({
     );
   }, [slot, testMutation]);
 
+  // pendingConfirm is set when the server returns 409 NeedsConfirmation
+  // for an embedding-model swap. The modal renders from this state and,
+  // on confirm, re-fires the mutation with confirm_invalidate=true.
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    data: UpdateProviderSlotRequest;
+    result: UpdateProviderSlotResult;
+  } | null>(null);
+  const [cascadeResult, setCascadeResult] = useState<UpdateProviderSlotResult | null>(null);
+
   const handleSave = useCallback(
     (data: UpdateProviderSlotRequest) => {
+      setCascadeResult(null);
       updateMutation.mutate(
         { slot: slot.slot, data },
-        { onSuccess: () => setEditing(false) },
+        {
+          onSuccess: (resp) => {
+            // Cascade success carries entity_reembed_queued=true and row counts.
+            const r = resp as UpdateProviderSlotResult;
+            if (r.entity_reembed_queued) {
+              setCascadeResult(r);
+            }
+            setEditing(false);
+          },
+          onError: (err) => {
+            // 409: server is asking for confirmation of a destructive swap.
+            // Capture the row counts so the modal can show them, then wait
+            // for the user to confirm or cancel.
+            if (err instanceof APIError && err.status === 409) {
+              const body = err.body as UpdateProviderSlotResult;
+              if (body && body.needs_confirmation) {
+                setPendingConfirm({ data, result: body });
+                return;
+              }
+            }
+            // Other errors fall through to react-query's default isError state.
+          },
+        },
       );
     },
     [slot.slot, updateMutation],
   );
+
+  const confirmSwitch = useCallback(() => {
+    if (!pendingConfirm) return;
+    const data: UpdateProviderSlotRequest = {
+      ...pendingConfirm.data,
+      confirm_invalidate: true,
+    };
+    setPendingConfirm(null);
+    updateMutation.mutate(
+      { slot: slot.slot, data },
+      {
+        onSuccess: (resp) => {
+          const r = resp as UpdateProviderSlotResult;
+          if (r.entity_reembed_queued) {
+            setCascadeResult(r);
+          }
+          setEditing(false);
+        },
+      },
+    );
+  }, [pendingConfirm, slot.slot, updateMutation]);
 
   const initialFormState: EditFormState = {
     type: slot.configured ? slot.type : "",
     url: slot.configured ? slot.url : "",
     model: slot.configured ? slot.model : "",
     api_key: "",
-    dimensions: slot.dimensions != null ? String(slot.dimensions) : "",
     timeout: slot.timeout != null ? String(slot.timeout) : "",
   };
 
@@ -704,6 +681,86 @@ function ProviderSlotCard({
 
       {/* Body */}
       <div className="px-5 py-4">
+        {/* Cascade success banner: shown after a confirmed model switch
+            so the operator knows re-embedding is in flight. The memory
+            queue drains in the background; the entity loop runs in a
+            detached goroutine on the server. */}
+        {cascadeResult && (
+          <div className="mb-4 rounded-md border border-blue-300 bg-blue-50 p-3 dark:border-blue-700 dark:bg-blue-900/30">
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
+              Embedding model switched: {cascadeResult.old_model} →{" "}
+              {cascadeResult.new_model}
+            </p>
+            <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">
+              {cascadeResult.memory_jobs_enqueued ?? 0} memory re-embed jobs
+              queued, {cascadeResult.entities_affected ?? 0} entities queued
+              for re-embed in the background. Recall is degraded until the
+              workers drain (~5–15 min for typical corpora).
+            </p>
+            <button
+              type="button"
+              onClick={() => setCascadeResult(null)}
+              className="mt-2 text-xs font-medium text-blue-700 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Destructive-action confirmation modal: server-driven. Pops up
+            only when an embedding-model change was attempted and the
+            server gated the cascade on confirm_invalidate. */}
+        {pendingConfirm && (
+          <div className="mb-4 rounded-md border-2 border-red-400 bg-red-50 p-3 dark:border-red-600 dark:bg-red-900/30">
+            <p className="text-sm font-semibold text-red-900 dark:text-red-100">
+              Confirm embedding model switch
+            </p>
+            <p className="mt-1 text-sm text-red-800 dark:text-red-200">
+              Switching from{" "}
+              <span className="font-mono text-xs">{pendingConfirm.result.old_model}</span>{" "}
+              to{" "}
+              <span className="font-mono text-xs">{pendingConfirm.result.new_model}</span>{" "}
+              will:
+            </p>
+            <ul className="mt-1 ml-5 list-disc text-xs text-red-800 dark:text-red-200">
+              <li>
+                Clear all memory and entity vectors across every dimension
+                table
+              </li>
+              <li>
+                Invalidate {pendingConfirm.result.memories_affected ?? 0} memory
+                vectors and {pendingConfirm.result.entities_affected ?? 0} entity
+                vectors
+              </li>
+              <li>
+                Queue every memory and entity for re-embedding under the new
+                model
+              </li>
+            </ul>
+            <p className="mt-2 text-xs text-red-700 dark:text-red-300">
+              Recall returns no results for unprocessed rows during the
+              re-embed window (typically 5–15 minutes).
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={confirmSwitch}
+                disabled={updateMutation.isPending}
+                className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {updateMutation.isPending ? "Switching..." : "Confirm Switch & Re-embed"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingConfirm(null)}
+                className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 dark:border-red-600 dark:text-red-200 dark:hover:bg-red-900/50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
         {editing || !slot.configured ? (
           <ProviderSlotEditForm
             slotName={slot.slot}

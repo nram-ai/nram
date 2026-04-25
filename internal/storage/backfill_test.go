@@ -180,3 +180,83 @@ func TestBackfillEmbedJobs_EnqueuesOneJobPerUncoveredMemory(t *testing.T) {
 		}
 	})
 }
+
+// TestBackfillReembedAllJobs_EnqueuesEveryLiveMemory exercises the
+// model-switch cascade entry point. Unlike BackfillEmbedJobs (which
+// dedups against existing pending/running jobs), the force-reembed path
+// MUST enqueue every live memory unconditionally — the cascade has
+// already wiped the vector store and NULL'd embedding_dim, so any prior
+// in-flight job is operating on stale assumptions and can be safely
+// duplicated.
+func TestBackfillReembedAllJobs_EnqueuesEveryLiveMemory(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		memRepo := NewMemoryRepo(db)
+		queueRepo := NewEnrichmentQueueRepo(db)
+
+		nsID := createTestNamespace(t, ctx, db)
+
+		// Three live memories (one with a pre-existing pending job),
+		// one soft-deleted (must be skipped).
+		memA := newTestMemory(nsID)
+		memB := newTestMemory(nsID)
+		memC := newTestMemory(nsID)
+		memD := newTestMemory(nsID)
+		for _, m := range []*model.Memory{memA, memB, memC, memD} {
+			if err := memRepo.Create(ctx, m); err != nil {
+				t.Fatalf("create memory: %v", err)
+			}
+		}
+		// Pre-existing pending job on memB — backfill must still enqueue.
+		if err := queueRepo.Enqueue(ctx, &model.EnrichmentJob{MemoryID: memB.ID, NamespaceID: nsID}); err != nil {
+			t.Fatalf("seed pending: %v", err)
+		}
+		if err := memRepo.SoftDelete(ctx, memD.ID, nsID); err != nil {
+			t.Fatalf("soft-delete: %v", err)
+		}
+
+		enqueued, err := BackfillReembedAllJobs(ctx, db)
+		if err != nil {
+			t.Fatalf("force re-embed enqueue: %v", err)
+		}
+		// Three live memories → three jobs (memD skipped as soft-deleted).
+		if enqueued != 3 {
+			t.Fatalf("expected 3 force-enqueued jobs, got %d", enqueued)
+		}
+
+		// Verify per-memory job counts. memB now has the original pending
+		// PLUS the new force-enqueued one (duplicates ARE expected here —
+		// see BackfillReembedAllJobs docs).
+		query := `SELECT memory_id, COUNT(*) FROM enrichment_queue WHERE namespace_id = ? GROUP BY memory_id`
+		if db.Backend() == BackendPostgres {
+			query = `SELECT memory_id, COUNT(*) FROM enrichment_queue WHERE namespace_id = $1 GROUP BY memory_id`
+		}
+		rows, err := db.Query(ctx, query, nsID.String())
+		if err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		defer rows.Close()
+		got := map[uuid.UUID]int{}
+		for rows.Next() {
+			var idStr string
+			var n int
+			if err := rows.Scan(&idStr, &n); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			id, _ := uuid.Parse(idStr)
+			got[id] = n
+		}
+		if got[memA.ID] != 1 {
+			t.Errorf("memA: want 1 job, got %d", got[memA.ID])
+		}
+		if got[memB.ID] != 2 {
+			t.Errorf("memB: want 2 jobs (original + force), got %d", got[memB.ID])
+		}
+		if got[memC.ID] != 1 {
+			t.Errorf("memC: want 1 job, got %d", got[memC.ID])
+		}
+		if _, ok := got[memD.ID]; ok {
+			t.Errorf("memD soft-deleted must not be enqueued, got %d jobs", got[memD.ID])
+		}
+	})
+}

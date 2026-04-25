@@ -301,6 +301,34 @@ func (s *PgVectorStore) Delete(ctx context.Context, kind VectorKind, id uuid.UUI
 	return nil
 }
 
+// TruncateAllVectors clears every memory_vectors_<dim> and entity_vectors_<dim>
+// table in a single transaction so an embedding-model switch leaves no
+// orphaned vectors behind. Schema is preserved (TRUNCATE, not DROP) so
+// re-population begins immediately under the new dim.
+func (s *PgVectorStore) TruncateAllVectors(ctx context.Context) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("pgvector: truncate begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	for _, table := range supportedMemoryDimensions {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", table)); err != nil {
+			return fmt.Errorf("pgvector: truncate %s: %w", table, err)
+		}
+	}
+	for _, table := range supportedEntityDimensions {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", table)); err != nil {
+			return fmt.Errorf("pgvector: truncate %s: %w", table, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("pgvector: truncate commit: %w", err)
+	}
+	return nil
+}
+
 // Ping verifies connectivity to the PostgreSQL database.
 func (s *PgVectorStore) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)

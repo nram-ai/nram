@@ -12,9 +12,32 @@ import (
 type ProviderAdminStore interface {
 	GetProviderConfig(ctx context.Context) (*ProviderConfigResponse, error)
 	TestProvider(ctx context.Context, req ProviderTestRequest) (*ProviderTestResult, error)
-	UpdateProviderSlot(ctx context.Context, slot string, cfg ProviderSlotConfig) error
+	UpdateProviderSlot(ctx context.Context, slot string, cfg ProviderSlotConfig, opts UpdateProviderSlotOpts) (*UpdateProviderSlotResult, error)
 	ListOllamaModels(ctx context.Context, ollamaURL string) ([]OllamaModel, error)
 	PullOllamaModel(ctx context.Context, model string, ollamaURL string) error
+}
+
+// UpdateProviderSlotOpts carries request-only options for an update that
+// must not be persisted into the settings JSON. ConfirmInvalidate gates
+// the destructive embedding-model switch cascade — without it the store
+// returns a "needs confirmation" response and persists nothing.
+type UpdateProviderSlotOpts struct {
+	ConfirmInvalidate bool
+}
+
+// UpdateProviderSlotResult describes the outcome of an update that may
+// have triggered the embedding-model switch cascade. NeedsConfirmation
+// is true when the user attempted to change the embedding model without
+// providing confirm_invalidate=true; the response carries row counts
+// the UI can show in its confirmation modal.
+type UpdateProviderSlotResult struct {
+	NeedsConfirmation     bool   `json:"needs_confirmation,omitempty"`
+	OldModel              string `json:"old_model,omitempty"`
+	NewModel              string `json:"new_model,omitempty"`
+	MemoriesAffected      int64  `json:"memories_affected,omitempty"`
+	EntitiesAffected      int64  `json:"entities_affected,omitempty"`
+	MemoryJobsEnqueued    int64  `json:"memory_jobs_enqueued,omitempty"`
+	EntityReembedQueued   bool   `json:"entity_reembed_queued,omitempty"`
 }
 
 // ProviderAdminConfig holds the dependencies for the provider admin handler.
@@ -31,6 +54,13 @@ type ProviderConfigResponse struct {
 }
 
 // ProviderSlotStatus describes the current state of a single provider slot.
+//
+// Dimensions is the embedder's native output dimension as discovered by a
+// runtime probe (Embed("probe") → len(resp.Embeddings[0])). It is NOT a
+// user-configurable input — the registry probes the live embedder once
+// after each config change and surfaces the result here for display.
+// Always nil for non-embedding slots (LLMs do not have a meaningful
+// "dim").
 type ProviderSlotStatus struct {
 	Configured bool   `json:"configured"`
 	Type       string `json:"type,omitempty"`
@@ -49,13 +79,18 @@ type ProviderTestRequest struct {
 }
 
 // ProviderSlotConfig describes the desired configuration for a provider slot.
+//
+// The embedding provider's output dimension is intentionally NOT included
+// here — it's discovered by probing the live embedder via the registry
+// (see provider.Registry.EmbeddingDim). Letting the user pick a dim that
+// disagrees with the embedder's actual output is a footgun: vectors land
+// in a table the recall path doesn't query, and the failure is silent.
 type ProviderSlotConfig struct {
-	Type       string `json:"type"`
-	URL        string `json:"url"`
-	APIKey     string `json:"api_key,omitempty"`
-	Model      string `json:"model"`
-	Dimensions *int   `json:"dimensions,omitempty"`
-	Timeout    *int   `json:"timeout,omitempty"` // seconds, 0 = default (120s)
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	APIKey  string `json:"api_key,omitempty"`
+	Model   string `json:"model"`
+	Timeout *int   `json:"timeout,omitempty"` // seconds, 0 = default (120s)
 }
 
 // ProviderTestResult is the response body for POST /providers/test.
@@ -156,30 +191,54 @@ func handleProviderTest(w http.ResponseWriter, r *http.Request, cfg ProviderAdmi
 	writeJSON(w, http.StatusOK, result)
 }
 
-// handleProviderSlotUpdate handles PUT /providers/{slot} — updates a provider slot.
+// handleProviderSlotUpdate handles PUT /providers/{slot} — updates a provider
+// slot. For the embedding slot, a model change additionally triggers the
+// invalidate-and-re-embed cascade; the cascade is gated on a
+// confirm_invalidate flag in the request body so the UI must show a
+// destructive-action modal first. Without confirmation the handler
+// returns 409 Conflict carrying the row counts that would be touched.
 func handleProviderSlotUpdate(w http.ResponseWriter, r *http.Request, cfg ProviderAdminConfig, slot string) {
 	if r.Method != http.MethodPut {
 		WriteError(w, ErrBadRequest("method not allowed"))
 		return
 	}
 
-	var slotCfg ProviderSlotConfig
-	if err := json.NewDecoder(r.Body).Decode(&slotCfg); err != nil {
+	// Decode into a wrapper so confirm_invalidate is captured but does not
+	// pollute the persisted ProviderSlotConfig JSON.
+	var body struct {
+		ProviderSlotConfig
+		ConfirmInvalidate bool `json:"confirm_invalidate,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid JSON body"))
 		return
 	}
 
-	if slotCfg.Type == "" {
+	if body.Type == "" {
 		WriteError(w, ErrBadRequest("type is required"))
 		return
 	}
 
-	if err := cfg.Store.UpdateProviderSlot(r.Context(), slot, slotCfg); err != nil {
-		WriteError(w, ErrInternal("failed to update provider slot"))
+	result, err := cfg.Store.UpdateProviderSlot(r.Context(), slot, body.ProviderSlotConfig, UpdateProviderSlotOpts{
+		ConfirmInvalidate: body.ConfirmInvalidate,
+	})
+	if err != nil {
+		WriteError(w, ErrInternal("failed to update provider slot: "+err.Error()))
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	if result != nil && result.NeedsConfirmation {
+		// 409 Conflict signals the UI to show the destructive-action modal
+		// and re-submit with confirm_invalidate=true.
+		writeJSON(w, http.StatusConflict, result)
+		return
+	}
+
+	if result == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleOllamaModels handles GET /providers/ollama/models — lists Ollama models.

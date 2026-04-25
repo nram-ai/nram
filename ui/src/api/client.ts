@@ -513,8 +513,30 @@ export interface UpdateProviderSlotRequest {
   url?: string;
   model?: string;
   api_key?: string;
-  dimensions?: number;
   timeout?: number;
+  /**
+   * Set to true to authorize the destructive embedding-model switch
+   * cascade (truncate every vector table, NULL embedding_dim columns,
+   * force re-embed). Without this flag a model-change request returns
+   * HTTP 409 with row counts so the UI can show a confirmation modal.
+   */
+  confirm_invalidate?: boolean;
+}
+
+/**
+ * UpdateProviderSlotResult is the server's response to PUT /providers/{slot}.
+ * needs_confirmation=true means the embedding model changed and the cascade
+ * was withheld pending user authorization (re-submit with
+ * confirm_invalidate=true).
+ */
+export interface UpdateProviderSlotResult {
+  needs_confirmation?: boolean;
+  old_model?: string;
+  new_model?: string;
+  memories_affected?: number;
+  entities_affected?: number;
+  memory_jobs_enqueued?: number;
+  entity_reembed_queued?: boolean;
 }
 
 export interface ProviderConfigResponse {
@@ -990,7 +1012,7 @@ export const adminAPI = {
       })) as ProviderSlot[];
     }),
   updateProviderSlot: (slot: string, data: UpdateProviderSlotRequest) =>
-    request<{ status: string }>("PUT", `/admin/providers/${slot}`, data),
+    request<UpdateProviderSlotResult | { status: string }>("PUT", `/admin/providers/${slot}`, data),
   testProviderSlot: (slot: string, config: UpdateProviderSlotRequest) =>
     request<TestProviderResult>("POST", "/admin/providers/test", { slot, config }),
   getOllamaModels: (ollamaUrl?: string) => {

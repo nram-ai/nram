@@ -864,7 +864,8 @@ func (r *recordingVectorStore) Delete(_ context.Context, _ VectorKind, id uuid.U
 	r.deletes = append(r.deletes, id)
 	return nil
 }
-func (r *recordingVectorStore) Ping(_ context.Context) error { return nil }
+func (r *recordingVectorStore) TruncateAllVectors(_ context.Context) error { return nil }
+func (r *recordingVectorStore) Ping(_ context.Context) error                { return nil }
 
 // TestMemoryRepo_SoftDelete_PurgesVector verifies that soft-delete asks
 // the attached vector store to drop the vector alongside the row-level
@@ -1128,6 +1129,72 @@ func TestMemoryRepo_ListPurgeable(t *testing.T) {
 		}
 		if len(results) < 1 {
 			t.Fatalf("expected at least 1 purgeable memory, got %d", len(results))
+		}
+	})
+}
+
+// TestMemoryRepo_ClearAllEmbeddingDims is the load-bearing assertion for
+// the embedding-model switch cascade: every live memory's embedding_dim
+// gets NULL'd in one call so the re-embed worker treats every row as
+// needing fresh vectors. Soft-deleted memories are left untouched (they
+// will not be re-enqueued by BackfillReembedAllJobs anyway).
+func TestMemoryRepo_ClearAllEmbeddingDims(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		dim := 768
+
+		// 3 live memories with embedding_dim, 1 with NULL, 1 soft-deleted with dim.
+		var liveDimIDs []uuid.UUID
+		for i := 0; i < 3; i++ {
+			m := newTestMemory(nsID)
+			m.EmbeddingDim = &dim
+			if err := repo.Create(ctx, m); err != nil {
+				t.Fatalf("create with dim: %v", err)
+			}
+			liveDimIDs = append(liveDimIDs, m.ID)
+		}
+		mNull := newTestMemory(nsID)
+		if err := repo.Create(ctx, mNull); err != nil {
+			t.Fatalf("create null: %v", err)
+		}
+		mDeleted := newTestMemory(nsID)
+		mDeleted.EmbeddingDim = &dim
+		if err := repo.Create(ctx, mDeleted); err != nil {
+			t.Fatalf("create deleted: %v", err)
+		}
+		if err := repo.SoftDelete(ctx, mDeleted.ID, nsID); err != nil {
+			t.Fatalf("soft-delete: %v", err)
+		}
+
+		n, err := repo.ClearAllEmbeddingDims(ctx)
+		if err != nil {
+			t.Fatalf("clear: %v", err)
+		}
+		// Exactly the 3 live, non-null rows.
+		if n != 3 {
+			t.Errorf("expected 3 rows affected (live + non-null), got %d", n)
+		}
+
+		// Each live row now has NULL embedding_dim.
+		for _, id := range liveDimIDs {
+			got, err := repo.GetByID(ctx, id)
+			if err != nil {
+				t.Fatalf("get %s: %v", id, err)
+			}
+			if got.EmbeddingDim != nil {
+				t.Errorf("live memory %s embedding_dim should be NULL after clear, got %d", id, *got.EmbeddingDim)
+			}
+		}
+
+		// Idempotent: second call affects 0 rows.
+		n2, err := repo.ClearAllEmbeddingDims(ctx)
+		if err != nil {
+			t.Fatalf("second clear: %v", err)
+		}
+		if n2 != 0 {
+			t.Errorf("second clear should be no-op, affected %d rows", n2)
 		}
 	})
 }

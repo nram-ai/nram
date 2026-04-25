@@ -74,7 +74,7 @@ func TestListOllamaModels(t *testing.T) {
 	})
 	defer srv.Close()
 
-	store := NewProviderAdminStore(nil, nil)
+	store := NewProviderAdminStore(nil, nil, nil, nil, nil, nil)
 	models, err := store.ListOllamaModels(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("ListOllamaModels: %v", err)
@@ -98,7 +98,7 @@ func TestListOllamaModelsEmpty(t *testing.T) {
 	srv := newOllamaTestServer(t, []provider.OllamaModel{})
 	defer srv.Close()
 
-	store := NewProviderAdminStore(nil, nil)
+	store := NewProviderAdminStore(nil, nil, nil, nil, nil, nil)
 	models, err := store.ListOllamaModels(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("ListOllamaModels: %v", err)
@@ -110,7 +110,7 @@ func TestListOllamaModelsEmpty(t *testing.T) {
 }
 
 func TestResolveOllamaURLExplicitOverride(t *testing.T) {
-	store := NewProviderAdminStore(nil, nil)
+	store := NewProviderAdminStore(nil, nil, nil, nil, nil, nil)
 	url := store.resolveOllamaURL("http://custom:9999")
 	if url != "http://custom:9999" {
 		t.Errorf("expected http://custom:9999, got %q", url)
@@ -118,7 +118,7 @@ func TestResolveOllamaURLExplicitOverride(t *testing.T) {
 }
 
 func TestResolveOllamaURLStripsV1Suffix(t *testing.T) {
-	store := NewProviderAdminStore(nil, nil)
+	store := NewProviderAdminStore(nil, nil, nil, nil, nil, nil)
 	url := store.resolveOllamaURL("http://localhost:11434/v1")
 	if url != "http://localhost:11434" {
 		t.Errorf("expected http://localhost:11434, got %q", url)
@@ -130,7 +130,7 @@ func TestResolveOllamaURLStripsV1Suffix(t *testing.T) {
 }
 
 func TestResolveOllamaURLDefaultFallback(t *testing.T) {
-	store := NewProviderAdminStore(nil, nil)
+	store := NewProviderAdminStore(nil, nil, nil, nil, nil, nil)
 	url := store.resolveOllamaURL("")
 	if url != "http://localhost:11434" {
 		t.Errorf("expected http://localhost:11434, got %q", url)
@@ -150,7 +150,7 @@ func TestResolveOllamaURLFromRegistryPort(t *testing.T) {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 
-	store := NewProviderAdminStore(reg, nil)
+	store := NewProviderAdminStore(reg, nil, nil, nil, nil, nil)
 	url := store.resolveOllamaURL("")
 	if url != "http://myollama:11434" {
 		t.Errorf("expected http://myollama:11434, got %q", url)
@@ -161,7 +161,7 @@ func TestPullOllamaModel(t *testing.T) {
 	srv := newOllamaTestServer(t, nil)
 	defer srv.Close()
 
-	store := NewProviderAdminStore(nil, nil)
+	store := NewProviderAdminStore(nil, nil, nil, nil, nil, nil)
 	err := store.PullOllamaModel(context.Background(), "llama3:latest", srv.URL)
 	if err != nil {
 		t.Fatalf("PullOllamaModel: %v", err)
@@ -181,14 +181,14 @@ func TestUpdateProviderSlotTriggersReload(t *testing.T) {
 		t.Fatal("expected registry not configured initially")
 	}
 
-	store := NewProviderAdminStore(reg, settingsRepo)
+	store := NewProviderAdminStore(reg, settingsRepo, nil, nil, nil, nil)
 
-	err = store.UpdateProviderSlot(context.Background(), "embedding", api.ProviderSlotConfig{
+	_, err = store.UpdateProviderSlot(context.Background(), "embedding", api.ProviderSlotConfig{
 		Type:   "openai",
 		URL:    "https://api.openai.com",
 		APIKey: "sk-test",
 		Model:  "text-embedding-3-small",
-	})
+	}, api.UpdateProviderSlotOpts{})
 	if err != nil {
 		t.Fatalf("UpdateProviderSlot: %v", err)
 	}
@@ -213,14 +213,14 @@ func TestUpdateProviderSlotNilRegistryNoError(t *testing.T) {
 	db := testSQLiteDBWithMigrations(t)
 	settingsRepo := storage.NewSettingsRepo(db)
 
-	store := NewProviderAdminStore(nil, settingsRepo)
+	store := NewProviderAdminStore(nil, settingsRepo, nil, nil, nil, nil)
 
-	err := store.UpdateProviderSlot(context.Background(), "fact", api.ProviderSlotConfig{
+	_, err := store.UpdateProviderSlot(context.Background(), "fact", api.ProviderSlotConfig{
 		Type:   "openai",
 		URL:    "https://api.openai.com",
 		APIKey: "sk-test",
 		Model:  "gpt-4",
-	})
+	}, api.UpdateProviderSlotOpts{})
 	if err != nil {
 		t.Fatalf("UpdateProviderSlot with nil registry: %v", err)
 	}

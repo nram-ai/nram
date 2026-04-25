@@ -78,3 +78,57 @@ func hasUncoveredMemory(ctx context.Context, db DB) (bool, error) {
 	defer rows.Close()
 	return rows.Next(), rows.Err()
 }
+
+// BackfillReembedAllJobs enqueues a pending enrichment job (priority -1) for
+// every live memory unconditionally, including memories that already have a
+// pending or running job. Used by the embedding-model switch cascade so the
+// worker pool re-embeds the entire corpus under the new model. Returns the
+// number of new rows inserted.
+//
+// Idempotency note: the enrichment_queue does NOT have a UNIQUE constraint
+// on memory_id, so repeated calls insert duplicate rows. The worker pool
+// handles duplicates by short-circuiting on memories whose embedding_dim
+// already matches the current provider dim. For a one-shot cascade after a
+// model switch (where embedding_dim has been NULLed) this is the desired
+// behavior — every memory needs exactly one job to land.
+//
+// Callers MUST ensure dependent state is consistent before invoking:
+// memories.embedding_dim should be NULL'd and the corresponding
+// memory_vectors_* tables truncated, otherwise the worker may skip
+// memories whose old vectors are still indexed under a stale dim.
+func BackfillReembedAllJobs(ctx context.Context, db DB) (int64, error) {
+	var query string
+	switch db.Backend() {
+	case BackendPostgres:
+		query = `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, created_at, updated_at)
+			SELECT gen_random_uuid(), m.id, m.namespace_id, 'pending', -1, 0, 3, now(), now()
+			FROM memories m
+			WHERE m.deleted_at IS NULL`
+	case BackendSQLite:
+		query = `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, created_at, updated_at)
+			SELECT
+			  lower(hex(randomblob(16))),
+			  m.id,
+			  m.namespace_id,
+			  'pending',
+			  -1,
+			  0,
+			  3,
+			  strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+			  strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+			FROM memories m
+			WHERE m.deleted_at IS NULL`
+	default:
+		return 0, fmt.Errorf("backfill reembed all jobs: unsupported backend %s", db.Backend())
+	}
+
+	result, err := db.Exec(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("backfill reembed all jobs: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("backfill reembed all jobs: rows affected: %w", err)
+	}
+	return n, nil
+}
