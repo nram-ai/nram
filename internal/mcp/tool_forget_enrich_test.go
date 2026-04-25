@@ -96,7 +96,7 @@ func (m *mockLineageQuerier) FindParentIDs(_ context.Context, _ uuid.UUID, _ []u
 	return nil, nil
 }
 
-func (m *mockLineageQuerier) FindChildIDs(_ context.Context, _ uuid.UUID, _ uuid.UUID) ([]uuid.UUID, error) {
+func (m *mockLineageQuerier) FindChildIDsByRelation(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ []string) ([]uuid.UUID, error) {
 	return nil, nil
 }
 

@@ -27,7 +27,11 @@ type EnrichResponse struct {
 // LineageQuerier provides read-only lineage lookups used by multiple services.
 type LineageQuerier interface {
 	FindParentIDs(ctx context.Context, namespaceID uuid.UUID, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
-	FindChildIDs(ctx context.Context, namespaceID uuid.UUID, parentID uuid.UUID) ([]uuid.UUID, error)
+	// FindChildIDsByRelation returns the children of a memory restricted to
+	// the given lineage relations. Filtered to keep cascades scoped to the
+	// caller's intent (e.g. extraction edges only) and to keep self-edges
+	// from one relation from feeding cycles into another.
+	FindChildIDsByRelation(ctx context.Context, namespaceID uuid.UUID, parentID uuid.UUID, relations []string) ([]uuid.UUID, error)
 }
 
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.

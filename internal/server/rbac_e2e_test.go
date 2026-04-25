@@ -1269,7 +1269,7 @@ func (m *rbacLineageReader) FindParentIDs(_ context.Context, _ uuid.UUID, _ []uu
 	return nil, nil
 }
 
-func (m *rbacLineageReader) FindChildIDs(_ context.Context, _, _ uuid.UUID) ([]uuid.UUID, error) {
+func (m *rbacLineageReader) FindChildIDsByRelation(_ context.Context, _, _ uuid.UUID, _ []string) ([]uuid.UUID, error) {
 	return nil, nil
 }
 

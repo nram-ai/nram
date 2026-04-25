@@ -568,15 +568,16 @@ func (p *ContradictionPhase) selectNeighborPairs(
 			for j, vec := range resp.Embeddings {
 				stored[allMemories[missIdx[j]].ID] = vec
 			}
-			embedTokens = resp.Usage.TotalTokens
-			if embedTokens == 0 {
+			missTokens := resp.Usage.TotalTokens
+			if missTokens == 0 {
 				for _, s := range inputs {
-					embedTokens += EstimateTokens(s)
+					missTokens += EstimateTokens(s)
 				}
 			}
+			embedTokens += missTokens
 			slog.Info("dreaming: neighbour embedding complete",
 				"provider", embedder.Name(), "count", len(inputs),
-				"duration_ms", embedDur.Milliseconds(), "tokens", embedTokens)
+				"duration_ms", embedDur.Milliseconds(), "tokens", missTokens)
 
 			// Self-heal: write the freshly-embedded vectors back so the next
 			// cycle finds them already cached. Best-effort; log + continue

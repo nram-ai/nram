@@ -90,7 +90,7 @@ function resolvePromptData(
   schemas: SettingSchema[],
   settingsMap: Map<string, Setting>,
   fallbackDefault: string,
-): PromptData | null {
+): PromptData {
   // Find the first matching schema key.
   for (const key of keys) {
     const schema = schemas.find((s) => s.key === key);
@@ -130,32 +130,6 @@ function resolvePromptData(
     scope: "global",
     isModified: false,
     description,
-  };
-}
-
-function resolveDreamingPrompt(
-  spec: DreamingPromptSpec,
-  schemas: SettingSchema[],
-  settingsMap: Map<string, Setting>,
-): PromptData {
-  const schema = schemas.find((s) => s.key === spec.key);
-  const defaultValue =
-    schema && typeof schema.default_value === "string"
-      ? schema.default_value
-      : "";
-  const setting = settingsMap.get(spec.key);
-  const currentValue = setting
-    ? typeof setting.value === "string"
-      ? setting.value
-      : JSON.stringify(setting.value)
-    : defaultValue;
-  return {
-    key: spec.key,
-    currentValue,
-    defaultValue,
-    scope: setting?.scope ?? "global",
-    isModified: setting !== null && setting !== undefined,
-    description: schema?.description ?? "",
   };
 }
 
@@ -747,7 +721,7 @@ export default function ExtractionPromptEditor() {
 
   const dreamingPrompts = DREAMING_PROMPTS.map((spec) => ({
     spec,
-    data: resolveDreamingPrompt(spec, schemas, settingsMap),
+    data: resolvePromptData([spec.key], schemas, settingsMap, ""),
   }));
 
   // Keep refs updated for test calls.

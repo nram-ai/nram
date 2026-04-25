@@ -129,9 +129,14 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 
 	var deleted int
 
+	// Visited set spans the entire request so a cycle within one root cannot
+	// be re-entered when a sibling root happens to land on the same node, and
+	// each cascade frame is bounded regardless of the lineage shape on disk.
+	visited := make(map[uuid.UUID]struct{})
+
 	// Single memory ID delete.
 	if hasMemoryID {
-		ok, err := s.deleteSingle(ctx, *req.MemoryID, project.NamespaceID, req.HardDelete)
+		ok, err := s.deleteSingle(ctx, *req.MemoryID, project.NamespaceID, req.HardDelete, visited)
 		if err != nil {
 			return nil, err
 		}
@@ -143,7 +148,7 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 	// Bulk delete by IDs.
 	if hasMemoryIDs {
 		for _, id := range req.MemoryIDs {
-			ok, err := s.deleteSingle(ctx, id, project.NamespaceID, req.HardDelete)
+			ok, err := s.deleteSingle(ctx, id, project.NamespaceID, req.HardDelete, visited)
 			if err != nil {
 				log.Printf("forget: delete %s: %v", id, err)
 				continue
@@ -169,7 +174,7 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 
 			for _, mem := range memories {
 				if hasAllTags(mem.Tags, req.Tags) {
-					ok, err := s.deleteSingle(ctx, mem.ID, project.NamespaceID, req.HardDelete)
+					ok, err := s.deleteSingle(ctx, mem.ID, project.NamespaceID, req.HardDelete, visited)
 					if err != nil {
 						continue
 					}
@@ -194,9 +199,25 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 	}, nil
 }
 
+// cascadeRelations restricts the forget cascade to extraction edges. Other
+// relations (model.LineageSupersedes, LineageConflictsWith, LineageSynthesizedFrom)
+// can self-reference or form cycles and are not the caller's intent when
+// deleting by memory ID.
+var cascadeRelations = []string{
+	model.LineageExtractedFrom,
+	model.LineageExtractedFact,
+}
+
 // deleteSingle deletes a single memory after verifying it belongs to the given namespace.
 // Returns true if the memory was deleted, false if it was skipped (e.g., not found).
-func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, hard bool) (bool, error) {
+// The visited set is shared across all calls for one Forget request so cyclic
+// or already-handled lineage cannot loop the cascade.
+func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, hard bool, visited map[uuid.UUID]struct{}) (bool, error) {
+	if _, ok := visited[id]; ok {
+		return false, nil
+	}
+	visited[id] = struct{}{}
+
 	mem, err := s.memories.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -214,12 +235,12 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 
 	// Cascade: delete child memories (extracted facts) before the parent.
 	if s.lineageQuerier != nil {
-		childIDs, err := s.lineageQuerier.FindChildIDs(ctx, namespaceID, id)
+		childIDs, err := s.lineageQuerier.FindChildIDsByRelation(ctx, namespaceID, id, cascadeRelations)
 		if err != nil {
 			log.Printf("cascade: find children for %s: %v", id, err)
 		}
 		for _, childID := range childIDs {
-			if _, err := s.deleteSingle(ctx, childID, namespaceID, hard); err != nil {
+			if _, err := s.deleteSingle(ctx, childID, namespaceID, hard, visited); err != nil {
 				log.Printf("cascade: delete child %s of %s: %v", childID, id, err)
 			}
 		}

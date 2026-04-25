@@ -81,7 +81,7 @@ func (m *enrichLineageQuerier) FindParentIDs(_ context.Context, _ uuid.UUID, mem
 	return result, nil
 }
 
-func (m *enrichLineageQuerier) FindChildIDs(_ context.Context, _ uuid.UUID, _ uuid.UUID) ([]uuid.UUID, error) {
+func (m *enrichLineageQuerier) FindChildIDsByRelation(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ []string) ([]uuid.UUID, error) {
 	return nil, nil
 }
 

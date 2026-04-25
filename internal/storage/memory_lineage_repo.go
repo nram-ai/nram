@@ -134,16 +134,37 @@ func (r *MemoryLineageRepo) CountConflictsBetween(ctx context.Context, namespace
 	return n, nil
 }
 
-// FindChildIDs returns the memory IDs of all direct children of the given
-// parent memory.
-func (r *MemoryLineageRepo) FindChildIDs(ctx context.Context, namespaceID uuid.UUID, parentID uuid.UUID) ([]uuid.UUID, error) {
-	query := `SELECT memory_id FROM memory_lineage WHERE namespace_id = ? AND parent_id = ?`
-	if r.db.Backend() == BackendPostgres {
-		query = `SELECT memory_id FROM memory_lineage WHERE namespace_id = $1 AND parent_id = $2`
+// FindChildIDsByRelation returns the memory IDs of direct children of the
+// given parent memory, restricted to the supplied relations. An empty
+// relations slice returns no rows (avoids generating an invalid IN ()).
+func (r *MemoryLineageRepo) FindChildIDsByRelation(ctx context.Context, namespaceID uuid.UUID, parentID uuid.UUID, relations []string) ([]uuid.UUID, error) {
+	if len(relations) == 0 {
+		return nil, nil
 	}
-	rows, err := r.db.Query(ctx, query, namespaceID.String(), parentID.String())
+
+	placeholders := make([]string, len(relations))
+	args := make([]any, 0, 2+len(relations))
+	args = append(args, namespaceID.String(), parentID.String())
+	for i, rel := range relations {
+		args = append(args, rel)
+		if r.db.Backend() == BackendPostgres {
+			placeholders[i] = fmt.Sprintf("$%d", i+3)
+		} else {
+			placeholders[i] = "?"
+		}
+	}
+
+	nsPH, parentPH := "?", "?"
+	if r.db.Backend() == BackendPostgres {
+		nsPH, parentPH = "$1", "$2"
+	}
+	query := fmt.Sprintf(
+		`SELECT memory_id FROM memory_lineage WHERE namespace_id = %s AND parent_id = %s AND relation IN (%s)`,
+		nsPH, parentPH, strings.Join(placeholders, ","),
+	)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("lineage find child ids: %w", err)
+		return nil, fmt.Errorf("lineage find child ids by relation: %w", err)
 	}
 	defer rows.Close()
 
@@ -151,16 +172,16 @@ func (r *MemoryLineageRepo) FindChildIDs(ctx context.Context, namespaceID uuid.U
 	for rows.Next() {
 		var idStr string
 		if err := rows.Scan(&idStr); err != nil {
-			return nil, fmt.Errorf("lineage find child ids scan: %w", err)
+			return nil, fmt.Errorf("lineage find child ids by relation scan: %w", err)
 		}
-		id, err := uuid.Parse(idStr)
-		if err != nil {
-			return nil, fmt.Errorf("lineage find child ids parse: %w", err)
+		id, perr := uuid.Parse(idStr)
+		if perr != nil {
+			return nil, fmt.Errorf("lineage find child ids by relation parse: %w", perr)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("lineage find child ids iteration: %w", err)
+		return nil, fmt.Errorf("lineage find child ids by relation iteration: %w", err)
 	}
 	return ids, nil
 }
