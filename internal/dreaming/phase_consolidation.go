@@ -461,7 +461,7 @@ func (p *ConsolidationPhase) purgeVector(ctx context.Context, id uuid.UUID) {
 	if p.vectorPurger == nil {
 		return
 	}
-	if err := p.vectorPurger.Delete(ctx, id); err != nil {
+	if err := p.vectorPurger.Delete(ctx, storage.VectorKindMemory, id); err != nil {
 		slog.Warn("dreaming: vector purge failed", "memory", id, "err", err)
 	}
 }

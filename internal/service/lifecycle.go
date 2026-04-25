@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // LifecycleStore provides the query and delete operations needed by the lifecycle service.
@@ -167,7 +168,7 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 			continue
 		}
 		if s.vectorStore != nil {
-			_ = s.vectorStore.Delete(ctx, mem.ID)
+			_ = s.vectorStore.Delete(ctx, storage.VectorKindMemory, mem.ID)
 		}
 		purged++
 	}

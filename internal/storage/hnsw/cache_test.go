@@ -73,7 +73,7 @@ func TestCacheGetOrCreateEmpty(t *testing.T) {
 	ctx := context.Background()
 	nsID := uuid.New()
 
-	g, err := cache.GetOrCreate(ctx, nsID, 128)
+	g, err := cache.GetOrCreate(ctx, KindMemory, nsID, 128)
 	if err != nil {
 		t.Fatalf("GetOrCreate: %v", err)
 	}
@@ -99,12 +99,12 @@ func TestCacheGetOrCreateCached(t *testing.T) {
 	ctx := context.Background()
 	nsID := uuid.New()
 
-	g1, err := cache.GetOrCreate(ctx, nsID, 64)
+	g1, err := cache.GetOrCreate(ctx, KindMemory, nsID, 64)
 	if err != nil {
 		t.Fatalf("first GetOrCreate: %v", err)
 	}
 
-	g2, err := cache.GetOrCreate(ctx, nsID, 64)
+	g2, err := cache.GetOrCreate(ctx, KindMemory, nsID, 64)
 	if err != nil {
 		t.Fatalf("second GetOrCreate: %v", err)
 	}
@@ -127,25 +127,25 @@ func TestCacheLRUEviction(t *testing.T) {
 	ns2 := uuid.New()
 	ns3 := uuid.New()
 
-	g1, err := cache.GetOrCreate(ctx, ns1, 32)
+	g1, err := cache.GetOrCreate(ctx, KindMemory, ns1, 32)
 	if err != nil {
 		t.Fatalf("GetOrCreate ns1: %v", err)
 	}
 
-	_, err = cache.GetOrCreate(ctx, ns2, 32)
+	_, err = cache.GetOrCreate(ctx, KindMemory, ns2, 32)
 	if err != nil {
 		t.Fatalf("GetOrCreate ns2: %v", err)
 	}
 
 	// Loading ns3 should evict ns1 (LRU).
-	_, err = cache.GetOrCreate(ctx, ns3, 32)
+	_, err = cache.GetOrCreate(ctx, KindMemory, ns3, 32)
 	if err != nil {
 		t.Fatalf("GetOrCreate ns3: %v", err)
 	}
 
 	// Verify ns1 was evicted from cache.
 	cache.mu.Lock()
-	_, ns1Cached := cache.indexes[indexKey{NamespaceID: ns1, Dimension: 32}]
+	_, ns1Cached := cache.indexes[indexKey{Kind: KindMemory, NamespaceID: ns1, Dimension: 32}]
 	cacheSize := len(cache.indexes)
 	cache.mu.Unlock()
 
@@ -157,7 +157,7 @@ func TestCacheLRUEviction(t *testing.T) {
 	}
 
 	// Re-loading ns1 should create a new graph (not same pointer).
-	g1Again, err := cache.GetOrCreate(ctx, ns1, 32)
+	g1Again, err := cache.GetOrCreate(ctx, KindMemory, ns1, 32)
 	if err != nil {
 		t.Fatalf("GetOrCreate ns1 again: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestCacheMarkDirtyAndFlush(t *testing.T) {
 	nsID := uuid.New()
 	dim := 16
 
-	g, err := cache.GetOrCreate(ctx, nsID, dim)
+	g, err := cache.GetOrCreate(ctx, KindMemory, nsID, dim)
 	if err != nil {
 		t.Fatalf("GetOrCreate: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestCacheMarkDirtyAndFlush(t *testing.T) {
 	if err := g.Add(Node{ID: uuid.New(), Vector: vec}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	cache.MarkDirty(nsID, dim)
+	cache.MarkDirty(KindMemory, nsID, dim)
 
 	// Flush.
 	if err := cache.FlushAll(ctx); err != nil {
@@ -211,7 +211,7 @@ func TestCacheMarkDirtyAndFlush(t *testing.T) {
 
 	// Verify dirty flag cleared.
 	cache.mu.Lock()
-	entry := cache.indexes[indexKey{NamespaceID: nsID, Dimension: dim}]
+	entry := cache.indexes[indexKey{Kind: KindMemory, NamespaceID: nsID, Dimension: dim}]
 	dirty := entry.dirty
 	cache.mu.Unlock()
 	if dirty {
@@ -241,7 +241,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 	defer cache.Close()
 
 	ctx := context.Background()
-	g, err := cache.GetOrCreate(ctx, nsID, dim)
+	g, err := cache.GetOrCreate(ctx, KindMemory, nsID, dim)
 	if err != nil {
 		t.Fatalf("GetOrCreate: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 	}
 
 	// Mark dirty and flush to create a snapshot.
-	cache.MarkDirty(nsID, dim)
+	cache.MarkDirty(KindMemory, nsID, dim)
 	if err := cache.FlushAll(ctx); err != nil {
 		t.Fatalf("FlushAll: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 	})
 	defer cache2.Close()
 
-	g2, err := cache2.GetOrCreate(ctx, nsID, dim)
+	g2, err := cache2.GetOrCreate(ctx, KindMemory, nsID, dim)
 	if err != nil {
 		t.Fatalf("second GetOrCreate: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestCacheClose(t *testing.T) {
 	nsID := uuid.New()
 	dim := 16
 
-	g, err := cache.GetOrCreate(ctx, nsID, dim)
+	g, err := cache.GetOrCreate(ctx, KindMemory, nsID, dim)
 	if err != nil {
 		t.Fatalf("GetOrCreate: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestCacheClose(t *testing.T) {
 	if err := g.Add(Node{ID: uuid.New(), Vector: randomVector(rng, dim)}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	cache.MarkDirty(nsID, dim)
+	cache.MarkDirty(KindMemory, nsID, dim)
 
 	// Close should flush.
 	if err := cache.Close(); err != nil {
@@ -337,24 +337,24 @@ func TestCacheRemove(t *testing.T) {
 	nsID := uuid.New()
 	dim := 32
 
-	_, err := cache.GetOrCreate(ctx, nsID, dim)
+	_, err := cache.GetOrCreate(ctx, KindMemory, nsID, dim)
 	if err != nil {
 		t.Fatalf("GetOrCreate: %v", err)
 	}
 
 	// Verify it's cached.
 	cache.mu.Lock()
-	_, ok := cache.indexes[indexKey{NamespaceID: nsID, Dimension: dim}]
+	_, ok := cache.indexes[indexKey{Kind: KindMemory, NamespaceID: nsID, Dimension: dim}]
 	cache.mu.Unlock()
 	if !ok {
 		t.Fatal("entry should be in cache before Remove")
 	}
 
-	cache.Remove(nsID, dim)
+	cache.Remove(KindMemory, nsID, dim)
 
 	// Verify it's gone.
 	cache.mu.Lock()
-	_, ok = cache.indexes[indexKey{NamespaceID: nsID, Dimension: dim}]
+	_, ok = cache.indexes[indexKey{Kind: KindMemory, NamespaceID: nsID, Dimension: dim}]
 	size := len(cache.indexes)
 	cache.mu.Unlock()
 	if ok {

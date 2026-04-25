@@ -525,7 +525,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 		for i := range allMemories {
 			ids[i] = allMemories[i].ID
 		}
-		fetched, err := p.vectorStore.GetByIDs(ctx, ids, dim)
+		fetched, err := p.vectorStore.GetByIDs(ctx, storage.VectorKindMemory, ids, dim)
 		if err != nil {
 			slog.Warn("dreaming: vector-store fetch failed; falling back to full re-embed",
 				"err", err)
@@ -586,6 +586,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 				items := make([]storage.VectorUpsertItem, len(missIdx))
 				for j, i := range missIdx {
 					items[j] = storage.VectorUpsertItem{
+						Kind:        storage.VectorKindMemory,
 						ID:          allMemories[i].ID,
 						NamespaceID: allMemories[i].NamespaceID,
 						Embedding:   resp.Embeddings[j],
@@ -648,7 +649,7 @@ func (p *ContradictionPhase) candidatesFor(
 	if p.vectorStore != nil && hasVec && dim > 0 {
 		// topK+1 because Search will return the anchor itself (cosine 1.0)
 		// at rank 0; we filter it out below.
-		results, err := p.vectorStore.Search(ctx, anchorVec, anchor.NamespaceID, dim, defaultContradictionNeighbors+1)
+		results, err := p.vectorStore.Search(ctx, storage.VectorKindMemory, anchorVec, anchor.NamespaceID, dim, defaultContradictionNeighbors+1)
 		if err == nil {
 			out := make([]int, 0, defaultContradictionNeighbors)
 			for _, r := range results {
@@ -806,7 +807,7 @@ func (p *ContradictionPhase) paraphraseSupersede(
 	mirrorToStale(staleByID, loser)
 
 	if p.vectorPurger != nil {
-		if err := p.vectorPurger.Delete(ctx, loser.ID); err != nil {
+		if err := p.vectorPurger.Delete(ctx, storage.VectorKindMemory, loser.ID); err != nil {
 			slog.Warn("dreaming: paraphrase vector purge failed",
 				"memory", loser.ID, "err", err)
 		}

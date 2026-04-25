@@ -133,7 +133,7 @@ type mockVectorStore struct {
 	}
 }
 
-func (m *mockVectorStore) Upsert(_ context.Context, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error {
+func (m *mockVectorStore) Upsert(_ context.Context, _ storage.VectorKind, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error {
 	m.upserted = append(m.upserted, struct {
 		ID          uuid.UUID
 		NamespaceID uuid.UUID

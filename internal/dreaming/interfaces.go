@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // MemoryReader retrieves memories.
@@ -108,13 +109,13 @@ type UsageContextResolver interface {
 	ResolveUsageContext(ctx context.Context, namespaceID uuid.UUID) (*model.UsageContext, error)
 }
 
-// VectorPurger removes a vector associated with a memory from the active
-// vector store. The dreaming system calls it whenever a memory transitions
-// to a state in which it should no longer surface via vector search:
-// soft-delete, novelty-audit demotion, or supersession. Implementations
-// should be idempotent — calling Delete on an already-absent id is a no-op.
+// VectorPurger removes a vector from the active vector store. The dreaming
+// system calls it whenever a memory or entity transitions to a state in which
+// it should no longer surface via vector search: soft-delete, novelty-audit
+// demotion, or supersession. Implementations should be idempotent — calling
+// Delete on an already-absent id is a no-op. Kind selects the table family.
 type VectorPurger interface {
-	Delete(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, kind storage.VectorKind, id uuid.UUID) error
 }
 
 // MemoryHardDeleter deletes memory rows past their soft-delete retention

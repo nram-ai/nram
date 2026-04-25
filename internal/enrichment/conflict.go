@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // ---------------------------------------------------------------------------
@@ -130,7 +131,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 	dimension := len(embedding)
 
 	// Search for similar memories.
-	results, err := cd.vectorStore.Search(ctx, embedding, memory.NamespaceID, dimension, cd.config.TopK)
+	results, err := cd.vectorStore.Search(ctx, storage.VectorKindMemory, embedding, memory.NamespaceID, dimension, cd.config.TopK)
 	if err != nil {
 		return nil, fmt.Errorf("conflict: vector search: %w", err)
 	}

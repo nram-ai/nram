@@ -10,8 +10,9 @@ import (
 	"github.com/qdrant/go-client/qdrant"
 )
 
-// qdrantCollections maps supported vector dimensions to their Qdrant collection names.
-var qdrantCollections = map[int]string{
+// qdrantMemoryCollections maps supported vector dimensions to their memory
+// collection names.
+var qdrantMemoryCollections = map[int]string{
 	384:  "nram_vectors_384",
 	512:  "nram_vectors_512",
 	768:  "nram_vectors_768",
@@ -20,14 +21,14 @@ var qdrantCollections = map[int]string{
 	3072: "nram_vectors_3072",
 }
 
-// allQdrantCollections is an ordered list of all collection names for delete operations.
-var allQdrantCollections = []string{
-	"nram_vectors_384",
-	"nram_vectors_512",
-	"nram_vectors_768",
-	"nram_vectors_1024",
-	"nram_vectors_1536",
-	"nram_vectors_3072",
+// qdrantEntityCollections is the parallel set for entity vectors.
+var qdrantEntityCollections = map[int]string{
+	384:  "nram_entity_vectors_384",
+	512:  "nram_entity_vectors_512",
+	768:  "nram_entity_vectors_768",
+	1024: "nram_entity_vectors_1024",
+	1536: "nram_entity_vectors_1536",
+	3072: "nram_entity_vectors_3072",
 }
 
 // QdrantStore implements VectorStore using Qdrant via gRPC.
@@ -81,19 +82,50 @@ func parseQdrantAddr(addr string) (string, int, error) {
 	return host, port, nil
 }
 
-// qdrantCollectionName maps a dimension to its Qdrant collection name.
-func qdrantCollectionName(dimension int) (string, error) {
-	name, ok := qdrantCollections[dimension]
-	if !ok {
-		return "", fmt.Errorf("qdrant: unsupported dimension %d; supported: 384, 512, 768, 1024, 1536, 3072", dimension)
+// qdrantCollectionName maps (Kind, dimension) to its Qdrant collection name.
+func qdrantCollectionName(kind VectorKind, dimension int) (string, error) {
+	switch kind {
+	case "", VectorKindMemory:
+		name, ok := qdrantMemoryCollections[dimension]
+		if !ok {
+			return "", fmt.Errorf("qdrant: unsupported memory dimension %d; supported: 384, 512, 768, 1024, 1536, 3072", dimension)
+		}
+		return name, nil
+	case VectorKindEntity:
+		name, ok := qdrantEntityCollections[dimension]
+		if !ok {
+			return "", fmt.Errorf("qdrant: unsupported entity dimension %d; supported: 384, 512, 768, 1024, 1536, 3072", dimension)
+		}
+		return name, nil
+	default:
+		return "", fmt.Errorf("qdrant: unknown vector kind %q", kind)
 	}
-	return name, nil
 }
 
-// EnsureCollections creates all dimension-specific collections if they do not already exist.
-// Uses cosine distance metric. Should be called during server startup.
+// collectionsForKind returns the dim→collection map for the given kind.
+func collectionsForKind(kind VectorKind) (map[int]string, error) {
+	switch kind {
+	case "", VectorKindMemory:
+		return qdrantMemoryCollections, nil
+	case VectorKindEntity:
+		return qdrantEntityCollections, nil
+	default:
+		return nil, fmt.Errorf("qdrant: unknown vector kind %q", kind)
+	}
+}
+
+// EnsureCollections creates all dimension-specific collections (memory + entity)
+// if they do not already exist. Uses cosine distance metric. Should be called
+// during server startup.
 func (s *QdrantStore) EnsureCollections(ctx context.Context) error {
-	for dim, name := range qdrantCollections {
+	if err := s.ensureCollectionFamily(ctx, qdrantMemoryCollections); err != nil {
+		return err
+	}
+	return s.ensureCollectionFamily(ctx, qdrantEntityCollections)
+}
+
+func (s *QdrantStore) ensureCollectionFamily(ctx context.Context, family map[int]string) error {
+	for dim, name := range family {
 		exists, err := s.client.CollectionExists(ctx, name)
 		if err != nil {
 			return fmt.Errorf("qdrant: failed to check collection %s: %w", name, err)
@@ -127,8 +159,8 @@ func (s *QdrantStore) EnsureCollections(ctx context.Context) error {
 }
 
 // Upsert inserts or updates a single vector in the appropriate dimension collection.
-func (s *QdrantStore) Upsert(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error {
-	collection, err := qdrantCollectionName(dimension)
+func (s *QdrantStore) Upsert(ctx context.Context, kind VectorKind, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error {
+	collection, err := qdrantCollectionName(kind, dimension)
 	if err != nil {
 		return err
 	}
@@ -151,23 +183,30 @@ func (s *QdrantStore) Upsert(ctx context.Context, id uuid.UUID, namespaceID uuid
 	return nil
 }
 
-// UpsertBatch inserts or updates multiple vectors, grouping by dimension for efficiency.
+// UpsertBatch inserts or updates multiple vectors, grouping by (kind, dimension)
+// for efficiency.
 func (s *QdrantStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem) error {
 	if len(items) == 0 {
 		return nil
 	}
 
-	// Group items by dimension.
-	groups := make(map[int][]VectorUpsertItem)
-	for _, item := range items {
-		if _, err := qdrantCollectionName(item.Dimension); err != nil {
-			return err
-		}
-		groups[item.Dimension] = append(groups[item.Dimension], item)
+	type batchKey struct {
+		kind VectorKind
+		dim  int
 	}
 
-	for dim, group := range groups {
-		collection, _ := qdrantCollectionName(dim) // already validated above
+	groups := make(map[batchKey][]VectorUpsertItem)
+	for _, item := range items {
+		k := item.EffectiveKind()
+		if _, err := qdrantCollectionName(k, item.Dimension); err != nil {
+			return err
+		}
+		key := batchKey{kind: k, dim: item.Dimension}
+		groups[key] = append(groups[key], item)
+	}
+
+	for key, group := range groups {
+		collection, _ := qdrantCollectionName(key.kind, key.dim) // already validated above
 
 		points := make([]*qdrant.PointStruct, len(group))
 		for i, item := range group {
@@ -194,8 +233,8 @@ func (s *QdrantStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem)
 
 // Search finds the nearest vectors within a namespace using cosine similarity.
 // Filters by namespace_id payload field. The caller is responsible for soft-delete exclusion.
-func (s *QdrantStore) Search(ctx context.Context, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]VectorSearchResult, error) {
-	collection, err := qdrantCollectionName(dimension)
+func (s *QdrantStore) Search(ctx context.Context, kind VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]VectorSearchResult, error) {
+	collection, err := qdrantCollectionName(kind, dimension)
 	if err != nil {
 		return nil, err
 	}
@@ -232,11 +271,11 @@ func (s *QdrantStore) Search(ctx context.Context, embedding []float32, namespace
 	return results, nil
 }
 
-func (s *QdrantStore) GetByIDs(ctx context.Context, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error) {
+func (s *QdrantStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error) {
 	if len(ids) == 0 {
 		return map[uuid.UUID][]float32{}, nil
 	}
-	collection, err := qdrantCollectionName(dimension)
+	collection, err := qdrantCollectionName(kind, dimension)
 	if err != nil {
 		return nil, err
 	}
@@ -277,12 +316,17 @@ func (s *QdrantStore) GetByIDs(ctx context.Context, ids []uuid.UUID, dimension i
 	return out, nil
 }
 
-// Delete removes a vector from all dimension collections since the dimension is unknown at delete time.
-// Does not error if the point does not exist in a collection.
-func (s *QdrantStore) Delete(ctx context.Context, id uuid.UUID) error {
+// Delete removes a vector from every dimension collection of the given kind,
+// since the dimension is unknown at delete time. Does not error if the point
+// does not exist in a collection.
+func (s *QdrantStore) Delete(ctx context.Context, kind VectorKind, id uuid.UUID) error {
+	collections, err := collectionsForKind(kind)
+	if err != nil {
+		return err
+	}
 	pointID := qdrant.NewID(id.String())
 
-	for _, collection := range allQdrantCollections {
+	for _, collection := range collections {
 		_, err := s.client.Delete(ctx, &qdrant.DeletePoints{
 			CollectionName: collection,
 			Points:         qdrant.NewPointsSelector(pointID),

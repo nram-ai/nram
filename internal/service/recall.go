@@ -24,7 +24,7 @@ type MemoryReader interface {
 
 // VectorSearcher provides vector similarity search.
 type VectorSearcher interface {
-	Search(ctx context.Context, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error)
+	Search(ctx context.Context, kind storage.VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error)
 }
 
 // EntityReader provides entity lookup operations.
@@ -329,7 +329,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 				simMap := make(map[uuid.UUID]float64)
 				for _, nsID := range searchNamespaces {
-					results, err := s.vectorSearch.Search(ctx, resp.Embeddings[0], nsID, actualDim, topK)
+					results, err := s.vectorSearch.Search(ctx, storage.VectorKindMemory, resp.Embeddings[0], nsID, actualDim, topK)
 					if err != nil {
 						continue
 					}

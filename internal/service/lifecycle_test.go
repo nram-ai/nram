@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- Lifecycle mock implementations ---
@@ -74,7 +75,7 @@ func newMockLifecycleVectorDeleter() *mockLifecycleVectorDeleter {
 	return &mockLifecycleVectorDeleter{deleted: make(map[uuid.UUID]bool)}
 }
 
-func (m *mockLifecycleVectorDeleter) Delete(_ context.Context, id uuid.UUID) error {
+func (m *mockLifecycleVectorDeleter) Delete(_ context.Context, _ storage.VectorKind, id uuid.UUID) error {
 	m.deleted[id] = true
 	return nil
 }

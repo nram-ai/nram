@@ -24,6 +24,12 @@ const (
 	defaultConfidenceDecayRatePerCycle = 0.02
 	// defaultConfidenceFloor is the lower bound decay will not cross.
 	defaultConfidenceFloor = 0.05
+	// effectivelyZero is the upper bound for the zero-confidence prune branch.
+	// Contradiction haircuts are multiplicative (mem.Confidence *= factor) and
+	// only reach exact zero on float underflow, so an `== 0` check never fires.
+	// Anything at or below this came from contradiction compounding past the
+	// decay floor and is explicitly devalued.
+	effectivelyZero = 0.001
 )
 
 // Prune reasons emitted by shouldPrune. Logged and surfaced upstream; pin them
@@ -231,8 +237,9 @@ func (p *PruningPhase) shouldPrune(mem *model.Memory, now time.Time) (bool, stri
 		}
 	}
 
-	// Hard zero-confidence is the explicit kill signal regardless of source.
-	if mem.Confidence == 0 && now.Sub(mem.UpdatedAt) > 7*24*time.Hour {
+	// Effectively-zero confidence is the kill signal regardless of source.
+	// See effectivelyZero comment for why an exact-zero check never fires.
+	if mem.Confidence <= effectivelyZero && now.Sub(mem.UpdatedAt) > 7*24*time.Hour {
 		return true, pruneReasonZeroConfidence
 	}
 

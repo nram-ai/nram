@@ -7,27 +7,35 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
+	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
 
+const entityMergeCosineThreshold = 0.92
+
 // EntityDedupPhase merges near-duplicate entities within a namespace.
-// It uses canonical string comparison and optional vector similarity
-// to identify entities that should be merged, then updates aliases
-// and retargets relationships.
+// It compares entities first by canonical/normalized text and known suffix
+// variants, then by cosine similarity over their stored entity vectors when
+// the vector store is attached and both sides have an embedding_dim recorded.
+// Aliases and relationships are retargeted onto the surviving entity.
 type EntityDedupPhase struct {
 	entities      EntityReader
 	entityWriter  EntityWriter
 	aliases       EntityAliasWriter
 	relationships RelationshipReader
 	relWriter     RelationshipWriter
+	vectorStore   storage.VectorStore
 }
 
-// NewEntityDedupPhase creates a new entity deduplication phase.
+// NewEntityDedupPhase creates a new entity deduplication phase. vectorStore
+// may be nil; in that case the phase degrades to text-only matching.
 func NewEntityDedupPhase(
 	entities EntityReader,
 	entityWriter EntityWriter,
 	aliases EntityAliasWriter,
 	relationships RelationshipReader,
 	relWriter RelationshipWriter,
+	vectorStore storage.VectorStore,
 ) *EntityDedupPhase {
 	return &EntityDedupPhase{
 		entities:      entities,
@@ -35,6 +43,7 @@ func NewEntityDedupPhase(
 		aliases:       aliases,
 		relationships: relationships,
 		relWriter:     relWriter,
+		vectorStore:   vectorStore,
 	}
 }
 
@@ -68,9 +77,6 @@ func (p *EntityDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle,
 		}
 	}
 
-	// Entity dedup scans the full entity set each cycle and performs every
-	// candidate merge in-process; there is no per-cycle cap that could leave
-	// residual work for a future cycle.
 	return false, nil
 }
 
@@ -82,7 +88,8 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 	logger *DreamLogWriter,
 ) int {
 	merged := 0
-	// Track which entities have been consumed by merges.
+
+	vectorsByID, normsByID := p.preloadVectors(ctx, entities)
 	consumed := make(map[uuid.UUID]bool)
 
 	for i := 0; i < len(entities); i++ {
@@ -97,7 +104,7 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 			}
 			candidate := &entities[j]
 
-			if !p.shouldMerge(primary, candidate) {
+			if !p.shouldMerge(primary, candidate, vectorsByID, normsByID) {
 				continue
 			}
 
@@ -114,29 +121,77 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 	return merged
 }
 
-// shouldMerge determines if two entities are near-duplicates that should be merged.
-func (p *EntityDedupPhase) shouldMerge(a, b *model.Entity) bool {
-	// Same canonical name = definite merge.
+// preloadVectors batches GetByIDs once per (kind=entity, dim) and precomputes
+// the L2 norm of each loaded vector. Norms are cached so the O(n^2) shouldMerge
+// loop computes O(n) norms instead of O(n^2). Returns nil maps when no vector
+// store is attached or no entities have a dim recorded; callers degrade to
+// text-only matching.
+func (p *EntityDedupPhase) preloadVectors(ctx context.Context, entities []model.Entity) (map[uuid.UUID][]float32, map[uuid.UUID]float32) {
+	if p.vectorStore == nil {
+		return nil, nil
+	}
+
+	byDim := make(map[int][]uuid.UUID)
+	for _, e := range entities {
+		if e.EmbeddingDim == nil {
+			continue
+		}
+		byDim[*e.EmbeddingDim] = append(byDim[*e.EmbeddingDim], e.ID)
+	}
+	if len(byDim) == 0 {
+		return nil, nil
+	}
+
+	vecs := make(map[uuid.UUID][]float32)
+	norms := make(map[uuid.UUID]float32)
+	for dim, ids := range byDim {
+		got, err := p.vectorStore.GetByIDs(ctx, storage.VectorKindEntity, ids, dim)
+		if err != nil {
+			slog.Warn("dreaming: entity vector preload failed; vector fallback unavailable for this dim",
+				"dim", dim, "ids", len(ids), "err", err)
+			continue
+		}
+		for k, v := range got {
+			vecs[k] = v
+			norms[k] = hnsw.Norm(v)
+		}
+	}
+	return vecs, norms
+}
+
+// shouldMerge runs text-matching branches first, then falls back to cosine
+// similarity over the preloaded vectors.
+func (p *EntityDedupPhase) shouldMerge(a, b *model.Entity, vectorsByID map[uuid.UUID][]float32, normsByID map[uuid.UUID]float32) bool {
 	if a.Canonical == b.Canonical {
 		return true
 	}
 
-	// Normalize further: remove common separators and compare.
 	normA := normalizeForDedup(a.Canonical)
 	normB := normalizeForDedup(b.Canonical)
 	if normA == normB {
 		return true
 	}
 
-	// Check if one is a substring/prefix of the other (e.g., "react" vs "reactjs").
-	if strings.Contains(normA, normB) || strings.Contains(normB, normA) {
-		// Only if the difference is a common suffix like "js", ".js", "lang", etc.
-		if isVariantSuffix(normA, normB) {
-			return true
-		}
+	if (strings.Contains(normA, normB) || strings.Contains(normB, normA)) && isVariantSuffix(normA, normB) {
+		return true
 	}
 
-	return false
+	// Vector-similarity fallback. A dim mismatch (mid-migration after switching
+	// providers) is treated as no-match so we never compare vectors of
+	// incompatible shape.
+	if a.EmbeddingDim == nil || b.EmbeddingDim == nil {
+		return false
+	}
+	if *a.EmbeddingDim != *b.EmbeddingDim {
+		return false
+	}
+	aVec, aOK := vectorsByID[a.ID]
+	bVec, bOK := vectorsByID[b.ID]
+	if !aOK || !bOK {
+		return false
+	}
+	sim := hnsw.CosineSimilarityWithNorms(aVec, bVec, normsByID[a.ID], normsByID[b.ID])
+	return sim >= entityMergeCosineThreshold
 }
 
 // mergeEntities absorbs candidate into primary: creates alias, increments
@@ -147,13 +202,11 @@ func (p *EntityDedupPhase) mergeEntities(
 	primary, candidate *model.Entity,
 	logger *DreamLogWriter,
 ) error {
-	// Log the merge operation with before states.
 	if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup,
 		model.DreamOpEntityMerged, "entity", candidate.ID, candidate, primary); err != nil {
 		return err
 	}
 
-	// Create alias from candidate name to primary.
 	alias := &model.EntityAlias{
 		ID:          uuid.New(),
 		NamespaceID: primary.NamespaceID,
@@ -165,13 +218,11 @@ func (p *EntityDedupPhase) mergeEntities(
 		slog.Warn("dreaming: alias creation failed (may already exist)", "err", err)
 	}
 
-	// Increment primary mention count.
 	primary.MentionCount += candidate.MentionCount
 	if err := p.entityWriter.Upsert(ctx, primary); err != nil {
 		return err
 	}
 
-	// Retarget candidate's relationships to point to primary.
 	rels, err := p.relationships.ListByEntity(ctx, candidate.ID)
 	if err != nil {
 		return err
@@ -186,7 +237,6 @@ func (p *EntityDedupPhase) mergeEntities(
 			newRel.TargetID = primary.ID
 		}
 
-		// Skip self-referential relationships that would result from merge.
 		if newRel.SourceID == newRel.TargetID {
 			if err := p.relWriter.Expire(ctx, rel.ID, rel.NamespaceID); err != nil {
 				slog.Warn("dreaming: expire self-referential relationship failed", "err", err)
@@ -194,20 +244,17 @@ func (p *EntityDedupPhase) mergeEntities(
 			continue
 		}
 
-		// Expire old relationship.
 		if err := p.relWriter.Expire(ctx, rel.ID, rel.NamespaceID); err != nil {
 			slog.Warn("dreaming: expire relationship failed", "rel", rel.ID, "err", err)
 			continue
 		}
 
-		// Create retargeted relationship.
 		newRel.ID = uuid.New()
 		if err := p.relWriter.Create(ctx, &newRel); err != nil {
 			slog.Warn("dreaming: create retargeted relationship failed", "err", err)
 			continue
 		}
 
-		// Log the retarget so rollback can reverse it.
 		if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup,
 			model.DreamOpRelationshipCreated, "relationship", newRel.ID, nil, &newRel); err != nil {
 			slog.Warn("dreaming: log relationship retarget failed", "err", err)

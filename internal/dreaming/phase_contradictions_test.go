@@ -918,7 +918,7 @@ type fakeContradictionVectorStore struct {
 	searchCalls int
 }
 
-func (f *fakeContradictionVectorStore) Upsert(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ []float32, _ int) error {
+func (f *fakeContradictionVectorStore) Upsert(_ context.Context, _ storage.VectorKind, _ uuid.UUID, _ uuid.UUID, _ []float32, _ int) error {
 	return nil
 }
 func (f *fakeContradictionVectorStore) UpsertBatch(_ context.Context, items []storage.VectorUpsertItem) error {
@@ -934,7 +934,7 @@ func (f *fakeContradictionVectorStore) UpsertBatch(_ context.Context, items []st
 	}
 	return nil
 }
-func (f *fakeContradictionVectorStore) Search(_ context.Context, _ []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
+func (f *fakeContradictionVectorStore) Search(_ context.Context, _ storage.VectorKind, _ []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
 	f.searchCalls++
 	if f.searchErr != nil {
 		return nil, f.searchErr
@@ -944,7 +944,7 @@ func (f *fakeContradictionVectorStore) Search(_ context.Context, _ []float32, _ 
 	// well from the in-process top-K fallback the empty result triggers.
 	return nil, nil
 }
-func (f *fakeContradictionVectorStore) GetByIDs(_ context.Context, ids []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
+func (f *fakeContradictionVectorStore) GetByIDs(_ context.Context, _ storage.VectorKind, ids []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
 	f.getCalls++
 	if f.getErr != nil {
 		return nil, f.getErr
@@ -959,7 +959,7 @@ func (f *fakeContradictionVectorStore) GetByIDs(_ context.Context, ids []uuid.UU
 	}
 	return out, nil
 }
-func (f *fakeContradictionVectorStore) Delete(_ context.Context, id uuid.UUID) error {
+func (f *fakeContradictionVectorStore) Delete(_ context.Context, _ storage.VectorKind, id uuid.UUID) error {
 	f.deleteCalls++
 	f.deleted = append(f.deleted, id)
 	return nil

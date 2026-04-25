@@ -15,7 +15,7 @@ import (
 
 // VectorSearcher provides vector similarity search within a namespace.
 type VectorSearcher interface {
-	Search(ctx context.Context, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error)
+	Search(ctx context.Context, kind storage.VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ func (d *Deduplicator) Check(ctx context.Context, content string, namespaceID uu
 	dimension := len(embedding)
 
 	// Search for nearest neighbours in the namespace.
-	results, err := d.vectorStore.Search(ctx, embedding, namespaceID, dimension, d.config.TopK)
+	results, err := d.vectorStore.Search(ctx, storage.VectorKindMemory, embedding, namespaceID, dimension, d.config.TopK)
 	if err != nil {
 		return nil, fmt.Errorf("dedup: vector search: %w", err)
 	}
@@ -159,7 +159,7 @@ func (d *Deduplicator) CheckBatch(ctx context.Context, contents []string, namesp
 	for i, emb := range resp.Embeddings {
 		dimension := len(emb)
 
-		results, err := d.vectorStore.Search(ctx, emb, namespaceID, dimension, d.config.TopK)
+		results, err := d.vectorStore.Search(ctx, storage.VectorKindMemory, emb, namespaceID, dimension, d.config.TopK)
 		if err != nil {
 			return nil, fmt.Errorf("dedup batch: vector search for item %d: %w", i, err)
 		}

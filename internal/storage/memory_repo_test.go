@@ -848,19 +848,19 @@ type recordingVectorStore struct {
 	deletes []uuid.UUID
 }
 
-func (r *recordingVectorStore) Upsert(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ []float32, _ int) error {
+func (r *recordingVectorStore) Upsert(_ context.Context, _ VectorKind, _ uuid.UUID, _ uuid.UUID, _ []float32, _ int) error {
 	return nil
 }
 func (r *recordingVectorStore) UpsertBatch(_ context.Context, _ []VectorUpsertItem) error {
 	return nil
 }
-func (r *recordingVectorStore) Search(_ context.Context, _ []float32, _ uuid.UUID, _ int, _ int) ([]VectorSearchResult, error) {
+func (r *recordingVectorStore) Search(_ context.Context, _ VectorKind, _ []float32, _ uuid.UUID, _ int, _ int) ([]VectorSearchResult, error) {
 	return nil, nil
 }
-func (r *recordingVectorStore) GetByIDs(_ context.Context, _ []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
+func (r *recordingVectorStore) GetByIDs(_ context.Context, _ VectorKind, _ []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
 	return map[uuid.UUID][]float32{}, nil
 }
-func (r *recordingVectorStore) Delete(_ context.Context, id uuid.UUID) error {
+func (r *recordingVectorStore) Delete(_ context.Context, _ VectorKind, id uuid.UUID) error {
 	r.deletes = append(r.deletes, id)
 	return nil
 }

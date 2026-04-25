@@ -20,7 +20,7 @@ type mockVectorSearcher struct {
 	err     error
 }
 
-func (m *mockVectorSearcher) Search(_ context.Context, _ []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
+func (m *mockVectorSearcher) Search(_ context.Context, _ storage.VectorKind, _ []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
 	return m.results, m.err
 }
 
@@ -211,7 +211,7 @@ func TestCheckBatch_MixedResults(t *testing.T) {
 
 	callCount := 0
 	vs := &mockVectorSearcherFunc{
-		searchFn: func(_ context.Context, emb []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
+		searchFn: func(_ context.Context, _ storage.VectorKind, emb []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
 			defer func() { callCount++ }()
 			switch callCount {
 			case 0: // first content — duplicate
@@ -359,9 +359,9 @@ func TestConfigWithDefaults(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type mockVectorSearcherFunc struct {
-	searchFn func(ctx context.Context, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error)
+	searchFn func(ctx context.Context, kind storage.VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error)
 }
 
-func (m *mockVectorSearcherFunc) Search(ctx context.Context, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error) {
-	return m.searchFn(ctx, embedding, namespaceID, dimension, topK)
+func (m *mockVectorSearcherFunc) Search(ctx context.Context, kind storage.VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error) {
+	return m.searchFn(ctx, kind, embedding, namespaceID, dimension, topK)
 }

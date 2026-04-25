@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- Mock implementations ---
@@ -64,7 +65,7 @@ type mockPDVectorDeleter struct {
 	deleted []uuid.UUID
 }
 
-func (m *mockPDVectorDeleter) Delete(_ context.Context, id uuid.UUID) error {
+func (m *mockPDVectorDeleter) Delete(_ context.Context, _ storage.VectorKind, id uuid.UUID) error {
 	m.deleted = append(m.deleted, id)
 	return nil
 }

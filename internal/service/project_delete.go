@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // ProjectDeleteGetter provides project lookup operations for the delete service.
@@ -204,7 +205,7 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 			}
 		}
 		if s.vectorStore != nil {
-			if err := s.vectorStore.Delete(ctx, memID); err != nil {
+			if err := s.vectorStore.Delete(ctx, storage.VectorKindMemory, memID); err != nil {
 				log.Printf("project delete: vector for memory %s: %v", memID, err)
 			}
 		}

@@ -456,7 +456,7 @@ func main() {
 
 	dreamRunner := dreaming.NewRunner(
 		dreamCycleRepo, dreamLogRepo, workerPool,
-		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo),
+		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo, vectorStore),
 		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
 		contradictionPhase,
 		consolidationPhase,

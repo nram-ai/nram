@@ -45,9 +45,15 @@ func (m *mockMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memo
 }
 
 type mockMemoryUpdater struct {
-	mu      sync.Mutex
-	updated []*model.Memory
-	err     error
+	mu          sync.Mutex
+	updated     []*model.Memory
+	dimUpdates  []dimUpdate
+	err         error
+}
+
+type dimUpdate struct {
+	id  uuid.UUID
+	dim int
 }
 
 func (m *mockMemoryUpdater) Update(_ context.Context, mem *model.Memory) error {
@@ -58,6 +64,16 @@ func (m *mockMemoryUpdater) Update(_ context.Context, mem *model.Memory) error {
 	}
 	cp := *mem
 	m.updated = append(m.updated, &cp)
+	return nil
+}
+
+func (m *mockMemoryUpdater) UpdateEmbeddingDim(_ context.Context, id uuid.UUID, dim int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	m.dimUpdates = append(m.dimUpdates, dimUpdate{id: id, dim: dim})
 	return nil
 }
 
@@ -158,6 +174,10 @@ func (m *mockEntityUpserter) FindBySimilarity(_ context.Context, _ uuid.UUID, _ 
 	return nil, nil
 }
 
+func (m *mockEntityUpserter) UpdateEmbeddingDimBatch(_ context.Context, _ []uuid.UUID, _ int) error {
+	return nil
+}
+
 type mockRelationshipCreator struct {
 	mu      sync.Mutex
 	created []*model.Relationship
@@ -230,7 +250,7 @@ type vectorEntry struct {
 	Dimension   int
 }
 
-func (m *mockVectorWriter) Upsert(_ context.Context, id, nsID uuid.UUID, emb []float32, dim int) error {
+func (m *mockVectorWriter) Upsert(_ context.Context, _ storage.VectorKind, id, nsID uuid.UUID, emb []float32, dim int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
@@ -420,9 +440,22 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 		t.Errorf("expected job completed, got %v", h.queue.completed)
 	}
 
-	// Memory should be marked enriched.
+	// Parent gets a full Update (Enriched=true plus its dim); children take
+	// the focused UpdateEmbeddingDim path so finalize doesn't rewrite every
+	// column for a brand-new row.
 	if len(h.updater.updated) != 1 || !h.updater.updated[0].Enriched {
-		t.Error("expected memory marked enriched")
+		t.Errorf("expected 1 parent update with Enriched=true, got %d updates", len(h.updater.updated))
+	}
+	if h.updater.updated[0].EmbeddingDim == nil || *h.updater.updated[0].EmbeddingDim != 3 {
+		t.Errorf("parent EmbeddingDim = %v, want 3", h.updater.updated[0].EmbeddingDim)
+	}
+	if len(h.updater.dimUpdates) != 2 {
+		t.Errorf("expected 2 child dim updates, got %d", len(h.updater.dimUpdates))
+	}
+	for i, du := range h.updater.dimUpdates {
+		if du.dim != 3 {
+			t.Errorf("child dim update %d: dim = %d, want 3", i, du.dim)
+		}
 	}
 
 	// Two child memories (facts).
@@ -484,10 +517,11 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 		}
 	}
 
-	// Vectors upserted for the parent memory and each extracted-fact child.
-	// Fixture produces 2 facts, so we expect 3 total upserts (parent + 2).
-	if len(h.vectors.vectors) != 3 {
-		t.Errorf("expected 3 vector upserts (parent + 2 facts), got %d", len(h.vectors.vectors))
+	// Vectors upserted for the parent memory, each extracted-fact child, and
+	// each upserted entity. Fixture produces 2 facts and 2 entities, so we
+	// expect 5 total upserts (parent + 2 facts + 2 entities).
+	if len(h.vectors.vectors) != 5 {
+		t.Errorf("expected 5 vector upserts (parent + 2 facts + 2 entities), got %d", len(h.vectors.vectors))
 	}
 	// First upsert must be the parent memory itself, not a fact — guards
 	// against the old bug where the first fact's embedding was stored under

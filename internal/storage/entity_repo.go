@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -216,6 +217,58 @@ func (r *EntityRepo) promoteStub(ctx context.Context, entity *model.Entity) erro
 		return fmt.Errorf("entity promote stub: update mention count: %w", err)
 	}
 
+	return nil
+}
+
+// UpdateEmbeddingDimBatch sets embedding_dim on every id in the same UPDATE,
+// grouped by dim. The enrichment worker amortizes per-job entity writes this
+// way: K entities at one dim become one round-trip instead of K. Empty input
+// is a no-op.
+func (r *EntityRepo) UpdateEmbeddingDimBatch(ctx context.Context, ids []uuid.UUID, dim int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	args := make([]interface{}, 0, len(ids)+2)
+	args = append(args, dim, now)
+	placeholders := make([]string, len(ids))
+	if r.db.Backend() == BackendPostgres {
+		for i, id := range ids {
+			placeholders[i] = fmt.Sprintf("$%d", i+3)
+			args = append(args, id.String())
+		}
+	} else {
+		for i, id := range ids {
+			placeholders[i] = "?"
+			args = append(args, id.String())
+		}
+	}
+
+	query := `UPDATE entities SET embedding_dim = ?, updated_at = ? WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE entities SET embedding_dim = $1, updated_at = $2 WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	if _, err := r.db.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("entity update embedding_dim batch: %w", err)
+	}
+	return nil
+}
+
+// UpdateEmbeddingDim sets the entity's embedding_dim column without bumping
+// mention_count or otherwise re-running the Upsert merge logic. Used by the
+// enrichment worker to record the dim that an entity vector was written at,
+// so admin queries that filter `WHERE embedding_dim IS NOT NULL` see entities
+// whose vectors actually exist in entity_vectors_<dim>.
+func (r *EntityRepo) UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE entities SET embedding_dim = ?, updated_at = ? WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE entities SET embedding_dim = $1, updated_at = $2 WHERE id = $3`
+	}
+	if _, err := r.db.Exec(ctx, query, dim, now, id.String()); err != nil {
+		return fmt.Errorf("entity update embedding_dim: %w", err)
+	}
 	return nil
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // RelationshipCleaner deletes relationships associated with a memory.
@@ -42,7 +43,7 @@ type MemoryDeleter interface {
 
 // VectorDeleter provides vector store deletion.
 type VectorDeleter interface {
-	Delete(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, kind storage.VectorKind, id uuid.UUID) error
 }
 
 // ForgetRequest contains all parameters needed to forget (delete) memories.
@@ -252,7 +253,7 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 		// memory_lineage, relationships all reference memories without CASCADE).
 		s.cleanupRelatedData(ctx, namespaceID, id)
 		if s.vectorStore != nil {
-			_ = s.vectorStore.Delete(ctx, id)
+			_ = s.vectorStore.Delete(ctx, storage.VectorKindMemory, id)
 		}
 
 		if err := s.memories.HardDelete(ctx, id, namespaceID); err != nil {

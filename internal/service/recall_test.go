@@ -58,7 +58,7 @@ type mockVectorSearcher struct {
 	err     error
 }
 
-func (m *mockVectorSearcher) Search(_ context.Context, _ []float32, _ uuid.UUID, _ int, topK int) ([]storage.VectorSearchResult, error) {
+func (m *mockVectorSearcher) Search(_ context.Context, _ storage.VectorKind, _ []float32, _ uuid.UUID, _ int, topK int) ([]storage.VectorSearchResult, error) {
 	if m.err != nil {
 		return nil, m.err
 	}

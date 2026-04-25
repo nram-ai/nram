@@ -13,7 +13,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// IndexCache manages per-(namespace, dimension) HNSW indexes with LRU eviction.
+// Kind selects between the memory and entity table families. The cache is
+// agnostic to what the rows mean; it just needs to know which tables to read,
+// write, and snapshot for a given partition.
+type Kind string
+
+const (
+	KindMemory Kind = "memory"
+	KindEntity Kind = "entity"
+)
+
+// IndexCache manages per-(kind, namespace, dimension) HNSW indexes with LRU eviction.
 type IndexCache struct {
 	mu               sync.Mutex
 	indexes          map[indexKey]*indexEntry
@@ -28,6 +38,7 @@ type IndexCache struct {
 }
 
 type indexKey struct {
+	Kind        Kind
 	NamespaceID uuid.UUID
 	Dimension   int
 }
@@ -37,6 +48,29 @@ type indexEntry struct {
 	dirty   bool
 	element *list.Element
 	key     indexKey
+}
+
+type tableSpec struct {
+	vectorTable   string
+	snapshotTable string
+	idColumn      string
+}
+
+func specForKind(k Kind) tableSpec {
+	switch k {
+	case KindEntity:
+		return tableSpec{
+			vectorTable:   "entity_vectors",
+			snapshotTable: "entity_hnsw_snapshots",
+			idColumn:      "entity_id",
+		}
+	default:
+		return tableSpec{
+			vectorTable:   "memory_vectors",
+			snapshotTable: "hnsw_snapshots",
+			idColumn:      "memory_id",
+		}
+	}
 }
 
 // CacheConfig holds configuration for the index cache.
@@ -76,11 +110,11 @@ func NewIndexCache(readDB, writeDB *sql.DB, cfg CacheConfig) *IndexCache {
 	return c
 }
 
-// GetOrCreate returns the HNSW graph for the given namespace+dimension,
-// loading from snapshot/rebuilding from memory_vectors if not cached.
+// GetOrCreate returns the HNSW graph for the given (kind, namespace, dimension),
+// loading from snapshot/rebuilding from the kind's vector table if not cached.
 // Creates a new empty graph if no data exists.
-func (c *IndexCache) GetOrCreate(ctx context.Context, namespaceID uuid.UUID, dimension int) (*Graph, error) {
-	key := indexKey{NamespaceID: namespaceID, Dimension: dimension}
+func (c *IndexCache) GetOrCreate(ctx context.Context, kind Kind, namespaceID uuid.UUID, dimension int) (*Graph, error) {
+	key := indexKey{Kind: kind, NamespaceID: namespaceID, Dimension: dimension}
 
 	// Fast path: check cache under lock.
 	c.mu.Lock()
@@ -124,9 +158,10 @@ func (c *IndexCache) GetOrCreate(ctx context.Context, namespaceID uuid.UUID, dim
 	return graph, nil
 }
 
-// MarkDirty flags the index for the given key as needing a snapshot save.
-func (c *IndexCache) MarkDirty(namespaceID uuid.UUID, dimension int) {
-	key := indexKey{NamespaceID: namespaceID, Dimension: dimension}
+// MarkDirty flags the index for the given (kind, namespace, dimension) as
+// needing a snapshot save.
+func (c *IndexCache) MarkDirty(kind Kind, namespaceID uuid.UUID, dimension int) {
+	key := indexKey{Kind: kind, NamespaceID: namespaceID, Dimension: dimension}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -175,8 +210,8 @@ func (c *IndexCache) Close() error {
 }
 
 // Remove evicts a specific index from the cache (used after bulk deletes).
-func (c *IndexCache) Remove(namespaceID uuid.UUID, dimension int) {
-	key := indexKey{NamespaceID: namespaceID, Dimension: dimension}
+func (c *IndexCache) Remove(kind Kind, namespaceID uuid.UUID, dimension int) {
+	key := indexKey{Kind: kind, NamespaceID: namespaceID, Dimension: dimension}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -186,7 +221,7 @@ func (c *IndexCache) Remove(namespaceID uuid.UUID, dimension int) {
 	}
 }
 
-// RemoveByNamespace evicts all cached indexes for the given namespace.
+// RemoveByNamespace evicts all cached indexes (across all kinds) for the given namespace.
 func (c *IndexCache) RemoveByNamespace(namespaceID uuid.UUID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -199,13 +234,15 @@ func (c *IndexCache) RemoveByNamespace(namespaceID uuid.UUID) {
 	}
 }
 
-// loadGraph loads a graph from snapshot or rebuilds from memory_vectors.
+// loadGraph loads a graph from snapshot or rebuilds from the kind's vector table.
 // Called without holding c.mu.
 func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, error) {
+	spec := specForKind(key.Kind)
+
 	// Try snapshot first.
 	var graphData []byte
 	err := c.readDB.QueryRowContext(ctx,
-		"SELECT graph_data FROM hnsw_snapshots WHERE namespace_id = ? AND dimension = ?",
+		fmt.Sprintf("SELECT graph_data FROM %s WHERE namespace_id = ? AND dimension = ?", spec.snapshotTable),
 		key.NamespaceID.String(), key.Dimension,
 	).Scan(&graphData)
 
@@ -215,59 +252,61 @@ func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, error
 			return g, nil
 		}
 		// Snapshot corrupted; fall through to rebuild.
-		log.Printf("hnsw: cache: corrupted snapshot for ns=%s dim=%d: %v", key.NamespaceID, key.Dimension, importErr)
+		log.Printf("hnsw: cache: corrupted snapshot for kind=%s ns=%s dim=%d: %v", key.Kind, key.NamespaceID, key.Dimension, importErr)
 	}
 
-	// Rebuild from memory_vectors.
+	// Rebuild from the vector table.
 	rows, err := c.readDB.QueryContext(ctx,
-		"SELECT memory_id, embedding FROM memory_vectors WHERE namespace_id = ? AND dimension = ?",
+		fmt.Sprintf("SELECT %s, embedding FROM %s WHERE namespace_id = ? AND dimension = ?", spec.idColumn, spec.vectorTable),
 		key.NamespaceID.String(), key.Dimension,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("hnsw: cache: query memory_vectors: %w", err)
+		return nil, fmt.Errorf("hnsw: cache: query %s: %w", spec.vectorTable, err)
 	}
 	defer rows.Close()
 
 	g := NewGraph(key.Dimension, c.graphOpts...)
 	for rows.Next() {
-		var memIDStr string
+		var rowIDStr string
 		var embBlob []byte
-		if err := rows.Scan(&memIDStr, &embBlob); err != nil {
-			return nil, fmt.Errorf("hnsw: cache: scan memory_vectors row: %w", err)
+		if err := rows.Scan(&rowIDStr, &embBlob); err != nil {
+			return nil, fmt.Errorf("hnsw: cache: scan %s row: %w", spec.vectorTable, err)
 		}
-		memID, err := uuid.Parse(memIDStr)
+		rowID, err := uuid.Parse(rowIDStr)
 		if err != nil {
-			return nil, fmt.Errorf("hnsw: cache: parse memory_id %q: %w", memIDStr, err)
+			return nil, fmt.Errorf("hnsw: cache: parse %s %q: %w", spec.idColumn, rowIDStr, err)
 		}
 		vec, err := DecodeVector(embBlob)
 		if err != nil {
-			return nil, fmt.Errorf("hnsw: cache: decode vector for %s: %w", memID, err)
+			return nil, fmt.Errorf("hnsw: cache: decode vector for %s: %w", rowID, err)
 		}
-		if err := g.Add(Node{ID: memID, Vector: vec}); err != nil {
-			return nil, fmt.Errorf("hnsw: cache: add node %s: %w", memID, err)
+		if err := g.Add(Node{ID: rowID, Vector: vec}); err != nil {
+			return nil, fmt.Errorf("hnsw: cache: add node %s: %w", rowID, err)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("hnsw: cache: iterate memory_vectors: %w", err)
+		return nil, fmt.Errorf("hnsw: cache: iterate %s: %w", spec.vectorTable, err)
 	}
 
 	return g, nil
 }
 
-// saveSnapshot writes the serialized graph to hnsw_snapshots.
+// saveSnapshot writes the serialized graph to the kind's snapshot table.
 func (c *IndexCache) saveSnapshot(ctx context.Context, key indexKey, g *Graph) error {
+	spec := specForKind(key.Kind)
+
 	var buf bytes.Buffer
 	if err := g.Export(&buf); err != nil {
-		return fmt.Errorf("hnsw: cache: export graph ns=%s dim=%d: %w", key.NamespaceID, key.Dimension, err)
+		return fmt.Errorf("hnsw: cache: export graph kind=%s ns=%s dim=%d: %w", key.Kind, key.NamespaceID, key.Dimension, err)
 	}
 
-	_, err := c.writeDB.ExecContext(ctx, `
-		INSERT INTO hnsw_snapshots (namespace_id, dimension, graph_data, node_count, updated_at)
+	_, err := c.writeDB.ExecContext(ctx, fmt.Sprintf(`
+		INSERT INTO %s (namespace_id, dimension, graph_data, node_count, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(namespace_id, dimension) DO UPDATE SET
 		  graph_data = excluded.graph_data,
 		  node_count = excluded.node_count,
-		  updated_at = excluded.updated_at`,
+		  updated_at = excluded.updated_at`, spec.snapshotTable),
 		key.NamespaceID.String(),
 		key.Dimension,
 		buf.Bytes(),
@@ -275,7 +314,7 @@ func (c *IndexCache) saveSnapshot(ctx context.Context, key indexKey, g *Graph) e
 		time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 	)
 	if err != nil {
-		return fmt.Errorf("hnsw: cache: upsert snapshot ns=%s dim=%d: %w", key.NamespaceID, key.Dimension, err)
+		return fmt.Errorf("hnsw: cache: upsert snapshot kind=%s ns=%s dim=%d: %w", key.Kind, key.NamespaceID, key.Dimension, err)
 	}
 	return nil
 }
@@ -292,7 +331,7 @@ func (c *IndexCache) evictLRU(ctx context.Context) {
 	if entry.dirty {
 		// Save before evicting. Best-effort; log errors.
 		if err := c.saveSnapshot(ctx, entry.key, entry.graph); err != nil {
-			log.Printf("hnsw: cache: evict save failed ns=%s dim=%d: %v", entry.key.NamespaceID, entry.key.Dimension, err)
+			log.Printf("hnsw: cache: evict save failed kind=%s ns=%s dim=%d: %v", entry.key.Kind, entry.key.NamespaceID, entry.key.Dimension, err)
 		}
 	}
 

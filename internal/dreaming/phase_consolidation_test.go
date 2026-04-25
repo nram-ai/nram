@@ -11,6 +11,7 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- doubles ---
@@ -604,7 +605,7 @@ type recordingVectorPurger struct {
 	deleted []uuid.UUID
 }
 
-func (p *recordingVectorPurger) Delete(_ context.Context, id uuid.UUID) error {
+func (p *recordingVectorPurger) Delete(_ context.Context, _ storage.VectorKind, id uuid.UUID) error {
 	p.deleted = append(p.deleted, id)
 	return nil
 }

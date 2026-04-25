@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // MemoryUpdater defines the memory persistence operations needed by the update service.
@@ -149,7 +150,7 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 				mem.EmbeddingDim = &embDim
 
 				if s.vectorStore != nil {
-					_ = s.vectorStore.Upsert(ctx, mem.ID, mem.NamespaceID, resp.Embeddings[0], embDim)
+					_ = s.vectorStore.Upsert(ctx, storage.VectorKindMemory, mem.ID, mem.NamespaceID, resp.Embeddings[0], embDim)
 				}
 
 				// Record token usage.

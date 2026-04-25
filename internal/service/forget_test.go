@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- Forget mock implementations ---
@@ -68,7 +69,7 @@ func newMockVectorDeleter() *mockVectorDeleter {
 	return &mockVectorDeleter{deleted: make(map[uuid.UUID]bool)}
 }
 
-func (m *mockVectorDeleter) Delete(_ context.Context, id uuid.UUID) error {
+func (m *mockVectorDeleter) Delete(_ context.Context, _ storage.VectorKind, id uuid.UUID) error {
 	m.deleted[id] = true
 	return nil
 }

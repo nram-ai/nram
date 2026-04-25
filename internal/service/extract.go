@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // EntityCreator defines the entity persistence operations needed by the extraction service.
@@ -510,7 +511,7 @@ func (s *ExtractionService) embedMemory(
 	mem.EmbeddingDim = &embDim
 
 	if s.vectorStore != nil {
-		_ = s.vectorStore.Upsert(ctx, mem.ID, ns.ID, resp.Embeddings[0], embDim)
+		_ = s.vectorStore.Upsert(ctx, storage.VectorKindMemory, mem.ID, ns.ID, resp.Embeddings[0], embDim)
 	}
 
 	projectID := project.ID

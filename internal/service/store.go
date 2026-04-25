@@ -57,7 +57,7 @@ type EnrichmentQueueRepository interface {
 
 // VectorStoreWriter defines the vector persistence operations needed by the store service.
 type VectorStoreWriter interface {
-	Upsert(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
+	Upsert(ctx context.Context, kind storage.VectorKind, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
 }
 
 // StoreOptions controls optional behavior during memory storage.

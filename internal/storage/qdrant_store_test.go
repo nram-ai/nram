@@ -41,7 +41,7 @@ func setupQdrantTest(t *testing.T) *QdrantStore {
 
 	t.Cleanup(func() {
 		// Clean up all test data from all collections.
-		for _, collection := range allQdrantCollections {
+		for _, collection := range qdrantMemoryCollections {
 			// Delete all points by using a filter that matches everything.
 			// Use scroll to get all point IDs, then delete them.
 			points, err := client.Scroll(ctx, &qdrant.ScrollPoints{
@@ -100,15 +100,15 @@ func TestQdrantStore_UpsertAndSearch(t *testing.T) {
 	}
 
 	// Upsert two vectors.
-	if err := store.Upsert(ctx, memID1, nsID, emb1, dim); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, memID1, nsID, emb1, dim); err != nil {
 		t.Fatalf("Upsert 1: %v", err)
 	}
-	if err := store.Upsert(ctx, memID2, nsID, emb2, dim); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, memID2, nsID, emb2, dim); err != nil {
 		t.Fatalf("Upsert 2: %v", err)
 	}
 
 	// Search — query vector identical to emb1 should rank memID1 first.
-	results, err := store.Search(ctx, emb1, nsID, dim, 10)
+	results, err := store.Search(ctx, VectorKindMemory, emb1, nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -126,10 +126,10 @@ func TestQdrantStore_UpsertAndSearch(t *testing.T) {
 	}
 
 	// Upsert update — change emb1 to match emb2 and verify search changes.
-	if err := store.Upsert(ctx, memID1, nsID, emb2, dim); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, memID1, nsID, emb2, dim); err != nil {
 		t.Fatalf("Upsert update: %v", err)
 	}
-	results, err = store.Search(ctx, emb2, nsID, dim, 10)
+	results, err = store.Search(ctx, VectorKindMemory, emb2, nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("Search after update: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestQdrantStore_UpsertBatch(t *testing.T) {
 	}
 
 	// Verify 384-dim vectors.
-	results384, err := store.Search(ctx, makeEmbedding(384, 1.0), nsID, 384, 10)
+	results384, err := store.Search(ctx, VectorKindMemory, makeEmbedding(384, 1.0), nsID, 384, 10)
 	if err != nil {
 		t.Fatalf("Search 384: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestQdrantStore_UpsertBatch(t *testing.T) {
 	}
 
 	// Verify 512-dim vectors.
-	results512, err := store.Search(ctx, makeEmbedding(512, 0.8), nsID, 512, 10)
+	results512, err := store.Search(ctx, VectorKindMemory, makeEmbedding(512, 0.8), nsID, 512, 10)
 	if err != nil {
 		t.Fatalf("Search 512: %v", err)
 	}
@@ -200,12 +200,12 @@ func TestQdrantStore_Delete(t *testing.T) {
 	memID := uuid.New()
 
 	dim := 384
-	if err := store.Upsert(ctx, memID, nsID, makeEmbedding(dim, 1.0), dim); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, memID, nsID, makeEmbedding(dim, 1.0), dim); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
 	// Verify it exists.
-	results, err := store.Search(ctx, makeEmbedding(dim, 1.0), nsID, dim, 10)
+	results, err := store.Search(ctx, VectorKindMemory, makeEmbedding(dim, 1.0), nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("Search before delete: %v", err)
 	}
@@ -214,12 +214,12 @@ func TestQdrantStore_Delete(t *testing.T) {
 	}
 
 	// Delete.
-	if err := store.Delete(ctx, memID); err != nil {
+	if err := store.Delete(ctx, VectorKindMemory, memID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
 	// Verify it's gone.
-	results, err = store.Search(ctx, makeEmbedding(dim, 1.0), nsID, dim, 10)
+	results, err = store.Search(ctx, VectorKindMemory, makeEmbedding(dim, 1.0), nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("Search after delete: %v", err)
 	}
@@ -240,15 +240,15 @@ func TestQdrantStore_SearchNamespaceScoping(t *testing.T) {
 	dim := 384
 	emb := makeEmbedding(dim, 1.0)
 
-	if err := store.Upsert(ctx, memID1, nsID1, emb, dim); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, memID1, nsID1, emb, dim); err != nil {
 		t.Fatalf("Upsert ns1: %v", err)
 	}
-	if err := store.Upsert(ctx, memID2, nsID2, emb, dim); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, memID2, nsID2, emb, dim); err != nil {
 		t.Fatalf("Upsert ns2: %v", err)
 	}
 
 	// Search in ns1 should only return memID1.
-	results, err := store.Search(ctx, emb, nsID1, dim, 10)
+	results, err := store.Search(ctx, VectorKindMemory, emb, nsID1, dim, 10)
 	if err != nil {
 		t.Fatalf("Search ns1: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestQdrantStore_SearchNamespaceScoping(t *testing.T) {
 	}
 
 	// Search in ns2 should only return memID2.
-	results, err = store.Search(ctx, emb, nsID2, dim, 10)
+	results, err = store.Search(ctx, VectorKindMemory, emb, nsID2, dim, 10)
 	if err != nil {
 		t.Fatalf("Search ns2: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestQdrantStore_Upsert_InvalidDimension(t *testing.T) {
 
 	store := setupQdrantTest(t)
 
-	err := store.Upsert(context.Background(), uuid.New(), uuid.New(), makeEmbedding(128, 1.0), 128)
+	err := store.Upsert(context.Background(), VectorKindMemory, uuid.New(), uuid.New(), makeEmbedding(128, 1.0), 128)
 	if err == nil {
 		t.Fatal("expected error for unsupported dimension 128, got nil")
 	}
@@ -288,7 +288,7 @@ func TestQdrantStore_Search_InvalidDimension(t *testing.T) {
 
 	store := setupQdrantTest(t)
 
-	_, err := store.Search(context.Background(), makeEmbedding(128, 1.0), uuid.New(), 128, 10)
+	_, err := store.Search(context.Background(), VectorKindMemory, makeEmbedding(128, 1.0), uuid.New(), 128, 10)
 	if err == nil {
 		t.Fatal("expected error for unsupported dimension 128, got nil")
 	}
@@ -328,17 +328,17 @@ func TestQdrantCollectionName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		name, err := qdrantCollectionName(tt.dim)
+		name, err := qdrantCollectionName(VectorKindMemory, tt.dim)
 		if tt.wantErr {
 			if err == nil {
-				t.Errorf("qdrantCollectionName(%d) expected error, got %q", tt.dim, name)
+				t.Errorf("qdrantCollectionName(memory, %d) expected error, got %q", tt.dim, name)
 			}
 		} else {
 			if err != nil {
-				t.Errorf("qdrantCollectionName(%d) unexpected error: %v", tt.dim, err)
+				t.Errorf("qdrantCollectionName(memory, %d) unexpected error: %v", tt.dim, err)
 			}
 			if name != tt.want {
-				t.Errorf("qdrantCollectionName(%d) = %q, want %q", tt.dim, name, tt.want)
+				t.Errorf("qdrantCollectionName(memory, %d) = %q, want %q", tt.dim, name, tt.want)
 			}
 		}
 	}
@@ -377,11 +377,11 @@ func TestQdrantStore_NewWithFullConfig(t *testing.T) {
 	dim := 384
 	emb := makeEmbedding(dim, 1.0)
 
-	if err := store.Upsert(ctx, memID, nsID, emb, dim); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, memID, nsID, emb, dim); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	results, err := store.Search(ctx, emb, nsID, dim, 10)
+	results, err := store.Search(ctx, VectorKindMemory, emb, nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -393,7 +393,7 @@ func TestQdrantStore_NewWithFullConfig(t *testing.T) {
 	}
 
 	// Clean up inserted point.
-	if err := store.Delete(ctx, memID); err != nil {
+	if err := store.Delete(ctx, VectorKindMemory, memID); err != nil {
 		t.Errorf("cleanup Delete: %v", err)
 	}
 }
@@ -425,11 +425,11 @@ func TestQdrantStore_NewWithPoolSizeOne(t *testing.T) {
 	dim := 384
 	emb := makeEmbedding(dim, 1.0)
 
-	if err := store.Upsert(ctx, memID, nsID, emb, dim); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, memID, nsID, emb, dim); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	results, err := store.Search(ctx, emb, nsID, dim, 10)
+	results, err := store.Search(ctx, VectorKindMemory, emb, nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestQdrantStore_NewWithPoolSizeOne(t *testing.T) {
 	}
 
 	// Clean up inserted point.
-	if err := store.Delete(ctx, memID); err != nil {
+	if err := store.Delete(ctx, VectorKindMemory, memID); err != nil {
 		t.Errorf("cleanup Delete: %v", err)
 	}
 }
@@ -501,7 +501,7 @@ func TestQdrantStore_GetByIDs_RoundTrip(t *testing.T) {
 		t.Fatalf("UpsertBatch: %v", err)
 	}
 
-	got, err := store.GetByIDs(ctx, ids, dim)
+	got, err := store.GetByIDs(ctx, VectorKindMemory, ids, dim)
 	if err != nil {
 		t.Fatalf("GetByIDs: %v", err)
 	}
@@ -532,12 +532,12 @@ func TestQdrantStore_GetByIDs_PartialAndEmpty(t *testing.T) {
 	nsID := uuid.New()
 	dim := 384
 	stored := uuid.New()
-	if err := store.Upsert(ctx, stored, nsID, makeEmbedding(dim, 0.3), dim); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, stored, nsID, makeEmbedding(dim, 0.3), dim); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
 	missing := uuid.New()
-	got, err := store.GetByIDs(ctx, []uuid.UUID{stored, missing}, dim)
+	got, err := store.GetByIDs(ctx, VectorKindMemory, []uuid.UUID{stored, missing}, dim)
 	if err != nil {
 		t.Fatalf("GetByIDs partial: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestQdrantStore_GetByIDs_PartialAndEmpty(t *testing.T) {
 		t.Errorf("missing id should not be in result")
 	}
 
-	emptyResult, err := store.GetByIDs(ctx, nil, dim)
+	emptyResult, err := store.GetByIDs(ctx, VectorKindMemory, nil, dim)
 	if err != nil {
 		t.Fatalf("GetByIDs empty: %v", err)
 	}
@@ -563,11 +563,11 @@ func TestQdrantStore_GetByIDs_WrongDimension(t *testing.T) {
 
 	nsID := uuid.New()
 	id := uuid.New()
-	if err := store.Upsert(ctx, id, nsID, makeEmbedding(384, 0.4), 384); err != nil {
+	if err := store.Upsert(ctx, VectorKindMemory, id, nsID, makeEmbedding(384, 0.4), 384); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := store.GetByIDs(ctx, []uuid.UUID{id}, 768)
+	got, err := store.GetByIDs(ctx, VectorKindMemory, []uuid.UUID{id}, 768)
 	if err != nil {
 		t.Fatalf("GetByIDs at dim 768: %v", err)
 	}

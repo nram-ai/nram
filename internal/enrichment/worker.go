@@ -50,8 +50,11 @@ type MemoryReader interface {
 }
 
 // MemoryUpdater persists changes to an existing memory.
+// UpdateEmbeddingDim is a focused setter so child memories created in the
+// same job can record their dim without rewriting every column.
 type MemoryUpdater interface {
 	Update(ctx context.Context, mem *model.Memory) error
+	UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error
 }
 
 // MemoryCreator persists a new memory record.
@@ -69,10 +72,12 @@ type QueueClaimer interface {
 
 // EntityUpserter creates or updates an entity record and supports lookup
 // by name similarity so that relationship resolution can find entities
-// created by prior enrichment jobs.
+// created by prior enrichment jobs. UpdateEmbeddingDimBatch records the dim
+// for many ids in one round-trip so per-job entity writes amortize.
 type EntityUpserter interface {
 	Upsert(ctx context.Context, entity *model.Entity) error
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
+	UpdateEmbeddingDimBatch(ctx context.Context, ids []uuid.UUID, dim int) error
 }
 
 // RelationshipCreator persists a new relationship between entities, with
@@ -99,9 +104,11 @@ type UsageContextResolver interface {
 	ResolveUsageContext(ctx context.Context, namespaceID uuid.UUID) (*model.UsageContext, error)
 }
 
-// VectorWriter upserts embedding vectors for memories and entities.
+// VectorWriter upserts embedding vectors for memories and entities. Kind
+// selects which table family the single-vector Upsert targets; UpsertBatch
+// reads Kind from each item.
 type VectorWriter interface {
-	Upsert(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
+	Upsert(ctx context.Context, kind storage.VectorKind, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
 	UpsertBatch(ctx context.Context, items []storage.VectorUpsertItem) error
 }
 
@@ -369,23 +376,38 @@ func (wp *WorkerPool) sleepWithBackoff(ctx context.Context, emptyPolls, maxBacko
 type childFact struct {
 	id      uuid.UUID
 	content string
+	mem     *model.Memory
+}
+
+// entityFact is the per-job entity record carried into the shared embed call
+// so the entity's canonical text can be embedded alongside the parent and
+// child memories. The pointer is retained so the embed_dim write-back can
+// flow through to the in-memory model object as well as the DB row.
+type entityFact struct {
+	id        uuid.UUID
+	canonical string
+	ent       *model.Entity
 }
 
 // pendingJob is the per-job state carried between pre-embed, embed, and
 // finalize phases. embedStart/embedCount index into the shared batched embed
-// response.
+// response for the parent + children; embedEntStart/embedEntCount cover the
+// entity canonicals appended after them in the same batch.
 type pendingJob struct {
-	job          *model.EnrichmentJob
-	mem          *model.Memory
-	children     []childFact
-	factUsage    *provider.TokenUsage
-	factModel    string
-	factProvider string
-	entityUsage  *provider.TokenUsage
-	entityModel  string
-	entityProv   string
-	embedStart   int
-	embedCount   int
+	job           *model.EnrichmentJob
+	mem           *model.Memory
+	children      []childFact
+	entities      []entityFact
+	factUsage     *provider.TokenUsage
+	factModel     string
+	factProvider  string
+	entityUsage   *provider.TokenUsage
+	entityModel   string
+	entityProv    string
+	embedStart    int
+	embedCount    int
+	embedEntStart int
+	embedEntCount int
 }
 
 func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *model.EnrichmentJob) error {
@@ -515,7 +537,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 			slog.Error("enrichment: create child memory", "job", job.ID, "err", err)
 			continue
 		}
-		children = append(children, childFact{id: childID, content: fact.Content})
+		children = append(children, childFact{id: childID, content: fact.Content, mem: child})
 
 		parentID := mem.ID
 		lin := &model.MemoryLineage{
@@ -531,12 +553,13 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		}
 	}
 
-	wp.upsertEntitiesAndRelationships(ctx, job, mem, entResult)
+	entities := wp.upsertEntitiesAndRelationships(ctx, job, mem, entResult)
 
 	return &pendingJob{
 		job:          job,
 		mem:          mem,
 		children:     children,
+		entities:     entities,
 		factUsage:    factUsage,
 		factModel:    factModel,
 		factProvider: factProvider,
@@ -547,10 +570,28 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 }
 
 // upsertEntitiesAndRelationships persists extracted entities and relationships,
-// resolving missing references against the DB and dedup-ing against existing edges.
-func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *model.EnrichmentJob, mem *model.Memory, entResult *entityExtractionResult) {
+// resolving missing references against the DB and dedup-ing against existing
+// edges. Returns the entityFact list of every entity (extracted + stubbed via
+// relationship resolution) so runEmbedBatch can embed their canonical names
+// in the same provider call as the parent and child memories.
+func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *model.EnrichmentJob, mem *model.Memory, entResult *entityExtractionResult) []entityFact {
 	if entResult == nil {
-		return
+		return nil
+	}
+
+	collected := make([]entityFact, 0, len(entResult.Entities))
+	seen := make(map[uuid.UUID]bool, len(entResult.Entities))
+
+	addFact := func(ent *model.Entity) {
+		if ent == nil || seen[ent.ID] {
+			return
+		}
+		seen[ent.ID] = true
+		collected = append(collected, entityFact{
+			id:        ent.ID,
+			canonical: ent.Canonical,
+			ent:       ent,
+		})
 	}
 
 	entityNameToID := make(map[string]uuid.UUID)
@@ -575,6 +616,7 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 			continue
 		}
 		entityNameToID[ent.Name] = modelEntity.ID
+		addFact(modelEntity)
 	}
 
 	for _, rel := range entResult.Relationships {
@@ -588,6 +630,7 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 			} else {
 				srcID, srcOK = ent.ID, true
 				entityNameToID[rel.Source] = ent.ID
+				addFact(ent)
 			}
 		}
 		if !tgtOK {
@@ -597,6 +640,7 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 			} else {
 				tgtID, tgtOK = ent.ID, true
 				entityNameToID[rel.Target] = ent.ID
+				addFact(ent)
 			}
 		}
 
@@ -623,13 +667,16 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 			slog.Error("enrichment: create relationship", "job", job.ID, "err", err)
 		}
 	}
+
+	return collected
 }
 
 // runEmbedBatch runs one embed provider call covering every pendingJob's
-// parent + child-fact contents, chunking at embedInputCap, then writes all
-// vectors via UpsertBatch. Per-job token usage is attributed with a
-// largest-remainder allocation so the per-job rows sum to exactly the
-// provider-billed aggregate.
+// parent + child-fact contents AND every entity canonical, chunking at
+// embedInputCap, then writes all vectors via UpsertBatch. Memory and entity
+// items share the same provider call to keep RTT cost at one per batch.
+// Per-job token usage is attributed with a largest-remainder allocation so
+// the per-job rows sum to exactly the provider-billed aggregate.
 func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob) {
 	if len(pendings) == 0 {
 		return
@@ -650,6 +697,12 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 			inputs = append(inputs, c.content)
 		}
 		p.embedCount = 1 + len(p.children)
+
+		p.embedEntStart = len(inputs)
+		for _, e := range p.entities {
+			inputs = append(inputs, e.canonical)
+		}
+		p.embedEntCount = len(p.entities)
 	}
 
 	dim := storage.BestEmbeddingDimension(ep.Dimensions())
@@ -669,7 +722,9 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		if p.embedStart < len(embeddings) {
 			parentVec := embeddings[p.embedStart]
 			if d := len(parentVec); d > 0 {
+				p.mem.EmbeddingDim = &d
 				items = append(items, storage.VectorUpsertItem{
+					Kind:        storage.VectorKindMemory,
 					ID:          p.mem.ID,
 					NamespaceID: p.mem.NamespaceID,
 					Embedding:   parentVec,
@@ -684,8 +739,31 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 			}
 			vec := embeddings[idx]
 			if d := len(vec); d > 0 {
+				if c.mem != nil {
+					c.mem.EmbeddingDim = &d
+				}
 				items = append(items, storage.VectorUpsertItem{
+					Kind:        storage.VectorKindMemory,
 					ID:          c.id,
+					NamespaceID: p.mem.NamespaceID,
+					Embedding:   vec,
+					Dimension:   d,
+				})
+			}
+		}
+		for j, e := range p.entities {
+			idx := p.embedEntStart + j
+			if idx >= len(embeddings) {
+				break
+			}
+			vec := embeddings[idx]
+			if d := len(vec); d > 0 {
+				if e.ent != nil {
+					e.ent.EmbeddingDim = &d
+				}
+				items = append(items, storage.VectorUpsertItem{
+					Kind:        storage.VectorKindEntity,
+					ID:          e.id,
 					NamespaceID: p.mem.NamespaceID,
 					Embedding:   vec,
 					Dimension:   d,
@@ -747,7 +825,8 @@ func (wp *WorkerPool) attributeEmbedUsage(ctx context.Context, pendings []*pendi
 		rem := make([]float64, len(pendings))
 		sum := 0
 		for i, p := range pendings {
-			exact := float64(total) * float64(p.embedCount) / float64(totalInputs)
+			share := p.embedCount + p.embedEntCount
+			exact := float64(total) * float64(share) / float64(totalInputs)
 			alloc[i] = int(exact)
 			rem[i] = exact - float64(alloc[i])
 			sum += alloc[i]
@@ -773,7 +852,7 @@ func (wp *WorkerPool) attributeEmbedUsage(ctx context.Context, pendings []*pendi
 	total := allocate(usage.TotalTokens)
 
 	for i, p := range pendings {
-		if p.embedCount == 0 {
+		if p.embedCount == 0 && p.embedEntCount == 0 {
 			continue
 		}
 		wp.recordUsage(ctx, p.mem, "embedding", providerName, model, provider.TokenUsage{
@@ -792,6 +871,29 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 	if err := wp.memUpdater.Update(ctx, p.mem); err != nil {
 		_ = wp.queue.Fail(ctx, p.job.ID, fmt.Sprintf("update memory enriched: %v", err))
 		return fmt.Errorf("update memory: %w", err)
+	}
+
+	for _, c := range p.children {
+		if c.mem != nil && c.mem.EmbeddingDim != nil {
+			if err := wp.memUpdater.UpdateEmbeddingDim(ctx, c.id, *c.mem.EmbeddingDim); err != nil {
+				slog.Warn("enrichment: update child embedding_dim", "child", c.id, "err", err)
+			}
+		}
+	}
+
+	// Group entity dim writes by dim so a single batch covers the whole job.
+	// In practice every entity in one cycle lands at the same dim, so this is
+	// almost always a single round-trip.
+	entityIDsByDim := make(map[int][]uuid.UUID)
+	for _, e := range p.entities {
+		if e.ent != nil && e.ent.EmbeddingDim != nil {
+			entityIDsByDim[*e.ent.EmbeddingDim] = append(entityIDsByDim[*e.ent.EmbeddingDim], e.id)
+		}
+	}
+	for dim, ids := range entityIDsByDim {
+		if err := wp.entities.UpdateEmbeddingDimBatch(ctx, ids, dim); err != nil {
+			slog.Warn("enrichment: update entity embedding_dim batch", "dim", dim, "count", len(ids), "err", err)
+		}
 	}
 
 	if p.factUsage != nil {

@@ -496,6 +496,21 @@ func (r *MemoryRepo) ListIDsByNamespaceFiltered(ctx context.Context, namespaceID
 	return result, nil
 }
 
+// UpdateEmbeddingDim sets a memory's embedding_dim without rewriting every
+// other column. Used by the enrichment worker to record the dim that a
+// child memory's vector was written at.
+func (r *MemoryRepo) UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE memories SET embedding_dim = ?, updated_at = ? WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories SET embedding_dim = $1, updated_at = $2 WHERE id = $3`
+	}
+	if _, err := r.db.Exec(ctx, query, dim, now, id.String()); err != nil {
+		return fmt.Errorf("memory update embedding_dim: %w", err)
+	}
+	return nil
+}
+
 // Update updates all mutable fields of a memory and bumps updated_at.
 func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -731,7 +746,7 @@ func (r *MemoryRepo) purgeVector(ctx context.Context, id uuid.UUID) {
 	if r.vectorStore == nil {
 		return
 	}
-	_ = r.vectorStore.Delete(ctx, id)
+	_ = r.vectorStore.Delete(ctx, VectorKindMemory, id)
 }
 
 // HardDeleteSoftDeletedBefore hard-deletes rows whose deleted_at is older

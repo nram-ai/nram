@@ -106,14 +106,14 @@ func TestHNSWStoreUpsertAndSearch(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		ids[i] = uuid.New()
 		vectors[i] = normalizeVector(randomVector(dim, int64(i+1)))
-		err := store.Upsert(ctx, ids[i], nsID, vectors[i], dim)
+		err := store.Upsert(ctx, storage.VectorKindMemory, ids[i], nsID, vectors[i], dim)
 		if err != nil {
 			t.Fatalf("upsert %d: %v", i, err)
 		}
 	}
 
 	// Search for the nearest neighbor of vectors[0] — it should be vectors[0] itself.
-	results, err := store.Search(ctx, vectors[0], nsID, dim, 3)
+	results, err := store.Search(ctx, storage.VectorKindMemory, vectors[0], nsID, dim, 3)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestHNSWStoreUpsertBatch(t *testing.T) {
 	}
 
 	// Search for the first item.
-	results, err := store.Search(ctx, items[0].Embedding, nsID, dim, 5)
+	results, err := store.Search(ctx, storage.VectorKindMemory, items[0].Embedding, nsID, dim, 5)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -188,12 +188,12 @@ func TestHNSWStoreDelete(t *testing.T) {
 	vec := normalizeVector(randomVector(dim, 42))
 
 	// Upsert a vector.
-	if err := store.Upsert(ctx, id, nsID, vec, dim); err != nil {
+	if err := store.Upsert(ctx, storage.VectorKindMemory, id, nsID, vec, dim); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
 	// Verify it's found.
-	results, err := store.Search(ctx, vec, nsID, dim, 1)
+	results, err := store.Search(ctx, storage.VectorKindMemory, vec, nsID, dim, 1)
 	if err != nil {
 		t.Fatalf("search before delete: %v", err)
 	}
@@ -202,12 +202,12 @@ func TestHNSWStoreDelete(t *testing.T) {
 	}
 
 	// Delete.
-	if err := store.Delete(ctx, id); err != nil {
+	if err := store.Delete(ctx, storage.VectorKindMemory, id); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
 	// Search again — should be empty.
-	results, err = store.Search(ctx, vec, nsID, dim, 1)
+	results, err = store.Search(ctx, storage.VectorKindMemory, vec, nsID, dim, 1)
 	if err != nil {
 		t.Fatalf("search after delete: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestHNSWStoreDelete(t *testing.T) {
 	}
 
 	// Delete again — should be a no-op.
-	if err := store.Delete(ctx, id); err != nil {
+	if err := store.Delete(ctx, storage.VectorKindMemory, id); err != nil {
 		t.Fatalf("double delete: %v", err)
 	}
 }
@@ -239,15 +239,15 @@ func TestHNSWStoreNamespaceIsolation(t *testing.T) {
 	id1 := uuid.New()
 	id2 := uuid.New()
 
-	if err := store.Upsert(ctx, id1, ns1, vec1, dim); err != nil {
+	if err := store.Upsert(ctx, storage.VectorKindMemory, id1, ns1, vec1, dim); err != nil {
 		t.Fatalf("upsert ns1: %v", err)
 	}
-	if err := store.Upsert(ctx, id2, ns2, vec2, dim); err != nil {
+	if err := store.Upsert(ctx, storage.VectorKindMemory, id2, ns2, vec2, dim); err != nil {
 		t.Fatalf("upsert ns2: %v", err)
 	}
 
 	// Search in ns1 — should only find id1.
-	results, err := store.Search(ctx, vec1, ns1, dim, 10)
+	results, err := store.Search(ctx, storage.VectorKindMemory, vec1, ns1, dim, 10)
 	if err != nil {
 		t.Fatalf("search ns1: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestHNSWStoreNamespaceIsolation(t *testing.T) {
 	}
 
 	// Search in ns2 — should only find id2.
-	results, err = store.Search(ctx, vec2, ns2, dim, 10)
+	results, err = store.Search(ctx, storage.VectorKindMemory, vec2, ns2, dim, 10)
 	if err != nil {
 		t.Fatalf("search ns2: %v", err)
 	}
@@ -287,17 +287,17 @@ func TestHNSWStoreUpsertUpdate(t *testing.T) {
 	vec2 := normalizeVector(randomVector(dim, 20))
 
 	// Upsert with vec1.
-	if err := store.Upsert(ctx, id, nsID, vec1, dim); err != nil {
+	if err := store.Upsert(ctx, storage.VectorKindMemory, id, nsID, vec1, dim); err != nil {
 		t.Fatalf("upsert vec1: %v", err)
 	}
 
 	// Upsert same ID with vec2.
-	if err := store.Upsert(ctx, id, nsID, vec2, dim); err != nil {
+	if err := store.Upsert(ctx, storage.VectorKindMemory, id, nsID, vec2, dim); err != nil {
 		t.Fatalf("upsert vec2: %v", err)
 	}
 
 	// Search for vec2 — should find id with high score.
-	results, err := store.Search(ctx, vec2, nsID, dim, 1)
+	results, err := store.Search(ctx, storage.VectorKindMemory, vec2, nsID, dim, 1)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestHNSWStoreSearchEmptyNamespace(t *testing.T) {
 	dim := 384
 	query := normalizeVector(randomVector(dim, 99))
 
-	results, err := store.Search(ctx, query, nsID, dim, 5)
+	results, err := store.Search(ctx, storage.VectorKindMemory, query, nsID, dim, 5)
 	if err != nil {
 		t.Fatalf("search empty namespace: %v", err)
 	}
@@ -345,13 +345,13 @@ func TestHNSWStoreUnsupportedDimension(t *testing.T) {
 
 	// Dimension 999 is not in SupportedVectorDimensions.
 	vec := randomVector(999, 1)
-	err := store.Upsert(ctx, uuid.New(), nsID, vec, 999)
+	err := store.Upsert(ctx, storage.VectorKindMemory, uuid.New(), nsID, vec, 999)
 	if err == nil {
 		t.Fatal("expected error for unsupported dimension, got nil")
 	}
 
 	// Search with unsupported dimension should also fail.
-	_, err = store.Search(ctx, vec, nsID, 999, 5)
+	_, err = store.Search(ctx, storage.VectorKindMemory, vec, nsID, 999, 5)
 	if err == nil {
 		t.Fatal("expected error for unsupported search dimension, got nil")
 	}
@@ -389,7 +389,7 @@ func TestHNSWStoreClose(t *testing.T) {
 	vec := normalizeVector(randomVector(dim, 42))
 
 	// Upsert a vector so there's dirty state to flush.
-	if err := store.Upsert(ctx, uuid.New(), nsID, vec, dim); err != nil {
+	if err := store.Upsert(ctx, storage.VectorKindMemory, uuid.New(), nsID, vec, dim); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -486,7 +486,7 @@ func TestHNSWStoreSnapshotPersistence(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		ids[i] = uuid.New()
 		vecs[i] = normalizeVector(randomVector(dim, int64(i+1)))
-		if err := store1.Upsert(ctx, ids[i], nsID, vecs[i], dim); err != nil {
+		if err := store1.Upsert(ctx, storage.VectorKindMemory, ids[i], nsID, vecs[i], dim); err != nil {
 			t.Fatalf("upsert %d: %v", i, err)
 		}
 	}
@@ -509,7 +509,7 @@ func TestHNSWStoreSnapshotPersistence(t *testing.T) {
 	defer store2.Close()
 
 	// Search should return correct results loaded from the snapshot.
-	results, err := store2.Search(ctx, vecs[0], nsID, dim, 3)
+	results, err := store2.Search(ctx, storage.VectorKindMemory, vecs[0], nsID, dim, 3)
 	if err != nil {
 		t.Fatalf("search after restart: %v", err)
 	}
@@ -524,7 +524,7 @@ func TestHNSWStoreSnapshotPersistence(t *testing.T) {
 	}
 
 	// Verify all 10 vectors are searchable.
-	allResults, err := store2.Search(ctx, vecs[5], nsID, dim, 10)
+	allResults, err := store2.Search(ctx, storage.VectorKindMemory, vecs[5], nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("search all after restart: %v", err)
 	}
@@ -563,7 +563,7 @@ func TestHNSWStoreLRUEviction(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			data[ni].ids[i] = uuid.New()
 			data[ni].vecs[i] = normalizeVector(randomVector(dim, int64(ni*1000+i+1)))
-			if err := store.Upsert(ctx, data[ni].ids[i], ns, data[ni].vecs[i], dim); err != nil {
+			if err := store.Upsert(ctx, storage.VectorKindMemory, data[ni].ids[i], ns, data[ni].vecs[i], dim); err != nil {
 				t.Fatalf("upsert ns%d vec%d: %v", ni, i, err)
 			}
 		}
@@ -573,7 +573,7 @@ func TestHNSWStoreLRUEviction(t *testing.T) {
 	// With MaxLoadedIndexes=2, ns1 should have been evicted when ns3 was loaded.
 	// But search should still work because it reloads from DB.
 	for ni, ns := range namespaces {
-		results, err := store.Search(ctx, data[ni].vecs[0], ns, dim, 3)
+		results, err := store.Search(ctx, storage.VectorKindMemory, data[ni].vecs[0], ns, dim, 3)
 		if err != nil {
 			t.Fatalf("search ns%d: %v", ni, err)
 		}
@@ -606,7 +606,7 @@ func TestHNSWStoreConcurrentReadWrite(t *testing.T) {
 	// Seed some initial vectors so searches have data.
 	for i := 0; i < 5; i++ {
 		vec := normalizeVector(randomVector(dim, int64(i+1000)))
-		if err := store.Upsert(ctx, uuid.New(), nsID, vec, dim); err != nil {
+		if err := store.Upsert(ctx, storage.VectorKindMemory, uuid.New(), nsID, vec, dim); err != nil {
 			t.Fatalf("seed upsert %d: %v", i, err)
 		}
 	}
@@ -620,7 +620,7 @@ func TestHNSWStoreConcurrentReadWrite(t *testing.T) {
 		go func(seed int) {
 			defer wg.Done()
 			vec := normalizeVector(randomVector(dim, int64(seed+2000)))
-			if err := store.Upsert(ctx, uuid.New(), nsID, vec, dim); err != nil {
+			if err := store.Upsert(ctx, storage.VectorKindMemory, uuid.New(), nsID, vec, dim); err != nil {
 				errCh <- err
 			}
 		}(w)
@@ -632,7 +632,7 @@ func TestHNSWStoreConcurrentReadWrite(t *testing.T) {
 		go func(seed int) {
 			defer wg.Done()
 			query := normalizeVector(randomVector(dim, int64(seed+3000)))
-			_, err := store.Search(ctx, query, nsID, dim, 3)
+			_, err := store.Search(ctx, storage.VectorKindMemory, query, nsID, dim, 3)
 			if err != nil {
 				errCh <- err
 			}
@@ -673,13 +673,13 @@ func TestHNSWStoreDeleteAndSearchConsistency(t *testing.T) {
 			v[j] += float32(i) * 0.0001
 		}
 		vec := normalizeVector(v)
-		if err := store.Upsert(ctx, ids[i], nsID, vec, dim); err != nil {
+		if err := store.Upsert(ctx, storage.VectorKindMemory, ids[i], nsID, vec, dim); err != nil {
 			t.Fatalf("upsert %d: %v", i, err)
 		}
 	}
 
 	// Search for top 20 to get the rank order.
-	allResults, err := store.Search(ctx, query, nsID, dim, 20)
+	allResults, err := store.Search(ctx, storage.VectorKindMemory, query, nsID, dim, 20)
 	if err != nil {
 		t.Fatalf("search all: %v", err)
 	}
@@ -695,13 +695,13 @@ func TestHNSWStoreDeleteAndSearchConsistency(t *testing.T) {
 
 	// Delete the top 5.
 	for id := range top5 {
-		if err := store.Delete(ctx, id); err != nil {
+		if err := store.Delete(ctx, storage.VectorKindMemory, id); err != nil {
 			t.Fatalf("delete %s: %v", id, err)
 		}
 	}
 
 	// Search again — none of the deleted vectors should appear.
-	afterResults, err := store.Search(ctx, query, nsID, dim, 20)
+	afterResults, err := store.Search(ctx, storage.VectorKindMemory, query, nsID, dim, 20)
 	if err != nil {
 		t.Fatalf("search after delete: %v", err)
 	}
@@ -793,7 +793,7 @@ func TestHNSWStoreBatchUpsertMultiNamespace(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := groups[tc.key]
-			results, err := store.Search(ctx, g[0].vec, tc.ns, tc.dim, 10)
+			results, err := store.Search(ctx, storage.VectorKindMemory, g[0].vec, tc.ns, tc.dim, 10)
 			if err != nil {
 				t.Fatalf("search: %v", err)
 			}
@@ -826,7 +826,7 @@ func TestHNSWStoreBatchUpsertMultiNamespace(t *testing.T) {
 	}
 
 	// Cross-check: searching ns1 with dim=768 should return nothing.
-	crossResults, err := store.Search(ctx, normalizeVector(makeVector(dim768, 10.0)), ns1, dim768, 10)
+	crossResults, err := store.Search(ctx, storage.VectorKindMemory, normalizeVector(makeVector(dim768, 10.0)), ns1, dim768, 10)
 	if err != nil {
 		t.Fatalf("cross search: %v", err)
 	}
@@ -853,7 +853,7 @@ func TestHNSWStoreRebuildFromVectors(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		ids[i] = uuid.New()
 		vecs[i] = normalizeVector(randomVector(dim, int64(i+500)))
-		if err := store1.Upsert(ctx, ids[i], nsID, vecs[i], dim); err != nil {
+		if err := store1.Upsert(ctx, storage.VectorKindMemory, ids[i], nsID, vecs[i], dim); err != nil {
 			t.Fatalf("upsert %d: %v", i, err)
 		}
 	}
@@ -891,7 +891,7 @@ func TestHNSWStoreRebuildFromVectors(t *testing.T) {
 	defer store2.Close()
 
 	// Search should return correct results rebuilt from raw vectors.
-	results, err := store2.Search(ctx, vecs[0], nsID, dim, 3)
+	results, err := store2.Search(ctx, storage.VectorKindMemory, vecs[0], nsID, dim, 3)
 	if err != nil {
 		t.Fatalf("search after rebuild: %v", err)
 	}
@@ -906,7 +906,7 @@ func TestHNSWStoreRebuildFromVectors(t *testing.T) {
 	}
 
 	// Verify all 10 vectors are searchable.
-	allResults, err := store2.Search(ctx, vecs[5], nsID, dim, 10)
+	allResults, err := store2.Search(ctx, storage.VectorKindMemory, vecs[5], nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("search all after rebuild: %v", err)
 	}
@@ -980,7 +980,7 @@ func TestHNSWStoreGetByIDs_RoundTrip(t *testing.T) {
 		ids[i] = it.ID
 	}
 
-	got, err := store.GetByIDs(ctx, ids, dim)
+	got, err := store.GetByIDs(ctx, storage.VectorKindMemory, ids, dim)
 	if err != nil {
 		t.Fatalf("GetByIDs: %v", err)
 	}
@@ -1011,12 +1011,12 @@ func TestHNSWStoreGetByIDs_PartialHit(t *testing.T) {
 	dim := 384
 
 	stored := uuid.New()
-	if err := store.Upsert(ctx, stored, nsID, normalizeVector(randomVector(dim, 1)), dim); err != nil {
+	if err := store.Upsert(ctx, storage.VectorKindMemory, stored, nsID, normalizeVector(randomVector(dim, 1)), dim); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
 	missing := uuid.New()
-	got, err := store.GetByIDs(ctx, []uuid.UUID{stored, missing}, dim)
+	got, err := store.GetByIDs(ctx, storage.VectorKindMemory, []uuid.UUID{stored, missing}, dim)
 	if err != nil {
 		t.Fatalf("GetByIDs: %v", err)
 	}
@@ -1038,7 +1038,7 @@ func TestHNSWStoreGetByIDs_EmptyInput(t *testing.T) {
 	store := storage.NewHNSWStore(db, db, cfg)
 	defer store.Close()
 
-	got, err := store.GetByIDs(context.Background(), nil, 384)
+	got, err := store.GetByIDs(context.Background(), storage.VectorKindMemory, nil, 384)
 	if err != nil {
 		t.Fatalf("GetByIDs(nil): %v", err)
 	}
@@ -1057,12 +1057,12 @@ func TestHNSWStoreGetByIDs_WrongDimension(t *testing.T) {
 	ctx := context.Background()
 	nsID := uuid.New()
 	id := uuid.New()
-	if err := store.Upsert(ctx, id, nsID, normalizeVector(randomVector(384, 7)), 384); err != nil {
+	if err := store.Upsert(ctx, storage.VectorKindMemory, id, nsID, normalizeVector(randomVector(384, 7)), 384); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
 	// Stored at 384, query at 768 — must return empty without error.
-	got, err := store.GetByIDs(ctx, []uuid.UUID{id}, 768)
+	got, err := store.GetByIDs(ctx, storage.VectorKindMemory, []uuid.UUID{id}, 768)
 	if err != nil {
 		t.Fatalf("GetByIDs at wrong dim: %v", err)
 	}
