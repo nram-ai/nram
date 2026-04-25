@@ -753,3 +753,117 @@ func (s *scriptedEmbedder) Embed(_ context.Context, req *provider.EmbeddingReque
 }
 func (s *scriptedEmbedder) Name() string      { return "scripted" }
 func (s *scriptedEmbedder) Dimensions() []int { return []int{s.dim} }
+
+func auditReasonFromMeta(raw json.RawMessage) string {
+	var m map[string]interface{}
+	_ = json.Unmarshal(raw, &m)
+	r, _ := m["novelty_audit_reason"].(string)
+	return r
+}
+
+// TestAuditExistingDreams_PersistentEmbedErrorStamps proves the
+// silent-re-eligibility-loop fix: when the embedder returns an error that
+// will fail identically on retry (HTTP 4xx, context-overflow phrasing),
+// the audit stamps the synthesis with embed_error_persistent so it exits
+// eligibility instead of re-entering it every cycle. Without this, the
+// project's dirty flag never clears because consolidation always reports
+// has_residual=true on these memories. See phase_consolidation.go and
+// scheduler.go:251.
+func TestAuditExistingDreams_PersistentEmbedErrorStamps(t *testing.T) {
+	src := model.Memory{ID: uuid.New(), Content: "source"}
+	dream := dreamMemory("synthesis with oversized context", []uuid.UUID{src.ID})
+
+	emb := &staticEmbedder{
+		err: errors.New("openai: embedding request failed: API error (400): context length exceeded for model"),
+	}
+	settings := noveltySettings(true)
+	settings.ints[service.SettingDreamNoveltyBackfillPerCycle] = 50
+	writer := &updatingMemoryWriter{}
+	reader := &fakeMemoryReader{list: []model.Memory{src, dream}}
+	phase := newAuditPhase(emb, &scriptedJudgeLLM{}, settings, writer, reader)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: dream.NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, reader.list, settings.ints[service.SettingDreamNoveltyBackfillPerCycle]); err != nil {
+		t.Fatalf("AuditExistingDreams returned error: %v", err)
+	}
+
+	if len(writer.updates) != 1 {
+		t.Fatalf("persistent embed error must stamp the synthesis (1 update), got %d", len(writer.updates))
+	}
+	updated := writer.updates[0]
+	if updated.ID != dream.ID {
+		t.Fatalf("expected the dream to be updated, got %s", updated.ID)
+	}
+	if !hasAuditMarker(updated.Metadata) {
+		t.Errorf("dream missing novelty_audited_at marker after persistent error; got %s", string(updated.Metadata))
+	}
+	if got := auditReasonFromMeta(updated.Metadata); got != "embed_error_persistent" {
+		t.Errorf("expected reason embed_error_persistent, got %q", got)
+	}
+	if isLowNoveltyJSON(updated.Metadata) {
+		t.Errorf("persistent embed error must NOT demote (low_novelty=false); got %s", string(updated.Metadata))
+	}
+	if updated.Confidence == 0 {
+		t.Errorf("persistent embed error must NOT zero confidence; got 0")
+	}
+}
+
+// TestAuditExistingDreams_TransientEmbedErrorDoesNotStamp asserts the
+// inverse: 5xx and other transient errors leave the synthesis in the
+// eligibility set so the next cycle retries. This is the pre-fix
+// behavior preserved for transient failures.
+func TestAuditExistingDreams_TransientEmbedErrorDoesNotStamp(t *testing.T) {
+	src := model.Memory{ID: uuid.New(), Content: "source"}
+	dream := dreamMemory("synthesis with transient blip", []uuid.UUID{src.ID})
+
+	emb := &staticEmbedder{
+		err: errors.New("openai: embedding request failed: API error (503): service unavailable"),
+	}
+	settings := noveltySettings(true)
+	settings.ints[service.SettingDreamNoveltyBackfillPerCycle] = 50
+	writer := &updatingMemoryWriter{}
+	reader := &fakeMemoryReader{list: []model.Memory{src, dream}}
+	phase := newAuditPhase(emb, &scriptedJudgeLLM{}, settings, writer, reader)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: dream.NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, reader.list, settings.ints[service.SettingDreamNoveltyBackfillPerCycle]); err != nil {
+		t.Fatalf("AuditExistingDreams returned error: %v", err)
+	}
+
+	if len(writer.updates) != 0 {
+		t.Fatalf("transient embed error must NOT stamp; got %d updates", len(writer.updates))
+	}
+}
+
+func TestIsPersistentEmbedError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"http_400", errors.New("openai: embedding request failed: API error (400): bad request"), true},
+		{"http_413_payload", errors.New("API error (413): request entity too large"), true},
+		{"http_499", errors.New("API error (499): client closed request"), true},
+		{"http_503_transient", errors.New("openai: embedding request failed: API error (503): service unavailable"), false},
+		{"http_500_transient", errors.New("API error (500): internal server error"), false},
+		{"context_length_phrase", errors.New("the input exceeds context length of 2048 tokens"), true},
+		{"too_long_phrase", errors.New("input is too long for the model"), true},
+		{"connection_refused_transient", errors.New("dial tcp 192.168.2.35:11434: connection refused"), false},
+		{"timeout_transient", errors.New("context deadline exceeded"), false},
+		{"context_window_phrase", errors.New("Input length exceeds maximum context window."), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isPersistentEmbedError(c.err); got != c.want {
+				t.Errorf("isPersistentEmbedError(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}

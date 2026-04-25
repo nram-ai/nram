@@ -529,6 +529,7 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 		"orphans_demoted":        0,
 		"fetch_errors":           0,
 		"audit_errors":           0,
+		"persistent_audit_errors": 0,
 		"skipped_budget":         0,
 		"embedding_calls":        0,
 		"judge_calls":            0,
@@ -639,10 +640,21 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			p.record(ctx, cycle, "dream_novelty_backfill", llm.Name(), &mem.ID, auditUsage.PromptTokens, auditUsage.CompletionTokens)
 		}
 		if auditErr != nil {
+			persistent := isPersistentEmbedError(auditErr)
 			slog.Warn("dreaming: backfill novelty audit error",
-				"memory", mem.ID, "err", auditErr, "reason", reason)
+				"memory", mem.ID, "err", auditErr, "reason", reason,
+				"persistent", persistent)
 			stats["audit_errors"] = stats["audit_errors"].(int) + 1
-			// Do not stamp on hard error; let a later cycle retry.
+			if persistent {
+				// Stamp with a persistent-failure reason so the synthesis
+				// exits eligibility. Without this, every cycle re-audits
+				// the same memory, the same call fails, and the project's
+				// dirty flag never clears (consolidation always reports
+				// has_residual=true). Transient errors fall through and
+				// retry next cycle as before.
+				p.writeAuditDecision(ctx, logger, &mem, meta, "embed_error_persistent", false)
+				stats["persistent_audit_errors"] = stats["persistent_audit_errors"].(int) + 1
+			}
 			continue
 		}
 
@@ -664,6 +676,55 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 // future cycles skip it. Mutates only the metadata field.
 func (p *ConsolidationPhase) stampAudited(ctx context.Context, mem *model.Memory, meta map[string]interface{}, reason string) {
 	p.writeAuditDecision(ctx, nil, mem, meta, reason, false)
+}
+
+// isPersistentEmbedError classifies an embedder error as persistent (will
+// fail identically on retry without operator intervention) vs transient
+// (worth retrying next cycle). The audit caller stamps persistent errors
+// so the synthesis exits eligibility; without that stamp every cycle
+// re-audits the same memory, the same call fails, and the project's
+// dirty flag never clears.
+//
+// Classification rules, in order:
+//  1. HTTP 4xx in the wrapped error string → persistent (client-side
+//     problem: input too large, malformed request, missing model).
+//  2. Common context-overflow phrases → persistent (defensive belt for
+//     providers that don't surface the status code in the error string).
+//  3. HTTP 5xx, network/timeout/connection errors, anything else → transient.
+//
+// The OpenAI provider wraps embed failures as
+//
+//	"openai: embedding request failed: API error (NNN): ... [type=..., code=...]"
+//
+// (see internal/provider/openai.go:336), which makes pattern matching on
+// the rendered string a stable signal across the OpenAI-compatible
+// providers we use today (OpenAI itself, Ollama via the OpenAI adapter).
+func isPersistentEmbedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for code := 400; code < 500; code++ {
+		if strings.Contains(msg, fmt.Sprintf("API error (%d)", code)) {
+			return true
+		}
+	}
+	lower := strings.ToLower(msg)
+	persistentPhrases := []string{
+		"context length",
+		"maximum context",
+		"context window",
+		"too long",
+		"token limit",
+		"exceeds the maximum",
+		"input is too large",
+	}
+	for _, phrase := range persistentPhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // demoteDream zeroes Confidence and stamps low_novelty so the recall service
