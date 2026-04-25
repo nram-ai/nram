@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,15 @@ import (
 // exists and is not strictly before its UpdatedAt; any other state marks the
 // memory as stale and eligible for re-checking.
 const ContradictionsCheckedStampKey = "contradictions_checked_at"
+
+// Winner values emitted by the contradiction LLM judge in the response's
+// "winner" field. WinnerTie also covers the legacy-prompt empty-field case
+// after normalization.
+const (
+	WinnerSideA = "a"
+	WinnerSideB = "b"
+	WinnerTie   = "tie"
+)
 
 // defaultContradictionCap bounds the number of pair-check LLM calls the
 // phase may issue per cycle. Exposed as SettingDreamContradictionCap so
@@ -146,6 +156,22 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamContradictionPrompt, "global")
 
+	// Index stale by ID so haircut/supersede updates can be mirrored back.
+	// The post-loop stamp pass writes Update on each stale[i].Mem with all
+	// columns; without this mirror the stamp would overwrite the haircut
+	// confidence with the pre-haircut value.
+	staleByID := make(map[uuid.UUID]*model.Memory, len(stale))
+	for i := range stale {
+		staleByID[stale[i].Mem.ID] = &stale[i].Mem
+	}
+
+	// Haircut settings are stable for the duration of the cycle; resolve once
+	// up front rather than re-resolving on every contradiction.
+	loserBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionLoserHaircut, 0.85)
+	winnerBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionWinnerHaircut, 0.97)
+	tieBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionTieHaircut, 0.92)
+	supersedeThreshold := resolveFraction(ctx, p.settings, service.SettingDreamSupersessionThreshold, 0.85)
+
 	contradictions := 0
 	budgetStopped := false
 	for idx, pair := range pairs {
@@ -167,7 +193,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		}
 
 		pairStart := time.Now()
-		found, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
+		found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
 		pairDur := time.Since(pairStart)
 
 		// Account for usage before handling the error. Parse-error paths
@@ -209,12 +235,94 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			continue
 		}
 
+		priorCount, lcErr := p.lineage.CountConflictsBetween(ctx, cycle.NamespaceID, pair[0].ID, pair[1].ID)
+		if lcErr != nil {
+			slog.Warn("dreaming: lineage count failed",
+				"a", pair[0].ID, "b", pair[1].ID, "err", lcErr)
+			continue
+		}
+		detection := priorCount + 1
+
+		// Diminishing factor: 1 - (1 - base) / N. n=1 applies the full base
+		// haircut; subsequent detections of the same pair shrink the gap
+		// to 1.0 so cumulative drift is bounded.
+		diminish := func(base float64) float64 {
+			return 1.0 - (1.0-base)/float64(detection)
+		}
+
+		// Empty winner means the operator's prompt predates the field; treat
+		// as tie so legacy deployments degrade gracefully to symmetric haircuts.
+		normalized := winner
+		if normalized != WinnerSideA && normalized != WinnerSideB {
+			normalized = WinnerTie
+		}
+
+		now := time.Now().UTC()
+		var loserMem, winnerMem *model.Memory
+		var loserFactor, winnerFactor float64
+		switch normalized {
+		case WinnerSideA:
+			winnerMem, loserMem = &pair[0], &pair[1]
+			winnerFactor, loserFactor = diminish(winnerBase), diminish(loserBase)
+		case WinnerSideB:
+			winnerMem, loserMem = &pair[1], &pair[0]
+			winnerFactor, loserFactor = diminish(winnerBase), diminish(loserBase)
+		default:
+			loserFactor = diminish(tieBase)
+			winnerFactor = diminish(tieBase)
+		}
+
+		// Conditional supersede: when the winner was already well-established
+		// before the haircut, mark the loser as superseded so the supersede
+		// prune branch (with its 7d clock from SupersededAt) cleans it up
+		// faster than waiting for confidence drift to reach zero. Set the
+		// fields here so the haircut Update below carries them in one write.
+		if winnerMem != nil && winnerMem.Confidence > supersedeThreshold {
+			loserMem.SupersededBy = &winnerMem.ID
+			loserMem.SupersededAt = &now
+		}
+
+		// Mirror writes into the stale index so the post-loop stamp Update,
+		// which serializes every column from stale[i].Mem, preserves the
+		// haircut and any supersession marker we wrote.
+		mirrorToStale := func(mem *model.Memory) {
+			if s, ok := staleByID[mem.ID]; ok {
+				s.Confidence = mem.Confidence
+				s.UpdatedAt = mem.UpdatedAt
+				s.SupersededBy = mem.SupersededBy
+				s.SupersededAt = mem.SupersededAt
+			}
+		}
+
+		applyHaircut := func(mem *model.Memory, factor float64) {
+			mem.Confidence = math.Max(0.0, mem.Confidence*factor)
+			mem.UpdatedAt = now
+			if err := p.memWriter.Update(ctx, mem); err != nil {
+				slog.Warn("dreaming: contradiction haircut update failed",
+					"memory", mem.ID, "err", err)
+			}
+			mirrorToStale(mem)
+		}
+
+		if normalized == WinnerTie {
+			applyHaircut(&pair[0], loserFactor)
+			applyHaircut(&pair[1], winnerFactor)
+		} else {
+			applyHaircut(loserMem, loserFactor)
+			applyHaircut(winnerMem, winnerFactor)
+		}
+
+		edgeCtx, _ := json.Marshal(map[string]interface{}{
+			"detection_count": detection,
+			"winner":          normalized,
+		})
 		lineageEntry := &model.MemoryLineage{
 			ID:          uuid.New(),
 			NamespaceID: cycle.NamespaceID,
 			MemoryID:    pair[0].ID,
 			ParentID:    &pair[1].ID,
 			Relation:    model.LineageConflictsWith,
+			Context:     edgeCtx,
 		}
 		if err := p.lineage.Create(ctx, lineageEntry); err != nil {
 			slog.Warn("dreaming: lineage creation failed", "err", err)
@@ -224,8 +332,12 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		_ = logger.LogOperation(ctx, model.DreamPhaseContradictions,
 			model.DreamOpContradictionDetected, "memory", pair[0].ID,
 			nil, map[string]interface{}{
-				"conflicting_id": pair[1].ID.String(),
-				"explanation":    explanation,
+				"conflicting_id":  pair[1].ID.String(),
+				"winner":          normalized,
+				"detection_count": detection,
+				"loser_factor":    loserFactor,
+				"winner_factor":   winnerFactor,
+				"explanation":     explanation,
 			})
 
 		contradictions++
@@ -498,7 +610,7 @@ func (p *ContradictionPhase) checkContradiction(
 	a, b *model.Memory,
 	prompt string,
 	budget *TokenBudget,
-) (bool, string, *provider.TokenUsage, error) {
+) (bool, string, string, *provider.TokenUsage, error) {
 	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
@@ -508,7 +620,7 @@ func (p *ContradictionPhase) checkContradiction(
 		JSONMode:    true,
 	})
 	if err != nil {
-		return false, "", nil, err
+		return false, "", "", nil, err
 	}
 
 	usage := resp.Usage
@@ -525,17 +637,21 @@ func (p *ContradictionPhase) checkContradiction(
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 
+	// Winner is "a", "b", "tie", or empty when the operator's prompt predates
+	// the winner field. Empty is normalized to "tie" at the call site so
+	// custom prompts in the field continue to work without an upgrade.
 	var result struct {
 		Contradicts bool   `json:"contradicts"`
+		Winner      string `json:"winner"`
 		Explanation string `json:"explanation"`
 	}
 
 	content := strings.TrimSpace(resp.Content)
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return false, "", &usage, fmt.Errorf("parse contradiction response: %w", err)
+		return false, "", "", &usage, fmt.Errorf("parse contradiction response: %w", err)
 	}
 
-	return result.Contradicts, result.Explanation, &usage, nil
+	return result.Contradicts, result.Winner, result.Explanation, &usage, nil
 }
 
 // record persists a token_usage row for a dreaming operation. Shared by

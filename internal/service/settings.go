@@ -86,6 +86,17 @@ const (
 	// pass drains on namespaces with large unstamped backlogs.
 	SettingDreamContradictionCap = "dreaming.contradiction.cap_per_cycle"
 
+	// Contradiction confidence haircuts. Multiplicative factors applied to
+	// memory.confidence at the time a conflicts_with edge is written. The
+	// factor is diminished on reaffirmation: effective = 1 - (1 - base) / N
+	// where N is the count of prior conflicts_with edges between the pair.
+	// Loser is the side the LLM judge marks as less likely correct; winner
+	// takes a smaller haircut acknowledging some uncertainty in any judgment;
+	// tie applies the same haircut to both sides when the judge cannot pick.
+	SettingDreamContradictionLoserHaircut  = "dreaming.contradiction.loser_haircut"
+	SettingDreamContradictionWinnerHaircut = "dreaming.contradiction.winner_haircut"
+	SettingDreamContradictionTieHaircut    = "dreaming.contradiction.tie_haircut"
+
 	// Retention for soft-deleted memories. Rows past this age are hard-deleted
 	// by the retention sweeper and their vector rows are CASCADEd alongside.
 	SettingMemorySoftDeleteRetentionDays = "memory.soft_delete_retention_days"
@@ -149,10 +160,16 @@ Determine if the two statements below contradict each other.
 %s
 </statement_b>
 
+When they contradict, also identify which is more likely correct and set "winner" to "a", "b", or "tie". Use "tie" when the contradiction is real but neither side is clearly right (subjective claims, partial overlap, claims about different time periods, equally plausible interpretations).
+
 Output ONLY this JSON, nothing else:
-{"contradicts": true, "explanation": "reason"}
+{"contradicts": true, "winner": "a", "explanation": "reason"}
 or
-{"contradicts": false, "explanation": "reason"}`,
+{"contradicts": true, "winner": "b", "explanation": "reason"}
+or
+{"contradicts": true, "winner": "tie", "explanation": "reason"}
+or
+{"contradicts": false, "winner": null, "explanation": "reason"}`,
 	SettingDreamSynthesisPrompt: `You are a knowledge synthesizer. You do NOT converse, greet, or ask questions. You output ONLY the synthesized text.
 
 Combine the following pieces of information into a single concise paragraph that preserves all key facts. Do not lose details. Do not add commentary. Do not prefix with "Here is" or similar.
@@ -192,7 +209,10 @@ alignment must be a float:
 	SettingDreamConsolidationReinforceFraction:   "0.35",
 	SettingDreamConsolidationConsolidateFraction: "0.30",
 
-	SettingDreamContradictionCap: "30",
+	SettingDreamContradictionCap:           "30",
+	SettingDreamContradictionLoserHaircut:  "0.85",
+	SettingDreamContradictionWinnerHaircut: "0.97",
+	SettingDreamContradictionTieHaircut:    "0.92",
 
 	SettingMemorySoftDeleteRetentionDays: "30",
 	SettingDreamNoveltyJudgePrompt: `You are a novelty auditor. You do NOT converse. You output JSON only.

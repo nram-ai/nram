@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -42,6 +43,9 @@ func (r *recordingTokenRecorder) Record(_ context.Context, u *model.TokenUsage) 
 type stubLineageWriter struct{}
 
 func (stubLineageWriter) Create(_ context.Context, _ *model.MemoryLineage) error { return nil }
+func (stubLineageWriter) CountConflictsBetween(_ context.Context, _, _, _ uuid.UUID) (int, error) {
+	return 0, nil
+}
 
 type stubUsageCtxResolver struct{}
 
@@ -678,4 +682,217 @@ func (m *mutableMemoryStore) HardDelete(_ context.Context, _ uuid.UUID, _ uuid.U
 }
 func (m *mutableMemoryStore) DecayConfidence(_ context.Context, ids []uuid.UUID, _, _ float64) (int64, error) {
 	return int64(len(ids)), nil
+}
+
+// --- haircut/winner tests (item #5) ---
+
+// decidingLLM emits a structured contradiction response with a configurable
+// winner field. Used to drive the haircut path through the full code branches
+// (WinnerSideA, WinnerSideB, WinnerTie, or "" for legacy-prompt fallback).
+type decidingLLM struct {
+	winner string
+	calls  atomic.Int32
+}
+
+func (d *decidingLLM) Complete(_ context.Context, _ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+	d.calls.Add(1)
+	body := `{"contradicts": true, "explanation": "test"}`
+	if d.winner != "" {
+		body = `{"contradicts": true, "winner": "` + d.winner + `", "explanation": "test"}`
+	}
+	return &provider.CompletionResponse{
+		Content: body,
+		Model:   "deciding",
+		Usage:   provider.TokenUsage{PromptTokens: 30, CompletionTokens: 20, TotalTokens: 50},
+	}, nil
+}
+func (d *decidingLLM) Name() string     { return "deciding" }
+func (d *decidingLLM) Models() []string { return []string{"deciding"} }
+
+// countingLineageWriter mirrors stubLineageWriter but lets tests inject a
+// non-zero prior conflict count to exercise the diminishing-haircut path.
+type countingLineageWriter struct {
+	priorCount int
+	creates    []model.MemoryLineage
+}
+
+func (c *countingLineageWriter) Create(_ context.Context, l *model.MemoryLineage) error {
+	c.creates = append(c.creates, *l)
+	return nil
+}
+func (c *countingLineageWriter) CountConflictsBetween(_ context.Context, _, _, _ uuid.UUID) (int, error) {
+	return c.priorCount, nil
+}
+
+// haircutMemories returns N memories with starting confidence 1.0 and
+// staggered IDs so neighbour selection is deterministic. Stamps are absent so
+// the contradiction phase treats every row as stale.
+func haircutMemories(n int) []model.Memory {
+	out := makeMemories(n)
+	for i := range out {
+		out[i].Confidence = 1.0
+	}
+	return out
+}
+
+func runContradictionCycle(t *testing.T, llm provider.LLMProvider, mems []model.Memory, lineage LineageWriter) *updatingMemoryWriter {
+	t.Helper()
+	reader := &fakeMemoryReader{list: mems}
+	writer := &updatingMemoryWriter{}
+	phase := NewContradictionPhase(
+		reader,
+		writer,
+		lineage,
+		func() provider.LLMProvider { return llm },
+		nilEmbedder,
+		stubSettings{},
+		&recordingTokenRecorder{},
+		stubUsageCtxResolver{},
+	)
+	budget := NewTokenBudget(1_000_000, 2048)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	return writer
+}
+
+// findUpdate returns the most recent recorded Update to a memory by ID, or
+// nil if there was none. Tests use this to assert per-memory deltas.
+func findUpdate(updates []model.Memory, id uuid.UUID) *model.Memory {
+	for i := len(updates) - 1; i >= 0; i-- {
+		if updates[i].ID == id {
+			cp := updates[i]
+			return &cp
+		}
+	}
+	return nil
+}
+
+// approxEq verifies two confidence values agree to 4 decimals; accounts for
+// the multiplicative noise inherent in the haircut diminishing function.
+func approxEq(a, b float64) bool { return math.Abs(a-b) < 1e-4 }
+
+func TestContradictionPhase_LoserHaircut(t *testing.T) {
+	llm := &decidingLLM{winner: WinnerSideA}
+	mems := haircutMemories(2)
+	lineage := &countingLineageWriter{}
+	w := runContradictionCycle(t, llm, mems, lineage)
+
+	// pair[0] is statement A → winner gets the small haircut.
+	winner := findUpdate(w.updates, mems[0].ID)
+	loser := findUpdate(w.updates, mems[1].ID)
+	if winner == nil || loser == nil {
+		t.Fatalf("expected updates for both pair members; got winner=%v loser=%v", winner, loser)
+	}
+	if !approxEq(winner.Confidence, 0.97) {
+		t.Errorf("winner confidence = %.4f, want 0.97", winner.Confidence)
+	}
+	if !approxEq(loser.Confidence, 0.85) {
+		t.Errorf("loser confidence = %.4f, want 0.85", loser.Confidence)
+	}
+	if len(lineage.creates) == 0 {
+		t.Fatal("expected a conflicts_with edge to be written")
+	}
+}
+
+func TestContradictionPhase_TieHaircut(t *testing.T) {
+	llm := &decidingLLM{winner: WinnerTie}
+	mems := haircutMemories(2)
+	lineage := &countingLineageWriter{}
+	w := runContradictionCycle(t, llm, mems, lineage)
+
+	for _, m := range mems {
+		got := findUpdate(w.updates, m.ID)
+		if got == nil {
+			t.Fatalf("expected update for %s", m.ID)
+		}
+		if !approxEq(got.Confidence, 0.92) {
+			t.Errorf("tie confidence = %.4f, want 0.92", got.Confidence)
+		}
+	}
+}
+
+// TestContradictionPhase_LegacyPromptFallback guards the contract that an
+// empty "winner" field (operator running a custom prompt that predates the
+// field) normalizes to tie. Permanent test; remove only when no deployment
+// can plausibly still be on a pre-winner prompt.
+func TestContradictionPhase_LegacyPromptFallback(t *testing.T) {
+	llm := &decidingLLM{winner: ""}
+	mems := haircutMemories(2)
+	lineage := &countingLineageWriter{}
+	w := runContradictionCycle(t, llm, mems, lineage)
+
+	// Empty winner normalizes to tie at the call site.
+	for _, m := range mems {
+		got := findUpdate(w.updates, m.ID)
+		if got == nil {
+			t.Fatalf("expected update for %s", m.ID)
+		}
+		if !approxEq(got.Confidence, 0.92) {
+			t.Errorf("legacy-fallback confidence = %.4f, want tie 0.92", got.Confidence)
+		}
+	}
+}
+
+func TestContradictionPhase_DiminishingReaffirmation(t *testing.T) {
+	llm := &decidingLLM{winner: WinnerSideA}
+	mems := haircutMemories(2)
+	// Pretend one prior conflict already exists; this is detection #2.
+	// Diminished factor: 1 - (1 - base) / 2.
+	// loser:  1 - 0.15/2 = 0.925
+	// winner: 1 - 0.03/2 = 0.985
+	lineage := &countingLineageWriter{priorCount: 1}
+	w := runContradictionCycle(t, llm, mems, lineage)
+
+	winner := findUpdate(w.updates, mems[0].ID)
+	loser := findUpdate(w.updates, mems[1].ID)
+	if winner == nil || loser == nil {
+		t.Fatalf("expected updates for both pair members")
+	}
+	if !approxEq(winner.Confidence, 0.985) {
+		t.Errorf("reaffirm winner conf = %.4f, want 0.985", winner.Confidence)
+	}
+	if !approxEq(loser.Confidence, 0.925) {
+		t.Errorf("reaffirm loser conf = %.4f, want 0.925", loser.Confidence)
+	}
+}
+
+func TestContradictionPhase_HighConfidenceWinnerSupersedes(t *testing.T) {
+	llm := &decidingLLM{winner: WinnerSideA}
+	mems := haircutMemories(2)
+	mems[0].Confidence = 0.95 // pre-haircut > 0.85 supersession threshold
+	lineage := &countingLineageWriter{}
+	w := runContradictionCycle(t, llm, mems, lineage)
+
+	loser := findUpdate(w.updates, mems[1].ID)
+	if loser == nil {
+		t.Fatalf("expected update for loser")
+	}
+	if loser.SupersededBy == nil {
+		t.Fatal("expected loser.SupersededBy to be set when winner conf > threshold")
+	}
+	if *loser.SupersededBy != mems[0].ID {
+		t.Errorf("loser.SupersededBy = %s, want winner ID %s", *loser.SupersededBy, mems[0].ID)
+	}
+	if loser.SupersededAt == nil {
+		t.Error("expected loser.SupersededAt to be set alongside SupersededBy")
+	}
+}
+
+func TestContradictionPhase_LowConfidenceWinnerNoSupersede(t *testing.T) {
+	llm := &decidingLLM{winner: WinnerSideA}
+	mems := haircutMemories(2)
+	mems[0].Confidence = 0.5 // below 0.85 threshold
+	lineage := &countingLineageWriter{}
+	w := runContradictionCycle(t, llm, mems, lineage)
+
+	loser := findUpdate(w.updates, mems[1].ID)
+	if loser == nil {
+		t.Fatalf("expected update for loser")
+	}
+	if loser.SupersededBy != nil {
+		t.Errorf("expected SupersededBy nil for low-confidence winner; got %s", *loser.SupersededBy)
+	}
 }

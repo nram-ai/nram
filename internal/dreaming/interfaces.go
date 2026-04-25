@@ -64,9 +64,15 @@ type RelationshipWriter interface {
 	ExpireLowWeight(ctx context.Context, namespaceID uuid.UUID, threshold float64) (int64, error)
 }
 
-// LineageWriter creates memory lineage records.
+// LineageWriter creates memory lineage records and answers questions a
+// dreaming phase needs to ask about prior lineage state at write time.
+// CountConflictsBetween reads the table but lives here because the
+// contradiction phase needs both the read and the write to make a single
+// detection decision; splitting them across two interfaces would force
+// callers to wire in two dependencies for one operation.
 type LineageWriter interface {
 	Create(ctx context.Context, lineage *model.MemoryLineage) error
+	CountConflictsBetween(ctx context.Context, namespaceID, aID, bID uuid.UUID) (int, error)
 }
 
 // LineageReader reads memory lineage records.

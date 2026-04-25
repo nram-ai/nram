@@ -108,6 +108,32 @@ func (r *MemoryLineageRepo) FindConflicts(ctx context.Context, namespaceID uuid.
 	return r.scanLineages(rows)
 }
 
+// CountConflictsBetween counts conflicts_with edges between the two memories
+// in either direction (a→b or b→a). Used by the contradiction phase to
+// diminish the haircut applied on reaffirmation: the Nth detection of the
+// same pair receives a smaller penalty than the first.
+func (r *MemoryLineageRepo) CountConflictsBetween(ctx context.Context, namespaceID, aID, bID uuid.UUID) (int, error) {
+	query := `SELECT COUNT(*) FROM memory_lineage
+		WHERE namespace_id = ? AND relation = ?
+		AND ((memory_id = ? AND parent_id = ?) OR (memory_id = ? AND parent_id = ?))`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM memory_lineage
+			WHERE namespace_id = $1 AND relation = $2
+			AND ((memory_id = $3 AND parent_id = $4) OR (memory_id = $5 AND parent_id = $6))`
+	}
+
+	var n int
+	err := r.db.QueryRow(ctx, query,
+		namespaceID.String(), model.LineageConflictsWith,
+		aID.String(), bID.String(),
+		bID.String(), aID.String(),
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("memory lineage count conflicts between: %w", err)
+	}
+	return n, nil
+}
+
 // FindChildIDs returns the memory IDs of all direct children of the given
 // parent memory.
 func (r *MemoryLineageRepo) FindChildIDs(ctx context.Context, namespaceID uuid.UUID, parentID uuid.UUID) ([]uuid.UUID, error) {
