@@ -135,8 +135,8 @@ func wrapToolResult(payload any, reducer reducerFunc) (*mcp.CallToolResult, erro
 //      Halving — rather than dropping one at a time — keeps the reducer
 //      bounded by O(log N) iterations regardless of how large the original
 //      result set was.
-func newRecallReducer(orig *service.RecallResponse) reducerFunc {
-	memories := append([]service.RecallResult(nil), orig.Memories...)
+func newRecallReducer(orig *mcpRecallResponse) reducerFunc {
+	memories := append([]mcpRecallMemory(nil), orig.Memories...)
 	originalMemories := len(memories)
 	dropGraph := false
 	stage := 0
@@ -169,7 +169,7 @@ func newRecallReducer(orig *service.RecallResponse) reducerFunc {
 	}
 }
 
-func buildRecallPayload(orig *service.RecallResponse, memories []service.RecallResult, dropGraph bool, originalMemories int) map[string]any {
+func buildRecallPayload(orig *mcpRecallResponse, memories []mcpRecallMemory, dropGraph bool, originalMemories int) map[string]any {
 	info := truncationInfo{
 		Reason:        "response_too_large",
 		OriginalCount: originalMemories,
@@ -179,17 +179,16 @@ func buildRecallPayload(orig *service.RecallResponse, memories []service.RecallR
 	graph := orig.Graph
 	if dropGraph {
 		info.Dropped = []string{"graph.entities", "graph.relationships"}
-		graph = service.RecallGraph{
-			Entities:      []service.RecallEntity{},
-			Relationships: []service.RecallRelationship{},
+		graph = graphResponse{
+			Entities:      []graphEntity{},
+			Relationships: []graphRelationship{},
 		}
 	}
 	payload := map[string]any{
-		"memories":       memories,
-		"graph":          graph,
-		"total_searched": orig.TotalSearched,
-		"latency_ms":     orig.LatencyMs,
-		"_truncated":     info,
+		"memories":   memories,
+		"graph":      graph,
+		"latency_ms": orig.LatencyMs,
+		"_truncated": info,
 	}
 	// coverage_gaps is bounded by the number of distinct prefix-groups in the
 	// candidate pool (typically tens of entries) and is load-bearing metadata
@@ -248,11 +247,8 @@ func newGraphReducer(orig graphResponse) reducerFunc {
 		}
 		more := len(rels) > 0 || len(entities) > 1
 		return map[string]any{
-			"entities":        entities,
-			"relationships":   rels,
-			"query":           orig.Query,
-			"depth":           orig.Depth,
-			"include_history": orig.IncludeHistory,
+			"entities":      entities,
+			"relationships": rels,
 			"_truncated": truncationInfo{
 				Reason:        "response_too_large",
 				OriginalCount: origE + origR,

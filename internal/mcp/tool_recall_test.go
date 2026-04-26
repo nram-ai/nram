@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -67,6 +68,284 @@ func (m *mockMemoryReaderRecall) ListByNamespaceFiltered(_ context.Context, _ uu
 }
 
 // --- schema tests ---
+
+// TestBuildMCPRecallResponse_ResolvesOrphanGraphEndpoints exercises the
+// orphan-resolution path that's the core MCP-side improvement: a relationship
+// whose far endpoint isn't in the service-layer entities[] gets the missing
+// entity batch-fetched and merged in, rather than being emitted as an orphan
+// or silently dropped. This is the no-orphan invariant.
+func TestBuildMCPRecallResponse_ResolvesOrphanGraphEndpoints(t *testing.T) {
+	nsID := uuid.New()
+	anchor := uuid.New()
+	target := uuid.New()
+
+	resp := &service.RecallResponse{
+		Memories: []service.RecallResult{},
+		Graph: service.RecallGraph{
+			Entities: []service.RecallEntity{
+				{ID: anchor, Name: "Alice", EntityType: "person"},
+			},
+			Relationships: []service.RecallRelationship{
+				{ID: uuid.New(), SourceID: anchor, TargetID: target, Relation: "knows", Weight: 0.9},
+			},
+		},
+	}
+
+	reader := &mockEntityReader{entities: []model.Entity{
+		{ID: target, NamespaceID: nsID, Name: "Bob", EntityType: "person"},
+	}}
+
+	out := buildMCPRecallResponse(context.Background(), reader, resp, []uuid.UUID{nsID})
+
+	if len(out.Graph.Entities) != 2 {
+		t.Errorf("expected 2 entities (anchor + resolved target), got %d", len(out.Graph.Entities))
+	}
+	if len(out.Graph.Relationships) != 1 {
+		t.Errorf("expected 1 relationship to survive, got %d", len(out.Graph.Relationships))
+	}
+	assertNoOrphanRelationships(t, out.Graph)
+}
+
+// TestBuildMCPRecallResponse_PrunesUnresolvableOrphans confirms the secondary
+// path: when the missing endpoint cannot be resolved (for example, it lives in
+// a namespace the caller isn't permitted to see), the relationship is pruned
+// rather than emitted with a dangling endpoint.
+func TestBuildMCPRecallResponse_PrunesUnresolvableOrphans(t *testing.T) {
+	allowedNS := uuid.New()
+	otherNS := uuid.New()
+	anchor := uuid.New()
+	target := uuid.New()
+
+	resp := &service.RecallResponse{
+		Memories: []service.RecallResult{},
+		Graph: service.RecallGraph{
+			Entities: []service.RecallEntity{
+				{ID: anchor, Name: "Alice", EntityType: "person"},
+			},
+			Relationships: []service.RecallRelationship{
+				{ID: uuid.New(), SourceID: anchor, TargetID: target, Relation: "knows", Weight: 0.9},
+			},
+		},
+	}
+
+	// Target exists but lives outside the allowed namespace set — must be
+	// filtered out by the projector and the relationship pruned.
+	reader := &mockEntityReader{entities: []model.Entity{
+		{ID: target, NamespaceID: otherNS, Name: "Bob", EntityType: "person"},
+	}}
+
+	out := buildMCPRecallResponse(context.Background(), reader, resp, []uuid.UUID{allowedNS})
+
+	if len(out.Graph.Entities) != 1 {
+		t.Errorf("expected only the anchor entity (target out of scope), got %d", len(out.Graph.Entities))
+	}
+	if len(out.Graph.Relationships) != 0 {
+		t.Errorf("expected the orphan relationship to be pruned, got %d", len(out.Graph.Relationships))
+	}
+	assertNoOrphanRelationships(t, out.Graph)
+}
+
+// TestBuildMCPRecallResponse_HoistsDreamLineage confirms that source_memory_ids
+// stored inside metadata are surfaced as a typed top-level derived_from field
+// and that the unresolvable dream_cycle_id key is stripped, while any
+// user-supplied metadata keys pass through.
+func TestBuildMCPRecallResponse_HoistsDreamLineage(t *testing.T) {
+	srcA := uuid.New()
+	srcB := uuid.New()
+	rawMeta := json.RawMessage(fmt.Sprintf(
+		`{"dream_cycle_id":"%s","source_memory_ids":["%s","%s"],"user_key":"keep me"}`,
+		uuid.New(), srcA, srcB,
+	))
+	resp := &service.RecallResponse{
+		Memories: []service.RecallResult{
+			{ID: uuid.New(), Content: "synthesised memory", Metadata: rawMeta},
+		},
+	}
+
+	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, nil)
+
+	if len(out.Memories) != 1 {
+		t.Fatalf("expected 1 memory, got %d", len(out.Memories))
+	}
+	got := out.Memories[0]
+	if len(got.DerivedFrom) != 2 {
+		t.Fatalf("expected derived_from of length 2, got %v", got.DerivedFrom)
+	}
+	want := map[uuid.UUID]bool{srcA: false, srcB: false}
+	for _, id := range got.DerivedFrom {
+		if _, ok := want[id]; !ok {
+			t.Errorf("unexpected derived_from id: %s", id)
+		}
+		want[id] = true
+	}
+	for id, seen := range want {
+		if !seen {
+			t.Errorf("missing derived_from id: %s", id)
+		}
+	}
+	if got.Metadata == nil {
+		t.Fatal("expected user-supplied metadata to be preserved")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(got.Metadata, &parsed); err != nil {
+		t.Fatalf("residual metadata not valid JSON: %v", err)
+	}
+	if _, hasCycle := parsed["dream_cycle_id"]; hasCycle {
+		t.Error("dream_cycle_id should be stripped from residual metadata")
+	}
+	if _, hasIDs := parsed["source_memory_ids"]; hasIDs {
+		t.Error("source_memory_ids should be stripped from residual metadata")
+	}
+	if parsed["user_key"] != "keep me" {
+		t.Errorf("expected user_key preserved, got %v", parsed["user_key"])
+	}
+}
+
+// TestBuildMCPRecallResponse_FixtureShape pins the structural improvements
+// the projection makes on a fixture sized like the recall that motivated this
+// work (10 memories, a small anchor entity set, and a relationship set that
+// references several unseen endpoints — the orphan case).
+//
+// The byte reduction is intentionally not asserted as a strict percentage:
+// when orphans are fully resolvable the projector trades freed bytes back to
+// surface useful entity rows, which is the explicit goal ("preserve valuable
+// data"). We log the delta for visibility and assert the invariants that
+// matter — no orphans, no internal fields, derived_from hoisted.
+func TestBuildMCPRecallResponse_FixtureShape(t *testing.T) {
+	nsID := uuid.New()
+	mems := make([]service.RecallResult, 10)
+	for i := range mems {
+		sim := 0.7
+		mems[i] = service.RecallResult{
+			ID:          uuid.New(),
+			ProjectID:   uuid.New(),
+			ProjectSlug: "fixture",
+			Path:        "users/" + uuid.NewString() + "/projects/" + uuid.NewString() + "/fixture",
+			Content:     "fixture content " + fmt.Sprint(i),
+			Tags:        []string{"alpha", "beta"},
+			Score:       0.5,
+			Similarity:  &sim,
+			Confidence:  1.0,
+			AccessCount: 3,
+			Enriched:    true,
+			Metadata: json.RawMessage(
+				`{"dream_cycle_id":"` + uuid.NewString() + `","source_memory_ids":["` + uuid.NewString() + `"]}`,
+			),
+		}
+	}
+
+	anchor := uuid.New()
+	entities := []service.RecallEntity{{ID: anchor, Name: "Anchor", EntityType: "concept"}}
+
+	rels := make([]service.RecallRelationship, 30)
+	missingTargets := make([]uuid.UUID, len(rels))
+	for i := range rels {
+		missingTargets[i] = uuid.New()
+		rels[i] = service.RecallRelationship{
+			ID:       uuid.New(),
+			SourceID: anchor,
+			TargetID: missingTargets[i],
+			Relation: "related_to",
+			Weight:   0.85,
+		}
+	}
+
+	resp := &service.RecallResponse{
+		Memories:      mems,
+		Graph:         service.RecallGraph{Entities: entities, Relationships: rels},
+		TotalSearched: 60,
+		LatencyMs:     427,
+	}
+
+	rawBefore, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal service response: %v", err)
+	}
+
+	mockEntities := make([]model.Entity, len(missingTargets))
+	for i, id := range missingTargets {
+		mockEntities[i] = model.Entity{ID: id, NamespaceID: nsID, Name: "Target" + fmt.Sprint(i), EntityType: "concept"}
+	}
+	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{entities: mockEntities}, resp, []uuid.UUID{nsID})
+
+	rawAfter, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal mcp response: %v", err)
+	}
+
+	t.Logf("recall payload before=%d after=%d delta=%+d (%.1f%%)",
+		len(rawBefore), len(rawAfter), len(rawAfter)-len(rawBefore),
+		100*(1.0-float64(len(rawAfter))/float64(len(rawBefore))))
+
+	// Invariants — these are the actual goals.
+	assertNoOrphanRelationships(t, out.Graph)
+	for _, m := range out.Memories {
+		if len(m.DerivedFrom) == 0 {
+			t.Errorf("expected derived_from hoisted for memory %s", m.ID)
+		}
+	}
+	// Internal fields must not appear in the serialized JSON.
+	bannedKeys := []string{`"path"`, `"project_id"`, `"similarity"`, `"confidence"`, `"access_count"`, `"enriched"`, `"shared_from"`, `"total_searched"`, `"dream_cycle_id"`, `"source_memory_ids"`}
+	body := string(rawAfter)
+	for _, k := range bannedKeys {
+		if strings.Contains(body, k) {
+			t.Errorf("banned key %s leaked into MCP recall payload", k)
+		}
+	}
+	// All 30 missing targets resolved, plus the anchor: 31 entities total.
+	if len(out.Graph.Entities) != 31 {
+		t.Errorf("expected 31 entities (1 anchor + 30 resolved), got %d", len(out.Graph.Entities))
+	}
+	if len(out.Graph.Relationships) != 30 {
+		t.Errorf("expected all 30 relationships preserved, got %d", len(out.Graph.Relationships))
+	}
+}
+
+// TestBuildMCPRecallResponse_FixtureShape_PrunedFallback covers the worst-case
+// path: when orphan endpoints can't be resolved (out-of-scope or storage
+// error), the projector prunes rather than emits dangling references. This
+// is where the byte reduction is at its maximum.
+func TestBuildMCPRecallResponse_FixtureShape_PrunedFallback(t *testing.T) {
+	mems := make([]service.RecallResult, 10)
+	for i := range mems {
+		mems[i] = service.RecallResult{
+			ID:      uuid.New(),
+			Content: "x",
+		}
+	}
+	anchor := uuid.New()
+	rels := make([]service.RecallRelationship, 30)
+	for i := range rels {
+		rels[i] = service.RecallRelationship{
+			ID: uuid.New(), SourceID: anchor, TargetID: uuid.New(),
+			Relation: "related_to", Weight: 0.85,
+		}
+	}
+	resp := &service.RecallResponse{
+		Memories: mems,
+		Graph: service.RecallGraph{
+			Entities:      []service.RecallEntity{{ID: anchor, Name: "Anchor", EntityType: "concept"}},
+			Relationships: rels,
+		},
+	}
+
+	rawBefore, _ := json.Marshal(resp)
+	// EntityReader returns no rows — orphans are pruned.
+	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, []uuid.UUID{uuid.New()})
+	rawAfter, _ := json.Marshal(out)
+
+	t.Logf("pruned fallback: before=%d after=%d (%.1f%% reduction)",
+		len(rawBefore), len(rawAfter),
+		100*(1.0-float64(len(rawAfter))/float64(len(rawBefore))))
+
+	assertNoOrphanRelationships(t, out.Graph)
+	if len(out.Graph.Relationships) != 0 {
+		t.Errorf("expected unresolvable relationships pruned, got %d", len(out.Graph.Relationships))
+	}
+	if len(out.Graph.Entities) != 1 {
+		t.Errorf("expected only anchor entity remaining, got %d", len(out.Graph.Entities))
+	}
+}
 
 func TestMemoryRecall_Schema_Postgres_HasGraphParams(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}

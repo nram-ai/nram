@@ -19,15 +19,17 @@ const (
 	listMaxLimit     = 200
 )
 
-// listMemoryItem is a compact representation of a memory for list results.
+// listMemoryItem applies the same dream-lineage hoisting as mcpRecallMemory
+// (source_memory_ids → derived_from) so the two outputs stay consistent.
 type listMemoryItem struct {
-	ID        uuid.UUID       `json:"id"`
-	Content   string          `json:"content"`
-	Source    *string         `json:"source,omitempty"`
-	Tags     []string        `json:"tags"`
-	Metadata json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	ID          uuid.UUID       `json:"id"`
+	Content     string          `json:"content"`
+	Source      *string         `json:"source,omitempty"`
+	Tags        []string        `json:"tags"`
+	DerivedFrom []uuid.UUID     `json:"derived_from,omitempty"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 // listMemoryResponse is the paginated response envelope for memory_list.
@@ -141,14 +143,16 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 
 	items := make([]listMemoryItem, 0, len(memories))
 	for _, m := range memories {
+		derived, meta := extractDerivedFrom(m.Metadata)
 		items = append(items, listMemoryItem{
-			ID:        m.ID,
-			Content:   m.Content,
-			Source:    m.Source,
-			Tags:     m.Tags,
-			Metadata:  m.Metadata,
-			CreatedAt: m.CreatedAt,
-			UpdatedAt: m.UpdatedAt,
+			ID:          m.ID,
+			Content:     m.Content,
+			Source:      m.Source,
+			Tags:        m.Tags,
+			DerivedFrom: derived,
+			Metadata:    meta,
+			CreatedAt:   m.CreatedAt,
+			UpdatedAt:   m.UpdatedAt,
 		})
 	}
 

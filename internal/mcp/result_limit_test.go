@@ -68,9 +68,9 @@ func TestWrapToolResultHardTruncationWhenNoReducer(t *testing.T) {
 func TestWrapToolResultUsesReducer(t *testing.T) {
 	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400") // 800 byte budget
 	// Build a recall response that will overflow.
-	mems := make([]service.RecallResult, 50)
+	mems := make([]mcpRecallMemory, 50)
 	for i := range mems {
-		mems[i] = service.RecallResult{
+		mems[i] = mcpRecallMemory{
 			ID:        uuid.New(),
 			Content:   strings.Repeat("lorem ipsum ", 80),
 			Tags:      []string{"a", "b"},
@@ -78,14 +78,13 @@ func TestWrapToolResultUsesReducer(t *testing.T) {
 			CreatedAt: time.Now(),
 		}
 	}
-	resp := &service.RecallResponse{
+	resp := &mcpRecallResponse{
 		Memories: mems,
-		Graph: service.RecallGraph{
-			Entities:      []service.RecallEntity{{ID: uuid.New(), Name: "x", EntityType: "concept"}},
-			Relationships: []service.RecallRelationship{},
+		Graph: graphResponse{
+			Entities:      []graphEntity{{ID: uuid.New(), Name: "x", Type: "concept"}},
+			Relationships: []graphRelationship{},
 		},
-		TotalSearched: 999,
-		LatencyMs:     12,
+		LatencyMs: 12,
 	}
 	res, err := wrapToolResult(resp, newRecallReducer(resp))
 	if err != nil {
@@ -112,9 +111,9 @@ func TestWrapToolResultUsesReducer(t *testing.T) {
 func TestRecallReducerPreservesCoverageGaps(t *testing.T) {
 	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400") // 800 byte budget, forces reduction
 
-	mems := make([]service.RecallResult, 50)
+	mems := make([]mcpRecallMemory, 50)
 	for i := range mems {
-		mems[i] = service.RecallResult{
+		mems[i] = mcpRecallMemory{
 			ID:        uuid.New(),
 			Content:   strings.Repeat("lorem ipsum ", 80),
 			Tags:      []string{"category-a"},
@@ -127,7 +126,7 @@ func TestRecallReducerPreservesCoverageGaps(t *testing.T) {
 		{GroupKey: "category-c", Cause: "threshold"},
 		{GroupKey: "category-d", Cause: "tag_filter"},
 	}
-	resp := &service.RecallResponse{
+	resp := &mcpRecallResponse{
 		Memories:     mems,
 		CoverageGaps: gaps,
 		LatencyMs:    7,
@@ -164,9 +163,9 @@ func TestRecallReducerPreservesCoverageGaps(t *testing.T) {
 func TestRecallReducerOmitsCoverageGapsWhenEmpty(t *testing.T) {
 	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400")
 
-	mems := make([]service.RecallResult, 50)
+	mems := make([]mcpRecallMemory, 50)
 	for i := range mems {
-		mems[i] = service.RecallResult{
+		mems[i] = mcpRecallMemory{
 			ID:        uuid.New(),
 			Content:   strings.Repeat("x", 200),
 			Tags:      []string{"a"},
@@ -174,7 +173,7 @@ func TestRecallReducerOmitsCoverageGapsWhenEmpty(t *testing.T) {
 			CreatedAt: time.Now(),
 		}
 	}
-	resp := &service.RecallResponse{Memories: mems, LatencyMs: 1}
+	resp := &mcpRecallResponse{Memories: mems, LatencyMs: 1}
 
 	res, err := wrapToolResult(resp, newRecallReducer(resp))
 	if err != nil {

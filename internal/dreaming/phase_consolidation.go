@@ -1001,8 +1001,8 @@ func (p *ConsolidationPhase) consolidate(
 		}
 
 		metadata, _ := json.Marshal(map[string]interface{}{
-			"dream_cycle_id":    cycle.ID.String(),
-			"source_memory_ids": sourceIDs,
+			model.DreamMetaCycleID:    cycle.ID.String(),
+			model.DreamMetaSourceMemoryIDs: sourceIDs,
 		})
 
 		source := model.DreamSource

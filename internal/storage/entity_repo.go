@@ -491,6 +491,27 @@ func (r *EntityRepo) FindByAlias(ctx context.Context, namespaceID uuid.UUID, ali
 	return r.scanEntities(rows)
 }
 
+// GetBatch returns multiple entities by their UUIDs in a single query. Missing
+// IDs are silently dropped — callers are responsible for diffing the result
+// against the input list if they need to detect them. Order is not preserved.
+func (r *EntityRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Entity, error) {
+	if len(ids) == 0 {
+		return []model.Entity{}, nil
+	}
+
+	placeholders, args := uuidInPlaceholders(r.db, ids, 1)
+	query := selectEntityColumns + ` FROM entities WHERE id IN (` +
+		strings.Join(placeholders, ", ") + `)`
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("entity get batch: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanEntities(rows)
+}
+
 // ListByNamespace returns all entities for a namespace, ordered by created_at DESC.
 func (r *EntityRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.Entity, error) {
 	query := selectEntityColumns + ` FROM entities

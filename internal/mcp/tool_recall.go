@@ -103,6 +103,11 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		globalNsID = &nsID
 	}
 
+	// allowedNS bounds orphan resolution to namespaces the caller is already
+	// permitted to read from — without it, GetBatch could surface entities
+	// from another user's scope.
+	var allowedNS []uuid.UUID
+
 	if projectSlug != "" {
 		// Project-scoped recall: search this project + global.
 		project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
@@ -111,17 +116,23 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		}
 
 		req.ProjectID = project.ID
+		allowedNS = append(allowedNS, project.NamespaceID)
 		// Include global memories alongside project-specific results.
 		if projectSlug != "global" {
 			req.GlobalNamespaceID = globalNsID
+			if globalNsID != nil {
+				allowedNS = append(allowedNS, *globalNsID)
+			}
 		}
 	} else {
 		// No project specified: search only the global project.
 		if globalProject != nil {
 			req.ProjectID = globalProject.ID
+			allowedNS = append(allowedNS, globalProject.NamespaceID)
 		} else {
 			// Fallback: no global project exists, search all user projects.
 			req.NamespaceID = &user.NamespaceID
+			allowedNS = append(allowedNS, user.NamespaceID)
 		}
 	}
 
@@ -130,5 +141,6 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError(fmt.Sprintf("recall failed: %v", err)), nil
 	}
 
-	return wrapToolResult(resp, newRecallReducer(resp))
+	mcpResp := buildMCPRecallResponse(ctx, deps.EntityReader, resp, allowedNS)
+	return wrapToolResult(mcpResp, newRecallReducer(mcpResp))
 }

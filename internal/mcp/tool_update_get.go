@@ -142,7 +142,7 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		"project_id": project.ID.String(),
 	})
 
-	return wrapToolResult(resp, nil)
+	return wrapToolResult(buildMCPUpdateResponse(resp), nil)
 }
 
 func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -204,5 +204,5 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 		return mcp.NewToolResultError(fmt.Sprintf("batch get failed: %v", err)), nil
 	}
 
-	return wrapToolResult(resp, nil)
+	return wrapToolResult(buildMCPBatchGetResponse(resp), nil)
 }

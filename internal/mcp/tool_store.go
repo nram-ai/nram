@@ -132,7 +132,7 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 		"project_id": project.ID.String(),
 	})
 
-	return wrapToolResult(resp, nil)
+	return wrapToolResult(buildMCPStoreResponse(resp), nil)
 }
 
 func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -209,7 +209,7 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		})
 	}
 
-	return wrapToolResult(resp, nil)
+	return wrapToolResult(buildMCPBatchStoreResponse(resp), nil)
 }
 
 // resolveOrCreateProject looks up an existing project by slug under the user's

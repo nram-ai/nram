@@ -276,18 +276,14 @@ func TestHandleMemoryUpdate_Success(t *testing.T) {
 	}
 
 	text := extractText(result)
-	var resp service.UpdateResponse
+	// MCP update response is the slim mcpUpdateResponse — content and
+	// previous_content echoes are no longer surfaced.
+	var resp mcpUpdateResponse
 	if err := json.Unmarshal([]byte(text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 	if resp.ID != memoryID {
 		t.Errorf("expected memory ID %s, got %s", memoryID, resp.ID)
-	}
-	if resp.Content != "new content" {
-		t.Errorf("expected content %q, got %q", "new content", resp.Content)
-	}
-	if resp.PreviousContent != "old content" {
-		t.Errorf("expected previous content %q, got %q", "old content", resp.PreviousContent)
 	}
 }
 

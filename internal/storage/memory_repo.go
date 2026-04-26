@@ -244,15 +244,16 @@ func (r *MemoryRepo) BackfillContentHashes(ctx context.Context, batchSize int) (
 	return processed, nil
 }
 
-// uuidPlaceholders returns N placeholders and stringified UUIDs for an IN-list.
-// startIndex is the first Postgres placeholder number ($N); it is ignored for
-// SQLite (which always uses "?"). Returned ids are stringified so callers can
-// append directly to the Exec/Query args slice.
-func (r *MemoryRepo) uuidPlaceholders(ids []uuid.UUID, startIndex int) ([]string, []interface{}) {
+// uuidInPlaceholders returns N placeholders and stringified UUIDs for an
+// IN-list. startIndex is the first Postgres placeholder number ($N); it is
+// ignored for SQLite (which always uses "?"). Returned ids are stringified so
+// callers can append directly to the Exec/Query args slice.
+func uuidInPlaceholders(db DB, ids []uuid.UUID, startIndex int) ([]string, []interface{}) {
 	placeholders := make([]string, len(ids))
 	args := make([]interface{}, len(ids))
+	pg := db.Backend() == BackendPostgres
 	for i, id := range ids {
-		if r.db.Backend() == BackendPostgres {
+		if pg {
 			placeholders[i] = fmt.Sprintf("$%d", startIndex+i)
 		} else {
 			placeholders[i] = "?"
@@ -268,7 +269,7 @@ func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Mem
 		return []model.Memory{}, nil
 	}
 
-	placeholders, args := r.uuidPlaceholders(ids, 1)
+	placeholders, args := uuidInPlaceholders(r.db, ids, 1)
 
 	query := selectMemoryColumns + ` FROM memories WHERE id IN (` +
 		strings.Join(placeholders, ", ") + `) AND deleted_at IS NULL`
@@ -655,7 +656,7 @@ func (r *MemoryRepo) BumpReinforcement(ctx context.Context, ids []uuid.UUID, now
 	nowStr := now.UTC().Format(time.RFC3339)
 
 	// Two fixed args come first (last_accessed, factor). IDs follow starting at $3.
-	placeholders, idArgs := r.uuidPlaceholders(ids, 3)
+	placeholders, idArgs := uuidInPlaceholders(r.db, ids, 3)
 	args := make([]interface{}, 0, 2+len(ids))
 	args = append(args, nowStr, factor)
 	args = append(args, idArgs...)
@@ -702,7 +703,7 @@ func (r *MemoryRepo) DecayConfidence(ctx context.Context, ids []uuid.UUID, multi
 	// GREATEST and SQLite's MAX are both variadic scalar functions returning
 	// the largest argument, so the SQL reads the same way with matching
 	// placeholder positions.
-	placeholders, idArgs := r.uuidPlaceholders(ids, 3)
+	placeholders, idArgs := uuidInPlaceholders(r.db, ids, 3)
 	args := make([]interface{}, 0, 2+len(ids))
 	args = append(args, floor, multiplier)
 	args = append(args, idArgs...)

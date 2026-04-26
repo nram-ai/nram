@@ -584,19 +584,17 @@ func TestHTTPStack_MCP_InitializeAndCallTool(t *testing.T) {
 		t.Fatal("no text content in tool result")
 	}
 
-	// Parse the store response JSON.
-	var storeResp service.StoreResponse
+	// Parse the store response JSON. The MCP store response no longer echoes
+	// content/tags or surfaces project_id; we verify the slim shape here.
+	var storeResp mcpStoreResponse
 	if err := json.Unmarshal([]byte(textContent), &storeResp); err != nil {
 		t.Fatalf("failed to unmarshal store response: %v", err)
 	}
 	if storeResp.ID == uuid.Nil {
 		t.Error("expected non-nil memory ID")
 	}
-	if storeResp.Content != "test memory content" {
-		t.Errorf("expected content 'test memory content', got %q", storeResp.Content)
-	}
-	if storeResp.ProjectID == uuid.Nil {
-		t.Error("expected non-nil project_id")
+	if storeResp.ProjectSlug == "" {
+		t.Error("expected non-empty project_slug")
 	}
 }
 
@@ -989,15 +987,14 @@ func TestHTTPStack_MCP_StoreUpdateForgetFlow(t *testing.T) {
 	}
 
 	updateText := extractToolResultText(t, updateRPC)
-	var updateResp service.UpdateResponse
+	// MCP update no longer echoes content or previous_content; verify the slim
+	// confirmation shape (id + re_embedded).
+	var updateResp mcpUpdateResponse
 	if err := json.Unmarshal([]byte(updateText), &updateResp); err != nil {
 		t.Fatalf("update: unmarshal failed: %v", err)
 	}
-	if updateResp.Content != "updated content for lifecycle test" {
-		t.Errorf("update: expected updated content, got %q", updateResp.Content)
-	}
-	if updateResp.PreviousContent != "original content for lifecycle test" {
-		t.Errorf("update: expected previous content 'original content for lifecycle test', got %q", updateResp.PreviousContent)
+	if updateResp.ID == uuid.Nil {
+		t.Error("update: expected non-nil id in response")
 	}
 
 	// Step 3: Forget (soft delete).
@@ -3326,27 +3323,16 @@ func TestHTTPStack_MCP_StoreMinimalFields(t *testing.T) {
 		t.Fatalf("store failed")
 	}
 	storeText := extractToolResultText(t, storeRPC)
-	var storeResp service.StoreResponse
+	// MCP store no longer echoes content or tags; verify only the slim shape.
+	var storeResp mcpStoreResponse
 	if err := json.Unmarshal([]byte(storeText), &storeResp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if storeResp.ID == uuid.Nil {
 		t.Error("expected non-nil memory ID")
 	}
-	if storeResp.Content != "minimal fields only" {
-		t.Errorf("expected content 'minimal fields only', got %q", storeResp.Content)
-	}
-
-	// Verify tags is an empty array (not null) in the raw JSON.
-	if storeResp.Tags == nil {
-		// StoreResponse.Tags might be nil in Go, but the JSON should
-		// represent it as []. Check the raw JSON.
-		if !strings.Contains(storeText, `"tags":[]`) && !strings.Contains(storeText, `"tags": []`) {
-			// Tags may be omitted or null — log but don't fail.
-			t.Logf("tags in response: raw JSON does not contain explicit empty array (may be null or omitted)")
-		}
-	} else if len(storeResp.Tags) != 0 {
-		t.Errorf("expected empty tags, got %v", storeResp.Tags)
+	if storeResp.ProjectSlug != "minimal-proj" {
+		t.Errorf("expected project_slug 'minimal-proj', got %q", storeResp.ProjectSlug)
 	}
 }
 
@@ -3641,23 +3627,14 @@ func TestHTTPStack_MCP_UpdateTagsOnly(t *testing.T) {
 	}
 
 	updateText := extractToolResultText(t, updateRPC)
-	var updateResp service.UpdateResponse
+	// MCP update no longer echoes content/tags; just verify the update was
+	// accepted by the slim shape.
+	var updateResp mcpUpdateResponse
 	if err := json.Unmarshal([]byte(updateText), &updateResp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-
-	// Content should remain unchanged.
-	if updateResp.Content != "content that should not change" {
-		t.Errorf("expected content unchanged, got %q", updateResp.Content)
-	}
-
-	// Tags should be updated.
-	tagSet := make(map[string]bool)
-	for _, tag := range updateResp.Tags {
-		tagSet[tag] = true
-	}
-	if !tagSet["updated-tag-1"] || !tagSet["updated-tag-2"] {
-		t.Errorf("expected updated tags, got %v", updateResp.Tags)
+	if updateResp.ID == uuid.Nil {
+		t.Error("expected non-nil id in update response")
 	}
 }
 

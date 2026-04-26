@@ -47,6 +47,7 @@ type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
 	FindByAlias(ctx context.Context, namespaceID uuid.UUID, alias string) ([]model.Entity, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.Entity, error)
+	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Entity, error)
 }
 
 // RelationshipTraverser provides graph traversal for MCP tool handlers.

@@ -33,12 +33,33 @@ func (m *mockEntityReader) ListByNamespace(_ context.Context, _ uuid.UUID) ([]mo
 	return m.entities, m.err
 }
 
+func (m *mockEntityReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Entity, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	want := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	out := make([]model.Entity, 0, len(ids))
+	for _, e := range m.entities {
+		if _, ok := want[e.ID]; ok {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
 type mockTraverser struct {
 	rels []model.Relationship
 	err  error
+	// lastDepth records the depth argument from the most recent call so tests
+	// can verify the handler propagates default and explicit depths correctly.
+	lastDepth int
 }
 
-func (m *mockTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, _ int) ([]model.Relationship, error) {
+func (m *mockTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, depth int) ([]model.Relationship, error) {
+	m.lastDepth = depth
 	return m.rels, m.err
 }
 
@@ -222,24 +243,28 @@ func TestHandleMemoryGraph_EntitySearch(t *testing.T) {
 	user := &model.User{ID: userID, NamespaceID: nsID}
 	entities := []model.Entity{
 		{ID: entityID, NamespaceID: nsID, Name: "Alice", EntityType: "person", Canonical: "alice"},
+		// Target lives in the same namespace so orphan resolution can fold it
+		// into entities[] when the relationship references it.
+		{ID: targetID, NamespaceID: nsID, Name: "Bob", EntityType: "person", Canonical: "bob"},
 	}
 	rels := []model.Relationship{
 		{
-			ID:       relID,
-			SourceID: entityID,
-			TargetID: targetID,
-			Relation: "knows",
-			Weight:   1.0,
+			ID:        relID,
+			SourceID:  entityID,
+			TargetID:  targetID,
+			Relation:  "knows",
+			Weight:    1.0,
 			ValidFrom: time.Now(),
 		},
 	}
 
+	traverser := &mockTraverser{rels: rels}
 	deps := Dependencies{
 		Backend:      storage.BackendPostgres,
 		UserRepo:     &mockUserRepoStore{user: user},
 		ProjectRepo:  &mockProjectRepoStore{getErr: nil, project: nil},
 		EntityReader: &mockEntityReader{entities: entities},
-		Traverser:    &mockTraverser{rels: rels},
+		Traverser:    traverser,
 	}
 	srv := NewServer(deps)
 
@@ -258,35 +283,43 @@ func TestHandleMemoryGraph_EntitySearch(t *testing.T) {
 		t.Fatalf("unexpected tool error: %v", result.Content)
 	}
 
+	if traverser.lastDepth != 3 {
+		t.Errorf("expected depth 3 propagated to traverser, got %d", traverser.lastDepth)
+	}
+
 	text := extractText(result)
 	var resp graphResponse
 	if err := json.Unmarshal([]byte(text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if resp.Query != "Alice" {
-		t.Errorf("expected query %q, got %q", "Alice", resp.Query)
-	}
-	if resp.Depth != 3 {
-		t.Errorf("expected depth 3, got %d", resp.Depth)
-	}
-	if len(resp.Entities) != 1 {
-		t.Errorf("expected 1 entity, got %d", len(resp.Entities))
+	// Anchor entity (Alice) plus the orphan-resolved target (Bob).
+	if len(resp.Entities) != 2 {
+		t.Errorf("expected 2 entities (anchor + resolved target), got %d", len(resp.Entities))
 	}
 	if len(resp.Relationships) != 1 {
 		t.Errorf("expected 1 relationship, got %d", len(resp.Relationships))
 	}
+	assertNoOrphanRelationships(t, resp)
 }
 
 func TestHandleMemoryGraph_DefaultDepth(t *testing.T) {
 	userID := uuid.New()
 	nsID := uuid.New()
+	entityID := uuid.New()
 	user := &model.User{ID: userID, NamespaceID: nsID}
+
+	// One anchor entity so traversal actually runs (without it, the handler
+	// short-circuits before invoking the traverser).
+	entities := []model.Entity{
+		{ID: entityID, NamespaceID: nsID, Name: "something", EntityType: "concept", Canonical: "something"},
+	}
+	traverser := &mockTraverser{}
 
 	deps := Dependencies{
 		Backend:      storage.BackendPostgres,
 		UserRepo:     &mockUserRepoStore{user: user},
-		EntityReader: &mockEntityReader{entities: nil},
-		Traverser:    &mockTraverser{},
+		EntityReader: &mockEntityReader{entities: entities},
+		Traverser:    traverser,
 	}
 	srv := NewServer(deps)
 
@@ -303,14 +336,8 @@ func TestHandleMemoryGraph_DefaultDepth(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected tool error: %v", result.Content)
 	}
-
-	text := extractText(result)
-	var resp graphResponse
-	if err := json.Unmarshal([]byte(text), &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-	if resp.Depth != 2 {
-		t.Errorf("expected default depth 2, got %d", resp.Depth)
+	if traverser.lastDepth != 2 {
+		t.Errorf("expected default depth 2 propagated to traverser, got %d", traverser.lastDepth)
 	}
 }
 
@@ -635,12 +662,20 @@ func TestHandleMemoryGraph_FiltersSupersededSourceMemory(t *testing.T) {
 	}
 
 	entityID := uuid.New()
+	aliveTargetID := uuid.New()
+	supersededTargetID := uuid.New()
 	relAliveID := uuid.New()
 	relSupersededID := uuid.New()
-	entities := []model.Entity{{ID: entityID, NamespaceID: nsID, Name: "Alice", EntityType: "person", Canonical: "alice"}}
+	entities := []model.Entity{
+		{ID: entityID, NamespaceID: nsID, Name: "Alice", EntityType: "person", Canonical: "alice"},
+		// Target entities live in the same namespace so orphan resolution can
+		// fold them into entities[] instead of pruning the relationships.
+		{ID: aliveTargetID, NamespaceID: nsID, Name: "Bob", EntityType: "person", Canonical: "bob"},
+		{ID: supersededTargetID, NamespaceID: nsID, Name: "Carol", EntityType: "person", Canonical: "carol"},
+	}
 	rels := []model.Relationship{
-		{ID: relAliveID, SourceID: entityID, TargetID: uuid.New(), Relation: "knows", Weight: 1, ValidFrom: now, SourceMemory: &winnerMemSrc},
-		{ID: relSupersededID, SourceID: entityID, TargetID: uuid.New(), Relation: "knows", Weight: 1, ValidFrom: now, SourceMemory: &loserMemSrc},
+		{ID: relAliveID, SourceID: entityID, TargetID: aliveTargetID, Relation: "knows", Weight: 1, ValidFrom: now, SourceMemory: &winnerMemSrc},
+		{ID: relSupersededID, SourceID: entityID, TargetID: supersededTargetID, Relation: "knows", Weight: 1, ValidFrom: now, SourceMemory: &loserMemSrc},
 	}
 
 	deps := Dependencies{
@@ -671,12 +706,11 @@ func TestHandleMemoryGraph_FiltersSupersededSourceMemory(t *testing.T) {
 	if len(resp.Relationships) != 1 {
 		t.Fatalf("expected only the live relationship; got %d", len(resp.Relationships))
 	}
-	if resp.Relationships[0].ID != relAliveID {
-		t.Errorf("expected surviving rel %s; got %s", relAliveID, resp.Relationships[0].ID)
-	}
+	// Identity comes from source_memory now that per-edge IDs are dropped.
 	if resp.Relationships[0].SourceMemory == nil || *resp.Relationships[0].SourceMemory != winnerID {
 		t.Errorf("expected source_memory=%s on surviving rel; got %+v", winnerID, resp.Relationships[0].SourceMemory)
 	}
+	assertNoOrphanRelationships(t, resp)
 
 	// include_superseded=true: both relationships present.
 	reqIncl := mcp.CallToolRequest{}

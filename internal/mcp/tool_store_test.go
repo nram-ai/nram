@@ -567,6 +567,25 @@ func extractText(result *mcp.CallToolResult) string {
 	return ""
 }
 
+// assertNoOrphanRelationships verifies that every relationship's source_id
+// and target_id appear in entities[] — the structural guarantee of the
+// orphan-resolution layer.
+func assertNoOrphanRelationships(t *testing.T, g graphResponse) {
+	t.Helper()
+	known := make(map[uuid.UUID]struct{}, len(g.Entities))
+	for _, e := range g.Entities {
+		known[e.ID] = struct{}{}
+	}
+	for i, rel := range g.Relationships {
+		if _, ok := known[rel.SourceID]; !ok {
+			t.Errorf("relationship[%d] source_id %s not in entities[]", i, rel.SourceID)
+		}
+		if _, ok := known[rel.TargetID]; !ok {
+			t.Errorf("relationship[%d] target_id %s not in entities[]", i, rel.TargetID)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsSubstring(s, sub))
 }

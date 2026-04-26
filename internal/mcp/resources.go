@@ -237,8 +237,6 @@ func handleProjectGraphResource(ctx context.Context, s *Server, request mcp.Read
 			ID:           ent.ID,
 			Name:         ent.Name,
 			Type:         ent.EntityType,
-			Canonical:    ent.Canonical,
-			Properties:   ent.Properties,
 			MentionCount: ent.MentionCount,
 		})
 
@@ -252,12 +250,10 @@ func handleProjectGraphResource(ctx context.Context, s *Server, request mcp.Read
 			}
 			seenRels[rel.ID] = struct{}{}
 			graphRels = append(graphRels, graphRelationship{
-				ID:         rel.ID,
 				SourceID:   rel.SourceID,
 				TargetID:   rel.TargetID,
 				Relation:   rel.Relation,
 				Weight:     rel.Weight,
-				ValidFrom:  rel.ValidFrom,
 				ValidUntil: rel.ValidUntil,
 			})
 		}

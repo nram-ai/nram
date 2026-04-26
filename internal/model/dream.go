@@ -7,6 +7,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// Memory metadata keys written by the dream-cycle consolidation phase. These
+// identify a memory's lineage to a parent dream cycle and the source memories
+// that produced it. Treated as a contract between the dreaming package
+// (writer) and any reader that needs to surface or strip the lineage.
+const (
+	DreamMetaCycleID    = "dream_cycle_id"
+	DreamMetaSourceMemoryIDs = "source_memory_ids"
+)
+
 // DreamCycleStatus constants define the lifecycle of a dream cycle.
 const (
 	DreamStatusPending    = "pending"

@@ -3,7 +3,6 @@ package mcp
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -16,32 +15,36 @@ import (
 )
 
 // graphResponse is the JSON envelope returned by the memory_graph tool.
+// Argument echoes (query, depth, include_history) are deliberately omitted —
+// the caller already has them.
 type graphResponse struct {
-	Entities       []graphEntity       `json:"entities"`
-	Relationships  []graphRelationship `json:"relationships"`
-	Query          string              `json:"query"`
-	Depth          int                 `json:"depth"`
-	IncludeHistory bool                `json:"include_history"`
+	Entities      []graphEntity       `json:"entities"`
+	Relationships []graphRelationship `json:"relationships"`
 }
 
-// graphEntity is a minimal entity representation for graph results.
+// graphEntity is a minimal entity representation for graph results. canonical
+// is dropped (redundant with name in the common case) and properties is
+// dropped (raw JSON, can be large; callers can fetch the entity directly via
+// the REST endpoint if they need the full record).
 type graphEntity struct {
-	ID           uuid.UUID       `json:"id"`
-	Name         string          `json:"name"`
-	Type         string          `json:"type"`
-	Canonical    string          `json:"canonical"`
-	Properties   json.RawMessage `json:"properties,omitempty"`
-	MentionCount int             `json:"mention_count"`
+	ID           uuid.UUID `json:"id"`
+	Name         string    `json:"name"`
+	Type         string    `json:"type"`
+	MentionCount int       `json:"mention_count"`
 }
 
-// graphRelationship is a minimal relationship representation for graph results.
+// graphRelationship is a minimal relationship representation for graph
+// results. The per-edge id is dropped (callers have no use for it). valid_from
+// is dropped because it usually equals the relationship's creation time and
+// callers asking for history can use the REST API. valid_until and
+// source_memory are kept (omitempty) because they are only set when meaningful
+// AND because source_memory is a resolvable lineage pointer the caller can
+// fetch via memory_get.
 type graphRelationship struct {
-	ID           uuid.UUID  `json:"id"`
 	SourceID     uuid.UUID  `json:"source_id"`
 	TargetID     uuid.UUID  `json:"target_id"`
 	Relation     string     `json:"relation"`
 	Weight       float64    `json:"weight"`
-	ValidFrom    time.Time  `json:"valid_from"`
 	ValidUntil   *time.Time `json:"valid_until,omitempty"`
 	SourceMemory *uuid.UUID `json:"source_memory,omitempty"`
 }
@@ -187,8 +190,6 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 			ID:           ent.ID,
 			Name:         ent.Name,
 			Type:         ent.EntityType,
-			Canonical:    ent.Canonical,
-			Properties:   ent.Properties,
 			MentionCount: ent.MentionCount,
 		})
 
@@ -202,12 +203,10 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 			}
 			seenRels[rel.ID] = struct{}{}
 			graphRels = append(graphRels, graphRelationship{
-				ID:           rel.ID,
 				SourceID:     rel.SourceID,
 				TargetID:     rel.TargetID,
 				Relation:     rel.Relation,
 				Weight:       rel.Weight,
-				ValidFrom:    rel.ValidFrom,
 				ValidUntil:   rel.ValidUntil,
 				SourceMemory: rel.SourceMemory,
 			})
@@ -270,6 +269,8 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		}
 	}
 
+	graphEntities, graphRels = resolveGraphOrphans(ctx, deps.EntityReader, graphEntities, graphRels, namespaces)
+
 	if graphEntities == nil {
 		graphEntities = []graphEntity{}
 	}
@@ -278,14 +279,78 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	}
 
 	resp := graphResponse{
-		Entities:       graphEntities,
-		Relationships:  graphRels,
-		Query:          entityQuery,
-		Depth:          depth,
-		IncludeHistory: includeHistory,
+		Entities:      graphEntities,
+		Relationships: graphRels,
 	}
 
 	return wrapToolResult(resp, newGraphReducer(resp))
+}
+
+// resolveGraphOrphans guarantees that every relationship's endpoints appear
+// in entities[]. Missing endpoints are batch-fetched and merged in (filtered
+// to allowedNamespaces); anything still unresolved gets the relationship
+// pruned, so a GetBatch failure can never produce a dangling-endpoint emit.
+func resolveGraphOrphans(
+	ctx context.Context,
+	entityReader EntityReader,
+	entities []graphEntity,
+	rels []graphRelationship,
+	allowedNamespaces []uuid.UUID,
+) ([]graphEntity, []graphRelationship) {
+	known := make(map[uuid.UUID]struct{}, len(entities))
+	for _, e := range entities {
+		known[e.ID] = struct{}{}
+	}
+
+	missing := make(map[uuid.UUID]struct{})
+	for _, rel := range rels {
+		if _, ok := known[rel.SourceID]; !ok {
+			missing[rel.SourceID] = struct{}{}
+		}
+		if _, ok := known[rel.TargetID]; !ok {
+			missing[rel.TargetID] = struct{}{}
+		}
+	}
+
+	if len(missing) > 0 && entityReader != nil {
+		ids := make([]uuid.UUID, 0, len(missing))
+		for id := range missing {
+			ids = append(ids, id)
+		}
+		if fetched, err := entityReader.GetBatch(ctx, ids); err == nil {
+			allowed := make(map[uuid.UUID]struct{}, len(allowedNamespaces))
+			for _, ns := range allowedNamespaces {
+				allowed[ns] = struct{}{}
+			}
+			for _, ent := range fetched {
+				if _, ok := allowed[ent.NamespaceID]; !ok {
+					continue
+				}
+				if _, ok := known[ent.ID]; ok {
+					continue
+				}
+				known[ent.ID] = struct{}{}
+				entities = append(entities, graphEntity{
+					ID:           ent.ID,
+					Name:         ent.Name,
+					Type:         ent.EntityType,
+					MentionCount: ent.MentionCount,
+				})
+			}
+		}
+	}
+
+	pruned := rels[:0]
+	for _, rel := range rels {
+		if _, ok := known[rel.SourceID]; !ok {
+			continue
+		}
+		if _, ok := known[rel.TargetID]; !ok {
+			continue
+		}
+		pruned = append(pruned, rel)
+	}
+	return entities, pruned
 }
 
 func handleMemoryProjects(ctx context.Context, s *Server, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {

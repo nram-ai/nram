@@ -323,7 +323,7 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 		t.Fatalf("store: unexpected tool error: %s", extractText(storeResult))
 	}
 
-	var storeResp service.StoreResponse
+	var storeResp mcpStoreResponse
 	if err := json.Unmarshal([]byte(extractText(storeResult)), &storeResp); err != nil {
 		t.Fatalf("store: failed to unmarshal response: %v", err)
 	}
@@ -332,9 +332,6 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 	}
 	if storeResp.ProjectSlug != "test-project" {
 		t.Errorf("store: expected project_slug %q, got %q", "test-project", storeResp.ProjectSlug)
-	}
-	if storeResp.Content != "The quick brown fox jumps over the lazy dog" {
-		t.Errorf("store: content mismatch: got %q", storeResp.Content)
 	}
 
 	// Verify the memory was persisted in the repo.
@@ -613,26 +610,18 @@ func TestMCP_UpdateMemory(t *testing.T) {
 		t.Fatalf("unexpected tool error: %s", extractText(result))
 	}
 
-	var resp service.UpdateResponse
+	var resp mcpUpdateResponse
 	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 	if resp.ID != memoryID {
 		t.Errorf("expected ID %s, got %s", memoryID, resp.ID)
 	}
-	if resp.Content != "updated content" {
-		t.Errorf("expected content %q, got %q", "updated content", resp.Content)
-	}
-	if resp.PreviousContent != "original content" {
-		t.Errorf("expected previous_content %q, got %q", "original content", resp.PreviousContent)
-	}
 	// Without embed provider, re_embedded must be false.
 	if resp.ReEmbedded {
 		t.Error("expected re_embedded=false when no embed provider is configured")
 	}
-	if resp.ProjectID != projectID {
-		t.Errorf("expected project_id %s, got %s", projectID, resp.ProjectID)
-	}
+	_ = projectID // project_id is no longer surfaced in the MCP update shape
 }
 
 // ---------------------------------------------------------------------------
