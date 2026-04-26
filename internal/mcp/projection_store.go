@@ -50,26 +50,30 @@ func buildMCPUpdateResponse(resp *service.UpdateResponse) *mcpUpdateResponse {
 	}
 }
 
-// mcpMemoryDetail is shared by memory_get and memory_list; derived_from is
-// hoisted from metadata so dream lineage stays resolvable via memory_get.
+// mcpMemoryDetail is the memory_get projection. derived_from is hoisted from
+// metadata so dream lineage stays resolvable.
 type mcpMemoryDetail struct {
 	ID          uuid.UUID       `json:"id"`
+	ProjectSlug string          `json:"project_slug"`
 	Content     string          `json:"content"`
 	Tags        []string        `json:"tags"`
 	Source      *string         `json:"source,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 	DerivedFrom []uuid.UUID     `json:"derived_from,omitempty"`
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
 }
 
-func buildMCPMemoryDetail(d service.MemoryDetail, opts projectionOpts) mcpMemoryDetail {
+func buildMCPMemoryDetail(d service.MemoryDetail, projectSlug string, opts projectionOpts) mcpMemoryDetail {
 	derived, meta := extractDerivedFrom(d.Metadata, opts)
 	return mcpMemoryDetail{
 		ID:          d.ID,
+		ProjectSlug: projectSlug,
 		Content:     d.Content,
 		Tags:        d.Tags,
 		Source:      d.Source,
 		CreatedAt:   d.CreatedAt,
+		UpdatedAt:   d.UpdatedAt,
 		DerivedFrom: derived,
 		Metadata:    meta,
 	}
@@ -80,10 +84,13 @@ type mcpBatchGetResponse struct {
 	NotFound []uuid.UUID       `json:"not_found"`
 }
 
-func buildMCPBatchGetResponse(resp *service.BatchGetResponse, opts projectionOpts) *mcpBatchGetResponse {
+// buildMCPBatchGetResponse stamps every result with projectSlug because
+// memory_get is project-scoped — BatchGet filters to a single namespace, so
+// all returned memories share the request's project.
+func buildMCPBatchGetResponse(resp *service.BatchGetResponse, projectSlug string, opts projectionOpts) *mcpBatchGetResponse {
 	found := make([]mcpMemoryDetail, 0, len(resp.Found))
 	for _, d := range resp.Found {
-		found = append(found, buildMCPMemoryDetail(d, opts))
+		found = append(found, buildMCPMemoryDetail(d, projectSlug, opts))
 	}
 	return &mcpBatchGetResponse{
 		Found:    found,

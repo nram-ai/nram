@@ -205,5 +205,5 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 		return mcp.NewToolResultError(fmt.Sprintf("batch get failed: %v", err)), nil
 	}
 
-	return wrapToolResult(buildMCPBatchGetResponse(resp, projectionOpts{IncludeAudit: argBool(args, includeAuditArg, false)}), nil)
+	return wrapToolResult(buildMCPBatchGetResponse(resp, project.Slug, projectionOpts{IncludeAudit: argBool(args, includeAuditArg, false)}), nil)
 }

@@ -584,7 +584,13 @@ func TestBuildMCPMemoryDetail_IncludeAudit(t *testing.T) {
 	}
 
 	// Default: all audit/bookkeeping keys stripped (current behavior).
-	stripped := buildMCPMemoryDetail(detail, projectionOpts{})
+	stripped := buildMCPMemoryDetail(detail, "test-project", projectionOpts{})
+	if stripped.ProjectSlug != "test-project" {
+		t.Errorf("expected project_slug=test-project, got %q", stripped.ProjectSlug)
+	}
+	if stripped.UpdatedAt.IsZero() {
+		t.Error("expected updated_at populated, got zero time")
+	}
 	if stripped.Metadata == nil {
 		t.Fatal("expected user_key to keep the metadata blob non-nil")
 	}
@@ -606,7 +612,7 @@ func TestBuildMCPMemoryDetail_IncludeAudit(t *testing.T) {
 	}
 
 	// Opt-in: every audit-stamp key surfaces.
-	full := buildMCPMemoryDetail(detail, projectionOpts{IncludeAudit: true})
+	full := buildMCPMemoryDetail(detail, "test-project", projectionOpts{IncludeAudit: true})
 	if full.Metadata == nil {
 		t.Fatal("expected metadata non-nil with include_audit=true")
 	}
