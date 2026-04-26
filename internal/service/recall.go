@@ -604,6 +604,12 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		if c.memory.Confidence == 0 {
 			continue
 		}
+		// Superseded memories are duplicates of a newer winner. Hide them from
+		// recall the moment supersede is set; the supersede-prune branch
+		// soft-deletes them after 7d of zero access.
+		if c.memory.SupersededBy != nil {
+			continue
+		}
 		// isLowNovelty stays gated on dream-source because the metadata key is
 		// only written by the dream novelty audit.
 		if c.memory.Source != nil && *c.memory.Source == model.DreamSource {

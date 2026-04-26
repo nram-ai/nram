@@ -99,6 +99,13 @@ const (
 	SettingDreamContradictionParaphraseEnabled   = "dreaming.contradiction.paraphrase_enabled"
 	SettingDreamContradictionParaphraseThreshold = "dreaming.contradiction.paraphrase_threshold"
 
+	// Paraphrase dedup phase: dedicated sweep that catches user-source
+	// duplicates the contradiction phase's anchor walk does not pair.
+	SettingDreamParaphraseEnabled     = "dreaming.paraphrase.enabled"
+	SettingDreamParaphraseThreshold   = "dreaming.paraphrase.threshold"
+	SettingDreamParaphraseCapPerCycle = "dreaming.paraphrase.cap_per_cycle"
+	SettingDreamParaphraseTopK        = "dreaming.paraphrase.top_k"
+
 	// Retention for soft-deleted memories. Rows past this age are hard-deleted
 	// by the retention sweeper and their vector rows are CASCADEd alongside.
 	SettingMemorySoftDeleteRetentionDays = "memory.soft_delete_retention_days"
@@ -143,7 +150,7 @@ var settingDefaults = map[string]string{
 	SettingRankWeightGraph:            "0.20",
 	SettingTokenRetention:             "365",
 	SettingDreamingEnabled:            "false",
-	SettingDreamMaxTokensPerCycle:     "10000",
+	SettingDreamMaxTokensPerCycle:     "1024000",
 	SettingDreamMaxTokensPerCall:      "2048",
 	SettingDreamCooldown:              "300",
 	SettingDreamMinInterval:           "3600",
@@ -211,12 +218,17 @@ alignment must be a float:
 	SettingDreamConsolidationReinforceFraction:   "0.35",
 	SettingDreamConsolidationConsolidateFraction: "0.30",
 
-	SettingDreamContradictionCap:                 "30",
+	SettingDreamContradictionCap:                 "2000",
 	SettingDreamContradictionLoserHaircut:        "0.85",
 	SettingDreamContradictionWinnerHaircut:       "0.97",
 	SettingDreamContradictionTieHaircut:          "0.92",
 	SettingDreamContradictionParaphraseEnabled:   "true",
 	SettingDreamContradictionParaphraseThreshold: "0.97",
+
+	SettingDreamParaphraseEnabled:     "true",
+	SettingDreamParaphraseThreshold:   "0.97",
+	SettingDreamParaphraseCapPerCycle: "500",
+	SettingDreamParaphraseTopK:        "5",
 
 	SettingMemorySoftDeleteRetentionDays: "30",
 	SettingDreamNoveltyJudgePrompt: `You are a novelty auditor. You do NOT converse. You output JSON only.

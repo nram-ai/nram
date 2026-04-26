@@ -19,6 +19,7 @@ const (
 // DreamPhase constants define the ordered phases of a dream cycle.
 const (
 	DreamPhaseEntityDedup     = "entity_dedup"
+	DreamPhaseParaphraseDedup = "paraphrase_dedup"
 	DreamPhaseTransitive      = "transitive_discovery"
 	DreamPhaseContradictions  = "contradiction_detection"
 	DreamPhaseConsolidation   = "consolidation"

@@ -472,6 +472,9 @@ func main() {
 	dreamRunner := dreaming.NewRunner(
 		dreamCycleRepo, dreamLogRepo, workerPool,
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo, vectorStore),
+		// Paraphrase dedup runs before contradiction so the LLM-judge pair
+		// walk operates on a deduped memory set.
+		dreaming.NewParaphraseDedupPhase(memoryRepo, memoryRepo, vectorStore, vectorStore, embedProvider, settingsSvc),
 		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
 		contradictionPhase,
 		consolidationPhase,
