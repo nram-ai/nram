@@ -1066,3 +1066,125 @@ func TestRecall_DiversifyByTagPrefix_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestRecall_IncludeLowNovelty_BypassesDreamFilter confirms that the
+// dream-source low_novelty filter at the candidate-pruning step is gated on
+// req.IncludeLowNovelty: default false hides demoted dreams, true surfaces
+// them so an MCP caller can inspect what the dreamer demoted and why.
+func TestRecall_IncludeLowNovelty_BypassesDreamFilter(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	dreamSrc := model.DreamSource
+	regularSrc := "api"
+	now := time.Now()
+
+	demotedID := uuid.New()
+	demoted := makeTestMemory(demotedID, nsID, "demoted dream", nil, 0.5, 1, now)
+	demoted.Source = &dreamSrc
+	demoted.Metadata = json.RawMessage(`{"low_novelty":true,"low_novelty_reason":"orphan_no_sources"}`)
+
+	keptID := uuid.New()
+	kept := makeTestMemory(keptID, nsID, "regular memory", nil, 0.5, 1, now)
+	kept.Source = &regularSrc
+
+	memReader := &mockMemoryReader{
+		nsList: []model.Memory{*demoted, *kept},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, nil, nil, nil, nil)
+
+	// Default: demoted dream filtered out.
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID: projectID,
+		Query:     "anything",
+	})
+	if err != nil {
+		t.Fatalf("default recall: %v", err)
+	}
+	if len(resp.Memories) != 1 {
+		t.Fatalf("default recall: expected 1 memory, got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != keptID {
+		t.Errorf("default recall: expected only the regular memory, got %s", resp.Memories[0].ID)
+	}
+
+	// Opt-in: demoted dream surfaces alongside the regular memory.
+	resp, err = svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:         projectID,
+		Query:             "anything",
+		IncludeLowNovelty: true,
+	})
+	if err != nil {
+		t.Fatalf("include_low_novelty recall: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("include_low_novelty recall: expected 2 memories, got %d", len(resp.Memories))
+	}
+	got := map[uuid.UUID]bool{}
+	for _, m := range resp.Memories {
+		got[m.ID] = true
+	}
+	if !got[demotedID] || !got[keptID] {
+		t.Errorf("expected both memories surfaced; got %v", got)
+	}
+}
+
+// TestRecall_PerNamespaceProjectAttribution confirms that candidates fetched
+// from the global namespace alongside the primary project's namespace get
+// stamped with the global project's slug, not the primary's. Without the
+// per-namespace lookup, every result was attributed to the primary project.
+func TestRecall_PerNamespaceProjectAttribution(t *testing.T) {
+	primaryID := uuid.New()
+	primaryNs := uuid.New()
+	globalID := uuid.New()
+	globalNs := uuid.New()
+
+	projects := &mockProjectRepo{
+		projects: map[uuid.UUID]*model.Project{
+			primaryID: {ID: primaryID, NamespaceID: primaryNs, Name: "Primary", Slug: "primary"},
+			globalID:  {ID: globalID, NamespaceID: globalNs, Name: "Global", Slug: "global"},
+		},
+	}
+	namespaces := &mockNamespaceRepo{
+		namespaces: map[uuid.UUID]*model.Namespace{
+			primaryNs: {ID: primaryNs, Slug: "primary", Kind: "project", Path: "primary"},
+			globalNs:  {ID: globalNs, Slug: "global", Kind: "project", Path: "global"},
+		},
+	}
+
+	primaryMemID := uuid.New()
+	globalMemID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		nsList: []model.Memory{
+			*makeTestMemory(primaryMemID, primaryNs, "primary content", nil, 0.5, 1, now),
+			*makeTestMemory(globalMemID, globalNs, "global content", nil, 0.5, 1, now),
+		},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, nil, nil, nil, nil)
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:         primaryID,
+		GlobalNamespaceID: &globalNs,
+		Query:             "anything",
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
+	}
+
+	bySlug := map[uuid.UUID]string{}
+	for _, m := range resp.Memories {
+		bySlug[m.ID] = m.ProjectSlug
+	}
+	if bySlug[primaryMemID] != "primary" {
+		t.Errorf("primary memory: expected slug 'primary', got %q", bySlug[primaryMemID])
+	}
+	if bySlug[globalMemID] != "global" {
+		t.Errorf("global memory: expected slug 'global', got %q (regression: globals were being attributed to the search-target project)", bySlug[globalMemID])
+	}
+}

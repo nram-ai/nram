@@ -62,8 +62,8 @@ type mcpMemoryDetail struct {
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
 }
 
-func buildMCPMemoryDetail(d service.MemoryDetail) mcpMemoryDetail {
-	derived, meta := extractDerivedFrom(d.Metadata)
+func buildMCPMemoryDetail(d service.MemoryDetail, opts projectionOpts) mcpMemoryDetail {
+	derived, meta := extractDerivedFrom(d.Metadata, opts)
 	return mcpMemoryDetail{
 		ID:          d.ID,
 		Content:     d.Content,
@@ -80,10 +80,10 @@ type mcpBatchGetResponse struct {
 	NotFound []uuid.UUID       `json:"not_found"`
 }
 
-func buildMCPBatchGetResponse(resp *service.BatchGetResponse) *mcpBatchGetResponse {
+func buildMCPBatchGetResponse(resp *service.BatchGetResponse, opts projectionOpts) *mcpBatchGetResponse {
 	found := make([]mcpMemoryDetail, 0, len(resp.Found))
 	for _, d := range resp.Found {
-		found = append(found, buildMCPMemoryDetail(d))
+		found = append(found, buildMCPMemoryDetail(d, opts))
 	}
 	return &mcpBatchGetResponse{
 		Found:    found,

@@ -1397,6 +1397,15 @@ func (m *nsAwareProjectLookup) GetByID(_ context.Context, id uuid.UUID) (*model.
 	return nil, fmt.Errorf("project not found")
 }
 
+func (m *nsAwareProjectLookup) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	for _, p := range m.repo.projects {
+		if p.NamespaceID == namespaceID {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("project not found for namespace")
+}
+
 // nsAwareNamespaceLookup satisfies service.NamespaceRepository (GetByID only).
 type nsAwareNamespaceLookup struct {
 	repo *nsAwareNamespaceRepo

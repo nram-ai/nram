@@ -256,6 +256,17 @@ func (m *e2eMemoryRepo) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID)
 	return nil
 }
 
+// e2eMCPStoreResult mirrors the slim mcpStoreResponse projection in
+// internal/mcp/projection_store.go. Defined here because that type is
+// unexported; if the projection grows a new field, update this struct so
+// drift is caught at unmarshal time.
+type e2eMCPStoreResult struct {
+	ID               uuid.UUID `json:"id"`
+	ProjectSlug      string    `json:"project_slug"`
+	Enriched         bool      `json:"enriched"`
+	EnrichmentQueued bool      `json:"enrichment_queued"`
+}
+
 // Mock repos that satisfy the interfaces needed by services
 
 type e2eProjectLookup struct {
@@ -274,6 +285,13 @@ func (m *e2eProjectLookup) GetByID(_ context.Context, id uuid.UUID) (*model.Proj
 		return m.project, nil
 	}
 	return nil, fmt.Errorf("project not found: %s", id)
+}
+
+func (m *e2eProjectLookup) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	if m.project != nil && m.project.NamespaceID == namespaceID {
+		return m.project, nil
+	}
+	return nil, fmt.Errorf("project not found for namespace: %s", namespaceID)
 }
 
 func (m *e2eProjectLookup) ListByUser(_ context.Context, _ uuid.UUID) ([]model.Project, error) {
@@ -1042,15 +1060,15 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	}
 
 	storeText := e2eExtractToolResultText(t, storeRPC)
-	var storeResult service.StoreResponse
+	var storeResult e2eMCPStoreResult
 	if err := json.Unmarshal([]byte(storeText), &storeResult); err != nil {
 		t.Fatalf("step 11: unmarshal store result: %v", err)
 	}
 	if storeResult.ID == uuid.Nil {
 		t.Fatal("step 11: stored memory has nil ID")
 	}
-	if storeResult.Content != "The auth service uses JWT with 1h expiry" {
-		t.Fatalf("step 11: unexpected content: %q", storeResult.Content)
+	if storeResult.ProjectSlug != "claude-test" {
+		t.Fatalf("step 11: expected project_slug=claude-test, got %q", storeResult.ProjectSlug)
 	}
 	t.Logf("step 11: stored memory ID: %s", storeResult.ID)
 
@@ -1536,7 +1554,7 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 	}
 
 	storeText := e2eExtractToolResultText(t, storeRPC)
-	var storeResult service.StoreResponse
+	var storeResult e2eMCPStoreResult
 	if err := json.Unmarshal([]byte(storeText), &storeResult); err != nil {
 		t.Fatalf("store: unmarshal: %v", err)
 	}

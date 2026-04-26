@@ -53,6 +53,10 @@ type RecallRequest struct {
 	Tags        []string   `json:"tags"`
 	IncludeGraph bool      `json:"include_graph"`
 	GraphDepth  int        `json:"graph_depth"`
+	// IncludeLowNovelty, when true, bypasses the dream-source low_novelty
+	// filter so demoted dream memories surface alongside the rest. Default
+	// false preserves the standard recall behavior.
+	IncludeLowNovelty bool `json:"include_low_novelty,omitempty"`
 	// DiversifyByTagPrefix, when non-empty, post-processes the ranked candidate
 	// set by grouping results by the first tag matching this prefix and
 	// round-robin-picking across groups up to Limit. Candidates with no
@@ -221,6 +225,14 @@ type scoredMemory struct {
 	sharedFromNs   *string // non-nil if surfaced via cross-namespace sharing (source namespace slug)
 }
 
+// projectAttribution carries the owning project's ID and slug for a given
+// namespace, so each candidate can be stamped with its actual home project
+// rather than the recall's primary target.
+type projectAttribution struct {
+	ProjectID   uuid.UUID
+	ProjectSlug string
+}
+
 // Recall retrieves and ranks memories matching the given query.
 func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*RecallResponse, error) {
 	start := time.Now()
@@ -273,6 +285,28 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				namespacePath = ns.Path
 			}
 		}
+	}
+
+	// projectByNamespace maps each namespace this recall touches to the project
+	// that owns it. Without this, every candidate gets stamped with the primary
+	// project's slug — globals fetched alongside primary results would be
+	// mis-attributed to the search-target project. The map covers primary,
+	// global, and shared-source namespaces (seeded lazily during shared
+	// resolution below). Falls back to the primary stamp when a namespace has
+	// no owning project (e.g., org-level shares).
+	projectByNamespace := map[uuid.UUID]projectAttribution{
+		namespaceID: {ProjectID: projectID, ProjectSlug: projectSlug},
+	}
+	if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
+		if gp, err := s.projects.GetByNamespaceID(ctx, *req.GlobalNamespaceID); err == nil && gp != nil {
+			projectByNamespace[*req.GlobalNamespaceID] = projectAttribution{ProjectID: gp.ID, ProjectSlug: gp.Slug}
+		}
+	}
+	attribute := func(memNs uuid.UUID) projectAttribution {
+		if attr, ok := projectByNamespace[memNs]; ok {
+			return attr
+		}
+		return projectAttribution{ProjectID: projectID, ProjectSlug: projectSlug}
 	}
 
 	candidates := []scoredMemory{}
@@ -353,11 +387,12 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					if err == nil {
 						for _, mem := range memories {
 							sim := simMap[mem.ID]
+							attr := attribute(mem.NamespaceID)
 							candidates = append(candidates, scoredMemory{
 								memory:        mem,
 								similarity:    sim,
-								projectID:     projectID,
-								projectSlug:   projectSlug,
+								projectID:     attr.ProjectID,
+								projectSlug:   attr.ProjectSlug,
 								namespacePath: namespacePath,
 							})
 						}
@@ -374,10 +409,11 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		if err == nil {
 			for _, mem := range memories {
 				seenIDs[mem.ID] = true
+				attr := attribute(mem.NamespaceID)
 				candidates = append(candidates, scoredMemory{
 					memory:        mem,
-					projectID:     projectID,
-					projectSlug:   projectSlug,
+					projectID:     attr.ProjectID,
+					projectSlug:   attr.ProjectSlug,
 					namespacePath: namespacePath,
 				})
 			}
@@ -388,10 +424,11 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			if err == nil {
 				for _, mem := range globalMems {
 					if !seenIDs[mem.ID] {
+						attr := attribute(mem.NamespaceID)
 						candidates = append(candidates, scoredMemory{
 							memory:        mem,
-							projectID:     projectID,
-							projectSlug:   projectSlug,
+							projectID:     attr.ProjectID,
+							projectSlug:   attr.ProjectSlug,
 							namespacePath: namespacePath,
 						})
 					}
@@ -419,15 +456,21 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				if sourceNsSlug == "" {
 					sourceNsSlug = share.SourceNsID.String()
 				}
+				if _, ok := projectByNamespace[share.SourceNsID]; !ok {
+					if sp, err := s.projects.GetByNamespaceID(ctx, share.SourceNsID); err == nil && sp != nil {
+						projectByNamespace[share.SourceNsID] = projectAttribution{ProjectID: sp.ID, ProjectSlug: sp.Slug}
+					}
+				}
 				// Fetch memories from the source namespace.
 				sharedMems, err := s.memories.ListByNamespace(ctx, share.SourceNsID, limit*3, 0)
 				if err == nil {
 					for _, mem := range sharedMems {
 						slug := sourceNsSlug
+						attr := attribute(mem.NamespaceID)
 						candidates = append(candidates, scoredMemory{
 							memory:        mem,
-							projectID:     projectID,
-							projectSlug:   projectSlug,
+							projectID:     attr.ProjectID,
+							projectSlug:   attr.ProjectSlug,
 							namespacePath: namespacePath,
 							sharedFromNs:  &slug,
 						})
@@ -613,8 +656,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			continue
 		}
 		// isLowNovelty stays gated on dream-source because the metadata key is
-		// only written by the dream novelty audit.
-		if c.memory.Source != nil && *c.memory.Source == model.DreamSource {
+		// only written by the dream novelty audit. Callers can opt into the
+		// demoted set via IncludeLowNovelty for inspection/debugging.
+		if !req.IncludeLowNovelty && c.memory.Source != nil && *c.memory.Source == model.DreamSource {
 			if isLowNovelty(c.memory.Metadata) {
 				continue
 			}

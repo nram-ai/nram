@@ -33,6 +33,7 @@ type MemoryRepository interface {
 // ProjectRepository defines the project lookup operations needed by the store service.
 type ProjectRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error)
+	GetByNamespaceID(ctx context.Context, namespaceID uuid.UUID) (*model.Project, error)
 }
 
 // NamespaceRepository defines the namespace lookup operations needed by the store service.

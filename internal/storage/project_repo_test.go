@@ -218,6 +218,42 @@ func TestProjectRepo_GetBySlug_NotFound(t *testing.T) {
 	})
 }
 
+func TestProjectRepo_GetByNamespaceID(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewProjectRepo(db)
+
+		project, _ := createTestProject(t, ctx, db, "ns-lookup-proj")
+
+		fetched, err := repo.GetByNamespaceID(ctx, project.NamespaceID)
+		if err != nil {
+			t.Fatalf("failed to get by namespace id: %v", err)
+		}
+		if fetched.ID != project.ID {
+			t.Fatalf("expected ID %s, got %s", project.ID, fetched.ID)
+		}
+		if fetched.Slug != "ns-lookup-proj" {
+			t.Fatalf("expected slug %q, got %q", "ns-lookup-proj", fetched.Slug)
+		}
+		if fetched.NamespaceID != project.NamespaceID {
+			t.Fatalf("expected namespace_id %s, got %s", project.NamespaceID, fetched.NamespaceID)
+		}
+	})
+}
+
+func TestProjectRepo_GetByNamespaceID_NotFound(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewProjectRepo(db)
+
+		// A random namespace UUID with no project pointing at it.
+		_, err := repo.GetByNamespaceID(ctx, uuid.New())
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("expected sql.ErrNoRows, got %v", err)
+		}
+	})
+}
+
 func TestProjectRepo_ListByUser(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

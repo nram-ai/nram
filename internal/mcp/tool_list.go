@@ -148,7 +148,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 
 	items := make([]listMemoryItem, 0, len(memories))
 	for _, m := range memories {
-		derived, meta := extractDerivedFrom(m.Metadata)
+		derived, meta := extractDerivedFrom(m.Metadata, projectionOpts{})
 		items = append(items, listMemoryItem{
 			ID:          m.ID,
 			ProjectSlug: nsIDToSlug[m.NamespaceID],

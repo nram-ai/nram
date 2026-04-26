@@ -26,6 +26,7 @@ type recallRequestBody struct {
 	Tags                 []string `json:"tags"`
 	IncludeGraph         bool     `json:"include_graph"`
 	GraphDepth           int      `json:"graph_depth"`
+	IncludeLowNovelty    bool     `json:"include_low_novelty"`
 	DiversifyByTagPrefix string   `json:"diversify_by_tag_prefix"`
 }
 
@@ -78,6 +79,7 @@ func NewRecallHandler(svc RecallServicer) http.HandlerFunc {
 			Tags:                 body.Tags,
 			IncludeGraph:         body.IncludeGraph,
 			GraphDepth:           body.GraphDepth,
+			IncludeLowNovelty:    body.IncludeLowNovelty,
 			DiversifyByTagPrefix: body.DiversifyByTagPrefix,
 		}
 
@@ -131,6 +133,7 @@ func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
 			Tags:                 body.Tags,
 			IncludeGraph:         body.IncludeGraph,
 			GraphDepth:           body.GraphDepth,
+			IncludeLowNovelty:    body.IncludeLowNovelty,
 			DiversifyByTagPrefix: body.DiversifyByTagPrefix,
 			NamespaceID:          &user.NamespaceID,
 		}

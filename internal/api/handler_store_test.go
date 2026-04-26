@@ -65,6 +65,20 @@ func (m *mockProjectRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Pro
 	}, nil
 }
 
+func (m *mockProjectRepo) GetByNamespaceID(ctx context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.project != nil && m.project.NamespaceID == namespaceID {
+		return m.project, nil
+	}
+	return &model.Project{
+		ID:          uuid.New(),
+		Slug:        "test-project",
+		NamespaceID: namespaceID,
+	}, nil
+}
+
 type mockNamespaceRepo struct{}
 
 func (m *mockNamespaceRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Namespace, error) {

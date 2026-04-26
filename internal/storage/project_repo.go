@@ -93,6 +93,20 @@ func (r *ProjectRepo) GetBySlug(ctx context.Context, ownerNamespaceID uuid.UUID,
 	return r.scanProject(row)
 }
 
+// GetByNamespaceID returns the project that owns the given namespace. Each
+// project owns exactly one namespace (1:1), so this resolves to a single row.
+// Returns sql.ErrNoRows if the namespace is not owned by any project (e.g.,
+// org or user namespaces).
+func (r *ProjectRepo) GetByNamespaceID(ctx context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	query := selectProjectColumns + ` FROM projects p` + projectJoins + ` WHERE p.namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = selectProjectColumns + ` FROM projects p` + projectJoins + ` WHERE p.namespace_id = $1`
+	}
+
+	row := r.db.QueryRow(ctx, query, namespaceID.String())
+	return r.scanProject(row)
+}
+
 // ListByUser returns all projects owned by the given namespace, ordered by name.
 func (r *ProjectRepo) ListByUser(ctx context.Context, ownerNamespaceID uuid.UUID) ([]model.Project, error) {
 	query := selectProjectColumns + ` FROM projects p` + projectJoins + ` WHERE p.owner_namespace_id = ? ORDER BY p.name`

@@ -25,6 +25,7 @@ func RegisterRecallTool(s *Server) {
 	opts = append(opts,
 		mcp.WithBoolean("include_graph", mcp.Description("Include graph entities in results (default true)")),
 		mcp.WithNumber("graph_depth", mcp.Description("Graph traversal depth (default 2)")),
+		mcp.WithBoolean("include_low_novelty", mcp.Description("When true, surface dream-source memories the novelty audit demoted (low_novelty=true) and include the low_novelty / low_novelty_reason markers in their metadata so the caller sees why they were demoted. Default false hides them.")),
 	)
 
 	tool := mcp.NewTool("memory_recall", opts...)
@@ -74,6 +75,11 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 
 	diversifyPrefix, _ := args["diversify_by_tag_prefix"].(string)
 
+	includeLowNovelty := false
+	if v, ok := args["include_low_novelty"].(bool); ok {
+		includeLowNovelty = v
+	}
+
 	deps := s.Deps()
 	uid := ac.UserID
 
@@ -83,6 +89,7 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		Tags:                 tags,
 		IncludeGraph:         includeGraph,
 		GraphDepth:           graphDepth,
+		IncludeLowNovelty:    includeLowNovelty,
 		DiversifyByTagPrefix: diversifyPrefix,
 		UserID:               &uid,
 		APIKeyID:             ac.APIKeyID,
@@ -141,6 +148,6 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError(fmt.Sprintf("recall failed: %v", err)), nil
 	}
 
-	mcpResp := buildMCPRecallResponse(ctx, deps.EntityReader, resp, allowedNS)
+	mcpResp := buildMCPRecallResponse(ctx, deps.EntityReader, resp, allowedNS, projectionOpts{IncludeLowNovelty: includeLowNovelty})
 	return wrapToolResult(mcpResp, newRecallReducer(mcpResp))
 }

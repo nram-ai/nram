@@ -211,6 +211,17 @@ func (m *rbacMultiProjectLookup) GetByID(_ context.Context, id uuid.UUID) (*mode
 	return p, nil
 }
 
+func (m *rbacMultiProjectLookup) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, p := range m.projects {
+		if p.NamespaceID == namespaceID {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("project not found for namespace: %s", namespaceID)
+}
+
 func (m *rbacMultiProjectLookup) ListByUser(_ context.Context, ownerNS uuid.UUID) ([]model.Project, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

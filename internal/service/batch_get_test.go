@@ -59,6 +59,15 @@ func (m *mockBatchProjectRepo) GetByID(_ context.Context, id uuid.UUID) (*model.
 	return p, nil
 }
 
+func (m *mockBatchProjectRepo) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	for _, p := range m.projects {
+		if p.NamespaceID == namespaceID {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("project not found for namespace")
+}
+
 // --- Test helpers ---
 
 func newTestMemory(id, namespaceID uuid.UUID, deleted bool) *model.Memory {

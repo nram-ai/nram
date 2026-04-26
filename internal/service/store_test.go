@@ -85,6 +85,15 @@ func (m *mockProjectRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Proje
 	return p, nil
 }
 
+func (m *mockProjectRepo) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	for _, p := range m.projects {
+		if p.NamespaceID == namespaceID {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("project not found for namespace")
+}
+
 type mockNamespaceRepo struct {
 	namespaces map[uuid.UUID]*model.Namespace
 }

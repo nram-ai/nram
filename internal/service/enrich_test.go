@@ -81,6 +81,15 @@ func (m *enrichProjectRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Pro
 	return p, nil
 }
 
+func (m *enrichProjectRepo) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	for _, p := range m.projects {
+		if p.NamespaceID == namespaceID {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("project not found for namespace")
+}
+
 type enrichQueueRepo struct {
 	jobs []*model.EnrichmentJob
 }

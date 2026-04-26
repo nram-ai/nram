@@ -131,6 +131,13 @@ func (m *mockExportProjectRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.
 	return nil, io.ErrUnexpectedEOF
 }
 
+func (m *mockExportProjectRepo) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	if m.project != nil && m.project.NamespaceID == namespaceID {
+		return m.project, nil
+	}
+	return nil, io.ErrUnexpectedEOF
+}
+
 // --- memory_graph schema tests ---
 
 func TestMemoryGraph_Registered_Postgres(t *testing.T) {

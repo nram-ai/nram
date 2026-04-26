@@ -650,6 +650,13 @@ func (m *mockProjectLookup) GetByID(_ context.Context, _ uuid.UUID) (*model.Proj
 	return m.project, nil
 }
 
+func (m *mockProjectLookup) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	if m.project != nil && m.project.NamespaceID == namespaceID {
+		return m.project, nil
+	}
+	return m.project, nil
+}
+
 type mockNamespaceLookup struct {
 	ns *model.Namespace
 }

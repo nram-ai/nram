@@ -116,6 +116,15 @@ func (m *mockExportProjectRepo) GetByID(_ context.Context, id uuid.UUID) (*model
 	return p, nil
 }
 
+func (m *mockExportProjectRepo) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	for _, p := range m.projects {
+		if p.NamespaceID == namespaceID {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("project not found for namespace")
+}
+
 // --- Helper to build test fixtures ---
 
 func newExportTestFixtures() (

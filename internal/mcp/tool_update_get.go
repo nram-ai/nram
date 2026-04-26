@@ -41,6 +41,7 @@ func registerMemoryGet(s *Server) {
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to retrieve")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithBoolean(includeSupersededArg, mcp.Description(includeSupersededDesc)),
+		mcp.WithBoolean(includeAuditArg, mcp.Description(includeAuditDesc)),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -204,5 +205,5 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 		return mcp.NewToolResultError(fmt.Sprintf("batch get failed: %v", err)), nil
 	}
 
-	return wrapToolResult(buildMCPBatchGetResponse(resp), nil)
+	return wrapToolResult(buildMCPBatchGetResponse(resp, projectionOpts{IncludeAudit: argBool(args, includeAuditArg, false)}), nil)
 }

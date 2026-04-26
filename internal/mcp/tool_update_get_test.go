@@ -560,3 +560,70 @@ func TestMemoryGet_SchemaRegistered(t *testing.T) {
 		t.Fatal("memory_get tool not registered")
 	}
 }
+
+// TestBuildMCPMemoryDetail_IncludeAudit confirms that include_audit=true on
+// memory_get surfaces the per-memory novelty/bookkeeping audit-stamp keys
+// that the projector strips by default. The default-strip behavior is
+// covered by the recall drift catcher; this test pins the opt-in path.
+func TestBuildMCPMemoryDetail_IncludeAudit(t *testing.T) {
+	rawMeta := json.RawMessage(
+		`{"novelty_audited_at":"2026-04-26T09:43:17Z",` +
+			`"novelty_audit_reason":"orphan_no_sources",` +
+			`"contradictions_checked_at":"2026-04-26T09:43:17Z",` +
+			`"paraphrase_checked_at":"2026-04-26T09:43:17Z",` +
+			`"low_novelty":true,"low_novelty_reason":"orphan_no_sources",` +
+			`"user_key":"keep me"}`,
+	)
+	detail := service.MemoryDetail{
+		ID:        uuid.New(),
+		Content:   "audited memory",
+		Tags:      []string{"x"},
+		Metadata:  rawMeta,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	// Default: all audit/bookkeeping keys stripped (current behavior).
+	stripped := buildMCPMemoryDetail(detail, projectionOpts{})
+	if stripped.Metadata == nil {
+		t.Fatal("expected user_key to keep the metadata blob non-nil")
+	}
+	var sParsed map[string]any
+	if err := json.Unmarshal(stripped.Metadata, &sParsed); err != nil {
+		t.Fatalf("default residual metadata not valid JSON: %v", err)
+	}
+	for _, k := range []string{
+		"novelty_audited_at", "novelty_audit_reason",
+		"contradictions_checked_at", "paraphrase_checked_at",
+		"low_novelty", "low_novelty_reason",
+	} {
+		if _, ok := sParsed[k]; ok {
+			t.Errorf("default memory_get: expected %s stripped, but it survived", k)
+		}
+	}
+	if sParsed["user_key"] != "keep me" {
+		t.Errorf("default memory_get: expected user_key preserved")
+	}
+
+	// Opt-in: every audit-stamp key surfaces.
+	full := buildMCPMemoryDetail(detail, projectionOpts{IncludeAudit: true})
+	if full.Metadata == nil {
+		t.Fatal("expected metadata non-nil with include_audit=true")
+	}
+	var fParsed map[string]any
+	if err := json.Unmarshal(full.Metadata, &fParsed); err != nil {
+		t.Fatalf("audit residual metadata not valid JSON: %v", err)
+	}
+	for _, k := range []string{
+		"novelty_audited_at", "novelty_audit_reason",
+		"contradictions_checked_at", "paraphrase_checked_at",
+		"low_novelty", "low_novelty_reason",
+	} {
+		if _, ok := fParsed[k]; !ok {
+			t.Errorf("include_audit=true: expected %s surfaced, but it was stripped", k)
+		}
+	}
+	if fParsed["user_key"] != "keep me" {
+		t.Errorf("include_audit=true: expected user_key still preserved")
+	}
+}

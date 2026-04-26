@@ -86,6 +86,15 @@ func (m *mockForgetProjectRepo) GetByID(_ context.Context, id uuid.UUID) (*model
 	return p, nil
 }
 
+func (m *mockForgetProjectRepo) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
+	for _, p := range m.projects {
+		if p.NamespaceID == namespaceID {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("project not found for namespace")
+}
+
 // --- Helper to build test fixtures ---
 
 func forgetTestFixtures() (uuid.UUID, uuid.UUID, uuid.UUID, *model.Project) {

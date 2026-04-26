@@ -421,3 +421,38 @@ func TestMeRecallHandler_NoAuth(t *testing.T) {
 		t.Fatalf("expected status 401, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// TestRecallHandler_PassesIncludeLowNoveltyFlag confirms include_low_novelty
+// in the JSON body propagates to service.RecallRequest.IncludeLowNovelty.
+// Default false (omitted from body) preserves the standard recall behavior.
+func TestRecallHandler_PassesIncludeLowNoveltyFlag(t *testing.T) {
+	projectID := uuid.New()
+
+	var captured *service.RecallRequest
+	svc := &mockRecallService{
+		recallFn: func(_ context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
+			captured = req
+			return &service.RecallResponse{Memories: []service.RecallResult{}, LatencyMs: 1}, nil
+		},
+	}
+	router := newRecallRouter(NewRecallHandler(svc))
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+
+	// Default: omitted → false.
+	if w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall",
+		map[string]interface{}{"query": "q"}, ac); w.Code != http.StatusOK {
+		t.Fatalf("default request: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if captured == nil || captured.IncludeLowNovelty {
+		t.Errorf("default should keep IncludeLowNovelty=false; got %+v", captured)
+	}
+
+	// Opt-in: body field → true.
+	if w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall",
+		map[string]interface{}{"query": "q", "include_low_novelty": true}, ac); w.Code != http.StatusOK {
+		t.Fatalf("opt-in request: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if captured == nil || !captured.IncludeLowNovelty {
+		t.Errorf("include_low_novelty=true should set IncludeLowNovelty; got %+v", captured)
+	}
+}

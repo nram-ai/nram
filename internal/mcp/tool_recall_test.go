@@ -95,7 +95,7 @@ func TestBuildMCPRecallResponse_ResolvesOrphanGraphEndpoints(t *testing.T) {
 		{ID: target, NamespaceID: nsID, Name: "Bob", EntityType: "person"},
 	}}
 
-	out := buildMCPRecallResponse(context.Background(), reader, resp, []uuid.UUID{nsID})
+	out := buildMCPRecallResponse(context.Background(), reader, resp, []uuid.UUID{nsID}, projectionOpts{})
 
 	if len(out.Graph.Entities) != 2 {
 		t.Errorf("expected 2 entities (anchor + resolved target), got %d", len(out.Graph.Entities))
@@ -134,7 +134,7 @@ func TestBuildMCPRecallResponse_PrunesUnresolvableOrphans(t *testing.T) {
 		{ID: target, NamespaceID: otherNS, Name: "Bob", EntityType: "person"},
 	}}
 
-	out := buildMCPRecallResponse(context.Background(), reader, resp, []uuid.UUID{allowedNS})
+	out := buildMCPRecallResponse(context.Background(), reader, resp, []uuid.UUID{allowedNS}, projectionOpts{})
 
 	if len(out.Graph.Entities) != 1 {
 		t.Errorf("expected only the anchor entity (target out of scope), got %d", len(out.Graph.Entities))
@@ -171,7 +171,7 @@ func TestBuildMCPRecallResponse_StripsBookkeepingMetadata(t *testing.T) {
 		},
 	}
 
-	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, nil)
+	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, nil, projectionOpts{})
 
 	if len(out.Memories) != 1 {
 		t.Fatalf("expected 1 memory, got %d", len(out.Memories))
@@ -215,6 +215,51 @@ func TestBuildMCPRecallResponse_StripsBookkeepingMetadata(t *testing.T) {
 	}
 	if parsed["user_key"] != "keep me" {
 		t.Errorf("expected user_key preserved, got %v", parsed["user_key"])
+	}
+}
+
+// TestBuildMCPRecallResponse_IncludeLowNovelty pairs with the strip drift
+// catcher: when projectionOpts.IncludeLowNovelty=true, low_novelty and
+// low_novelty_reason MUST survive the strip (so the caller knows why a
+// dream was demoted), while the other audit-stamp keys stay stripped (those
+// are exposed only by include_audit on memory_get).
+func TestBuildMCPRecallResponse_IncludeLowNovelty(t *testing.T) {
+	rawMeta := json.RawMessage(
+		`{"low_novelty":true,"low_novelty_reason":"orphan_no_sources",` +
+			`"novelty_audited_at":"2026-04-26T09:43:17Z",` +
+			`"novelty_audit_reason":"orphan_no_sources",` +
+			`"contradictions_checked_at":"2026-04-26T09:43:17Z",` +
+			`"paraphrase_checked_at":"2026-04-26T09:43:17Z",` +
+			`"user_key":"keep me"}`,
+	)
+	resp := &service.RecallResponse{
+		Memories: []service.RecallResult{
+			{ID: uuid.New(), Content: "demoted dream", Metadata: rawMeta},
+		},
+	}
+
+	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, nil, projectionOpts{IncludeLowNovelty: true})
+
+	if len(out.Memories) != 1 || out.Memories[0].Metadata == nil {
+		t.Fatalf("expected 1 memory with metadata; got %+v", out.Memories)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out.Memories[0].Metadata, &parsed); err != nil {
+		t.Fatalf("residual metadata not valid JSON: %v", err)
+	}
+	if v, ok := parsed["low_novelty"].(bool); !ok || !v {
+		t.Errorf("expected low_novelty=true to survive include_low_novelty=true; got %v", parsed["low_novelty"])
+	}
+	if v, _ := parsed["low_novelty_reason"].(string); v != "orphan_no_sources" {
+		t.Errorf("expected low_novelty_reason preserved; got %q", v)
+	}
+	for _, k := range []string{"novelty_audited_at", "novelty_audit_reason", "contradictions_checked_at", "paraphrase_checked_at"} {
+		if _, ok := parsed[k]; ok {
+			t.Errorf("audit-stamp key %s leaked when only include_low_novelty=true was set; that's include_audit's job", k)
+		}
+	}
+	if parsed["user_key"] != "keep me" {
+		t.Errorf("expected user_key preserved; got %v", parsed["user_key"])
 	}
 }
 
@@ -283,7 +328,7 @@ func TestBuildMCPRecallResponse_FixtureShape(t *testing.T) {
 	for i, id := range missingTargets {
 		mockEntities[i] = model.Entity{ID: id, NamespaceID: nsID, Name: "Target" + fmt.Sprint(i), EntityType: "concept"}
 	}
-	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{entities: mockEntities}, resp, []uuid.UUID{nsID})
+	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{entities: mockEntities}, resp, []uuid.UUID{nsID}, projectionOpts{})
 
 	rawAfter, err := json.Marshal(out)
 	if err != nil {
@@ -356,7 +401,7 @@ func TestBuildMCPRecallResponse_FixtureShape_PrunedFallback(t *testing.T) {
 
 	rawBefore, _ := json.Marshal(resp)
 	// EntityReader returns no rows — orphans are pruned.
-	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, []uuid.UUID{uuid.New()})
+	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, []uuid.UUID{uuid.New()}, projectionOpts{})
 	rawAfter, _ := json.Marshal(out)
 
 	t.Logf("pruned fallback: before=%d after=%d (%.1f%% reduction)",

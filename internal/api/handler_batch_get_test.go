@@ -245,3 +245,4 @@ func TestBatchGetHandler_PassesIncludeSupersededFlag(t *testing.T) {
 		t.Errorf("include_superseded=true should set IncludeSuperseded; got %+v", svc.lastRequest)
 	}
 }
+
