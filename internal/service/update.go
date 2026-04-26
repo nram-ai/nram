@@ -111,6 +111,13 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 		return nil, fmt.Errorf("memory does not belong to project namespace")
 	}
 
+	// Reject edits to a paraphrase-dedup or contradiction loser. Updating the
+	// loser would silently diverge from the winner the rest of the system has
+	// already pointed callers at; surface the winner so the caller can retry.
+	if mem.SupersededBy != nil {
+		return nil, fmt.Errorf("memory %s is superseded by %s; update that memory instead", mem.ID, *mem.SupersededBy)
+	}
+
 	// Store previous content for the response.
 	previousContent := mem.Content
 

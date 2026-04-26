@@ -40,6 +40,7 @@ func registerMemoryGet(s *Server) {
 		mcp.WithDescription("Retrieve specific memories by ID when you need the full content from a previous recall result. Project must already exist."),
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to retrieve")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
+		mcp.WithBoolean(includeSupersededArg, mcp.Description(includeSupersededDesc)),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -193,8 +194,9 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 	}
 
 	req := &service.BatchGetRequest{
-		ProjectID: project.ID,
-		IDs:       ids,
+		ProjectID:         project.ID,
+		IDs:               ids,
+		IncludeSuperseded: argBool(args, includeSupersededArg, false),
 	}
 
 	resp, err := deps.BatchGet.BatchGet(ctx, req)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -608,5 +609,30 @@ func TestUpdate_SameContentNoReEmbed(t *testing.T) {
 	}
 	if len(tokenUsage.usages) != 0 {
 		t.Errorf("expected 0 token usage records, got %d", len(tokenUsage.usages))
+	}
+}
+
+func TestUpdate_RejectsSupersededMemory(t *testing.T) {
+	projectID, _, memID, projects, memories := setupUpdateFixtures()
+	winnerID := uuid.New()
+	memories.memories[memID].SupersededBy = &winnerID
+
+	svc, _, _, _ := newUpdateService(memories, projects, nil)
+
+	newContent := "trying to edit a loser"
+	_, err := svc.Update(context.Background(), &UpdateRequest{
+		ProjectID: projectID,
+		MemoryID:  memID,
+		Content:   &newContent,
+	})
+	if err == nil {
+		t.Fatal("expected error when updating superseded memory")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "superseded by") {
+		t.Errorf("expected error to mention 'superseded by'; got %q", msg)
+	}
+	if !strings.Contains(msg, winnerID.String()) {
+		t.Errorf("expected error to surface winner ID %s; got %q", winnerID, msg)
 	}
 }

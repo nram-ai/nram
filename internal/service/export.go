@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // ExportFormat defines the output format for project data export.
@@ -38,6 +39,10 @@ type LineageReader interface {
 type ExportRequest struct {
 	ProjectID uuid.UUID
 	Format    ExportFormat
+	// IncludeSuperseded surfaces rows that were superseded by a paraphrase
+	// dedup or contradiction pass. Default false hides them so exports don't
+	// ship duplicate-loser rows downstream.
+	IncludeSuperseded bool
 }
 
 // ExportData holds the complete export payload for JSON format.
@@ -150,7 +155,7 @@ func (s *ExportService) Export(ctx context.Context, req *ExportRequest) (*Export
 	}
 
 	// Collect all memories via pagination.
-	allMemories, err := s.collectAllMemories(ctx, project.NamespaceID)
+	allMemories, err := s.collectAllMemories(ctx, project.NamespaceID, req.IncludeSuperseded)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list memories: %w", err)
 	}
@@ -262,7 +267,7 @@ func (s *ExportService) ExportNDJSON(ctx context.Context, req *ExportRequest, w 
 	}
 
 	// Stream memories.
-	allMemories, err := s.collectAllMemories(ctx, project.NamespaceID)
+	allMemories, err := s.collectAllMemories(ctx, project.NamespaceID, req.IncludeSuperseded)
 	if err != nil {
 		return fmt.Errorf("failed to list memories: %w", err)
 	}
@@ -318,11 +323,14 @@ func (s *ExportService) ExportNDJSON(ctx context.Context, req *ExportRequest, w 
 }
 
 // collectAllMemories paginates through all memories in the given namespace.
-func (s *ExportService) collectAllMemories(ctx context.Context, namespaceID uuid.UUID) ([]model.Memory, error) {
+// When includeSuperseded is false, the SQL filter drops rows with
+// superseded_by set so exports don't ship duplicate losers.
+func (s *ExportService) collectAllMemories(ctx context.Context, namespaceID uuid.UUID, includeSuperseded bool) ([]model.Memory, error) {
+	filters := storage.MemoryListFilters{HideSuperseded: !includeSuperseded}
 	all := []model.Memory{}
 	offset := 0
 	for {
-		page, err := s.memories.ListByNamespace(ctx, namespaceID, exportPageSize, offset)
+		page, err := s.memories.ListByNamespaceFiltered(ctx, namespaceID, filters, exportPageSize, offset)
 		if err != nil {
 			return nil, err
 		}

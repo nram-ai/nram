@@ -583,3 +583,65 @@ func TestListIDsHandler_HonorsHardCap(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
+
+func TestListHandler_HidesSupersededByDefault(t *testing.T) {
+	nsID := uuid.New()
+	projectID := uuid.New()
+	proj := &model.Project{ID: projectID, Slug: "test", NamespaceID: nsID}
+
+	memRepo := &mockMemoryLister{
+		countFn: func(_ context.Context, _ uuid.UUID) (int, error) { return 0, nil },
+		listFn: func(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
+			return nil, nil
+		},
+	}
+	router := newListRouter(memRepo, &mockProjectGetter{project: proj})
+
+	if w := doListRequest(router, projectID.String(), ""); w.Code != http.StatusOK {
+		t.Fatalf("default request: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !memRepo.lastFilters.HideSuperseded {
+		t.Errorf("default should set HideSuperseded=true; got %+v", memRepo.lastFilters)
+	}
+
+	memRepo.filtersSeen = false
+	if w := doListRequest(router, projectID.String(), "include_superseded=true"); w.Code != http.StatusOK {
+		t.Fatalf("include request: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if memRepo.lastFilters.HideSuperseded {
+		t.Errorf("include_superseded=true should clear HideSuperseded; got %+v", memRepo.lastFilters)
+	}
+}
+
+func TestDetailHandler_HidesSupersededByDefault(t *testing.T) {
+	nsID := uuid.New()
+	projectID := uuid.New()
+	memoryID := uuid.New()
+	winnerID := uuid.New()
+	proj := &model.Project{ID: projectID, Slug: "test", NamespaceID: nsID}
+	now := time.Now()
+
+	memRepo := &mockMemoryLister{
+		getFn: func(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+			return &model.Memory{
+				ID: id, NamespaceID: nsID, Content: "loser",
+				SupersededBy: &winnerID,
+				CreatedAt:    now, UpdatedAt: now,
+			}, nil
+		},
+	}
+	router := newListRouter(memRepo, &mockProjectGetter{project: proj})
+
+	w := doDetailRequest(router, projectID.String(), memoryID.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("default detail of superseded should 404; got %d: %s", w.Code, w.Body.String())
+	}
+
+	path := "/v1/projects/" + projectID.String() + "/memories/" + memoryID.String() + "?include_superseded=true"
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("include_superseded=true should surface loser; got %d: %s", w.Code, w.Body.String())
+	}
+}

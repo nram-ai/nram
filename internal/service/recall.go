@@ -20,6 +20,7 @@ type MemoryReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
 	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
+	ListByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
 }
 
 // VectorSearcher provides vector similarity search.

@@ -216,6 +216,10 @@ func (m *memRepoListAdapter) ListByNamespace(_ context.Context, _ uuid.UUID, lim
 	return out, nil
 }
 
+func (m *memRepoListAdapter) ListByNamespaceFiltered(ctx context.Context, ns uuid.UUID, _ storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	return m.ListByNamespace(ctx, ns, limit, offset)
+}
+
 // memRepoUpdater adapts mockMemoryRepoWithContent to service.MemoryUpdater.
 type memRepoUpdater struct {
 	memRepo *mockMemoryRepoWithContent
@@ -1258,6 +1262,25 @@ func (m *nsAwareMemoryRepo) ListByNamespace(_ context.Context, nsID uuid.UUID, l
 			if limit > 0 && len(out) >= limit {
 				break
 			}
+		}
+	}
+	return out, nil
+}
+
+func (m *nsAwareMemoryRepo) ListByNamespaceFiltered(_ context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, limit, _ int) ([]model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []model.Memory
+	for _, mem := range m.memories {
+		if mem.NamespaceID != nsID || mem.DeletedAt != nil {
+			continue
+		}
+		if filters.HideSuperseded && mem.SupersededBy != nil {
+			continue
+		}
+		out = append(out, *mem)
+		if limit > 0 && len(out) >= limit {
+			break
 		}
 	}
 	return out, nil

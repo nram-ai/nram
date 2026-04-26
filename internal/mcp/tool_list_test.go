@@ -24,18 +24,59 @@ type mockMemoryListerByNs struct {
 	countErr     error
 }
 
-func (m *mockMemoryListerByNs) ListByNamespace(_ context.Context, nsID uuid.UUID, _, _ int) ([]model.Memory, error) {
+func (m *mockMemoryListerByNs) supersededInNs(nsID uuid.UUID) int {
+	n := 0
+	for _, mem := range m.memoriesByNs[nsID] {
+		if mem.SupersededBy != nil {
+			n++
+		}
+	}
+	return n
+}
+
+func (m *mockMemoryListerByNs) ListByNamespaceFiltered(_ context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, _, _ int) ([]model.Memory, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
-	return m.memoriesByNs[nsID], nil
+	rows := m.memoriesByNs[nsID]
+	if !filters.HideSuperseded {
+		return rows, nil
+	}
+	out := make([]model.Memory, 0, len(rows))
+	for _, mem := range rows {
+		if mem.SupersededBy != nil {
+			continue
+		}
+		out = append(out, mem)
+	}
+	return out, nil
 }
 
-func (m *mockMemoryListerByNs) CountByNamespace(_ context.Context, nsID uuid.UUID) (int, error) {
+func (m *mockMemoryListerByNs) CountByNamespaceFiltered(_ context.Context, nsID uuid.UUID, filters storage.MemoryListFilters) (int, error) {
 	if m.countErr != nil {
 		return 0, m.countErr
 	}
-	return m.countByNs[nsID], nil
+	c := m.countByNs[nsID]
+	if filters.HideSuperseded {
+		c -= m.supersededInNs(nsID)
+	}
+	return c, nil
+}
+
+func (m *mockMemoryListerByNs) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+	idSet := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		idSet[id] = struct{}{}
+	}
+	var out []model.Memory
+	for _, rows := range m.memoriesByNs {
+		for _, mem := range rows {
+			if _, ok := idSet[mem.ID]; ok {
+				out = append(out, mem)
+			}
+		}
+	}
+	return out, nil
 }
 
 // slugProjectRepo returns different projects per slug.
@@ -676,5 +717,79 @@ func TestHandleMemoryList_NoGlobalProjectGraceful(t *testing.T) {
 	}
 	if resp.Pagination.Total != 1 {
 		t.Errorf("expected total 1, got %d", resp.Pagination.Total)
+	}
+}
+
+func TestHandleMemoryList_HidesSupersededByDefault(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	projNsID := uuid.New()
+	user := &model.User{ID: userID, NamespaceID: nsID}
+
+	now := time.Now().UTC()
+	winnerID := uuid.New()
+	winner := model.Memory{ID: winnerID, NamespaceID: projNsID, Content: "winner", Tags: []string{}, CreatedAt: now, UpdatedAt: now}
+	loser := model.Memory{ID: uuid.New(), NamespaceID: projNsID, Content: "loser", Tags: []string{}, CreatedAt: now, UpdatedAt: now, SupersededBy: &winnerID}
+
+	deps := Dependencies{
+		Backend:  storage.BackendSQLite,
+		UserRepo: &mockUserRepoStore{user: user},
+		ProjectRepo: &slugProjectRepo{projects: map[string]*model.Project{
+			"myproj": {ID: uuid.New(), NamespaceID: projNsID, OwnerNamespaceID: nsID, Slug: "myproj"},
+		}},
+		MemoryLister: &mockMemoryListerByNs{
+			memoriesByNs: map[uuid.UUID][]model.Memory{projNsID: {winner, loser}},
+			countByNs:    map[uuid.UUID]int{projNsID: 2},
+		},
+	}
+	srv := NewServer(deps)
+
+	// Default — supersede hidden.
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"project": "myproj"}
+	ctx := buildAuthCtx(userID)
+	result, err := handleMemoryList(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("default list: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("default list errored: %v", result.Content)
+	}
+	var resp listMemoryResponse
+	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
+		t.Fatalf("decode default: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 (winner only); got %d", len(resp.Data))
+	}
+	if resp.Data[0].ID != winnerID {
+		t.Errorf("expected winner; got %s", resp.Data[0].ID)
+	}
+	if resp.Pagination.Total != 1 {
+		t.Errorf("expected pagination.total=1; got %d", resp.Pagination.Total)
+	}
+
+	// include_superseded=true — both surface, total matches row count.
+	reqIncl := mcp.CallToolRequest{}
+	reqIncl.Params.Arguments = map[string]interface{}{
+		"project":            "myproj",
+		"include_superseded": true,
+	}
+	resultIncl, err := handleMemoryList(ctx, srv, reqIncl)
+	if err != nil {
+		t.Fatalf("include list: %v", err)
+	}
+	if resultIncl.IsError {
+		t.Fatalf("include list errored: %v", resultIncl.Content)
+	}
+	var respIncl listMemoryResponse
+	if err := json.Unmarshal([]byte(extractText(resultIncl)), &respIncl); err != nil {
+		t.Fatalf("decode include: %v", err)
+	}
+	if len(respIncl.Data) != 2 {
+		t.Fatalf("include_superseded should return both rows; got %d", len(respIncl.Data))
+	}
+	if respIncl.Pagination.Total != 2 {
+		t.Errorf("expected pagination.total=2 with include; got %d", respIncl.Pagination.Total)
 	}
 }

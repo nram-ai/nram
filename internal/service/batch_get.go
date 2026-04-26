@@ -13,6 +13,10 @@ import (
 type BatchGetRequest struct {
 	ProjectID uuid.UUID   `json:"project_id"`
 	IDs       []uuid.UUID `json:"ids"`
+	// IncludeSuperseded surfaces rows that were superseded by a paraphrase
+	// dedup or contradiction pass. Default false hides them so callers don't
+	// have to filter the loser side of a winner/loser pair themselves.
+	IncludeSuperseded bool `json:"include_superseded,omitempty"`
 }
 
 // BatchGetResponse contains the results of a batch memory retrieval.
@@ -49,8 +53,9 @@ func NewBatchGetService(memories MemoryReader, projects ProjectRepository) *Batc
 }
 
 // BatchGet retrieves multiple memories by ID, filtering to the project's namespace
-// and excluding soft-deleted records. It returns found memories and a list of IDs
-// that were not found.
+// and excluding soft-deleted records. Superseded rows are excluded by default;
+// set req.IncludeSuperseded to surface them. It returns found memories and a
+// list of IDs that were not found.
 func (s *BatchGetService) BatchGet(ctx context.Context, req *BatchGetRequest) (*BatchGetResponse, error) {
 	start := time.Now()
 
@@ -85,6 +90,9 @@ func (s *BatchGetService) BatchGet(ctx context.Context, req *BatchGetRequest) (*
 		}
 		// Exclude soft-deleted memories.
 		if mem.DeletedAt != nil {
+			continue
+		}
+		if mem.SupersededBy != nil && !req.IncludeSuperseded {
 			continue
 		}
 

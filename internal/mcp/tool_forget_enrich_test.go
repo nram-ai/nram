@@ -68,6 +68,24 @@ func (m *mockEnrichMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([
 	return result, nil
 }
 
+func (m *mockEnrichMemoryReader) ListByNamespaceFiltered(_ context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, limit, _ int) ([]model.Memory, error) {
+	mems := m.memories
+	if filters.HideSuperseded {
+		filtered := make([]model.Memory, 0, len(mems))
+		for _, mem := range mems {
+			if mem.SupersededBy != nil {
+				continue
+			}
+			filtered = append(filtered, mem)
+		}
+		mems = filtered
+	}
+	if limit > len(mems) {
+		return mems, nil
+	}
+	return mems[:limit], nil
+}
+
 func (m *mockEnrichMemoryReader) ListByNamespace(_ context.Context, nsID uuid.UUID, limit, _ int) ([]model.Memory, error) {
 	var result []model.Memory
 	for _, mem := range m.memories {
@@ -568,4 +586,72 @@ func TestHandleMemoryEnrich_InvalidUUID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertToolError(t, result, "not a valid UUID")
+}
+
+func TestHandleMemoryEnrich_SkipsSupersededByDefault(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	projectID := uuid.New()
+
+	user := &model.User{ID: userID, NamespaceID: nsID}
+	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "test"}
+
+	now := time.Now()
+	winnerID := uuid.New()
+	loserID := uuid.New()
+	memories := []model.Memory{
+		{ID: winnerID, NamespaceID: nsID, Content: "winner", Enriched: false, CreatedAt: now, UpdatedAt: now},
+		{ID: loserID, NamespaceID: nsID, Content: "loser", Enriched: false, CreatedAt: now, UpdatedAt: now, SupersededBy: &winnerID},
+	}
+
+	deps := Dependencies{
+		Backend:     storage.BackendPostgres,
+		UserRepo:    &mockUserRepoStore{user: user},
+		ProjectRepo: &mockProjectRepoStore{project: project},
+		Enrich:      newMockEnrichService(nsID, memories),
+	}
+	srv := NewServer(deps)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "memory_enrich"
+	req.Params.Arguments = map[string]interface{}{"project": "test"}
+
+	ctx := buildAuthCtx(userID)
+	result, err := handleMemoryEnrich(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("default enrich: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("default enrich errored: %v", result.Content)
+	}
+	var resp service.EnrichResponse
+	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
+		t.Fatalf("decode default: %v", err)
+	}
+	if resp.Queued != 1 {
+		t.Fatalf("expected only the winner queued; got %d", resp.Queued)
+	}
+
+	deps.Enrich = newMockEnrichService(nsID, memories)
+	srv = NewServer(deps)
+	reqIncl := mcp.CallToolRequest{}
+	reqIncl.Params.Name = "memory_enrich"
+	reqIncl.Params.Arguments = map[string]interface{}{
+		"project":            "test",
+		"include_superseded": true,
+	}
+	resultIncl, err := handleMemoryEnrich(ctx, srv, reqIncl)
+	if err != nil {
+		t.Fatalf("include enrich: %v", err)
+	}
+	if resultIncl.IsError {
+		t.Fatalf("include enrich errored: %v", resultIncl.Content)
+	}
+	var respIncl service.EnrichResponse
+	if err := json.Unmarshal([]byte(extractText(resultIncl)), &respIncl); err != nil {
+		t.Fatalf("decode include: %v", err)
+	}
+	if respIncl.Queued != 2 {
+		t.Fatalf("expected both rows queued with include_superseded; got %d", respIncl.Queued)
+	}
 }

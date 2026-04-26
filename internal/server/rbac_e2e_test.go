@@ -134,6 +134,22 @@ func (m *rbacMemoryRepo) ListByNamespace(_ context.Context, _ uuid.UUID, limit, 
 	return out, nil
 }
 
+func (m *rbacMemoryRepo) ListByNamespaceFiltered(_ context.Context, _ uuid.UUID, filters storage.MemoryListFilters, limit, _ int) ([]model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []model.Memory
+	for _, mem := range m.memories {
+		if filters.HideSuperseded && mem.SupersededBy != nil {
+			continue
+		}
+		out = append(out, *mem)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (m *rbacMemoryRepo) Update(_ context.Context, mem *model.Memory) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

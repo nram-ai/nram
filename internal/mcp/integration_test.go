@@ -144,6 +144,10 @@ func (m *mockMemoryReaderForExport) ListByNamespace(_ context.Context, _ uuid.UU
 	return m.memories, nil
 }
 
+func (m *mockMemoryReaderForExport) ListByNamespaceFiltered(ctx context.Context, ns uuid.UUID, _ storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	return m.ListByNamespace(ctx, ns, limit, offset)
+}
+
 // ---------------------------------------------------------------------------
 // Integration test helpers
 // ---------------------------------------------------------------------------
@@ -275,6 +279,10 @@ func (m *mockListByNsReader) ListByNamespace(_ context.Context, _ uuid.UUID, lim
 		mems = mems[:limit]
 	}
 	return mems, nil
+}
+
+func (m *mockListByNsReader) ListByNamespaceFiltered(ctx context.Context, ns uuid.UUID, _ storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	return m.ListByNamespace(ctx, ns, limit, offset)
 }
 
 // ---------------------------------------------------------------------------

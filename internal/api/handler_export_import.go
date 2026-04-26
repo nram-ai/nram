@@ -52,8 +52,9 @@ func NewExportHandler(svc ExportServicer) http.HandlerFunc {
 		}
 
 		req := &service.ExportRequest{
-			ProjectID: projectID,
-			Format:    format,
+			ProjectID:         projectID,
+			Format:            format,
+			IncludeSuperseded: queryParamBool(r, includeSupersededParam),
 		}
 
 		if format == service.ExportFormatNDJSON {

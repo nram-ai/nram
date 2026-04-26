@@ -36,13 +36,14 @@ type graphEntity struct {
 
 // graphRelationship is a minimal relationship representation for graph results.
 type graphRelationship struct {
-	ID         uuid.UUID  `json:"id"`
-	SourceID   uuid.UUID  `json:"source_id"`
-	TargetID   uuid.UUID  `json:"target_id"`
-	Relation   string     `json:"relation"`
-	Weight     float64    `json:"weight"`
-	ValidFrom  time.Time  `json:"valid_from"`
-	ValidUntil *time.Time `json:"valid_until,omitempty"`
+	ID           uuid.UUID  `json:"id"`
+	SourceID     uuid.UUID  `json:"source_id"`
+	TargetID     uuid.UUID  `json:"target_id"`
+	Relation     string     `json:"relation"`
+	Weight       float64    `json:"weight"`
+	ValidFrom    time.Time  `json:"valid_from"`
+	ValidUntil   *time.Time `json:"valid_until,omitempty"`
+	SourceMemory *uuid.UUID `json:"source_memory,omitempty"`
 }
 
 // projectItem is the JSON representation of a project in the memory_projects response.
@@ -68,6 +69,7 @@ func registerMemoryGraph(s *Server) {
 		mcp.WithNumber("depth", mcp.Description("Graph traversal depth (default 2)")),
 		mcp.WithNumber("min_weight", mcp.Description("Minimum relationship weight to include (default 0.1). Set to 0 to include all.")),
 		mcp.WithBoolean("include_history", mcp.Description("Include expired/past relationships (default false)")),
+		mcp.WithBoolean(includeSupersededArg, mcp.Description("Include relationships extracted from a memory that was later superseded by paraphrase or contradiction dedup. Default false drops them.")),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -90,6 +92,7 @@ func registerMemoryExport(s *Server) {
 		mcp.WithDescription("Export all memories from a project for backup, migration, or analysis. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug to export (default: 'global')")),
 		mcp.WithString("format", mcp.Description("Export format: \"json\" or \"ndjson\" (default \"json\")")),
+		mcp.WithBoolean(includeSupersededArg, mcp.Description(includeSupersededDesc)),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -128,6 +131,8 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	if v, ok := args["include_history"].(bool); ok {
 		includeHistory = v
 	}
+
+	includeSuperseded := argBool(args, includeSupersededArg, false)
 
 	deps := s.Deps()
 
@@ -197,13 +202,14 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 			}
 			seenRels[rel.ID] = struct{}{}
 			graphRels = append(graphRels, graphRelationship{
-				ID:         rel.ID,
-				SourceID:   rel.SourceID,
-				TargetID:   rel.TargetID,
-				Relation:   rel.Relation,
-				Weight:     rel.Weight,
-				ValidFrom:  rel.ValidFrom,
-				ValidUntil: rel.ValidUntil,
+				ID:           rel.ID,
+				SourceID:     rel.SourceID,
+				TargetID:     rel.TargetID,
+				Relation:     rel.Relation,
+				Weight:       rel.Weight,
+				ValidFrom:    rel.ValidFrom,
+				ValidUntil:   rel.ValidUntil,
+				SourceMemory: rel.SourceMemory,
 			})
 		}
 	}
@@ -224,6 +230,44 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 			filtered = append(filtered, rel)
 		}
 		graphRels = filtered
+	}
+
+	// Drop relationships extracted from a memory that has since been
+	// superseded so the graph stays consistent with memory_list/memory_recall.
+	// One GetBatch over the distinct source-memory IDs; superseded rows are
+	// dropped in Go.
+	if !includeSuperseded && len(graphRels) > 0 {
+		idSet := make(map[uuid.UUID]struct{})
+		for _, rel := range graphRels {
+			if rel.SourceMemory != nil {
+				idSet[*rel.SourceMemory] = struct{}{}
+			}
+		}
+		if len(idSet) > 0 {
+			ids := make([]uuid.UUID, 0, len(idSet))
+			for id := range idSet {
+				ids = append(ids, id)
+			}
+			alive := make(map[uuid.UUID]struct{})
+			if mems, err := deps.MemoryLister.GetBatch(ctx, ids); err == nil {
+				for _, m := range mems {
+					if m.SupersededBy == nil && m.DeletedAt == nil {
+						alive[m.ID] = struct{}{}
+					}
+				}
+			}
+			filtered := graphRels[:0]
+			for _, rel := range graphRels {
+				if rel.SourceMemory == nil {
+					filtered = append(filtered, rel)
+					continue
+				}
+				if _, ok := alive[*rel.SourceMemory]; ok {
+					filtered = append(filtered, rel)
+				}
+			}
+			graphRels = filtered
+		}
 	}
 
 	if graphEntities == nil {
@@ -317,12 +361,15 @@ func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError("project not found"), nil
 	}
 
+	includeSuperseded := argBool(args, includeSupersededArg, false)
+
 	exportSvc := deps.Export
 
 	if format == "ndjson" {
 		req := &service.ExportRequest{
-			ProjectID: project.ID,
-			Format:    service.ExportFormatNDJSON,
+			ProjectID:         project.ID,
+			Format:            service.ExportFormatNDJSON,
+			IncludeSuperseded: includeSuperseded,
 		}
 		var buf bytes.Buffer
 		if err := exportSvc.ExportNDJSON(ctx, req, &buf); err != nil {
@@ -332,8 +379,9 @@ func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequ
 	}
 
 	req := &service.ExportRequest{
-		ProjectID: project.ID,
-		Format:    service.ExportFormatJSON,
+		ProjectID:         project.ID,
+		Format:            service.ExportFormatJSON,
+		IncludeSuperseded: includeSuperseded,
 	}
 	data, err := exportSvc.Export(ctx, req)
 	if err != nil {

@@ -48,11 +48,14 @@ const (
 //   - enriched ("true" | "false"; absent or any other value = no filter)
 //   - source (case-insensitive substring)
 //   - search (case-insensitive substring against content)
+//   - include_superseded ("true" surfaces paraphrase/contradiction losers; default hides them)
 //
 // Returns an APIError on parse failure.
 func parseMemoryFilters(r *http.Request) (storage.MemoryListFilters, *APIError) {
 	q := r.URL.Query()
-	var filters storage.MemoryListFilters
+	// Default to hiding superseded rows so list/detail/listIDs stay
+	// consistent with recall. Admin and debug callers opt back in.
+	filters := storage.MemoryListFilters{HideSuperseded: !queryParamBool(r, includeSupersededParam)}
 
 	if tags := q["tag"]; len(tags) > 0 {
 		// Drop empty entries to be lenient.
@@ -241,6 +244,13 @@ func NewDetailHandler(memRepo MemoryLister, projRepo ProjectGetter, lineage Pare
 		}
 
 		if mem.NamespaceID != project.NamespaceID {
+			WriteError(w, ErrNotFound("memory not found"))
+			return
+		}
+
+		// Hide superseded rows by default. The same query parameter as the
+		// list endpoint flips this for admin/debug callers.
+		if mem.SupersededBy != nil && !queryParamBool(r, includeSupersededParam) {
 			WriteError(w, ErrNotFound("memory not found"))
 			return
 		}

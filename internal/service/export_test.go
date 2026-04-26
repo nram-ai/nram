@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- Mock implementations for export tests ---
@@ -55,6 +56,28 @@ func (m *mockExportMemoryReader) ListByNamespace(_ context.Context, namespaceID 
 		end = len(mems)
 	}
 	return mems[offset:end], nil
+}
+
+func (m *mockExportMemoryReader) ListByNamespaceFiltered(_ context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	rows := m.memories[namespaceID]
+	if filters.HideSuperseded {
+		filtered := make([]model.Memory, 0, len(rows))
+		for _, mem := range rows {
+			if mem.SupersededBy != nil {
+				continue
+			}
+			filtered = append(filtered, mem)
+		}
+		rows = filtered
+	}
+	if offset >= len(rows) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(rows) {
+		end = len(rows)
+	}
+	return rows[offset:end], nil
 }
 
 type mockEntityLister struct {
@@ -639,5 +662,41 @@ func TestExportNDJSON_LineageInMemoryRecords(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("mem2 not found in NDJSON output")
+	}
+}
+
+func TestExport_SupersededExcludedByDefault(t *testing.T) {
+	projectID, nsID, mem1ID, mem2ID, _, _, _, projects, memories, entities, relationships, lineage := newExportTestFixtures()
+	// Mark mem1 as superseded by mem2.
+	winnerID := mem2ID
+	for i := range memories.memories[nsID] {
+		if memories.memories[nsID][i].ID == mem1ID {
+			memories.memories[nsID][i].SupersededBy = &winnerID
+		}
+	}
+
+	svc := NewExportService(memories, entities, relationships, lineage, projects)
+
+	defaulted, err := svc.Export(context.Background(), &ExportRequest{ProjectID: projectID, Format: ExportFormatJSON})
+	if err != nil {
+		t.Fatalf("Export default: %v", err)
+	}
+	if len(defaulted.Memories) != 1 {
+		t.Fatalf("default should drop superseded loser; got %d memories", len(defaulted.Memories))
+	}
+	if defaulted.Memories[0].ID != mem2ID {
+		t.Fatalf("survivor should be mem2; got %s", defaulted.Memories[0].ID)
+	}
+
+	included, err := svc.Export(context.Background(), &ExportRequest{
+		ProjectID:         projectID,
+		Format:            ExportFormatJSON,
+		IncludeSuperseded: true,
+	})
+	if err != nil {
+		t.Fatalf("Export include: %v", err)
+	}
+	if len(included.Memories) != 2 {
+		t.Fatalf("IncludeSuperseded should surface both rows; got %d", len(included.Memories))
 	}
 }

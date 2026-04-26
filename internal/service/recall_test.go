@@ -53,6 +53,10 @@ func (m *mockMemoryReader) ListByNamespace(_ context.Context, _ uuid.UUID, limit
 	return m.nsList[:limit], nil
 }
 
+func (m *mockMemoryReader) ListByNamespaceFiltered(ctx context.Context, ns uuid.UUID, _ storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	return m.ListByNamespace(ctx, ns, limit, offset)
+}
+
 type mockVectorSearcher struct {
 	results []storage.VectorSearchResult
 	err     error

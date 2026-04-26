@@ -48,8 +48,9 @@ func NewBatchGetHandler(svc BatchGetServicer) http.HandlerFunc {
 
 		// Build service request.
 		req := &service.BatchGetRequest{
-			ProjectID: projectID,
-			IDs:       body.IDs,
+			ProjectID:         projectID,
+			IDs:               body.IDs,
+			IncludeSuperseded: queryParamBool(r, includeSupersededParam),
 		}
 
 		// Call the service.

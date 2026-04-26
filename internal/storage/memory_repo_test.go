@@ -621,6 +621,105 @@ func TestMemoryRepo_CountByNamespaceFiltered_MatchesList(t *testing.T) {
 	})
 }
 
+func TestMemoryRepo_ListByNamespaceFiltered_HideSuperseded(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		winner := newTestMemory(nsID)
+		winner.Content = "winner content"
+		if err := repo.Create(ctx, winner); err != nil {
+			t.Fatalf("create winner: %v", err)
+		}
+		loser := newTestMemory(nsID)
+		loser.Content = "loser content"
+		if err := repo.Create(ctx, loser); err != nil {
+			t.Fatalf("create loser: %v", err)
+		}
+		now := time.Now().UTC()
+		loser.SupersededBy = &winner.ID
+		loser.SupersededAt = &now
+		if err := repo.Update(ctx, loser); err != nil {
+			t.Fatalf("mark loser superseded: %v", err)
+		}
+
+		all, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{}, 100, 0)
+		if err != nil {
+			t.Fatalf("list default: %v", err)
+		}
+		if len(all) != 2 {
+			t.Fatalf("default filters should include superseded: got %d, want 2", len(all))
+		}
+
+		hidden, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{HideSuperseded: true}, 100, 0)
+		if err != nil {
+			t.Fatalf("list hide: %v", err)
+		}
+		if len(hidden) != 1 {
+			t.Fatalf("HideSuperseded should drop loser: got %d, want 1", len(hidden))
+		}
+		if hidden[0].ID != winner.ID {
+			t.Fatalf("survivor should be winner; got %s, want %s", hidden[0].ID, winner.ID)
+		}
+
+		count, err := repo.CountByNamespaceFiltered(ctx, nsID, MemoryListFilters{HideSuperseded: true})
+		if err != nil {
+			t.Fatalf("count hide: %v", err)
+		}
+		if count != len(hidden) {
+			t.Fatalf("count %d != list length %d", count, len(hidden))
+		}
+	})
+}
+
+func TestMemoryRepo_LookupByContentHash_SkipsSuperseded(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		hash := "deadbeef"
+		older := newTestMemory(nsID)
+		older.Content = "duplicate content"
+		older.ContentHash = hash
+		if err := repo.Create(ctx, older); err != nil {
+			t.Fatalf("create older: %v", err)
+		}
+
+		// Stagger so created_at ordering is deterministic regardless of backend.
+		time.Sleep(1100 * time.Millisecond)
+
+		newer := newTestMemory(nsID)
+		newer.Content = "duplicate content"
+		newer.ContentHash = hash
+		if err := repo.Create(ctx, newer); err != nil {
+			t.Fatalf("create newer: %v", err)
+		}
+
+		// Mark the older one superseded (mirrors paraphrase-dedup picking the
+		// newer row as winner). Without the supersede filter, the
+		// `ORDER BY created_at ASC LIMIT 1` would return the older loser.
+		now := time.Now().UTC()
+		older.SupersededBy = &newer.ID
+		older.SupersededAt = &now
+		if err := repo.Update(ctx, older); err != nil {
+			t.Fatalf("mark older superseded: %v", err)
+		}
+
+		got, err := repo.LookupByContentHash(ctx, nsID, hash)
+		if err != nil {
+			t.Fatalf("lookup: %v", err)
+		}
+		if got == nil {
+			t.Fatalf("expected a hit, got nil")
+		}
+		if got.ID != newer.ID {
+			t.Fatalf("expected newer winner %s, got loser %s", newer.ID, got.ID)
+		}
+	})
+}
+
 func TestMemoryRepo_ListIDsByNamespaceFiltered_RespectsCap(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

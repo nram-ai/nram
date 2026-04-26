@@ -13,6 +13,7 @@ import (
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // ProjectRepo defines the project lookup operations needed by MCP tool handlers.
@@ -36,8 +37,9 @@ type NamespaceRepo interface {
 
 // MemoryLister provides read-only memory listing operations for MCP tool handlers.
 type MemoryLister interface {
-	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
-	CountByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
+	ListByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
+	CountByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters) (int, error)
+	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
 }
 
 // EntityReader provides entity lookup operations for MCP tool handlers.

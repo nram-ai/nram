@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // EnrichRequest contains the parameters for an enrich operation.
@@ -15,6 +16,10 @@ type EnrichRequest struct {
 	MemoryIDs []uuid.UUID `json:"memory_ids,omitempty"` // specific IDs
 	All       bool        `json:"all,omitempty"`         // enrich all un-enriched
 	Priority  int         `json:"priority,omitempty"`    // default 0
+	// IncludeSuperseded enrolls superseded losers in the enrichment pass.
+	// Default false skips them so the queue doesn't burn tokens on rows
+	// already slated for prune.
+	IncludeSuperseded bool `json:"include_superseded,omitempty"`
 }
 
 // EnrichResponse contains the result of an enrich operation.
@@ -58,7 +63,8 @@ func NewEnrichService(
 }
 
 // Enrich enqueues enrichment jobs for the specified memories or all un-enriched
-// memories in the project's namespace.
+// memories in the project's namespace. Superseded rows are excluded by default;
+// set req.IncludeSuperseded to enroll them.
 func (s *EnrichService) Enrich(ctx context.Context, req *EnrichRequest) (*EnrichResponse, error) {
 	start := time.Now()
 
@@ -88,16 +94,23 @@ func (s *EnrichService) Enrich(ctx context.Context, req *EnrichRequest) (*Enrich
 		}
 		// Filter to only memories in the project's namespace.
 		for _, mem := range batch {
-			if mem.NamespaceID == namespaceID {
-				memories = append(memories, mem)
+			if mem.NamespaceID != namespaceID {
+				continue
 			}
+			if mem.SupersededBy != nil && !req.IncludeSuperseded {
+				continue
+			}
+			memories = append(memories, mem)
 		}
 	} else {
-		// Paginate through all memories in the namespace.
+		// Paginate through all memories in the namespace, pushing the
+		// supersede filter into SQL so the queue doesn't waste round-trips
+		// shipping rows we'd skip in Go.
 		const pageSize = 100
+		filters := storage.MemoryListFilters{HideSuperseded: !req.IncludeSuperseded}
 		offset := 0
 		for {
-			page, err := s.memories.ListByNamespace(ctx, namespaceID, pageSize, offset)
+			page, err := s.memories.ListByNamespaceFiltered(ctx, namespaceID, filters, pageSize, offset)
 			if err != nil {
 				return nil, fmt.Errorf("failed to list memories: %w", err)
 			}

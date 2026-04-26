@@ -18,11 +18,13 @@ import (
 // --- mock BatchGetServicer ---
 
 type mockBatchGetServicer struct {
-	resp *service.BatchGetResponse
-	err  error
+	resp        *service.BatchGetResponse
+	err         error
+	lastRequest *service.BatchGetRequest
 }
 
 func (m *mockBatchGetServicer) BatchGet(_ context.Context, req *service.BatchGetRequest) (*service.BatchGetResponse, error) {
+	m.lastRequest = req
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -209,5 +211,37 @@ func TestBatchGetHandler_ServiceError_Internal(t *testing.T) {
 	}
 	if envelope.Error == nil || envelope.Error.Code != "internal_error" {
 		t.Errorf("expected internal_error, got %+v", envelope.Error)
+	}
+}
+
+func TestBatchGetHandler_PassesIncludeSupersededFlag(t *testing.T) {
+	svc := &mockBatchGetServicer{
+		resp: &service.BatchGetResponse{Found: []service.MemoryDetail{}, NotFound: []uuid.UUID{}},
+	}
+	router := newBatchGetRouter(NewBatchGetHandler(svc))
+	projectID := uuid.New()
+
+	body := map[string]interface{}{"ids": []string{uuid.New().String()}}
+
+	if w := doBatchGetRequest(router, projectID.String(), body); w.Code != http.StatusOK {
+		t.Fatalf("default request: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if svc.lastRequest == nil || svc.lastRequest.IncludeSuperseded {
+		t.Errorf("default should keep IncludeSuperseded=false; got %+v", svc.lastRequest)
+	}
+
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(body)
+	req := httptest.NewRequest(http.MethodPost,
+		"/v1/projects/"+projectID.String()+"/memories/get?include_superseded=true", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("include request: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if svc.lastRequest == nil || !svc.lastRequest.IncludeSuperseded {
+		t.Errorf("include_superseded=true should set IncludeSuperseded; got %+v", svc.lastRequest)
 	}
 }

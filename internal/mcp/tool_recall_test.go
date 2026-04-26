@@ -62,6 +62,10 @@ func (m *mockMemoryReaderRecall) ListByNamespace(_ context.Context, _ uuid.UUID,
 	return []model.Memory{}, nil
 }
 
+func (m *mockMemoryReaderRecall) ListByNamespaceFiltered(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters, _ int, _ int) ([]model.Memory, error) {
+	return []model.Memory{}, nil
+}
+
 // --- schema tests ---
 
 func TestMemoryRecall_Schema_Postgres_HasGraphParams(t *testing.T) {

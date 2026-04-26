@@ -63,6 +63,20 @@ func (m *mockExportMemoryReader) ListByNamespace(_ context.Context, _ uuid.UUID,
 	return m.memories, nil
 }
 
+func (m *mockExportMemoryReader) ListByNamespaceFiltered(_ context.Context, _ uuid.UUID, filters storage.MemoryListFilters, _, _ int) ([]model.Memory, error) {
+	if !filters.HideSuperseded {
+		return m.memories, nil
+	}
+	out := make([]model.Memory, 0, len(m.memories))
+	for _, mem := range m.memories {
+		if mem.SupersededBy != nil {
+			continue
+		}
+		out = append(out, mem)
+	}
+	return out, nil
+}
+
 type mockExportEntityLister struct {
 	entities []model.Entity
 }
@@ -597,6 +611,163 @@ func TestHandleMemoryExport_ProjectNotFound(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertToolError(t, result, "project not found")
+}
+
+func TestHandleMemoryGraph_FiltersSupersededSourceMemory(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	user := &model.User{ID: userID, NamespaceID: nsID}
+	project := &model.Project{ID: uuid.New(), NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "test"}
+
+	// Two memories — one alive, one superseded — used as source memories for
+	// two relationships. The superseded one's relationship is dropped by
+	// default but reappears with include_superseded=true.
+	winnerID := uuid.New()
+	loserID := uuid.New()
+	winnerMemSrc := winnerID
+	loserMemSrc := loserID
+	now := time.Now().UTC()
+	memories := map[uuid.UUID][]model.Memory{
+		nsID: {
+			{ID: winnerID, NamespaceID: nsID, Content: "winner", Tags: []string{}, CreatedAt: now, UpdatedAt: now},
+			{ID: loserID, NamespaceID: nsID, Content: "loser", Tags: []string{}, CreatedAt: now, UpdatedAt: now, SupersededBy: &winnerID},
+		},
+	}
+
+	entityID := uuid.New()
+	relAliveID := uuid.New()
+	relSupersededID := uuid.New()
+	entities := []model.Entity{{ID: entityID, NamespaceID: nsID, Name: "Alice", EntityType: "person", Canonical: "alice"}}
+	rels := []model.Relationship{
+		{ID: relAliveID, SourceID: entityID, TargetID: uuid.New(), Relation: "knows", Weight: 1, ValidFrom: now, SourceMemory: &winnerMemSrc},
+		{ID: relSupersededID, SourceID: entityID, TargetID: uuid.New(), Relation: "knows", Weight: 1, ValidFrom: now, SourceMemory: &loserMemSrc},
+	}
+
+	deps := Dependencies{
+		Backend:      storage.BackendPostgres,
+		UserRepo:     &mockUserRepoStore{user: user},
+		ProjectRepo:  &mockProjectRepoStore{project: project},
+		EntityReader: &mockEntityReader{entities: entities},
+		Traverser:    &mockTraverser{rels: rels},
+		MemoryLister: &mockMemoryListerByNs{memoriesByNs: memories},
+	}
+	srv := NewServer(deps)
+
+	// Default: superseded relationship dropped.
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"entity": "Alice"}
+	ctx := buildAuthCtx(userID)
+	result, err := handleMemoryGraph(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("default graph: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("default graph errored: %v", result.Content)
+	}
+	var resp graphResponse
+	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
+		t.Fatalf("decode default: %v", err)
+	}
+	if len(resp.Relationships) != 1 {
+		t.Fatalf("expected only the live relationship; got %d", len(resp.Relationships))
+	}
+	if resp.Relationships[0].ID != relAliveID {
+		t.Errorf("expected surviving rel %s; got %s", relAliveID, resp.Relationships[0].ID)
+	}
+	if resp.Relationships[0].SourceMemory == nil || *resp.Relationships[0].SourceMemory != winnerID {
+		t.Errorf("expected source_memory=%s on surviving rel; got %+v", winnerID, resp.Relationships[0].SourceMemory)
+	}
+
+	// include_superseded=true: both relationships present.
+	reqIncl := mcp.CallToolRequest{}
+	reqIncl.Params.Arguments = map[string]interface{}{
+		"entity":             "Alice",
+		"include_superseded": true,
+	}
+	resultIncl, err := handleMemoryGraph(ctx, srv, reqIncl)
+	if err != nil {
+		t.Fatalf("include graph: %v", err)
+	}
+	if resultIncl.IsError {
+		t.Fatalf("include graph errored: %v", resultIncl.Content)
+	}
+	var respIncl graphResponse
+	if err := json.Unmarshal([]byte(extractText(resultIncl)), &respIncl); err != nil {
+		t.Fatalf("decode include: %v", err)
+	}
+	if len(respIncl.Relationships) != 2 {
+		t.Fatalf("expected both relationships with include_superseded; got %d", len(respIncl.Relationships))
+	}
+}
+
+func TestHandleMemoryExport_HidesSupersededByDefault(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	projectID := uuid.New()
+	user := &model.User{ID: userID, NamespaceID: nsID}
+	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "test"}
+
+	winnerID := uuid.New()
+	loserID := uuid.New()
+	now := time.Now().UTC()
+	mems := []model.Memory{
+		{ID: winnerID, NamespaceID: nsID, Content: "winner", Tags: []string{}, CreatedAt: now, UpdatedAt: now},
+		{ID: loserID, NamespaceID: nsID, Content: "loser", Tags: []string{}, CreatedAt: now, UpdatedAt: now, SupersededBy: &winnerID},
+	}
+
+	exportSvc := service.NewExportService(
+		&mockExportMemoryReader{memories: mems},
+		&mockExportEntityLister{entities: []model.Entity{}},
+		&mockExportRelLister{rels: []model.Relationship{}},
+		&mockExportLineageReader{},
+		&mockExportProjectRepo{project: project},
+	)
+
+	deps := Dependencies{
+		Backend:     storage.BackendSQLite,
+		UserRepo:    &mockUserRepoStore{user: user},
+		ProjectRepo: &mockProjectRepoStore{project: project},
+		Export:      exportSvc,
+	}
+	srv := NewServer(deps)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"project": "test"}
+	ctx := buildAuthCtx(userID)
+	result, err := handleMemoryExport(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("default export: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("default export errored: %v", result.Content)
+	}
+	var data service.ExportData
+	if err := json.Unmarshal([]byte(extractText(result)), &data); err != nil {
+		t.Fatalf("decode default: %v", err)
+	}
+	if len(data.Memories) != 1 || data.Memories[0].ID != winnerID {
+		t.Fatalf("expected only winner in default export; got %+v", data.Memories)
+	}
+
+	reqIncl := mcp.CallToolRequest{}
+	reqIncl.Params.Arguments = map[string]interface{}{
+		"project":            "test",
+		"include_superseded": true,
+	}
+	resultIncl, err := handleMemoryExport(ctx, srv, reqIncl)
+	if err != nil {
+		t.Fatalf("include export: %v", err)
+	}
+	if resultIncl.IsError {
+		t.Fatalf("include export errored: %v", resultIncl.Content)
+	}
+	var dataIncl service.ExportData
+	if err := json.Unmarshal([]byte(extractText(resultIncl)), &dataIncl); err != nil {
+		t.Fatalf("decode include: %v", err)
+	}
+	if len(dataIncl.Memories) != 2 {
+		t.Fatalf("expected both rows with include_superseded; got %d", len(dataIncl.Memories))
+	}
 }
 
 // splitNDJSON splits NDJSON text into individual lines, skipping empty lines.

@@ -160,13 +160,14 @@ func (r *MemoryRepo) getByIDIncludeDeleted(ctx context.Context, id uuid.UUID) (*
 // LookupByContentHash returns the live memory in the namespace that matches the
 // given sha256 content hash, or sql.ErrNoRows if none exists. The index is
 // non-unique (legacy duplicates exist), so LIMIT 1 keeps behavior deterministic.
+// Superseded rows are excluded so ingest dedup never returns a paraphrase loser.
 func (r *MemoryRepo) LookupByContentHash(ctx context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error) {
 	query := selectMemoryColumns + ` FROM memories
-		WHERE namespace_id = ? AND content_hash = ? AND deleted_at IS NULL
+		WHERE namespace_id = ? AND content_hash = ? AND deleted_at IS NULL AND superseded_by IS NULL
 		ORDER BY created_at ASC LIMIT 1`
 	if r.db.Backend() == BackendPostgres {
 		query = selectMemoryColumns + ` FROM memories
-			WHERE namespace_id = $1 AND content_hash = $2 AND deleted_at IS NULL
+			WHERE namespace_id = $1 AND content_hash = $2 AND deleted_at IS NULL AND superseded_by IS NULL
 			ORDER BY created_at ASC LIMIT 1`
 	}
 
@@ -307,12 +308,16 @@ type MemoryListFilters struct {
 	Enriched *bool
 	Source   string
 	Search   string
+	// HideSuperseded excludes rows with superseded_by set. Mirrors the
+	// always-on deleted_at filter but is opt-in so dreaming phases that walk
+	// the full set with zero-value filters still see superseded rows.
+	HideSuperseded bool
 }
 
 // IsZero reports whether no filter dimensions are active.
 func (f MemoryListFilters) IsZero() bool {
 	return len(f.Tags) == 0 && f.DateFrom == nil && f.DateTo == nil &&
-		f.Enriched == nil && f.Source == "" && f.Search == ""
+		f.Enriched == nil && f.Source == "" && f.Search == "" && !f.HideSuperseded
 }
 
 // whereBuilder accumulates WHERE clause fragments and their bind values while
@@ -346,6 +351,9 @@ func (r *MemoryRepo) buildFilterWhere(namespaceID uuid.UUID, filters MemoryListF
 	wb := &whereBuilder{postgres: r.db.Backend() == BackendPostgres}
 	wb.add("namespace_id = %s", namespaceID.String())
 	wb.clauses = append(wb.clauses, "deleted_at IS NULL")
+	if filters.HideSuperseded {
+		wb.clauses = append(wb.clauses, "superseded_by IS NULL")
+	}
 
 	// Tag filter — AND semantics.
 	if len(filters.Tags) > 0 {

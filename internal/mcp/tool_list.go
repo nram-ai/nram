@@ -11,6 +11,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 const (
@@ -42,6 +43,7 @@ func RegisterListTool(s *Server) {
 		mcp.WithString("project", mcp.Description("Project slug. Lists this project + global. Omit to list only the global project")),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of memories to return (default 50, max 200)")),
 		mcp.WithNumber("offset", mcp.Description("Number of memories to skip for pagination (default 0)")),
+		mcp.WithBoolean(includeSupersededArg, mcp.Description(includeSupersededDesc)),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -80,6 +82,8 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		offset = int(v)
 	}
 
+	filters := storage.MemoryListFilters{HideSuperseded: !argBool(args, includeSupersededArg, false)}
+
 	deps := s.Deps()
 
 	user, err := deps.UserRepo.GetByID(ctx, ac.UserID)
@@ -104,7 +108,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 	// Aggregate counts and memories across all namespaces.
 	total := 0
 	for _, nsID := range namespaces {
-		c, err := deps.MemoryLister.CountByNamespace(ctx, nsID)
+		c, err := deps.MemoryLister.CountByNamespaceFiltered(ctx, nsID, filters)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to count memories: %v", err)), nil
 		}
@@ -118,7 +122,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		if remaining <= 0 {
 			break
 		}
-		nsCount, err := deps.MemoryLister.CountByNamespace(ctx, nsID)
+		nsCount, err := deps.MemoryLister.CountByNamespaceFiltered(ctx, nsID, filters)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to count memories: %v", err)), nil
 		}
@@ -126,7 +130,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 			currentOffset -= nsCount
 			continue
 		}
-		batch, err := deps.MemoryLister.ListByNamespace(ctx, nsID, remaining, currentOffset)
+		batch, err := deps.MemoryLister.ListByNamespaceFiltered(ctx, nsID, filters, remaining, currentOffset)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to list memories: %v", err)), nil
 		}

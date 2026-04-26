@@ -70,6 +70,10 @@ func (m *mockMemoryBatchReader) ListByNamespace(_ context.Context, _ uuid.UUID, 
 	return nil, nil
 }
 
+func (m *mockMemoryBatchReader) ListByNamespaceFiltered(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters, _, _ int) ([]model.Memory, error) {
+	return nil, nil
+}
+
 // newMockUpdateService creates a mock UpdateService for testing.
 func newMockUpdateService(mem *model.Memory) *service.UpdateService {
 	nsID := mem.NamespaceID

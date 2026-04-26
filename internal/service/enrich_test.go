@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- Enrich-specific mock implementations ---
@@ -44,6 +45,28 @@ func (m *enrichMemoryReader) ListByNamespace(_ context.Context, _ uuid.UUID, lim
 		end = len(m.nsList)
 	}
 	return m.nsList[offset:end], nil
+}
+
+func (m *enrichMemoryReader) ListByNamespaceFiltered(_ context.Context, _ uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	rows := m.nsList
+	if filters.HideSuperseded {
+		filtered := make([]model.Memory, 0, len(rows))
+		for _, mem := range rows {
+			if mem.SupersededBy != nil {
+				continue
+			}
+			filtered = append(filtered, mem)
+		}
+		rows = filtered
+	}
+	if offset >= len(rows) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(rows) {
+		end = len(rows)
+	}
+	return rows[offset:end], nil
 }
 
 type enrichProjectRepo struct {
@@ -358,5 +381,78 @@ func TestEnrich_ProjectIDRequired(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for missing project_id")
+	}
+}
+
+func TestEnrich_SpecificIDs_SkipsSupersededByDefault(t *testing.T) {
+	projectID, nsID, projects := setupEnrichFixtures()
+	winnerID := uuid.New()
+	loserID := uuid.New()
+	loser := makeEnrichMemory(loserID, nsID, false)
+	loser.SupersededBy = &winnerID
+
+	reader := &enrichMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			winnerID: makeEnrichMemory(winnerID, nsID, false),
+			loserID:  loser,
+		},
+	}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+
+	resp, err := svc.Enrich(context.Background(), &EnrichRequest{
+		ProjectID: projectID,
+		MemoryIDs: []uuid.UUID{winnerID, loserID},
+	})
+	if err != nil {
+		t.Fatalf("default enrich: %v", err)
+	}
+	if resp.Queued != 1 {
+		t.Fatalf("expected only the winner queued; got %d", resp.Queued)
+	}
+	if len(queue.jobs) != 1 || queue.jobs[0].MemoryID != winnerID {
+		t.Fatalf("expected enqueued memory=%s; got %+v", winnerID, queue.jobs)
+	}
+}
+
+func TestEnrich_All_SkipsSupersededByDefault(t *testing.T) {
+	projectID, nsID, projects := setupEnrichFixtures()
+	winnerID := uuid.New()
+	loserID := uuid.New()
+	loser := *makeEnrichMemory(loserID, nsID, false)
+	loser.SupersededBy = &winnerID
+
+	reader := &enrichMemoryReader{
+		nsList: []model.Memory{
+			*makeEnrichMemory(winnerID, nsID, false),
+			loser,
+		},
+	}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+
+	resp, err := svc.Enrich(context.Background(), &EnrichRequest{
+		ProjectID: projectID,
+		All:       true,
+	})
+	if err != nil {
+		t.Fatalf("default enrich all: %v", err)
+	}
+	if resp.Queued != 1 {
+		t.Fatalf("expected only the winner queued; got %d", resp.Queued)
+	}
+
+	// With IncludeSuperseded the loser is enrolled too.
+	queue.jobs = nil
+	respIncl, err := svc.Enrich(context.Background(), &EnrichRequest{
+		ProjectID:         projectID,
+		All:               true,
+		IncludeSuperseded: true,
+	})
+	if err != nil {
+		t.Fatalf("include enrich all: %v", err)
+	}
+	if respIncl.Queued != 2 {
+		t.Fatalf("expected both rows queued with IncludeSuperseded; got %d", respIncl.Queued)
 	}
 }

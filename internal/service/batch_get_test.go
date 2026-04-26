@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- Mock implementations for batch get tests ---
@@ -39,6 +40,10 @@ func (m *mockBatchMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]
 }
 
 func (m *mockBatchMemoryReader) ListByNamespace(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
+	return nil, nil
+}
+
+func (m *mockBatchMemoryReader) ListByNamespaceFiltered(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters, _, _ int) ([]model.Memory, error) {
 	return nil, nil
 }
 
@@ -288,6 +293,78 @@ func TestBatchGet_SoftDeletedExcluded(t *testing.T) {
 	}
 	if resp.NotFound[0] != idDeleted {
 		t.Errorf("expected not_found to contain %s, got %s", idDeleted, resp.NotFound[0])
+	}
+}
+
+func TestBatchGet_SupersededExcludedByDefault(t *testing.T) {
+	nsID := uuid.New()
+	projID := uuid.New()
+	winnerID := uuid.New()
+	loserID := uuid.New()
+
+	loser := newTestMemory(loserID, nsID, false)
+	loser.SupersededBy = &winnerID
+
+	reader := &mockBatchMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			winnerID: newTestMemory(winnerID, nsID, false),
+			loserID:  loser,
+		},
+	}
+	projects := &mockBatchProjectRepo{
+		projects: map[uuid.UUID]*model.Project{
+			projID: {ID: projID, NamespaceID: nsID},
+		},
+	}
+
+	svc := NewBatchGetService(reader, projects)
+	resp, err := svc.BatchGet(context.Background(), &BatchGetRequest{
+		ProjectID: projID,
+		IDs:       []uuid.UUID{winnerID, loserID},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Found) != 1 || resp.Found[0].ID != winnerID {
+		t.Fatalf("expected only winner; got found=%+v", resp.Found)
+	}
+	if len(resp.NotFound) != 1 || resp.NotFound[0] != loserID {
+		t.Fatalf("expected loser in not_found; got %+v", resp.NotFound)
+	}
+}
+
+func TestBatchGet_SupersededIncludedWithFlag(t *testing.T) {
+	nsID := uuid.New()
+	projID := uuid.New()
+	winnerID := uuid.New()
+	loserID := uuid.New()
+
+	loser := newTestMemory(loserID, nsID, false)
+	loser.SupersededBy = &winnerID
+
+	reader := &mockBatchMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			winnerID: newTestMemory(winnerID, nsID, false),
+			loserID:  loser,
+		},
+	}
+	projects := &mockBatchProjectRepo{
+		projects: map[uuid.UUID]*model.Project{
+			projID: {ID: projID, NamespaceID: nsID},
+		},
+	}
+
+	svc := NewBatchGetService(reader, projects)
+	resp, err := svc.BatchGet(context.Background(), &BatchGetRequest{
+		ProjectID:         projID,
+		IDs:               []uuid.UUID{winnerID, loserID},
+		IncludeSuperseded: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Found) != 2 {
+		t.Fatalf("expected both rows with IncludeSuperseded; got found=%d", len(resp.Found))
 	}
 }
 

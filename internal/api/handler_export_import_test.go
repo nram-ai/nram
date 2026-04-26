@@ -329,3 +329,40 @@ func TestImportHandler_ServiceError(t *testing.T) {
 		t.Fatalf("expected status 404, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestExportHandler_PassesIncludeSupersededFlag(t *testing.T) {
+	var got *service.ExportRequest
+	svc := &mockExportService{
+		exportFn: func(_ context.Context, req *service.ExportRequest) (*service.ExportData, error) {
+			got = req
+			return &service.ExportData{
+				Version: "1.0", Project: service.ExportProject{ID: req.ProjectID, Slug: "test"},
+				Memories: []service.ExportMemory{}, Entities: []service.ExportEntity{}, Relationships: []service.ExportRelationship{},
+			}, nil
+		},
+	}
+	router := newExportRouter(NewExportHandler(svc))
+	projectID := uuid.New()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/projects/"+projectID.String()+"/memories/export", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("default request: %d %s", w.Code, w.Body.String())
+	}
+	if got == nil || got.IncludeSuperseded {
+		t.Errorf("default should keep IncludeSuperseded=false; got %+v", got)
+	}
+
+	got = nil
+	req = httptest.NewRequest(http.MethodGet,
+		"/v1/projects/"+projectID.String()+"/memories/export?include_superseded=true", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("include request: %d %s", w.Code, w.Body.String())
+	}
+	if got == nil || !got.IncludeSuperseded {
+		t.Errorf("include_superseded=true should set IncludeSuperseded; got %+v", got)
+	}
+}

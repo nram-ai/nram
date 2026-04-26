@@ -329,3 +329,38 @@ func TestEnrichHandler_EmitsEnrichmentFailedEvent(t *testing.T) {
 		t.Fatal("expected enrichment.failed event to be emitted")
 	}
 }
+
+func TestEnrichHandler_PassesIncludeSupersededFlag(t *testing.T) {
+	var got *service.EnrichRequest
+	svc := &mockEnrichService{
+		enrichFn: func(_ context.Context, req *service.EnrichRequest) (*service.EnrichResponse, error) {
+			got = req
+			return &service.EnrichResponse{Queued: 0, Skipped: 0, LatencyMs: 0}, nil
+		},
+	}
+	router := newEnrichRouter(NewEnrichHandler(svc, nil))
+	projectID := uuid.New()
+	body := map[string]interface{}{"all": true}
+
+	if w := doEnrichRequest(router, projectID.String(), body); w.Code != http.StatusOK {
+		t.Fatalf("default request: %d %s", w.Code, w.Body.String())
+	}
+	if got == nil || got.IncludeSuperseded {
+		t.Errorf("default should keep IncludeSuperseded=false; got %+v", got)
+	}
+
+	got = nil
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(body)
+	req := httptest.NewRequest(http.MethodPost,
+		"/v1/projects/"+projectID.String()+"/memories/enrich?include_superseded=true", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("include request: %d %s", w.Code, w.Body.String())
+	}
+	if got == nil || !got.IncludeSuperseded {
+		t.Errorf("include_superseded=true should set IncludeSuperseded; got %+v", got)
+	}
+}

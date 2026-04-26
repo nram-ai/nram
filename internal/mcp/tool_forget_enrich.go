@@ -37,6 +37,7 @@ func registerMemoryEnrich(s *Server) {
 		mcp.WithDescription("Extract entities and relationships from memories into the knowledge graph. Use after storing without enrich: true, or to batch-process a project. Omit IDs to enrich all un-enriched. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithArray("ids", mcp.Description("Specific memory IDs to enrich; omit to enrich all un-enriched")),
+		mcp.WithBoolean(includeSupersededArg, mcp.Description(includeSupersededDesc)),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -172,7 +173,8 @@ func handleMemoryEnrich(ctx context.Context, s *Server, request mcp.CallToolRequ
 	}
 
 	req := &service.EnrichRequest{
-		ProjectID: project.ID,
+		ProjectID:         project.ID,
+		IncludeSuperseded: argBool(args, includeSupersededArg, false),
 	}
 	if len(parsedIDs) > 0 {
 		req.MemoryIDs = parsedIDs

@@ -51,10 +51,11 @@ func NewEnrichHandler(svc EnrichServicer, bus events.EventBus) http.HandlerFunc 
 
 		// Build service request, mapping ids -> MemoryIDs.
 		req := &service.EnrichRequest{
-			ProjectID: projectID,
-			MemoryIDs: body.IDs,
-			All:       body.All,
-			Priority:  body.Priority,
+			ProjectID:         projectID,
+			MemoryIDs:         body.IDs,
+			All:               body.All,
+			Priority:          body.Priority,
+			IncludeSuperseded: queryParamBool(r, includeSupersededParam),
 		}
 
 		// Call the service.

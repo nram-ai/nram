@@ -219,6 +219,22 @@ func (m *e2eMemoryRepo) ListByNamespace(_ context.Context, _ uuid.UUID, limit, _
 	return out, nil
 }
 
+func (m *e2eMemoryRepo) ListByNamespaceFiltered(_ context.Context, _ uuid.UUID, filters storage.MemoryListFilters, limit, _ int) ([]model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []model.Memory
+	for _, mem := range m.memories {
+		if filters.HideSuperseded && mem.SupersededBy != nil {
+			continue
+		}
+		out = append(out, *mem)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (m *e2eMemoryRepo) Update(_ context.Context, mem *model.Memory) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
