@@ -23,7 +23,7 @@ func RegisterStoreTools(s *Server) {
 
 func registerMemoryStore(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store important context to persistent memory. Use proactively: store preferences, decisions, corrections, architecture choices, bugs, workarounds, and task summaries without being asked. ALWAYS call memory_projects first and use an existing project — only auto-create when no existing project fits. Tag consistently for easy recall."),
+		mcp.WithDescription("Store important context to persistent memory. Use proactively: store preferences, decisions, corrections, architecture choices, bugs, workarounds, and task summaries without being asked. ALWAYS call memory_projects first and use an existing project — only auto-create when no existing project fits. Tag consistently for easy recall. Identical content in the same project returns the existing memory's ID without creating a duplicate; tags and metadata on the new request are ignored on a dedup hit."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). Prefer an existing project — call memory_projects first. Auto-creates if missing, but treat this as a last resort.")),
 		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to store")),
@@ -43,7 +43,7 @@ func registerMemoryStore(s *Server) {
 
 func registerMemoryStoreBatch(s *Server) {
 	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store multiple memories at once. Use when you have several related facts, decisions, or observations to persist. Each item needs its own content; they share the same project and TTL. ALWAYS call memory_projects first and use an existing project — only auto-create when no existing project fits."),
+		mcp.WithDescription("Store multiple memories at once. Use when you have several related facts, decisions, or observations to persist. Each item needs its own content; they share the same project and TTL. ALWAYS call memory_projects first and use an existing project — only auto-create when no existing project fits. Items whose content matches an existing memory in the same project return that memory's ID instead of creating a duplicate."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). Prefer an existing project — call memory_projects first. Auto-creates if missing, but treat this as a last resort.")),
 		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
 		mcp.WithArray("items", mcp.Required(), mcp.Description("Array of objects with content (required), source, tags, metadata")),
