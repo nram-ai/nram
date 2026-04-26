@@ -86,6 +86,7 @@ type RecallResult struct {
 	Enriched    bool            `json:"enriched"`
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 // RecallGraph holds the graph entities and relationships found during graph traversal.
@@ -650,6 +651,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			Enriched:    c.memory.Enriched,
 			Metadata:    c.memory.Metadata,
 			CreatedAt:   c.memory.CreatedAt,
+			UpdatedAt:   c.memory.UpdatedAt,
 		})
 	}
 

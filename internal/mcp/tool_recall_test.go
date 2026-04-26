@@ -145,20 +145,29 @@ func TestBuildMCPRecallResponse_PrunesUnresolvableOrphans(t *testing.T) {
 	assertNoOrphanRelationships(t, out.Graph)
 }
 
-// TestBuildMCPRecallResponse_HoistsDreamLineage confirms that source_memory_ids
-// stored inside metadata are surfaced as a typed top-level derived_from field
-// and that the unresolvable dream_cycle_id key is stripped, while any
-// user-supplied metadata keys pass through.
-func TestBuildMCPRecallResponse_HoistsDreamLineage(t *testing.T) {
+// TestBuildMCPRecallResponse_StripsBookkeepingMetadata confirms that
+// source_memory_ids are hoisted to a typed top-level derived_from field and
+// that the dream-lineage and audit-stamp keys (novelty audit, contradiction
+// check, paraphrase dedup) are stripped from emitted metadata, while
+// user-supplied keys pass through. This is the drift catcher: if a writer
+// renames a bookkeeping key without updating bookkeepingMetaKeys, the rename
+// surfaces here as a bookkeeping field that fails the test.
+func TestBuildMCPRecallResponse_StripsBookkeepingMetadata(t *testing.T) {
 	srcA := uuid.New()
 	srcB := uuid.New()
 	rawMeta := json.RawMessage(fmt.Sprintf(
-		`{"dream_cycle_id":"%s","source_memory_ids":["%s","%s"],"user_key":"keep me"}`,
+		`{"dream_cycle_id":"%s","source_memory_ids":["%s","%s"],`+
+			`"contradictions_checked_at":"2026-04-26T09:43:17Z",`+
+			`"novelty_audited_at":"2026-04-26T09:43:17Z",`+
+			`"novelty_audit_reason":"orphan_no_sources",`+
+			`"low_novelty":true,"low_novelty_reason":"orphan_no_sources",`+
+			`"paraphrase_checked_at":"2026-04-26T09:43:17Z",`+
+			`"user_key":"keep me"}`,
 		uuid.New(), srcA, srcB,
 	))
 	resp := &service.RecallResponse{
 		Memories: []service.RecallResult{
-			{ID: uuid.New(), Content: "synthesised memory", Metadata: rawMeta},
+			{ID: uuid.New(), Content: "audited memory", Metadata: rawMeta},
 		},
 	}
 
@@ -168,6 +177,7 @@ func TestBuildMCPRecallResponse_HoistsDreamLineage(t *testing.T) {
 		t.Fatalf("expected 1 memory, got %d", len(out.Memories))
 	}
 	got := out.Memories[0]
+
 	if len(got.DerivedFrom) != 2 {
 		t.Fatalf("expected derived_from of length 2, got %v", got.DerivedFrom)
 	}
@@ -183,18 +193,25 @@ func TestBuildMCPRecallResponse_HoistsDreamLineage(t *testing.T) {
 			t.Errorf("missing derived_from id: %s", id)
 		}
 	}
+
 	if got.Metadata == nil {
-		t.Fatal("expected user-supplied metadata to be preserved")
+		t.Fatal("expected user-supplied metadata to survive (user_key)")
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal(got.Metadata, &parsed); err != nil {
 		t.Fatalf("residual metadata not valid JSON: %v", err)
 	}
-	if _, hasCycle := parsed["dream_cycle_id"]; hasCycle {
-		t.Error("dream_cycle_id should be stripped from residual metadata")
+
+	stripped := []string{
+		"dream_cycle_id", "source_memory_ids",
+		"contradictions_checked_at", "novelty_audited_at",
+		"novelty_audit_reason", "low_novelty", "low_novelty_reason",
+		"paraphrase_checked_at",
 	}
-	if _, hasIDs := parsed["source_memory_ids"]; hasIDs {
-		t.Error("source_memory_ids should be stripped from residual metadata")
+	for _, k := range stripped {
+		if _, ok := parsed[k]; ok {
+			t.Errorf("expected %s stripped from residual metadata, but it was present", k)
+		}
 	}
 	if parsed["user_key"] != "keep me" {
 		t.Errorf("expected user_key preserved, got %v", parsed["user_key"])
@@ -284,8 +301,16 @@ func TestBuildMCPRecallResponse_FixtureShape(t *testing.T) {
 			t.Errorf("expected derived_from hoisted for memory %s", m.ID)
 		}
 	}
-	// Internal fields must not appear in the serialized JSON.
-	bannedKeys := []string{`"path"`, `"project_id"`, `"similarity"`, `"confidence"`, `"access_count"`, `"enriched"`, `"shared_from"`, `"total_searched"`, `"dream_cycle_id"`, `"source_memory_ids"`}
+	// Internal fields must not appear in the serialized JSON. Audit-stamp keys
+	// are written by the dreaming pipeline; the projector strips them via
+	// bookkeepingMetaKeys, and this list is the drift catcher.
+	bannedKeys := []string{
+		`"path"`, `"project_id"`, `"similarity"`, `"confidence"`, `"access_count"`,
+		`"enriched"`, `"shared_from"`, `"total_searched"`,
+		`"dream_cycle_id"`, `"source_memory_ids"`,
+		`"contradictions_checked_at"`, `"novelty_audited_at"`, `"novelty_audit_reason"`,
+		`"low_novelty"`, `"low_novelty_reason"`, `"paraphrase_checked_at"`,
+	}
 	body := string(rawAfter)
 	for _, k := range bannedKeys {
 		if strings.Contains(body, k) {

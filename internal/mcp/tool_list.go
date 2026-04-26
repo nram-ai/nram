@@ -21,8 +21,11 @@ const (
 
 // listMemoryItem applies the same dream-lineage hoisting as mcpRecallMemory
 // (source_memory_ids → derived_from) so the two outputs stay consistent.
+// project_slug disambiguates per-item because list crosses the requested
+// project's namespace and the global namespace.
 type listMemoryItem struct {
 	ID          uuid.UUID       `json:"id"`
+	ProjectSlug string          `json:"project_slug"`
 	Content     string          `json:"content"`
 	Source      *string         `json:"source,omitempty"`
 	Tags        []string        `json:"tags"`
@@ -101,9 +104,11 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 	// Collect namespaces to query: always the specified project, plus global
 	// when a non-global project is specified (consistent with memory_recall).
 	namespaces := []uuid.UUID{project.NamespaceID}
+	nsIDToSlug := map[uuid.UUID]string{project.NamespaceID: projectSlug}
 	if projectSlug != "global" {
 		if gp, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, "global"); err == nil && gp != nil {
 			namespaces = append(namespaces, gp.NamespaceID)
+			nsIDToSlug[gp.NamespaceID] = "global"
 		}
 	}
 
@@ -146,6 +151,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		derived, meta := extractDerivedFrom(m.Metadata)
 		items = append(items, listMemoryItem{
 			ID:          m.ID,
+			ProjectSlug: nsIDToSlug[m.NamespaceID],
 			Content:     m.Content,
 			Source:      m.Source,
 			Tags:        m.Tags,

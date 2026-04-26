@@ -21,6 +21,7 @@ type mcpRecallMemory struct {
 	Source      *string         `json:"source,omitempty"`
 	Score       float64         `json:"score"`
 	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 	DerivedFrom []uuid.UUID     `json:"derived_from,omitempty"`
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
 }
@@ -34,16 +35,25 @@ type mcpRecallResponse struct {
 	CoverageGaps []service.CoverageGap `json:"coverage_gaps,omitempty"`
 }
 
-// dreamMetaKeys are stripped from emitted metadata: dream_cycle_id is
-// unresolvable from the MCP surface, and source_memory_ids is replaced by the
-// typed derived_from field.
-var dreamMetaKeys = map[string]struct{}{
+// bookkeepingMetaKeys are stripped from emitted metadata: dream_cycle_id is
+// unresolvable from the MCP surface, source_memory_ids is replaced by the typed
+// derived_from field, and the audit-stamp keys are writer-side bookkeeping no
+// caller acts on. Audit keys are inlined as string literals rather than imported
+// from internal/dreaming — the projector intentionally avoids a writer-side
+// dependency; a CI-time test catches drift if a writer renames a key.
+var bookkeepingMetaKeys = map[string]struct{}{
 	model.DreamMetaCycleID:         {},
 	model.DreamMetaSourceMemoryIDs: {},
+	"contradictions_checked_at":    {},
+	"novelty_audited_at":           {},
+	"novelty_audit_reason":         {},
+	"low_novelty":                  {},
+	"low_novelty_reason":           {},
+	"paraphrase_checked_at":        {},
 }
 
 // extractDerivedFrom plucks source_memory_ids into a typed slice and returns
-// the metadata residual after stripping dream-only keys. Invalid blobs return
+// the metadata residual after stripping bookkeeping keys. Invalid blobs return
 // (nil, nil) — the projector drops them rather than passing UUIDs the agent
 // can't resolve.
 func extractDerivedFrom(raw json.RawMessage) (derived []uuid.UUID, residual json.RawMessage) {
@@ -66,7 +76,7 @@ func extractDerivedFrom(raw json.RawMessage) (derived []uuid.UUID, residual json
 		}
 	}
 
-	for k := range dreamMetaKeys {
+	for k := range bookkeepingMetaKeys {
 		delete(obj, k)
 	}
 	if len(obj) == 0 {
@@ -89,6 +99,7 @@ func projectMemory(m service.RecallResult) mcpRecallMemory {
 		Source:      m.Source,
 		Score:       m.Score,
 		CreatedAt:   m.CreatedAt,
+		UpdatedAt:   m.UpdatedAt,
 		DerivedFrom: derived,
 		Metadata:    meta,
 	}
