@@ -20,7 +20,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
+)
+
+// Ingestion-decision operation codes. The LLM judge returns one of these as
+// "operation"; ADDFallback is internal-only and recorded when the LLM call or
+// JSON parse fails twice (fail-open: keep the new memory, no lineage edge).
+const (
+	IngestionOpAdd         = "ADD"
+	IngestionOpUpdate      = "UPDATE"
+	IngestionOpDelete      = "DELETE"
+	IngestionOpNone        = "NONE"
+	IngestionOpAddFallback = "ADD-FALLBACK"
 )
 
 // workerEmbedTimeout bounds a single embed HTTP call inside the worker.
@@ -44,9 +56,12 @@ const embedInputCap = 256
 // Dependency-inversion interfaces
 // ---------------------------------------------------------------------------
 
-// MemoryReader retrieves a memory by ID.
+// MemoryReader retrieves a memory by ID, individually or in batch. The
+// batch path is the read used by FindNearMatches to hydrate near-neighbour
+// content in a single round-trip rather than topK sequential lookups.
 type MemoryReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
 }
 
 // MemoryUpdater persists changes to an existing memory.
@@ -110,6 +125,13 @@ type UsageContextResolver interface {
 type VectorWriter interface {
 	Upsert(ctx context.Context, kind storage.VectorKind, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
 	UpsertBatch(ctx context.Context, items []storage.VectorUpsertItem) error
+}
+
+// MemorySoftDeleter soft-deletes a memory row and purges its vector. Used
+// only by the ingestion-decision DELETE branch; everything else takes the
+// memory through enrichment normally.
+type MemorySoftDeleter interface {
+	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 }
 
 // ---------------------------------------------------------------------------
@@ -209,20 +231,24 @@ func (c WorkerConfig) withDefaults() WorkerConfig {
 // WorkerPool manages a set of background goroutines that process enrichment
 // jobs from the queue.
 type WorkerPool struct {
-	config         WorkerConfig
-	memories       MemoryReader
-	memUpdater     MemoryUpdater
-	memCreator     MemoryCreator
-	queue          QueueClaimer
-	entities       EntityUpserter
-	relationships  RelationshipCreator
-	lineage        LineageCreator
-	tokenUsage     TokenRecorder
-	usageCtxRes    UsageContextResolver
-	vectorStore    VectorWriter
-	factProvider   func() provider.LLMProvider
-	entityProvider func() provider.LLMProvider
-	embedProvider  func() provider.EmbeddingProvider
+	config            WorkerConfig
+	memories          MemoryReader
+	memUpdater        MemoryUpdater
+	memCreator        MemoryCreator
+	memSoftDeleter    MemorySoftDeleter
+	queue             QueueClaimer
+	entities          EntityUpserter
+	relationships     RelationshipCreator
+	lineage           LineageCreator
+	tokenUsage        TokenRecorder
+	usageCtxRes       UsageContextResolver
+	vectorStore       VectorWriter
+	factProvider      func() provider.LLMProvider
+	entityProvider    func() provider.LLMProvider
+	embedProvider     func() provider.EmbeddingProvider
+	ingestionProvider func() provider.LLMProvider
+	deduplicator      *Deduplicator
+	settings          *service.SettingsService
 
 	idleWorkers atomic.Int32
 
@@ -232,11 +258,15 @@ type WorkerPool struct {
 
 // NewWorkerPool creates a new enrichment worker pool. Provider functions may
 // return nil to indicate that particular capability is unavailable.
+// memSoftDeleter, ingestionProvider, deduplicator, and settings together
+// activate the ingestion-decision phase; passing nil for any of them turns
+// the phase off and the pool runs as if it were not present.
 func NewWorkerPool(
 	config WorkerConfig,
 	memories MemoryReader,
 	memUpdater MemoryUpdater,
 	memCreator MemoryCreator,
+	memSoftDeleter MemorySoftDeleter,
 	queue QueueClaimer,
 	entities EntityUpserter,
 	relationships RelationshipCreator,
@@ -247,22 +277,29 @@ func NewWorkerPool(
 	factProvider func() provider.LLMProvider,
 	entityProvider func() provider.LLMProvider,
 	embedProvider func() provider.EmbeddingProvider,
+	ingestionProvider func() provider.LLMProvider,
+	deduplicator *Deduplicator,
+	settings *service.SettingsService,
 ) *WorkerPool {
 	return &WorkerPool{
-		config:         config.withDefaults(),
-		memories:       memories,
-		memUpdater:     memUpdater,
-		memCreator:     memCreator,
-		queue:          queue,
-		entities:       entities,
-		relationships:  relationships,
-		lineage:        lineage,
-		tokenUsage:     tokenUsage,
-		usageCtxRes:    usageCtxRes,
-		vectorStore:    vectorStore,
-		factProvider:   factProvider,
-		entityProvider: entityProvider,
-		embedProvider:  embedProvider,
+		config:            config.withDefaults(),
+		memories:          memories,
+		memUpdater:        memUpdater,
+		memCreator:        memCreator,
+		memSoftDeleter:    memSoftDeleter,
+		queue:             queue,
+		entities:          entities,
+		relationships:     relationships,
+		lineage:           lineage,
+		tokenUsage:        tokenUsage,
+		usageCtxRes:       usageCtxRes,
+		vectorStore:       vectorStore,
+		factProvider:      factProvider,
+		entityProvider:    entityProvider,
+		embedProvider:     embedProvider,
+		ingestionProvider: ingestionProvider,
+		deduplicator:      deduplicator,
+		settings:          settings,
 	}
 }
 
@@ -392,7 +429,9 @@ type entityFact struct {
 // pendingJob is the per-job state carried between pre-embed, embed, and
 // finalize phases. embedStart/embedCount index into the shared batched embed
 // response for the parent + children; embedEntStart/embedEntCount cover the
-// entity canonicals appended after them in the same batch.
+// entity canonicals appended after them in the same batch. Ingestion-decision
+// fields are populated by runIngestionDecision when the phase is enabled;
+// parentEmbedFromPhase / shortCircuitDelete are derived from them.
 type pendingJob struct {
 	job           *model.EnrichmentJob
 	mem           *model.Memory
@@ -408,6 +447,21 @@ type pendingJob struct {
 	embedCount    int
 	embedEntStart int
 	embedEntCount int
+
+	parentEmbedding []float32
+
+	ingestionDecision   string
+	ingestionTarget     *uuid.UUID
+	ingestionRationale  string
+	ingestionMatchN     int
+	ingestionTopScore   float64
+	ingestionShadowOp   string
+	ingestionUsage      *provider.TokenUsage
+	ingestionModel      string
+	ingestionProvName   string
+	ingestionEmbedUsage *provider.TokenUsage
+	ingestionEmbedProv  string
+	ingestionEmbedModel string
 }
 
 func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *model.EnrichmentJob) error {
@@ -470,6 +524,17 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 			slog.Error("enrichment: fail-mark error", "job", job.ID, "err", failErr)
 		}
 		return nil, fmt.Errorf("memory lookup: %w", err)
+	}
+
+	// Ingestion-decision phase. Runs first so a DELETE decision can short-
+	// circuit fact/entity extraction (no point spending LLM tokens on a
+	// memory we are about to soft-delete). Already-enriched memories skip
+	// the phase: re-judging would create duplicate lineage edges.
+	ingestion := wp.runIngestionDecision(ctx, job, mem)
+	if ingestion != nil && ingestion.decision == IngestionOpDelete {
+		p := &pendingJob{job: job, mem: mem}
+		p.applyIngestion(ingestion)
+		return p, nil
 	}
 
 	hasFact := wp.factProvider() != nil
@@ -555,7 +620,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 
 	entities := wp.upsertEntitiesAndRelationships(ctx, job, mem, entResult)
 
-	return &pendingJob{
+	p := &pendingJob{
 		job:          job,
 		mem:          mem,
 		children:     children,
@@ -566,7 +631,9 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		entityUsage:  entityUsage,
 		entityModel:  entityModel,
 		entityProv:   entityProv,
-	}, nil
+	}
+	p.applyIngestion(ingestion)
+	return p, nil
 }
 
 // upsertEntitiesAndRelationships persists extracted entities and relationships,
@@ -691,12 +758,27 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 
 	inputs := make([]string, 0, len(pendings)*2)
 	for _, p := range pendings {
+		if p.shortCircuitDelete() {
+			// New memory is going to be soft-deleted; do not embed or
+			// upsert anything for it. Children/entities are not produced
+			// for short-circuited jobs.
+			continue
+		}
 		p.embedStart = len(inputs)
-		inputs = append(inputs, p.mem.Content)
+		// Reuse the embedding the ingestion-decision phase already
+		// computed for this content. The vector is upserted in the
+		// upsert loop below; we just keep it out of the embed call.
+		if !p.parentEmbedFromPhase() {
+			inputs = append(inputs, p.mem.Content)
+		}
 		for _, c := range p.children {
 			inputs = append(inputs, c.content)
 		}
-		p.embedCount = 1 + len(p.children)
+		if p.parentEmbedFromPhase() {
+			p.embedCount = len(p.children)
+		} else {
+			p.embedCount = 1 + len(p.children)
+		}
 
 		p.embedEntStart = len(inputs)
 		for _, e := range p.entities {
@@ -705,35 +787,57 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		p.embedEntCount = len(p.entities)
 	}
 
-	dim := storage.BestEmbeddingDimension(ep.Dimensions())
-	embeddings, usage, model, err := wp.embedChunked(ctx, ep, inputs, dim)
-	if err != nil {
-		slog.Error("enrichment: batched embed", "jobs", len(pendings), "err", err)
-		return
-	}
-	if len(embeddings) == 0 {
-		return
+	var (
+		embeddings [][]float32
+		modelName  string
+	)
+	if len(inputs) > 0 {
+		dim := storage.BestEmbeddingDimension(ep.Dimensions())
+		var (
+			usage provider.TokenUsage
+			err   error
+		)
+		embeddings, usage, modelName, err = wp.embedChunked(ctx, ep, inputs, dim)
+		if err != nil {
+			slog.Error("enrichment: batched embed", "jobs", len(pendings), "err", err)
+			return
+		}
+		wp.attributeEmbedUsage(ctx, pendings, ep.Name(), modelName, usage, len(inputs))
 	}
 
-	wp.attributeEmbedUsage(ctx, pendings, ep.Name(), model, usage, len(inputs))
-
-	items := make([]storage.VectorUpsertItem, 0, len(inputs))
+	items := make([]storage.VectorUpsertItem, 0, len(inputs)+len(pendings))
 	for _, p := range pendings {
-		if p.embedStart < len(embeddings) {
-			parentVec := embeddings[p.embedStart]
-			if d := len(parentVec); d > 0 {
-				p.mem.EmbeddingDim = &d
-				items = append(items, storage.VectorUpsertItem{
-					Kind:        storage.VectorKindMemory,
-					ID:          p.mem.ID,
-					NamespaceID: p.mem.NamespaceID,
-					Embedding:   parentVec,
-					Dimension:   d,
-				})
-			}
+		if p.shortCircuitDelete() {
+			continue
+		}
+
+		// Parent vector: either reused from the ingestion-decision phase
+		// or read out of the freshly produced embeddings slice.
+		var parentVec []float32
+		if p.parentEmbedFromPhase() {
+			parentVec = p.parentEmbedding
+		} else if p.embedStart < len(embeddings) {
+			parentVec = embeddings[p.embedStart]
+		}
+		if d := len(parentVec); d > 0 {
+			p.mem.EmbeddingDim = &d
+			items = append(items, storage.VectorUpsertItem{
+				Kind:        storage.VectorKindMemory,
+				ID:          p.mem.ID,
+				NamespaceID: p.mem.NamespaceID,
+				Embedding:   parentVec,
+				Dimension:   d,
+			})
+		}
+
+		// Children index from embedStart (parent absent) or embedStart+1
+		// (parent present in the embed batch).
+		childOffset := p.embedStart
+		if !p.parentEmbedFromPhase() {
+			childOffset = p.embedStart + 1
 		}
 		for i, c := range p.children {
-			idx := p.embedStart + 1 + i
+			idx := childOffset + i
 			if idx >= len(embeddings) {
 				break
 			}
@@ -864,8 +968,32 @@ func (wp *WorkerPool) attributeEmbedUsage(ctx context.Context, pendings []*pendi
 }
 
 // finalizeJob marks the memory enriched, records LLM token usage, and
-// completes the queue row.
+// completes the queue row. Short-circuit DELETE pendings (the LLM ingestion
+// judge marked the new memory as redundant) take a separate path: the memory
+// is soft-deleted instead of marked enriched, and only the ingestion-decision
+// token usage is recorded.
 func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
+	if p.shortCircuitDelete() {
+		return wp.finalizeShortCircuitDelete(ctx, p)
+	}
+
+	// UPDATE: insert a supersedes lineage edge and mark the target memory
+	// superseded by the new one. Failures here log but do not abort the
+	// finalize (the new memory still gets enriched and recall improves).
+	if p.ingestionDecision == IngestionOpUpdate && p.ingestionTarget != nil {
+		wp.applyIngestionUpdate(ctx, p)
+	}
+	if p.ingestionDecision != "" {
+		slog.Info("enrichment: ingestion_decision_apply",
+			"job", p.job.ID,
+			"memory", p.mem.ID,
+			"op", p.ingestionDecision,
+			"target_id", uuidPtrString(p.ingestionTarget),
+			"shadow_op", p.ingestionShadowOp)
+	}
+
+	stampIngestionMetadata(p)
+
 	p.mem.Enriched = true
 	p.mem.UpdatedAt = time.Now().UTC()
 	if err := wp.memUpdater.Update(ctx, p.mem); err != nil {
@@ -902,6 +1030,7 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 	if p.entityUsage != nil {
 		wp.recordUsage(ctx, p.mem, "entity_extraction", p.entityProv, p.entityModel, *p.entityUsage)
 	}
+	wp.recordIngestionUsage(ctx, p)
 
 	if err := wp.queue.Complete(ctx, p.job.ID); err != nil {
 		return fmt.Errorf("complete job: %w", err)

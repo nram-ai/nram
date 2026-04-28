@@ -448,12 +448,19 @@ func main() {
 		return registry.GetEntity()
 	}
 
+	// Ingestion-decision deduplicator. Wires the existing dedup vector
+	// search into the enrichment worker so context-aware deduplication runs
+	// at write time. Disabled by default in settings; flipping the toggle
+	// activates the phase without further plumbing.
+	ingestionDedup := enrichment.NewDeduplicator(vectorStore, embedProvider, memoryRepo, enrichment.DefaultDeduplicationConfig)
+
 	// Start enrichment worker pool — needs providers for LLM extraction.
 	workerPool := enrichment.NewWorkerPool(
 		enrichment.WorkerConfig{Backend: db.Backend()},
-		memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
+		memoryRepo, memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
 		entityRepo, relationshipRepo, lineageRepo, tokenUsageRepo, namespaceRepo, vectorStore,
 		factProvider, entityProvider, embedProvider,
+		factProvider, ingestionDedup, settingsSvc,
 	)
 	workerPool.Start()
 	defer workerPool.Stop()

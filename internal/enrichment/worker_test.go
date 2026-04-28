@@ -44,6 +44,21 @@ func (m *mockMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memo
 	return &cp, nil
 }
 
+func (m *mockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return nil, m.err
+	}
+	out := make([]model.Memory, 0, len(ids))
+	for _, id := range ids {
+		if mem, ok := m.byID[id]; ok {
+			out = append(out, *mem)
+		}
+	}
+	return out, nil
+}
+
 type mockMemoryUpdater struct {
 	mu          sync.Mutex
 	updated     []*model.Memory
@@ -385,11 +400,12 @@ func newTestHarness(
 
 	h.pool = NewWorkerPool(
 		WorkerConfig{Workers: 1, PollInterval: 10 * time.Millisecond},
-		h.reader, h.updater, h.creator, h.queue,
+		h.reader, h.updater, h.creator, nil, h.queue,
 		h.entities, h.rels, h.lineage, h.tokens, nil, h.vectors,
 		func() provider.LLMProvider { return factLLM },
 		func() provider.LLMProvider { return entityLLM },
 		func() provider.EmbeddingProvider { return embedProv },
+		nil, nil, nil,
 	)
 	return h
 }

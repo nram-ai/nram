@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -68,7 +70,7 @@ func TestCheck_Duplicate(t *testing.T) {
 	}
 	ep := &dedupMockEmbedder{embeddings: [][]float32{{0.1, 0.2, 0.3}}}
 
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, DefaultDeduplicationConfig)
 
 	res, err := dedup.Check(context.Background(), "some content", uuid.New())
 	if err != nil {
@@ -93,7 +95,7 @@ func TestCheck_Unique(t *testing.T) {
 	}
 	ep := &dedupMockEmbedder{embeddings: [][]float32{{0.1, 0.2, 0.3}}}
 
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, DefaultDeduplicationConfig)
 
 	res, err := dedup.Check(context.Background(), "unique content", uuid.New())
 	if err != nil {
@@ -110,7 +112,7 @@ func TestCheck_Unique(t *testing.T) {
 func TestCheck_NoEmbeddingProvider(t *testing.T) {
 	vs := &mockVectorSearcher{}
 
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, nil, DefaultDeduplicationConfig)
 
 	res, err := dedup.Check(context.Background(), "anything", uuid.New())
 	if err != nil {
@@ -128,7 +130,7 @@ func TestCheck_NoVectorResults(t *testing.T) {
 	vs := &mockVectorSearcher{results: nil}
 	ep := &dedupMockEmbedder{embeddings: [][]float32{{0.1, 0.2, 0.3}}}
 
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, DefaultDeduplicationConfig)
 
 	res, err := dedup.Check(context.Background(), "novel content", uuid.New())
 	if err != nil {
@@ -154,7 +156,7 @@ func TestCheck_ExactThresholdBoundary(t *testing.T) {
 	}
 	ep := &dedupMockEmbedder{embeddings: [][]float32{{0.1, 0.2, 0.3}}}
 
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, DefaultDeduplicationConfig)
 
 	res, err := dedup.Check(context.Background(), "borderline content", uuid.New())
 	if err != nil {
@@ -178,7 +180,7 @@ func TestCheck_CustomThreshold(t *testing.T) {
 
 	// Use a lower threshold of 0.80.
 	cfg := DeduplicationConfig{Threshold: 0.80, TopK: 3}
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, cfg)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, cfg)
 
 	res, err := dedup.Check(context.Background(), "some content", uuid.New())
 	if err != nil {
@@ -193,7 +195,7 @@ func TestCheck_EmptyContent(t *testing.T) {
 	vs := &mockVectorSearcher{results: nil}
 	ep := &dedupMockEmbedder{embeddings: [][]float32{{0.0, 0.0, 0.0}}}
 
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, DefaultDeduplicationConfig)
 
 	res, err := dedup.Check(context.Background(), "", uuid.New())
 	if err != nil {
@@ -238,7 +240,7 @@ func TestCheckBatch_MixedResults(t *testing.T) {
 		},
 	}
 
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, DefaultDeduplicationConfig)
 
 	results, err := dedup.CheckBatch(context.Background(), []string{"dup", "unique", "novel"}, nsID)
 	if err != nil {
@@ -282,7 +284,7 @@ func TestCheckBatch_MixedResults(t *testing.T) {
 
 func TestCheckBatch_NoEmbeddingProvider(t *testing.T) {
 	vs := &mockVectorSearcher{}
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, nil, DefaultDeduplicationConfig)
 
 	results, err := dedup.CheckBatch(context.Background(), []string{"a", "b"}, uuid.New())
 	if err != nil {
@@ -301,7 +303,7 @@ func TestCheckBatch_NoEmbeddingProvider(t *testing.T) {
 func TestCheckBatch_EmptyInput(t *testing.T) {
 	vs := &mockVectorSearcher{}
 	ep := &dedupMockEmbedder{}
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, DefaultDeduplicationConfig)
 
 	results, err := dedup.CheckBatch(context.Background(), nil, uuid.New())
 	if err != nil {
@@ -315,7 +317,7 @@ func TestCheckBatch_EmptyInput(t *testing.T) {
 func TestCheck_EmbedError(t *testing.T) {
 	vs := &mockVectorSearcher{}
 	ep := &dedupMockEmbedder{err: fmt.Errorf("embedding service down")}
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, DefaultDeduplicationConfig)
 
 	_, err := dedup.Check(context.Background(), "content", uuid.New())
 	if err == nil {
@@ -326,7 +328,7 @@ func TestCheck_EmbedError(t *testing.T) {
 func TestCheck_VectorSearchError(t *testing.T) {
 	vs := &mockVectorSearcher{err: fmt.Errorf("vector store down")}
 	ep := &dedupMockEmbedder{embeddings: [][]float32{{0.1, 0.2, 0.3}}}
-	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, DefaultDeduplicationConfig)
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return ep }, nil, DefaultDeduplicationConfig)
 
 	_, err := dedup.Check(context.Background(), "content", uuid.New())
 	if err == nil {
@@ -364,4 +366,193 @@ type mockVectorSearcherFunc struct {
 
 func (m *mockVectorSearcherFunc) Search(ctx context.Context, kind storage.VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error) {
 	return m.searchFn(ctx, kind, embedding, namespaceID, dimension, topK)
+}
+
+// ---------------------------------------------------------------------------
+// FindNearMatches tests
+// ---------------------------------------------------------------------------
+
+func TestFindNearMatches_NoResults(t *testing.T) {
+	vs := &mockVectorSearcher{results: nil}
+	reader := newMockMemoryReader()
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, reader, DefaultDeduplicationConfig)
+
+	matches, err := dedup.FindNearMatches(context.Background(), []float32{0.1, 0.2, 0.3}, uuid.New(), 5, 0.92, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("expected no matches, got %d", len(matches))
+	}
+}
+
+func TestFindNearMatches_FiltersBelowThreshold(t *testing.T) {
+	hi := uuid.New()
+	mid := uuid.New()
+	lo := uuid.New()
+	nsID := uuid.New()
+
+	vs := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: hi, Score: 0.97, NamespaceID: nsID},
+			{ID: mid, Score: 0.93, NamespaceID: nsID},
+			{ID: lo, Score: 0.85, NamespaceID: nsID}, // below 0.92 threshold
+		},
+	}
+	reader := newMockMemoryReader()
+	for _, id := range []uuid.UUID{hi, mid, lo} {
+		reader.byID[id] = &model.Memory{ID: id, NamespaceID: nsID, Content: "c-" + id.String(), CreatedAt: time.Now().UTC()}
+	}
+
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, reader, DefaultDeduplicationConfig)
+
+	matches, err := dedup.FindNearMatches(context.Background(), []float32{0.1}, nsID, 5, 0.92, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches above threshold, got %d", len(matches))
+	}
+	// Sorted descending by score.
+	if matches[0].ID != hi || matches[1].ID != mid {
+		t.Errorf("ordering wrong: got %v, %v", matches[0].ID, matches[1].ID)
+	}
+}
+
+func TestFindNearMatches_ExcludeSelf(t *testing.T) {
+	selfID := uuid.New()
+	otherID := uuid.New()
+	nsID := uuid.New()
+
+	vs := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: selfID, Score: 1.0, NamespaceID: nsID},
+			{ID: otherID, Score: 0.95, NamespaceID: nsID},
+		},
+	}
+	reader := newMockMemoryReader()
+	reader.byID[otherID] = &model.Memory{ID: otherID, NamespaceID: nsID, Content: "other"}
+
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, reader, DefaultDeduplicationConfig)
+
+	matches, err := dedup.FindNearMatches(context.Background(), []float32{0.1}, nsID, 5, 0.92, &selfID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match (self filtered), got %d", len(matches))
+	}
+	if matches[0].ID != otherID {
+		t.Errorf("expected otherID, got %v", matches[0].ID)
+	}
+}
+
+func TestFindNearMatches_HydratesContent(t *testing.T) {
+	id := uuid.New()
+	nsID := uuid.New()
+	created := time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)
+
+	vs := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: id, Score: 0.95, NamespaceID: nsID},
+		},
+	}
+	reader := newMockMemoryReader()
+	reader.byID[id] = &model.Memory{ID: id, NamespaceID: nsID, Content: "hydrated content", CreatedAt: created}
+
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, reader, DefaultDeduplicationConfig)
+
+	matches, err := dedup.FindNearMatches(context.Background(), []float32{0.1}, nsID, 5, 0.92, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Content != "hydrated content" {
+		t.Errorf("Content = %q, want hydrated content", matches[0].Content)
+	}
+	if !matches[0].CreatedAt.Equal(created) {
+		t.Errorf("CreatedAt = %v, want %v", matches[0].CreatedAt, created)
+	}
+}
+
+func TestFindNearMatches_SkipsMissingMemoryRow(t *testing.T) {
+	idGood := uuid.New()
+	idMissing := uuid.New()
+	nsID := uuid.New()
+
+	vs := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: idMissing, Score: 0.99, NamespaceID: nsID}, // reader returns error
+			{ID: idGood, Score: 0.95, NamespaceID: nsID},
+		},
+	}
+	reader := newMockMemoryReader()
+	reader.byID[idGood] = &model.Memory{ID: idGood, NamespaceID: nsID, Content: "good"}
+
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, reader, DefaultDeduplicationConfig)
+
+	matches, err := dedup.FindNearMatches(context.Background(), []float32{0.1}, nsID, 5, 0.92, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(matches) != 1 || matches[0].ID != idGood {
+		t.Errorf("expected only idGood, got %+v", matches)
+	}
+}
+
+func TestFindNearMatches_TopKLimit(t *testing.T) {
+	nsID := uuid.New()
+	results := make([]storage.VectorSearchResult, 10)
+	reader := newMockMemoryReader()
+	for i := range results {
+		id := uuid.New()
+		results[i] = storage.VectorSearchResult{ID: id, Score: 0.99 - float64(i)*0.001, NamespaceID: nsID}
+		reader.byID[id] = &model.Memory{ID: id, NamespaceID: nsID, Content: fmt.Sprintf("c-%d", i)}
+	}
+	vs := &mockVectorSearcher{results: results}
+
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, reader, DefaultDeduplicationConfig)
+
+	matches, err := dedup.FindNearMatches(context.Background(), []float32{0.1}, nsID, 3, 0.92, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(matches) != 3 {
+		t.Errorf("expected 3 matches (topK), got %d", len(matches))
+	}
+}
+
+func TestFindNearMatches_EmptyEmbedding(t *testing.T) {
+	vs := &mockVectorSearcher{}
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, nil, DefaultDeduplicationConfig)
+
+	matches, err := dedup.FindNearMatches(context.Background(), nil, uuid.New(), 5, 0.92, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if matches != nil {
+		t.Errorf("expected nil matches for empty embedding, got %v", matches)
+	}
+}
+
+func TestFindNearMatches_NilMemoryReader(t *testing.T) {
+	id := uuid.New()
+	nsID := uuid.New()
+	vs := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{{ID: id, Score: 0.95, NamespaceID: nsID}},
+	}
+	dedup := NewDeduplicator(vs, func() provider.EmbeddingProvider { return nil }, nil, DefaultDeduplicationConfig)
+
+	matches, err := dedup.FindNearMatches(context.Background(), []float32{0.1}, nsID, 5, 0.92, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match even with nil reader, got %d", len(matches))
+	}
+	if matches[0].Content != "" {
+		t.Errorf("expected empty Content with nil reader, got %q", matches[0].Content)
+	}
 }

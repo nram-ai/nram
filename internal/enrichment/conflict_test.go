@@ -33,6 +33,19 @@ func (m *conflictMockMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*mo
 	return mem, nil
 }
 
+func (m *conflictMockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	out := make([]model.Memory, 0, len(ids))
+	for _, id := range ids {
+		if mem, ok := m.memories[id]; ok {
+			out = append(out, *mem)
+		}
+	}
+	return out, nil
+}
+
 // conflictMockLineageCreator captures lineage records created during detection.
 type conflictMockLineageCreator struct {
 	records []*model.MemoryLineage

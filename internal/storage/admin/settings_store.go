@@ -96,6 +96,11 @@ var settingsSchemas = []api.SettingSchema{
 	{Key: "recall.fusion.rrf_k", Type: "number", DefaultValue: json.RawMessage(`60`), Description: "RRF constant. Higher values flatten the head of each ranked list; 60 is the canonical Cormack-Clarke-Buettcher default.", Category: "recall_fusion"},
 	{Key: "recall.fusion.vector_weight", Type: "number", DefaultValue: json.RawMessage(`0.70`), Description: "Weight on each vector channel's RRF contribution (0.0-1.0). Together with lexical_weight, controls the relative pull of dense embedding vs sparse keyword evidence.", Category: "recall_fusion"},
 	{Key: "recall.fusion.lexical_weight", Type: "number", DefaultValue: json.RawMessage(`0.30`), Description: "Weight on each lexical channel's RRF contribution (0.0-1.0). Raise to bias recall toward exact-token matches (entity names, version strings).", Category: "recall_fusion"},
+	{Key: service.SettingIngestionDecisionEnabled, Type: "boolean", DefaultValue: json.RawMessage(`false`), Description: "Enable LLM-driven ingestion decision (ADD/UPDATE/DELETE/NONE) on near-duplicate matches at enrichment time. When off, every memory is treated as ADD without an LLM call.", Category: "enrichment_ingestion"},
+	{Key: service.SettingIngestionDecisionShadow, Type: "boolean", DefaultValue: json.RawMessage(`true`), Description: "Shadow mode: compute and log the decision (op, top_score, match_count) but always behave as if it were ADD. Defaults to true so enabling the feature first observes its distribution before acting on UPDATE/DELETE.", Category: "enrichment_ingestion"},
+	{Key: service.SettingIngestionDecisionThreshold, Type: "number", DefaultValue: json.RawMessage(`0.92`), Description: "Cosine similarity at or above which a candidate match is presented to the LLM judge (0.0-1.0). Below this, the new memory is treated as ADD without an LLM call.", Category: "enrichment_ingestion"},
+	{Key: service.SettingIngestionDecisionTopK, Type: "number", DefaultValue: json.RawMessage(`5`), Description: "Maximum number of candidate matches presented to the LLM judge.", Category: "enrichment_ingestion"},
+	{Key: service.SettingIngestionDecisionModel, Type: "string", DefaultValue: json.RawMessage(`""`), Description: "LLM model name for the ingestion decision. Empty falls back to the fact-extraction provider's model (this is a categorization task, a small model is fine).", Category: "enrichment_ingestion"},
 }
 
 // promptSchemaEntries describes the dreaming-phase prompts surfaced through
@@ -107,6 +112,7 @@ var promptSchemaEntries = []api.SettingSchema{
 	{Key: service.SettingDreamSynthesisPrompt, Type: "prompt", Description: "LLM prompt used by the consolidation phase to merge a cluster of memories into a single synthesis. One %s placeholder for the combined source content. Must return only the synthesized text.", Category: "dreaming_prompts"},
 	{Key: service.SettingDreamAlignmentPrompt, Type: "prompt", Description: "LLM prompt used to score how strongly new evidence supports or contradicts an existing synthesis. Two %s placeholders for synthesis and evidence. Must return JSON with an `alignment` float in [-1.0, 1.0] and `reasoning`.", Category: "dreaming_prompts"},
 	{Key: service.SettingDreamNoveltyJudgePrompt, Type: "prompt", Description: "LLM prompt used by the novelty audit to decide whether a synthesis introduces facts not present in its sources. Two %s placeholders for synthesis and sources. Must return JSON with a `novel_facts` array (empty when the synthesis is duplicative).", Category: "dreaming_prompts"},
+	{Key: service.SettingIngestionDecisionPrompt, Type: "prompt", Description: "LLM prompt used by the ingestion-decision phase. Three placeholders in order: %d for top_k (rendered into the instructions), %s for the new memory content, %s for the candidate list. Must return JSON {\"operation\":\"ADD|UPDATE|DELETE|NONE\",\"target_id\":\"uuid|null\",\"rationale\":\"string\"}.", Category: "enrichment_prompts"},
 }
 
 func init() {

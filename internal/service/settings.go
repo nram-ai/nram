@@ -120,6 +120,20 @@ const (
 	// by the retention sweeper and their vector rows are CASCADEd alongside.
 	SettingMemorySoftDeleteRetentionDays = "memory.soft_delete_retention_days"
 
+	// Ingestion-decision phase. Runs as the first step of enrichment: when a
+	// new memory has near-neighbours above the configured similarity threshold,
+	// an LLM judges whether to ADD as-is, mark as superseding an existing row
+	// (UPDATE), discard the new row (DELETE), or proceed with no lineage edge
+	// (NONE). Shadow mode computes and logs the decision but always behaves as
+	// if it were ADD, so the distribution can be observed before flipping the
+	// behavior on. Empty model falls back to the fact-extraction provider.
+	SettingIngestionDecisionEnabled   = "enrichment.ingestion_decision.enabled"
+	SettingIngestionDecisionShadow    = "enrichment.ingestion_decision.shadow_mode"
+	SettingIngestionDecisionThreshold = "enrichment.ingestion_decision.threshold"
+	SettingIngestionDecisionTopK      = "enrichment.ingestion_decision.top_k"
+	SettingIngestionDecisionModel     = "enrichment.ingestion_decision.model"
+	SettingIngestionDecisionPrompt    = "enrichment.ingestion_decision.prompt"
+
 	SettingQdrantAddr             = "qdrant.addr"
 	SettingQdrantAPIKey           = "qdrant.api_key"
 	SettingQdrantUseTLS           = "qdrant.use_tls"
@@ -245,6 +259,45 @@ alignment must be a float:
 	SettingDreamParaphraseTopK:        "5",
 
 	SettingMemorySoftDeleteRetentionDays: "30",
+
+	SettingIngestionDecisionEnabled:   "false",
+	SettingIngestionDecisionShadow:    "true",
+	SettingIngestionDecisionThreshold: "0.92",
+	SettingIngestionDecisionTopK:      "5",
+	SettingIngestionDecisionModel:     "",
+	SettingIngestionDecisionPrompt: `You are an ingestion decision engine. You do NOT converse. You output JSON only.
+
+A new memory has just arrived. Below is its content, followed by up to %d candidate near-neighbour memories that already exist (with their IDs and creation times). Decide what to do with the new memory.
+
+Choose exactly one operation:
+- "ADD": the new memory is genuinely distinct from every candidate; keep it as a separate row.
+- "UPDATE": the new memory is an updated, more specific, more recent, or otherwise improved version of one specific candidate. The old candidate should be marked superseded by the new memory.
+- "DELETE": the new memory is itself redundant — every fact it states is already present in one of the candidates, which remains the canonical record. Discard the new memory.
+- "NONE": the new memory overlaps with one or more candidates but is not a clean update or duplicate (e.g. partial overlap, different aspect of the same topic). Keep the new memory but do not record any lineage edge.
+
+Hard rules:
+- target_id is required for UPDATE and DELETE and must be one of the candidate IDs given below verbatim. For ADD and NONE, set target_id to null.
+- Pick UPDATE only when one specific candidate is clearly superseded; if multiple candidates would each need updating, choose NONE.
+- Pick DELETE only when the new memory adds nothing not already in the named candidate.
+- When in doubt between ADD and NONE, prefer ADD.
+- Rationale must be one short sentence (under 200 characters) that names the candidate ID you compared against (when applicable).
+
+<new_memory>
+%s
+</new_memory>
+
+<candidates>
+%s
+</candidates>
+
+Output ONLY this JSON, nothing else:
+{"operation": "ADD", "target_id": null, "rationale": "..."}
+or
+{"operation": "UPDATE", "target_id": "candidate-uuid", "rationale": "..."}
+or
+{"operation": "DELETE", "target_id": "candidate-uuid", "rationale": "..."}
+or
+{"operation": "NONE", "target_id": null, "rationale": "..."}`,
 	SettingDreamNoveltyJudgePrompt: `You are a novelty auditor. You do NOT converse. You output JSON only.
 
 Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.
