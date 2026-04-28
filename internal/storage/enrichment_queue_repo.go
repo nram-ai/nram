@@ -362,19 +362,6 @@ func (r *EnrichmentQueueRepo) Retry(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// DeleteByMemoryID removes all enrichment queue items for the given memory.
-func (r *EnrichmentQueueRepo) DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error {
-	query := `DELETE FROM enrichment_queue WHERE memory_id = ?`
-	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM enrichment_queue WHERE memory_id = $1`
-	}
-	_, err := r.db.Exec(ctx, query, memoryID.String())
-	if err != nil {
-		return fmt.Errorf("enrichment queue delete by memory: %w", err)
-	}
-	return nil
-}
-
 // DeleteByNamespace deletes all enrichment queue entries for a namespace.
 func (r *EnrichmentQueueRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
 	query := `DELETE FROM enrichment_queue WHERE namespace_id = ?`

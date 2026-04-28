@@ -540,7 +540,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 		nil, nil, nil, nil, nil,
 		)
 
-	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil, nil)
+	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 
 	updateSvc := service.NewUpdateService(
 		memRepo, projectLookup, &rbacLineageCreator{},
@@ -1481,7 +1481,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		nil, nil, nil, nil, nil,
 		)
 
-	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil, nil)
+	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 
 	updateSvc := service.NewUpdateService(
 		memRepo, projectLookup, &rbacLineageCreator{},

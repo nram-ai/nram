@@ -248,20 +248,6 @@ func (r *MemoryLineageRepo) FindParentIDs(ctx context.Context, namespaceID uuid.
 	return result, nil
 }
 
-// DeleteByMemoryID removes all lineage records where the given memory is either
-// the child (memory_id) or the parent (parent_id).
-func (r *MemoryLineageRepo) DeleteByMemoryID(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) error {
-	query := `DELETE FROM memory_lineage WHERE namespace_id = ? AND (memory_id = ? OR parent_id = ?)`
-	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM memory_lineage WHERE namespace_id = $1 AND (memory_id = $2 OR parent_id = $3)`
-	}
-	_, err := r.db.Exec(ctx, query, namespaceID.String(), memoryID.String(), memoryID.String())
-	if err != nil {
-		return fmt.Errorf("lineage delete by memory: %w", err)
-	}
-	return nil
-}
-
 // reload fetches the lineage by ID and populates the struct in place.
 func (r *MemoryLineageRepo) reload(ctx context.Context, lineage *model.MemoryLineage) error {
 	fetched, err := r.GetByID(ctx, lineage.ID)

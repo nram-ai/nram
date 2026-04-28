@@ -352,7 +352,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		memRepo, projectLookup, namespaceLookup,
 		nil, nil, nil, nil, nil,
 		)
-	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil, nil)
+	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 	updateSvc := service.NewUpdateService(
 		memRepo, projectLookup, &rbacLineageCreator{},
 		nil, nil,

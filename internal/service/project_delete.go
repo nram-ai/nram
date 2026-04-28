@@ -59,9 +59,8 @@ type MemoryShareDeleter interface {
 	DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error
 }
 
-// EnrichmentBulkDeleter deletes enrichment queue entries by namespace and memory.
+// EnrichmentBulkDeleter deletes enrichment queue entries by namespace.
 type EnrichmentBulkDeleter interface {
-	DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error
 	DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error
 }
 
@@ -88,7 +87,9 @@ type ProjectDeleteResponse struct {
 
 // ProjectDeleteService orchestrates recursive deletion of a project and all
 // associated data. Project deletion is strictly self-service: only the project
-// owner can delete their own projects.
+// owner can delete their own projects. Persisted FK children of memories(id)
+// are reaped by schema-level ON DELETE actions on the bulk memory delete; the
+// in-memory HNSW vector node is the only thing still dropped per-memory here.
 type ProjectDeleteService struct {
 	projectGetter       ProjectDeleteGetter
 	projectDeleter      ProjectDeleter
@@ -97,11 +98,8 @@ type ProjectDeleteService struct {
 	vectorStore         VectorDeleter
 	entityDeleter       EntityBulkDeleter
 	relationshipDeleter RelationshipBulkDeleter
-	relationshipCleaner RelationshipCleaner
-	lineageCleaner      LineageCleaner
 	enrichmentDeleter   EnrichmentBulkDeleter
 	tokenUsageReassign  TokenUsageReassigner
-	tokenUsageCleaner   TokenUsageCleaner
 	ingestionDeleter    IngestionLogDeleter
 	shareDeleter        MemoryShareDeleter
 	hnswDeleter         HNSWSnapshotDeleter
@@ -118,11 +116,8 @@ func NewProjectDeleteService(
 	vectorStore VectorDeleter,
 	entityDeleter EntityBulkDeleter,
 	relationshipDeleter RelationshipBulkDeleter,
-	relationshipCleaner RelationshipCleaner,
-	lineageCleaner LineageCleaner,
 	enrichmentDeleter EnrichmentBulkDeleter,
 	tokenUsageReassign TokenUsageReassigner,
-	tokenUsageCleaner TokenUsageCleaner,
 	ingestionDeleter IngestionLogDeleter,
 	shareDeleter MemoryShareDeleter,
 	hnswDeleter HNSWSnapshotDeleter,
@@ -137,11 +132,8 @@ func NewProjectDeleteService(
 		vectorStore:         vectorStore,
 		entityDeleter:       entityDeleter,
 		relationshipDeleter: relationshipDeleter,
-		relationshipCleaner: relationshipCleaner,
-		lineageCleaner:      lineageCleaner,
 		enrichmentDeleter:   enrichmentDeleter,
 		tokenUsageReassign:  tokenUsageReassign,
-		tokenUsageCleaner:   tokenUsageCleaner,
 		ingestionDeleter:    ingestionDeleter,
 		shareDeleter:        shareDeleter,
 		hnswDeleter:         hnswDeleter,
@@ -182,29 +174,11 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 		}
 	}
 
-	// 4. For each memory: cleanup related data + vector deletion.
-	for _, memID := range memoryIDs {
-		if s.relationshipCleaner != nil {
-			if err := s.relationshipCleaner.DeleteBySourceMemory(ctx, project.NamespaceID, memID); err != nil {
-				log.Printf("project delete: relationships for memory %s: %v", memID, err)
-			}
-		}
-		if s.lineageCleaner != nil {
-			if err := s.lineageCleaner.DeleteByMemoryID(ctx, project.NamespaceID, memID); err != nil {
-				log.Printf("project delete: lineage for memory %s: %v", memID, err)
-			}
-		}
-		if s.enrichmentDeleter != nil {
-			if err := s.enrichmentDeleter.DeleteByMemoryID(ctx, memID); err != nil {
-				log.Printf("project delete: enrichment queue for memory %s: %v", memID, err)
-			}
-		}
-		if s.tokenUsageCleaner != nil {
-			if err := s.tokenUsageCleaner.DeleteByMemoryID(ctx, memID); err != nil {
-				log.Printf("project delete: token usage for memory %s: %v", memID, err)
-			}
-		}
-		if s.vectorStore != nil {
+	// 4. For each memory: drop the in-memory HNSW vector node. Persisted
+	// child rows are handled by FK ON DELETE actions when step 5 hard-deletes
+	// the memory rows.
+	if s.vectorStore != nil {
+		for _, memID := range memoryIDs {
 			if err := s.vectorStore.Delete(ctx, storage.VectorKindMemory, memID); err != nil {
 				log.Printf("project delete: vector for memory %s: %v", memID, err)
 			}

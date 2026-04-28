@@ -108,7 +108,8 @@ func (s *RetentionSweeper) Sweep(ctx context.Context) error {
 	}
 
 	// Hard-delete soft-deleted memories past their own retention window.
-	// The memory_vectors_* FK CASCADE reclaims persisted vector rows; any
+	// FK ON DELETE actions reap child rows (CASCADE for vectors / lineage /
+	// enrichment_queue, SET NULL for token_usage / relationships); any
 	// still-attached VectorStore saw the in-memory node dropped at
 	// soft-delete time. Bounded per sweep so a single call cannot stall on
 	// a backlog.

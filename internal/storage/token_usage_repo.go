@@ -62,19 +62,6 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 	return r.reload(ctx, usage)
 }
 
-// DeleteByMemoryID removes all token usage records for the given memory.
-func (r *TokenUsageRepo) DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error {
-	query := `DELETE FROM token_usage WHERE memory_id = ?`
-	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM token_usage WHERE memory_id = $1`
-	}
-	_, err := r.db.Exec(ctx, query, memoryID.String())
-	if err != nil {
-		return fmt.Errorf("token usage delete by memory: %w", err)
-	}
-	return nil
-}
-
 // ReassignProject updates all token_usage records from one project to another,
 // including the namespace_id to avoid FK violations when the old namespace is deleted.
 func (r *TokenUsageRepo) ReassignProject(ctx context.Context, fromProjectID, toProjectID uuid.UUID, toNamespaceID uuid.UUID) error {

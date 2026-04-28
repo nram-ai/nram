@@ -104,7 +104,7 @@ func newMockForgetService(nsID uuid.UUID, memories map[uuid.UUID]*model.Memory) 
 	return service.NewForgetService(
 		&mockMemoryDeleter{memories: memories},
 		&mockProjectLookup{project: &model.Project{ID: projectID, NamespaceID: nsID}},
-		nil, nil, nil, nil, nil, nil,
+		nil, nil,
 	)
 }
 

@@ -1466,7 +1466,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 		memRepo, projectLookup, nsLookup,
 		nil, nil, nil, nil, nil,
 	)
-	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil, nil)
+	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 	updateSvc := service.NewUpdateService(
 		&nsAwareMemRepoUpdater{memRepo: memRepo},
 		projectLookup, &mockLineageCreator{}, nil, nil,

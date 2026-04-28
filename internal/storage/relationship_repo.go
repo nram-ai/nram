@@ -242,19 +242,6 @@ func (r *RelationshipRepo) DeleteByNamespace(ctx context.Context, namespaceID uu
 	return nil
 }
 
-// DeleteBySourceMemory removes all relationships where source_memory matches the given memory ID.
-func (r *RelationshipRepo) DeleteBySourceMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) error {
-	query := `DELETE FROM relationships WHERE namespace_id = ? AND source_memory = ?`
-	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM relationships WHERE namespace_id = $1 AND source_memory = $2`
-	}
-	_, err := r.db.Exec(ctx, query, namespaceID.String(), memoryID.String())
-	if err != nil {
-		return fmt.Errorf("relationship delete by source memory: %w", err)
-	}
-	return nil
-}
-
 // UpdateWeight sets the weight of a relationship to a specific value.
 func (r *RelationshipRepo) UpdateWeight(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, weight float64) error {
 	query := `UPDATE relationships SET weight = ? WHERE id = ? AND namespace_id = ?`

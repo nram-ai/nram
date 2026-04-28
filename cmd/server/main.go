@@ -319,7 +319,6 @@ func main() {
 	)
 	forgetSvc := service.NewForgetService(
 		memoryRepo, projectRepo, vectorStore,
-		relationshipRepo, lineageRepo, enrichmentQueueRepo, tokenUsageRepo,
 		lineageRepo,
 	)
 	batchGetSvc := service.NewBatchGetService(memoryRepo, projectRepo)
@@ -334,8 +333,7 @@ func main() {
 	projectDeleteSvc := service.NewProjectDeleteService(
 		projectRepo, projectRepo, memoryRepo, memoryRepo,
 		vectorStore, entityRepo, relationshipRepo,
-		relationshipRepo, lineageRepo, enrichmentQueueRepo,
-		tokenUsageRepo, tokenUsageRepo,
+		enrichmentQueueRepo, tokenUsageRepo,
 		ingestionLogRepo, shareRepo, hnswDeleter, namespaceRepo, eventBus,
 	)
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)

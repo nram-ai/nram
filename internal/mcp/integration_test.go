@@ -181,7 +181,7 @@ func buildIntegForgetService(deleter *trackingMemoryDeleter, project *model.Proj
 	return service.NewForgetService(
 		deleter,
 		&mockProjectLookup{project: project},
-		nil, nil, nil, nil, nil, nil,
+		nil, nil,
 	)
 }
 

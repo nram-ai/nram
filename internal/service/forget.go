@@ -13,26 +13,6 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
-// RelationshipCleaner deletes relationships associated with a memory.
-type RelationshipCleaner interface {
-	DeleteBySourceMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) error
-}
-
-// LineageCleaner deletes lineage records associated with a memory.
-type LineageCleaner interface {
-	DeleteByMemoryID(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) error
-}
-
-// EnrichmentQueueCleaner deletes enrichment queue items associated with a memory.
-type EnrichmentQueueCleaner interface {
-	DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error
-}
-
-// TokenUsageCleaner deletes token usage records associated with a memory.
-type TokenUsageCleaner interface {
-	DeleteByMemoryID(ctx context.Context, memoryID uuid.UUID) error
-}
-
 // MemoryDeleter provides delete and read operations needed by the forget service.
 type MemoryDeleter interface {
 	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
@@ -65,16 +45,13 @@ type ForgetResponse struct {
 }
 
 // ForgetService orchestrates memory deletion: soft delete, hard delete,
-// single ID delete, bulk delete, and filter-based delete.
+// single ID delete, bulk delete, and filter-based delete. Hard delete relies
+// on schema-level FK ON DELETE actions to clean up child rows.
 type ForgetService struct {
-	memories             MemoryDeleter
-	projects             ProjectRepository
-	vectorStore          VectorDeleter
-	relationshipCleaner  RelationshipCleaner
-	lineageCleaner       LineageCleaner
-	enrichmentCleaner    EnrichmentQueueCleaner
-	tokenUsageCleaner    TokenUsageCleaner
-	lineageQuerier       LineageQuerier
+	memories       MemoryDeleter
+	projects       ProjectRepository
+	vectorStore    VectorDeleter
+	lineageQuerier LineageQuerier
 }
 
 // NewForgetService creates a new ForgetService with the given dependencies.
@@ -82,21 +59,13 @@ func NewForgetService(
 	memories MemoryDeleter,
 	projects ProjectRepository,
 	vectorStore VectorDeleter,
-	relationshipCleaner RelationshipCleaner,
-	lineageCleaner LineageCleaner,
-	enrichmentCleaner EnrichmentQueueCleaner,
-	tokenUsageCleaner TokenUsageCleaner,
 	lineageQuerier LineageQuerier,
 ) *ForgetService {
 	return &ForgetService{
-		memories:            memories,
-		projects:            projects,
-		vectorStore:         vectorStore,
-		relationshipCleaner: relationshipCleaner,
-		lineageCleaner:      lineageCleaner,
-		enrichmentCleaner:   enrichmentCleaner,
-		tokenUsageCleaner:   tokenUsageCleaner,
-		lineageQuerier:      lineageQuerier,
+		memories:       memories,
+		projects:       projects,
+		vectorStore:    vectorStore,
+		lineageQuerier: lineageQuerier,
 	}
 }
 
@@ -248,10 +217,6 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 	}
 
 	if hard {
-		// Remove FK references BEFORE deleting the memory to avoid
-		// FOREIGN KEY constraint failures (enrichment_queue, token_usage,
-		// memory_lineage, relationships all reference memories without CASCADE).
-		s.cleanupRelatedData(ctx, namespaceID, id)
 		if s.vectorStore != nil {
 			_ = s.vectorStore.Delete(ctx, storage.VectorKindMemory, id)
 		}
@@ -268,27 +233,3 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 	return true, nil
 }
 
-// cleanupRelatedData performs best-effort removal of data associated with a
-// deleted memory. Errors are logged but do not cause the delete to fail.
-func (s *ForgetService) cleanupRelatedData(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) {
-	if s.relationshipCleaner != nil {
-		if err := s.relationshipCleaner.DeleteBySourceMemory(ctx, namespaceID, memoryID); err != nil {
-			log.Printf("cascade cleanup: relationships for memory %s: %v", memoryID, err)
-		}
-	}
-	if s.lineageCleaner != nil {
-		if err := s.lineageCleaner.DeleteByMemoryID(ctx, namespaceID, memoryID); err != nil {
-			log.Printf("cascade cleanup: lineage for memory %s: %v", memoryID, err)
-		}
-	}
-	if s.enrichmentCleaner != nil {
-		if err := s.enrichmentCleaner.DeleteByMemoryID(ctx, memoryID); err != nil {
-			log.Printf("cascade cleanup: enrichment queue for memory %s: %v", memoryID, err)
-		}
-	}
-	if s.tokenUsageCleaner != nil {
-		if err := s.tokenUsageCleaner.DeleteByMemoryID(ctx, memoryID); err != nil {
-			log.Printf("cascade cleanup: token usage for memory %s: %v", memoryID, err)
-		}
-	}
-}

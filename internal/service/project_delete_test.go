@@ -89,32 +89,8 @@ func (m *mockRelationshipBulkDeleter) DeleteByNamespace(_ context.Context, _ uui
 	return nil
 }
 
-type mockRelCleaner struct {
-	called []uuid.UUID
-}
-
-func (m *mockRelCleaner) DeleteBySourceMemory(_ context.Context, _ uuid.UUID, memoryID uuid.UUID) error {
-	m.called = append(m.called, memoryID)
-	return nil
-}
-
-type mockLineageCleaner struct {
-	called []uuid.UUID
-}
-
-func (m *mockLineageCleaner) DeleteByMemoryID(_ context.Context, _ uuid.UUID, memoryID uuid.UUID) error {
-	m.called = append(m.called, memoryID)
-	return nil
-}
-
 type mockEnrichmentBulkDeleter struct {
-	byMemory    []uuid.UUID
 	byNamespace bool
-}
-
-func (m *mockEnrichmentBulkDeleter) DeleteByMemoryID(_ context.Context, memoryID uuid.UUID) error {
-	m.byMemory = append(m.byMemory, memoryID)
-	return nil
 }
 
 func (m *mockEnrichmentBulkDeleter) DeleteByNamespace(_ context.Context, _ uuid.UUID) error {
@@ -130,15 +106,6 @@ type mockTokenUsageReassigner struct {
 func (m *mockTokenUsageReassigner) ReassignProject(_ context.Context, from, to uuid.UUID, _ uuid.UUID) error {
 	m.from = from
 	m.to = to
-	return nil
-}
-
-type mockTokenUsageCleaner struct {
-	called []uuid.UUID
-}
-
-func (m *mockTokenUsageCleaner) DeleteByMemoryID(_ context.Context, memoryID uuid.UUID) error {
-	m.called = append(m.called, memoryID)
 	return nil
 }
 
@@ -203,19 +170,16 @@ func TestProjectDeleteService_SuccessfulCascade(t *testing.T) {
 	vecDel := &mockPDVectorDeleter{}
 	entDel := &mockEntityBulkDeleter{}
 	relBulk := &mockRelationshipBulkDeleter{}
-	relClean := &mockRelCleaner{}
-	linClean := &mockLineageCleaner{}
 	enrDel := &mockEnrichmentBulkDeleter{}
 	tokReassign := &mockTokenUsageReassigner{}
-	tokClean := &mockTokenUsageCleaner{}
 	ingDel := &mockIngestionLogDeleter{}
 	shareDel := &mockShareDeleter{}
 	nsDel := &mockNamespaceDeleter{}
 
 	svc := NewProjectDeleteService(
 		getter, deleter, memLister, memBulk, vecDel,
-		entDel, relBulk, relClean, linClean, enrDel,
-		tokReassign, tokClean, ingDel, shareDel, nil, nsDel, nil,
+		entDel, relBulk, enrDel,
+		tokReassign, ingDel, shareDel, nil, nsDel, nil,
 	)
 
 	resp, err := svc.Delete(context.Background(), &ProjectDeleteRequest{ProjectID: projectID})
@@ -230,19 +194,9 @@ func TestProjectDeleteService_SuccessfulCascade(t *testing.T) {
 		t.Errorf("expected slug test-project, got %s", resp.ProjectSlug)
 	}
 
-	// Verify all cleanup methods were called.
-	if len(relClean.called) != 2 {
-		t.Errorf("expected 2 relationship cleanup calls, got %d", len(relClean.called))
-	}
-	if len(linClean.called) != 2 {
-		t.Errorf("expected 2 lineage cleanup calls, got %d", len(linClean.called))
-	}
-	if len(enrDel.byMemory) != 2 {
-		t.Errorf("expected 2 enrichment per-memory calls, got %d", len(enrDel.byMemory))
-	}
-	if len(tokClean.called) != 2 {
-		t.Errorf("expected 2 token usage cleanup calls, got %d", len(tokClean.called))
-	}
+	// FK cleanup of memory_lineage / enrichment_queue / relationships /
+	// token_usage is now driven by ON DELETE CASCADE / SET NULL on the
+	// memory hard-delete; no per-memory app-side cleanup runs here.
 	if len(vecDel.deleted) != 2 {
 		t.Errorf("expected 2 vector deletes, got %d", len(vecDel.deleted))
 	}
@@ -287,7 +241,7 @@ func TestProjectDeleteService_RejectsGlobal(t *testing.T) {
 	}
 	svc := NewProjectDeleteService(
 		getter, &mockProjectDeleter{}, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	)
 
 	_, err := svc.Delete(context.Background(), &ProjectDeleteRequest{ProjectID: projectID})
@@ -327,7 +281,7 @@ func TestProjectDeleteService_ZeroMemories(t *testing.T) {
 
 	svc := NewProjectDeleteService(
 		getter, deleter, memLister, memBulk, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &mockNamespaceDeleter{}, nil,
+		nil, nil, nil, nil, nil, nil, nil, &mockNamespaceDeleter{}, nil,
 	)
 
 	resp, err := svc.Delete(context.Background(), &ProjectDeleteRequest{ProjectID: projectID})
@@ -367,7 +321,7 @@ func TestProjectDeleteService_TokenUsageReassigned(t *testing.T) {
 
 	svc := NewProjectDeleteService(
 		getter, &mockProjectDeleter{}, &mockMemoryIDLister{}, &mockMemoryBulkDeleter{}, nil,
-		nil, nil, nil, nil, nil, tokReassign, nil, nil, nil, nil, &mockNamespaceDeleter{}, nil,
+		nil, nil, nil, tokReassign, nil, nil, nil, &mockNamespaceDeleter{}, nil,
 	)
 
 	_, err := svc.Delete(context.Background(), &ProjectDeleteRequest{ProjectID: projectID})
@@ -408,7 +362,7 @@ func TestProjectDeleteService_PartialFailure(t *testing.T) {
 
 	svc := NewProjectDeleteService(
 		getter, deleter, memLister, memBulk, nil,
-		entDel, relBulk, nil, nil, nil, nil, nil, nil, nil, nil, &mockNamespaceDeleter{}, nil,
+		entDel, relBulk, nil, nil, nil, nil, nil, &mockNamespaceDeleter{}, nil,
 	)
 
 	resp, err := svc.Delete(context.Background(), &ProjectDeleteRequest{ProjectID: projectID})
@@ -434,7 +388,7 @@ func TestProjectDeleteService_ProjectNotFound(t *testing.T) {
 	}
 	svc := NewProjectDeleteService(
 		getter, &mockProjectDeleter{}, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	)
 
 	_, err := svc.Delete(context.Background(), &ProjectDeleteRequest{ProjectID: uuid.New()})
