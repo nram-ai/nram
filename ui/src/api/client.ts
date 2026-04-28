@@ -613,11 +613,25 @@ export interface AnalyticsData {
   };
 }
 
+export type UsageGroupBy =
+  | "operation"
+  | "model"
+  | "provider"
+  | "user"
+  | "project"
+  | "org"
+  | "success"
+  | "error_code"
+  | "request_id";
+
 export interface UsageGroup {
   key: string;
   tokens_input: number;
   tokens_output: number;
   call_count: number;
+  success_count: number;
+  error_count: number;
+  avg_latency_ms: number;
 }
 
 export interface UsageReport {
@@ -1050,7 +1064,7 @@ export const adminAPI = {
 
   // Analytics
   getAnalytics: () => request<AnalyticsData>("GET", "/analytics"),
-  getUsage: (params?: { org?: string; user?: string; project?: string; from?: string; to?: string; group_by?: string }) => {
+  getUsage: (params?: { org?: string; user?: string; project?: string; from?: string; to?: string; group_by?: UsageGroupBy; success_only?: boolean }) => {
     const sp = new URLSearchParams();
     if (params?.org) sp.set("org", params.org);
     if (params?.user) sp.set("user", params.user);
@@ -1058,6 +1072,7 @@ export const adminAPI = {
     if (params?.from) sp.set("from", params.from);
     if (params?.to) sp.set("to", params.to);
     if (params?.group_by) sp.set("group_by", params.group_by);
+    if (params?.success_only !== undefined) sp.set("success_only", params.success_only ? "true" : "false");
     const qs = sp.toString();
     return request<UsageReport>("GET", `/usage${qs ? `?${qs}` : ""}`);
   },

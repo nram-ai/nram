@@ -22,46 +22,55 @@ interface SettingWithSchema {
 const CATEGORY_ORDER = [
   "memory",
   "enrichment",
+  "enrichment_ingestion",
   "dreaming",
   "dreaming_novelty",
   "dreaming_consolidation",
   "dreaming_contradiction",
+  "dreaming_prompts",
   "reconsolidation",
   "recall_fusion",
   "ranking",
   "api",
   "auth",
   "qdrant",
+  "enrichment_prompts",
 ];
 
 const CATEGORY_LABELS: Record<string, string> = {
   memory: "Memory",
   enrichment: "Enrichment",
+  enrichment_ingestion: "Enrichment — Ingestion Decision",
   dreaming: "Dreaming",
   dreaming_novelty: "Dreaming — Novelty Audit",
   dreaming_consolidation: "Dreaming — Consolidation Budget",
   dreaming_contradiction: "Dreaming — Contradiction Detection",
+  dreaming_prompts: "Dreaming — Prompts",
   reconsolidation: "Reconsolidation",
   recall_fusion: "Recall — Hybrid Fusion",
   ranking: "Ranking",
   api: "API",
   auth: "Auth",
   qdrant: "Qdrant Vector Database",
+  enrichment_prompts: "Enrichment — Prompts",
 };
 
 const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   memory: "Default values and retention for memory storage",
   enrichment: "Configuration for LLM-based enrichment pipeline",
+  enrichment_ingestion: "LLM-judged ADD / UPDATE / DELETE / NONE decision on near-duplicate matches at ingest. Off by default — flip enabled with shadow_mode on first to log the decision distribution before allowing UPDATE/DELETE to take effect.",
   dreaming: "Background consolidation scheduler, token budgets, and synthesis thresholds",
   dreaming_novelty: "Gates whether dream syntheses are kept based on how much genuinely new content they introduce over their sources",
   dreaming_consolidation: "Per-sub-phase budget fractions so audit, reinforce, and consolidate cannot starve each other",
   dreaming_contradiction: "Per-cycle cap on pair-comparison LLM calls in the contradiction phase",
+  dreaming_prompts: "Prompt templates used by the dreaming phases (contradiction detection, synthesis, alignment scoring, novelty audit). Use the test harness to validate placeholder substitution before saving.",
   reconsolidation: "Recall-time reinforcement and sleep-time confidence decay for stored memories",
   recall_fusion: "Parallel vector + lexical (BM25/tsvector) retrieval with Reciprocal Rank Fusion. Off by default — flip enabled after migrations are applied.",
   ranking: "Weights and thresholds for memory ranking",
   api: "API rate limiting and request configuration",
   auth: "Authentication and authorization settings",
   qdrant: "Connection settings for the Qdrant vector database. Changes require a server restart to take effect.",
+  enrichment_prompts: "Prompt templates used by the enrichment pipeline. Use the test harness to validate placeholder substitution before saving.",
 };
 
 const PROMPT_KEYS = new Set([
@@ -69,6 +78,7 @@ const PROMPT_KEYS = new Set([
   "enrichment.entity_prompt",
   "enrichment.fact_extraction_prompt",
   "enrichment.entity_extraction_prompt",
+  "enrichment.ingestion_decision.prompt",
   "dreaming.contradiction_prompt",
   "dreaming.synthesis_prompt",
   "dreaming.alignment_prompt",

@@ -430,10 +430,11 @@ export function useAnalytics() {
   });
 }
 
-export function useUsage() {
+export function useUsage(params?: Parameters<typeof adminAPI.getUsage>[0]) {
   return useQuery({
-    queryKey: ["admin", "usage"],
-    queryFn: () => adminAPI.getUsage(),
+    queryKey: ["admin", "usage", params ?? {}],
+    queryFn: () => adminAPI.getUsage(params),
+    staleTime: 30_000,
   });
 }
 

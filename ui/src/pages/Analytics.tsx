@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from "react";
 import { useAnalytics, useUsage } from "../hooks/useApi";
-import type { AnalyticsData, UsageReport, MemoryRankItem, UsageGroup } from "../api/client";
+import type { AnalyticsData, UsageReport, MemoryRankItem, UsageGroup, UsageGroupBy } from "../api/client";
 import {
   BarChart,
   Bar,
@@ -355,13 +355,44 @@ function TokenUsageSummaryCards({
 // Usage Breakdown Table
 // ---------------------------------------------------------------------------
 
+function renderGroupKey(groupBy: UsageGroupBy, key: string) {
+  if (groupBy === "request_id") {
+    const short = key ? key.slice(0, 8) + "…" : "(unset)";
+    return (
+      <code className="font-mono text-xs" title={key}>
+        {short}
+      </code>
+    );
+  }
+  if (groupBy === "success") {
+    const ok = key === "true" || key === "1";
+    return (
+      <span
+        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+          ok
+            ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
+            : "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300"
+        }`}
+      >
+        {ok ? "Success" : "Failed"}
+      </span>
+    );
+  }
+  if (groupBy === "error_code") {
+    return <span className="font-mono text-xs">{key || "(none)"}</span>;
+  }
+  return <span className="font-mono text-xs">{key}</span>;
+}
+
 function UsageBreakdownTable({
   groups,
   costRates,
+  groupBy,
   isLoading,
 }: {
   groups: UsageGroup[];
   costRates: CostRate[];
+  groupBy: UsageGroupBy;
   isLoading: boolean;
 }) {
   if (isLoading) return <SkeletonChart />;
@@ -382,7 +413,7 @@ function UsageBreakdownTable({
       <div className="border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Usage Breakdown</h2>
         <p className="text-xs text-muted-foreground">
-          Token usage by group key
+          Grouped by <span className="font-mono">{groupBy}</span>
         </p>
       </div>
       <div className="overflow-x-auto p-4">
@@ -393,6 +424,9 @@ function UsageBreakdownTable({
               <th className="pb-2 text-right font-medium">Input Tokens</th>
               <th className="pb-2 text-right font-medium">Output Tokens</th>
               <th className="pb-2 text-right font-medium">Calls</th>
+              <th className="pb-2 text-right font-medium">Success</th>
+              <th className="pb-2 text-right font-medium">Errors</th>
+              <th className="pb-2 text-right font-medium">Avg Latency</th>
               <th className="pb-2 text-right font-medium">Est. Cost</th>
             </tr>
           </thead>
@@ -405,7 +439,7 @@ function UsageBreakdownTable({
                 : 0;
               return (
                 <tr key={g.key}>
-                  <td className="py-2 font-mono text-xs">{g.key}</td>
+                  <td className="py-2">{renderGroupKey(groupBy, g.key)}</td>
                   <td className="py-2 text-right font-mono">
                     {g.tokens_input.toLocaleString()}
                   </td>
@@ -414,6 +448,23 @@ function UsageBreakdownTable({
                   </td>
                   <td className="py-2 text-right font-mono">
                     {g.call_count.toLocaleString()}
+                  </td>
+                  <td className="py-2 text-right font-mono">
+                    {g.success_count.toLocaleString()}
+                  </td>
+                  <td
+                    className={`py-2 text-right font-mono ${
+                      g.error_count > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                    }`}
+                  >
+                    {g.error_count.toLocaleString()}
+                  </td>
+                  <td
+                    className={`py-2 text-right font-mono ${
+                      g.avg_latency_ms === 0 ? "text-muted-foreground" : ""
+                    }`}
+                  >
+                    {g.avg_latency_ms === 0 ? "—" : `${Math.round(g.avg_latency_ms)} ms`}
                   </td>
                   <td className="py-2 text-right font-mono">
                     {rate ? formatCost(cost) : "-"}
@@ -489,6 +540,199 @@ function UsageBarChart({
             />
           </BarChart>
         </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Usage Controls — group_by, success filter, date range
+// ---------------------------------------------------------------------------
+
+const GROUP_BY_OPTIONS: { value: UsageGroupBy; label: string }[] = [
+  { value: "operation", label: "Operation" },
+  { value: "model", label: "Model" },
+  { value: "provider", label: "Provider" },
+  { value: "user", label: "User" },
+  { value: "project", label: "Project" },
+  { value: "org", label: "Org" },
+  { value: "success", label: "Success / Failed" },
+  { value: "error_code", label: "Error Code" },
+  { value: "request_id", label: "Request ID" },
+];
+
+function parseSuccessFilter(raw: string): boolean | undefined {
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return undefined;
+}
+
+function successFilterToValue(f: boolean | undefined): string {
+  if (f === true) return "true";
+  if (f === false) return "false";
+  return "all";
+}
+
+function rangePresetToFromTo(preset: string): { from: string; to: string } {
+  const now = new Date();
+  const to = now.toISOString();
+  let from = "";
+  switch (preset) {
+    case "24h":
+      from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+      break;
+    case "7d":
+      from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      break;
+    case "30d":
+      from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      break;
+    default:
+      return { from: "", to: "" };
+  }
+  return { from, to };
+}
+
+function UsageControls({
+  groupBy,
+  setGroupBy,
+  successFilter,
+  setSuccessFilter,
+  from,
+  to,
+  setFrom,
+  setTo,
+}: {
+  groupBy: UsageGroupBy;
+  setGroupBy: (v: UsageGroupBy) => void;
+  successFilter: boolean | undefined;
+  setSuccessFilter: (v: boolean | undefined) => void;
+  from: string;
+  to: string;
+  setFrom: (v: string) => void;
+  setTo: (v: string) => void;
+}) {
+  // Pending input state for the datetime fields. Committing to from/to on
+  // every keystroke would refetch on every step of the spinner; commit on
+  // blur instead so React Query only re-runs once the user stops typing.
+  const [pendingFrom, setPendingFrom] = useState(from);
+  const [pendingTo, setPendingTo] = useState(to);
+
+  const commitDate = useCallback(
+    (raw: string, set: (v: string) => void) => {
+      if (!raw) {
+        set("");
+        return;
+      }
+      const d = new Date(raw);
+      if (Number.isNaN(d.getTime())) return;
+      set(d.toISOString());
+    },
+    [],
+  );
+
+  const applyPreset = useCallback(
+    (preset: string) => {
+      const r = rangePresetToFromTo(preset);
+      setFrom(r.from);
+      setTo(r.to);
+      setPendingFrom(r.from);
+      setPendingTo(r.to);
+    },
+    [setFrom, setTo],
+  );
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="flex flex-wrap items-end gap-4">
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground">
+            Group by
+          </label>
+          <select
+            value={groupBy}
+            onChange={(e) => setGroupBy(e.target.value as UsageGroupBy)}
+            className="mt-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
+          >
+            {GROUP_BY_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground">
+            Show
+          </label>
+          <select
+            value={successFilterToValue(successFilter)}
+            onChange={(e) => setSuccessFilter(parseSuccessFilter(e.target.value))}
+            className="mt-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
+          >
+            <option value="all">All calls</option>
+            <option value="true">Successful only</option>
+            <option value="false">Errors only</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground">
+            From
+          </label>
+          <input
+            type="datetime-local"
+            value={pendingFrom ? pendingFrom.slice(0, 16) : ""}
+            onChange={(e) => setPendingFrom(e.target.value)}
+            onBlur={(e) => commitDate(e.target.value, setFrom)}
+            className="mt-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground">
+            To
+          </label>
+          <input
+            type="datetime-local"
+            value={pendingTo ? pendingTo.slice(0, 16) : ""}
+            onChange={(e) => setPendingTo(e.target.value)}
+            onBlur={(e) => commitDate(e.target.value, setTo)}
+            className="mt-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
+          />
+        </div>
+
+        <div className="flex items-end gap-1">
+          <button
+            type="button"
+            onClick={() => applyPreset("24h")}
+            className="rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
+          >
+            Last 24h
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset("7d")}
+            className="rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
+          >
+            7d
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset("30d")}
+            className="rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
+          >
+            30d
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset("all")}
+            className="rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
+          >
+            All
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -704,7 +948,18 @@ function CostRateEditor({
 
 function Analytics() {
   const analytics = useAnalytics();
-  const usage = useUsage();
+
+  const [groupBy, setGroupBy] = useState<UsageGroupBy>("operation");
+  const [successFilter, setSuccessFilter] = useState<boolean | undefined>(undefined);
+  const [from, setFrom] = useState<string>("");
+  const [to, setTo] = useState<string>("");
+
+  const usage = useUsage({
+    group_by: groupBy,
+    success_only: successFilter,
+    from: from || undefined,
+    to: to || undefined,
+  });
 
   const [costRates, setCostRates] = useState<CostRate[]>(loadCostRates);
 
@@ -792,6 +1047,18 @@ function Analytics() {
       <div className="space-y-6">
         <h2 className="text-lg font-semibold tracking-tight">Token Usage</h2>
 
+        {/* Filters and grouping */}
+        <UsageControls
+          groupBy={groupBy}
+          setGroupBy={setGroupBy}
+          successFilter={successFilter}
+          setSuccessFilter={setSuccessFilter}
+          from={from}
+          to={to}
+          setFrom={setFrom}
+          setTo={setTo}
+        />
+
         {/* Summary cards */}
         <TokenUsageSummaryCards
           data={usageData}
@@ -816,6 +1083,7 @@ function Analytics() {
         <UsageBreakdownTable
           groups={groups}
           costRates={costRates}
+          groupBy={groupBy}
           isLoading={usage.isLoading}
         />
       </div>

@@ -38,10 +38,13 @@ type UsageReport struct {
 
 // UsageGroup represents a single aggregation bucket in a usage report.
 type UsageGroup struct {
-	Key          string `json:"key"`
-	TokensInput  int64  `json:"tokens_input"`
-	TokensOutput int64  `json:"tokens_output"`
-	CallCount    int64  `json:"call_count"`
+	Key          string  `json:"key"`
+	TokensInput  int64   `json:"tokens_input"`
+	TokensOutput int64   `json:"tokens_output"`
+	CallCount    int64   `json:"call_count"`
+	SuccessCount int64   `json:"success_count"`
+	ErrorCount   int64   `json:"error_count"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
 }
 
 // UsageTotals holds the sum totals across all groups in a usage report.
@@ -60,6 +63,7 @@ var validGroupByValues = map[string]bool{
 	"model":      true,
 	"provider":   true,
 	"success":    true,
+	"error_code": true,
 	"request_id": true,
 }
 
@@ -117,7 +121,7 @@ func NewAdminUsageHandler(cfg UsageConfig) http.HandlerFunc {
 			groupBy = "operation"
 		}
 		if !validGroupByValues[groupBy] {
-			WriteError(w, ErrBadRequest("invalid group_by value; must be one of: org, user, project, operation, model, provider, success, request_id"))
+			WriteError(w, ErrBadRequest("invalid group_by value; must be one of: org, user, project, operation, model, provider, success, error_code, request_id"))
 			return
 		}
 		filter.GroupBy = groupBy

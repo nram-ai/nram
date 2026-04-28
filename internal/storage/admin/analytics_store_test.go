@@ -2,55 +2,18 @@ package admin
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/nram-ai/nram/internal/config"
-	"github.com/nram-ai/nram/internal/migration"
 	"github.com/nram-ai/nram/internal/storage"
 )
-
-func setupAnalyticsTestDB(t *testing.T) storage.DB {
-	t.Helper()
-	tmpDir := t.TempDir()
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() { os.Chdir(origDir) })
-
-	db, err := storage.Open(config.DatabaseConfig{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	migrator, err := migration.NewMigrator(db.DB(), db.Backend())
-	if err != nil {
-		t.Fatalf("create migrator: %v", err)
-	}
-	if err := migrator.Up(); err != nil {
-		t.Fatalf("run migrations: %v", err)
-	}
-	return db
-}
 
 // insertOrgWithNamespace creates a namespace and organization for testing.
 func insertOrgWithNamespace(t *testing.T, db storage.DB, ctx context.Context) (orgID, nsID uuid.UUID) {
 	t.Helper()
+	nsID = insertTestNamespace(t, db, ctx)
 	orgID = uuid.New()
-	nsID = uuid.New()
 	_, err := db.Exec(ctx,
-		"INSERT INTO namespaces (id, name, slug, kind, path, depth) VALUES (?, ?, ?, ?, ?, ?)",
-		nsID.String(), "test-org", "test-org", "org", "test-org", 0)
-	if err != nil {
-		t.Fatalf("insert namespace: %v", err)
-	}
-	_, err = db.Exec(ctx,
 		"INSERT INTO organizations (id, name, slug, namespace_id) VALUES (?, ?, ?, ?)",
 		orgID.String(), "Test Org", "test-org", nsID.String())
 	if err != nil {
@@ -60,7 +23,7 @@ func insertOrgWithNamespace(t *testing.T, db storage.DB, ctx context.Context) (o
 }
 
 func TestAnalyticsStoreGetAnalytics_GlobalNoData(t *testing.T) {
-	db := setupAnalyticsTestDB(t)
+	db := setupAdminTestDB(t)
 	store := NewAnalyticsStore(db)
 
 	data, err := store.GetAnalytics(context.Background(), nil)
@@ -73,7 +36,7 @@ func TestAnalyticsStoreGetAnalytics_GlobalNoData(t *testing.T) {
 }
 
 func TestAnalyticsStoreGetAnalytics_OrgScopedNoData(t *testing.T) {
-	db := setupAnalyticsTestDB(t)
+	db := setupAdminTestDB(t)
 	store := NewAnalyticsStore(db)
 	ctx := context.Background()
 
@@ -89,7 +52,7 @@ func TestAnalyticsStoreGetAnalytics_OrgScopedNoData(t *testing.T) {
 }
 
 func TestAnalyticsStoreGetAnalytics_OrgScopedWithMemories(t *testing.T) {
-	db := setupAnalyticsTestDB(t)
+	db := setupAdminTestDB(t)
 	store := NewAnalyticsStore(db)
 	ctx := context.Background()
 
@@ -129,7 +92,7 @@ func TestAnalyticsStoreGetAnalytics_OrgScopedWithMemories(t *testing.T) {
 }
 
 func TestAnalyticsStoreGetAnalytics_OrgScopedNoOrg(t *testing.T) {
-	db := setupAnalyticsTestDB(t)
+	db := setupAdminTestDB(t)
 	store := NewAnalyticsStore(db)
 	ctx := context.Background()
 

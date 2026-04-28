@@ -73,11 +73,19 @@ func (s *UsageStore) QueryUsage(ctx context.Context, filter api.UsageFilter) (*a
 		return report, nil
 	}
 
-	// Grouped aggregation.
+	// AVG(latency_ms) excludes NULLs natively so rows written before the
+	// usage-recording middleware (column existed but was unpopulated) do not
+	// deflate the per-group average.
 	groupCol := s.groupByColumn(filter.GroupBy)
 	if groupCol != "" {
-		groupQuery := fmt.Sprintf(
-			"SELECT COALESCE(%s, ''), COALESCE(SUM(tokens_input), 0), COALESCE(SUM(tokens_output), 0), COUNT(*) FROM token_usage%s GROUP BY %s ORDER BY COUNT(*) DESC LIMIT 100",
+		groupQuery := fmt.Sprintf(`SELECT COALESCE(%s, ''),
+			COALESCE(SUM(tokens_input), 0),
+			COALESCE(SUM(tokens_output), 0),
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN NOT success THEN 1 ELSE 0 END), 0),
+			COALESCE(AVG(latency_ms), 0)
+			FROM token_usage%s GROUP BY %s ORDER BY COUNT(*) DESC LIMIT 100`,
 			groupCol, whereClause, groupCol,
 		)
 		rows, err := s.db.Query(ctx, groupQuery, args...)
@@ -85,7 +93,15 @@ func (s *UsageStore) QueryUsage(ctx context.Context, filter api.UsageFilter) (*a
 			defer rows.Close()
 			for rows.Next() {
 				var g api.UsageGroup
-				if err := rows.Scan(&g.Key, &g.TokensInput, &g.TokensOutput, &g.CallCount); err != nil {
+				if err := rows.Scan(
+					&g.Key,
+					&g.TokensInput,
+					&g.TokensOutput,
+					&g.CallCount,
+					&g.SuccessCount,
+					&g.ErrorCount,
+					&g.AvgLatencyMs,
+				); err != nil {
 					continue
 				}
 				report.Groups = append(report.Groups, g)
@@ -128,6 +144,8 @@ func (s *UsageStore) groupByColumn(groupBy string) string {
 		return "provider"
 	case "success":
 		return "success"
+	case "error_code":
+		return "error_code"
 	case "request_id":
 		return "request_id"
 	default:
