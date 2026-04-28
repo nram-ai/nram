@@ -84,7 +84,6 @@ func newMockUpdateService(mem *model.Memory) *service.UpdateService {
 		&mockProjectLookup{project: &model.Project{ID: projectID, NamespaceID: nsID}},
 		&mockLineageCreator{},
 		nil, // no vector store
-		&mockTokenUsageRepo{},
 		nil, // no embed provider
 	)
 }

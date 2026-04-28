@@ -108,17 +108,6 @@ type LineageCreator interface {
 	Create(ctx context.Context, lineage *model.MemoryLineage) error
 }
 
-// TokenRecorder persists token-usage telemetry.
-type TokenRecorder interface {
-	Record(ctx context.Context, usage *model.TokenUsage) error
-}
-
-// UsageContextResolver resolves org, user, and project IDs from a project
-// namespace ID so that token usage records can be attributed correctly.
-type UsageContextResolver interface {
-	ResolveUsageContext(ctx context.Context, namespaceID uuid.UUID) (*model.UsageContext, error)
-}
-
 // VectorWriter upserts embedding vectors for memories and entities. Kind
 // selects which table family the single-vector Upsert targets; UpsertBatch
 // reads Kind from each item.
@@ -240,8 +229,6 @@ type WorkerPool struct {
 	entities          EntityUpserter
 	relationships     RelationshipCreator
 	lineage           LineageCreator
-	tokenUsage        TokenRecorder
-	usageCtxRes       UsageContextResolver
 	vectorStore       VectorWriter
 	factProvider      func() provider.LLMProvider
 	entityProvider    func() provider.LLMProvider
@@ -261,6 +248,9 @@ type WorkerPool struct {
 // memSoftDeleter, ingestionProvider, deduplicator, and settings together
 // activate the ingestion-decision phase; passing nil for any of them turns
 // the phase off and the pool runs as if it were not present.
+//
+// token_usage rows are written by the UsageRecordingProvider middleware
+// wrapping the registry-issued providers; the pool itself does not record.
 func NewWorkerPool(
 	config WorkerConfig,
 	memories MemoryReader,
@@ -271,8 +261,6 @@ func NewWorkerPool(
 	entities EntityUpserter,
 	relationships RelationshipCreator,
 	lineage LineageCreator,
-	tokenUsage TokenRecorder,
-	usageCtxRes UsageContextResolver,
 	vectorStore VectorWriter,
 	factProvider func() provider.LLMProvider,
 	entityProvider func() provider.LLMProvider,
@@ -291,8 +279,6 @@ func NewWorkerPool(
 		entities:          entities,
 		relationships:     relationships,
 		lineage:           lineage,
-		tokenUsage:        tokenUsage,
-		usageCtxRes:       usageCtxRes,
 		vectorStore:       vectorStore,
 		factProvider:      factProvider,
 		entityProvider:    entityProvider,
@@ -525,6 +511,14 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		}
 		return nil, fmt.Errorf("memory lookup: %w", err)
 	}
+
+	// Stamp namespace + memory context for the UsageRecordingProvider
+	// middleware so every provider call emitted by this job lands a
+	// token_usage row attributed to the right namespace and memory. The
+	// middleware resolves org/user/project lazily via its injected
+	// resolver when no UsageContext is pre-stamped on ctx.
+	ctx = provider.WithNamespaceID(ctx, mem.NamespaceID)
+	ctx = provider.WithMemoryID(ctx, mem.ID)
 
 	// Ingestion-decision phase. Runs first so a DELETE decision can short-
 	// circuit fact/entity extraction (no point spending LLM tokens on a
@@ -797,12 +791,22 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 			usage provider.TokenUsage
 			err   error
 		)
-		embeddings, usage, modelName, err = wp.embedChunked(ctx, ep, inputs, dim)
+		// For batched embed across multiple pendings, attribute the call to
+		// the first pending's namespace so the row has a non-nil
+		// namespace_id. Per-job split is intentionally not recovered here;
+		// per-batch granularity is sufficient for analytics, and request_id
+		// correlation can recover finer attribution when needed.
+		batchCtx := ctx
+		if len(pendings) > 0 {
+			batchCtx = provider.WithNamespaceID(batchCtx, pendings[0].mem.NamespaceID)
+		}
+		embeddings, _, modelName, err = wp.embedChunked(batchCtx, ep, inputs, dim)
+		_ = modelName
+		_ = usage
 		if err != nil {
 			slog.Error("enrichment: batched embed", "jobs", len(pendings), "err", err)
 			return
 		}
-		wp.attributeEmbedUsage(ctx, pendings, ep.Name(), modelName, usage, len(inputs))
 	}
 
 	items := make([]storage.VectorUpsertItem, 0, len(inputs)+len(pendings))
@@ -898,6 +902,7 @@ func (wp *WorkerPool) embedChunked(ctx context.Context, ep provider.EmbeddingPro
 			end = len(inputs)
 		}
 		embedCtx, cancel := context.WithTimeout(ctx, workerEmbedTimeout)
+		embedCtx = provider.WithOperation(embedCtx, provider.OperationEmbedding)
 		resp, err := ep.Embed(embedCtx, &provider.EmbeddingRequest{
 			Input:     inputs[start:end],
 			Dimension: dim,
@@ -915,56 +920,6 @@ func (wp *WorkerPool) embedChunked(ctx context.Context, ep provider.EmbeddingPro
 		}
 	}
 	return out, usage, model, nil
-}
-
-// attributeEmbedUsage splits aggregate embed usage across pendings using
-// largest-remainder allocation so the per-job rows sum to exactly the
-// provider-billed aggregate (no truncation drift).
-func (wp *WorkerPool) attributeEmbedUsage(ctx context.Context, pendings []*pendingJob, providerName, model string, usage provider.TokenUsage, totalInputs int) {
-	if totalInputs <= 0 {
-		return
-	}
-	allocate := func(total int) []int {
-		alloc := make([]int, len(pendings))
-		rem := make([]float64, len(pendings))
-		sum := 0
-		for i, p := range pendings {
-			share := p.embedCount + p.embedEntCount
-			exact := float64(total) * float64(share) / float64(totalInputs)
-			alloc[i] = int(exact)
-			rem[i] = exact - float64(alloc[i])
-			sum += alloc[i]
-		}
-		// Distribute leftover tokens to the pendings with the largest
-		// fractional remainders until the totals match.
-		for sum < total {
-			maxIdx := 0
-			for i := 1; i < len(rem); i++ {
-				if rem[i] > rem[maxIdx] {
-					maxIdx = i
-				}
-			}
-			alloc[maxIdx]++
-			rem[maxIdx] = -1 // exclude from further rounds
-			sum++
-		}
-		return alloc
-	}
-
-	prompt := allocate(usage.PromptTokens)
-	completion := allocate(usage.CompletionTokens)
-	total := allocate(usage.TotalTokens)
-
-	for i, p := range pendings {
-		if p.embedCount == 0 && p.embedEntCount == 0 {
-			continue
-		}
-		wp.recordUsage(ctx, p.mem, "embedding", providerName, model, provider.TokenUsage{
-			PromptTokens:     prompt[i],
-			CompletionTokens: completion[i],
-			TotalTokens:      total[i],
-		})
-	}
 }
 
 // finalizeJob marks the memory enriched, records LLM token usage, and
@@ -1024,13 +979,9 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 		}
 	}
 
-	if p.factUsage != nil {
-		wp.recordUsage(ctx, p.mem, "fact_extraction", p.factProvider, p.factModel, *p.factUsage)
-	}
-	if p.entityUsage != nil {
-		wp.recordUsage(ctx, p.mem, "entity_extraction", p.entityProv, p.entityModel, *p.entityUsage)
-	}
-	wp.recordIngestionUsage(ctx, p)
+	// Token usage for fact_extraction, entity_extraction, embedding, and
+	// ingestion_decision is recorded by the UsageRecordingProvider
+	// middleware on every wrapped provider call. No manual write needed.
 
 	if err := wp.queue.Complete(ctx, p.job.ID); err != nil {
 		return fmt.Errorf("complete job: %w", err)
@@ -1084,7 +1035,7 @@ func (wp *WorkerPool) extractFacts(
 	content string,
 ) ([]extractedFact, *provider.TokenUsage, string, string, error) {
 	prompt := fmt.Sprintf(factExtractionPrompt, content)
-	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
+	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationFactExtraction), &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
 		},
@@ -1109,7 +1060,7 @@ func (wp *WorkerPool) extractEntities(
 	content string,
 ) (*entityExtractionResult, *provider.TokenUsage, string, string, error) {
 	prompt := fmt.Sprintf(entityExtractionPrompt, content)
-	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
+	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
 		},
@@ -1196,43 +1147,6 @@ func parseEntityResponse(raw string) (*entityExtractionResult, error) {
 		return nil, fmt.Errorf("unable to parse entity JSON from LLM response: %q", preview)
 	}
 	return &result, nil
-}
-
-// ---------------------------------------------------------------------------
-// Token usage recording helper
-// ---------------------------------------------------------------------------
-
-func (wp *WorkerPool) recordUsage(
-	ctx context.Context,
-	mem *model.Memory,
-	operation, providerName, modelName string,
-	usage provider.TokenUsage,
-) {
-	memID := mem.ID
-	u := &model.TokenUsage{
-		ID:           uuid.New(),
-		NamespaceID:  mem.NamespaceID,
-		Operation:    operation,
-		Provider:     providerName,
-		Model:        modelName,
-		TokensInput:  usage.PromptTokens,
-		TokensOutput: usage.CompletionTokens,
-		MemoryID:     &memID,
-		CreatedAt:    time.Now().UTC(),
-	}
-
-	// Resolve ownership context so the record can be filtered by org/user/project.
-	if wp.usageCtxRes != nil {
-		if uc, err := wp.usageCtxRes.ResolveUsageContext(ctx, mem.NamespaceID); err == nil && uc != nil {
-			u.OrgID = uc.OrgID
-			u.UserID = uc.UserID
-			u.ProjectID = uc.ProjectID
-		}
-	}
-
-	if err := wp.tokenUsage.Record(ctx, u); err != nil {
-		slog.Error("enrichment: record token usage", "operation", operation, "err", err)
-	}
 }
 
 func mergeTags(parent, child []string) []string {

@@ -21,12 +21,13 @@ type UsageConfig struct {
 
 // UsageFilter specifies filtering and grouping criteria for usage queries.
 type UsageFilter struct {
-	OrgID     *uuid.UUID `json:"org_id,omitempty"`
-	UserID    *uuid.UUID `json:"user_id,omitempty"`
-	ProjectID *uuid.UUID `json:"project_id,omitempty"`
-	From      *time.Time `json:"from,omitempty"`
-	To        *time.Time `json:"to,omitempty"`
-	GroupBy   string     `json:"group_by"`
+	OrgID       *uuid.UUID `json:"org_id,omitempty"`
+	UserID      *uuid.UUID `json:"user_id,omitempty"`
+	ProjectID   *uuid.UUID `json:"project_id,omitempty"`
+	From        *time.Time `json:"from,omitempty"`
+	To          *time.Time `json:"to,omitempty"`
+	GroupBy     string     `json:"group_by"`
+	SuccessOnly *bool      `json:"success_only,omitempty"`
 }
 
 // UsageReport contains the aggregated usage data returned by QueryUsage.
@@ -52,11 +53,14 @@ type UsageTotals struct {
 
 // validGroupByValues contains the allowed values for the group_by parameter.
 var validGroupByValues = map[string]bool{
-	"org":       true,
-	"user":      true,
-	"project":   true,
-	"operation": true,
-	"model":     true,
+	"org":        true,
+	"user":       true,
+	"project":    true,
+	"operation":  true,
+	"model":      true,
+	"provider":   true,
+	"success":    true,
+	"request_id": true,
 }
 
 // NewAdminUsageHandler returns an http.HandlerFunc that serves GET /v1/admin/usage.
@@ -113,10 +117,22 @@ func NewAdminUsageHandler(cfg UsageConfig) http.HandlerFunc {
 			groupBy = "operation"
 		}
 		if !validGroupByValues[groupBy] {
-			WriteError(w, ErrBadRequest("invalid group_by value; must be one of: org, user, project, operation, model"))
+			WriteError(w, ErrBadRequest("invalid group_by value; must be one of: org, user, project, operation, model, provider, success, request_id"))
 			return
 		}
 		filter.GroupBy = groupBy
+
+		// success_only=true filters out rows recorded for failed provider
+		// calls so billing/cost rollups exclude error noise.
+		if raw := q.Get("success_only"); raw != "" {
+			if raw == "true" || raw == "1" {
+				v := true
+				filter.SuccessOnly = &v
+			} else if raw == "false" || raw == "0" {
+				v := false
+				filter.SuccessOnly = &v
+			}
+		}
 
 		report, err := cfg.Store.QueryUsage(r.Context(), filter)
 		if err != nil {

@@ -128,7 +128,6 @@ func newHTTPStackEnv(t *testing.T) *httpStackEnv {
 		recallReader,
 		&mockProjectLookup{project: project},
 		&mockNamespaceLookup{ns: ns},
-		&mockTokenUsageRepo{},
 		nil, nil, nil, nil, nil,
 	)
 
@@ -143,7 +142,6 @@ func newHTTPStackEnv(t *testing.T) *httpStackEnv {
 		&mockProjectLookup{project: project},
 		&mockLineageCreator{},
 		nil,
-		&mockTokenUsageRepo{},
 		nil,
 	)
 
@@ -1466,12 +1464,12 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 	)
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, nsLookup,
-		&mockTokenUsageRepo{}, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 	)
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil, nil)
 	updateSvc := service.NewUpdateService(
 		&nsAwareMemRepoUpdater{memRepo: memRepo},
-		projectLookup, &mockLineageCreator{}, nil, &mockTokenUsageRepo{}, nil,
+		projectLookup, &mockLineageCreator{}, nil, nil,
 	)
 	batchGetSvc := service.NewBatchGetService(memRepo, projectLookup)
 	exportSvc := service.NewExportService(

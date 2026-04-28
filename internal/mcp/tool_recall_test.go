@@ -36,7 +36,6 @@ func newMockRecallSvc() *service.RecallService {
 		&mockMemoryReaderRecall{},
 		&mockProjectLookup{project: &model.Project{ID: uuid.New(), NamespaceID: nsID}},
 		&mockNamespaceLookup{ns: &model.Namespace{ID: nsID}},
-		&mockTokenUsageRepo{},
 		nil, // no vector search
 		nil, // no entity reader
 		nil, // no traverser

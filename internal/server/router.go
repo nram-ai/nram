@@ -133,8 +133,11 @@ func handler(h http.HandlerFunc) http.HandlerFunc {
 func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	r := chi.NewRouter()
 
-	// Global middleware applied to all routes: panic recovery and metrics.
+	// Global middleware applied to all routes: panic recovery, request-ID
+	// correlation, and metrics. Request-ID runs before metrics so the ID is
+	// available in any downstream observability hook.
 	r.Use(api.ErrorMiddleware)
+	r.Use(RequestIDMiddleware)
 	if config.Metrics != nil {
 		r.Use(api.MetricsMiddleware(config.Metrics))
 	}

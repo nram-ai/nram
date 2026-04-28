@@ -12,6 +12,7 @@ import (
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -193,7 +194,18 @@ func NewServer(deps Dependencies) *Server {
 	httpSrv := server.NewStreamableHTTPServer(
 		mcpSrv,
 		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-			return context.WithValue(ctx, httpRequestKey, r)
+			ctx = context.WithValue(ctx, httpRequestKey, r)
+			// Thread the request-id from the inbound HTTP request (set by
+			// server.RequestIDMiddleware) into the MCP tool ctx so provider
+			// calls emitted by tool handlers land token_usage rows tagged
+			// with the same correlation ID. Falls back to the request's own
+			// context (already stamped) when present.
+			if id := r.Header.Get("X-Request-ID"); id != "" {
+				ctx = provider.WithRequestID(ctx, id)
+			} else if id := provider.RequestIDFromContext(r.Context()); id != "" {
+				ctx = provider.WithRequestID(ctx, id)
+			}
+			return ctx
 		}),
 	)
 

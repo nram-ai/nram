@@ -40,7 +40,7 @@ func (r *OAuthRepo) CreateClient(ctx context.Context, client *model.OAuthClient)
 
 	redirectVal := encodeStringArray(r.db.Backend(), client.RedirectURIs)
 	grantVal := encodeStringArray(r.db.Backend(), client.GrantTypes)
-	autoRegVal := encodeBool(r.db.Backend(), client.AutoRegistered)
+	autoRegVal := EncodeBool(r.db.Backend(), client.AutoRegistered)
 
 	var orgID *string
 	if client.OrgID != nil {
@@ -650,7 +650,7 @@ func (r *OAuthRepo) CreateIdP(ctx context.Context, idp *model.OAuthIdPConfig) er
 	}
 
 	domainsVal := encodeStringArray(r.db.Backend(), idp.AllowedDomains)
-	autoProvVal := encodeBool(r.db.Backend(), idp.AutoProvision)
+	autoProvVal := EncodeBool(r.db.Backend(), idp.AutoProvision)
 
 	var orgID *string
 	if idp.OrgID != nil {
@@ -756,7 +756,7 @@ func (r *OAuthRepo) DeleteIdP(ctx context.Context, id uuid.UUID) error {
 // UpdateIdP updates a mutable subset of an identity provider configuration.
 func (r *OAuthRepo) UpdateIdP(ctx context.Context, idp *model.OAuthIdPConfig) error {
 	domainsVal := encodeStringArray(r.db.Backend(), idp.AllowedDomains)
-	autoProvVal := encodeBool(r.db.Backend(), idp.AutoProvision)
+	autoProvVal := EncodeBool(r.db.Backend(), idp.AutoProvision)
 
 	query := `UPDATE oauth_idp_configs
 		SET client_id = ?, client_secret = ?, issuer_url = ?,
@@ -799,7 +799,7 @@ func (r *OAuthRepo) UpdateIdP(ctx context.Context, idp *model.OAuthIdPConfig) er
 // UpdateIdPByOrg updates an identity provider config only if it belongs to the given org.
 func (r *OAuthRepo) UpdateIdPByOrg(ctx context.Context, idp *model.OAuthIdPConfig, orgID uuid.UUID) error {
 	domainsVal := encodeStringArray(r.db.Backend(), idp.AllowedDomains)
-	autoProvVal := encodeBool(r.db.Backend(), idp.AutoProvision)
+	autoProvVal := EncodeBool(r.db.Backend(), idp.AutoProvision)
 
 	query := `UPDATE oauth_idp_configs
 		SET client_id = ?, client_secret = ?, issuer_url = ?,

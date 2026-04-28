@@ -28,5 +28,8 @@ type TokenUsage struct {
 	MemoryID     *uuid.UUID `json:"memory_id"`
 	APIKeyID     *uuid.UUID `json:"api_key_id"`
 	LatencyMs    *int       `json:"latency_ms"`
+	Success      bool       `json:"success"`
+	ErrorCode    *string    `json:"error_code"`
+	RequestID    *string    `json:"request_id"`
 	CreatedAt    time.Time  `json:"created_at"`
 }

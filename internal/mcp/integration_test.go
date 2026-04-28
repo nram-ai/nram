@@ -192,7 +192,6 @@ func buildIntegUpdateService(updater *mockMemoryUpdater, project *model.Project)
 		&mockProjectLookup{project: project},
 		&mockLineageCreator{},
 		nil,
-		&mockTokenUsageRepo{},
 		nil,
 	)
 }
@@ -350,7 +349,6 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 		&mockListByNsReader{memories: []model.Memory{storedMemory}},
 		&mockProjectLookup{project: project},
 		&mockNamespaceLookup{ns: ns},
-		&mockTokenUsageRepo{},
 		nil, nil, nil, nil, nil,
 	)
 	deps.Recall = recallSvc

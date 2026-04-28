@@ -98,10 +98,19 @@ func newExtractTestService(
 		vectors:       &mockVectorStore{},
 	}
 
+	// Wrap test provider stubs in the UsageRecordingProvider middleware so
+	// the middleware writes token_usage rows to deps.tokenUsage on every
+	// Complete/Embed call — matches production wiring (registry wrap)
+	// without spinning up a registry in unit tests.
+	wrappedFact := provider.WrapLLMForTest(factProvider, deps.tokenUsage)
+	wrappedEntity := provider.WrapLLMForTest(entityProvider, deps.tokenUsage)
 	var embedFn func() provider.EmbeddingProvider
 	if embedProvider != nil {
 		ep := embedProvider
-		embedFn = func() provider.EmbeddingProvider { return ep }
+		embedFn = provider.WrapEmbeddingForTest(
+			func() provider.EmbeddingProvider { return ep },
+			deps.tokenUsage,
+		)
 	}
 
 	svc := NewExtractionService(
@@ -109,13 +118,12 @@ func newExtractTestService(
 		projects,
 		namespaces,
 		deps.ingestion,
-		deps.tokenUsage,
 		deps.entities,
 		deps.relationships,
 		deps.lineage,
 		deps.vectors,
-		factProvider,
-		entityProvider,
+		wrappedFact,
+		wrappedEntity,
 		embedFn,
 	)
 

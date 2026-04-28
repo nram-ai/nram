@@ -145,7 +145,7 @@ func TestResolveOllamaURLFromRegistryPort(t *testing.T) {
 			APIKey:  "test",
 			Model:   "llama3",
 		},
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestUpdateProviderSlotTriggersReload(t *testing.T) {
 	db := testSQLiteDBWithMigrations(t)
 	settingsRepo := storage.NewSettingsRepo(db)
 
-	reg, err := provider.NewRegistry(provider.RegistryConfig{})
+	reg, err := provider.NewRegistry(provider.RegistryConfig{}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestGetRegistryConfig(t *testing.T) {
 			Model:   "text-embedding-3-small",
 		},
 	}
-	reg, err := provider.NewRegistry(cfg)
+	reg, err := provider.NewRegistry(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

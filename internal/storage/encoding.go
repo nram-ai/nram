@@ -38,9 +38,9 @@ func decodeStringArray(backend string, s string) ([]string, error) {
 	return arr, nil
 }
 
-// encodeBool returns the appropriate value for a BOOLEAN column.
+// EncodeBool returns the appropriate value for a BOOLEAN column.
 // Postgres: native bool. SQLite: INTEGER 0/1.
-func encodeBool(backend string, val bool) interface{} {
+func EncodeBool(backend string, val bool) interface{} {
 	if backend == BackendPostgres {
 		return val
 	}

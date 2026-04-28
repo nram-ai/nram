@@ -47,14 +47,14 @@ type UpdateResponse struct {
 	LatencyMs       int64     `json:"latency_ms"`
 }
 
-// UpdateService orchestrates memory updates, re-embedding, lineage tracking,
-// and token usage recording.
+// UpdateService orchestrates memory updates, re-embedding, and lineage
+// tracking. token_usage recording is handled by the UsageRecordingProvider
+// middleware wrapping the registry-issued embedding provider.
 type UpdateService struct {
 	memories      MemoryUpdater
 	projects      ProjectRepository
 	lineage       LineageCreator
 	vectorStore   VectorStoreWriter
-	tokenUsage    TokenUsageRepository
 	embedProvider func() provider.EmbeddingProvider
 }
 
@@ -64,7 +64,6 @@ func NewUpdateService(
 	projects ProjectRepository,
 	lineage LineageCreator,
 	vectorStore VectorStoreWriter,
-	tokenUsage TokenUsageRepository,
 	embedProvider func() provider.EmbeddingProvider,
 ) *UpdateService {
 	return &UpdateService{
@@ -72,7 +71,6 @@ func NewUpdateService(
 		projects:      projects,
 		lineage:       lineage,
 		vectorStore:   vectorStore,
-		tokenUsage:    tokenUsage,
 		embedProvider: embedProvider,
 	}
 }
@@ -150,7 +148,21 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 				Dimension: dim,
 			}
 
-			resp, embErr := ep.Embed(ctx, embReq)
+			// Stamp ownership/correlation context so the
+			// UsageRecordingProvider middleware records a token_usage row
+			// for this re-embed call attributed to the right scope.
+			projectIDForCtx := project.ID
+			updateCtx := provider.WithUsageContext(ctx, &model.UsageContext{
+				OrgID:     req.OrgID,
+				UserID:    req.UserID,
+				ProjectID: &projectIDForCtx,
+			})
+			updateCtx = provider.WithNamespaceID(updateCtx, mem.NamespaceID)
+			updateCtx = provider.WithMemoryID(updateCtx, mem.ID)
+			updateCtx = provider.WithAPIKeyID(updateCtx, req.APIKeyID)
+			updateCtx = provider.WithOperation(updateCtx, provider.OperationEmbedding)
+
+			resp, embErr := ep.Embed(updateCtx, embReq)
 			if embErr == nil && len(resp.Embeddings) > 0 {
 				reEmbedded = true
 				embDim := len(resp.Embeddings[0])
@@ -159,25 +171,6 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 				if s.vectorStore != nil {
 					_ = s.vectorStore.Upsert(ctx, storage.VectorKindMemory, mem.ID, mem.NamespaceID, resp.Embeddings[0], embDim)
 				}
-
-				// Record token usage.
-				projectID := project.ID
-				usage := &model.TokenUsage{
-					ID:           uuid.New(),
-					OrgID:        req.OrgID,
-					UserID:       req.UserID,
-					ProjectID:    &projectID,
-					NamespaceID:  mem.NamespaceID,
-					Operation:    "embedding",
-					Provider:     ep.Name(),
-					Model:        resp.Model,
-					TokensInput:  resp.Usage.PromptTokens,
-					TokensOutput: resp.Usage.CompletionTokens,
-					MemoryID:     &mem.ID,
-					APIKeyID:     req.APIKeyID,
-					CreatedAt:    time.Now(),
-				}
-				_ = s.tokenUsage.Record(ctx, usage)
 			}
 		}
 	}

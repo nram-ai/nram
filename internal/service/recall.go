@@ -203,7 +203,6 @@ type RecallService struct {
 	memories      MemoryReader
 	projects      ProjectRepository
 	namespaces    NamespaceRepository
-	tokenUsage    TokenUsageRepository
 	vectorSearch  VectorSearcher
 	lexical       LexicalSearcher
 	entityReader  EntityReader
@@ -220,11 +219,12 @@ type RecallService struct {
 }
 
 // NewRecallService creates a new RecallService with the given dependencies.
+// token_usage recording is handled by the UsageRecordingProvider middleware
+// wrapping the registry-issued providers.
 func NewRecallService(
 	memories MemoryReader,
 	projects ProjectRepository,
 	namespaces NamespaceRepository,
-	tokenUsage TokenUsageRepository,
 	vectorSearch VectorSearcher,
 	entityReader EntityReader,
 	traverser RelationshipTraverser,
@@ -235,7 +235,6 @@ func NewRecallService(
 		memories:      memories,
 		projects:      projects,
 		namespaces:    namespaces,
-		tokenUsage:    tokenUsage,
 		vectorSearch:  vectorSearch,
 		entityReader:  entityReader,
 		traverser:     traverser,
@@ -373,7 +372,20 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				Dimension: dim,
 			}
 
-			resp, err := ep.Embed(ctx, embReq)
+			// Stamp ownership/correlation context for the
+			// UsageRecordingProvider middleware to attribute the embedding
+			// token_usage row to the right org/user/project/namespace and
+			// correlate it back to the API key.
+			projectIDForCtx := projectID
+			recallCtx := provider.WithUsageContext(ctx, &model.UsageContext{
+				UserID:    req.UserID,
+				ProjectID: &projectIDForCtx,
+			})
+			recallCtx = provider.WithNamespaceID(recallCtx, namespaceID)
+			recallCtx = provider.WithAPIKeyID(recallCtx, req.APIKeyID)
+			recallCtx = provider.WithOperation(recallCtx, provider.OperationEmbedding)
+
+			resp, err := ep.Embed(recallCtx, embReq)
 			if err == nil && len(resp.Embeddings) > 0 {
 				embeddingUsed = true
 
@@ -381,24 +393,6 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				// not the requested one — some providers (e.g., Ollama)
 				// ignore the dimension parameter and return their native size.
 				actualDim := len(resp.Embeddings[0])
-
-				// Record token usage.
-				if s.tokenUsage != nil {
-					usage := &model.TokenUsage{
-						ID:           uuid.New(),
-						UserID:       req.UserID,
-						ProjectID:    &projectID,
-						NamespaceID:  namespaceID,
-						Operation:    "embedding",
-						Provider:     ep.Name(),
-						Model:        resp.Model,
-						TokensInput:  resp.Usage.PromptTokens,
-						TokensOutput: resp.Usage.CompletionTokens,
-						APIKeyID:     req.APIKeyID,
-						CreatedAt:    time.Now(),
-					}
-					_ = s.tokenUsage.Record(ctx, usage)
-				}
 
 				// Over-fetch for re-ranking.
 				topK := limit * 3

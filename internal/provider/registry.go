@@ -38,13 +38,21 @@ type RegistryConfig struct {
 
 // Registry manages the lifecycle of provider slots (embedding, fact extraction,
 // entity extraction). It instantiates the appropriate provider for each slot,
-// wraps them in circuit breakers, and provides thread-safe accessors.
+// wraps them in circuit breakers and the usage-recording middleware, and
+// provides thread-safe accessors.
 type Registry struct {
 	mu        sync.RWMutex
 	embedding EmbeddingProvider
 	fact      LLMProvider
 	entity    LLMProvider
 	config    RegistryConfig
+
+	// Wrapping infrastructure. Both may be nil — when nil, providers are
+	// returned without the usage-recording middleware (e.g., in tests that
+	// don't care about token_usage rows). Captured at construction time and
+	// reused across Reload.
+	recorder UsageRecorder
+	resolver UsageContextResolver
 
 	// Cached result of probing the embedding provider for its native output
 	// dimension. The probe sends a tiny "probe" string through Embed and
@@ -55,19 +63,26 @@ type Registry struct {
 }
 
 // NewRegistry instantiates providers from config, wraps each in a circuit
-// breaker, and returns the populated Registry. It returns an error if a
-// configured slot has an invalid type or an unsupported type/slot combination
-// (e.g., anthropic for embedding).
-func NewRegistry(config RegistryConfig) (*Registry, error) {
-	r := &Registry{}
+// breaker and the usage-recording middleware, and returns the populated
+// Registry. recorder and resolver may both be nil to skip usage recording
+// (e.g., for unit tests). It returns an error if a configured slot has an
+// invalid type or an unsupported type/slot combination (e.g., anthropic
+// for embedding).
+func NewRegistry(config RegistryConfig, recorder UsageRecorder, resolver UsageContextResolver) (*Registry, error) {
+	r := &Registry{recorder: recorder, resolver: resolver}
 	if err := r.load(config); err != nil {
 		return nil, err
 	}
+	// Pre-warm the tokenizer fallback encodings so the first provider
+	// call that hits the zero-token path does not block on a remote BPE
+	// download.
+	PrewarmTokenizers()
 	// Eagerly probe the embedder dim so the first downstream caller does
 	// not pay the round-trip latency. Failures are non-fatal — the cache
 	// stays empty and EmbeddingDim retries on demand.
 	if r.embedding != nil {
-		_, _ = r.probeAndCache(context.Background(), r.embedding)
+		probeCtx := WithOperation(context.Background(), OperationProbe)
+		_, _ = r.probeAndCache(probeCtx, r.embedding)
 	}
 	return r, nil
 }
@@ -101,7 +116,7 @@ func (r *Registry) GetEntity() LLMProvider {
 // EmbeddingDim call will retry.
 func (r *Registry) Reload(config RegistryConfig) error {
 	r.mu.Lock()
-	tmp := &Registry{}
+	tmp := &Registry{recorder: r.recorder, resolver: r.resolver}
 	if err := tmp.load(config); err != nil {
 		r.mu.Unlock()
 		return err
@@ -116,7 +131,8 @@ func (r *Registry) Reload(config RegistryConfig) error {
 	r.mu.Unlock()
 
 	if embedder != nil {
-		_, _ = r.probeAndCache(context.Background(), embedder)
+		probeCtx := WithOperation(context.Background(), OperationProbe)
+		_, _ = r.probeAndCache(probeCtx, embedder)
 	}
 	return nil
 }
@@ -198,7 +214,7 @@ func (r *Registry) load(config RegistryConfig) error {
 		if err != nil {
 			return fmt.Errorf("embedding slot: %w", err)
 		}
-		r.embedding = NewCircuitBreakerEmbedding(ep, cbConfig)
+		r.embedding = r.wrapEmbedding(NewCircuitBreakerEmbedding(ep, cbConfig))
 	} else {
 		r.embedding = nil
 	}
@@ -209,7 +225,7 @@ func (r *Registry) load(config RegistryConfig) error {
 		if err != nil {
 			return fmt.Errorf("fact slot: %w", err)
 		}
-		r.fact = NewCircuitBreakerLLM(lp, cbConfig)
+		r.fact = r.wrapLLM(NewCircuitBreakerLLM(lp, cbConfig))
 	} else {
 		r.fact = nil
 	}
@@ -220,13 +236,34 @@ func (r *Registry) load(config RegistryConfig) error {
 		if err != nil {
 			return fmt.Errorf("entity slot: %w", err)
 		}
-		r.entity = NewCircuitBreakerLLM(lp, cbConfig)
+		r.entity = r.wrapLLM(NewCircuitBreakerLLM(lp, cbConfig))
 	} else {
 		r.entity = nil
 	}
 
 	r.config = config
 	return nil
+}
+
+// wrapLLM wraps a circuit-breaker-protected LLM provider in the
+// usage-recording middleware so every Complete call lands a token_usage
+// row. When no recorder is configured (e.g., in unit tests) the inner
+// provider is returned as-is.
+func (r *Registry) wrapLLM(inner LLMProvider) LLMProvider {
+	if r.recorder == nil {
+		return inner
+	}
+	return NewUsageRecordingLLM(inner, r.recorder, r.resolver)
+}
+
+// wrapEmbedding wraps a circuit-breaker-protected embedding provider in
+// the usage-recording middleware so every Embed call lands a token_usage
+// row. When no recorder is configured the inner provider is returned as-is.
+func (r *Registry) wrapEmbedding(inner EmbeddingProvider) EmbeddingProvider {
+	if r.recorder == nil {
+		return inner
+	}
+	return NewUsageRecordingEmbedding(inner, r.recorder, r.resolver)
 }
 
 // slotTimeout converts a SlotConfig timeout (seconds) to a time.Duration,

@@ -212,6 +212,81 @@ func TestTokenUsageRepo_GetByID_NotFound(t *testing.T) {
 	})
 }
 
+// TestTokenUsageRepo_ObservabilityColumns verifies that the columns added
+// in migration 000022 (sqlite) / 000019 (postgres) — success, error_code,
+// request_id — round-trip cleanly through Record + GetByID. This is the
+// migration smoke per step 11 of the audit plan: it proves the migration
+// applied AND that the repo writes/reads the new dimensions correctly on
+// both backends.
+func TestTokenUsageRepo_ObservabilityColumns(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewTokenUsageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		// Successful row with request correlation.
+		errCode := "circuit_open"
+		reqID := "req-abc-123"
+		latency := 87
+		row := &model.TokenUsage{
+			NamespaceID:  nsID,
+			Operation:    "fact_extraction",
+			Provider:     "openai",
+			Model:        "gpt-4o",
+			TokensInput:  10,
+			TokensOutput: 5,
+			LatencyMs:    &latency,
+			Success:      true,
+			RequestID:    &reqID,
+		}
+		if err := repo.Record(ctx, row); err != nil {
+			t.Fatalf("Record success row: %v", err)
+		}
+		if !row.Success {
+			t.Errorf("Success: got %v want true", row.Success)
+		}
+		if row.RequestID == nil || *row.RequestID != reqID {
+			t.Errorf("RequestID round-trip: got %v want %q", row.RequestID, reqID)
+		}
+		if row.ErrorCode != nil {
+			t.Errorf("ErrorCode for success row: got %v want nil", *row.ErrorCode)
+		}
+
+		// Failure row with bounded error code.
+		fail := &model.TokenUsage{
+			NamespaceID:  nsID,
+			Operation:    "embedding",
+			Provider:     "ollama",
+			Model:        "nomic-embed-text",
+			TokensInput:  0,
+			TokensOutput: 0,
+			LatencyMs:    &latency,
+			Success:      false,
+			ErrorCode:    &errCode,
+			RequestID:    &reqID,
+		}
+		if err := repo.Record(ctx, fail); err != nil {
+			t.Fatalf("Record failure row: %v", err)
+		}
+		fetched, err := repo.GetByID(ctx, fail.ID)
+		if err != nil {
+			t.Fatalf("GetByID failure row: %v", err)
+		}
+		if fetched.Success {
+			t.Error("Success: got true want false")
+		}
+		if fetched.ErrorCode == nil || *fetched.ErrorCode != errCode {
+			t.Errorf("ErrorCode round-trip: got %v want %q", fetched.ErrorCode, errCode)
+		}
+		if fetched.RequestID == nil || *fetched.RequestID != reqID {
+			t.Errorf("RequestID round-trip: got %v want %q", fetched.RequestID, reqID)
+		}
+		if fetched.LatencyMs == nil || *fetched.LatencyMs != latency {
+			t.Errorf("LatencyMs round-trip: got %v want %d", fetched.LatencyMs, latency)
+		}
+	})
+}
+
 func TestTokenUsageRepo_QueryByScope(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

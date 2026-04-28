@@ -106,7 +106,7 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
 	}
 
-	enrichedVal := encodeBool(r.db.Backend(), mem.Enriched)
+	enrichedVal := EncodeBool(r.db.Backend(), mem.Enriched)
 	createdAtStr := mem.CreatedAt.UTC().Format(time.RFC3339)
 	updatedAtStr := mem.UpdatedAt.UTC().Format(time.RFC3339)
 
@@ -384,7 +384,7 @@ func (r *MemoryRepo) buildFilterWhere(namespaceID uuid.UUID, filters MemoryListF
 	}
 
 	if filters.Enriched != nil {
-		wb.add("enriched = %s", encodeBool(r.db.Backend(), *filters.Enriched))
+		wb.add("enriched = %s", EncodeBool(r.db.Backend(), *filters.Enriched))
 	}
 
 	if filters.Source != "" {
@@ -602,7 +602,7 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
 	}
 
-	enrichedVal := encodeBool(r.db.Backend(), mem.Enriched)
+	enrichedVal := EncodeBool(r.db.Backend(), mem.Enriched)
 
 	query := `UPDATE memories SET content = ?, content_hash = ?, embedding_dim = ?, source = ?, tags = ?,
 		confidence = ?, importance = ?, access_count = ?, last_accessed = ?,

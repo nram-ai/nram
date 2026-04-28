@@ -15,7 +15,7 @@ func TestRegistryAllSlots(t *testing.T) {
 		Entity:    SlotConfig{Type: ProviderTypeAnthropic, APIKey: "k3", Model: "claude-sonnet-4-20250514"},
 	}
 
-	r, err := NewRegistry(cfg)
+	r, err := NewRegistry(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestRegistryAllSlots(t *testing.T) {
 }
 
 func TestRegistryEmptySlots(t *testing.T) {
-	r, err := NewRegistry(RegistryConfig{})
+	r, err := NewRegistry(RegistryConfig{}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestRegistryOnlyEmbedding(t *testing.T) {
 		Embedding: SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k1", Model: "text-embedding-3-small"},
 	}
 
-	r, err := NewRegistry(cfg)
+	r, err := NewRegistry(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestRegistryAnthropicEmbeddingError(t *testing.T) {
 		Embedding: SlotConfig{Type: ProviderTypeAnthropic, APIKey: "k1"},
 	}
 
-	_, err := NewRegistry(cfg)
+	_, err := NewRegistry(cfg, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for anthropic embedding slot, got nil")
 	}
@@ -112,7 +112,7 @@ func TestRegistryInvalidProviderType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewRegistry(tt.cfg)
+			_, err := NewRegistry(tt.cfg, nil, nil)
 			if err == nil {
 				t.Fatal("expected error for invalid provider type, got nil")
 			}
@@ -126,7 +126,7 @@ func TestRegistryReload(t *testing.T) {
 		Embedding: SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k1", Model: "m1"},
 	}
 
-	r, err := NewRegistry(cfg1)
+	r, err := NewRegistry(cfg1, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestRegistryReloadError(t *testing.T) {
 	cfg := RegistryConfig{
 		Embedding: SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k1"},
 	}
-	r, err := NewRegistry(cfg)
+	r, err := NewRegistry(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestRegistryReloadError(t *testing.T) {
 
 func TestRegistryIsConfigured(t *testing.T) {
 	// No embedding = not configured.
-	r, err := NewRegistry(RegistryConfig{})
+	r, err := NewRegistry(RegistryConfig{}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestRegistryIsConfigured(t *testing.T) {
 	// With embedding = configured.
 	r2, err := NewRegistry(RegistryConfig{
 		Embedding: SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k1"},
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestRegistryIsConfigured(t *testing.T) {
 	r3, err := NewRegistry(RegistryConfig{
 		Fact:   SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k1"},
 		Entity: SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k1"},
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestRegistryConcurrentAccess(t *testing.T) {
 		Entity:    SlotConfig{Type: ProviderTypeAnthropic, APIKey: "k3", Model: "m3"},
 	}
 
-	r, err := NewRegistry(cfg)
+	r, err := NewRegistry(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestRegistryEmbeddingDim_ReloadInvalidatesCache(t *testing.T) {
 	cfg := RegistryConfig{
 		Embedding: SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k", Model: "m"},
 	}
-	r, err := NewRegistry(cfg)
+	r, err := NewRegistry(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry error: %v", err)
 	}

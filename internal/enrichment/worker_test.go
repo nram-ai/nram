@@ -398,16 +398,33 @@ func newTestHarness(
 		vectors:  &mockVectorWriter{},
 	}
 
+	// Wrap test provider stubs so the middleware writes token_usage rows
+	// to h.tokens on every wrapped call — matches production wiring
+	// (registry wrap) without spinning up a registry in unit tests.
+	factFn := provider.WrapLLMForTest(constLLM(factLLM), h.tokens)
+	entityFn := provider.WrapLLMForTest(constLLM(entityLLM), h.tokens)
+	embedFn := provider.WrapEmbeddingForTest(constEmbed(embedProv), h.tokens)
+
 	h.pool = NewWorkerPool(
 		WorkerConfig{Workers: 1, PollInterval: 10 * time.Millisecond},
 		h.reader, h.updater, h.creator, nil, h.queue,
-		h.entities, h.rels, h.lineage, h.tokens, nil, h.vectors,
-		func() provider.LLMProvider { return factLLM },
-		func() provider.LLMProvider { return entityLLM },
-		func() provider.EmbeddingProvider { return embedProv },
+		h.entities, h.rels, h.lineage, h.vectors,
+		factFn, entityFn, embedFn,
 		nil, nil, nil,
 	)
 	return h
+}
+
+// constLLM returns a closure that always yields p (which may be nil).
+// Always returns a non-nil function so worker code can call it without
+// nil-checking; the closure body returns whatever p is.
+func constLLM(p provider.LLMProvider) func() provider.LLMProvider {
+	return func() provider.LLMProvider { return p }
+}
+
+// constEmbed mirrors constLLM for embedding providers.
+func constEmbed(p provider.EmbeddingProvider) func() provider.EmbeddingProvider {
+	return func() provider.EmbeddingProvider { return p }
 }
 
 // ---------------------------------------------------------------------------
@@ -934,16 +951,19 @@ func TestProcessBatch_SingleSharedEmbed(t *testing.T) {
 		t.Errorf("expected %d completed jobs, got %d", len(jobs), len(h.queue.completed))
 	}
 
-	// Embedding usage records are split per-job (one record each) so
-	// downstream billing can attribute by parent memory.
+	// One batched embed call → one aggregate token_usage row. Per-job
+	// attribution was removed when recording centralized in the
+	// UsageRecordingProvider middleware (see plan: "aggregate-only is
+	// the correct trade"). Per-job attribution can be recovered via
+	// request_id correlation when needed.
 	var embedRecords int
 	for _, r := range h.tokens.records {
 		if r.Operation == "embedding" {
 			embedRecords++
 		}
 	}
-	if embedRecords != len(jobs) {
-		t.Errorf("expected %d per-job embedding usage records, got %d", len(jobs), embedRecords)
+	if embedRecords != 1 {
+		t.Errorf("expected 1 aggregate embedding usage record, got %d", embedRecords)
 	}
 }
 

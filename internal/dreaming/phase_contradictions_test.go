@@ -49,12 +49,6 @@ func (stubLineageWriter) CountConflictsBetween(_ context.Context, _, _, _ uuid.U
 	return 0, nil
 }
 
-type stubUsageCtxResolver struct{}
-
-func (stubUsageCtxResolver) ResolveUsageContext(_ context.Context, _ uuid.UUID) (*model.UsageContext, error) {
-	return &model.UsageContext{}, nil
-}
-
 type stubSettings struct{}
 
 func (stubSettings) Resolve(_ context.Context, _ string, _ string) (string, error) {
@@ -111,11 +105,11 @@ func TestContradictionPhase_ZeroUsageBudgetAdvances(t *testing.T) {
 		reader,
 		&updatingMemoryWriter{},
 		stubLineageWriter{},
-		func() provider.LLMProvider { return llm },
+		func() provider.LLMProvider {
+			return provider.NewUsageRecordingLLM(llm, recorder, nil)
+		},
 		nilEmbedder,
 		stubSettings{},
-		recorder,
-		stubUsageCtxResolver{},
 	)
 
 	budget := NewTokenBudget(500, 128) // small on purpose
@@ -176,11 +170,11 @@ func TestContradictionPhase_ParseErrorStillAccountsUsage(t *testing.T) {
 		reader,
 		&updatingMemoryWriter{},
 		stubLineageWriter{},
-		func() provider.LLMProvider { return llm },
+		func() provider.LLMProvider {
+			return provider.NewUsageRecordingLLM(llm, recorder, nil)
+		},
 		nilEmbedder,
 		stubSettings{},
-		recorder,
-		stubUsageCtxResolver{},
 	)
 
 	budget := NewTokenBudget(10000, 2048)
@@ -220,7 +214,6 @@ func TestContradictionPhase_ParseErrorStillAccountsUsage(t *testing.T) {
 // remaining budget.
 func TestContradictionPhase_PreflightStopsWhenBudgetTooSmall(t *testing.T) {
 	llm := &zeroUsageLLM{}
-	recorder := &recordingTokenRecorder{}
 	memories := makeMemories(4)
 	reader := &fakeMemoryReader{list: memories}
 
@@ -231,8 +224,6 @@ func TestContradictionPhase_PreflightStopsWhenBudgetTooSmall(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		nilEmbedder,
 		stubSettings{},
-		recorder,
-		stubUsageCtxResolver{},
 	)
 
 	// PerCallCap alone exceeds total budget — every pre-flight check fails.
@@ -259,7 +250,6 @@ func TestContradictionPhase_NoStaleReturnsResidualFalse(t *testing.T) {
 	writer := &updatingMemoryWriter{}
 	llm := &zeroUsageLLM{}
 	emb := &staticEmbedder{}
-	recorder := &recordingTokenRecorder{}
 
 	phase := NewContradictionPhase(
 		reader,
@@ -268,8 +258,6 @@ func TestContradictionPhase_NoStaleReturnsResidualFalse(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
 		stubSettings{},
-		recorder,
-		stubUsageCtxResolver{},
 	)
 
 	budget := NewTokenBudget(10000, 2048)
@@ -299,7 +287,6 @@ func TestContradictionPhase_NoStaleReturnsResidualFalse(t *testing.T) {
 // cover, the phase stamps the subset it dispatched and reports residual=true.
 func TestContradictionPhase_StampsDispatchedAndReportsResidualWhenCapHit(t *testing.T) {
 	llm := &zeroUsageLLM{}
-	recorder := &recordingTokenRecorder{}
 	mems := makeMemories(100)
 	reader := &fakeMemoryReader{list: mems}
 	writer := &updatingMemoryWriter{}
@@ -311,8 +298,6 @@ func TestContradictionPhase_StampsDispatchedAndReportsResidualWhenCapHit(t *test
 		func() provider.LLMProvider { return llm },
 		nilEmbedder,
 		stubSettings{}, // cap defaults to 30, K defaults to 4
-		recorder,
-		stubUsageCtxResolver{},
 	)
 
 	budget := NewTokenBudget(1_000_000, 2048)
@@ -366,7 +351,6 @@ func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
 	reader := &fakeMemoryReader{list: mems}
 	writer := &updatingMemoryWriter{}
 	llm := &zeroUsageLLM{}
-	recorder := &recordingTokenRecorder{}
 
 	phase := NewContradictionPhase(
 		reader,
@@ -375,8 +359,6 @@ func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		nilEmbedder,
 		stubSettings{},
-		recorder,
-		stubUsageCtxResolver{},
 	)
 
 	budget := NewTokenBudget(100_000, 2048)
@@ -405,7 +387,6 @@ func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
 // is that stability, once reached, is preserved.
 func TestContradictionPhase_StampingIsIdempotent(t *testing.T) {
 	llm := &zeroUsageLLM{}
-	recorder := &recordingTokenRecorder{}
 	mems := makeMemories(10) // all stale
 	store := &mutableMemoryStore{memories: mems}
 
@@ -416,8 +397,6 @@ func TestContradictionPhase_StampingIsIdempotent(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		nilEmbedder,
 		stubSettings{},
-		recorder,
-		stubUsageCtxResolver{},
 	)
 
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
@@ -502,8 +481,6 @@ func TestContradictionPhase_TooFewMemoriesIsNoOp(t *testing.T) {
 			func() provider.LLMProvider { return llm },
 			nilEmbedder,
 			stubSettings{},
-			&recordingTokenRecorder{},
-			stubUsageCtxResolver{},
 		)
 
 		ns := uuid.New()
@@ -546,8 +523,6 @@ func TestContradictionPhase_EmbedderNilDegradesSafely(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		nilEmbedder,
 		stubSettings{},
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 
 	budget := NewTokenBudget(1_000_000, 2048)
@@ -603,8 +578,6 @@ func TestContradictionPhase_EmbedderErrorDegradesSafely(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
 		stubSettings{},
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 
 	budget := NewTokenBudget(1_000_000, 2048)
@@ -748,8 +721,6 @@ func runContradictionCycle(t *testing.T, llm provider.LLMProvider, mems []model.
 		func() provider.LLMProvider { return llm },
 		nilEmbedder,
 		stubSettings{},
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 	budget := NewTokenBudget(1_000_000, 2048)
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
@@ -1014,8 +985,6 @@ func TestContradictionPhase_VectorStoreHitsAvoidEmbedding(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
 		paraphraseSettings(false, 0.97), // disabled — exercise only the read path
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 	phase.AttachVectorStore(vs)
 
@@ -1060,8 +1029,6 @@ func TestContradictionPhase_VectorStoreMissesTriggerEmbed(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
 		paraphraseSettings(false, 0.97),
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 	phase.AttachVectorStore(vs)
 
@@ -1113,8 +1080,6 @@ func TestContradictionPhase_VectorStoreErrorFallsBackToFullEmbed(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
 		paraphraseSettings(false, 0.97),
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 	phase.AttachVectorStore(vs)
 
@@ -1155,8 +1120,6 @@ func TestContradictionPhase_ParaphraseAutoSupersede(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
 		paraphraseSettings(true, 0.97),
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 	phase.AttachVectorStore(vs)
 	phase.AttachVectorPurger(vs)
@@ -1213,8 +1176,6 @@ func TestContradictionPhase_ParaphraseDisabledKeepsLLMPath(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
 		paraphraseSettings(false, 0.97),
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 	phase.AttachVectorStore(vs)
 	phase.AttachVectorPurger(vs)
@@ -1257,8 +1218,6 @@ func TestContradictionPhase_ParaphraseTiebreakOlderWins(t *testing.T) {
 		func() provider.LLMProvider { return &zeroUsageLLM{} },
 		func() provider.EmbeddingProvider { return emb },
 		paraphraseSettings(true, 0.97),
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 	phase.AttachVectorStore(vs)
 
@@ -1302,8 +1261,6 @@ func TestContradictionPhase_SearchFailureUsesInProcessTopK(t *testing.T) {
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
 		paraphraseSettings(false, 0.97),
-		&recordingTokenRecorder{},
-		stubUsageCtxResolver{},
 	)
 	phase.AttachVectorStore(vs)
 

@@ -135,7 +135,10 @@ func newRecallService(
 	embedFn func() provider.EmbeddingProvider,
 ) (*RecallService, *mockTokenUsageRepo) {
 	tokenUsage := &mockTokenUsageRepo{}
-	svc := NewRecallService(memories, projects, namespaces, tokenUsage, vectorSearch, entityReader, traverser, &mockMemoryShareReader{}, embedFn)
+	// Wrap embedFn so the middleware writes token_usage rows on every
+	// Embed call — matches production wiring.
+	wrapped := provider.WrapEmbeddingForTest(embedFn, tokenUsage)
+	svc := NewRecallService(memories, projects, namespaces, vectorSearch, entityReader, traverser, &mockMemoryShareReader{}, wrapped)
 	return svc, tokenUsage
 }
 

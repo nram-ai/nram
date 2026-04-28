@@ -45,9 +45,9 @@ func (r *WebAuthnRepo) Create(ctx context.Context, cred *model.WebAuthnCredentia
 	_, err := r.db.Exec(ctx, query,
 		cred.ID.String(), cred.UserID.String(), cred.Name, cred.CredentialID,
 		cred.PublicKey, cred.AAGUID, cred.SignCount, transportsVal,
-		encodeBool(r.db.Backend(), cred.UserVerified),
-		encodeBool(r.db.Backend(), cred.BackupEligible),
-		encodeBool(r.db.Backend(), cred.BackupState),
+		EncodeBool(r.db.Backend(), cred.UserVerified),
+		EncodeBool(r.db.Backend(), cred.BackupEligible),
+		EncodeBool(r.db.Backend(), cred.BackupState),
 		cred.AttestationType, now,
 	)
 	if err != nil {

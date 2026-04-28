@@ -95,20 +95,6 @@ type SettingsResolver interface {
 	ResolveBool(ctx context.Context, key string, scope string) bool
 }
 
-// TokenRecorder persists token-usage telemetry. Dreaming phases attribute
-// every LLM call to the token_usage table via this interface so the UI's
-// analytics view reflects actual consumption.
-type TokenRecorder interface {
-	Record(ctx context.Context, usage *model.TokenUsage) error
-}
-
-// UsageContextResolver resolves org, user, and project IDs from a namespace
-// ID so that token usage records written by dreaming can be attributed to
-// the correct owner in analytics.
-type UsageContextResolver interface {
-	ResolveUsageContext(ctx context.Context, namespaceID uuid.UUID) (*model.UsageContext, error)
-}
-
 // VectorPurger removes a vector from the active vector store. The dreaming
 // system calls it whenever a memory or entity transitions to a state in which
 // it should no longer surface via vector search: soft-delete, novelty-audit

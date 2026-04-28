@@ -87,7 +87,6 @@ type ExtractionService struct {
 	projects      ProjectRepository
 	namespaces    NamespaceRepository
 	ingestionLogs IngestionLogRepository
-	tokenUsage    TokenUsageRepository
 	entities      EntityCreator
 	relationships RelationshipCreator
 	lineage       LineageCreator
@@ -97,13 +96,15 @@ type ExtractionService struct {
 	embedProvider func() provider.EmbeddingProvider
 }
 
-// NewExtractionService creates a new ExtractionService with the given dependencies.
+// NewExtractionService creates a new ExtractionService with the given
+// dependencies. token_usage recording is handled by the
+// UsageRecordingProvider middleware wrapping the registry-issued
+// providers — callers do not need to pass a TokenUsageRepository.
 func NewExtractionService(
 	memories MemoryRepository,
 	projects ProjectRepository,
 	namespaces NamespaceRepository,
 	ingestionLogs IngestionLogRepository,
-	tokenUsage TokenUsageRepository,
 	entities EntityCreator,
 	relationships RelationshipCreator,
 	lineage LineageCreator,
@@ -117,7 +118,6 @@ func NewExtractionService(
 		projects:       projects,
 		namespaces:     namespaces,
 		ingestionLogs:  ingestionLogs,
-		tokenUsage:     tokenUsage,
 		entities:       entities,
 		relationships:  relationships,
 		lineage:        lineage,
@@ -216,6 +216,19 @@ func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*Ex
 	}
 	_ = s.ingestionLogs.Create(ctx, ingLog)
 
+	// Stamp ownership/correlation context once so the UsageRecordingProvider
+	// middleware can attribute every downstream provider call to the right
+	// org/user/project/namespace/api-key/memory without a per-call DB hit.
+	projectIDForCtx := project.ID
+	usageCtx := provider.WithUsageContext(ctx, &model.UsageContext{
+		OrgID:     req.OrgID,
+		UserID:    req.UserID,
+		ProjectID: &projectIDForCtx,
+	})
+	usageCtx = provider.WithNamespaceID(usageCtx, ns.ID)
+	usageCtx = provider.WithMemoryID(usageCtx, rawMemID)
+	usageCtx = provider.WithAPIKeyID(usageCtx, req.APIKeyID)
+
 	var totalTokens ExtractTokens
 	var extractedMemories []ExtractedMemory
 
@@ -225,7 +238,7 @@ func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*Ex
 	if s.factProvider != nil {
 		fp := s.factProvider()
 		if fp != nil {
-			facts, factErr = s.extractFacts(ctx, fp, req.Content, project, ns, rawMemID, req, &totalTokens)
+			facts, factErr = s.extractFacts(usageCtx, fp, req.Content, &totalTokens)
 		}
 	}
 
@@ -262,8 +275,11 @@ func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*Ex
 			}
 			_ = s.lineage.Create(ctx, lineageRecord)
 
-			// Embed the extracted fact if provider is available.
-			s.embedMemory(ctx, childMem, project, ns, req, &totalTokens)
+			// Embed the extracted fact if provider is available. The child
+			// memory ID overrides the raw memory ID stamped on usageCtx so
+			// the embedding token_usage row points at the child.
+			childCtx := provider.WithMemoryID(usageCtx, childID)
+			s.embedMemory(childCtx, childMem, &totalTokens)
 
 			extractedMemories = append(extractedMemories, ExtractedMemory{
 				ID:         childID,
@@ -279,7 +295,7 @@ func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*Ex
 	if s.entityProvider != nil {
 		ep := s.entityProvider()
 		if ep != nil {
-			ec, rc := s.extractEntities(ctx, ep, req.Content, project, ns, rawMemID, req, &totalTokens)
+			ec, rc := s.extractEntities(usageCtx, ep, req.Content, ns, rawMemID, &totalTokens)
 			entitiesCreated = ec
 			relationshipsCreated = rc
 		}
@@ -301,10 +317,6 @@ func (s *ExtractionService) extractFacts(
 	ctx context.Context,
 	fp provider.LLMProvider,
 	content string,
-	project *model.Project,
-	ns *model.Namespace,
-	rawMemID uuid.UUID,
-	req *StoreRequest,
 	tokens *ExtractTokens,
 ) ([]ExtractedFact, error) {
 	completionReq := &provider.CompletionRequest{
@@ -317,32 +329,16 @@ func (s *ExtractionService) extractFacts(
 		JSONMode:    true,
 	}
 
-	resp, err := fp.Complete(ctx, completionReq)
+	resp, err := fp.Complete(provider.WithOperation(ctx, provider.OperationFactExtraction), completionReq)
 	if err != nil {
 		return nil, fmt.Errorf("fact extraction LLM call failed: %w", err)
 	}
 
-	// Record token usage.
+	// Aggregate in-memory token counter for the API response. The
+	// authoritative per-call record is written by the
+	// UsageRecordingProvider middleware.
 	tokens.Input += resp.Usage.PromptTokens
 	tokens.Output += resp.Usage.CompletionTokens
-
-	projectID := project.ID
-	usage := &model.TokenUsage{
-		ID:           uuid.New(),
-		OrgID:        req.OrgID,
-		UserID:       req.UserID,
-		ProjectID:    &projectID,
-		NamespaceID:  ns.ID,
-		Operation:    "fact_extraction",
-		Provider:     fp.Name(),
-		Model:        resp.Model,
-		TokensInput:  resp.Usage.PromptTokens,
-		TokensOutput: resp.Usage.CompletionTokens,
-		MemoryID:     &rawMemID,
-		APIKeyID:     req.APIKeyID,
-		CreatedAt:    time.Now(),
-	}
-	_ = s.tokenUsage.Record(ctx, usage)
 
 	facts, err := parseFactResponse(resp.Content)
 	if err != nil {
@@ -357,10 +353,8 @@ func (s *ExtractionService) extractEntities(
 	ctx context.Context,
 	ep provider.LLMProvider,
 	content string,
-	project *model.Project,
 	ns *model.Namespace,
 	rawMemID uuid.UUID,
-	req *StoreRequest,
 	tokens *ExtractTokens,
 ) (entitiesCreated int, relationshipsCreated int) {
 	completionReq := &provider.CompletionRequest{
@@ -373,32 +367,16 @@ func (s *ExtractionService) extractEntities(
 		JSONMode:    true,
 	}
 
-	resp, err := ep.Complete(ctx, completionReq)
+	resp, err := ep.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), completionReq)
 	if err != nil {
 		return 0, 0
 	}
 
-	// Record token usage.
+	// Aggregate in-memory token counter for the API response. The
+	// authoritative per-call record is written by the
+	// UsageRecordingProvider middleware.
 	tokens.Input += resp.Usage.PromptTokens
 	tokens.Output += resp.Usage.CompletionTokens
-
-	projectID := project.ID
-	usage := &model.TokenUsage{
-		ID:           uuid.New(),
-		OrgID:        req.OrgID,
-		UserID:       req.UserID,
-		ProjectID:    &projectID,
-		NamespaceID:  ns.ID,
-		Operation:    "entity_extraction",
-		Provider:     ep.Name(),
-		Model:        resp.Model,
-		TokensInput:  resp.Usage.PromptTokens,
-		TokensOutput: resp.Usage.CompletionTokens,
-		MemoryID:     &rawMemID,
-		APIKeyID:     req.APIKeyID,
-		CreatedAt:    time.Now(),
-	}
-	_ = s.tokenUsage.Record(ctx, usage)
 
 	result, err := parseEntityResponse(resp.Content)
 	if err != nil {
@@ -479,9 +457,6 @@ func (s *ExtractionService) extractEntities(
 func (s *ExtractionService) embedMemory(
 	ctx context.Context,
 	mem *model.Memory,
-	project *model.Project,
-	ns *model.Namespace,
-	req *StoreRequest,
 	tokens *ExtractTokens,
 ) {
 	if s.embedProvider == nil {
@@ -499,7 +474,7 @@ func (s *ExtractionService) embedMemory(
 		Dimension: dim,
 	}
 
-	resp, err := ep.Embed(ctx, embReq)
+	resp, err := ep.Embed(provider.WithOperation(ctx, provider.OperationEmbedding), embReq)
 	if err != nil || len(resp.Embeddings) == 0 {
 		return
 	}
@@ -511,26 +486,8 @@ func (s *ExtractionService) embedMemory(
 	mem.EmbeddingDim = &embDim
 
 	if s.vectorStore != nil {
-		_ = s.vectorStore.Upsert(ctx, storage.VectorKindMemory, mem.ID, ns.ID, resp.Embeddings[0], embDim)
+		_ = s.vectorStore.Upsert(ctx, storage.VectorKindMemory, mem.ID, mem.NamespaceID, resp.Embeddings[0], embDim)
 	}
-
-	projectID := project.ID
-	usage := &model.TokenUsage{
-		ID:           uuid.New(),
-		OrgID:        req.OrgID,
-		UserID:       req.UserID,
-		ProjectID:    &projectID,
-		NamespaceID:  ns.ID,
-		Operation:    "embedding",
-		Provider:     ep.Name(),
-		Model:        resp.Model,
-		TokensInput:  resp.Usage.PromptTokens,
-		TokensOutput: resp.Usage.CompletionTokens,
-		MemoryID:     &mem.ID,
-		APIKeyID:     req.APIKeyID,
-		CreatedAt:    time.Now(),
-	}
-	_ = s.tokenUsage.Record(ctx, usage)
 }
 
 // parseFactResponse parses an LLM fact extraction response. With JSON mode

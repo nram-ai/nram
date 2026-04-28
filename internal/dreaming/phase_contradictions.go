@@ -58,8 +58,6 @@ type ContradictionPhase struct {
 	llmProvider      LLMProviderFunc
 	embedderProvider EmbeddingProviderFunc
 	settings         SettingsResolver
-	tokens           TokenRecorder
-	usageCtx         UsageContextResolver
 	vectorStore      storage.VectorStore
 	vectorPurger     VectorPurger
 }
@@ -82,6 +80,8 @@ func (p *ContradictionPhase) AttachVectorPurger(vp VectorPurger) {
 // NewContradictionPhase creates a new contradiction detection phase.
 // When embedderProvider returns nil (either absent or transiently failed),
 // the phase degrades to a deterministic ID-ordered neighbour walk.
+// token_usage rows are written by the UsageRecordingProvider middleware
+// wrapping the registry-issued providers; no per-phase recorder is needed.
 func NewContradictionPhase(
 	memories MemoryReader,
 	memWriter MemoryWriter,
@@ -89,8 +89,6 @@ func NewContradictionPhase(
 	llmProvider LLMProviderFunc,
 	embedderProvider EmbeddingProviderFunc,
 	settings SettingsResolver,
-	tokens TokenRecorder,
-	usageCtx UsageContextResolver,
 ) *ContradictionPhase {
 	return &ContradictionPhase{
 		memories:         memories,
@@ -99,8 +97,6 @@ func NewContradictionPhase(
 		llmProvider:      llmProvider,
 		embedderProvider: embedderProvider,
 		settings:         settings,
-		tokens:           tokens,
-		usageCtx:         usageCtx,
 	}
 }
 
@@ -142,6 +138,12 @@ func orderedPairKey(a, b uuid.UUID) pairKey {
 }
 
 func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+	// Stamp namespace context once so every provider call emitted by this
+	// phase lands a token_usage row attributed to the right scope. The
+	// UsageRecordingProvider middleware reads namespace_id from ctx and,
+	// when no UsageContext is pre-stamped, falls back to its injected
+	// resolver to populate org/user/project.
+	ctx = provider.WithNamespaceID(ctx, cycle.NamespaceID)
 	llm := p.llmProvider()
 	if llm == nil {
 		slog.Info("dreaming: no LLM provider for contradiction detection, skipping")
@@ -176,15 +178,11 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		slog.Warn("dreaming: neighbour selection failed; degrading to ID-ordered walk",
 			"cycle", cycle.ID, "err", selErr)
 	}
+	// token_usage rows for the embedding probe + batch are written by
+	// the UsageRecordingProvider middleware. Here we only spend against
+	// the dream-cycle budget.
 	if embedTokens > 0 {
 		_ = budget.Spend(embedTokens)
-		embedderName := ""
-		if p.embedderProvider != nil {
-			if emb := p.embedderProvider(); emb != nil {
-				embedderName = emb.Name()
-			}
-		}
-		p.record(ctx, cycle, "dream_contradiction_embedding", embedderName, nil, embedTokens, 0)
 	}
 
 	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamContradictionPrompt, "global")
@@ -248,15 +246,14 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		pairDur := time.Since(pairStart)
 
 		// Account for usage before handling the error. Parse-error paths
-		// still return non-nil usage from the LLM call, and we must record
-		// what it cost even if we can't use the result.
+		// still return non-nil usage from the LLM call. token_usage rows
+		// are written by the UsageRecordingProvider middleware; here we
+		// only charge the dream-cycle budget.
 		var spendErr error
 		callTokens := 0
 		if usage != nil {
 			callTokens = usage.TotalTokens
 			spendErr = budget.Spend(usage.TotalTokens)
-			p.record(ctx, cycle, "dream_contradiction", llm.Name(), &pair[0].ID,
-				usage.PromptTokens, usage.CompletionTokens)
 		}
 
 		if err != nil {
@@ -500,7 +497,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 	// matches what the service write path stores via len(vec).
 	dim := 0
 	if embedder != nil {
-		probeResp, probeErr := embedder.Embed(ctx, &provider.EmbeddingRequest{
+		probeResp, probeErr := embedder.Embed(provider.WithOperation(ctx, provider.OperationDreamContradictionEmbed), &provider.EmbeddingRequest{
 			Input: []string{"probe"},
 		})
 		if probeErr != nil || probeResp == nil || len(probeResp.Embeddings) == 0 || len(probeResp.Embeddings[0]) == 0 {
@@ -552,7 +549,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 		slog.Info("dreaming: embedding miss set for neighbour selection",
 			"provider", embedder.Name(), "misses", len(inputs), "total", len(allMemories))
 		embedStart := time.Now()
-		resp, err := embedder.Embed(ctx, &provider.EmbeddingRequest{
+		resp, err := embedder.Embed(provider.WithOperation(ctx, provider.OperationDreamContradictionEmbed), &provider.EmbeddingRequest{
 			Input:     inputs,
 			Dimension: dim,
 		})
@@ -853,6 +850,8 @@ func (p *ContradictionPhase) checkContradiction(
 	prompt string,
 	budget *TokenBudget,
 ) (bool, string, string, *provider.TokenUsage, error) {
+	ctx = provider.WithOperation(ctx, provider.OperationDreamContradiction)
+	ctx = provider.WithMemoryID(ctx, a.ID)
 	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
@@ -896,38 +895,3 @@ func (p *ContradictionPhase) checkContradiction(
 	return result.Contradicts, result.Winner, result.Explanation, &usage, nil
 }
 
-// record persists a token_usage row for a dreaming operation. Shared by
-// the per-pair LLM contradiction check and the per-cycle embedding call
-// that powers neighbour selection.
-func (p *ContradictionPhase) record(
-	ctx context.Context,
-	cycle *model.DreamCycle,
-	operation, providerName string,
-	memoryID *uuid.UUID,
-	tokensIn, tokensOut int,
-) {
-	if p.tokens == nil || (tokensIn == 0 && tokensOut == 0) {
-		return
-	}
-	rec := &model.TokenUsage{
-		ID:           uuid.New(),
-		NamespaceID:  cycle.NamespaceID,
-		Operation:    operation,
-		Provider:     providerName,
-		TokensInput:  tokensIn,
-		TokensOutput: tokensOut,
-		MemoryID:     memoryID,
-		CreatedAt:    time.Now().UTC(),
-	}
-	if p.usageCtx != nil {
-		if uc, err := p.usageCtx.ResolveUsageContext(ctx, cycle.NamespaceID); err == nil && uc != nil {
-			rec.OrgID = uc.OrgID
-			rec.UserID = uc.UserID
-			rec.ProjectID = uc.ProjectID
-		}
-	}
-	if err := p.tokens.Record(ctx, rec); err != nil {
-		slog.Warn("dreaming: token usage record failed",
-			"phase", model.DreamPhaseContradictions, "operation", operation, "err", err)
-	}
-}

@@ -350,14 +350,13 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	)
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, namespaceLookup,
-		&rbacTokenUsageRepo{},
 		nil, nil, nil, nil, nil,
-	)
+		)
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil, nil, nil, nil, nil)
 	updateSvc := service.NewUpdateService(
 		memRepo, projectLookup, &rbacLineageCreator{},
-		nil, &rbacTokenUsageRepo{}, nil,
-	)
+		nil, nil,
+		)
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
 		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},

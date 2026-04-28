@@ -139,7 +139,7 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 		}, nil
 	}
 
-	tmpReg, err := provider.NewRegistry(cfg)
+	tmpReg, err := provider.NewRegistry(cfg, nil, nil)
 	if err != nil {
 		return &api.ProviderTestResult{
 			Success:   false,

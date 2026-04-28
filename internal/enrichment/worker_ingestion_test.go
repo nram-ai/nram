@@ -117,14 +117,18 @@ func newIngestionHarness(
 		DefaultDeduplicationConfig,
 	)
 
+	// Wrap test provider stubs so the middleware writes token_usage rows
+	// to h.tokens — matches production registry wiring.
+	factFn := provider.WrapLLMForTest(constLLM(factLLM), h.tokens)
+	entityFn := provider.WrapLLMForTest(constLLM(entityLLM), h.tokens)
+	ingestionFn := provider.WrapLLMForTest(constLLM(ingestionLLM), h.tokens)
+	embedFn := provider.WrapEmbeddingForTest(constEmbed(embedProv), h.tokens)
+
 	h.pool = NewWorkerPool(
 		WorkerConfig{Workers: 1, PollInterval: 10 * time.Millisecond},
 		h.reader, h.updater, h.creator, h.deleter, h.queue,
-		h.entities, h.rels, h.lineage, h.tokens, nil, h.vectors,
-		func() provider.LLMProvider { return factLLM },
-		func() provider.LLMProvider { return entityLLM },
-		func() provider.EmbeddingProvider { return embedProv },
-		func() provider.LLMProvider { return ingestionLLM },
+		h.entities, h.rels, h.lineage, h.vectors,
+		factFn, entityFn, embedFn, ingestionFn,
 		dedup,
 		h.settings,
 	)

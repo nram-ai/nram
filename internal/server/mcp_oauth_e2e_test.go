@@ -416,7 +416,6 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		memRepo,
 		projectLookup,
 		namespaceLookup,
-		&e2eTokenUsageRepo{},
 		nil, nil, nil, nil, nil,
 	)
 
@@ -431,9 +430,8 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		projectLookup,
 		&e2eLineageCreator{},
 		nil,
-		&e2eTokenUsageRepo{},
 		nil,
-	)
+		)
 
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo,
@@ -1937,7 +1935,6 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 		memRepo,
 		projectLookup,
 		namespaceLookup,
-		&e2eTokenUsageRepo{},
 		nil, nil, nil, nil, nil,
 	)
 
@@ -1952,9 +1949,8 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 		projectLookup,
 		&e2eLineageCreator{},
 		nil,
-		&e2eTokenUsageRepo{},
 		nil,
-	)
+		)
 
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo,

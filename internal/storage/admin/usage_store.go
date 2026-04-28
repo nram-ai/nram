@@ -55,6 +55,11 @@ func (s *UsageStore) QueryUsage(ctx context.Context, filter api.UsageFilter) (*a
 		args = append(args, filter.To.Format("2006-01-02T15:04:05Z"))
 		argIdx++
 	}
+	if filter.SuccessOnly != nil {
+		conditions = append(conditions, s.placeholder("success", argIdx))
+		args = append(args, storage.EncodeBool(s.db.Backend(), *filter.SuccessOnly))
+		argIdx++
+	}
 
 	whereClause := ""
 	if len(conditions) > 0 {
@@ -119,6 +124,12 @@ func (s *UsageStore) groupByColumn(groupBy string) string {
 		return "operation"
 	case "model":
 		return "model"
+	case "provider":
+		return "provider"
+	case "success":
+		return "success"
+	case "request_id":
+		return "request_id"
 	default:
 		return "operation"
 	}

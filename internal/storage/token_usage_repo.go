@@ -27,12 +27,14 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 	}
 
 	query := `INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id,
-		operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id, latency_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id,
+		latency_ms, success, error_code, request_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
 		query = `INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id,
-			operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id, latency_ms)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
+			operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id,
+			latency_ms, success, error_code, request_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
@@ -49,6 +51,9 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 		nullableUUIDStr(usage.MemoryID),
 		nullableUUIDStr(usage.APIKeyID),
 		usage.LatencyMs,
+		EncodeBool(r.db.Backend(), usage.Success),
+		usage.ErrorCode,
+		usage.RequestID,
 	)
 	if err != nil {
 		return fmt.Errorf("token usage record: %w", err)
@@ -162,7 +167,7 @@ func nullableUUIDStr(id *uuid.UUID) *string {
 
 const selectTokenUsageColumns = `SELECT id, org_id, user_id, project_id, namespace_id,
 	operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id,
-	latency_ms, created_at`
+	latency_ms, success, error_code, request_id, created_at`
 
 func (r *TokenUsageRepo) scanTokenUsage(row *sql.Row) (*model.TokenUsage, error) {
 	var usage model.TokenUsage
@@ -171,20 +176,24 @@ func (r *TokenUsageRepo) scanTokenUsage(row *sql.Row) (*model.TokenUsage, error)
 	var namespaceIDStr string
 	var memoryIDStr, apiKeyIDStr sql.NullString
 	var latencyMs sql.NullInt64
+	var success bool
+	var errorCode, requestID sql.NullString
 	var createdAtStr string
 
 	err := row.Scan(
 		&idStr, &orgIDStr, &userIDStr, &projectIDStr, &namespaceIDStr,
 		&usage.Operation, &usage.Provider, &usage.Model,
 		&usage.TokensInput, &usage.TokensOutput,
-		&memoryIDStr, &apiKeyIDStr, &latencyMs, &createdAtStr,
+		&memoryIDStr, &apiKeyIDStr, &latencyMs,
+		&success, &errorCode, &requestID, &createdAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	return populateTokenUsage(&usage, idStr, orgIDStr, userIDStr, projectIDStr,
-		namespaceIDStr, memoryIDStr, apiKeyIDStr, latencyMs, createdAtStr)
+		namespaceIDStr, memoryIDStr, apiKeyIDStr, latencyMs,
+		success, errorCode, requestID, createdAtStr)
 }
 
 func (r *TokenUsageRepo) scanTokenUsageFromRows(rows *sql.Rows) (*model.TokenUsage, error) {
@@ -194,20 +203,24 @@ func (r *TokenUsageRepo) scanTokenUsageFromRows(rows *sql.Rows) (*model.TokenUsa
 	var namespaceIDStr string
 	var memoryIDStr, apiKeyIDStr sql.NullString
 	var latencyMs sql.NullInt64
+	var success bool
+	var errorCode, requestID sql.NullString
 	var createdAtStr string
 
 	err := rows.Scan(
 		&idStr, &orgIDStr, &userIDStr, &projectIDStr, &namespaceIDStr,
 		&usage.Operation, &usage.Provider, &usage.Model,
 		&usage.TokensInput, &usage.TokensOutput,
-		&memoryIDStr, &apiKeyIDStr, &latencyMs, &createdAtStr,
+		&memoryIDStr, &apiKeyIDStr, &latencyMs,
+		&success, &errorCode, &requestID, &createdAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("token usage scan rows: %w", err)
 	}
 
 	return populateTokenUsage(&usage, idStr, orgIDStr, userIDStr, projectIDStr,
-		namespaceIDStr, memoryIDStr, apiKeyIDStr, latencyMs, createdAtStr)
+		namespaceIDStr, memoryIDStr, apiKeyIDStr, latencyMs,
+		success, errorCode, requestID, createdAtStr)
 }
 
 func (r *TokenUsageRepo) scanTokenUsages(rows *sql.Rows) ([]model.TokenUsage, error) {
@@ -232,6 +245,8 @@ func populateTokenUsage(
 	namespaceIDStr string,
 	memoryIDStr, apiKeyIDStr sql.NullString,
 	latencyMs sql.NullInt64,
+	success bool,
+	errorCode, requestID sql.NullString,
 	createdAtStr string,
 ) (*model.TokenUsage, error) {
 	id, err := uuid.Parse(idStr)
@@ -289,6 +304,17 @@ func populateTokenUsage(
 	if latencyMs.Valid {
 		v := int(latencyMs.Int64)
 		usage.LatencyMs = &v
+	}
+
+	usage.Success = success
+
+	if errorCode.Valid {
+		s := errorCode.String
+		usage.ErrorCode = &s
+	}
+	if requestID.Valid {
+		s := requestID.String
+		usage.RequestID = &s
 	}
 
 	usage.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)

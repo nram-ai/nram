@@ -40,8 +40,6 @@ type ConsolidationPhase struct {
 	llmProvider      LLMProviderFunc
 	embedderProvider EmbeddingProviderFunc
 	settings         SettingsResolver
-	tokens           TokenRecorder
-	usageCtx         UsageContextResolver
 	vectorPurger     VectorPurger
 }
 
@@ -56,7 +54,9 @@ func (p *ConsolidationPhase) AttachVectorPurger(vp VectorPurger) {
 // NewConsolidationPhase creates a new consolidation and reinforcement phase.
 // embedderProvider may be nil; when nil, the novelty audit degrades to LLM-only
 // judgement (every borderline call), and pre-write audits will fail closed if
-// the embedding provider is unavailable.
+// the embedding provider is unavailable. token_usage rows are written by the
+// UsageRecordingProvider middleware wrapping the registry-issued providers;
+// no per-phase recorder is needed.
 func NewConsolidationPhase(
 	memories MemoryReader,
 	memWriter MemoryWriter,
@@ -64,8 +64,6 @@ func NewConsolidationPhase(
 	llmProvider LLMProviderFunc,
 	embedderProvider EmbeddingProviderFunc,
 	settings SettingsResolver,
-	tokens TokenRecorder,
-	usageCtx UsageContextResolver,
 ) *ConsolidationPhase {
 	return &ConsolidationPhase{
 		memories:         memories,
@@ -74,14 +72,19 @@ func NewConsolidationPhase(
 		llmProvider:      llmProvider,
 		embedderProvider: embedderProvider,
 		settings:         settings,
-		tokens:           tokens,
-		usageCtx:         usageCtx,
 	}
 }
 
 func (p *ConsolidationPhase) Name() string { return model.DreamPhaseConsolidation }
 
 func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+	// Stamp namespace context once so every provider call emitted by this
+	// phase lands a token_usage row attributed to the right scope. The
+	// UsageRecordingProvider middleware reads namespace_id from ctx and,
+	// when no UsageContext is pre-stamped, falls back to its injected
+	// resolver to populate org/user/project.
+	ctx = provider.WithNamespaceID(ctx, cycle.NamespaceID)
+
 	llm := p.llmProvider()
 	if llm == nil {
 		slog.Info("dreaming: no LLM provider for consolidation, skipping")
@@ -238,7 +241,8 @@ func (p *ConsolidationPhase) reinforce(
 		}
 
 		callStart := time.Now()
-		alignment, usage, err := p.scoreAlignment(ctx, llm, prompt, budget)
+		alignmentCtx := provider.WithMemoryID(ctx, synthesis.ID)
+		alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, prompt, budget)
 		callTokens := 0
 		if usage != nil {
 			callTokens = usage.TotalTokens
@@ -251,10 +255,10 @@ func (p *ConsolidationPhase) reinforce(
 
 		// Account for usage before handling the error. scoreAlignment returns
 		// non-nil usage on parse errors too (the LLM call already happened).
+		// token_usage rows are written by the UsageRecordingProvider middleware.
 		var spendErr error
 		if usage != nil {
 			spendErr = budget.Spend(usage.TotalTokens)
-			p.record(ctx, cycle, "dream_alignment_scoring", llm.Name(), &synthesis.ID, usage.PromptTokens, usage.CompletionTokens)
 		}
 
 		if err != nil {
@@ -331,6 +335,7 @@ func (p *ConsolidationPhase) scoreAlignment(
 	prompt string,
 	budget *TokenBudget,
 ) (float64, *provider.TokenUsage, error) {
+	ctx = provider.WithOperation(ctx, provider.OperationDreamAlignmentScoring)
 	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
@@ -371,54 +376,6 @@ func (p *ConsolidationPhase) scoreAlignment(
 	}
 
 	return result.Alignment, &usage, nil
-}
-
-// record persists a token_usage row for a consolidation-phase LLM or
-// embedding call. Caller supplies the provider name and the in/out token
-// split; no-ops when the recorder is absent or both counts are zero.
-func (p *ConsolidationPhase) record(
-	ctx context.Context,
-	cycle *model.DreamCycle,
-	operation, providerName string,
-	memoryID *uuid.UUID,
-	tokensIn, tokensOut int,
-) {
-	if p.tokens == nil || (tokensIn == 0 && tokensOut == 0) {
-		return
-	}
-	rec := &model.TokenUsage{
-		ID:           uuid.New(),
-		NamespaceID:  cycle.NamespaceID,
-		Operation:    operation,
-		Provider:     providerName,
-		TokensInput:  tokensIn,
-		TokensOutput: tokensOut,
-		MemoryID:     memoryID,
-		CreatedAt:    time.Now().UTC(),
-	}
-	if p.usageCtx != nil {
-		if uc, err := p.usageCtx.ResolveUsageContext(ctx, cycle.NamespaceID); err == nil && uc != nil {
-			rec.OrgID = uc.OrgID
-			rec.UserID = uc.UserID
-			rec.ProjectID = uc.ProjectID
-		}
-	}
-	if err := p.tokens.Record(ctx, rec); err != nil {
-		slog.Warn("dreaming: token usage record failed", "phase", model.DreamPhaseConsolidation, "operation", operation, "err", err)
-	}
-}
-
-// embedderName resolves the embedding provider's name once, used to attribute
-// embedding token_usage rows.
-func (p *ConsolidationPhase) embedderName() string {
-	if p.embedderProvider == nil {
-		return ""
-	}
-	e := p.embedderProvider()
-	if e == nil {
-		return ""
-	}
-	return e.Name()
 }
 
 // supersedeOriginals marks the source memories of a synthesis as superseded
@@ -537,7 +494,6 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 		"embedding_tokens_spent": 0,
 	}
 	tokensBefore := budget.Used()
-	embedName := p.embedderName()
 
 	slog.Info("dreaming: backfill audit starting",
 		"cycle", cycle.ID, "candidates", eligible,
@@ -617,7 +573,8 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 		}
 
 		callStart := time.Now()
-		passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, mem.Content, sources, backfillHigh)
+		auditCtx := provider.WithMemoryID(ctx, mem.ID)
+		passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(auditCtx, llm, budget, mem.Content, sources, backfillHigh, provider.OperationDreamNoveltyBackfill)
 		llmTokens := 0
 		if auditUsage != nil {
 			llmTokens = auditUsage.TotalTokens
@@ -631,14 +588,14 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			"passed", passed, "latency_ms", time.Since(callStart).Milliseconds(),
 			"embed_tokens", embedTokens, "llm_tokens", llmTokens)
 
+		// Token usage rows are written by the UsageRecordingProvider
+		// middleware. Here we only spend against the local dream budget.
 		if embedTokens > 0 {
 			_ = budget.Spend(embedTokens)
-			p.record(ctx, cycle, "dream_novelty_embedding", embedName, &mem.ID, embedTokens, 0)
 			stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
 		}
 		if auditUsage != nil {
 			_ = budget.Spend(auditUsage.TotalTokens)
-			p.record(ctx, cycle, "dream_novelty_backfill", llm.Name(), &mem.ID, auditUsage.PromptTokens, auditUsage.CompletionTokens)
 		}
 		if auditErr != nil {
 			persistent := isPersistentEmbedError(auditErr)
@@ -855,7 +812,6 @@ func (p *ConsolidationPhase) consolidate(
 		"embedding_tokens_spent": 0,
 	}
 	tokensBefore := budget.Used()
-	embedName := p.embedderName()
 
 	if len(candidates) < 3 {
 		slog.Info("dreaming: consolidate starting (insufficient candidates)",
@@ -929,9 +885,11 @@ func (p *ConsolidationPhase) consolidate(
 			continue
 		}
 
+		// token_usage rows for the synthesis call are written by the
+		// UsageRecordingProvider middleware. We only spend against the
+		// dream-cycle budget here.
 		if usage != nil {
 			spendErr := budget.Spend(usage.TotalTokens)
-			p.record(ctx, cycle, "dream_synthesis", llm.Name(), nil, usage.PromptTokens, usage.CompletionTokens)
 			if spendErr != nil {
 				break
 			}
@@ -946,7 +904,7 @@ func (p *ConsolidationPhase) consolidate(
 		// LLM usage against the dream budget when the borderline judge fires.
 		if noveltyEnabled {
 			auditStart := time.Now()
-			passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, synthesisContent, cluster, 0)
+			passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, synthesisContent, cluster, 0, provider.OperationDreamNoveltyAudit)
 			llmTokens := 0
 			if auditUsage != nil {
 				llmTokens = auditUsage.TotalTokens
@@ -960,14 +918,14 @@ func (p *ConsolidationPhase) consolidate(
 				"latency_ms", time.Since(auditStart).Milliseconds(),
 				"embed_tokens", embedTokens, "llm_tokens", llmTokens)
 
+			// token_usage rows are written by the middleware; here we
+			// only charge the dream-cycle budget.
 			if embedTokens > 0 {
 				_ = budget.Spend(embedTokens)
-				p.record(ctx, cycle, "dream_novelty_embedding", embedName, nil, embedTokens, 0)
 				stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
 			}
 			if auditUsage != nil {
 				_ = budget.Spend(auditUsage.TotalTokens)
-				p.record(ctx, cycle, "dream_novelty_audit", llm.Name(), nil, auditUsage.PromptTokens, auditUsage.CompletionTokens)
 			}
 			if auditErr != nil {
 				slog.Warn("dreaming: novelty audit error",
@@ -1063,6 +1021,7 @@ func (p *ConsolidationPhase) synthesize(
 	prompt string,
 	budget *TokenBudget,
 ) (string, *provider.TokenUsage, error) {
+	ctx = provider.WithOperation(ctx, provider.OperationDreamSynthesis)
 	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
@@ -1111,6 +1070,7 @@ func (p *ConsolidationPhase) auditNovelty(
 	candidate string,
 	sources []model.Memory,
 	embedHighOverride float64,
+	llmOperation provider.Operation,
 ) (passed bool, reason string, usage *provider.TokenUsage, embedTokens int, err error) {
 	if len(sources) == 0 {
 		return false, "no_sources", nil, 0, nil
@@ -1141,7 +1101,7 @@ func (p *ConsolidationPhase) auditNovelty(
 		for _, s := range sources {
 			inputs = append(inputs, s.Content)
 		}
-		resp, embErr := embedder.Embed(ctx, &provider.EmbeddingRequest{
+		resp, embErr := embedder.Embed(provider.WithOperation(ctx, provider.OperationDreamNoveltyEmbedding), &provider.EmbeddingRequest{
 			Input:     inputs,
 			Dimension: storage.BestEmbeddingDimension(embedder.Dimensions()),
 		})
@@ -1189,7 +1149,10 @@ func (p *ConsolidationPhase) auditNovelty(
 		maxTokens = 512
 	}
 
-	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
+	if llmOperation == "" {
+		llmOperation = provider.OperationDreamNoveltyAudit
+	}
+	resp, err := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
 		},

@@ -8,9 +8,18 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/storage"
 )
+
+// EntityReembedRepo is the entity-store surface ReembedAllEntities needs.
+// Defined as an interface so the admin reembed loop can be exercised in
+// unit tests without spinning up a real database.
+type EntityReembedRepo interface {
+	ListAll(ctx context.Context, limit, offset int) ([]model.Entity, error)
+	UpdateEmbeddingDimBatch(ctx context.Context, ids []uuid.UUID, dim int) error
+}
 
 type ReembedEntitiesResult struct {
 	Total       int
@@ -28,7 +37,7 @@ type ReembedEntitiesResult struct {
 // return means infrastructure failure (db unreachable mid-walk).
 func ReembedAllEntities(
 	ctx context.Context,
-	repo *storage.EntityRepo,
+	repo EntityReembedRepo,
 	vectorStore storage.VectorStore,
 	embedder provider.EmbeddingProvider,
 ) (*ReembedEntitiesResult, error) {
@@ -73,6 +82,16 @@ func ReembedAllEntities(
 		}
 
 		embedCtx, cancel := context.WithTimeout(ctx, workerEmbedTimeout)
+		// Stamp operation + first-entity namespace so the
+		// UsageRecordingProvider middleware can persist the token_usage row
+		// for this batch with non-empty operation/namespace_id columns.
+		// All entities in a batch share a namespace in practice (the page
+		// is read in repo order); attribution to the first entity's
+		// namespace is the documented trade-off for this admin path.
+		embedCtx = provider.WithOperation(embedCtx, provider.OperationEmbedding)
+		if len(batch) > 0 {
+			embedCtx = provider.WithNamespaceID(embedCtx, batch[0].nid)
+		}
 		resp, embErr := embedder.Embed(embedCtx, &provider.EmbeddingRequest{Input: inputs})
 		cancel()
 		if embErr != nil || resp == nil || len(resp.Embeddings) != len(inputs) {

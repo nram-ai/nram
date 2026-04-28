@@ -72,9 +72,7 @@ func main() {
 
 	memoryRepo := storage.NewMemoryRepo(db)
 	projectRepo := storage.NewProjectRepo(db)
-	namespaceRepo := storage.NewNamespaceRepo(db)
 	lineageRepo := storage.NewMemoryLineageRepo(db)
-	tokenUsageRepo := storage.NewTokenUsageRepo(db)
 	settingsRepo := storage.NewSettingsRepo(db)
 	settingsSvc := service.NewSettingsService(settingsRepo)
 
@@ -86,7 +84,7 @@ func main() {
 		Fact:      provider.SlotConfig{Type: cfg.Fact.Provider, BaseURL: cfg.Fact.URL, APIKey: cfg.Fact.Key, Model: cfg.Fact.Model},
 		Entity:    provider.SlotConfig{Type: cfg.Entity.Provider, BaseURL: cfg.Entity.URL, APIKey: cfg.Entity.Key, Model: cfg.Entity.Model},
 	}
-	registry, err := provider.NewRegistry(regCfg)
+	registry, err := provider.NewRegistry(regCfg, nil, nil)
 	if err != nil {
 		log.Fatalf("provider registry init: %v", err)
 	}
@@ -116,7 +114,7 @@ func main() {
 		memoryRepo, memoryRepo, lineageRepo,
 		func() provider.LLMProvider { return registry.GetFact() },
 		func() provider.EmbeddingProvider { return registry.GetEmbedding() },
-		settingsSvc, tokenUsageRepo, namespaceRepo,
+		settingsSvc,
 	)
 
 	cycle := &model.DreamCycle{

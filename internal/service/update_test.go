@@ -99,7 +99,11 @@ func newUpdateService(
 	tokenUsage := &mockTokenUsageRepo{}
 	vectors := &mockVectorStore{}
 
-	svc := NewUpdateService(memories, projects, lineage, vectors, tokenUsage, embedFn)
+	// Wrap embedFn so the middleware writes token_usage rows on every
+	// Embed call — matches production wiring.
+	wrapped := provider.WrapEmbeddingForTest(embedFn, tokenUsage)
+
+	svc := NewUpdateService(memories, projects, lineage, vectors, wrapped)
 	return svc, lineage, tokenUsage, vectors
 }
 

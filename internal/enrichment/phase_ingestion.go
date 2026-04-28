@@ -81,7 +81,7 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 		return res
 	}
 
-	embedResp, err := ep.Embed(ctx, &provider.EmbeddingRequest{Input: []string{mem.Content}})
+	embedResp, err := ep.Embed(provider.WithOperation(ctx, provider.OperationEmbedding), &provider.EmbeddingRequest{Input: []string{mem.Content}})
 	if err != nil || embedResp == nil || len(embedResp.Embeddings) == 0 {
 		slog.Error("enrichment: ingestion_decision embed", "job", job.ID, "err", err)
 		res.decision = IngestionOpAddFallback
@@ -129,7 +129,8 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	}
 
 	start := time.Now()
-	resp, err := llm.Complete(ctx, req)
+	ingestionCtx := provider.WithOperation(ctx, provider.OperationIngestionDecision)
+	resp, err := llm.Complete(ingestionCtx, req)
 	llmLatency := time.Since(start)
 	if err != nil {
 		slog.Error("enrichment: ingestion_decision llm", "job", job.ID, "err", err, "llm_latency_ms", llmLatency.Milliseconds())
@@ -144,7 +145,7 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	parsed, parseErr := parseIngestionDecision(resp.Content)
 	if parseErr != nil {
 		retryStart := time.Now()
-		resp, err = llm.Complete(ctx, req)
+		resp, err = llm.Complete(ingestionCtx, req)
 		llmLatency += time.Since(retryStart)
 		if err == nil {
 			res.usage.PromptTokens += resp.Usage.PromptTokens
@@ -371,7 +372,9 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 			_ = wp.queue.Fail(ctx, p.job.ID, fmt.Sprintf("update memory: %v", err))
 			return fmt.Errorf("update memory: %w", err)
 		}
-		wp.recordIngestionUsage(ctx, p)
+		// token_usage rows for the ingestion-decision phase (LLM + embed)
+		// are written by the UsageRecordingProvider middleware on every
+		// wrapped Complete/Embed call.
 		return wp.queue.Complete(ctx, p.job.ID)
 	}
 
@@ -396,7 +399,8 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 		"target_id", uuidPtrString(p.ingestionTarget),
 		"shadow_op", p.ingestionShadowOp)
 
-	wp.recordIngestionUsage(ctx, p)
+	// token_usage rows for the ingestion-decision phase (LLM + embed) are
+	// written by the UsageRecordingProvider middleware on every wrapped call.
 
 	if err := wp.queue.Complete(ctx, p.job.ID); err != nil {
 		return fmt.Errorf("complete job: %w", err)
@@ -404,18 +408,6 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 	return nil
 }
 
-// recordIngestionUsage writes token-usage rows for both LLM/embed calls the
-// phase makes. Used by both finalize paths so the bookkeeping stays in sync.
-// Token-usage rows reference memories by id and are not joined through the
-// deleted_at filter, so this is safe to call after a soft-delete.
-func (wp *WorkerPool) recordIngestionUsage(ctx context.Context, p *pendingJob) {
-	if p.ingestionUsage != nil {
-		wp.recordUsage(ctx, p.mem, "ingestion_decision", p.ingestionProvName, p.ingestionModel, *p.ingestionUsage)
-	}
-	if p.ingestionEmbedUsage != nil {
-		wp.recordUsage(ctx, p.mem, "embedding", p.ingestionEmbedProv, p.ingestionEmbedModel, *p.ingestionEmbedUsage)
-	}
-}
 
 // applyIngestionUpdate writes the supersedes lineage edge and marks the
 // target memory superseded by the new one. Failures are logged but not

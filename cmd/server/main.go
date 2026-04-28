@@ -206,7 +206,7 @@ func main() {
 		}
 	}
 
-	registry, err = provider.NewRegistry(regCfg)
+	registry, err = provider.NewRegistry(regCfg, tokenUsageRepo, namespaceRepo)
 	if err != nil {
 		log.Printf("warning: provider registry init failed (providers disabled): %v", err)
 		registry = nil
@@ -310,12 +310,12 @@ func main() {
 	)
 	recallSvc := service.NewRecallService(
 		memoryRepo, projectRepo, namespaceRepo,
-		tokenUsageRepo, vectorStore, entityRepo,
+		vectorStore, entityRepo,
 		relationshipRepo, shareRepo, embedProvider,
 	)
 	updateSvc := service.NewUpdateService(
 		memoryRepo, projectRepo, lineageRepo,
-		vectorStore, tokenUsageRepo, embedProvider,
+		vectorStore, embedProvider,
 	)
 	forgetSvc := service.NewForgetService(
 		memoryRepo, projectRepo, vectorStore,
@@ -458,7 +458,7 @@ func main() {
 	workerPool := enrichment.NewWorkerPool(
 		enrichment.WorkerConfig{Backend: db.Backend()},
 		memoryRepo, memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
-		entityRepo, relationshipRepo, lineageRepo, tokenUsageRepo, namespaceRepo, vectorStore,
+		entityRepo, relationshipRepo, lineageRepo, vectorStore,
 		factProvider, entityProvider, embedProvider,
 		factProvider, ingestionDedup, settingsSvc,
 	)
@@ -471,8 +471,8 @@ func main() {
 	dreamLogRepo := storage.NewDreamLogRepo(db)
 	dreamDirtyRepo := storage.NewDreamDirtyRepo(db)
 
-	consolidationPhase := dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, tokenUsageRepo, namespaceRepo)
-	contradictionPhase := dreaming.NewContradictionPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, tokenUsageRepo, namespaceRepo)
+	consolidationPhase := dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc)
+	contradictionPhase := dreaming.NewContradictionPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc)
 	// Wire the active vector store into dream-side state transitions so that
 	// demotion and supersession purge vectors alongside the row-level update,
 	// and so the contradiction phase reads stored vectors instead of
