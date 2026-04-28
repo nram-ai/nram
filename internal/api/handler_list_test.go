@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,12 +19,15 @@ import (
 // --- mock implementations for list/detail tests ---
 
 type mockMemoryLister struct {
-	listFn       func(ctx context.Context, nsID uuid.UUID, limit, offset int) ([]model.Memory, error)
-	countFn      func(ctx context.Context, nsID uuid.UUID) (int, error)
-	listIDsFn    func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, max int) ([]uuid.UUID, error)
-	getFn        func(ctx context.Context, id uuid.UUID) (*model.Memory, error)
-	lastFilters  storage.MemoryListFilters
-	filtersSeen  bool
+	listFn        func(ctx context.Context, nsID uuid.UUID, limit, offset int) ([]model.Memory, error)
+	countFn       func(ctx context.Context, nsID uuid.UUID) (int, error)
+	listIDsFn     func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, max int) ([]uuid.UUID, error)
+	getFn         func(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	listParentsFn func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
+	countParentsFn func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters) (int, error)
+	findChildrenFn func(ctx context.Context, nsID uuid.UUID, parentIDs []uuid.UUID, relations []string) (map[uuid.UUID][]model.Memory, error)
+	lastFilters   storage.MemoryListFilters
+	filtersSeen   bool
 }
 
 func (m *mockMemoryLister) ListByNamespace(ctx context.Context, nsID uuid.UUID, limit, offset int) ([]model.Memory, error) {
@@ -70,6 +74,29 @@ func (m *mockMemoryLister) GetByID(ctx context.Context, id uuid.UUID) (*model.Me
 		return m.getFn(ctx, id)
 	}
 	return nil, sql.ErrNoRows
+}
+
+func (m *mockMemoryLister) ListParentsByNamespaceFiltered(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	m.lastFilters = filters
+	m.filtersSeen = true
+	if m.listParentsFn != nil {
+		return m.listParentsFn(ctx, nsID, filters, limit, offset)
+	}
+	return nil, nil
+}
+
+func (m *mockMemoryLister) CountParentsByNamespaceFiltered(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters) (int, error) {
+	if m.countParentsFn != nil {
+		return m.countParentsFn(ctx, nsID, filters)
+	}
+	return 0, nil
+}
+
+func (m *mockMemoryLister) FindChildrenByParents(ctx context.Context, nsID uuid.UUID, parentIDs []uuid.UUID, relations []string) (map[uuid.UUID][]model.Memory, error) {
+	if m.findChildrenFn != nil {
+		return m.findChildrenFn(ctx, nsID, parentIDs, relations)
+	}
+	return map[uuid.UUID][]model.Memory{}, nil
 }
 
 type mockProjectGetter struct {
@@ -643,5 +670,171 @@ func TestDetailHandler_HidesSupersededByDefault(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("include_superseded=true should surface loser; got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListHandler_GroupByParent_EmbedsChildren(t *testing.T) {
+	nsID := uuid.New()
+	projectID := uuid.New()
+	parentID := uuid.New()
+	child1ID := uuid.New()
+	child2ID := uuid.New()
+	proj := &model.Project{ID: projectID, Slug: "test", NamespaceID: nsID}
+	now := time.Now()
+
+	listParentsCalled := false
+	findChildrenCalled := false
+
+	memRepo := &mockMemoryLister{
+		listParentsFn: func(_ context.Context, gotNS uuid.UUID, _ storage.MemoryListFilters, _, _ int) ([]model.Memory, error) {
+			listParentsCalled = true
+			if gotNS != nsID {
+				t.Errorf("expected namespace %s, got %s", nsID, gotNS)
+			}
+			return []model.Memory{{
+				ID: parentID, NamespaceID: nsID, Content: "parent",
+				CreatedAt: now, UpdatedAt: now,
+			}}, nil
+		},
+		countParentsFn: func(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters) (int, error) {
+			return 1, nil
+		},
+		findChildrenFn: func(_ context.Context, gotNS uuid.UUID, parentIDs []uuid.UUID, relations []string) (map[uuid.UUID][]model.Memory, error) {
+			findChildrenCalled = true
+			if gotNS != nsID {
+				t.Errorf("findChildren expected namespace %s, got %s", nsID, gotNS)
+			}
+			if len(parentIDs) != 1 || parentIDs[0] != parentID {
+				t.Errorf("findChildren expected [%s], got %v", parentID, parentIDs)
+			}
+			if len(relations) == 0 {
+				t.Errorf("findChildren expected non-empty relations")
+			}
+			return map[uuid.UUID][]model.Memory{
+				parentID: {
+					{ID: child1ID, NamespaceID: nsID, Content: "fact 1", Enriched: true, ParentID: &parentID, CreatedAt: now, UpdatedAt: now},
+					{ID: child2ID, NamespaceID: nsID, Content: "fact 2", Enriched: true, ParentID: &parentID, CreatedAt: now, UpdatedAt: now},
+				},
+			}, nil
+		},
+		// Flat-mode functions should NOT be called.
+		listFn: func(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
+			t.Errorf("flat list should not be called when group_by_parent=true")
+			return nil, nil
+		},
+		countFn: func(_ context.Context, _ uuid.UUID) (int, error) {
+			t.Errorf("flat count should not be called when group_by_parent=true")
+			return 0, nil
+		},
+	}
+
+	router := newListRouter(memRepo, &mockProjectGetter{project: proj})
+	w := doListRequest(router, projectID.String(), "group_by_parent=true")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !listParentsCalled {
+		t.Errorf("expected ListParentsByNamespaceFiltered to be called")
+	}
+	if !findChildrenCalled {
+		t.Errorf("expected FindChildrenByParents to be called")
+	}
+
+	var resp model.PaginatedResponse[model.Memory]
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 parent, got %d", len(resp.Data))
+	}
+	if resp.Pagination.Total != 1 {
+		t.Errorf("expected total=1 (parents), got %d", resp.Pagination.Total)
+	}
+	parent := resp.Data[0]
+	if parent.ID != parentID {
+		t.Fatalf("expected parent id %s, got %s", parentID, parent.ID)
+	}
+	if len(parent.Children) != 2 {
+		t.Fatalf("expected 2 embedded children, got %d", len(parent.Children))
+	}
+	if parent.Children[0].ID != child1ID || parent.Children[1].ID != child2ID {
+		t.Fatalf("unexpected child ids: %s, %s", parent.Children[0].ID, parent.Children[1].ID)
+	}
+}
+
+func TestListHandler_GroupByParent_NoChildrenReturnsEmptySlice(t *testing.T) {
+	nsID := uuid.New()
+	projectID := uuid.New()
+	parentID := uuid.New()
+	proj := &model.Project{ID: projectID, Slug: "test", NamespaceID: nsID}
+	now := time.Now()
+
+	memRepo := &mockMemoryLister{
+		listParentsFn: func(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters, _, _ int) ([]model.Memory, error) {
+			return []model.Memory{{ID: parentID, NamespaceID: nsID, Content: "lone parent", CreatedAt: now, UpdatedAt: now}}, nil
+		},
+		countParentsFn: func(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters) (int, error) {
+			return 1, nil
+		},
+		findChildrenFn: func(_ context.Context, _ uuid.UUID, _ []uuid.UUID, _ []string) (map[uuid.UUID][]model.Memory, error) {
+			return map[uuid.UUID][]model.Memory{}, nil
+		},
+	}
+
+	router := newListRouter(memRepo, &mockProjectGetter{project: proj})
+	w := doListRequest(router, projectID.String(), "group_by_parent=true")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Children field may be absent or empty for parents with no enrichment
+	// children — both forms are equivalent on the client.
+	var resp model.PaginatedResponse[model.Memory]
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 parent, got %d", len(resp.Data))
+	}
+	if len(resp.Data[0].Children) != 0 {
+		t.Errorf("expected 0 children, got %d", len(resp.Data[0].Children))
+	}
+}
+
+func TestListHandler_DefaultMode_OmitsChildren(t *testing.T) {
+	nsID := uuid.New()
+	projectID := uuid.New()
+	memID := uuid.New()
+	proj := &model.Project{ID: projectID, Slug: "test", NamespaceID: nsID}
+	now := time.Now()
+
+	memRepo := &mockMemoryLister{
+		listFn: func(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
+			return []model.Memory{{ID: memID, NamespaceID: nsID, Content: "x", CreatedAt: now, UpdatedAt: now}}, nil
+		},
+		countFn: func(_ context.Context, _ uuid.UUID) (int, error) {
+			return 1, nil
+		},
+		listParentsFn: func(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters, _, _ int) ([]model.Memory, error) {
+			t.Errorf("parent list should not be called without group_by_parent")
+			return nil, nil
+		},
+		findChildrenFn: func(_ context.Context, _ uuid.UUID, _ []uuid.UUID, _ []string) (map[uuid.UUID][]model.Memory, error) {
+			t.Errorf("findChildren should not be called without group_by_parent")
+			return nil, nil
+		},
+	}
+
+	router := newListRouter(memRepo, &mockProjectGetter{project: proj})
+	w := doListRequest(router, projectID.String(), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, `"children"`) {
+		t.Errorf("default flat-mode response should omit the children field; body: %s", body)
 	}
 }

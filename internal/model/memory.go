@@ -31,6 +31,12 @@ type Memory struct {
 
 	// Derived from lineage table at read time; not persisted in memories table.
 	ParentID *uuid.UUID `json:"parent_id,omitempty"`
+
+	// Populated by the parent-anchored list endpoint when ?group_by_parent=true.
+	// The slice carries enrichment-derived child memories (extracted_fact,
+	// synthesized_from, extracted_from). Omitted entirely from JSON when nil
+	// so non-grouped responses (recall, detail, default list) stay unchanged.
+	Children []Memory `json:"children,omitempty"`
 }
 
 type SystemMeta struct {

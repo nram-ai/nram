@@ -505,6 +505,293 @@ func (r *MemoryRepo) ListIDsByNamespaceFiltered(ctx context.Context, namespaceID
 	return result, nil
 }
 
+// ExtractedChildRelations is the canonical set of memory_lineage relations
+// that represent enrichment-derived child memories. Used by the parent-
+// anchored list endpoint to identify rows that should roll up under their
+// source memory rather than appear as standalone entries.
+var ExtractedChildRelations = []string{
+	model.LineageExtractedFact,
+	model.LineageSynthesizedFrom,
+	model.LineageExtractedFrom,
+}
+
+// bindOnly claims a placeholder against the builder and binds the value,
+// returning the placeholder string. Unlike add(), it does not append to
+// clauses — the caller is responsible for placing the placeholder inside a
+// larger SQL fragment.
+func (w *whereBuilder) bindOnly(value interface{}) string {
+	ph := w.placeholder()
+	w.args = append(w.args, value)
+	return ph
+}
+
+// userFilterClauses returns predicate strings for the user-facing filter
+// dimensions (tags, dates, enriched, source, search), qualified by the given
+// table alias. Args are claimed against wb so placeholders are unique within
+// the surrounding query. Anchors that always apply (namespace, deleted_at,
+// hide-superseded) are NOT emitted by this helper — callers add them
+// separately so the user filter can be reused inside an OR-EXISTS subquery.
+func (r *MemoryRepo) userFilterClauses(wb *whereBuilder, filters MemoryListFilters, alias string) []string {
+	qualify := func(col string) string {
+		if alias == "" {
+			return col
+		}
+		return alias + "." + col
+	}
+	out := []string{}
+
+	if len(filters.Tags) > 0 {
+		if wb.postgres {
+			phs := make([]string, len(filters.Tags))
+			for i, t := range filters.Tags {
+				phs[i] = wb.bindOnly(t)
+			}
+			out = append(out, fmt.Sprintf("%s @> ARRAY[%s]::text[]", qualify("tags"), strings.Join(phs, ",")))
+		} else {
+			for _, t := range filters.Tags {
+				ph := wb.bindOnly(`%"` + escapeLike(t) + `"%`)
+				out = append(out, fmt.Sprintf(`%s LIKE %s ESCAPE '\'`, qualify("tags"), ph))
+			}
+		}
+	}
+	if filters.DateFrom != nil {
+		ph := wb.bindOnly(filters.DateFrom.UTC().Format(time.RFC3339))
+		out = append(out, fmt.Sprintf("%s >= %s", qualify("created_at"), ph))
+	}
+	if filters.DateTo != nil {
+		ph := wb.bindOnly(filters.DateTo.UTC().Format(time.RFC3339))
+		out = append(out, fmt.Sprintf("%s < %s", qualify("created_at"), ph))
+	}
+	if filters.Enriched != nil {
+		ph := wb.bindOnly(EncodeBool(r.db.Backend(), *filters.Enriched))
+		out = append(out, fmt.Sprintf("%s = %s", qualify("enriched"), ph))
+	}
+	if filters.Source != "" {
+		ph := wb.bindOnly("%" + strings.ToLower(escapeLike(filters.Source)) + "%")
+		out = append(out, fmt.Sprintf(`LOWER(COALESCE(%s, '')) LIKE %s ESCAPE '\'`, qualify("source"), ph))
+	}
+	if filters.Search != "" {
+		ph := wb.bindOnly("%" + strings.ToLower(escapeLike(filters.Search)) + "%")
+		out = append(out, fmt.Sprintf(`LOWER(%s) LIKE %s ESCAPE '\'`, qualify("content"), ph))
+	}
+	return out
+}
+
+// memoryColumnsAliased returns the SELECT column list with each column
+// prefixed by the given alias. Mirrors selectMemoryColumns but for joined
+// queries where bare names would be ambiguous.
+func memoryColumnsAliased(alias string) string {
+	cols := []string{
+		"id", "namespace_id", "content", "embedding_dim", "source", "tags",
+		"confidence", "importance", "access_count", "last_accessed", "expires_at",
+		"superseded_by", "superseded_at", "enriched", "metadata", "content_hash",
+		"created_at", "updated_at", "deleted_at", "purge_after",
+	}
+	parts := make([]string, len(cols))
+	for i, c := range cols {
+		parts[i] = alias + "." + c
+	}
+	return "SELECT " + strings.Join(parts, ", ")
+}
+
+// buildParentListWhere assembles the WHERE clause for parent-anchored
+// listing. The result selects memories that are NOT themselves enrichment-
+// derived children of another memory in the same namespace, with user
+// filters matching either the parent itself or any of its enrichment
+// descendants. The returned WHERE references alias `m` for the outer
+// memories table.
+func (r *MemoryRepo) buildParentListWhere(namespaceID uuid.UUID, filters MemoryListFilters) (string, []interface{}) {
+	wb := &whereBuilder{postgres: r.db.Backend() == BackendPostgres}
+
+	wb.add("m.namespace_id = %s", namespaceID.String())
+	wb.clauses = append(wb.clauses, "m.deleted_at IS NULL")
+	if filters.HideSuperseded {
+		wb.clauses = append(wb.clauses, "m.superseded_by IS NULL")
+	}
+
+	relPHs := make([]string, len(ExtractedChildRelations))
+	for i, rel := range ExtractedChildRelations {
+		relPHs[i] = wb.bindOnly(rel)
+	}
+	antiJoin := fmt.Sprintf(
+		`NOT EXISTS (SELECT 1 FROM memory_lineage ls WHERE ls.namespace_id = m.namespace_id AND ls.memory_id = m.id AND ls.parent_id IS NOT NULL AND ls.relation IN (%s))`,
+		strings.Join(relPHs, ", "),
+	)
+	wb.clauses = append(wb.clauses, antiJoin)
+
+	parentClauses := r.userFilterClauses(wb, filters, "m")
+	if len(parentClauses) > 0 {
+		descRelPHs := make([]string, len(ExtractedChildRelations))
+		for i, rel := range ExtractedChildRelations {
+			descRelPHs[i] = wb.bindOnly(rel)
+		}
+		childClauses := r.userFilterClauses(wb, filters, "c")
+		descSub := fmt.Sprintf(
+			`EXISTS (SELECT 1 FROM memory_lineage ld JOIN memories c ON c.id = ld.memory_id WHERE ld.namespace_id = m.namespace_id AND ld.parent_id = m.id AND ld.relation IN (%s) AND c.deleted_at IS NULL AND %s)`,
+			strings.Join(descRelPHs, ", "),
+			strings.Join(childClauses, " AND "),
+		)
+		combined := fmt.Sprintf("(%s OR %s)", strings.Join(parentClauses, " AND "), descSub)
+		wb.clauses = append(wb.clauses, combined)
+	}
+
+	return wb.where(), wb.args
+}
+
+// ListParentsByNamespaceFiltered returns memories that are not themselves
+// enrichment-derived children of another memory in the namespace, narrowed
+// by filters that match the parent or any descendant. Paginated, ordered by
+// created_at DESC. Drives the parent-anchored Memory Browser view so a
+// parent and its extracted facts always appear together.
+func (r *MemoryRepo) ListParentsByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	where, args := r.buildParentListWhere(namespaceID, filters)
+
+	limitPH := "?"
+	offsetPH := "?"
+	if r.db.Backend() == BackendPostgres {
+		limitPH = fmt.Sprintf("$%d", len(args)+1)
+		offsetPH = fmt.Sprintf("$%d", len(args)+2)
+	}
+	args = append(args, limit, offset)
+
+	query := memoryColumnsAliased("m") + ` FROM memories m WHERE ` + where +
+		` ORDER BY m.created_at DESC LIMIT ` + limitPH + ` OFFSET ` + offsetPH
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory list parents by namespace: %w", err)
+	}
+	defer rows.Close()
+
+	result := []model.Memory{}
+	for rows.Next() {
+		mem, err := r.scanMemoryFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *mem)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory list parents iteration: %w", err)
+	}
+	return result, nil
+}
+
+// CountParentsByNamespaceFiltered returns the total parent-anchored count
+// matching the same predicate as ListParentsByNamespaceFiltered. Used to
+// drive infinite-scroll has-more detection.
+func (r *MemoryRepo) CountParentsByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters MemoryListFilters) (int, error) {
+	where, args := r.buildParentListWhere(namespaceID, filters)
+	query := `SELECT COUNT(*) FROM memories m WHERE ` + where
+	row := r.db.QueryRow(ctx, query, args...)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("memory count parents by namespace: %w", err)
+	}
+	return count, nil
+}
+
+// FindChildrenByParents returns the enrichment-derived child memories for
+// each given parent ID, bucketed in a single batched query. Soft-deleted
+// and superseded children are excluded so the response shape matches what
+// the list endpoint already filters out for top-level rows. Children are
+// ordered by created_at DESC within each bucket.
+func (r *MemoryRepo) FindChildrenByParents(ctx context.Context, namespaceID uuid.UUID, parentIDs []uuid.UUID, relations []string) (map[uuid.UUID][]model.Memory, error) {
+	if len(parentIDs) == 0 || len(relations) == 0 {
+		return map[uuid.UUID][]model.Memory{}, nil
+	}
+
+	postgres := r.db.Backend() == BackendPostgres
+	args := make([]interface{}, 0, 1+len(parentIDs)+len(relations))
+	args = append(args, namespaceID.String())
+
+	parentPHs := make([]string, len(parentIDs))
+	for i, pid := range parentIDs {
+		if postgres {
+			parentPHs[i] = fmt.Sprintf("$%d", len(args)+1)
+		} else {
+			parentPHs[i] = "?"
+		}
+		args = append(args, pid.String())
+	}
+
+	relPHs := make([]string, len(relations))
+	for i, rel := range relations {
+		if postgres {
+			relPHs[i] = fmt.Sprintf("$%d", len(args)+1)
+		} else {
+			relPHs[i] = "?"
+		}
+		args = append(args, rel)
+	}
+
+	nsPH := "?"
+	if postgres {
+		nsPH = "$1"
+	}
+
+	query := memoryColumnsAliased("m") + `, l.parent_id FROM memories m JOIN memory_lineage l ON l.memory_id = m.id` +
+		` WHERE l.namespace_id = ` + nsPH +
+		` AND l.parent_id IN (` + strings.Join(parentPHs, ", ") + `)` +
+		` AND l.relation IN (` + strings.Join(relPHs, ", ") + `)` +
+		` AND m.deleted_at IS NULL AND m.superseded_by IS NULL` +
+		` ORDER BY m.created_at DESC`
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory find children by parents: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID][]model.Memory)
+	for rows.Next() {
+		var mem model.Memory
+		var idStr, namespaceIDStr string
+		var tagsStr, metadataStr string
+		var createdAtStr, updatedAtStr string
+		var embeddingDim sql.NullInt64
+		var source sql.NullString
+		var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
+		var supersededByStr, supersededAtStr, contentHashStr sql.NullString
+		var enrichedBool bool
+		var parentIDStr string
+
+		err := rows.Scan(
+			&idStr, &namespaceIDStr, &mem.Content, &embeddingDim, &source, &tagsStr,
+			&mem.Confidence, &mem.Importance, &mem.AccessCount, &lastAccessedStr,
+			&expiresAtStr, &supersededByStr, &supersededAtStr, &enrichedBool, &metadataStr,
+			&contentHashStr, &createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
+			&parentIDStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("memory find children scan: %w", err)
+		}
+
+		populated, err := r.populateMemory(&mem, idStr, namespaceIDStr, tagsStr, metadataStr,
+			createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
+			expiresAtStr, supersededByStr, supersededAtStr, contentHashStr,
+			enrichedBool, deletedAtStr, purgeAfterStr)
+		if err != nil {
+			return nil, err
+		}
+
+		parentID, err := uuid.Parse(parentIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("memory find children parse parent_id: %w", err)
+		}
+
+		// Set ParentID so callers/JSON responses match the detail handler shape.
+		pidCopy := parentID
+		populated.ParentID = &pidCopy
+
+		result[parentID] = append(result[parentID], *populated)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory find children iteration: %w", err)
+	}
+	return result, nil
+}
+
 // CountWithEmbeddingDim returns the number of live memories that
 // currently have a non-NULL embedding_dim.
 func (r *MemoryRepo) CountWithEmbeddingDim(ctx context.Context) (int64, error) {

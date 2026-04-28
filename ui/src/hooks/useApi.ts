@@ -1,4 +1,9 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   adminAPI,
   meAPI,
@@ -596,6 +601,36 @@ export function useMemoryList(projectId: string, params?: MemoryListParams) {
     queryKey: ["memories", "list", projectId, params],
     queryFn: () => memoryAPI.list(projectId, params),
     enabled: !!projectId,
+  });
+}
+
+/**
+ * Infinite-scroll variant of the memory list. Pages over parents (or flat
+ * memories, depending on the caller's params). Each page is appended to
+ * `data.pages`; the consumer flattens with `data.pages.flatMap(p => p.data)`.
+ * Requires `pageSize` so the hook can compute the next offset and detect
+ * end-of-data deterministically.
+ */
+export function useMemoryListInfinite(
+  projectId: string,
+  pageSize: number,
+  params?: Omit<MemoryListParams, "limit" | "offset">,
+) {
+  return useInfiniteQuery({
+    queryKey: ["memories", "list-infinite", projectId, pageSize, params],
+    enabled: !!projectId,
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      memoryAPI.list(projectId, {
+        ...params,
+        limit: pageSize,
+        offset: pageParam as number,
+      }),
+    getNextPageParam: (lastPage, _allPages, lastPageParam) => {
+      const nextOffset = (lastPageParam as number) + pageSize;
+      if (nextOffset >= lastPage.pagination.total) return undefined;
+      return nextOffset;
+    },
   });
 }
 

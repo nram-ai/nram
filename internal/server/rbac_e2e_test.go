@@ -1270,6 +1270,20 @@ func (m *rbacCountingMemoryRepo) ListIDsByNamespaceFiltered(_ context.Context, _
 	return ids, nil
 }
 
+func (m *rbacCountingMemoryRepo) ListParentsByNamespaceFiltered(ctx context.Context, nsID uuid.UUID, _ storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
+	return m.ListByNamespace(ctx, nsID, limit, offset)
+}
+
+func (m *rbacCountingMemoryRepo) CountParentsByNamespaceFiltered(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.memories), nil
+}
+
+func (m *rbacCountingMemoryRepo) FindChildrenByParents(_ context.Context, _ uuid.UUID, _ []uuid.UUID, _ []string) (map[uuid.UUID][]model.Memory, error) {
+	return map[uuid.UUID][]model.Memory{}, nil
+}
+
 // rbacEntityLister is a no-op entity lister for export.
 type rbacEntityLister struct{}
 

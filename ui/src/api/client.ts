@@ -167,6 +167,12 @@ export interface Memory {
   deleted_at?: string | null;
   purge_after?: string | null;
   parent_id?: string | null;
+  /**
+   * Populated only when the list endpoint was called with
+   * group_by_parent=true. Carries enrichment-derived child memories so a
+   * parent and its extracted facts always render together.
+   */
+  children?: Memory[];
 }
 
 export interface RecallResult {
@@ -234,6 +240,12 @@ export interface MemoryListParams {
   source?: string;
   /** case-insensitive substring against the content column */
   search?: string;
+  /**
+   * Parent-anchored list: pagination is over non-enrichment parents and each
+   * row carries its enrichment-derived children inline. The total reflects
+   * parent count, not memory count.
+   */
+  group_by_parent?: boolean;
 }
 
 export interface ListIDsResponse {
@@ -1186,6 +1198,7 @@ function memoryListSearchParams(params?: MemoryListParams): URLSearchParams {
   if (params.enriched) sp.set("enriched", params.enriched);
   if (params.source) sp.set("source", params.source);
   if (params.search) sp.set("search", params.search);
+  if (params.group_by_parent) sp.set("group_by_parent", "true");
   return sp;
 }
 

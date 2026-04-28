@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   useMeProjects,
-  useMemoryList,
+  useMemoryListInfinite,
   useMemoryRecall,
   useMemoryDetail,
   useUpdateMemory,
@@ -17,7 +17,12 @@ import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
 // Constants
 // ---------------------------------------------------------------------------
 
-const PAGE_SIZE = 20;
+// Number of parents per infinite-scroll page in browse mode. Each parent
+// also brings its enrichment-derived children inline, so the visible row
+// count per fetch is typically larger.
+const PARENT_PAGE_SIZE = 25;
+// Page size for semantic recall, which still returns a flat scored list.
+const RECALL_PAGE_SIZE = 50;
 const DEBOUNCE_MS = 300;
 // Cap on parallel API calls inside bulk operations. With "select all matching"
 // the selection can include thousands of memories, and firing one in-flight
@@ -377,6 +382,9 @@ function MemoryCard({
   score,
   isSelected,
   isChild,
+  childCount,
+  isExpanded,
+  onToggleExpand,
   onToggleSelect,
   onClick,
 }: {
@@ -384,9 +392,15 @@ function MemoryCard({
   score?: number;
   isSelected: boolean;
   isChild?: boolean;
+  /** Number of enrichment-derived children attached to this parent. When > 0,
+   *  a chip renders that toggles inline expansion. Omit/zero for child rows. */
+  childCount?: number;
+  isExpanded?: boolean;
+  onToggleExpand?: () => void;
   onToggleSelect: () => void;
   onClick: () => void;
 }) {
+  const hasChildren = (childCount ?? 0) > 0;
   return (
     <div
       className={`cursor-pointer rounded-lg border p-4 transition-colors hover:bg-accent/50 ${
@@ -438,6 +452,25 @@ function MemoryCard({
               <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
                 extracted fact
               </span>
+            )}
+            {hasChildren && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 font-medium text-blue-800 transition-colors hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300 dark:hover:bg-blue-900"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleExpand?.();
+                }}
+                aria-expanded={!!isExpanded}
+                aria-label={
+                  isExpanded
+                    ? `Hide ${childCount} extracted facts`
+                    : `Show ${childCount} extracted facts`
+                }
+              >
+                <span aria-hidden="true">{isExpanded ? "▾" : "▸"}</span>
+                {childCount} extracted {childCount === 1 ? "fact" : "facts"}
+              </button>
             )}
           </div>
         </div>
@@ -788,55 +821,6 @@ function BulkActionsBar({
 }
 
 // ---------------------------------------------------------------------------
-// Pagination
-// ---------------------------------------------------------------------------
-
-function Pagination({
-  offset,
-  limit,
-  total,
-  onPageChange,
-}: {
-  offset: number;
-  limit: number;
-  total: number;
-  onPageChange: (newOffset: number) => void;
-}) {
-  const currentPage = Math.floor(offset / limit) + 1;
-  const totalPages = Math.max(1, Math.ceil(total / limit));
-
-  return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between px-1 py-3">
-      <p className="text-xs text-muted-foreground">
-        Showing {Math.min(offset + 1, total)}-{Math.min(offset + limit, total)}{" "}
-        of {total}
-      </p>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          className="rounded border px-3 py-1 text-sm hover:bg-muted disabled:opacity-50"
-          disabled={offset === 0}
-          onClick={() => onPageChange(Math.max(0, offset - limit))}
-        >
-          Previous
-        </button>
-        <span className="text-xs text-muted-foreground">
-          Page {currentPage} of {totalPages}
-        </span>
-        <button
-          type="button"
-          className="rounded border px-3 py-1 text-sm hover:bg-muted disabled:opacity-50"
-          disabled={offset + limit >= total}
-          onClick={() => onPageChange(offset + limit)}
-        >
-          Next
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main MemoryBrowser
 // ---------------------------------------------------------------------------
 
@@ -873,10 +857,10 @@ function MemoryBrowser() {
     typeof window !== "undefined" && window.innerWidth < 768,
   );
 
-  // Pagination
-  const [offset, setOffset] = useState(0);
-
-  // Reset offset when search/filters change
+  // When search/filters/project change, the matching set changes — drop
+  // stale selections so bulk ops don't act on rows the user can no longer
+  // see. Infinite scroll drives offset internally; we only need to reset
+  // user-visible state here.
   const filterKey = JSON.stringify({
     debouncedSearch,
     searchMode,
@@ -887,13 +871,26 @@ function MemoryBrowser() {
   useEffect(() => {
     if (prevFilterKeyRef.current !== filterKey) {
       prevFilterKeyRef.current = filterKey;
-      setOffset(0);
-      // Matching set changed — drop stale selections from the prior filter.
       setSelectedIds(new Set());
       setSelectionScope("page");
       setAllMatchingTruncation(null);
+      setExpandedParents(new Set());
     }
   }, [filterKey]);
+
+  // Which parent rows are showing their extracted-fact children inline.
+  // Keyed by parent memory id. Reset on filter change so collapsed-by-default
+  // is restored when the visible set changes.
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+
+  function toggleExpand(parentId: string) {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentId)) next.delete(parentId);
+      else next.add(parentId);
+      return next;
+    });
+  }
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -926,14 +923,17 @@ function MemoryBrowser() {
     };
   }, [filters, debouncedSearch, isSemanticSearch]);
 
-  const listParams: MemoryListParams = useMemo(
-    () => ({ ...filterOnlyParams, limit: PAGE_SIZE, offset }),
-    [filterOnlyParams, offset],
+  // In browse mode we always pull parent-anchored — the server sends each
+  // parent with its enrichment children inline so a family is never split.
+  const groupedListParams: Omit<MemoryListParams, "limit" | "offset"> = useMemo(
+    () => ({ ...filterOnlyParams, group_by_parent: true }),
+    [filterOnlyParams],
   );
 
-  const listQuery = useMemoryList(
-    selectedProjectId,
-    isSemanticSearch ? undefined : listParams,
+  const listQuery = useMemoryListInfinite(
+    isSemanticSearch ? "" : selectedProjectId,
+    PARENT_PAGE_SIZE,
+    groupedListParams,
   );
 
   const recallQuery = useMemoryRecall(
@@ -941,7 +941,7 @@ function MemoryBrowser() {
     isSemanticSearch
       ? {
           query: debouncedSearch,
-          limit: PAGE_SIZE,
+          limit: RECALL_PAGE_SIZE,
           tags:
             filters.selectedTags.length > 0
               ? filters.selectedTags
@@ -982,7 +982,9 @@ function MemoryBrowser() {
     }
   }
 
-  // Derived data
+  // Derived data — in browse mode this is the flat list of parents (each may
+  // carry .children inline). Semantic search stays a flat scored list and
+  // ignores the parent-anchored shape.
   const memories: Memory[] = useMemo(() => {
     if (isSemanticSearch) {
       const results = recallQuery.data?.memories ?? [];
@@ -997,7 +999,8 @@ function MemoryBrowser() {
         updated_at: r.created_at,
       }));
     }
-    return listQuery.data?.data ?? [];
+    const pages = listQuery.data?.pages ?? [];
+    return pages.flatMap((p) => p.data);
   }, [isSemanticSearch, recallQuery.data, listQuery.data]);
 
   // For list mode all filtering is server-side; the response is already
@@ -1044,9 +1047,10 @@ function MemoryBrowser() {
     return new Map(recallQuery.data.memories.map((r) => [r.id, r.score]));
   }, [isSemanticSearch, recallQuery.data]);
 
+  // Total parents (browse) or total scored hits (semantic).
   const total = isSemanticSearch
     ? filteredMemories.length
-    : (listQuery.data?.pagination?.total ?? 0);
+    : (listQuery.data?.pages[0]?.pagination?.total ?? 0);
 
   const isLoading = isSemanticSearch
     ? recallQuery.isLoading
@@ -1060,40 +1064,53 @@ function MemoryBrowser() {
     ? recallQuery.error?.message
     : listQuery.error?.message;
 
-  // Group memories: parent memories at top level, children nested below.
-  // Children whose parent is not on the current page appear as standalone
-  // entries with a visual indicator.
-  const groupedMemories = useMemo(() => {
-    const parentIds = new Set(filteredMemories.filter((m) => !m.parent_id).map((m) => m.id));
-    const childrenByParent = new Map<string, Memory[]>();
-    const topLevel: Memory[] = [];
+  const hasNextPage = !isSemanticSearch && (listQuery.hasNextPage ?? false);
+  const isFetchingNextPage = !isSemanticSearch && (listQuery.isFetchingNextPage ?? false);
 
-    for (const m of filteredMemories) {
-      if (m.parent_id && parentIds.has(m.parent_id)) {
-        const list = childrenByParent.get(m.parent_id) ?? [];
-        list.push(m);
-        childrenByParent.set(m.parent_id, list);
-      } else {
-        topLevel.push(m);
-      }
-    }
+  // IntersectionObserver sentinel — fires fetchNextPage as the user scrolls
+  // near the end of the list. Only active in infinite-scroll (browse) mode.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (isSemanticSearch) return;
+    const node = loadMoreRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
+            listQuery.fetchNextPage();
+          }
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [isSemanticSearch, hasNextPage, isFetchingNextPage, listQuery]);
 
-    return { topLevel, childrenByParent };
-  }, [filteredMemories]);
-
-  // Available tags derived from unfiltered memories so options don't disappear
+  // Available tags — pulled from parents AND any inline children so the
+  // sidebar surfaces tags that only live on extracted facts.
   const availableTags = useMemo(() => {
     const tagSet = new Set<string>();
     for (const m of memories) {
       for (const t of m.tags) tagSet.add(t);
+      for (const c of m.children ?? []) {
+        for (const t of c.tags) tagSet.add(t);
+      }
     }
     return Array.from(tagSet).sort();
   }, [memories]);
 
-  const currentPageIds = useMemo(
-    () => filteredMemories.map((m) => m.id),
-    [filteredMemories],
-  );
+  // IDs of every memory currently rendered (parents + all loaded children)
+  // so "Select Page" / "Deselect Page" act on the full visible set.
+  const currentPageIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const m of filteredMemories) {
+      ids.push(m.id);
+      for (const c of m.children ?? []) ids.push(c.id);
+    }
+    return ids;
+  }, [filteredMemories]);
 
   const allCurrentPageSelected = useMemo(
     () =>
@@ -1144,9 +1161,13 @@ function MemoryBrowser() {
     const projectId = selectedProjectId;
     // For items on the current page we already have the existing tag set;
     // items selected via "select all matching" must be fetched so we don't
-    // clobber their tags with just the new ones.
+    // clobber their tags with just the new ones. Inline children count as
+    // on-page since the server already returned them under their parent.
     const onPage = new Map<string, Memory>();
-    for (const m of filteredMemories) onPage.set(m.id, m);
+    for (const m of filteredMemories) {
+      onPage.set(m.id, m);
+      for (const c of m.children ?? []) onPage.set(c.id, c);
+    }
 
     const ids = Array.from(selectedIds);
     await runInChunks(ids, BULK_CHUNK_SIZE, async (memoryId) => {
@@ -1187,7 +1208,14 @@ function MemoryBrowser() {
       downloadJson(items, "memories-export.json");
       return;
     }
-    const selected = filteredMemories.filter((m) => selectedIds.has(m.id));
+    // Walk parents and inline children — selection may span both.
+    const selected: Memory[] = [];
+    for (const m of filteredMemories) {
+      if (selectedIds.has(m.id)) selected.push(m);
+      for (const c of m.children ?? []) {
+        if (selectedIds.has(c.id)) selected.push(c);
+      }
+    }
     downloadJson(selected, "memories-export.json");
   }
 
@@ -1227,7 +1255,6 @@ function MemoryBrowser() {
                 onChange={(e) => {
                   setSelectedProjectId(e.target.value);
                   clearSelection();
-                  setOffset(0);
                 }}
               >
                 {projects.length === 0 && (
@@ -1478,49 +1505,60 @@ function MemoryBrowser() {
               </div>
 
               {!isSemanticSearch && total > 0 && (
-                <Pagination
-                  offset={offset}
-                  limit={PAGE_SIZE}
-                  total={total}
-                  onPageChange={setOffset}
-                />
+                <p className="px-1 py-2 text-xs text-muted-foreground">
+                  {filteredMemories.length} of {total}
+                  {total === 1 ? " parent" : " parents"} loaded
+                </p>
               )}
 
               <div className="flex-1 space-y-3 overflow-y-auto">
-                {groupedMemories.topLevel.map((m) => (
-                  <div key={m.id}>
-                    <MemoryCard
-                      memory={m}
-                      score={scoreMap.get(m.id)}
-                      isSelected={selectedIds.has(m.id)}
-                      isChild={!!m.parent_id}
-                      onToggleSelect={() => toggleSelect(m.id)}
-                      onClick={() => setDetailMemoryId(m.id)}
-                    />
-                    {(groupedMemories.childrenByParent.get(m.id) ?? []).map((child) => (
+                {filteredMemories.map((m) => {
+                  const children = m.children ?? [];
+                  const childCount = children.length;
+                  const expanded = expandedParents.has(m.id);
+                  return (
+                    <div key={m.id}>
                       <MemoryCard
-                        key={child.id}
-                        memory={child}
-                        score={scoreMap.get(child.id)}
-                        isSelected={selectedIds.has(child.id)}
-                        isChild
-                        onToggleSelect={() => toggleSelect(child.id)}
-                        onClick={() => setDetailMemoryId(child.id)}
+                        memory={m}
+                        score={scoreMap.get(m.id)}
+                        isSelected={selectedIds.has(m.id)}
+                        isChild={!!m.parent_id}
+                        childCount={childCount}
+                        isExpanded={expanded}
+                        onToggleExpand={
+                          childCount > 0 ? () => toggleExpand(m.id) : undefined
+                        }
+                        onToggleSelect={() => toggleSelect(m.id)}
+                        onClick={() => setDetailMemoryId(m.id)}
                       />
-                    ))}
-                  </div>
-                ))}
-              </div>
+                      {expanded &&
+                        children.map((child) => (
+                          <MemoryCard
+                            key={child.id}
+                            memory={child}
+                            score={scoreMap.get(child.id)}
+                            isSelected={selectedIds.has(child.id)}
+                            isChild
+                            onToggleSelect={() => toggleSelect(child.id)}
+                            onClick={() => setDetailMemoryId(child.id)}
+                          />
+                        ))}
+                    </div>
+                  );
+                })}
 
-              {/* Bottom pagination (only for list mode, not semantic) */}
-              {!isSemanticSearch && total > 0 && (
-                <Pagination
-                  offset={offset}
-                  limit={PAGE_SIZE}
-                  total={total}
-                  onPageChange={setOffset}
-                />
-              )}
+                {!isSemanticSearch && (
+                  <div ref={loadMoreRef} className="py-4 text-center text-xs text-muted-foreground">
+                    {isFetchingNextPage
+                      ? "Loading more…"
+                      : hasNextPage
+                        ? ""
+                        : filteredMemories.length > 0
+                          ? "End of list"
+                          : ""}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>

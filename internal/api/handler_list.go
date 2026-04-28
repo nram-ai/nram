@@ -22,6 +22,9 @@ type MemoryLister interface {
 	CountByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
 	CountByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters) (int, error)
 	ListIDsByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, maxIDs int) ([]uuid.UUID, error)
+	ListParentsByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
+	CountParentsByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters) (int, error)
+	FindChildrenByParents(ctx context.Context, namespaceID uuid.UUID, parentIDs []uuid.UUID, relations []string) (map[uuid.UUID][]model.Memory, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
 }
 
@@ -163,23 +166,59 @@ func NewListHandler(memRepo MemoryLister, projRepo ProjectGetter, lineage Parent
 			return
 		}
 
-		total, err := memRepo.CountByNamespaceFiltered(r.Context(), project.NamespaceID, filters)
-		if err != nil {
-			WriteError(w, ErrInternal("failed to count memories"))
-			return
-		}
+		groupByParent := queryParamBool(r, groupByParentParam)
 
-		mems, err := memRepo.ListByNamespaceFiltered(r.Context(), project.NamespaceID, filters, limit, offset)
-		if err != nil {
-			WriteError(w, ErrInternal("failed to list memories"))
-			return
+		var (
+			mems  []model.Memory
+			total int
+		)
+		if groupByParent {
+			total, err = memRepo.CountParentsByNamespaceFiltered(r.Context(), project.NamespaceID, filters)
+			if err != nil {
+				WriteError(w, ErrInternal("failed to count parent memories"))
+				return
+			}
+			mems, err = memRepo.ListParentsByNamespaceFiltered(r.Context(), project.NamespaceID, filters, limit, offset)
+			if err != nil {
+				WriteError(w, ErrInternal("failed to list parent memories"))
+				return
+			}
+		} else {
+			total, err = memRepo.CountByNamespaceFiltered(r.Context(), project.NamespaceID, filters)
+			if err != nil {
+				WriteError(w, ErrInternal("failed to count memories"))
+				return
+			}
+			mems, err = memRepo.ListByNamespaceFiltered(r.Context(), project.NamespaceID, filters, limit, offset)
+			if err != nil {
+				WriteError(w, ErrInternal("failed to list memories"))
+				return
+			}
 		}
 		if mems == nil {
 			mems = []model.Memory{}
 		}
 
-		// Populate parent IDs from lineage table.
-		if lineage != nil && len(mems) > 0 {
+		if groupByParent && len(mems) > 0 {
+			parentIDs := make([]uuid.UUID, len(mems))
+			for i := range mems {
+				parentIDs[i] = mems[i].ID
+			}
+			children, cerr := memRepo.FindChildrenByParents(r.Context(), project.NamespaceID, parentIDs, storage.ExtractedChildRelations)
+			if cerr != nil {
+				WriteError(w, ErrInternal("failed to load child memories"))
+				return
+			}
+			for i := range mems {
+				if kids, ok := children[mems[i].ID]; ok {
+					mems[i].Children = kids
+				} else {
+					mems[i].Children = []model.Memory{}
+				}
+			}
+		} else if lineage != nil && len(mems) > 0 {
+			// Flat-list mode: surface ParentID so the existing client renderer
+			// can flag enrichment-derived rows as children.
 			ids := make([]uuid.UUID, len(mems))
 			for i := range mems {
 				ids[i] = mems[i].ID
@@ -281,6 +320,12 @@ type ListIDsResponse struct {
 // memories matching the given filters, capped at `max` (default 10000,
 // hard-capped at 50000). Used by the admin UI to power "select all matching"
 // across pages.
+//
+// When ?group_by_parent=true, only parent IDs are returned (matching the
+// list endpoint's grouped semantics). Children travel with their parent on
+// bulk operations through the existing forget/enrich cascade in the service
+// layer, so the UI never needs explicit child IDs to bulk-select an entire
+// family.
 func NewListIDsHandler(memRepo MemoryLister, projRepo ProjectGetter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projectIDStr := chi.URLParam(r, "project_id")
@@ -319,16 +364,38 @@ func NewListIDsHandler(memRepo MemoryLister, projRepo ProjectGetter) http.Handle
 			return
 		}
 
-		total, err := memRepo.CountByNamespaceFiltered(r.Context(), project.NamespaceID, filters)
-		if err != nil {
-			WriteError(w, ErrInternal("failed to count memories"))
-			return
-		}
+		groupByParent := queryParamBool(r, groupByParentParam)
 
-		ids, err := memRepo.ListIDsByNamespaceFiltered(r.Context(), project.NamespaceID, filters, max)
-		if err != nil {
-			WriteError(w, ErrInternal("failed to list memory ids"))
-			return
+		var (
+			ids   []uuid.UUID
+			total int
+		)
+		if groupByParent {
+			total, err = memRepo.CountParentsByNamespaceFiltered(r.Context(), project.NamespaceID, filters)
+			if err != nil {
+				WriteError(w, ErrInternal("failed to count parent memories"))
+				return
+			}
+			parents, perr := memRepo.ListParentsByNamespaceFiltered(r.Context(), project.NamespaceID, filters, max, 0)
+			if perr != nil {
+				WriteError(w, ErrInternal("failed to list parent memory ids"))
+				return
+			}
+			ids = make([]uuid.UUID, len(parents))
+			for i, p := range parents {
+				ids[i] = p.ID
+			}
+		} else {
+			total, err = memRepo.CountByNamespaceFiltered(r.Context(), project.NamespaceID, filters)
+			if err != nil {
+				WriteError(w, ErrInternal("failed to count memories"))
+				return
+			}
+			ids, err = memRepo.ListIDsByNamespaceFiltered(r.Context(), project.NamespaceID, filters, max)
+			if err != nil {
+				WriteError(w, ErrInternal("failed to list memory ids"))
+				return
+			}
 		}
 
 		strs := make([]string, len(ids))
