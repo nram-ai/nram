@@ -1188,3 +1188,229 @@ func TestRecall_PerNamespaceProjectAttribution(t *testing.T) {
 		t.Errorf("global memory: expected slug 'global', got %q (regression: globals were being attributed to the search-target project)", bySlug[globalMemID])
 	}
 }
+
+// --- Hybrid recall fusion tests ---
+
+type mockLexicalSearcher struct {
+	results map[uuid.UUID][]storage.MemoryRank // namespace → ranked results
+}
+
+func (m *mockLexicalSearcher) SearchByText(_ context.Context, ns uuid.UUID, _ string, limit int) ([]storage.MemoryRank, error) {
+	r := m.results[ns]
+	if limit > 0 && limit < len(r) {
+		return r[:limit], nil
+	}
+	return r, nil
+}
+
+// TestRecall_FusionDisabled_NoBehaviorChange verifies the off-flag path is
+// untouched: a fusion-aware build with FusionConfig.Enabled=false (the
+// default) produces the same output as a build without a lexical searcher.
+// The regression we are guarding against is "wiring fusion accidentally
+// changed cosine-only ranking."
+func TestRecall_FusionDisabled_NoBehaviorChange(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	mem1ID := uuid.New()
+	mem2ID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			mem1ID: makeTestMemory(mem1ID, nsID, "first memory", []string{"go"}, 0.8, 5, now.Add(-1*time.Hour)),
+			mem2ID: makeTestMemory(mem2ID, nsID, "second memory", []string{"rust"}, 0.6, 2, now.Add(-24*time.Hour)),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: mem1ID, Score: 0.95, NamespaceID: nsID},
+			{ID: mem2ID, Score: 0.80, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-embed",
+		dimensions: []int{384},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 384)},
+			Model:      "test-model",
+		},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+
+	// Wire a lexical searcher that would rank mem2 first if it were
+	// consulted — fusion-off must ignore it.
+	svc.SetLexical(&mockLexicalSearcher{
+		results: map[uuid.UUID][]storage.MemoryRank{
+			nsID: {{ID: mem2ID, Rank: 1}, {ID: mem1ID, Rank: 0.5}},
+		},
+	})
+	// Default FusionConfig has Enabled=false — leave it.
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{ProjectID: projectID, Query: "find something", Limit: 10})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
+	}
+	// mem1 has higher cosine + higher importance + more recent → should win
+	// when fusion is off, ignoring lexical entirely.
+	if resp.Memories[0].ID != mem1ID {
+		t.Errorf("fusion-off: expected mem1 first, got %v (lexical bled through?)", resp.Memories[0].ID)
+	}
+}
+
+// TestRecall_FusionEnabled_LexicalOnlyHit verifies the lexical channel
+// surfaces memories the vector channel completely missed when fusion is on.
+// This is the headline value of the feature.
+func TestRecall_FusionEnabled_LexicalOnlyHit(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	lexHitID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			lexHitID: makeTestMemory(lexHitID, nsID, "retatrutide-2.4mg dosing protocol", nil, 0.5, 0, now),
+		},
+	}
+	// Vector returns nothing — embedder cannot resolve the lexical query.
+	vectorSearcher := &mockVectorSearcher{results: nil}
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-embed",
+		dimensions: []int{384},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 384)},
+			Model:      "test-model",
+		},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	svc.SetLexical(&mockLexicalSearcher{
+		results: map[uuid.UUID][]storage.MemoryRank{
+			nsID: {{ID: lexHitID, Rank: 1.0}},
+		},
+	})
+	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.7, LexicalWeight: 0.3})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{ProjectID: projectID, Query: "retatrutide-2.4mg", Limit: 10})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 1 {
+		t.Fatalf("expected 1 memory from lexical channel, got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != lexHitID {
+		t.Errorf("expected lexHit %v, got %v", lexHitID, resp.Memories[0].ID)
+	}
+}
+
+// TestRecall_FusionEnabled_EmptyLexicalMatchesVectorOnly guards against
+// fusion-on regressing queries the vector channel already handles when
+// the lexical channel produces nothing — the realistic case where the
+// user's query has no exact-token matches in the corpus.
+func TestRecall_FusionEnabled_EmptyLexicalMatchesVectorOnly(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	mem1ID := uuid.New()
+	mem2ID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			mem1ID: makeTestMemory(mem1ID, nsID, "first memory", []string{"go"}, 0.8, 5, now.Add(-1*time.Hour)),
+			mem2ID: makeTestMemory(mem2ID, nsID, "second memory", []string{"rust"}, 0.6, 2, now.Add(-24*time.Hour)),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: mem1ID, Score: 0.95, NamespaceID: nsID},
+			{ID: mem2ID, Score: 0.80, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-embed",
+		dimensions: []int{384},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 384)},
+			Model:      "test-model",
+		},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	// Lexical returns no rows — the realistic case where the user's query
+	// has no exact-token matches in the corpus.
+	svc.SetLexical(&mockLexicalSearcher{results: map[uuid.UUID][]storage.MemoryRank{}})
+	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.70, LexicalWeight: 0.30})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{ProjectID: projectID, Query: "find something", Limit: 10})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != mem1ID {
+		t.Errorf("fusion-on with empty lex: expected mem1 first (matches vector-only result), got %v", resp.Memories[0].ID)
+	}
+	if resp.Memories[0].Similarity == nil {
+		t.Error("expected similarity to be set under fusion (it carries the normalized fused score)")
+	}
+}
+
+// TestRecall_FusionEnabled_BothChannelsBoost verifies that a memory which
+// surfaces in both rankings ranks above one that appears in only the
+// vector channel — the documents-with-multi-channel-evidence-win property
+// is what makes RRF worth the engineering.
+func TestRecall_FusionEnabled_BothChannelsBoost(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	bothID := uuid.New()
+	vecOnlyID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			bothID:    makeTestMemory(bothID, nsID, "memory in both channels", nil, 0.5, 0, now),
+			vecOnlyID: makeTestMemory(vecOnlyID, nsID, "memory in vector only", nil, 0.5, 0, now),
+		},
+	}
+	// Both vector positions roughly equivalent — RRF should pick the doc
+	// with cross-channel evidence.
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: vecOnlyID, Score: 0.9, NamespaceID: nsID}, // rank 1 in vector
+			{ID: bothID, Score: 0.85, NamespaceID: nsID},   // rank 2 in vector
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-embed",
+		dimensions: []int{384},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 384)},
+			Model:      "test-model",
+		},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	svc.SetLexical(&mockLexicalSearcher{
+		results: map[uuid.UUID][]storage.MemoryRank{
+			nsID: {{ID: bothID, Rank: 1.0}}, // bothID rank 1 in lexical
+		},
+	})
+	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.5, LexicalWeight: 0.5})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{ProjectID: projectID, Query: "anything", Limit: 10})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
+	}
+	// bothID: vec rank 2 (1/62) + lex rank 1 (1/61); vecOnlyID: vec rank 1 (1/61).
+	// 1/62 + 1/61 ≈ 0.0325 vs 1/61 ≈ 0.0164 — bothID wins.
+	if resp.Memories[0].ID != bothID {
+		t.Errorf("expected cross-channel memory to rank first; got %v", resp.Memories[0].ID)
+	}
+}

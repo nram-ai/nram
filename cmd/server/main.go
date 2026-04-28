@@ -358,6 +358,14 @@ func main() {
 		Scope:    "global",
 	})
 
+	// Hybrid recall fusion. The lexical channel is the same MemoryRepo
+	// (its SearchByText hits FTS5 on SQLite or the content_tsv generated
+	// column on Postgres). FusionConfig is loaded from /v1/admin/settings,
+	// off by default — flipping recall.fusion.enabled is the deployment
+	// switch after migrations have been applied.
+	recallSvc.SetLexical(memoryRepo)
+	recallSvc.SetFusion(loadFusionConfig(context.Background(), settingsSvc))
+
 	// Create lifecycle service for TTL expiry and purge sweeps.
 	graphPruner := service.NewGraphPruner(entityRepo, relationshipRepo)
 	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, service.LifecycleConfig{})
@@ -708,4 +716,23 @@ func main() {
 	}
 
 	log.Println("server stopped")
+}
+
+// loadFusionConfig pulls the recall.fusion.* settings into a FusionConfig.
+// Each lookup falls back to the registered default when the key is missing
+// or unparseable, so a misconfigured setting keeps fusion in a known state
+// rather than crashing startup.
+func loadFusionConfig(ctx context.Context, settingsSvc *service.SettingsService) service.FusionConfig {
+	cfg := service.DefaultFusionConfig
+	cfg.Enabled = settingsSvc.ResolveBool(ctx, service.SettingRecallFusionEnabled, "global")
+	if k, err := settingsSvc.ResolveInt(ctx, service.SettingRecallFusionK, "global"); err == nil && k > 0 {
+		cfg.RRFConstant = k
+	}
+	if w, err := settingsSvc.ResolveFloat(ctx, service.SettingRecallFusionVecW, "global"); err == nil && w >= 0 {
+		cfg.VectorWeight = w
+	}
+	if w, err := settingsSvc.ResolveFloat(ctx, service.SettingRecallFusionLexW, "global"); err == nil && w >= 0 {
+		cfg.LexicalWeight = w
+	}
+	return cfg
 }

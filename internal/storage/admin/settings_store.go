@@ -92,6 +92,10 @@ var settingsSchemas = []api.SettingSchema{
 	{Key: "reconsolidation.decay_threshold_days", Type: "number", DefaultValue: json.RawMessage(`14`), Description: "Days since last recall before a memory starts losing confidence to decay", Category: "reconsolidation"},
 	{Key: "reconsolidation.decay_rate_per_cycle", Type: "number", DefaultValue: json.RawMessage(`0.02`), Description: "Confidence loss per dream cycle applied to decay-eligible memories (0.0-1.0)", Category: "reconsolidation"},
 	{Key: "reconsolidation.confidence_floor", Type: "number", DefaultValue: json.RawMessage(`0.05`), Description: "Minimum confidence decay will not push below (0.0-1.0)", Category: "reconsolidation"},
+	{Key: "recall.fusion.enabled", Type: "boolean", DefaultValue: json.RawMessage(`false`), Description: "Enable hybrid recall: parallel vector + BM25/tsvector retrieval fused via Reciprocal Rank Fusion. Requires migration 18 applied and a lexical searcher wired.", Category: "recall_fusion"},
+	{Key: "recall.fusion.rrf_k", Type: "number", DefaultValue: json.RawMessage(`60`), Description: "RRF constant. Higher values flatten the head of each ranked list; 60 is the canonical Cormack-Clarke-Buettcher default.", Category: "recall_fusion"},
+	{Key: "recall.fusion.vector_weight", Type: "number", DefaultValue: json.RawMessage(`0.70`), Description: "Weight on each vector channel's RRF contribution (0.0-1.0). Together with lexical_weight, controls the relative pull of dense embedding vs sparse keyword evidence.", Category: "recall_fusion"},
+	{Key: "recall.fusion.lexical_weight", Type: "number", DefaultValue: json.RawMessage(`0.30`), Description: "Weight on each lexical channel's RRF contribution (0.0-1.0). Raise to bias recall toward exact-token matches (entity names, version strings).", Category: "recall_fusion"},
 }
 
 // promptSchemaEntries describes the dreaming-phase prompts surfaced through

@@ -36,6 +36,16 @@ const (
 	SettingRankWeightGraph = "ranking.weight.graph_relevance"
 	SettingTokenRetention  = "usage.token_retention_days"
 
+	// Hybrid recall fusion. Off by default; flipping enabled turns on
+	// parallel vector + BM25/tsvector retrieval with RRF fusion. The two
+	// weights govern each channel's RRF contribution; rrf_k is the
+	// canonical Cormack-Clarke-Buettcher constant (60 dampens deep-tail
+	// noise without flattening the head of either ranked list).
+	SettingRecallFusionEnabled = "recall.fusion.enabled"
+	SettingRecallFusionK       = "recall.fusion.rrf_k"
+	SettingRecallFusionVecW    = "recall.fusion.vector_weight"
+	SettingRecallFusionLexW    = "recall.fusion.lexical_weight"
+
 	// Dreaming system-level settings (global scope).
 	SettingDreamingEnabled            = "dreaming.enabled"
 	SettingDreamMaxTokensPerCycle     = "dreaming.max_tokens_per_cycle"
@@ -148,6 +158,10 @@ var settingDefaults = map[string]string{
 	SettingRankWeightImp:              "0.10",
 	SettingRankWeightFreq:             "0.05",
 	SettingRankWeightGraph:            "0.20",
+	SettingRecallFusionEnabled:        "false",
+	SettingRecallFusionK:              "60",
+	SettingRecallFusionVecW:           "0.70",
+	SettingRecallFusionLexW:           "0.30",
 	SettingTokenRetention:             "365",
 	SettingDreamingEnabled:            "false",
 	SettingDreamMaxTokensPerCycle:     "1024000",

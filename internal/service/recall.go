@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/storage"
@@ -21,6 +25,16 @@ type MemoryReader interface {
 	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
 	ListByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
+}
+
+// LexicalSearcher runs a backend-native full-text query (FTS5 on SQLite,
+// to_tsvector on Postgres) and returns rows in best-first order. The recall
+// path uses it as a second retrieval channel that gets fused with vector
+// search via Reciprocal Rank Fusion. Implementations must fail soft — a
+// malformed query should yield an empty result, not an error, so recall is
+// never gated on lexical input parsing.
+type LexicalSearcher interface {
+	SearchByText(ctx context.Context, namespaceID uuid.UUID, query string, limit int) ([]storage.MemoryRank, error)
 }
 
 // VectorSearcher provides vector similarity search.
@@ -163,6 +177,26 @@ var DefaultRankingWeights = RankingWeights{
 	GraphRelevance: 0.20,
 }
 
+// FusionConfig governs candidate retrieval (parallel vector + lexical,
+// fused via RRF). The fused score lands in scoredMemory.similarity, so
+// RankingWeights.Similarity still controls its weight in computeScore —
+// that's why this is a separate struct from RankingWeights.
+type FusionConfig struct {
+	Enabled       bool    // off by default; flip via /v1/admin/settings
+	RRFConstant   int     // RRF k; canonical default 60
+	VectorWeight  float64 // weight on each vector channel's RRF contribution
+	LexicalWeight float64 // weight on each lexical channel's RRF contribution
+}
+
+// DefaultFusionConfig ships with the feature dark — operators flip
+// recall.fusion.enabled in admin settings after migration + smoke test.
+var DefaultFusionConfig = FusionConfig{
+	Enabled:       false,
+	RRFConstant:   60,
+	VectorWeight:  0.70,
+	LexicalWeight: 0.30,
+}
+
 // RecallService orchestrates memory recall with vector search, tag filtering,
 // graph traversal, and multi-factor ranking.
 type RecallService struct {
@@ -171,11 +205,13 @@ type RecallService struct {
 	namespaces    NamespaceRepository
 	tokenUsage    TokenUsageRepository
 	vectorSearch  VectorSearcher
+	lexical       LexicalSearcher
 	entityReader  EntityReader
 	traverser     RelationshipTraverser
 	shares        MemoryShareReader
 	embedProvider func() provider.EmbeddingProvider
 	weights       RankingWeights
+	fusion        FusionConfig
 	// reinforcement is optional. When nil (the default, matching all existing
 	// callers), recall has no read-path write. When wired via SetReinforcement,
 	// every successful recall asynchronously bumps access_count, last_accessed,
@@ -206,12 +242,26 @@ func NewRecallService(
 		shares:        shares,
 		embedProvider: embedProvider,
 		weights:       DefaultRankingWeights,
+		fusion:        DefaultFusionConfig,
 	}
 }
 
 // SetWeights overrides the default ranking weights.
 func (s *RecallService) SetWeights(w RankingWeights) {
 	s.weights = w
+}
+
+// SetLexical wires the lexical (BM25/tsvector) searcher used by the hybrid
+// recall path. Passing nil disables fusion regardless of FusionConfig.Enabled.
+func (s *RecallService) SetLexical(l LexicalSearcher) {
+	s.lexical = l
+}
+
+// SetFusion overrides the fusion configuration. Off by default; flip via
+// /v1/admin/settings (key recall.fusion.enabled) after migrations have been
+// applied and the lexical searcher is wired.
+func (s *RecallService) SetFusion(cfg FusionConfig) {
+	s.fusion = cfg
 }
 
 // scoredMemory is an internal type used during ranking.
@@ -364,15 +414,32 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				}
 
 				simMap := make(map[uuid.UUID]float64)
-				for _, nsID := range searchNamespaces {
-					results, err := s.vectorSearch.Search(ctx, storage.VectorKindMemory, resp.Embeddings[0], nsID, actualDim, topK)
-					if err != nil {
-						continue
-					}
-					for _, r := range results {
-						// Keep the best score if a memory appears in multiple searches.
-						if existing, ok := simMap[r.ID]; !ok || r.Score > existing {
-							simMap[r.ID] = r.Score
+				if s.fusion.Enabled && s.lexical != nil {
+					// Hybrid path: fan out vector + lexical per namespace,
+					// then fuse via RRF. The fused score (normalized to
+					// [0, 1] by max) replaces raw cosine similarity in the
+					// downstream computeScore — RankingWeights.Similarity
+					// semantics are unchanged from the caller's view.
+					simMap = s.runHybridSearch(ctx, runHybridArgs{
+						Query:        req.Query,
+						Embedding:    resp.Embeddings[0],
+						Dim:          actualDim,
+						Namespaces:   searchNamespaces,
+						TopK:         topK,
+						PrimaryNS:    namespaceID,
+						PrimaryProj:  projectID,
+					})
+				} else {
+					for _, nsID := range searchNamespaces {
+						results, err := s.vectorSearch.Search(ctx, storage.VectorKindMemory, resp.Embeddings[0], nsID, actualDim, topK)
+						if err != nil {
+							continue
+						}
+						for _, r := range results {
+							// Keep the best score if a memory appears in multiple searches.
+							if existing, ok := simMap[r.ID]; !ok || r.Score > existing {
+								simMap[r.ID] = r.Score
+							}
 						}
 					}
 				}
@@ -743,6 +810,118 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		LatencyMs:     latency,
 		CoverageGaps:  coverageGaps,
 	}, nil
+}
+
+// runHybridArgs bundles the inputs to the hybrid search fan-out so the
+// signature does not balloon when fusion grows new knobs.
+type runHybridArgs struct {
+	Query       string
+	Embedding   []float32
+	Dim         int
+	Namespaces  []uuid.UUID
+	TopK        int
+	PrimaryNS   uuid.UUID
+	PrimaryProj uuid.UUID
+}
+
+// runHybridSearch returns a simMap normalized to [0, 1] so the caller can
+// drop it into scoredMemory.similarity unchanged.
+//
+// Both channels' errors are swallowed by design: a vector hiccup or
+// unparseable lexical query must not strand a recall that the other
+// channel can still serve.
+func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs) map[uuid.UUID]float64 {
+	var (
+		mu          sync.Mutex
+		vecRankings [][]storage.MemoryRank
+		lexRankings [][]storage.MemoryRank
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	for _, nsID := range args.Namespaces {
+		nsID := nsID
+		g.Go(func() error {
+			results, err := s.vectorSearch.Search(gctx, storage.VectorKindMemory, args.Embedding, nsID, args.Dim, args.TopK)
+			if err != nil {
+				return nil
+			}
+			ranks := make([]storage.MemoryRank, 0, len(results))
+			for _, r := range results {
+				ranks = append(ranks, storage.MemoryRank{ID: r.ID, Rank: r.Score})
+			}
+			mu.Lock()
+			vecRankings = append(vecRankings, ranks)
+			mu.Unlock()
+			return nil
+		})
+		g.Go(func() error {
+			ranks, _ := s.lexical.SearchByText(gctx, nsID, args.Query, args.TopK)
+			mu.Lock()
+			lexRankings = append(lexRankings, ranks)
+			mu.Unlock()
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	// Compose the ranking list and per-list weights for RRF. Each
+	// per-namespace list contributes independently — if a memory shows up
+	// in primary's vector list and global's lexical list, both
+	// contributions accumulate.
+	allRankings := make([][]storage.MemoryRank, 0, len(vecRankings)+len(lexRankings))
+	allWeights := make([]float64, 0, len(vecRankings)+len(lexRankings))
+	var vecCount, lexCount int
+	vecIDs := make(map[uuid.UUID]struct{})
+	for _, r := range vecRankings {
+		allRankings = append(allRankings, r)
+		allWeights = append(allWeights, s.fusion.VectorWeight)
+		vecCount += len(r)
+		for _, m := range r {
+			vecIDs[m.ID] = struct{}{}
+		}
+	}
+	overlap := 0
+	for _, r := range lexRankings {
+		allRankings = append(allRankings, r)
+		allWeights = append(allWeights, s.fusion.LexicalWeight)
+		lexCount += len(r)
+		for _, m := range r {
+			if _, ok := vecIDs[m.ID]; ok {
+				overlap++
+			}
+		}
+	}
+
+	fused := ReciprocalRankFusion(allRankings, s.fusion.RRFConstant, allWeights)
+
+	// Normalize by max so the fused score lives in [0, 1] like the cosine
+	// it replaces. clampScore in computeScore expects this range, and
+	// RankingWeights default to summing to 1.0 against [0, 1] inputs.
+	var maxScore float64
+	for _, v := range fused {
+		if v > maxScore {
+			maxScore = v
+		}
+	}
+	simMap := make(map[uuid.UUID]float64, len(fused))
+	if maxScore > 0 {
+		for id, v := range fused {
+			simMap[id] = v / maxScore
+		}
+	}
+
+	if len(fused) > 0 {
+		slog.Info("recall: fusion",
+			"vector_count", vecCount,
+			"lexical_count", lexCount,
+			"overlap", overlap,
+			"fused_count", len(fused),
+			"namespace_id", args.PrimaryNS,
+			"project_id", args.PrimaryProj,
+		)
+	}
+
+	return simMap
 }
 
 // computeScore calculates the composite ranking score for a candidate.

@@ -1297,3 +1297,71 @@ func TestMemoryRepo_ClearAllEmbeddingDims(t *testing.T) {
 		}
 	})
 }
+
+func TestMemoryRepo_SearchByText(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+		otherNsID := createTestMemoryNamespace(t, ctx, db)
+
+		// Three memories with distinctive lexical content. SQLite uses
+		// FTS5 (memories_fts triggers backfill on insert); Postgres uses
+		// the content_tsv generated column added in migration 000018.
+		mkMem := func(content string, ns uuid.UUID) uuid.UUID {
+			m := newTestMemory(ns)
+			m.Content = content
+			if err := repo.Create(ctx, m); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			return m.ID
+		}
+		hitID := mkMem("retatrutide-2.4mg dosing protocol Q4 2025", nsID)
+		missID := mkMem("the quick brown fox jumps over the lazy dog", nsID)
+		otherNsID2 := mkMem("retatrutide should not surface from a different namespace", otherNsID)
+
+		results, err := repo.SearchByText(ctx, nsID, "retatrutide", 10)
+		if err != nil {
+			t.Fatalf("SearchByText: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected exactly 1 result for 'retatrutide' in nsID, got %d (ids: %v)", len(results), results)
+		}
+		if results[0].ID != hitID {
+			t.Errorf("expected hit %v, got %v", hitID, results[0].ID)
+		}
+
+		// Empty query short-circuits.
+		empty, err := repo.SearchByText(ctx, nsID, "   ", 10)
+		if err != nil {
+			t.Fatalf("empty query SearchByText: %v", err)
+		}
+		if len(empty) != 0 {
+			t.Errorf("empty query: expected 0 results, got %d", len(empty))
+		}
+
+		// Soft-deleted memories must drop out of the lexical index.
+		if err := repo.SoftDelete(ctx, hitID, nsID); err != nil {
+			t.Fatalf("soft delete: %v", err)
+		}
+		afterDelete, err := repo.SearchByText(ctx, nsID, "retatrutide", 10)
+		if err != nil {
+			t.Fatalf("post-delete SearchByText: %v", err)
+		}
+		if len(afterDelete) != 0 {
+			t.Errorf("expected 0 results after soft delete, got %d", len(afterDelete))
+		}
+
+		// No match in this namespace's content corpus.
+		none, err := repo.SearchByText(ctx, nsID, "kangaroo", 10)
+		if err != nil {
+			t.Fatalf("no-match SearchByText: %v", err)
+		}
+		if len(none) != 0 {
+			t.Errorf("expected 0 results for 'kangaroo', got %d", len(none))
+		}
+
+		_ = missID
+		_ = otherNsID2
+	})
+}

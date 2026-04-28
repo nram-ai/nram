@@ -933,6 +933,93 @@ func (r *MemoryRepo) ListPurgeable(ctx context.Context, before time.Time, limit 
 	return result, nil
 }
 
+// MemoryRank is one (id, score) pair from a lexical search. The Rank value
+// is raw and unitless — sign and magnitude differ between backends (BM25 is
+// lower-is-better, ts_rank_cd is higher-is-better). RRF only consumes the
+// ordinal position of each row in the returned slice, so callers should
+// treat Rank as opaque.
+type MemoryRank struct {
+	ID   uuid.UUID
+	Rank float64
+}
+
+// SearchByText runs a backend-native lexical search over memories.content
+// scoped to a single namespace and live (non-soft-deleted) rows. Rows are
+// returned in best-first order, capped at limit.
+//
+// SQLite uses the FTS5 virtual table memories_fts (created in migration
+// 000005) joined to memories for the namespace + soft-delete filter, with
+// bm25() as the rank.
+//
+// Postgres uses the content_tsv generated tsvector column (added in
+// migration 000018) with ts_rank_cd against plainto_tsquery('english', ?).
+//
+// An empty/whitespace query returns (nil, nil) without touching the DB.
+// Backend-level query parse failures (rare) are returned as an empty slice
+// rather than an error so the recall path can degrade gracefully when
+// lexical input cannot be parsed.
+func (r *MemoryRepo) SearchByText(ctx context.Context, namespaceID uuid.UUID, query string, limit int) ([]MemoryRank, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	var sql string
+	var args []interface{}
+	if r.db.Backend() == BackendPostgres {
+		// Compute plainto_tsquery once via CTE so it is reused in both
+		// the rank expression and the @@ filter.
+		sql = `WITH q AS (SELECT plainto_tsquery('english', $1) AS tsq)
+			SELECT m.id, ts_rank_cd(m.content_tsv, q.tsq) AS rank
+			FROM memories m, q
+			WHERE m.namespace_id = $2
+			  AND m.deleted_at IS NULL
+			  AND m.content_tsv @@ q.tsq
+			ORDER BY rank DESC
+			LIMIT $3`
+		args = []interface{}{query, namespaceID.String(), limit}
+	} else {
+		sql = `SELECT m.id, bm25(memories_fts) AS rank
+			FROM memories_fts
+			JOIN memories m ON m.id = memories_fts.memory_id
+			WHERE memories_fts MATCH ?
+			  AND m.namespace_id = ?
+			  AND m.deleted_at IS NULL
+			ORDER BY rank ASC
+			LIMIT ?`
+		args = []interface{}{query, namespaceID.String(), limit}
+	}
+
+	rows, err := r.db.Query(ctx, sql, args...)
+	if err != nil {
+		// Treat malformed queries (FTS5 syntax errors, plainto_tsquery
+		// failures) as empty result. Recall must not error just because
+		// a user typed `:` or `(` into the query box.
+		return nil, nil
+	}
+	defer rows.Close()
+
+	result := []MemoryRank{}
+	for rows.Next() {
+		var idStr string
+		var rank float64
+		if err := rows.Scan(&idStr, &rank); err != nil {
+			return nil, fmt.Errorf("memory search by text scan: %w", err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("memory search by text parse: %w", err)
+		}
+		result = append(result, MemoryRank{ID: id, Rank: rank})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory search by text iteration: %w", err)
+	}
+	return result, nil
+}
+
 // reload fetches the memory by ID and populates the struct in place.
 func (r *MemoryRepo) reload(ctx context.Context, mem *model.Memory) error {
 	fetched, err := r.getByIDIncludeDeleted(ctx, mem.ID)
