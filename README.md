@@ -8,22 +8,24 @@ nram provides a self-hosted server that any AI agent can use to persist long-ter
 
 ## Features
 
-- **Persistent Memory** - Store, retrieve, update, and soft-delete memories with tags, metadata, TTL, and supersession tracking
-- **Semantic Search** - Vector embedding support via pgvector (PostgreSQL), pure-Go HNSW (SQLite), or Qdrant for similarity-based recall
-- **Enrichment Pipeline** - Background workers extract facts, entities, and relationships from stored memories using configurable LLM providers
-- **Knowledge Graph** - Automatically constructed from enriched entities and relationships with multi-hop traversal
-- **Dreaming** - Offline background process with six phases: entity dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation
-- **Adaptive Confidence** - Optional reconsolidation hook on recall nudges `access_count`, `last_accessed`, and `confidence` on surfaced memories; the pruning phase applies a complementary confidence decay so unused memories fade over time. Shadow mode by default for observable-only rollout.
-- **Model Context Protocol (MCP)** - Full MCP server at `/mcp` (Streamable HTTP) with 13 tools covering store, recall, update, get, list, forget, enrich, graph traversal, project management, and export
+- **Persistent Memory** - Store, retrieve, update, and soft-delete memories with tags, metadata, TTL, content-hash dedup-on-ingest, and supersession tracking. Superseded memories are hidden from list/recall/MCP results by default.
+- **Hybrid Recall** - Parallel vector + lexical retrieval (FTS5 on SQLite, `tsvector`/`ts_rank_cd` on Postgres) fused with Reciprocal Rank Fusion. Off by default; flip `recall.fusion.enabled` once embeddings are populated.
+- **Semantic Search** - Vector embedding support via pgvector (PostgreSQL), pure-Go HNSW (SQLite), or Qdrant. Embedding runs off the write path in the enrichment worker, so stores stay fast.
+- **Enrichment Pipeline** - Background workers extract facts, entities, and relationships using configurable LLM providers. The first phase is an optional context-aware ingestion judge that decides ADD / UPDATE / DELETE / NONE on near-duplicate matches before extraction runs (shadow mode by default).
+- **Knowledge Graph** - Automatically constructed from enriched entities and relationships with multi-hop traversal and entity-vector lookup
+- **Dreaming** - Offline background consolidation cycle with seven phases: entity dedup, paraphrase dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation
+- **Novelty Audit** - LLM-judged audit on dream syntheses; low-novelty consolidations are demoted, vectors are purged, and surfacing in recall is suppressed unless explicitly opted in
+- **Adaptive Confidence** - Optional reconsolidation hook on recall nudges `access_count`, `last_accessed`, and `confidence` on surfaced memories; pruning applies a complementary confidence decay so unused memories fade over time. Shadow mode by default for observable-only rollout.
+- **Model Context Protocol (MCP)** - Full MCP server at `/mcp` (Streamable HTTP) with 13 tools covering store, recall (including tag-axis diversification), update, get, list, forget, enrich, graph traversal, project management, and export
 - **Authentication** - JWT (password login), per-user API keys, WebAuthn passkeys, and per-organization OIDC single sign-on
 - **OAuth 2.0** - Authorization Code + PKCE, dynamic client registration (RFC 7591), resource indicators (RFC 8707), discovery metadata (RFC 8414, RFC 9728)
 - **RBAC** - Five roles (administrator, org_owner, member, readonly, service) enforced across REST and MCP
 - **Multi-Tenancy** - Organizations, hierarchical namespaces, and projects for memory isolation
 - **Real-Time Events** - Server-Sent Events (SSE) with scope filtering and reconnection replay; webhook delivery with HMAC-SHA256 signatures
-- **Admin UI** - React-based dashboard for managing organizations, users, projects, providers, enrichment, dreaming, OAuth clients, webhooks, SSO, database, and analytics
-- **Dual Database Support** - SQLite (zero-config default) or PostgreSQL (with pgvector and LISTEN/NOTIFY); both support enrichment and knowledge graph
+- **Admin UI** - React-based dashboard for managing organizations, users, projects, providers, enrichment, dreaming, OAuth clients, webhooks, SSO, database, and analytics. Surfaces today's settings (fusion, ingestion-decision, novelty, reconsolidation) and per-provider token usage.
+- **Dual Database Support** - SQLite (zero-config default) or PostgreSQL (with pgvector and LISTEN/NOTIFY); both support enrichment, dreaming, knowledge graph, and hybrid recall
 - **Migration Tooling** - SQLite-to-Postgres migration with preflight checks (connectivity, pgvector, privileges, target row counts), orphan audit against foreign-key relationships, and gated reset (truncate or drop-schema)
-- **LLM Provider Agnostic** - OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint
+- **LLM Provider Agnostic** - OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint, with a centralized provider middleware that records token usage for every call
 - **Import/Export** - JSON and NDJSON formats for full project snapshots
 - **Prometheus Metrics** - `/metrics` endpoint for monitoring
 
@@ -43,6 +45,10 @@ make build
 # Or build components separately
 make build-ui       # Build React UI and embed into Go binary
 make build-server   # Compile Go server to ./nram
+
+# Operator-only auxiliary binary (drains the dream novelty-audit backlog
+# for a single project without going through the scheduler)
+go build -o ./backfill-audit ./cmd/backfill-audit
 ```
 
 ### Run
@@ -59,6 +65,17 @@ DATABASE_URL=postgres://user:pass@localhost/nram PORT=8674 ./nram
 ```
 
 On first launch, navigate to `http://localhost:8674` to complete the setup wizard (create the initial admin account).
+
+#### Operator Flags
+
+| Flag | Description |
+|---|---|
+| `--config <path>` | Override the config file path |
+| `--backfill-embeddings` | Enqueue embed jobs for memories missing vectors, then exit |
+| `--reembed-all-memories` | Force re-embed every live memory (e.g. after switching embedding models), then exit |
+| `migrate up` / `migrate down` / `migrate version` | Migration CLI commands (run before normal startup) |
+
+Setting `NRAM_ENABLE_EMBED_BACKFILL=1` runs the embed backfill at startup without forcing an exit.
 
 ## Configuration
 
@@ -122,6 +139,8 @@ hnsw:
 
 YAML values support environment variable interpolation: `${VAR_NAME:-default}`.
 
+Most runtime knobs (recall fusion weights, ingestion-decision thresholds, novelty audit, reconsolidation, dreaming budgets, retention, prompts) are stored in the `settings` table and edited at `/v1/admin/settings` (or in the admin UI). `config.yaml` provides bootstrap defaults and provider credentials; persisted settings always win at runtime so operators do not need to redeploy to retune.
+
 ### Environment Variables
 
 | Variable | Description |
@@ -148,7 +167,7 @@ YAML values support environment variable interpolation: `${VAR_NAME:-default}`.
 
 No configuration required. Creates `nram.db` in the working directory with WAL mode, foreign keys, and FTS5 full-text search.
 
-SQLite mode uses a pure-Go HNSW index for vector search and FTS5 for full-text search. Enrichment, knowledge graph, and all MCP tools are fully supported.
+SQLite mode uses a pure-Go HNSW index for vector search and FTS5 for the lexical channel of hybrid recall. Enrichment, dreaming, knowledge graph, and all MCP tools are fully supported.
 
 ### PostgreSQL
 
@@ -158,7 +177,7 @@ Set `DATABASE_URL` or `database.url` in your config file:
 DATABASE_URL=postgres://nram:password@localhost:5432/nram ./nram
 ```
 
-PostgreSQL enables pgvector for semantic search and LISTEN/NOTIFY for multi-instance event propagation.
+PostgreSQL enables pgvector for semantic search, a generated `content_tsv` column with `ts_rank_cd` for the lexical channel of hybrid recall, and LISTEN/NOTIFY for multi-instance event propagation.
 
 ### Qdrant (Optional)
 
@@ -233,7 +252,7 @@ All under `/v1/projects/{project_id}/memories`. Read operations are available to
 | `GET` | `/ids` | List matching memory IDs (for "select all") |
 | `GET` | `/{id}` | Get a memory by ID |
 | `POST` | `/get` | Batch-get by ID list |
-| `POST` | `/recall` | Semantic recall (vector + graph + ranking; fires reconsolidation) |
+| `POST` | `/recall` | Hybrid recall (vector + optional BM25/tsvector + graph + ranking; fires reconsolidation) |
 | `GET` | `/export` | Export as JSON / NDJSON |
 | `POST` | `/` | Store a memory |
 | `PUT` | `/{id}` | Update a memory |
@@ -294,7 +313,7 @@ All under `/v1/admin`, gated by `administrator` role.
 | `*` | `/users/...` | Global user CRUD |
 | `*` | `/projects/...` | Global project CRUD |
 | `*` | `/providers/...` | LLM / embedding provider configuration |
-| `*` | `/settings` | Global settings (including reconsolidation tunables) |
+| `*` | `/settings` | Global settings (recall fusion, ingestion decision, novelty audit, reconsolidation, dreaming budgets, retention, prompts) |
 | `*` | `/oauth/...` | OAuth client administration |
 | `*` | `/webhooks/...` | Webhook registration and delivery audit |
 | `*` | `/database/...` | Database info, test, preflight, migration audit, reset |
@@ -307,13 +326,13 @@ The MCP server is available at `POST /mcp` using Streamable HTTP transport.
 
 | Tool | Description |
 |---|---|
-| `memory_store` | Store a single memory |
-| `memory_store_batch` | Batch store memories |
+| `memory_store` | Store a single memory. Identical content within the same project is deduplicated on ingest — the existing memory's ID is returned and tags / metadata on the new request are ignored. |
+| `memory_store_batch` | Batch store memories (same dedup-on-ingest behavior) |
 | `memory_update` | Update a memory |
 | `memory_get` | Retrieve a memory by ID |
-| `memory_list` | List memories with filtering |
-| `memory_recall` | Semantic search |
-| `memory_forget` | Soft-delete a memory |
+| `memory_list` | List memories with filtering. Superseded rows are hidden by default. |
+| `memory_recall` | Hybrid (vector + lexical) recall with optional `diversify_by_tag_prefix` for round-robin coverage across a tag axis |
+| `memory_forget` | Soft-delete a memory; cascades restricted to extraction lineage |
 | `memory_enrich` | Trigger enrichment |
 | `memory_graph` | Knowledge graph traversal |
 | `memory_projects` | List projects |
@@ -337,33 +356,40 @@ The embedded web UI is served at the root path (`/`). It provides:
 - Organization and user management
 - Project management
 - LLM / embedding provider configuration with hot-reload
-- Settings editor (including reconsolidation mode and decay tuning)
-- Enrichment queue monitoring and retry
-- Dreaming cycle inspection and manual triggers
+- Settings editor (recall fusion weights, ingestion decision, novelty audit, reconsolidation mode and decay, dreaming budgets and retention, prompts)
+- Enrichment queue monitoring and retry; ingestion-decision shadow vs persist toggle
+- Dreaming cycle inspection, log replay, manual triggers, and rollback
+- Memory browser with parent / enrichment-child grouping
 - Knowledge graph visualization
 - OAuth client management, webhook management, per-org OIDC SSO configuration
 - Passkey management (per-user registration and removal)
 - Database management (info, test, preflight, migration audit, reset)
-- Token usage analytics and real-time activity feed
+- Token usage analytics (per-provider, per-model, per-tenant) and real-time activity feed
 
 ## Project Structure
 
 ```
-cmd/server/          Server entrypoint
+cmd/
+  server/            Server entrypoint
+  backfill-audit/    Operator tool: drains the dream novelty-audit backlog
+                     for a single project without going through the scheduler
 internal/
-  api/               HTTP handlers
-  auth/              OAuth 2.0, JWT, RBAC
+  api/               HTTP handlers (REST + admin)
+  auth/              OAuth 2.0, JWT, WebAuthn, RBAC
   config/            Configuration loading
-  dreaming/          Offline consolidation, dedup, pruning, and inference
-  enrichment/        Background enrichment workers
+  dreaming/          Offline consolidation cycle (entity dedup, paraphrase dedup,
+                     transitive inference, contradiction, consolidation, pruning,
+                     weight adjustment) with rollback and retention sweeps
+  enrichment/        Background enrichment worker pool, context-aware ingestion
+                     decision, dedup, conflict resolution, re-embed
   events/            Event bus, SSE, webhooks
   mcp/               MCP server and tool handlers
   migration/         Database migration runner
   model/             Data models
-  provider/          LLM/embedding provider adapters
+  provider/          LLM / embedding provider adapters with token-usage middleware
   server/            HTTP router setup
-  service/           Business logic layer
-  storage/           Database repositories
+  service/           Business logic layer (recall, store, fusion, settings, lifecycle)
+  storage/           Database repositories (incl. HNSW, pgvector, Qdrant adapters)
   ui/                Embedded React UI assets
 migrations/
   sqlite/            SQLite migration SQL files
