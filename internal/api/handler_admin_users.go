@@ -303,8 +303,7 @@ func handleAdminUpdateUser(w http.ResponseWriter, r *http.Request, store UserAdm
 		return
 	}
 
-	if err := ValidateUserSettingsJSON(body.Settings); err != nil {
-		WriteError(w, ErrBadRequest(err.Error()))
+	if requireValidUserSettings(w, body.Settings) {
 		return
 	}
 

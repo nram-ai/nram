@@ -11,11 +11,13 @@ import (
 )
 
 type mockCascadeProjects struct {
-	byNS map[uuid.UUID]*model.Project
-	err  error
+	byNS  map[uuid.UUID]*model.Project
+	err   error
+	calls int
 }
 
 func (m *mockCascadeProjects) GetByNamespaceID(ctx context.Context, ns uuid.UUID) (*model.Project, error) {
+	m.calls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -159,5 +161,39 @@ func TestCascade_ResolveDedupThreshold_NilNamespace(t *testing.T) {
 	)
 	if got := r.ResolveDedupThreshold(context.Background(), uuid.Nil); got != 0.92 {
 		t.Errorf("uuid.Nil should NOT pick up project overrides, got %v", got)
+	}
+}
+
+func TestCascade_RepeatedLookupsHitCache(t *testing.T) {
+	// A worker draining a batch of jobs from the same namespace should hit
+	// the project repo only once, not once per job.
+	projNS := uuid.New()
+	projects := &mockCascadeProjects{byNS: map[uuid.UUID]*model.Project{
+		projNS: {Settings: json.RawMessage(`{"dedup_threshold": 0.85}`)},
+	}}
+	r := NewCascadeResolver(nil, projects, &mockCascadeUsers{})
+
+	for i := 0; i < 5; i++ {
+		_ = r.ResolveDedupThreshold(context.Background(), projNS)
+		_ = r.ResolveEnrichmentEnabled(context.Background(), projNS)
+	}
+	if projects.calls != 1 {
+		t.Errorf("expected 1 project lookup (cache hit on repeat), got %d", projects.calls)
+	}
+}
+
+func TestCascade_InvalidateNamespaceClearsCache(t *testing.T) {
+	projNS := uuid.New()
+	projects := &mockCascadeProjects{byNS: map[uuid.UUID]*model.Project{
+		projNS: {Settings: json.RawMessage(`{"dedup_threshold": 0.85}`)},
+	}}
+	r := NewCascadeResolver(nil, projects, &mockCascadeUsers{})
+
+	_ = r.ResolveDedupThreshold(context.Background(), projNS)
+	r.InvalidateNamespace(projNS)
+	_ = r.ResolveDedupThreshold(context.Background(), projNS)
+
+	if projects.calls != 2 {
+		t.Errorf("expected 2 project lookups (1 + invalidate + 1), got %d", projects.calls)
 	}
 }

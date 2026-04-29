@@ -280,8 +280,7 @@ func handleOrgUpdateUser(w http.ResponseWriter, r *http.Request, store OrgUserSt
 		return
 	}
 
-	if err := ValidateUserSettingsJSON(body.Settings); err != nil {
-		WriteError(w, ErrBadRequest(err.Error()))
+	if requireValidUserSettings(w, body.Settings) {
 		return
 	}
 

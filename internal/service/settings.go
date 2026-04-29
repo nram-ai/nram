@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -26,7 +28,8 @@ const (
 	SettingEntityURL       = "provider.entity.url"
 	SettingEntityKey       = "provider.entity.key"
 	SettingEntityModel     = "provider.entity.model"
-	SettingDedupThreshold  = "enrichment.dedup_threshold"
+	SettingEnrichmentEnabled = "enrichment.enabled"
+	SettingDedupThreshold    = "enrichment.dedup_threshold"
 	SettingFactPrompt      = "enrichment.fact_prompt"
 	SettingEntityPrompt    = "enrichment.entity_prompt"
 	SettingRankWeightSim   = "ranking.weight.similarity"
@@ -409,15 +412,35 @@ type SettingsRepository interface {
 	ListByScope(ctx context.Context, scope string) ([]model.Setting, error)
 }
 
+// settingsCacheTTL bounds how long a Resolve hit lives in memory before the
+// next read goes back to the repo. Operator changes via Set / Delete invalidate
+// the affected key immediately; the TTL covers writes from outside the
+// SettingsService (direct SQL, restore-from-backup) and bounds the staleness
+// hot-path callers have to tolerate.
+const settingsCacheTTL = 30 * time.Second
+
+type settingsCacheEntry struct {
+	value     string
+	expiresAt time.Time
+}
+
 // SettingsService provides cascading settings resolution with built-in defaults,
-// type-safe accessors, and convenience methods for common settings.
+// type-safe accessors, and convenience methods for common settings. Resolve
+// hits a small TTL cache so worker loops and per-job cascade resolutions do
+// not hammer the repo for values that change rarely.
 type SettingsService struct {
-	repo SettingsRepository
+	repo  SettingsRepository
+	mu    sync.RWMutex
+	cache map[string]settingsCacheEntry
 }
 
 // NewSettingsService creates a new SettingsService with the given repository.
 func NewSettingsService(repo SettingsRepository) *SettingsService {
-	return &SettingsService{repo: repo}
+	return &SettingsService{repo: repo, cache: make(map[string]settingsCacheEntry)}
+}
+
+func settingsCacheKey(key, scope string) string {
+	return key + "\x00" + scope
 }
 
 // Resolve retrieves a setting value as a string through the cascade hierarchy.
@@ -425,20 +448,54 @@ func NewSettingsService(repo SettingsRepository) *SettingsService {
 // then falls back to built-in defaults. If no value is found anywhere,
 // it returns an empty string with no error.
 func (s *SettingsService) Resolve(ctx context.Context, key string, scope string) (string, error) {
-	setting, err := s.repo.Get(ctx, key, scope)
-	if err == nil {
-		return unmarshalJSONString(setting.Value), nil
+	cacheKey := settingsCacheKey(key, scope)
+	now := time.Now()
+	s.mu.RLock()
+	if entry, ok := s.cache[cacheKey]; ok && entry.expiresAt.After(now) {
+		s.mu.RUnlock()
+		return entry.value, nil
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	s.mu.RUnlock()
+
+	setting, err := s.repo.Get(ctx, key, scope)
+	var value string
+	if err == nil {
+		value = unmarshalJSONString(setting.Value)
+	} else if errors.Is(err, sql.ErrNoRows) {
+		if def, ok := settingDefaults[key]; ok {
+			value = def
+		}
+	} else {
+		// Real DB errors do not cache — the caller may want to retry.
 		return "", fmt.Errorf("resolve setting %q: %w", key, err)
 	}
 
-	// Not found in DB; check built-in defaults.
-	if def, ok := settingDefaults[key]; ok {
-		return def, nil
-	}
+	s.mu.Lock()
+	s.cache[cacheKey] = settingsCacheEntry{value: value, expiresAt: now.Add(settingsCacheTTL)}
+	s.mu.Unlock()
+	return value, nil
+}
 
-	return "", nil
+// invalidateCache drops the cached entry for one (key, scope) pair so the
+// next Resolve hits the repo. Called from Set / Delete to make operator
+// changes visible immediately.
+func (s *SettingsService) invalidateCache(key, scope string) {
+	s.mu.Lock()
+	delete(s.cache, settingsCacheKey(key, scope))
+	s.mu.Unlock()
+}
+
+// ResolveFloatInRange resolves a numeric setting and clamps it through a
+// range filter, returning fallback when the configured value is missing,
+// unparseable, or outside [min, max]. Used for boot-time hydration helpers
+// where the caller wants a single guaranteed-valid float and an explicit
+// default — collapses the common `if v, err := ResolveFloat(...); err == nil
+// && v >= min && v <= max { dst = v }` block.
+func (s *SettingsService) ResolveFloatInRange(ctx context.Context, key, scope string, min, max, fallback float64) float64 {
+	if v, err := s.ResolveFloat(ctx, key, scope); err == nil && v >= min && v <= max {
+		return v
+	}
+	return fallback
 }
 
 // ResolveFloat resolves a setting and parses it as a float64.
@@ -498,12 +555,20 @@ func (s *SettingsService) Set(ctx context.Context, key string, value string, sco
 		UpdatedBy: updatedBy,
 	}
 
-	return s.repo.Set(ctx, setting)
+	if err := s.repo.Set(ctx, setting); err != nil {
+		return err
+	}
+	s.invalidateCache(key, scope)
+	return nil
 }
 
 // Delete removes a setting at the given scope.
 func (s *SettingsService) Delete(ctx context.Context, key string, scope string) error {
-	return s.repo.Delete(ctx, key, scope)
+	if err := s.repo.Delete(ctx, key, scope); err != nil {
+		return err
+	}
+	s.invalidateCache(key, scope)
+	return nil
 }
 
 // ListByScope returns all settings for a given scope.

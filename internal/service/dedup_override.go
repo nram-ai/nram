@@ -3,7 +3,6 @@ package service
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 )
 
 // DedupOverride captures a sparse per-namespace override for the dedup
@@ -26,17 +25,14 @@ func ParseDedupOverride(raw json.RawMessage) (DedupOverride, error) {
 	// Try bare-number first (matches the legacy top-level project.settings
 	// shape: {"dedup_threshold": 0.92}).
 	var f float64
-	if err := json.Unmarshal(raw, &f); err == nil {
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return ov, fmt.Errorf("dedup_threshold: must be finite")
-		}
-		if f < 0 || f > 1 {
-			return ov, fmt.Errorf("dedup_threshold: must be in [0.0, 1.0]")
-		}
-		ov.Threshold = &f
-		return ov, nil
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return ov, fmt.Errorf("dedup_threshold: not a number")
 	}
-	return ov, fmt.Errorf("dedup_threshold: not a number")
+	if err := ValidateUnitFloat("dedup_threshold", f); err != nil {
+		return ov, err
+	}
+	ov.Threshold = &f
+	return ov, nil
 }
 
 // MergeDedupThreshold returns the override's value when set, otherwise base.

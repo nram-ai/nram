@@ -5,6 +5,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildProjectSettingsPayload,
   buildUserSettingsPayload,
+  fromTriState,
+  triStateValue,
 } from "./settingsPayload";
 
 const emptyProjectState = {
@@ -145,5 +147,31 @@ describe("buildUserSettingsPayload", () => {
         enrichment_enabled: true,
       }),
     ).toEqual({ dedup_threshold: 0.92, enrichment_enabled: true });
+  });
+});
+
+describe("triStateValue / fromTriState", () => {
+  it("round-trips through the three states", () => {
+    expect(fromTriState(triStateValue(undefined))).toBe(undefined);
+    expect(fromTriState(triStateValue(true))).toBe(true);
+    expect(fromTriState(triStateValue(false))).toBe(false);
+  });
+
+  it("triStateValue maps undefined → inherit", () => {
+    expect(triStateValue(undefined)).toBe("inherit");
+  });
+
+  it("triStateValue maps true → on, false → off", () => {
+    expect(triStateValue(true)).toBe("on");
+    expect(triStateValue(false)).toBe("off");
+  });
+
+  it("fromTriState treats unknown strings as inherit", () => {
+    // Defensive against an unexpected select value (or future "global"
+    // alias). Falling back to inherit means an unrecognized value clears
+    // the override rather than silently flipping to false.
+    expect(fromTriState("garbage")).toBe(undefined);
+    expect(fromTriState("")).toBe(undefined);
+    expect(fromTriState("inherit")).toBe(undefined);
   });
 });

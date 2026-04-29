@@ -934,12 +934,6 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 }
 
 // computeScore calculates the composite ranking score for a candidate.
-//
-// The Confidence term is gated on c.memory.Confidence > 0 so confidence=0 rows
-// score identically to "no Confidence term applied" if they ever reach this
-// function. Today the kill-signal filter at the post-threshold loop drops them
-// before the sort, but the gate keeps the math sound for any future caller
-// that bypasses that filter.
 func computeScore(c scoredMemory, w RankingWeights, now time.Time, maxAccess int) float64 {
 	hoursSinceCreation := now.Sub(c.memory.CreatedAt).Hours()
 	recencyScore := math.Exp(-0.01 * hoursSinceCreation)
@@ -949,16 +943,12 @@ func computeScore(c scoredMemory, w RankingWeights, now time.Time, maxAccess int
 		frequencyScore = math.Log(1+float64(c.memory.AccessCount)) / math.Log(1+float64(maxAccess))
 	}
 
-	score := w.Similarity*clampScore(c.similarity) +
+	return w.Similarity*clampScore(c.similarity) +
 		w.Recency*recencyScore +
 		w.Importance*c.memory.Importance +
 		w.Frequency*frequencyScore +
-		w.GraphRelevance*c.graphRelevance
-
-	if c.memory.Confidence > 0 {
-		score += w.Confidence * clampScore(c.memory.Confidence)
-	}
-	return score
+		w.GraphRelevance*c.graphRelevance +
+		w.Confidence*clampScore(c.memory.Confidence)
 }
 
 // clampScore ensures a score is in the [0, 1] range.

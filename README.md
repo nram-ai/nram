@@ -15,7 +15,8 @@ nram provides a self-hosted server that any AI agent can use to persist long-ter
 - **Knowledge Graph** - Automatically constructed from enriched entities and relationships with multi-hop traversal and entity-vector lookup
 - **Dreaming** - Offline background consolidation cycle with eight phases: entity dedup, embedding backfill (repairs rows whose `embedding_dim` is recorded but whose vector row is missing — re-embeds when the provider is healthy, clears `embedding_dim` otherwise), paraphrase dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation
 - **Novelty Audit** - LLM-judged audit on dream syntheses; low-novelty consolidations are demoted, vectors are purged, and surfacing in recall is suppressed unless explicitly opted in
-- **Adaptive Confidence** - Optional reconsolidation hook on recall nudges `access_count`, `last_accessed`, and `confidence` on surfaced memories; pruning applies a complementary confidence decay so unused memories fade over time. Shadow mode by default for observable-only rollout.
+- **Adaptive Confidence** - Optional reconsolidation hook on recall nudges `access_count`, `last_accessed`, and `confidence` on surfaced memories; pruning applies a complementary confidence decay so unused memories fade over time. Shadow mode by default for observable-only rollout. `confidence` is one of six terms in the recall ranking score (similarity, recency, importance, frequency, graph relevance, confidence), each operator-tunable.
+- **Per-Project Tuning** - System-level ranking weights, `dedup_threshold`, and `enrichment_enabled` cascade through optional per-user and per-project JSON overrides. Recall scores each candidate under its owning project's effective weights, so cross-project results (globals, shared namespaces) honor each row's owner's tuning. Sparse: unset fields fall through to system defaults.
 - **Model Context Protocol (MCP)** - Full MCP server at `/mcp` (Streamable HTTP) with 13 tools covering store, recall (including tag-axis diversification), update, get, list, forget, enrich, graph traversal, project management, and export
 - **Authentication** - JWT (password login), per-user API keys, WebAuthn passkeys, and per-organization OIDC single sign-on
 - **OAuth 2.0** - Authorization Code + PKCE, dynamic client registration (RFC 7591), resource indicators (RFC 8707), discovery metadata (RFC 8414, RFC 9728)
@@ -141,7 +142,9 @@ hnsw:
 
 YAML values support environment variable interpolation: `${VAR_NAME:-default}`.
 
-Most runtime knobs (recall fusion weights, ingestion-decision thresholds, novelty audit, reconsolidation, dreaming budgets, retention, prompts) are stored in the `settings` table and edited at `/v1/admin/settings` (or in the admin UI). `config.yaml` provides bootstrap defaults and provider credentials; persisted settings always win at runtime so operators do not need to redeploy to retune.
+Most runtime knobs (ranking weights, recall fusion weights, ingestion-decision thresholds, novelty audit, reconsolidation, dreaming budgets, retention, prompts) are stored in the `settings` table and edited at `/v1/admin/settings` (or in the admin UI). `config.yaml` provides bootstrap defaults and provider credentials; persisted settings always win at runtime so operators do not need to redeploy to retune.
+
+Per-project and per-user overrides for `ranking_weights`, `dedup_threshold`, and `enrichment_enabled` live on the project and user records as sparse JSON. The cascade is `system → user → project → effective`; unset fields fall through. Edit at `/v1/me/projects/{id}` (project) or `/v1/admin/users/{id}` (user). User-scope `ranking_weights` is rejected with a 400 — the cascade for weights lands at project, not user.
 
 ### Environment Variables
 
@@ -315,7 +318,7 @@ All under `/v1/admin`, gated by `administrator` role.
 | `*` | `/users/...` | Global user CRUD |
 | `*` | `/projects/...` | Global project CRUD |
 | `*` | `/providers/...` | LLM / embedding provider configuration |
-| `*` | `/settings` | Global settings (recall fusion, ingestion decision, novelty audit, reconsolidation, dreaming budgets, retention, prompts) |
+| `*` | `/settings` | Global settings (ranking weights, recall fusion, ingestion decision, novelty audit, reconsolidation, dreaming budgets, retention, prompts) |
 | `*` | `/oauth/...` | OAuth client administration |
 | `*` | `/webhooks/...` | Webhook registration and delivery audit |
 | `*` | `/database/...` | Database info, test, preflight, migration audit, reset |
@@ -358,7 +361,9 @@ The embedded web UI is served at the root path (`/`). It provides:
 - Organization and user management
 - Project management
 - LLM / embedding provider configuration with hot-reload
-- Settings editor (recall fusion weights, ingestion decision, novelty audit, reconsolidation mode and decay, dreaming budgets and retention, prompts)
+- Settings editor (ranking weights, recall fusion weights, ingestion decision, novelty audit, reconsolidation mode and decay, dreaming budgets and retention, prompts)
+- Project edit panel with sparse per-project override editor (six ranking weights, dedup threshold, enrichment toggle) — empty fields inherit system defaults; effective merged weights and sum displayed inline
+- Memory detail panel surfaces `confidence`, `importance`, `access_count`, and `last_accessed` so operators can verify reinforcement and decay are moving the values
 - Enrichment queue monitoring and retry; ingestion-decision shadow vs persist toggle
 - Dreaming cycle inspection, log replay, manual triggers, and rollback
 - Memory browser with parent / enrichment-child grouping

@@ -4,6 +4,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
+import { useMemo } from "react";
 import {
   adminAPI,
   meAPI,
@@ -434,9 +435,16 @@ export function resolveSystemRankingWeights(
 export function useSystemRankingWeights(): SystemRankingWeights {
   const settingsQuery = useSettings("global");
   const schemaQuery = useSettingsSchema();
-  return resolveSystemRankingWeights(
-    settingsQuery.data?.data ?? [],
-    schemaQuery.data?.data ?? [],
+  // useMemo gives the consumer (ProjectManagement edit panel) a stable
+  // reference between unrelated re-renders — without it every keystroke
+  // in any form input rebuilds the resolution Maps.
+  return useMemo(
+    () =>
+      resolveSystemRankingWeights(
+        settingsQuery.data?.data ?? [],
+        schemaQuery.data?.data ?? [],
+      ),
+    [settingsQuery.data, schemaQuery.data],
   );
 }
 

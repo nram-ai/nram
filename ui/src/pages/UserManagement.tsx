@@ -25,7 +25,11 @@ import type {
   GenerateAPIKeyRequest,
   Organization,
 } from "../api/client";
-import { buildUserSettingsPayload } from "./settingsPayload";
+import {
+  buildUserSettingsPayload,
+  fromTriState,
+  triStateValue,
+} from "./settingsPayload";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -911,19 +915,8 @@ function UserDetailPanel({
                 </label>
                 <select
                   className="rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  value={
-                    editEnrichmentEnabled === undefined
-                      ? "inherit"
-                      : editEnrichmentEnabled
-                      ? "on"
-                      : "off"
-                  }
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setEditEnrichmentEnabled(
-                      v === "inherit" ? undefined : v === "on",
-                    );
-                  }}
+                  value={triStateValue(editEnrichmentEnabled)}
+                  onChange={(e) => setEditEnrichmentEnabled(fromTriState(e.target.value))}
                 >
                   <option value="inherit">Inherit system</option>
                   <option value="on">On</option>

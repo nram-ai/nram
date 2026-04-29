@@ -13,7 +13,11 @@ import type {
   ProjectUpdateRequest,
   SystemRankingWeights,
 } from "../api/client";
-import { buildProjectSettingsPayload } from "./settingsPayload";
+import {
+  buildProjectSettingsPayload,
+  fromTriState,
+  triStateValue,
+} from "./settingsPayload";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -351,9 +355,9 @@ function ProjectDetailPanel({
 
   const project = detailQuery.data;
 
-  // Initialize form when project loads. Migration 000025/000022 rewrites
-  // legacy `relevance` to `similarity`, but we read it with a fallback so
-  // pre-migration UIs render correctly.
+  // Initialize form when project loads. The legacy `relevance` key (mapped
+  // by migrations 000025/000022 to `similarity`) is read via a defensive
+  // type-cast in case a UI client receives pre-migration cached data.
   useEffect(() => {
     if (project && !initialized) {
       setEditName(project.name || "");
@@ -363,7 +367,8 @@ function ProjectDetailPanel({
       setEditDedupThreshold(settings?.dedup_threshold);
       setEditEnrichmentEnabled(settings?.enrichment_enabled);
       const rw = settings?.ranking_weights;
-      setEditSimilarity(rw?.similarity ?? rw?.relevance);
+      const legacyRelevance = (rw as { relevance?: number } | undefined)?.relevance;
+      setEditSimilarity(rw?.similarity ?? legacyRelevance);
       setEditRecency(rw?.recency);
       setEditImportance(rw?.importance);
       setEditFrequency(rw?.frequency);
@@ -607,19 +612,8 @@ function ProjectDetailPanel({
                 </label>
                 <select
                   className="rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  value={
-                    editEnrichmentEnabled === undefined
-                      ? "inherit"
-                      : editEnrichmentEnabled
-                      ? "on"
-                      : "off"
-                  }
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setEditEnrichmentEnabled(
-                      v === "inherit" ? undefined : v === "on",
-                    );
-                  }}
+                  value={triStateValue(editEnrichmentEnabled)}
+                  onChange={(e) => setEditEnrichmentEnabled(fromTriState(e.target.value))}
                 >
                   <option value="inherit">Inherit system</option>
                   <option value="on">On</option>

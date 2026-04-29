@@ -746,27 +746,16 @@ func main() {
 // the key is missing, unparseable, or out of range, so a misconfigured setting
 // keeps ranking in a known state rather than crashing startup. Per-project
 // overrides resolve later at recall time.
-func loadRankingWeights(ctx context.Context, settingsSvc *service.SettingsService) service.RankingWeights {
-	w := service.DefaultRankingWeights
-	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightSim, "global"); err == nil && v >= 0 && v <= 1 {
-		w.Similarity = v
+func loadRankingWeights(ctx context.Context, s *service.SettingsService) service.RankingWeights {
+	d := service.DefaultRankingWeights
+	return service.RankingWeights{
+		Similarity:     s.ResolveFloatInRange(ctx, service.SettingRankWeightSim, "global", 0, 1, d.Similarity),
+		Recency:        s.ResolveFloatInRange(ctx, service.SettingRankWeightRec, "global", 0, 1, d.Recency),
+		Importance:     s.ResolveFloatInRange(ctx, service.SettingRankWeightImp, "global", 0, 1, d.Importance),
+		Frequency:      s.ResolveFloatInRange(ctx, service.SettingRankWeightFreq, "global", 0, 1, d.Frequency),
+		GraphRelevance: s.ResolveFloatInRange(ctx, service.SettingRankWeightGraph, "global", 0, 1, d.GraphRelevance),
+		Confidence:     s.ResolveFloatInRange(ctx, service.SettingRankWeightConf, "global", 0, 1, d.Confidence),
 	}
-	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightRec, "global"); err == nil && v >= 0 && v <= 1 {
-		w.Recency = v
-	}
-	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightImp, "global"); err == nil && v >= 0 && v <= 1 {
-		w.Importance = v
-	}
-	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightFreq, "global"); err == nil && v >= 0 && v <= 1 {
-		w.Frequency = v
-	}
-	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightGraph, "global"); err == nil && v >= 0 && v <= 1 {
-		w.GraphRelevance = v
-	}
-	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightConf, "global"); err == nil && v >= 0 && v <= 1 {
-		w.Confidence = v
-	}
-	return w
 }
 
 // loadFusionConfig pulls the recall.fusion.* settings into a FusionConfig.

@@ -449,13 +449,11 @@ export interface SystemRankingWeights {
 // ProjectRankingWeights mirrors the canonical six-field sparse override
 // shape parsed by service.ParseRankingOverride. Every field is optional so
 // the editor can persist partial overrides; unset fields fall through to
-// the system-level ranking.weight.* setting at recall time.
-//
-// `relevance` is a deprecated alias for `similarity`. The migration that
-// ships alongside the canonical wire-up (000025/000022) rewrites it
-// in-place; new code must use `similarity`. The field stays on the
-// interface as `?` so legacy UI code paths that still mention it remain
-// type-safe during the transition. Drop after the editor rebuild lands.
+// the system-level ranking.weight.* setting at recall time. The legacy
+// `relevance` field has been migrated in-place by 000025/000022; readers
+// that need to defend against pre-migration cached data should use a
+// type-narrowing cast at the use site rather than carrying a deprecated
+// alias on the canonical interface.
 export interface ProjectRankingWeights {
   similarity?: number;
   recency?: number;
@@ -463,8 +461,6 @@ export interface ProjectRankingWeights {
   frequency?: number;
   graph_relevance?: number;
   confidence?: number;
-  /** @deprecated migrated to `similarity` by 000025/000022 */
-  relevance?: number;
 }
 
 // ProjectSettings is the full per-project override blob. All fields are

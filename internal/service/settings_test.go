@@ -14,6 +14,7 @@ import (
 // mockSettingsRepo implements SettingsRepository for testing.
 type mockSettingsRepo struct {
 	settings map[string]map[string]*model.Setting // key -> scope -> setting
+	getCalls int
 	setCalls int
 	delCalls int
 }
@@ -38,6 +39,7 @@ func (m *mockSettingsRepo) put(key, scope, value string) {
 }
 
 func (m *mockSettingsRepo) Get(_ context.Context, key string, scope string) (*model.Setting, error) {
+	m.getCalls++
 	scopes, ok := m.settings[key]
 	if !ok {
 		return nil, sql.ErrNoRows
@@ -325,5 +327,71 @@ func TestResolveIntErrorOnEmpty(t *testing.T) {
 	_, err := svc.ResolveInt(context.Background(), "nonexistent.key", "global")
 	if err == nil {
 		t.Fatal("expected error for empty int resolve")
+	}
+}
+
+func TestResolveCachesRepeatedReads(t *testing.T) {
+	repo := newMockSettingsRepo()
+	repo.put("cache.key", "global", "value")
+	svc := NewSettingsService(repo)
+
+	for i := 0; i < 5; i++ {
+		v, err := svc.Resolve(context.Background(), "cache.key", "global")
+		if err != nil || v != "value" {
+			t.Fatalf("iteration %d: got (%q, %v)", i, v, err)
+		}
+	}
+	if repo.getCalls != 1 {
+		t.Errorf("expected 1 repo.Get call, got %d", repo.getCalls)
+	}
+}
+
+func TestResolveCachesMissPath(t *testing.T) {
+	// Built-in defaults must also be cached so callers polling for the
+	// fallback value don't pay sql.ErrNoRows on every iteration.
+	repo := newMockSettingsRepo()
+	svc := NewSettingsService(repo)
+	for i := 0; i < 3; i++ {
+		_, _ = svc.Resolve(context.Background(), SettingRankWeightSim, "global")
+	}
+	if repo.getCalls != 1 {
+		t.Errorf("expected 1 repo.Get call (default-fallback path cached), got %d", repo.getCalls)
+	}
+}
+
+func TestSetInvalidatesCache(t *testing.T) {
+	repo := newMockSettingsRepo()
+	repo.put("invalidate.key", "global", "first")
+	svc := NewSettingsService(repo)
+
+	v, _ := svc.Resolve(context.Background(), "invalidate.key", "global")
+	if v != "first" {
+		t.Fatalf("expected 'first', got %q", v)
+	}
+	// Set must drop the cached entry so the next Resolve sees the new value.
+	if err := svc.Set(context.Background(), "invalidate.key", "second", "global", nil); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+	v, _ = svc.Resolve(context.Background(), "invalidate.key", "global")
+	if v != "second" {
+		t.Errorf("expected 'second' after Set, got %q (cache not invalidated)", v)
+	}
+}
+
+func TestDeleteInvalidatesCache(t *testing.T) {
+	repo := newMockSettingsRepo()
+	repo.put("delete.key", "global", "value")
+	svc := NewSettingsService(repo)
+
+	v, _ := svc.Resolve(context.Background(), "delete.key", "global")
+	if v != "value" {
+		t.Fatalf("expected 'value', got %q", v)
+	}
+	if err := svc.Delete(context.Background(), "delete.key", "global"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	v, _ = svc.Resolve(context.Background(), "delete.key", "global")
+	if v != "" {
+		t.Errorf("expected empty after Delete, got %q (cache not invalidated)", v)
 	}
 }

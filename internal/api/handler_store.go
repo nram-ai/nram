@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"math"
 	"net/http"
 	"strings"
 
@@ -61,13 +60,8 @@ func NewStoreHandler(svc *service.StoreService, bus events.EventBus) http.Handle
 			return
 		}
 		if body.Importance != nil {
-			v := *body.Importance
-			if math.IsNaN(v) || math.IsInf(v, 0) {
-				WriteError(w, ErrBadRequest("importance: must be finite"))
-				return
-			}
-			if v < 0 || v > 1 {
-				WriteError(w, ErrBadRequest("importance: must be in [0.0, 1.0]"))
+			if err := service.ValidateUnitFloat("importance", *body.Importance); err != nil {
+				WriteError(w, ErrBadRequest(err.Error()))
 				return
 			}
 		}

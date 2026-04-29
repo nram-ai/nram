@@ -135,8 +135,7 @@ func handleAdminCreateProject(w http.ResponseWriter, r *http.Request, store Proj
 		return
 	}
 
-	if err := ValidateProjectSettingsJSON(body.Settings); err != nil {
-		WriteError(w, ErrBadRequest(err.Error()))
+	if requireValidProjectSettings(w, body.Settings) {
 		return
 	}
 

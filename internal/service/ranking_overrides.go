@@ -61,12 +61,8 @@ func ParseRankingOverride(raw json.RawMessage) (ProjectRankingOverride, error) {
 			errs = append(errs, fmt.Sprintf("%s: not a number", key))
 			continue
 		}
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			errs = append(errs, fmt.Sprintf("%s: must be finite", key))
-			continue
-		}
-		if f < 0 || f > 1 {
-			errs = append(errs, fmt.Sprintf("%s: must be in [0.0, 1.0]", key))
+		if err := ValidateUnitFloat(key, f); err != nil {
+			errs = append(errs, err.Error())
 			continue
 		}
 		switch field {

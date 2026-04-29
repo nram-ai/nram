@@ -4,9 +4,31 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/nram-ai/nram/internal/service"
 )
+
+// requireValidProjectSettings validates the JSON and writes a 400 if it fails.
+// Returns true when the response was already written and the handler must
+// return; false when the caller should proceed.
+func requireValidProjectSettings(w http.ResponseWriter, raw json.RawMessage) bool {
+	if err := ValidateProjectSettingsJSON(raw); err != nil {
+		WriteError(w, ErrBadRequest(err.Error()))
+		return true
+	}
+	return false
+}
+
+// requireValidUserSettings is the user-scope counterpart. Returns true when
+// the response was already written.
+func requireValidUserSettings(w http.ResponseWriter, raw json.RawMessage) bool {
+	if err := ValidateUserSettingsJSON(raw); err != nil {
+		WriteError(w, ErrBadRequest(err.Error()))
+		return true
+	}
+	return false
+}
 
 // settingsRoot mirrors the JSON shape that project.Settings and user.Settings
 // serialize. Only fields wired through the cascade are validated here; any

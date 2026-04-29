@@ -330,8 +330,7 @@ func handleMeUpdateProject(w http.ResponseWriter, r *http.Request, projects Proj
 		project.DefaultTags = body.DefaultTags
 	}
 	if body.Settings != nil {
-		if err := ValidateProjectSettingsJSON(body.Settings); err != nil {
-			WriteError(w, ErrBadRequest(err.Error()))
+		if requireValidProjectSettings(w, body.Settings) {
 			return
 		}
 		project.Settings = body.Settings
