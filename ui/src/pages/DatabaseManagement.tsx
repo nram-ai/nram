@@ -457,11 +457,14 @@ function SQLiteView({
           </svg>
           <div>
             <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-              Single-Instance Limitation
+              Single-Instance Backend
             </p>
             <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-              SQLite is single-instance only. For horizontal scaling, vector
-              search, and LLM enrichment, upgrade to PostgreSQL.
+              SQLite supports the full feature set — vector search (pure-Go
+              HNSW), hybrid recall (FTS5), enrichment, dreaming, knowledge
+              graph, and every MCP tool. Upgrade to PostgreSQL only if you
+              need to run multiple nram instances against one database, with
+              cross-instance event propagation via LISTEN/NOTIFY.
             </p>
           </div>
         </div>

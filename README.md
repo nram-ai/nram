@@ -67,6 +67,8 @@ DATABASE_URL=postgres://user:pass@localhost/nram PORT=8674 ./nram
 
 On first launch, navigate to `http://localhost:8674` to complete the setup wizard (create the initial admin account).
 
+> **Required for enrichment, dreaming, and semantic recall:** nram ships with **no LLM provider configured**, so memories are stored as raw text only — embeddings, fact/entity extraction, the knowledge graph, dreaming consolidation, and the novelty audit are all **disabled** until you add a provider. After completing the setup wizard, open **Provider Config** in the admin UI and configure at minimum an **embedding** provider (for semantic search) and a **fact** + **entity** provider (for enrichment and dreaming). OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint works. Provider changes hot-reload — no restart needed.
+
 #### Operator Flags
 
 | Flag | Description |
