@@ -22,6 +22,13 @@ type ProjectReader interface {
 type SchedulerConfig struct {
 	// PollInterval is how often the scheduler checks for eligible projects.
 	PollInterval time.Duration
+	// EnrichmentAvailable returns true iff embedding, fact, and entity
+	// providers are all configured. The scheduler skips its poll when this
+	// returns false so dream cycles never run with a missing slot. Read
+	// live each poll so a provider reload reopens the gate without
+	// restarting the process. Nil means the gate is always open (used in
+	// tests that don't exercise it).
+	EnrichmentAvailable func() bool
 }
 
 func (c SchedulerConfig) withDefaults() SchedulerConfig {
@@ -110,6 +117,10 @@ func (s *Scheduler) run(ctx context.Context) {
 }
 
 func (s *Scheduler) poll(ctx context.Context) {
+	if s.config.EnrichmentAvailable != nil && !s.config.EnrichmentAvailable() {
+		return
+	}
+
 	// Check global dream enable.
 	enabledStr, _ := s.settings.Resolve(ctx, service.SettingDreamingEnabled, "global")
 	if enabledStr != "true" && enabledStr != "1" {

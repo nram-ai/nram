@@ -80,6 +80,66 @@ func TestRegistryOnlyEmbedding(t *testing.T) {
 	}
 }
 
+func TestRegistryEnrichmentAvailable(t *testing.T) {
+	embed := SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k1", Model: "text-embedding-3-small"}
+	fact := SlotConfig{Type: ProviderTypeGemini, APIKey: "k2", Model: "gemini-2.0-flash"}
+	entity := SlotConfig{Type: ProviderTypeAnthropic, APIKey: "k3", Model: "claude-sonnet-4-20250514"}
+
+	cases := []struct {
+		name string
+		cfg  RegistryConfig
+		want bool
+	}{
+		{"all-three", RegistryConfig{Embedding: embed, Fact: fact, Entity: entity}, true},
+		{"missing-embedding", RegistryConfig{Fact: fact, Entity: entity}, false},
+		{"missing-fact", RegistryConfig{Embedding: embed, Entity: entity}, false},
+		{"missing-entity", RegistryConfig{Embedding: embed, Fact: fact}, false},
+		{"only-embedding", RegistryConfig{Embedding: embed}, false},
+		{"only-fact", RegistryConfig{Fact: fact}, false},
+		{"only-entity", RegistryConfig{Entity: entity}, false},
+		{"none", RegistryConfig{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := NewRegistry(tc.cfg, nil, nil)
+			if err != nil {
+				t.Fatalf("NewRegistry() error: %v", err)
+			}
+			if got := r.EnrichmentAvailable(); got != tc.want {
+				t.Errorf("EnrichmentAvailable() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRegistryEnrichmentAvailableLiveReload(t *testing.T) {
+	embed := SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k1", Model: "text-embedding-3-small"}
+	fact := SlotConfig{Type: ProviderTypeGemini, APIKey: "k2", Model: "gemini-2.0-flash"}
+	entity := SlotConfig{Type: ProviderTypeAnthropic, APIKey: "k3", Model: "claude-sonnet-4-20250514"}
+
+	r, err := NewRegistry(RegistryConfig{Embedding: embed}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry() error: %v", err)
+	}
+	if r.EnrichmentAvailable() {
+		t.Fatal("EnrichmentAvailable should be false with only embedding configured")
+	}
+
+	if err := r.Reload(RegistryConfig{Embedding: embed, Fact: fact, Entity: entity}); err != nil {
+		t.Fatalf("Reload() error: %v", err)
+	}
+	if !r.EnrichmentAvailable() {
+		t.Fatal("EnrichmentAvailable should be true after Reload with all three slots")
+	}
+
+	if err := r.Reload(RegistryConfig{Embedding: embed, Fact: fact}); err != nil {
+		t.Fatalf("Reload() removing entity error: %v", err)
+	}
+	if r.EnrichmentAvailable() {
+		t.Fatal("EnrichmentAvailable should be false after entity slot removed")
+	}
+}
+
 func TestRegistryAnthropicEmbeddingError(t *testing.T) {
 	cfg := RegistryConfig{
 		Embedding: SlotConfig{Type: ProviderTypeAnthropic, APIKey: "k1"},

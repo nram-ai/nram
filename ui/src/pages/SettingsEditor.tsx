@@ -4,6 +4,7 @@ import {
   useSettingsSchema,
   useUpdateSetting,
 } from "../hooks/useApi";
+import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import type { Setting, SettingSchema } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,19 @@ const CATEGORY_ORDER = [
   "qdrant",
   "enrichment_prompts",
 ];
+
+// Retrieval-side categories (recall_fusion, ranking, reconsolidation) are
+// intentionally not in this set — they affect the read path, not enrichment.
+const ENRICHMENT_GATED_CATEGORIES = new Set<string>([
+  "enrichment",
+  "enrichment_ingestion",
+  "enrichment_prompts",
+  "dreaming",
+  "dreaming_novelty",
+  "dreaming_consolidation",
+  "dreaming_contradiction",
+  "dreaming_prompts",
+]);
 
 const CATEGORY_LABELS: Record<string, string> = {
   memory: "Memory",
@@ -811,6 +825,7 @@ function SettingsEditor() {
   const settingsQuery = useSettings();
   const schemaQuery = useSettingsSchema();
   const updateMutation = useUpdateSetting();
+  const { available: enrichmentAvailable } = useEnrichmentAvailable();
 
   const [toast, setToast] = useState<{
     message: string;
@@ -860,6 +875,9 @@ function SettingsEditor() {
 
   for (const schema of schemas) {
     if (MOVED_TO_PROVIDER_CONFIG.has(schema.key)) {
+      continue;
+    }
+    if (!enrichmentAvailable && ENRICHMENT_GATED_CATEGORIES.has(schema.category || "")) {
       continue;
     }
     const merged: SettingWithSchema = {

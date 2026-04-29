@@ -79,6 +79,12 @@ type Dependencies struct {
 	// ProviderStatus returns the current provider availability at call time.
 	// This is called per-connection to build dynamic MCP instructions.
 	ProviderStatus func() (hasEmbedding, hasEnrichment bool)
+	// EnrichmentAvailable returns true iff embedding, fact, and entity
+	// providers are all configured. This is the per-call gate for
+	// enrichment-touching MCP tools (memory_enrich and the enrich: true
+	// path on memory_store / memory_store_batch). Read live each call so a
+	// provider reload opens or closes the gate without restart.
+	EnrichmentAvailable func() bool
 }
 
 // Server wraps an MCP server with its Streamable HTTP transport and dependency context.
@@ -98,6 +104,17 @@ const httpRequestKey ctxKey = 0
 func HTTPRequestFromContext(ctx context.Context) *http.Request {
 	r, _ := ctx.Value(httpRequestKey).(*http.Request)
 	return r
+}
+
+// enrichmentGateError returns the standard tool error a handler should
+// emit when EnrichmentAvailable is configured and reports the gate closed.
+// Returns nil when the gate is open (or undefined, treated as open).
+func (s *Server) enrichmentGateError() *mcp.CallToolResult {
+	avail := s.deps.EnrichmentAvailable
+	if avail == nil || avail() {
+		return nil
+	}
+	return mcp.NewToolResultError("enrichment_unavailable: configure embedding, fact, and entity providers")
 }
 
 // buildInstructions returns the MCP server instructions string, conditioned on

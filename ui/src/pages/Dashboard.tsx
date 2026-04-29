@@ -7,6 +7,7 @@ import {
   useStoreMemory,
   useDreamingStatus,
 } from "../hooks/useApi";
+import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import { useAuth } from "../context/AuthContext";
 import type {
   ProjectMemoryCount,
@@ -283,14 +284,11 @@ function ProviderHealthCards({
 
 function EnrichmentQueueCard({
   queue,
-  hasProviders,
   isLoading,
 }: {
   queue?: { pending: number; processing: number; failed: number };
-  hasProviders: boolean;
   isLoading: boolean;
 }) {
-  if (!hasProviders) return null;
   if (isLoading) return <SkeletonCard />;
 
   const pending = queue?.pending ?? 0;
@@ -548,7 +546,9 @@ function Dashboard() {
   const projectList = Array.isArray(projects.data) ? projects.data : [];
   const slotList = Array.isArray(providerSlots.data) ? providerSlots.data : [];
 
-  const hasProviders = slotList.some((s) => s.configured);
+  // ProviderHealthCards stays visible when the gate is closed; it's the
+  // surface admins use to fix the missing slot.
+  const { available: enrichmentAvailable } = useEnrichmentAvailable();
 
   const hasError = dashboard.isError || activity.isError;
   const errorMessage = dashboard.error?.message ?? activity.error?.message ?? "";
@@ -601,12 +601,15 @@ function Dashboard() {
               slots={slotList}
               isLoading={providerSlots.isLoading}
             />
-            <EnrichmentQueueCard
-              queue={dashData?.enrichment_queue ?? undefined}
-              hasProviders={hasProviders}
-              isLoading={dashboard.isLoading}
-            />
-            <DreamingStatusCard isLoading={dashboard.isLoading} />
+            {enrichmentAvailable && (
+              <>
+                <EnrichmentQueueCard
+                  queue={dashData?.enrichment_queue ?? undefined}
+                  isLoading={dashboard.isLoading}
+                />
+                <DreamingStatusCard isLoading={dashboard.isLoading} />
+              </>
+            )}
           </div>
         )}
       </div>

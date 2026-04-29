@@ -200,6 +200,14 @@ func (r *Registry) IsConfigured() bool {
 	return r.embedding != nil
 }
 
+// EnrichmentAvailable returns true iff embedding, fact, and entity providers
+// are all configured. The gate behind every enrichment + dreaming surface.
+func (r *Registry) EnrichmentAvailable() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.embedding != nil && r.fact != nil && r.entity != nil
+}
+
 // load does the actual construction work without locking. It is called from
 // both NewRegistry and Reload.
 func (r *Registry) load(config RegistryConfig) error {

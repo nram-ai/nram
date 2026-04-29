@@ -54,55 +54,42 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 }
 
 function BackendBanners({ backend }: { backend: string }) {
-  if (backend === "sqlite") {
-    return (
-      <div className="space-y-3">
-        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-950/30">
-          <div className="flex items-start gap-3">
-            <svg className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-            </svg>
-            <div>
-              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">Running on SQLite</p>
-              <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-                Tag and full-text search available. Upgrade to Postgres for vector search and LLM enrichment.
-              </p>
-              <a href="/database" className="mt-1 inline-block text-sm font-medium text-amber-800 underline hover:no-underline dark:text-amber-200">
-                Settings &rarr; Database
-              </a>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-lg border border-blue-300 bg-blue-50 px-4 py-3 dark:border-blue-700 dark:bg-blue-950/30">
-          <div className="flex items-start gap-3">
-            <svg className="mt-0.5 h-5 w-5 shrink-0 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-            </svg>
-            <div>
-              <p className="text-sm text-blue-700 dark:text-blue-300">
-                LLM providers not configured &mdash; configure after upgrading to Postgres.
-              </p>
-            </div>
+  const backendLabel = backend === "sqlite" ? "SQLite" : "Postgres";
+  const backendBlurb =
+    backend === "sqlite"
+      ? "SQLite supports the full feature set — vector search (pure-Go HNSW), hybrid recall (FTS5), enrichment, dreaming, knowledge graph, and every MCP tool. Upgrade to Postgres only if you need multiple nram instances against one database with cross-instance event propagation."
+      : "Vector search via pgvector, hybrid recall, multi-instance event propagation via LISTEN/NOTIFY, and the full feature set are active.";
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-blue-300 bg-blue-50 px-4 py-3 dark:border-blue-700 dark:bg-blue-950/30">
+        <div className="flex items-start gap-3">
+          <svg className="mt-0.5 h-5 w-5 shrink-0 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+          </svg>
+          <div>
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-200">Running on {backendLabel}</p>
+            <p className="mt-1 text-sm text-blue-700 dark:text-blue-300">{backendBlurb}</p>
+            <a href="/database" className="mt-1 inline-block text-sm font-medium text-blue-800 underline hover:no-underline dark:text-blue-200">
+              Settings &rarr; Database
+            </a>
           </div>
         </div>
       </div>
-    );
-  }
-
-  return (
-    <div className="rounded-lg border border-blue-300 bg-blue-50 px-4 py-3 dark:border-blue-700 dark:bg-blue-950/30">
-      <div className="flex items-start gap-3">
-        <svg className="mt-0.5 h-5 w-5 shrink-0 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-        </svg>
-        <div>
-          <p className="text-sm font-medium text-blue-800 dark:text-blue-200">Running on Postgres</p>
-          <p className="mt-1 text-sm text-blue-700 dark:text-blue-300">
-            Configure an embedding provider to enable vector search.
-          </p>
-          <a href="/providers" className="mt-1 inline-block text-sm font-medium text-blue-800 underline hover:no-underline dark:text-blue-200">
-            Settings &rarr; Providers
-          </a>
+      <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-950/30">
+        <div className="flex items-start gap-3">
+          <svg className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+          <div>
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">LLM providers not configured</p>
+            <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+              Memories are stored as raw text only. Configure an <strong>embedding</strong> provider for semantic recall and a <strong>fact</strong> + <strong>entity</strong> provider for enrichment, dreaming, and the knowledge graph. Provider changes hot-reload — no restart.
+            </p>
+            <a href="/providers" className="mt-1 inline-block text-sm font-medium text-amber-800 underline hover:no-underline dark:text-amber-200">
+              Settings &rarr; Providers
+            </a>
+          </div>
         </div>
       </div>
     </div>

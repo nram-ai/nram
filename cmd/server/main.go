@@ -371,6 +371,12 @@ func main() {
 	lifecycleSvc.Start()
 	defer lifecycleSvc.Stop()
 
+	// Read live so a hot provider reload reopens or closes the gate
+	// without a restart.
+	enrichmentAvailable := func() bool {
+		return registry != nil && registry.EnrichmentAvailable()
+	}
+
 	// Create MCP server.
 	mcpServer := mcp.NewServer(mcp.Dependencies{
 		Backend:        db.Backend(),
@@ -399,6 +405,7 @@ func main() {
 			hasEnrich := registry.GetFact() != nil && registry.GetEntity() != nil
 			return hasEmbed, hasEnrich
 		},
+		EnrichmentAvailable: enrichmentAvailable,
 	})
 
 	// Create metrics.
@@ -523,9 +530,12 @@ func main() {
 	}
 	defer dirtyTracker.Stop()
 
-	// Start dream scheduler.
+	// Start dream scheduler. The scheduler stays running even when the
+	// enrichment gate is closed; its poll skips when EnrichmentAvailable
+	// returns false, so a live provider reload reopens dreaming without
+	// restart.
 	dreamScheduler := dreaming.NewScheduler(
-		dreaming.SchedulerConfig{},
+		dreaming.SchedulerConfig{EnrichmentAvailable: enrichmentAvailable},
 		settingsSvc, dreamDirtyRepo, dreamCycleRepo,
 		projectRepo, workerPool, dreamRunner, eventBus, dreamRetention,
 	)
@@ -708,6 +718,7 @@ func main() {
 		RateLimiter:    rateLimiter,
 		SetupGuard:     api.SetupGuardMiddleware(setupChecker.IsComplete),
 		ProjectAccess:  api.ProjectAccessMiddleware(projectAccessCfg),
+		EnrichmentGate: api.EnrichmentGateMiddleware(enrichmentAvailable),
 	}
 
 	r := server.NewRouter(routerCfg, handlers)

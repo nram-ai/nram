@@ -115,6 +115,7 @@ type mockQueueClaimer struct {
 	jobs           []*model.EnrichmentJob
 	completed      []uuid.UUID
 	failed         map[uuid.UUID]string
+	released       []uuid.UUID
 	stepsCompleted map[uuid.UUID][]string
 	claimErr       error
 }
@@ -170,6 +171,13 @@ func (m *mockQueueClaimer) Fail(_ context.Context, id uuid.UUID, errMsg string) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.failed[id] = errMsg
+	return nil
+}
+
+func (m *mockQueueClaimer) Release(_ context.Context, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.released = append(m.released, id)
 	return nil
 }
 
@@ -399,6 +407,55 @@ func factJSON() string {
 	}
 	b, _ := json.Marshal(facts)
 	return string(b)
+}
+
+// noopFactLLM returns an LLM stub that emits an empty fact array. Used by
+// tests that focus on a single slot (e.g., entity extraction) but need the
+// other slots configured to satisfy the worker's all-three gate.
+func noopFactLLM() *mockLLMProvider {
+	return &mockLLMProvider{
+		name: "fact-noop",
+		respond: func(*provider.CompletionRequest) (*provider.CompletionResponse, error) {
+			return &provider.CompletionResponse{
+				Content: `[]`,
+				Model:   "noop",
+				Usage:   provider.TokenUsage{},
+			}, nil
+		},
+	}
+}
+
+// noopEntityLLM returns an LLM stub that emits an empty entity payload.
+func noopEntityLLM() *mockLLMProvider {
+	return &mockLLMProvider{
+		name: "entity-noop",
+		respond: func(*provider.CompletionRequest) (*provider.CompletionResponse, error) {
+			return &provider.CompletionResponse{
+				Content: `{"entities":[],"relationships":[]}`,
+				Model:   "noop",
+				Usage:   provider.TokenUsage{},
+			}, nil
+		},
+	}
+}
+
+// noopEmbed returns an embedding stub that emits a 3-dim zero vector for
+// each input.
+func noopEmbed() *mockEmbeddingProvider {
+	return &mockEmbeddingProvider{
+		name: "embed-noop",
+		respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+			embs := make([][]float32, len(req.Input))
+			for i := range req.Input {
+				embs[i] = []float32{0, 0, 0}
+			}
+			return &provider.EmbeddingResponse{
+				Embeddings: embs,
+				Model:      "noop",
+				Usage:      provider.TokenUsage{},
+			}, nil
+		},
+	}
 }
 
 func entityJSON() string {
@@ -896,7 +953,9 @@ func TestProcessJob_FactExtractionOnly(t *testing.T) {
 		}, nil
 	}}
 
-	h := newTestHarness(factLLM, nil, nil)
+	// Entity + embed are no-op stubs to keep the all-three gate open while
+	// the test focuses on the fact-extraction path.
+	h := newTestHarness(factLLM, noopEntityLLM(), noopEmbed())
 	mem := testMemory()
 	h.reader.byID[mem.ID] = mem
 	job := testJob(mem.ID, mem.NamespaceID)
@@ -913,7 +972,7 @@ func TestProcessJob_FactExtractionOnly(t *testing.T) {
 		t.Errorf("expected 2 child memories, got %d", len(h.creator.created))
 	}
 	if len(h.entities.upserted) != 0 {
-		t.Error("no entities should be upserted without entity provider")
+		t.Error("no entities should be upserted when entity stub returns empty payload")
 	}
 }
 
@@ -926,7 +985,9 @@ func TestProcessJob_EntityExtractionOnly(t *testing.T) {
 		}, nil
 	}}
 
-	h := newTestHarness(nil, entityLLM, nil)
+	// Fact + embed are no-op stubs to keep the all-three gate open while
+	// the test focuses on the entity-extraction path.
+	h := newTestHarness(noopFactLLM(), entityLLM, noopEmbed())
 	mem := testMemory()
 	h.reader.byID[mem.ID] = mem
 	job := testJob(mem.ID, mem.NamespaceID)
@@ -940,7 +1001,7 @@ func TestProcessJob_EntityExtractionOnly(t *testing.T) {
 		t.Error("job should be completed")
 	}
 	if len(h.creator.created) != 0 {
-		t.Error("no child memories without fact provider")
+		t.Error("no child memories when fact stub returns empty payload")
 	}
 	if len(h.entities.upserted) != 2 {
 		t.Errorf("expected 2 entities, got %d", len(h.entities.upserted))
@@ -958,18 +1019,75 @@ func TestProcessJob_NoProviders(t *testing.T) {
 
 	err := h.pool.processJob(context.Background(), "w-0", job)
 	if err == nil {
-		t.Fatal("expected error when no providers configured")
+		t.Fatal("expected error when gate is closed (no providers configured)")
 	}
 
-	// Job should be failed, not completed.
+	// Gate-closed mid-batch must release the job (status=pending, attempts
+	// unchanged) so the backlog drains automatically once the missing slot
+	// is configured. Failing the job would force admins to manually retry.
 	if len(h.queue.completed) != 0 {
 		t.Error("job should not be completed with no providers")
 	}
-	if len(h.queue.failed) != 1 {
-		t.Error("job should be marked failed when no providers configured")
+	if len(h.queue.failed) != 0 {
+		t.Errorf("job should not be failed when gate is closed; got failed=%d", len(h.queue.failed))
+	}
+	if len(h.queue.released) != 1 {
+		t.Errorf("job should be released to pending when gate is closed; got released=%d", len(h.queue.released))
+	}
+	if len(h.queue.released) == 1 && h.queue.released[0] != job.ID {
+		t.Errorf("released job ID = %s, want %s", h.queue.released[0], job.ID)
 	}
 	if len(h.updater.updated) != 0 {
 		t.Error("memory should not be marked enriched when no providers ran")
+	}
+}
+
+// TestProcessJob_PartialProviders verifies the gate is closed when ANY of
+// embedding, fact, or entity is unconfigured — not just all three. This is
+// the new behavior; the old worker only failed when all three were nil.
+func TestProcessJob_PartialProviders(t *testing.T) {
+	cases := []struct {
+		name         string
+		fact, entity bool
+		embed        bool
+	}{
+		{"only-fact-missing", false, true, true},
+		{"only-entity-missing", true, false, true},
+		{"only-embed-missing", true, true, false},
+		{"fact-and-entity-set", true, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Declare as interface types so unset slots stay as
+			// nil-interface (not typed-nil pointer wrapped in a
+			// non-nil interface, which would defeat the gate check).
+			var fact, entity provider.LLMProvider
+			var embed provider.EmbeddingProvider
+			if tc.fact {
+				fact = &mockLLMProvider{name: "fact"}
+			}
+			if tc.entity {
+				entity = &mockLLMProvider{name: "entity"}
+			}
+			if tc.embed {
+				embed = &mockEmbeddingProvider{}
+			}
+			h := newTestHarness(fact, entity, embed)
+			mem := testMemory()
+			h.reader.byID[mem.ID] = mem
+			job := testJob(mem.ID, mem.NamespaceID)
+
+			err := h.pool.processJob(context.Background(), "w-0", job)
+			if err == nil {
+				t.Fatalf("expected error when gate is closed (case %s)", tc.name)
+			}
+			if len(h.queue.failed) != 0 {
+				t.Errorf("job should not be failed when gate is partially closed (case %s)", tc.name)
+			}
+			if len(h.queue.released) != 1 {
+				t.Errorf("job should be released when gate is partially closed (case %s); got released=%d", tc.name, len(h.queue.released))
+			}
+		})
 	}
 }
 
@@ -978,7 +1096,9 @@ func TestProcessJob_FactLLMError(t *testing.T) {
 		return nil, errors.New("LLM unavailable")
 	}}
 
-	h := newTestHarness(factLLM, nil, nil)
+	// Entity + embed are no-op stubs so the all-three gate stays open and
+	// the test reaches the fact-LLM-error path under runPreEmbed.
+	h := newTestHarness(factLLM, noopEntityLLM(), noopEmbed())
 	mem := testMemory()
 	h.reader.byID[mem.ID] = mem
 	job := testJob(mem.ID, mem.NamespaceID)
@@ -1005,7 +1125,9 @@ func TestProcessJob_EntityLLMError_FactsSucceed(t *testing.T) {
 		return nil, errors.New("entity LLM down")
 	}}
 
-	h := newTestHarness(factLLM, entityLLM, nil)
+	// Embed is a no-op stub to keep the all-three gate open; the test
+	// exercises partial success of fact + entity extraction.
+	h := newTestHarness(factLLM, entityLLM, noopEmbed())
 	mem := testMemory()
 	h.reader.byID[mem.ID] = mem
 	job := testJob(mem.ID, mem.NamespaceID)
@@ -1052,17 +1174,29 @@ func TestProcessJob_TokenUsageRecorded(t *testing.T) {
 		}, nil
 	}}
 
-	h := newTestHarness(factLLM, nil, nil)
+	// Entity + embed are no-op stubs to keep the all-three gate open
+	// while the test focuses on the fact extraction's token-usage row.
+	h := newTestHarness(factLLM, noopEntityLLM(), noopEmbed())
 	mem := testMemory()
 	h.reader.byID[mem.ID] = mem
 	job := testJob(mem.ID, mem.NamespaceID)
 
 	_ = h.pool.processJob(context.Background(), "w-0", job)
 
-	if len(h.tokens.records) != 1 {
-		t.Fatalf("expected 1 token usage record, got %d", len(h.tokens.records))
+	// Three records: fact (real), entity (noop), embedding (noop).
+	if len(h.tokens.records) < 1 {
+		t.Fatalf("expected at least 1 token usage record, got %d", len(h.tokens.records))
 	}
-	rec := h.tokens.records[0]
+	var rec *model.TokenUsage
+	for _, r := range h.tokens.records {
+		if r.Operation == "fact_extraction" {
+			rec = r
+			break
+		}
+	}
+	if rec == nil {
+		t.Fatalf("expected a fact_extraction token usage record")
+	}
 	if rec.Operation != "fact_extraction" {
 		t.Errorf("expected operation 'fact_extraction', got %q", rec.Operation)
 	}
@@ -1089,7 +1223,9 @@ func TestProcessJob_LineageRecordsCreated(t *testing.T) {
 		}, nil
 	}}
 
-	h := newTestHarness(factLLM, nil, nil)
+	// Entity + embed are no-op stubs to keep the all-three gate open
+	// while the test focuses on lineage records produced by fact extraction.
+	h := newTestHarness(factLLM, noopEntityLLM(), noopEmbed())
 	mem := testMemory()
 	h.reader.byID[mem.ID] = mem
 	job := testJob(mem.ID, mem.NamespaceID)
@@ -1168,9 +1304,10 @@ func TestProcessBatch_SingleSharedEmbed(t *testing.T) {
 		}, nil
 	}}
 
-	// Embed-only worker (no fact/entity providers) so each job produces
-	// exactly one input (the parent's own content).
-	h := newTestHarness(nil, nil, embedProv)
+	// Fact + entity stubs return empty payloads so each job produces
+	// exactly one input (the parent's own content) for the shared embed
+	// call. The all-three gate stays open with the stubs in place.
+	h := newTestHarness(noopFactLLM(), noopEntityLLM(), embedProv)
 
 	jobs := make([]*model.EnrichmentJob, 0, 3)
 	wantParentIDs := make(map[uuid.UUID]bool, 3)
@@ -1244,7 +1381,7 @@ func TestProcessBatch_VectorUpsertFailure_FailsJobs(t *testing.T) {
 		},
 	}
 
-	h := newTestHarness(nil, nil, embedProv)
+	h := newTestHarness(noopFactLLM(), noopEntityLLM(), embedProv)
 	// Force every UpsertBatch to fail so the worker's failure path runs.
 	h.vectors.err = errors.New("vector store offline")
 

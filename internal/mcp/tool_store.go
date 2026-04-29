@@ -95,6 +95,11 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 	if v, ok := args["enrich"].(bool); ok {
 		enrich = v
 	}
+	if enrich {
+		if gate := s.enrichmentGateError(); gate != nil {
+			return gate, nil
+		}
+	}
 
 	ttl, _ := args["ttl"].(string)
 
@@ -172,6 +177,11 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 	var enrich bool
 	if v, ok := args["enrich"].(bool); ok {
 		enrich = v
+	}
+	if enrich {
+		if gate := s.enrichmentGateError(); gate != nil {
+			return gate, nil
+		}
 	}
 
 	ttl, _ := args["ttl"].(string)

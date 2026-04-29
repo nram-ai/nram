@@ -123,6 +123,9 @@ func handleMemoryForget(ctx context.Context, s *Server, request mcp.CallToolRequ
 }
 
 func handleMemoryEnrich(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if gate := s.enrichmentGateError(); gate != nil {
+		return gate, nil
+	}
 	if err := checkWriteAccess(ctx); err != nil {
 		return err, nil
 	}

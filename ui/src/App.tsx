@@ -1,6 +1,7 @@
 import React, { Suspense, useState, useEffect } from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { useSetupStatus } from "./hooks/useApi";
+import { useEnrichmentAvailable } from "./hooks/useEnrichmentAvailable";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ProjectProvider } from "./context/ProjectContext";
 import RequireRole from "./components/RequireRole";
@@ -101,6 +102,7 @@ interface NavItem {
   section: string;
   minRole?: string;
   writeOnly?: boolean;
+  requiresEnrichment?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -113,14 +115,14 @@ const navItems: NavItem[] = [
   { path: "/users", label: "Users", section: "Management", minRole: "org_owner" },
   { path: "/providers", label: "Providers", section: "Configuration", minRole: "administrator" },
   { path: "/settings", label: "Settings", section: "Configuration", minRole: "administrator" },
-  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration", minRole: "administrator" },
+  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration", minRole: "administrator", requiresEnrichment: true },
   { path: "/webhooks", label: "Webhooks", section: "Configuration", minRole: "administrator" },
   { path: "/oauth", label: "OAuth Clients", section: "Configuration", minRole: "administrator" },
   { path: "/idp", label: "Identity Providers", section: "Configuration", minRole: "org_owner" },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
   { path: "/database", label: "Database", section: "System", minRole: "administrator" },
-  { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator" },
-  { path: "/dreaming", label: "Dreaming", section: "System", minRole: "administrator" },
+  { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator", requiresEnrichment: true },
+  { path: "/dreaming", label: "Dreaming", section: "System", minRole: "administrator", requiresEnrichment: true },
   { path: "/analytics", label: "Analytics", section: "System" },
   { path: "/import", label: "Bulk Import", section: "System", writeOnly: true },
   { path: "/account", label: "My Account", section: "Account" },
@@ -168,6 +170,7 @@ function AppLayout() {
   const auth = useAuth();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { available: enrichmentAvailable } = useEnrichmentAvailable();
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -179,6 +182,9 @@ function AppLayout() {
       return false;
     }
     if (item.writeOnly && !auth.canWrite) {
+      return false;
+    }
+    if (item.requiresEnrichment && !enrichmentAvailable) {
       return false;
     }
     return true;

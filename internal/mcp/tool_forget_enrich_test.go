@@ -162,6 +162,102 @@ func TestMemoryEnrich_Registered_Postgres(t *testing.T) {
 	}
 }
 
+// TestHandleMemoryEnrich_GateClosed verifies the enrichment-available gate
+// short-circuits the handler with a clear "enrichment_unavailable" tool
+// error before any project resolution happens. The gate is evaluated live
+// each call so a provider reload reopens the surface without restart.
+func TestHandleMemoryEnrich_GateClosed(t *testing.T) {
+	deps := Dependencies{
+		Backend:             storage.BackendSQLite,
+		EnrichmentAvailable: func() bool { return false },
+	}
+	srv := NewServer(deps)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "memory_enrich"
+	req.Params.Arguments = map[string]interface{}{"project": "test"}
+
+	// Use an authenticated context so we know the gate runs before the
+	// auth check (matches the handler's defensive ordering).
+	ctx := buildAuthCtx(uuid.New())
+	result, err := handleMemoryEnrich(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertToolError(t, result, "enrichment_unavailable")
+}
+
+// TestHandleMemoryEnrich_GateOpenStillRequiresAuth verifies the gate does
+// not bypass downstream auth/project checks — closing the gate is the only
+// effect of a missing provider, not a free pass.
+func TestHandleMemoryEnrich_GateOpenStillRequiresAuth(t *testing.T) {
+	deps := Dependencies{
+		Backend:             storage.BackendSQLite,
+		EnrichmentAvailable: func() bool { return true },
+	}
+	srv := NewServer(deps)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "memory_enrich"
+	req.Params.Arguments = map[string]interface{}{"project": "test"}
+
+	ctx := buildNoAuthCtx()
+	result, err := handleMemoryEnrich(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertToolError(t, result, "authentication required")
+}
+
+// TestHandleMemoryStore_EnrichTrueGateClosed verifies opting in to async
+// enrichment via memory_store(enrich: true) is rejected with the same
+// gate-closed error. Calls without enrich:true are not gated here — that
+// path queues a job either way today and the worker drops it onto pending
+// when the gate is closed (see internal/enrichment.TestProcessJob_NoProviders).
+func TestHandleMemoryStore_EnrichTrueGateClosed(t *testing.T) {
+	deps := Dependencies{
+		Backend:             storage.BackendSQLite,
+		EnrichmentAvailable: func() bool { return false },
+	}
+	srv := NewServer(deps)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "memory_store"
+	req.Params.Arguments = map[string]interface{}{
+		"content": "test content",
+		"enrich":  true,
+	}
+	ctx := buildAuthCtx(uuid.New())
+	result, err := handleMemoryStore(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertToolError(t, result, "enrichment_unavailable")
+}
+
+// TestHandleMemoryStoreBatch_EnrichTrueGateClosed mirrors the single-store
+// case for the batch tool.
+func TestHandleMemoryStoreBatch_EnrichTrueGateClosed(t *testing.T) {
+	deps := Dependencies{
+		Backend:             storage.BackendSQLite,
+		EnrichmentAvailable: func() bool { return false },
+	}
+	srv := NewServer(deps)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "memory_store_batch"
+	req.Params.Arguments = map[string]interface{}{
+		"items":  []interface{}{map[string]interface{}{"content": "a"}},
+		"enrich": true,
+	}
+	ctx := buildAuthCtx(uuid.New())
+	result, err := handleMemoryStoreBatch(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertToolError(t, result, "enrichment_unavailable")
+}
+
 // --- memory_forget handler tests ---
 
 func TestHandleMemoryForget_NoHTTPRequest(t *testing.T) {

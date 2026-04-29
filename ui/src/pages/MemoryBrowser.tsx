@@ -9,6 +9,7 @@ import {
   useForgetMemories,
   useEnrichMemories,
 } from "../hooks/useApi";
+import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import { useAuth } from "../context/AuthContext";
 import { useSelectedProject } from "../context/ProjectContext";
 import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
@@ -989,6 +990,8 @@ function MemoryBrowser() {
   const enrichMut = useEnrichMemories();
   const updateMut = useUpdateMemory();
 
+  const { available: enrichmentAvailable } = useEnrichmentAvailable();
+
   // "Select all matching" — fetched directly on user click rather than via a
   // gated useQuery, since the result is consumed once and stored in
   // selectedIds. Tracks fetch-in-progress + truncation info for the UI.
@@ -1602,7 +1605,7 @@ function MemoryBrowser() {
         <BulkActionsBar
           selectedCount={selectedIds.size}
           onDelete={canWrite ? handleBulkDelete : undefined}
-          onEnrich={canWrite ? handleBulkEnrich : undefined}
+          onEnrich={canWrite && enrichmentAvailable ? handleBulkEnrich : undefined}
           onAddTags={canWrite ? handleBulkAddTags : undefined}
           onExport={handleBulkExport}
           onClear={clearSelection}

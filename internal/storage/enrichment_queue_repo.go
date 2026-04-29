@@ -398,6 +398,34 @@ func (r *EnrichmentQueueRepo) MarkStepCompleted(ctx context.Context, id uuid.UUI
 	return nil
 }
 
+// Release resets a claimed enrichment queue item back to "pending" status
+// without bumping the attempts counter. Used when the worker decides to
+// defer processing (e.g., the enrichment-available gate flipped closed
+// mid-batch) rather than fail the job. Distinct from Retry, which is for
+// transient processing failures and counts toward the retry budget.
+func (r *EnrichmentQueueRepo) Release(ctx context.Context, id uuid.UUID) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = $1 WHERE id = $2`
+	}
+
+	result, err := r.db.Exec(ctx, query, now, id.String())
+	if err != nil {
+		return fmt.Errorf("enrichment queue release: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("enrichment queue release rows affected: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // Retry resets an enrichment queue item back to "pending" status, clears the
 // worker_id and claimed_at, and increments the attempts counter.
 func (r *EnrichmentQueueRepo) Retry(ctx context.Context, id uuid.UUID) error {

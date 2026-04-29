@@ -20,6 +20,11 @@ type RouterConfig struct {
 	// ProjectAccess is middleware that enforces project-level ownership checks.
 	// If nil, no ownership check is applied (useful in tests).
 	ProjectAccess func(http.Handler) http.Handler
+	// EnrichmentGate is middleware that returns 503 when the enrichment +
+	// dreaming gate is closed (any of embedding/fact/entity unconfigured).
+	// Wraps memory enrich, admin enrichment, and admin dreaming routes.
+	// If nil, no gate is applied (useful in tests that don't exercise it).
+	EnrichmentGate func(http.Handler) http.Handler
 }
 
 // Handlers holds all handler instances. Nil handlers are replaced with a
@@ -230,8 +235,16 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				r.Delete("/{id}", handler(handlers.Delete))
 				r.Post("/batch", handler(handlers.BatchStore))
 				r.Post("/forget", handler(handlers.BulkForget))
-				r.Post("/enrich", handler(handlers.Enrich))
 				r.Post("/import", handler(handlers.Import))
+
+				// /enrich is gated behind the enrichment-available signal —
+				// returns 503 unless all three provider slots are configured.
+				r.Group(func(r chi.Router) {
+					if config.EnrichmentGate != nil {
+						r.Use(config.EnrichmentGate)
+					}
+					r.Post("/enrich", handler(handlers.Enrich))
+				})
 			})
 		})
 
@@ -260,10 +273,19 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Get("/v1/usage", handler(handlers.AdminUsage))
 		r.Get("/v1/graph", handler(handlers.AdminGraph))
 		r.Get("/v1/namespaces/tree", handler(handlers.AdminNamespaces))
-		r.HandleFunc("/v1/enrichment", handler(handlers.AdminEnrichment))
-		r.HandleFunc("/v1/enrichment/*", handler(handlers.AdminEnrichment))
-		r.HandleFunc("/v1/dreaming", handler(handlers.AdminDreaming))
-		r.HandleFunc("/v1/dreaming/*", handler(handlers.AdminDreaming))
+		// Enrichment + dreaming admin/monitoring endpoints are gated behind
+		// the enrichment-available signal — returns 503 unless all three
+		// provider slots are configured. /admin/providers is intentionally
+		// not gated; admins must reach it to configure the slots.
+		r.Group(func(r chi.Router) {
+			if config.EnrichmentGate != nil {
+				r.Use(config.EnrichmentGate)
+			}
+			r.HandleFunc("/v1/enrichment", handler(handlers.AdminEnrichment))
+			r.HandleFunc("/v1/enrichment/*", handler(handlers.AdminEnrichment))
+			r.HandleFunc("/v1/dreaming", handler(handlers.AdminDreaming))
+			r.HandleFunc("/v1/dreaming/*", handler(handlers.AdminDreaming))
+		})
 
 		// Org-scoped routes.
 		r.Route("/v1/orgs/{org_id}", func(r chi.Router) {

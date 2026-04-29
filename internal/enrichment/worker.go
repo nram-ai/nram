@@ -79,12 +79,16 @@ type MemoryCreator interface {
 
 // QueueClaimer manages enrichment job lifecycle in the queue.
 // MarkStepCompleted appends a step name to the job's steps_completed array
-// (idempotent) so retries skip phases that already ran.
+// (idempotent) so retries skip phases that already ran. Release resets a
+// claimed job to pending without bumping attempts — used when the worker
+// defers a job (e.g., the enrichment-available gate is closed) rather than
+// failing it.
 type QueueClaimer interface {
 	ClaimNext(ctx context.Context, workerID string) (*model.EnrichmentJob, error)
 	ClaimNextBatch(ctx context.Context, workerID string, max int) ([]*model.EnrichmentJob, error)
 	Complete(ctx context.Context, id uuid.UUID) error
 	Fail(ctx context.Context, id uuid.UUID, errMsg string) error
+	Release(ctx context.Context, id uuid.UUID) error
 	MarkStepCompleted(ctx context.Context, id uuid.UUID, step string) error
 }
 
@@ -328,6 +332,17 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 			continue
 		}
 
+		// Idle without claiming when any LLM slot is unconfigured; jobs
+		// stay pending and resume on the next poll once the admin
+		// configures the missing slot.
+		if wp.factProvider() == nil || wp.entityProvider() == nil || wp.embedProvider() == nil {
+			emptyPolls++
+			wp.idleWorkers.Add(1)
+			wp.sleepWithBackoff(ctx, emptyPolls, maxBackoff)
+			wp.idleWorkers.Add(-1)
+			continue
+		}
+
 		jobs, err := wp.queue.ClaimNextBatch(ctx, workerID, batchClaimSize)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -559,9 +574,12 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 	hasEntity := wp.entityProvider() != nil
 	hasEmbed := wp.embedProvider() != nil
 
-	if !hasFact && !hasEntity && !hasEmbed {
-		_ = wp.queue.Fail(ctx, job.ID, "no providers configured")
-		return nil, fmt.Errorf("no providers configured, job requeued")
+	// Race window: a slot can be removed via /admin/providers after the
+	// batch is claimed. Release (no attempts bump) so the backlog drains
+	// automatically when the admin restores the slot.
+	if !(hasFact && hasEntity && hasEmbed) {
+		_ = wp.queue.Release(ctx, job.ID)
+		return nil, fmt.Errorf("enrichment gate closed mid-batch; job released")
 	}
 
 	// Per-step skip gates. mem.Enriched is the cheap signal — finalizeJob
@@ -1196,13 +1214,18 @@ func (wp *WorkerPool) extractEntities(
 
 // parseFactResponse parses a fact extraction response. With JSON mode enabled
 // the LLM is constrained to produce valid JSON, so only direct unmarshal with
-// a string-array fallback is needed.
+// a string-array fallback is needed. An empty array (or wrapper with empty
+// facts) is treated as a valid "no facts extracted" outcome and returns
+// (nil, nil) rather than an error.
 func parseFactResponse(raw string) ([]extractedFact, error) {
 	raw = strings.TrimSpace(raw)
 
-	// Try array of structured facts.
+	// Try array of structured facts. Empty array is valid (no facts).
 	var facts []extractedFact
-	if err := json.Unmarshal([]byte(raw), &facts); err == nil && len(facts) > 0 {
+	if err := json.Unmarshal([]byte(raw), &facts); err == nil {
+		if len(facts) == 0 {
+			return nil, nil
+		}
 		for i := range facts {
 			facts[i].Content = facts[i].text()
 		}
@@ -1216,15 +1239,23 @@ func parseFactResponse(raw string) ([]extractedFact, error) {
 		return []extractedFact{single}, nil
 	}
 
-	// Wrapper object with a "facts" key.
+	// Wrapper object with a "facts" key. Empty wrapper is valid (no facts).
 	var wrapper struct {
 		Facts []extractedFact `json:"facts"`
 	}
-	if err := json.Unmarshal([]byte(raw), &wrapper); err == nil && len(wrapper.Facts) > 0 {
-		for i := range wrapper.Facts {
-			wrapper.Facts[i].Content = wrapper.Facts[i].text()
+	if err := json.Unmarshal([]byte(raw), &wrapper); err == nil {
+		if len(wrapper.Facts) == 0 {
+			// Distinguish "valid empty wrapper" from "different object
+			// shape" by checking that the response is a JSON object.
+			if strings.HasPrefix(raw, "{") {
+				return nil, nil
+			}
+		} else {
+			for i := range wrapper.Facts {
+				wrapper.Facts[i].Content = wrapper.Facts[i].text()
+			}
+			return wrapper.Facts, nil
 		}
-		return wrapper.Facts, nil
 	}
 
 	// Plain string array.
