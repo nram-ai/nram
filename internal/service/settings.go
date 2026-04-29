@@ -16,29 +16,29 @@ import (
 
 // Well-known setting keys.
 const (
-	SettingEmbedProvider   = "provider.embedding.type"
-	SettingEmbedURL        = "provider.embedding.url"
-	SettingEmbedKey        = "provider.embedding.key"
-	SettingEmbedModel      = "provider.embedding.model"
-	SettingFactProvider    = "provider.fact.type"
-	SettingFactURL         = "provider.fact.url"
-	SettingFactKey         = "provider.fact.key"
-	SettingFactModel       = "provider.fact.model"
-	SettingEntityProvider  = "provider.entity.type"
-	SettingEntityURL       = "provider.entity.url"
-	SettingEntityKey       = "provider.entity.key"
-	SettingEntityModel     = "provider.entity.model"
+	SettingEmbedProvider     = "provider.embedding.type"
+	SettingEmbedURL          = "provider.embedding.url"
+	SettingEmbedKey          = "provider.embedding.key"
+	SettingEmbedModel        = "provider.embedding.model"
+	SettingFactProvider      = "provider.fact.type"
+	SettingFactURL           = "provider.fact.url"
+	SettingFactKey           = "provider.fact.key"
+	SettingFactModel         = "provider.fact.model"
+	SettingEntityProvider    = "provider.entity.type"
+	SettingEntityURL         = "provider.entity.url"
+	SettingEntityKey         = "provider.entity.key"
+	SettingEntityModel       = "provider.entity.model"
 	SettingEnrichmentEnabled = "enrichment.enabled"
 	SettingDedupThreshold    = "enrichment.dedup_threshold"
-	SettingFactPrompt      = "enrichment.fact_prompt"
-	SettingEntityPrompt    = "enrichment.entity_prompt"
-	SettingRankWeightSim   = "ranking.weight.similarity"
-	SettingRankWeightRec   = "ranking.weight.recency"
-	SettingRankWeightImp   = "ranking.weight.importance"
-	SettingRankWeightFreq  = "ranking.weight.frequency"
-	SettingRankWeightGraph = "ranking.weight.graph_relevance"
-	SettingRankWeightConf  = "ranking.weight.confidence"
-	SettingTokenRetention  = "usage.token_retention_days"
+	SettingFactPrompt        = "enrichment.fact_prompt"
+	SettingEntityPrompt      = "enrichment.entity_prompt"
+	SettingRankWeightSim     = "ranking.weight.similarity"
+	SettingRankWeightRec     = "ranking.weight.recency"
+	SettingRankWeightImp     = "ranking.weight.importance"
+	SettingRankWeightFreq    = "ranking.weight.frequency"
+	SettingRankWeightGraph   = "ranking.weight.graph_relevance"
+	SettingRankWeightConf    = "ranking.weight.confidence"
+	SettingTokenRetention    = "usage.token_retention_days"
 
 	// Hybrid recall fusion. Off by default; flipping enabled turns on
 	// parallel vector + BM25/tsvector retrieval with RRF fusion. The two
@@ -179,6 +179,7 @@ const (
 // settingDefaults provides built-in default values for well-known settings.
 // These are used when a setting is not found at any scope in the database.
 var settingDefaults = map[string]string{
+	SettingEnrichmentEnabled:          "true",
 	SettingDedupThreshold:             "0.92",
 	SettingRankWeightSim:              "0.50",
 	SettingRankWeightRec:              "0.15",
