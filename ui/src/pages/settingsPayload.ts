@@ -56,7 +56,7 @@ export function buildProjectSettingsPayload(state: ProjectFormState): ProjectSet
 }
 
 // Build the user.settings JSON the API expects. ranking_weights is never
-// emitted at user scope — the server rejects it with a 400 because the
+// emitted at user scope: the server rejects it with a 400 because the
 // cascade lands at project, not user.
 export function buildUserSettingsPayload(state: UserFormState): Record<string, unknown> {
   const settings: Record<string, unknown> = {};

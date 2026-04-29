@@ -28,7 +28,7 @@ const WebhookManagement = React.lazy(() => import("./pages/WebhookManagement"));
 const OAuthClients = React.lazy(() => import("./pages/OAuthClients"));
 const IdPConfiguration = React.lazy(() => import("./pages/IdPConfiguration"));
 const MCPConfigGenerator = React.lazy(() => import("./pages/MCPConfigGenerator"));
-const ExtractionPromptEditor = React.lazy(() => import("./pages/ExtractionPromptEditor"));
+const PromptTemplates = React.lazy(() => import("./pages/PromptTemplates"));
 const DreamingMonitor = React.lazy(() => import("./pages/DreamingMonitor"));
 const MyAccount = React.lazy(() => import("./pages/MyAccount"));
 
@@ -115,7 +115,7 @@ const navItems: NavItem[] = [
   { path: "/users", label: "Users", section: "Management", minRole: "org_owner" },
   { path: "/providers", label: "Providers", section: "Configuration", minRole: "administrator" },
   { path: "/settings", label: "Settings", section: "Configuration", minRole: "administrator" },
-  { path: "/extraction-prompts", label: "Extraction Prompts", section: "Configuration", minRole: "administrator", requiresEnrichment: true },
+  { path: "/prompt-templates", label: "Prompt Templates", section: "Configuration", minRole: "administrator", requiresEnrichment: true },
   { path: "/webhooks", label: "Webhooks", section: "Configuration", minRole: "administrator" },
   { path: "/oauth", label: "OAuth Clients", section: "Configuration", minRole: "administrator" },
   { path: "/idp", label: "Identity Providers", section: "Configuration", minRole: "org_owner" },
@@ -298,7 +298,8 @@ function AppLayout() {
                 <Route path="/users" element={<RequireRole minRole="org_owner"><UserManagement /></RequireRole>} />
                 <Route path="/providers" element={<RequireRole minRole="administrator"><ProviderConfiguration /></RequireRole>} />
                 <Route path="/settings" element={<RequireRole minRole="administrator"><SettingsEditor /></RequireRole>} />
-                <Route path="/extraction-prompts" element={<RequireRole minRole="administrator"><ExtractionPromptEditor /></RequireRole>} />
+                <Route path="/prompt-templates" element={<RequireRole minRole="administrator"><PromptTemplates /></RequireRole>} />
+                <Route path="/extraction-prompts" element={<Navigate to="/prompt-templates" replace />} />
                 <Route path="/database" element={<RequireRole minRole="administrator"><DatabaseManagement /></RequireRole>} />
                 <Route path="/enrichment" element={<RequireRole minRole="administrator"><EnrichmentMonitor /></RequireRole>} />
                 <Route path="/dreaming" element={<RequireRole minRole="administrator"><DreamingMonitor /></RequireRole>} />

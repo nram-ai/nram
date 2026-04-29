@@ -80,6 +80,62 @@ var uiOnlySchemaKeys = map[string]struct{}{
 	"qdrant.api_key":            {},
 }
 
+// TestSettingsSchemaRequiresRestart asserts that the RequiresRestart flag is
+// set on every entry that genuinely needs a server restart and cleared on
+// entries that are hot-reloadable. The UI reads this flag to render the
+// "Requires a server restart" badge, so drift here misleads operators.
+func TestSettingsSchemaRequiresRestart(t *testing.T) {
+	store := &SettingsAdminStore{settingsRepo: nil}
+	schemas, err := store.GetSettingsSchema(context.Background())
+	if err != nil {
+		t.Fatalf("GetSettingsSchema: %v", err)
+	}
+
+	// Keys that the runtime reads only at process start. Changing them in the
+	// admin UI must surface the restart badge; if an entry here ever flips to
+	// hot-reloadable, remove it from this list at the same commit.
+	mustRestart := map[string]struct{}{
+		"qdrant.addr":                                   {},
+		"qdrant.api_key":                                {},
+		"qdrant.use_tls":                                {},
+		"qdrant.pool_size":                              {},
+		"qdrant.keepalive_time":                         {},
+		"qdrant.keepalive_timeout":                      {},
+		service.SettingEnrichmentWorkerCountSQLite:      {},
+		service.SettingEnrichmentWorkerCountPostgres:    {},
+		service.SettingEnrichmentWorkerPollIntervalSeconds: {},
+		service.SettingDreamSchedulerPollSeconds:        {},
+		service.SettingLifecycleSweepIntervalSeconds:    {},
+		service.SettingCascadeCacheTTLSeconds:           {},
+		service.SettingSettingsCacheTTLSeconds:          {},
+		service.SettingAPIRateLimitCleanupSeconds:       {},
+		service.SettingAPIRateLimitStaleSeconds:         {},
+		service.SettingEventsSubscriberBufferSize:       {},
+		service.SettingEventsReplayCapacity:             {},
+		service.SettingEventsSSEKeepaliveSeconds:        {},
+	}
+
+	seen := make(map[string]bool, len(mustRestart))
+	for _, entry := range schemas {
+		if _, want := mustRestart[entry.Key]; want {
+			seen[entry.Key] = true
+			if !entry.RequiresRestart {
+				t.Errorf("key %q: expected RequiresRestart=true, got false", entry.Key)
+			}
+			continue
+		}
+		if entry.RequiresRestart {
+			t.Errorf("key %q: RequiresRestart=true but not on the mustRestart list; either flag a real restart requirement or remove the field", entry.Key)
+		}
+	}
+
+	for key := range mustRestart {
+		if !seen[key] {
+			t.Errorf("key %q is on mustRestart but no schema entry was found; was it renamed?", key)
+		}
+	}
+}
+
 // TestSettingsSchemaDefaultsMatchRuntime asserts that every UI schema entry's
 // DefaultValue matches the runtime default returned by service.GetDefault.
 // This catches the class of bug where a setting is registered in the UI and

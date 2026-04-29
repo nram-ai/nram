@@ -27,12 +27,13 @@ type SettingsAdminConfig struct {
 
 // SettingSchema describes a single setting definition with its type and default.
 type SettingSchema struct {
-	Key          string          `json:"key"`
-	Type         string          `json:"type"`
-	DefaultValue json.RawMessage `json:"default_value"`
-	Description  string          `json:"description"`
-	Category     string          `json:"category"`
-	EnumValues   []string        `json:"enum_values,omitempty"`
+	Key             string          `json:"key"`
+	Type            string          `json:"type"`
+	DefaultValue    json.RawMessage `json:"default_value"`
+	Description     string          `json:"description"`
+	Category        string          `json:"category"`
+	EnumValues      []string        `json:"enum_values,omitempty"`
+	RequiresRestart bool            `json:"requires_restart,omitempty"`
 }
 
 // settingUpdateRequest is the request body for PUT /settings.

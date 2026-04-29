@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   useSettings,
   useSettingsSchema,
@@ -20,91 +20,187 @@ interface SettingWithSchema {
 // Constants
 // ---------------------------------------------------------------------------
 
-const CATEGORY_ORDER = [
-  "memory",
-  "enrichment",
-  "enrichment_ingestion",
-  "enrichment_performance",
-  "dreaming",
-  "dreaming_novelty",
-  "dreaming_consolidation",
-  "dreaming_contradiction",
-  "dreaming_performance",
-  "dreaming_prompts",
-  "reconsolidation",
-  "recall_fusion",
-  "ranking",
-  "api",
-  "api_performance",
-  "auth",
-  "qdrant",
-  "lifecycle",
-  "events",
-  "performance",
-  "enrichment_prompts",
+interface SubSection {
+  // The schema-side category key that backend entries are tagged with.
+  category: string;
+  // Sub-section heading; leave undefined when the parent has only one
+  // sub-section and the parent header already says everything.
+  label?: string;
+  description?: string;
+}
+
+interface ParentGroup {
+  id: string;
+  label: string;
+  description?: string;
+  // Hide the entire parent (and its sub-sections) when enrichment is
+  // unavailable. Read-path tuning stays visible regardless.
+  requiresEnrichment?: boolean;
+  subSections: SubSection[];
+}
+
+const PARENT_GROUPS: ParentGroup[] = [
+  {
+    id: "memory",
+    label: "Memory",
+    description: "Defaults applied to new memories and how long deleted ones are retained.",
+    subSections: [{ category: "memory" }],
+  },
+  {
+    id: "enrichment",
+    label: "Enrichment",
+    description: "Background pipeline that pulls facts and entities out of new memories.",
+    requiresEnrichment: true,
+    subSections: [
+      {
+        category: "enrichment",
+        label: "General",
+        description: "Master switches and basic batch sizing for the enrichment pipeline.",
+      },
+      {
+        category: "enrichment_ingestion",
+        label: "Ingestion Decision",
+        description:
+          "When a new memory looks like a near-duplicate, the model decides whether to add, update, delete, or skip. Off by default. Turn shadow mode on first to observe the decisions before acting on them.",
+      },
+      {
+        category: "enrichment_performance",
+        label: "Worker Performance",
+        description:
+          "Throughput and concurrency for the enrichment worker pool, plus the model parameters used for fact and entity extraction. Most fields hot-reload; the worker count and poll interval need a restart.",
+      },
+    ],
+  },
+  {
+    id: "dreaming",
+    label: "Dreaming",
+    description: "Background consolidation that audits syntheses, reinforces confidence, and merges related memories.",
+    requiresEnrichment: true,
+    subSections: [
+      {
+        category: "dreaming",
+        label: "General",
+        description: "Scheduler, token budgets, and the confidence floor for new syntheses.",
+      },
+      {
+        category: "dreaming_novelty",
+        label: "Novelty Audit",
+        description:
+          "Discards syntheses that don't actually add anything new compared to the memories they were built from.",
+      },
+      {
+        category: "dreaming_consolidation",
+        label: "Consolidation Budget",
+        description:
+          "How the per-cycle token budget is split across the audit, reinforce, and consolidate sub-phases so none can starve the others.",
+      },
+      {
+        category: "dreaming_contradiction",
+        label: "Contradiction Detection",
+        description:
+          "Per-cycle cap on the model calls used to find contradicting memory pairs, plus the confidence haircuts applied to winners, losers, and ties.",
+      },
+      {
+        category: "dreaming_paraphrase",
+        label: "Paraphrase Sweep",
+        description:
+          "Catches near-duplicate memories the contradiction phase misses by running a vector similarity sweep directly on every eligible memory.",
+      },
+      {
+        category: "dreaming_embedding_backfill",
+        label: "Embedding Backfill",
+        description:
+          "Repairs memories whose embedding row is missing. Re-embeds when the embedder is healthy; otherwise clears the orphan dimension marker.",
+      },
+      {
+        category: "dreaming_performance",
+        label: "Performance",
+        description:
+          "How many neighbors to consider, how similar two entities must be to merge, and how often the scheduler wakes up.",
+      },
+    ],
+  },
+  {
+    id: "recall",
+    label: "Recall & Ranking",
+    description: "How memories are scored, fused, and reinforced at retrieval time.",
+    subSections: [
+      {
+        category: "reconsolidation",
+        label: "Reconsolidation",
+        description:
+          "Each recall reinforces a memory's confidence; idle memories slowly decay during dream cycles.",
+      },
+      {
+        category: "recall_fusion",
+        label: "Hybrid Fusion",
+        description:
+          "Run vector and lexical (BM25) search side by side and merge the results with Reciprocal Rank Fusion. Off by default. Turn on after migration 18 has been applied.",
+      },
+      {
+        category: "ranking",
+        label: "Ranking",
+        description:
+          "Weights for the recall ranking formula: similarity, recency, importance, frequency, graph relevance, and confidence.",
+      },
+    ],
+  },
+  {
+    id: "api",
+    label: "API",
+    description: "Public API rate limits, per-request caps, and graph defaults.",
+    subSections: [
+      {
+        category: "api",
+        label: "General",
+        description: "Per-user rate limit and burst size for the public API.",
+      },
+      {
+        category: "api_performance",
+        label: "Performance",
+        description:
+          "Rate-limiter cleanup cadence, batch-store item cap, and the default minimum edge weight for the graph endpoint. Advanced.",
+      },
+    ],
+  },
+  {
+    id: "auth",
+    label: "Auth",
+    description: "Authentication and authorization.",
+    subSections: [{ category: "auth" }],
+  },
+  {
+    id: "vector_db",
+    label: "Vector Database",
+    description: "Connection settings for the Qdrant vector database.",
+    subSections: [{ category: "qdrant" }],
+  },
+  {
+    id: "lifecycle",
+    label: "Lifecycle Sweep",
+    description:
+      "Background sweep that expires time-to-live (TTL) memories, hard-purges soft-deleted ones past their retention window, and prunes orphaned graph data.",
+    subSections: [{ category: "lifecycle" }],
+  },
+  {
+    id: "events",
+    label: "Events & Streaming",
+    description:
+      "Buffer sizes and keepalive timing for server-sent events (SSE) and the in-process event bus. Advanced: incorrect values can stall subscribers or grow memory unboundedly.",
+    subSections: [{ category: "events" }],
+  },
+  {
+    id: "caches",
+    label: "Service Caches",
+    description:
+      "Cache lifetimes for the cascade resolver and settings service, plus the export pagination size.",
+    subSections: [{ category: "performance" }],
+  },
 ];
 
-// Retrieval-side categories (recall_fusion, ranking, reconsolidation) are
-// intentionally not in this set — they affect the read path, not enrichment.
-const ENRICHMENT_GATED_CATEGORIES = new Set<string>([
-  "enrichment",
-  "enrichment_ingestion",
-  "enrichment_prompts",
-  "dreaming",
-  "dreaming_novelty",
-  "dreaming_consolidation",
-  "dreaming_contradiction",
-  "dreaming_prompts",
-]);
-
-const CATEGORY_LABELS: Record<string, string> = {
-  memory: "Memory",
-  enrichment: "Enrichment",
-  enrichment_ingestion: "Enrichment — Ingestion Decision",
-  enrichment_performance: "Enrichment — Worker Performance",
-  dreaming: "Dreaming",
-  dreaming_novelty: "Dreaming — Novelty Audit",
-  dreaming_consolidation: "Dreaming — Consolidation Budget",
-  dreaming_contradiction: "Dreaming — Contradiction Detection",
-  dreaming_performance: "Dreaming — Performance",
-  dreaming_prompts: "Dreaming — Prompts",
-  reconsolidation: "Reconsolidation",
-  recall_fusion: "Recall — Hybrid Fusion",
-  ranking: "Ranking",
-  api: "API",
-  api_performance: "API — Performance",
-  auth: "Auth",
-  qdrant: "Qdrant Vector Database",
-  lifecycle: "Lifecycle Sweep",
-  events: "Event Bus & SSE",
-  performance: "Service Caches",
-  enrichment_prompts: "Enrichment — Prompts",
-};
-
-const CATEGORY_DESCRIPTIONS: Record<string, string> = {
-  memory: "Default values and retention for memory storage",
-  enrichment: "Configuration for LLM-based enrichment pipeline",
-  enrichment_ingestion: "LLM-judged ADD / UPDATE / DELETE / NONE decision on near-duplicate matches at ingest. Off by default — flip enabled with shadow_mode on first to log the decision distribution before allowing UPDATE/DELETE to take effect.",
-  enrichment_performance: "Throughput and concurrency knobs for the enrichment worker pool. Hot-reload knobs (batch claim size, pre-embed concurrency, embed input cap) take effect within ~30s; restart-required knobs (worker count, poll interval) are flagged in their descriptions.",
-  dreaming: "Background consolidation scheduler, token budgets, and synthesis thresholds",
-  dreaming_novelty: "Gates whether dream syntheses are kept based on how much genuinely new content they introduce over their sources",
-  dreaming_consolidation: "Per-sub-phase budget fractions so audit, reinforce, and consolidate cannot starve each other",
-  dreaming_contradiction: "Per-cycle cap on pair-comparison LLM calls in the contradiction phase",
-  dreaming_performance: "Tuning knobs for dream phases — neighbour fan-out, entity-merge similarity threshold, scheduler poll cadence",
-  dreaming_prompts: "Prompt templates used by the dreaming phases (contradiction detection, synthesis, alignment scoring, novelty audit). Use the test harness to validate placeholder substitution before saving.",
-  reconsolidation: "Recall-time reinforcement and sleep-time confidence decay for stored memories",
-  recall_fusion: "Parallel vector + lexical (BM25/tsvector) retrieval with Reciprocal Rank Fusion. Off by default — flip enabled after migrations are applied.",
-  ranking: "Weights and thresholds for memory ranking",
-  api: "API rate limiting and request configuration",
-  api_performance: "Per-request safety limits, rate-limiter cleanup cadence, and admin graph defaults. Advanced — raising batch caps widens the per-request DoS surface; pair with reverse-proxy body-size limits.",
-  auth: "Authentication and authorization settings",
-  qdrant: "Connection settings for the Qdrant vector database. Changes require a server restart to take effect.",
-  lifecycle: "Background sweep that expires TTL'd memories, hard-purges soft-deletes past their retention window, and prunes orphaned graph data",
-  events: "In-process event bus subscriber buffer, SSE replay capacity, and keepalive interval. Advanced — wrong values can stall subscribers or balloon memory; changes require server restart.",
-  performance: "Cache TTLs for the cascade resolver and settings service, plus export pagination",
-  enrichment_prompts: "Prompt templates used by the enrichment pipeline. Use the test harness to validate placeholder substitution before saving.",
-};
-
+// Prompt-typed schema entries. Surfaced on the dedicated Prompt Templates page;
+// filtered out of the Settings page entirely so they cannot be edited in two
+// places.
 const PROMPT_KEYS = new Set([
   "enrichment.fact_prompt",
   "enrichment.entity_prompt",
@@ -115,22 +211,8 @@ const PROMPT_KEYS = new Set([
   "dreaming.novelty.judge_prompt",
 ]);
 
-// Settings now surfaced on the dedicated Prompt Editor page. They stay in
-// PROMPT_KEYS so the standard category display filters them out, but they
-// are also filtered from this page's prompt section so the Settings Editor
-// does not double-surface them.
-const MOVED_TO_PROMPT_EDITOR = new Set([
-  "enrichment.fact_prompt",
-  "enrichment.entity_prompt",
-  "enrichment.ingestion_decision.prompt",
-  "dreaming.contradiction_prompt",
-  "dreaming.synthesis_prompt",
-  "dreaming.alignment_prompt",
-  "dreaming.novelty.judge_prompt",
-]);
-
-// Settings now surfaced on the Provider Configuration page. Filtered out of
-// every section here so the editor does not double-surface them.
+// Settings now surfaced on the Provider Configuration page. Filtered out so
+// the Settings page does not double-surface them.
 const MOVED_TO_PROVIDER_CONFIG = new Set([
   "enrichment.ingestion_decision.model",
 ]);
@@ -274,6 +356,52 @@ function Toggle({
         }`}
       />
     </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Help Tooltip
+// ---------------------------------------------------------------------------
+
+function HelpTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  if (!text) return null;
+  return (
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        aria-label="Show help"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        onBlur={() => {
+          if (open) setOpen(false);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+        }}
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        <svg
+          className="h-3.5 w-3.5"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <circle cx="12" cy="12" r="10" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.5 9a2.5 2.5 0 015 0c0 1.5-2.5 2-2.5 4" />
+          <circle cx="12" cy="17" r="0.5" fill="currentColor" />
+        </svg>
+      </button>
+      {open && (
+        <span
+          role="tooltip"
+          className="absolute left-1/2 top-full z-20 mt-1 w-64 -translate-x-1/2 rounded-md border border-border bg-popover p-3 text-xs leading-relaxed text-foreground shadow-lg"
+        >
+          {text}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -445,32 +573,36 @@ function InlineSettingEditor({
     [handleSave, handleCancel, schema.type],
   );
 
-  const requiresRestart = schema.description?.toLowerCase().includes("restart");
+  const requiresRestart = schema.requires_restart === true;
+  const headerRow = (
+    <>
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-sm font-medium text-foreground">
+          {schema.key}
+        </span>
+        <HelpTooltip text={schema.description ?? ""} />
+        <ScopeBadge scope={currentScope} />
+        {isDefault && (
+          <span className="text-xs text-muted-foreground">(default)</span>
+        )}
+        {requiresRestart && (
+          <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-300">
+            Requires a server restart
+          </span>
+        )}
+      </div>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        {schema.description}
+      </p>
+    </>
+  );
 
   // Bool toggle (no edit mode needed)
   if ((schema.type === "bool" || schema.type === "boolean") && !editing) {
     const boolVal = currentValue === true || currentValue === "true";
     return (
       <div className="flex items-center justify-between py-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-foreground">
-              {schema.key}
-            </span>
-            <ScopeBadge scope={currentScope} />
-            {isDefault && (
-              <span className="text-xs text-muted-foreground">(default)</span>
-            )}
-            {requiresRestart && (
-              <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-300">
-                Requires restart
-              </span>
-            )}
-          </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {schema.description}
-          </p>
-        </div>
+        <div className="flex-1 min-w-0">{headerRow}</div>
         <Toggle
           checked={boolVal}
           disabled={saving}
@@ -485,23 +617,7 @@ function InlineSettingEditor({
     return (
       <div className="flex items-start justify-between py-3 gap-4">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-foreground">
-              {schema.key}
-            </span>
-            <ScopeBadge scope={currentScope} />
-            {isDefault && (
-              <span className="text-xs text-muted-foreground">(default)</span>
-            )}
-            {requiresRestart && (
-              <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-300">
-                Requires restart
-              </span>
-            )}
-          </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {schema.description}
-          </p>
+          {headerRow}
           {!isDefault && (
             <p className="mt-1 text-xs text-muted-foreground">
               Default:{" "}
@@ -637,200 +753,81 @@ function InlineSettingEditor({
 }
 
 // ---------------------------------------------------------------------------
-// Prompt Editor Section
+// Parent Group Card
 // ---------------------------------------------------------------------------
 
-function PromptEditorSection({
-  items,
+function ParentGroupCard({
+  group,
+  itemsByCategory,
   onSave,
   saving,
 }: {
-  items: SettingWithSchema[];
+  group: ParentGroup;
+  itemsByCategory: Map<string, SettingWithSchema[]>;
   onSave: (key: string, value: unknown, scope: string) => void;
   saving: boolean;
 }) {
-  const [testKey, setTestKey] = useState<string | null>(null);
-  const [testInput, setTestInput] = useState("");
-  const [testOutput, setTestOutput] = useState<string | null>(null);
-  const [testRunning, setTestRunning] = useState(false);
-
-  const handleTest = useCallback(
-    async (key: string) => {
-      if (!testInput.trim()) return;
-      setTestKey(key);
-      setTestRunning(true);
-      setTestOutput(null);
-
-      try {
-        const token = localStorage.getItem("nram_token");
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        if (token) {
-          headers["Authorization"] = `Bearer ${token}`;
-        }
-
-        const res = await fetch("/v1/admin/settings/test-prompt", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            key,
-            sample_input: testInput,
-          }),
-        });
-
-        if (!res.ok) {
-          const err = await res.text();
-          setTestOutput(`Error: ${err}`);
-        } else {
-          const data = await res.json();
-          setTestOutput(
-            typeof data.output === "string"
-              ? data.output
-              : JSON.stringify(data, null, 2),
-          );
-        }
-      } catch (err) {
-        setTestOutput(
-          `Error: ${err instanceof Error ? err.message : "Request failed"}`,
-        );
-      } finally {
-        setTestRunning(false);
-      }
-    },
-    [testInput],
+  // Empty sub-sections are dropped silently so the card never shows a heading
+  // with nothing under it.
+  const populated = useMemo(
+    () =>
+      group.subSections
+        .map((sub) => ({ sub, items: itemsByCategory.get(sub.category) ?? [] }))
+        .filter((entry) => entry.items.length > 0),
+    [group.subSections, itemsByCategory],
   );
 
-  if (items.length === 0) return null;
+  if (populated.length === 0) return null;
+
+  // When a parent has exactly one sub-section and it has no own label, the
+  // parent header already conveys the section identity, so render the items
+  // flat with no h3.
+  const flatten =
+    populated.length === 1 && !populated[0].sub.label && !populated[0].sub.description;
 
   return (
     <div className="rounded-lg border border-border bg-card shadow-sm">
       <div className="border-b border-border px-5 py-4">
-        <h2 className="text-lg font-semibold text-foreground">
-          Extraction Prompts
-        </h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Prompts used by the enrichment pipeline to extract facts and entities
-          from memories. Use the test button to validate against sample input.
-        </p>
-      </div>
-      <div className="divide-y divide-border px-5">
-        {items.map((item) => (
-          <div key={item.schema.key} className="py-4">
-            <InlineSettingEditor item={item} onSave={onSave} saving={saving} />
-
-            {/* Test section */}
-            <div className="mt-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={testKey === item.schema.key ? testInput : ""}
-                  onChange={(e) => {
-                    setTestKey(item.schema.key);
-                    setTestInput(e.target.value);
-                  }}
-                  onFocus={() => {
-                    if (testKey !== item.schema.key) {
-                      setTestKey(item.schema.key);
-                      setTestInput("");
-                      setTestOutput(null);
-                    }
-                  }}
-                  placeholder="Enter sample text to test extraction..."
-                  className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleTest(item.schema.key)}
-                  disabled={
-                    testRunning ||
-                    !testInput.trim() ||
-                    testKey !== item.schema.key
-                  }
-                  className="rounded-md bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {testRunning && testKey === item.schema.key ? (
-                    <span className="flex items-center gap-1.5">
-                      <svg
-                        className="h-3.5 w-3.5 animate-spin"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        />
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                        />
-                      </svg>
-                      Testing...
-                    </span>
-                  ) : (
-                    "Test with sample input"
-                  )}
-                </button>
-              </div>
-              {testOutput !== null && testKey === item.schema.key && (
-                <pre className="max-h-48 overflow-auto rounded-md bg-muted p-3 font-mono text-xs text-foreground">
-                  {testOutput}
-                </pre>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Category Card
-// ---------------------------------------------------------------------------
-
-function CategoryCard({
-  category,
-  items,
-  onSave,
-  saving,
-}: {
-  category: string;
-  items: SettingWithSchema[];
-  onSave: (key: string, value: unknown, scope: string) => void;
-  saving: boolean;
-}) {
-  const label = CATEGORY_LABELS[category] || category;
-  const description = CATEGORY_DESCRIPTIONS[category] || "";
-
-  // Filter out prompt keys from standard display (they get their own section)
-  const standardItems = items.filter((i) => !isPromptKey(i.schema.key));
-
-  if (standardItems.length === 0) return null;
-
-  return (
-    <div className="rounded-lg border border-border bg-card shadow-sm">
-      <div className="border-b border-border px-5 py-4">
-        <h2 className="text-lg font-semibold text-foreground">{label}</h2>
-        {description && (
-          <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+        <h2 className="text-lg font-semibold text-foreground">{group.label}</h2>
+        {group.description && (
+          <p className="mt-1 text-xs text-muted-foreground">{group.description}</p>
         )}
       </div>
-      <div className="divide-y divide-border px-5">
-        {standardItems.map((item) => (
-          <InlineSettingEditor
-            key={item.schema.key}
-            item={item}
-            onSave={onSave}
-            saving={saving}
-          />
-        ))}
-      </div>
+      {flatten ? (
+        <div className="divide-y divide-border px-5">
+          {populated[0].items.map((item) => (
+            <InlineSettingEditor
+              key={item.schema.key}
+              item={item}
+              onSave={onSave}
+              saving={saving}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="divide-y divide-border">
+          {populated.map(({ sub, items }) => (
+            <section key={sub.category} className="px-5 py-4">
+              {sub.label && (
+                <h3 className="text-sm font-semibold text-foreground">{sub.label}</h3>
+              )}
+              {sub.description && (
+                <p className="mt-1 text-xs text-muted-foreground">{sub.description}</p>
+              )}
+              <div className="mt-2 divide-y divide-border">
+                {items.map((item) => (
+                  <InlineSettingEditor
+                    key={item.schema.key}
+                    item={item}
+                    onSave={onSave}
+                    saving={saving}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -880,49 +877,43 @@ function SettingsEditor() {
   const isLoading = settingsQuery.isLoading || schemaQuery.isLoading;
   const isError = settingsQuery.isError || schemaQuery.isError;
 
-  // Build merged data: schema + current values
-  const allSchemas = schemaQuery.data?.data ?? [];
+  const schemas = schemaQuery.data?.data ?? [];
   const settings = settingsQuery.data?.data ?? [];
-  const settingsMap = new Map(settings.map((s) => [s.key, s]));
 
-  const schemas = allSchemas;
-
-  // Group by category
-  const categoryMap = new Map<string, SettingWithSchema[]>();
-  const promptItems: SettingWithSchema[] = [];
-
-  for (const schema of schemas) {
-    if (MOVED_TO_PROVIDER_CONFIG.has(schema.key)) {
-      continue;
+  // Group settings by their backend category. Prompt keys live on the Prompt
+  // Templates page; provider-config keys live on the Provider Configuration
+  // page. Both are filtered out so the Settings page is the single source of
+  // truth for everything else.
+  const itemsByCategory = useMemo(() => {
+    const settingsMap = new Map(settings.map((s) => [s.key, s]));
+    const out = new Map<string, SettingWithSchema[]>();
+    for (const schema of schemas) {
+      if (isPromptKey(schema.key)) continue;
+      if (MOVED_TO_PROVIDER_CONFIG.has(schema.key)) continue;
+      const cat = schema.category || "other";
+      const merged: SettingWithSchema = {
+        schema,
+        setting: settingsMap.get(schema.key) ?? null,
+      };
+      const list = out.get(cat);
+      if (list) {
+        list.push(merged);
+      } else {
+        out.set(cat, [merged]);
+      }
     }
-    if (!enrichmentAvailable && ENRICHMENT_GATED_CATEGORIES.has(schema.category || "")) {
-      continue;
-    }
-    const merged: SettingWithSchema = {
-      schema,
-      setting: settingsMap.get(schema.key) ?? null,
-    };
+    return out;
+  }, [schemas, settings]);
 
-    if (isPromptKey(schema.key) && !MOVED_TO_PROMPT_EDITOR.has(schema.key)) {
-      promptItems.push(merged);
-    }
-
-    const cat = schema.category || "other";
-    if (!categoryMap.has(cat)) {
-      categoryMap.set(cat, []);
-    }
-    categoryMap.get(cat)!.push(merged);
-  }
-
-  // Sort categories by defined order, then alphabetically for any extras
-  const orderedCategories = Array.from(categoryMap.keys()).sort((a, b) => {
-    const ai = CATEGORY_ORDER.indexOf(a);
-    const bi = CATEGORY_ORDER.indexOf(b);
-    if (ai !== -1 && bi !== -1) return ai - bi;
-    if (ai !== -1) return -1;
-    if (bi !== -1) return 1;
-    return a.localeCompare(b);
-  });
+  // Hide enrichment- and dreaming-flavoured groups when no enrichment provider
+  // is configured. Read-path tuning (recall, ranking, etc.) stays visible.
+  const visibleGroups = useMemo(
+    () =>
+      enrichmentAvailable
+        ? PARENT_GROUPS
+        : PARENT_GROUPS.filter((g) => !g.requiresEnrichment),
+    [enrichmentAvailable],
+  );
 
   return (
     <div>
@@ -930,7 +921,7 @@ function SettingsEditor() {
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          System settings and configuration. Changes take effect immediately.
+          System configuration. Changes take effect immediately unless a setting is flagged as requiring a server restart.
         </p>
       </div>
 
@@ -981,25 +972,16 @@ function SettingsEditor() {
             </div>
           )}
 
-          {/* Category cards */}
-          {orderedCategories.map((cat) => (
-            <CategoryCard
-              key={cat}
-              category={cat}
-              items={categoryMap.get(cat)!}
+          {/* Parent group cards */}
+          {visibleGroups.map((group) => (
+            <ParentGroupCard
+              key={group.id}
+              group={group}
+              itemsByCategory={itemsByCategory}
               onSave={handleSave}
               saving={updateMutation.isPending}
             />
           ))}
-
-          {/* Extraction Prompts section */}
-          {promptItems.length > 0 && (
-            <PromptEditorSection
-              items={promptItems}
-              onSave={handleSave}
-              saving={updateMutation.isPending}
-            />
-          )}
         </div>
       )}
 

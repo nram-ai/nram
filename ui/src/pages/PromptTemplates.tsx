@@ -13,7 +13,7 @@ import type { Setting, SettingSchema } from "../api/client";
 
 // Canonical prompt keys. Both fact and entity prompts now have schema entries
 // with backend-registered defaults, so the editor reads description and
-// default value straight from useSettingsSchema — no UI fallback needed.
+// default value straight from useSettingsSchema, so no UI fallback is needed.
 const FACT_PROMPT_KEY = "enrichment.fact_prompt";
 const ENTITY_PROMPT_KEY = "enrichment.entity_prompt";
 
@@ -613,7 +613,7 @@ function SimplePromptEditorCard({
 // Main Page
 // ---------------------------------------------------------------------------
 
-export default function ExtractionPromptEditor() {
+export default function PromptTemplates() {
   const settingsQuery = useSettings();
   const schemaQuery = useSettingsSchema();
   const updateMutation = useUpdateSetting();
@@ -772,13 +772,13 @@ export default function ExtractionPromptEditor() {
       {/* Page header */}
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Prompt Editor
+          Prompt Templates
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Edit the system prompts used by the enrichment and dreaming pipelines.
-          Extraction prompts control how facts and entities are extracted from
-          memories. Dreaming prompts control how the system consolidates
-          knowledge during background processing.
+          The system prompts the model uses for enrichment and dreaming.
+          Enrichment prompts decide how facts and entities are pulled out of
+          new memories. Dreaming prompts decide how the model consolidates
+          knowledge in the background.
         </p>
       </div>
 
