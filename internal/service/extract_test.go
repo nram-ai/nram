@@ -701,11 +701,14 @@ func TestExtract_LatencyTracked(t *testing.T) {
 
 // --- Parse function unit tests ---
 
-func TestParseFactResponse_CleanJSON(t *testing.T) {
+func TestParseFacts_CleanJSON(t *testing.T) {
 	input := `[{"fact":"Clean JSON fact","confidence":0.9},{"fact":"Another fact","confidence":0.8}]`
-	facts, err := parseFactResponse(input)
+	facts, partial, err := parseFacts(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if partial {
+		t.Errorf("clean parse should not set PartialRecovery")
 	}
 	if len(facts) != 2 {
 		t.Fatalf("expected 2 facts, got %d", len(facts))
@@ -718,39 +721,40 @@ func TestParseFactResponse_CleanJSON(t *testing.T) {
 	}
 }
 
-func TestParseFactResponse_MarkdownFenced(t *testing.T) {
+func TestParseFacts_MarkdownFenced(t *testing.T) {
 	// With JSON mode enabled, LLM output should never contain markdown fences.
-	// The parser no longer strips fences, so fenced input is treated as invalid.
+	// The parser no longer strips fences; recovery rejects non-JSON prefixes.
 	input := "```json\n[{\"fact\":\"Fenced fact\",\"confidence\":0.85}]\n```"
-	_, err := parseFactResponse(input)
+	_, _, err := parseFacts(input)
 	if err == nil {
-		t.Error("expected error for markdown-fenced input (JSON mode makes fence stripping unnecessary)")
+		t.Error("expected error for markdown-fenced input")
 	}
 }
 
-func TestParseFactResponse_EmbeddedInText(t *testing.T) {
-	// With JSON mode enabled, LLM output should be pure JSON.
-	// The parser no longer extracts JSON from surrounding text.
+func TestParseFacts_EmbeddedInText(t *testing.T) {
 	input := "Here are the facts:\n[{\"fact\":\"Embedded fact\",\"confidence\":0.7}]\nEnd."
-	_, err := parseFactResponse(input)
+	_, _, err := parseFacts(input)
 	if err == nil {
-		t.Error("expected error for text-wrapped input (JSON mode makes extraction unnecessary)")
+		t.Error("expected error for text-wrapped input")
 	}
 }
 
-func TestParseFactResponse_InvalidJSON(t *testing.T) {
+func TestParseFacts_InvalidJSON(t *testing.T) {
 	input := "This is not JSON at all"
-	_, err := parseFactResponse(input)
+	_, _, err := parseFacts(input)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
 }
 
-func TestParseEntityResponse_CleanJSON(t *testing.T) {
+func TestParseEntities_CleanJSON(t *testing.T) {
 	input := `{"entities":[{"name":"Go","type":"tech","properties":{"version":"1.21"}}],"relationships":[{"source":"Go","target":"Google","relation":"created_by","temporal":"current"}]}`
-	result, err := parseEntityResponse(input)
+	result, partial, err := parseEntities(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if partial {
+		t.Errorf("clean parse should not set PartialRecovery")
 	}
 	if len(result.Entities) != 1 {
 		t.Fatalf("expected 1 entity, got %d", len(result.Entities))
@@ -766,19 +770,17 @@ func TestParseEntityResponse_CleanJSON(t *testing.T) {
 	}
 }
 
-func TestParseEntityResponse_MarkdownFenced(t *testing.T) {
-	// With JSON mode enabled, LLM output should never contain markdown fences.
-	// The parser no longer strips fences, so fenced input is treated as invalid.
+func TestParseEntities_MarkdownFenced(t *testing.T) {
 	input := "```json\n{\"entities\":[{\"name\":\"Python\",\"type\":\"tech\",\"properties\":{}}],\"relationships\":[]}\n```"
-	_, err := parseEntityResponse(input)
+	_, _, err := parseEntities(input)
 	if err == nil {
-		t.Error("expected error for markdown-fenced input (JSON mode makes fence stripping unnecessary)")
+		t.Error("expected error for markdown-fenced input")
 	}
 }
 
-func TestParseEntityResponse_InvalidJSON(t *testing.T) {
+func TestParseEntities_InvalidJSON(t *testing.T) {
 	input := "Not valid entity JSON"
-	_, err := parseEntityResponse(input)
+	_, _, err := parseEntities(input)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}

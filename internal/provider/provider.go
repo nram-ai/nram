@@ -11,6 +11,11 @@ type Message struct {
 }
 
 // CompletionRequest contains the parameters for an LLM completion call.
+//
+// RepeatPenalty, TopK, and MinP are Ollama-extension fields. Strict OpenAI
+// rejects unknown fields, so OpenAIProvider gates them behind
+// OpenAIConfig.ProviderType == ProviderTypeOllama. nil means "omit from the
+// request" — providers that do not support these knobs see a clean request.
 type CompletionRequest struct {
 	Messages    []Message
 	Model       string
@@ -18,6 +23,10 @@ type CompletionRequest struct {
 	Temperature float64
 	Stop        []string
 	JSONMode    bool // request JSON-formatted output from the model
+
+	RepeatPenalty *float64
+	TopK          *int
+	MinP          *float64
 }
 
 // CompletionResponse contains the result of an LLM completion call.

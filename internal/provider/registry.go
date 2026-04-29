@@ -338,6 +338,7 @@ func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 			APIKey:       config.APIKey,
 			DefaultModel: config.Model,
 			Timeout:      slotTimeout(config.Timeout),
+			ProviderType: config.Type,
 		}), nil
 
 	case ProviderTypeGemini:

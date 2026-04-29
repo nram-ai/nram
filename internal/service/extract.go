@@ -26,9 +26,10 @@ type RelationshipCreator interface {
 
 // ExtractedFact represents a single fact extracted by an LLM.
 type ExtractedFact struct {
-	Fact       string  `json:"fact"`
-	Content    string  `json:"content"` // alternate field name some LLMs use
-	Confidence float64 `json:"confidence"`
+	Fact       string   `json:"fact"`
+	Content    string   `json:"content"` // alternate field name some LLMs use
+	Confidence float64  `json:"confidence"`
+	Tags       []string `json:"tags,omitempty"`
 }
 
 // text returns the fact content, preferring "fact" over "content".
@@ -48,10 +49,11 @@ type ExtractedEntityData struct {
 
 // ExtractedRelation represents a single relationship extracted by an LLM.
 type ExtractedRelation struct {
-	Source   string `json:"source"`
-	Target   string `json:"target"`
-	Relation string `json:"relation"`
-	Temporal string `json:"temporal"`
+	Source   string  `json:"source"`
+	Target   string  `json:"target"`
+	Relation string  `json:"relation"`
+	Weight   float64 `json:"weight,omitempty"`
+	Temporal string  `json:"temporal,omitempty"`
 }
 
 // EntityExtractionResult holds the combined entity and relationship extraction output.
@@ -292,43 +294,24 @@ func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*Ex
 	}, nil
 }
 
-// extractFacts calls the fact extraction LLM and returns parsed facts.
 func (s *ExtractionService) extractFacts(
 	ctx context.Context,
 	fp provider.LLMProvider,
 	content string,
 	tokens *ExtractTokens,
 ) ([]ExtractedFact, error) {
-	prompt := fmt.Sprintf(ResolveOrDefault(ctx, s.settings, SettingFactPrompt, "global"), content)
-	completionReq := &provider.CompletionRequest{
-		Messages: []provider.Message{
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   2048,
-		Temperature: 0.1,
-		JSONMode:    true,
+	opts := ResolveCallOptions(ctx, s.settings, FactCallOptionKeys(true))
+	env, err := ExtractFactsLLM(ctx, fp, s.settings, content, opts)
+	if env != nil {
+		tokens.Input += env.Usage.PromptTokens
+		tokens.Output += env.Usage.CompletionTokens
 	}
-
-	resp, err := fp.Complete(provider.WithOperation(ctx, provider.OperationFactExtraction), completionReq)
 	if err != nil {
-		return nil, fmt.Errorf("fact extraction LLM call failed: %w", err)
+		return nil, err
 	}
-
-	// Aggregate in-memory token counter for the API response. The
-	// authoritative per-call record is written by the
-	// UsageRecordingProvider middleware.
-	tokens.Input += resp.Usage.PromptTokens
-	tokens.Output += resp.Usage.CompletionTokens
-
-	facts, err := parseFactResponse(resp.Content)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse fact response: %w", err)
-	}
-
-	return facts, nil
+	return env.Facts, nil
 }
 
-// extractEntities calls the entity extraction LLM and persists entities and relationships.
 func (s *ExtractionService) extractEntities(
 	ctx context.Context,
 	ep provider.LLMProvider,
@@ -337,31 +320,16 @@ func (s *ExtractionService) extractEntities(
 	rawMemID uuid.UUID,
 	tokens *ExtractTokens,
 ) (entitiesCreated int, relationshipsCreated int) {
-	prompt := fmt.Sprintf(ResolveOrDefault(ctx, s.settings, SettingEntityPrompt, "global"), content)
-	completionReq := &provider.CompletionRequest{
-		Messages: []provider.Message{
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   2048,
-		Temperature: 0.1,
-		JSONMode:    true,
+	opts := ResolveCallOptions(ctx, s.settings, EntityCallOptionKeys(true))
+	env, err := ExtractEntitiesLLM(ctx, ep, s.settings, content, opts)
+	if env != nil {
+		tokens.Input += env.Usage.PromptTokens
+		tokens.Output += env.Usage.CompletionTokens
 	}
-
-	resp, err := ep.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), completionReq)
-	if err != nil {
+	if err != nil || env == nil || env.Result == nil {
 		return 0, 0
 	}
-
-	// Aggregate in-memory token counter for the API response. The
-	// authoritative per-call record is written by the
-	// UsageRecordingProvider middleware.
-	tokens.Input += resp.Usage.PromptTokens
-	tokens.Output += resp.Usage.CompletionTokens
-
-	result, err := parseEntityResponse(resp.Content)
-	if err != nil {
-		return 0, 0
-	}
+	result := env.Result
 
 	// Build a name->ID map for entity resolution.
 	entityMap := make(map[string]uuid.UUID)
@@ -477,68 +445,3 @@ func (s *ExtractionService) embedMemory(
 	mem.EmbeddingDim = &embDim
 }
 
-// parseFactResponse parses an LLM fact extraction response. With JSON mode
-// enabled the LLM is constrained to produce valid JSON, so only direct
-// unmarshal with a string-array fallback is needed.
-func parseFactResponse(raw string) ([]ExtractedFact, error) {
-	raw = strings.TrimSpace(raw)
-
-	// Try array of structured facts.
-	var facts []ExtractedFact
-	if err := json.Unmarshal([]byte(raw), &facts); err == nil && len(facts) > 0 {
-		for i := range facts {
-			facts[i].Fact = facts[i].text()
-		}
-		return facts, nil
-	}
-
-	// Single fact object instead of array.
-	var single ExtractedFact
-	if err := json.Unmarshal([]byte(raw), &single); err == nil && single.text() != "" {
-		single.Fact = single.text()
-		return []ExtractedFact{single}, nil
-	}
-
-	// Wrapper object with a "facts" key.
-	var wrapper struct {
-		Facts []ExtractedFact `json:"facts"`
-	}
-	if err := json.Unmarshal([]byte(raw), &wrapper); err == nil && len(wrapper.Facts) > 0 {
-		for i := range wrapper.Facts {
-			wrapper.Facts[i].Fact = wrapper.Facts[i].text()
-		}
-		return wrapper.Facts, nil
-	}
-
-	// Plain string array.
-	var strs []string
-	if err := json.Unmarshal([]byte(raw), &strs); err == nil && len(strs) > 0 {
-		facts = make([]ExtractedFact, len(strs))
-		for i, s := range strs {
-			facts[i] = ExtractedFact{Fact: s, Confidence: 0.8}
-		}
-		return facts, nil
-	}
-
-	preview := raw
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
-	}
-	return nil, fmt.Errorf("failed to parse fact extraction response as JSON array: %q", preview)
-}
-
-// parseEntityResponse parses an LLM entity extraction response. With JSON mode
-// enabled the LLM is constrained to produce valid JSON.
-func parseEntityResponse(raw string) (*EntityExtractionResult, error) {
-	raw = strings.TrimSpace(raw)
-
-	var result EntityExtractionResult
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		preview := raw
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
-		}
-		return nil, fmt.Errorf("failed to parse entity extraction response as JSON object: %q", preview)
-	}
-	return &result, nil
-}

@@ -279,25 +279,38 @@ func (r *EnrichmentQueueRepo) ClaimNextBatch(ctx context.Context, workerID strin
 	return items, nil
 }
 
-// Complete marks an enrichment queue item as "completed", clears any stale
-// last_error (a retry that ultimately succeeded should not still surface its
-// prior failure), and sets completed_at.
-func (r *EnrichmentQueueRepo) Complete(ctx context.Context, id uuid.UUID) error {
+// setStatus updates an enrichment_queue row's status, last_error, and
+// timestamps in one round-trip. Shared body of Complete / CompleteWithWarning
+// / Fail so the SQLite/Postgres branch and rows-affected dance live in one
+// place. lastError nil clears the column; bumpAttempts adds attempts+1
+// (Fail-only); setCompletedAt writes completed_at (Complete-paths only).
+func (r *EnrichmentQueueRepo) setStatus(ctx context.Context, id uuid.UUID, status string, lastError *string, bumpAttempts, setCompletedAt bool) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE enrichment_queue SET status = 'completed', last_error = NULL, completed_at = ?, updated_at = ? WHERE id = ?`
+	parts := []string{"status = ?", "last_error = ?"}
+	args := []any{status, lastErrorArg(lastError)}
+	if bumpAttempts {
+		parts = append(parts, "attempts = attempts + 1")
+	}
+	if setCompletedAt {
+		parts = append(parts, "completed_at = ?")
+		args = append(args, now)
+	}
+	parts = append(parts, "updated_at = ?")
+	args = append(args, now, id.String())
+
+	query := "UPDATE enrichment_queue SET " + strings.Join(parts, ", ") + " WHERE id = ?"
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE enrichment_queue SET status = 'completed', last_error = NULL, completed_at = $1, updated_at = $2 WHERE id = $3`
+		query = postgresPlaceholders(query)
 	}
 
-	result, err := r.db.Exec(ctx, query, now, now, id.String())
+	result, err := r.db.Exec(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("enrichment queue complete: %w", err)
+		return fmt.Errorf("enrichment queue %s: %w", status, err)
 	}
-
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("enrichment queue complete rows affected: %w", err)
+		return fmt.Errorf("enrichment queue %s rows affected: %w", status, err)
 	}
 	if rows == 0 {
 		return sql.ErrNoRows
@@ -305,39 +318,72 @@ func (r *EnrichmentQueueRepo) Complete(ctx context.Context, id uuid.UUID) error 
 	return nil
 }
 
-// Fail marks an enrichment queue item as "failed", stores the error message,
-// and increments the attempts counter.
-func (r *EnrichmentQueueRepo) Fail(ctx context.Context, id uuid.UUID, errMsg string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+// lastErrorArg returns the SQL value for last_error: untyped nil clears the
+// column, otherwise the string is bound directly. Both backends accept the
+// JSON-encoded string — SQLite stores in TEXT, Postgres parses into JSONB.
+func lastErrorArg(s *string) any {
+	if s == nil {
+		return nil
+	}
+	return *s
+}
 
-	// last_error is JSONB in Postgres, TEXT in SQLite.
-	var lastErrorVal interface{} = errMsg
-	if r.db.Backend() == BackendPostgres {
-		b, err := json.Marshal(errMsg)
-		if err != nil {
-			return fmt.Errorf("enrichment queue fail marshal error: %w", err)
+// postgresPlaceholders rewrites '?' placeholders to '$N' positional form.
+func postgresPlaceholders(query string) string {
+	var b strings.Builder
+	b.Grow(len(query) + 8)
+	n := 0
+	for i := 0; i < len(query); i++ {
+		if query[i] == '?' {
+			n++
+			fmt.Fprintf(&b, "$%d", n)
+			continue
 		}
-		lastErrorVal = string(b)
+		b.WriteByte(query[i])
 	}
+	return b.String()
+}
 
-	query := `UPDATE enrichment_queue SET status = 'failed', last_error = ?, attempts = attempts + 1, updated_at = ? WHERE id = ?`
-	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE enrichment_queue SET status = 'failed', last_error = $1, attempts = attempts + 1, updated_at = $2 WHERE id = $3`
-	}
-
-	result, err := r.db.Exec(ctx, query, lastErrorVal, now, id.String())
+// marshalLastError produces the JSON-encoded string stored in last_error.
+// A plain string becomes a JSON string ("..."); a struct becomes a JSON
+// object ({...}). One JSON form for both backends so admin views can
+// JSON.parse and either render the structured fields or show the bare string.
+func marshalLastError(payload any) (string, error) {
+	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("enrichment queue fail: %w", err)
+		return "", err
 	}
+	return string(encoded), nil
+}
 
-	rows, err := result.RowsAffected()
+// Complete marks an enrichment queue item as "completed", clears any stale
+// last_error (a retry that ultimately succeeded should not still surface its
+// prior failure), and sets completed_at.
+func (r *EnrichmentQueueRepo) Complete(ctx context.Context, id uuid.UUID) error {
+	return r.setStatus(ctx, id, "completed", nil, false, true)
+}
+
+// CompleteWithWarning marks the row "completed" but preserves a structured
+// payload on last_error so admin surfaces can flag the job as "completed but
+// degraded." Used by the partial-recovery path. Callers passing a nil payload
+// should use Complete instead.
+func (r *EnrichmentQueueRepo) CompleteWithWarning(ctx context.Context, id uuid.UUID, payload any) error {
+	encoded, err := marshalLastError(payload)
 	if err != nil {
-		return fmt.Errorf("enrichment queue fail rows affected: %w", err)
+		return fmt.Errorf("enrichment queue complete-with-warning marshal payload: %w", err)
 	}
-	if rows == 0 {
-		return sql.ErrNoRows
+	return r.setStatus(ctx, id, "completed", &encoded, false, true)
+}
+
+// Fail marks the row "failed", stores the JSON-encoded payload as last_error,
+// and increments the attempts counter. payload may be any JSON-marshallable
+// value — string, *ExtractionFailure, etc.
+func (r *EnrichmentQueueRepo) Fail(ctx context.Context, id uuid.UUID, payload any) error {
+	encoded, err := marshalLastError(payload)
+	if err != nil {
+		return fmt.Errorf("enrichment queue fail marshal payload: %w", err)
 	}
-	return nil
+	return r.setStatus(ctx, id, "failed", &encoded, true, false)
 }
 
 // MarkStepCompleted appends a step name to the enrichment job's

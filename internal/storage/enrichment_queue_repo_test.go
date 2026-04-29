@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -406,6 +407,117 @@ func TestEnrichmentQueueRepo_Fail(t *testing.T) {
 		}
 		if fetched.Attempts != 1 {
 			t.Fatalf("expected attempts 1, got %d", fetched.Attempts)
+		}
+	})
+}
+
+// TestEnrichmentQueueRepo_Fail_StructuredPayload verifies the wire-contract
+// change for Issue 2: when a parse-failure-shaped payload is passed (a
+// struct rather than a string), it round-trips as a JSON object and the
+// admin layer can read finish_reason / prompt_tokens / completion_tokens /
+// raw_response back without re-running the call.
+func TestEnrichmentQueueRepo_Fail_StructuredPayload(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		nsID, memID := createTestMemoryForQueue(t, ctx, db)
+
+		item := newTestEnrichmentItem(nsID, memID)
+		if err := repo.Enqueue(ctx, item); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		if _, err := repo.ClaimNext(ctx, "worker-1"); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+
+		// Mirror the *service.ExtractionFailure shape without taking a
+		// service-package import (storage cannot depend on service).
+		payload := map[string]any{
+			"phase":             "fact_extraction",
+			"reason":            "parse_failed",
+			"error":             "failed to parse fact extraction response as JSON",
+			"finish_reason":     "length",
+			"prompt_tokens":     1362,
+			"completion_tokens": 2048,
+			"model":             "qwen3:8b-extract",
+			"provider":          "openai",
+			"raw_response":      `[{"content":"truncated`,
+		}
+		if err := repo.Fail(ctx, item.ID, payload); err != nil {
+			t.Fatalf("fail with structured payload: %v", err)
+		}
+
+		fetched, err := repo.GetByID(ctx, item.ID)
+		if err != nil {
+			t.Fatalf("get by id: %v", err)
+		}
+		if fetched.Status != "failed" {
+			t.Fatalf("expected status 'failed', got %q", fetched.Status)
+		}
+
+		var decoded map[string]any
+		if err := json.Unmarshal(fetched.LastError, &decoded); err != nil {
+			t.Fatalf("last_error must round-trip as JSON object on both backends; got %s — err: %v",
+				string(fetched.LastError), err)
+		}
+		if decoded["phase"] != "fact_extraction" {
+			t.Errorf("phase = %v, want fact_extraction", decoded["phase"])
+		}
+		if decoded["finish_reason"] != "length" {
+			t.Errorf("finish_reason = %v, want length", decoded["finish_reason"])
+		}
+		// JSON numbers decode as float64.
+		if decoded["completion_tokens"].(float64) != 2048 {
+			t.Errorf("completion_tokens = %v, want 2048", decoded["completion_tokens"])
+		}
+		if !strings.Contains(decoded["raw_response"].(string), "truncated") {
+			t.Errorf("raw_response missing the truncated tail; got %q", decoded["raw_response"])
+		}
+	})
+}
+
+func TestEnrichmentQueueRepo_CompleteWithWarning(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		nsID, memID := createTestMemoryForQueue(t, ctx, db)
+
+		item := newTestEnrichmentItem(nsID, memID)
+		if err := repo.Enqueue(ctx, item); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		if _, err := repo.ClaimNext(ctx, "worker-1"); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+
+		warning := map[string]any{
+			"warnings": []map[string]any{{
+				"phase":            "fact_extraction",
+				"reason":           "partial_recovery",
+				"finish_reason":    "length",
+				"facts_recovered":  10,
+				"model":            "qwen3:8b-extract",
+			}},
+		}
+		if err := repo.CompleteWithWarning(ctx, item.ID, warning); err != nil {
+			t.Fatalf("complete with warning: %v", err)
+		}
+
+		fetched, err := repo.GetByID(ctx, item.ID)
+		if err != nil {
+			t.Fatalf("get by id: %v", err)
+		}
+		if fetched.Status != "completed" {
+			t.Fatalf("expected status 'completed', got %q", fetched.Status)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(fetched.LastError, &decoded); err != nil {
+			t.Fatalf("warning payload must round-trip; got %s err: %v",
+				string(fetched.LastError), err)
+		}
+		warnings, ok := decoded["warnings"].([]any)
+		if !ok || len(warnings) != 1 {
+			t.Fatalf("expected 1-element warnings array, got %v", decoded["warnings"])
 		}
 	})
 }

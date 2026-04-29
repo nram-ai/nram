@@ -30,6 +30,13 @@ type OpenAIConfig struct {
 
 	// Timeout is the HTTP client timeout. Defaults to 120s if zero.
 	Timeout time.Duration
+
+	// ProviderType is the canonical type from registry.go ("openai", "ollama",
+	// "openrouter", "custom"). Gates Ollama-extension request fields
+	// (repeat_penalty, top_k, min_p) so they do not leak to strict OpenAI
+	// endpoints that reject unknown fields. Empty = treat as standard
+	// OpenAI-compatible (extensions omitted).
+	ProviderType string
 }
 
 // OpenAIProvider implements both LLMProvider and EmbeddingProvider using any
@@ -79,6 +86,11 @@ type openaiResponseFormat struct {
 }
 
 // openaiChatRequest is the request body for POST /v1/chat/completions.
+//
+// RepeatPenalty, TopK, MinP are Ollama-extension fields. They are populated
+// only when OpenAIConfig.ProviderType == ProviderTypeOllama; with omitempty +
+// pointer types, nil values disappear from the marshalled body so strict
+// OpenAI endpoints never see them.
 type openaiChatRequest struct {
 	Model          string                `json:"model"`
 	Messages       []openaiChatMessage   `json:"messages"`
@@ -86,6 +98,9 @@ type openaiChatRequest struct {
 	Temperature    *float64              `json:"temperature,omitempty"`
 	Stop           []string              `json:"stop,omitempty"`
 	ResponseFormat *openaiResponseFormat `json:"response_format,omitempty"`
+	RepeatPenalty  *float64              `json:"repeat_penalty,omitempty"`
+	TopK           *int                  `json:"top_k,omitempty"`
+	MinP           *float64              `json:"min_p,omitempty"`
 }
 
 // openaiChatChoice is a single choice in a chat completion response.
@@ -178,6 +193,11 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 	if req.JSONMode {
 		body.ResponseFormat = &openaiResponseFormat{Type: "json_object"}
+	}
+	if p.config.ProviderType == ProviderTypeOllama {
+		body.RepeatPenalty = req.RepeatPenalty
+		body.TopK = req.TopK
+		body.MinP = req.MinP
 	}
 
 	var chatResp openaiChatResponse

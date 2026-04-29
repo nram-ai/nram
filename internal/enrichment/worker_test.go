@@ -167,10 +167,33 @@ func (m *mockQueueClaimer) Complete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (m *mockQueueClaimer) Fail(_ context.Context, id uuid.UUID, errMsg string) error {
+// CompleteWithWarning mirrors EnrichmentQueueRepo.CompleteWithWarning: the
+// job is added to completed AND the warning payload is JSON-encoded into
+// the failed map alongside it, so tests asserting on either dimension see
+// the same wire-form admin views would render.
+func (m *mockQueueClaimer) CompleteWithWarning(_ context.Context, id uuid.UUID, payload any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.failed[id] = errMsg
+	m.completed = append(m.completed, id)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	m.failed[id] = string(encoded)
+	return nil
+}
+
+// Fail mirrors EnrichmentQueueRepo.Fail's contract: payload is JSON-marshalled
+// before being stored, so tests that string-match against the failed map see
+// the same encoded form admin views would render on the queue row.
+func (m *mockQueueClaimer) Fail(_ context.Context, id uuid.UUID, payload any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	m.failed[id] = string(encoded)
 	return nil
 }
 
@@ -1425,73 +1448,7 @@ func TestProcessBatch_VectorUpsertFailure_FailsJobs(t *testing.T) {
 	_ = memIDs
 }
 
-// ---------------------------------------------------------------------------
-// Parse response tests (three-tier recovery)
-// ---------------------------------------------------------------------------
-
-func TestParseFactResponse_Direct(t *testing.T) {
-	facts, err := parseFactResponse(factJSON())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(facts) != 2 {
-		t.Errorf("expected 2 facts, got %d", len(facts))
-	}
-}
-
-func TestParseFactResponse_WithFences(t *testing.T) {
-	// With JSON mode enabled, LLM output should never contain markdown fences.
-	// The parser no longer strips fences, so fenced input is treated as invalid.
-	input := "```json\n" + factJSON() + "\n```"
-	_, err := parseFactResponse(input)
-	if err == nil {
-		t.Error("expected error for markdown-fenced input (JSON mode makes fence stripping unnecessary)")
-	}
-}
-
-func TestParseFactResponse_RegexFallback(t *testing.T) {
-	// With JSON mode enabled, LLM output should be pure JSON.
-	// The parser no longer extracts JSON from surrounding text.
-	input := "Here are the facts:\n" + factJSON() + "\nHope that helps!"
-	_, err := parseFactResponse(input)
-	if err == nil {
-		t.Error("expected error for text-wrapped input (JSON mode makes extraction unnecessary)")
-	}
-}
-
-func TestParseEntityResponse_Direct(t *testing.T) {
-	result, err := parseEntityResponse(entityJSON())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(result.Entities) != 2 {
-		t.Errorf("expected 2 entities, got %d", len(result.Entities))
-	}
-	if len(result.Relationships) != 1 {
-		t.Errorf("expected 1 relationship, got %d", len(result.Relationships))
-	}
-}
-
-func TestParseEntityResponse_WithFences(t *testing.T) {
-	// With JSON mode enabled, LLM output should never contain markdown fences.
-	// The parser no longer strips fences, so fenced input is treated as invalid.
-	input := "```\n" + entityJSON() + "\n```"
-	_, err := parseEntityResponse(input)
-	if err == nil {
-		t.Error("expected error for markdown-fenced input (JSON mode makes fence stripping unnecessary)")
-	}
-}
-
-func TestParseFactResponse_Invalid(t *testing.T) {
-	_, err := parseFactResponse("not json at all")
-	if err == nil {
-		t.Error("expected error for invalid input")
-	}
-}
-
-func TestParseEntityResponse_Invalid(t *testing.T) {
-	_, err := parseEntityResponse("not json at all")
-	if err == nil {
-		t.Error("expected error for invalid input")
-	}
-}
+// Parser tests for the unified extraction parsers live in
+// internal/service/extract_test.go (TestParseFacts_*, TestParseEntities_*).
+// The worker's local copies were removed as part of the
+// extract.go/worker.go duplication collapse.

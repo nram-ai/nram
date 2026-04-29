@@ -106,12 +106,30 @@ func isTransientLLMErr(err error) bool {
 	return ok
 }
 
+// extractionFailPayload returns the structured *service.ExtractionFailure
+// when err carries one (so the JSON encoder produces the structured
+// last_error envelope), and falls back to err.Error() otherwise. Used at
+// the boundary between LLM-call helpers and the queue-fail path.
+func extractionFailPayload(err error) any {
+	var fail *service.ExtractionFailure
+	if errors.As(err, &fail) {
+		return fail
+	}
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // requeueOrFail releases jobID back to pending without bumping attempts when
 // err is transient (breaker open), and otherwise marks it failed with the
-// given message. Release errors are logged at WARN since the job is in an
-// indeterminate but self-healing state (the next claim probe will resolve
-// it) and the original cause is the more important signal.
-func (wp *WorkerPool) requeueOrFail(ctx context.Context, jobID uuid.UUID, err error, failMsg string) {
+// given payload. payload is JSON-marshalled into last_error: pass an
+// *service.ExtractionFailure for parse failures (so finish_reason,
+// prompt_tokens, completion_tokens, and raw_response land on the queue
+// row), or a plain string for non-extraction failures (memory lookup,
+// vector upsert, lifecycle errors). Release errors are logged at WARN
+// since the job is in an indeterminate but self-healing state.
+func (wp *WorkerPool) requeueOrFail(ctx context.Context, jobID uuid.UUID, err error, payload any) {
 	if isTransientLLMErr(err) {
 		if relErr := wp.queue.Release(ctx, jobID); relErr != nil {
 			slog.Warn("enrichment: queue release after transient failure",
@@ -119,7 +137,7 @@ func (wp *WorkerPool) requeueOrFail(ctx context.Context, jobID uuid.UUID, err er
 		}
 		return
 	}
-	if failErr := wp.queue.Fail(ctx, jobID, failMsg); failErr != nil {
+	if failErr := wp.queue.Fail(ctx, jobID, payload); failErr != nil {
 		slog.Warn("enrichment: queue fail",
 			"job", jobID, "err", failErr)
 	}
@@ -160,7 +178,8 @@ type QueueClaimer interface {
 	ClaimNext(ctx context.Context, workerID string) (*model.EnrichmentJob, error)
 	ClaimNextBatch(ctx context.Context, workerID string, max int) ([]*model.EnrichmentJob, error)
 	Complete(ctx context.Context, id uuid.UUID) error
-	Fail(ctx context.Context, id uuid.UUID, errMsg string) error
+	CompleteWithWarning(ctx context.Context, id uuid.UUID, payload any) error
+	Fail(ctx context.Context, id uuid.UUID, payload any) error
 	Release(ctx context.Context, id uuid.UUID) error
 	MarkStepCompleted(ctx context.Context, id uuid.UUID, step string) error
 }
@@ -215,41 +234,18 @@ type MemorySoftDeleter interface {
 
 
 // ---------------------------------------------------------------------------
-// Parsed extraction types
+// Parsed extraction types — aliased to the canonical service types so
+// the worker and the synchronous HTTP path share one definition. All
+// extraction parsing and LLM-call logic now lives in
+// internal/service/extraction_llm.go.
 // ---------------------------------------------------------------------------
 
-type extractedFact struct {
-	Content    string   `json:"content"`
-	Fact       string   `json:"fact"` // alternate field name some LLMs use
-	Confidence float64  `json:"confidence"`
-	Tags       []string `json:"tags"`
-}
-
-// text returns the fact content, preferring "content" over "fact".
-func (f extractedFact) text() string {
-	if f.Content != "" {
-		return f.Content
-	}
-	return f.Fact
-}
-
-type extractedEntity struct {
-	Name       string                 `json:"name"`
-	Type       string                 `json:"type"`
-	Properties map[string]interface{} `json:"properties"`
-}
-
-type extractedRelationship struct {
-	Source   string  `json:"source"`
-	Target   string  `json:"target"`
-	Relation string  `json:"relation"`
-	Weight   float64 `json:"weight"`
-}
-
-type entityExtractionResult struct {
-	Entities      []extractedEntity       `json:"entities"`
-	Relationships []extractedRelationship `json:"relationships"`
-}
+type (
+	extractedFact          = service.ExtractedFact
+	extractedEntity        = service.ExtractedEntityData
+	extractedRelationship  = service.ExtractedRelation
+	entityExtractionResult = service.EntityExtractionResult
+)
 
 // ---------------------------------------------------------------------------
 // WorkerConfig / WorkerPool
@@ -588,6 +584,12 @@ type pendingJob struct {
 	// row; finalizeJob must skip to keep embedding_dim from being
 	// persisted with no matching vector.
 	vectorWriteFailed bool
+
+	// partialRecoveryWarning is the structured payload finalizeJob writes
+	// to last_error via CompleteWithWarning when at least one of the
+	// extraction legs returned a longest-valid-prefix recovery (truncation
+	// or degenerate-loop). nil = clean parse, finalize via Complete.
+	partialRecoveryWarning any
 }
 
 func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *model.EnrichmentJob) error {
@@ -784,6 +786,20 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 	}
 
 	var (
+		factEnv   *service.FactExtractionEnvelope
+		entEnv    *service.EntityExtractionEnvelope
+		factErr   error
+		entityErr error
+	)
+
+	if hasFact && !skipFact {
+		factEnv, factErr = wp.extractFacts(ctx, wp.factProvider(), mem.Content)
+	}
+	if hasEntity && !skipEntity {
+		entEnv, entityErr = wp.extractEntities(ctx, wp.entityProvider(), mem.Content)
+	}
+
+	var (
 		facts        []extractedFact
 		entResult    *entityExtractionResult
 		factUsage    *provider.TokenUsage
@@ -792,21 +808,23 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		entityModel  string
 		factProvider string
 		entityProv   string
-		factErr      error
-		entityErr    error
 	)
-
-	if hasFact && !skipFact {
-		facts, factUsage, factModel, factProvider, factErr = wp.extractFacts(ctx, wp.factProvider(), mem.Content)
+	if factEnv != nil {
+		facts = factEnv.Facts
+		u := factEnv.Usage
+		factUsage = &u
+		factModel = factEnv.Model
+		factProvider = factEnv.ProviderName
 	}
-	if hasEntity && !skipEntity {
-		entResult, entityUsage, entityModel, entityProv, entityErr = wp.extractEntities(ctx, wp.entityProvider(), mem.Content)
+	if entEnv != nil {
+		entResult = entEnv.Result
+		u := entEnv.Usage
+		entityUsage = &u
+		entityModel = entEnv.Model
+		entityProv = entEnv.ProviderName
 	}
 
 	if (hasFact && factErr != nil) && (hasEntity && entityErr != nil) {
-		// extractFacts/extractEntities already prefix their errors with
-		// "fact LLM call: ..." / "entity LLM call: ..."; re-prefixing here
-		// produced the "fact: fact LLM call: ..." doubling users were seeing.
 		joined := errors.Join(factErr, entityErr)
 		// Treat as transient only when *both* legs are: if one leg is a real
 		// fault, burning a queue attempt is the right policy.
@@ -818,7 +836,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		return nil, fmt.Errorf("extraction failed: %w", joined)
 	}
 	if hasFact && factErr != nil {
-		wp.requeueOrFail(ctx, job.ID, factErr, factErr.Error())
+		wp.requeueOrFail(ctx, job.ID, factErr, extractionFailPayload(factErr))
 		return nil, fmt.Errorf("fact extraction: %w", factErr)
 	}
 	// Entity-only failure is intentionally soft: facts may have succeeded and
@@ -880,19 +898,76 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 	}
 
 	p := &pendingJob{
-		job:          job,
-		mem:          mem,
-		children:     children,
-		entities:     entities,
-		factUsage:    factUsage,
-		factModel:    factModel,
-		factProvider: factProvider,
-		entityUsage:  entityUsage,
-		entityModel:  entityModel,
-		entityProv:   entityProv,
+		job:                    job,
+		mem:                    mem,
+		children:               children,
+		entities:               entities,
+		factUsage:              factUsage,
+		factModel:              factModel,
+		factProvider:           factProvider,
+		entityUsage:            entityUsage,
+		entityModel:            entityModel,
+		entityProv:             entityProv,
+		partialRecoveryWarning: buildPartialRecoveryWarning(factEnv, entEnv),
 	}
 	p.applyIngestion(ingestion)
 	return p, nil
+}
+
+// partialRecoveryLeg is one entry in the warning payload finalizeJob writes
+// to last_error via CompleteWithWarning. Each leg records the diagnostic
+// data the operator needs to confirm the recovery was acceptable.
+type partialRecoveryLeg struct {
+	Phase            string `json:"phase"`
+	Reason           string `json:"reason"`
+	FinishReason     string `json:"finish_reason,omitempty"`
+	PromptTokens     int    `json:"prompt_tokens,omitempty"`
+	CompletionTokens int    `json:"completion_tokens,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	FactsRecovered   int    `json:"facts_recovered,omitempty"`
+	EntitiesRec      int    `json:"entities_recovered,omitempty"`
+	RelationsRec     int    `json:"relationships_recovered,omitempty"`
+}
+
+// buildPartialRecoveryWarning returns the last_error payload for
+// CompleteWithWarning when at least one leg recovered from a truncated or
+// looping response. Returns nil for clean-parse jobs so finalizeJob routes
+// through plain Complete.
+func buildPartialRecoveryWarning(factEnv *service.FactExtractionEnvelope, entEnv *service.EntityExtractionEnvelope) any {
+	var warnings []partialRecoveryLeg
+	if factEnv != nil && factEnv.PartialRecovery {
+		warnings = append(warnings, partialRecoveryLeg{
+			Phase:            service.ExtractionPhaseFact,
+			Reason:           service.ExtractionReasonPartialRecovery,
+			FinishReason:     factEnv.FinishReason,
+			PromptTokens:     factEnv.Usage.PromptTokens,
+			CompletionTokens: factEnv.Usage.CompletionTokens,
+			Model:            factEnv.Model,
+			Provider:         factEnv.ProviderName,
+			FactsRecovered:   len(factEnv.Facts),
+		})
+	}
+	if entEnv != nil && entEnv.PartialRecovery {
+		w := partialRecoveryLeg{
+			Phase:            service.ExtractionPhaseEntity,
+			Reason:           service.ExtractionReasonPartialRecovery,
+			FinishReason:     entEnv.FinishReason,
+			PromptTokens:     entEnv.Usage.PromptTokens,
+			CompletionTokens: entEnv.Usage.CompletionTokens,
+			Model:            entEnv.Model,
+			Provider:         entEnv.ProviderName,
+		}
+		if entEnv.Result != nil {
+			w.EntitiesRec = len(entEnv.Result.Entities)
+			w.RelationsRec = len(entEnv.Result.Relationships)
+		}
+		warnings = append(warnings, w)
+	}
+	if len(warnings) == 0 {
+		return nil
+	}
+	return map[string]any{"warnings": warnings}
 }
 
 // stepDoneSet parses an EnrichmentJob.StepsCompleted JSON payload into a
@@ -1332,7 +1407,11 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 		}
 	}
 
-	if err := wp.queue.Complete(ctx, p.job.ID); err != nil {
+	if p.partialRecoveryWarning != nil {
+		if err := wp.queue.CompleteWithWarning(ctx, p.job.ID, p.partialRecoveryWarning); err != nil {
+			return fmt.Errorf("complete job (with warning): %w", err)
+		}
+	} else if err := wp.queue.Complete(ctx, p.job.ID); err != nil {
 		return fmt.Errorf("complete job: %w", err)
 	}
 
@@ -1382,133 +1461,18 @@ func (wp *WorkerPool) extractFacts(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	content string,
-) ([]extractedFact, *provider.TokenUsage, string, string, error) {
-	prompt := fmt.Sprintf(service.ResolveOrDefault(ctx, wp.settings, service.SettingFactPrompt, "global"), content)
-	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationFactExtraction), &provider.CompletionRequest{
-		Messages: []provider.Message{
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   2048,
-		Temperature: 0.2,
-		JSONMode:    true,
-	})
-	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("fact LLM call: %w", err)
-	}
-
-	facts, parseErr := parseFactResponse(resp.Content)
-	if parseErr != nil {
-		return nil, &resp.Usage, resp.Model, llm.Name(), fmt.Errorf("parse facts: %w", parseErr)
-	}
-	return facts, &resp.Usage, resp.Model, llm.Name(), nil
+) (*service.FactExtractionEnvelope, error) {
+	opts := service.ResolveCallOptions(ctx, wp.settings, service.FactCallOptionKeys(false))
+	return service.ExtractFactsLLM(ctx, llm, wp.settings, content, opts)
 }
 
 func (wp *WorkerPool) extractEntities(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	content string,
-) (*entityExtractionResult, *provider.TokenUsage, string, string, error) {
-	prompt := fmt.Sprintf(service.ResolveOrDefault(ctx, wp.settings, service.SettingEntityPrompt, "global"), content)
-	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), &provider.CompletionRequest{
-		Messages: []provider.Message{
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   2048,
-		Temperature: 0.2,
-		JSONMode:    true,
-	})
-	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("entity LLM call: %w", err)
-	}
-
-	result, parseErr := parseEntityResponse(resp.Content)
-	if parseErr != nil {
-		return nil, &resp.Usage, resp.Model, llm.Name(), fmt.Errorf("parse entities: %w", parseErr)
-	}
-	return result, &resp.Usage, resp.Model, llm.Name(), nil
-}
-
-// ---------------------------------------------------------------------------
-// Response parsing (JSON mode guarantees valid JSON from the LLM)
-// ---------------------------------------------------------------------------
-
-// parseFactResponse parses a fact extraction response. With JSON mode enabled
-// the LLM is constrained to produce valid JSON, so only direct unmarshal with
-// a string-array fallback is needed. An empty array (or wrapper with empty
-// facts) is treated as a valid "no facts extracted" outcome and returns
-// (nil, nil) rather than an error.
-func parseFactResponse(raw string) ([]extractedFact, error) {
-	raw = strings.TrimSpace(raw)
-
-	// Try array of structured facts. Empty array is valid (no facts).
-	var facts []extractedFact
-	if err := json.Unmarshal([]byte(raw), &facts); err == nil {
-		if len(facts) == 0 {
-			return nil, nil
-		}
-		for i := range facts {
-			facts[i].Content = facts[i].text()
-		}
-		return facts, nil
-	}
-
-	// Single fact object instead of array.
-	var single extractedFact
-	if err := json.Unmarshal([]byte(raw), &single); err == nil && single.text() != "" {
-		single.Content = single.text()
-		return []extractedFact{single}, nil
-	}
-
-	// Wrapper object with a "facts" key. Empty wrapper is valid (no facts).
-	var wrapper struct {
-		Facts []extractedFact `json:"facts"`
-	}
-	if err := json.Unmarshal([]byte(raw), &wrapper); err == nil {
-		if len(wrapper.Facts) == 0 {
-			// Distinguish "valid empty wrapper" from "different object
-			// shape" by checking that the response is a JSON object.
-			if strings.HasPrefix(raw, "{") {
-				return nil, nil
-			}
-		} else {
-			for i := range wrapper.Facts {
-				wrapper.Facts[i].Content = wrapper.Facts[i].text()
-			}
-			return wrapper.Facts, nil
-		}
-	}
-
-	// Plain string array.
-	var strs []string
-	if err := json.Unmarshal([]byte(raw), &strs); err == nil && len(strs) > 0 {
-		facts = make([]extractedFact, len(strs))
-		for i, s := range strs {
-			facts[i] = extractedFact{Content: s, Confidence: 0.8}
-		}
-		return facts, nil
-	}
-
-	preview := raw
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
-	}
-	return nil, fmt.Errorf("unable to parse fact JSON from LLM response: %q", preview)
-}
-
-// parseEntityResponse parses an entity/relationship extraction response.
-// With JSON mode enabled the LLM is constrained to produce valid JSON.
-func parseEntityResponse(raw string) (*entityExtractionResult, error) {
-	raw = strings.TrimSpace(raw)
-
-	var result entityExtractionResult
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		preview := raw
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
-		}
-		return nil, fmt.Errorf("unable to parse entity JSON from LLM response: %q", preview)
-	}
-	return &result, nil
+) (*service.EntityExtractionEnvelope, error) {
+	opts := service.ResolveCallOptions(ctx, wp.settings, service.EntityCallOptionKeys(false))
+	return service.ExtractEntitiesLLM(ctx, llm, wp.settings, content, opts)
 }
 
 func mergeTags(parent, child []string) []string {
