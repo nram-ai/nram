@@ -10,11 +10,10 @@ import {
 import { useAuth } from "../context/AuthContext";
 import type {
   Project,
-  ProjectRankingWeights,
-  ProjectSettings,
   ProjectUpdateRequest,
   SystemRankingWeights,
 } from "../api/client";
+import { buildProjectSettingsPayload } from "./settingsPayload";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -405,19 +404,16 @@ function ProjectDetailPanel({
     // Build sparse payload: only include fields the operator actually set.
     // Empty inputs roundtrip back to "inherit system default" — the cascade
     // resolver picks them up from the system layer at recall time.
-    const rankingOverride: ProjectRankingWeights = {};
-    if (editSimilarity !== undefined) rankingOverride.similarity = editSimilarity;
-    if (editRecency !== undefined) rankingOverride.recency = editRecency;
-    if (editImportance !== undefined) rankingOverride.importance = editImportance;
-    if (editFrequency !== undefined) rankingOverride.frequency = editFrequency;
-    if (editGraphRelevance !== undefined) rankingOverride.graph_relevance = editGraphRelevance;
-    if (editConfidence !== undefined) rankingOverride.confidence = editConfidence;
-
-    const settings: ProjectSettings = {};
-    if (editDedupThreshold !== undefined) settings.dedup_threshold = editDedupThreshold;
-    if (editEnrichmentEnabled !== undefined) settings.enrichment_enabled = editEnrichmentEnabled;
-    if (Object.keys(rankingOverride).length > 0) settings.ranking_weights = rankingOverride;
-
+    const settings = buildProjectSettingsPayload({
+      similarity: editSimilarity,
+      recency: editRecency,
+      importance: editImportance,
+      frequency: editFrequency,
+      graph_relevance: editGraphRelevance,
+      confidence: editConfidence,
+      dedup_threshold: editDedupThreshold,
+      enrichment_enabled: editEnrichmentEnabled,
+    });
     const data: ProjectUpdateRequest = {
       name: editName,
       description: editDescription,

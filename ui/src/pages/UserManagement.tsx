@@ -25,6 +25,7 @@ import type {
   GenerateAPIKeyRequest,
   Organization,
 } from "../api/client";
+import { buildUserSettingsPayload } from "./settingsPayload";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -730,13 +731,10 @@ function UserDetailPanel({
     if (!user) return;
     // Build sparse settings: omit fields the operator did not set so the
     // cascade resolver picks them up from the system layer at runtime.
-    const settings: Record<string, unknown> = {};
-    if (editEnrichmentEnabled !== undefined) {
-      settings.enrichment_enabled = editEnrichmentEnabled;
-    }
-    if (editDedupThreshold !== undefined) {
-      settings.dedup_threshold = editDedupThreshold;
-    }
+    const settings = buildUserSettingsPayload({
+      dedup_threshold: editDedupThreshold,
+      enrichment_enabled: editEnrichmentEnabled,
+    });
     const data: UpdateUserRequest = {
       display_name: editDisplayName,
       role: editRole,
