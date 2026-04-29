@@ -120,10 +120,12 @@ func (u *UsageRecordingLLM) record(
 		completionTokens = EstimateTokens(modelName, resp.Content)
 	}
 
-	rec := buildUsageRow(ctx, u.resolver, u.inner.Name(), modelName, op,
+	recCtx, cancel := recordingContext(ctx)
+	defer cancel()
+	rec := buildUsageRow(recCtx, u.resolver, u.inner.Name(), modelName, op,
 		promptTokens, completionTokens, latencyMs, callErr)
 
-	if err := u.recorder.Record(ctx, rec); err != nil {
+	if err := u.recorder.Record(recCtx, rec); err != nil {
 		slog.Warn("usage_recorder: record failed",
 			"provider", u.inner.Name(), "operation", op, "err", err)
 	}
@@ -194,10 +196,12 @@ func (u *UsageRecordingEmbedding) record(
 		}
 	}
 
-	rec := buildUsageRow(ctx, u.resolver, u.inner.Name(), modelName, op,
+	recCtx, cancel := recordingContext(ctx)
+	defer cancel()
+	rec := buildUsageRow(recCtx, u.resolver, u.inner.Name(), modelName, op,
 		promptTokens, 0, latencyMs, callErr)
 
-	if err := u.recorder.Record(ctx, rec); err != nil {
+	if err := u.recorder.Record(recCtx, rec); err != nil {
 		slog.Warn("usage_recorder: record failed",
 			"provider", u.inner.Name(), "operation", op, "err", err)
 	}
@@ -206,6 +210,15 @@ func (u *UsageRecordingEmbedding) record(
 // ---------------------------------------------------------------------------
 // shared helpers
 // ---------------------------------------------------------------------------
+
+// recordingContext returns a context that preserves all stamped values
+// (UsageContext, RequestID, NamespaceID, Operation, etc.) but drops the
+// caller's deadline and cancellation, then bounds the write at 5s.
+// Recording is best-effort by design: a slow or near-deadline upstream
+// call must not poison the token_usage write that follows it.
+func recordingContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+}
 
 // operationOrUnknown returns the operation stamped on ctx, or
 // OperationUnknown — and warns with a stack trace when one is missing so the

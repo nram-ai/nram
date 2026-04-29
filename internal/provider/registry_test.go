@@ -6,6 +6,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 func TestRegistryAllSlots(t *testing.T) {
@@ -378,16 +381,29 @@ func TestCreateEmbeddingProviderTypes(t *testing.T) {
 }
 
 // probeEmbedder is a configurable EmbeddingProvider for the EmbeddingDim
-// tests. It returns a vector of `dim` zeros (or `err` if set), and counts
-// how many times Embed has been called so the cache behavior is testable.
+// tests. It returns a vector of `dim` zeros (or `err` if set), counts
+// Embed invocations, and optionally delays each call by `delay` (used to
+// give racing callers a window to coalesce in singleflight). ops captures
+// the operation stamped on each Embed ctx for assertion.
 type probeEmbedder struct {
 	dim   int
 	err   error
+	delay time.Duration
 	calls atomic.Int32
+	opMu  sync.Mutex
+	ops   []Operation
 }
 
-func (p *probeEmbedder) Embed(_ context.Context, _ *EmbeddingRequest) (*EmbeddingResponse, error) {
+func (p *probeEmbedder) Embed(ctx context.Context, _ *EmbeddingRequest) (*EmbeddingResponse, error) {
 	p.calls.Add(1)
+	if op, ok := OperationFromContext(ctx); ok {
+		p.opMu.Lock()
+		p.ops = append(p.ops, op)
+		p.opMu.Unlock()
+	}
+	if p.delay > 0 {
+		time.Sleep(p.delay)
+	}
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -398,7 +414,7 @@ func (p *probeEmbedder) Dimensions() []int { return []int{p.dim} }
 
 func TestRegistryEmbeddingDim_ProbesAndCaches(t *testing.T) {
 	emb := &probeEmbedder{dim: 768}
-	r := &Registry{embedding: emb}
+	r := &Registry{embedding: emb, probeGroup: &singleflight.Group{}}
 
 	d1, err := r.EmbeddingDim(context.Background())
 	if err != nil {
@@ -432,7 +448,7 @@ func TestRegistryEmbeddingDim_NotConfigured(t *testing.T) {
 
 func TestRegistryEmbeddingDim_ProbeErrorNotCached(t *testing.T) {
 	emb := &probeEmbedder{err: errors.New("network blip")}
-	r := &Registry{embedding: emb}
+	r := &Registry{embedding: emb, probeGroup: &singleflight.Group{}}
 
 	if _, err := r.EmbeddingDim(context.Background()); err == nil {
 		t.Fatal("expected error from failing probe")
@@ -499,5 +515,67 @@ func TestRegistryEmbeddingDim_ReloadInvalidatesCache(t *testing.T) {
 	}
 	if got := emb2.calls.Load(); got != 1 {
 		t.Errorf("expected exactly 1 probe of new embedder, got %d", got)
+	}
+}
+
+// TestRegistryProbe_StampsSystemProbeOperation verifies that every probe
+// path — including the lazy EmbeddingDim hit triggered by the admin
+// providers handler — stamps OperationProbe so the recorder middleware
+// neither logs a missing-operation stack trace nor records the row as
+// "unknown".
+func TestRegistryProbe_StampsSystemProbeOperation(t *testing.T) {
+	emb := &probeEmbedder{dim: 768}
+	r := &Registry{embedding: emb, probeGroup: &singleflight.Group{}}
+
+	// Bare context with no operation stamped mirrors the slotStatus path;
+	// probeAndCache must inject OperationProbe before the embed call.
+	if _, err := r.EmbeddingDim(context.Background()); err != nil {
+		t.Fatalf("EmbeddingDim error: %v", err)
+	}
+
+	emb.opMu.Lock()
+	defer emb.opMu.Unlock()
+	if len(emb.ops) != 1 || emb.ops[0] != OperationProbe {
+		t.Fatalf("probe ops = %v, want exactly [%q]", emb.ops, OperationProbe)
+	}
+}
+
+// TestRegistryProbe_SingleflightCollapsesConcurrent verifies that a
+// burst of EmbeddingDim callers racing the eager prewarm coalesces into
+// a single network probe. The embedder sleeps 100ms inside Embed so the
+// leader stays in flight long enough for every follower to reach DoChan
+// and join the singleflight entry — observing that opaque arrival is
+// not possible, so we widen the window instead.
+func TestRegistryProbe_SingleflightCollapsesConcurrent(t *testing.T) {
+	emb := &probeEmbedder{dim: 1024, delay: 100 * time.Millisecond}
+	r := &Registry{embedding: emb, probeGroup: &singleflight.Group{}}
+
+	const callers = 10
+	var (
+		wg      sync.WaitGroup
+		results = make([]int, callers)
+		errs    = make([]error, callers)
+	)
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			d, err := r.EmbeddingDim(context.Background())
+			results[i] = d
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	if got := emb.calls.Load(); got != 1 {
+		t.Fatalf("singleflight should have collapsed %d callers into 1 probe, got %d probes", callers, got)
+	}
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("caller %d got error: %v", i, err)
+		}
+		if results[i] != 1024 {
+			t.Errorf("caller %d dim = %d, want 1024", i, results[i])
+		}
 	}
 }

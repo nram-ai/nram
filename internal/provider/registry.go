@@ -5,6 +5,16 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
+)
+
+// probeInput is the dummy text fed to the embedder when measuring its
+// native output dim. probeSlotEmbedding is the singleflight key that
+// coalesces concurrent embedding-slot probes.
+const (
+	probeInput         = "probe"
+	probeSlotEmbedding = "embedding"
 )
 
 // Provider type constants identify the backend provider implementation.
@@ -60,6 +70,13 @@ type Registry struct {
 	// invalidated on Reload. Probe errors are NOT cached so a transient
 	// failure does not pin the dim to 0 forever.
 	embDim int
+
+	// Coalesces concurrent probes so the eager prewarm and a racing lazy
+	// EmbeddingDim caller share one network round-trip instead of doubling
+	// up. Held by pointer so Reload can swap a fresh group atomically
+	// without disturbing in-flight goroutines that still reference the
+	// old one.
+	probeGroup *singleflight.Group
 }
 
 // NewRegistry instantiates providers from config, wraps each in a circuit
@@ -69,7 +86,7 @@ type Registry struct {
 // invalid type or an unsupported type/slot combination (e.g., anthropic
 // for embedding).
 func NewRegistry(config RegistryConfig, recorder UsageRecorder, resolver UsageContextResolver) (*Registry, error) {
-	r := &Registry{recorder: recorder, resolver: resolver}
+	r := &Registry{recorder: recorder, resolver: resolver, probeGroup: &singleflight.Group{}}
 	if err := r.load(config); err != nil {
 		return nil, err
 	}
@@ -79,10 +96,10 @@ func NewRegistry(config RegistryConfig, recorder UsageRecorder, resolver UsageCo
 	PrewarmTokenizers()
 	// Eagerly probe the embedder dim so the first downstream caller does
 	// not pay the round-trip latency. Failures are non-fatal — the cache
-	// stays empty and EmbeddingDim retries on demand.
+	// stays empty and EmbeddingDim retries on demand. Operation stamping
+	// is done inside probeAndCache so every probe call site is covered.
 	if r.embedding != nil {
-		probeCtx := WithOperation(context.Background(), OperationProbe)
-		_, _ = r.probeAndCache(probeCtx, r.embedding)
+		_, _ = r.probeAndCache(context.Background(), r.embedding, r.probeGroup)
 	}
 	return r, nil
 }
@@ -127,12 +144,13 @@ func (r *Registry) Reload(config RegistryConfig) error {
 	r.entity = tmp.entity
 	r.config = tmp.config
 	r.embDim = 0
+	r.probeGroup = &singleflight.Group{}
 	embedder := r.embedding
+	group := r.probeGroup
 	r.mu.Unlock()
 
 	if embedder != nil {
-		probeCtx := WithOperation(context.Background(), OperationProbe)
-		_, _ = r.probeAndCache(probeCtx, embedder)
+		_, _ = r.probeAndCache(context.Background(), embedder, group)
 	}
 	return nil
 }
@@ -150,40 +168,58 @@ func (r *Registry) EmbeddingDim(ctx context.Context) (int, error) {
 		return d, nil
 	}
 	embedder := r.embedding
+	group := r.probeGroup
 	r.mu.RUnlock()
 
 	if embedder == nil {
 		return 0, fmt.Errorf("registry: embedding provider not configured")
 	}
-	return r.probeAndCache(ctx, embedder)
+	return r.probeAndCache(ctx, embedder, group)
 }
 
-// probeAndCache runs the dim probe outside the lock (Embed is a network
-// call), then takes the write lock to install the result. If a Reload
-// swapped the embedder mid-probe, the measured dim belongs to the old
-// provider and is discarded.
-func (r *Registry) probeAndCache(ctx context.Context, embedder EmbeddingProvider) (int, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	resp, err := embedder.Embed(probeCtx, &EmbeddingRequest{Input: []string{"probe"}})
-	if err != nil {
-		return 0, fmt.Errorf("registry: embedding probe failed: %w", err)
-	}
-	if len(resp.Embeddings) == 0 || len(resp.Embeddings[0]) == 0 {
-		return 0, fmt.Errorf("registry: embedding probe returned no vector")
-	}
-	probedDim := len(resp.Embeddings[0])
+// probeAndCache coalesces concurrent probes through singleflight so the
+// eager prewarm and a racing lazy hit share one network round-trip. The
+// probe runs on a bg-derived context with its own 10s budget so a caller
+// bailing early does not cancel the work — the result still populates
+// the cache for the next caller. If Reload swapped the embedder
+// mid-probe, the measured dim is discarded by the identity check.
+func (r *Registry) probeAndCache(ctx context.Context, embedder EmbeddingProvider, group *singleflight.Group) (int, error) {
+	ch := group.DoChan(probeSlotEmbedding, func() (any, error) {
+		probeCtx, cancel := context.WithTimeout(
+			WithOperation(context.Background(), OperationProbe),
+			10*time.Second,
+		)
+		defer cancel()
+		resp, err := embedder.Embed(probeCtx, &EmbeddingRequest{Input: []string{probeInput}})
+		if err != nil {
+			return 0, fmt.Errorf("registry: embedding probe failed: %w", err)
+		}
+		if len(resp.Embeddings) == 0 || len(resp.Embeddings[0]) == 0 {
+			return 0, fmt.Errorf("registry: embedding probe returned no vector")
+		}
+		probedDim := len(resp.Embeddings[0])
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.embedding != embedder {
-		return 0, fmt.Errorf("registry: provider changed during probe; retry")
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.embedding != embedder {
+			return 0, fmt.Errorf("registry: provider changed during probe; retry")
+		}
+		if r.embDim > 0 {
+			return r.embDim, nil
+		}
+		r.embDim = probedDim
+		return probedDim, nil
+	})
+
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return 0, res.Err
+		}
+		return res.Val.(int), nil
 	}
-	if r.embDim > 0 {
-		return r.embDim, nil
-	}
-	r.embDim = probedDim
-	return probedDim, nil
 }
 
 // GetConfig returns the current registry configuration (read-locked).

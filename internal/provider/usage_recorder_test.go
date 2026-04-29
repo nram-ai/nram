@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -331,5 +332,77 @@ func TestUsageRecordingLLM_FallbackResolver(t *testing.T) {
 	}
 	if got.OrgID == nil || *got.OrgID != orgID {
 		t.Errorf("expected resolver-supplied OrgID, got %v", got.OrgID)
+	}
+}
+
+// recordCtxSnapshot is what ctxCaptureRecorder records — a snapshot of
+// the recording context taken inline at Record time, since the caller's
+// deferred cancel() fires the moment record() returns.
+type recordCtxSnapshot struct {
+	row     *model.TokenUsage
+	err     error
+	op      Operation
+	hasDdl  bool
+}
+
+type ctxCaptureRecorder struct {
+	mu        sync.Mutex
+	snapshots []recordCtxSnapshot
+}
+
+func (c *ctxCaptureRecorder) Record(ctx context.Context, u *model.TokenUsage) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	op, _ := OperationFromContext(ctx)
+	_, hasDdl := ctx.Deadline()
+	c.snapshots = append(c.snapshots, recordCtxSnapshot{
+		row:    u,
+		err:    ctx.Err(),
+		op:     op,
+		hasDdl: hasDdl,
+	})
+	return nil
+}
+
+// TestUsageRecordingEmbedding_RecordSurvivesExpiredCallerCtx is the
+// load-bearing assertion that the recorder is decoupled from the
+// upstream call's deadline. The embedder's Embed runs to completion;
+// when record() runs afterwards, the caller's ctx is already expired.
+// The row must still be written with a live recording context.
+func TestUsageRecordingEmbedding_RecordSurvivesExpiredCallerCtx(t *testing.T) {
+	rec := &ctxCaptureRecorder{}
+	emb := &stubEmbedding{
+		name: "openai",
+		resp: &EmbeddingResponse{
+			Embeddings: [][]float32{{1, 2, 3}},
+			Model:      "text-embedding-3-small",
+			Usage:      TokenUsage{PromptTokens: 5},
+		},
+	}
+	w := NewUsageRecordingEmbedding(emb, rec, nil)
+
+	ctx, cancel := context.WithDeadline(
+		WithOperation(context.Background(), OperationEmbedding),
+		time.Now().Add(-1*time.Hour),
+	)
+	defer cancel()
+
+	_, _ = w.Embed(ctx, &EmbeddingRequest{Input: []string{"x"}})
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.snapshots) != 1 {
+		t.Fatalf("expected exactly 1 recorded row, got %d", len(rec.snapshots))
+	}
+	got := rec.snapshots[0]
+	if got.err != nil {
+		t.Fatalf("recorder context must be live at Record time; got Err()=%v", got.err)
+	}
+	if !got.hasDdl {
+		t.Errorf("recording context should carry its own bounded deadline (5s)")
+	}
+	// WithoutCancel preserves Value lookups — the operation must survive.
+	if got.op != OperationEmbedding {
+		t.Errorf("recording context lost stamped operation; got op=%q", got.op)
 	}
 }
