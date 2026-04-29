@@ -74,10 +74,19 @@ func (s *scriptedJudgeLLM) Name() string     { return "test-llm" }
 func (s *scriptedJudgeLLM) Models() []string { return []string{"test-model"} }
 
 // updatingMemoryWriter records each Update call so backfill tests can
-// inspect what the consolidation phase wrote back.
+// inspect what the consolidation phase wrote back. metadataUpdates is
+// recorded separately so tests can distinguish stamp-only writes (which
+// must not bump updated_at) from full Updates.
 type updatingMemoryWriter struct {
-	creates []*model.Memory
-	updates []model.Memory
+	creates         []*model.Memory
+	updates         []model.Memory
+	metadataUpdates []metadataUpdateRecord
+}
+
+type metadataUpdateRecord struct {
+	ID          uuid.UUID
+	NamespaceID uuid.UUID
+	Metadata    json.RawMessage
 }
 
 func (w *updatingMemoryWriter) Create(_ context.Context, mem *model.Memory) error {
@@ -87,6 +96,15 @@ func (w *updatingMemoryWriter) Create(_ context.Context, mem *model.Memory) erro
 }
 func (w *updatingMemoryWriter) Update(_ context.Context, mem *model.Memory) error {
 	w.updates = append(w.updates, *mem)
+	return nil
+}
+func (w *updatingMemoryWriter) UpdateMetadata(_ context.Context, id, namespaceID uuid.UUID, metadata json.RawMessage) error {
+	cp := append(json.RawMessage(nil), metadata...)
+	w.metadataUpdates = append(w.metadataUpdates, metadataUpdateRecord{
+		ID:          id,
+		NamespaceID: namespaceID,
+		Metadata:    cp,
+	})
 	return nil
 }
 func (w *updatingMemoryWriter) SoftDelete(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
@@ -424,30 +442,30 @@ func TestAuditExistingDreams_DemotesDuplicateAndStampsNovel(t *testing.T) {
 		t.Fatalf("auditExistingDreams returned error: %v", err)
 	}
 
-	// Both dreams should have been processed (Update called on each).
-	if len(writer.updates) != 2 {
-		t.Fatalf("expected 2 Update calls (one demote + one stamp), got %d", len(writer.updates))
+	// Demote takes the full Update path (real state change); stamp-only
+	// audits go through UpdateMetadata so updated_at stays intact and
+	// the next cycle does not re-audit.
+	if len(writer.updates) != 1 {
+		t.Fatalf("expected 1 Update call (demote), got %d", len(writer.updates))
+	}
+	if len(writer.metadataUpdates) != 1 {
+		t.Fatalf("expected 1 UpdateMetadata call (stamp-only audit), got %d", len(writer.metadataUpdates))
 	}
 
-	var demoted, stamped *model.Memory
-	for i := range writer.updates {
-		u := writer.updates[i]
-		if u.ID == dupDream.ID {
-			demoted = &u
-		}
-		if u.ID == novelDream.ID {
-			stamped = &u
-		}
+	demoted := &writer.updates[0]
+	if demoted.ID != dupDream.ID {
+		t.Fatalf("Update target should be duplicate dream %s, got %s", dupDream.ID, demoted.ID)
 	}
-	if demoted == nil {
-		t.Fatalf("duplicate dream was not updated")
-	}
-	if stamped == nil {
-		t.Fatalf("novel dream was not stamped")
+	stampRecord := writer.metadataUpdates[0]
+	if stampRecord.ID != novelDream.ID {
+		t.Fatalf("UpdateMetadata target should be novel dream %s, got %s", novelDream.ID, stampRecord.ID)
 	}
 
 	if demoted.Confidence != 0 {
 		t.Errorf("duplicate dream confidence should be 0, got %v", demoted.Confidence)
+	}
+	if demoted.EmbeddingDim != nil {
+		t.Errorf("duplicate dream EmbeddingDim should be cleared on demote, got %v", *demoted.EmbeddingDim)
 	}
 	if !isLowNoveltyJSON(demoted.Metadata) {
 		t.Errorf("duplicate dream metadata.low_novelty must be true; got %s", string(demoted.Metadata))
@@ -456,13 +474,10 @@ func TestAuditExistingDreams_DemotesDuplicateAndStampsNovel(t *testing.T) {
 		t.Errorf("duplicate dream missing novelty_audited_at marker")
 	}
 
-	if stamped.Confidence == 0 {
-		t.Errorf("novel dream confidence should not be zeroed by passing audit, got 0")
-	}
-	if isLowNoveltyJSON(stamped.Metadata) {
+	if isLowNoveltyJSON(stampRecord.Metadata) {
 		t.Errorf("novel dream must not be flagged low_novelty")
 	}
-	if !hasAuditMarker(stamped.Metadata) {
+	if !hasAuditMarker(stampRecord.Metadata) {
 		t.Errorf("novel dream missing novelty_audited_at marker")
 	}
 }
@@ -488,8 +503,13 @@ func TestAuditExistingDreams_RespectsPerCycleCap(t *testing.T) {
 	if _, err := phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, memories, settings.ints[service.SettingDreamNoveltyBackfillPerCycle]); err != nil {
 		t.Fatalf("auditExistingDreams returned error: %v", err)
 	}
-	if len(writer.updates) != 3 {
-		t.Fatalf("backfill cap=3 should produce exactly 3 updates, got %d", len(writer.updates))
+	// Auto-accept dreams take the stamp-only UpdateMetadata path; the
+	// per-cycle cap covers visited memories regardless of which write
+	// path each one takes.
+	totalWrites := len(writer.updates) + len(writer.metadataUpdates)
+	if totalWrites != 3 {
+		t.Fatalf("backfill cap=3 should produce exactly 3 writes, got %d (Update=%d, UpdateMetadata=%d)",
+			totalWrites, len(writer.updates), len(writer.metadataUpdates))
 	}
 }
 
@@ -519,8 +539,9 @@ func TestAuditExistingDreams_SkipsAlreadyStamped(t *testing.T) {
 
 	_, _ = phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, memories, settings.ints[service.SettingDreamNoveltyBackfillPerCycle])
 
-	if len(writer.updates) != 0 {
-		t.Fatalf("already-audited dream must not be updated, got %d updates", len(writer.updates))
+	if len(writer.updates) != 0 || len(writer.metadataUpdates) != 0 {
+		t.Fatalf("already-audited dream must not be touched, got %d updates / %d metadata updates",
+			len(writer.updates), len(writer.metadataUpdates))
 	}
 	if emb.calls.Load() != 0 {
 		t.Fatalf("audit must short-circuit before embedding when marker exists, got %d embed calls", emb.calls.Load())
@@ -696,11 +717,14 @@ func TestAuditExistingDreams_PassDoesNotPurgeVector(t *testing.T) {
 }
 
 // TestSupersedeOriginals_PurgesOriginalVectors asserts that when a synthesis
-// supersedes its source memories, the source vectors are purged. The
-// synthesis itself retains its vector (that's the one recall should surface).
+// supersedes its source memories, the source vectors are purged AND the
+// originals' embedding_dim is cleared so the row state matches the
+// vector store. The synthesis itself retains its vector (that's the one
+// recall should surface).
 func TestSupersedeOriginals_PurgesOriginalVectors(t *testing.T) {
-	srcA := model.Memory{ID: uuid.New(), Content: "source A"}
-	srcB := model.Memory{ID: uuid.New(), Content: "source B"}
+	d := 4
+	srcA := model.Memory{ID: uuid.New(), Content: "source A", EmbeddingDim: &d}
+	srcB := model.Memory{ID: uuid.New(), Content: "source B", EmbeddingDim: &d}
 
 	// Build a synthesis whose metadata lists srcA and srcB as source memories.
 	src := model.DreamSource
@@ -735,6 +759,31 @@ func TestSupersedeOriginals_PurgesOriginalVectors(t *testing.T) {
 	if containsUUID(purger.deleted, synthesis.ID) {
 		t.Errorf("synthesis vector should NOT be purged; got %v", purger.deleted)
 	}
+
+	// Both originals should have EmbeddingDim cleared in the persisted
+	// Update so the row state matches the vector store.
+	for _, id := range []uuid.UUID{srcA.ID, srcB.ID} {
+		updated := findMemoryUpdate(writer.updates, id)
+		if updated == nil {
+			t.Errorf("expected Update on superseded original %s", id)
+			continue
+		}
+		if updated.EmbeddingDim != nil {
+			t.Errorf("original %s should have EmbeddingDim cleared on supersede; got %v", id, *updated.EmbeddingDim)
+		}
+	}
+}
+
+// findMemoryUpdate returns the most recent Update record for the given
+// memory ID, or nil if none.
+func findMemoryUpdate(updates []model.Memory, id uuid.UUID) *model.Memory {
+	for i := len(updates) - 1; i >= 0; i-- {
+		if updates[i].ID == id {
+			cp := updates[i]
+			return &cp
+		}
+	}
+	return nil
 }
 
 // scriptedEmbedder lets tests provide a per-call embedding response so the
@@ -788,24 +837,26 @@ func TestAuditExistingDreams_PersistentEmbedErrorStamps(t *testing.T) {
 		t.Fatalf("AuditExistingDreams returned error: %v", err)
 	}
 
-	if len(writer.updates) != 1 {
-		t.Fatalf("persistent embed error must stamp the synthesis (1 update), got %d", len(writer.updates))
+	// Persistent embed error stamps as audited without demoting; that's
+	// a metadata-only write so it lands in metadataUpdates.
+	if len(writer.updates) != 0 {
+		t.Fatalf("persistent embed error without demote must not call Update, got %d", len(writer.updates))
 	}
-	updated := writer.updates[0]
-	if updated.ID != dream.ID {
-		t.Fatalf("expected the dream to be updated, got %s", updated.ID)
+	if len(writer.metadataUpdates) != 1 {
+		t.Fatalf("persistent embed error must stamp the synthesis (1 metadata update), got %d", len(writer.metadataUpdates))
 	}
-	if !hasAuditMarker(updated.Metadata) {
-		t.Errorf("dream missing novelty_audited_at marker after persistent error; got %s", string(updated.Metadata))
+	stamped := writer.metadataUpdates[0]
+	if stamped.ID != dream.ID {
+		t.Fatalf("expected the dream to be stamped, got %s", stamped.ID)
 	}
-	if got := auditReasonFromMeta(updated.Metadata); got != "embed_error_persistent" {
+	if !hasAuditMarker(stamped.Metadata) {
+		t.Errorf("dream missing novelty_audited_at marker after persistent error; got %s", string(stamped.Metadata))
+	}
+	if got := auditReasonFromMeta(stamped.Metadata); got != "embed_error_persistent" {
 		t.Errorf("expected reason embed_error_persistent, got %q", got)
 	}
-	if isLowNoveltyJSON(updated.Metadata) {
-		t.Errorf("persistent embed error must NOT demote (low_novelty=false); got %s", string(updated.Metadata))
-	}
-	if updated.Confidence == 0 {
-		t.Errorf("persistent embed error must NOT zero confidence; got 0")
+	if isLowNoveltyJSON(stamped.Metadata) {
+		t.Errorf("persistent embed error must NOT demote (low_novelty=false); got %s", string(stamped.Metadata))
 	}
 }
 

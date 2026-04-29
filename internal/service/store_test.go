@@ -140,9 +140,15 @@ type mockVectorStore struct {
 		Embedding   []float32
 		Dimension   int
 	}
+	// upsertErr, when non-nil, is returned by every Upsert call. Tests
+	// that drive the write-path failure branch set this.
+	upsertErr error
 }
 
 func (m *mockVectorStore) Upsert(_ context.Context, _ storage.VectorKind, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error {
+	if m.upsertErr != nil {
+		return m.upsertErr
+	}
 	m.upserted = append(m.upserted, struct {
 		ID          uuid.UUID
 		NamespaceID uuid.UUID

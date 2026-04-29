@@ -314,8 +314,8 @@ func TestContradictionPhase_StampsDispatchedAndReportsResidualWhenCapHit(t *test
 	if int(llm.calls.Load()) > 30 {
 		t.Errorf("cap=30 was violated: %d calls", llm.calls.Load())
 	}
-	if len(writer.updates) == 0 {
-		t.Fatal("expected some memories to be stamped")
+	if len(writer.metadataUpdates) == 0 {
+		t.Fatal("expected some memories to be stamped via UpdateMetadata")
 	}
 	if len(writer.updates) >= len(mems) {
 		t.Errorf("expected fewer stamps than total memories; got %d of %d", len(writer.updates), len(mems))
@@ -372,11 +372,17 @@ func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
 	if residual {
 		t.Error("expected residual=false after draining the single stale memory")
 	}
-	if len(writer.updates) != 1 {
-		t.Errorf("expected exactly 1 stamp update, got %d", len(writer.updates))
+	// Stamps go through UpdateMetadata so updated_at stays intact;
+	// otherwise the stamp the phase just wrote would be strictly less
+	// than the new updated_at, immediately re-marking the memory stale.
+	if len(writer.updates) != 0 {
+		t.Errorf("stamp must use UpdateMetadata, not Update; got %d Update calls", len(writer.updates))
 	}
-	if len(writer.updates) > 0 && writer.updates[0].ID != mems[0].ID {
-		t.Errorf("expected the stale memory to be stamped, got %s", writer.updates[0].ID)
+	if len(writer.metadataUpdates) != 1 {
+		t.Errorf("expected exactly 1 stamp via UpdateMetadata, got %d", len(writer.metadataUpdates))
+	}
+	if len(writer.metadataUpdates) > 0 && writer.metadataUpdates[0].ID != mems[0].ID {
+		t.Errorf("expected the stale memory to be stamped, got %s", writer.metadataUpdates[0].ID)
 	}
 }
 
@@ -534,13 +540,13 @@ func TestContradictionPhase_EmbedderNilDegradesSafely(t *testing.T) {
 		t.Fatalf("Execute returned error: %v", err)
 	}
 	// 8 memories * K=4 = 32 candidate pairs but dedup reduces that; cap=30
-	// may or may not be hit depending on overlap. Either way, Update must
-	// have been called on at least one memory (the degradation path must
-	// not abort stamping).
-	if len(writer.updates) == 0 {
+	// may or may not be hit depending on overlap. Either way, the
+	// degradation path must still stamp at least one memory via
+	// UpdateMetadata (the metadata-only stamp path).
+	if len(writer.metadataUpdates) == 0 {
 		t.Fatal("expected degradation path to still stamp memories")
 	}
-	if residual && len(writer.updates) == len(mems) {
+	if residual && len(writer.metadataUpdates) == len(mems) {
 		t.Error("residual=true with every memory stamped is contradictory")
 	}
 	if llm.calls.Load() == 0 {
@@ -590,7 +596,7 @@ func TestContradictionPhase_EmbedderErrorDegradesSafely(t *testing.T) {
 	if emb.calls.Load() == 0 {
 		t.Fatal("expected the embedder to be called once")
 	}
-	if len(writer.updates) == 0 {
+	if len(writer.metadataUpdates) == 0 {
 		t.Fatal("expected stamping to still happen on embedder error")
 	}
 	if llm.calls.Load() == 0 {
@@ -599,14 +605,19 @@ func TestContradictionPhase_EmbedderErrorDegradesSafely(t *testing.T) {
 }
 
 // mutableMemoryStore is a combined reader+writer that applies Update
-// mutations back into the in-memory list so cycle-to-cycle idempotency
-// tests can observe persisted stamps on subsequent reads.
+// and UpdateMetadata mutations back into the in-memory list so
+// cycle-to-cycle idempotency tests can observe persisted stamps on
+// subsequent reads.
 type mutableMemoryStore struct {
-	memories []model.Memory
-	updates  int
+	memories        []model.Memory
+	updates         int
+	metadataUpdates int
 }
 
-func (m *mutableMemoryStore) updateCount() int { return m.updates }
+// updateCount returns the total persisted writes (full Updates plus
+// metadata-only stamp updates). Cross-cycle drain tests use this to
+// confirm the phase actually wrote anything during the drain.
+func (m *mutableMemoryStore) updateCount() int { return m.updates + m.metadataUpdates }
 
 func (m *mutableMemoryStore) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
 	for i := range m.memories {
@@ -644,6 +655,20 @@ func (m *mutableMemoryStore) Update(_ context.Context, mem *model.Memory) error 
 		if m.memories[i].ID == mem.ID {
 			m.memories[i] = *mem
 			m.updates++
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+func (m *mutableMemoryStore) UpdateMetadata(_ context.Context, id, _ uuid.UUID, metadata json.RawMessage) error {
+	for i := range m.memories {
+		if m.memories[i].ID == id {
+			cp := append(json.RawMessage(nil), metadata...)
+			m.memories[i].Metadata = cp
+			// Deliberately do NOT bump UpdatedAt — that's the contract
+			// the production UpdateMetadata enforces. Cross-cycle
+			// staleness tests rely on this.
+			m.metadataUpdates++
 			return nil
 		}
 	}
@@ -836,10 +861,31 @@ func TestContradictionPhase_HighConfidenceWinnerSupersedes(t *testing.T) {
 	llm := &decidingLLM{winner: WinnerSideA}
 	mems := haircutMemories(2)
 	mems[0].Confidence = 0.95 // pre-haircut > 0.85 supersession threshold
-	lineage := &countingLineageWriter{}
-	w := runContradictionCycle(t, llm, mems, lineage)
+	d := 4
+	mems[0].EmbeddingDim = &d
+	mems[1].EmbeddingDim = &d
 
-	loser := findUpdate(w.updates, mems[1].ID)
+	reader := &fakeMemoryReader{list: mems}
+	writer := &updatingMemoryWriter{}
+	vs := &fakeContradictionVectorStore{vectorsByID: map[uuid.UUID][]float32{}}
+	lineage := &countingLineageWriter{}
+	phase := NewContradictionPhase(
+		reader,
+		writer,
+		lineage,
+		func() provider.LLMProvider { return llm },
+		nilEmbedder,
+		stubSettings{},
+	)
+	phase.AttachVectorPurger(vs)
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1_000_000, 2048),
+		NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	loser := findUpdate(writer.updates, mems[1].ID)
 	if loser == nil {
 		t.Fatalf("expected update for loser")
 	}
@@ -851,6 +897,23 @@ func TestContradictionPhase_HighConfidenceWinnerSupersedes(t *testing.T) {
 	}
 	if loser.SupersededAt == nil {
 		t.Error("expected loser.SupersededAt to be set alongside SupersededBy")
+	}
+	if loser.EmbeddingDim != nil {
+		t.Errorf("loser.EmbeddingDim should be cleared on haircut supersede; got %v", *loser.EmbeddingDim)
+	}
+	if vs.deleteCalls == 0 {
+		t.Errorf("expected vector purge on loser when haircut superseded fired; got %d Delete calls", vs.deleteCalls)
+	} else {
+		found := false
+		for _, id := range vs.deleted {
+			if id == mems[1].ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected Delete on loser %s; deleted=%v", mems[1].ID, vs.deleted)
+		}
 	}
 }
 
@@ -1101,6 +1164,9 @@ func TestContradictionPhase_ParaphraseAutoSupersede(t *testing.T) {
 	mems := makeMemories(2)
 	mems[0].Confidence = 0.9
 	mems[1].Confidence = 0.5
+	d := 4
+	mems[0].EmbeddingDim = &d
+	mems[1].EmbeddingDim = &d
 	dim := 4
 	dup := vectorOffsetAt(dim, 0) // both vectors identical → cosine = 1.0
 	vs := &fakeContradictionVectorStore{
@@ -1147,6 +1213,9 @@ func TestContradictionPhase_ParaphraseAutoSupersede(t *testing.T) {
 	}
 	if loser.SupersededAt == nil {
 		t.Error("expected loser.SupersededAt to be set")
+	}
+	if loser.EmbeddingDim != nil {
+		t.Errorf("loser.EmbeddingDim should be cleared on supersede; got %v", *loser.EmbeddingDim)
 	}
 
 	if vs.deleteCalls == 0 || vs.deleted[0] != mems[1].ID {

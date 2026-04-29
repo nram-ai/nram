@@ -260,6 +260,8 @@ func TestIngestion_NoMatches_AddDecisionStampsMetadata(t *testing.T) {
 func TestIngestion_Update_WritesLineageAndSupersedesTarget(t *testing.T) {
 	target := testMemory()
 	target.Content = "existing fact"
+	d := 384
+	target.EmbeddingDim = &d
 
 	dedupResults := []storage.VectorSearchResult{
 		{ID: target.ID, Score: 0.96, NamespaceID: target.NamespaceID},
@@ -323,6 +325,19 @@ func TestIngestion_Update_WritesLineageAndSupersedesTarget(t *testing.T) {
 	}
 	if targetUpdate.SupersededAt == nil {
 		t.Error("target.SupersededAt should be set")
+	}
+	if targetUpdate.EmbeddingDim != nil {
+		t.Errorf("target.EmbeddingDim should be cleared on supersede; got %v", *targetUpdate.EmbeddingDim)
+	}
+	purged := false
+	for _, id := range h.vectors.deleted {
+		if id == target.ID {
+			purged = true
+			break
+		}
+	}
+	if !purged {
+		t.Errorf("expected vector purge on superseded target %s; deleted=%v", target.ID, h.vectors.deleted)
 	}
 
 	if parentUpdate == nil {

@@ -485,6 +485,11 @@ func main() {
 	dreamRunner := dreaming.NewRunner(
 		dreamCycleRepo, dreamLogRepo, workerPool,
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo, vectorStore),
+		// Embedding backfill repairs rows whose embedding_dim is set but
+		// whose memory_vectors_<dim> row is missing (no_vector divergence).
+		// Runs before paraphrase dedup so the downstream phase sees the
+		// repaired vector state in the same cycle.
+		dreaming.NewEmbeddingBackfillPhase(memoryRepo, memoryRepo, vectorStore, embedProvider, settingsSvc),
 		// Paraphrase dedup runs before contradiction so the LLM-judge pair
 		// walk operates on a deduped memory set.
 		dreaming.NewParaphraseDedupPhase(memoryRepo, memoryRepo, vectorStore, vectorStore, embedProvider, settingsSvc),

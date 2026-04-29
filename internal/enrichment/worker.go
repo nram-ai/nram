@@ -120,10 +120,13 @@ type LineageCreator interface {
 
 // VectorWriter upserts embedding vectors for memories and entities. Kind
 // selects which table family the single-vector Upsert targets; UpsertBatch
-// reads Kind from each item.
+// reads Kind from each item. Delete drops a single vector by parent ID and
+// is invoked when ingestion-decision supersedes a target memory so the
+// stored vector does not outlive the row's superseded state.
 type VectorWriter interface {
 	Upsert(ctx context.Context, kind storage.VectorKind, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
 	UpsertBatch(ctx context.Context, items []storage.VectorUpsertItem) error
+	Delete(ctx context.Context, kind storage.VectorKind, id uuid.UUID) error
 }
 
 // MemorySoftDeleter soft-deletes a memory row and purges its vector. Used
@@ -458,6 +461,11 @@ type pendingJob struct {
 	ingestionEmbedUsage *provider.TokenUsage
 	ingestionEmbedProv  string
 	ingestionEmbedModel string
+
+	// vectorWriteFailed signals runEmbedBatch already failed the queue
+	// row; finalizeJob must skip to keep embedding_dim from being
+	// persisted with no matching vector.
+	vectorWriteFailed bool
 }
 
 func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *model.EnrichmentJob) error {
@@ -952,6 +960,18 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 	}
 	if err := wp.vectorStore.UpsertBatch(ctx, items); err != nil {
 		slog.Error("enrichment: upsert vectors batch", "jobs", len(pendings), "items", len(items), "err", err)
+		// Fail each pending so finalizeJob skips persisting embedding_dim
+		// without a matching vector; queue retry policy requeues.
+		for _, p := range pendings {
+			if p.shortCircuitDelete() {
+				continue
+			}
+			p.vectorWriteFailed = true
+			if failErr := wp.queue.Fail(ctx, p.job.ID, fmt.Sprintf("vector upsert batch: %v", err)); failErr != nil {
+				slog.Warn("enrichment: queue fail after vector batch failure",
+					"job", p.job.ID, "err", failErr)
+			}
+		}
 	}
 }
 
@@ -996,6 +1016,12 @@ func (wp *WorkerPool) embedChunked(ctx context.Context, ep provider.EmbeddingPro
 // is soft-deleted instead of marked enriched, and only the ingestion-decision
 // token usage is recorded.
 func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
+	if p.vectorWriteFailed {
+		// runEmbedBatch already marked the queue row failed; skipping
+		// the memory Update here is what stops embedding_dim from being
+		// persisted without a matching vector row.
+		return nil
+	}
 	if p.shortCircuitDelete() {
 		return wp.finalizeShortCircuitDelete(ctx, p)
 	}

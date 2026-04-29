@@ -13,7 +13,7 @@ nram provides a self-hosted server that any AI agent can use to persist long-ter
 - **Semantic Search** - Vector embedding support via pgvector (PostgreSQL), pure-Go HNSW (SQLite), or Qdrant. Embedding runs off the write path in the enrichment worker, so stores stay fast.
 - **Enrichment Pipeline** - Background workers extract facts, entities, and relationships using configurable LLM providers. The first phase is an optional context-aware ingestion judge that decides ADD / UPDATE / DELETE / NONE on near-duplicate matches before extraction runs (shadow mode by default).
 - **Knowledge Graph** - Automatically constructed from enriched entities and relationships with multi-hop traversal and entity-vector lookup
-- **Dreaming** - Offline background consolidation cycle with seven phases: entity dedup, paraphrase dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation
+- **Dreaming** - Offline background consolidation cycle with eight phases: entity dedup, embedding backfill (repairs rows whose `embedding_dim` is recorded but whose vector row is missing — re-embeds when the provider is healthy, clears `embedding_dim` otherwise), paraphrase dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation
 - **Novelty Audit** - LLM-judged audit on dream syntheses; low-novelty consolidations are demoted, vectors are purged, and surfacing in recall is suppressed unless explicitly opted in
 - **Adaptive Confidence** - Optional reconsolidation hook on recall nudges `access_count`, `last_accessed`, and `confidence` on surfaced memories; pruning applies a complementary confidence decay so unused memories fade over time. Shadow mode by default for observable-only rollout.
 - **Model Context Protocol (MCP)** - Full MCP server at `/mcp` (Streamable HTTP) with 13 tools covering store, recall (including tag-axis diversification), update, get, list, forget, enrich, graph traversal, project management, and export
@@ -379,9 +379,10 @@ internal/
   api/               HTTP handlers (REST + admin)
   auth/              OAuth 2.0, JWT, WebAuthn, RBAC
   config/            Configuration loading
-  dreaming/          Offline consolidation cycle (entity dedup, paraphrase dedup,
-                     transitive inference, contradiction, consolidation, pruning,
-                     weight adjustment) with rollback and retention sweeps
+  dreaming/          Offline consolidation cycle (entity dedup, embedding
+                     backfill, paraphrase dedup, transitive inference,
+                     contradiction, consolidation, pruning, weight adjustment)
+                     with rollback and retention sweeps
   enrichment/        Background enrichment worker pool, context-aware ingestion
                      decision, dedup, conflict resolution, re-embed
   events/            Event bus, SSE, webhooks

@@ -923,3 +923,61 @@ func TestExtract_RelationshipSkippedForUnknownEntity(t *testing.T) {
 	}
 }
 
+// TestExtract_VectorUpsertFailure_ClearsEmbeddingDim drives the
+// embedMemory failure path: when the vector store rejects an Upsert
+// during fact-child embedding, the extracted child memory must be
+// persisted WITHOUT an embedding_dim. The embedding-backfill phase
+// owns the repair on the next dream cycle.
+func TestExtract_VectorUpsertFailure_ClearsEmbeddingDim(t *testing.T) {
+	projectID, _, projects, namespaces := setupTestFixtures()
+
+	factResp := `[{"fact":"Fact whose vector write fails","confidence":0.9}]`
+	factLLM := makeFactLLM(factResp, 50, 20)
+
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-embed",
+		dimensions: []int{384},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 384)},
+			Model:      "embed-model",
+			Usage:      provider.TokenUsage{PromptTokens: 5, TotalTokens: 5},
+		},
+	}
+
+	svc, deps := newExtractTestService(
+		projects, namespaces,
+		func() provider.LLMProvider { return factLLM },
+		nil,
+		embProvider,
+	)
+	deps.vectors.upsertErr = fmt.Errorf("vector store offline")
+
+	_, err := svc.Extract(context.Background(), &StoreRequest{
+		ProjectID: projectID,
+		Content:   "Some content to embed.",
+		Source:    "test",
+	})
+	if err != nil {
+		t.Fatalf("Extract should succeed even when vector Upsert fails; got err=%v", err)
+	}
+
+	// Find the fact-child memory: it carries the fact text as content.
+	const factText = "Fact whose vector write fails"
+	var child *model.Memory
+	for _, m := range deps.memories.created {
+		if m.Content == factText {
+			child = m
+			break
+		}
+	}
+	if child == nil {
+		t.Fatalf("extracted child memory %q not found in created list", factText)
+	}
+	if child.EmbeddingDim != nil {
+		t.Errorf("child EmbeddingDim must be cleared when vector Upsert failed; got %v", *child.EmbeddingDim)
+	}
+	if len(deps.vectors.upserted) != 0 {
+		t.Errorf("Upsert calls should have failed; got %d successful upserts", len(deps.vectors.upserted))
+	}
+}
+

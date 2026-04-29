@@ -88,16 +88,22 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 	}
 
 	stats := map[string]interface{}{
-		"sub_phase":       model.DreamPhaseParaphraseDedup,
-		"candidates":      0,
-		"visited":         0,
-		"superseded":      0,
-		"no_vector":       0,
-		"vector_errors":   0,
-		"update_errors":   0,
-		"per_cycle_cap":   cap,
-		"top_k":           topK,
-		"threshold":       threshold,
+		"sub_phase":             model.DreamPhaseParaphraseDedup,
+		"candidates":            0,
+		"visited":               0,
+		"superseded":            0,
+		"no_vector":             0,
+		"no_vector_demoted":     0,
+		"no_vector_low_novelty": 0,
+		"no_vector_unknown":     0,
+		"filtered_superseded":   0,
+		"filtered_demoted":      0,
+		"filtered_unembedded":   0,
+		"vector_errors":         0,
+		"update_errors":         0,
+		"per_cycle_cap":         cap,
+		"top_k":                 topK,
+		"threshold":             threshold,
 	}
 	tokensBefore := 0
 	if budget != nil {
@@ -112,7 +118,20 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 	eligible := make([]candidate, 0, len(memories))
 	for i := range memories {
 		m := memories[i]
-		if m.DeletedAt != nil || m.SupersededBy != nil {
+		if m.DeletedAt != nil {
+			continue
+		}
+		if m.SupersededBy != nil {
+			stats["filtered_superseded"] = stats["filtered_superseded"].(int) + 1
+			continue
+		}
+		if m.Confidence == 0 {
+			// Demoted by the audit phase — vector already purged.
+			stats["filtered_demoted"] = stats["filtered_demoted"].(int) + 1
+			continue
+		}
+		if m.EmbeddingDim == nil || *m.EmbeddingDim == 0 {
+			stats["filtered_unembedded"] = stats["filtered_unembedded"].(int) + 1
 			continue
 		}
 		// Fast path: no stamp at all → eligible without JSON decode.
@@ -197,10 +216,18 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 
 		anchorVec, ok := vectorsByID[anchor.ID]
 		if !ok || len(anchorVec) == 0 {
+			// Eligibility filter already excludes Confidence==0 and
+			// EmbeddingDim==nil; non-zero no_vector_unknown points at
+			// drift the embedding-backfill phase will repair next cycle.
 			stats["no_vector"] = stats["no_vector"].(int) + 1
-			// Stamp anyway so we don't busy-loop on memories with no
-			// vector; the next time updated_at bumps (e.g. after
-			// re-embed) the stamp will fall behind and we'll revisit.
+			switch {
+			case anchor.Confidence == 0:
+				stats["no_vector_demoted"] = stats["no_vector_demoted"].(int) + 1
+			case isMetaLowNovelty(eligible[i].meta):
+				stats["no_vector_low_novelty"] = stats["no_vector_low_novelty"].(int) + 1
+			default:
+				stats["no_vector_unknown"] = stats["no_vector_unknown"].(int) + 1
+			}
 			_ = p.stampParaphrase(ctx, anchor, eligible[i].meta)
 			continue
 		}
@@ -286,6 +313,7 @@ func (p *ParaphraseDedupPhase) applySupersede(
 	loser.SupersededBy = &winner.ID
 	loser.SupersededAt = &now
 	loser.UpdatedAt = now
+	loser.EmbeddingDim = nil // vector is purged below; keep row state in sync
 	if err := p.memWriter.Update(ctx, loser); err != nil {
 		slog.Warn("dreaming: paraphrase dedup supersede update failed",
 			"memory", loser.ID, "winner", winner.ID, "err", err)
@@ -307,11 +335,9 @@ func (p *ParaphraseDedupPhase) applySupersede(
 	return nil
 }
 
-// stampParaphrase writes ParaphraseCheckedStampKey without bumping
-// UpdatedAt. Bumping UpdatedAt would falsely re-stale the memory for
-// every other phase that gates on UpdatedAt vs its own stamp, so we
-// preserve it. The freshness invariant `stamp < UpdatedAt → stale`
-// still holds: equal stamp and UpdatedAt is fresh.
+// stampParaphrase records the visit stamp anchored to mem.UpdatedAt
+// via UpdateMetadata so the staleness check (stamp < UpdatedAt) does
+// not self-invalidate next cycle.
 func (p *ParaphraseDedupPhase) stampParaphrase(ctx context.Context, mem *model.Memory, meta map[string]interface{}) error {
 	if meta == nil {
 		meta = map[string]interface{}{}
@@ -322,10 +348,22 @@ func (p *ParaphraseDedupPhase) stampParaphrase(ctx context.Context, mem *model.M
 		return fmt.Errorf("marshal paraphrase stamp: %w", err)
 	}
 	mem.Metadata = encoded
-	if err := p.memWriter.Update(ctx, mem); err != nil {
+	if err := p.memWriter.UpdateMetadata(ctx, mem.ID, mem.NamespaceID, encoded); err != nil {
 		return fmt.Errorf("persist paraphrase stamp: %w", err)
 	}
 	return nil
+}
+
+// isMetaLowNovelty reports whether the memory metadata carries the
+// low_novelty marker set by the consolidation novelty audit on demote.
+// Used by the no_vector categorical breakdown to classify a missing
+// vector as "expected absence" vs. "unexplained drift."
+func isMetaLowNovelty(meta map[string]interface{}) bool {
+	if meta == nil {
+		return false
+	}
+	v, ok := meta["low_novelty"].(bool)
+	return ok && v
 }
 
 // isParaphraseStale mirrors isStale (contradiction phase): no stamp,

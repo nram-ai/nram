@@ -640,3 +640,53 @@ func TestUpdate_RejectsSupersededMemory(t *testing.T) {
 		t.Errorf("expected error to surface winner ID %s; got %q", winnerID, msg)
 	}
 }
+
+// TestUpdate_VectorUpsertFailure_ClearsEmbeddingDim verifies that when
+// the vector store rejects an Upsert during a content update, the memory
+// row is persisted WITHOUT an embedding_dim rather than carrying a stale
+// dim that has no matching vector. The embedding-backfill phase is the
+// owner of repair on the next dream cycle.
+func TestUpdate_VectorUpsertFailure_ClearsEmbeddingDim(t *testing.T) {
+	projectID, _, memID, projects, memories := setupUpdateFixtures()
+
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-provider",
+		dimensions: []int{384},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 384)},
+			Model:      "test-model",
+			Usage:      provider.TokenUsage{PromptTokens: 10, TotalTokens: 10},
+		},
+	}
+
+	svc, _, _, vectors := newUpdateService(memories, projects, func() provider.EmbeddingProvider {
+		return embProvider
+	})
+	vectors.upsertErr = fmt.Errorf("vector store offline")
+
+	newContent := "edit that triggers re-embed"
+	resp, err := svc.Update(context.Background(), &UpdateRequest{
+		ProjectID: projectID,
+		MemoryID:  memID,
+		Content:   &newContent,
+	})
+	if err != nil {
+		t.Fatalf("Update should succeed even when vector Upsert fails; got err=%v", err)
+	}
+	if !resp.ReEmbedded {
+		t.Errorf("ReEmbedded should be true (we did call the embedder); got false")
+	}
+
+	// The persisted memory must NOT advertise an embedding_dim, since
+	// the vector write failed.
+	if len(memories.updated) != 1 {
+		t.Fatalf("expected 1 memory Update; got %d", len(memories.updated))
+	}
+	persisted := memories.updated[0]
+	if persisted.EmbeddingDim != nil {
+		t.Errorf("EmbeddingDim must be cleared when vector Upsert failed; got %v", *persisted.EmbeddingDim)
+	}
+	if len(vectors.upserted) != 0 {
+		t.Errorf("upsert call should have failed; got %d successful upserts", len(vectors.upserted))
+	}
+}

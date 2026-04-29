@@ -162,6 +162,9 @@ func TestParaphraseDedupPhase_SupersedesNearDuplicate(t *testing.T) {
 	if *loserUpdate.SupersededBy != older.ID {
 		t.Errorf("loser should point to older as winner; got %s, want %s", *loserUpdate.SupersededBy, older.ID)
 	}
+	if loserUpdate.EmbeddingDim != nil {
+		t.Errorf("loser should have EmbeddingDim cleared on supersede; got %v", *loserUpdate.EmbeddingDim)
+	}
 
 	purgedLoser := false
 	for _, id := range vs.deleted {
@@ -203,17 +206,20 @@ func TestParaphraseDedupPhase_StampsSurvivorWithoutMatch(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	if len(writer.updates) != 1 {
-		t.Fatalf("expected exactly 1 Update (stamp survivor), got %d", len(writer.updates))
+	if len(writer.updates) != 0 {
+		t.Fatalf("survivor stamp must use UpdateMetadata, not Update (Update bumps updated_at and would self-invalidate the stamp); got %d Update calls", len(writer.updates))
 	}
-	updated := writer.updates[0]
-	if updated.SupersededBy != nil {
-		t.Errorf("survivor should not be superseded; got SupersededBy=%v", updated.SupersededBy)
+	if len(writer.metadataUpdates) != 1 {
+		t.Fatalf("expected exactly 1 UpdateMetadata (survivor stamp), got %d", len(writer.metadataUpdates))
+	}
+	stamped := writer.metadataUpdates[0]
+	if stamped.ID != mem.ID {
+		t.Errorf("stamped wrong memory; got %s, want %s", stamped.ID, mem.ID)
 	}
 	var meta map[string]interface{}
-	_ = json.Unmarshal(updated.Metadata, &meta)
+	_ = json.Unmarshal(stamped.Metadata, &meta)
 	if _, ok := meta[ParaphraseCheckedStampKey]; !ok {
-		t.Errorf("survivor should carry %s stamp; got metadata=%s", ParaphraseCheckedStampKey, string(updated.Metadata))
+		t.Errorf("survivor should carry %s stamp; got metadata=%s", ParaphraseCheckedStampKey, string(stamped.Metadata))
 	}
 }
 
@@ -246,7 +252,10 @@ func TestParaphraseDedupPhase_SkipsAlreadyStamped(t *testing.T) {
 	}
 
 	if len(writer.updates) != 0 {
-		t.Errorf("already-stamped memory must not be touched; got %d updates", len(writer.updates))
+		t.Errorf("already-stamped memory must not be touched; got %d Update calls", len(writer.updates))
+	}
+	if len(writer.metadataUpdates) != 0 {
+		t.Errorf("already-stamped memory must not be re-stamped; got %d UpdateMetadata calls", len(writer.metadataUpdates))
 	}
 }
 
@@ -270,7 +279,143 @@ func TestParaphraseDedupPhase_DisabledByZeroSetting(t *testing.T) {
 	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if len(writer.updates) != 0 {
-		t.Errorf("disabled phase must be a no-op, got %d updates", len(writer.updates))
+	if len(writer.updates) != 0 || len(writer.metadataUpdates) != 0 {
+		t.Errorf("disabled phase must be a no-op, got %d updates / %d metadata updates", len(writer.updates), len(writer.metadataUpdates))
 	}
 }
+
+// TestParaphraseDedupPhase_StampsPersistAcrossCycles is the load-bearing
+// regression test for the stamp self-invalidation bug. Two consecutive
+// cycles against the same namespace, no content edits between. Cycle 1
+// stamps a unique memory via UpdateMetadata; cycle 2 must classify it as
+// fresh (stamp == UpdatedAt → not stale) and skip it entirely.
+//
+// Before the fix, stampParaphrase called Update which bumped updated_at
+// and re-fetched it, leaving the stamp strictly less than the new
+// updated_at; cycle 2 would always re-visit. Convergence depends on
+// UpdateMetadata leaving updated_at intact.
+func TestParaphraseDedupPhase_StampsPersistAcrossCycles(t *testing.T) {
+	ns := uuid.New()
+	dim := 2
+	mem, vec := userMemoryWithVector("Stable content", 1.0, time.Now(), dim, ns, 1.0)
+
+	reader := &fakeMemoryReader{list: []model.Memory{mem}}
+	writer := &updatingMemoryWriter{}
+	vs := &paraphraseTestVectorStore{
+		vectorsByID: map[uuid.UUID][]float32{mem.ID: vec},
+		searchResults: map[uuid.UUID][]storage.VectorSearchResult{
+			mem.ID: {{ID: mem.ID, Score: 1.0, NamespaceID: ns}},
+		},
+	}
+
+	phase := NewParaphraseDedupPhase(reader, writer, vs, vs, nil, paraphraseDedupSettings())
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	// Cycle 1: stamp written via UpdateMetadata.
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+		t.Fatalf("cycle 1 Execute: %v", err)
+	}
+	if len(writer.metadataUpdates) != 1 {
+		t.Fatalf("cycle 1 should stamp via UpdateMetadata; got %d UpdateMetadata calls", len(writer.metadataUpdates))
+	}
+	if len(writer.updates) != 0 {
+		t.Fatalf("cycle 1 must not call Update for stamp-only writes; got %d Update calls", len(writer.updates))
+	}
+
+	// Apply the metadata update to the reader's view so cycle 2 sees the
+	// stamp. updated_at is intentionally NOT bumped — that's the whole
+	// point of UpdateMetadata.
+	stamp := writer.metadataUpdates[0]
+	reader.list[0].Metadata = stamp.Metadata
+
+	// Cycle 2: same memory, stamped now. Must be filtered out at
+	// eligibility, no Update or UpdateMetadata.
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+		t.Fatalf("cycle 2 Execute: %v", err)
+	}
+	if len(writer.metadataUpdates) != 1 {
+		t.Errorf("cycle 2 should not re-stamp a fresh memory; got %d UpdateMetadata calls (expected 1 from cycle 1)", len(writer.metadataUpdates))
+	}
+	if len(writer.updates) != 0 {
+		t.Errorf("cycle 2 must not Update; got %d", len(writer.updates))
+	}
+}
+
+// TestParaphraseDedupPhase_SkipsDemotedMemories asserts that demoted
+// memories (Confidence == 0) are filtered before the no_vector path.
+// Their vectors were purged by the audit phase, so vector search would
+// always classify them no_vector.
+func TestParaphraseDedupPhase_SkipsDemotedMemories(t *testing.T) {
+	ns := uuid.New()
+	dim := 2
+	demoted, _ := userMemoryWithVector("Demoted memory", 0.0, time.Now(), dim, ns, 1.0)
+	live, vec := userMemoryWithVector("Live memory", 1.0, time.Now(), dim, ns, 2.0)
+
+	reader := &fakeMemoryReader{list: []model.Memory{demoted, live}}
+	writer := &updatingMemoryWriter{}
+	// Demoted memory deliberately not in vectorsByID — vector was purged.
+	vs := &paraphraseTestVectorStore{
+		vectorsByID: map[uuid.UUID][]float32{live.ID: vec},
+		searchResults: map[uuid.UUID][]storage.VectorSearchResult{
+			live.ID: {{ID: live.ID, Score: 1.0, NamespaceID: ns}},
+		},
+	}
+
+	phase := NewParaphraseDedupPhase(reader, writer, vs, vs, nil, paraphraseDedupSettings())
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Demoted memory should never be stamped; only the live one should.
+	for _, m := range writer.metadataUpdates {
+		if m.ID == demoted.ID {
+			t.Errorf("demoted memory %s must not be stamped", demoted.ID)
+		}
+	}
+	for _, m := range writer.updates {
+		if m.ID == demoted.ID {
+			t.Errorf("demoted memory %s must not be Updated", demoted.ID)
+		}
+	}
+}
+
+// TestParaphraseDedupPhase_SkipsUnembeddedMemories asserts that memories
+// without an embedding_dim are filtered before the no_vector path —
+// vector search would always miss them anyway.
+func TestParaphraseDedupPhase_SkipsUnembeddedMemories(t *testing.T) {
+	ns := uuid.New()
+	dim := 2
+	unembedded, _ := userMemoryWithVector("Never embedded", 1.0, time.Now(), dim, ns, 1.0)
+	unembedded.EmbeddingDim = nil
+	live, vec := userMemoryWithVector("Live", 1.0, time.Now(), dim, ns, 2.0)
+
+	reader := &fakeMemoryReader{list: []model.Memory{unembedded, live}}
+	writer := &updatingMemoryWriter{}
+	vs := &paraphraseTestVectorStore{
+		vectorsByID: map[uuid.UUID][]float32{live.ID: vec},
+		searchResults: map[uuid.UUID][]storage.VectorSearchResult{
+			live.ID: {{ID: live.ID, Score: 1.0, NamespaceID: ns}},
+		},
+	}
+
+	phase := NewParaphraseDedupPhase(reader, writer, vs, vs, nil, paraphraseDedupSettings())
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	for _, m := range writer.metadataUpdates {
+		if m.ID == unembedded.ID {
+			t.Errorf("unembedded memory %s must not be stamped", unembedded.ID)
+		}
+	}
+}
+

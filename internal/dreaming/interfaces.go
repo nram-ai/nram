@@ -2,6 +2,7 @@ package dreaming
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,11 @@ type MemoryReader interface {
 type MemoryWriter interface {
 	Create(ctx context.Context, mem *model.Memory) error
 	Update(ctx context.Context, mem *model.Memory) error
+	// UpdateMetadata writes only the metadata column without bumping
+	// updated_at. Phases use it to record visit stamps so the staleness
+	// check (stamp < updated_at) does not immediately re-invalidate the
+	// stamp on the next cycle.
+	UpdateMetadata(ctx context.Context, id, namespaceID uuid.UUID, metadata json.RawMessage) error
 	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	// DecayConfidence multiplicatively scales confidence for the given IDs,
@@ -109,4 +115,13 @@ type VectorPurger interface {
 // vector rows cascade and disk/index space is reclaimed.
 type MemoryHardDeleter interface {
 	HardDeleteSoftDeletedBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error)
+}
+
+// MemoryDimRepairer locates memories whose embedding_dim is set but whose
+// matching memory_vectors_<dim> row is missing. The embedding-backfill
+// phase pages through divergent rows per supported dim and either re-
+// embeds them or clears embedding_dim so the row state matches the
+// vector store.
+type MemoryDimRepairer interface {
+	FindMemoriesMissingVector(ctx context.Context, namespaceID uuid.UUID, dim, limit int) ([]model.Memory, error)
 }

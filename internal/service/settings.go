@@ -116,6 +116,15 @@ const (
 	SettingDreamParaphraseCapPerCycle = "dreaming.paraphrase.cap_per_cycle"
 	SettingDreamParaphraseTopK        = "dreaming.paraphrase.top_k"
 
+	// Embedding-backfill phase: scans for memories whose embedding_dim is
+	// recorded but whose corresponding memory_vectors_<dim> row is missing
+	// (the no_vector divergence the paraphrase phase observes), then either
+	// re-embeds via the live embedder or clears embedding_dim so the row
+	// state matches the vector store. Runs before paraphrase dedup so the
+	// downstream phase sees the repaired state in the same cycle.
+	SettingDreamEmbeddingBackfillEnabled     = "dreaming.embedding_backfill.enabled"
+	SettingDreamEmbeddingBackfillCapPerCycle = "dreaming.embedding_backfill.cap_per_cycle"
+
 	// Retention for soft-deleted memories. Rows past this age are hard-deleted
 	// by the retention sweeper and their vector rows are CASCADEd alongside.
 	SettingMemorySoftDeleteRetentionDays = "memory.soft_delete_retention_days"
@@ -252,6 +261,9 @@ alignment must be a float:
 	SettingDreamContradictionTieHaircut:          "0.92",
 	SettingDreamContradictionParaphraseEnabled:   "true",
 	SettingDreamContradictionParaphraseThreshold: "0.97",
+
+	SettingDreamEmbeddingBackfillEnabled:     "true",
+	SettingDreamEmbeddingBackfillCapPerCycle: "200",
 
 	SettingDreamParaphraseEnabled:     "true",
 	SettingDreamParaphraseThreshold:   "0.97",

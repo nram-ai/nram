@@ -325,9 +325,12 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		// prune branch (with its 7d clock from SupersededAt) cleans it up
 		// faster than waiting for confidence drift to reach zero. Set the
 		// fields here so the haircut Update below carries them in one write.
+		loserSuperseded := false
 		if winnerMem != nil && winnerMem.Confidence > supersedeThreshold {
 			loserMem.SupersededBy = &winnerMem.ID
 			loserMem.SupersededAt = &now
+			loserMem.EmbeddingDim = nil
+			loserSuperseded = true
 		}
 
 		applyHaircut := func(mem *model.Memory, factor float64) {
@@ -346,6 +349,13 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		} else {
 			applyHaircut(loserMem, loserFactor)
 			applyHaircut(winnerMem, winnerFactor)
+		}
+
+		if loserSuperseded && p.vectorPurger != nil {
+			if err := p.vectorPurger.Delete(ctx, storage.VectorKindMemory, loserMem.ID); err != nil {
+				slog.Warn("dreaming: contradiction haircut vector purge failed",
+					"memory", loserMem.ID, "err", err)
+			}
 		}
 
 		edgeCtx, _ := json.Marshal(map[string]interface{}{
@@ -795,6 +805,7 @@ func (p *ContradictionPhase) paraphraseSupersede(
 	loser.SupersededBy = &winner.ID
 	loser.SupersededAt = &now
 	loser.UpdatedAt = now
+	loser.EmbeddingDim = nil // vector is purged below; keep row state in sync
 
 	if err := p.memWriter.Update(ctx, loser); err != nil {
 		slog.Warn("dreaming: paraphrase supersede update failed",
@@ -820,24 +831,21 @@ func (p *ContradictionPhase) paraphraseSupersede(
 		})
 }
 
-// stampContradictionsChecked writes ContradictionsCheckedStampKey onto the
-// memory's metadata. UpdatedAt and the stamp are set to the same now so the
-// strict-less-than staleness check does not immediately invalidate the
-// stamp.
+// stampContradictionsChecked records the visit stamp anchored to
+// mem.UpdatedAt via UpdateMetadata so the staleness check
+// (stamp < UpdatedAt) does not self-invalidate next cycle.
 func (p *ContradictionPhase) stampContradictionsChecked(ctx context.Context, mem *model.Memory, meta map[string]interface{}) error {
 	if meta == nil {
 		meta = map[string]interface{}{}
 	}
-	now := time.Now().UTC()
-	meta[ContradictionsCheckedStampKey] = now.Format(time.RFC3339Nano)
+	meta[ContradictionsCheckedStampKey] = mem.UpdatedAt.UTC().Format(time.RFC3339Nano)
 
 	encoded, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshal contradiction stamp metadata: %w", err)
 	}
 	mem.Metadata = encoded
-	mem.UpdatedAt = now
-	if err := p.memWriter.Update(ctx, mem); err != nil {
+	if err := p.memWriter.UpdateMetadata(ctx, mem.ID, mem.NamespaceID, encoded); err != nil {
 		return fmt.Errorf("persist contradiction stamp: %w", err)
 	}
 	return nil

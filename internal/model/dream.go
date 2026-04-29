@@ -27,13 +27,14 @@ const (
 
 // DreamPhase constants define the ordered phases of a dream cycle.
 const (
-	DreamPhaseEntityDedup     = "entity_dedup"
-	DreamPhaseParaphraseDedup = "paraphrase_dedup"
-	DreamPhaseTransitive      = "transitive_discovery"
-	DreamPhaseContradictions  = "contradiction_detection"
-	DreamPhaseConsolidation   = "consolidation"
-	DreamPhasePruning         = "pruning"
-	DreamPhaseWeightAdjust    = "weight_adjustment"
+	DreamPhaseEntityDedup       = "entity_dedup"
+	DreamPhaseEmbeddingBackfill = "embedding_backfill"
+	DreamPhaseParaphraseDedup   = "paraphrase_dedup"
+	DreamPhaseTransitive        = "transitive_discovery"
+	DreamPhaseContradictions    = "contradiction_detection"
+	DreamPhaseConsolidation     = "consolidation"
+	DreamPhasePruning           = "pruning"
+	DreamPhaseWeightAdjust      = "weight_adjustment"
 )
 
 // DreamSource is the memory source value for dream-created content.

@@ -396,6 +396,7 @@ func (p *ConsolidationPhase) supersedeOriginals(
 		original.SupersededBy = &synthesis.ID
 		original.SupersededAt = &now
 		original.UpdatedAt = now
+		original.EmbeddingDim = nil // vector is purged below; keep row state in sync
 		if err := p.memWriter.Update(ctx, original); err != nil {
 			slog.Warn("dreaming: supersession update failed", "memory", memID, "err", err)
 			continue
@@ -676,8 +677,10 @@ func (p *ConsolidationPhase) demoteDream(ctx context.Context, logger *DreamLogWr
 }
 
 // writeAuditDecision is the shared write path for stampAudited and demoteDream.
-// When demote is true, Confidence is zeroed and low_novelty markers are added;
-// when logger is non-nil and demote fired, DreamOpMemoryDemoted is recorded.
+// demote=false uses UpdateMetadata so the audit stamp survives the next cycle;
+// demote=true takes the full Update path because Confidence/low_novelty/
+// EmbeddingDim are real state changes — a stale stamp on demote is harmless
+// since low_novelty filtering keeps the row out of future audit eligibility.
 func (p *ConsolidationPhase) writeAuditDecision(
 	ctx context.Context,
 	logger *DreamLogWriter,
@@ -691,8 +694,11 @@ func (p *ConsolidationPhase) writeAuditDecision(
 	}
 	beforeConfidence := mem.Confidence
 
-	now := time.Now().UTC()
-	meta[NoveltyAuditStampKey] = now.Format(time.RFC3339)
+	stampValue := mem.UpdatedAt.UTC()
+	if demote {
+		stampValue = time.Now().UTC()
+	}
+	meta[NoveltyAuditStampKey] = stampValue.Format(time.RFC3339Nano)
 	meta["novelty_audit_reason"] = reason
 	if demote {
 		meta["low_novelty"] = true
@@ -705,29 +711,34 @@ func (p *ConsolidationPhase) writeAuditDecision(
 		return
 	}
 	mem.Metadata = encoded
-	if demote {
-		mem.Confidence = 0
-	}
-	mem.UpdatedAt = now
-	if err := p.memWriter.Update(ctx, mem); err != nil {
-		slog.Warn("dreaming: audit update failed", "memory", mem.ID, "demote", demote, "err", err)
+
+	if !demote {
+		if err := p.memWriter.UpdateMetadata(ctx, mem.ID, mem.NamespaceID, encoded); err != nil {
+			slog.Warn("dreaming: audit stamp update failed", "memory", mem.ID, "err", err)
+		}
 		return
 	}
 
-	if demote {
-		// Demoted dreams are excluded from recall via isLowNovelty, so
-		// the vector is dead weight in the index.
-		p.purgeVector(ctx, mem.ID)
-		if logger != nil {
-			_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
-				model.DreamOpMemoryDemoted, "memory", mem.ID,
-				map[string]interface{}{"confidence": beforeConfidence},
-				map[string]interface{}{
-					"confidence":  0,
-					"low_novelty": true,
-					"reason":      reason,
-				})
-		}
+	mem.Confidence = 0
+	mem.EmbeddingDim = nil
+	mem.UpdatedAt = stampValue
+	if err := p.memWriter.Update(ctx, mem); err != nil {
+		slog.Warn("dreaming: audit update failed", "memory", mem.ID, "demote", true, "err", err)
+		return
+	}
+
+	// Demoted dreams are excluded from recall via isLowNovelty, so
+	// the vector is dead weight in the index.
+	p.purgeVector(ctx, mem.ID)
+	if logger != nil {
+		_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+			model.DreamOpMemoryDemoted, "memory", mem.ID,
+			map[string]interface{}{"confidence": beforeConfidence},
+			map[string]interface{}{
+				"confidence":  0,
+				"low_novelty": true,
+				"reason":      reason,
+			})
 	}
 }
 

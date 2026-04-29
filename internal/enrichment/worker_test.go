@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -293,6 +294,7 @@ func (m *mockTokenRecorder) Record(_ context.Context, usage *model.TokenUsage) e
 type mockVectorWriter struct {
 	mu      sync.Mutex
 	vectors []vectorEntry
+	deleted []uuid.UUID
 	err     error
 }
 
@@ -322,6 +324,13 @@ func (m *mockVectorWriter) UpsertBatch(_ context.Context, items []storage.Vector
 	for _, it := range items {
 		m.vectors = append(m.vectors, vectorEntry{ID: it.ID, NamespaceID: it.NamespaceID, Embedding: it.Embedding, Dimension: it.Dimension})
 	}
+	return nil
+}
+
+func (m *mockVectorWriter) Delete(_ context.Context, _ storage.VectorKind, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleted = append(m.deleted, id)
 	return nil
 }
 
@@ -1211,6 +1220,72 @@ func TestProcessBatch_SingleSharedEmbed(t *testing.T) {
 	if embedRecords != 1 {
 		t.Errorf("expected 1 aggregate embedding usage record, got %d", embedRecords)
 	}
+}
+
+// TestProcessBatch_VectorUpsertFailure_FailsJobs drives the
+// UpsertBatch failure path. Before the fix, runEmbedBatch logged the
+// error and let processBatch's finalize loop run, persisting
+// embedding_dim on memories whose vectors had not landed. Now the
+// pending jobs in the failed batch are marked failed and finalize is
+// skipped, so the memory rows do not persist a stale embedding_dim.
+func TestProcessBatch_VectorUpsertFailure_FailsJobs(t *testing.T) {
+	embedProv := &mockEmbeddingProvider{
+		name: "test-embed",
+		respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+			embs := make([][]float32, len(req.Input))
+			for i := range req.Input {
+				embs[i] = []float32{float32(i), float32(i) + 0.1, float32(i) + 0.2}
+			}
+			return &provider.EmbeddingResponse{
+				Embeddings: embs,
+				Model:      "embed-model",
+				Usage:      provider.TokenUsage{PromptTokens: 40, TotalTokens: 40},
+			}, nil
+		},
+	}
+
+	h := newTestHarness(nil, nil, embedProv)
+	// Force every UpsertBatch to fail so the worker's failure path runs.
+	h.vectors.err = errors.New("vector store offline")
+
+	jobs := make([]*model.EnrichmentJob, 0, 2)
+	memIDs := make([]uuid.UUID, 0, 2)
+	for i := 0; i < 2; i++ {
+		mem := testMemory()
+		mem.ID = uuid.New()
+		mem.Content = fmt.Sprintf("memory-content-%d", i)
+		h.reader.byID[mem.ID] = mem
+		memIDs = append(memIDs, mem.ID)
+		jobs = append(jobs, testJob(mem.ID, mem.NamespaceID))
+	}
+
+	h.pool.processBatch(context.Background(), "w-0", jobs)
+
+	// All jobs must be in the queue's failed map; none completed.
+	if len(h.queue.completed) != 0 {
+		t.Errorf("no jobs should be completed when vector batch failed; got %d", len(h.queue.completed))
+	}
+	if len(h.queue.failed) != len(jobs) {
+		t.Errorf("expected %d failed jobs; got %d", len(jobs), len(h.queue.failed))
+	}
+	for _, j := range jobs {
+		if msg, ok := h.queue.failed[j.ID]; !ok {
+			t.Errorf("job %s not marked failed", j.ID)
+		} else if !strings.Contains(msg, "vector upsert batch") {
+			t.Errorf("expected failure message to mention vector upsert; got %q", msg)
+		}
+	}
+
+	// No memory Update should have happened — finalizeJob is the only
+	// thing that persists embedding_dim, and it must be skipped on the
+	// vectorWriteFailed flag.
+	for _, mem := range h.updater.updated {
+		if mem.EmbeddingDim != nil {
+			t.Errorf("memory %s should not persist embedding_dim after vector batch failure; got %d",
+				mem.ID, *mem.EmbeddingDim)
+		}
+	}
+	_ = memIDs
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ package dreaming
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -58,6 +59,9 @@ type recordingMemoryWriter struct {
 
 func (r *recordingMemoryWriter) Create(_ context.Context, _ *model.Memory) error { return nil }
 func (r *recordingMemoryWriter) Update(_ context.Context, _ *model.Memory) error { return nil }
+func (r *recordingMemoryWriter) UpdateMetadata(_ context.Context, _, _ uuid.UUID, _ json.RawMessage) error {
+	return nil
+}
 func (r *recordingMemoryWriter) SoftDelete(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
 	return nil
 }

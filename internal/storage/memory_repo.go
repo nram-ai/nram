@@ -925,6 +925,34 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 	return r.reload(ctx, mem)
 }
 
+// UpdateMetadata writes only the metadata column. It deliberately does
+// NOT bump updated_at, so phases that stamp a "checked-by-X" sentinel
+// can record the visit without invalidating their own staleness check
+// (stamp < updated_at) on the next cycle. The caller is responsible for
+// keeping any in-memory representation of metadata in sync; no reload
+// is performed.
+func (r *MemoryRepo) UpdateMetadata(ctx context.Context, id, namespaceID uuid.UUID, metadata json.RawMessage) error {
+	if len(metadata) == 0 {
+		metadata = json.RawMessage(`{}`)
+	}
+	query := `UPDATE memories SET metadata = ? WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories SET metadata = $1 WHERE id = $2 AND namespace_id = $3 AND deleted_at IS NULL`
+	}
+	result, err := r.db.Exec(ctx, query, string(metadata), id.String(), namespaceID.String())
+	if err != nil {
+		return fmt.Errorf("memory update metadata: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("memory update metadata rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // BumpReinforcement atomically bumps access_count, last_accessed, and
 // multiplicatively nudges confidence (capped at 1.0) for the given memory IDs
 // that are not soft-deleted. factor is the multiplicative reinforcement term:
@@ -1074,6 +1102,71 @@ func (r *MemoryRepo) purgeVector(ctx context.Context, id uuid.UUID) {
 		return
 	}
 	_ = r.vectorStore.Delete(ctx, VectorKindMemory, id)
+}
+
+// FindMemoriesMissingVector returns memories that record an embedding_dim
+// equal to dim but have no corresponding row in the dim's vector table.
+// Used by the embedding-backfill phase to repair drift between
+// memories.embedding_dim and memory_vectors_<dim>. Soft-deleted,
+// superseded, and demoted (confidence = 0) rows are excluded so the
+// repair targets only memories that should currently be searchable.
+func (r *MemoryRepo) FindMemoriesMissingVector(ctx context.Context, namespaceID uuid.UUID, dim, limit int) ([]model.Memory, error) {
+	if !SupportedVectorDimensions[dim] {
+		return nil, fmt.Errorf("memory find missing vector: unsupported dim %d", dim)
+	}
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	selectCols := memoryColumnsAliased("m")
+
+	var query string
+	var args []interface{}
+	if r.db.Backend() == BackendPostgres {
+		table := fmt.Sprintf("memory_vectors_%d", dim)
+		query = selectCols + ` FROM memories m
+			LEFT JOIN ` + table + ` v ON v.memory_id = m.id
+			WHERE m.namespace_id = $1
+			  AND m.deleted_at IS NULL
+			  AND m.superseded_by IS NULL
+			  AND m.confidence > 0
+			  AND m.embedding_dim = $2
+			  AND v.memory_id IS NULL
+			ORDER BY m.created_at DESC
+			LIMIT $3`
+		args = []interface{}{namespaceID.String(), dim, limit}
+	} else {
+		query = selectCols + ` FROM memories m
+			LEFT JOIN memory_vectors v ON v.memory_id = m.id AND v.dimension = ?
+			WHERE m.namespace_id = ?
+			  AND m.deleted_at IS NULL
+			  AND m.superseded_by IS NULL
+			  AND m.confidence > 0
+			  AND m.embedding_dim = ?
+			  AND v.memory_id IS NULL
+			ORDER BY m.created_at DESC
+			LIMIT ?`
+		args = []interface{}{dim, namespaceID.String(), dim, limit}
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory find missing vector: %w", err)
+	}
+	defer rows.Close()
+
+	out := []model.Memory{}
+	for rows.Next() {
+		mem, err := r.scanMemoryFromRows(rows)
+		if err != nil {
+			return nil, fmt.Errorf("memory find missing vector scan: %w", err)
+		}
+		out = append(out, *mem)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory find missing vector iteration: %w", err)
+	}
+	return out, nil
 }
 
 // HardDeleteSoftDeletedBefore hard-deletes rows whose deleted_at is older

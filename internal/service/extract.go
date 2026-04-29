@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -483,11 +484,18 @@ func (s *ExtractionService) embedMemory(
 	tokens.Output += resp.Usage.CompletionTokens
 
 	embDim := len(resp.Embeddings[0])
-	mem.EmbeddingDim = &embDim
 
 	if s.vectorStore != nil {
-		_ = s.vectorStore.Upsert(ctx, storage.VectorKindMemory, mem.ID, mem.NamespaceID, resp.Embeddings[0], embDim)
+		if err := s.vectorStore.Upsert(ctx, storage.VectorKindMemory, mem.ID, mem.NamespaceID, resp.Embeddings[0], embDim); err != nil {
+			// Drop dim so the row doesn't claim a vector that never landed;
+			// the backfill phase repairs on the next dream cycle.
+			slog.Warn("extract: vector upsert failed; persisting without embedding_dim",
+				"memory", mem.ID, "dim", embDim, "err", err)
+			mem.EmbeddingDim = nil
+			return
+		}
 	}
+	mem.EmbeddingDim = &embDim
 }
 
 // parseFactResponse parses an LLM fact extraction response. With JSON mode

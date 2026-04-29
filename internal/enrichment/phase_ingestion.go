@@ -14,6 +14,7 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // ingestionSettings is the snapshot taken once per phase invocation so the
@@ -442,7 +443,8 @@ func (wp *WorkerPool) applyIngestionUpdate(ctx context.Context, p *pendingJob) {
 		return
 	}
 
-	// Mark the target memory superseded by the new one.
+	// Mark the target memory superseded by the new one and drop its
+	// vector. embedding_dim is cleared so the row state matches.
 	targetMem, err := wp.memories.GetByID(ctx, target)
 	if err != nil {
 		slog.Error("enrichment: ingestion update load target", "job", p.job.ID, "target", target, "err", err)
@@ -452,8 +454,16 @@ func (wp *WorkerPool) applyIngestionUpdate(ctx context.Context, p *pendingJob) {
 	targetMem.SupersededBy = &newID
 	targetMem.SupersededAt = &now
 	targetMem.UpdatedAt = now
+	targetMem.EmbeddingDim = nil
 	if err := wp.memUpdater.Update(ctx, targetMem); err != nil {
 		slog.Error("enrichment: ingestion update target", "job", p.job.ID, "target", target, "err", err)
+		return
+	}
+	if wp.vectorStore != nil {
+		if err := wp.vectorStore.Delete(ctx, storage.VectorKindMemory, target); err != nil {
+			slog.Warn("enrichment: ingestion update vector purge failed",
+				"job", p.job.ID, "target", target, "err", err)
+		}
 	}
 }
 
