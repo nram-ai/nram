@@ -1,10 +1,12 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   useProviderSlots,
   useUpdateProviderSlot,
   useTestProviderSlot,
   useOllamaModels,
   usePullOllamaModel,
+  useSettings,
+  useUpdateSetting,
 } from "../hooks/useApi";
 import type {
   ProviderSlot,
@@ -14,6 +16,8 @@ import type {
   OllamaModel,
 } from "../api/client";
 import { APIError } from "../api/client";
+
+const INGESTION_MODEL_SETTING_KEY = "enrichment.ingestion_decision.model";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -539,6 +543,141 @@ function ProviderSlotEditForm({
 }
 
 // ---------------------------------------------------------------------------
+// Ingestion Decision Model Override (Fact slot only)
+// ---------------------------------------------------------------------------
+
+// IngestionDecisionModelOverride reads and writes the
+// enrichment.ingestion_decision.model setting. The ingestion-decision phase
+// runs against the Fact provider; this override only swaps the model name —
+// it does not configure a separate provider slot. Empty value falls back to
+// the Fact slot's model.
+function IngestionDecisionModelOverride({
+  factSlot,
+}: {
+  factSlot: ProviderSlot;
+}) {
+  const settingsQuery = useSettings("global");
+  const updateSetting = useUpdateSetting();
+  const [editValue, setEditValue] = useState("");
+
+  const stored = settingsQuery.data?.data?.find(
+    (s) => s.key === INGESTION_MODEL_SETTING_KEY,
+  );
+  const storedValue =
+    typeof stored?.value === "string" ? stored.value : "";
+
+  useEffect(() => {
+    setEditValue(storedValue);
+  }, [storedValue]);
+
+  const isOllama = factSlot.type === "ollama";
+  const placeholder = factSlot.model
+    ? `Falls back to Fact slot model: ${factSlot.model}`
+    : "Empty falls back to Fact slot model";
+  const dirty = editValue !== storedValue;
+
+  const writeValue = useCallback(
+    (value: string) => {
+      updateSetting.mutate({
+        key: INGESTION_MODEL_SETTING_KEY,
+        value,
+        scope: "global",
+      });
+    },
+    [updateSetting],
+  );
+
+  const handleSave = useCallback(
+    () => writeValue(editValue.trim()),
+    [editValue, writeValue],
+  );
+
+  const handleClear = useCallback(() => {
+    setEditValue("");
+    writeValue("");
+  }, [writeValue]);
+
+  return (
+    <div className="mt-4 rounded-md border border-border bg-muted/30 px-4 py-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div>
+          <h4 className="text-sm font-medium text-foreground">
+            Ingestion Decision Model Override
+          </h4>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            The ingestion-decision phase reuses this Fact provider. Override
+            just the model name (categorisation is a small-model task);
+            empty falls back to the Fact slot's model.
+          </p>
+        </div>
+        {storedValue && (
+          <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+            Override active
+          </span>
+        )}
+      </div>
+      {isOllama ? (
+        <div className="space-y-2">
+          <input
+            type="text"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            placeholder={placeholder}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          {factSlot.url && (
+            <OllamaModelPicker
+              ollamaUrl={factSlot.url}
+              selectedModel={editValue}
+              onSelectModel={(m) => setEditValue(m)}
+              slotName="fact"
+            />
+          )}
+        </div>
+      ) : (
+        <input
+          type="text"
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          placeholder={placeholder}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      )}
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={!dirty || updateSetting.isPending}
+          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {updateSetting.isPending ? "Saving..." : "Save Override"}
+        </button>
+        {storedValue && (
+          <button
+            type="button"
+            onClick={handleClear}
+            disabled={updateSetting.isPending}
+            className="rounded-md border border-input px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm hover:bg-muted disabled:opacity-50"
+          >
+            Clear Override
+          </button>
+        )}
+        {updateSetting.isSuccess && !dirty && (
+          <span className="text-xs text-green-700 dark:text-green-400">
+            Saved
+          </span>
+        )}
+        {updateSetting.isError && (
+          <span className="text-xs text-red-600 dark:text-red-400">
+            {(updateSetting.error as Error).message}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Provider Slot Card
 // ---------------------------------------------------------------------------
 
@@ -863,6 +1002,14 @@ function ProviderSlotCard({
               <p className="text-sm text-red-600 dark:text-red-400">
                 Failed to update: {(updateMutation.error as Error).message}
               </p>
+            )}
+
+            {/* Ingestion-decision model override (Fact slot only). The
+                ingestion phase reuses the Fact provider at runtime, so the
+                override sits next to its host slot rather than in the
+                generic Settings page. */}
+            {slot.slot === "fact" && slot.configured && (
+              <IngestionDecisionModelOverride factSlot={slot} />
             )}
           </div>
         )}

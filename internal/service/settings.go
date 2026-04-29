@@ -272,6 +272,34 @@ alignment must be a float:
 
 	SettingMemorySoftDeleteRetentionDays: "30",
 
+	SettingFactPrompt: `You are a fact extraction engine. Given a text, extract all discrete facts as a JSON array. Each fact should be a JSON object with these fields:
+- "content": the fact statement (string)
+- "confidence": how confident you are in this fact, 0.0 to 1.0 (number)
+- "tags": relevant tags for categorization (array of strings)
+
+Return ONLY valid JSON. Do not include markdown fences or explanation.
+
+Text:
+%s`,
+	SettingEntityPrompt: `You are an entity and relationship extraction engine. Given a text, extract all named entities and relationships between them as JSON.
+
+Return a JSON object with two fields:
+- "entities": array of objects with fields:
+  - "name": the entity name (string)
+  - "type": the entity type, e.g. "person", "organization", "location", "concept" (string)
+  - "properties": optional key-value pairs (object)
+- "relationships": array of objects with fields:
+  - "source": source entity name (string)
+  - "target": target entity name (string)
+  - "relation": the relationship type (string)
+  - "weight": confidence/strength 0.0 to 1.0 (number)
+  - "temporal": "current", "as of <date>", "previously", or "no longer" (string, default "current")
+
+Return ONLY valid JSON. Do not include markdown fences or explanation.
+
+Text:
+%s`,
+
 	SettingIngestionDecisionEnabled:   "false",
 	SettingIngestionDecisionShadow:    "true",
 	SettingIngestionDecisionThreshold: "0.92",
@@ -353,6 +381,22 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 func GetDefault(key string) (string, bool) {
 	v, ok := settingDefaults[key]
 	return v, ok
+}
+
+// ResolveOrDefault returns the configured value for key, treating an empty
+// stored value as "use the default" — appropriate for prompt-shaped settings
+// where "" is never a valid configuration. A nil settings pointer routes
+// straight to GetDefault, so test callers can pass a typed nil without a
+// guard. A *SettingsService parameter (rather than an interface) sidesteps
+// the typed-nil-interface trap.
+func ResolveOrDefault(ctx context.Context, s *SettingsService, key, scope string) string {
+	if s != nil {
+		if v, _ := s.Resolve(ctx, key, scope); v != "" {
+			return v
+		}
+	}
+	def, _ := GetDefault(key)
+	return def
 }
 
 // SettingsRepository defines the persistence operations needed by the settings service.

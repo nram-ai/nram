@@ -136,37 +136,6 @@ type MemorySoftDeleter interface {
 	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 }
 
-// ---------------------------------------------------------------------------
-// Extraction prompt constants
-// ---------------------------------------------------------------------------
-
-const factExtractionPrompt = `You are a fact extraction engine. Given a text, extract all discrete facts as a JSON array. Each fact should be a JSON object with these fields:
-- "content": the fact statement (string)
-- "confidence": how confident you are in this fact, 0.0 to 1.0 (number)
-- "tags": relevant tags for categorization (array of strings)
-
-Return ONLY valid JSON. Do not include markdown fences or explanation.
-
-Text:
-%s`
-
-const entityExtractionPrompt = `You are an entity and relationship extraction engine. Given a text, extract all named entities and relationships between them as JSON.
-
-Return a JSON object with two fields:
-- "entities": array of objects with fields:
-  - "name": the entity name (string)
-  - "type": the entity type, e.g. "person", "organization", "location", "concept" (string)
-  - "properties": optional key-value pairs (object)
-- "relationships": array of objects with fields:
-  - "source": source entity name (string)
-  - "target": target entity name (string)
-  - "relation": the relationship type (string)
-  - "weight": confidence/strength 0.0 to 1.0 (number)
-
-Return ONLY valid JSON. Do not include markdown fences or explanation.
-
-Text:
-%s`
 
 // ---------------------------------------------------------------------------
 // Parsed extraction types
@@ -1139,7 +1108,7 @@ func (wp *WorkerPool) extractFacts(
 	llm provider.LLMProvider,
 	content string,
 ) ([]extractedFact, *provider.TokenUsage, string, string, error) {
-	prompt := fmt.Sprintf(factExtractionPrompt, content)
+	prompt := fmt.Sprintf(service.ResolveOrDefault(ctx, wp.settings, service.SettingFactPrompt, "global"), content)
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationFactExtraction), &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},
@@ -1164,7 +1133,7 @@ func (wp *WorkerPool) extractEntities(
 	llm provider.LLMProvider,
 	content string,
 ) (*entityExtractionResult, *provider.TokenUsage, string, string, error) {
-	prompt := fmt.Sprintf(entityExtractionPrompt, content)
+	prompt := fmt.Sprintf(service.ResolveOrDefault(ctx, wp.settings, service.SettingEntityPrompt, "global"), content)
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: prompt},

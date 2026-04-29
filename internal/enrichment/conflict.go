@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -52,44 +53,37 @@ type ConflictResult struct {
 }
 
 // ---------------------------------------------------------------------------
-// Prompt
-// ---------------------------------------------------------------------------
-
-const contradictionPrompt = `Given two factual statements, determine if they contradict each other (i.e., both cannot be true simultaneously).
-
-Statement A: %s
-Statement B: %s
-
-Consider temporal context — if Statement A says "Alice works at ACME" and Statement B says "Alice previously worked at ACME", these do NOT contradict.
-
-Respond ONLY with JSON, no markdown fences:
-{"contradicts": true, "explanation": "Brief reason"}`
-
-// ---------------------------------------------------------------------------
 // ConflictDetector
 // ---------------------------------------------------------------------------
 
 // ConflictDetector checks whether a new memory semantically contradicts
 // existing memories in the same namespace. When a contradiction is found it
 // creates a conflicts_with lineage record linking the two memories.
+//
+// The prompt template used here is shared with the dreaming contradiction
+// phase (service.SettingDreamContradictionPrompt). That prompt's JSON shape
+// also includes a "winner" field; the parser here drops it.
 type ConflictDetector struct {
 	vectorStore   VectorSearcher
 	memories      MemoryReader
 	lineage       LineageCreator
 	llmProvider   func() provider.LLMProvider
 	embedProvider func() provider.EmbeddingProvider
+	settings      *service.SettingsService
 	config        ConflictConfig
 }
 
 // NewConflictDetector constructs a ConflictDetector. The provider functions may
 // return nil to indicate that a capability is unavailable; in that case Detect
-// returns an empty result.
+// returns an empty result. settings may be nil; the runtime default from
+// service.GetDefault is used when no override is configured.
 func NewConflictDetector(
 	vectorStore VectorSearcher,
 	memories MemoryReader,
 	lineage LineageCreator,
 	llmProvider func() provider.LLMProvider,
 	embedProvider func() provider.EmbeddingProvider,
+	settings *service.SettingsService,
 	config ConflictConfig,
 ) *ConflictDetector {
 	return &ConflictDetector{
@@ -98,6 +92,7 @@ func NewConflictDetector(
 		lineage:       lineage,
 		llmProvider:   llmProvider,
 		embedProvider: embedProvider,
+		settings:      settings,
 		config:        config.withDefaults(),
 	}
 }
@@ -136,6 +131,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 		return nil, fmt.Errorf("conflict: vector search: %w", err)
 	}
 
+	promptTemplate := service.ResolveOrDefault(ctx, cd.settings, service.SettingDreamContradictionPrompt, "global")
 	var conflicts []ConflictResult
 
 	for _, result := range results {
@@ -157,7 +153,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 		}
 
 		// Ask the LLM whether the two statements contradict.
-		prompt := fmt.Sprintf(contradictionPrompt, memory.Content, candidate.Content)
+		prompt := fmt.Sprintf(promptTemplate, memory.Content, candidate.Content)
 		resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 			Messages: []provider.Message{
 				{Role: "user", Content: prompt},

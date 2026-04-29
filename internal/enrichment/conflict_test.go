@@ -131,6 +131,7 @@ func buildConflictDetector(
 		vs, mr, lc,
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return ep },
+		nil,
 		cfg,
 	)
 }
@@ -270,6 +271,7 @@ func TestConflict_NoLLMProvider(t *testing.T) {
 		vs, mr, lc,
 		func() provider.LLMProvider { return nil },
 		func() provider.EmbeddingProvider { return ep },
+		nil,
 		ConflictConfig{},
 	)
 	results, err := cd.Detect(context.Background(), mem)
@@ -293,6 +295,7 @@ func TestConflict_NoEmbeddingProvider(t *testing.T) {
 		vs, mr, lc,
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return nil },
+		nil,
 		ConflictConfig{},
 	)
 	results, err := cd.Detect(context.Background(), mem)

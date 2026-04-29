@@ -29,9 +29,11 @@ type EnrichmentAdminStore interface {
 
 // EnrichmentAdminConfig holds the dependencies for the enrichment admin handler.
 type EnrichmentAdminConfig struct {
-	Store          EnrichmentAdminStore
-	FactProvider   func() provider.LLMProvider
-	EntityProvider func() provider.LLMProvider
+	Store               EnrichmentAdminStore
+	FactProvider        func() provider.LLMProvider
+	EntityProvider      func() provider.LLMProvider
+	FactPromptDefault   func(ctx context.Context) string
+	EntityPromptDefault func(ctx context.Context) string
 }
 
 // EnrichmentQueueStatus is the response for GET /enrichment/queue.
@@ -196,34 +198,6 @@ type enrichmentTestPromptResponse struct {
 	LatencyMs int64 `json:"latency_ms"`
 }
 
-// Default prompts (must match service/extract.go).
-const defaultFactPrompt = `You are a memory extraction system. Given the following text, extract discrete, standalone facts that would be useful to remember about the user or context in future conversations.
-
-Rules:
-- Each fact must be self-contained (understandable without the original text)
-- Prefer specific over vague ("lives in Denver" not "lives somewhere in Colorado")
-- Include temporal context when relevant ("as of March 2026")
-- Assign confidence 0.0-1.0 based on how explicitly the fact was stated vs inferred
-- Skip pleasantries, filler, and procedural content
-
-Respond ONLY as a JSON array, no markdown fences, no preamble:
-[{"fact": "...", "confidence": 0.95}, ...]`
-
-const defaultEntityPrompt = `You are an entity and relationship extraction system. Given the following text, extract entities (people, organizations, technologies, places, concepts) and the relationships between them.
-
-Rules:
-- Each entity needs a name, a type, and optionally key properties
-- Each relationship needs a source entity, target entity, relationship label, and temporal qualifier
-- Temporal qualifiers: "current" (default), "as of <date>", "previously", "no longer"
-- Normalize entity names
-- Include relationship directionality
-
-Respond ONLY as JSON, no markdown fences, no preamble:
-{
-  "entities": [{"name": "...", "type": "person|org|tech|place|concept", "properties": {}}],
-  "relationships": [{"source": "...", "target": "...", "relation": "...", "temporal": "current"}]
-}`
-
 // handleEnrichmentTestPrompt handles POST /enrichment/test-prompt.
 // It sends the sample input through the configured LLM provider using the given prompt
 // and returns both the raw output and parsed structured data.
@@ -249,9 +223,8 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		return
 	}
 
-	// Select the provider and prompt based on type.
 	var llmProvider provider.LLMProvider
-	var systemPrompt string
+	var promptTemplate string
 
 	switch body.Type {
 	case "fact":
@@ -264,9 +237,10 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			WriteError(w, ErrBadRequest("fact extraction provider is not available"))
 			return
 		}
-		systemPrompt = defaultFactPrompt
 		if strings.TrimSpace(body.Prompt) != "" {
-			systemPrompt = body.Prompt
+			promptTemplate = body.Prompt
+		} else if cfg.FactPromptDefault != nil {
+			promptTemplate = cfg.FactPromptDefault(r.Context())
 		}
 	case "entity":
 		if cfg.EntityProvider == nil {
@@ -278,18 +252,23 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			WriteError(w, ErrBadRequest("entity extraction provider is not available"))
 			return
 		}
-		systemPrompt = defaultEntityPrompt
 		if strings.TrimSpace(body.Prompt) != "" {
-			systemPrompt = body.Prompt
+			promptTemplate = body.Prompt
+		} else if cfg.EntityPromptDefault != nil {
+			promptTemplate = cfg.EntityPromptDefault(r.Context())
 		}
+	}
+
+	if promptTemplate == "" {
+		WriteError(w, ErrBadRequest("no prompt template available"))
+		return
 	}
 
 	start := time.Now()
 
 	completionReq := &provider.CompletionRequest{
 		Messages: []provider.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: body.SampleInput},
+			{Role: "user", Content: fmt.Sprintf(promptTemplate, body.SampleInput)},
 		},
 		MaxTokens:   2048,
 		Temperature: 0.1,

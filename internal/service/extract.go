@@ -95,12 +95,15 @@ type ExtractionService struct {
 	factProvider  func() provider.LLMProvider
 	entityProvider func() provider.LLMProvider
 	embedProvider func() provider.EmbeddingProvider
+	settings      *SettingsService
 }
 
 // NewExtractionService creates a new ExtractionService with the given
 // dependencies. token_usage recording is handled by the
 // UsageRecordingProvider middleware wrapping the registry-issued
 // providers — callers do not need to pass a TokenUsageRepository.
+// settings may be nil; in that case extraction prompts always come from
+// service.GetDefault.
 func NewExtractionService(
 	memories MemoryRepository,
 	projects ProjectRepository,
@@ -113,6 +116,7 @@ func NewExtractionService(
 	factProvider func() provider.LLMProvider,
 	entityProvider func() provider.LLMProvider,
 	embedProvider func() provider.EmbeddingProvider,
+	settings *SettingsService,
 ) *ExtractionService {
 	return &ExtractionService{
 		memories:       memories,
@@ -126,35 +130,10 @@ func NewExtractionService(
 		factProvider:   factProvider,
 		entityProvider: entityProvider,
 		embedProvider:  embedProvider,
+		settings:       settings,
 	}
 }
 
-const factExtractionPrompt = `You are a memory extraction system. Given the following text, extract discrete, standalone facts that would be useful to remember about the user or context in future conversations.
-
-Rules:
-- Each fact must be self-contained (understandable without the original text)
-- Prefer specific over vague ("lives in Denver" not "lives somewhere in Colorado")
-- Include temporal context when relevant ("as of March 2026")
-- Assign confidence 0.0-1.0 based on how explicitly the fact was stated vs inferred
-- Skip pleasantries, filler, and procedural content
-
-Respond ONLY as a JSON array, no markdown fences, no preamble:
-[{"fact": "...", "confidence": 0.95}, ...]`
-
-const entityExtractionPrompt = `You are an entity and relationship extraction system. Given the following text, extract entities (people, organizations, technologies, places, concepts) and the relationships between them.
-
-Rules:
-- Each entity needs a name, a type, and optionally key properties
-- Each relationship needs a source entity, target entity, relationship label, and temporal qualifier
-- Temporal qualifiers: "current" (default), "as of <date>", "previously", "no longer"
-- Normalize entity names
-- Include relationship directionality
-
-Respond ONLY as JSON, no markdown fences, no preamble:
-{
-  "entities": [{"name": "...", "type": "person|org|tech|place|concept", "properties": {}}],
-  "relationships": [{"source": "...", "target": "...", "relation": "...", "temporal": "current"}]
-}`
 
 // Extract performs synchronous fact and entity extraction on the given store request.
 func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*ExtractResponse, error) {
@@ -320,10 +299,10 @@ func (s *ExtractionService) extractFacts(
 	content string,
 	tokens *ExtractTokens,
 ) ([]ExtractedFact, error) {
+	prompt := fmt.Sprintf(ResolveOrDefault(ctx, s.settings, SettingFactPrompt, "global"), content)
 	completionReq := &provider.CompletionRequest{
 		Messages: []provider.Message{
-			{Role: "system", Content: factExtractionPrompt},
-			{Role: "user", Content: content},
+			{Role: "user", Content: prompt},
 		},
 		MaxTokens:   2048,
 		Temperature: 0.1,
@@ -358,10 +337,10 @@ func (s *ExtractionService) extractEntities(
 	rawMemID uuid.UUID,
 	tokens *ExtractTokens,
 ) (entitiesCreated int, relationshipsCreated int) {
+	prompt := fmt.Sprintf(ResolveOrDefault(ctx, s.settings, SettingEntityPrompt, "global"), content)
 	completionReq := &provider.CompletionRequest{
 		Messages: []provider.Message{
-			{Role: "system", Content: entityExtractionPrompt},
-			{Role: "user", Content: content},
+			{Role: "user", Content: prompt},
 		},
 		MaxTokens:   2048,
 		Temperature: 0.1,

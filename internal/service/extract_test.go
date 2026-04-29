@@ -125,6 +125,7 @@ func newExtractTestService(
 		wrappedFact,
 		wrappedEntity,
 		embedFn,
+		nil,
 	)
 
 	return svc, deps

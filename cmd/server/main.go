@@ -654,6 +654,12 @@ func main() {
 			Store:          enrichmentAdminStore,
 			FactProvider:   factProvider,
 			EntityProvider: entityProvider,
+			FactPromptDefault: func(ctx context.Context) string {
+				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingFactPrompt, "global")
+			},
+			EntityPromptDefault: func(ctx context.Context) string {
+				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingEntityPrompt, "global")
+			},
 		}),
 		AdminOAuth:      api.NewAdminOAuthHandler(api.OAuthAdminConfig{Store: oauthAdminStore}),
 		AdminWebhooks:   api.NewAdminWebhooksHandler(api.WebhookAdminConfig{Store: webhookAdminStore}),

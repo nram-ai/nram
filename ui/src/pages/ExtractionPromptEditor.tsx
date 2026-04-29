@@ -11,45 +11,13 @@ import type { Setting, SettingSchema } from "../api/client";
 // Constants
 // ---------------------------------------------------------------------------
 
-const FACT_PROMPT_KEYS = [
-  "enrichment.extraction_prompt",
-  "enrichment.fact_extraction_prompt",
-  "enrichment.fact_prompt",
-];
+// Canonical prompt keys. Both fact and entity prompts now have schema entries
+// with backend-registered defaults, so the editor reads description and
+// default value straight from useSettingsSchema — no UI fallback needed.
+const FACT_PROMPT_KEY = "enrichment.fact_prompt";
+const ENTITY_PROMPT_KEY = "enrichment.entity_prompt";
 
-const ENTITY_PROMPT_KEYS = [
-  "enrichment.entity_prompt",
-  "enrichment.entity_extraction_prompt",
-];
-
-const DEFAULT_FACT_PROMPT = `You are a memory extraction system. Given the following text, extract discrete, standalone facts that would be useful to remember about the user or context in future conversations.
-
-Rules:
-- Each fact must be self-contained (understandable without the original text)
-- Prefer specific over vague ("lives in Denver" not "lives somewhere in Colorado")
-- Include temporal context when relevant ("as of March 2026")
-- Assign confidence 0.0-1.0 based on how explicitly the fact was stated vs inferred
-- Skip pleasantries, filler, and procedural content
-
-Respond ONLY as a JSON array, no markdown fences, no preamble:
-[{"fact": "...", "confidence": 0.95}, ...]`;
-
-const DEFAULT_ENTITY_PROMPT = `You are an entity and relationship extraction system. Given the following text, extract entities (people, organizations, technologies, places, concepts) and the relationships between them.
-
-Rules:
-- Each entity needs a name, a type, and optionally key properties
-- Each relationship needs a source entity, target entity, relationship label, and temporal qualifier
-- Temporal qualifiers: "current" (default), "as of <date>", "previously", "no longer"
-- Normalize entity names
-- Include relationship directionality
-
-Respond ONLY as JSON, no markdown fences, no preamble:
-{
-  "entities": [{"name": "...", "type": "person|org|tech|place|concept", "properties": {}}],
-  "relationships": [{"source": "...", "target": "...", "relation": "...", "temporal": "current"}]
-}`;
-
-interface DreamingPromptSpec {
+interface SimplePromptSpec {
   key: string;
   title: string;
 }
@@ -57,11 +25,15 @@ interface DreamingPromptSpec {
 // Title is UI-only; the prompt body default and the per-key description are
 // resolved from the admin settings schema at render time so the editor
 // cannot drift from the runtime cascade in service.GetDefault.
-const DREAMING_PROMPTS: DreamingPromptSpec[] = [
+const DREAMING_PROMPTS: SimplePromptSpec[] = [
   { key: "dreaming.contradiction_prompt", title: "Contradiction Detection Prompt" },
   { key: "dreaming.synthesis_prompt", title: "Memory Synthesis Prompt" },
   { key: "dreaming.alignment_prompt", title: "Alignment Scoring Prompt" },
   { key: "dreaming.novelty.judge_prompt", title: "Novelty Judge Prompt" },
+];
+
+const ENRICHMENT_PROMPTS: SimplePromptSpec[] = [
+  { key: "enrichment.ingestion_decision.prompt", title: "Ingestion Decision Prompt" },
 ];
 
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:
@@ -705,19 +677,26 @@ export default function ExtractionPromptEditor() {
   const settings = settingsQuery.data?.data ?? [];
   const settingsMap = new Map(settings.map((s) => [s.key, s]));
 
-  // Resolve prompt data.
+  // Resolve prompt data. Defaults come from the registered schema; the
+  // empty-string fallback is only reached if the schema entry is missing,
+  // which would itself be a registration bug surfaced at server boot.
   const factPromptData = resolvePromptData(
-    FACT_PROMPT_KEYS,
+    [FACT_PROMPT_KEY],
     schemas,
     settingsMap,
-    DEFAULT_FACT_PROMPT,
+    "",
   );
   const entityPromptData = resolvePromptData(
-    ENTITY_PROMPT_KEYS,
+    [ENTITY_PROMPT_KEY],
     schemas,
     settingsMap,
-    DEFAULT_ENTITY_PROMPT,
+    "",
   );
+
+  const enrichmentPrompts = ENRICHMENT_PROMPTS.map((spec) => ({
+    spec,
+    data: resolvePromptData([spec.key], schemas, settingsMap, ""),
+  }));
 
   const dreamingPrompts = DREAMING_PROMPTS.map((spec) => ({
     spec,
@@ -852,6 +831,36 @@ export default function ExtractionPromptEditor() {
               sampleInput={entitySampleInput}
               onSampleInputChange={setEntitySampleInput}
             />
+          )}
+
+          {/* Enrichment Prompts Section */}
+          {enrichmentPrompts.length > 0 && (
+            <div className="border-t border-border pt-8">
+              <div className="mb-6">
+                <h2 className="text-xl font-semibold tracking-tight">
+                  Enrichment Prompts
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Additional prompts used by the enrichment pipeline beyond
+                  fact and entity extraction. The ingestion-decision prompt
+                  drives the ADD/UPDATE/DELETE/NONE judgment on near-duplicate
+                  matches at write time.
+                </p>
+              </div>
+
+              <div className="space-y-6">
+                {enrichmentPrompts.map(({ spec, data }) => (
+                  <SimplePromptEditorCard
+                    key={spec.key}
+                    title={spec.title}
+                    description={data.description}
+                    promptData={data}
+                    onSave={handleSave}
+                    saving={updateMutation.isPending}
+                  />
+                ))}
+              </div>
+            </div>
           )}
 
           {/* Dreaming Prompts Section */}

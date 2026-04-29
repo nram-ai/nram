@@ -74,15 +74,33 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
 };
 
 const PROMPT_KEYS = new Set([
-  "enrichment.extraction_prompt",
+  "enrichment.fact_prompt",
   "enrichment.entity_prompt",
-  "enrichment.fact_extraction_prompt",
-  "enrichment.entity_extraction_prompt",
   "enrichment.ingestion_decision.prompt",
   "dreaming.contradiction_prompt",
   "dreaming.synthesis_prompt",
   "dreaming.alignment_prompt",
   "dreaming.novelty.judge_prompt",
+]);
+
+// Settings now surfaced on the dedicated Prompt Editor page. They stay in
+// PROMPT_KEYS so the standard category display filters them out, but they
+// are also filtered from this page's prompt section so the Settings Editor
+// does not double-surface them.
+const MOVED_TO_PROMPT_EDITOR = new Set([
+  "enrichment.fact_prompt",
+  "enrichment.entity_prompt",
+  "enrichment.ingestion_decision.prompt",
+  "dreaming.contradiction_prompt",
+  "dreaming.synthesis_prompt",
+  "dreaming.alignment_prompt",
+  "dreaming.novelty.judge_prompt",
+]);
+
+// Settings now surfaced on the Provider Configuration page. Filtered out of
+// every section here so the editor does not double-surface them.
+const MOVED_TO_PROVIDER_CONFIG = new Set([
+  "enrichment.ingestion_decision.model",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -841,12 +859,15 @@ function SettingsEditor() {
   const promptItems: SettingWithSchema[] = [];
 
   for (const schema of schemas) {
+    if (MOVED_TO_PROVIDER_CONFIG.has(schema.key)) {
+      continue;
+    }
     const merged: SettingWithSchema = {
       schema,
       setting: settingsMap.get(schema.key) ?? null,
     };
 
-    if (isPromptKey(schema.key)) {
+    if (isPromptKey(schema.key) && !MOVED_TO_PROMPT_EDITOR.has(schema.key)) {
       promptItems.push(merged);
     }
 
