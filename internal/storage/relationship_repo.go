@@ -290,6 +290,28 @@ func (r *RelationshipRepo) CountActiveByNamespace(ctx context.Context, namespace
 	return count, nil
 }
 
+// HasBySourceMemory reports whether at least one relationship row exists
+// with the given memory recorded as source_memory. Used by the enrichment
+// worker to detect that entity extraction has already produced edges for
+// this memory in a prior run, so the chat-completion step can be skipped.
+func (r *RelationshipRepo) HasBySourceMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) (bool, error) {
+	query := `SELECT 1 FROM relationships
+		WHERE namespace_id = ? AND source_memory = ?
+		LIMIT 1`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT 1 FROM relationships
+			WHERE namespace_id = $1 AND source_memory = $2
+			LIMIT 1`
+	}
+
+	rows, err := r.db.Query(ctx, query, namespaceID.String(), memoryID.String())
+	if err != nil {
+		return false, fmt.Errorf("relationship has by source memory: %w", err)
+	}
+	defer rows.Close()
+	return rows.Next(), rows.Err()
+}
+
 // ExpireLowWeight expires all active relationships in a namespace with weight below the threshold.
 // Returns the number of relationships expired.
 func (r *RelationshipRepo) ExpireLowWeight(ctx context.Context, namespaceID uuid.UUID, threshold float64) (int64, error) {

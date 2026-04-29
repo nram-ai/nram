@@ -8,7 +8,7 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
-// TestBackfillEmbedJobs_EnqueuesOneJobPerUncoveredMemory verifies the
+// TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory verifies the
 // post-write-path-refactor contract for existing deployments:
 //
 //  1. Memories with no enrichment job at all get one enqueued.
@@ -20,7 +20,7 @@ import (
 //  4. Running the backfill twice is a no-op the second time (idempotent).
 //  5. Backfill jobs land at priority -1 so the worker drains them after any
 //     newly-stored memories (priority 0 or higher).
-func TestBackfillEmbedJobs_EnqueuesOneJobPerUncoveredMemory(t *testing.T) {
+func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		memRepo := NewMemoryRepo(db)
@@ -76,7 +76,7 @@ func TestBackfillEmbedJobs_EnqueuesOneJobPerUncoveredMemory(t *testing.T) {
 		}
 
 		// Run the backfill.
-		enqueued, err := BackfillEmbedJobs(ctx, db)
+		enqueued, err := EnqueueUncoveredMemories(ctx, db)
 		if err != nil {
 			t.Fatalf("backfill failed: %v", err)
 		}
@@ -90,7 +90,7 @@ func TestBackfillEmbedJobs_EnqueuesOneJobPerUncoveredMemory(t *testing.T) {
 		// Idempotency: running again must insert zero rows. The jobs created
 		// in the first pass are themselves pending/running and will satisfy
 		// the LEFT JOIN ... IS NULL guard.
-		enqueuedAgain, err := BackfillEmbedJobs(ctx, db)
+		enqueuedAgain, err := EnqueueUncoveredMemories(ctx, db)
 		if err != nil {
 			t.Fatalf("second backfill failed: %v", err)
 		}
@@ -181,14 +181,14 @@ func TestBackfillEmbedJobs_EnqueuesOneJobPerUncoveredMemory(t *testing.T) {
 	})
 }
 
-// TestBackfillReembedAllJobs_EnqueuesEveryLiveMemory exercises the
-// model-switch cascade entry point. Unlike BackfillEmbedJobs (which
+// TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory exercises the
+// model-switch cascade entry point. Unlike EnqueueUncoveredMemories (which
 // dedups against existing pending/running jobs), the force-reembed path
 // MUST enqueue every live memory unconditionally — the cascade has
 // already wiped the vector store and NULL'd embedding_dim, so any prior
 // in-flight job is operating on stale assumptions and can be safely
 // duplicated.
-func TestBackfillReembedAllJobs_EnqueuesEveryLiveMemory(t *testing.T) {
+func TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		memRepo := NewMemoryRepo(db)
@@ -215,7 +215,7 @@ func TestBackfillReembedAllJobs_EnqueuesEveryLiveMemory(t *testing.T) {
 			t.Fatalf("soft-delete: %v", err)
 		}
 
-		enqueued, err := BackfillReembedAllJobs(ctx, db)
+		enqueued, err := EnqueueAllLiveMemories(ctx, db)
 		if err != nil {
 			t.Fatalf("force re-embed enqueue: %v", err)
 		}
@@ -226,7 +226,7 @@ func TestBackfillReembedAllJobs_EnqueuesEveryLiveMemory(t *testing.T) {
 
 		// Verify per-memory job counts. memB now has the original pending
 		// PLUS the new force-enqueued one (duplicates ARE expected here —
-		// see BackfillReembedAllJobs docs).
+		// see EnqueueAllLiveMemories docs).
 		query := `SELECT memory_id, COUNT(*) FROM enrichment_queue WHERE namespace_id = ? GROUP BY memory_id`
 		if db.Backend() == BackendPostgres {
 			query = `SELECT memory_id, COUNT(*) FROM enrichment_queue WHERE namespace_id = $1 GROUP BY memory_id`

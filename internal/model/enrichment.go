@@ -7,6 +7,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// Enrichment step names persisted into EnrichmentJob.StepsCompleted by the
+// worker as it finishes each phase. Read by runPreEmbed to short-circuit
+// retries of jobs that already advanced past a phase before failing.
+const (
+	StepFactExtraction   = "fact_extraction"
+	StepEntityExtraction = "entity_extraction"
+	StepEmbedding        = "embedding"
+)
+
 type EnrichmentJob struct {
 	ID             uuid.UUID       `json:"id"`
 	MemoryID       uuid.UUID       `json:"memory_id"`

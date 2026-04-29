@@ -634,3 +634,67 @@ func TestEnrichmentQueueRepo_RetryAllFailed(t *testing.T) {
 		}
 	})
 }
+
+// TestEnrichmentQueueRepo_MarkStepCompleted exercises the per-step
+// progress marker the worker writes between phases. Idempotent across
+// repeats, preserves prior contents, and survives the round-trip.
+func TestEnrichmentQueueRepo_MarkStepCompleted(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		nsID, memID := createTestMemoryForQueue(t, ctx, db)
+
+		item := newTestEnrichmentItem(nsID, memID)
+		if err := repo.Enqueue(ctx, item); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+
+		// First mark.
+		if err := repo.MarkStepCompleted(ctx, item.ID, model.StepFactExtraction); err != nil {
+			t.Fatalf("mark fact: %v", err)
+		}
+		got, err := repo.GetByID(ctx, item.ID)
+		if err != nil {
+			t.Fatalf("get after first mark: %v", err)
+		}
+		var steps []string
+		if err := json.Unmarshal(got.StepsCompleted, &steps); err != nil {
+			t.Fatalf("decode steps after first mark: %v: %q", err, string(got.StepsCompleted))
+		}
+		if len(steps) != 1 || steps[0] != model.StepFactExtraction {
+			t.Fatalf("expected [%q], got %v", model.StepFactExtraction, steps)
+		}
+
+		// Idempotent: re-marking the same step does not duplicate.
+		if err := repo.MarkStepCompleted(ctx, item.ID, model.StepFactExtraction); err != nil {
+			t.Fatalf("mark fact again: %v", err)
+		}
+		got, _ = repo.GetByID(ctx, item.ID)
+		_ = json.Unmarshal(got.StepsCompleted, &steps)
+		if len(steps) != 1 {
+			t.Fatalf("expected idempotent append, got %v", steps)
+		}
+
+		// Append a different step preserves the first.
+		if err := repo.MarkStepCompleted(ctx, item.ID, model.StepEntityExtraction); err != nil {
+			t.Fatalf("mark entity: %v", err)
+		}
+		got, _ = repo.GetByID(ctx, item.ID)
+		_ = json.Unmarshal(got.StepsCompleted, &steps)
+		if len(steps) != 2 {
+			t.Fatalf("expected 2 steps after entity append, got %v", steps)
+		}
+		seen := map[string]bool{}
+		for _, s := range steps {
+			seen[s] = true
+		}
+		if !seen[model.StepFactExtraction] || !seen[model.StepEntityExtraction] {
+			t.Fatalf("expected fact+entity in steps_completed, got %v", steps)
+		}
+
+		// Empty step name is rejected.
+		if err := repo.MarkStepCompleted(ctx, item.ID, ""); err == nil {
+			t.Fatal("expected error on empty step name")
+		}
+	})
+}

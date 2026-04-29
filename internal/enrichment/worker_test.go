@@ -110,15 +110,19 @@ func (m *mockMemoryCreator) Create(_ context.Context, mem *model.Memory) error {
 }
 
 type mockQueueClaimer struct {
-	mu        sync.Mutex
-	jobs      []*model.EnrichmentJob
-	completed []uuid.UUID
-	failed    map[uuid.UUID]string
-	claimErr  error
+	mu             sync.Mutex
+	jobs           []*model.EnrichmentJob
+	completed      []uuid.UUID
+	failed         map[uuid.UUID]string
+	stepsCompleted map[uuid.UUID][]string
+	claimErr       error
 }
 
 func newMockQueueClaimer() *mockQueueClaimer {
-	return &mockQueueClaimer{failed: make(map[uuid.UUID]string)}
+	return &mockQueueClaimer{
+		failed:         make(map[uuid.UUID]string),
+		stepsCompleted: make(map[uuid.UUID][]string),
+	}
 }
 
 func (m *mockQueueClaimer) ClaimNext(_ context.Context, _ string) (*model.EnrichmentJob, error) {
@@ -168,6 +172,18 @@ func (m *mockQueueClaimer) Fail(_ context.Context, id uuid.UUID, errMsg string) 
 	return nil
 }
 
+func (m *mockQueueClaimer) MarkStepCompleted(_ context.Context, id uuid.UUID, step string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.stepsCompleted[id] {
+		if existing == step {
+			return nil
+		}
+	}
+	m.stepsCompleted[id] = append(m.stepsCompleted[id], step)
+	return nil
+}
+
 type mockEntityUpserter struct {
 	mu       sync.Mutex
 	upserted []*model.Entity
@@ -194,9 +210,11 @@ func (m *mockEntityUpserter) UpdateEmbeddingDimBatch(_ context.Context, _ []uuid
 }
 
 type mockRelationshipCreator struct {
-	mu      sync.Mutex
-	created []*model.Relationship
-	err     error
+	mu                sync.Mutex
+	created           []*model.Relationship
+	err               error
+	hasBySourceMemory bool
+	hasBySourceErr    error
 }
 
 func (m *mockRelationshipCreator) Create(_ context.Context, rel *model.Relationship) error {
@@ -218,10 +236,21 @@ func (m *mockRelationshipCreator) UpdateWeight(_ context.Context, _ uuid.UUID, _
 	return nil
 }
 
+func (m *mockRelationshipCreator) HasBySourceMemory(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hasBySourceErr != nil {
+		return false, m.hasBySourceErr
+	}
+	return m.hasBySourceMemory, nil
+}
+
 type mockLineageCreator struct {
-	mu      sync.Mutex
-	created []*model.MemoryLineage
-	err     error
+	mu                       sync.Mutex
+	created                  []*model.MemoryLineage
+	err                      error
+	hasExtractedFactChildren bool
+	hasExtractedFactErr      error
 }
 
 func (m *mockLineageCreator) Create(_ context.Context, lin *model.MemoryLineage) error {
@@ -233,6 +262,15 @@ func (m *mockLineageCreator) Create(_ context.Context, lin *model.MemoryLineage)
 	cp := *lin
 	m.created = append(m.created, &cp)
 	return nil
+}
+
+func (m *mockLineageCreator) HasExtractedFactChildren(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hasExtractedFactErr != nil {
+		return false, m.hasExtractedFactErr
+	}
+	return m.hasExtractedFactChildren, nil
 }
 
 type mockTokenRecorder struct {
@@ -629,6 +667,214 @@ func TestProcessJob_SkipsLLMWhenAlreadyEnriched(t *testing.T) {
 	}
 	if len(h.vectors.vectors) != 1 || h.vectors.vectors[0].ID != mem.ID {
 		t.Errorf("expected 1 vector upsert for parent memory, got %+v", h.vectors.vectors)
+	}
+}
+
+// backfillProbeProviders builds counting fact/entity/embed providers used
+// across the per-step gating tests. Returns the providers and pointers to
+// per-call counters so individual tests can assert which LLM steps fired.
+func backfillProbeProviders() (factLLM, entityLLM provider.LLMProvider, embedProv provider.EmbeddingProvider, factCalls, entityCalls, embedCalls *int) {
+	var fc, ec, embC int
+	var mu sync.Mutex
+	factLLM = &mockLLMProvider{name: "test-fact", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		mu.Lock()
+		fc++
+		mu.Unlock()
+		return &provider.CompletionResponse{Content: factJSON(), Model: "fact-model"}, nil
+	}}
+	entityLLM = &mockLLMProvider{name: "test-entity", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		mu.Lock()
+		ec++
+		mu.Unlock()
+		return &provider.CompletionResponse{Content: entityJSON(), Model: "entity-model"}, nil
+	}}
+	embedProv = &mockEmbeddingProvider{name: "test-embed", respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+		mu.Lock()
+		embC++
+		mu.Unlock()
+		embs := make([][]float32, len(req.Input))
+		for i := range req.Input {
+			embs[i] = []float32{0.1, 0.2, 0.3}
+		}
+		return &provider.EmbeddingResponse{Embeddings: embs, Model: "embed-model"}, nil
+	}}
+	return factLLM, entityLLM, embedProv, &fc, &ec, &embC
+}
+
+// TestProcessJob_BackfillSkipsFactsWhenLineagePresent verifies the
+// historical-memory case for embed backfill: a memory with mem.Enriched
+// false but extracted_fact lineage rows already in the DB triggers the
+// lineage probe, which short-circuits fact extraction and avoids burning
+// a chat completion.
+func TestProcessJob_BackfillSkipsFactsWhenLineagePresent(t *testing.T) {
+	factLLM, entityLLM, embedProv, factCalls, entityCalls, embedCalls := backfillProbeProviders()
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	h.lineage.hasExtractedFactChildren = true // simulate prior fact extraction
+	mem := testMemory()
+	mem.Enriched = false
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+
+	if *factCalls != 0 {
+		t.Errorf("expected 0 fact extraction calls when lineage present, got %d", *factCalls)
+	}
+	if *entityCalls != 1 {
+		t.Errorf("expected 1 entity extraction call (only fact gated), got %d", *entityCalls)
+	}
+	if *embedCalls != 1 {
+		t.Errorf("expected 1 embed call, got %d", *embedCalls)
+	}
+}
+
+// TestProcessJob_BackfillSkipsEntitiesWhenRelationshipsPresent — symmetric
+// case for entity extraction. A memory with relationship rows already
+// present (source_memory = mem.ID) triggers the relationship probe and
+// skips the entity LLM call.
+func TestProcessJob_BackfillSkipsEntitiesWhenRelationshipsPresent(t *testing.T) {
+	factLLM, entityLLM, embedProv, factCalls, entityCalls, embedCalls := backfillProbeProviders()
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	h.rels.hasBySourceMemory = true
+	mem := testMemory()
+	mem.Enriched = false
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+
+	if *entityCalls != 0 {
+		t.Errorf("expected 0 entity extraction calls when relationships present, got %d", *entityCalls)
+	}
+	if *factCalls != 1 {
+		t.Errorf("expected 1 fact extraction call (only entity gated), got %d", *factCalls)
+	}
+	if *embedCalls != 1 {
+		t.Errorf("expected 1 embed call, got %d", *embedCalls)
+	}
+}
+
+// TestProcessJob_BackfillRunsBothWhenNothingPresent — control case. A
+// historical memory with mem.Enriched=false, empty steps_completed, and
+// no lineage/relationship rows should run both extractions normally.
+func TestProcessJob_BackfillRunsBothWhenNothingPresent(t *testing.T) {
+	factLLM, entityLLM, embedProv, factCalls, entityCalls, embedCalls := backfillProbeProviders()
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	mem := testMemory()
+	mem.Enriched = false
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+
+	if *factCalls != 1 {
+		t.Errorf("expected 1 fact extraction call, got %d", *factCalls)
+	}
+	if *entityCalls != 1 {
+		t.Errorf("expected 1 entity extraction call, got %d", *entityCalls)
+	}
+	if *embedCalls != 1 {
+		t.Errorf("expected 1 embed call, got %d", *embedCalls)
+	}
+}
+
+// TestProcessJob_BackfillSkipsByStepsCompleted — covers the in-flight
+// retry case. job.StepsCompleted carries "fact_extraction" from a
+// partially-successful prior run; the gate skips fact extraction without
+// consulting the lineage probe.
+func TestProcessJob_BackfillSkipsByStepsCompleted(t *testing.T) {
+	factLLM, entityLLM, embedProv, factCalls, entityCalls, _ := backfillProbeProviders()
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	mem := testMemory()
+	mem.Enriched = false
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+	job.StepsCompleted = json.RawMessage(`["` + model.StepFactExtraction + `"]`)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+
+	if *factCalls != 0 {
+		t.Errorf("expected 0 fact calls when steps_completed names fact_extraction, got %d", *factCalls)
+	}
+	if *entityCalls != 1 {
+		t.Errorf("expected 1 entity call, got %d", *entityCalls)
+	}
+}
+
+// TestProcessJob_StampsStepsCompletedOnSuccess verifies that finalize
+// records each successful step into the queue's steps_completed marker so
+// retries skip work that has already run.
+func TestProcessJob_StampsStepsCompletedOnSuccess(t *testing.T) {
+	factLLM, entityLLM, embedProv, _, _, _ := backfillProbeProviders()
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	mem := testMemory()
+	mem.Enriched = false
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+
+	steps := h.queue.stepsCompleted[job.ID]
+	want := map[string]bool{
+		model.StepFactExtraction:   false,
+		model.StepEntityExtraction: false,
+		model.StepEmbedding:        false,
+	}
+	for _, s := range steps {
+		if _, ok := want[s]; ok {
+			want[s] = true
+		}
+	}
+	for s, seen := range want {
+		if !seen {
+			t.Errorf("expected step %q to be marked completed; got %v", s, steps)
+		}
+	}
+}
+
+// TestStepDoneSet covers the parser used by runPreEmbed to read prior
+// step markers off the job. Tolerant of malformed inputs.
+func TestStepDoneSet(t *testing.T) {
+	cases := []struct {
+		name string
+		in   json.RawMessage
+		want map[string]bool
+	}{
+		{"nil", nil, map[string]bool{}},
+		{"empty", json.RawMessage(`[]`), map[string]bool{}},
+		{"single", json.RawMessage(`["fact_extraction"]`), map[string]bool{"fact_extraction": true}},
+		{"multi", json.RawMessage(`["fact_extraction","embedding"]`), map[string]bool{"fact_extraction": true, "embedding": true}},
+		{"malformed-string", json.RawMessage(`"not-an-array"`), map[string]bool{}},
+		{"malformed-json", json.RawMessage(`{`), map[string]bool{}},
+		{"empty-string-entries", json.RawMessage(`["",""]`), map[string]bool{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stepDoneSet(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("len mismatch: got %v, want %v", got, tc.want)
+			}
+			for k := range tc.want {
+				if !got[k] {
+					t.Errorf("missing key %q in %v", k, got)
+				}
+			}
+		})
 	}
 }
 

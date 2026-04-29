@@ -66,6 +66,29 @@ func (r *MemoryLineageRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.M
 	return r.scanLineage(row)
 }
 
+// HasExtractedFactChildren reports whether at least one extracted_fact
+// lineage row exists with the given memory as parent. Used by the
+// enrichment worker to detect that fact extraction has already produced
+// children for this memory in a prior run, so the chat-completion step
+// can be skipped.
+func (r *MemoryLineageRepo) HasExtractedFactChildren(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) (bool, error) {
+	query := `SELECT 1 FROM memory_lineage
+		WHERE namespace_id = ? AND parent_id = ? AND relation = ?
+		LIMIT 1`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT 1 FROM memory_lineage
+			WHERE namespace_id = $1 AND parent_id = $2 AND relation = $3
+			LIMIT 1`
+	}
+
+	rows, err := r.db.Query(ctx, query, namespaceID.String(), memoryID.String(), model.LineageExtractedFact)
+	if err != nil {
+		return false, fmt.Errorf("memory lineage has extracted fact children: %w", err)
+	}
+	defer rows.Close()
+	return rows.Next(), rows.Err()
+}
+
 // ListByMemory returns all lineage records for a memory, both as parent and
 // child, ordered by created_at DESC.
 func (r *MemoryLineageRepo) ListByMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) ([]model.MemoryLineage, error) {

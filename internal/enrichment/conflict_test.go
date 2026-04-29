@@ -60,6 +60,10 @@ func (m *conflictMockLineageCreator) Create(_ context.Context, lineage *model.Me
 	return nil
 }
 
+func (m *conflictMockLineageCreator) HasExtractedFactChildren(_ context.Context, _ uuid.UUID, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
+
 // conflictMockLLM returns pre-configured completion responses.
 type conflictMockLLM struct {
 	responses []string // rotated through on successive calls

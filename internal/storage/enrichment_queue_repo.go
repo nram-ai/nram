@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -333,6 +334,66 @@ func (r *EnrichmentQueueRepo) Fail(ctx context.Context, id uuid.UUID, errMsg str
 	}
 	if rows == 0 {
 		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// MarkStepCompleted appends a step name to the enrichment job's
+// steps_completed array. Idempotent: a step already present is not
+// duplicated. Postgres uses jsonb containment + concat in a single
+// statement; SQLite reads the column, mutates the JSON in Go, and
+// writes it back. Used by the worker to record per-phase progress so
+// retries of a partially-failed job skip phases that already ran.
+func (r *EnrichmentQueueRepo) MarkStepCompleted(ctx context.Context, id uuid.UUID, step string) error {
+	if step == "" {
+		return fmt.Errorf("enrichment queue mark step completed: empty step")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if r.db.Backend() == BackendPostgres {
+		// jsonb append guarded by NOT containment — atomic in one round-trip.
+		query := `UPDATE enrichment_queue
+			SET steps_completed = COALESCE(steps_completed, '[]'::jsonb) || to_jsonb($1::text),
+			    updated_at = $2
+			WHERE id = $3
+			  AND NOT (COALESCE(steps_completed, '[]'::jsonb) @> to_jsonb($1::text))`
+		if _, err := r.db.Exec(ctx, query, step, now, id.String()); err != nil {
+			return fmt.Errorf("enrichment queue mark step completed: %w", err)
+		}
+		return nil
+	}
+
+	// SQLite: read-modify-write. The column is TEXT holding a JSON array.
+	var raw sql.NullString
+	row := r.db.QueryRow(ctx, `SELECT steps_completed FROM enrichment_queue WHERE id = ?`, id.String())
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sql.ErrNoRows
+		}
+		return fmt.Errorf("enrichment queue mark step completed read: %w", err)
+	}
+
+	steps := []string{}
+	if raw.Valid && raw.String != "" {
+		_ = json.Unmarshal([]byte(raw.String), &steps) // tolerate malformed → reset
+	}
+	for _, existing := range steps {
+		if existing == step {
+			return nil
+		}
+	}
+	steps = append(steps, step)
+	encoded, err := json.Marshal(steps)
+	if err != nil {
+		return fmt.Errorf("enrichment queue mark step completed encode: %w", err)
+	}
+
+	if _, err := r.db.Exec(ctx,
+		`UPDATE enrichment_queue SET steps_completed = ?, updated_at = ? WHERE id = ?`,
+		string(encoded), now, id.String(),
+	); err != nil {
+		return fmt.Errorf("enrichment queue mark step completed write: %w", err)
 	}
 	return nil
 }

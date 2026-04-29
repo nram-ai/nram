@@ -71,11 +71,13 @@ On first launch, navigate to `http://localhost:8674` to complete the setup wizar
 | Flag | Description |
 |---|---|
 | `--config <path>` | Override the config file path |
-| `--backfill-embeddings` | Enqueue embed jobs for memories missing vectors, then exit |
+| `--backfill-enrichment` | Enqueue enrichment jobs for memories missing vectors, then exit. Worker skips fact/entity extraction for memories whose lineage/relationships already exist, so re-running is cheap. |
 | `--reembed-all-memories` | Force re-embed every live memory (e.g. after switching embedding models), then exit |
 | `migrate up` / `migrate down` / `migrate version` | Migration CLI commands (run before normal startup) |
 
-Setting `NRAM_ENABLE_EMBED_BACKFILL=1` runs the embed backfill at startup without forcing an exit.
+Setting `NRAM_ENABLE_ENRICHMENT_BACKFILL=1` runs the enrichment backfill at startup without forcing an exit.
+
+> **Renamed:** the previous `NRAM_ENABLE_EMBED_BACKFILL` env var and `--backfill-embeddings` flag are no longer honored — update your deployment env. The flag and var were renamed alongside a fix that makes backfill skip fact/entity extraction for memories whose lineage and relationship rows already exist, so re-runs cost only the embed call.
 
 ## Configuration
 

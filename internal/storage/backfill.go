@@ -40,10 +40,14 @@ func buildEnqueueLiveMemoriesQuery(backend string, dedupe bool) (string, error) 
 	return q, nil
 }
 
-// BackfillEmbedJobs enqueues a priority-(-1) job for every live memory that
-// does not already have a pending or running job. Idempotent. Exposed via
-// NRAM_ENABLE_EMBED_BACKFILL=1 (startup) and --backfill-embeddings (CLI).
-func BackfillEmbedJobs(ctx context.Context, db DB) (int64, error) {
+// EnqueueUncoveredMemories enqueues a priority-(-1) enrichment job for
+// every live memory that does not already have a pending or running job.
+// Idempotent. Exposed via NRAM_ENABLE_ENRICHMENT_BACKFILL=1 (startup) and
+// --backfill-enrichment (CLI). The worker skips fact/entity extraction
+// when prior lineage/relationship rows already exist for the memory, so
+// re-running this against fully-enriched memories costs only the embed
+// call.
+func EnqueueUncoveredMemories(ctx context.Context, db DB) (int64, error) {
 	// Short-circuit avoids the full-table INSERT...SELECT in steady state.
 	present, err := hasUncoveredMemory(ctx, db)
 	if err != nil {
@@ -55,15 +59,15 @@ func BackfillEmbedJobs(ctx context.Context, db DB) (int64, error) {
 
 	query, err := buildEnqueueLiveMemoriesQuery(db.Backend(), true)
 	if err != nil {
-		return 0, fmt.Errorf("backfill embed jobs: %w", err)
+		return 0, fmt.Errorf("enqueue uncovered memories: %w", err)
 	}
 	result, err := db.Exec(ctx, query)
 	if err != nil {
-		return 0, fmt.Errorf("backfill embed jobs: %w", err)
+		return 0, fmt.Errorf("enqueue uncovered memories: %w", err)
 	}
 	n, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("backfill embed jobs: rows affected: %w", err)
+		return 0, fmt.Errorf("enqueue uncovered memories: rows affected: %w", err)
 	}
 	return n, nil
 }
@@ -78,28 +82,29 @@ func hasUncoveredMemory(ctx context.Context, db DB) (bool, error) {
 		LIMIT 1`
 	rows, err := db.Query(ctx, query)
 	if err != nil {
-		return false, fmt.Errorf("backfill embed jobs: probe: %w", err)
+		return false, fmt.Errorf("enqueue uncovered memories: probe: %w", err)
 	}
 	defer rows.Close()
 	return rows.Next(), rows.Err()
 }
 
-// BackfillReembedAllJobs enqueues a priority-(-1) job for every live memory
-// unconditionally. Used by the embedding-model switch cascade after the
-// vector tables have been truncated and embedding_dim NULL'd — duplicates
-// against in-flight jobs are expected and handled by the worker.
-func BackfillReembedAllJobs(ctx context.Context, db DB) (int64, error) {
+// EnqueueAllLiveMemories enqueues a priority-(-1) enrichment job for
+// every live memory unconditionally. Used by the embedding-model switch
+// cascade after the vector tables have been truncated and embedding_dim
+// NULL'd — duplicates against in-flight jobs are expected and handled by
+// the worker.
+func EnqueueAllLiveMemories(ctx context.Context, db DB) (int64, error) {
 	query, err := buildEnqueueLiveMemoriesQuery(db.Backend(), false)
 	if err != nil {
-		return 0, fmt.Errorf("backfill reembed all jobs: %w", err)
+		return 0, fmt.Errorf("enqueue all live memories: %w", err)
 	}
 	result, err := db.Exec(ctx, query)
 	if err != nil {
-		return 0, fmt.Errorf("backfill reembed all jobs: %w", err)
+		return 0, fmt.Errorf("enqueue all live memories: %w", err)
 	}
 	n, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("backfill reembed all jobs: rows affected: %w", err)
+		return 0, fmt.Errorf("enqueue all live memories: rows affected: %w", err)
 	}
 	return n, nil
 }

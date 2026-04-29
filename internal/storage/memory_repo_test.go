@@ -1236,7 +1236,7 @@ func TestMemoryRepo_ListPurgeable(t *testing.T) {
 // the embedding-model switch cascade: every live memory's embedding_dim
 // gets NULL'd in one call so the re-embed worker treats every row as
 // needing fresh vectors. Soft-deleted memories are left untouched (they
-// will not be re-enqueued by BackfillReembedAllJobs anyway).
+// will not be re-enqueued by EnqueueAllLiveMemories anyway).
 func TestMemoryRepo_ClearAllEmbeddingDims(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

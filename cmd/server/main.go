@@ -74,16 +74,16 @@ func main() {
 	}
 
 	for _, arg := range os.Args[1:] {
-		if arg == "--backfill-embeddings" {
-			n, err := storage.BackfillEmbedJobs(context.Background(), db)
+		if arg == "--backfill-enrichment" {
+			n, err := storage.EnqueueUncoveredMemories(context.Background(), db)
 			if err != nil {
-				log.Fatalf("backfill embed jobs failed: %v", err)
+				log.Fatalf("enrichment backfill failed: %v", err)
 			}
-			log.Printf("backfill: enqueued %d embed jobs", n)
+			log.Printf("backfill: enqueued %d enrichment jobs", n)
 			return
 		}
 		if arg == "--reembed-all-memories" {
-			n, err := storage.BackfillReembedAllJobs(context.Background(), db)
+			n, err := storage.EnqueueAllLiveMemories(context.Background(), db)
 			if err != nil {
 				log.Fatalf("reembed all memories failed: %v", err)
 			}
@@ -92,12 +92,12 @@ func main() {
 		}
 	}
 
-	if os.Getenv("NRAM_ENABLE_EMBED_BACKFILL") == "1" {
-		n, err := storage.BackfillEmbedJobs(context.Background(), db)
+	if os.Getenv("NRAM_ENABLE_ENRICHMENT_BACKFILL") == "1" {
+		n, err := storage.EnqueueUncoveredMemories(context.Background(), db)
 		if err != nil {
-			log.Fatalf("startup embed backfill failed: %v", err)
+			log.Fatalf("startup enrichment backfill failed: %v", err)
 		}
-		log.Printf("backfill: enqueued %d embed jobs at startup (NRAM_ENABLE_EMBED_BACKFILL=1)", n)
+		log.Printf("backfill: enqueued %d enrichment jobs at startup (NRAM_ENABLE_ENRICHMENT_BACKFILL=1)", n)
 	}
 
 	// Create repositories.

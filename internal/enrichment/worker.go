@@ -78,11 +78,14 @@ type MemoryCreator interface {
 }
 
 // QueueClaimer manages enrichment job lifecycle in the queue.
+// MarkStepCompleted appends a step name to the job's steps_completed array
+// (idempotent) so retries skip phases that already ran.
 type QueueClaimer interface {
 	ClaimNext(ctx context.Context, workerID string) (*model.EnrichmentJob, error)
 	ClaimNextBatch(ctx context.Context, workerID string, max int) ([]*model.EnrichmentJob, error)
 	Complete(ctx context.Context, id uuid.UUID) error
 	Fail(ctx context.Context, id uuid.UUID, errMsg string) error
+	MarkStepCompleted(ctx context.Context, id uuid.UUID, step string) error
 }
 
 // EntityUpserter creates or updates an entity record and supports lookup
@@ -96,16 +99,23 @@ type EntityUpserter interface {
 }
 
 // RelationshipCreator persists a new relationship between entities, with
-// dedup support to avoid creating duplicate edges.
+// dedup support to avoid creating duplicate edges. HasBySourceMemory is the
+// probe runPreEmbed uses to detect that entity extraction has already
+// produced edges for a memory and skip the LLM step.
 type RelationshipCreator interface {
 	Create(ctx context.Context, rel *model.Relationship) error
 	FindActiveByTriple(ctx context.Context, namespaceID, sourceID, targetID uuid.UUID, relation string) (*model.Relationship, error)
 	UpdateWeight(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, weight float64) error
+	HasBySourceMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) (bool, error)
 }
 
 // LineageCreator records parent-child lineage between memories.
+// HasExtractedFactChildren is the probe runPreEmbed uses to detect that
+// fact extraction has already produced children for a memory and skip the
+// LLM step.
 type LineageCreator interface {
 	Create(ctx context.Context, lineage *model.MemoryLineage) error
+	HasExtractedFactChildren(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) (bool, error)
 }
 
 // VectorWriter upserts embedding vectors for memories and entities. Kind
@@ -540,12 +550,33 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		return nil, fmt.Errorf("no providers configured, job requeued")
 	}
 
-	// Skip LLM extractions when the memory has already been enriched.
-	// finalizeJob sets mem.Enriched=true only after fact and entity
-	// extraction have been persisted, so re-running them would duplicate
-	// lineage and token spend. Backfill jobs enqueued to populate missing
-	// embeddings fall straight through to the shared embed step.
-	skipLLM := mem.Enriched
+	// Per-step skip gates. mem.Enriched is the cheap signal — finalizeJob
+	// sets it only after every phase persisted, so it covers fully-enriched
+	// memories without any extra DB round-trips. job.StepsCompleted catches
+	// retries of a job that partially advanced before failing. The lineage
+	// and relationship probes catch historical memories whose extraction
+	// predates step tracking (e.g. memories enriched before steps_completed
+	// was wired into the worker, or before mem.Enriched was set on the
+	// synchronous write path). Probe errors fail open — run the step rather
+	// than skip on a transient DB hiccup.
+	stepDone := stepDoneSet(job.StepsCompleted)
+	skipFact := mem.Enriched || stepDone[model.StepFactExtraction]
+	skipEntity := mem.Enriched || stepDone[model.StepEntityExtraction]
+
+	if hasFact && !skipFact {
+		if has, probeErr := wp.lineage.HasExtractedFactChildren(ctx, mem.NamespaceID, mem.ID); probeErr != nil {
+			slog.Warn("enrichment: probe extracted-fact lineage", "job", job.ID, "memory", mem.ID, "err", probeErr)
+		} else if has {
+			skipFact = true
+		}
+	}
+	if hasEntity && !skipEntity {
+		if has, probeErr := wp.relationships.HasBySourceMemory(ctx, mem.NamespaceID, mem.ID); probeErr != nil {
+			slog.Warn("enrichment: probe source-memory relationships", "job", job.ID, "memory", mem.ID, "err", probeErr)
+		} else if has {
+			skipEntity = true
+		}
+	}
 
 	var (
 		facts        []extractedFact
@@ -560,10 +591,10 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		entityErr    error
 	)
 
-	if hasFact && !skipLLM {
+	if hasFact && !skipFact {
 		facts, factUsage, factModel, factProvider, factErr = wp.extractFacts(ctx, wp.factProvider(), mem.Content)
 	}
-	if hasEntity && !skipLLM {
+	if hasEntity && !skipEntity {
 		entResult, entityUsage, entityModel, entityProv, entityErr = wp.extractEntities(ctx, wp.entityProvider(), mem.Content)
 	}
 
@@ -612,7 +643,23 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		}
 	}
 
+	// Mark fact_extraction as completed when the LLM call succeeded —
+	// even if 0 facts came back. The signal is "the step ran", not "the
+	// step produced output", so a legitimate 0-fact memory does not
+	// re-extract on the next claim.
+	if hasFact && !skipFact && factErr == nil {
+		if err := wp.queue.MarkStepCompleted(ctx, job.ID, model.StepFactExtraction); err != nil {
+			slog.Warn("enrichment: mark step completed (fact)", "job", job.ID, "err", err)
+		}
+	}
+
 	entities := wp.upsertEntitiesAndRelationships(ctx, job, mem, entResult)
+
+	if hasEntity && !skipEntity && entityErr == nil {
+		if err := wp.queue.MarkStepCompleted(ctx, job.ID, model.StepEntityExtraction); err != nil {
+			slog.Warn("enrichment: mark step completed (entity)", "job", job.ID, "err", err)
+		}
+	}
 
 	p := &pendingJob{
 		job:          job,
@@ -628,6 +675,27 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 	}
 	p.applyIngestion(ingestion)
 	return p, nil
+}
+
+// stepDoneSet parses an EnrichmentJob.StepsCompleted JSON payload into a
+// presence set. Tolerates NULL, empty, or malformed inputs by returning an
+// empty set — the worker will then re-run the step rather than skip on
+// bad data.
+func stepDoneSet(raw json.RawMessage) map[string]bool {
+	out := map[string]bool{}
+	if len(raw) == 0 {
+		return out
+	}
+	var steps []string
+	if err := json.Unmarshal(raw, &steps); err != nil {
+		return out
+	}
+	for _, s := range steps {
+		if s != "" {
+			out[s] = true
+		}
+	}
+	return out
 }
 
 // upsertEntitiesAndRelationships persists extracted entities and relationships,
@@ -982,6 +1050,17 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 	// Token usage for fact_extraction, entity_extraction, embedding, and
 	// ingestion_decision is recorded by the UsageRecordingProvider
 	// middleware on every wrapped provider call. No manual write needed.
+
+	// Stamp the embedding step on success. EmbeddingDim being set means
+	// runEmbedBatch produced a vector for this pending (either via the
+	// batch embed call or reused from the ingestion-decision phase). The
+	// step marker survives even if Complete fails below, so a retry of
+	// this same job will skip re-embedding.
+	if p.mem.EmbeddingDim != nil {
+		if err := wp.queue.MarkStepCompleted(ctx, p.job.ID, model.StepEmbedding); err != nil {
+			slog.Warn("enrichment: mark step completed (embedding)", "job", p.job.ID, "err", err)
+		}
+	}
 
 	if err := wp.queue.Complete(ctx, p.job.ID); err != nil {
 		return fmt.Errorf("complete job: %w", err)

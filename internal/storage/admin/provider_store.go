@@ -305,7 +305,7 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 		return nil, fmt.Errorf("cascade: persist + reload: %w", err)
 	}
 
-	jobs, err := storage.BackfillReembedAllJobs(ctx, s.deps.DB)
+	jobs, err := storage.EnqueueAllLiveMemories(ctx, s.deps.DB)
 	if err != nil {
 		return nil, fmt.Errorf("cascade: enqueue memory re-embed jobs: %w", err)
 	}
