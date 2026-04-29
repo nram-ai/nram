@@ -24,7 +24,7 @@ const (
 	defaultMaxResultTokens = 22000
 	charsPerTokenEstimate  = 2
 	maxReducerIterations   = 32
-	truncationSuffix       = "... [TRUNCATED: response exceeded MCP token budget; use pagination, narrower query, or REST API for full data]"
+	truncationSuffix       = "... [TRUNCATED: response exceeded MCP token budget; narrow the query, lower the limit, or paginate via memory_list]"
 )
 
 // maxResultBytes returns the byte budget for a tool result, honoring the
@@ -174,7 +174,7 @@ func buildRecallPayload(orig *mcpRecallResponse, memories []mcpRecallMemory, dro
 		Reason:        "response_too_large",
 		OriginalCount: originalMemories,
 		ReturnedCount: len(memories),
-		Hint:          "narrow your query, lower the limit, or use the REST API at POST /v1/projects/{id}/memories/recall for full results",
+		Hint:          "narrow your query, lower the limit, filter by tags/project, or shrink the graph block via include_graph=false or a lower graph_depth",
 	}
 	graph := orig.Graph
 	if dropGraph {
@@ -292,7 +292,7 @@ func newExportReducer(orig *service.ExportData) reducerFunc {
 				Reason:        "response_too_large",
 				OriginalCount: origM,
 				ReturnedCount: len(memories),
-				Hint:          "export is too large for an MCP response; use the REST API at GET /v1/projects/{id}/export for the full archive",
+				Hint:          "export exceeded MCP token budget; result is partial — narrow the project scope or paginate memories via memory_list",
 			},
 		}, more
 	}
