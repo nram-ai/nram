@@ -1417,3 +1417,239 @@ func TestRecall_FusionEnabled_BothChannelsBoost(t *testing.T) {
 		t.Errorf("expected cross-channel memory to rank first; got %v", resp.Memories[0].ID)
 	}
 }
+
+// --- Confidence ranking term + per-project resolver ---
+
+// makeTestMemoryWithConfidence is a variant of makeTestMemory that takes an
+// explicit confidence so tests can build adjacent rows differing only by
+// confidence (the existing helper hard-codes 1.0).
+func makeTestMemoryWithConfidence(id uuid.UUID, nsID uuid.UUID, content string, importance, confidence float64, createdAt time.Time) *model.Memory {
+	return &model.Memory{
+		ID:          id,
+		NamespaceID: nsID,
+		Content:     content,
+		Tags:        []string{},
+		Confidence:  confidence,
+		Importance:  importance,
+		CreatedAt:   createdAt,
+		UpdatedAt:   createdAt,
+	}
+}
+
+// TestRecall_ConfidenceRanksHigher verifies the new Confidence term in
+// computeScore actually shifts ordering. Two memories share content,
+// importance, and recency; only their stored Confidence differs. The
+// higher-confidence row must rank first AND its score must be strictly
+// greater (so a future regression that drops the term is caught).
+func TestRecall_ConfidenceRanksHigher(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	now := time.Now()
+	highID := uuid.New()
+	lowID := uuid.New()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			highID: makeTestMemoryWithConfidence(highID, nsID, "shared content", 0.5, 1.0, now.Add(-1*time.Hour)),
+			lowID:  makeTestMemoryWithConfidence(lowID, nsID, "shared content", 0.5, 0.5, now.Add(-1*time.Hour)),
+		},
+	}
+
+	// Identical similarity to isolate the Confidence contribution.
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: highID, Score: 0.80, NamespaceID: nsID},
+			{ID: lowID, Score: 0.80, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider {
+		return embProvider
+	})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID: projectID,
+		Query:     "search",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != highID {
+		t.Errorf("expected high-confidence memory to rank first, got %v", resp.Memories[0].ID)
+	}
+	if resp.Memories[0].Score <= resp.Memories[1].Score {
+		t.Errorf("expected strict score gap; got %v vs %v", resp.Memories[0].Score, resp.Memories[1].Score)
+	}
+	// Score delta should be approximately Confidence_weight * (1.0 - 0.5) = 0.025.
+	delta := resp.Memories[0].Score - resp.Memories[1].Score
+	if delta < 0.020 || delta > 0.030 {
+		t.Errorf("expected delta ~= 0.025, got %v", delta)
+	}
+}
+
+// TestRecall_ZeroConfidenceFiltered verifies the kill-signal at recall.go:725
+// is preserved. A confidence=0 memory must not appear in results.
+func TestRecall_ZeroConfidenceFiltered(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	now := time.Now()
+	zeroID := uuid.New()
+	keepID := uuid.New()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			zeroID: makeTestMemoryWithConfidence(zeroID, nsID, "filtered", 0.5, 0.0, now),
+			keepID: makeTestMemoryWithConfidence(keepID, nsID, "kept", 0.5, 1.0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: zeroID, Score: 0.99, NamespaceID: nsID},
+			{ID: keepID, Score: 0.50, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider {
+		return embProvider
+	})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID: projectID,
+		Query:     "x",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Memories) != 1 {
+		t.Fatalf("expected exactly 1 memory (zero-confidence filtered), got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != keepID {
+		t.Errorf("expected the non-zero memory to be returned, got %v", resp.Memories[0].ID)
+	}
+}
+
+// TestRecall_PerProjectOverrideMerges verifies that a project's
+// ranking_weights JSON override merges into the system weights, leaving
+// non-overridden fields at their system value. The override sets only
+// Confidence to 0.50; with otherwise-identical candidates the boost on the
+// higher-confidence row should now be ~10x larger than under the system
+// default of 0.05.
+func TestRecall_PerProjectOverrideMerges(t *testing.T) {
+	projectID, nsID, _, namespaces := setupTestFixtures()
+
+	// Re-build projects with a Settings JSON that overrides Confidence.
+	projects := &mockProjectRepo{
+		projects: map[uuid.UUID]*model.Project{
+			projectID: {
+				ID:          projectID,
+				NamespaceID: nsID,
+				Name:        "Test Project",
+				Slug:        "test-project",
+				Settings:    json.RawMessage(`{"ranking_weights":{"confidence":0.50}}`),
+			},
+		},
+	}
+
+	now := time.Now()
+	highID := uuid.New()
+	lowID := uuid.New()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			highID: makeTestMemoryWithConfidence(highID, nsID, "shared", 0.5, 1.0, now),
+			lowID:  makeTestMemoryWithConfidence(lowID, nsID, "shared", 0.5, 0.5, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: highID, Score: 0.80, NamespaceID: nsID},
+			{ID: lowID, Score: 0.80, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider {
+		return embProvider
+	})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID: projectID,
+		Query:     "search",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != highID {
+		t.Errorf("expected high-confidence memory to rank first, got %v", resp.Memories[0].ID)
+	}
+	// Override pumps Confidence weight to 0.50, so the delta should be
+	// ~0.50 * 0.5 = 0.25 — much larger than the default-weight delta of
+	// ~0.025 from the previous test.
+	delta := resp.Memories[0].Score - resp.Memories[1].Score
+	if delta < 0.20 || delta > 0.30 {
+		t.Errorf("expected delta ~= 0.25 with project override, got %v", delta)
+	}
+}
+
+// TestRecall_PerProjectOverrideLegacyShape verifies the parser still honors
+// projects whose settings have not been migrated yet (the legacy
+// recency/relevance/importance shape). With relevance set high but Confidence
+// unset, ranking should still be sane.
+func TestRecall_PerProjectOverrideLegacyShape(t *testing.T) {
+	projectID, nsID, _, namespaces := setupTestFixtures()
+
+	// Legacy shape: relevance instead of similarity, no other canonical keys.
+	projects := &mockProjectRepo{
+		projects: map[uuid.UUID]*model.Project{
+			projectID: {
+				ID:          projectID,
+				NamespaceID: nsID,
+				Settings:    json.RawMessage(`{"ranking_weights":{"relevance":0.80,"recency":0.10,"importance":0.10}}`),
+			},
+		},
+	}
+
+	now := time.Now()
+	id := uuid.New()
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			id: makeTestMemoryWithConfidence(id, nsID, "shared", 0.5, 1.0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{{ID: id, Score: 0.80, NamespaceID: nsID}},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider {
+		return embProvider
+	})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{ProjectID: projectID, Query: "x"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Memories) != 1 {
+		t.Fatalf("legacy-shape override should still yield results, got %d", len(resp.Memories))
+	}
+}

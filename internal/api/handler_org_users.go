@@ -280,6 +280,11 @@ func handleOrgUpdateUser(w http.ResponseWriter, r *http.Request, store OrgUserSt
 		return
 	}
 
+	if err := ValidateUserSettingsJSON(body.Settings); err != nil {
+		WriteError(w, ErrBadRequest(err.Error()))
+		return
+	}
+
 	user, err := store.UpdateUser(r.Context(), userID, body.DisplayName, body.Role, body.Settings)
 	if err != nil {
 		if isUserNotFound(err) {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"strings"
 
@@ -13,12 +14,20 @@ import (
 )
 
 // storeRequestBody represents the JSON body for the store memory endpoint.
+//
+// Importance is the only [0,1] memory-score field a caller can seed at store
+// time; Confidence is deliberately not accepted because it is an internal
+// signal driven by reinforcement, decay, and contradiction haircuts. A
+// client-supplied confidence would let callers game ranking. Fields that
+// look like Confidence in the request body are silently ignored — same as
+// any other unknown JSON key — which preserves the contract.
 type storeRequestBody struct {
-	Content  string          `json:"content"`
-	Source   string          `json:"source"`
-	Tags     []string        `json:"tags"`
-	Metadata json.RawMessage `json:"metadata"`
-	Options  storeBodyOpts   `json:"options"`
+	Content    string          `json:"content"`
+	Source     string          `json:"source"`
+	Tags       []string        `json:"tags"`
+	Importance *float64        `json:"importance,omitempty"`
+	Metadata   json.RawMessage `json:"metadata"`
+	Options    storeBodyOpts   `json:"options"`
 }
 
 type storeBodyOpts struct {
@@ -51,14 +60,26 @@ func NewStoreHandler(svc *service.StoreService, bus events.EventBus) http.Handle
 			WriteError(w, ErrBadRequest("content is required"))
 			return
 		}
+		if body.Importance != nil {
+			v := *body.Importance
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				WriteError(w, ErrBadRequest("importance: must be finite"))
+				return
+			}
+			if v < 0 || v > 1 {
+				WriteError(w, ErrBadRequest("importance: must be in [0.0, 1.0]"))
+				return
+			}
+		}
 
 		// Build service request.
 		req := &service.StoreRequest{
-			ProjectID: projectID,
-			Content:   body.Content,
-			Source:    body.Source,
-			Tags:      body.Tags,
-			Metadata:  body.Metadata,
+			ProjectID:  projectID,
+			Content:    body.Content,
+			Source:     body.Source,
+			Tags:       body.Tags,
+			Importance: body.Importance,
+			Metadata:   body.Metadata,
 			Options: service.StoreOptions{
 				Enrich:  body.Options.Enrich,
 				Extract: body.Options.Extract,

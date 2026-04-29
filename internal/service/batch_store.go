@@ -15,11 +15,17 @@ import (
 )
 
 // BatchStoreItem represents a single item in a batch store request.
+//
+// Importance is optional per-item; nil falls through to the documented
+// default of 0.5. Confidence is not exposed for the same reason as the
+// single-store path: it is an internal signal driven by reinforcement,
+// decay, and contradiction haircuts.
 type BatchStoreItem struct {
-	Content  string          `json:"content"`
-	Source   string          `json:"source"`
-	Tags     []string        `json:"tags"`
-	Metadata json.RawMessage `json:"metadata"`
+	Content    string          `json:"content"`
+	Source     string          `json:"source"`
+	Tags       []string        `json:"tags"`
+	Importance *float64        `json:"importance,omitempty"`
+	Metadata   json.RawMessage `json:"metadata"`
 }
 
 // BatchStoreRequest contains all parameters needed for a batch memory store operation.
@@ -163,6 +169,10 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 		if item.Source != "" {
 			source = &item.Source
 		}
+		importance := 0.5
+		if item.Importance != nil {
+			importance = *item.Importance
+		}
 		mem := &model.Memory{
 			ID:          memID,
 			NamespaceID: ns.ID,
@@ -171,7 +181,7 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 			Source:      source,
 			Tags:        item.Tags,
 			Confidence:  1.0,
-			Importance:  0.5,
+			Importance:  importance,
 			Metadata:    item.Metadata,
 			CreatedAt:   now,
 			UpdatedAt:   now,

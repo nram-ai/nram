@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
 	"strings"
 
@@ -47,6 +49,23 @@ func NewBatchStoreHandler(svc BatchStoreServicer, bus events.EventBus) http.Hand
 		if len(body.Items) == 0 {
 			WriteError(w, ErrBadRequest("items must not be empty"))
 			return
+		}
+		// Validate optional importance per item: must be finite and in [0, 1].
+		// Failing fast at the boundary keeps malformed batches from doing any
+		// partial work; the service layer relies on the values being clean.
+		for i, item := range body.Items {
+			if item.Importance == nil {
+				continue
+			}
+			v := *item.Importance
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				WriteError(w, ErrBadRequest(fmt.Sprintf("items[%d].importance: must be finite", i)))
+				return
+			}
+			if v < 0 || v > 1 {
+				WriteError(w, ErrBadRequest(fmt.Sprintf("items[%d].importance: must be in [0.0, 1.0]", i)))
+				return
+			}
 		}
 
 		// Build service request.

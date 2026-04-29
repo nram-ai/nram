@@ -166,15 +166,20 @@ type RankingWeights struct {
 	Importance     float64
 	Frequency      float64
 	GraphRelevance float64
+	Confidence     float64
 }
 
-// DefaultRankingWeights provides sensible defaults for ranking.
+// DefaultRankingWeights provides sensible defaults for ranking. Frequency is
+// 0 because access_count already drives Confidence reinforcement; weighting
+// both double-counts the same signal. Operators can re-enable Frequency via
+// the ranking.weight.frequency setting.
 var DefaultRankingWeights = RankingWeights{
-	Similarity:     0.5,
+	Similarity:     0.50,
 	Recency:        0.15,
 	Importance:     0.10,
-	Frequency:      0.05,
+	Frequency:      0.00,
 	GraphRelevance: 0.20,
+	Confidence:     0.05,
 }
 
 // FusionConfig governs candidate retrieval (parallel vector + lexical,
@@ -666,37 +671,47 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		}
 	}
 
+	// Normalize raw similarity into [0, 1] so RecallResult.Similarity reflects
+	// the same value computeScore feeds into the weighted sum.
 	for i := range candidates {
-		c := &candidates[i]
-		mem := &c.memory
-
-		// Recency: exp(-0.01 * hours_since_creation)
-		hoursSinceCreation := now.Sub(mem.CreatedAt).Hours()
-		recencyScore := math.Exp(-0.01 * hoursSinceCreation)
-
-		// Frequency: log(1 + access_count) / log(1 + max_access_in_results)
-		var frequencyScore float64
-		if maxAccess > 0 {
-			frequencyScore = math.Log(1+float64(mem.AccessCount)) / math.Log(1+float64(maxAccess))
-		}
-
-		// Composite score.
-		c.similarity = clampScore(c.similarity)
-		score := s.weights.Similarity*c.similarity +
-			s.weights.Recency*recencyScore +
-			s.weights.Importance*mem.Importance +
-			s.weights.Frequency*frequencyScore +
-			s.weights.GraphRelevance*c.graphRelevance
-
-		// Store back — we reuse similarity field for the raw similarity, score is computed below.
-		_ = score // used in sort
-		candidates[i] = *c
+		candidates[i].similarity = clampScore(candidates[i].similarity)
 	}
 
-	// Sort by computed score descending.
+	// Resolve effective weights per candidate based on its owning project.
+	// Each candidate carries c.projectID (stamped during candidate building),
+	// so cross-project recall — globals, shared namespaces — gets each row's
+	// owner's tuning rather than the requester's. Cache lifetime is one
+	// Recall call; operator changes to a project's overrides are picked up on
+	// the next call.
+	weightsByProject := make(map[uuid.UUID]RankingWeights, 4)
+	resolveWeights := func(projID uuid.UUID) RankingWeights {
+		if w, ok := weightsByProject[projID]; ok {
+			return w
+		}
+		merged := s.weights
+		if projID != uuid.Nil && s.projects != nil {
+			if proj, err := s.projects.GetByID(ctx, projID); err == nil && proj != nil {
+				var settings struct {
+					RankingWeights json.RawMessage `json:"ranking_weights"`
+				}
+				if len(proj.Settings) > 0 {
+					_ = json.Unmarshal(proj.Settings, &settings)
+				}
+				if ov, perr := ParseRankingOverride(settings.RankingWeights); perr == nil {
+					merged = MergeWeights(s.weights, ov)
+				}
+			}
+		}
+		weightsByProject[projID] = merged
+		return merged
+	}
+
+	// Sort by computed score descending. Each comparison resolves weights
+	// from the candidate's owning project, so a single sort can score
+	// candidates from different projects under different effective weights.
 	sort.Slice(candidates, func(i, j int) bool {
-		si := computeScore(candidates[i], s.weights, now, maxAccess)
-		sj := computeScore(candidates[j], s.weights, now, maxAccess)
+		si := computeScore(candidates[i], resolveWeights(candidates[i].projectID), now, maxAccess)
+		sj := computeScore(candidates[j], resolveWeights(candidates[j].projectID), now, maxAccess)
 		return si > sj
 	})
 
@@ -725,7 +740,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			}
 		}
 
-		score := computeScore(c, s.weights, now, maxAccess)
+		score := computeScore(c, resolveWeights(c.projectID), now, maxAccess)
 		if score < threshold {
 			continue
 		}
@@ -919,6 +934,12 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 }
 
 // computeScore calculates the composite ranking score for a candidate.
+//
+// The Confidence term is gated on c.memory.Confidence > 0 so confidence=0 rows
+// score identically to "no Confidence term applied" if they ever reach this
+// function. Today the kill-signal filter at the post-threshold loop drops them
+// before the sort, but the gate keeps the math sound for any future caller
+// that bypasses that filter.
 func computeScore(c scoredMemory, w RankingWeights, now time.Time, maxAccess int) float64 {
 	hoursSinceCreation := now.Sub(c.memory.CreatedAt).Hours()
 	recencyScore := math.Exp(-0.01 * hoursSinceCreation)
@@ -928,11 +949,16 @@ func computeScore(c scoredMemory, w RankingWeights, now time.Time, maxAccess int
 		frequencyScore = math.Log(1+float64(c.memory.AccessCount)) / math.Log(1+float64(maxAccess))
 	}
 
-	return w.Similarity*clampScore(c.similarity) +
+	score := w.Similarity*clampScore(c.similarity) +
 		w.Recency*recencyScore +
 		w.Importance*c.memory.Importance +
 		w.Frequency*frequencyScore +
 		w.GraphRelevance*c.graphRelevance
+
+	if c.memory.Confidence > 0 {
+		score += w.Confidence * clampScore(c.memory.Confidence)
+	}
+	return score
 }
 
 // clampScore ensures a score is in the [0, 1] range.

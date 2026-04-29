@@ -135,6 +135,11 @@ func handleAdminCreateProject(w http.ResponseWriter, r *http.Request, store Proj
 		return
 	}
 
+	if err := ValidateProjectSettingsJSON(body.Settings); err != nil {
+		WriteError(w, ErrBadRequest(err.Error()))
+		return
+	}
+
 	project, err := store.CreateProject(r.Context(), body.Name, body.Slug, body.Description, ownerNSID, body.DefaultTags, body.Settings)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to create project"))

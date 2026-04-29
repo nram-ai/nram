@@ -73,7 +73,7 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 		return nil
 	}
 
-	cfg := wp.resolveIngestionSettings(ctx)
+	cfg := wp.resolveIngestionSettings(ctx, mem.NamespaceID)
 	res := &ingestionDecisionResult{enabled: true, shadow: cfg.shadow}
 
 	ep := wp.embedProvider()
@@ -199,9 +199,15 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 // resolveIngestionSettings snapshots the five admin-tunable ingestion knobs
 // so the rest of the phase reads from a local struct rather than re-issuing
 // settings cascades. Bad operator values fall back to documented defaults.
-func (wp *WorkerPool) resolveIngestionSettings(ctx context.Context) ingestionSettings {
+// The threshold respects the namespace cascade (system → user → project) when
+// a CascadeResolver is wired; without one it falls back to the system-level
+// ingestion_decision.threshold (with the legacy dedup_threshold key as a
+// secondary fallback inside the resolver).
+func (wp *WorkerPool) resolveIngestionSettings(ctx context.Context, namespaceID uuid.UUID) ingestionSettings {
 	cfg := ingestionSettings{threshold: 0.92, topK: 5}
-	if v, err := wp.settings.ResolveFloat(ctx, service.SettingIngestionDecisionThreshold, "global"); err == nil && v > 0 && v <= 1 {
+	if wp.cascade != nil {
+		cfg.threshold = wp.cascade.ResolveDedupThreshold(ctx, namespaceID)
+	} else if v, err := wp.settings.ResolveFloat(ctx, service.SettingIngestionDecisionThreshold, "global"); err == nil && v > 0 && v <= 1 {
 		cfg.threshold = v
 	}
 	if v, err := wp.settings.ResolveInt(ctx, service.SettingIngestionDecisionTopK, "global"); err == nil && v > 0 {

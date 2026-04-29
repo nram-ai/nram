@@ -278,6 +278,49 @@ func TestStore_Success(t *testing.T) {
 	}
 }
 
+func TestStore_ImportanceOverride(t *testing.T) {
+	projectID, _, projects, namespaces := setupTestFixtures()
+	svc, memories, _, _ := newTestService(projects, namespaces)
+
+	v := 0.9
+	resp, err := svc.Store(context.Background(), &StoreRequest{
+		ProjectID:  projectID,
+		Content:    "weighted",
+		Importance: &v,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(memories.created) != 1 {
+		t.Fatalf("expected 1 memory, got %d", len(memories.created))
+	}
+	if memories.created[0].Importance != 0.9 {
+		t.Errorf("expected stored importance 0.9, got %v", memories.created[0].Importance)
+	}
+	// Confidence stays at the hardcoded internal default — clients cannot seed it.
+	if memories.created[0].Confidence != 1.0 {
+		t.Errorf("expected confidence 1.0 (internal default), got %v", memories.created[0].Confidence)
+	}
+	if resp.ID == uuid.Nil {
+		t.Error("expected non-nil ID")
+	}
+}
+
+func TestStore_ImportanceDefault(t *testing.T) {
+	projectID, _, projects, namespaces := setupTestFixtures()
+	svc, memories, _, _ := newTestService(projects, namespaces)
+
+	if _, err := svc.Store(context.Background(), &StoreRequest{
+		ProjectID: projectID,
+		Content:   "default",
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if memories.created[0].Importance != 0.5 {
+		t.Errorf("expected default importance 0.5, got %v", memories.created[0].Importance)
+	}
+}
+
 func TestStore_EnqueuesRegardlessOfEnrichFlag(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
 

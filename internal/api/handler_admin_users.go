@@ -303,6 +303,11 @@ func handleAdminUpdateUser(w http.ResponseWriter, r *http.Request, store UserAdm
 		return
 	}
 
+	if err := ValidateUserSettingsJSON(body.Settings); err != nil {
+		WriteError(w, ErrBadRequest(err.Error()))
+		return
+	}
+
 	user, err := store.UpdateUser(r.Context(), id, body.DisplayName, body.Role, body.Settings)
 	if err != nil {
 		if isUserNotFound(err) {

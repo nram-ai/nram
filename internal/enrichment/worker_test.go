@@ -457,7 +457,7 @@ func newTestHarness(
 		h.reader, h.updater, h.creator, nil, h.queue,
 		h.entities, h.rels, h.lineage, h.vectors,
 		factFn, entityFn, embedFn,
-		nil, nil, nil,
+		nil, nil, nil, nil,
 	)
 	return h
 }

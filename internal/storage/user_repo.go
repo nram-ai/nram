@@ -102,6 +102,23 @@ func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.User, erro
 	return r.scanUser(row)
 }
 
+// GetByNamespaceID returns the user whose personal namespace is the given ID.
+// A user owns exactly one namespace (created at user-Create time), so this is
+// the inverse of looking up "which user lives at this namespace." Returns
+// sql.ErrNoRows when the namespace is not a user's personal namespace
+// (typically because it is a project namespace instead).
+func (r *UserRepo) GetByNamespaceID(ctx context.Context, namespaceID uuid.UUID) (*model.User, error) {
+	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
+		FROM users WHERE namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
+			FROM users WHERE namespace_id = $1`
+	}
+
+	row := r.db.QueryRow(ctx, query, namespaceID.String())
+	return r.scanUser(row)
+}
+
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
 		FROM users WHERE email = ?`

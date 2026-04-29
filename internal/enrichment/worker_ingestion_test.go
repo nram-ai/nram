@@ -131,6 +131,7 @@ func newIngestionHarness(
 		factFn, entityFn, embedFn, ingestionFn,
 		dedup,
 		h.settings,
+		nil,
 	)
 	return h
 }

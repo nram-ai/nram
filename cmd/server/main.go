@@ -363,6 +363,7 @@ func main() {
 	// switch after migrations have been applied.
 	recallSvc.SetLexical(memoryRepo)
 	recallSvc.SetFusion(loadFusionConfig(context.Background(), settingsSvc))
+	recallSvc.SetWeights(loadRankingWeights(context.Background(), settingsSvc))
 
 	// Create lifecycle service for TTL expiry and purge sweeps.
 	graphPruner := service.NewGraphPruner(entityRepo, relationshipRepo)
@@ -452,13 +453,19 @@ func main() {
 	// activates the phase without further plumbing.
 	ingestionDedup := enrichment.NewDeduplicator(vectorStore, embedProvider, memoryRepo, enrichment.DefaultDeduplicationConfig)
 
+	// Cascade resolver merges system + user + project layers of the
+	// enrichment_enabled and dedup_threshold overrides. The worker pool
+	// honors enrichment_enabled at both the master toggle (system-only,
+	// uuid.Nil namespace) and per-job (memory.namespace_id) layers.
+	cascadeResolver := service.NewCascadeResolver(settingsSvc, projectRepo, userRepo)
+
 	// Start enrichment worker pool — needs providers for LLM extraction.
 	workerPool := enrichment.NewWorkerPool(
 		enrichment.WorkerConfig{Backend: db.Backend()},
 		memoryRepo, memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
 		entityRepo, relationshipRepo, lineageRepo, vectorStore,
 		factProvider, entityProvider, embedProvider,
-		factProvider, ingestionDedup, settingsSvc,
+		factProvider, ingestionDedup, settingsSvc, cascadeResolver,
 	)
 	workerPool.Start()
 	defer workerPool.Stop()
@@ -732,6 +739,34 @@ func main() {
 	}
 
 	log.Println("server stopped")
+}
+
+// loadRankingWeights pulls the ranking.weight.* settings into a RankingWeights.
+// Each lookup falls back to the corresponding DefaultRankingWeights field when
+// the key is missing, unparseable, or out of range, so a misconfigured setting
+// keeps ranking in a known state rather than crashing startup. Per-project
+// overrides resolve later at recall time.
+func loadRankingWeights(ctx context.Context, settingsSvc *service.SettingsService) service.RankingWeights {
+	w := service.DefaultRankingWeights
+	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightSim, "global"); err == nil && v >= 0 && v <= 1 {
+		w.Similarity = v
+	}
+	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightRec, "global"); err == nil && v >= 0 && v <= 1 {
+		w.Recency = v
+	}
+	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightImp, "global"); err == nil && v >= 0 && v <= 1 {
+		w.Importance = v
+	}
+	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightFreq, "global"); err == nil && v >= 0 && v <= 1 {
+		w.Frequency = v
+	}
+	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightGraph, "global"); err == nil && v >= 0 && v <= 1 {
+		w.GraphRelevance = v
+	}
+	if v, err := settingsSvc.ResolveFloat(ctx, service.SettingRankWeightConf, "global"); err == nil && v >= 0 && v <= 1 {
+		w.Confidence = v
+	}
+	return w
 }
 
 // loadFusionConfig pulls the recall.fusion.* settings into a FusionConfig.

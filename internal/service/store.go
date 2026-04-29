@@ -69,13 +69,21 @@ type StoreOptions struct {
 }
 
 // StoreRequest contains all parameters needed to store a new memory.
+//
+// Importance is an optional per-memory override. When nil, Store falls
+// through to the documented default (0.5). Confidence is deliberately not
+// caller-settable: it is driven by reinforcement on recall, decay during
+// sleep, and contradiction haircuts in the dream phase, and a client-side
+// seed would let callers game ranking. Imports needing seeded confidence
+// have a separate path through the import service.
 type StoreRequest struct {
-	ProjectID uuid.UUID       `json:"project_id"`
-	Content   string          `json:"content"`
-	Source    string          `json:"source"`
-	Tags     []string        `json:"tags"`
-	Metadata json.RawMessage `json:"metadata"`
-	Options  StoreOptions    `json:"options"`
+	ProjectID  uuid.UUID       `json:"project_id"`
+	Content    string          `json:"content"`
+	Source     string          `json:"source"`
+	Tags       []string        `json:"tags"`
+	Importance *float64        `json:"importance,omitempty"`
+	Metadata   json.RawMessage `json:"metadata"`
+	Options    StoreOptions    `json:"options"`
 	// Caller context (set by handler/middleware)
 	UserID   *uuid.UUID `json:"-"`
 	OrgID    *uuid.UUID `json:"-"`
@@ -200,6 +208,10 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 	if req.Source != "" {
 		source = &req.Source
 	}
+	importance := 0.5
+	if req.Importance != nil {
+		importance = *req.Importance
+	}
 	mem := &model.Memory{
 		ID:          memID,
 		NamespaceID: ns.ID,
@@ -208,7 +220,7 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 		Source:      source,
 		Tags:        req.Tags,
 		Confidence:  1.0,
-		Importance:  0.5,
+		Importance:  importance,
 		Metadata:    req.Metadata,
 		CreatedAt:   now,
 		UpdatedAt:   now,

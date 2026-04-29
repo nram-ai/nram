@@ -34,6 +34,7 @@ const (
 	SettingRankWeightImp   = "ranking.weight.importance"
 	SettingRankWeightFreq  = "ranking.weight.frequency"
 	SettingRankWeightGraph = "ranking.weight.graph_relevance"
+	SettingRankWeightConf  = "ranking.weight.confidence"
 	SettingTokenRetention  = "usage.token_retention_days"
 
 	// Hybrid recall fusion. Off by default; flipping enabled turns on
@@ -176,11 +177,12 @@ const (
 // These are used when a setting is not found at any scope in the database.
 var settingDefaults = map[string]string{
 	SettingDedupThreshold:             "0.92",
-	SettingRankWeightSim:              "0.5",
+	SettingRankWeightSim:              "0.50",
 	SettingRankWeightRec:              "0.15",
 	SettingRankWeightImp:              "0.10",
-	SettingRankWeightFreq:             "0.05",
+	SettingRankWeightFreq:             "0.00",
 	SettingRankWeightGraph:            "0.20",
+	SettingRankWeightConf:             "0.05",
 	SettingRecallFusionEnabled:        "false",
 	SettingRecallFusionK:              "60",
 	SettingRecallFusionVecW:           "0.70",

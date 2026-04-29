@@ -218,6 +218,7 @@ type WorkerPool struct {
 	ingestionProvider func() provider.LLMProvider
 	deduplicator      *Deduplicator
 	settings          *service.SettingsService
+	cascade           *service.CascadeResolver
 
 	idleWorkers atomic.Int32
 
@@ -250,6 +251,7 @@ func NewWorkerPool(
 	ingestionProvider func() provider.LLMProvider,
 	deduplicator *Deduplicator,
 	settings *service.SettingsService,
+	cascade *service.CascadeResolver,
 ) *WorkerPool {
 	return &WorkerPool{
 		config:            config.withDefaults(),
@@ -268,6 +270,7 @@ func NewWorkerPool(
 		ingestionProvider: ingestionProvider,
 		deduplicator:      deduplicator,
 		settings:          settings,
+		cascade:           cascade,
 	}
 }
 
@@ -310,6 +313,19 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		// System-level enrichment.enabled is the master toggle. When false
+		// the worker stays idle without claiming, so per-job state is not
+		// disturbed and re-enabling resumes the existing queue cleanly.
+		// Per-namespace overrides (project / user) are honoured below in
+		// runPreEmbed once the job is claimed and the memory is loaded.
+		if wp.cascade != nil && !wp.cascade.ResolveEnrichmentEnabled(ctx, uuid.Nil) {
+			emptyPolls++
+			wp.idleWorkers.Add(1)
+			wp.sleepWithBackoff(ctx, emptyPolls, maxBackoff)
+			wp.idleWorkers.Add(-1)
+			continue
 		}
 
 		jobs, err := wp.queue.ClaimNextBatch(ctx, workerID, batchClaimSize)
@@ -442,6 +458,12 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 	if err != nil {
 		return err
 	}
+	// runPreEmbed returns (nil, nil) when a per-namespace gate skipped the
+	// job; the queue entry is already Complete-marked, so there is nothing
+	// further to do for this caller.
+	if p == nil {
+		return nil
+	}
 	wp.runEmbedBatch(ctx, []*pendingJob{p})
 	return wp.finalizeJob(ctx, p)
 }
@@ -497,6 +519,21 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 			slog.Error("enrichment: fail-mark error", "job", job.ID, "err", failErr)
 		}
 		return nil, fmt.Errorf("memory lookup: %w", err)
+	}
+
+	// Per-namespace enrichment_enabled cascade. A project or user may opt
+	// their namespace out of enrichment even while the system-level toggle
+	// is on. Mark the job complete (not failed) so the queue does not
+	// retry; the memory simply stays unenriched until the toggle flips
+	// back. Returning (nil, nil) signals to callers that nothing further
+	// should happen with this job.
+	if wp.cascade != nil && !wp.cascade.ResolveEnrichmentEnabled(ctx, mem.NamespaceID) {
+		if err := wp.queue.Complete(ctx, job.ID); err != nil {
+			slog.Error("enrichment: complete-skipped error", "job", job.ID, "err", err)
+		}
+		slog.Info("enrichment: skipped per cascade",
+			"job", job.ID, "memory", mem.ID, "namespace", mem.NamespaceID)
+		return nil, nil
 	}
 
 	// Stamp namespace + memory context for the UsageRecordingProvider
