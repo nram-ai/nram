@@ -52,6 +52,94 @@ const preEmbedConcurrency = 4
 // ceilings on nearest providers.
 const embedInputCap = 256
 
+// breakerErrorEscalateAfter is how long a circuit breaker must remain
+// continuously open before the worker escalates its log lines from INFO
+// (operationally normal during a provider warmup or brief outage) to ERROR
+// (sustained outage, deserves attention).
+const breakerErrorEscalateAfter = 5 * time.Minute
+
+// asCircuitOpen extracts the *provider.CircuitOpenError from an error chain
+// (returns nil, false if absent) so callers can pull provider name and timing
+// out of breaker-open errors for structured logging and worker cooldown.
+func asCircuitOpen(err error) (*provider.CircuitOpenError, bool) {
+	var coe *provider.CircuitOpenError
+	if errors.As(err, &coe) {
+		return coe, true
+	}
+	return nil, false
+}
+
+// logBreakerOrError logs a job-level error. Breaker-open errors print at INFO
+// during the first breakerErrorEscalateAfter of an open window (a fresh trip
+// is not a code bug — Ollama warming up, provider rate limit, brief network
+// blip). Sustained breaker-open trips and all other errors print at ERROR.
+func logBreakerOrError(msg string, err error, attrs ...any) {
+	if coe, ok := asCircuitOpen(err); ok {
+		level := slog.LevelInfo
+		if time.Since(coe.OpenSince) >= breakerErrorEscalateAfter {
+			level = slog.LevelError
+		}
+		retryIn := time.Until(coe.RetryAt).Round(time.Second)
+		if retryIn < 0 {
+			retryIn = 0
+		}
+		extra := append([]any{}, attrs...)
+		extra = append(extra,
+			"provider", coe.Provider,
+			"open_for", time.Since(coe.OpenSince).Round(time.Second).String(),
+			"retry_in", retryIn.String(),
+			"cause", causeString(coe.Cause),
+		)
+		slog.Log(context.Background(), level, msg, extra...)
+		return
+	}
+	extra := append([]any{}, attrs...)
+	extra = append(extra, "err", err)
+	slog.Error(msg, extra...)
+}
+
+func causeString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// errNonTransient is a sentinel passed to requeueOrFail when the caller has
+// already decided the failure should burn a queue attempt (e.g., a mixed
+// transient/non-transient batch). It carries no message of its own; the
+// caller supplies the failMsg.
+var errNonTransient = errors.New("non-transient")
+
+// isTransientLLMErr reports whether err represents a transient provider state
+// the worker can recover from without operator intervention (currently:
+// circuit breaker open). Transient failures use queue.Release so the job is
+// re-queued without bumping its attempts counter, preventing a slow Ollama
+// warmup from exhausting max_attempts and stranding the queue.
+func isTransientLLMErr(err error) bool {
+	_, ok := asCircuitOpen(err)
+	return ok
+}
+
+// requeueOrFail releases jobID back to pending without bumping attempts when
+// err is transient (breaker open), and otherwise marks it failed with the
+// given message. Release errors are logged at WARN since the job is in an
+// indeterminate but self-healing state (the next claim probe will resolve
+// it) and the original cause is the more important signal.
+func (wp *WorkerPool) requeueOrFail(ctx context.Context, jobID uuid.UUID, err error, failMsg string) {
+	if isTransientLLMErr(err) {
+		if relErr := wp.queue.Release(ctx, jobID); relErr != nil {
+			slog.Warn("enrichment: queue release after transient failure",
+				"job", jobID, "err", relErr)
+		}
+		return
+	}
+	if failErr := wp.queue.Fail(ctx, jobID, failMsg); failErr != nil {
+		slog.Warn("enrichment: queue fail",
+			"job", jobID, "err", failErr)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Dependency-inversion interfaces
 // ---------------------------------------------------------------------------
@@ -369,7 +457,38 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 		// Reset backoff on successful claim.
 		emptyPolls = 0
 
-		wp.processBatch(ctx, workerID, jobs)
+		cooldown := wp.processBatch(ctx, workerID, jobs)
+		// If a breaker tripped during this batch, pause this worker until
+		// the breaker is allowed to probe again (its RetryAt). Without this
+		// pause the worker would immediately re-claim the same jobs, run
+		// them straight into the still-open breaker, Release them, and burn
+		// CPU until the breaker recovers — exactly the "needs a restart"
+		// symptom users were seeing.
+		if !cooldown.IsZero() {
+			wp.idleWorkers.Add(1)
+			wp.sleepUntil(ctx, cooldown)
+			wp.idleWorkers.Add(-1)
+		}
+	}
+}
+
+// sleepUntil blocks until the given deadline or context cancellation. A small
+// floor prevents busy-spinning if the deadline has already passed; a small
+// jitter prevents two workers from waking simultaneously after a shared
+// breaker trip.
+func (wp *WorkerPool) sleepUntil(ctx context.Context, deadline time.Time) {
+	wait := time.Until(deadline)
+	if wait < 500*time.Millisecond {
+		wait = 500 * time.Millisecond
+	}
+	jitter := time.Duration(rand.Int63n(int64(time.Second)))
+	wait += jitter
+
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
 	}
 }
 
@@ -485,9 +604,16 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 
 // processBatch runs pre-embed in parallel across claimed jobs (bounded by
 // preEmbedConcurrency), then makes one shared embed call, then finalizes
-// each. Bounded concurrency keeps LLM provider rate limits safe.
-func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []*model.EnrichmentJob) {
+// each. Bounded concurrency keeps LLM provider rate limits safe. Returns
+// the soonest breaker RetryAt observed across the batch's failures (zero if
+// none) so the worker loop can pause until the breaker is allowed to probe
+// again instead of hot-spinning.
+func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []*model.EnrichmentJob) time.Time {
+	started := time.Now()
+	slog.Info("enrichment: batch claimed", "worker", workerID, "jobs", len(jobs))
+
 	results := make([]*pendingJob, len(jobs))
+	preEmbedErrs := make([]error, len(jobs))
 	sem := make(chan struct{}, preEmbedConcurrency)
 	var wg sync.WaitGroup
 	for i, job := range jobs {
@@ -497,7 +623,9 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 			defer func() { <-sem; wg.Done() }()
 			p, err := wp.runPreEmbed(ctx, job)
 			if err != nil {
-				slog.Error("enrichment: batch pre-embed failed", "worker", workerID, "job", job.ID, "err", err)
+				preEmbedErrs[i] = err
+				logBreakerOrError("enrichment: batch pre-embed failed",
+					err, "worker", workerID, "job", job.ID)
 				return
 			}
 			results[i] = p
@@ -505,21 +633,57 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 	}
 	wg.Wait()
 
+	// Earliest RetryAt across any breaker-open errors observed. The worker
+	// loop sleeps until that time before claiming again so a tripped breaker
+	// does not produce a tight Release/Claim/Release loop while the upstream
+	// provider is recovering.
+	cooldown := earliestBreakerRetry(preEmbedErrs)
+
 	pendings := make([]*pendingJob, 0, len(jobs))
 	for _, p := range results {
 		if p != nil {
 			pendings = append(pendings, p)
 		}
 	}
+	slog.Info("enrichment: pre-embed done",
+		"worker", workerID,
+		"claimed", len(jobs),
+		"kept", len(pendings),
+		"duration_ms", time.Since(started).Milliseconds(),
+	)
 	if len(pendings) == 0 {
-		return
+		return cooldown
 	}
 	wp.runEmbedBatch(ctx, pendings)
 	for _, p := range pendings {
 		if err := wp.finalizeJob(ctx, p); err != nil {
-			slog.Error("enrichment: batch finalize failed", "worker", workerID, "job", p.job.ID, "err", err)
+			logBreakerOrError("enrichment: batch finalize failed",
+				err, "worker", workerID, "job", p.job.ID)
 		}
 	}
+	slog.Info("enrichment: batch done",
+		"worker", workerID,
+		"jobs", len(jobs),
+		"finalized", len(pendings),
+		"duration_ms", time.Since(started).Milliseconds(),
+	)
+	return cooldown
+}
+
+// earliestBreakerRetry returns the soonest RetryAt time across any
+// CircuitOpenError in errs. Zero time if none of the errors were breaker-open.
+func earliestBreakerRetry(errs []error) time.Time {
+	var earliest time.Time
+	for _, err := range errs {
+		coe, ok := asCircuitOpen(err)
+		if !ok {
+			continue
+		}
+		if earliest.IsZero() || coe.RetryAt.Before(earliest) {
+			earliest = coe.RetryAt
+		}
+	}
+	return earliest
 }
 
 // runPreEmbed runs fact/entity extraction, child-memory creation, and
@@ -631,14 +795,27 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 	}
 
 	if (hasFact && factErr != nil) && (hasEntity && entityErr != nil) {
-		errMsg := fmt.Sprintf("fact: %v; entity: %v", factErr, entityErr)
-		_ = wp.queue.Fail(ctx, job.ID, errMsg)
-		return nil, fmt.Errorf("all extractions failed: %s", errMsg)
+		// extractFacts/extractEntities already prefix their errors with
+		// "fact LLM call: ..." / "entity LLM call: ..."; re-prefixing here
+		// produced the "fact: fact LLM call: ..." doubling users were seeing.
+		joined := errors.Join(factErr, entityErr)
+		// Treat as transient only when *both* legs are: if one leg is a real
+		// fault, burning a queue attempt is the right policy.
+		if isTransientLLMErr(factErr) && isTransientLLMErr(entityErr) {
+			wp.requeueOrFail(ctx, job.ID, factErr, joined.Error())
+		} else {
+			wp.requeueOrFail(ctx, job.ID, errNonTransient, joined.Error())
+		}
+		return nil, fmt.Errorf("extraction failed: %w", joined)
 	}
 	if hasFact && factErr != nil {
-		_ = wp.queue.Fail(ctx, job.ID, fmt.Sprintf("fact extraction: %v", factErr))
+		wp.requeueOrFail(ctx, job.ID, factErr, factErr.Error())
 		return nil, fmt.Errorf("fact extraction: %w", factErr)
 	}
+	// Entity-only failure is intentionally soft: facts may have succeeded and
+	// the job can still produce useful output. The job continues with empty
+	// entities. (Both-failed and fact-only branches above already handle the
+	// hard cases.)
 
 	children := make([]childFact, 0, len(facts))
 	for _, fact := range facts {
@@ -900,13 +1077,31 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		if len(pendings) > 0 {
 			batchCtx = provider.WithNamespaceID(batchCtx, pendings[0].mem.NamespaceID)
 		}
+		embedStarted := time.Now()
 		embeddings, _, modelName, err = wp.embedChunked(batchCtx, ep, inputs, dim)
 		_ = modelName
 		_ = usage
 		if err != nil {
-			slog.Error("enrichment: batched embed", "jobs", len(pendings), "err", err)
+			logBreakerOrError("enrichment: batched embed",
+				err, "jobs", len(pendings), "inputs", len(inputs))
+			if isTransientLLMErr(err) {
+				for _, p := range pendings {
+					if p.shortCircuitDelete() {
+						continue
+					}
+					if relErr := wp.queue.Release(ctx, p.job.ID); relErr != nil {
+						slog.Warn("enrichment: queue release after transient embed failure",
+							"job", p.job.ID, "err", relErr)
+					}
+				}
+			}
 			return
 		}
+		slog.Info("enrichment: embedded",
+			"jobs", len(pendings),
+			"inputs", len(inputs),
+			"duration_ms", time.Since(embedStarted).Milliseconds(),
+		)
 	}
 
 	items := make([]storage.VectorUpsertItem, 0, len(inputs)+len(pendings))
@@ -982,8 +1177,10 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 	if len(items) == 0 {
 		return
 	}
+	upsertStarted := time.Now()
 	if err := wp.vectorStore.UpsertBatch(ctx, items); err != nil {
-		slog.Error("enrichment: upsert vectors batch", "jobs", len(pendings), "items", len(items), "err", err)
+		slog.Error("enrichment: upsert vectors batch",
+			"jobs", len(pendings), "items", len(items), "err", err)
 		// Fail each pending so finalizeJob skips persisting embedding_dim
 		// without a matching vector; queue retry policy requeues.
 		for _, p := range pendings {
@@ -996,7 +1193,13 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 					"job", p.job.ID, "err", failErr)
 			}
 		}
+		return
 	}
+	slog.Info("enrichment: vectors upserted",
+		"jobs", len(pendings),
+		"items", len(items),
+		"duration_ms", time.Since(upsertStarted).Milliseconds(),
+	)
 }
 
 // embedChunked makes one or more Embed calls so each request respects

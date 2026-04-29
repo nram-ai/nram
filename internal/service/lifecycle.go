@@ -19,21 +19,29 @@ type LifecycleStore interface {
 	HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 }
 
-// GraphPruner cleans up orphaned graph data (Postgres only).
+// GraphPruner cleans up orphaned graph data. Wired for both SQLite and
+// Postgres: an entity created by enrichment but whose relationships are never
+// written is otherwise leaked. The orphan filter is age-gated so in-flight
+// enrichment (which writes the entity row before its relationships) cannot
+// race the sweep — see EntityRepo.DeleteOrphaned.
 type GraphPruner interface {
 	DeleteDanglingRelationships(ctx context.Context) (int64, error)
-	DeleteOrphanedEntities(ctx context.Context) (int64, error)
+	DeleteOrphanedEntities(ctx context.Context, olderThan time.Time) (int64, error)
 }
 
 // graphPrunerAdapter wraps entity and relationship repos into a GraphPruner.
 type graphPrunerAdapter struct {
-	entities      interface{ DeleteOrphaned(ctx context.Context) (int64, error) }
+	entities      interface {
+		DeleteOrphaned(ctx context.Context, olderThan time.Time) (int64, error)
+	}
 	relationships interface{ DeleteDangling(ctx context.Context) (int64, error) }
 }
 
 // NewGraphPruner creates a GraphPruner from entity and relationship repos.
 func NewGraphPruner(
-	entities interface{ DeleteOrphaned(ctx context.Context) (int64, error) },
+	entities interface {
+		DeleteOrphaned(ctx context.Context, olderThan time.Time) (int64, error)
+	},
 	relationships interface{ DeleteDangling(ctx context.Context) (int64, error) },
 ) GraphPruner {
 	return &graphPrunerAdapter{entities: entities, relationships: relationships}
@@ -43,8 +51,8 @@ func (a *graphPrunerAdapter) DeleteDanglingRelationships(ctx context.Context) (i
 	return a.relationships.DeleteDangling(ctx)
 }
 
-func (a *graphPrunerAdapter) DeleteOrphanedEntities(ctx context.Context) (int64, error) {
-	return a.entities.DeleteOrphaned(ctx)
+func (a *graphPrunerAdapter) DeleteOrphanedEntities(ctx context.Context, olderThan time.Time) (int64, error) {
+	return a.entities.DeleteOrphaned(ctx, olderThan)
 }
 
 // LifecycleConfig controls the behavior of the lifecycle sweep loop.
@@ -52,6 +60,13 @@ type LifecycleConfig struct {
 	SweepInterval     time.Duration // how often to run, default 5 minutes
 	BatchSize         int           // max items per sweep, default 100
 	DefaultPurgeDelay time.Duration // how long after soft-delete before hard purge, default 30 days
+	// OrphanGrace is the minimum age an entity must reach before becoming
+	// eligible for orphan deletion. Protects in-flight enrichment whose entity
+	// rows are written before relationships and before vector upsert; without
+	// this gate, a slow embed call lets the sweep delete the row mid-flight
+	// and the subsequent vector upsert fails with a FOREIGN KEY violation.
+	// Default 60 minutes; see config.EnrichmentOrphanGraceSeconds to override.
+	OrphanGrace time.Duration
 }
 
 // defaultLifecycleConfig returns a LifecycleConfig with sensible defaults applied.
@@ -60,6 +75,7 @@ func defaultLifecycleConfig() LifecycleConfig {
 		SweepInterval:     5 * time.Minute,
 		BatchSize:         100,
 		DefaultPurgeDelay: 30 * 24 * time.Hour,
+		OrphanGrace:       60 * time.Minute,
 	}
 }
 
@@ -88,6 +104,9 @@ func NewLifecycleService(store LifecycleStore, vectorStore VectorDeleter, graphP
 	}
 	if cfg.DefaultPurgeDelay <= 0 {
 		cfg.DefaultPurgeDelay = defaults.DefaultPurgeDelay
+	}
+	if cfg.OrphanGrace <= 0 {
+		cfg.OrphanGrace = defaults.OrphanGrace
 	}
 	return &LifecycleService{
 		store:       store,
@@ -173,8 +192,10 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 		purged++
 	}
 
-	// Phase 3: Prune orphaned graph data (Postgres only).
-	// Order matters: delete dangling relationships first, then orphaned entities.
+	// Phase 3: Prune orphaned graph data (wired for both SQLite and Postgres).
+	// Order matters: delete dangling relationships first, then orphaned
+	// entities. The entity sweep is age-gated against in-flight enrichment;
+	// see LifecycleConfig.OrphanGrace.
 	if s.graphPruner != nil {
 		danglingRels, relErr := s.graphPruner.DeleteDanglingRelationships(ctx)
 		if relErr != nil {
@@ -183,11 +204,13 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 			log.Printf("lifecycle: deleted %d dangling relationships", danglingRels)
 		}
 
-		orphanedEntities, entErr := s.graphPruner.DeleteOrphanedEntities(ctx)
+		orphanCutoff := now.Add(-s.config.OrphanGrace)
+		orphanedEntities, entErr := s.graphPruner.DeleteOrphanedEntities(ctx, orphanCutoff)
 		if entErr != nil {
 			log.Printf("lifecycle: failed to delete orphaned entities: %v", entErr)
 		} else if orphanedEntities > 0 {
-			log.Printf("lifecycle: deleted %d orphaned entities", orphanedEntities)
+			log.Printf("lifecycle: deleted %d orphaned entities (older than %s)",
+				orphanedEntities, s.config.OrphanGrace)
 		}
 	}
 

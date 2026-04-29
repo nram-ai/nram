@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +30,26 @@ import (
 	"github.com/nram-ai/nram/internal/ui"
 )
 
+// configureLogger installs a slog text handler at the level named by
+// cfg.LogLevel (info|debug|warn|error). Without this, slog defaults to INFO
+// and the cfg.LogLevel field is read but never honoured.
+func configureLogger(level string) {
+	var l slog.Level
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug", "trace":
+		l = slog.LevelDebug
+	case "warn", "warning":
+		l = slog.LevelWarn
+	case "error":
+		l = slog.LevelError
+	default:
+		l = slog.LevelInfo
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: l,
+	})))
+}
+
 func main() {
 	// Determine config file path from --config flag if provided.
 	var configPath string
@@ -42,6 +64,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
+
+	configureLogger(cfg.LogLevel)
 
 	db, err := storage.Open(cfg.Database)
 	if err != nil {
@@ -365,9 +389,14 @@ func main() {
 	recallSvc.SetFusion(loadFusionConfig(context.Background(), settingsSvc))
 	recallSvc.SetWeights(loadRankingWeights(context.Background(), settingsSvc))
 
-	// Create lifecycle service for TTL expiry and purge sweeps.
+	// Create lifecycle service for TTL expiry and purge sweeps. The orphan-
+	// grace cutoff protects in-flight enrichment from having its newly-
+	// written entity rows deleted before the matching vector upsert lands.
 	graphPruner := service.NewGraphPruner(entityRepo, relationshipRepo)
-	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, service.LifecycleConfig{})
+	lifecycleCfg := service.LifecycleConfig{
+		OrphanGrace: time.Duration(cfg.EnrichmentOrphanGraceSeconds) * time.Second,
+	}
+	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, lifecycleCfg)
 	lifecycleSvc.Start()
 	defer lifecycleSvc.Stop()
 

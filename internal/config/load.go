@@ -118,6 +118,12 @@ func applyEnv(cfg *Config) {
 		cfg.LogLevel = strings.ToLower(v)
 	}
 
+	if v := os.Getenv("NRAM_ENRICHMENT_ORPHAN_GRACE_SECONDS"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			cfg.EnrichmentOrphanGraceSeconds = secs
+		}
+	}
+
 	if v := os.Getenv("DATABASE_URL"); v != "" {
 		cfg.Database.URL = v
 	}

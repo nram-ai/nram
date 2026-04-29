@@ -252,13 +252,22 @@ func (r *Registry) load(config RegistryConfig) error {
 		cbConfig = DefaultCircuitBreakerConfig()
 	}
 
+	// breakerCfgFor labels the breaker with "<provider>-<slot>" so
+	// CircuitOpenError messages identify both the upstream service and which
+	// pipeline stage tripped.
+	breakerCfgFor := func(slotType, slotLabel string) CircuitBreakerConfig {
+		c := cbConfig
+		c.Name = slotType + "-" + slotLabel
+		return c
+	}
+
 	// --- Embedding slot ---
 	if config.Embedding.Type != "" {
 		ep, err := createEmbeddingProvider(config.Embedding)
 		if err != nil {
 			return fmt.Errorf("embedding slot: %w", err)
 		}
-		r.embedding = r.wrapEmbedding(NewCircuitBreakerEmbedding(ep, cbConfig))
+		r.embedding = r.wrapEmbedding(NewCircuitBreakerEmbedding(ep, breakerCfgFor(config.Embedding.Type, "embed")))
 	} else {
 		r.embedding = nil
 	}
@@ -269,7 +278,7 @@ func (r *Registry) load(config RegistryConfig) error {
 		if err != nil {
 			return fmt.Errorf("fact slot: %w", err)
 		}
-		r.fact = r.wrapLLM(NewCircuitBreakerLLM(lp, cbConfig))
+		r.fact = r.wrapLLM(NewCircuitBreakerLLM(lp, breakerCfgFor(config.Fact.Type, "fact")))
 	} else {
 		r.fact = nil
 	}
@@ -280,7 +289,7 @@ func (r *Registry) load(config RegistryConfig) error {
 		if err != nil {
 			return fmt.Errorf("entity slot: %w", err)
 		}
-		r.entity = r.wrapLLM(NewCircuitBreakerLLM(lp, cbConfig))
+		r.entity = r.wrapLLM(NewCircuitBreakerLLM(lp, breakerCfgFor(config.Entity.Type, "entity")))
 	} else {
 		r.entity = nil
 	}

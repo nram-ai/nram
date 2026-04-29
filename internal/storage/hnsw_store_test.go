@@ -1047,6 +1047,125 @@ func TestHNSWStoreGetByIDs_EmptyInput(t *testing.T) {
 	}
 }
 
+// setupEntityVectorsTestDB creates an in-memory SQLite DB with the entities,
+// entity_vectors, and entity_hnsw_snapshots tables wired the way the
+// production migrations wire them — entity_vectors.entity_id REFERENCES
+// entities(id) ON DELETE CASCADE — with PRAGMA foreign_keys=ON. Used to
+// reproduce the lifecycle/enrichment race the FK-skip behaviour must tolerate.
+func setupEntityVectorsTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		t.Fatalf("set WAL mode: %v", err)
+	}
+
+	stmts := []string{
+		`CREATE TABLE entities (
+			id TEXT PRIMARY KEY,
+			namespace_id TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		)`,
+		`CREATE TABLE entity_vectors (
+			entity_id TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+			namespace_id TEXT NOT NULL,
+			dimension INTEGER NOT NULL,
+			embedding BLOB NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		)`,
+		`CREATE TABLE entity_hnsw_snapshots (
+			namespace_id TEXT NOT NULL,
+			dimension INTEGER NOT NULL,
+			graph_data BLOB NOT NULL,
+			node_count INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			PRIMARY KEY (namespace_id, dimension)
+		)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("setup ddl %q: %v", stmt, err)
+		}
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+// TestHNSWStoreUpsertBatch_SkipsForeignKeyViolation reproduces the lifecycle/
+// enrichment race: an entity row was deleted between the producer creating
+// the entity and the worker upserting its vector. Pre-fix, the whole batch
+// rolled back and burned 39 healthy vectors for one missing parent. Post-fix,
+// the surviving rows commit and the missing-parent row is skipped with a
+// warning.
+func TestHNSWStoreUpsertBatch_SkipsForeignKeyViolation(t *testing.T) {
+	db := setupEntityVectorsTestDB(t)
+	cfg := storage.DefaultHNSWConfig()
+	cfg.SnapshotInterval = 1<<63 - 1
+	store := storage.NewHNSWStore(db, db, cfg)
+	defer store.Close()
+
+	ctx := context.Background()
+	nsID := uuid.New()
+	dim := 384
+
+	// Create 3 entities — but only insert 2 of their parent rows so the third
+	// triggers a FK violation when its vector tries to land.
+	live1 := uuid.New()
+	live2 := uuid.New()
+	missing := uuid.New()
+	for _, id := range []uuid.UUID{live1, live2} {
+		if _, err := db.Exec(`INSERT INTO entities (id, namespace_id) VALUES (?, ?)`,
+			id.String(), nsID.String()); err != nil {
+			t.Fatalf("insert entity %s: %v", id, err)
+		}
+	}
+
+	items := []storage.VectorUpsertItem{
+		{Kind: storage.VectorKindEntity, ID: live1, NamespaceID: nsID,
+			Embedding: normalizeVector(randomVector(dim, 1)), Dimension: dim},
+		{Kind: storage.VectorKindEntity, ID: missing, NamespaceID: nsID,
+			Embedding: normalizeVector(randomVector(dim, 2)), Dimension: dim},
+		{Kind: storage.VectorKindEntity, ID: live2, NamespaceID: nsID,
+			Embedding: normalizeVector(randomVector(dim, 3)), Dimension: dim},
+	}
+
+	if err := store.UpsertBatch(ctx, items); err != nil {
+		t.Fatalf("UpsertBatch must tolerate per-item FK violation, got: %v", err)
+	}
+
+	// The two live entities must have their vectors committed.
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM entity_vectors`).Scan(&count); err != nil {
+		t.Fatalf("count entity_vectors: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 committed vectors after FK skip, got %d", count)
+	}
+
+	// And the in-memory HNSW graph must contain only the committed entities.
+	got, err := store.GetByIDs(ctx, storage.VectorKindEntity,
+		[]uuid.UUID{live1, live2, missing}, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs: %v", err)
+	}
+	if _, ok := got[live1]; !ok {
+		t.Errorf("live1 missing from HNSW graph after partial commit")
+	}
+	if _, ok := got[live2]; !ok {
+		t.Errorf("live2 missing from HNSW graph after partial commit")
+	}
+	if _, ok := got[missing]; ok {
+		t.Error("missing-parent vector should not be present in HNSW graph")
+	}
+}
+
 func TestHNSWStoreGetByIDs_WrongDimension(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()

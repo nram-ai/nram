@@ -13,6 +13,13 @@ type Config struct {
 	Entity   ProviderConfig `yaml:"entity"`
 	Qdrant   QdrantConfig   `yaml:"qdrant"`
 	HNSW     HNSWConfig     `yaml:"hnsw"`
+	// EnrichmentOrphanGraceSeconds is how long a newly-created entity is
+	// protected from the orphan sweep. The producer (enrichment / dream)
+	// writes the entity row before its relationships and before its vector;
+	// without this gate, a slow embed call lets the lifecycle sweep delete
+	// the row mid-flight and the subsequent vector upsert fails with a
+	// FOREIGN KEY constraint error. Default 3600 (60 minutes).
+	EnrichmentOrphanGraceSeconds int `yaml:"enrichment_orphan_grace_seconds"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -71,7 +78,8 @@ func DefaultConfig() Config {
 			MaxConnections: 20,
 			MigrateOnStart: true,
 		},
-		LogLevel: "info",
+		LogLevel:                     "info",
+		EnrichmentOrphanGraceSeconds: 3600,
 		HNSW: HNSWConfig{
 			M:                16,
 			EfConstruction:   200,

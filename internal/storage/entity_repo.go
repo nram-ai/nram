@@ -579,15 +579,29 @@ func (r *EntityRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUI
 	return nil
 }
 
-// DeleteOrphaned removes entities that have no relationships (neither as source nor target).
-// Returns the number of entities deleted.
-func (r *EntityRepo) DeleteOrphaned(ctx context.Context) (int64, error) {
-	query := `DELETE FROM entities WHERE id NOT IN (
+// DeleteOrphaned removes entities that have no relationships (neither as
+// source nor target) AND were created at or before olderThan. The age cutoff
+// protects in-flight enrichment: a job that just upserted an entity but has
+// not yet written its relationships (or has not yet upserted the entity's
+// vector) must not have its row pulled out from under it. Callers pick
+// olderThan = now - grace, where grace must exceed the longest plausible
+// gap between entity Upsert and vector UpsertBatch (LLM embed round-trip,
+// queue dispatch, etc.). Returns the number of entities deleted.
+func (r *EntityRepo) DeleteOrphaned(ctx context.Context, olderThan time.Time) (int64, error) {
+	cutoff := olderThan.UTC().Format(time.RFC3339)
+	query := `DELETE FROM entities WHERE created_at <= ? AND id NOT IN (
 		SELECT source_id FROM relationships
 		UNION
 		SELECT target_id FROM relationships
 	)`
-	result, err := r.db.Exec(ctx, query)
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM entities WHERE created_at <= $1 AND id NOT IN (
+			SELECT source_id FROM relationships
+			UNION
+			SELECT target_id FROM relationships
+		)`
+	}
+	result, err := r.db.Exec(ctx, query, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("entity delete orphaned: %w", err)
 	}

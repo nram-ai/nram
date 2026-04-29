@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -164,6 +165,175 @@ func TestCircuitBreaker_HalfOpenFailureReopens(t *testing.T) {
 	_ = cb.Execute(func() error { return errSimulated })
 	if cb.State() != StateOpen {
 		t.Fatalf("expected StateOpen after half-open failure, got %v", cb.State())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CircuitOpenError tests
+// ---------------------------------------------------------------------------
+
+func TestCircuitBreaker_OpenErrorCarriesProviderAndCause(t *testing.T) {
+	cfg := testConfig()
+	cfg.Name = "ollama-fact"
+	cb := NewCircuitBreaker(cfg)
+
+	for i := 0; i < 3; i++ {
+		_ = cb.Execute(func() error { return errSimulated })
+	}
+
+	err := cb.Execute(func() error { return nil })
+	if err == nil {
+		t.Fatal("expected open-circuit error")
+	}
+
+	var coe *CircuitOpenError
+	if !errors.As(err, &coe) {
+		t.Fatalf("expected *CircuitOpenError, got %T: %v", err, err)
+	}
+	if coe.Provider != "ollama-fact" {
+		t.Fatalf("expected provider=ollama-fact, got %q", coe.Provider)
+	}
+	if !errors.Is(coe.Cause, errSimulated) {
+		t.Fatalf("expected cause to wrap errSimulated, got %v", coe.Cause)
+	}
+	if coe.OpenSince.IsZero() {
+		t.Fatal("expected OpenSince to be set")
+	}
+	if !coe.RetryAt.After(coe.OpenSince) {
+		t.Fatalf("expected RetryAt (%v) after OpenSince (%v)", coe.RetryAt, coe.OpenSince)
+	}
+	// Sentinel match must keep working for legacy callers.
+	if !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("errors.Is(err, ErrCircuitOpen) must be true; got false. err=%v", err)
+	}
+	// Error string must mention the provider so log greppers can find it.
+	if !strings.Contains(err.Error(), "ollama-fact") {
+		t.Fatalf("expected error message to mention provider; got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "simulated failure") {
+		t.Fatalf("expected error message to mention cause; got %q", err.Error())
+	}
+}
+
+func TestCircuitBreaker_OpenErrorMissingNameFallsBackToUnnamed(t *testing.T) {
+	cb := NewCircuitBreaker(testConfig())
+	for i := 0; i < 3; i++ {
+		_ = cb.Execute(func() error { return errSimulated })
+	}
+	err := cb.Execute(func() error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "<unnamed>") {
+		t.Fatalf("expected unnamed marker in error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Self-recovery tests
+// ---------------------------------------------------------------------------
+
+// TestCircuitBreaker_HalfOpenInFlightDecremented verifies that admitting a
+// trial then completing it (success or failure) returns the in-flight quota
+// so subsequent windows are not stranded.
+func TestCircuitBreaker_HalfOpenInFlightDecremented(t *testing.T) {
+	cb := NewCircuitBreaker(testConfig())
+	for i := 0; i < 3; i++ {
+		_ = cb.Execute(func() error { return errSimulated })
+	}
+
+	// First HalfOpen window: trial fails, breaker re-opens.
+	fakeNow := time.Now().Add(200 * time.Millisecond)
+	cb.mu.Lock()
+	cb.now = func() time.Time { return fakeNow }
+	cb.mu.Unlock()
+	_ = cb.Execute(func() error { return errSimulated })
+
+	cb.mu.Lock()
+	if cb.halfOpenInFlight != 0 {
+		t.Fatalf("expected halfOpenInFlight=0 after trial completed, got %d", cb.halfOpenInFlight)
+	}
+	cb.mu.Unlock()
+
+	// Second HalfOpen window: trial succeeds, breaker closes.
+	fakeNow = fakeNow.Add(200 * time.Millisecond)
+	cb.mu.Lock()
+	cb.now = func() time.Time { return fakeNow }
+	cb.mu.Unlock()
+	if err := cb.Execute(func() error { return nil }); err != nil {
+		t.Fatalf("expected trial success in second half-open window, got %v", err)
+	}
+	if s := cb.State(); s != StateClosed {
+		t.Fatalf("expected StateClosed after successful trial, got %v", s)
+	}
+}
+
+// TestCircuitBreaker_HalfOpenSelfHealsStuckQuota simulates a stuck HalfOpen
+// window where the in-flight counter was never decremented (e.g., trial fn
+// panicked between admit and return). After 2x ResetTimeout, stateLocked must
+// re-arm the window so the breaker is not permanently jammed.
+func TestCircuitBreaker_HalfOpenSelfHealsStuckQuota(t *testing.T) {
+	cb := NewCircuitBreaker(testConfig())
+	for i := 0; i < 3; i++ {
+		_ = cb.Execute(func() error { return errSimulated })
+	}
+
+	// Force HalfOpen with a stuck in-flight counter and no recorded outcome.
+	fakeNow := time.Now().Add(200 * time.Millisecond)
+	cb.mu.Lock()
+	cb.now = func() time.Time { return fakeNow }
+	cb.state = StateHalfOpen
+	cb.lastStateChange = fakeNow
+	cb.halfOpenInFlight = 1
+	cb.halfOpenAttempted = false
+	cb.mu.Unlock()
+
+	// Without re-arm, every Execute call would return ErrCircuitOpen forever.
+	// Confirm that's the case at t = 0 inside the HalfOpen window.
+	if err := cb.Execute(func() error { return nil }); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("expected ErrCircuitOpen while quota is stuck, got %v", err)
+	}
+
+	// Advance past 2x ResetTimeout. The stale window should fall back to Open
+	// and then re-enter HalfOpen (small ResetTimeout means both transitions
+	// fire on the same call).
+	fakeNow = fakeNow.Add(3 * cb.config.ResetTimeout)
+	cb.mu.Lock()
+	cb.now = func() time.Time { return fakeNow }
+	cb.mu.Unlock()
+
+	called := false
+	if err := cb.Execute(func() error { called = true; return nil }); err != nil {
+		t.Fatalf("expected re-armed HalfOpen to admit trial, got %v", err)
+	}
+	if !called {
+		t.Fatal("trial fn was not called after re-arm")
+	}
+	if s := cb.State(); s != StateClosed {
+		t.Fatalf("expected StateClosed after successful trial, got %v", s)
+	}
+}
+
+// TestCircuitBreaker_LastErrorRetained verifies that the most recent
+// underlying error is exposed via LastError() and embedded in CircuitOpenError.
+func TestCircuitBreaker_LastErrorRetained(t *testing.T) {
+	cfg := testConfig()
+	cfg.Name = "ollama"
+	cb := NewCircuitBreaker(cfg)
+
+	specific := errors.New("dial tcp 127.0.0.1:11434: connect: connection refused")
+	for i := 0; i < 3; i++ {
+		_ = cb.Execute(func() error { return specific })
+	}
+
+	if got := cb.LastError(); !errors.Is(got, specific) {
+		t.Fatalf("LastError() = %v, want %v", got, specific)
+	}
+
+	err := cb.Execute(func() error { return nil })
+	var coe *CircuitOpenError
+	if !errors.As(err, &coe) {
+		t.Fatalf("expected *CircuitOpenError, got %T", err)
+	}
+	if !errors.Is(coe.Cause, specific) {
+		t.Fatalf("CircuitOpenError.Cause = %v, want wraps %v", coe.Cause, specific)
 	}
 }
 

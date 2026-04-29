@@ -279,13 +279,15 @@ func (r *EnrichmentQueueRepo) ClaimNextBatch(ctx context.Context, workerID strin
 	return items, nil
 }
 
-// Complete marks an enrichment queue item as "completed" and sets completed_at.
+// Complete marks an enrichment queue item as "completed", clears any stale
+// last_error (a retry that ultimately succeeded should not still surface its
+// prior failure), and sets completed_at.
 func (r *EnrichmentQueueRepo) Complete(ctx context.Context, id uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE enrichment_queue SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?`
+	query := `UPDATE enrichment_queue SET status = 'completed', last_error = NULL, completed_at = ?, updated_at = ? WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE enrichment_queue SET status = 'completed', completed_at = $1, updated_at = $2 WHERE id = $3`
+		query = `UPDATE enrichment_queue SET status = 'completed', last_error = NULL, completed_at = $1, updated_at = $2 WHERE id = $3`
 	}
 
 	result, err := r.db.Exec(ctx, query, now, now, id.String())
@@ -427,13 +429,15 @@ func (r *EnrichmentQueueRepo) Release(ctx context.Context, id uuid.UUID) error {
 }
 
 // Retry resets an enrichment queue item back to "pending" status, clears the
-// worker_id and claimed_at, and increments the attempts counter.
+// worker_id, claimed_at, and any stale last_error from the prior attempt
+// (so admin views show a clean slate while the new attempt is in flight),
+// and increments the attempts counter.
 func (r *EnrichmentQueueRepo) Retry(ctx context.Context, id uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, attempts = attempts + 1, updated_at = ? WHERE id = ?`
+	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, last_error = NULL, attempts = attempts + 1, updated_at = ? WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, attempts = attempts + 1, updated_at = $1 WHERE id = $2`
+		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, last_error = NULL, attempts = attempts + 1, updated_at = $1 WHERE id = $2`
 	}
 
 	result, err := r.db.Exec(ctx, query, now, id.String())

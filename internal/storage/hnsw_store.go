@@ -4,11 +4,40 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
+
+// isForeignKeyViolation reports whether err is a SQLite or Postgres foreign
+// key constraint failure. Used by UpsertBatch to skip individual items whose
+// parent row was deleted concurrently (e.g., lifecycle orphan-cleanup racing
+// in-flight enrichment) instead of rolling the whole batch back and starving
+// good rows. Driver-agnostic: string-matches the message rather than depending
+// on a specific driver's typed error API (we ship modernc.org/sqlite for
+// SQLite and pgx for Postgres).
+func isForeignKeyViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// modernc.org/sqlite formats this as "constraint failed: FOREIGN KEY
+	// constraint failed (787)". SQLITE_CONSTRAINT_FOREIGNKEY = 787.
+	if strings.Contains(msg, "FOREIGN KEY constraint failed") ||
+		strings.Contains(msg, "(787)") {
+		return true
+	}
+	// Postgres / pgx formats: "ERROR: ... violates foreign key constraint ..."
+	// or carries SQLSTATE 23503.
+	if strings.Contains(msg, "violates foreign key constraint") ||
+		strings.Contains(msg, "SQLSTATE 23503") {
+		return true
+	}
+	return false
+}
 
 // HNSWConfig holds configuration for the HNSW vector store.
 type HNSWConfig struct {
@@ -194,28 +223,62 @@ func (s *HNSWStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem) e
 			return fmt.Errorf("hnsw: prepare batch insert: %w", err)
 		}
 
+		// Track which items were actually committed so the in-memory HNSW
+		// graph only adds nodes whose SQLite row exists. Items skipped due
+		// to a FK violation (parent row was concurrently deleted) are
+		// dropped from the in-memory index too.
+		committed := make([]VectorUpsertItem, 0, len(group))
+		var skipped int
 		for _, item := range group {
 			encoded := hnsw.EncodeVector(item.Embedding)
 			_, err := stmt.ExecContext(ctx, item.ID.String(), item.NamespaceID.String(), item.Dimension, encoded, now, now)
 			if err != nil {
-				stmt.Close() //nolint:errcheck
+				if isForeignKeyViolation(err) {
+					// Parent row (memories or entities) was deleted between
+					// the producer (enrichment / dream) creating the parent
+					// and this vector insert. With ON DELETE CASCADE on the
+					// vector tables, the resulting state — no parent row, no
+					// vector row — is the intended steady state. Skip this
+					// item and move on; the rest of the batch is still
+					// healthy and committable.
+					slog.Warn("hnsw: skipping vector with missing parent row",
+						"table", spec.vectorTable,
+						"id", item.ID,
+						"namespace_id", item.NamespaceID,
+						"reason", "foreign_key_violation_likely_lifecycle_race",
+					)
+					skipped++
+					continue
+				}
+				stmt.Close()  //nolint:errcheck
 				tx.Rollback() //nolint:errcheck
 				return fmt.Errorf("hnsw: batch insert item %s: %w", item.ID, err)
 			}
+			committed = append(committed, item)
 		}
 		stmt.Close() //nolint:errcheck
 
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("hnsw: commit batch insert: %w", err)
 		}
+		if skipped > 0 {
+			slog.Warn("hnsw: batch upsert skipped items",
+				"table", spec.vectorTable,
+				"committed", len(committed),
+				"skipped", skipped,
+			)
+		}
+		if len(committed) == 0 {
+			continue
+		}
 
-		// Load the HNSW index and add all nodes.
+		// Load the HNSW index and add only the committed nodes.
 		graph, err := s.cache.GetOrCreate(ctx, spec.cacheKind, gk.NamespaceID, gk.Dimension)
 		if err != nil {
 			return fmt.Errorf("hnsw: get or create index for batch: %w", err)
 		}
 
-		for _, item := range group {
+		for _, item := range committed {
 			if err := graph.Add(hnsw.Node{ID: item.ID, Vector: item.Embedding}); err != nil {
 				return fmt.Errorf("hnsw: batch add node %s: %w", item.ID, err)
 			}
