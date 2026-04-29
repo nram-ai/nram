@@ -118,15 +118,19 @@ type ExportService struct {
 	relationships RelationshipLister
 	lineage       LineageReader
 	projects      ProjectRepository
+	settings      *SettingsService
 }
 
 // NewExportService creates a new ExportService with the given dependencies.
+// settings may be nil; the page size then falls through to the registered
+// default for SettingExportPageSize.
 func NewExportService(
 	memories MemoryReader,
 	entities EntityLister,
 	relationships RelationshipLister,
 	lineage LineageReader,
 	projects ProjectRepository,
+	settings *SettingsService,
 ) *ExportService {
 	return &ExportService{
 		memories:      memories,
@@ -134,11 +138,11 @@ func NewExportService(
 		relationships: relationships,
 		lineage:       lineage,
 		projects:      projects,
+		settings:      settings,
 	}
 }
 
 const exportVersion = "1.0"
-const exportPageSize = 100
 
 // Export collects all project data and returns it as an ExportData struct (JSON format).
 func (s *ExportService) Export(ctx context.Context, req *ExportRequest) (*ExportData, error) {
@@ -327,15 +331,19 @@ func (s *ExportService) ExportNDJSON(ctx context.Context, req *ExportRequest, w 
 // superseded_by set so exports don't ship duplicate losers.
 func (s *ExportService) collectAllMemories(ctx context.Context, namespaceID uuid.UUID, includeSuperseded bool) ([]model.Memory, error) {
 	filters := storage.MemoryListFilters{HideSuperseded: !includeSuperseded}
+	pageSize := s.settings.ResolveIntWithDefault(ctx, SettingExportPageSize, "global")
+	if pageSize < 1 {
+		pageSize = 1
+	}
 	all := []model.Memory{}
 	offset := 0
 	for {
-		page, err := s.memories.ListByNamespaceFiltered(ctx, namespaceID, filters, exportPageSize, offset)
+		page, err := s.memories.ListByNamespaceFiltered(ctx, namespaceID, filters, pageSize, offset)
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, page...)
-		if len(page) < exportPageSize {
+		if len(page) < pageSize {
 			break
 		}
 		offset += len(page)

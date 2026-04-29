@@ -176,6 +176,7 @@ func main() {
 	tokenUsageRepo := storage.NewTokenUsageRepo(db)
 	enrichmentQueueRepo := storage.NewEnrichmentQueueRepo(db)
 	settingsRepo := storage.NewSettingsRepo(db)
+	settingsSvc := service.NewSettingsService(settingsRepo)
 
 	// Create provider registry.
 	// First try config file values, then overlay with DB-persisted settings
@@ -313,8 +314,13 @@ func main() {
 		log.Println("hnsw vector store initialized (SQLite backend)")
 	}
 
-	// Create event bus.
-	eventBus := events.NewEventBus(db.Backend(), nil)
+	// Create event bus. Buffer and replay capacity are read once from
+	// settings; runtime changes require server restart.
+	eventBusBuf := settingsSvc.ResolveIntWithDefault(context.Background(),
+		service.SettingEventsSubscriberBufferSize, "global")
+	eventBusReplay := settingsSvc.ResolveIntWithDefault(context.Background(),
+		service.SettingEventsReplayCapacity, "global")
+	eventBus := events.NewEventBus(db.Backend(), nil, eventBusBuf, eventBusReplay)
 	defer eventBus.Close()
 
 	// Create webhook deliverer.
@@ -349,6 +355,7 @@ func main() {
 	batchStoreSvc := service.NewBatchStoreService(
 		memoryRepo, projectRepo, namespaceRepo,
 		ingestionLogRepo, enrichmentQueueRepo,
+		settingsSvc,
 	)
 	var hnswDeleter service.HNSWSnapshotDeleter
 	if hnswStore != nil {
@@ -363,11 +370,11 @@ func main() {
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)
 	exportSvc := service.NewExportService(
 		memoryRepo, entityRepo, relationshipRepo, lineageRepo, projectRepo,
+		settingsSvc,
 	)
 	importSvc := service.NewImportService(
 		memoryRepo, projectRepo, namespaceRepo, ingestionLogRepo,
 	)
-	settingsSvc := service.NewSettingsService(settingsRepo)
 
 	// Reconsolidation hook on recall. Mode defaults to shadow (observable-only
 	// via events.MemoryReinforced) so the first deployment emits without
@@ -396,7 +403,7 @@ func main() {
 	lifecycleCfg := service.LifecycleConfig{
 		OrphanGrace: time.Duration(cfg.EnrichmentOrphanGraceSeconds) * time.Second,
 	}
-	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, lifecycleCfg)
+	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, lifecycleCfg, settingsSvc)
 	lifecycleSvc.Start()
 	defer lifecycleSvc.Stop()
 
@@ -461,6 +468,7 @@ func main() {
 	providerAdminStore := adminstore.NewProviderAdminStore(adminstore.ProviderAdminDeps{
 		Registry:     registry,
 		SettingsRepo: settingsRepo,
+		Settings:     settingsSvc,
 		MemoryRepo:   memoryRepo,
 		EntityRepo:   entityRepo,
 		VectorStore:  vectorStore,
@@ -527,7 +535,7 @@ func main() {
 
 	dreamRunner := dreaming.NewRunner(
 		dreamCycleRepo, dreamLogRepo, workerPool,
-		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo, vectorStore),
+		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo, vectorStore, settingsSvc),
 		// Embedding backfill repairs rows whose embedding_dim is set but
 		// whose memory_vectors_<dim> row is missing (no_vector divergence).
 		// Runs before paraphrase dedup so the downstream phase sees the
@@ -656,7 +664,9 @@ func main() {
 		OrgIdP:   api.NewOrgIdPHandler(oauthRepo),
 
 		// SSE events
-		Events: api.NewEventsHandler(eventBus),
+		Events: api.NewEventsHandler(eventBus,
+			settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
+				service.SettingEventsSSEKeepaliveSeconds, "global")),
 
 		// MCP server
 		MCP: mcpServer.Handler(),
@@ -720,6 +730,7 @@ func main() {
 			Aliases:       entityAliasRepo,
 			Namespaces:    namespaceRepo,
 			Orgs:          orgRepo,
+			Settings:      settingsSvc,
 		}),
 		AdminDreaming: api.NewAdminDreamingHandler(api.DreamAdminConfig{
 			Store:    dreamAdminStore,
@@ -727,9 +738,15 @@ func main() {
 		}),
 	}
 
-	// Build router config with auth middleware and rate limiter.
+	// Build router config with auth middleware and rate limiter. Cleanup
+	// and stale-after windows are read once from settings; runtime changes
+	// require server restart.
 	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, userRepo, jwtSecret)
-	rateLimiter := auth.NewRateLimiter(10, 20)
+	rateLimiter := auth.NewRateLimiter(10, 20,
+		settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
+			service.SettingAPIRateLimitCleanupSeconds, "global"),
+		settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
+			service.SettingAPIRateLimitStaleSeconds, "global"))
 	defer rateLimiter.Stop()
 
 	// Project access middleware enforces org-membership checks on all

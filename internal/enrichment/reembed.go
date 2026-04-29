@@ -35,19 +35,32 @@ type ReembedEntitiesResult struct {
 // don't go through the enrichment_queue. Per-batch embed/upsert errors
 // are accumulated in the result and the loop continues; a non-nil error
 // return means infrastructure failure (db unreachable mid-walk).
+//
+// pageSize controls the page size of each embed call (matches the
+// SettingEnrichmentWorkerEmbedInputCap setting); embedTimeout bounds the
+// per-batch embed HTTP call. The caller resolves both from the settings
+// cascade so this admin path stays runtime-tunable alongside the worker
+// hot path.
 func ReembedAllEntities(
 	ctx context.Context,
 	repo EntityReembedRepo,
 	vectorStore storage.VectorStore,
 	embedder provider.EmbeddingProvider,
+	pageSize int,
+	embedTimeout time.Duration,
 ) (*ReembedEntitiesResult, error) {
 	if repo == nil || vectorStore == nil || embedder == nil {
 		return nil, fmt.Errorf("reembed entities: repo, vectorStore, and embedder are required")
 	}
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	if embedTimeout <= 0 {
+		embedTimeout = 30 * time.Second
+	}
 
 	start := time.Now()
 	result := &ReembedEntitiesResult{}
-	pageSize := embedInputCap
 	offset := 0
 
 	for {
@@ -81,7 +94,7 @@ func ReembedAllEntities(
 			continue
 		}
 
-		embedCtx, cancel := context.WithTimeout(ctx, workerEmbedTimeout)
+		embedCtx, cancel := context.WithTimeout(ctx, embedTimeout)
 		// Stamp operation + first-entity namespace so the
 		// UsageRecordingProvider middleware can persist the token_usage row
 		// for this batch with non-empty operation/namespace_id columns.

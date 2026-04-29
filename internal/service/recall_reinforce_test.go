@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -75,6 +76,20 @@ func (s *staticSettings) ResolveFloat(_ context.Context, key string, _ string) (
 	}
 	if v, ok := s.floats[key]; ok {
 		return v, nil
+	}
+	return 0, errors.New("no value")
+}
+
+func (s *staticSettings) ResolveInt(_ context.Context, key string, _ string) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	if v, ok := s.values[key]; ok {
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, err
+		}
+		return i, nil
 	}
 	return 0, errors.New("no value")
 }

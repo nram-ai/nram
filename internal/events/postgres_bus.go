@@ -30,11 +30,12 @@ type PostgresBus struct {
 
 // NewPostgresBus creates an event bus backed by Postgres LISTEN/NOTIFY for
 // cross-instance fan-out, with a local MemoryBus for intra-process delivery.
-func NewPostgresBus(pool *pgxpool.Pool) *PostgresBus {
+// subscriberBuf and replayCap are forwarded to the local MemoryBus.
+func NewPostgresBus(pool *pgxpool.Pool, subscriberBuf, replayCap int) *PostgresBus {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	b := &PostgresBus{
-		local:      NewMemoryBus(),
+		local:      NewMemoryBus(subscriberBuf, replayCap),
 		pool:       pool,
 		instanceID: uuid.New().String(),
 		cancel:     cancel,

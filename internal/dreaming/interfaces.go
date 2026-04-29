@@ -99,6 +99,9 @@ type SettingsResolver interface {
 	ResolveFloat(ctx context.Context, key string, scope string) (float64, error)
 	ResolveInt(ctx context.Context, key string, scope string) (int, error)
 	ResolveBool(ctx context.Context, key string, scope string) bool
+	ResolveIntWithDefault(ctx context.Context, key, scope string) int
+	ResolveFloatWithDefault(ctx context.Context, key, scope string) float64
+	ResolveDurationSecondsWithDefault(ctx context.Context, key, scope string) time.Duration
 }
 
 // VectorPurger removes a vector from the active vector store. The dreaming

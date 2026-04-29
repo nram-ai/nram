@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ type MemoryReinforcer interface {
 type SettingsReader interface {
 	Resolve(ctx context.Context, key string, scope string) (string, error)
 	ResolveFloat(ctx context.Context, key string, scope string) (float64, error)
+	ResolveInt(ctx context.Context, key string, scope string) (int, error)
 }
 
 // ReinforcementDeps carries the optional dependencies that activate the
@@ -48,8 +50,6 @@ type reinforcementEvent struct {
 	ElapsedMs  int64       `json:"elapsed_ms"`
 	Persisted  int64       `json:"persisted,omitempty"` // non-zero only in persist mode
 }
-
-const reinforcementEventMemoryCap = 20
 
 // reinforce applies reconsolidation to the given memory IDs. The three
 // possible outcomes:
@@ -98,9 +98,19 @@ func (s *RecallService) reinforce(ctx context.Context, ids []uuid.UUID) {
 		}
 	}
 
+	cap, cerr := s.reinforcement.Settings.ResolveInt(ctx, SettingReinforcementEventMemoryCap, scope)
+	if cerr != nil || cap < 1 {
+		// Fall through to the registered default to avoid drift between code
+		// and schema; see settingDefaults[SettingReinforcementEventMemoryCap].
+		if def, ok := settingDefaults[SettingReinforcementEventMemoryCap]; ok {
+			if v, perr := strconv.Atoi(def); perr == nil && v >= 1 {
+				cap = v
+			}
+		}
+	}
 	idsForEvent := ids
-	if len(idsForEvent) > reinforcementEventMemoryCap {
-		idsForEvent = idsForEvent[:reinforcementEventMemoryCap]
+	if len(idsForEvent) > cap {
+		idsForEvent = idsForEvent[:cap]
 	}
 
 	payload := reinforcementEvent{

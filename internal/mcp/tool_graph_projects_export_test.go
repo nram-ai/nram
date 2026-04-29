@@ -527,6 +527,7 @@ func TestHandleMemoryExport_JSONSuccess(t *testing.T) {
 		&mockExportRelLister{rels: []model.Relationship{}},
 		&mockExportLineageReader{},
 		&mockExportProjectRepo{project: project},
+		nil,
 	)
 
 	deps := Dependencies{
@@ -577,6 +578,7 @@ func TestHandleMemoryExport_NDJSONSuccess(t *testing.T) {
 		&mockExportRelLister{rels: []model.Relationship{}},
 		&mockExportLineageReader{},
 		&mockExportProjectRepo{project: project},
+		nil,
 	)
 
 	deps := Dependencies{
@@ -762,6 +764,7 @@ func TestHandleMemoryExport_HidesSupersededByDefault(t *testing.T) {
 		&mockExportRelLister{rels: []model.Relationship{}},
 		&mockExportLineageReader{},
 		&mockExportProjectRepo{project: project},
+		nil,
 	)
 
 	deps := Dependencies{

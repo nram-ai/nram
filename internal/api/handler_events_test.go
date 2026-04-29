@@ -28,10 +28,10 @@ func publishTestEvent(t *testing.T, bus events.EventBus, id, typ, scope string) 
 }
 
 func TestEventsHandler_SSEDelivery(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
-	handler := NewEventsHandler(bus)
+	handler := NewEventsHandler(bus, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -77,10 +77,10 @@ func TestEventsHandler_SSEDelivery(t *testing.T) {
 }
 
 func TestEventsHandler_ScopeFiltering(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
-	handler := NewEventsHandler(bus)
+	handler := NewEventsHandler(bus, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -115,7 +115,7 @@ func TestEventsHandler_ScopeFiltering(t *testing.T) {
 }
 
 func TestEventsHandler_LastEventIDReplay(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	// Publish some events before connecting.
@@ -123,7 +123,7 @@ func TestEventsHandler_LastEventIDReplay(t *testing.T) {
 	publishTestEvent(t, bus, "evt-b", events.MemoryUpdated, "org/proj")
 	publishTestEvent(t, bus, "evt-c", events.MemoryDeleted, "org/proj")
 
-	handler := NewEventsHandler(bus)
+	handler := NewEventsHandler(bus, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -158,7 +158,7 @@ func TestEventsHandler_LastEventIDReplay(t *testing.T) {
 }
 
 func TestEventsHandler_Keepalive(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	// Create a handler with a very short keepalive for testing.
@@ -232,7 +232,7 @@ func TestEventsHandler_Keepalive(t *testing.T) {
 }
 
 func TestEventsHandler_ReplayWithScopeFilter(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	// Publish events with different scopes.
@@ -240,7 +240,7 @@ func TestEventsHandler_ReplayWithScopeFilter(t *testing.T) {
 	publishTestEvent(t, bus, "evt-2", events.MemoryCreated, "other/proj")
 	publishTestEvent(t, bus, "evt-3", events.MemoryUpdated, "org/proj/ns")
 
-	handler := NewEventsHandler(bus)
+	handler := NewEventsHandler(bus, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

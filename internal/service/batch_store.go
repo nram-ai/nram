@@ -62,15 +62,19 @@ type BatchStoreService struct {
 	namespaces      NamespaceRepository
 	ingestionLogs   IngestionLogRepository
 	enrichmentQueue EnrichmentQueueRepository
+	settings        *SettingsService
 }
 
 // NewBatchStoreService creates a new BatchStoreService with the given dependencies.
+// settings may be nil; the per-request item cap then falls through to the
+// registered default for SettingAPIBatchStoreMaxItems.
 func NewBatchStoreService(
 	memories MemoryRepository,
 	projects ProjectRepository,
 	namespaces NamespaceRepository,
 	ingestionLogs IngestionLogRepository,
 	enrichmentQueue EnrichmentQueueRepository,
+	settings *SettingsService,
 ) *BatchStoreService {
 	return &BatchStoreService{
 		memories:        memories,
@@ -78,11 +82,9 @@ func NewBatchStoreService(
 		namespaces:      namespaces,
 		ingestionLogs:   ingestionLogs,
 		enrichmentQueue: enrichmentQueue,
+		settings:        settings,
 	}
 }
-
-// maxBatchItems is the maximum number of items allowed in a single batch store request.
-const maxBatchItems = 100
 
 // BatchStore persists items independently; failure of one item does not
 // affect others.
@@ -96,8 +98,9 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 	if len(req.Items) == 0 {
 		return nil, fmt.Errorf("items must not be empty")
 	}
-	if len(req.Items) > maxBatchItems {
-		return nil, fmt.Errorf("too many items: %d exceeds maximum of %d", len(req.Items), maxBatchItems)
+	maxItems := s.settings.ResolveIntWithDefault(ctx, SettingAPIBatchStoreMaxItems, "global")
+	if len(req.Items) > maxItems {
+		return nil, fmt.Errorf("too many items: %d exceeds maximum of %d", len(req.Items), maxItems)
 	}
 	if req.Options.Extract {
 		return nil, fmt.Errorf("extract support is not yet implemented")

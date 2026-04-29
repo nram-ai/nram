@@ -39,16 +39,24 @@ type RateLimiter struct {
 }
 
 // NewRateLimiter creates a RateLimiter that allows rps requests per second
-// with the given burst size per user. It starts a background goroutine that
-// periodically removes limiters for users who have not made a request in the
-// last 10 minutes.
-func NewRateLimiter(rps float64, burst int) *RateLimiter {
+// with the given burst size per user. cleanupInterval / staleAfter control
+// the background cleanup loop; cmd/server/main.go resolves them once at
+// startup from SettingAPIRateLimitCleanupSeconds /
+// SettingAPIRateLimitStaleSeconds. Zero or negative values fall back to
+// 1m / 10m so misuse cannot disable the cleanup loop entirely.
+func NewRateLimiter(rps float64, burst int, cleanupInterval, staleAfter time.Duration) *RateLimiter {
+	if cleanupInterval <= 0 {
+		cleanupInterval = 1 * time.Minute
+	}
+	if staleAfter <= 0 {
+		staleAfter = 10 * time.Minute
+	}
 	rl := &RateLimiter{
 		rps:             rps,
 		burst:           burst,
 		users:           make(map[uuid.UUID]*userLimiter),
-		cleanupInterval: 1 * time.Minute,
-		staleAfter:      10 * time.Minute,
+		cleanupInterval: cleanupInterval,
+		staleAfter:      staleAfter,
 		stopCleanup:     make(chan struct{}),
 	}
 

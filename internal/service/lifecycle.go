@@ -55,28 +55,19 @@ func (a *graphPrunerAdapter) DeleteOrphanedEntities(ctx context.Context, olderTh
 	return a.entities.DeleteOrphaned(ctx, olderThan)
 }
 
-// LifecycleConfig controls the behavior of the lifecycle sweep loop.
+// LifecycleConfig pins specific tunables; zero fields fall through to the
+// SettingsService cascade. See SettingLifecycle* keys.
 type LifecycleConfig struct {
-	SweepInterval     time.Duration // how often to run, default 5 minutes
-	BatchSize         int           // max items per sweep, default 100
-	DefaultPurgeDelay time.Duration // how long after soft-delete before hard purge, default 30 days
+	SweepInterval     time.Duration // 0 → resolve from SettingLifecycleSweepIntervalSeconds
+	BatchSize         int           // 0 → resolve from SettingLifecycleBatchSize per sweep
+	DefaultPurgeDelay time.Duration // 0 → resolve from SettingMemorySoftDeleteRetentionDays per sweep
 	// OrphanGrace is the minimum age an entity must reach before becoming
 	// eligible for orphan deletion. Protects in-flight enrichment whose entity
 	// rows are written before relationships and before vector upsert; without
 	// this gate, a slow embed call lets the sweep delete the row mid-flight
 	// and the subsequent vector upsert fails with a FOREIGN KEY violation.
-	// Default 60 minutes; see config.EnrichmentOrphanGraceSeconds to override.
+	// 0 → resolve from SettingLifecycleOrphanGraceSeconds per sweep.
 	OrphanGrace time.Duration
-}
-
-// defaultLifecycleConfig returns a LifecycleConfig with sensible defaults applied.
-func defaultLifecycleConfig() LifecycleConfig {
-	return LifecycleConfig{
-		SweepInterval:     5 * time.Minute,
-		BatchSize:         100,
-		DefaultPurgeDelay: 30 * 24 * time.Hour,
-		OrphanGrace:       60 * time.Minute,
-	}
 }
 
 // LifecycleService runs a background goroutine that periodically sweeps expired
@@ -85,6 +76,7 @@ type LifecycleService struct {
 	store       LifecycleStore
 	vectorStore VectorDeleter
 	graphPruner GraphPruner // nil on SQLite
+	settings    *SettingsService
 	config      LifecycleConfig
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
@@ -92,28 +84,59 @@ type LifecycleService struct {
 
 // NewLifecycleService creates a new LifecycleService. The vectorStore parameter
 // may be nil if no vector store is configured. The graphPruner parameter may be
-// nil if graph data is not available (e.g., SQLite backend). Zero-value fields
-// in cfg are replaced with defaults.
-func NewLifecycleService(store LifecycleStore, vectorStore VectorDeleter, graphPruner GraphPruner, cfg LifecycleConfig) *LifecycleService {
-	defaults := defaultLifecycleConfig()
+// nil if graph data is not available (e.g., SQLite backend). settings may be
+// nil; the per-sweep knobs fall through to settingDefaults. Zero-value config
+// fields are resolved from the SettingsService at construction (SweepInterval)
+// or per-sweep (everything else).
+func NewLifecycleService(store LifecycleStore, vectorStore VectorDeleter, graphPruner GraphPruner, cfg LifecycleConfig, settings *SettingsService) *LifecycleService {
 	if cfg.SweepInterval <= 0 {
-		cfg.SweepInterval = defaults.SweepInterval
-	}
-	if cfg.BatchSize <= 0 {
-		cfg.BatchSize = defaults.BatchSize
-	}
-	if cfg.DefaultPurgeDelay <= 0 {
-		cfg.DefaultPurgeDelay = defaults.DefaultPurgeDelay
-	}
-	if cfg.OrphanGrace <= 0 {
-		cfg.OrphanGrace = defaults.OrphanGrace
+		cfg.SweepInterval = settings.ResolveDurationSecondsWithDefault(context.Background(),
+			SettingLifecycleSweepIntervalSeconds, "global")
+		if cfg.SweepInterval < time.Second {
+			cfg.SweepInterval = time.Second
+		}
 	}
 	return &LifecycleService{
 		store:       store,
 		vectorStore: vectorStore,
 		graphPruner: graphPruner,
+		settings:    settings,
 		config:      cfg,
 	}
+}
+
+// resolveBatchSize returns the per-sweep batch size, hot-reloading from
+// SettingLifecycleBatchSize unless the operator pinned a value at construction.
+func (s *LifecycleService) resolveBatchSize(ctx context.Context) int {
+	if s.config.BatchSize > 0 {
+		return s.config.BatchSize
+	}
+	v := s.settings.ResolveIntWithDefault(ctx, SettingLifecycleBatchSize, "global")
+	if v < 1 {
+		v = 1
+	}
+	return v
+}
+
+// resolvePurgeDelay returns the soft-delete retention window in time.Duration.
+func (s *LifecycleService) resolvePurgeDelay(ctx context.Context) time.Duration {
+	if s.config.DefaultPurgeDelay > 0 {
+		return s.config.DefaultPurgeDelay
+	}
+	days := s.settings.ResolveIntWithDefault(ctx, SettingMemorySoftDeleteRetentionDays, "global")
+	if days < 1 {
+		days = 1
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
+// resolveOrphanGrace returns the orphan-deletion grace window in time.Duration.
+func (s *LifecycleService) resolveOrphanGrace(ctx context.Context) time.Duration {
+	if s.config.OrphanGrace > 0 {
+		return s.config.OrphanGrace
+	}
+	return s.settings.ResolveDurationSecondsWithDefault(ctx,
+		SettingLifecycleOrphanGraceSeconds, "global")
 }
 
 // Start launches the background sweep loop. It returns immediately.
@@ -162,10 +185,11 @@ func (s *LifecycleService) Sweep(ctx context.Context) (int, int, error) {
 // sweep is the core logic: expire TTL'd memories, then purge soft-deleted ones.
 func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, err error) {
 	now := time.Now()
+	batchSize := s.resolveBatchSize(ctx)
+	orphanGrace := s.resolveOrphanGrace(ctx)
 
 	// Phase 1: Expire memories whose expires_at <= now.
-	// These get soft-deleted and scheduled for purge after DefaultPurgeDelay.
-	expiredMemories, err := s.store.ListExpired(ctx, now, s.config.BatchSize)
+	expiredMemories, err := s.store.ListExpired(ctx, now, batchSize)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -178,7 +202,7 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 
 	// Phase 2: Purge memories whose purge_after <= now (already soft-deleted).
 	// These get hard-deleted along with their vectors.
-	purgeableMemories, err := s.store.ListPurgeable(ctx, now, s.config.BatchSize)
+	purgeableMemories, err := s.store.ListPurgeable(ctx, now, batchSize)
 	if err != nil {
 		return expired, 0, err
 	}
@@ -195,7 +219,7 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 	// Phase 3: Prune orphaned graph data (wired for both SQLite and Postgres).
 	// Order matters: delete dangling relationships first, then orphaned
 	// entities. The entity sweep is age-gated against in-flight enrichment;
-	// see LifecycleConfig.OrphanGrace.
+	// see SettingLifecycleOrphanGraceSeconds.
 	if s.graphPruner != nil {
 		danglingRels, relErr := s.graphPruner.DeleteDanglingRelationships(ctx)
 		if relErr != nil {
@@ -204,13 +228,13 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 			log.Printf("lifecycle: deleted %d dangling relationships", danglingRels)
 		}
 
-		orphanCutoff := now.Add(-s.config.OrphanGrace)
+		orphanCutoff := now.Add(-orphanGrace)
 		orphanedEntities, entErr := s.graphPruner.DeleteOrphanedEntities(ctx, orphanCutoff)
 		if entErr != nil {
 			log.Printf("lifecycle: failed to delete orphaned entities: %v", entErr)
 		} else if orphanedEntities > 0 {
 			log.Printf("lifecycle: deleted %d orphaned entities (older than %s)",
-				orphanedEntities, s.config.OrphanGrace)
+				orphanedEntities, orphanGrace)
 		}
 	}
 

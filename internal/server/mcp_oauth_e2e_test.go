@@ -383,7 +383,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
 
 	// Real rate limiter
-	rl := auth.NewRateLimiter(1000, 2000)
+	rl := auth.NewRateLimiter(1000, 2000, 0, 0)
 	t.Cleanup(rl.Stop)
 
 	// Real metrics
@@ -439,6 +439,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		namespaceLookup,
 		&e2eIngestionLogRepo{},
 		&e2eEnrichmentQueueRepo{},
+		nil,
 	)
 
 	mcpDeps := mcp.Dependencies{
@@ -1902,7 +1903,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
 
 	// Real rate limiter
-	rl := auth.NewRateLimiter(1000, 2000)
+	rl := auth.NewRateLimiter(1000, 2000, 0, 0)
 	t.Cleanup(rl.Stop)
 
 	// Real metrics
@@ -1958,6 +1959,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 		namespaceLookup,
 		&e2eIngestionLogRepo{},
 		&e2eEnrichmentQueueRepo{},
+		nil,
 	)
 
 	mcpDeps := mcp.Dependencies{

@@ -246,6 +246,7 @@ func TestMemoryExportTool_EmptyExport_NoNull(t *testing.T) {
 		&mockExportRelLister{rels: []model.Relationship{}},
 		&mockExportLineageReader{},
 		&mockExportProjectRepo{project: project},
+		nil,
 	)
 
 	deps := Dependencies{
@@ -336,6 +337,7 @@ func TestMemoryExportTool_NilRepoResults_NoNull(t *testing.T) {
 		&mockExportRelLister{rels: nil},
 		&mockExportLineageReader{},
 		&mockExportProjectRepo{project: project},
+		nil,
 	)
 
 	deps := Dependencies{

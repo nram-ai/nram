@@ -21,6 +21,8 @@ type ProjectReader interface {
 // SchedulerConfig configures the dream scheduler.
 type SchedulerConfig struct {
 	// PollInterval is how often the scheduler checks for eligible projects.
+	// Zero falls through to SettingDreamSchedulerPollSeconds; read once at
+	// scheduler start so changes require a server restart.
 	PollInterval time.Duration
 	// EnrichmentAvailable returns true iff embedding, fact, and entity
 	// providers are all configured. The scheduler skips its poll when this
@@ -31,9 +33,15 @@ type SchedulerConfig struct {
 	EnrichmentAvailable func() bool
 }
 
-func (c SchedulerConfig) withDefaults() SchedulerConfig {
+func (c SchedulerConfig) withDefaults(ctx context.Context, settings SettingsResolver) SchedulerConfig {
 	if c.PollInterval <= 0 {
-		c.PollInterval = 30 * time.Second
+		if settings != nil {
+			c.PollInterval = settings.ResolveDurationSecondsWithDefault(ctx,
+				service.SettingDreamSchedulerPollSeconds, "global")
+		}
+		if c.PollInterval < time.Second {
+			c.PollInterval = time.Second
+		}
 	}
 	return c
 }
@@ -68,7 +76,7 @@ func NewScheduler(
 	retention *RetentionSweeper,
 ) *Scheduler {
 	return &Scheduler{
-		config:    config.withDefaults(),
+		config:    config.withDefaults(context.Background(), settings),
 		settings:  settings,
 		dirtyRepo: dirtyRepo,
 		cycleRepo: cycleRepo,

@@ -245,7 +245,7 @@ func TestEnrichHandler_ServiceError_Internal(t *testing.T) {
 }
 
 func TestEnrichHandler_EmitsMemoryEnrichedEvent(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
@@ -288,7 +288,7 @@ func TestEnrichHandler_EmitsMemoryEnrichedEvent(t *testing.T) {
 }
 
 func TestEnrichHandler_EmitsEnrichmentFailedEvent(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")

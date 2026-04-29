@@ -550,6 +550,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
 		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
+		nil,
 	)
 
 	// --- MCP server ---
@@ -570,7 +571,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
 
 	// --- Rate limiter ---
-	rl := auth.NewRateLimiter(10000, 20000)
+	rl := auth.NewRateLimiter(10000, 20000, 0, 0)
 	t.Cleanup(rl.Stop)
 
 	// --- Metrics ---
@@ -1491,6 +1492,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
 		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
+		nil,
 	)
 
 	batchGetSvc := service.NewBatchGetService(memRepo, projectLookup)
@@ -1498,6 +1500,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	exportSvc := service.NewExportService(
 		memRepo, &rbacEntityLister{}, &rbacRelationshipLister{},
 		&rbacLineageReader{}, projectLookup,
+		nil,
 	)
 
 	importSvc := service.NewImportService(
@@ -1529,7 +1532,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
 
 	// --- Rate limiter ---
-	rl := auth.NewRateLimiter(10000, 20000)
+	rl := auth.NewRateLimiter(10000, 20000, 0, 0)
 	t.Cleanup(rl.Stop)
 
 	// --- Metrics ---

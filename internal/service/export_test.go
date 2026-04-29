@@ -270,7 +270,7 @@ func newExportTestFixtures() (
 func TestExport_JSONFormat_WithData(t *testing.T) {
 	projectID, _, mem1ID, mem2ID, ent1ID, ent2ID, rel1ID, projects, memories, entities, relationships, lineage := newExportTestFixtures()
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	data, err := svc.Export(context.Background(), &ExportRequest{
 		ProjectID: projectID,
@@ -397,7 +397,7 @@ func TestExport_JSONFormat_EmptyProject(t *testing.T) {
 	relationships := &mockRelationshipLister{relationships: map[uuid.UUID][]model.Relationship{}}
 	lineage := &mockLineageReader{lineage: map[uuid.UUID][]model.MemoryLineage{}}
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	data, err := svc.Export(context.Background(), &ExportRequest{
 		ProjectID: projectID,
@@ -442,7 +442,7 @@ func TestExport_ProjectNotFound(t *testing.T) {
 	relationships := &mockRelationshipLister{relationships: map[uuid.UUID][]model.Relationship{}}
 	lineage := &mockLineageReader{lineage: map[uuid.UUID][]model.MemoryLineage{}}
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	_, err := svc.Export(context.Background(), &ExportRequest{
 		ProjectID: uuid.New(),
@@ -472,7 +472,7 @@ func TestExport_InvalidFormat(t *testing.T) {
 	relationships := &mockRelationshipLister{relationships: map[uuid.UUID][]model.Relationship{}}
 	lineage := &mockLineageReader{lineage: map[uuid.UUID][]model.MemoryLineage{}}
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	_, err := svc.Export(context.Background(), &ExportRequest{
 		ProjectID: projectID,
@@ -486,7 +486,7 @@ func TestExport_InvalidFormat(t *testing.T) {
 func TestExportNDJSON(t *testing.T) {
 	projectID, _, _, _, _, _, _, projects, memories, entities, relationships, lineage := newExportTestFixtures()
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	var buf bytes.Buffer
 	err := svc.ExportNDJSON(context.Background(), &ExportRequest{
@@ -551,7 +551,7 @@ func TestExportNDJSON_ProjectNotFound(t *testing.T) {
 	relationships := &mockRelationshipLister{relationships: map[uuid.UUID][]model.Relationship{}}
 	lineage := &mockLineageReader{lineage: map[uuid.UUID][]model.MemoryLineage{}}
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	var buf bytes.Buffer
 	err := svc.ExportNDJSON(context.Background(), &ExportRequest{
@@ -565,7 +565,7 @@ func TestExportNDJSON_ProjectNotFound(t *testing.T) {
 func TestExport_StatsCalculatedCorrectly(t *testing.T) {
 	projectID, _, _, _, _, _, _, projects, memories, entities, relationships, lineage := newExportTestFixtures()
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	data, err := svc.Export(context.Background(), &ExportRequest{
 		ProjectID: projectID,
@@ -589,7 +589,7 @@ func TestExport_StatsCalculatedCorrectly(t *testing.T) {
 func TestExport_LineageIncludedForMemories(t *testing.T) {
 	projectID, _, mem1ID, mem2ID, _, _, _, projects, memories, entities, relationships, lineage := newExportTestFixtures()
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	data, err := svc.Export(context.Background(), &ExportRequest{
 		ProjectID: projectID,
@@ -629,7 +629,7 @@ func TestExport_LineageIncludedForMemories(t *testing.T) {
 func TestExportNDJSON_LineageInMemoryRecords(t *testing.T) {
 	projectID, _, _, mem2ID, _, _, _, projects, memories, entities, relationships, lineage := newExportTestFixtures()
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	var buf bytes.Buffer
 	err := svc.ExportNDJSON(context.Background(), &ExportRequest{
@@ -684,7 +684,7 @@ func TestExport_SupersededExcludedByDefault(t *testing.T) {
 		}
 	}
 
-	svc := NewExportService(memories, entities, relationships, lineage, projects)
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
 
 	defaulted, err := svc.Export(context.Background(), &ExportRequest{ProjectID: projectID, Format: ExportFormatJSON})
 	if err != nil {

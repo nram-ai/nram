@@ -13,7 +13,7 @@ func TestEmit_NilBus(t *testing.T) {
 }
 
 func TestEmit_PublishesEvent(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
@@ -56,7 +56,7 @@ func TestEmit_PublishesEvent(t *testing.T) {
 }
 
 func TestEmit_UnmarshalableData(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")

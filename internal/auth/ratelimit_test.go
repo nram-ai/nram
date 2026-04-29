@@ -24,7 +24,7 @@ func makeAuthRequest(t *testing.T, userID uuid.UUID) *http.Request {
 }
 
 func TestRateLimitWithinLimitSucceeds(t *testing.T) {
-	rl := NewRateLimiter(10, 5) // 10 rps, burst of 5
+	rl := NewRateLimiter(10, 5, 0, 0) // 10 rps, burst of 5
 	defer rl.Stop()
 
 	handler := rl.Handler(rateLimitOKHandler)
@@ -63,7 +63,7 @@ func TestRateLimitWithinLimitSucceeds(t *testing.T) {
 }
 
 func TestRateLimitExceedingLimitReturns429(t *testing.T) {
-	rl := NewRateLimiter(1, 2) // 1 rps, burst of 2
+	rl := NewRateLimiter(1, 2, 0, 0) // 1 rps, burst of 2
 	defer rl.Stop()
 
 	handler := rl.Handler(rateLimitOKHandler)
@@ -105,7 +105,7 @@ func TestRateLimitExceedingLimitReturns429(t *testing.T) {
 }
 
 func TestRateLimitIndependentUsers(t *testing.T) {
-	rl := NewRateLimiter(1, 2) // 1 rps, burst of 2
+	rl := NewRateLimiter(1, 2, 0, 0) // 1 rps, burst of 2
 	defer rl.Stop()
 
 	handler := rl.Handler(rateLimitOKHandler)
@@ -140,7 +140,7 @@ func TestRateLimitIndependentUsers(t *testing.T) {
 }
 
 func TestRateLimitUnauthenticatedPassThrough(t *testing.T) {
-	rl := NewRateLimiter(1, 1) // Very restrictive
+	rl := NewRateLimiter(1, 1, 0, 0) // Very restrictive
 	defer rl.Stop()
 
 	handler := rl.Handler(rateLimitOKHandler)
@@ -163,7 +163,7 @@ func TestRateLimitUnauthenticatedPassThrough(t *testing.T) {
 }
 
 func TestRateLimitHeadersPresent(t *testing.T) {
-	rl := NewRateLimiter(100, 50) // Generous limits so nothing is blocked
+	rl := NewRateLimiter(100, 50, 0, 0) // Generous limits so nothing is blocked
 	defer rl.Stop()
 
 	handler := rl.Handler(rateLimitOKHandler)
@@ -219,7 +219,7 @@ func TestRateLimitHeadersPresent(t *testing.T) {
 }
 
 func TestRateLimitCleanup(t *testing.T) {
-	rl := NewRateLimiter(10, 5)
+	rl := NewRateLimiter(10, 5, 0, 0)
 	defer rl.Stop()
 
 	// Override staleAfter to a very short duration for testing.
@@ -258,7 +258,7 @@ func TestRateLimitCleanup(t *testing.T) {
 }
 
 func TestRateLimitConcurrency(t *testing.T) {
-	rl := NewRateLimiter(1000, 500) // High limits to avoid 429s
+	rl := NewRateLimiter(1000, 500, 0, 0) // High limits to avoid 429s
 	defer rl.Stop()
 
 	handler := rl.Handler(rateLimitOKHandler)

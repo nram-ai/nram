@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -134,7 +135,7 @@ func TestReembedAllEntities_RecordsTokenUsage(t *testing.T) {
 	recorder := &reembedRecorder{}
 	wrapped := provider.NewUsageRecordingEmbedding(inner, recorder, nil)
 
-	result, err := ReembedAllEntities(context.Background(), repo, vectorStore, wrapped)
+	result, err := ReembedAllEntities(context.Background(), repo, vectorStore, wrapped, 256, 30*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -308,7 +308,7 @@ func TestStoreHandler_InvalidJSON(t *testing.T) {
 }
 
 func TestStoreHandler_EmitsMemoryCreatedEvent(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")

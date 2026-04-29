@@ -196,7 +196,7 @@ func newTestRouter(t *testing.T, handlers Handlers) http.Handler {
 
 	validator := &mockAPIKeyValidator{}
 	authMw := auth.NewAuthMiddleware(validator, &mockUserIdentityLookup{}, testJWTSecret)
-	rl := auth.NewRateLimiter(100, 200)
+	rl := auth.NewRateLimiter(100, 200, 0, 0)
 	t.Cleanup(rl.Stop)
 	metrics := api.NewMetrics()
 

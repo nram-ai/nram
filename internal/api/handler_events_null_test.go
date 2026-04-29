@@ -16,10 +16,10 @@ import (
 // a payload with nil slices (sanitized by Emit), the SSE data line contains
 // [] and {} instead of null.
 func TestEventsHandler_SSE_SanitizedDataLine(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
-	handler := NewEventsHandler(bus)
+	handler := NewEventsHandler(bus, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,10 +84,10 @@ func TestEventsHandler_SSE_SanitizedDataLine(t *testing.T) {
 // TestEventsHandler_SSE_NilDataFieldSanitized verifies that writeSSE sanitizes
 // a nil Data field on the Event envelope to {} instead of null.
 func TestEventsHandler_SSE_NilDataFieldSanitized(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
-	handler := NewEventsHandler(bus)
+	handler := NewEventsHandler(bus, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -149,7 +149,7 @@ func TestEventsHandler_SSE_NilDataFieldSanitized(t *testing.T) {
 // TestEventsHandler_SSE_ReplayedEventSanitized verifies that replayed events
 // also have sanitized data (no null collections).
 func TestEventsHandler_SSE_ReplayedEventSanitized(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	// Publish events before connecting — they go into the replay buffer.
@@ -175,7 +175,7 @@ func TestEventsHandler_SSE_ReplayedEventSanitized(t *testing.T) {
 	// Wait for events to be buffered.
 	time.Sleep(50 * time.Millisecond)
 
-	handler := NewEventsHandler(bus)
+	handler := NewEventsHandler(bus, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

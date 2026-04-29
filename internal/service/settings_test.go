@@ -334,6 +334,9 @@ func TestResolveCachesRepeatedReads(t *testing.T) {
 	repo := newMockSettingsRepo()
 	repo.put("cache.key", "global", "value")
 	svc := NewSettingsService(repo)
+	// NewSettingsService probes the cache-TTL setting at construction; reset
+	// the counter so this test only measures Resolve-time repo hits.
+	repo.getCalls = 0
 
 	for i := 0; i < 5; i++ {
 		v, err := svc.Resolve(context.Background(), "cache.key", "global")
@@ -351,6 +354,7 @@ func TestResolveCachesMissPath(t *testing.T) {
 	// fallback value don't pay sql.ErrNoRows on every iteration.
 	repo := newMockSettingsRepo()
 	svc := NewSettingsService(repo)
+	repo.getCalls = 0
 	for i := 0; i < 3; i++ {
 		_, _ = svc.Resolve(context.Background(), SettingRankWeightSim, "global")
 	}

@@ -165,6 +165,73 @@ const (
 	SettingConfidenceDecayThresholdDays = "reconsolidation.decay_threshold_days"
 	SettingConfidenceDecayRatePerCycle  = "reconsolidation.decay_rate_per_cycle"
 	SettingConfidenceFloor              = "reconsolidation.confidence_floor"
+
+	// Recall reinforcement event memory cap. Caps how many memory IDs are
+	// attached to a recall event before truncation, bounding event payload
+	// growth on very wide queries.
+	SettingReinforcementEventMemoryCap = "reconsolidation.event_memory_cap"
+
+	// Cascade resolver cache TTL. How long a parsed override blob stays in
+	// memory before the next read goes back to the repo. Operator changes
+	// to project/user settings hit eventual consistency within this window.
+	// Read once at process start; changes require server restart.
+	SettingCascadeCacheTTLSeconds = "cascade.cache_ttl_seconds"
+
+	// Settings cache TTL. How long a Resolve hit lives in memory before
+	// the next read goes back to the repo. Read once at process start;
+	// changes require server restart (the cache TTL itself cannot be
+	// hot-reloaded without self-reference).
+	SettingSettingsCacheTTLSeconds = "settings.cache_ttl_seconds"
+
+	// Enrichment worker pool tuning. The pool claims jobs in batches and
+	// fans LLM calls out per-job before issuing one shared embed call;
+	// the knobs below cap each layer.
+	SettingEnrichmentWorkerBatchClaimSize             = "enrichment.worker.batch_claim_size"
+	SettingEnrichmentWorkerPreEmbedConcurrency        = "enrichment.worker.pre_embed_concurrency"
+	SettingEnrichmentWorkerEmbedTimeoutSeconds        = "enrichment.worker.embed_timeout_seconds"
+	SettingEnrichmentWorkerEmbedInputCap              = "enrichment.worker.embed_input_cap"
+	SettingEnrichmentWorkerBreakerEscalateSeconds     = "enrichment.worker.breaker_error_escalate_seconds"
+	SettingEnrichmentWorkerMaxBackoffSeconds          = "enrichment.worker.max_backoff_seconds"
+	SettingEnrichmentWorkerCountSQLite                = "enrichment.worker.count_sqlite"
+	SettingEnrichmentWorkerCountPostgres              = "enrichment.worker.count_postgres"
+	SettingEnrichmentWorkerPollIntervalSeconds        = "enrichment.worker.poll_interval_seconds"
+	SettingEnrichmentIngestionRationaleMaxLen         = "enrichment.ingestion.rationale_max_len"
+
+	// Dreaming worker tuning beyond what the existing dreaming.* keys cover.
+	SettingDreamContradictionNeighbors = "dreaming.contradiction.neighbors_per_anchor"
+	SettingDreamEntityMergeThreshold   = "dreaming.entity_merge.cosine_threshold"
+	SettingDreamSchedulerPollSeconds   = "dreaming.scheduler.poll_interval_seconds"
+
+	// Lifecycle sweep tuning. SweepInterval is read at start (restart);
+	// BatchSize / OrphanGrace are read on every sweep so they hot-reload.
+	SettingLifecycleSweepIntervalSeconds = "lifecycle.sweep_interval_seconds"
+	SettingLifecycleBatchSize            = "lifecycle.batch_size"
+	SettingLifecycleOrphanGraceSeconds   = "lifecycle.orphan_grace_seconds"
+
+	// API rate-limit per-user-bucket cleanup. Read once at startup; changes
+	// require server restart.
+	SettingAPIRateLimitCleanupSeconds = "api.rate_limit.cleanup_interval_seconds"
+	SettingAPIRateLimitStaleSeconds   = "api.rate_limit.stale_after_seconds"
+
+	// In-process event bus. subscriber_buffer_size is the per-subscriber
+	// channel buffer (drops events on full); replay_capacity is the ring
+	// buffer for SSE Last-Event-ID reconnection. Both read once at startup
+	// — wrong values can stall subscribers or balloon memory, so both are
+	// restart-required and flagged as advanced in their descriptions.
+	SettingEventsSubscriberBufferSize  = "events.subscriber_buffer_size"
+	SettingEventsReplayCapacity        = "events.replay_capacity"
+	SettingEventsSSEKeepaliveSeconds   = "events.sse_keepalive_seconds"
+
+	// Admin graph visualization minimum edge weight. Hot-reloadable.
+	SettingGraphDefaultMinWeight = "graph.default_min_weight"
+
+	// Batch store request item cap. Raising this widens the per-request DoS
+	// surface; description warns and the value is bounded by an internal
+	// safety floor in BatchStore validation.
+	SettingAPIBatchStoreMaxItems = "api.batch_store.max_items"
+
+	// Export pagination size for memories. Hot-reloadable.
+	SettingExportPageSize = "export.page_size"
 )
 
 // Reconsolidation mode values. Default is shadow so the first real deployment
@@ -378,6 +445,54 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingConfidenceDecayThresholdDays: "14",
 	SettingConfidenceDecayRatePerCycle:  "0.02",
 	SettingConfidenceFloor:              "0.05",
+
+	SettingReinforcementEventMemoryCap: "20",
+
+	SettingCascadeCacheTTLSeconds:  "30",
+	SettingSettingsCacheTTLSeconds: "30",
+
+	SettingEnrichmentWorkerBatchClaimSize:         "16",
+	SettingEnrichmentWorkerPreEmbedConcurrency:    "4",
+	SettingEnrichmentWorkerEmbedTimeoutSeconds:    "30",
+	SettingEnrichmentWorkerEmbedInputCap:          "256",
+	SettingEnrichmentWorkerBreakerEscalateSeconds: "300",
+	SettingEnrichmentWorkerMaxBackoffSeconds:      "30",
+	SettingEnrichmentWorkerCountSQLite:            "1",
+	SettingEnrichmentWorkerCountPostgres:          "2",
+	SettingEnrichmentWorkerPollIntervalSeconds:    "5",
+	SettingEnrichmentIngestionRationaleMaxLen:     "500",
+
+	SettingDreamContradictionNeighbors: "4",
+	SettingDreamEntityMergeThreshold:   "0.92",
+	SettingDreamSchedulerPollSeconds:   "30",
+
+	SettingLifecycleSweepIntervalSeconds: "300",
+	SettingLifecycleBatchSize:            "100",
+	SettingLifecycleOrphanGraceSeconds:   "3600",
+
+	SettingAPIRateLimitCleanupSeconds: "60",
+	SettingAPIRateLimitStaleSeconds:   "600",
+
+	SettingEventsSubscriberBufferSize: "64",
+	SettingEventsReplayCapacity:       "256",
+	SettingEventsSSEKeepaliveSeconds:  "30",
+
+	SettingGraphDefaultMinWeight: "0.1",
+
+	SettingAPIBatchStoreMaxItems: "100",
+
+	SettingExportPageSize: "100",
+
+	// Display-only keys: registered in the admin schema for UI completeness
+	// but not yet wired to any consumer. Listed here so the init-time
+	// consistency check passes; remove once a consumer is added (and either
+	// promote to a Setting* constant or delete the schema entry).
+	"enrichment.batch_size":     "10",
+	"enrichment.auto_enrich":    "false",
+	"memory.default_confidence": "0.9",
+	"memory.default_importance": "0.5",
+	"api.rate_limit_rps":        "10",
+	"api.rate_limit_burst":      "20",
 }
 
 // GetDefault returns the built-in default for the given setting key. The
@@ -413,12 +528,14 @@ type SettingsRepository interface {
 	ListByScope(ctx context.Context, scope string) ([]model.Setting, error)
 }
 
-// settingsCacheTTL bounds how long a Resolve hit lives in memory before the
-// next read goes back to the repo. Operator changes via Set / Delete invalidate
-// the affected key immediately; the TTL covers writes from outside the
-// SettingsService (direct SQL, restore-from-backup) and bounds the staleness
-// hot-path callers have to tolerate.
-const settingsCacheTTL = 30 * time.Second
+// Settings cache TTL bounds how long a Resolve hit lives in memory before
+// the next read goes back to the repo. Operator changes via Set / Delete
+// invalidate the affected key immediately; the TTL covers writes from
+// outside the SettingsService (direct SQL, restore-from-backup) and bounds
+// the staleness hot-path callers have to tolerate. Read once at
+// SettingsService construction from SettingSettingsCacheTTLSeconds; runtime
+// changes require server restart (the cache TTL itself cannot hot-reload
+// without self-reference).
 
 type settingsCacheEntry struct {
 	value     string
@@ -430,14 +547,41 @@ type settingsCacheEntry struct {
 // hits a small TTL cache so worker loops and per-job cascade resolutions do
 // not hammer the repo for values that change rarely.
 type SettingsService struct {
-	repo  SettingsRepository
-	mu    sync.RWMutex
-	cache map[string]settingsCacheEntry
+	repo     SettingsRepository
+	mu       sync.RWMutex
+	cache    map[string]settingsCacheEntry
+	cacheTTL time.Duration
 }
 
 // NewSettingsService creates a new SettingsService with the given repository.
+// The cache TTL is bootstrapped from the registered default for
+// SettingSettingsCacheTTLSeconds because the service itself is the resolver
+// for that key — using the resolver before it has a TTL would self-reference.
+// Operators wanting to change the cache TTL must update the setting and
+// restart.
 func NewSettingsService(repo SettingsRepository) *SettingsService {
-	return &SettingsService{repo: repo, cache: make(map[string]settingsCacheEntry)}
+	def := settingDefaults[SettingSettingsCacheTTLSeconds]
+	secs, err := strconv.Atoi(def)
+	if err != nil || secs < 1 {
+		secs = 30
+	}
+	s := &SettingsService{
+		repo:     repo,
+		cache:    make(map[string]settingsCacheEntry),
+		cacheTTL: time.Duration(secs) * time.Second,
+	}
+	// Promote a stored value if present — Resolve goes through the repo,
+	// not through s.cache, so this lookup is safe even before cacheTTL is
+	// finalized.
+	if repo != nil {
+		if setting, err := repo.Get(context.Background(), SettingSettingsCacheTTLSeconds, "global"); err == nil {
+			val := unmarshalJSONString(setting.Value)
+			if v, perr := strconv.Atoi(val); perr == nil && v >= 1 {
+				s.cacheTTL = time.Duration(v) * time.Second
+			}
+		}
+	}
+	return s
 }
 
 func settingsCacheKey(key, scope string) string {
@@ -472,7 +616,7 @@ func (s *SettingsService) Resolve(ctx context.Context, key string, scope string)
 	}
 
 	s.mu.Lock()
-	s.cache[cacheKey] = settingsCacheEntry{value: value, expiresAt: now.Add(settingsCacheTTL)}
+	s.cache[cacheKey] = settingsCacheEntry{value: value, expiresAt: now.Add(s.cacheTTL)}
 	s.mu.Unlock()
 	return value, nil
 }
@@ -540,6 +684,55 @@ func (s *SettingsService) ResolveBool(ctx context.Context, key string, scope str
 		return false
 	}
 	return val == "true" || val == "1"
+}
+
+// ResolveIntWithDefault resolves an int setting, falling back to the value
+// registered in settingDefaults when the resolved value is missing, empty, or
+// fails to parse. The init-time consistency check in storage/admin enforces
+// that every numeric schema entry has a matching settingDefaults entry, so a
+// missing default is a programmer error and we panic to surface it.
+func (s *SettingsService) ResolveIntWithDefault(ctx context.Context, key, scope string) int {
+	if s != nil {
+		if v, err := s.ResolveInt(ctx, key, scope); err == nil {
+			return v
+		}
+	}
+	def, ok := settingDefaults[key]
+	if !ok {
+		panic("settings: ResolveIntWithDefault called for key with no registered default: " + key)
+	}
+	i, err := strconv.Atoi(def)
+	if err != nil {
+		panic("settings: registered default for " + key + " is not a valid int: " + def)
+	}
+	return i
+}
+
+// ResolveFloatWithDefault resolves a float setting, falling back to the value
+// registered in settingDefaults. Same panic-on-missing-default contract as
+// ResolveIntWithDefault.
+func (s *SettingsService) ResolveFloatWithDefault(ctx context.Context, key, scope string) float64 {
+	if s != nil {
+		if v, err := s.ResolveFloat(ctx, key, scope); err == nil {
+			return v
+		}
+	}
+	def, ok := settingDefaults[key]
+	if !ok {
+		panic("settings: ResolveFloatWithDefault called for key with no registered default: " + key)
+	}
+	f, err := strconv.ParseFloat(def, 64)
+	if err != nil {
+		panic("settings: registered default for " + key + " is not a valid float: " + def)
+	}
+	return f
+}
+
+// ResolveDurationSecondsWithDefault resolves an int setting interpreted as a
+// number of seconds, returning the corresponding time.Duration. Falls back to
+// the registered default if the configured value is missing or unparseable.
+func (s *SettingsService) ResolveDurationSecondsWithDefault(ctx context.Context, key, scope string) time.Duration {
+	return time.Duration(s.ResolveIntWithDefault(ctx, key, scope)) * time.Second
 }
 
 // Set writes a setting at the given scope.

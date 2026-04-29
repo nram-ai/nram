@@ -16,7 +16,7 @@ func TestPostgresBus_LocalDelivery(t *testing.T) {
 	// Test the local (MemoryBus) portion without requiring Postgres.
 	// We construct a PostgresBus manually with only the local bus populated.
 	bus := &PostgresBus{
-		local:      NewMemoryBus(),
+		local:      NewMemoryBus(0, 0),
 		instanceID: "test-instance",
 	}
 	defer bus.local.Close()

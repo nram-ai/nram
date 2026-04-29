@@ -22,13 +22,14 @@ type CascadeUserReader interface {
 	GetByNamespaceID(ctx context.Context, namespaceID uuid.UUID) (*model.User, error)
 }
 
-// cascadeCacheTTL bounds how long a parsed override blob stays in memory.
+// Cascade cache TTL bounds how long a parsed override blob stays in memory.
 // Per-namespace cascade lookups happen inside hot paths (every enrichment
 // job, every recall fallback to system weights), so without a cache a
 // worker draining 16 jobs from one namespace pays 16 project lookups.
 // Operator changes to project/user settings hit eventual consistency
-// within the TTL window — same model as SettingsService.
-const cascadeCacheTTL = 30 * time.Second
+// within the TTL window — same model as SettingsService. Read once at
+// resolver construction; runtime changes require server restart. See
+// service.SettingCascadeCacheTTLSeconds.
 
 type cascadeCacheEntry struct {
 	root      effectiveRoot
@@ -46,16 +47,25 @@ type CascadeResolver struct {
 	users    CascadeUserReader
 	mu       sync.RWMutex
 	cache    map[uuid.UUID]cascadeCacheEntry
+	cacheTTL time.Duration
 }
 
 // NewCascadeResolver wires the cascade against the system settings service
-// and the project + user readers needed to fetch JSON overrides.
+// and the project + user readers needed to fetch JSON overrides. The cache
+// TTL is read once from SettingCascadeCacheTTLSeconds; nil settings falls
+// through to the registered default.
 func NewCascadeResolver(s *SettingsService, projects CascadeProjectReader, users CascadeUserReader) *CascadeResolver {
+	ttl := s.ResolveDurationSecondsWithDefault(context.Background(),
+		SettingCascadeCacheTTLSeconds, "global")
+	if ttl < time.Second {
+		ttl = time.Second
+	}
 	return &CascadeResolver{
 		settings: s,
 		projects: projects,
 		users:    users,
 		cache:    make(map[uuid.UUID]cascadeCacheEntry),
+		cacheTTL: ttl,
 	}
 }
 
@@ -85,7 +95,7 @@ func (r *CascadeResolver) resolveOverrideJSON(ctx context.Context, namespaceID u
 	root := r.lookupOverrideJSON(ctx, namespaceID)
 
 	r.mu.Lock()
-	r.cache[namespaceID] = cascadeCacheEntry{root: root, expiresAt: now.Add(cascadeCacheTTL)}
+	r.cache[namespaceID] = cascadeCacheEntry{root: root, expiresAt: now.Add(r.cacheTTL)}
 	r.mu.Unlock()
 	return root
 }

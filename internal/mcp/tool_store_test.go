@@ -620,6 +620,7 @@ func newMockBatchStoreService(memoriesCreated int) *service.BatchStoreService {
 		&mockNamespaceLookup{ns: &model.Namespace{ID: nsID}},
 		&mockIngestionLogRepo{},
 		&mockEnrichmentQueueRepo{},
+		nil,
 	)
 }
 

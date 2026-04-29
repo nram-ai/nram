@@ -25,7 +25,7 @@ type recallResponse struct {
 // TestEmit_NilSliceSanitized verifies that Emit sanitizes nil slices to []
 // and nil json.RawMessage to {} before marshaling.
 func TestEmit_NilSliceSanitized(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
@@ -75,7 +75,7 @@ func TestEmit_NilSliceSanitized(t *testing.T) {
 // TestEmit_NilSliceInNestedStruct verifies that nested nil slices and maps
 // are sanitized in event payloads.
 func TestEmit_NilSliceInNestedStruct(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
@@ -115,7 +115,7 @@ func TestEmit_NilSliceInNestedStruct(t *testing.T) {
 // TestEmit_InitializedSliceProducesEmptyArray verifies that explicitly
 // initialized empty slices still produce [].
 func TestEmit_InitializedSliceProducesEmptyArray(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")

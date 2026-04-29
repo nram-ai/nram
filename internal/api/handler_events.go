@@ -10,12 +10,16 @@ import (
 	"github.com/nram-ai/nram/internal/events"
 )
 
-const sseKeepaliveInterval = 30 * time.Second
-
 // NewEventsHandler returns an HTTP handler that streams SSE events from the bus.
 // Supports optional "scope" query param for prefix filtering and the
-// "Last-Event-ID" header for replay on reconnect.
-func NewEventsHandler(bus events.EventBus) http.HandlerFunc {
+// "Last-Event-ID" header for replay on reconnect. keepalive controls the
+// interval between SSE keepalive pings; cmd/server/main.go resolves it from
+// SettingEventsSSEKeepaliveSeconds at startup. Zero or negative falls back
+// to 30s.
+func NewEventsHandler(bus events.EventBus, keepalive time.Duration) http.HandlerFunc {
+	if keepalive <= 0 {
+		keepalive = 30 * time.Second
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -50,8 +54,8 @@ func NewEventsHandler(bus events.EventBus) http.HandlerFunc {
 		}
 		defer cancel()
 
-		keepalive := time.NewTicker(sseKeepaliveInterval)
-		defer keepalive.Stop()
+		keepaliveTicker := time.NewTicker(keepalive)
+		defer keepaliveTicker.Stop()
 
 		for {
 			select {
@@ -63,7 +67,7 @@ func NewEventsHandler(bus events.EventBus) http.HandlerFunc {
 				}
 				writeSSE(w, evt)
 				flusher.Flush()
-			case <-keepalive.C:
+			case <-keepaliveTicker.C:
 				fmt.Fprint(w, ": keepalive\n\n")
 				flusher.Flush()
 			}

@@ -105,6 +105,21 @@ func (s *staticDreamSettings) ResolveBool(_ context.Context, key string, _ strin
 	v := s.values[key]
 	return v == "true" || v == "1"
 }
+func (s *staticDreamSettings) ResolveIntWithDefault(ctx context.Context, key, scope string) int {
+	if v, ok := s.ints[key]; ok {
+		return v
+	}
+	return 0
+}
+func (s *staticDreamSettings) ResolveFloatWithDefault(ctx context.Context, key, scope string) float64 {
+	if v, ok := s.floats[key]; ok {
+		return v
+	}
+	return 0
+}
+func (s *staticDreamSettings) ResolveDurationSecondsWithDefault(ctx context.Context, key, scope string) time.Duration {
+	return time.Duration(s.ResolveIntWithDefault(ctx, key, scope)) * time.Second
+}
 
 // --- Helpers ---
 

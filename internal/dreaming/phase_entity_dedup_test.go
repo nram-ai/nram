@@ -43,7 +43,7 @@ func TestShouldMerge_VectorSimilarityFallback(t *testing.T) {
 	}
 
 	p := &EntityDedupPhase{}
-	if !p.shouldMerge(entA, entB, vectorsByID, normsByID(vectorsByID)) {
+	if !p.shouldMerge(entA, entB, vectorsByID, normsByID(vectorsByID), 0.92) {
 		t.Fatal("expected vector-similarity fallback to merge entities with cosine 1.0")
 	}
 }
@@ -72,7 +72,7 @@ func TestShouldMerge_VectorSimilarityBelowThreshold(t *testing.T) {
 	}
 
 	p := &EntityDedupPhase{}
-	if p.shouldMerge(entA, entB, vectorsByID, normsByID(vectorsByID)) {
+	if p.shouldMerge(entA, entB, vectorsByID, normsByID(vectorsByID), 0.92) {
 		t.Fatal("expected orthogonal vectors to fall below entityMergeCosineThreshold")
 	}
 }
@@ -100,7 +100,7 @@ func TestShouldMerge_DimMismatchReturnsFalse(t *testing.T) {
 	}
 
 	p := &EntityDedupPhase{}
-	if p.shouldMerge(entA, entB, vectorsByID, normsByID(vectorsByID)) {
+	if p.shouldMerge(entA, entB, vectorsByID, normsByID(vectorsByID), 0.92) {
 		t.Fatal("expected dim mismatch to short-circuit before cosine comparison")
 	}
 }
@@ -112,7 +112,7 @@ func TestShouldMerge_TextMatchStillFiresFirst(t *testing.T) {
 	entB := &model.Entity{Canonical: "react", EntityType: "library"}
 
 	p := &EntityDedupPhase{}
-	if !p.shouldMerge(entA, entB, nil, nil) {
+	if !p.shouldMerge(entA, entB, nil, nil, 0.92) {
 		t.Fatal("expected canonical-equality merge even with nil vectorsByID")
 	}
 }

@@ -7,7 +7,15 @@ import (
 	"sync"
 )
 
-const subscriberBufferSize = 64
+// fallbackSubscriberBufferSize is the absolute floor used when callers pass
+// 0 to NewMemoryBus. Production callers (cmd/server/main.go) resolve the
+// value from SettingEventsSubscriberBufferSize. Tests pass 0 and fall here.
+const fallbackSubscriberBufferSize = 64
+
+// fallbackReplayCapacity mirrors fallbackSubscriberBufferSize for the replay
+// ring buffer; resolved from SettingEventsReplayCapacity at the production
+// call site.
+const fallbackReplayCapacity = 256
 
 type subscriber struct {
 	ch    chan Event
@@ -16,18 +24,29 @@ type subscriber struct {
 
 // MemoryBus is a thread-safe in-memory implementation of EventBus.
 type MemoryBus struct {
-	mu          sync.RWMutex
-	subscribers map[uint64]*subscriber
-	nextID      uint64
-	closed      bool
-	replay      *ReplayBuffer
+	mu             sync.RWMutex
+	subscribers    map[uint64]*subscriber
+	nextID         uint64
+	closed         bool
+	replay         *ReplayBuffer
+	subscriberBuf  int
 }
 
-// NewMemoryBus creates a new in-memory event bus.
-func NewMemoryBus() *MemoryBus {
+// NewMemoryBus creates a new in-memory event bus. subscriberBuf and
+// replayCap are resolved from settings at the production call site
+// (cmd/server/main.go). Zero or negative falls back to the in-package
+// floor so tests that don't care about tuning can still construct a bus.
+func NewMemoryBus(subscriberBuf, replayCap int) *MemoryBus {
+	if subscriberBuf < 1 {
+		subscriberBuf = fallbackSubscriberBufferSize
+	}
+	if replayCap < 1 {
+		replayCap = fallbackReplayCapacity
+	}
 	return &MemoryBus{
-		subscribers: make(map[uint64]*subscriber),
-		replay:      NewReplayBuffer(defaultReplayCapacity),
+		subscribers:   make(map[uint64]*subscriber),
+		replay:        NewReplayBuffer(replayCap),
+		subscriberBuf: subscriberBuf,
 	}
 }
 
@@ -70,7 +89,7 @@ func (b *MemoryBus) Subscribe(_ context.Context, scope string) (<-chan Event, fu
 	b.nextID++
 
 	sub := &subscriber{
-		ch:    make(chan Event, subscriberBufferSize),
+		ch:    make(chan Event, b.subscriberBuf),
 		scope: scope,
 	}
 	b.subscribers[id] = sub

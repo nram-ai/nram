@@ -19,7 +19,7 @@ func makeEvent(typ, scope string) Event {
 }
 
 func TestMemoryBus_PublishSubscribe(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ctx := context.Background()
@@ -48,7 +48,7 @@ func TestMemoryBus_PublishSubscribe(t *testing.T) {
 }
 
 func TestMemoryBus_ScopeFiltering(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ctx := context.Background()
@@ -90,7 +90,7 @@ func TestMemoryBus_ScopeFiltering(t *testing.T) {
 }
 
 func TestMemoryBus_Cancel(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ctx := context.Background()
@@ -112,7 +112,7 @@ func TestMemoryBus_Cancel(t *testing.T) {
 }
 
 func TestMemoryBus_Close(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 
 	ctx := context.Background()
 	ch, _, err := bus.Subscribe(ctx, "")
@@ -143,7 +143,7 @@ func TestMemoryBus_Close(t *testing.T) {
 }
 
 func TestMemoryBus_FullChannel(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ctx := context.Background()
@@ -154,7 +154,7 @@ func TestMemoryBus_FullChannel(t *testing.T) {
 	defer cancel()
 
 	// Fill the channel buffer
-	for i := 0; i < subscriberBufferSize; i++ {
+	for i := 0; i < fallbackSubscriberBufferSize; i++ {
 		evt := makeEvent(MemoryCreated, "test")
 		evt.ID = "fill"
 		if err := bus.Publish(ctx, evt); err != nil {
@@ -169,7 +169,7 @@ func TestMemoryBus_FullChannel(t *testing.T) {
 		t.Fatalf("publish overflow: %v", err)
 	}
 
-	// Drain and verify we got exactly subscriberBufferSize events
+	// Drain and verify we got exactly fallbackSubscriberBufferSize events
 	count := 0
 	for {
 		select {
@@ -180,13 +180,13 @@ func TestMemoryBus_FullChannel(t *testing.T) {
 		}
 	}
 done:
-	if count != subscriberBufferSize {
-		t.Errorf("got %d events, want %d (overflow should be dropped)", count, subscriberBufferSize)
+	if count != fallbackSubscriberBufferSize {
+		t.Errorf("got %d events, want %d (overflow should be dropped)", count, fallbackSubscriberBufferSize)
 	}
 }
 
 func TestMemoryBus_ConcurrentPublish(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ctx := context.Background()

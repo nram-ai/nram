@@ -319,7 +319,7 @@ func TestBulkForgetHandler_TagsOnly(t *testing.T) {
 }
 
 func TestDeleteHandler_EmitsMemoryDeletedEvent(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
@@ -359,7 +359,7 @@ func TestDeleteHandler_EmitsMemoryDeletedEvent(t *testing.T) {
 }
 
 func TestBulkForgetHandler_EmitsMemoryDeletedEvents(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")

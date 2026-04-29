@@ -228,7 +228,7 @@ func TestBatchStoreHandler_PartialSuccess(t *testing.T) {
 }
 
 func TestBatchStoreHandler_EmitsMemoryCreatedEvents(t *testing.T) {
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")

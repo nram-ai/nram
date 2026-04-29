@@ -50,10 +50,6 @@ type ingestionDecisionResult struct {
 	providerName    string
 }
 
-// rationaleMaxLen caps the rationale stored on memory metadata so the JSONB
-// column does not balloon if the LLM returns prose.
-const rationaleMaxLen = 500
-
 // runIngestionDecision is the first enrichment phase. On near-duplicate
 // matches it asks an LLM judge to pick ADD / UPDATE / DELETE / NONE. Failure
 // at any step (settings missing, embed error, LLM error, parse error) falls
@@ -172,7 +168,8 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	}
 	res.decision = op
 	res.target = target
-	res.rationale = truncate(parsed.Rationale, rationaleMaxLen)
+	res.rationale = truncate(parsed.Rationale,
+		wp.settings.ResolveIntWithDefault(ctx, service.SettingEnrichmentIngestionRationaleMaxLen, "global"))
 
 	// Shadow mode: log the would-be decision but treat it as ADD downstream
 	// so no lineage edges or supersessions are written.

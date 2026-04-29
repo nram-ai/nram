@@ -14,6 +14,7 @@ import (
 	"github.com/nram-ai/nram/internal/enrichment"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -24,6 +25,7 @@ import (
 type ProviderAdminDeps struct {
 	Registry     *provider.Registry
 	SettingsRepo *storage.SettingsRepo
+	Settings     *service.SettingsService
 	MemoryRepo   *storage.MemoryRepo
 	EntityRepo   *storage.EntityRepo
 	VectorStore  storage.VectorStore
@@ -319,8 +321,12 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 			if bgCtx == nil {
 				bgCtx = context.Background()
 			}
+			pageSize := s.deps.Settings.ResolveIntWithDefault(bgCtx,
+				service.SettingEnrichmentWorkerEmbedInputCap, "global")
+			timeout := s.deps.Settings.ResolveDurationSecondsWithDefault(bgCtx,
+				service.SettingEnrichmentWorkerEmbedTimeoutSeconds, "global")
 			go func(emb provider.EmbeddingProvider) {
-				if _, rerr := enrichment.ReembedAllEntities(bgCtx, s.deps.EntityRepo, s.deps.VectorStore, emb); rerr != nil {
+				if _, rerr := enrichment.ReembedAllEntities(bgCtx, s.deps.EntityRepo, s.deps.VectorStore, emb, pageSize, timeout); rerr != nil {
 					slog.Error("cascade: entity re-embed loop failed", "err", rerr)
 				}
 			}(embedder)

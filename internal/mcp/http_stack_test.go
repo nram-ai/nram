@@ -1461,6 +1461,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, nsLookup,
 		&mockIngestionLogRepo{}, &mockEnrichmentQueueRepo{},
+		nil,
 	)
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, nsLookup,
@@ -1478,6 +1479,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 		&mockExportRelLister{rels: []model.Relationship{}},
 		&mockExportLineageReader{},
 		projectLookup,
+		nil,
 	)
 
 	deps := Dependencies{

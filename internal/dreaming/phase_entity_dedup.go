@@ -7,11 +7,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
-
-const entityMergeCosineThreshold = 0.92
 
 // EntityDedupPhase merges near-duplicate entities within a namespace.
 // It compares entities first by canonical/normalized text and known suffix
@@ -25,10 +24,13 @@ type EntityDedupPhase struct {
 	relationships RelationshipReader
 	relWriter     RelationshipWriter
 	vectorStore   storage.VectorStore
+	settings      SettingsResolver
 }
 
 // NewEntityDedupPhase creates a new entity deduplication phase. vectorStore
-// may be nil; in that case the phase degrades to text-only matching.
+// may be nil; in that case the phase degrades to text-only matching. settings
+// may be nil; the threshold falls through to the registered default in
+// service.settingDefaults.
 func NewEntityDedupPhase(
 	entities EntityReader,
 	entityWriter EntityWriter,
@@ -36,6 +38,7 @@ func NewEntityDedupPhase(
 	relationships RelationshipReader,
 	relWriter RelationshipWriter,
 	vectorStore storage.VectorStore,
+	settings SettingsResolver,
 ) *EntityDedupPhase {
 	return &EntityDedupPhase{
 		entities:      entities,
@@ -44,6 +47,7 @@ func NewEntityDedupPhase(
 		relationships: relationships,
 		relWriter:     relWriter,
 		vectorStore:   vectorStore,
+		settings:      settings,
 	}
 }
 
@@ -65,12 +69,18 @@ func (p *EntityDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle,
 		byType[e.EntityType] = append(byType[e.EntityType], e)
 	}
 
+	threshold := 0.92
+	if p.settings != nil {
+		threshold = p.settings.ResolveFloatWithDefault(ctx,
+			service.SettingDreamEntityMergeThreshold, "global")
+	}
+
 	for entityType, group := range byType {
 		if len(group) < 2 {
 			continue
 		}
 
-		merged := p.findAndMergeDuplicates(ctx, cycle, group, entityType, logger)
+		merged := p.findAndMergeDuplicates(ctx, cycle, group, entityType, logger, threshold)
 		if merged > 0 {
 			slog.Info("dreaming: entity dedup merged entities",
 				"type", entityType, "merged", merged, "cycle", cycle.ID)
@@ -86,6 +96,7 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 	entities []model.Entity,
 	entityType string,
 	logger *DreamLogWriter,
+	threshold float64,
 ) int {
 	merged := 0
 
@@ -104,7 +115,7 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 			}
 			candidate := &entities[j]
 
-			if !p.shouldMerge(primary, candidate, vectorsByID, normsByID) {
+			if !p.shouldMerge(primary, candidate, vectorsByID, normsByID, threshold) {
 				continue
 			}
 
@@ -160,8 +171,9 @@ func (p *EntityDedupPhase) preloadVectors(ctx context.Context, entities []model.
 }
 
 // shouldMerge runs text-matching branches first, then falls back to cosine
-// similarity over the preloaded vectors.
-func (p *EntityDedupPhase) shouldMerge(a, b *model.Entity, vectorsByID map[uuid.UUID][]float32, normsByID map[uuid.UUID]float32) bool {
+// similarity over the preloaded vectors. threshold is the resolved value of
+// SettingDreamEntityMergeThreshold for this phase invocation.
+func (p *EntityDedupPhase) shouldMerge(a, b *model.Entity, vectorsByID map[uuid.UUID][]float32, normsByID map[uuid.UUID]float32, threshold float64) bool {
 	if a.Canonical == b.Canonical {
 		return true
 	}
@@ -191,7 +203,7 @@ func (p *EntityDedupPhase) shouldMerge(a, b *model.Entity, vectorsByID map[uuid.
 		return false
 	}
 	sim := hnsw.CosineSimilarityWithNorms(aVec, bVec, normsByID[a.ID], normsByID[b.ID])
-	return sim >= entityMergeCosineThreshold
+	return float64(sim) >= threshold
 }
 
 // mergeEntities absorbs candidate into primary: creates alias, increments

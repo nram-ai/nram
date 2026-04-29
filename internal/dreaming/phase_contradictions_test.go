@@ -49,6 +49,9 @@ func (stubLineageWriter) CountConflictsBetween(_ context.Context, _, _, _ uuid.U
 	return 0, nil
 }
 
+// stubSettings is the default zero-config stub used by most tests. cap and
+// neighbors fall through to their package defaults (2000 and 4) — matching
+// what production cascade resolution would produce on a fresh deployment.
 type stubSettings struct{}
 
 func (stubSettings) Resolve(_ context.Context, _ string, _ string) (string, error) {
@@ -62,6 +65,41 @@ func (stubSettings) ResolveInt(_ context.Context, _ string, _ string) (int, erro
 	return 0, nil
 }
 func (stubSettings) ResolveBool(_ context.Context, _ string, _ string) bool { return false }
+
+// ResolveIntWithDefault returns the registered default for the few keys this
+// test stub is asked about. Keep the values in sync with service.settingDefaults
+// so the test sees the same fallback the runtime cascade would produce.
+func (stubSettings) ResolveIntWithDefault(_ context.Context, key, _ string) int {
+	switch key {
+	case service.SettingDreamContradictionCap:
+		return 2000
+	case service.SettingDreamContradictionNeighbors:
+		return 4
+	}
+	return 0
+}
+func (stubSettings) ResolveFloatWithDefault(_ context.Context, _, _ string) float64 {
+	return 0
+}
+func (stubSettings) ResolveDurationSecondsWithDefault(_ context.Context, _, _ string) time.Duration {
+	return 0
+}
+
+// stubSettingsWithCap is used by tests that need to assert behavior at a
+// specific cap (e.g., residual reporting when stale exceeds cap). The
+// embedded stubSettings provides every other resolver method; this type
+// only overrides ResolveIntWithDefault for the cap key.
+type stubSettingsWithCap struct {
+	stubSettings
+	cap int
+}
+
+func (s stubSettingsWithCap) ResolveIntWithDefault(ctx context.Context, key, scope string) int {
+	if key == service.SettingDreamContradictionCap {
+		return s.cap
+	}
+	return s.stubSettings.ResolveIntWithDefault(ctx, key, scope)
+}
 
 func makeMemories(n int) []model.Memory {
 	out := make([]model.Memory, n)
@@ -297,7 +335,7 @@ func TestContradictionPhase_StampsDispatchedAndReportsResidualWhenCapHit(t *test
 		stubLineageWriter{},
 		func() provider.LLMProvider { return llm },
 		nilEmbedder,
-		stubSettings{}, // cap defaults to 30, K defaults to 4
+		stubSettingsWithCap{cap: 30}, // cap=30, K defaults to 4
 	)
 
 	budget := NewTokenBudget(1_000_000, 2048)

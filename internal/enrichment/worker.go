@@ -35,28 +35,10 @@ const (
 	IngestionOpAddFallback = "ADD-FALLBACK"
 )
 
-// workerEmbedTimeout bounds a single embed HTTP call inside the worker.
-const workerEmbedTimeout = 30 * time.Second
-
-// batchClaimSize caps the jobs claimed per worker iteration; one claim
-// produces one shared embed call.
-const batchClaimSize = 16
-
-// preEmbedConcurrency caps fan-out of per-job fact/entity LLM calls inside a
-// single processBatch invocation. Small enough to stay under per-minute rate
-// limits on typical accounts.
-const preEmbedConcurrency = 4
-
-// embedInputCap caps inputs per provider call; larger batches are chunked.
-// Conservative vs. OpenAI's 2048-input limit to account for per-input token
-// ceilings on nearest providers.
-const embedInputCap = 256
-
-// breakerErrorEscalateAfter is how long a circuit breaker must remain
-// continuously open before the worker escalates its log lines from INFO
-// (operationally normal during a provider warmup or brief outage) to ERROR
-// (sustained outage, deserves attention).
-const breakerErrorEscalateAfter = 5 * time.Minute
+// Worker tunables (batch claim size, pre-embed concurrency, embed input cap,
+// embed timeout, breaker escalation window, max backoff) are resolved through
+// the SettingsService cascade — see service.SettingEnrichmentWorker* keys in
+// internal/service/settings.go. Defaults live in service.settingDefaults.
 
 // asCircuitOpen extracts the *provider.CircuitOpenError from an error chain
 // (returns nil, false if absent) so callers can pull provider name and timing
@@ -70,13 +52,16 @@ func asCircuitOpen(err error) (*provider.CircuitOpenError, bool) {
 }
 
 // logBreakerOrError logs a job-level error. Breaker-open errors print at INFO
-// during the first breakerErrorEscalateAfter of an open window (a fresh trip
-// is not a code bug — Ollama warming up, provider rate limit, brief network
-// blip). Sustained breaker-open trips and all other errors print at ERROR.
-func logBreakerOrError(msg string, err error, attrs ...any) {
+// during the first SettingEnrichmentWorkerBreakerEscalateSeconds of an open
+// window (a fresh trip is not a code bug — Ollama warming up, provider rate
+// limit, brief network blip). Sustained breaker-open trips and all other
+// errors print at ERROR.
+func (wp *WorkerPool) logBreakerOrError(ctx context.Context, msg string, err error, attrs ...any) {
 	if coe, ok := asCircuitOpen(err); ok {
+		escalateAfter := wp.settings.ResolveDurationSecondsWithDefault(ctx,
+			service.SettingEnrichmentWorkerBreakerEscalateSeconds, "global")
 		level := slog.LevelInfo
-		if time.Since(coe.OpenSince) >= breakerErrorEscalateAfter {
+		if time.Since(coe.OpenSince) >= escalateAfter {
 			level = slog.LevelError
 		}
 		retryIn := time.Until(coe.RetryAt).Round(time.Second)
@@ -270,23 +255,34 @@ type entityExtractionResult struct {
 // WorkerConfig / WorkerPool
 // ---------------------------------------------------------------------------
 
-// WorkerConfig controls the behavior of the enrichment worker pool.
+// WorkerConfig controls the behavior of the enrichment worker pool. Workers
+// and PollInterval are read once at construction; changing them at runtime
+// requires a server restart (the pool is sized by the goroutine count
+// spawned in Start). Defaults come from the SettingsService cascade —
+// SettingEnrichmentWorkerCountSQLite / *CountPostgres / *PollIntervalSeconds.
 type WorkerConfig struct {
-	Workers      int           // number of concurrent workers (default: 1 for SQLite, 2 for Postgres)
-	PollInterval time.Duration // how often idle workers poll for jobs, default 5s
-	Backend      string        // "sqlite" or "postgres" — used to tune defaults
+	Workers      int           // number of concurrent workers; 0 → resolve from settings
+	PollInterval time.Duration // how often idle workers poll for jobs; 0 → resolve from settings
+	Backend      string        // "sqlite" or "postgres" — selects which worker-count setting applies
 }
 
-func (c WorkerConfig) withDefaults() WorkerConfig {
+func (c WorkerConfig) withDefaults(ctx context.Context, settings *service.SettingsService) WorkerConfig {
 	if c.Workers <= 0 {
+		key := service.SettingEnrichmentWorkerCountPostgres
 		if c.Backend == "sqlite" {
-			c.Workers = 1 // single writer makes multiple workers pointless on SQLite
-		} else {
-			c.Workers = 2
+			key = service.SettingEnrichmentWorkerCountSQLite
+		}
+		c.Workers = settings.ResolveIntWithDefault(ctx, key, "global")
+		if c.Workers < 1 {
+			c.Workers = 1
 		}
 	}
 	if c.PollInterval <= 0 {
-		c.PollInterval = 5 * time.Second
+		c.PollInterval = settings.ResolveDurationSecondsWithDefault(ctx,
+			service.SettingEnrichmentWorkerPollIntervalSeconds, "global")
+		if c.PollInterval < time.Second {
+			c.PollInterval = time.Second
+		}
 	}
 	return c
 }
@@ -346,7 +342,7 @@ func NewWorkerPool(
 	cascade *service.CascadeResolver,
 ) *WorkerPool {
 	return &WorkerPool{
-		config:            config.withDefaults(),
+		config:            config.withDefaults(context.Background(), settings),
 		memories:          memories,
 		memUpdater:        memUpdater,
 		memCreator:        memCreator,
@@ -398,7 +394,6 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 
 	// Consecutive empty polls — used for backoff.
 	emptyPolls := 0
-	const maxBackoff = 30 // seconds
 
 	for {
 		select {
@@ -406,6 +401,14 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 			return
 		default:
 		}
+
+		// Hot-reloadable each iteration: settings.* knobs are read here so
+		// operator changes propagate within the settings cache TTL without
+		// needing a worker restart.
+		maxBackoff := wp.settings.ResolveIntWithDefault(ctx,
+			service.SettingEnrichmentWorkerMaxBackoffSeconds, "global")
+		batchClaim := wp.settings.ResolveIntWithDefault(ctx,
+			service.SettingEnrichmentWorkerBatchClaimSize, "global")
 
 		// System-level enrichment.enabled is the master toggle. When false
 		// the worker stays idle without claiming, so per-job state is not
@@ -431,7 +434,7 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 			continue
 		}
 
-		jobs, err := wp.queue.ClaimNextBatch(ctx, workerID, batchClaimSize)
+		jobs, err := wp.queue.ClaimNextBatch(ctx, workerID, batchClaim)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -603,18 +606,24 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 }
 
 // processBatch runs pre-embed in parallel across claimed jobs (bounded by
-// preEmbedConcurrency), then makes one shared embed call, then finalizes
-// each. Bounded concurrency keeps LLM provider rate limits safe. Returns
-// the soonest breaker RetryAt observed across the batch's failures (zero if
-// none) so the worker loop can pause until the breaker is allowed to probe
-// again instead of hot-spinning.
+// SettingEnrichmentWorkerPreEmbedConcurrency), then makes one shared embed
+// call, then finalizes each. Bounded concurrency keeps LLM provider rate
+// limits safe. Returns the soonest breaker RetryAt observed across the
+// batch's failures (zero if none) so the worker loop can pause until the
+// breaker is allowed to probe again instead of hot-spinning.
 func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []*model.EnrichmentJob) time.Time {
 	started := time.Now()
 	slog.Info("enrichment: batch claimed", "worker", workerID, "jobs", len(jobs))
 
+	preEmbedFanOut := wp.settings.ResolveIntWithDefault(ctx,
+		service.SettingEnrichmentWorkerPreEmbedConcurrency, "global")
+	if preEmbedFanOut < 1 {
+		preEmbedFanOut = 1
+	}
+
 	results := make([]*pendingJob, len(jobs))
 	preEmbedErrs := make([]error, len(jobs))
-	sem := make(chan struct{}, preEmbedConcurrency)
+	sem := make(chan struct{}, preEmbedFanOut)
 	var wg sync.WaitGroup
 	for i, job := range jobs {
 		wg.Add(1)
@@ -624,7 +633,7 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 			p, err := wp.runPreEmbed(ctx, job)
 			if err != nil {
 				preEmbedErrs[i] = err
-				logBreakerOrError("enrichment: batch pre-embed failed",
+				wp.logBreakerOrError(ctx, "enrichment: batch pre-embed failed",
 					err, "worker", workerID, "job", job.ID)
 				return
 			}
@@ -657,7 +666,7 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 	wp.runEmbedBatch(ctx, pendings)
 	for _, p := range pendings {
 		if err := wp.finalizeJob(ctx, p); err != nil {
-			logBreakerOrError("enrichment: batch finalize failed",
+			wp.logBreakerOrError(ctx, "enrichment: batch finalize failed",
 				err, "worker", workerID, "job", p.job.ID)
 		}
 	}
@@ -1082,7 +1091,7 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		_ = modelName
 		_ = usage
 		if err != nil {
-			logBreakerOrError("enrichment: batched embed",
+			wp.logBreakerOrError(ctx, "enrichment: batched embed",
 				err, "jobs", len(pendings), "inputs", len(inputs))
 			if isTransientLLMErr(err) {
 				for _, p := range pendings {
@@ -1203,20 +1212,28 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 }
 
 // embedChunked makes one or more Embed calls so each request respects
-// embedInputCap. Returned embeddings preserve input order; returned usage is
-// the sum across chunks; returned model is the last non-empty model string.
+// SettingEnrichmentWorkerEmbedInputCap. Returned embeddings preserve input
+// order; returned usage is the sum across chunks; returned model is the
+// last non-empty model string.
 func (wp *WorkerPool) embedChunked(ctx context.Context, ep provider.EmbeddingProvider, inputs []string, dim int) ([][]float32, provider.TokenUsage, string, error) {
 	var (
 		out   = make([][]float32, 0, len(inputs))
 		usage provider.TokenUsage
 		model string
 	)
-	for start := 0; start < len(inputs); start += embedInputCap {
-		end := start + embedInputCap
+	cap := wp.settings.ResolveIntWithDefault(ctx,
+		service.SettingEnrichmentWorkerEmbedInputCap, "global")
+	if cap < 1 {
+		cap = 1
+	}
+	timeout := wp.settings.ResolveDurationSecondsWithDefault(ctx,
+		service.SettingEnrichmentWorkerEmbedTimeoutSeconds, "global")
+	for start := 0; start < len(inputs); start += cap {
+		end := start + cap
 		if end > len(inputs) {
 			end = len(inputs)
 		}
-		embedCtx, cancel := context.WithTimeout(ctx, workerEmbedTimeout)
+		embedCtx, cancel := context.WithTimeout(ctx, timeout)
 		embedCtx = provider.WithOperation(embedCtx, provider.OperationEmbedding)
 		resp, err := ep.Embed(embedCtx, &provider.EmbeddingRequest{
 			Input:     inputs[start:end],

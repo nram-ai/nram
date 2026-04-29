@@ -173,6 +173,7 @@ func buildIntegBatchStoreService(memRepo *mockMemoryRepoWithContent, project *mo
 		&mockNamespaceLookup{ns: ns},
 		&mockIngestionLogRepo{},
 		&mockEnrichmentQueueRepo{},
+		nil,
 	)
 }
 
@@ -214,6 +215,7 @@ func buildIntegExportService(memories []model.Memory, project *model.Project) *s
 		&mockExportRelLister{rels: []model.Relationship{}},
 		&mockExportLineageReader{},
 		&mockProjectLookup{project: project},
+		nil,
 	)
 }
 
@@ -1068,7 +1070,7 @@ func TestMCP_StoreEmitsEvent(t *testing.T) {
 	memRepo := newMockMemoryRepoWithContent()
 	storeSvc := buildIntegStoreService(memRepo, project, ns)
 
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "project:")
@@ -1151,7 +1153,7 @@ func TestMCP_ForgetEmitsEvent(t *testing.T) {
 	deleter := newTrackingMemoryDeleter(memories)
 	forgetSvc := buildIntegForgetService(deleter, project)
 
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "project:")
@@ -1227,7 +1229,7 @@ func TestMCP_UpdateEmitsEvent(t *testing.T) {
 	updater := &mockMemoryUpdater{mem: existing}
 	updateSvc := buildIntegUpdateService(updater, project)
 
-	bus := events.NewMemoryBus()
+	bus := events.NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "project:")

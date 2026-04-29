@@ -360,6 +360,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
 		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
+		nil,
 	)
 
 	// --- MCP server ---
@@ -378,7 +379,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 
 	// --- Middleware ---
 	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
-	rl := auth.NewRateLimiter(10000, 20000)
+	rl := auth.NewRateLimiter(10000, 20000, 0, 0)
 	t.Cleanup(rl.Stop)
 	metrics := api.NewMetrics()
 	projectAccessMw := api.ProjectAccessMiddleware(api.ProjectAccessConfig{

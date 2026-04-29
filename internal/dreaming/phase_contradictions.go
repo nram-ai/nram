@@ -35,17 +35,6 @@ const (
 	WinnerTie   = "tie"
 )
 
-// defaultContradictionCap bounds the number of pair-check LLM calls the
-// phase may issue per cycle. Exposed as SettingDreamContradictionCap so
-// operators can raise it during a first-pass drain and restore it after.
-const defaultContradictionCap = 30
-
-// defaultContradictionNeighbors bounds the per-memory work. A memory is
-// compared against at most K semantic neighbours per visit. K is deliberately
-// small so "fully dispatched" is reachable under defaultContradictionCap for
-// namespaces of realistic size (K*anchors_per_cycle ≤ cap).
-const defaultContradictionNeighbors = 4
-
 // ContradictionPhase detects contradictions between semantically-close pairs
 // of memories. Per-memory work is bounded via an embedding top-K prefilter;
 // progress across cycles is tracked via the ContradictionsCheckedStampKey
@@ -159,9 +148,13 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		return false, nil
 	}
 
-	cap, _ := p.settings.ResolveInt(ctx, service.SettingDreamContradictionCap, "global")
+	cap := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamContradictionCap, "global")
 	if cap <= 0 {
-		cap = defaultContradictionCap
+		cap = 1
+	}
+	neighbors := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamContradictionNeighbors, "global")
+	if neighbors <= 0 {
+		neighbors = 1
 	}
 
 	stale := p.collectStale(memories)
@@ -171,9 +164,9 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 	slog.Info("dreaming: contradiction phase starting",
 		"cycle", cycle.ID, "memories", len(memories), "stale", len(stale),
-		"cap", cap, "neighbors_per_anchor", defaultContradictionNeighbors)
+		"cap", cap, "neighbors_per_anchor", neighbors)
 
-	pairs, fullyDispatched, embedTokens, vectorsByID, selErr := p.selectNeighborPairs(ctx, stale, memories, cap)
+	pairs, fullyDispatched, embedTokens, vectorsByID, selErr := p.selectNeighborPairs(ctx, stale, memories, cap, neighbors)
 	if selErr != nil {
 		slog.Warn("dreaming: neighbour selection failed; degrading to ID-ordered walk",
 			"cycle", cycle.ID, "err", selErr)
@@ -484,6 +477,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 	stale []staleMemory,
 	allMemories []model.Memory,
 	cap int,
+	neighbors int,
 ) ([][2]model.Memory, map[uuid.UUID]bool, int, map[uuid.UUID][]float32, error) {
 	idxByID := make(map[uuid.UUID]int, len(allMemories))
 	for i := range allMemories {
@@ -619,7 +613,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 			continue
 		}
 
-		candidates := p.candidatesFor(ctx, anchor, anchorIdx, allMemories, idxByID, stored, dim)
+		candidates := p.candidatesFor(ctx, anchor, anchorIdx, allMemories, idxByID, stored, dim, neighbors)
 
 		var capHit bool
 		pairs, capHit = dispatchCandidates(anchor, candidates, allMemories, pairs, seen, cap)
@@ -650,15 +644,16 @@ func (p *ContradictionPhase) candidatesFor(
 	idxByID map[uuid.UUID]int,
 	stored map[uuid.UUID][]float32,
 	dim int,
+	neighbors int,
 ) []int {
 	anchorVec, hasVec := stored[anchor.ID]
 
 	if p.vectorStore != nil && hasVec && dim > 0 {
 		// topK+1 because Search will return the anchor itself (cosine 1.0)
 		// at rank 0; we filter it out below.
-		results, err := p.vectorStore.Search(ctx, storage.VectorKindMemory, anchorVec, anchor.NamespaceID, dim, defaultContradictionNeighbors+1)
+		results, err := p.vectorStore.Search(ctx, storage.VectorKindMemory, anchorVec, anchor.NamespaceID, dim, neighbors+1)
 		if err == nil {
-			out := make([]int, 0, defaultContradictionNeighbors)
+			out := make([]int, 0, neighbors)
 			for _, r := range results {
 				if r.ID == anchor.ID {
 					continue
@@ -666,7 +661,7 @@ func (p *ContradictionPhase) candidatesFor(
 				if i, ok := idxByID[r.ID]; ok {
 					out = append(out, i)
 				}
-				if len(out) >= defaultContradictionNeighbors {
+				if len(out) >= neighbors {
 					break
 				}
 			}
@@ -682,10 +677,10 @@ func (p *ContradictionPhase) candidatesFor(
 	}
 
 	if hasVec && len(stored) > 1 {
-		return topKNeighborsFromMap(anchor.ID, allMemories, stored, defaultContradictionNeighbors)
+		return topKNeighborsFromMap(anchor.ID, allMemories, stored, neighbors)
 	}
 
-	return idOrderedNeighbors(anchorIdx, len(allMemories), defaultContradictionNeighbors)
+	return idOrderedNeighbors(anchorIdx, len(allMemories), neighbors)
 }
 
 // topKNeighborsFromMap returns the indices of the K most cosine-similar

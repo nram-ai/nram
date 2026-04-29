@@ -64,7 +64,7 @@ func assertNone(t *testing.T, ch <-chan Event, window time.Duration) {
 // TestMemoryBus_PublishAndReceive verifies that every field of a published
 // event arrives unchanged at the subscriber.
 func TestMemoryBus_PublishAndReceive(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -107,7 +107,7 @@ func TestMemoryBus_PublishAndReceive(t *testing.T) {
 // TestMemoryBus_ScopeFiltering_Exact verifies that a subscriber with an exact
 // scope string only receives events whose Scope equals that string.
 func TestMemoryBus_ScopeFiltering_Exact(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -142,7 +142,7 @@ func TestMemoryBus_ScopeFiltering_Exact(t *testing.T) {
 // TestMemoryBus_ScopeFiltering_Prefix verifies that a subscriber with a prefix
 // scope (e.g. "project:") receives all events whose Scope starts with that prefix.
 func TestMemoryBus_ScopeFiltering_Prefix(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -194,7 +194,7 @@ func TestMemoryBus_ScopeFiltering_Prefix(t *testing.T) {
 // TestMemoryBus_EmptyScope_ReceivesAll verifies that subscribing with "" delivers
 // every published event regardless of Scope.
 func TestMemoryBus_EmptyScope_ReceivesAll(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -227,7 +227,7 @@ func TestMemoryBus_EmptyScope_ReceivesAll(t *testing.T) {
 // TestMemoryBus_MultipleSubscribers verifies that two subscribers with different
 // scopes each receive only their matching events.
 func TestMemoryBus_MultipleSubscribers(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -269,7 +269,7 @@ func TestMemoryBus_MultipleSubscribers(t *testing.T) {
 // TestMemoryBus_CancelSubscription verifies that after cancel() is called the
 // channel is closed and no further events are delivered.
 func TestMemoryBus_CancelSubscription(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -301,7 +301,7 @@ func TestMemoryBus_CancelSubscription(t *testing.T) {
 // TestMemoryBus_CloseStopsDelivery verifies that closing the bus closes all
 // subscriber channels and that subsequent Publish returns ErrBusClosed.
 func TestMemoryBus_CloseStopsDelivery(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 
 	ctx := context.Background()
 	ch, _, err := bus.Subscribe(ctx, "")
@@ -338,11 +338,11 @@ func TestMemoryBus_CloseStopsDelivery(t *testing.T) {
 // TestMemoryBus_ConcurrentPublish_AllReceived publishes events from multiple
 // goroutines concurrently and verifies all events are received without
 // deadlocks or races.  The total is kept below the subscriber channel buffer
-// size (subscriberBufferSize=64) so that the bus's documented drop-on-full
+// size (fallbackSubscriberBufferSize=64) so that the bus's documented drop-on-full
 // behaviour does not interfere with the count assertion.  The race detector
 // validates that concurrent Publish calls are safe.
 func TestMemoryBus_ConcurrentPublish_AllReceived(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -353,7 +353,7 @@ func TestMemoryBus_ConcurrentPublish_AllReceived(t *testing.T) {
 	}
 	t.Cleanup(cancel)
 
-	// Stay well under subscriberBufferSize (64) so no events are dropped.
+	// Stay well under fallbackSubscriberBufferSize (64) so no events are dropped.
 	const goroutines = 5
 	const perGoroutine = 10
 	const total = goroutines * perGoroutine // 50, safely < 64
@@ -388,7 +388,7 @@ func TestMemoryBus_ConcurrentPublish_AllReceived(t *testing.T) {
 // channel is full, additional events are dropped without panicking or
 // deadlocking, and Publish still returns nil.
 func TestMemoryBus_FullChannelDropsEvents(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -399,7 +399,7 @@ func TestMemoryBus_FullChannelDropsEvents(t *testing.T) {
 	t.Cleanup(cancel)
 
 	// Fill the channel buffer exactly.
-	for i := 0; i < subscriberBufferSize; i++ {
+	for i := 0; i < fallbackSubscriberBufferSize; i++ {
 		e := newEvt(fmt.Sprintf("fill-%d", i), MemoryCreated, "test")
 		if err := bus.Publish(ctx, e); err != nil {
 			t.Fatalf("Publish fill[%d]: %v", i, err)
@@ -426,15 +426,15 @@ drain:
 		}
 	}
 
-	if count != subscriberBufferSize {
-		t.Errorf("drained %d events, want exactly %d (overflows must be dropped)", count, subscriberBufferSize)
+	if count != fallbackSubscriberBufferSize {
+		t.Errorf("drained %d events, want exactly %d (overflows must be dropped)", count, fallbackSubscriberBufferSize)
 	}
 }
 
 // TestMemoryBus_PublishAfterClose verifies that Publish on a closed bus returns
 // ErrBusClosed, not nil or any other error.
 func TestMemoryBus_PublishAfterClose(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 
 	if err := bus.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -595,7 +595,7 @@ func TestEmit_NilBus_NoOp(t *testing.T) {
 // the correct Type and Scope, a non-empty UUID as ID, a non-zero Timestamp,
 // and that the Data is properly populated.
 func TestEmit_PublishesEvent_FieldsVerified(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -628,7 +628,7 @@ func TestEmit_PublishesEvent_FieldsVerified(t *testing.T) {
 // TestEmit_DataSerialization verifies that map data passed to Emit arrives as
 // valid JSON in the event's Data field.
 func TestEmit_DataSerialization(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
@@ -680,7 +680,7 @@ func TestEmit_AllEventTypes(t *testing.T) {
 	for _, typ := range allTypes {
 		typ := typ
 		t.Run(typ, func(t *testing.T) {
-			bus := NewMemoryBus()
+			bus := NewMemoryBus(0, 0)
 			t.Cleanup(func() { _ = bus.Close() })
 
 			ch, cancel, err := bus.Subscribe(context.Background(), "")
@@ -702,7 +702,7 @@ func TestEmit_AllEventTypes(t *testing.T) {
 // TestEmit_TwoEventsHaveDifferentIDs verifies that each Emit call produces a
 // unique event ID (no static/reused IDs).
 func TestEmit_TwoEventsHaveDifferentIDs(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
@@ -780,7 +780,7 @@ func TestWebhookDeliverer_DeliversEvent(t *testing.T) {
 	evtID := uuid.New().String()
 	store := newMockWebhookStore(newWebhookForNS(whID.String(), srv.URL, nsID, []string{MemoryCreated}, nil))
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	d := NewWebhookDeliverer(bus, store, WithHTTPClient(srv.Client()), WithTimeout(5*time.Second))
@@ -855,7 +855,7 @@ func TestWebhookDeliverer_HMAC_Signature(t *testing.T) {
 	whID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	store := newMockWebhookStore(newWebhookForNS(whID.String(), srv.URL, nsID, []string{MemoryUpdated}, &secret))
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	d := NewWebhookDeliverer(bus, store, WithHTTPClient(srv.Client()), WithTimeout(5*time.Second))
@@ -921,7 +921,7 @@ func TestWebhookDeliverer_RetryOnFailure(t *testing.T) {
 	whID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
 	store := newMockWebhookStore(newWebhookForNS(whID.String(), srv.URL, nsID, []string{MemoryCreated}, nil))
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	d := NewWebhookDeliverer(bus, store,
@@ -971,7 +971,7 @@ func TestWebhookDeliverer_ScopeFiltering(t *testing.T) {
 	whID := uuid.MustParse("44444444-4444-4444-4444-444444444444")
 	store := newMockWebhookStore(newWebhookForNS(whID.String(), srv.URL, targetNS, []string{MemoryCreated}, nil))
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	d := NewWebhookDeliverer(bus, store, WithHTTPClient(srv.Client()), WithTimeout(5*time.Second))
@@ -1013,7 +1013,7 @@ func TestWebhookDeliverer_EventTypeFiltering(t *testing.T) {
 	// Webhook only subscribes to MemoryCreated.
 	store := newMockWebhookStore(newWebhookForNS(whID.String(), srv.URL, nsID, []string{MemoryCreated}, nil))
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	d := NewWebhookDeliverer(bus, store, WithHTTPClient(srv.Client()), WithTimeout(5*time.Second))
@@ -1050,7 +1050,7 @@ func TestWebhookDeliverer_StopCancelsDelivery(t *testing.T) {
 	whID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
 	store := newMockWebhookStore(newWebhookForNS(whID.String(), srv.URL, nsID, []string{MemoryCreated}, nil))
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	d := NewWebhookDeliverer(bus, store, WithHTTPClient(srv.Client()), WithTimeout(5*time.Second))
@@ -1080,7 +1080,7 @@ func TestWebhookDeliverer_StopCancelsDelivery(t *testing.T) {
 // TestBusReplay_PopulatedByPublish verifies that events published to the bus
 // are stored in the replay buffer and accessible via bus.Replay.
 func TestBusReplay_PopulatedByPublish(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -1100,7 +1100,7 @@ func TestBusReplay_PopulatedByPublish(t *testing.T) {
 // TestBusReplay_SinceID verifies that bus.Replay(id) returns only events after
 // the given ID.
 func TestBusReplay_SinceID(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -1125,7 +1125,7 @@ func TestBusReplay_SinceID(t *testing.T) {
 // TestBusReplay_ClosedBusRetainsBuffer verifies that events added before
 // Close() are still retrievable via Replay after Close.
 func TestBusReplay_ClosedBusRetainsBuffer(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 
 	ctx := context.Background()
 	e := newEvt("persist-1", MemoryCreated, "test")
@@ -1229,7 +1229,7 @@ func TestComputeHMACSHA256_Properties(t *testing.T) {
 // cancel, and publish operations to surface any race conditions.  The race
 // detector will report any data race.
 func TestMemoryBus_ConcurrentSubscribeCancel(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()
@@ -1270,7 +1270,7 @@ func TestMemoryBus_ConcurrentSubscribeCancel(t *testing.T) {
 // subscription was created are NOT delivered to the new subscriber (no
 // retroactive delivery), but events published afterward are.
 func TestMemoryBus_SubscribeAfterPublish(t *testing.T) {
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	t.Cleanup(func() { _ = bus.Close() })
 
 	ctx := context.Background()

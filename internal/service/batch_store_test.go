@@ -64,7 +64,7 @@ func newBatchTestService(
 	ingestion := &mockIngestionLogRepo{}
 	enrichment := &mockEnrichmentQueueRepo{}
 
-	svc := NewBatchStoreService(memories, projects, namespaces, ingestion, enrichment)
+	svc := NewBatchStoreService(memories, projects, namespaces, ingestion, enrichment, nil)
 	return svc, memories, ingestion, enrichment
 }
 
@@ -77,7 +77,7 @@ func newBatchTestServiceWithFailingMemory(
 	ingestion := &mockIngestionLogRepo{}
 	enrichment := &mockEnrichmentQueueRepo{}
 
-	svc := NewBatchStoreService(memories, projects, namespaces, ingestion, enrichment)
+	svc := NewBatchStoreService(memories, projects, namespaces, ingestion, enrichment, nil)
 	return svc, memories, ingestion, enrichment
 }
 

@@ -2,8 +2,6 @@ package events
 
 import "sync"
 
-const defaultReplayCapacity = 256
-
 // ReplayBuffer is a thread-safe ring buffer that stores the last N events
 // for SSE Last-Event-ID reconnection replay.
 type ReplayBuffer struct {
@@ -15,10 +13,10 @@ type ReplayBuffer struct {
 }
 
 // NewReplayBuffer creates a replay buffer with the given capacity.
-// If capacity is zero or negative, defaultReplayCapacity is used.
+// If capacity is zero or negative, fallbackReplayCapacity is used.
 func NewReplayBuffer(capacity int) *ReplayBuffer {
 	if capacity <= 0 {
-		capacity = defaultReplayCapacity
+		capacity = fallbackReplayCapacity
 	}
 	return &ReplayBuffer{
 		buf:      make([]Event, capacity),

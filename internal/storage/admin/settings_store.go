@@ -3,6 +3,8 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
@@ -113,6 +115,56 @@ var settingsSchemas = []api.SettingSchema{
 	{Key: service.SettingRankWeightFreq, Type: "number", DefaultValue: json.RawMessage(`0.00`), Description: "Weight on access-count frequency (log-normalized to the result set) in the recall ranking formula (0.0-1.0). Default 0 because reconsolidation already drives Memory.Confidence on every recall — Frequency double-counts the same signal. Re-enable for callers that bypass the reconsolidation hook.", Category: "ranking"},
 	{Key: service.SettingRankWeightGraph, Type: "number", DefaultValue: json.RawMessage(`0.20`), Description: "Weight on graph-traversal relevance in the recall ranking formula (0.0-1.0). Boosts memories connected to entities mentioned in the query through the knowledge graph.", Category: "ranking"},
 	{Key: service.SettingRankWeightConf, Type: "number", DefaultValue: json.RawMessage(`0.05`), Description: "Weight on Memory.Confidence in the recall ranking formula (0.0-1.0). Confidence is reinforced on each recall and decayed during dream cycles, so this term elevates well-used, well-aligned memories. Start small (0.05) and raise after the confidence distribution stabilises.", Category: "ranking"},
+
+	// Enrichment worker pool tuning. Hot-reloadable knobs are read on every
+	// worker iteration; restart-required knobs are read once when the pool
+	// is constructed at server start.
+	{Key: service.SettingEnrichmentWorkerBatchClaimSize, Type: "number", DefaultValue: json.RawMessage(`16`), Description: "Maximum jobs claimed per worker iteration. Each claim produces one shared embed call across the batch. Raising this increases throughput per worker at the cost of larger per-batch latency spikes.", Category: "enrichment_performance"},
+	{Key: service.SettingEnrichmentWorkerPreEmbedConcurrency, Type: "number", DefaultValue: json.RawMessage(`4`), Description: "Per-batch fan-out cap for fact and entity LLM calls. Small enough to stay under per-minute rate limits on typical accounts. Lower if your provider rejects with 429s.", Category: "enrichment_performance"},
+	{Key: service.SettingEnrichmentWorkerEmbedTimeoutSeconds, Type: "number", DefaultValue: json.RawMessage(`30`), Description: "Per-call timeout for the shared embed HTTP call inside a worker batch.", Category: "enrichment_performance"},
+	{Key: service.SettingEnrichmentWorkerEmbedInputCap, Type: "number", DefaultValue: json.RawMessage(`256`), Description: "Maximum inputs per embedding provider call; larger batches are chunked. Conservative vs OpenAI's 2048-input limit to account for per-input token ceilings on smaller providers.", Category: "enrichment_performance"},
+	{Key: service.SettingEnrichmentWorkerBreakerEscalateSeconds, Type: "number", DefaultValue: json.RawMessage(`300`), Description: "How long a provider circuit breaker must remain open before worker logs escalate from INFO (operational warmup) to ERROR (sustained outage).", Category: "enrichment_performance"},
+	{Key: service.SettingEnrichmentWorkerMaxBackoffSeconds, Type: "number", DefaultValue: json.RawMessage(`30`), Description: "Maximum sleep between empty polls. Workers back off exponentially up to this cap when the queue is idle.", Category: "enrichment_performance"},
+	{Key: service.SettingEnrichmentWorkerCountSQLite, Type: "number", DefaultValue: json.RawMessage(`1`), Description: "Number of concurrent enrichment workers when the backend is SQLite. Single writer makes multiple workers pointless on SQLite. Changes require server restart.", Category: "enrichment_performance"},
+	{Key: service.SettingEnrichmentWorkerCountPostgres, Type: "number", DefaultValue: json.RawMessage(`2`), Description: "Number of concurrent enrichment workers when the backend is Postgres. Each worker holds its own LLM/embed slot. Changes require server restart.", Category: "enrichment_performance"},
+	{Key: service.SettingEnrichmentWorkerPollIntervalSeconds, Type: "number", DefaultValue: json.RawMessage(`5`), Description: "How often idle workers poll for jobs. Read once at pool start; changes require server restart.", Category: "enrichment_performance"},
+	{Key: service.SettingEnrichmentIngestionRationaleMaxLen, Type: "number", DefaultValue: json.RawMessage(`500`), Description: "Maximum characters retained from the ingestion-decision rationale before truncation when stored on memory metadata.", Category: "enrichment_performance"},
+
+	// Dreaming performance/tuning knobs that complement the existing
+	// dreaming.* keys. Hot-reloadable per dream cycle.
+	{Key: service.SettingDreamContradictionNeighbors, Type: "number", DefaultValue: json.RawMessage(`4`), Description: "Top-K nearest neighbours probed per anchor in the contradiction phase. Two memories only need to be top-K of each other to be paired. K is small so 'fully dispatched' is reachable under the contradiction cap.", Category: "dreaming_performance"},
+	{Key: service.SettingDreamEntityMergeThreshold, Type: "number", DefaultValue: json.RawMessage(`0.92`), Description: "Cosine similarity at or above which the entity-dedup phase merges two entities of the same type via the vector fallback (0.0-1.0). Conservative high values minimize spurious merges.", Category: "dreaming_performance"},
+	{Key: service.SettingDreamSchedulerPollSeconds, Type: "number", DefaultValue: json.RawMessage(`30`), Description: "How often the dream scheduler checks for eligible projects. Read once at scheduler start; changes require server restart.", Category: "dreaming_performance"},
+
+	// Lifecycle sweep tuning.
+	{Key: service.SettingLifecycleSweepIntervalSeconds, Type: "number", DefaultValue: json.RawMessage(`300`), Description: "How often the lifecycle sweep runs (TTL expiry + soft-delete purge). Read once at startup; changes require server restart.", Category: "lifecycle"},
+	{Key: service.SettingLifecycleBatchSize, Type: "number", DefaultValue: json.RawMessage(`100`), Description: "Maximum memories processed per lifecycle sweep pass. Hot-reloads on the next sweep.", Category: "lifecycle"},
+	{Key: service.SettingLifecycleOrphanGraceSeconds, Type: "number", DefaultValue: json.RawMessage(`3600`), Description: "Minimum age an entity must reach before becoming eligible for orphan deletion. Protects in-flight enrichment whose entity rows are written before relationships and before vector upsert.", Category: "lifecycle"},
+
+	// Recall reinforcement event payload bound.
+	{Key: service.SettingReinforcementEventMemoryCap, Type: "number", DefaultValue: json.RawMessage(`20`), Description: "Maximum memory IDs attached to a recall reinforcement event before truncation. Keeps event payloads bounded on very wide queries.", Category: "reconsolidation"},
+
+	// Cascade and settings cache TTLs.
+	{Key: service.SettingCascadeCacheTTLSeconds, Type: "number", DefaultValue: json.RawMessage(`30`), Description: "How long parsed namespace override blobs stay in the cascade resolver cache. Operator changes hit eventual consistency within this window. Changes require server restart.", Category: "performance"},
+	{Key: service.SettingSettingsCacheTTLSeconds, Type: "number", DefaultValue: json.RawMessage(`30`), Description: "How long a Resolve hit lives in the settings cache before the next read goes back to the repo. Changes require server restart (the cache TTL itself cannot be hot-reloaded).", Category: "performance"},
+
+	// API rate-limit per-user-bucket cleanup.
+	{Key: service.SettingAPIRateLimitCleanupSeconds, Type: "number", DefaultValue: json.RawMessage(`60`), Description: "How often the rate limiter purges stale per-user buckets. Changes require server restart.", Category: "api_performance"},
+	{Key: service.SettingAPIRateLimitStaleSeconds, Type: "number", DefaultValue: json.RawMessage(`600`), Description: "Per-user rate-limit bucket is removed after this many seconds of inactivity. Changes require server restart.", Category: "api_performance"},
+
+	// In-process event bus.
+	{Key: service.SettingEventsSubscriberBufferSize, Type: "number", DefaultValue: json.RawMessage(`64`), Description: "Per-subscriber channel buffer for the in-memory event bus. Advanced — values too low drop events under burst, too high inflate memory per subscriber. Changes require server restart.", Category: "events"},
+	{Key: service.SettingEventsReplayCapacity, Type: "number", DefaultValue: json.RawMessage(`256`), Description: "Ring buffer size for SSE Last-Event-ID reconnection replay. Advanced — values too low miss events under reconnects, too high inflate memory. Changes require server restart.", Category: "events"},
+	{Key: service.SettingEventsSSEKeepaliveSeconds, Type: "number", DefaultValue: json.RawMessage(`30`), Description: "Interval between SSE keepalive pings to prevent intermediaries from closing idle connections. Changes require server restart.", Category: "events"},
+
+	// Admin graph minimum edge weight.
+	{Key: service.SettingGraphDefaultMinWeight, Type: "number", DefaultValue: json.RawMessage(`0.1`), Description: "Default minimum edge weight applied when the graph visualization endpoint is called without an explicit min_weight query parameter (0.0-1.0).", Category: "api_performance"},
+
+	// Batch store request item cap.
+	{Key: service.SettingAPIBatchStoreMaxItems, Type: "number", DefaultValue: json.RawMessage(`100`), Description: "Maximum items allowed in a single batch store request. Advanced — raising this widens the per-request DoS surface; pair with reverse-proxy body-size limits.", Category: "api_performance"},
+
+	// Export pagination size.
+	{Key: service.SettingExportPageSize, Type: "number", DefaultValue: json.RawMessage(`100`), Description: "Memories fetched per page when collecting an export. Hot-reloads on the next export.", Category: "performance"},
 }
 
 // promptSchemaEntries describes the dreaming-phase prompts surfaced through
@@ -146,6 +198,67 @@ func init() {
 		entry.DefaultValue = raw
 		settingsSchemas = append(settingsSchemas, entry)
 	}
+
+	// Numeric/boolean/enum consistency check. For every schema entry whose
+	// type is one of these, the schema's DefaultValue (JSON-encoded) must
+	// agree with the parsed value of settingDefaults[key]. Drift between
+	// the two is a load-bearing bug — it caused the contradictionCap=30
+	// vs schema=2000 split that silently degraded production cycles when
+	// the settings repo was briefly unavailable. Surface the inconsistency
+	// at process start, not at first cache miss.
+	for _, entry := range settingsSchemas {
+		switch entry.Type {
+		case "number", "boolean", "enum":
+		default:
+			continue
+		}
+		def, ok := service.GetDefault(entry.Key)
+		if !ok {
+			panic("settings_store: schema entry " + entry.Key + " has no runtime default registered in service.settingDefaults")
+		}
+		if !defaultsAgree(entry.Type, entry.DefaultValue, def) {
+			panic("settings_store: default mismatch for " + entry.Key +
+				" — schema=" + string(entry.DefaultValue) + " runtime=" + def)
+		}
+	}
+}
+
+// defaultsAgree compares a schema's JSON-encoded DefaultValue to the runtime
+// default string registered in settingDefaults. Numbers compare numerically
+// (1 == 1.0), booleans compare structurally, enums compare as quoted strings.
+func defaultsAgree(typ string, schema json.RawMessage, runtime string) bool {
+	switch typ {
+	case "number":
+		var a float64
+		if err := json.Unmarshal(schema, &a); err != nil {
+			return false
+		}
+		b, err := strconv.ParseFloat(strings.TrimSpace(runtime), 64)
+		if err != nil {
+			return false
+		}
+		return a == b
+	case "boolean":
+		var a bool
+		if err := json.Unmarshal(schema, &a); err != nil {
+			return false
+		}
+		switch strings.TrimSpace(runtime) {
+		case "true", "1":
+			return a
+		case "false", "0":
+			return !a
+		default:
+			return false
+		}
+	case "enum":
+		var a string
+		if err := json.Unmarshal(schema, &a); err != nil {
+			return false
+		}
+		return a == strings.TrimSpace(runtime)
+	}
+	return false
 }
 
 func (s *SettingsAdminStore) GetSettingsSchema(ctx context.Context) ([]api.SettingSchema, error) {

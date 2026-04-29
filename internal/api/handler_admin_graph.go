@@ -11,7 +11,12 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
-const defaultGraphMinWeight = 0.1
+// GraphSettingsResolver narrows the SettingsService surface to just the
+// methods this handler needs. Keeps the api package decoupled from the
+// concrete service type.
+type GraphSettingsResolver interface {
+	ResolveFloatWithDefault(ctx context.Context, key, scope string) float64
+}
 
 // GraphEntity represents an entity node for graph visualization.
 type GraphEntity struct {
@@ -78,6 +83,7 @@ type GraphAdminConfig struct {
 	Aliases       GraphAliasStore
 	Namespaces    GraphNamespaceLookup
 	Orgs          GraphOrgLookup
+	Settings      GraphSettingsResolver
 }
 
 // NewAdminGraphHandler returns an http.HandlerFunc that serves graph data
@@ -107,8 +113,10 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 			return
 		}
 
-		// Parse optional min_weight filter (default 0.1).
-		minWeight := defaultGraphMinWeight
+		// Parse optional min_weight filter; default falls through to
+		// graph.default_min_weight (0.1 by default).
+		minWeight := cfg.Settings.ResolveFloatWithDefault(r.Context(),
+			"graph.default_min_weight", "global")
 		if mwStr := r.URL.Query().Get("min_weight"); mwStr != "" {
 			if parsed, err := strconv.ParseFloat(mwStr, 64); err == nil && parsed >= 0 {
 				minWeight = parsed

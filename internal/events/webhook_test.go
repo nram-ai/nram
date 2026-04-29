@@ -127,7 +127,7 @@ func TestWebhookDelivery_Success(t *testing.T) {
 		Active: true,
 	})
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	deliverer := NewWebhookDeliverer(bus, store,
@@ -220,7 +220,7 @@ func TestWebhookDelivery_RetryThenSuccess(t *testing.T) {
 		Active: true,
 	})
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	deliverer := NewWebhookDeliverer(bus, store,
@@ -277,7 +277,7 @@ func TestWebhookDelivery_MaxRetriesExceeded(t *testing.T) {
 		Active: true,
 	})
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	deliverer := NewWebhookDeliverer(bus, store,
@@ -344,7 +344,7 @@ func TestWebhookDelivery_NoSecret(t *testing.T) {
 		Active: true,
 	})
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	deliverer := NewWebhookDeliverer(bus, store,
@@ -432,7 +432,7 @@ func TestWebhookDelivery_NoMatchingScope(t *testing.T) {
 		Active: true,
 	})
 
-	bus := NewMemoryBus()
+	bus := NewMemoryBus(0, 0)
 	defer bus.Close()
 
 	deliverer := NewWebhookDeliverer(bus, store,
