@@ -24,6 +24,12 @@ import (
 // string literal.
 const NoveltyAuditStampKey = "novelty_audited_at"
 
+// ReinforceCheckedStampKey is the metadata key stamped on a synthesis once
+// the reinforce sub-phase has scored it against current evidence. Cleared
+// implicitly by any Update() that bumps updated_at, so a confidence change
+// re-stales the row for the next cycle.
+const ReinforceCheckedStampKey = "reinforce_checked_at"
+
 // ConsolidationPhase consolidates clusters of related memories into synthesis
 // memories and reinforces/erodes existing syntheses based on new evidence.
 //
@@ -179,9 +185,12 @@ func (p *ConsolidationPhase) reinforce(
 		}
 	}
 
+	stale := collectReinforceStale(syntheses)
+
 	stats := map[string]interface{}{
 		"sub_phase":           "reinforce",
 		"syntheses_total":     len(syntheses),
+		"syntheses_stale":     len(stale),
 		"user_memories":       len(userMemories),
 		"alignment_calls":     0,
 		"confidence_adjusted": 0,
@@ -192,16 +201,16 @@ func (p *ConsolidationPhase) reinforce(
 	}
 	tokensBefore := budget.Used()
 
-	if len(syntheses) == 0 || len(userMemories) == 0 {
+	if len(stale) == 0 || len(userMemories) == 0 {
 		slog.Info("dreaming: reinforce starting (no-op)",
-			"cycle", cycle.ID, "syntheses", len(syntheses),
+			"cycle", cycle.ID, "syntheses", len(syntheses), "stale", len(stale),
 			"user_memories", len(userMemories), "budget_remaining", budget.Remaining())
 		p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
 		return false, nil
 	}
 
 	slog.Info("dreaming: reinforce starting",
-		"cycle", cycle.ID, "syntheses", len(syntheses),
+		"cycle", cycle.ID, "syntheses", len(syntheses), "stale", len(stale),
 		"user_memories", len(userMemories), "budget_remaining", budget.Remaining())
 
 	initialConfidence, _ := p.settings.ResolveFloat(ctx, service.SettingDreamInitialConfidence, "global")
@@ -216,7 +225,9 @@ func (p *ConsolidationPhase) reinforce(
 	alignmentPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamAlignmentPrompt, "global")
 
 	visited := 0
-	for _, synthesis := range syntheses {
+	for i := range stale {
+		synthesis := stale[i].mem
+		meta := stale[i].meta
 		if budget.Exhausted() {
 			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
 			break
@@ -285,6 +296,7 @@ func (p *ConsolidationPhase) reinforce(
 		}
 
 		if newConfidence == oldConfidence {
+			p.stampReinforce(ctx, &synthesis, meta)
 			continue
 		}
 
@@ -313,7 +325,7 @@ func (p *ConsolidationPhase) reinforce(
 	}
 
 	p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-	return visited < len(syntheses), nil
+	return visited < len(stale), nil
 }
 
 // renderAlignmentPrompt builds the alignment-scoring prompt so it can be
@@ -739,6 +751,81 @@ func (p *ConsolidationPhase) writeAuditDecision(
 				"low_novelty": true,
 				"reason":      reason,
 			})
+	}
+}
+
+// staleSynthesis carries a synthesis alongside its pre-decoded metadata so the
+// reinforce stamp path does not have to re-parse on completion.
+type staleSynthesis struct {
+	mem  model.Memory
+	meta map[string]interface{}
+}
+
+// collectReinforceStale returns the subset of syntheses whose
+// reinforce_checked_at stamp is missing or strictly before their UpdatedAt.
+// The byte-level marker check skips the JSON decode for any synthesis that
+// cannot possibly be fresh.
+func collectReinforceStale(syntheses []model.Memory) []staleSynthesis {
+	stampMarker := []byte(ReinforceCheckedStampKey)
+	stale := make([]staleSynthesis, 0, len(syntheses))
+	for i := range syntheses {
+		m := syntheses[i]
+		if !bytes.Contains(m.Metadata, stampMarker) {
+			stale = append(stale, staleSynthesis{mem: m, meta: map[string]interface{}{}})
+			continue
+		}
+		meta := decodeMetadata(m.Metadata)
+		if isReinforceStale(&m, meta) {
+			stale = append(stale, staleSynthesis{mem: m, meta: meta})
+		}
+	}
+	return stale
+}
+
+// isReinforceStale mirrors isStale (contradiction phase) and isParaphraseStale:
+// no stamp, malformed stamp, or stamp strictly before UpdatedAt → eligible.
+// Equal stamp and UpdatedAt is fresh — the stamp path writes
+// mem.UpdatedAt.UTC() through UpdateMetadata, which does not bump updated_at,
+// so a just-stamped row reports stamp == updated_at and stays fresh next cycle.
+func isReinforceStale(mem *model.Memory, meta map[string]interface{}) bool {
+	raw, ok := meta[ReinforceCheckedStampKey]
+	if !ok {
+		return true
+	}
+	s, ok := raw.(string)
+	if !ok || s == "" {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, s)
+		if err != nil {
+			return true
+		}
+	}
+	return t.Before(mem.UpdatedAt)
+}
+
+// stampReinforce records the visit stamp anchored to mem.UpdatedAt via
+// UpdateMetadata so the staleness check (stamp < UpdatedAt) does not
+// self-invalidate next cycle. Mirrors stampParaphrase and the non-demote
+// half of writeAuditDecision: persist failures are logged, never returned —
+// a failed stamp leaves the row stale so the next cycle retries.
+func (p *ConsolidationPhase) stampReinforce(
+	ctx context.Context, mem *model.Memory, meta map[string]interface{},
+) {
+	if meta == nil {
+		meta = map[string]interface{}{}
+	}
+	meta[ReinforceCheckedStampKey] = mem.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		slog.Warn("dreaming: reinforce stamp marshal failed", "memory", mem.ID, "err", err)
+		return
+	}
+	mem.Metadata = encoded
+	if err := p.memWriter.UpdateMetadata(ctx, mem.ID, mem.NamespaceID, encoded); err != nil {
+		slog.Warn("dreaming: reinforce stamp persist failed", "memory", mem.ID, "err", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -914,5 +915,457 @@ func TestIsPersistentEmbedError(t *testing.T) {
 				t.Errorf("isPersistentEmbedError(%v) = %v, want %v", c.err, got, c.want)
 			}
 		})
+	}
+}
+
+// --- reinforce sub-phase tests ---
+
+// reinforceSettings returns a settings stub with the alignment-prompt
+// template and the confidence floats reinforce reads at startup. Callers
+// can mutate the returned struct to override individual values.
+func reinforceSettings() *staticDreamSettings {
+	return &staticDreamSettings{
+		values: map[string]string{
+			service.SettingDreamAlignmentPrompt: "synthesis: %s\nevidence: %s",
+		},
+		floats: map[string]float64{
+			service.SettingDreamInitialConfidence:     0.3,
+			service.SettingDreamSupersessionThreshold: 0.85,
+		},
+		ints: map[string]int{},
+	}
+}
+
+// reinforcePhase wires a ConsolidationPhase and an updatingMemoryWriter
+// suitable for reinforce-only tests (no embedder, no audit).
+func reinforcePhase(llm provider.LLMProvider, settings SettingsResolver) (*ConsolidationPhase, *updatingMemoryWriter) {
+	writer := &updatingMemoryWriter{}
+	phase := NewConsolidationPhase(
+		&fakeMemoryReader{},
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return nil },
+		settings,
+	)
+	return phase, writer
+}
+
+// userMemoryForReinforce builds a non-DreamSource memory suitable for use as
+// reinforce evidence. UpdatedAt is set so the row is comparable to syntheses.
+func userMemoryForReinforce(content string, ns uuid.UUID) model.Memory {
+	src := "user"
+	now := time.Now().UTC()
+	return model.Memory{
+		ID:          uuid.New(),
+		NamespaceID: ns,
+		Content:     content,
+		Source:      &src,
+		Confidence:  0.5,
+		Metadata:    json.RawMessage("{}"),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+}
+
+// synthesisForReinforce builds a DreamSource memory with a known UpdatedAt
+// so stamp/staleness round-trips are exact.
+func synthesisForReinforce(content string, ns uuid.UUID, updatedAt time.Time) model.Memory {
+	src := model.DreamSource
+	return model.Memory{
+		ID:          uuid.New(),
+		NamespaceID: ns,
+		Content:     content,
+		Source:      &src,
+		Confidence:  0.3,
+		Metadata:    json.RawMessage("{}"),
+		CreatedAt:   updatedAt,
+		UpdatedAt:   updatedAt,
+	}
+}
+
+// alignmentResponse builds the JSON content scoreAlignment expects.
+func alignmentResponse(score float64) string {
+	return `{"alignment": ` + jsonFloat(score) + `, "reasoning": ""}`
+}
+
+func jsonFloat(f float64) string {
+	b, _ := json.Marshal(f)
+	return string(b)
+}
+
+// TestReinforce_StampsOnNoChange asserts the bug fix: a synthesis scored by
+// reinforce whose alignment leaves Confidence unchanged is stamped via
+// UpdateMetadata so the next cycle filters it out. Pre-fix, no stamp meant
+// the synthesis re-entered the loop every cycle and projects with more
+// syntheses than the per-cycle budget could fit kept dirty_since set
+// indefinitely.
+func TestReinforce_StampsOnNoChange(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	synth := synthesisForReinforce("stable synthesis content", ns, now)
+	user := userMemoryForReinforce("evidence", ns)
+
+	llm := &scriptedJudgeLLM{
+		content: alignmentResponse(0.0),
+		usage:   provider.TokenUsage{PromptTokens: 30, CompletionTokens: 5, TotalTokens: 35},
+	}
+	phase, writer := reinforcePhase(llm, reinforceSettings())
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	residual, err := phase.reinforce(context.Background(), cycle, budget, logger, llm, []model.Memory{synth, user})
+	if err != nil {
+		t.Fatalf("reinforce returned error: %v", err)
+	}
+	if residual {
+		t.Fatalf("residual must be false when every stale synthesis was visited")
+	}
+
+	if len(writer.updates) != 0 {
+		t.Fatalf("no-change branch must not call Update (Update would bump updated_at and re-stale the row); got %d Update calls", len(writer.updates))
+	}
+	if len(writer.metadataUpdates) != 1 {
+		t.Fatalf("no-change branch must stamp via UpdateMetadata; got %d UpdateMetadata calls", len(writer.metadataUpdates))
+	}
+	stamp := writer.metadataUpdates[0]
+	if stamp.ID != synth.ID {
+		t.Errorf("wrong row stamped: got %s, want %s", stamp.ID, synth.ID)
+	}
+	var meta map[string]interface{}
+	if err := json.Unmarshal(stamp.Metadata, &meta); err != nil {
+		t.Fatalf("stamp metadata not valid JSON: %v", err)
+	}
+	stampVal, ok := meta[ReinforceCheckedStampKey].(string)
+	if !ok || stampVal == "" {
+		t.Fatalf("stamp must carry %s string; got metadata=%s", ReinforceCheckedStampKey, string(stamp.Metadata))
+	}
+	if stampVal != now.Format(time.RFC3339Nano) {
+		t.Errorf("stamp value should equal mem.UpdatedAt formatted as RFC3339Nano; got %q want %q", stampVal, now.Format(time.RFC3339Nano))
+	}
+}
+
+// TestReinforce_FreshStampSkipsSynthesis asserts the eligibility filter: a
+// synthesis whose stamp equals UpdatedAt is fresh (predicate is strictly
+// before, not before-or-equal) and must be filtered out before any LLM
+// call.
+func TestReinforce_FreshStampSkipsSynthesis(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	synth := synthesisForReinforce("already checked", ns, now)
+
+	meta := map[string]interface{}{
+		ReinforceCheckedStampKey: now.Format(time.RFC3339Nano),
+	}
+	raw, _ := json.Marshal(meta)
+	synth.Metadata = raw
+
+	user := userMemoryForReinforce("evidence", ns)
+
+	llm := &scriptedJudgeLLM{content: alignmentResponse(0.0)}
+	phase, writer := reinforcePhase(llm, reinforceSettings())
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	residual, err := phase.reinforce(context.Background(), cycle, budget, logger, llm, []model.Memory{synth, user})
+	if err != nil {
+		t.Fatalf("reinforce returned error: %v", err)
+	}
+	if residual {
+		t.Fatalf("residual must be false when there are zero stale syntheses")
+	}
+	if llm.calls.Load() != 0 {
+		t.Fatalf("fresh-stamped synthesis must skip the LLM; got %d alignment calls", llm.calls.Load())
+	}
+	if len(writer.updates) != 0 || len(writer.metadataUpdates) != 0 {
+		t.Errorf("fresh-stamped row must not be touched; got %d Update / %d UpdateMetadata", len(writer.updates), len(writer.metadataUpdates))
+	}
+}
+
+// TestReinforce_StaleStampReEvaluated asserts that a stamp strictly before
+// UpdatedAt (e.g. a confidence change happened after the last visit)
+// re-stales the row so it gets re-aligned this cycle.
+func TestReinforce_StaleStampReEvaluated(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	synth := synthesisForReinforce("changed since last check", ns, now)
+
+	meta := map[string]interface{}{
+		ReinforceCheckedStampKey: now.Add(-time.Hour).Format(time.RFC3339Nano),
+	}
+	raw, _ := json.Marshal(meta)
+	synth.Metadata = raw
+
+	user := userMemoryForReinforce("evidence", ns)
+
+	llm := &scriptedJudgeLLM{
+		content: alignmentResponse(0.0),
+		usage:   provider.TokenUsage{PromptTokens: 30, CompletionTokens: 5, TotalTokens: 35},
+	}
+	phase, writer := reinforcePhase(llm, reinforceSettings())
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.reinforce(context.Background(), cycle, budget, logger, llm, []model.Memory{synth, user}); err != nil {
+		t.Fatalf("reinforce returned error: %v", err)
+	}
+	if llm.calls.Load() != 1 {
+		t.Fatalf("stale-stamped synthesis must be re-aligned; got %d alignment calls", llm.calls.Load())
+	}
+	if len(writer.metadataUpdates) != 1 {
+		t.Fatalf("stale row should be re-stamped on no-change; got %d UpdateMetadata calls", len(writer.metadataUpdates))
+	}
+}
+
+// TestReinforce_ConfidenceChangeDoesNotStamp asserts that when alignment
+// shifts confidence, reinforce calls Update (which bumps updated_at) but
+// does NOT call UpdateMetadata. The bumped updated_at re-stales the row so
+// the changed synthesis is re-evaluated next cycle.
+func TestReinforce_ConfidenceChangeDoesNotStamp(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	synth := synthesisForReinforce("will move", ns, now)
+
+	user := userMemoryForReinforce("evidence", ns)
+
+	// alignment 0.5 against confidence 0.3 → newConfidence = 0.65, != 0.3
+	llm := &scriptedJudgeLLM{
+		content: alignmentResponse(0.5),
+		usage:   provider.TokenUsage{PromptTokens: 30, CompletionTokens: 5, TotalTokens: 35},
+	}
+	phase, writer := reinforcePhase(llm, reinforceSettings())
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.reinforce(context.Background(), cycle, budget, logger, llm, []model.Memory{synth, user}); err != nil {
+		t.Fatalf("reinforce returned error: %v", err)
+	}
+
+	if len(writer.updates) != 1 {
+		t.Fatalf("confidence change must call Update exactly once; got %d", len(writer.updates))
+	}
+	if len(writer.metadataUpdates) != 0 {
+		t.Errorf("confidence change must NOT stamp via UpdateMetadata (Update bumps updated_at; the bump is the re-stale signal); got %d UpdateMetadata calls", len(writer.metadataUpdates))
+	}
+}
+
+// TestReinforce_ErrorScoringLeavesRowStampFree asserts that an LLM error on
+// scoreAlignment leaves the synthesis unstamped so the next cycle retries.
+// The skipped-budget paths share this property structurally (they break
+// before any stamp call) and are covered by inspection rather than a
+// dedicated test.
+func TestReinforce_ErrorScoringLeavesRowStampFree(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	synth := synthesisForReinforce("alignment will error", ns, now)
+
+	user := userMemoryForReinforce("evidence", ns)
+
+	llm := &scriptedJudgeLLM{err: errors.New("provider down")}
+	phase, writer := reinforcePhase(llm, reinforceSettings())
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.reinforce(context.Background(), cycle, budget, logger, llm, []model.Memory{synth, user}); err != nil {
+		t.Fatalf("reinforce should swallow per-call alignment errors; got %v", err)
+	}
+	if len(writer.updates) != 0 {
+		t.Errorf("error-scoring path must not Update; got %d", len(writer.updates))
+	}
+	if len(writer.metadataUpdates) != 0 {
+		t.Errorf("error-scoring path must not stamp; got %d UpdateMetadata calls", len(writer.metadataUpdates))
+	}
+}
+
+// TestReinforce_StampsPersistAcrossCycles is the load-bearing regression
+// for the stamp self-invalidation class of bug. Two consecutive reinforce
+// cycles, no content edits between. Cycle 1 stamps via UpdateMetadata;
+// cycle 2 must classify the synthesis as fresh and skip it. Mirrors
+// TestParaphraseDedupPhase_StampsPersistAcrossCycles.
+func TestReinforce_StampsPersistAcrossCycles(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	synth := synthesisForReinforce("stable synthesis", ns, now)
+	user := userMemoryForReinforce("evidence", ns)
+
+	llm := &scriptedJudgeLLM{
+		content: alignmentResponse(0.0),
+		usage:   provider.TokenUsage{PromptTokens: 30, CompletionTokens: 5, TotalTokens: 35},
+	}
+	phase, writer := reinforcePhase(llm, reinforceSettings())
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	// Cycle 1: stamp written via UpdateMetadata.
+	if _, err := phase.reinforce(context.Background(), cycle, budget, logger, llm, []model.Memory{synth, user}); err != nil {
+		t.Fatalf("cycle 1 reinforce: %v", err)
+	}
+	if len(writer.metadataUpdates) != 1 {
+		t.Fatalf("cycle 1 should stamp once via UpdateMetadata; got %d", len(writer.metadataUpdates))
+	}
+	if llm.calls.Load() != 1 {
+		t.Fatalf("cycle 1 should call alignment LLM once; got %d", llm.calls.Load())
+	}
+
+	// Apply the metadata update to the in-memory copy so cycle 2 sees the
+	// stamp. updated_at is intentionally NOT bumped — that's the whole
+	// point of UpdateMetadata.
+	synth.Metadata = writer.metadataUpdates[0].Metadata
+
+	// Cycle 2: same memory, stamped now. Must be filtered out at
+	// eligibility, no LLM call, no writes.
+	if _, err := phase.reinforce(context.Background(), cycle, budget, logger, llm, []model.Memory{synth, user}); err != nil {
+		t.Fatalf("cycle 2 reinforce: %v", err)
+	}
+	if llm.calls.Load() != 1 {
+		t.Errorf("cycle 2 should not invoke the LLM (synthesis is fresh); total calls now %d, expected 1 from cycle 1", llm.calls.Load())
+	}
+	if len(writer.metadataUpdates) != 1 {
+		t.Errorf("cycle 2 should not re-stamp; total UpdateMetadata calls now %d, expected 1 from cycle 1", len(writer.metadataUpdates))
+	}
+	if len(writer.updates) != 0 {
+		t.Errorf("cycle 2 must not Update; got %d", len(writer.updates))
+	}
+}
+
+// TestCollectReinforceStale_PredicateCases is the table-driven unit test of
+// the staleness predicate. Mirrors the cases in isStale (contradictions)
+// and isParaphraseStale: no stamp, malformed stamp, parsed stamp before
+// UpdatedAt → stale; parsed stamp == UpdatedAt or after → fresh.
+func TestCollectReinforceStale_PredicateCases(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+
+	mkSynth := func(meta map[string]interface{}) model.Memory {
+		s := synthesisForReinforce("c", ns, now)
+		if meta != nil {
+			raw, _ := json.Marshal(meta)
+			s.Metadata = raw
+		}
+		return s
+	}
+
+	cases := []struct {
+		name      string
+		mem       model.Memory
+		wantStale bool
+	}{
+		{
+			name:      "no_metadata",
+			mem:       mkSynth(nil),
+			wantStale: true,
+		},
+		{
+			name:      "no_stamp_key",
+			mem:       mkSynth(map[string]interface{}{"other": "value"}),
+			wantStale: true,
+		},
+		{
+			name:      "malformed_stamp_value",
+			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: "not-a-timestamp"}),
+			wantStale: true,
+		},
+		{
+			name:      "non_string_stamp_value",
+			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: 12345}),
+			wantStale: true,
+		},
+		{
+			name:      "stamp_before_updated_at",
+			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: now.Add(-time.Hour).Format(time.RFC3339Nano)}),
+			wantStale: true,
+		},
+		{
+			name:      "stamp_equal_updated_at",
+			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: now.Format(time.RFC3339Nano)}),
+			wantStale: false,
+		},
+		{
+			name:      "stamp_after_updated_at",
+			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: now.Add(time.Hour).Format(time.RFC3339Nano)}),
+			wantStale: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stale := collectReinforceStale([]model.Memory{c.mem})
+			gotStale := len(stale) == 1
+			if gotStale != c.wantStale {
+				t.Errorf("collectReinforceStale: gotStale=%v, want=%v (metadata=%s)", gotStale, c.wantStale, string(c.mem.Metadata))
+			}
+		})
+	}
+
+	// RFC3339 (no-nano) fallback: data written by an earlier version that
+	// stamped at second precision must still classify fresh when the
+	// memory's UpdatedAt is second-aligned. Tested separately because
+	// arbitrary nanosecond UpdatedAt loses precision through the fallback
+	// format and that precision loss is acceptable, just out of scope.
+	t.Run("rfc3339_fallback_second_aligned", func(t *testing.T) {
+		secondAligned := now.Truncate(time.Second)
+		mem := synthesisForReinforce("c", ns, secondAligned)
+		stamp := map[string]interface{}{
+			ReinforceCheckedStampKey: secondAligned.Format(time.RFC3339),
+		}
+		raw, _ := json.Marshal(stamp)
+		mem.Metadata = raw
+		if got := collectReinforceStale([]model.Memory{mem}); len(got) != 0 {
+			t.Errorf("RFC3339-formatted stamp on second-aligned UpdatedAt should be fresh; got %d stale", len(got))
+		}
+	})
+}
+
+// TestCollectReinforceStale_PartitionsMixedSet asserts the eligibility
+// filter on a heterogeneous slice: only stale syntheses survive, and the
+// result count matches what reinforce will report as syntheses_stale.
+func TestCollectReinforceStale_PartitionsMixedSet(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+
+	freshMeta, _ := json.Marshal(map[string]interface{}{
+		ReinforceCheckedStampKey: now.Format(time.RFC3339Nano),
+	})
+	staleMeta, _ := json.Marshal(map[string]interface{}{
+		ReinforceCheckedStampKey: now.Add(-time.Hour).Format(time.RFC3339Nano),
+	})
+
+	fresh := synthesisForReinforce("fresh", ns, now)
+	fresh.Metadata = freshMeta
+
+	stale := synthesisForReinforce("stale", ns, now)
+	stale.Metadata = staleMeta
+
+	unstamped := synthesisForReinforce("unstamped", ns, now)
+
+	got := collectReinforceStale([]model.Memory{fresh, stale, unstamped})
+	if len(got) != 2 {
+		t.Fatalf("expected 2 stale (stale + unstamped), got %d", len(got))
+	}
+
+	ids := map[uuid.UUID]bool{}
+	for _, s := range got {
+		ids[s.mem.ID] = true
+	}
+	if !ids[stale.ID] {
+		t.Errorf("stale synthesis missing from result")
+	}
+	if !ids[unstamped.ID] {
+		t.Errorf("unstamped synthesis missing from result")
+	}
+	if ids[fresh.ID] {
+		t.Errorf("fresh synthesis must not be in stale set")
 	}
 }
