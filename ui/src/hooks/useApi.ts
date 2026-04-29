@@ -46,6 +46,7 @@ import {
   type OrgUpdateUserRequest,
   type Passkey,
   type LoginResponse,
+  type SystemRankingWeights,
 } from "../api/client";
 import {
   isWebAuthnAvailable,
@@ -363,6 +364,80 @@ export function useSettingsSchema() {
     queryKey: ["admin", "settings-schema"],
     queryFn: adminAPI.getSettingsSchema,
   });
+}
+
+// useSystemRankingWeights resolves the six ranking.weight.* settings into a
+// fully-populated baseline view. Used by the project edit panel to show
+// system defaults as input placeholders and to compute the effective merged
+// weights when a project sets sparse overrides.
+//
+// Resolution order per field: configured value (operator override at any
+// scope) → schema default → built-in fallback. The fallback values match
+// service.DefaultRankingWeights so the placeholders never disagree with the
+// runtime baseline if both server queries are still loading.
+const SYSTEM_RANKING_WEIGHT_KEYS = {
+  similarity: "ranking.weight.similarity",
+  recency: "ranking.weight.recency",
+  importance: "ranking.weight.importance",
+  frequency: "ranking.weight.frequency",
+  graph_relevance: "ranking.weight.graph_relevance",
+  confidence: "ranking.weight.confidence",
+} as const;
+
+const SYSTEM_RANKING_WEIGHT_FALLBACK: SystemRankingWeights = {
+  similarity: 0.5,
+  recency: 0.15,
+  importance: 0.1,
+  frequency: 0.0,
+  graph_relevance: 0.2,
+  confidence: 0.05,
+};
+
+function coerceWeight(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string") {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+// resolveSystemRankingWeights is the pure resolution logic. Exposed for
+// unit testing without spinning up React Query infrastructure.
+export function resolveSystemRankingWeights(
+  configured: Iterable<{ key: string; value: unknown }>,
+  schema: Iterable<{ key: string; default_value: unknown }>,
+): SystemRankingWeights {
+  const settingByKey = new Map<string, unknown>();
+  for (const s of configured) settingByKey.set(s.key, s.value);
+  const defaultByKey = new Map<string, unknown>();
+  for (const s of schema) defaultByKey.set(s.key, s.default_value);
+
+  const resolved = { ...SYSTEM_RANKING_WEIGHT_FALLBACK };
+  for (const [field, key] of Object.entries(SYSTEM_RANKING_WEIGHT_KEYS) as [
+    keyof SystemRankingWeights,
+    string,
+  ][]) {
+    const fromSetting = coerceWeight(settingByKey.get(key));
+    if (fromSetting !== null) {
+      resolved[field] = fromSetting;
+      continue;
+    }
+    const fromSchema = coerceWeight(defaultByKey.get(key));
+    if (fromSchema !== null) {
+      resolved[field] = fromSchema;
+    }
+  }
+  return resolved;
+}
+
+export function useSystemRankingWeights(): SystemRankingWeights {
+  const settingsQuery = useSettings("global");
+  const schemaQuery = useSettingsSchema();
+  return resolveSystemRankingWeights(
+    settingsQuery.data?.data ?? [],
+    schemaQuery.data?.data ?? [],
+  );
 }
 
 export function useUpdateSetting() {

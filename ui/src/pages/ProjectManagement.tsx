@@ -5,11 +5,15 @@ import {
   useProject,
   useUpdateProject,
   useDeleteProject,
+  useSystemRankingWeights,
 } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
 import type {
   Project,
+  ProjectRankingWeights,
+  ProjectSettings,
   ProjectUpdateRequest,
+  SystemRankingWeights,
 } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -271,6 +275,46 @@ function MCPConfigSnippet({ slug }: { slug: string }) {
   );
 }
 
+// SparseWeightInput renders a numeric input where empty = "inherit system
+// default". The placeholder shows the effective system value so operators
+// see the baseline before typing. Returning undefined to onChange is the
+// signal that the operator wants to clear the override.
+function SparseWeightInput({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: number | undefined;
+  placeholder: number;
+  onChange: (next: number | undefined) => void;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs text-muted-foreground">{label}</label>
+      <input
+        type="number"
+        min={0}
+        max={1}
+        step={0.05}
+        className="w-full rounded-md border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        value={value ?? ""}
+        placeholder={`system: ${placeholder.toFixed(2)}`}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === "") {
+            onChange(undefined);
+            return;
+          }
+          const n = parseFloat(v);
+          onChange(Number.isFinite(n) ? n : undefined);
+        }}
+      />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Project Detail Panel
 // ---------------------------------------------------------------------------
@@ -288,36 +332,44 @@ function ProjectDetailPanel({
   const updateMut = useUpdateProject();
   const deleteMut = useDeleteProject();
 
+  const systemWeights = useSystemRankingWeights();
+
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editTags, setEditTags] = useState<string[]>([]);
-  const [editDedupThreshold, setEditDedupThreshold] = useState(0.92);
-  const [editEnrichmentEnabled, setEditEnrichmentEnabled] = useState(true);
-  const [editRecency, setEditRecency] = useState(0.3);
-  const [editRelevance, setEditRelevance] = useState(0.5);
-  const [editImportance, setEditImportance] = useState(0.2);
+  // Sparse override state: undefined means "inherit system default."
+  const [editDedupThreshold, setEditDedupThreshold] = useState<number | undefined>(undefined);
+  const [editEnrichmentEnabled, setEditEnrichmentEnabled] = useState<boolean | undefined>(undefined);
+  const [editSimilarity, setEditSimilarity] = useState<number | undefined>(undefined);
+  const [editRecency, setEditRecency] = useState<number | undefined>(undefined);
+  const [editImportance, setEditImportance] = useState<number | undefined>(undefined);
+  const [editFrequency, setEditFrequency] = useState<number | undefined>(undefined);
+  const [editGraphRelevance, setEditGraphRelevance] = useState<number | undefined>(undefined);
+  const [editConfidence, setEditConfidence] = useState<number | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
   const project = detailQuery.data;
 
-  // Initialize form when project loads
+  // Initialize form when project loads. Migration 000025/000022 rewrites
+  // legacy `relevance` to `similarity`, but we read it with a fallback so
+  // pre-migration UIs render correctly.
   useEffect(() => {
     if (project && !initialized) {
       setEditName(project.name || "");
       setEditDescription(project.description || "");
       setEditTags(project.default_tags ?? []);
       const settings = project.settings;
-      if (settings) {
-        setEditDedupThreshold(settings.dedup_threshold ?? 0.92);
-        setEditEnrichmentEnabled(settings.enrichment_enabled ?? true);
-        if (settings.ranking_weights) {
-          setEditRecency(settings.ranking_weights.recency ?? 0.3);
-          setEditRelevance(settings.ranking_weights.relevance ?? 0.5);
-          setEditImportance(settings.ranking_weights.importance ?? 0.2);
-        }
-      }
+      setEditDedupThreshold(settings?.dedup_threshold);
+      setEditEnrichmentEnabled(settings?.enrichment_enabled);
+      const rw = settings?.ranking_weights;
+      setEditSimilarity(rw?.similarity ?? rw?.relevance);
+      setEditRecency(rw?.recency);
+      setEditImportance(rw?.importance);
+      setEditFrequency(rw?.frequency);
+      setEditGraphRelevance(rw?.graph_relevance);
+      setEditConfidence(rw?.confidence);
       setInitialized(true);
     }
   }, [project, initialized]);
@@ -329,24 +381,48 @@ function ProjectDetailPanel({
     setSaveSuccess(false);
   }, [projectId]);
 
-  const weightSum = editRecency + editRelevance + editImportance;
+  // Effective merged weights = system baseline with any project override
+  // applied. Used for the read-only summary block and the sum warning.
+  const effectiveWeights: SystemRankingWeights = {
+    similarity: editSimilarity ?? systemWeights.similarity,
+    recency: editRecency ?? systemWeights.recency,
+    importance: editImportance ?? systemWeights.importance,
+    frequency: editFrequency ?? systemWeights.frequency,
+    graph_relevance: editGraphRelevance ?? systemWeights.graph_relevance,
+    confidence: editConfidence ?? systemWeights.confidence,
+  };
+  const weightSum =
+    effectiveWeights.similarity +
+    effectiveWeights.recency +
+    effectiveWeights.importance +
+    effectiveWeights.frequency +
+    effectiveWeights.graph_relevance +
+    effectiveWeights.confidence;
   const weightWarning = Math.abs(weightSum - 1.0) > 0.001;
 
   function handleSave() {
     if (!project) return;
+    // Build sparse payload: only include fields the operator actually set.
+    // Empty inputs roundtrip back to "inherit system default" — the cascade
+    // resolver picks them up from the system layer at recall time.
+    const rankingOverride: ProjectRankingWeights = {};
+    if (editSimilarity !== undefined) rankingOverride.similarity = editSimilarity;
+    if (editRecency !== undefined) rankingOverride.recency = editRecency;
+    if (editImportance !== undefined) rankingOverride.importance = editImportance;
+    if (editFrequency !== undefined) rankingOverride.frequency = editFrequency;
+    if (editGraphRelevance !== undefined) rankingOverride.graph_relevance = editGraphRelevance;
+    if (editConfidence !== undefined) rankingOverride.confidence = editConfidence;
+
+    const settings: ProjectSettings = {};
+    if (editDedupThreshold !== undefined) settings.dedup_threshold = editDedupThreshold;
+    if (editEnrichmentEnabled !== undefined) settings.enrichment_enabled = editEnrichmentEnabled;
+    if (Object.keys(rankingOverride).length > 0) settings.ranking_weights = rankingOverride;
+
     const data: ProjectUpdateRequest = {
       name: editName,
       description: editDescription,
       default_tags: editTags,
-      settings: {
-        dedup_threshold: editDedupThreshold,
-        enrichment_enabled: editEnrichmentEnabled,
-        ranking_weights: {
-          recency: editRecency,
-          relevance: editRelevance,
-          importance: editImportance,
-        },
-      },
+      settings,
     };
     updateMut.mutate(
       { id: project.id, data },
@@ -497,9 +573,16 @@ function ProjectDetailPanel({
               </div>
             </div>
 
-            {/* Settings Overrides */}
+            {/* Settings Overrides — sparse: leave a field empty to inherit
+             * the system-level setting. Numeric inputs show the current
+             * effective system default as placeholder text so operators see
+             * what the cascade will resolve to without typing anything. */}
             <div className="space-y-4 rounded-lg border p-4">
               <h3 className="text-sm font-semibold">Settings Overrides</h3>
+              <p className="text-xs text-muted-foreground">
+                Empty fields fall through to the system-level setting. Set a
+                value here to override only this project.
+              </p>
 
               {/* Dedup threshold */}
               <div>
@@ -512,91 +595,111 @@ function ProjectDetailPanel({
                   max={1}
                   step={0.01}
                   className="w-32 rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  value={editDedupThreshold}
-                  onChange={(e) =>
-                    setEditDedupThreshold(parseFloat(e.target.value) || 0)
-                  }
+                  value={editDedupThreshold ?? ""}
+                  placeholder="system: 0.92"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setEditDedupThreshold(v === "" ? undefined : parseFloat(v));
+                  }}
                 />
               </div>
 
-              {/* Enrichment enabled */}
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="enrichment-enabled"
-                  className="rounded border"
-                  checked={editEnrichmentEnabled}
-                  onChange={(e) => setEditEnrichmentEnabled(e.target.checked)}
-                />
-                <label
-                  htmlFor="enrichment-enabled"
-                  className="text-sm text-muted-foreground"
-                >
+              {/* Enrichment enabled — three-state: inherit / on / off */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
                   Enrichment Enabled
                 </label>
+                <select
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={
+                    editEnrichmentEnabled === undefined
+                      ? "inherit"
+                      : editEnrichmentEnabled
+                      ? "on"
+                      : "off"
+                  }
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setEditEnrichmentEnabled(
+                      v === "inherit" ? undefined : v === "on",
+                    );
+                  }}
+                >
+                  <option value="inherit">Inherit system</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
               </div>
 
-              {/* Ranking weights */}
+              {/* Ranking weights — six sparse inputs. Each placeholder shows
+               * the effective system value so operators can see the
+               * baseline before deciding whether to override. */}
               <div>
                 <label className="mb-2 block text-xs font-medium text-muted-foreground">
                   Ranking Weights
                 </label>
-                <div className="flex items-end gap-4">
-                  <div>
-                    <label className="mb-1 block text-xs text-muted-foreground">
-                      Recency
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      className="w-20 rounded-md border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                      value={editRecency}
-                      onChange={(e) =>
-                        setEditRecency(parseFloat(e.target.value) || 0)
-                      }
-                    />
+                <div className="grid grid-cols-3 gap-3">
+                  <SparseWeightInput
+                    label="Similarity"
+                    value={editSimilarity}
+                    placeholder={systemWeights.similarity}
+                    onChange={setEditSimilarity}
+                  />
+                  <SparseWeightInput
+                    label="Recency"
+                    value={editRecency}
+                    placeholder={systemWeights.recency}
+                    onChange={setEditRecency}
+                  />
+                  <SparseWeightInput
+                    label="Importance"
+                    value={editImportance}
+                    placeholder={systemWeights.importance}
+                    onChange={setEditImportance}
+                  />
+                  <SparseWeightInput
+                    label="Frequency"
+                    value={editFrequency}
+                    placeholder={systemWeights.frequency}
+                    onChange={setEditFrequency}
+                  />
+                  <SparseWeightInput
+                    label="Graph Relevance"
+                    value={editGraphRelevance}
+                    placeholder={systemWeights.graph_relevance}
+                    onChange={setEditGraphRelevance}
+                  />
+                  <SparseWeightInput
+                    label="Confidence"
+                    value={editConfidence}
+                    placeholder={systemWeights.confidence}
+                    onChange={setEditConfidence}
+                  />
+                </div>
+
+                {/* Effective weights — read-only summary so operators see
+                 * exactly what recall will use after merging the override
+                 * with the system layer. */}
+                <div className="mt-3 rounded border bg-muted/30 p-3 text-xs">
+                  <div className="mb-1 font-medium text-muted-foreground">
+                    Effective weights (system + your overrides)
                   </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-muted-foreground">
-                      Relevance
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      className="w-20 rounded-md border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                      value={editRelevance}
-                      onChange={(e) =>
-                        setEditRelevance(parseFloat(e.target.value) || 0)
-                      }
-                    />
+                  <div className="grid grid-cols-3 gap-2 font-mono">
+                    <div>Similarity: {effectiveWeights.similarity.toFixed(2)}</div>
+                    <div>Recency: {effectiveWeights.recency.toFixed(2)}</div>
+                    <div>Importance: {effectiveWeights.importance.toFixed(2)}</div>
+                    <div>Frequency: {effectiveWeights.frequency.toFixed(2)}</div>
+                    <div>Graph: {effectiveWeights.graph_relevance.toFixed(2)}</div>
+                    <div>Confidence: {effectiveWeights.confidence.toFixed(2)}</div>
                   </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-muted-foreground">
-                      Importance
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      className="w-20 rounded-md border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                      value={editImportance}
-                      onChange={(e) =>
-                        setEditImportance(parseFloat(e.target.value) || 0)
-                      }
-                    />
-                  </div>
-                  <div className="pb-1.5 text-xs text-muted-foreground">
-                    Sum: {weightSum.toFixed(2)}
+                  <div className="mt-2 text-muted-foreground">
+                    Sum: <span className="font-mono">{weightSum.toFixed(3)}</span>
                   </div>
                 </div>
                 {weightWarning && (
                   <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                    Ranking weights should sum to 1.0 (currently {weightSum.toFixed(3)})
+                    Effective weights do not sum to 1.0 (currently {weightSum.toFixed(3)}).
+                    Recall will still work, but the score scale shifts; review the override.
                   </p>
                 )}
               </div>

@@ -8,7 +8,6 @@ import {
   useOrgs,
   useGenerateAPIKey,
   useRevokeAPIKey,
-  useSetupStatus,
   useOrgUsers,
   useOrgUser,
   useCreateOrgUser,
@@ -670,23 +669,24 @@ function UserDetailPanel({
   const adminDetailQuery = useUser(isAdmin ? userId : "");
   const orgDetailQuery = useOrgUser(isAdmin ? "" : (orgId ?? ""), isAdmin ? "" : userId);
   const detailQuery = isAdmin ? adminDetailQuery : orgDetailQuery;
-  const setupQuery = useSetupStatus();
   const adminUpdateMut = useUpdateUser();
   const orgUpdateMut = useUpdateOrgUser();
   const adminDeleteMut = useDeleteUser();
   const orgDeleteMut = useDeleteOrgUser();
   const updateMut = isAdmin ? adminUpdateMut : orgUpdateMut;
   const deleteMut = isAdmin ? adminDeleteMut : orgDeleteMut;
-  const isPostgres = setupQuery.data?.backend === "postgres";
   const availableRoles = isAdmin ? ROLES : ORG_OWNER_ROLES;
 
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editRole, setEditRole] = useState("");
   const [editDisabled, setEditDisabled] = useState(false);
-  const [editEnrichmentEnabled, setEditEnrichmentEnabled] = useState(true);
-  const [editRecency, setEditRecency] = useState("0.3");
-  const [editRelevance, setEditRelevance] = useState("0.5");
-  const [editImportance, setEditImportance] = useState("0.2");
+  // Sparse user-scope overrides: undefined = "inherit system default."
+  // ranking_weights is intentionally absent — the cascade for weights lands
+  // at project, not user, and the API rejects user-scope ranking_weights
+  // with a 400. Migration 000026/000023 strips the dead field from
+  // existing rows; the parser here ignores it on read for safety.
+  const [editEnrichmentEnabled, setEditEnrichmentEnabled] = useState<boolean | undefined>(undefined);
+  const [editDedupThreshold, setEditDedupThreshold] = useState<number | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [initialized, setInitialized] = useState(false);
@@ -698,16 +698,17 @@ function UserDetailPanel({
       setEditDisplayName(user.display_name || "");
       setEditRole(user.role || "member");
       setEditDisabled(user.disabled_at != null);
-      const settings = user.settings || {};
+      const settings = (user.settings || {}) as Record<string, unknown>;
+      const enrichRaw = settings.enrichment_enabled;
       setEditEnrichmentEnabled(
-        settings.enrichment_enabled !== undefined
-          ? Boolean(settings.enrichment_enabled)
-          : true,
+        typeof enrichRaw === "boolean" ? enrichRaw : undefined,
       );
-      const weights = (settings.ranking_weights as Record<string, number>) || {};
-      setEditRecency(String(weights.recency ?? 0.3));
-      setEditRelevance(String(weights.relevance ?? 0.5));
-      setEditImportance(String(weights.importance ?? 0.2));
+      const dedupRaw = settings.dedup_threshold;
+      setEditDedupThreshold(
+        typeof dedupRaw === "number" && Number.isFinite(dedupRaw)
+          ? dedupRaw
+          : undefined,
+      );
       setInitialized(true);
     }
   }, [user, initialized]);
@@ -727,17 +728,19 @@ function UserDetailPanel({
 
   const handleSave = useCallback(() => {
     if (!user) return;
+    // Build sparse settings: omit fields the operator did not set so the
+    // cascade resolver picks them up from the system layer at runtime.
+    const settings: Record<string, unknown> = {};
+    if (editEnrichmentEnabled !== undefined) {
+      settings.enrichment_enabled = editEnrichmentEnabled;
+    }
+    if (editDedupThreshold !== undefined) {
+      settings.dedup_threshold = editDedupThreshold;
+    }
     const data: UpdateUserRequest = {
       display_name: editDisplayName,
       role: editRole,
-      settings: {
-        enrichment_enabled: editEnrichmentEnabled,
-        ranking_weights: {
-          recency: parseFloat(editRecency) || 0.3,
-          relevance: parseFloat(editRelevance) || 0.5,
-          importance: parseFloat(editImportance) || 0.2,
-        },
-      },
+      settings,
     };
     const onSuccess = () => {
       setSaveSuccess(true);
@@ -754,9 +757,7 @@ function UserDetailPanel({
     editRole,
     editDisabled,
     editEnrichmentEnabled,
-    editRecency,
-    editRelevance,
-    editImportance,
+    editDedupThreshold,
     isAdmin,
     adminUpdateMut,
     orgUpdateMut,
@@ -894,85 +895,66 @@ function UserDetailPanel({
               <span>{formatDate(user.last_login)}</span>
             </div>
 
-            {/* Per-user settings */}
+            {/* Per-user settings — sparse overrides for the user's personal
+             * namespace. Apply only when memories live in the user's own
+             * namespace (project memories use project-scope overrides).
+             * Ranking weight preferences moved to project settings. */}
             <div className="space-y-4 rounded-lg border p-4">
               <h3 className="text-sm font-semibold">User Settings</h3>
-
-              {isPostgres && (
-              <div className="flex items-center gap-3">
-                <label className="text-sm text-muted-foreground">
-                  Enrichment enabled
-                </label>
-                <button
-                  type="button"
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-ring ${
-                    editEnrichmentEnabled
-                      ? "bg-green-500"
-                      : "bg-gray-300 dark:bg-gray-600"
-                  }`}
-                  onClick={() =>
-                    setEditEnrichmentEnabled(!editEnrichmentEnabled)
-                  }
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-lg transition-transform ${
-                      editEnrichmentEnabled
-                        ? "translate-x-5"
-                        : "translate-x-0"
-                    }`}
-                  />
-                </button>
-              </div>
-              )}
+              <p className="text-xs text-muted-foreground">
+                Apply to memories in this user&apos;s personal namespace only.
+                Empty fields inherit the system-level setting. Ranking weight
+                tuning lives on project settings.
+              </p>
 
               <div>
-                <label className="mb-2 block text-sm text-muted-foreground">
-                  Ranking Weight Preferences
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  Enrichment Enabled
                 </label>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="mb-1 block text-xs text-muted-foreground">
-                      Recency
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="1"
-                      className="w-full rounded-md border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                      value={editRecency}
-                      onChange={(e) => setEditRecency(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-muted-foreground">
-                      Relevance
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="1"
-                      className="w-full rounded-md border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                      value={editRelevance}
-                      onChange={(e) => setEditRelevance(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-muted-foreground">
-                      Importance
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="1"
-                      className="w-full rounded-md border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                      value={editImportance}
-                      onChange={(e) => setEditImportance(e.target.value)}
-                    />
-                  </div>
-                </div>
+                <select
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={
+                    editEnrichmentEnabled === undefined
+                      ? "inherit"
+                      : editEnrichmentEnabled
+                      ? "on"
+                      : "off"
+                  }
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setEditEnrichmentEnabled(
+                      v === "inherit" ? undefined : v === "on",
+                    );
+                  }}
+                >
+                  <option value="inherit">Inherit system</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  Dedup Threshold (0-1)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  className="w-32 rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={editDedupThreshold ?? ""}
+                  placeholder="system: 0.92"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") {
+                      setEditDedupThreshold(undefined);
+                      return;
+                    }
+                    const n = parseFloat(v);
+                    setEditDedupThreshold(Number.isFinite(n) ? n : undefined);
+                  }}
+                />
               </div>
             </div>
 

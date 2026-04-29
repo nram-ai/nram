@@ -626,7 +626,10 @@ function MemoryDetailPanel({
               </pre>
             </div>
 
-            {/* Info row */}
+            {/* Info row — Confidence, Importance, AccessCount, and
+             * LastAccessed are surfaced so operators can verify recall-time
+             * reinforcement is actually moving the values. Without these the
+             * reinforcement / decay loop is invisible from the UI. */}
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <span className="text-muted-foreground">Source: </span>
@@ -635,6 +638,36 @@ function MemoryDetailPanel({
               <div>
                 <span className="text-muted-foreground">Enriched: </span>
                 <span>{memory.enriched ? "Yes" : "No"}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Confidence: </span>
+                <span className="font-mono">
+                  {typeof memory.confidence === "number"
+                    ? memory.confidence.toFixed(3)
+                    : "—"}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Importance: </span>
+                <span className="font-mono">
+                  {typeof memory.importance === "number"
+                    ? memory.importance.toFixed(3)
+                    : "—"}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Access count: </span>
+                <span className="font-mono">
+                  {typeof memory.access_count === "number"
+                    ? memory.access_count
+                    : 0}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Last accessed: </span>
+                <span>
+                  {memory.last_accessed ? formatDate(memory.last_accessed) : "—"}
+                </span>
               </div>
               <div>
                 <span className="text-muted-foreground">Created: </span>

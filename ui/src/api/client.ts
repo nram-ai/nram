@@ -388,6 +388,10 @@ export interface User {
   organization?: { id: string; name: string };
   last_login?: string;
   disabled_at: string | null;
+  // Settings is typed loosely (Record<string, unknown>) rather than as
+  // UserSettings because legacy rows may still carry the stripped
+  // ranking_weights field until migration 26 runs. Editors should narrow
+  // through UserSettings at use-site.
   settings: Record<string, unknown>;
   api_keys?: APIKey[];
   created_at: string;
@@ -405,6 +409,11 @@ export interface CreateUserRequest {
 export interface UpdateUserRequest {
   display_name?: string;
   role?: string;
+  // Settings stays loosely typed (Record<string, unknown>) because the
+  // org-update path shares this request type and tolerates any JSON shape;
+  // the server validates the actual fields it cares about. Forms should
+  // construct payloads matching UserSettings — see that interface for the
+  // accepted keys (ranking_weights at user scope is rejected with 400).
   settings?: Record<string, unknown>;
 }
 
@@ -424,16 +433,56 @@ export interface GenerateAPIKeyResponse {
   created_at: string;
 }
 
-export interface ProjectRankingWeights {
+// SystemRankingWeights is the fully-resolved view of the six ranking weight
+// settings, used as the placeholder/effective baseline in the project edit
+// panel. All fields are required because the system layer always has a
+// value (operator override or built-in default).
+export interface SystemRankingWeights {
+  similarity: number;
   recency: number;
-  relevance: number;
   importance: number;
+  frequency: number;
+  graph_relevance: number;
+  confidence: number;
 }
 
+// ProjectRankingWeights mirrors the canonical six-field sparse override
+// shape parsed by service.ParseRankingOverride. Every field is optional so
+// the editor can persist partial overrides; unset fields fall through to
+// the system-level ranking.weight.* setting at recall time.
+//
+// `relevance` is a deprecated alias for `similarity`. The migration that
+// ships alongside the canonical wire-up (000025/000022) rewrites it
+// in-place; new code must use `similarity`. The field stays on the
+// interface as `?` so legacy UI code paths that still mention it remain
+// type-safe during the transition. Drop after the editor rebuild lands.
+export interface ProjectRankingWeights {
+  similarity?: number;
+  recency?: number;
+  importance?: number;
+  frequency?: number;
+  graph_relevance?: number;
+  confidence?: number;
+  /** @deprecated migrated to `similarity` by 000025/000022 */
+  relevance?: number;
+}
+
+// ProjectSettings is the full per-project override blob. All fields are
+// optional so the editor can write partial payloads; the backend's parsers
+// treat absent fields as "no override" and merge in the system default.
 export interface ProjectSettings {
-  dedup_threshold: number;
-  enrichment_enabled: boolean;
-  ranking_weights: ProjectRankingWeights;
+  dedup_threshold?: number;
+  enrichment_enabled?: boolean;
+  ranking_weights?: ProjectRankingWeights;
+}
+
+// UserSettings carries the per-user JSON overrides honored by the cascade
+// resolver when a memory lives in the user's personal namespace. Note that
+// ranking_weights is deliberately absent: the cascade lands at project for
+// weights, and the API rejects user-scope ranking_weights with a 400.
+export interface UserSettings {
+  dedup_threshold?: number;
+  enrichment_enabled?: boolean;
 }
 
 export interface ProjectOwner {
