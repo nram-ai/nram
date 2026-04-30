@@ -210,6 +210,11 @@ const (
 	SettingEnrichmentWorkerCountSQLite                = "enrichment.worker.count_sqlite"
 	SettingEnrichmentWorkerCountPostgres              = "enrichment.worker.count_postgres"
 	SettingEnrichmentWorkerPollIntervalSeconds        = "enrichment.worker.poll_interval_seconds"
+	// SettingEnrichmentPoolTickIntervalSeconds controls how often the worker
+	// pool publishes enrichment.pool.tick events for the admin UI's live
+	// banner. Cheap (one tick per pool, not per job), so a fast cadence is
+	// fine. Default 5s.
+	SettingEnrichmentPoolTickIntervalSeconds = "enrichment.pool_tick_interval_seconds"
 	SettingEnrichmentIngestionRationaleMaxLen         = "enrichment.ingestion.rationale_max_len"
 
 	// Fact and entity extraction LLM-call tunables. Resolved per call by both
@@ -513,6 +518,7 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingEnrichmentWorkerCountSQLite:            "1",
 	SettingEnrichmentWorkerCountPostgres:          "2",
 	SettingEnrichmentWorkerPollIntervalSeconds:    "5",
+	SettingEnrichmentPoolTickIntervalSeconds:      "5",
 	SettingEnrichmentIngestionRationaleMaxLen:     "500",
 
 	SettingFactExtractionMaxTokens:          "4096",

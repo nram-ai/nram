@@ -573,27 +573,32 @@ export function useMigrationAudit() {
 
 // --- Dreaming ---
 
-export function useDreamingStatus() {
+// Dynamic intervalMs lets DreamingMonitor drop polling frequency when SSE is
+// disconnected (3s/5s) and relax it back to the defaults (10s/15s) when SSE
+// is healthy. The detail hook only polls when a cycle is actively running.
+
+export function useDreamingStatus(opts: { intervalMs?: number } = {}) {
   return useQuery({
     queryKey: ["admin", "dreaming"],
     queryFn: adminAPI.getDreamingStatus,
-    refetchInterval: 10_000,
+    refetchInterval: opts.intervalMs ?? 10_000,
   });
 }
 
-export function useDreamingCycles(projectId?: string) {
+export function useDreamingCycles(projectId?: string, opts: { intervalMs?: number } = {}) {
   return useQuery({
     queryKey: ["admin", "dreaming", "cycles", projectId],
     queryFn: () => adminAPI.getDreamingCycles(projectId),
-    refetchInterval: 15_000,
+    refetchInterval: opts.intervalMs ?? 15_000,
   });
 }
 
-export function useDreamingCycleDetail(cycleId: string | null) {
+export function useDreamingCycleDetail(cycleId: string | null, opts: { intervalMs?: number } = {}) {
   return useQuery({
     queryKey: ["admin", "dreaming", "cycle", cycleId],
     queryFn: () => adminAPI.getDreamingCycleDetail(cycleId!),
     enabled: !!cycleId,
+    refetchInterval: opts.intervalMs,
   });
 }
 
@@ -629,11 +634,11 @@ export function useAbandonDreamCycle() {
 
 // --- Enrichment ---
 
-export function useEnrichmentStatus() {
+export function useEnrichmentStatus(opts: { intervalMs?: number } = {}) {
   return useQuery({
     queryKey: ["admin", "enrichment"],
     queryFn: adminAPI.getEnrichmentStatus,
-    refetchInterval: 10_000,
+    refetchInterval: opts.intervalMs ?? 10_000,
   });
 }
 

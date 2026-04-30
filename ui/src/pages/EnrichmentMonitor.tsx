@@ -1,10 +1,36 @@
 import { useState, useCallback, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useEnrichmentStatus,
   useRetryEnrichment,
   usePauseEnrichment,
 } from "../hooks/useApi";
+import { useEventStream } from "../hooks/useEventStream";
+import {
+  useElapsedTicker,
+  elapsedSeconds,
+  formatElapsed,
+} from "../hooks/useElapsedTicker";
 import type { EnrichmentQueueItem } from "../api/client";
+
+// Live SSE state for the enrichment worker pool. liveJobs is keyed by
+// queue job id (the EnrichmentQueueItem.id, identical to the worker's
+// EnrichmentJob.ID and the job_id field in events). poolTick mirrors the
+// pool ticker payload so the banner can compute oldest-claim age live.
+type LiveJob = {
+  jobId: string;
+  stage: string;
+  startedAt: string;
+};
+
+type PoolTick = {
+  inFlight: number;
+  oldestClaimAt?: string;
+  oldestClaimAgeMs?: number;
+  paused: boolean;
+  byStage: Record<string, number>;
+  receivedAt: number;
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -73,6 +99,164 @@ function Spinner({ className = "h-3.5 w-3.5" }: { className?: string }) {
         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
       />
     </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Live SSE state
+// ---------------------------------------------------------------------------
+
+function useEnrichmentLiveState() {
+  const qc = useQueryClient();
+  const [liveJobs, setLiveJobs] = useState<Record<string, LiveJob>>({});
+  const [poolTick, setPoolTick] = useState<PoolTick | null>(null);
+
+  const { connected } = useEventStream({
+    scope: "",
+    onEvent: (evt) => {
+      const data = (evt.data ?? {}) as Record<string, any>;
+      switch (evt.type) {
+        case "enrichment.job.started": {
+          if (!data.job_id) return;
+          setLiveJobs((prev) => ({
+            ...prev,
+            [data.job_id]: {
+              jobId: data.job_id,
+              stage: data.stage ?? "started",
+              startedAt: data.started_at ?? new Date().toISOString(),
+            },
+          }));
+          break;
+        }
+        case "enrichment.job.completed": {
+          if (!data.job_id) return;
+          setLiveJobs((prev) => {
+            const next = { ...prev };
+            delete next[data.job_id];
+            return next;
+          });
+          // Authoritative refresh — the row's status flipped to
+          // completed/failed, the queue endpoint will reflect it on the
+          // next poll, but we invalidate so the UI updates immediately.
+          qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+          break;
+        }
+        case "enrichment.pool.tick": {
+          setPoolTick({
+            inFlight: data.in_flight ?? 0,
+            oldestClaimAt: data.oldest_claim_at,
+            oldestClaimAgeMs: data.oldest_claim_age_ms,
+            paused: !!data.paused,
+            byStage: (data.by_stage ?? {}) as Record<string, number>,
+            receivedAt: Date.now(),
+          });
+          break;
+        }
+        default:
+          break;
+      }
+    },
+  });
+  return { liveJobs, poolTick, connected };
+}
+
+const STAGE_LABELS: Record<string, string> = {
+  started: "starting",
+  pre_embed: "extracting",
+  embed: "embedding",
+  finalize: "finalizing",
+};
+
+function StageChip({ stage }: { stage: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+      {STAGE_LABELS[stage] ?? stage}
+    </span>
+  );
+}
+
+function NoProgressChip({ secs }: { secs: number }) {
+  if (secs <= 60) return null;
+  const cls =
+    secs > 300
+      ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
+      : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}
+      title="No progress reported recently"
+    >
+      no progress {formatElapsed(secs)}
+    </span>
+  );
+}
+
+function EnrichmentPoolBanner({
+  tick,
+  liveJobs,
+  fallbackInFlightCount,
+}: {
+  tick: PoolTick | null;
+  liveJobs: Record<string, LiveJob>;
+  fallbackInFlightCount: number;
+}) {
+  const live = Object.values(liveJobs);
+  const inFlight = tick?.inFlight ?? live.length;
+  const visible = inFlight > 0 || fallbackInFlightCount > 0;
+  // Tick once a second only while the banner is visible — avoids a 1Hz
+  // wake on the page when the pool is idle.
+  useElapsedTicker(visible);
+  if (!visible) return null;
+
+  const tickStale = tick ? Date.now() - tick.receivedAt > 12_000 : true;
+  const oldestIso =
+    tick?.oldestClaimAt ??
+    (live.length > 0
+      ? live.reduce(
+          (acc, j) => (acc && acc < j.startedAt ? acc : j.startedAt),
+          live[0].startedAt,
+        )
+      : undefined);
+  const oldestSecs = elapsedSeconds(oldestIso);
+
+  let oldestCls = "text-emerald-700 dark:text-emerald-300";
+  if (oldestSecs > 300) oldestCls = "text-red-700 dark:text-red-300";
+  else if (oldestSecs > 60) oldestCls = "text-amber-700 dark:text-amber-300";
+
+  const stages = tick?.byStage ?? {};
+
+  return (
+    <div className="rounded-lg border border-dashed border-blue-300 bg-blue-50/50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <span className="font-medium text-blue-900 dark:text-blue-200">
+          Worker pool active
+        </span>
+        <span className="font-mono">
+          {inFlight} in flight
+        </span>
+        {Object.keys(stages).length > 0 && (
+          <span className="text-muted-foreground">
+            {Object.entries(stages)
+              .map(([k, v]) => `${STAGE_LABELS[k] ?? k}: ${v}`)
+              .join(" · ")}
+          </span>
+        )}
+        {oldestIso && (
+          <span className={`font-medium ${oldestCls}`}>
+            oldest claim: {formatElapsed(oldestSecs)}
+          </span>
+        )}
+        {tick?.paused && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-500" />
+            paused
+          </span>
+        )}
+        {tickStale && (
+          <span className="text-muted-foreground">(tick stale — using polled fallback)</span>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -180,6 +364,7 @@ function QueueTable({
   onToggleSelectAll,
   onRetryOne,
   retrying,
+  liveJobs,
 }: {
   items: EnrichmentQueueItem[];
   selectedIds: Set<string>;
@@ -187,7 +372,11 @@ function QueueTable({
   onToggleSelectAll: () => void;
   onRetryOne: (id: string) => void;
   retrying: boolean;
+  liveJobs: Record<string, LiveJob>;
 }) {
+  // Re-render every second so processing-row Elapsed counters tick.
+  const hasProcessing = items.some((i) => i.status === "processing");
+  useElapsedTicker(hasProcessing);
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
@@ -342,11 +531,28 @@ function QueueTable({
                   </span>
                 </td>
                 <td className="px-3 py-2.5">
-                  <span
-                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeCls}`}
-                  >
-                    {item.status}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeCls}`}
+                    >
+                      {item.status}
+                    </span>
+                    {item.status === "processing" &&
+                      (() => {
+                        const lj = liveJobs[item.id];
+                        const startedIso = lj?.startedAt ?? item.created_at;
+                        const secs = elapsedSeconds(startedIso);
+                        return (
+                          <>
+                            <span className="font-mono text-[11px] text-muted-foreground">
+                              {formatElapsed(secs)}
+                            </span>
+                            {lj?.stage && <StageChip stage={lj.stage} />}
+                            <NoProgressChip secs={secs} />
+                          </>
+                        );
+                      })()}
+                  </div>
                 </td>
                 <td className="px-3 py-2.5 text-xs text-foreground">
                   {item.attempts}
@@ -385,7 +591,9 @@ function QueueTable({
 // ---------------------------------------------------------------------------
 
 function EnrichmentMonitor() {
-  const statusQuery = useEnrichmentStatus();
+  const { liveJobs, poolTick, connected } = useEnrichmentLiveState();
+  const statusIntervalMs = connected ? 10_000 : 3_000;
+  const statusQuery = useEnrichmentStatus({ intervalMs: statusIntervalMs });
   const retryMutation = useRetryEnrichment();
   const pauseMutation = usePauseEnrichment();
 
@@ -497,6 +705,13 @@ function EnrichmentMonitor() {
       {/* Content */}
       {!statusQuery.isLoading && !statusQuery.isError && (
         <div className="space-y-6">
+          {/* Live pool banner */}
+          <EnrichmentPoolBanner
+            tick={poolTick}
+            liveJobs={liveJobs}
+            fallbackInFlightCount={counts.processing}
+          />
+
           {/* Status cards */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <StatCard
@@ -681,12 +896,15 @@ function EnrichmentMonitor() {
               onToggleSelectAll={handleToggleSelectAll}
               onRetryOne={handleRetryOne}
               retrying={retryMutation.isPending}
+              liveJobs={liveJobs}
             />
           </div>
 
           {/* Auto-refresh indicator */}
           <p className="text-xs text-muted-foreground">
-            Auto-refreshing every 10 seconds.
+            {connected
+              ? "Live updates connected"
+              : `Polling every ${statusIntervalMs / 1000}s`}
             {statusQuery.isFetching && !statusQuery.isLoading && (
               <span className="ml-2 inline-flex items-center gap-1">
                 <Spinner className="h-3 w-3" />

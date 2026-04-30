@@ -268,7 +268,10 @@ func (p *ConsolidationPhase) reinforce(
 
 		callStart := time.Now()
 		alignmentCtx := provider.WithMemoryID(ctx, synthesis.ID)
-		alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, prompt, budget)
+		alignment, usage, err := WrapLLMCall(alignmentCtx, "alignment", llm.Name(), synthesis.ID.String(),
+			func(ctx context.Context) (float64, *provider.TokenUsage, error) {
+				return p.scoreAlignment(ctx, llm, prompt, budget)
+			})
 		callTokens := 0
 		if usage != nil {
 			callTokens = usage.TotalTokens
@@ -602,7 +605,17 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 
 		callStart := time.Now()
 		auditCtx := provider.WithMemoryID(ctx, mem.ID)
-		passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(auditCtx, llm, budget, mem.Content, sources, backfillHigh, provider.OperationDreamNoveltyBackfill)
+		type auditResult struct {
+			passed      bool
+			reason      string
+			embedTokens int
+		}
+		ar, auditUsage, auditErr := WrapLLMCall(auditCtx, "novelty_backfill", llm.Name(), mem.ID.String(),
+			func(ctx context.Context) (auditResult, *provider.TokenUsage, error) {
+				passed, reason, usage, embedTokens, err := p.auditNovelty(ctx, llm, budget, mem.Content, sources, backfillHigh, provider.OperationDreamNoveltyBackfill)
+				return auditResult{passed: passed, reason: reason, embedTokens: embedTokens}, usage, err
+			})
+		passed, reason, embedTokens := ar.passed, ar.reason, ar.embedTokens
 		llmTokens := 0
 		if auditUsage != nil {
 			llmTokens = auditUsage.TotalTokens
@@ -1093,7 +1106,10 @@ func (p *ConsolidationPhase) consolidate(
 		}
 
 		synthStart := time.Now()
-		synthesisContent, usage, err := p.synthesize(ctx, llm, prompt, budget)
+		synthesisContent, usage, err := WrapLLMCall(ctx, "synthesis", llm.Name(), "",
+			func(ctx context.Context) (string, *provider.TokenUsage, error) {
+				return p.synthesize(ctx, llm, prompt, budget)
+			})
 		synthTokens := 0
 		if usage != nil {
 			synthTokens = usage.TotalTokens
@@ -1129,7 +1145,17 @@ func (p *ConsolidationPhase) consolidate(
 		// LLM usage against the dream budget when the borderline judge fires.
 		if noveltyEnabled {
 			auditStart := time.Now()
-			passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, synthesisContent, cluster, 0, provider.OperationDreamNoveltyAudit)
+			type auditResult struct {
+				passed      bool
+				reason      string
+				embedTokens int
+			}
+			ar, auditUsage, auditErr := WrapLLMCall(ctx, "novelty_audit", llm.Name(), "",
+				func(ctx context.Context) (auditResult, *provider.TokenUsage, error) {
+					passed, reason, usage, embedTokens, err := p.auditNovelty(ctx, llm, budget, synthesisContent, cluster, 0, provider.OperationDreamNoveltyAudit)
+					return auditResult{passed: passed, reason: reason, embedTokens: embedTokens}, usage, err
+				})
+			passed, reason, embedTokens := ar.passed, ar.reason, ar.embedTokens
 			llmTokens := 0
 			if auditUsage != nil {
 				llmTokens = auditUsage.TotalTokens

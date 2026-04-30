@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
@@ -306,6 +307,9 @@ type WorkerPool struct {
 
 	idleWorkers atomic.Int32
 
+	bus      events.EventBus
+	progress *progressTracker
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -336,6 +340,7 @@ func NewWorkerPool(
 	deduplicator *Deduplicator,
 	settings *service.SettingsService,
 	cascade *service.CascadeResolver,
+	bus events.EventBus,
 ) *WorkerPool {
 	return &WorkerPool{
 		config:            config.withDefaults(context.Background(), settings),
@@ -355,6 +360,8 @@ func NewWorkerPool(
 		deduplicator:      deduplicator,
 		settings:          settings,
 		cascade:           cascade,
+		bus:               bus,
+		progress:          newProgressTracker(bus, settings),
 	}
 }
 
@@ -369,6 +376,17 @@ func (wp *WorkerPool) Start() {
 		workerID := fmt.Sprintf("worker-%d", i)
 		wp.wg.Add(1)
 		go wp.run(ctx, workerID)
+	}
+
+	// Pool-level tick loop: emits enrichment.pool.tick events with the
+	// in-flight count, oldest-claim age, and stage breakdown so the admin
+	// banner stays live without per-job heartbeats.
+	if wp.progress != nil {
+		wp.wg.Add(1)
+		go func() {
+			defer wp.wg.Done()
+			wp.progress.runTickLoop(ctx)
+		}()
 	}
 }
 
@@ -625,6 +643,7 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 
 	results := make([]*pendingJob, len(jobs))
 	preEmbedErrs := make([]error, len(jobs))
+	jobStartTimes := make([]time.Time, len(jobs))
 	sem := make(chan struct{}, preEmbedFanOut)
 	var wg sync.WaitGroup
 	for i, job := range jobs {
@@ -632,13 +651,25 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 		sem <- struct{}{}
 		go func(i int, job *model.EnrichmentJob) {
 			defer func() { <-sem; wg.Done() }()
+			jobStartTimes[i] = time.Now().UTC()
+			wp.progress.JobStarted(ctx, job, nil, workerID)
 			p, err := wp.runPreEmbed(ctx, job)
 			if err != nil {
 				preEmbedErrs[i] = err
 				wp.logBreakerOrError(ctx, "enrichment: batch pre-embed failed",
 					err, "worker", workerID, "job", job.ID)
+				wp.progress.JobCompleted(ctx, job.ID, job.MemoryID, job.NamespaceID,
+					workerID, jobStartTimes[i], 0, 0, 0, err)
 				return
 			}
+			if p == nil {
+				// Cascade-skipped: queue is already Complete-marked. Clear
+				// the in-flight entry so the UI does not show a stale row.
+				wp.progress.JobCompleted(ctx, job.ID, job.MemoryID, job.NamespaceID,
+					workerID, jobStartTimes[i], 0, 0, 0, nil)
+				return
+			}
+			wp.progress.SetStage(job.ID, StageEmbed)
 			results[i] = p
 		}(i, job)
 	}
@@ -666,11 +697,25 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 		return cooldown
 	}
 	wp.runEmbedBatch(ctx, pendings)
+	// Map from job.ID back to its index in jobs so we can recover the
+	// start timestamp captured in the goroutine above.
+	idxByID := make(map[uuid.UUID]int, len(jobs))
+	for i, j := range jobs {
+		idxByID[j.ID] = i
+	}
 	for _, p := range pendings {
-		if err := wp.finalizeJob(ctx, p); err != nil {
+		wp.progress.SetStage(p.job.ID, StageFinalize)
+		err := wp.finalizeJob(ctx, p)
+		if err != nil {
 			wp.logBreakerOrError(ctx, "enrichment: batch finalize failed",
 				err, "worker", workerID, "job", p.job.ID)
 		}
+		startedAt := time.Now().UTC()
+		if i, ok := idxByID[p.job.ID]; ok && !jobStartTimes[i].IsZero() {
+			startedAt = jobStartTimes[i]
+		}
+		wp.progress.JobCompleted(ctx, p.job.ID, p.job.MemoryID, p.job.NamespaceID,
+			workerID, startedAt, 0, 0, 0, err)
 	}
 	slog.Info("enrichment: batch done",
 		"worker", workerID,

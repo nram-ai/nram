@@ -1,0 +1,277 @@
+package dreaming
+
+import (
+	"context"
+	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/events"
+	"github.com/nram-ai/nram/internal/provider"
+)
+
+// InFlightCall describes a single LLM call currently in progress for a cycle.
+// Snapshotted by the heartbeat goroutine and serialized into
+// dream.cycle.heartbeat events.
+type InFlightCall struct {
+	CallID    uuid.UUID `json:"call_id"`
+	Operation string    `json:"operation"`
+	Model     string    `json:"model,omitempty"`
+	TargetID  string    `json:"target_id,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+}
+
+// CycleTracker emits per-cycle progress events on the event bus and exposes a
+// Snapshot of the in-flight LLM call so the runner's heartbeat goroutine can
+// publish liveness updates without coordinating with the phase that owns the
+// call. One CycleTracker is constructed per cycle, in Runner.Execute.
+type CycleTracker struct {
+	bus       events.EventBus
+	cycleID   uuid.UUID
+	projectID uuid.UUID
+	scope     string
+
+	currentCall  atomic.Pointer[InFlightCall]
+	currentPhase atomic.Pointer[string]
+}
+
+// NewCycleTracker returns a tracker bound to a single cycle. bus may be nil,
+// in which case all emit calls are no-ops; this matches the soft-fail
+// discipline the rest of the dreaming pipeline uses for event delivery.
+func NewCycleTracker(bus events.EventBus, cycleID, projectID uuid.UUID) *CycleTracker {
+	return &CycleTracker{
+		bus:       bus,
+		cycleID:   cycleID,
+		projectID: projectID,
+		scope:     "project:" + projectID.String(),
+	}
+}
+
+// Snapshot returns the in-flight call descriptor or nil if no call is
+// currently outstanding. The returned pointer is owned by the caller.
+func (t *CycleTracker) Snapshot() *InFlightCall {
+	p := t.currentCall.Load()
+	if p == nil {
+		return nil
+	}
+	c := *p
+	return &c
+}
+
+// Phase returns the current phase name, or empty if not set.
+func (t *CycleTracker) Phase() string {
+	p := t.currentPhase.Load()
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// SetPhase updates the current phase name. Called by the runner just before
+// invoking phase.Execute.
+func (t *CycleTracker) SetPhase(phase string) {
+	t.currentPhase.Store(&phase)
+}
+
+// CycleID returns the cycle ID.
+func (t *CycleTracker) CycleID() uuid.UUID { return t.cycleID }
+
+// ProjectID returns the project ID.
+func (t *CycleTracker) ProjectID() uuid.UUID { return t.projectID }
+
+// Scope returns the event scope used for emissions ("project:<uuid>").
+func (t *CycleTracker) Scope() string { return t.scope }
+
+// EmitPhaseStarted publishes dream.phase.started.
+func (t *CycleTracker) EmitPhaseStarted(ctx context.Context, phase string, tokensUsed int) {
+	if t == nil {
+		return
+	}
+	events.Emit(ctx, t.bus, events.DreamPhaseStarted, t.scope, map[string]any{
+		"cycle_id":    t.cycleID.String(),
+		"project_id":  t.projectID.String(),
+		"phase":       phase,
+		"tokens_used": tokensUsed,
+	})
+}
+
+// EmitPhaseCompleted publishes dream.phase.completed. errStr is the empty
+// string on success.
+func (t *CycleTracker) EmitPhaseCompleted(
+	ctx context.Context,
+	phase string,
+	tokensUsed, operations int,
+	durationMs int64,
+	hasResidual bool,
+	errStr string,
+) {
+	if t == nil {
+		return
+	}
+	payload := map[string]any{
+		"cycle_id":     t.cycleID.String(),
+		"project_id":   t.projectID.String(),
+		"phase":        phase,
+		"tokens_used":  tokensUsed,
+		"operations":   operations,
+		"duration_ms":  durationMs,
+		"has_residual": hasResidual,
+		"ok":           errStr == "",
+	}
+	if errStr != "" {
+		payload["error"] = errStr
+	}
+	events.Emit(ctx, t.bus, events.DreamPhaseCompleted, t.scope, payload)
+}
+
+// EmitHeartbeat publishes dream.cycle.heartbeat carrying current phase, tokens
+// used, and the in-flight call (if any). Called from the runner's heartbeat
+// goroutine after the database heartbeat write.
+func (t *CycleTracker) EmitHeartbeat(ctx context.Context, tokensUsed int) {
+	if t == nil {
+		return
+	}
+	payload := map[string]any{
+		"cycle_id":    t.cycleID.String(),
+		"project_id":  t.projectID.String(),
+		"phase":       t.Phase(),
+		"tokens_used": tokensUsed,
+		"timestamp":   time.Now().UTC(),
+	}
+	if call := t.Snapshot(); call != nil {
+		payload["in_flight_call"] = map[string]any{
+			"call_id":    call.CallID.String(),
+			"operation":  call.Operation,
+			"model":      call.Model,
+			"target_id":  call.TargetID,
+			"started_at": call.StartedAt,
+			"elapsed_ms": time.Since(call.StartedAt).Milliseconds(),
+		}
+	}
+	events.Emit(ctx, t.bus, events.DreamCycleHeartbeat, t.scope, payload)
+}
+
+// trackerCtxKey is the context key used to bind a CycleTracker to a context.
+// Phases pull the tracker out of context so the Phase.Execute interface
+// signature can stay backward-compatible (matches the provider.WithMemoryID
+// and provider.WithOperation patterns already in this codebase).
+type trackerCtxKey struct{}
+
+// WithCycleTracker returns a child context carrying t. The returned context
+// is consumed by WrapLLMCall in phases.
+func WithCycleTracker(ctx context.Context, t *CycleTracker) context.Context {
+	if t == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, trackerCtxKey{}, t)
+}
+
+// CycleTrackerFromContext returns the tracker bound to ctx, or nil if none.
+func CycleTrackerFromContext(ctx context.Context) *CycleTracker {
+	if ctx == nil {
+		return nil
+	}
+	t, _ := ctx.Value(trackerCtxKey{}).(*CycleTracker)
+	return t
+}
+
+// WrapLLMCall is the context-aware entry point for instrumenting an LLM call
+// from inside a phase. If no tracker is bound to ctx (e.g. unit tests), fn
+// is invoked directly with no events. Otherwise emits dream.call.started,
+// runs fn, emits dream.call.completed, and clears the in-flight pointer.
+//
+// Generic over the call's primary return type so call sites read naturally:
+//
+//	alignment, usage, err := dreaming.WrapLLMCall(ctx, "alignment", model,
+//	    syn.ID.String(),
+//	    func(ctx context.Context) (float64, *provider.TokenUsage, error) {
+//	        return p.scoreAlignment(ctx, llm, prompt, budget)
+//	    })
+//
+// usage may be non-nil even on error (the LLM call already happened);
+// caller is responsible for budget accounting as before.
+func WrapLLMCall[T any](
+	ctx context.Context,
+	operation, model, targetID string,
+	fn func(ctx context.Context) (T, *provider.TokenUsage, error),
+) (T, *provider.TokenUsage, error) {
+	t := CycleTrackerFromContext(ctx)
+	if t == nil {
+		return fn(ctx)
+	}
+	call := &InFlightCall{
+		CallID:    uuid.New(),
+		Operation: operation,
+		Model:     model,
+		TargetID:  targetID,
+		StartedAt: time.Now().UTC(),
+	}
+	emitStart(ctx, t, call)
+	t.setInFlight(call)
+	defer t.clearInFlight(call)
+
+	result, usage, err := fn(ctx)
+	emitComplete(ctx, t, call, usage, err)
+	return result, usage, err
+}
+
+func (t *CycleTracker) setInFlight(c *InFlightCall) {
+	if t == nil {
+		return
+	}
+	t.currentCall.Store(c)
+}
+
+// clearInFlight only clears if the current pointer matches c. Phases run
+// calls serially today, but the CAS keeps Snapshot() honest if two
+// WrapLLMCall invocations ever overlap on the same tracker.
+func (t *CycleTracker) clearInFlight(c *InFlightCall) {
+	if t == nil {
+		return
+	}
+	t.currentCall.CompareAndSwap(c, nil)
+}
+
+func emitStart(ctx context.Context, t *CycleTracker, c *InFlightCall) {
+	if t == nil {
+		return
+	}
+	events.Emit(ctx, t.bus, events.DreamCallStarted, t.scope, map[string]any{
+		"cycle_id":   t.cycleID.String(),
+		"project_id": t.projectID.String(),
+		"call_id":    c.CallID.String(),
+		"operation":  c.Operation,
+		"model":      c.Model,
+		"target_id":  c.TargetID,
+		"phase":      t.Phase(),
+		"started_at": c.StartedAt,
+	})
+}
+
+func emitComplete(ctx context.Context, t *CycleTracker, c *InFlightCall, usage *provider.TokenUsage, err error) {
+	if t == nil {
+		return
+	}
+	payload := map[string]any{
+		"cycle_id":   t.cycleID.String(),
+		"project_id": t.projectID.String(),
+		"call_id":    c.CallID.String(),
+		"operation":  c.Operation,
+		"phase":      t.Phase(),
+		"started_at": c.StartedAt,
+		"ended_at":   time.Now().UTC(),
+		"latency_ms": time.Since(c.StartedAt).Milliseconds(),
+		"ok":         err == nil,
+	}
+	if usage != nil {
+		payload["tokens"] = map[string]int{
+			"prompt":     usage.PromptTokens,
+			"completion": usage.CompletionTokens,
+			"total":      usage.TotalTokens,
+		}
+	}
+	if err != nil {
+		payload["error"] = err.Error()
+	}
+	events.Emit(ctx, t.bus, events.DreamCallCompleted, t.scope, payload)
+}

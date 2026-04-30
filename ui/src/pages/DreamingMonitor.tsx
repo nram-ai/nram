@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useDreamingStatus,
   useDreamingCycles,
@@ -7,7 +8,44 @@ import {
   useRollbackDreamCycle,
   useAbandonDreamCycle,
 } from "../hooks/useApi";
+import { useEventStream } from "../hooks/useEventStream";
+import { useElapsedTicker, elapsedSeconds } from "../hooks/useElapsedTicker";
 import type { DreamCycle, DreamLog } from "../api/client";
+
+// Live SSE-driven state per running cycle. Populated from
+// dream.cycle.heartbeat, dream.call.started/completed, and
+// dream.phase.started/completed. Authoritative state still comes from the
+// REST endpoints; this layer only keeps the UI feeling alive between
+// polling intervals on slow LLM calls.
+type LiveInFlightCall = {
+  call_id: string;
+  operation: string;
+  model?: string;
+  target_id?: string;
+  started_at: string;
+};
+
+type LiveRecentCall = {
+  call_id: string;
+  operation: string;
+  started_at: string;
+  ended_at?: string;
+  latency_ms?: number;
+  ok?: boolean;
+  tokens?: { prompt: number; completion: number; total: number };
+  error?: string;
+};
+
+type LiveCycleState = {
+  cycleId: string;
+  phase?: string;
+  tokensUsed?: number;
+  lastActivityAt?: string;
+  currentCall?: LiveInFlightCall;
+  recentCalls: LiveRecentCall[];
+};
+
+const LIVE_RECENT_CAP = 30;
 
 const ABANDON_CONFIRM =
   "This cycle has not made progress in over 30 minutes. Marking it as failed will let you roll back any partial changes. The worker will be canceled if it's still running on this server. Continue?";
@@ -75,6 +113,150 @@ function formatDuration(start: string | null | undefined, end: string | null | u
   if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);
   return `${mins}m ${secs % 60}s`;
+}
+
+// ---------------------------------------------------------------------------
+// Live state via SSE
+// ---------------------------------------------------------------------------
+
+function useDreamingLiveState() {
+  const qc = useQueryClient();
+  const [live, setLive] = useState<Record<string, LiveCycleState>>({});
+
+  const { connected } = useEventStream({
+    scope: "",
+    onEvent: (evt) => {
+      const data = (evt.data ?? {}) as Record<string, any>;
+      const cycleId = data.cycle_id as string | undefined;
+      switch (evt.type) {
+        case "dream.cycle.heartbeat": {
+          if (!cycleId) return;
+          setLive((prev) => {
+            const cur = prev[cycleId] ?? { cycleId, recentCalls: [] };
+            return {
+              ...prev,
+              [cycleId]: {
+                ...cur,
+                phase: data.phase ?? cur.phase,
+                tokensUsed: typeof data.tokens_used === "number" ? data.tokens_used : cur.tokensUsed,
+                lastActivityAt: data.timestamp ?? cur.lastActivityAt,
+                currentCall: data.in_flight_call
+                  ? {
+                      call_id: data.in_flight_call.call_id,
+                      operation: data.in_flight_call.operation,
+                      model: data.in_flight_call.model,
+                      target_id: data.in_flight_call.target_id,
+                      started_at: data.in_flight_call.started_at,
+                    }
+                  : undefined,
+              },
+            };
+          });
+          break;
+        }
+        case "dream.call.started": {
+          if (!cycleId) return;
+          setLive((prev) => {
+            const cur = prev[cycleId] ?? { cycleId, recentCalls: [] };
+            const inFlight: LiveInFlightCall = {
+              call_id: data.call_id,
+              operation: data.operation,
+              model: data.model,
+              target_id: data.target_id,
+              started_at: data.started_at,
+            };
+            const next: LiveRecentCall = {
+              call_id: data.call_id,
+              operation: data.operation,
+              started_at: data.started_at,
+            };
+            return {
+              ...prev,
+              [cycleId]: {
+                ...cur,
+                phase: data.phase ?? cur.phase,
+                currentCall: inFlight,
+                lastActivityAt: data.started_at,
+                recentCalls: [next, ...cur.recentCalls].slice(0, LIVE_RECENT_CAP),
+              },
+            };
+          });
+          break;
+        }
+        case "dream.call.completed": {
+          if (!cycleId) return;
+          setLive((prev) => {
+            const cur = prev[cycleId] ?? { cycleId, recentCalls: [] };
+            const updatedRecent = cur.recentCalls.map((c) =>
+              c.call_id === data.call_id
+                ? {
+                    ...c,
+                    ended_at: data.ended_at,
+                    latency_ms: data.latency_ms,
+                    ok: data.ok,
+                    tokens: data.tokens,
+                    error: data.error,
+                  }
+                : c,
+            );
+            // Heartbeats carry cumulative tokens_used; call.completed carries
+            // this call's delta. Add the delta so the counter ticks per call.
+            const addTokens =
+              typeof data.tokens?.total === "number" ? data.tokens.total : 0;
+            return {
+              ...prev,
+              [cycleId]: {
+                ...cur,
+                currentCall:
+                  cur.currentCall?.call_id === data.call_id ? undefined : cur.currentCall,
+                tokensUsed: (cur.tokensUsed ?? 0) + addTokens,
+                lastActivityAt: data.ended_at ?? cur.lastActivityAt,
+                recentCalls: updatedRecent,
+              },
+            };
+          });
+          break;
+        }
+        case "dream.phase.started":
+        case "dream.phase.completed": {
+          if (!cycleId) return;
+          setLive((prev) => {
+            const cur = prev[cycleId] ?? { cycleId, recentCalls: [] };
+            return {
+              ...prev,
+              [cycleId]: {
+                ...cur,
+                phase: data.phase ?? cur.phase,
+                tokensUsed:
+                  typeof data.tokens_used === "number" ? data.tokens_used : cur.tokensUsed,
+                lastActivityAt: new Date().toISOString(),
+              },
+            };
+          });
+          // Authoritative refresh on phase boundaries (cheap, only every ~Ns).
+          qc.invalidateQueries({ queryKey: ["admin", "dreaming", "cycles"] });
+          break;
+        }
+        case "dream.cycle.completed":
+        case "dream.cycle.failed":
+        case "dream.cycle.rolled_back": {
+          if (!cycleId) return;
+          setLive((prev) => {
+            const next = { ...prev };
+            delete next[cycleId];
+            return next;
+          });
+          qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+          qc.invalidateQueries({ queryKey: ["admin", "dreaming", "cycles"] });
+          break;
+        }
+        default:
+          break;
+      }
+    },
+  });
+
+  return { live, connected };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,18 +351,112 @@ function StaleDiagnosticPill() {
   );
 }
 
+function operationLabel(op: string): string {
+  switch (op) {
+    case "alignment":
+      return "alignment";
+    case "synthesis":
+      return "synthesis";
+    case "novelty_audit":
+      return "novelty audit";
+    case "novelty_backfill":
+      return "novelty backfill";
+    case "contradiction_judge":
+      return "contradiction judge";
+    default:
+      return op.replace(/_/g, " ");
+  }
+}
+
+function InFlightCallChip({ call }: { call: LiveInFlightCall }) {
+  useElapsedTicker(true);
+  const secs = elapsedSeconds(call.started_at);
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-800 dark:bg-blue-900/40 dark:text-blue-200"
+      title={call.target_id ? `Target: ${call.target_id}` : undefined}
+    >
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-600 dark:bg-blue-400" />
+      awaiting {operationLabel(call.operation)} · {secs}s
+    </span>
+  );
+}
+
+function LastActivityChip({ iso }: { iso: string }) {
+  useElapsedTicker(true);
+  const secs = elapsedSeconds(iso);
+  let cls =
+    "inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200";
+  if (secs > 120) {
+    cls =
+      "inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-800 dark:bg-red-900/30 dark:text-red-200";
+  } else if (secs > 30) {
+    cls =
+      "inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-200";
+  }
+  return <span className={cls}>active {secs}s ago</span>;
+}
+
+function DreamingActivityBanner({
+  cycles,
+  live,
+}: {
+  cycles: DreamCycle[];
+  live: Record<string, LiveCycleState>;
+}) {
+  const running = cycles.filter((c) => c.status === "running");
+  if (running.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-dashed border-blue-300 bg-blue-50/50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+      <div className="space-y-2">
+        {running.slice(0, 2).map((cycle) => {
+          const ls = live[cycle.id];
+          const phase = ls?.phase ?? cycle.phase;
+          const tokens = ls?.tokensUsed ?? cycle.tokens_used;
+          const lastActivity =
+            ls?.lastActivityAt ?? cycle.heartbeat_at ?? cycle.updated_at;
+          return (
+            <div key={cycle.id} className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-medium text-blue-900 dark:text-blue-200">Cycle running</span>
+              <span className="text-muted-foreground">
+                {phase ? PHASE_LABELS[phase] ?? phase : "starting"}
+              </span>
+              {ls?.currentCall && <InFlightCallChip call={ls.currentCall} />}
+              {lastActivity && <LastActivityChip iso={lastActivity} />}
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {tokens.toLocaleString()} / {cycle.token_budget.toLocaleString()} tokens
+              </span>
+              <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+                {cycle.id.slice(0, 8)}
+              </span>
+            </div>
+          );
+        })}
+        {running.length > 2 && (
+          <p className="text-xs text-muted-foreground">
+            +{running.length - 2} more running…
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CycleTable({
   cycles,
   onSelect,
   selectedId,
   onAbandon,
   isAbandoning,
+  live,
 }: {
   cycles: DreamCycle[];
   onSelect: (id: string) => void;
   selectedId: string | null;
   onAbandon: (id: string) => void;
   isAbandoning: boolean;
+  live: Record<string, LiveCycleState>;
 }) {
   if (cycles.length === 0) {
     return (
@@ -217,20 +493,31 @@ function CycleTable({
                 }`}
               >
                 <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge status={cycle.status} />
                     {cycle.is_abandonable ? (
                       <StuckPill />
                     ) : cycle.is_stale_diagnostic ? (
                       <StaleDiagnosticPill />
                     ) : null}
+                    {cycle.status === "running" && live[cycle.id]?.currentCall && (
+                      <InFlightCallChip call={live[cycle.id].currentCall!} />
+                    )}
+                    {cycle.status === "running" &&
+                      (() => {
+                        const ts = live[cycle.id]?.lastActivityAt ?? cycle.heartbeat_at;
+                        return ts ? <LastActivityChip iso={ts} /> : null;
+                      })()}
                   </div>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
-                  {cycle.phase ? (PHASE_LABELS[cycle.phase] ?? cycle.phase) : "-"}
+                  {(() => {
+                    const phase = live[cycle.id]?.phase ?? cycle.phase;
+                    return phase ? (PHASE_LABELS[phase] ?? phase) : "-";
+                  })()}
                 </td>
                 <td className="px-4 py-3 font-mono text-xs">
-                  {cycle.tokens_used.toLocaleString()} / {cycle.token_budget.toLocaleString()}
+                  {(live[cycle.id]?.tokensUsed ?? cycle.tokens_used).toLocaleString()} / {cycle.token_budget.toLocaleString()}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {formatDuration(cycle.started_at, cycle.completed_at ?? cycle.updated_at)}
@@ -274,6 +561,8 @@ function CycleDetail({
   isRollingBack,
   onAbandon,
   isAbandoning,
+  live,
+  detailIntervalMs,
 }: {
   cycleId: string;
   onClose: () => void;
@@ -281,8 +570,12 @@ function CycleDetail({
   isRollingBack: boolean;
   onAbandon: (id: string) => void;
   isAbandoning: boolean;
+  live: Record<string, LiveCycleState>;
+  detailIntervalMs?: number;
 }) {
-  const { data, isLoading, isError } = useDreamingCycleDetail(cycleId);
+  const { data, isLoading, isError } = useDreamingCycleDetail(cycleId, {
+    intervalMs: detailIntervalMs,
+  });
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
 
   if (isLoading) {
@@ -377,7 +670,7 @@ function CycleDetail({
         <div>
           <p className="text-muted-foreground">Tokens Used</p>
           <p className="font-mono font-medium">
-            {cycle.tokens_used.toLocaleString()} / {cycle.token_budget.toLocaleString()}
+            {(live[cycleId]?.tokensUsed ?? cycle.tokens_used).toLocaleString()} / {cycle.token_budget.toLocaleString()}
           </p>
         </div>
         <div>
@@ -387,6 +680,11 @@ function CycleDetail({
           </p>
         </div>
       </div>
+
+      {/* Live activity timeline (only while the cycle is running). */}
+      {cycle.status === "running" && (
+        <LiveActivitySection state={live[cycleId]} />
+      )}
 
       {cycle.error && (
         <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
@@ -459,6 +757,88 @@ function CycleDetail({
   );
 }
 
+function LiveActivitySection({ state }: { state?: LiveCycleState }) {
+  // Re-render the in-flight elapsed counter every second.
+  useElapsedTicker(!!state?.currentCall);
+
+  if (!state) {
+    return (
+      <div className="rounded-md border border-blue-200 bg-blue-50/40 p-3 text-xs text-muted-foreground dark:border-blue-900/40 dark:bg-blue-900/10">
+        Waiting for live activity… (events will appear here as the runner emits them)
+      </div>
+    );
+  }
+
+  const { currentCall, recentCalls } = state;
+  return (
+    <div className="rounded-md border border-blue-200 bg-blue-50/40 p-3 dark:border-blue-900/40 dark:bg-blue-900/10">
+      <h4 className="mb-2 text-sm font-semibold text-blue-900 dark:text-blue-200">
+        Live Activity
+      </h4>
+
+      {currentCall && (
+        <div className="mb-2 flex items-center gap-2 text-xs">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600 dark:bg-blue-400" />
+          <span className="font-medium">In flight:</span>
+          <span>{operationLabel(currentCall.operation)}</span>
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {elapsedSeconds(currentCall.started_at)}s
+          </span>
+          {currentCall.model && (
+            <span className="text-muted-foreground">{currentCall.model}</span>
+          )}
+        </div>
+      )}
+
+      {recentCalls.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No calls observed yet.</p>
+      ) : (
+        <div className="max-h-64 space-y-1 overflow-y-auto">
+          {recentCalls.map((c) => {
+            const finished = c.ended_at !== undefined;
+            const status = !finished ? "running" : c.ok ? "ok" : "error";
+            const statusCls =
+              status === "running"
+                ? "text-blue-600 dark:text-blue-400"
+                : status === "ok"
+                ? "text-green-600 dark:text-green-400"
+                : "text-red-600 dark:text-red-400";
+            return (
+              <div
+                key={c.call_id}
+                className="flex flex-wrap items-center gap-2 rounded bg-white/40 px-2 py-1 text-xs dark:bg-black/20"
+              >
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {new Date(c.started_at).toLocaleTimeString()}
+                </span>
+                <span className="font-medium">{operationLabel(c.operation)}</span>
+                <span className={statusCls}>{status}</span>
+                {finished && c.latency_ms !== undefined && (
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    {c.latency_ms < 1000
+                      ? `${c.latency_ms}ms`
+                      : `${(c.latency_ms / 1000).toFixed(1)}s`}
+                  </span>
+                )}
+                {c.tokens && (
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    {c.tokens.total.toLocaleString()} tok
+                  </span>
+                )}
+                {c.error && (
+                  <span className="truncate text-[11px] text-red-600 dark:text-red-400">
+                    {c.error}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LogEntry({
   log,
   expanded,
@@ -515,8 +895,12 @@ function LogEntry({
 // ---------------------------------------------------------------------------
 
 export default function DreamingMonitor() {
-  const statusQuery = useDreamingStatus();
-  const cyclesQuery = useDreamingCycles();
+  const { live, connected } = useDreamingLiveState();
+  const statusIntervalMs = connected ? 10_000 : 3_000;
+  const cyclesIntervalMs = connected ? 15_000 : 5_000;
+
+  const statusQuery = useDreamingStatus({ intervalMs: statusIntervalMs });
+  const cyclesQuery = useDreamingCycles(undefined, { intervalMs: cyclesIntervalMs });
   const enableMutation = useSetDreamingEnabled();
   const rollbackMutation = useRollbackDreamCycle();
   const abandonMutation = useAbandonDreamCycle();
@@ -633,7 +1017,9 @@ export default function DreamingMonitor() {
                 {status?.enabled ? "Enabled" : "Disabled"}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground">Auto-refreshing every 10 seconds</p>
+            <p className="text-xs text-muted-foreground">
+              {connected ? "Live updates connected" : `Polling every ${statusIntervalMs / 1000}s`}
+            </p>
           </div>
 
           {/* Stats */}
@@ -673,6 +1059,9 @@ export default function DreamingMonitor() {
             />
           </div>
 
+          {/* Top-of-page live banner whenever a cycle is running. */}
+          <DreamingActivityBanner cycles={cycles} live={live} />
+
           {/* Detail or List */}
           {selectedCycleId ? (
             <CycleDetail
@@ -682,6 +1071,12 @@ export default function DreamingMonitor() {
               isRollingBack={rollbackMutation.isPending}
               onAbandon={handleAbandon}
               isAbandoning={abandonMutation.isPending}
+              live={live}
+              detailIntervalMs={
+                cycles.find((c) => c.id === selectedCycleId)?.status === "running"
+                  ? 5_000
+                  : undefined
+              }
             />
           ) : (
             <div>
@@ -692,6 +1087,7 @@ export default function DreamingMonitor() {
                 selectedId={selectedCycleId}
                 onAbandon={handleAbandon}
                 isAbandoning={abandonMutation.isPending}
+                live={live}
               />
             </div>
           )}

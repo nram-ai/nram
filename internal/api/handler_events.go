@@ -35,8 +35,14 @@ func NewEventsHandler(bus events.EventBus, keepalive time.Duration) http.Handler
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 
-		// Replay buffered events if Last-Event-ID is provided.
+		// Replay buffered events if Last-Event-ID is provided. EventSource in
+		// the browser cannot set arbitrary headers, so we also accept
+		// ?last_event_id= as a query-param fallback used by the React
+		// useEventStream hook on reconnect.
 		lastEventID := r.Header.Get("Last-Event-ID")
+		if lastEventID == "" {
+			lastEventID = r.URL.Query().Get("last_event_id")
+		}
 		if lastEventID != "" {
 			replayed := bus.Replay(lastEventID)
 			for _, evt := range replayed {

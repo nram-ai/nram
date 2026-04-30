@@ -149,6 +149,16 @@ func (s *rrSettingsStore) GetSettingsSchema(_ context.Context) ([]api.SettingSch
 	return []api.SettingSchema{}, nil
 }
 
+// rrGraphSettings is a stub GraphSettingsResolver. The graph handler reads
+// graph.default_min_weight via ResolveFloatWithDefault; production wires the
+// real SettingsService, the test returns the same default the cascade
+// publishes (0.1) so the handler's filter behavior is identical.
+type rrGraphSettings struct{}
+
+func (rrGraphSettings) ResolveFloatWithDefault(_ context.Context, _ string, _ string) float64 {
+	return 0.1
+}
+
 type rrDatabaseStore struct{}
 
 func (s *rrDatabaseStore) GetDatabaseInfo(_ context.Context) (*api.DatabaseInfo, error) {
@@ -432,6 +442,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 			Aliases:       entityAliasRepo,
 			Namespaces:    namespaceLookup,
 			Orgs:          orgLookup,
+			Settings:      rrGraphSettings{},
 		}),
 
 		Health: func(w http.ResponseWriter, r *http.Request) {

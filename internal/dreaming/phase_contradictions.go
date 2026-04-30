@@ -235,7 +235,17 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		}
 
 		pairStart := time.Now()
-		found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
+		type contradictionResult struct {
+			found       bool
+			winner      string
+			explanation string
+		}
+		cr, usage, err := WrapLLMCall(ctx, "contradiction_judge", llm.Name(), pair[0].ID.String()+","+pair[1].ID.String(),
+			func(ctx context.Context) (contradictionResult, *provider.TokenUsage, error) {
+				found, winner, explanation, u, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
+				return contradictionResult{found: found, winner: winner, explanation: explanation}, u, err
+			})
+		found, winner, explanation := cr.found, cr.winner, cr.explanation
 		pairDur := time.Since(pairStart)
 
 		// Account for usage before handling the error. Parse-error paths

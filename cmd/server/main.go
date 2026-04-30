@@ -511,6 +511,7 @@ func main() {
 		entityRepo, relationshipRepo, lineageRepo, vectorStore,
 		factProvider, entityProvider, embedProvider,
 		factProvider, ingestionDedup, settingsSvc, cascadeResolver,
+		eventBus,
 	)
 	workerPool.Start()
 	defer workerPool.Stop()
@@ -538,7 +539,7 @@ func main() {
 		context.Background(), service.SettingDreamHeartbeatInterval, "global")
 
 	dreamRunner := dreaming.NewRunner(
-		dreamCycleRepo, dreamLogRepo, workerPool, heartbeatInterval,
+		dreamCycleRepo, dreamLogRepo, workerPool, heartbeatInterval, eventBus,
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo, vectorStore, settingsSvc),
 		// Embedding backfill repairs rows whose embedding_dim is set but
 		// whose memory_vectors_<dim> row is missing (no_vector divergence).

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -52,6 +53,7 @@ type Runner struct {
 	logRepo           *storage.DreamLogRepo
 	idleCheck         IdleChecker
 	heartbeatInterval time.Duration
+	bus               events.EventBus
 	phases            []Phase
 }
 
@@ -60,11 +62,17 @@ type Runner struct {
 // cycle row while a phase is executing; zero falls back to 30 seconds. The
 // admin UI uses heartbeat_at to surface "no recent activity" with a tighter
 // window than phase-boundary updated_at can give.
+//
+// bus is the event bus used to publish per-phase, per-LLM-call, and
+// heartbeat events for live UI updates. May be nil — phases bind a
+// nil-bus tracker to ctx in that case, so emits become no-ops and the
+// rest of the pipeline is unaffected. Test fixtures rely on this.
 func NewRunner(
 	cycleRepo *storage.DreamCycleRepo,
 	logRepo *storage.DreamLogRepo,
 	idleCheck IdleChecker,
 	heartbeatInterval time.Duration,
+	bus events.EventBus,
 	phases ...Phase,
 ) *Runner {
 	if heartbeatInterval <= 0 {
@@ -75,6 +83,7 @@ func NewRunner(
 		logRepo:           logRepo,
 		idleCheck:         idleCheck,
 		heartbeatInterval: heartbeatInterval,
+		bus:               bus,
 		phases:            phases,
 	}
 }
@@ -93,14 +102,19 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		return false, false, fmt.Errorf("dream runner start cycle: %w", err)
 	}
 
-	// Heartbeat goroutine. Stamps heartbeat_at every heartbeatInterval until
-	// Execute returns, so the admin UI can detect "no recent activity"
-	// without waiting on a phase-boundary updated_at write. Heartbeat repo
-	// call is itself guarded on status='running', so a race against a
-	// terminal write at cycle exit is harmless.
+	// Tracker carries the cycle's event-emission state (in-flight LLM call,
+	// current phase). Bound to the ctx passed to phases so they can wrap
+	// LLM calls with WrapLLMCall without an interface change.
+	tracker := NewCycleTracker(r.bus, cycle.ID, cycle.ProjectID)
+	phaseCtx := WithCycleTracker(ctx, tracker)
+
+	// Heartbeat goroutine. Stamps heartbeat_at every heartbeatInterval and
+	// emits dream.cycle.heartbeat with tokens_used + in-flight call. The
+	// repo's WHERE status='running' guard makes a late tick against a
+	// terminal row a no-op, so a race against cycle exit is harmless.
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	defer hbCancel()
-	go r.heartbeat(hbCtx, cycle.ID)
+	go r.heartbeat(hbCtx, cycle.ID, tracker, budget)
 
 	logger := NewDreamLogWriter(r.logRepo, cycle.ID, cycle.ProjectID)
 	summaries := make([]PhaseSummaryEntry, 0, len(r.phases))
@@ -140,11 +154,14 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		slog.Info("dreaming: starting phase", "phase", phase.Name(), "cycle", cycle.ID,
 			"budget_remaining", budget.Remaining())
 
+		tracker.SetPhase(phase.Name())
+		tracker.EmitPhaseStarted(ctx, phase.Name(), budget.Used())
+
 		tokensBefore := budget.Used()
 		logger.ResetOpCount()
 		start := time.Now()
 
-		phaseResidual, err := phase.Execute(ctx, cycle, budget, logger)
+		phaseResidual, err := phase.Execute(phaseCtx, cycle, budget, logger)
 
 		elapsed := time.Since(start)
 		tokensConsumed := budget.Used() - tokensBefore
@@ -170,6 +187,8 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 				entry.ResidualReason = "budget_exhausted_during_phase"
 				hasResidual = true
 				summaries = append(summaries, entry)
+				tracker.EmitPhaseCompleted(ctx, phase.Name(), tokensConsumed,
+					logger.OpCount(), elapsed.Milliseconds(), true, entry.Error)
 				break
 			}
 
@@ -177,6 +196,8 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 				"phase", phase.Name(), "cycle", cycle.ID, "err", err)
 			entry.Error = err.Error()
 			summaries = append(summaries, entry)
+			tracker.EmitPhaseCompleted(ctx, phase.Name(), tokensConsumed,
+				logger.OpCount(), elapsed.Milliseconds(), phaseResidual, entry.Error)
 			lastErr = err
 			break
 		}
@@ -186,6 +207,8 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		slog.Info("dreaming: phase completed", "phase", phase.Name(),
 			"cycle", cycle.ID, "tokens", tokensConsumed, "duration_ms", elapsed.Milliseconds(),
 			"has_residual", phaseResidual)
+		tracker.EmitPhaseCompleted(ctx, phase.Name(), tokensConsumed,
+			logger.OpCount(), elapsed.Milliseconds(), phaseResidual, "")
 	}
 
 	summaryJSON, err := json.Marshal(summaries)
@@ -210,17 +233,23 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 	return allCompleted, hasResidual, nil
 }
 
-// heartbeat stamps heartbeat_at every heartbeatInterval until ctx is canceled.
-// Runs as a goroutine started from Execute. The repo's WHERE status='running'
-// guard makes this safe against a terminal write that races our ticker — a
-// late heartbeat against a row already transitioned to failed/completed is a
-// no-op and writes nothing.
-func (r *Runner) heartbeat(ctx context.Context, cycleID uuid.UUID) {
+// heartbeat stamps heartbeat_at every heartbeatInterval until ctx is canceled
+// AND publishes a dream.cycle.heartbeat event carrying tokens_used and the
+// in-flight LLM call descriptor. Runs as a goroutine started from Execute.
+// The repo's WHERE status='running' guard makes this safe against a terminal
+// write that races our ticker — a late heartbeat against a row already
+// transitioned to failed/completed is a no-op and writes nothing.
+func (r *Runner) heartbeat(ctx context.Context, cycleID uuid.UUID, tracker *CycleTracker, budget *TokenBudget) {
+	tick := func() {
+		if err := r.cycleRepo.Heartbeat(ctx, cycleID); err != nil && ctx.Err() == nil {
+			slog.Warn("dreaming: heartbeat failed", "cycle", cycleID, "err", err)
+		}
+		tracker.EmitHeartbeat(ctx, budget.Used())
+	}
+
 	// Initial tick on entry so the row carries a fresh heartbeat_at without
 	// waiting for the first interval to elapse.
-	if err := r.cycleRepo.Heartbeat(ctx, cycleID); err != nil && ctx.Err() == nil {
-		slog.Warn("dreaming: heartbeat failed", "cycle", cycleID, "err", err)
-	}
+	tick()
 
 	ticker := time.NewTicker(r.heartbeatInterval)
 	defer ticker.Stop()
@@ -230,9 +259,7 @@ func (r *Runner) heartbeat(ctx context.Context, cycleID uuid.UUID) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := r.cycleRepo.Heartbeat(ctx, cycleID); err != nil && ctx.Err() == nil {
-				slog.Warn("dreaming: heartbeat failed", "cycle", cycleID, "err", err)
-			}
+			tick()
 		}
 	}
 }

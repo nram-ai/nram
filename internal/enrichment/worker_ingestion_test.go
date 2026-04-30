@@ -132,6 +132,7 @@ func newIngestionHarness(
 		dedup,
 		h.settings,
 		nil,
+		nil,
 	)
 	return h
 }
