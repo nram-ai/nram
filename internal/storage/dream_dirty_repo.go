@@ -88,9 +88,15 @@ func (r *DreamDirtyRepo) SetLastDreamAt(ctx context.Context, projectID uuid.UUID
 	return nil
 }
 
-// ListDirtyProjects returns all projects with pending user-originated changes.
+// ListDirtyProjects returns all projects with pending user-originated changes,
+// ordered least-recently-dreamed first (never-dreamed rows ahead of dreamed
+// rows), then by oldest dirty_since, with project_id as a deterministic
+// tiebreaker for collisions at second-precision timestamps.
 func (r *DreamDirtyRepo) ListDirtyProjects(ctx context.Context) ([]model.DirtyProject, error) {
-	query := `SELECT project_id, dirty_since, last_dream_at FROM dream_project_dirty WHERE dirty_since IS NOT NULL`
+	query := `SELECT project_id, dirty_since, last_dream_at
+		FROM dream_project_dirty
+		WHERE dirty_since IS NOT NULL
+		ORDER BY last_dream_at ASC NULLS FIRST, dirty_since ASC, project_id ASC`
 
 	rows, err := r.db.Query(ctx, query)
 	if err != nil {
