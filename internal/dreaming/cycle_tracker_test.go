@@ -60,7 +60,7 @@ func TestCycleTrackerEmitsCallStartedAndCompleted(t *testing.T) {
 	tracker := NewCycleTracker(bus, cycleID, projectID)
 	ctx := WithCycleTracker(context.Background(), tracker)
 
-	got, _, err := WrapLLMCall(ctx, "alignment", "claude-test", "target-1",
+	got, _, err := WrapLLMCall(ctx, nil, "alignment", "claude-test", "target-1",
 		func(ctx context.Context) (string, *provider.TokenUsage, error) {
 			if tracker.Snapshot() == nil {
 				t.Fatal("expected in-flight call to be set during fn execution")
@@ -121,7 +121,7 @@ func TestCycleTrackerEmitsCompletedOnError(t *testing.T) {
 	ctx := WithCycleTracker(context.Background(), tracker)
 
 	wantErr := errors.New("provider hung up")
-	_, _, err := WrapLLMCall(ctx, "synthesis", "model-x", "",
+	_, _, err := WrapLLMCall(ctx, nil, "synthesis", "model-x", "",
 		func(ctx context.Context) (string, *provider.TokenUsage, error) {
 			return "", nil, wantErr
 		})
@@ -146,7 +146,7 @@ func TestCycleTrackerEmitsCompletedOnError(t *testing.T) {
 
 func TestWrapLLMCallNoOpsWithoutTracker(t *testing.T) {
 	// No tracker bound to context — fn should still run, no events, no panic.
-	got, _, err := WrapLLMCall(context.Background(), "synthesis", "model-x", "",
+	got, _, err := WrapLLMCall(context.Background(), nil, "synthesis", "model-x", "",
 		func(ctx context.Context) (int, *provider.TokenUsage, error) {
 			return 42, nil, nil
 		})
@@ -205,7 +205,7 @@ func TestHeartbeatIncludesInFlightCallSnapshot(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _, _ = WrapLLMCall(ctx, "contradiction_judge", "m", "id-1",
+		_, _, _ = WrapLLMCall(ctx, nil, "contradiction_judge", "m", "id-1",
 			func(ctx context.Context) (int, *provider.TokenUsage, error) {
 				// Wait for the test goroutine to capture an in-flight heartbeat.
 				<-heartbeatSeen
@@ -248,6 +248,83 @@ func TestHeartbeatIncludesInFlightCallSnapshot(t *testing.T) {
 	}
 	if in["target_id"] != "id-1" {
 		t.Errorf("in_flight_call.target_id = %v, want id-1", in["target_id"])
+	}
+}
+
+func TestWrapLLMCallChargesBudget(t *testing.T) {
+	budget := NewTokenBudget(1000, 500)
+	got, usage, err := WrapLLMCall(context.Background(), budget, "synth", "m", "",
+		func(ctx context.Context) (string, *provider.TokenUsage, error) {
+			return "ok", &provider.TokenUsage{PromptTokens: 100, CompletionTokens: 23, TotalTokens: 123}, nil
+		})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "ok" {
+		t.Errorf("got = %q, want ok", got)
+	}
+	if usage.TotalTokens != 123 {
+		t.Errorf("usage.TotalTokens = %d, want 123", usage.TotalTokens)
+	}
+	if budget.Used() != 123 {
+		t.Errorf("budget.Used() = %d, want 123 (WrapLLMCall must Spend internally)", budget.Used())
+	}
+}
+
+func TestWrapLLMCallSurfacesBudgetExhaustionWhenCallSucceeded(t *testing.T) {
+	budget := NewTokenBudget(50, 500) // tiny budget
+	_, _, err := WrapLLMCall(context.Background(), budget, "synth", "m", "",
+		func(ctx context.Context) (int, *provider.TokenUsage, error) {
+			return 0, &provider.TokenUsage{TotalTokens: 100}, nil
+		})
+	if !errors.Is(err, ErrBudgetExhausted) {
+		t.Fatalf("expected ErrBudgetExhausted to surface, got %v", err)
+	}
+}
+
+func TestWrapLLMCallPreservesInnerErrorOverBudgetExhaustion(t *testing.T) {
+	budget := NewTokenBudget(50, 500)
+	innerErr := errors.New("provider 500")
+	_, _, err := WrapLLMCall(context.Background(), budget, "synth", "m", "",
+		func(ctx context.Context) (int, *provider.TokenUsage, error) {
+			// Real LLM happened, returned usage AND an error. Budget should
+			// still be charged but the original error must surface.
+			return 0, &provider.TokenUsage{TotalTokens: 100}, innerErr
+		})
+	if !errors.Is(err, innerErr) {
+		t.Fatalf("expected inner error to surface, got %v", err)
+	}
+	if budget.Used() != 100 {
+		t.Errorf("budget.Used() = %d, want 100 (still charged on error path)", budget.Used())
+	}
+}
+
+func TestWrapLLMCallNilBudgetSkipsSpend(t *testing.T) {
+	_, _, err := WrapLLMCall(context.Background(), nil, "synth", "m", "",
+		func(ctx context.Context) (int, *provider.TokenUsage, error) {
+			return 0, &provider.TokenUsage{TotalTokens: 999}, nil
+		})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEmitPhaseProgressShapesPayload(t *testing.T) {
+	bus := &captureBus{}
+	tracker := NewCycleTracker(bus, uuid.New(), uuid.New())
+	tracker.SetPhase("pruning")
+	tracker.EmitPhaseProgress(context.Background(), 250, 1000, "memories")
+
+	emitted := bus.snapshot()
+	if len(emitted) != 1 || emitted[0].Type != events.DreamPhaseProgress {
+		t.Fatalf("expected one DreamPhaseProgress event, got %+v", bus.typesEmitted())
+	}
+	d := decodeData(t, emitted[0])
+	if d["phase"] != "pruning" || d["label"] != "memories" {
+		t.Errorf("payload phase/label wrong: %+v", d)
+	}
+	if int(d["current"].(float64)) != 250 || int(d["total"].(float64)) != 1000 {
+		t.Errorf("payload current/total wrong: %+v", d)
 	}
 }
 

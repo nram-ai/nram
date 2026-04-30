@@ -171,7 +171,14 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 	if dim == 0 && p.embedder != nil {
 		emb := p.embedder()
 		if emb != nil {
-			probeResp, perr := emb.Embed(ctx, &provider.EmbeddingRequest{Input: []string{"probe"}})
+			probeInputs := []string{"probe"}
+			probeResp, _, perr := WrapLLMCall(ctx, budget, OpParaphraseEmbedProbe,
+				emb.Name(), "",
+				func(ctx context.Context) (*provider.EmbeddingResponse, *provider.TokenUsage, error) {
+					ctx = provider.WithOperation(ctx, provider.OperationEmbedding)
+					r, e := emb.Embed(ctx, &provider.EmbeddingRequest{Input: probeInputs})
+					return r, usageOrEstimateEmbed(r, probeInputs), e
+				})
 			if perr == nil && probeResp != nil && len(probeResp.Embeddings) > 0 {
 				dim = len(probeResp.Embeddings[0])
 			}

@@ -31,5 +31,9 @@ type TokenUsage struct {
 	Success      bool       `json:"success"`
 	ErrorCode    *string    `json:"error_code"`
 	RequestID    *string    `json:"request_id"`
-	CreatedAt    time.Time  `json:"created_at"`
+	// CycleID attributes a row to the dream cycle that incurred the call.
+	// Non-dream callers leave this nil; dream_cycles.tokens_used is computed
+	// live from SUM(...) WHERE cycle_id = dream_cycles.id.
+	CycleID   *uuid.UUID `json:"cycle_id"`
+	CreatedAt time.Time  `json:"created_at"`
 }

@@ -48,8 +48,12 @@ func createRunningCycle(t *testing.T, ctx context.Context, repo *DreamCycleRepo,
 		t.Fatalf("start cycle: %v", err)
 	}
 	if tokensUsed > 0 {
-		if err := repo.UpdateStatus(ctx, cycle.ID, model.DreamStatusRunning, "entity_dedup", tokensUsed); err != nil {
-			t.Fatalf("seed tokens_used: %v", err)
+		// tokens_used is now derived live from the SUM of token_usage rows
+		// attributed to the cycle via cycle_id. Tests that need a specific
+		// tokens_used seed must insert token_usage rows directly; the
+		// UpdateStatus path no longer accepts a tokens_used value.
+		if err := repo.UpdateStatus(ctx, cycle.ID, model.DreamStatusRunning, "entity_dedup"); err != nil {
+			t.Fatalf("seed phase: %v", err)
 		}
 	}
 	out, err := repo.GetByID(ctx, cycle.ID)
@@ -59,7 +63,7 @@ func createRunningCycle(t *testing.T, ctx context.Context, repo *DreamCycleRepo,
 	return out
 }
 
-func TestDreamCycleRepo_Heartbeat_OnlyRunningRows(t *testing.T) {
+func TestDreamCycleRepo_TickProgress_OnlyRunningRows(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewDreamCycleRepo(db)
@@ -67,9 +71,13 @@ func TestDreamCycleRepo_Heartbeat_OnlyRunningRows(t *testing.T) {
 		project, _ := createTestProject(t, ctx, db, "hb-running-"+uuid.New().String()[:8])
 		running := createRunningCycle(t, ctx, repo, project.ID, project.NamespaceID, 0)
 
-		// Run heartbeat against a running row.
-		if err := repo.Heartbeat(ctx, running.ID); err != nil {
-			t.Fatalf("heartbeat running: %v", err)
+		// Run TickProgress against a running row.
+		used, err := repo.TickProgress(ctx, running.ID)
+		if err != nil {
+			t.Fatalf("tick progress running: %v", err)
+		}
+		if used != 0 {
+			t.Fatalf("no token_usage rows yet, expected used=0, got %d", used)
 		}
 		got, err := repo.GetByID(ctx, running.ID)
 		if err != nil {
@@ -79,23 +87,27 @@ func TestDreamCycleRepo_Heartbeat_OnlyRunningRows(t *testing.T) {
 			t.Fatalf("expected heartbeat_at to be set on running cycle")
 		}
 
-		// Transition to failed, then attempt heartbeat — must be a no-op.
-		if err := repo.Fail(ctx, running.ID, "test", 0); err != nil {
+		// Transition to failed, then attempt TickProgress — must be a no-op.
+		if err := repo.Fail(ctx, running.ID, "test"); err != nil {
 			t.Fatalf("fail: %v", err)
 		}
 		preFail, _ := repo.GetByID(ctx, running.ID)
-		// Sleep to ensure any successful Heartbeat would write a strictly
-		// newer second-resolution timestamp.
+		// Sleep to ensure any successful tick would write a strictly newer
+		// second-resolution timestamp.
 		time.Sleep(1100 * time.Millisecond)
-		if err := repo.Heartbeat(ctx, running.ID); err != nil {
-			t.Fatalf("heartbeat on failed cycle: %v", err)
+		used, err = repo.TickProgress(ctx, running.ID)
+		if err != nil {
+			t.Fatalf("tick progress on failed cycle: %v", err)
+		}
+		if used != 0 {
+			t.Fatalf("tick on terminal row should return 0, got %d", used)
 		}
 		postFail, _ := repo.GetByID(ctx, running.ID)
 		if postFail.HeartbeatAt == nil || preFail.HeartbeatAt == nil {
 			t.Fatalf("expected pre-existing heartbeat_at to remain set")
 		}
 		if !postFail.HeartbeatAt.Equal(*preFail.HeartbeatAt) {
-			t.Fatalf("heartbeat reached a non-running cycle: pre=%s post=%s",
+			t.Fatalf("tick reached a non-running cycle: pre=%s post=%s",
 				preFail.HeartbeatAt, postFail.HeartbeatAt)
 		}
 	})
@@ -157,13 +169,31 @@ func TestDreamCycleRepo_Abandon_TransitionsAndIdempotent(t *testing.T) {
 	})
 }
 
-func TestDreamCycleRepo_Abandon_PreservesTokensUsed(t *testing.T) {
+func TestDreamCycleRepo_Abandon_DerivesTokensUsedFromUsageRows(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewDreamCycleRepo(db)
 
 		project, _ := createTestProject(t, ctx, db, "abandon-tokens-"+uuid.New().String()[:8])
+		// Pre-seed dream_cycles.tokens_used to 4242 to verify Abandon
+		// overwrites it with the derived SUM, not preserves it.
 		running := createRunningCycle(t, ctx, repo, project.ID, project.NamespaceID, 4242)
+
+		// Insert token_usage rows attributing 1234 tokens to this cycle.
+		usageRepo := NewTokenUsageRepo(db)
+		cycleID := running.ID
+		if err := usageRepo.Record(ctx, &model.TokenUsage{
+			NamespaceID:  project.NamespaceID,
+			Operation:    "contradiction_judge",
+			Provider:     "test",
+			Model:        "test",
+			TokensInput:  1000,
+			TokensOutput: 234,
+			Success:      true,
+			CycleID:      &cycleID,
+		}); err != nil {
+			t.Fatalf("seed token_usage: %v", err)
+		}
 
 		ok, err := repo.Abandon(ctx, running.ID, "stuck for testing")
 		if err != nil {
@@ -173,8 +203,9 @@ func TestDreamCycleRepo_Abandon_PreservesTokensUsed(t *testing.T) {
 			t.Fatalf("expected abandon true")
 		}
 		got, _ := repo.GetByID(ctx, running.ID)
-		if got.TokensUsed != 4242 {
-			t.Fatalf("expected tokens_used preserved at 4242, got %d", got.TokensUsed)
+		// Abandon now writes the live SUM (1234), not the preserved 4242.
+		if got.TokensUsed != 1234 {
+			t.Fatalf("expected tokens_used derived from token_usage SUM = 1234, got %d", got.TokensUsed)
 		}
 	})
 }
@@ -191,7 +222,7 @@ func TestDreamCycleRepo_ListStale(t *testing.T) {
 
 		// Park `old` 20 minutes ago, leave `fresh` at now, complete the third.
 		setCycleTimestamps(t, ctx, db, old.ID, time.Now().Add(-20*time.Minute), nil)
-		if err := repo.Complete(ctx, completed.ID, json.RawMessage(`[]`), 0); err != nil {
+		if err := repo.Complete(ctx, completed.ID, json.RawMessage(`[]`)); err != nil {
 			t.Fatalf("complete: %v", err)
 		}
 		// Even if completed.updated_at is also old, ListStale must skip it
@@ -244,7 +275,7 @@ func TestDreamCycleRepo_GuardsBlockLateWrites(t *testing.T) {
 		}
 
 		// Late Complete from a still-alive runner.
-		if err := repo.Complete(ctx, running.ID, json.RawMessage(`[]`), 9999); err != nil {
+		if err := repo.Complete(ctx, running.ID, json.RawMessage(`[]`)); err != nil {
 			t.Fatalf("complete after abandon: %v", err)
 		}
 		got, _ := repo.GetByID(ctx, running.ID)
@@ -256,7 +287,7 @@ func TestDreamCycleRepo_GuardsBlockLateWrites(t *testing.T) {
 		}
 
 		// Late UpdateStatus from a phase boundary.
-		if err := repo.UpdateStatus(ctx, running.ID, model.DreamStatusRunning, "entity_dedup", 8888); err != nil {
+		if err := repo.UpdateStatus(ctx, running.ID, model.DreamStatusRunning, "entity_dedup"); err != nil {
 			t.Fatalf("update status after abandon: %v", err)
 		}
 		got, _ = repo.GetByID(ctx, running.ID)
@@ -265,12 +296,91 @@ func TestDreamCycleRepo_GuardsBlockLateWrites(t *testing.T) {
 		}
 
 		// Late Fail from runner.
-		if err := repo.Fail(ctx, running.ID, "runner saw an error", 7777); err != nil {
+		if err := repo.Fail(ctx, running.ID, "runner saw an error"); err != nil {
 			t.Fatalf("fail after abandon: %v", err)
 		}
 		got, _ = repo.GetByID(ctx, running.ID)
 		if got.Error == nil || *got.Error != "stuck" {
 			t.Fatalf("late Fail clobbered abandon's error: %v", got.Error)
+		}
+	})
+}
+
+func TestDreamCycleRepo_TickProgress_DerivesTokensUsedFromUsageRows(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewDreamCycleRepo(db)
+		usageRepo := NewTokenUsageRepo(db)
+
+		project, _ := createTestProject(t, ctx, db, "tick-tokens-"+uuid.New().String()[:8])
+		mine := createRunningCycle(t, ctx, repo, project.ID, project.NamespaceID, 0)
+		other := createRunningCycle(t, ctx, repo, project.ID, project.NamespaceID, 0)
+
+		// 3 rows attributed to mine: 100+50, 200+25, 0+10 = 385.
+		// 1 row attributed to other: must NOT contribute.
+		// 1 row with NULL cycle_id: must NOT contribute.
+		mineID, otherID := mine.ID, other.ID
+		seed := []*model.TokenUsage{
+			{NamespaceID: project.NamespaceID, Operation: "contradiction_judge", Provider: "p", Model: "m", TokensInput: 100, TokensOutput: 50, Success: true, CycleID: &mineID},
+			{NamespaceID: project.NamespaceID, Operation: "alignment_score", Provider: "p", Model: "m", TokensInput: 200, TokensOutput: 25, Success: true, CycleID: &mineID},
+			{NamespaceID: project.NamespaceID, Operation: "embed_backfill", Provider: "p", Model: "m", TokensInput: 0, TokensOutput: 10, Success: true, CycleID: &mineID},
+			{NamespaceID: project.NamespaceID, Operation: "synthesis", Provider: "p", Model: "m", TokensInput: 999, TokensOutput: 999, Success: true, CycleID: &otherID},
+			{NamespaceID: project.NamespaceID, Operation: "memory.store", Provider: "p", Model: "m", TokensInput: 50, TokensOutput: 0, Success: true, CycleID: nil},
+		}
+		for _, u := range seed {
+			if err := usageRepo.Record(ctx, u); err != nil {
+				t.Fatalf("record token_usage: %v", err)
+			}
+		}
+
+		used, err := repo.TickProgress(ctx, mine.ID)
+		if err != nil {
+			t.Fatalf("tick progress: %v", err)
+		}
+		if used != 385 {
+			t.Fatalf("expected SUM=385 (only mine's rows), got %d", used)
+		}
+
+		// Row state matches the returned value.
+		got, _ := repo.GetByID(ctx, mine.ID)
+		if got.TokensUsed != 385 {
+			t.Fatalf("dream_cycles.tokens_used = %d, want 385", got.TokensUsed)
+		}
+		if got.HeartbeatAt == nil {
+			t.Fatal("heartbeat_at should be set after TickProgress")
+		}
+	})
+}
+
+func TestDreamCycleRepo_Complete_DerivesTokensUsedFromUsageRows(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewDreamCycleRepo(db)
+		usageRepo := NewTokenUsageRepo(db)
+
+		project, _ := createTestProject(t, ctx, db, "complete-tokens-"+uuid.New().String()[:8])
+		// Pre-seed the row's tokens_used to a fake value to verify Complete
+		// overwrites with the live SUM, not the prior value.
+		mine := createRunningCycle(t, ctx, repo, project.ID, project.NamespaceID, 999_999)
+		mineID := mine.ID
+
+		if err := usageRepo.Record(ctx, &model.TokenUsage{
+			NamespaceID: project.NamespaceID,
+			Operation:   "synthesis", Provider: "p", Model: "m",
+			TokensInput: 700, TokensOutput: 350, Success: true, CycleID: &mineID,
+		}); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+
+		if err := repo.Complete(ctx, mine.ID, json.RawMessage(`[]`)); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+		got, _ := repo.GetByID(ctx, mine.ID)
+		if got.TokensUsed != 1050 {
+			t.Fatalf("Complete should write SUM=1050, got %d", got.TokensUsed)
+		}
+		if got.Status != model.DreamStatusCompleted {
+			t.Fatalf("status = %q, want completed", got.Status)
 		}
 	})
 }

@@ -2,6 +2,7 @@ package dreaming
 
 import (
 	"context"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -124,6 +125,111 @@ func (t *CycleTracker) EmitPhaseCompleted(
 	events.Emit(ctx, t.bus, events.DreamPhaseCompleted, t.scope, payload)
 }
 
+// usageOrEstimateLLM returns the usage struct from an LLM response,
+// substituting EstimateTokens for prompt and completion when the provider
+// reports zero (Ollama's OpenAI-compat endpoint, some local proxies). Without
+// the fallback the dream-cycle TokenBudget never advances and the cycle
+// burns through every candidate. budget.MarkZeroUsageWarned dedups the
+// per-cycle warning so logs stay clean.
+func usageOrEstimateLLM(resp *provider.CompletionResponse, prompt string, budget *TokenBudget, providerName, phase string) *provider.TokenUsage {
+	if resp == nil {
+		return nil
+	}
+	u := resp.Usage
+	if u.TotalTokens == 0 {
+		if budget != nil && budget.MarkZeroUsageWarned() {
+			slog.Warn("dreaming: provider returned zero token usage; estimating from prompt/response length",
+				"provider", providerName, "phase", phase)
+		}
+		u.PromptTokens = EstimateTokens(prompt)
+		u.CompletionTokens = EstimateTokens(resp.Content)
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	}
+	return &u
+}
+
+// usageOrEstimateEmbed returns the usage struct from an embedding response,
+// substituting EstimateTokens summed over the inputs when the provider
+// reports zero. See usageOrEstimateLLM for why the fallback exists.
+func usageOrEstimateEmbed(resp *provider.EmbeddingResponse, inputs []string) *provider.TokenUsage {
+	if resp == nil {
+		return nil
+	}
+	u := resp.Usage
+	if u.TotalTokens == 0 {
+		est := 0
+		for _, s := range inputs {
+			est += EstimateTokens(s)
+		}
+		u.PromptTokens = est
+		u.TotalTokens = est
+	}
+	return &u
+}
+
+// SSE call-operation labels. These are the dream.call.{started,completed}
+// "operation" payload field — they classify each LLM/embedder round trip in
+// the admin UI's live timeline and are referenced from the phase code below
+// and from the React handler. Adding a new wrapped call site means adding a
+// constant here so typos fail at compile time.
+const (
+	OpContradictionJudge      = "contradiction_judge"
+	OpContradictionEmbedProbe = "contradiction_embed_probe"
+	OpContradictionEmbedBatch = "contradiction_embed_batch"
+	OpAlignmentScore          = "alignment_score"
+	OpSynthesis               = "synthesis"
+	OpNoveltyAuditEmbed       = "novelty_audit_embed"
+	OpNoveltyAuditLLM         = "novelty_audit_llm"
+	OpParaphraseEmbedProbe    = "paraphrase_embed_probe"
+	OpEmbedBackfill           = "embed_backfill"
+)
+
+// progressEmitStep returns the iteration interval at which silent phases
+// should emit dream.phase.progress. Caps total ticks at ≤ 40 per phase
+// regardless of work size so the SSE stream stays readable on cycles with
+// millions of items. Uses ceiling division so total / step is bounded above
+// by 40 — floor division would overshoot when total is not a multiple of 40.
+func progressEmitStep(total int) int {
+	if total <= 40 {
+		return 1
+	}
+	return (total + 39) / 40
+}
+
+// shouldEmitProgress returns true when the i'th iteration (0-indexed) of a
+// total-element loop should emit dream.phase.progress. Always fires at the
+// final iteration so the UI sees the boundary, plus every step iterations
+// in between. Place at the top of the silent-phase loop — emitting after
+// continue branches starves progress on phases that skip most rows.
+func shouldEmitProgress(i, total, step int) bool {
+	if total <= 0 {
+		return false
+	}
+	return i+1 == total || (i+1)%step == 0
+}
+
+// EmitPhaseProgress publishes dream.phase.progress for phases whose work is
+// dominated by SQL-only iteration (entity dedup, transitive inference,
+// pruning, weight adjustment). Without this signal those phases look frozen
+// to the admin UI between dream.phase.{started,completed} markers.
+//
+// label describes what is being counted ("memories", "entities",
+// "relationships", "weights") so the UI can render a meaningful chip.
+func (t *CycleTracker) EmitPhaseProgress(ctx context.Context, current, total int, label string) {
+	if t == nil {
+		return
+	}
+	events.Emit(ctx, t.bus, events.DreamPhaseProgress, t.scope, map[string]any{
+		"cycle_id":   t.cycleID.String(),
+		"project_id": t.projectID.String(),
+		"phase":      t.Phase(),
+		"current":    current,
+		"total":      total,
+		"label":      label,
+		"timestamp":  time.Now().UTC(),
+	})
+}
+
 // EmitHeartbeat publishes dream.cycle.heartbeat carrying current phase, tokens
 // used, and the in-flight call (if any). Called from the runner's heartbeat
 // goroutine after the database heartbeat write.
@@ -175,30 +281,50 @@ func CycleTrackerFromContext(ctx context.Context) *CycleTracker {
 	return t
 }
 
-// WrapLLMCall is the context-aware entry point for instrumenting an LLM call
-// from inside a phase. If no tracker is bound to ctx (e.g. unit tests), fn
-// is invoked directly with no events. Otherwise emits dream.call.started,
-// runs fn, emits dream.call.completed, and clears the in-flight pointer.
+// WrapLLMCall is the single LLM/embedder call path the dreaming pipeline
+// knows about. It instruments the call (emits dream.call.{started,completed}
+// when a tracker is bound) AND charges the cycle's TokenBudget when usage is
+// returned. Phases never call budget.Spend directly — wrapping is the only
+// way LLM/embedder tokens reach the budget, which guarantees that every
+// wrapped call site charges and the budget can never be silently bypassed
+// by a future phase author.
 //
 // Generic over the call's primary return type so call sites read naturally:
 //
-//	alignment, usage, err := dreaming.WrapLLMCall(ctx, "alignment", model,
-//	    syn.ID.String(),
+//	alignment, usage, err := dreaming.WrapLLMCall(ctx, budget, "alignment_score",
+//	    model, syn.ID.String(),
 //	    func(ctx context.Context) (float64, *provider.TokenUsage, error) {
-//	        return p.scoreAlignment(ctx, llm, prompt, budget)
+//	        return p.scoreAlignment(ctx, llm, prompt)
 //	    })
 //
-// usage may be non-nil even on error (the LLM call already happened);
-// caller is responsible for budget accounting as before.
+// budget may be nil (unit tests, embedder probes outside a cycle) — the
+// Spend step is skipped. usage may be non-nil even on call error (the LLM
+// call already happened); the budget is still charged in that case so
+// reporting reflects real spend. If budget.Spend returns ErrBudgetExhausted
+// AND fn itself returned nil, that error surfaces to the caller so the
+// runner can break out of the phase loop on the next ctx check.
 func WrapLLMCall[T any](
 	ctx context.Context,
+	budget *TokenBudget,
 	operation, model, targetID string,
 	fn func(ctx context.Context) (T, *provider.TokenUsage, error),
 ) (T, *provider.TokenUsage, error) {
+	spend := func(usage *provider.TokenUsage, callErr error) error {
+		if usage == nil || budget == nil {
+			return callErr
+		}
+		if spendErr := budget.Spend(usage.TotalTokens); spendErr != nil && callErr == nil {
+			return spendErr
+		}
+		return callErr
+	}
+
 	t := CycleTrackerFromContext(ctx)
 	if t == nil {
-		return fn(ctx)
+		result, usage, err := fn(ctx)
+		return result, usage, spend(usage, err)
 	}
+
 	call := &InFlightCall{
 		CallID:    uuid.New(),
 		Operation: operation,
@@ -211,6 +337,7 @@ func WrapLLMCall[T any](
 	defer t.clearInFlight(call)
 
 	result, usage, err := fn(ctx)
+	err = spend(usage, err)
 	emitComplete(ctx, t, call, usage, err)
 	return result, usage, err
 }

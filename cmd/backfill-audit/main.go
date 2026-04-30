@@ -146,7 +146,7 @@ func main() {
 	residual, err := consolidationPhase.AuditExistingDreams(ctx, cycle, budget, logger, registry.GetFact(), memories, runCap)
 	elapsed := time.Since(start)
 
-	if cerr := dreamCycleRepo.Complete(ctx, cycle.ID, []byte(`[{"phase":"backfill_audit_cli"}]`), budget.Used()); cerr != nil {
+	if cerr := dreamCycleRepo.Complete(ctx, cycle.ID, []byte(`[{"phase":"backfill_audit_cli"}]`)); cerr != nil {
 		log.Printf("warning: mark cycle complete failed: %v", cerr)
 	}
 

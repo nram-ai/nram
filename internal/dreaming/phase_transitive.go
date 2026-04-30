@@ -133,7 +133,13 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	// cap with more potential inferences still available. When true, the
 	// phase reports residual so the next cycle picks up the rest.
 	truncated := false
-	for _, entityA := range entities {
+
+	tracker := CycleTrackerFromContext(ctx)
+	progressStep := progressEmitStep(len(entities))
+	for entityIdx, entityA := range entities {
+		if tracker != nil && shouldEmitProgress(entityIdx, len(entities), progressStep) {
+			tracker.EmitPhaseProgress(ctx, entityIdx+1, len(entities), "entities")
+		}
 		if created >= maxNew {
 			truncated = true
 			break

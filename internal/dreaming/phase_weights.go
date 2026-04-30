@@ -191,7 +191,13 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 	)
 	now := time.Now().UTC()
 
-	for _, rel := range rels {
+	tracker := CycleTrackerFromContext(ctx)
+	progressStep := progressEmitStep(len(rels))
+
+	for i, rel := range rels {
+		if tracker != nil && shouldEmitProgress(i, len(rels), progressStep) {
+			tracker.EmitPhaseProgress(ctx, i+1, len(rels), "relationships")
+		}
 		if rel.ValidUntil != nil {
 			continue
 		}

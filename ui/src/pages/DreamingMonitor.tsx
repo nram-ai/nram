@@ -36,6 +36,12 @@ type LiveRecentCall = {
   error?: string;
 };
 
+type LivePhaseProgress = {
+  current: number;
+  total: number;
+  label: string;
+};
+
 type LiveCycleState = {
   cycleId: string;
   phase?: string;
@@ -43,6 +49,7 @@ type LiveCycleState = {
   lastActivityAt?: string;
   currentCall?: LiveInFlightCall;
   recentCalls: LiveRecentCall[];
+  phaseProgress?: LivePhaseProgress;
 };
 
 const LIVE_RECENT_CAP = 30;
@@ -199,17 +206,15 @@ function useDreamingLiveState() {
                   }
                 : c,
             );
-            // Heartbeats carry cumulative tokens_used; call.completed carries
-            // this call's delta. Add the delta so the counter ticks per call.
-            const addTokens =
-              typeof data.tokens?.total === "number" ? data.tokens.total : 0;
+            // tokensUsed is owned by heartbeats now (SUM-derived from token_usage).
+            // Mutating it from per-call deltas would race the next heartbeat
+            // and double-count between ticks.
             return {
               ...prev,
               [cycleId]: {
                 ...cur,
                 currentCall:
                   cur.currentCall?.call_id === data.call_id ? undefined : cur.currentCall,
-                tokensUsed: (cur.tokensUsed ?? 0) + addTokens,
                 lastActivityAt: data.ended_at ?? cur.lastActivityAt,
                 recentCalls: updatedRecent,
               },
@@ -230,11 +235,33 @@ function useDreamingLiveState() {
                 tokensUsed:
                   typeof data.tokens_used === "number" ? data.tokens_used : cur.tokensUsed,
                 lastActivityAt: new Date().toISOString(),
+                // Reset progress on phase boundary — a fresh phase starts at 0/0.
+                phaseProgress: undefined,
               },
             };
           });
           // Authoritative refresh on phase boundaries (cheap, only every ~Ns).
           qc.invalidateQueries({ queryKey: ["admin", "dreaming", "cycles"] });
+          break;
+        }
+        case "dream.phase.progress": {
+          if (!cycleId) return;
+          setLive((prev) => {
+            const cur = prev[cycleId] ?? { cycleId, recentCalls: [] };
+            return {
+              ...prev,
+              [cycleId]: {
+                ...cur,
+                phase: data.phase ?? cur.phase,
+                lastActivityAt: data.timestamp ?? cur.lastActivityAt,
+                phaseProgress: {
+                  current: typeof data.current === "number" ? data.current : 0,
+                  total: typeof data.total === "number" ? data.total : 0,
+                  label: typeof data.label === "string" ? data.label : "",
+                },
+              },
+            };
+          });
           break;
         }
         case "dream.cycle.completed":
@@ -382,6 +409,27 @@ function InFlightCallChip({ call }: { call: LiveInFlightCall }) {
   );
 }
 
+function PhaseProgressChip({ progress }: { progress: LivePhaseProgress }) {
+  const pct =
+    progress.total > 0
+      ? Math.min(100, Math.round((progress.current / progress.total) * 100))
+      : 0;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-200"
+      title={`${progress.current} / ${progress.total} ${progress.label}`}
+    >
+      <span className="h-1.5 w-12 overflow-hidden rounded-full bg-indigo-200 dark:bg-indigo-900/60">
+        <span
+          className="block h-full bg-indigo-500 transition-[width] duration-300 dark:bg-indigo-400"
+          style={{ width: `${pct}%` }}
+        />
+      </span>
+      {progress.current.toLocaleString()}/{progress.total.toLocaleString()} {progress.label}
+    </span>
+  );
+}
+
 function LastActivityChip({ iso }: { iso: string }) {
   useElapsedTicker(true);
   const secs = elapsedSeconds(iso);
@@ -423,6 +471,7 @@ function DreamingActivityBanner({
                 {phase ? PHASE_LABELS[phase] ?? phase : "starting"}
               </span>
               {ls?.currentCall && <InFlightCallChip call={ls.currentCall} />}
+              {ls?.phaseProgress && <PhaseProgressChip progress={ls.phaseProgress} />}
               {lastActivity && <LastActivityChip iso={lastActivity} />}
               <span className="font-mono text-[11px] text-muted-foreground">
                 {tokens.toLocaleString()} / {cycle.token_budget.toLocaleString()} tokens
@@ -502,6 +551,9 @@ function CycleTable({
                     ) : null}
                     {cycle.status === "running" && live[cycle.id]?.currentCall && (
                       <InFlightCallChip call={live[cycle.id].currentCall!} />
+                    )}
+                    {cycle.status === "running" && live[cycle.id]?.phaseProgress && (
+                      <PhaseProgressChip progress={live[cycle.id].phaseProgress!} />
                     )}
                     {cycle.status === "running" &&
                       (() => {

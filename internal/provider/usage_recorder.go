@@ -255,6 +255,7 @@ func buildUsageRow(
 		Success:      callErr == nil,
 		MemoryID:     MemoryIDFromContext(ctx),
 		APIKeyID:     APIKeyIDFromContext(ctx),
+		CycleID:      CycleIDFromContext(ctx),
 		CreatedAt:    time.Now().UTC(),
 	}
 	if reqID := RequestIDFromContext(ctx); reqID != "" {

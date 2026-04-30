@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -174,16 +175,10 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		"cycle", cycle.ID, "memories", len(memories), "stale", len(stale),
 		"cap", cap, "neighbors_per_anchor", neighbors)
 
-	pairs, fullyDispatched, embedTokens, vectorsByID, selErr := p.selectNeighborPairs(ctx, stale, memories, cap, neighbors)
+	pairs, fullyDispatched, vectorsByID, selErr := p.selectNeighborPairs(ctx, stale, memories, cap, neighbors, budget)
 	if selErr != nil {
 		slog.Warn("dreaming: neighbour selection failed; degrading to ID-ordered walk",
 			"cycle", cycle.ID, "err", selErr)
-	}
-	// token_usage rows for the embedding probe + batch are written by
-	// the UsageRecordingProvider middleware. Here we only spend against
-	// the dream-cycle budget.
-	if embedTokens > 0 {
-		_ = budget.Spend(embedTokens)
 	}
 
 	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamContradictionPrompt, "global")
@@ -243,28 +238,24 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		}
 
 		pairStart := time.Now()
-		type contradictionResult struct {
-			found       bool
-			winner      string
-			explanation string
-		}
-		cr, usage, err := WrapLLMCall(ctx, "contradiction_judge", llm.Name(), pair[0].ID.String()+","+pair[1].ID.String(),
-			func(ctx context.Context) (contradictionResult, *provider.TokenUsage, error) {
-				found, winner, explanation, u, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
-				return contradictionResult{found: found, winner: winner, explanation: explanation}, u, err
-			})
-		found, winner, explanation := cr.found, cr.winner, cr.explanation
+		found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
 		pairDur := time.Since(pairStart)
 
-		// Account for usage before handling the error. Parse-error paths
-		// still return non-nil usage from the LLM call. token_usage rows
-		// are written by the UsageRecordingProvider middleware; here we
-		// only charge the dream-cycle budget.
-		var spendErr error
 		callTokens := 0
 		if usage != nil {
 			callTokens = usage.TotalTokens
-			spendErr = budget.Spend(usage.TotalTokens)
+		}
+
+		// Budget exhaustion surfaces from WrapLLMCall when the call itself
+		// succeeded but Spend tipped over the cycle's total. The runner needs
+		// us to break out so the next phase can start (or the cycle can wind
+		// down with the residual marker).
+		if errors.Is(err, ErrBudgetExhausted) {
+			slog.Info("dreaming: contradiction loop stopped on budget exhaustion",
+				"cycle", cycle.ID, "pair", idx+1, "of", len(pairs),
+				"tokens", callTokens)
+			budgetStopped = true
+			break
 		}
 
 		if err != nil {
@@ -272,10 +263,6 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 				"cycle", cycle.ID, "pair", idx+1, "of", len(pairs),
 				"a", pair[0].ID, "b", pair[1].ID,
 				"duration_ms", pairDur.Milliseconds(), "tokens", callTokens, "err", err)
-			if spendErr != nil {
-				budgetStopped = true
-				break
-			}
 			continue
 		}
 
@@ -284,11 +271,6 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			"a", pair[0].ID, "b", pair[1].ID,
 			"found", found, "duration_ms", pairDur.Milliseconds(),
 			"tokens", callTokens, "budget_remaining", budget.Remaining())
-
-		if spendErr != nil {
-			budgetStopped = true
-			break
-		}
 
 		if !found {
 			continue
@@ -496,7 +478,8 @@ func (p *ContradictionPhase) selectNeighborPairs(
 	allMemories []model.Memory,
 	cap int,
 	neighbors int,
-) ([][2]model.Memory, map[uuid.UUID]bool, int, map[uuid.UUID][]float32, error) {
+	budget *TokenBudget,
+) ([][2]model.Memory, map[uuid.UUID]bool, map[uuid.UUID][]float32, error) {
 	idxByID := make(map[uuid.UUID]int, len(allMemories))
 	for i := range allMemories {
 		idxByID[allMemories[i].ID] = i
@@ -507,7 +490,6 @@ func (p *ContradictionPhase) selectNeighborPairs(
 		embedder = p.embedderProvider()
 	}
 
-	embedTokens := 0
 	var selErr error
 
 	// Probe the embedder to learn the dim it actually returns. Provider
@@ -519,19 +501,19 @@ func (p *ContradictionPhase) selectNeighborPairs(
 	// matches what the service write path stores via len(vec).
 	dim := 0
 	if embedder != nil {
-		probeResp, probeErr := embedder.Embed(provider.WithOperation(ctx, provider.OperationDreamContradictionEmbed), &provider.EmbeddingRequest{
-			Input: []string{"probe"},
-		})
+		probeInputs := []string{"probe"}
+		probeResp, _, probeErr := WrapLLMCall(ctx, budget, OpContradictionEmbedProbe,
+			embedder.Name(), "",
+			func(ctx context.Context) (*provider.EmbeddingResponse, *provider.TokenUsage, error) {
+				ctx = provider.WithOperation(ctx, provider.OperationDreamContradictionEmbed)
+				r, e := embedder.Embed(ctx, &provider.EmbeddingRequest{Input: probeInputs})
+				return r, usageOrEstimateEmbed(r, probeInputs), e
+			})
 		if probeErr != nil || probeResp == nil || len(probeResp.Embeddings) == 0 || len(probeResp.Embeddings[0]) == 0 {
 			slog.Warn("dreaming: embedder dim probe failed; skipping vector-store optimization",
 				"provider", embedder.Name(), "err", probeErr)
 		} else {
 			dim = len(probeResp.Embeddings[0])
-			if probeResp.Usage.TotalTokens > 0 {
-				embedTokens += probeResp.Usage.TotalTokens
-			} else {
-				embedTokens += EstimateTokens("probe")
-			}
 		}
 	}
 
@@ -571,10 +553,16 @@ func (p *ContradictionPhase) selectNeighborPairs(
 		slog.Info("dreaming: embedding miss set for neighbour selection",
 			"provider", embedder.Name(), "misses", len(inputs), "total", len(allMemories))
 		embedStart := time.Now()
-		resp, err := embedder.Embed(provider.WithOperation(ctx, provider.OperationDreamContradictionEmbed), &provider.EmbeddingRequest{
-			Input:     inputs,
-			Dimension: dim,
-		})
+		resp, usage, err := WrapLLMCall(ctx, budget, OpContradictionEmbedBatch,
+			embedder.Name(), "",
+			func(ctx context.Context) (*provider.EmbeddingResponse, *provider.TokenUsage, error) {
+				ctx = provider.WithOperation(ctx, provider.OperationDreamContradictionEmbed)
+				r, e := embedder.Embed(ctx, &provider.EmbeddingRequest{
+					Input:     inputs,
+					Dimension: dim,
+				})
+				return r, usageOrEstimateEmbed(r, inputs), e
+			})
 		embedDur := time.Since(embedStart)
 		if err != nil || resp == nil || len(resp.Embeddings) != len(inputs) {
 			selErr = err
@@ -587,13 +575,10 @@ func (p *ContradictionPhase) selectNeighborPairs(
 			for j, vec := range resp.Embeddings {
 				stored[allMemories[missIdx[j]].ID] = vec
 			}
-			missTokens := resp.Usage.TotalTokens
-			if missTokens == 0 {
-				for _, s := range inputs {
-					missTokens += EstimateTokens(s)
-				}
+			missTokens := 0
+			if usage != nil {
+				missTokens = usage.TotalTokens
 			}
-			embedTokens += missTokens
 			slog.Info("dreaming: neighbour embedding complete",
 				"provider", embedder.Name(), "count", len(inputs),
 				"duration_ms", embedDur.Milliseconds(), "tokens", missTokens)
@@ -643,7 +628,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 		}
 	}
 
-	return pairs, fullyDispatched, embedTokens, stored, selErr
+	return pairs, fullyDispatched, stored, selErr
 }
 
 // candidatesFor returns the K nearest-neighbour candidate indices for an
@@ -871,32 +856,23 @@ func (p *ContradictionPhase) checkContradiction(
 	prompt string,
 	budget *TokenBudget,
 ) (bool, string, string, *provider.TokenUsage, error) {
-	ctx = provider.WithOperation(ctx, provider.OperationDreamContradiction)
-	ctx = provider.WithMemoryID(ctx, a.ID)
-	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
-		Messages: []provider.Message{
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   budget.PerCallCap(),
-		Temperature: 0.1,
-		JSONMode:    true,
-	})
+	resp, usage, err := WrapLLMCall(ctx, budget, OpContradictionJudge, llm.Name(),
+		a.ID.String()+","+b.ID.String(),
+		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
+			ctx = provider.WithOperation(ctx, provider.OperationDreamContradiction)
+			ctx = provider.WithMemoryID(ctx, a.ID)
+			r, e := llm.Complete(ctx, &provider.CompletionRequest{
+				Messages: []provider.Message{
+					{Role: "user", Content: prompt},
+				},
+				MaxTokens:   budget.PerCallCap(),
+				Temperature: 0.1,
+				JSONMode:    true,
+			})
+			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseContradictions), e
+		})
 	if err != nil {
-		return false, "", "", nil, err
-	}
-
-	usage := resp.Usage
-	// Fall back to the 4-bytes-per-token heuristic when the provider omits
-	// the usage field (e.g. Ollama's OpenAI-compat endpoint). Otherwise the
-	// budget never advances and the cycle burns through every candidate.
-	if usage.TotalTokens == 0 {
-		if budget.MarkZeroUsageWarned() {
-			slog.Warn("dreaming: provider returned zero token usage; estimating from prompt/response length",
-				"provider", llm.Name(), "phase", model.DreamPhaseContradictions)
-		}
-		usage.PromptTokens = EstimateTokens(prompt)
-		usage.CompletionTokens = EstimateTokens(resp.Content)
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		return false, "", "", usage, err
 	}
 
 	// Winner is "a", "b", "tie", or empty when the operator's prompt predates
@@ -910,9 +886,9 @@ func (p *ContradictionPhase) checkContradiction(
 
 	content := strings.TrimSpace(resp.Content)
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return false, "", "", &usage, fmt.Errorf("parse contradiction response: %w", err)
+		return false, "", "", usage, fmt.Errorf("parse contradiction response: %w", err)
 	}
 
-	return result.Contradicts, result.Winner, result.Explanation, &usage, nil
+	return result.Contradicts, result.Winner, result.Explanation, usage, nil
 }
 

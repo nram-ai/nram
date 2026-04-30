@@ -121,7 +121,7 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 		for i := range toProcess {
 			visited++
 			mem := toProcess[i]
-			if p.tryRepair(ctx, &mem, dim, stats) {
+			if p.tryRepair(ctx, &mem, dim, budget, stats) {
 				continue
 			}
 			p.clearDim(ctx, &mem, stats)
@@ -139,7 +139,7 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 // on success; false on embedder unavailability, embedder failure, or
 // persistent vector-store error. On false the caller falls back to
 // clearDim so the divergent row stops claiming a vector.
-func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memory, dim int, stats map[string]interface{}) bool {
+func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memory, dim int, budget *TokenBudget, stats map[string]interface{}) bool {
 	if p.embedder == nil {
 		return false
 	}
@@ -148,14 +148,19 @@ func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memor
 		return false
 	}
 
-	embedCtx := provider.WithOperation(ctx, provider.OperationEmbedding)
-	embedCtx = provider.WithMemoryID(embedCtx, mem.ID)
-	embedCtx = provider.WithNamespaceID(embedCtx, mem.NamespaceID)
-
-	resp, err := ep.Embed(embedCtx, &provider.EmbeddingRequest{
-		Input:     []string{mem.Content},
-		Dimension: dim,
-	})
+	inputs := []string{mem.Content}
+	resp, _, err := WrapLLMCall(ctx, budget, OpEmbedBackfill, ep.Name(),
+		mem.ID.String(),
+		func(ctx context.Context) (*provider.EmbeddingResponse, *provider.TokenUsage, error) {
+			ctx = provider.WithOperation(ctx, provider.OperationEmbedding)
+			ctx = provider.WithMemoryID(ctx, mem.ID)
+			ctx = provider.WithNamespaceID(ctx, mem.NamespaceID)
+			r, e := ep.Embed(ctx, &provider.EmbeddingRequest{
+				Input:     inputs,
+				Dimension: dim,
+			})
+			return r, usageOrEstimateEmbed(r, inputs), e
+		})
 	if err != nil {
 		slog.Warn("dreaming: embedding backfill re-embed failed",
 			"memory", mem.ID, "dim", dim, "err", err)

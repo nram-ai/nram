@@ -62,41 +62,74 @@ func (r *DreamCycleRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Drea
 	return r.scanRow(row)
 }
 
-// UpdateStatus updates the status, phase, and token usage of a dream cycle.
+// UpdateStatus updates the status and current phase of a dream cycle and
+// stamps updated_at. tokens_used is no longer written here — it is derived
+// live from token_usage by TickProgress / Complete / Fail / Abandon.
+//
 // Guarded on status IN ('pending','running') so a phase-boundary write that
 // loses to a concurrent Abandon is dropped silently rather than overwriting
 // the failed state.
-func (r *DreamCycleRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status, phase string, tokensUsed int) error {
+func (r *DreamCycleRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status, phase string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE dream_cycles SET status = ?, phase = ?, tokens_used = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')`
+	query := `UPDATE dream_cycles SET status = ?, phase = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE dream_cycles SET status = $1, phase = $2, tokens_used = $3, updated_at = $4 WHERE id = $5 AND status IN ('pending', 'running')`
+		query = `UPDATE dream_cycles SET status = $1, phase = $2, updated_at = $3 WHERE id = $4 AND status IN ('pending', 'running')`
 	}
 
-	_, err := r.db.Exec(ctx, query, status, phase, tokensUsed, now, id.String())
+	_, err := r.db.Exec(ctx, query, status, phase, now, id.String())
 	if err != nil {
 		return fmt.Errorf("dream cycle update status: %w", err)
 	}
 	return nil
 }
 
-// Heartbeat updates only heartbeat_at on a running cycle. The status guard
-// prevents reviving a just-terminated row when a heartbeat goroutine and the
-// runner's terminal write race.
-func (r *DreamCycleRepo) Heartbeat(ctx context.Context, id uuid.UUID) error {
+// TickProgress writes heartbeat_at, updated_at, AND tokens_used in one
+// statement. tokens_used is recomputed live from
+// SUM(tokens_input+tokens_output) over token_usage rows attributed to this
+// cycle via cycle_id; this is the single source of truth, so even if the
+// runner-side TokenBudget never sees a Spend (legacy code paths, future
+// phases), the row reflects what providers actually billed for.
+//
+// Returns the just-computed tokens_used so the runner can feed it to
+// EmitHeartbeat for the live SSE stream. Returns 0 + nil err if the row is
+// already terminal (the WHERE status='running' guard makes the UPDATE a
+// no-op and the RETURNING set is empty).
+func (r *DreamCycleRepo) TickProgress(ctx context.Context, id uuid.UUID) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE dream_cycles SET heartbeat_at = ? WHERE id = ? AND status = 'running'`
+	query := `UPDATE dream_cycles
+		SET heartbeat_at = ?,
+			updated_at   = ?,
+			tokens_used  = COALESCE(
+				(SELECT SUM(tokens_input + tokens_output)
+				 FROM token_usage
+				 WHERE cycle_id = ?), 0)
+		WHERE id = ? AND status = 'running'
+		RETURNING tokens_used`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE dream_cycles SET heartbeat_at = $1 WHERE id = $2 AND status = 'running'`
+		query = `UPDATE dream_cycles
+			SET heartbeat_at = $1,
+				updated_at   = $2,
+				tokens_used  = COALESCE(
+					(SELECT SUM(tokens_input + tokens_output)
+					 FROM token_usage
+					 WHERE cycle_id = $3), 0)
+			WHERE id = $4 AND status = 'running'
+			RETURNING tokens_used`
 	}
 
-	_, err := r.db.Exec(ctx, query, now, id.String())
-	if err != nil {
-		return fmt.Errorf("dream cycle heartbeat: %w", err)
+	idStr := id.String()
+	row := r.db.QueryRow(ctx, query, now, now, idStr, idStr)
+	var tokensUsed int
+	if err := row.Scan(&tokensUsed); err != nil {
+		if err == sql.ErrNoRows {
+			// Row was already terminal — UPDATE matched nothing.
+			return 0, nil
+		}
+		return 0, fmt.Errorf("dream cycle tick progress: %w", err)
 	}
-	return nil
+	return tokensUsed, nil
 }
 
 // Start marks a dream cycle as running and records the start time.
@@ -115,36 +148,76 @@ func (r *DreamCycleRepo) Start(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// Complete marks a dream cycle as completed with a phase summary and final
-// token count. Guarded on status='running' so a late completion that loses
-// to a concurrent Abandon is dropped silently.
-func (r *DreamCycleRepo) Complete(ctx context.Context, id uuid.UUID, summary json.RawMessage, tokensUsed int) error {
+// Complete marks a dream cycle as completed with a phase summary. tokens_used
+// is recomputed live from the SUM of token_usage rows attributed to this
+// cycle, so the row reflects what providers actually billed regardless of
+// what TokenBudget recorded in-memory.
+//
+// Guarded on status='running' so a late completion that loses to a concurrent
+// Abandon is dropped silently.
+func (r *DreamCycleRepo) Complete(ctx context.Context, id uuid.UUID, summary json.RawMessage) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE dream_cycles SET status = ?, phase_summary = ?, tokens_used = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status = 'running'`
+	query := `UPDATE dream_cycles SET
+		status        = ?,
+		phase_summary = ?,
+		tokens_used   = COALESCE(
+			(SELECT SUM(tokens_input + tokens_output)
+			 FROM token_usage WHERE cycle_id = ?), 0),
+		completed_at  = ?,
+		updated_at    = ?
+		WHERE id = ? AND status = 'running'`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE dream_cycles SET status = $1, phase_summary = $2, tokens_used = $3, completed_at = $4, updated_at = $5 WHERE id = $6 AND status = 'running'`
+		query = `UPDATE dream_cycles SET
+			status        = $1,
+			phase_summary = $2,
+			tokens_used   = COALESCE(
+				(SELECT SUM(tokens_input + tokens_output)
+				 FROM token_usage WHERE cycle_id = $3), 0),
+			completed_at  = $4,
+			updated_at    = $5
+			WHERE id = $6 AND status = 'running'`
 	}
 
-	_, err := r.db.Exec(ctx, query, model.DreamStatusCompleted, string(summary), tokensUsed, now, now, id.String())
+	idStr := id.String()
+	_, err := r.db.Exec(ctx, query, model.DreamStatusCompleted, string(summary), idStr, now, now, idStr)
 	if err != nil {
 		return fmt.Errorf("dream cycle complete: %w", err)
 	}
 	return nil
 }
 
-// Fail marks a dream cycle as failed with an error message and final token
-// count. Guarded on status IN ('pending','running') so a runner-side fail
-// that loses to a concurrent Abandon is dropped silently.
-func (r *DreamCycleRepo) Fail(ctx context.Context, id uuid.UUID, errMsg string, tokensUsed int) error {
+// Fail marks a dream cycle as failed with an error message. tokens_used is
+// recomputed live from the SUM of token_usage rows attributed to this cycle.
+//
+// Guarded on status IN ('pending','running') so a runner-side fail that loses
+// to a concurrent Abandon is dropped silently.
+func (r *DreamCycleRepo) Fail(ctx context.Context, id uuid.UUID, errMsg string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE dream_cycles SET status = ?, error = ?, tokens_used = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')`
+	query := `UPDATE dream_cycles SET
+		status       = ?,
+		error        = ?,
+		tokens_used  = COALESCE(
+			(SELECT SUM(tokens_input + tokens_output)
+			 FROM token_usage WHERE cycle_id = ?), 0),
+		completed_at = ?,
+		updated_at   = ?
+		WHERE id = ? AND status IN ('pending', 'running')`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE dream_cycles SET status = $1, error = $2, tokens_used = $3, completed_at = $4, updated_at = $5 WHERE id = $6 AND status IN ('pending', 'running')`
+		query = `UPDATE dream_cycles SET
+			status       = $1,
+			error        = $2,
+			tokens_used  = COALESCE(
+				(SELECT SUM(tokens_input + tokens_output)
+				 FROM token_usage WHERE cycle_id = $3), 0),
+			completed_at = $4,
+			updated_at   = $5
+			WHERE id = $6 AND status IN ('pending', 'running')`
 	}
 
-	_, err := r.db.Exec(ctx, query, model.DreamStatusFailed, errMsg, tokensUsed, now, now, id.String())
+	idStr := id.String()
+	_, err := r.db.Exec(ctx, query, model.DreamStatusFailed, errMsg, idStr, now, now, idStr)
 	if err != nil {
 		return fmt.Errorf("dream cycle fail: %w", err)
 	}
@@ -152,19 +225,37 @@ func (r *DreamCycleRepo) Fail(ctx context.Context, id uuid.UUID, errMsg string, 
 }
 
 // Abandon transitions a non-terminal cycle to failed with the given reason
-// and a completed_at stamp. Returns true iff the row was actually transitioned
-// (i.e. it was pending/running at the time of the write); false means it was
-// already terminal. tokens_used is intentionally NOT touched so the partial
-// accounting written at the last phase boundary survives the abandon.
+// and a completed_at stamp. Returns true iff the row was actually transitioned.
+// tokens_used is recomputed live from the SUM of token_usage rows so an
+// abandoned cycle reports the real cost of work it managed before the
+// sweeper reaped it (the previous behavior froze the value at zero when no
+// preceding phase had Spent against the in-memory budget).
 func (r *DreamCycleRepo) Abandon(ctx context.Context, id uuid.UUID, reason string) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE dream_cycles SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')`
+	query := `UPDATE dream_cycles SET
+		status       = ?,
+		error        = ?,
+		tokens_used  = COALESCE(
+			(SELECT SUM(tokens_input + tokens_output)
+			 FROM token_usage WHERE cycle_id = ?), 0),
+		completed_at = ?,
+		updated_at   = ?
+		WHERE id = ? AND status IN ('pending', 'running')`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE dream_cycles SET status = $1, error = $2, completed_at = $3, updated_at = $4 WHERE id = $5 AND status IN ('pending', 'running')`
+		query = `UPDATE dream_cycles SET
+			status       = $1,
+			error        = $2,
+			tokens_used  = COALESCE(
+				(SELECT SUM(tokens_input + tokens_output)
+				 FROM token_usage WHERE cycle_id = $3), 0),
+			completed_at = $4,
+			updated_at   = $5
+			WHERE id = $6 AND status IN ('pending', 'running')`
 	}
 
-	res, err := r.db.Exec(ctx, query, model.DreamStatusFailed, reason, now, now, id.String())
+	idStr := id.String()
+	res, err := r.db.Exec(ctx, query, model.DreamStatusFailed, reason, idStr, now, now, idStr)
 	if err != nil {
 		return false, fmt.Errorf("dream cycle abandon: %w", err)
 	}

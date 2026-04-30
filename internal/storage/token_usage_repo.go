@@ -28,13 +28,13 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 
 	query := `INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id,
 		operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id,
-		latency_ms, success, error_code, request_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		latency_ms, success, error_code, request_id, cycle_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
 		query = `INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id,
 			operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id,
-			latency_ms, success, error_code, request_id)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
+			latency_ms, success, error_code, request_id, cycle_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
@@ -54,6 +54,7 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 		EncodeBool(r.db.Backend(), usage.Success),
 		usage.ErrorCode,
 		usage.RequestID,
+		nullableUUIDStr(usage.CycleID),
 	)
 	if err != nil {
 		return fmt.Errorf("token usage record: %w", err)
@@ -154,7 +155,7 @@ func nullableUUIDStr(id *uuid.UUID) *string {
 
 const selectTokenUsageColumns = `SELECT id, org_id, user_id, project_id, namespace_id,
 	operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id,
-	latency_ms, success, error_code, request_id, created_at`
+	latency_ms, success, error_code, request_id, cycle_id, created_at`
 
 func (r *TokenUsageRepo) scanTokenUsage(row *sql.Row) (*model.TokenUsage, error) {
 	var usage model.TokenUsage
@@ -164,7 +165,7 @@ func (r *TokenUsageRepo) scanTokenUsage(row *sql.Row) (*model.TokenUsage, error)
 	var memoryIDStr, apiKeyIDStr sql.NullString
 	var latencyMs sql.NullInt64
 	var success bool
-	var errorCode, requestID sql.NullString
+	var errorCode, requestID, cycleIDStr sql.NullString
 	var createdAtStr string
 
 	err := row.Scan(
@@ -172,7 +173,7 @@ func (r *TokenUsageRepo) scanTokenUsage(row *sql.Row) (*model.TokenUsage, error)
 		&usage.Operation, &usage.Provider, &usage.Model,
 		&usage.TokensInput, &usage.TokensOutput,
 		&memoryIDStr, &apiKeyIDStr, &latencyMs,
-		&success, &errorCode, &requestID, &createdAtStr,
+		&success, &errorCode, &requestID, &cycleIDStr, &createdAtStr,
 	)
 	if err != nil {
 		return nil, err
@@ -180,7 +181,7 @@ func (r *TokenUsageRepo) scanTokenUsage(row *sql.Row) (*model.TokenUsage, error)
 
 	return populateTokenUsage(&usage, idStr, orgIDStr, userIDStr, projectIDStr,
 		namespaceIDStr, memoryIDStr, apiKeyIDStr, latencyMs,
-		success, errorCode, requestID, createdAtStr)
+		success, errorCode, requestID, cycleIDStr, createdAtStr)
 }
 
 func (r *TokenUsageRepo) scanTokenUsageFromRows(rows *sql.Rows) (*model.TokenUsage, error) {
@@ -191,7 +192,7 @@ func (r *TokenUsageRepo) scanTokenUsageFromRows(rows *sql.Rows) (*model.TokenUsa
 	var memoryIDStr, apiKeyIDStr sql.NullString
 	var latencyMs sql.NullInt64
 	var success bool
-	var errorCode, requestID sql.NullString
+	var errorCode, requestID, cycleIDStr sql.NullString
 	var createdAtStr string
 
 	err := rows.Scan(
@@ -199,7 +200,7 @@ func (r *TokenUsageRepo) scanTokenUsageFromRows(rows *sql.Rows) (*model.TokenUsa
 		&usage.Operation, &usage.Provider, &usage.Model,
 		&usage.TokensInput, &usage.TokensOutput,
 		&memoryIDStr, &apiKeyIDStr, &latencyMs,
-		&success, &errorCode, &requestID, &createdAtStr,
+		&success, &errorCode, &requestID, &cycleIDStr, &createdAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("token usage scan rows: %w", err)
@@ -207,7 +208,7 @@ func (r *TokenUsageRepo) scanTokenUsageFromRows(rows *sql.Rows) (*model.TokenUsa
 
 	return populateTokenUsage(&usage, idStr, orgIDStr, userIDStr, projectIDStr,
 		namespaceIDStr, memoryIDStr, apiKeyIDStr, latencyMs,
-		success, errorCode, requestID, createdAtStr)
+		success, errorCode, requestID, cycleIDStr, createdAtStr)
 }
 
 func (r *TokenUsageRepo) scanTokenUsages(rows *sql.Rows) ([]model.TokenUsage, error) {
@@ -233,7 +234,7 @@ func populateTokenUsage(
 	memoryIDStr, apiKeyIDStr sql.NullString,
 	latencyMs sql.NullInt64,
 	success bool,
-	errorCode, requestID sql.NullString,
+	errorCode, requestID, cycleIDStr sql.NullString,
 	createdAtStr string,
 ) (*model.TokenUsage, error) {
 	id, err := uuid.Parse(idStr)
@@ -302,6 +303,13 @@ func populateTokenUsage(
 	if requestID.Valid {
 		s := requestID.String
 		usage.RequestID = &s
+	}
+	if cycleIDStr.Valid {
+		parsed, err := uuid.Parse(cycleIDStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("token usage parse cycle_id: %w", err)
+		}
+		usage.CycleID = &parsed
 	}
 
 	usage.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)

@@ -217,7 +217,16 @@ func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycl
 	pruned := 0
 	now := time.Now().UTC()
 
-	for _, mem := range memories {
+	tracker := CycleTrackerFromContext(ctx)
+	progressStep := progressEmitStep(len(memories))
+
+	for i, mem := range memories {
+		// Emit at the top so the UI sees motion regardless of how many rows
+		// the shouldPrune/DeletedAt continues skip — most pruning passes
+		// touch a small fraction of the working set.
+		if tracker != nil && shouldEmitProgress(i, len(memories), progressStep) {
+			tracker.EmitPhaseProgress(ctx, i+1, len(memories), "memories")
+		}
 		if mem.DeletedAt != nil {
 			continue
 		}
@@ -227,7 +236,6 @@ func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycl
 			continue
 		}
 
-		// Log before pruning.
 		_ = logger.LogOperation(ctx, model.DreamPhasePruning,
 			model.DreamOpMemoryDeleted, "memory", mem.ID,
 			&mem, map[string]string{"reason": reason})

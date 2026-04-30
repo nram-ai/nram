@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -300,10 +301,7 @@ func (p *ConsolidationPhase) reinforce(
 
 		callStart := time.Now()
 		alignmentCtx := provider.WithMemoryID(ctx, synthesis.ID)
-		alignment, usage, err := WrapLLMCall(alignmentCtx, "alignment", llm.Name(), synthesis.ID.String(),
-			func(ctx context.Context) (float64, *provider.TokenUsage, error) {
-				return p.scoreAlignment(ctx, llm, prompt, budget)
-			})
+		alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, synthesis.ID, prompt, budget)
 		callTokens := 0
 		if usage != nil {
 			callTokens = usage.TotalTokens
@@ -314,25 +312,16 @@ func (p *ConsolidationPhase) reinforce(
 			"latency_ms", time.Since(callStart).Milliseconds(),
 			"tokens", callTokens)
 
-		// Account for usage before handling the error. scoreAlignment returns
-		// non-nil usage on parse errors too (the LLM call already happened).
-		// token_usage rows are written by the UsageRecordingProvider middleware.
-		var spendErr error
-		if usage != nil {
-			spendErr = budget.Spend(usage.TotalTokens)
+		if errors.Is(err, ErrBudgetExhausted) {
+			slog.Info("dreaming: alignment loop stopped on budget exhaustion",
+				"cycle", cycle.ID, "synthesis", synthesis.ID, "tokens", callTokens)
+			break
 		}
 
 		if err != nil {
 			slog.Warn("dreaming: alignment scoring failed", "synthesis", synthesis.ID, "err", err)
 			stats["errors_scoring"] = stats["errors_scoring"].(int) + 1
-			if spendErr != nil {
-				break
-			}
 			continue
-		}
-
-		if spendErr != nil {
-			break
 		}
 
 		// Adjust confidence proportionally.
@@ -394,31 +383,26 @@ func renderAlignmentPrompt(template string, synthesis *model.Memory, evidence []
 func (p *ConsolidationPhase) scoreAlignment(
 	ctx context.Context,
 	llm provider.LLMProvider,
+	synthesisID uuid.UUID,
 	prompt string,
 	budget *TokenBudget,
 ) (float64, *provider.TokenUsage, error) {
-	ctx = provider.WithOperation(ctx, provider.OperationDreamAlignmentScoring)
-	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
-		Messages: []provider.Message{
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   budget.PerCallCap(),
-		Temperature: 0.1,
-		JSONMode:    true,
-	})
+	resp, usage, err := WrapLLMCall(ctx, budget, OpAlignmentScore, llm.Name(),
+		synthesisID.String(),
+		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
+			ctx = provider.WithOperation(ctx, provider.OperationDreamAlignmentScoring)
+			r, e := llm.Complete(ctx, &provider.CompletionRequest{
+				Messages: []provider.Message{
+					{Role: "user", Content: prompt},
+				},
+				MaxTokens:   budget.PerCallCap(),
+				Temperature: 0.1,
+				JSONMode:    true,
+			})
+			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseConsolidation), e
+		})
 	if err != nil {
-		return 0, nil, err
-	}
-
-	usage := resp.Usage
-	if usage.TotalTokens == 0 {
-		if budget.MarkZeroUsageWarned() {
-			slog.Warn("dreaming: provider returned zero token usage; estimating from prompt/response length",
-				"provider", llm.Name(), "phase", model.DreamPhaseConsolidation)
-		}
-		usage.PromptTokens = EstimateTokens(prompt)
-		usage.CompletionTokens = EstimateTokens(resp.Content)
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		return 0, usage, err
 	}
 
 	var result struct {
@@ -426,7 +410,7 @@ func (p *ConsolidationPhase) scoreAlignment(
 		Reasoning string  `json:"reasoning"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(resp.Content)), &result); err != nil {
-		return 0, &usage, fmt.Errorf("parse alignment response: %w", err)
+		return 0, usage, fmt.Errorf("parse alignment response: %w", err)
 	}
 
 	// Clamp to [-1, 1].
@@ -437,7 +421,7 @@ func (p *ConsolidationPhase) scoreAlignment(
 		result.Alignment = 1
 	}
 
-	return result.Alignment, &usage, nil
+	return result.Alignment, usage, nil
 }
 
 // supersedeOriginals marks the source memories of a synthesis as superseded
@@ -637,17 +621,7 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 
 		callStart := time.Now()
 		auditCtx := provider.WithMemoryID(ctx, mem.ID)
-		type auditResult struct {
-			passed      bool
-			reason      string
-			embedTokens int
-		}
-		ar, auditUsage, auditErr := WrapLLMCall(auditCtx, "novelty_backfill", llm.Name(), mem.ID.String(),
-			func(ctx context.Context) (auditResult, *provider.TokenUsage, error) {
-				passed, reason, usage, embedTokens, err := p.auditNovelty(ctx, llm, budget, mem.Content, sources, backfillHigh, provider.OperationDreamNoveltyBackfill)
-				return auditResult{passed: passed, reason: reason, embedTokens: embedTokens}, usage, err
-			})
-		passed, reason, embedTokens := ar.passed, ar.reason, ar.embedTokens
+		passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(auditCtx, llm, budget, mem.Content, sources, backfillHigh, provider.OperationDreamNoveltyBackfill)
 		llmTokens := 0
 		if auditUsage != nil {
 			llmTokens = auditUsage.TotalTokens
@@ -655,20 +629,17 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 		}
 		if embedTokens > 0 {
 			stats["embedding_calls"] = stats["embedding_calls"].(int) + 1
+			stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
 		}
 		slog.Info("dreaming: backfill audit result",
 			"cycle", cycle.ID, "memory", mem.ID, "reason", reason,
 			"passed", passed, "latency_ms", time.Since(callStart).Milliseconds(),
 			"embed_tokens", embedTokens, "llm_tokens", llmTokens)
 
-		// Token usage rows are written by the UsageRecordingProvider
-		// middleware. Here we only spend against the local dream budget.
-		if embedTokens > 0 {
-			_ = budget.Spend(embedTokens)
-			stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
-		}
-		if auditUsage != nil {
-			_ = budget.Spend(auditUsage.TotalTokens)
+		if errors.Is(auditErr, ErrBudgetExhausted) {
+			slog.Info("dreaming: backfill audit loop stopped on budget exhaustion",
+				"cycle", cycle.ID, "memory", mem.ID)
+			break
 		}
 		if auditErr != nil {
 			persistent := isPersistentEmbedError(auditErr)
@@ -1169,10 +1140,7 @@ func (p *ConsolidationPhase) consolidate(
 		}
 
 		synthStart := time.Now()
-		synthesisContent, usage, err := WrapLLMCall(ctx, "synthesis", llm.Name(), "",
-			func(ctx context.Context) (string, *provider.TokenUsage, error) {
-				return p.synthesize(ctx, llm, prompt, budget)
-			})
+		synthesisContent, usage, err := p.synthesize(ctx, llm, prompt, budget)
 		synthTokens := 0
 		if usage != nil {
 			synthTokens = usage.TotalTokens
@@ -1183,20 +1151,16 @@ func (p *ConsolidationPhase) consolidate(
 			"latency_ms", time.Since(synthStart).Milliseconds(),
 			"tokens", synthTokens)
 
+		if errors.Is(err, ErrBudgetExhausted) {
+			slog.Info("dreaming: synthesis loop stopped on budget exhaustion",
+				"cycle", cycle.ID, "cluster_size", len(cluster), "tokens", synthTokens)
+			break
+		}
+
 		if err != nil {
 			slog.Warn("dreaming: synthesis failed", "err", err)
 			stats["errors_synth"] = stats["errors_synth"].(int) + 1
 			continue
-		}
-
-		// token_usage rows for the synthesis call are written by the
-		// UsageRecordingProvider middleware. We only spend against the
-		// dream-cycle budget here.
-		if usage != nil {
-			spendErr := budget.Spend(usage.TotalTokens)
-			if spendErr != nil {
-				break
-			}
 		}
 
 		if synthesisContent == "" {
@@ -1208,17 +1172,7 @@ func (p *ConsolidationPhase) consolidate(
 		// LLM usage against the dream budget when the borderline judge fires.
 		if noveltyEnabled {
 			auditStart := time.Now()
-			type auditResult struct {
-				passed      bool
-				reason      string
-				embedTokens int
-			}
-			ar, auditUsage, auditErr := WrapLLMCall(ctx, "novelty_audit", llm.Name(), "",
-				func(ctx context.Context) (auditResult, *provider.TokenUsage, error) {
-					passed, reason, usage, embedTokens, err := p.auditNovelty(ctx, llm, budget, synthesisContent, cluster, 0, provider.OperationDreamNoveltyAudit)
-					return auditResult{passed: passed, reason: reason, embedTokens: embedTokens}, usage, err
-				})
-			passed, reason, embedTokens := ar.passed, ar.reason, ar.embedTokens
+			passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, synthesisContent, cluster, 0, provider.OperationDreamNoveltyAudit)
 			llmTokens := 0
 			if auditUsage != nil {
 				llmTokens = auditUsage.TotalTokens
@@ -1226,20 +1180,17 @@ func (p *ConsolidationPhase) consolidate(
 			stats["audit_calls"] = stats["audit_calls"].(int) + 1
 			if embedTokens > 0 {
 				stats["embedding_calls"] = stats["embedding_calls"].(int) + 1
+				stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
 			}
 			slog.Info("dreaming: synthesis novelty audit",
 				"cycle", cycle.ID, "reason", reason, "passed", passed,
 				"latency_ms", time.Since(auditStart).Milliseconds(),
 				"embed_tokens", embedTokens, "llm_tokens", llmTokens)
 
-			// token_usage rows are written by the middleware; here we
-			// only charge the dream-cycle budget.
-			if embedTokens > 0 {
-				_ = budget.Spend(embedTokens)
-				stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
-			}
-			if auditUsage != nil {
-				_ = budget.Spend(auditUsage.TotalTokens)
+			if errors.Is(auditErr, ErrBudgetExhausted) {
+				slog.Info("dreaming: synthesis audit loop stopped on budget exhaustion",
+					"cycle", cycle.ID)
+				break
 			}
 			if auditErr != nil {
 				slog.Warn("dreaming: novelty audit error",
@@ -1337,30 +1288,22 @@ func (p *ConsolidationPhase) synthesize(
 	prompt string,
 	budget *TokenBudget,
 ) (string, *provider.TokenUsage, error) {
-	ctx = provider.WithOperation(ctx, provider.OperationDreamSynthesis)
-	resp, err := llm.Complete(ctx, &provider.CompletionRequest{
-		Messages: []provider.Message{
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   budget.PerCallCap(),
-		Temperature: 0.3,
-	})
+	resp, usage, err := WrapLLMCall(ctx, budget, OpSynthesis, llm.Name(), "",
+		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
+			ctx = provider.WithOperation(ctx, provider.OperationDreamSynthesis)
+			r, e := llm.Complete(ctx, &provider.CompletionRequest{
+				Messages: []provider.Message{
+					{Role: "user", Content: prompt},
+				},
+				MaxTokens:   budget.PerCallCap(),
+				Temperature: 0.3,
+			})
+			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseConsolidation), e
+		})
 	if err != nil {
-		return "", nil, err
+		return "", usage, err
 	}
-
-	usage := resp.Usage
-	if usage.TotalTokens == 0 {
-		if budget.MarkZeroUsageWarned() {
-			slog.Warn("dreaming: provider returned zero token usage; estimating from prompt/response length",
-				"provider", llm.Name(), "phase", model.DreamPhaseConsolidation)
-		}
-		usage.PromptTokens = EstimateTokens(prompt)
-		usage.CompletionTokens = EstimateTokens(resp.Content)
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	}
-
-	return strings.TrimSpace(resp.Content), &usage, nil
+	return strings.TrimSpace(resp.Content), usage, nil
 }
 
 // auditNovelty checks whether a candidate synthesis contains at least one
@@ -1417,18 +1360,21 @@ func (p *ConsolidationPhase) auditNovelty(
 		for _, s := range sources {
 			inputs = append(inputs, s.Content)
 		}
-		resp, embErr := embedder.Embed(provider.WithOperation(ctx, provider.OperationDreamNoveltyEmbedding), &provider.EmbeddingRequest{
-			Input:     inputs,
-			Dimension: storage.BestEmbeddingDimension(embedder.Dimensions()),
-		})
+		resp, embUsage, embErr := WrapLLMCall(ctx, budget, OpNoveltyAuditEmbed,
+			embedder.Name(), "",
+			func(ctx context.Context) (*provider.EmbeddingResponse, *provider.TokenUsage, error) {
+				ctx = provider.WithOperation(ctx, provider.OperationDreamNoveltyEmbedding)
+				r, e := embedder.Embed(ctx, &provider.EmbeddingRequest{
+					Input:     inputs,
+					Dimension: storage.BestEmbeddingDimension(embedder.Dimensions()),
+				})
+				return r, usageOrEstimateEmbed(r, inputs), e
+			})
 		if embErr != nil || resp == nil || len(resp.Embeddings) != len(inputs) {
 			return false, "embed_error", nil, 0, embErr
 		}
-		embedTokens = resp.Usage.TotalTokens
-		if embedTokens == 0 {
-			for _, s := range inputs {
-				embedTokens += EstimateTokens(s)
-			}
+		if embUsage != nil {
+			embedTokens = embUsage.TotalTokens
 		}
 		candEmb := resp.Embeddings[0]
 		maxSim := 0.0
@@ -1468,37 +1414,29 @@ func (p *ConsolidationPhase) auditNovelty(
 	if llmOperation == "" {
 		llmOperation = provider.OperationDreamNoveltyAudit
 	}
-	resp, err := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{
-		Messages: []provider.Message{
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   maxTokens,
-		Temperature: 0.1,
-		JSONMode:    true,
-	})
+	resp, judgeUsage, err := WrapLLMCall(ctx, budget, OpNoveltyAuditLLM, llm.Name(), "",
+		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
+			r, e := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{
+				Messages: []provider.Message{
+					{Role: "user", Content: prompt},
+				},
+				MaxTokens:   maxTokens,
+				Temperature: 0.1,
+				JSONMode:    true,
+			})
+			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseConsolidation), e
+		})
 	if err != nil {
-		return false, "judge_call_error", nil, embedTokens, err
-	}
-
-	u := resp.Usage
-	if u.TotalTokens == 0 {
-		if budget != nil && budget.MarkZeroUsageWarned() {
-			slog.Warn("dreaming: provider returned zero token usage; estimating from prompt/response length",
-				"provider", llm.Name(), "phase", model.DreamPhaseConsolidation,
-				"call", "novelty_judge")
-		}
-		u.PromptTokens = EstimateTokens(prompt)
-		u.CompletionTokens = EstimateTokens(resp.Content)
-		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+		return false, "judge_call_error", judgeUsage, embedTokens, err
 	}
 
 	var parsed struct {
 		NovelFacts []string `json:"novel_facts"`
 	}
 	if jerr := json.Unmarshal([]byte(strings.TrimSpace(resp.Content)), &parsed); jerr != nil {
-		return false, "judge_parse_error", &u, embedTokens, nil
+		return false, "judge_parse_error", judgeUsage, embedTokens, nil
 	}
-	return len(parsed.NovelFacts) > 0, "llm_judge", &u, embedTokens, nil
+	return len(parsed.NovelFacts) > 0, "llm_judge", judgeUsage, embedTokens, nil
 }
 
 // clusterMemories groups related memories using simple content overlap.

@@ -47,6 +47,7 @@ const (
 	ctxKeyMemoryID
 	ctxKeyNamespaceID
 	ctxKeyAPIKeyID
+	ctxKeyCycleID
 )
 
 // WithOperation stamps the call's operation kind into ctx so the
@@ -147,6 +148,26 @@ func WithAPIKeyID(ctx context.Context, id *uuid.UUID) context.Context {
 // APIKeyIDFromContext returns the API key ID stamped on ctx, or nil.
 func APIKeyIDFromContext(ctx context.Context) *uuid.UUID {
 	if v, ok := ctx.Value(ctxKeyAPIKeyID).(uuid.UUID); ok && v != uuid.Nil {
+		out := v
+		return &out
+	}
+	return nil
+}
+
+// WithCycleID stamps the dream cycle that owns this provider call. The
+// middleware writes it to token_usage.cycle_id; the dreaming runner reads
+// SUM(tokens_input+tokens_output) WHERE cycle_id=? to derive the cycle's
+// live tokens_used.
+func WithCycleID(ctx context.Context, id uuid.UUID) context.Context {
+	if id == uuid.Nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyCycleID, id)
+}
+
+// CycleIDFromContext returns the dream-cycle ID stamped on ctx, or nil.
+func CycleIDFromContext(ctx context.Context) *uuid.UUID {
+	if v, ok := ctx.Value(ctxKeyCycleID).(uuid.UUID); ok && v != uuid.Nil {
 		out := v
 		return &out
 	}

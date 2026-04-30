@@ -32,6 +32,7 @@ const (
 	// LLM call for >100s, which would otherwise look hung).
 	DreamPhaseStarted   = "dream.phase.started"
 	DreamPhaseCompleted = "dream.phase.completed"
+	DreamPhaseProgress  = "dream.phase.progress"
 	DreamCallStarted    = "dream.call.started"
 	DreamCallCompleted  = "dream.call.completed"
 	DreamCycleHeartbeat = "dream.cycle.heartbeat"

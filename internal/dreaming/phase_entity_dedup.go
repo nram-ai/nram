@@ -103,7 +103,14 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 	vectorsByID, normsByID := p.preloadVectors(ctx, entities)
 	consumed := make(map[uuid.UUID]bool)
 
+	tracker := CycleTrackerFromContext(ctx)
+	progressStep := progressEmitStep(len(entities))
+	progressLabel := "entities[" + entityType + "]"
+
 	for i := 0; i < len(entities); i++ {
+		if tracker != nil && shouldEmitProgress(i, len(entities), progressStep) {
+			tracker.EmitPhaseProgress(ctx, i+1, len(entities), progressLabel)
+		}
 		if consumed[entities[i].ID] {
 			continue
 		}
