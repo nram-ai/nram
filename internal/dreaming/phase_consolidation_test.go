@@ -78,10 +78,15 @@ func (s *scriptedJudgeLLM) Models() []string { return []string{"test-model"} }
 // inspect what the consolidation phase wrote back. metadataUpdates is
 // recorded separately so tests can distinguish stamp-only writes (which
 // must not bump updated_at) from full Updates.
+//
+// createErr, when non-nil, is returned from Create instead of recording —
+// used by the consolidate error-path table test to exercise the
+// post-audit Create-failure branch.
 type updatingMemoryWriter struct {
 	creates         []*model.Memory
 	updates         []model.Memory
 	metadataUpdates []metadataUpdateRecord
+	createErr       error
 }
 
 type metadataUpdateRecord struct {
@@ -91,6 +96,9 @@ type metadataUpdateRecord struct {
 }
 
 func (w *updatingMemoryWriter) Create(_ context.Context, mem *model.Memory) error {
+	if w.createErr != nil {
+		return w.createErr
+	}
 	cp := *mem
 	w.creates = append(w.creates, &cp)
 	return nil
@@ -1367,5 +1375,542 @@ func TestCollectReinforceStale_PartitionsMixedSet(t *testing.T) {
 	}
 	if ids[fresh.ID] {
 		t.Errorf("fresh synthesis must not be in stale set")
+	}
+}
+
+// --- consolidate sub-phase tests ---
+
+// consolidateSettings returns a settings stub configured for consolidate
+// tests. Callers can mutate the returned struct to disable novelty (omit
+// the SettingDreamNoveltyEnabled key) or override thresholds.
+func consolidateSettings(noveltyEnabled bool) *staticDreamSettings {
+	values := map[string]string{
+		service.SettingDreamSynthesisPrompt:    "synth: %s",
+		service.SettingDreamNoveltyJudgePrompt: "judge: %s vs %s",
+	}
+	if noveltyEnabled {
+		values[service.SettingDreamNoveltyEnabled] = "true"
+	}
+	return &staticDreamSettings{
+		values: values,
+		floats: map[string]float64{
+			service.SettingDreamInitialConfidence:         0.3,
+			service.SettingDreamNoveltyEmbedHighThreshold: 0.97,
+			service.SettingDreamNoveltyEmbedLowThreshold:  0.85,
+		},
+		ints: map[string]int{
+			service.SettingDreamNoveltyJudgeMaxTokens: 512,
+		},
+	}
+}
+
+// consolidatePhase wires a ConsolidationPhase + writer for direct
+// invocation of consolidate(). embedder may be nil to skip the audit's
+// embed pre-filter and route directly to the LLM judge.
+func consolidatePhase(llm provider.LLMProvider, embedder provider.EmbeddingProvider, settings SettingsResolver) (*ConsolidationPhase, *updatingMemoryWriter) {
+	writer := &updatingMemoryWriter{}
+	phase := NewConsolidationPhase(
+		&fakeMemoryReader{},
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		func() provider.EmbeddingProvider { return embedder },
+		settings,
+	)
+	return phase, writer
+}
+
+// candidateForConsolidate builds a non-DreamSource memory eligible as a
+// consolidate candidate. Content is set so the caller controls
+// clusterMemories' word-overlap output.
+func candidateForConsolidate(content string, ns uuid.UUID, updatedAt time.Time) model.Memory {
+	src := "user"
+	return model.Memory{
+		ID:          uuid.New(),
+		NamespaceID: ns,
+		Content:     content,
+		Source:      &src,
+		Confidence:  0.5,
+		Metadata:    json.RawMessage("{}"),
+		CreatedAt:   updatedAt,
+		UpdatedAt:   updatedAt,
+	}
+}
+
+// triClusterCandidates returns three user memories whose word overlap
+// makes clusterMemories produce a single 3-member cluster.
+func triClusterCandidates(ns uuid.UUID, t time.Time) (a, b, c model.Memory) {
+	a = candidateForConsolidate("shared term1 term2 term3 term4", ns, t)
+	b = candidateForConsolidate("shared term1 term2 alpha beta", ns, t)
+	c = candidateForConsolidate("shared term1 gamma delta epsilon", ns, t)
+	return
+}
+
+// stampClusterFresh marks every member of cluster with a stamp anchored
+// to its UpdatedAt and the supplied fingerprint, simulating a row that
+// was visited last cycle and should be filtered out this cycle.
+func stampClusterFresh(t *testing.T, cluster []*model.Memory, fingerprint string) {
+	t.Helper()
+	for _, m := range cluster {
+		raw, err := json.Marshal(map[string]interface{}{
+			ConsolidationClusterStampKey:       m.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			ConsolidationClusterFingerprintKey: fingerprint,
+		})
+		if err != nil {
+			t.Fatalf("marshal stamp: %v", err)
+		}
+		m.Metadata = raw
+	}
+}
+
+// TestConsolidate_StampsOnAuditRejection asserts that when the novelty
+// audit rejects the synthesis, every source memory in the cluster is
+// stamped via UpdateMetadata (no Create, no Update) so the same cluster
+// does not burn budget next cycle.
+func TestConsolidate_StampsOnAuditRejection(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	// Empty novel_facts → audit rejects.
+	llm := &scriptedJudgeLLM{
+		content: `{"novel_facts": []}`,
+		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+	}
+	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	residual, err := phase.consolidate(context.Background(), cycle, budget, logger, llm, []model.Memory{a, b, c})
+	if err != nil {
+		t.Fatalf("consolidate returned error: %v", err)
+	}
+	if residual {
+		t.Fatalf("residual must be false when every stale cluster was visited")
+	}
+
+	if len(writer.creates) != 0 {
+		t.Fatalf("audit-reject path must not Create; got %d", len(writer.creates))
+	}
+	if len(writer.updates) != 0 {
+		t.Fatalf("audit-reject path must not Update; got %d", len(writer.updates))
+	}
+	if len(writer.metadataUpdates) != 3 {
+		t.Fatalf("audit-reject path must stamp every cluster member exactly once; got %d UpdateMetadata calls", len(writer.metadataUpdates))
+	}
+
+	expectedFP := clusterFingerprint([]model.Memory{a, b, c})
+	stamped := map[uuid.UUID]bool{}
+	for _, u := range writer.metadataUpdates {
+		var meta map[string]interface{}
+		if err := json.Unmarshal(u.Metadata, &meta); err != nil {
+			t.Fatalf("stamp metadata not valid JSON: %v", err)
+		}
+		stampVal, ok := meta[ConsolidationClusterStampKey].(string)
+		if !ok || stampVal == "" {
+			t.Errorf("stamp must carry %s string; got %s", ConsolidationClusterStampKey, string(u.Metadata))
+		}
+		fp, ok := meta[ConsolidationClusterFingerprintKey].(string)
+		if !ok || fp != expectedFP {
+			t.Errorf("stamp fingerprint mismatch: got %q want %q", fp, expectedFP)
+		}
+		stamped[u.ID] = true
+	}
+	for _, m := range []model.Memory{a, b, c} {
+		if !stamped[m.ID] {
+			t.Errorf("cluster member %s missing from metadata updates", m.ID)
+		}
+	}
+}
+
+// TestConsolidate_StampsOnSuccessfulCreate asserts that when the audit
+// passes and the synthesis is created, every source member is stamped
+// (Create runs once for the synthesis, plus N stamp writes).
+func TestConsolidate_StampsOnSuccessfulCreate(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	llm := &scriptedJudgeLLM{
+		content: `{"novel_facts": ["new fact"]}`,
+		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+	}
+	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.consolidate(context.Background(), cycle, budget, logger, llm, []model.Memory{a, b, c}); err != nil {
+		t.Fatalf("consolidate returned error: %v", err)
+	}
+
+	if len(writer.creates) != 1 {
+		t.Fatalf("audit-pass must Create exactly one synthesis; got %d", len(writer.creates))
+	}
+	if len(writer.metadataUpdates) != 3 {
+		t.Fatalf("audit-pass must stamp every source member; got %d UpdateMetadata calls", len(writer.metadataUpdates))
+	}
+
+	expectedFP := clusterFingerprint([]model.Memory{a, b, c})
+	for _, u := range writer.metadataUpdates {
+		var meta map[string]interface{}
+		_ = json.Unmarshal(u.Metadata, &meta)
+		if fp, _ := meta[ConsolidationClusterFingerprintKey].(string); fp != expectedFP {
+			t.Errorf("stamp fingerprint mismatch on member %s: got %q want %q", u.ID, fp, expectedFP)
+		}
+	}
+}
+
+// TestConsolidate_FreshClusterSkipped asserts the eligibility filter:
+// when every member of the cluster is stamp-fresh AND the stored
+// fingerprint matches the current cluster's fingerprint, the cluster is
+// filtered out before the synthesis call.
+func TestConsolidate_FreshClusterSkipped(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	fp := clusterFingerprint([]model.Memory{a, b, c})
+	stampClusterFresh(t, []*model.Memory{&a, &b, &c}, fp)
+
+	llm := &scriptedJudgeLLM{content: `{"novel_facts": []}`}
+	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	residual, err := phase.consolidate(context.Background(), cycle, budget, logger, llm, []model.Memory{a, b, c})
+	if err != nil {
+		t.Fatalf("consolidate returned error: %v", err)
+	}
+	if residual {
+		t.Fatalf("residual must be false when there are zero stale clusters")
+	}
+	if llm.calls.Load() != 0 {
+		t.Errorf("fresh-stamped cluster must skip the LLM; got %d calls", llm.calls.Load())
+	}
+	if len(writer.creates) != 0 || len(writer.updates) != 0 || len(writer.metadataUpdates) != 0 {
+		t.Errorf("fresh-stamped cluster must not be touched; got %d Create / %d Update / %d UpdateMetadata",
+			len(writer.creates), len(writer.updates), len(writer.metadataUpdates))
+	}
+}
+
+// TestConsolidate_StaleStampReEvaluated asserts that when even one
+// member of the cluster is stale (stamp < UpdatedAt), the entire cluster
+// surfaces and is re-audited; on a stable verdict, every member is
+// re-stamped with the current fingerprint.
+func TestConsolidate_StaleStampReEvaluated(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	fp := clusterFingerprint([]model.Memory{a, b, c})
+	// a and b stamp-fresh; c stamped before its UpdatedAt → stale.
+	stampClusterFresh(t, []*model.Memory{&a, &b}, fp)
+	rawStaleC, _ := json.Marshal(map[string]interface{}{
+		ConsolidationClusterStampKey:       now.Add(-time.Hour).Format(time.RFC3339Nano),
+		ConsolidationClusterFingerprintKey: fp,
+	})
+	c.Metadata = rawStaleC
+
+	llm := &scriptedJudgeLLM{
+		content: `{"novel_facts": []}`,
+		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+	}
+	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.consolidate(context.Background(), cycle, budget, logger, llm, []model.Memory{a, b, c}); err != nil {
+		t.Fatalf("consolidate returned error: %v", err)
+	}
+	if llm.calls.Load() == 0 {
+		t.Errorf("a stale member must surface the cluster; expected at least one LLM call, got %d", llm.calls.Load())
+	}
+	if len(writer.metadataUpdates) != 3 {
+		t.Errorf("stale cluster should stamp every member on re-evaluation; got %d", len(writer.metadataUpdates))
+	}
+}
+
+// TestConsolidate_ClusterReshape_StalesSurvivors is the load-bearing
+// regression for the cluster-fingerprint extension. Pre-stamp every
+// member with stamp == UpdatedAt AND a fingerprint that does not match
+// the current cluster's fingerprint (simulating a member having migrated
+// out between cycles, leaving stamp-fresh survivors). The cluster must
+// re-enter eligibility despite all members appearing time-fresh.
+func TestConsolidate_ClusterReshape_StalesSurvivors(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	// Compute a fingerprint as if a fourth (now-migrated-out) member
+	// had been part of the prior cluster. Stamp every current member
+	// with that stale fingerprint.
+	migratedOut := model.Memory{ID: uuid.New()}
+	staleFP := clusterFingerprint([]model.Memory{a, b, c, migratedOut})
+	stampClusterFresh(t, []*model.Memory{&a, &b, &c}, staleFP)
+
+	currentFP := clusterFingerprint([]model.Memory{a, b, c})
+	if staleFP == currentFP {
+		t.Fatalf("test setup invalid: stale and current fingerprints must differ")
+	}
+
+	llm := &scriptedJudgeLLM{
+		content: `{"novel_facts": []}`,
+		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+	}
+	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.consolidate(context.Background(), cycle, budget, logger, llm, []model.Memory{a, b, c}); err != nil {
+		t.Fatalf("consolidate returned error: %v", err)
+	}
+	if llm.calls.Load() == 0 {
+		t.Errorf("fingerprint mismatch must surface the cluster; expected LLM calls, got 0")
+	}
+	if len(writer.metadataUpdates) != 3 {
+		t.Errorf("reshape-detected cluster should re-stamp every member; got %d", len(writer.metadataUpdates))
+	}
+	for _, u := range writer.metadataUpdates {
+		var meta map[string]interface{}
+		_ = json.Unmarshal(u.Metadata, &meta)
+		fp, _ := meta[ConsolidationClusterFingerprintKey].(string)
+		if fp != currentFP {
+			t.Errorf("re-stamp must carry the current cluster fingerprint; got %q want %q", fp, currentFP)
+		}
+	}
+}
+
+// TestConsolidate_StampsPersistAcrossCycles is the two-cycle regression
+// for the stamp self-invalidation class of bug. Cycle 1 stamps via
+// UpdateMetadata; cycle 2 must classify the cluster as fresh and skip it.
+func TestConsolidate_StampsPersistAcrossCycles(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	llm := &scriptedJudgeLLM{
+		content: `{"novel_facts": []}`,
+		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+	}
+	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	// Cycle 1: should reject + stamp.
+	if _, err := phase.consolidate(context.Background(), cycle, budget, logger, llm, []model.Memory{a, b, c}); err != nil {
+		t.Fatalf("cycle 1 consolidate: %v", err)
+	}
+	if len(writer.metadataUpdates) != 3 {
+		t.Fatalf("cycle 1 should stamp 3 members; got %d", len(writer.metadataUpdates))
+	}
+	cycle1LLMCalls := llm.calls.Load()
+	if cycle1LLMCalls == 0 {
+		t.Fatalf("cycle 1 should invoke the LLM at least once")
+	}
+
+	// Apply stamps onto the in-memory copies so cycle 2 sees them.
+	for _, m := range []*model.Memory{&a, &b, &c} {
+		for _, u := range writer.metadataUpdates {
+			if u.ID == m.ID {
+				m.Metadata = u.Metadata
+				break
+			}
+		}
+	}
+
+	// Cycle 2: cluster is fresh → no LLM calls, no writes.
+	if _, err := phase.consolidate(context.Background(), cycle, budget, logger, llm, []model.Memory{a, b, c}); err != nil {
+		t.Fatalf("cycle 2 consolidate: %v", err)
+	}
+	if llm.calls.Load() != cycle1LLMCalls {
+		t.Errorf("cycle 2 should not invoke the LLM; total calls now %d, expected %d from cycle 1", llm.calls.Load(), cycle1LLMCalls)
+	}
+	if len(writer.metadataUpdates) != 3 {
+		t.Errorf("cycle 2 should not re-stamp; total UpdateMetadata calls now %d, expected 3 from cycle 1", len(writer.metadataUpdates))
+	}
+	if len(writer.creates) != 0 {
+		t.Errorf("cycle 2 must not Create; got %d", len(writer.creates))
+	}
+}
+
+// TestConsolidate_ErrorPathsLeaveStampFree asserts that error and
+// transient-output branches of the consolidate loop do not stamp the
+// cluster, leaving it eligible for retry next cycle.
+func TestConsolidate_ErrorPathsLeaveStampFree(t *testing.T) {
+	type setup struct {
+		name        string
+		llm         *scriptedJudgeLLM
+		embedder    provider.EmbeddingProvider
+		settings    *staticDreamSettings
+		writerSetup func(w *updatingMemoryWriter)
+	}
+
+	cases := []setup{
+		{
+			name:     "synthesis_error",
+			llm:      &scriptedJudgeLLM{err: errors.New("synth boom")},
+			settings: consolidateSettings(false),
+		},
+		{
+			name: "audit_embed_error",
+			llm: &scriptedJudgeLLM{
+				content: `{"novel_facts": ["x"]}`,
+				usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+			},
+			embedder: &staticEmbedder{err: errors.New("embed down")},
+			settings: consolidateSettings(true),
+		},
+		{
+			name: "empty_synthesis_content",
+			llm: &scriptedJudgeLLM{
+				content: "",
+				usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 0, TotalTokens: 20},
+			},
+			settings: consolidateSettings(true),
+		},
+		{
+			name: "create_error",
+			llm: &scriptedJudgeLLM{
+				content: "synthesized",
+				usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+			},
+			settings: consolidateSettings(false),
+			writerSetup: func(w *updatingMemoryWriter) {
+				w.createErr = errors.New("create boom")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := uuid.New()
+			now := time.Now().UTC()
+			a, b, c := triClusterCandidates(ns, now)
+
+			phase, writer := consolidatePhase(tc.llm, tc.embedder, tc.settings)
+			if tc.writerSetup != nil {
+				tc.writerSetup(writer)
+			}
+
+			cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+			logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+			budget := NewTokenBudget(10000, 2048)
+
+			if _, err := phase.consolidate(context.Background(), cycle, budget, logger, tc.llm, []model.Memory{a, b, c}); err != nil {
+				t.Fatalf("consolidate should swallow per-call errors; got %v", err)
+			}
+			if len(writer.metadataUpdates) != 0 {
+				t.Errorf("error path %s must leave cluster stamp-free; got %d UpdateMetadata calls", tc.name, len(writer.metadataUpdates))
+			}
+		})
+	}
+}
+
+// TestCollectConsolidateStale_AnyMemberStaleStalesCluster asserts the
+// cluster-level OR semantics: a single stale member surfaces the entire
+// cluster; an all-fresh + matching-fingerprint cluster does not surface.
+func TestCollectConsolidateStale_AnyMemberStaleStalesCluster(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	fp := clusterFingerprint([]model.Memory{a, b, c})
+
+	// All-fresh case.
+	stampClusterFresh(t, []*model.Memory{&a, &b, &c}, fp)
+	allFresh, eligible := collectConsolidateStale([][]model.Memory{{a, b, c}})
+	if len(allFresh) != 0 {
+		t.Errorf("all-fresh + matching fingerprint cluster must not surface; got %d stale", len(allFresh))
+	}
+	if eligible != 1 {
+		t.Errorf("len-3 cluster should count as 1 eligible; got %d", eligible)
+	}
+
+	// One-stale case: rewrite c's stamp to a stale time.
+	staleMeta, _ := json.Marshal(map[string]interface{}{
+		ConsolidationClusterStampKey:       now.Add(-time.Hour).Format(time.RFC3339Nano),
+		ConsolidationClusterFingerprintKey: fp,
+	})
+	c.Metadata = staleMeta
+
+	mixed, _ := collectConsolidateStale([][]model.Memory{{a, b, c}})
+	if len(mixed) != 1 {
+		t.Fatalf("one-stale member must surface the cluster; got %d", len(mixed))
+	}
+	if len(mixed[0].members) != 3 {
+		t.Errorf("surfaced cluster should retain all members; got %d", len(mixed[0].members))
+	}
+	if mixed[0].fingerprint != fp {
+		t.Errorf("surfaced cluster should carry current fingerprint; got %q want %q", mixed[0].fingerprint, fp)
+	}
+}
+
+// TestCollectConsolidateStale_SkipsBelowFloor asserts that single-member
+// clusters never surface, regardless of stamp state. Mirrors the
+// eligibility floor inside consolidate (synthesis requires >= 2 sources).
+func TestCollectConsolidateStale_SkipsBelowFloor(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a := candidateForConsolidate("alpha lonely standalone unmatched orphan", ns, now)
+
+	got, eligible := collectConsolidateStale([][]model.Memory{{a}})
+	if len(got) != 0 {
+		t.Errorf("single-member cluster must never surface; got %d stale", len(got))
+	}
+	if eligible != 0 {
+		t.Errorf("single-member cluster must not count as eligible; got %d", eligible)
+	}
+}
+
+// TestClusterFingerprint_Stable asserts iteration order does not affect
+// the fingerprint — clusterMemories' anchor-order is unstable across
+// cycles when one member is removed, so the stamp must be order-blind.
+func TestClusterFingerprint_Stable(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	abc := clusterFingerprint([]model.Memory{a, b, c})
+	cba := clusterFingerprint([]model.Memory{c, b, a})
+	bca := clusterFingerprint([]model.Memory{b, c, a})
+
+	if abc != cba {
+		t.Errorf("fingerprint must be order-independent; got abc=%q cba=%q", abc, cba)
+	}
+	if abc != bca {
+		t.Errorf("fingerprint must be order-independent; got abc=%q bca=%q", abc, bca)
+	}
+}
+
+// TestClusterFingerprint_DiffersOnMembershipChange asserts adding or
+// removing one member changes the fingerprint, so the survivor-only
+// reshape staleness check has the signal it needs.
+func TestClusterFingerprint_DiffersOnMembershipChange(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+	d := candidateForConsolidate("zeta eta theta iota kappa", ns, now)
+
+	abc := clusterFingerprint([]model.Memory{a, b, c})
+	ab := clusterFingerprint([]model.Memory{a, b})
+	abcd := clusterFingerprint([]model.Memory{a, b, c, d})
+
+	if abc == ab {
+		t.Errorf("removing a member must change the fingerprint; abc=%q ab=%q", abc, ab)
+	}
+	if abc == abcd {
+		t.Errorf("adding a member must change the fingerprint; abc=%q abcd=%q", abc, abcd)
 	}
 }

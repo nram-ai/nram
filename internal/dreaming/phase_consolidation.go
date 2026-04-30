@@ -3,10 +3,13 @@ package dreaming
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +32,18 @@ const NoveltyAuditStampKey = "novelty_audited_at"
 // implicitly by any Update() that bumps updated_at, so a confidence change
 // re-stales the row for the next cycle.
 const ReinforceCheckedStampKey = "reinforce_checked_at"
+
+// ConsolidationClusterStampKey marks every source memory in a cluster the
+// consolidate sub-phase reached a stable verdict on (audit-rejection or
+// successful synthesis). Anchored to UpdatedAt and written via
+// UpdateMetadata so stamp == UpdatedAt does not self-invalidate.
+const ConsolidationClusterStampKey = "consolidation_cluster_checked_at"
+
+// ConsolidationClusterFingerprintKey carries the cluster's member-ID hash
+// alongside the timestamp stamp. Without it, a member migrating out
+// between cycles can leave stamp-fresh survivors that re-cluster into a
+// structurally different group the timestamp check cannot detect.
+const ConsolidationClusterFingerprintKey = "consolidation_cluster_fingerprint"
 
 // ConsolidationPhase consolidates clusters of related memories into synthesis
 // memories and reinforces/erodes existing syntheses based on new evidence.
@@ -782,26 +797,38 @@ func collectReinforceStale(syntheses []model.Memory) []staleSynthesis {
 	return stale
 }
 
+// parseStampTime returns the time recorded under key in meta. ok is false
+// when the key is absent, the value is non-string/empty, or the timestamp
+// fails both RFC3339Nano and RFC3339 parses — in every case the caller
+// should treat the row as stale. RFC3339 fallback covers stamps written by
+// older versions that did not use the nano variant.
+func parseStampTime(meta map[string]interface{}, key string) (time.Time, bool) {
+	raw, ok := meta[key]
+	if !ok {
+		return time.Time{}, false
+	}
+	s, ok := raw.(string)
+	if !ok || s == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
 // isReinforceStale mirrors isStale (contradiction phase) and isParaphraseStale:
 // no stamp, malformed stamp, or stamp strictly before UpdatedAt → eligible.
 // Equal stamp and UpdatedAt is fresh — the stamp path writes
 // mem.UpdatedAt.UTC() through UpdateMetadata, which does not bump updated_at,
 // so a just-stamped row reports stamp == updated_at and stays fresh next cycle.
 func isReinforceStale(mem *model.Memory, meta map[string]interface{}) bool {
-	raw, ok := meta[ReinforceCheckedStampKey]
+	t, ok := parseStampTime(meta, ReinforceCheckedStampKey)
 	if !ok {
 		return true
-	}
-	s, ok := raw.(string)
-	if !ok || s == "" {
-		return true
-	}
-	t, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		t, err = time.Parse(time.RFC3339, s)
-		if err != nil {
-			return true
-		}
 	}
 	return t.Before(mem.UpdatedAt)
 }
@@ -826,6 +853,110 @@ func (p *ConsolidationPhase) stampReinforce(
 	mem.Metadata = encoded
 	if err := p.memWriter.UpdateMetadata(ctx, mem.ID, mem.NamespaceID, encoded); err != nil {
 		slog.Warn("dreaming: reinforce stamp persist failed", "memory", mem.ID, "err", err)
+	}
+}
+
+// staleCluster carries a cluster alongside its current fingerprint and
+// per-member pre-decoded metadata so the consolidate stamp path does not
+// re-parse on completion. Parallel to staleSynthesis.
+type staleCluster struct {
+	members     []model.Memory
+	metas       []map[string]interface{}
+	fingerprint string
+}
+
+// clusterFingerprint returns an order-independent hash of the member ID
+// set. clusterMemories' anchor-walk produces non-deterministic iteration
+// order across cycles, so the stamp comparison must be sort-invariant.
+func clusterFingerprint(cluster []model.Memory) string {
+	ids := make([]string, len(cluster))
+	for i, m := range cluster {
+		ids[i] = m.ID.String()
+	}
+	sort.Strings(ids)
+	sum := sha256.Sum256([]byte(strings.Join(ids, "|")))
+	return hex.EncodeToString(sum[:8])
+}
+
+// collectConsolidateStale returns the eligible-cluster count alongside the
+// subset that needs a re-visit. A cluster is stale when ANY member is
+// missing the stamp marker, has a stamp before its own UpdatedAt, or
+// carries a fingerprint different from the cluster's current fingerprint —
+// the last condition catches survivor-only reshapes that timestamp checks
+// alone miss.
+func collectConsolidateStale(clusters [][]model.Memory) (stale []staleCluster, eligible int) {
+	stampMarker := []byte(ConsolidationClusterStampKey)
+	stale = make([]staleCluster, 0, len(clusters))
+	for _, cluster := range clusters {
+		if len(cluster) < 2 {
+			continue
+		}
+		eligible++
+		fp := clusterFingerprint(cluster)
+		metas := make([]map[string]interface{}, len(cluster))
+		clusterStale := false
+		for i := range cluster {
+			m := &cluster[i]
+			if !bytes.Contains(m.Metadata, stampMarker) {
+				metas[i] = map[string]interface{}{}
+				clusterStale = true
+				continue
+			}
+			metas[i] = decodeMetadata(m.Metadata)
+			if isClusterMemberStale(m, metas[i], fp) {
+				clusterStale = true
+			}
+		}
+		if clusterStale {
+			stale = append(stale, staleCluster{members: cluster, metas: metas, fingerprint: fp})
+		}
+	}
+	return stale, eligible
+}
+
+// isClusterMemberStale extends the time-stamp check (see isReinforceStale)
+// with a fingerprint check so a survivor-only cluster reshape stales even
+// when every member's UpdatedAt is unchanged.
+func isClusterMemberStale(mem *model.Memory, meta map[string]interface{}, currentFingerprint string) bool {
+	t, ok := parseStampTime(meta, ConsolidationClusterStampKey)
+	if !ok || t.Before(mem.UpdatedAt) {
+		return true
+	}
+	fp, _ := meta[ConsolidationClusterFingerprintKey].(string)
+	return fp == "" || fp != currentFingerprint
+}
+
+// stampConsolidateCluster writes the visit stamp + cluster fingerprint onto
+// every cluster member via UpdateMetadata so the staleness check does not
+// self-invalidate next cycle. Mirrors stampReinforce / stampParaphrase /
+// the non-demote half of writeAuditDecision: persist failures are logged,
+// never returned — a failed stamp leaves that row stale so the next cycle
+// retries the cluster (which is fine; the cluster's other members will
+// still appear stale due to the failed member, surfacing the cluster).
+func (p *ConsolidationPhase) stampConsolidateCluster(
+	ctx context.Context,
+	members []model.Memory,
+	metas []map[string]interface{},
+	fingerprint string,
+) {
+	for i := range members {
+		meta := metas[i]
+		if meta == nil {
+			meta = map[string]interface{}{}
+		}
+		meta[ConsolidationClusterStampKey] = members[i].UpdatedAt.UTC().Format(time.RFC3339Nano)
+		meta[ConsolidationClusterFingerprintKey] = fingerprint
+		encoded, err := json.Marshal(meta)
+		if err != nil {
+			slog.Warn("dreaming: consolidate cluster stamp marshal failed",
+				"memory", members[i].ID, "err", err)
+			continue
+		}
+		members[i].Metadata = encoded
+		if err := p.memWriter.UpdateMetadata(ctx, members[i].ID, members[i].NamespaceID, encoded); err != nil {
+			slog.Warn("dreaming: consolidate cluster stamp persist failed",
+				"memory", members[i].ID, "err", err)
+		}
 	}
 }
 
@@ -898,6 +1029,7 @@ func (p *ConsolidationPhase) consolidate(
 		"candidates_total":       len(candidates),
 		"clusters_total":         0,
 		"clusters_eligible":      0,
+		"clusters_stale":         0,
 		"synthesis_calls":        0,
 		"audit_calls":            0,
 		"created":                0,
@@ -921,19 +1053,15 @@ func (p *ConsolidationPhase) consolidate(
 
 	// Simple clustering: group by overlapping content (batches of related memories).
 	clusters := p.clusterMemories(candidates)
+	stale, eligibleClusters := collectConsolidateStale(clusters)
 	stats["clusters_total"] = len(clusters)
-	eligibleClusters := 0
-	for _, c := range clusters {
-		if len(c) >= 2 {
-			eligibleClusters++
-		}
-	}
 	stats["clusters_eligible"] = eligibleClusters
+	stats["clusters_stale"] = len(stale)
 
 	slog.Info("dreaming: consolidate starting",
 		"cycle", cycle.ID, "candidates", len(candidates),
 		"clusters", len(clusters), "eligible_clusters", eligibleClusters,
-		"budget_remaining", budget.Remaining())
+		"stale_clusters", len(stale), "budget_remaining", budget.Remaining())
 
 	initialConfidence, _ := p.settings.ResolveFloat(ctx, service.SettingDreamInitialConfidence, "global")
 	if initialConfidence == 0 {
@@ -944,14 +1072,13 @@ func (p *ConsolidationPhase) consolidate(
 	noveltyEnabled := p.settings.ResolveBool(ctx, service.SettingDreamNoveltyEnabled, "global")
 
 	clustersVisited := 0
-	for _, cluster := range clusters {
+	for si := range stale {
+		cluster := stale[si].members
+		metas := stale[si].metas
+		fingerprint := stale[si].fingerprint
 		if budget.Exhausted() {
 			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
 			break
-		}
-
-		if len(cluster) < 2 {
-			continue
 		}
 		clustersVisited++
 
@@ -1046,6 +1173,7 @@ func (p *ConsolidationPhase) consolidate(
 				slog.Info("dreaming: synthesis rejected by novelty audit",
 					"reason", reason, "sources", len(cluster))
 				stats["rejected"] = stats["rejected"].(int) + 1
+				p.stampConsolidateCluster(ctx, cluster, metas, fingerprint)
 				continue
 			}
 		}
@@ -1096,10 +1224,11 @@ func (p *ConsolidationPhase) consolidate(
 		_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
 			model.DreamOpMemoryCreated, "memory", synthMemory.ID,
 			nil, synthMemory)
+		p.stampConsolidateCluster(ctx, cluster, metas, fingerprint)
 	}
 
 	p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-	return clustersVisited < eligibleClusters, nil
+	return clustersVisited < len(stale), nil
 }
 
 // renderSynthesisPrompt builds the synthesis prompt so it can be inspected
