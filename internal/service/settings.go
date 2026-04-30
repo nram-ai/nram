@@ -239,6 +239,18 @@ const (
 	SettingDreamEntityMergeThreshold   = "dreaming.entity_merge.cosine_threshold"
 	SettingDreamSchedulerPollSeconds   = "dreaming.scheduler.poll_interval_seconds"
 
+	// Stuck-cycle detection and recovery. The runner ticks heartbeat_at every
+	// HeartbeatInterval while a phase is executing; the admin UI surfaces
+	// "no recent activity" when now() - heartbeat_at > HeartbeatStale. The
+	// abandon button (and the StuckCycleSweeper) fire only when
+	// now() - updated_at > StuckThreshold, which is intentionally
+	// conservative — it must exceed the longest legitimate single-phase
+	// runtime so we never abandon a cycle that might still complete.
+	SettingDreamHeartbeatInterval = "dreaming.heartbeat_interval_seconds"
+	SettingDreamHeartbeatStale    = "dreaming.heartbeat_stale_seconds"
+	SettingDreamStuckThreshold    = "dreaming.stuck_threshold_seconds"
+	SettingDreamStuckSweep        = "dreaming.stuck_sweep_seconds"
+
 	// Lifecycle sweep tuning. SweepInterval is read at start (restart);
 	// BatchSize / OrphanGrace are read on every sweep so they hot-reload.
 	SettingLifecycleSweepIntervalSeconds = "lifecycle.sweep_interval_seconds"
@@ -519,6 +531,10 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingDreamContradictionNeighbors: "4",
 	SettingDreamEntityMergeThreshold:   "0.92",
 	SettingDreamSchedulerPollSeconds:   "30",
+	SettingDreamHeartbeatInterval:      "30",
+	SettingDreamHeartbeatStale:         "120",
+	SettingDreamStuckThreshold:         "1800",
+	SettingDreamStuckSweep:             "300",
 
 	SettingLifecycleSweepIntervalSeconds: "300",
 	SettingLifecycleBatchSize:            "100",

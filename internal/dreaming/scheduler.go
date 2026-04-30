@@ -59,6 +59,14 @@ type Scheduler struct {
 	eventBus  events.EventBus
 	retention *RetentionSweeper
 
+	// activeCycles tracks in-flight cycles owned by this instance, keyed by
+	// cycle ID. Used by CancelCycle so an admin Abandon hitting THIS instance
+	// can interrupt the running ctx mid-phase rather than waiting for the
+	// next phase boundary. Cross-instance Abandon falls back to the DB write
+	// alone; the remote runner notices on its next phase boundary.
+	activeCycles   map[uuid.UUID]context.CancelFunc
+	activeCyclesMu sync.Mutex
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -76,16 +84,47 @@ func NewScheduler(
 	retention *RetentionSweeper,
 ) *Scheduler {
 	return &Scheduler{
-		config:    config.withDefaults(context.Background(), settings),
-		settings:  settings,
-		dirtyRepo: dirtyRepo,
-		cycleRepo: cycleRepo,
-		projects:  projects,
-		idleCheck: idleCheck,
-		runner:    runner,
-		eventBus:  eventBus,
-		retention: retention,
+		config:       config.withDefaults(context.Background(), settings),
+		settings:     settings,
+		dirtyRepo:    dirtyRepo,
+		cycleRepo:    cycleRepo,
+		projects:     projects,
+		idleCheck:    idleCheck,
+		runner:       runner,
+		eventBus:     eventBus,
+		retention:    retention,
+		activeCycles: make(map[uuid.UUID]context.CancelFunc),
 	}
+}
+
+// CancelCycle cancels the in-flight ctx for a cycle owned by this instance.
+// Returns true if the cycle was registered locally (and thus actually canceled),
+// false if the cycle is owned by a different instance or has already completed.
+// The caller must still write the DB row's terminal state separately —
+// canceling the ctx alone does not transition the cycle's status.
+func (s *Scheduler) CancelCycle(id uuid.UUID) bool {
+	s.activeCyclesMu.Lock()
+	defer s.activeCyclesMu.Unlock()
+
+	cancel, ok := s.activeCycles[id]
+	if !ok {
+		return false
+	}
+	cancel()
+	delete(s.activeCycles, id)
+	return true
+}
+
+func (s *Scheduler) registerCycle(id uuid.UUID, cancel context.CancelFunc) {
+	s.activeCyclesMu.Lock()
+	defer s.activeCyclesMu.Unlock()
+	s.activeCycles[id] = cancel
+}
+
+func (s *Scheduler) unregisterCycle(id uuid.UUID) {
+	s.activeCyclesMu.Lock()
+	defer s.activeCyclesMu.Unlock()
+	delete(s.activeCycles, id)
 }
 
 // Start launches the scheduler in a background goroutine.
@@ -96,12 +135,52 @@ func (s *Scheduler) Start() {
 	go s.run(ctx)
 }
 
-// Stop cancels the scheduler and waits for it to finish.
+// Stop cancels the scheduler and waits for it to finish. Any cycle that was
+// in-flight at shutdown is explicitly abandoned with a fresh context so its
+// DB row reflects the shutdown rather than being left as 'running' for the
+// stuck sweeper on the next instance to catch 30 minutes later. SIGKILL
+// bypasses this path; the sweeper still backs it up.
 func (s *Scheduler) Stop() {
+	// Capture before cancel — the runCycle goroutine's defer unregisters its
+	// own entry as it exits, so reading after wg.Wait() always finds the map
+	// empty.
+	inflight := s.snapshotActiveCycles()
+
 	if s.cancel != nil {
 		s.cancel()
 	}
 	s.wg.Wait()
+
+	if len(inflight) == 0 || s.cycleRepo == nil {
+		return
+	}
+
+	// Fresh context so the canceled-during-shutdown ctx doesn't fail the
+	// terminal write. Short timeout so a hung DB can't delay process exit.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for _, id := range inflight {
+		ok, err := s.cycleRepo.Abandon(ctx, id, "server shutdown; cycle interrupted by graceful stop")
+		if err != nil {
+			slog.Warn("dreaming: failed to abandon cycle on shutdown",
+				"cycle", id, "err", err)
+			continue
+		}
+		if ok {
+			slog.Info("dreaming: abandoned in-flight cycle on shutdown", "cycle", id)
+		}
+	}
+}
+
+func (s *Scheduler) snapshotActiveCycles() []uuid.UUID {
+	s.activeCyclesMu.Lock()
+	defer s.activeCyclesMu.Unlock()
+	ids := make([]uuid.UUID, 0, len(s.activeCycles))
+	for id := range s.activeCycles {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (s *Scheduler) run(ctx context.Context) {
@@ -241,8 +320,17 @@ func (s *Scheduler) runCycle(ctx context.Context, project *model.Project) {
 
 	slog.Info("dreaming: starting cycle", "cycle", cycle.ID, "project", project.Slug)
 
+	// Wrap ctx so CancelCycle can interrupt this cycle mid-phase without
+	// canceling the whole scheduler. Registry entry is removed in defer
+	// regardless of how Execute returns; CancelCycle also deletes on cancel
+	// to make a duplicate cancel idempotent.
+	cycleCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.registerCycle(cycle.ID, cancel)
+	defer s.unregisterCycle(cycle.ID)
+
 	budget := NewTokenBudget(maxTokens, maxPerCall)
-	allCompleted, hasResidual, err := s.runner.Execute(ctx, cycle, budget)
+	allCompleted, hasResidual, err := s.runner.Execute(cycleCtx, cycle, budget)
 
 	if err != nil {
 		slog.Error("dreaming: cycle failed", "cycle", cycle.ID, "err", err)

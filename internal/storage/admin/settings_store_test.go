@@ -105,6 +105,8 @@ func TestSettingsSchemaRequiresRestart(t *testing.T) {
 		service.SettingEnrichmentWorkerCountPostgres:    {},
 		service.SettingEnrichmentWorkerPollIntervalSeconds: {},
 		service.SettingDreamSchedulerPollSeconds:        {},
+		service.SettingDreamHeartbeatInterval:           {},
+		service.SettingDreamStuckSweep:                  {},
 		service.SettingLifecycleSweepIntervalSeconds:    {},
 		service.SettingCascadeCacheTTLSeconds:           {},
 		service.SettingSettingsCacheTTLSeconds:          {},

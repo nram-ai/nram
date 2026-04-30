@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
@@ -11,6 +12,22 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
+// DreamCycleCanceller cancels in-flight cycles owned by the local Scheduler
+// instance. Cross-instance cancellation falls back to the DB write alone, so
+// this dependency is optional (nil-tolerant).
+type DreamCycleCanceller interface {
+	CancelCycle(id uuid.UUID) bool
+}
+
+// DreamSettingsResolver resolves the timing settings used to decorate
+// running cycles with IsAbandonable / IsStaleDiagnostic flags. The store
+// uses ResolveIntWithDefault rather than directly reading the settings repo
+// so that the cache, default fallback, and value parsing are all handled
+// once in service.SettingsService.
+type DreamSettingsResolver interface {
+	ResolveIntWithDefault(ctx context.Context, key, scope string) int
+}
+
 // DreamAdminStore provides admin-level access to dream cycle data.
 // It implements api.DreamAdminStore.
 type DreamAdminStore struct {
@@ -18,21 +35,84 @@ type DreamAdminStore struct {
 	logRepo      *storage.DreamLogRepo
 	dirtyRepo    *storage.DreamDirtyRepo
 	settingsRepo *storage.SettingsRepo
+	settings     DreamSettingsResolver
+	canceller    DreamCycleCanceller
 }
 
-// NewDreamAdminStore creates a new DreamAdminStore.
+// NewDreamAdminStore creates a new DreamAdminStore. canceller may be nil
+// during tests or migrations that don't run a live scheduler; abandon then
+// degrades to a pure DB write that the in-process runner picks up at the
+// next phase boundary.
 func NewDreamAdminStore(
 	cycleRepo *storage.DreamCycleRepo,
 	logRepo *storage.DreamLogRepo,
 	dirtyRepo *storage.DreamDirtyRepo,
 	settingsRepo *storage.SettingsRepo,
+	settings DreamSettingsResolver,
+	canceller DreamCycleCanceller,
 ) *DreamAdminStore {
 	return &DreamAdminStore{
 		cycleRepo:    cycleRepo,
 		logRepo:      logRepo,
 		dirtyRepo:    dirtyRepo,
 		settingsRepo: settingsRepo,
+		settings:     settings,
+		canceller:    canceller,
 	}
+}
+
+// thresholds caches the two timing settings for the duration of a single
+// request so each cycle in a batch doesn't trigger its own settings lookup.
+type thresholds struct {
+	stuck     time.Duration
+	heartbeat time.Duration
+}
+
+func (s *DreamAdminStore) resolveThresholds(ctx context.Context) thresholds {
+	stuckSecs := s.settings.ResolveIntWithDefault(ctx, service.SettingDreamStuckThreshold, "global")
+	if stuckSecs <= 0 {
+		stuckSecs = 1800
+	}
+	hbSecs := s.settings.ResolveIntWithDefault(ctx, service.SettingDreamHeartbeatStale, "global")
+	if hbSecs <= 0 {
+		hbSecs = 120
+	}
+	return thresholds{
+		stuck:     time.Duration(stuckSecs) * time.Second,
+		heartbeat: time.Duration(hbSecs) * time.Second,
+	}
+}
+
+// decorate stamps the computed IsAbandonable and IsStaleDiagnostic fields on
+// a cycle. Both flags fire only for status='running' rows; everything else
+// keeps the zero value the repo scan returned.
+func decorate(c *model.DreamCycle, t thresholds, now time.Time) {
+	if c.Status != model.DreamStatusRunning {
+		return
+	}
+	if now.Sub(c.UpdatedAt) > t.stuck {
+		c.IsAbandonable = true
+	}
+	if c.HeartbeatAt != nil && now.Sub(*c.HeartbeatAt) > t.heartbeat {
+		c.IsStaleDiagnostic = true
+	}
+}
+
+func (s *DreamAdminStore) decorateAllWith(cycles []model.DreamCycle, t thresholds) {
+	if len(cycles) == 0 {
+		return
+	}
+	now := time.Now().UTC()
+	for i := range cycles {
+		decorate(&cycles[i], t, now)
+	}
+}
+
+func (s *DreamAdminStore) decorateAll(ctx context.Context, cycles []model.DreamCycle) {
+	if len(cycles) == 0 {
+		return
+	}
+	s.decorateAllWith(cycles, s.resolveThresholds(ctx))
 }
 
 // Status returns the system-wide dream status.
@@ -43,11 +123,22 @@ func (s *DreamAdminStore) Status(ctx context.Context) (*api.DreamStatusResponse,
 		cycles = []model.DreamCycle{}
 	}
 
-	enabled := s.isEnabled(ctx)
+	// Resolve once — the UI polls Status every 10 seconds, so we avoid a
+	// second settings cache lookup and (more importantly) a second query
+	// just to count stuck rows that the recent-cycles preview already
+	// covers in the typical case.
+	t := s.resolveThresholds(ctx)
+	s.decorateAllWith(cycles, t)
+
+	// CountStale gives an exact count without materializing a slice for
+	// the rare case where stuck cycles exist beyond the 10-row preview
+	// (post-deploy with many crashed workers).
+	stuckCount, _ := s.cycleRepo.CountStale(ctx, t.stuck)
 
 	return &api.DreamStatusResponse{
-		Enabled:      enabled,
+		Enabled:      s.isEnabled(ctx),
 		DirtyCount:   dirtyCount,
+		StuckCount:   stuckCount,
 		RecentCycles: cycles,
 	}, nil
 }
@@ -59,6 +150,7 @@ func (s *DreamAdminStore) ProjectStatus(ctx context.Context, projectID uuid.UUID
 	if cycles == nil {
 		cycles = []model.DreamCycle{}
 	}
+	s.decorateAll(ctx, cycles)
 
 	var lastDream *model.DreamCycle
 	if len(cycles) > 0 {
@@ -68,17 +160,27 @@ func (s *DreamAdminStore) ProjectStatus(ctx context.Context, projectID uuid.UUID
 	return &api.DreamProjectStatusResponse{
 		Enabled:   s.isProjectEnabled(ctx, projectID),
 		Dirty:     dirty,
-		LastDream:  lastDream,
+		LastDream: lastDream,
 		Cycles:    cycles,
 	}, nil
 }
 
 // ListCycles returns dream cycles, optionally filtered by project.
 func (s *DreamAdminStore) ListCycles(ctx context.Context, projectID *uuid.UUID, limit int) ([]model.DreamCycle, error) {
+	var (
+		cycles []model.DreamCycle
+		err    error
+	)
 	if projectID != nil {
-		return s.cycleRepo.ListByProject(ctx, *projectID, limit)
+		cycles, err = s.cycleRepo.ListByProject(ctx, *projectID, limit)
+	} else {
+		cycles, err = s.cycleRepo.ListRecent(ctx, limit)
 	}
-	return s.cycleRepo.ListRecent(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	s.decorateAll(ctx, cycles)
+	return cycles, nil
 }
 
 // GetCycleLogs returns the log entries for a specific cycle.
@@ -88,7 +190,26 @@ func (s *DreamAdminStore) GetCycleLogs(ctx context.Context, cycleID uuid.UUID) (
 
 // GetCycle returns a specific dream cycle by ID.
 func (s *DreamAdminStore) GetCycle(ctx context.Context, cycleID uuid.UUID) (*model.DreamCycle, error) {
-	return s.cycleRepo.GetByID(ctx, cycleID)
+	c, err := s.cycleRepo.GetByID(ctx, cycleID)
+	if err != nil {
+		return nil, err
+	}
+	t := s.resolveThresholds(ctx)
+	decorate(c, t, time.Now().UTC())
+	return c, nil
+}
+
+// AbandonCycle transitions a running cycle to failed. If the cycle is owned
+// by the local scheduler, its in-flight ctx is canceled first so the runner
+// stops at its next ctx-aware checkpoint instead of finishing the current
+// phase. Cross-instance cycles get only the DB write; the remote runner
+// notices on its next phase boundary. Returns true iff a row was actually
+// transitioned (false means it was already terminal).
+func (s *DreamAdminStore) AbandonCycle(ctx context.Context, cycleID uuid.UUID, reason string) (bool, error) {
+	if s.canceller != nil {
+		s.canceller.CancelCycle(cycleID)
+	}
+	return s.cycleRepo.Abandon(ctx, cycleID, reason)
 }
 
 // SetEnabled sets the global dreaming enabled state.

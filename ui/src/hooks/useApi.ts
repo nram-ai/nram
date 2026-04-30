@@ -617,6 +617,16 @@ export function useRollbackDreamCycle() {
   });
 }
 
+export function useAbandonDreamCycle() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cycleId: string) => adminAPI.abandonDreamCycle(cycleId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+    },
+  });
+}
+
 // --- Enrichment ---
 
 export function useEnrichmentStatus() {

@@ -808,8 +808,15 @@ export interface DreamCycle {
   error: string | null;
   started_at: string | null;
   completed_at: string | null;
+  heartbeat_at: string | null;
   created_at: string;
   updated_at: string;
+  // Computed server-side. is_stale_diagnostic flags running cycles whose
+  // heartbeat hasn't ticked recently — diagnostic only. is_abandonable
+  // flags running cycles whose updated_at is past the conservative stuck
+  // threshold; only these are eligible for the Abandon action.
+  is_stale_diagnostic: boolean;
+  is_abandonable: boolean;
 }
 
 export interface DreamLog {
@@ -828,7 +835,13 @@ export interface DreamLog {
 export interface DreamStatusResponse {
   enabled: boolean;
   dirty_count: number;
+  stuck_count: number;
   recent_cycles: DreamCycle[];
+}
+
+export interface DreamAbandonResponse {
+  status: string;
+  cycle_id: string;
 }
 
 export interface DreamCycleDetail {
@@ -1166,6 +1179,8 @@ export const adminAPI = {
     }),
   rollbackDreamCycle: (cycleId: string) =>
     request<DreamRollbackResponse>("POST", "/dreaming/rollback", { cycle_id: cycleId }),
+  abandonDreamCycle: (cycleId: string) =>
+    request<DreamAbandonResponse>("POST", `/dreaming/cycles/${cycleId}/abandon`),
 
   // Enrichment
   getEnrichmentStatus: () =>

@@ -5,8 +5,12 @@ import {
   useDreamingCycleDetail,
   useSetDreamingEnabled,
   useRollbackDreamCycle,
+  useAbandonDreamCycle,
 } from "../hooks/useApi";
 import type { DreamCycle, DreamLog } from "../api/client";
+
+const ABANDON_CONFIRM =
+  "This cycle has not made progress in over 30 minutes. Marking it as failed will let you roll back any partial changes. The worker will be canceled if it's still running on this server. Continue?";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -146,14 +150,37 @@ function StatusToast({ message, type }: { message: string; type: "success" | "er
 // Cycle List Table
 // ---------------------------------------------------------------------------
 
+function StuckPill() {
+  return (
+    <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800 dark:bg-red-900/40 dark:text-red-200">
+      stuck
+    </span>
+  );
+}
+
+function StaleDiagnosticPill() {
+  return (
+    <span
+      className="inline-flex items-center rounded-full bg-amber-100/70 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+      title="Heartbeat is stale — the worker may have stopped making progress."
+    >
+      no recent activity
+    </span>
+  );
+}
+
 function CycleTable({
   cycles,
   onSelect,
   selectedId,
+  onAbandon,
+  isAbandoning,
 }: {
   cycles: DreamCycle[];
   onSelect: (id: string) => void;
   selectedId: string | null;
+  onAbandon: (id: string) => void;
+  isAbandoning: boolean;
 }) {
   if (cycles.length === 0) {
     return (
@@ -177,34 +204,59 @@ function CycleTable({
           </tr>
         </thead>
         <tbody>
-          {cycles.map((cycle) => (
-            <tr
-              key={cycle.id}
-              onClick={() => onSelect(cycle.id)}
-              className={`cursor-pointer border-b transition-colors hover:bg-muted/30 ${
-                selectedId === cycle.id ? "bg-muted/50" : ""
-              }`}
-            >
-              <td className="px-4 py-3">
-                <StatusBadge status={cycle.status} />
-              </td>
-              <td className="px-4 py-3 text-muted-foreground">
-                {cycle.phase ? (PHASE_LABELS[cycle.phase] ?? cycle.phase) : "-"}
-              </td>
-              <td className="px-4 py-3 font-mono text-xs">
-                {cycle.tokens_used.toLocaleString()} / {cycle.token_budget.toLocaleString()}
-              </td>
-              <td className="px-4 py-3 text-muted-foreground">
-                {formatDuration(cycle.started_at, cycle.completed_at ?? cycle.updated_at)}
-              </td>
-              <td className="px-4 py-3 text-muted-foreground" title={formatDate(cycle.started_at)}>
-                {cycle.started_at ? relativeTime(cycle.started_at) : relativeTime(cycle.created_at)}
-              </td>
-              <td className="px-4 py-3 text-right text-muted-foreground">
-                &rsaquo;
-              </td>
-            </tr>
-          ))}
+          {cycles.map((cycle) => {
+            const rowTint = cycle.is_abandonable
+              ? "bg-red-50/40 dark:bg-red-900/10"
+              : "";
+            return (
+              <tr
+                key={cycle.id}
+                onClick={() => onSelect(cycle.id)}
+                className={`cursor-pointer border-b transition-colors hover:bg-muted/30 ${rowTint} ${
+                  selectedId === cycle.id ? "bg-muted/50" : ""
+                }`}
+              >
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <StatusBadge status={cycle.status} />
+                    {cycle.is_abandonable ? (
+                      <StuckPill />
+                    ) : cycle.is_stale_diagnostic ? (
+                      <StaleDiagnosticPill />
+                    ) : null}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-muted-foreground">
+                  {cycle.phase ? (PHASE_LABELS[cycle.phase] ?? cycle.phase) : "-"}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs">
+                  {cycle.tokens_used.toLocaleString()} / {cycle.token_budget.toLocaleString()}
+                </td>
+                <td className="px-4 py-3 text-muted-foreground">
+                  {formatDuration(cycle.started_at, cycle.completed_at ?? cycle.updated_at)}
+                </td>
+                <td className="px-4 py-3 text-muted-foreground" title={formatDate(cycle.started_at)}>
+                  {cycle.started_at ? relativeTime(cycle.started_at) : relativeTime(cycle.created_at)}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  {cycle.is_abandonable ? (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAbandon(cycle.id);
+                      }}
+                      disabled={isAbandoning}
+                      className="rounded-md border border-red-300 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50"
+                    >
+                      Abandon
+                    </button>
+                  ) : (
+                    <span className="text-muted-foreground">&rsaquo;</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -220,11 +272,15 @@ function CycleDetail({
   onClose,
   onRollback,
   isRollingBack,
+  onAbandon,
+  isAbandoning,
 }: {
   cycleId: string;
   onClose: () => void;
   onRollback: (id: string) => void;
   isRollingBack: boolean;
+  onAbandon: (id: string) => void;
+  isAbandoning: boolean;
 }) {
   const { data, isLoading, isError } = useDreamingCycleDetail(cycleId);
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
@@ -249,6 +305,7 @@ function CycleDetail({
 
   const { cycle, logs } = data;
   const canRollback = cycle.status === "completed" || cycle.status === "failed";
+  const canAbandon = cycle.is_abandonable;
 
   // Parse phase summary if available.
   let phaseSummary: Array<{
@@ -271,10 +328,24 @@ function CycleDetail({
           <div className="flex items-center gap-3">
             <h3 className="text-lg font-semibold">Dream Cycle</h3>
             <StatusBadge status={cycle.status} />
+            {canAbandon ? (
+              <StuckPill />
+            ) : cycle.is_stale_diagnostic ? (
+              <StaleDiagnosticPill />
+            ) : null}
           </div>
           <p className="mt-1 font-mono text-xs text-muted-foreground">{cycle.id}</p>
         </div>
         <div className="flex items-center gap-2">
+          {canAbandon && (
+            <button
+              onClick={() => onAbandon(cycle.id)}
+              disabled={isAbandoning}
+              className="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50"
+            >
+              {isAbandoning ? "Abandoning..." : "Abandon"}
+            </button>
+          )}
           {canRollback && (
             <button
               onClick={() => onRollback(cycle.id)}
@@ -448,6 +519,7 @@ export default function DreamingMonitor() {
   const cyclesQuery = useDreamingCycles();
   const enableMutation = useSetDreamingEnabled();
   const rollbackMutation = useRollbackDreamCycle();
+  const abandonMutation = useAbandonDreamCycle();
 
   const [selectedCycleId, setSelectedCycleId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
@@ -481,6 +553,30 @@ export default function DreamingMonitor() {
       });
     },
     [rollbackMutation, showToast],
+  );
+
+  const handleAbandon = useCallback(
+    (cycleId: string) => {
+      if (!window.confirm(ABANDON_CONFIRM)) {
+        return;
+      }
+      abandonMutation.mutate(cycleId, {
+        onSuccess: () => {
+          showToast("Dream cycle abandoned; rollback is now available", "success");
+        },
+        onError: (err: unknown) => {
+          // 409 from the server when the cycle has already finished or been
+          // abandoned by another operator/sweep cycle.
+          const message = err instanceof Error ? err.message : "";
+          if (message.toLowerCase().includes("terminal") || message.includes("409")) {
+            showToast("Cycle is already in a terminal state", "error");
+          } else {
+            showToast("Abandon failed", "error");
+          }
+        },
+      });
+    },
+    [abandonMutation, showToast],
   );
 
   const status = statusQuery.data;
@@ -541,7 +637,7 @@ export default function DreamingMonitor() {
           </div>
 
           {/* Stats */}
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
             <StatCard
               label="Dirty Projects"
               value={status?.dirty_count ?? 0}
@@ -555,6 +651,15 @@ export default function DreamingMonitor() {
               label="Active"
               value={runningCount}
               color={runningCount > 0 ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground"}
+            />
+            <StatCard
+              label="Stuck"
+              value={status?.stuck_count ?? 0}
+              color={
+                (status?.stuck_count ?? 0) > 0
+                  ? "text-red-600 dark:text-red-400"
+                  : "text-muted-foreground"
+              }
             />
             <StatCard
               label="Completed"
@@ -575,6 +680,8 @@ export default function DreamingMonitor() {
               onClose={() => setSelectedCycleId(null)}
               onRollback={handleRollback}
               isRollingBack={rollbackMutation.isPending}
+              onAbandon={handleAbandon}
+              isAbandoning={abandonMutation.isPending}
             />
           ) : (
             <div>
@@ -583,6 +690,8 @@ export default function DreamingMonitor() {
                 cycles={cycles}
                 onSelect={setSelectedCycleId}
                 selectedId={selectedCycleId}
+                onAbandon={handleAbandon}
+                isAbandoning={abandonMutation.isPending}
               />
             </div>
           )}

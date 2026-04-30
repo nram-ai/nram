@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -47,24 +48,34 @@ type PhaseSummaryEntry struct {
 
 // Runner orchestrates the fixed-order dream phase pipeline for a single cycle.
 type Runner struct {
-	cycleRepo *storage.DreamCycleRepo
-	logRepo   *storage.DreamLogRepo
-	idleCheck IdleChecker
-	phases    []Phase
+	cycleRepo         *storage.DreamCycleRepo
+	logRepo           *storage.DreamLogRepo
+	idleCheck         IdleChecker
+	heartbeatInterval time.Duration
+	phases            []Phase
 }
 
 // NewRunner creates a new Runner with the given phases in execution order.
+// heartbeatInterval controls how often the runner stamps heartbeat_at on the
+// cycle row while a phase is executing; zero falls back to 30 seconds. The
+// admin UI uses heartbeat_at to surface "no recent activity" with a tighter
+// window than phase-boundary updated_at can give.
 func NewRunner(
 	cycleRepo *storage.DreamCycleRepo,
 	logRepo *storage.DreamLogRepo,
 	idleCheck IdleChecker,
+	heartbeatInterval time.Duration,
 	phases ...Phase,
 ) *Runner {
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = 30 * time.Second
+	}
 	return &Runner{
-		cycleRepo: cycleRepo,
-		logRepo:   logRepo,
-		idleCheck: idleCheck,
-		phases:    phases,
+		cycleRepo:         cycleRepo,
+		logRepo:           logRepo,
+		idleCheck:         idleCheck,
+		heartbeatInterval: heartbeatInterval,
+		phases:            phases,
 	}
 }
 
@@ -81,6 +92,15 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 	if err := r.cycleRepo.Start(ctx, cycle.ID); err != nil {
 		return false, false, fmt.Errorf("dream runner start cycle: %w", err)
 	}
+
+	// Heartbeat goroutine. Stamps heartbeat_at every heartbeatInterval until
+	// Execute returns, so the admin UI can detect "no recent activity"
+	// without waiting on a phase-boundary updated_at write. Heartbeat repo
+	// call is itself guarded on status='running', so a race against a
+	// terminal write at cycle exit is harmless.
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+	go r.heartbeat(hbCtx, cycle.ID)
 
 	logger := NewDreamLogWriter(r.logRepo, cycle.ID, cycle.ProjectID)
 	summaries := make([]PhaseSummaryEntry, 0, len(r.phases))
@@ -188,4 +208,31 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 	}
 
 	return allCompleted, hasResidual, nil
+}
+
+// heartbeat stamps heartbeat_at every heartbeatInterval until ctx is canceled.
+// Runs as a goroutine started from Execute. The repo's WHERE status='running'
+// guard makes this safe against a terminal write that races our ticker — a
+// late heartbeat against a row already transitioned to failed/completed is a
+// no-op and writes nothing.
+func (r *Runner) heartbeat(ctx context.Context, cycleID uuid.UUID) {
+	// Initial tick on entry so the row carries a fresh heartbeat_at without
+	// waiting for the first interval to elapse.
+	if err := r.cycleRepo.Heartbeat(ctx, cycleID); err != nil && ctx.Err() == nil {
+		slog.Warn("dreaming: heartbeat failed", "cycle", cycleID, "err", err)
+	}
+
+	ticker := time.NewTicker(r.heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.cycleRepo.Heartbeat(ctx, cycleID); err != nil && ctx.Err() == nil {
+				slog.Warn("dreaming: heartbeat failed", "cycle", cycleID, "err", err)
+			}
+		}
+	}
 }

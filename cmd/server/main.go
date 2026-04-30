@@ -534,8 +534,11 @@ func main() {
 		memoryRepo.AttachVectorStore(vectorStore)
 	}
 
+	heartbeatInterval := settingsSvc.ResolveDurationSecondsWithDefault(
+		context.Background(), service.SettingDreamHeartbeatInterval, "global")
+
 	dreamRunner := dreaming.NewRunner(
-		dreamCycleRepo, dreamLogRepo, workerPool,
+		dreamCycleRepo, dreamLogRepo, workerPool, heartbeatInterval,
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo, vectorStore, settingsSvc),
 		// Embedding backfill repairs rows whose embedding_dim is set but
 		// whose memory_vectors_<dim> row is missing (no_vector divergence).
@@ -581,7 +584,21 @@ func main() {
 	defer dreamScheduler.Stop()
 	log.Println("dream scheduler started")
 
-	dreamAdminStore := adminstore.NewDreamAdminStore(dreamCycleRepo, dreamLogRepo, dreamDirtyRepo, settingsRepo)
+	// Start the stuck-cycle sweeper in its own goroutine. Lifecycle is
+	// independent of the scheduler so a long-running cycle on this instance
+	// (which blocks the scheduler's main loop) can't also block the sweeper
+	// that's supposed to detect and recover from it.
+	dreamStuckSweeper := dreaming.NewStuckCycleSweeper(
+		dreamCycleRepo, dreamScheduler, settingsSvc, eventBus,
+	)
+	dreamStuckSweeper.Start()
+	defer dreamStuckSweeper.Stop()
+	log.Println("dream stuck-cycle sweeper started")
+
+	dreamAdminStore := adminstore.NewDreamAdminStore(
+		dreamCycleRepo, dreamLogRepo, dreamDirtyRepo, settingsRepo,
+		settingsSvc, dreamScheduler,
+	)
 
 	// Create auth config for login/lookup handlers.
 	// JWT secret is loaded later, but we need it here — load it early.

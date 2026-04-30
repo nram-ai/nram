@@ -20,12 +20,17 @@ type DreamAdminStore interface {
 	GetCycleLogs(ctx context.Context, cycleID uuid.UUID) ([]model.DreamLog, error)
 	SetEnabled(ctx context.Context, enabled bool) error
 	SetProjectEnabled(ctx context.Context, projectID uuid.UUID, enabled bool) error
+	// AbandonCycle transitions a non-terminal cycle to failed, cancelling the
+	// in-flight ctx if owned by the local scheduler. Returns false iff the
+	// cycle was already terminal (handler should respond 409).
+	AbandonCycle(ctx context.Context, cycleID uuid.UUID, reason string) (bool, error)
 }
 
 // DreamStatusResponse is the system-wide dream status.
 type DreamStatusResponse struct {
 	Enabled      bool               `json:"enabled"`
 	DirtyCount   int                `json:"dirty_count"`
+	StuckCount   int                `json:"stuck_count"`
 	RecentCycles []model.DreamCycle `json:"recent_cycles"`
 }
 
@@ -52,18 +57,19 @@ type DreamAdminConfig struct {
 // admin requests based on method and sub-path.
 //
 // Routes:
-//   - GET  /dreaming             — system status
-//   - GET  /dreaming/cycles      — list cycles (optional ?project_id=)
-//   - GET  /dreaming/cycles/{id} — cycle detail with logs
-//   - POST /dreaming/enable      — {"enabled": bool}
-//   - POST /dreaming/project/enable — {"project_id": "...", "enabled": bool}
-//   - POST /dreaming/rollback    — {"cycle_id": "..."}
+//   - GET  /dreaming                       — system status
+//   - GET  /dreaming/cycles                — list cycles (optional ?project_id=)
+//   - GET  /dreaming/cycles/{id}           — cycle detail with logs
+//   - POST /dreaming/cycles/{id}/abandon   — abandon a stuck/running cycle
+//   - POST /dreaming/enable                — {"enabled": bool}
+//   - POST /dreaming/project/enable        — {"project_id": "...", "enabled": bool}
+//   - POST /dreaming/rollback              — {"cycle_id": "..."}
 func NewAdminDreamingHandler(cfg DreamAdminConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sub := extractDreamingSubPath(r.URL.Path)
 
 		// Write operations require administrator role.
-		if sub == "enable" || sub == "rollback" || strings.HasPrefix(sub, "project/") {
+		if sub == "enable" || sub == "rollback" || strings.HasPrefix(sub, "project/") || strings.HasSuffix(sub, "/abandon") {
 			ac := auth.FromContext(r.Context())
 			if ac == nil || ac.Role != auth.RoleAdministrator {
 				http.Error(w, "forbidden: administrator required", http.StatusForbidden)
@@ -76,6 +82,9 @@ func NewAdminDreamingHandler(cfg DreamAdminConfig) http.HandlerFunc {
 			handleDreamStatus(w, r, cfg)
 		case sub == "cycles":
 			handleDreamCyclesList(w, r, cfg)
+		case strings.HasPrefix(sub, "cycles/") && strings.HasSuffix(sub, "/abandon"):
+			cycleIDStr := strings.TrimSuffix(strings.TrimPrefix(sub, "cycles/"), "/abandon")
+			handleDreamAbandon(w, r, cfg, cycleIDStr)
 		case strings.HasPrefix(sub, "cycles/"):
 			cycleIDStr := strings.TrimPrefix(sub, "cycles/")
 			handleDreamCycleDetail(w, r, cfg, cycleIDStr)
@@ -224,6 +233,34 @@ func handleDreamProjectEnable(w http.ResponseWriter, r *http.Request, cfg DreamA
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"project_id": body.ProjectID,
 		"enabled":    body.Enabled,
+	})
+}
+
+func handleDreamAbandon(w http.ResponseWriter, r *http.Request, cfg DreamAdminConfig, cycleIDStr string) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+
+	cycleID, err := uuid.Parse(cycleIDStr)
+	if err != nil {
+		WriteError(w, ErrBadRequest("invalid cycle_id"))
+		return
+	}
+
+	abandoned, err := cfg.Store.AbandonCycle(r.Context(), cycleID, "abandoned by operator via admin UI")
+	if err != nil {
+		WriteError(w, ErrInternal("abandon failed: "+err.Error()))
+		return
+	}
+	if !abandoned {
+		WriteError(w, ErrConflict("cycle is already in a terminal state"))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":   "failed",
+		"cycle_id": cycleID.String(),
 	})
 }
 
