@@ -204,11 +204,13 @@ func TestEmbeddingBackfillPhase_ClearsDimWhenEmbedderUnavailable(t *testing.T) {
 	if len(vs.upserts) != 0 {
 		t.Errorf("nil embedder must not produce vector Upserts; got %d", len(vs.upserts))
 	}
-	if len(writer.updates) != 1 {
-		t.Fatalf("expected 1 Update (clear EmbeddingDim); got %d", len(writer.updates))
+	// Partial-column write (ClearEmbeddingDim) so a concurrent
+	// supersede on the row keeps its chain pointer.
+	if len(writer.embeddingDimClears) != 1 {
+		t.Fatalf("expected 1 ClearEmbeddingDim call; got %d", len(writer.embeddingDimClears))
 	}
-	if writer.updates[0].EmbeddingDim != nil {
-		t.Errorf("Update should have cleared EmbeddingDim; got %v", *writer.updates[0].EmbeddingDim)
+	if writer.embeddingDimClears[0].ID != row.ID {
+		t.Errorf("ClearEmbeddingDim target = %s, want %s", writer.embeddingDimClears[0].ID, row.ID)
 	}
 }
 
@@ -243,11 +245,8 @@ func TestEmbeddingBackfillPhase_ClearsDimOnFailingEmbedder(t *testing.T) {
 	if emb.calls == 0 {
 		t.Errorf("expected at least one embed attempt; got 0")
 	}
-	if len(writer.updates) != 1 {
-		t.Fatalf("expected 1 Update (clear EmbeddingDim after embedder failure); got %d", len(writer.updates))
-	}
-	if writer.updates[0].EmbeddingDim != nil {
-		t.Errorf("Update should have cleared EmbeddingDim; got %v", *writer.updates[0].EmbeddingDim)
+	if len(writer.embeddingDimClears) != 1 {
+		t.Fatalf("expected 1 ClearEmbeddingDim call after embedder failure; got %d", len(writer.embeddingDimClears))
 	}
 }
 
@@ -361,11 +360,16 @@ func TestEmbeddingBackfillPhase_SyncsDimWhenEmbedderReturnsDifferentDim(t *testi
 	if vs.upserts[0].Dimension != actualDim {
 		t.Errorf("vector written at wrong dim; got %d, want %d", vs.upserts[0].Dimension, actualDim)
 	}
-	if len(writer.updates) != 1 {
-		t.Fatalf("expected 1 Update to sync EmbeddingDim; got %d", len(writer.updates))
+	// Partial-column write (UpdateEmbeddingDim) so a concurrent
+	// supersede on the row keeps its chain pointer.
+	if len(writer.embeddingDimUpdates) != 1 {
+		t.Fatalf("expected 1 UpdateEmbeddingDim to sync; got %d", len(writer.embeddingDimUpdates))
 	}
-	if writer.updates[0].EmbeddingDim == nil || *writer.updates[0].EmbeddingDim != actualDim {
-		t.Errorf("EmbeddingDim sync mismatch; got %v, want %d", writer.updates[0].EmbeddingDim, actualDim)
+	if writer.embeddingDimUpdates[0].Dim != actualDim {
+		t.Errorf("dim sync mismatch; got %d, want %d", writer.embeddingDimUpdates[0].Dim, actualDim)
+	}
+	if writer.embeddingDimUpdates[0].ID != row.ID {
+		t.Errorf("UpdateEmbeddingDim target = %s, want %s", writer.embeddingDimUpdates[0].ID, row.ID)
 	}
 }
 

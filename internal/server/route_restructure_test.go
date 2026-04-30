@@ -364,9 +364,9 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		)
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 	updateSvc := service.NewUpdateService(
-		memRepo, projectLookup, &rbacLineageCreator{},
-		nil, nil,
-		)
+		memRepo, projectLookup,
+		nil, nil, &rbacEnrichmentQueueRepo{},
+	)
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
 		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},

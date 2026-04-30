@@ -156,12 +156,15 @@ type MemoryReader interface {
 	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
 }
 
-// MemoryUpdater persists changes to an existing memory.
-// UpdateEmbeddingDim is a focused setter so child memories created in the
-// same job can record their dim without rewriting every column.
+// MemoryUpdater persists changes to an existing memory. The partial
+// setters are how the finalize path avoids clobbering a concurrent
+// supersede with a stale full-row write — each touches only the
+// columns it intentionally mutates.
 type MemoryUpdater interface {
 	Update(ctx context.Context, mem *model.Memory) error
 	UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error
+	MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage) error
+	MarkSupersededBy(ctx context.Context, oldID, namespaceID, newID uuid.UUID) error
 }
 
 // MemoryCreator persists a new memory record.
@@ -1407,9 +1410,15 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 
 	stampIngestionMetadata(p)
 
+	// Single partial UPDATE so a concurrent memory_update that
+	// supersedes this row keeps its supersede pointer.
+	var stampedMetadata json.RawMessage
+	if p.ingestionDecision != "" {
+		stampedMetadata = p.mem.Metadata
+	}
 	p.mem.Enriched = true
 	p.mem.UpdatedAt = time.Now().UTC()
-	if err := wp.memUpdater.Update(ctx, p.mem); err != nil {
+	if err := wp.memUpdater.MarkEnriched(ctx, p.mem.ID, p.mem.NamespaceID, p.mem.EmbeddingDim, stampedMetadata); err != nil {
 		_ = wp.queue.Fail(ctx, p.job.ID, fmt.Sprintf("update memory enriched: %v", err))
 		return fmt.Errorf("update memory: %w", err)
 	}

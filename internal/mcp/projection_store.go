@@ -39,14 +39,18 @@ func buildMCPBatchStoreResponse(resp *service.BatchStoreResponse) *mcpBatchStore
 }
 
 type mcpUpdateResponse struct {
-	ID         uuid.UUID `json:"id"`
-	ReEmbedded bool      `json:"re_embedded"`
+	ID               uuid.UUID `json:"id"`
+	PreviousMemoryID uuid.UUID `json:"previous_memory_id"`
+	ReEmbedded       bool      `json:"re_embedded"`
+	Superseded       bool      `json:"superseded"`
 }
 
 func buildMCPUpdateResponse(resp *service.UpdateResponse) *mcpUpdateResponse {
 	return &mcpUpdateResponse{
-		ID:         resp.ID,
-		ReEmbedded: resp.ReEmbedded,
+		ID:               resp.ID,
+		PreviousMemoryID: resp.PreviousMemoryID,
+		ReEmbedded:       resp.ReEmbedded,
+		Superseded:       resp.Superseded,
 	}
 }
 

@@ -183,7 +183,7 @@ func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memor
 	if mem.EmbeddingDim == nil || *mem.EmbeddingDim != actualDim {
 		d := actualDim
 		mem.EmbeddingDim = &d
-		if err := p.memWriter.Update(ctx, mem); err != nil {
+		if err := p.memWriter.UpdateEmbeddingDim(ctx, mem.ID, actualDim); err != nil {
 			slog.Warn("dreaming: embedding backfill dim sync failed",
 				"memory", mem.ID, "dim", actualDim, "err", err)
 			stats["update_errors"] = stats["update_errors"].(int) + 1
@@ -200,7 +200,7 @@ func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memor
 // the next content edit triggers a re-embed at the write path.
 func (p *EmbeddingBackfillPhase) clearDim(ctx context.Context, mem *model.Memory, stats map[string]interface{}) {
 	mem.EmbeddingDim = nil
-	if err := p.memWriter.Update(ctx, mem); err != nil {
+	if err := p.memWriter.ClearEmbeddingDim(ctx, mem.ID, mem.NamespaceID); err != nil {
 		slog.Warn("dreaming: embedding backfill clear dim failed",
 			"memory", mem.ID, "err", err)
 		stats["update_errors"] = stats["update_errors"].(int) + 1

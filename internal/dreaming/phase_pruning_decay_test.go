@@ -95,6 +95,21 @@ func (r *recordingMemoryWriter) DecayConfidence(_ context.Context, ids []uuid.UU
 	})
 	return int64(len(ids)), nil
 }
+func (r *recordingMemoryWriter) UpdateEmbeddingDim(_ context.Context, _ uuid.UUID, _ int) error {
+	return nil
+}
+func (r *recordingMemoryWriter) ClearEmbeddingDim(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+func (r *recordingMemoryWriter) UpdateConfidence(_ context.Context, _, _ uuid.UUID, _ float64) error {
+	return nil
+}
+func (r *recordingMemoryWriter) Demote(_ context.Context, _, _ uuid.UUID, _ json.RawMessage) error {
+	return nil
+}
+func (r *recordingMemoryWriter) MarkSupersededBy(_ context.Context, _, _, _ uuid.UUID) error {
+	return nil
+}
 
 type staticDreamSettings struct {
 	values map[string]string

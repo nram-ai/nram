@@ -770,6 +770,65 @@ func (m *mutableMemoryStore) HardDelete(_ context.Context, _ uuid.UUID, _ uuid.U
 func (m *mutableMemoryStore) DecayConfidence(_ context.Context, ids []uuid.UUID, _, _ float64) (int64, error) {
 	return int64(len(ids)), nil
 }
+func (m *mutableMemoryStore) UpdateEmbeddingDim(_ context.Context, id uuid.UUID, dim int) error {
+	for i := range m.memories {
+		if m.memories[i].ID == id {
+			d := dim
+			m.memories[i].EmbeddingDim = &d
+			m.updates++
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+func (m *mutableMemoryStore) ClearEmbeddingDim(_ context.Context, id, _ uuid.UUID) error {
+	for i := range m.memories {
+		if m.memories[i].ID == id {
+			m.memories[i].EmbeddingDim = nil
+			m.updates++
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+func (m *mutableMemoryStore) UpdateConfidence(_ context.Context, id, _ uuid.UUID, confidence float64) error {
+	for i := range m.memories {
+		if m.memories[i].ID == id {
+			m.memories[i].Confidence = confidence
+			m.updates++
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+func (m *mutableMemoryStore) Demote(_ context.Context, id, _ uuid.UUID, metadata json.RawMessage) error {
+	for i := range m.memories {
+		if m.memories[i].ID == id {
+			m.memories[i].Confidence = 0
+			m.memories[i].EmbeddingDim = nil
+			m.memories[i].Metadata = append(json.RawMessage(nil), metadata...)
+			m.updates++
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+func (m *mutableMemoryStore) MarkSupersededBy(_ context.Context, oldID, _, newID uuid.UUID) error {
+	for i := range m.memories {
+		if m.memories[i].ID == oldID {
+			if m.memories[i].SupersededBy != nil {
+				return storage.ErrConcurrentSupersede
+			}
+			now := time.Now().UTC()
+			m.memories[i].SupersededBy = &newID
+			m.memories[i].SupersededAt = &now
+			m.memories[i].EmbeddingDim = nil
+			m.updates++
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
 
 // --- haircut/winner tests (item #5) ---
 

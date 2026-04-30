@@ -41,6 +41,16 @@ func (m *mockMemoryDeleter) ListByNamespace(_ context.Context, _ uuid.UUID, _, _
 	return nil, nil
 }
 
+func (m *mockMemoryDeleter) FindBySupersededBy(_ context.Context, _ uuid.UUID, id uuid.UUID) ([]uuid.UUID, error) {
+	var out []uuid.UUID
+	for ancestorID, mem := range m.memories {
+		if mem.SupersededBy != nil && *mem.SupersededBy == id && mem.DeletedAt == nil {
+			out = append(out, ancestorID)
+		}
+	}
+	return out, nil
+}
+
 type mockEnrichMemoryReader struct {
 	memories []model.Memory
 }

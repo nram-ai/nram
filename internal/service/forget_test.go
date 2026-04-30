@@ -29,6 +29,16 @@ func newMockMemoryDeleter() *mockMemoryDeleter {
 	}
 }
 
+func (m *mockMemoryDeleter) FindBySupersededBy(_ context.Context, _ uuid.UUID, id uuid.UUID) ([]uuid.UUID, error) {
+	var out []uuid.UUID
+	for ancestorID, mem := range m.memories {
+		if mem.SupersededBy != nil && *mem.SupersededBy == id && mem.DeletedAt == nil {
+			out = append(out, ancestorID)
+		}
+	}
+	return out, nil
+}
+
 func (m *mockMemoryDeleter) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memories[id]
 	if !ok {
@@ -416,5 +426,200 @@ func TestForget_MemoryWrongNamespace_Skipped(t *testing.T) {
 	}
 	if resp.Deleted != 0 {
 		t.Fatalf("expected 0 deleted (wrong namespace), got %d", resp.Deleted)
+	}
+}
+
+// makeSupersededMemory builds a memory whose superseded_by points at parent
+// and whose superseded_at is now. Used to seed cascade-walk fixtures.
+func makeSupersededMemory(id, namespaceID, parent uuid.UUID, tags []string) *model.Memory {
+	mem := makeMemory(id, namespaceID, tags)
+	now := time.Now()
+	mem.SupersededBy = &parent
+	mem.SupersededAt = &now
+	return mem
+}
+
+func TestForget_ChainTwoDeep_DeletesBoth(t *testing.T) {
+	projectID, nsID, _, project := forgetTestFixtures()
+
+	old := uuid.New()
+	head := uuid.New()
+	deleter := newMockMemoryDeleter()
+	deleter.memories[old] = makeSupersededMemory(old, nsID, head, nil)
+	deleter.memories[head] = makeMemory(head, nsID, nil)
+
+	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
+	svc := NewForgetService(deleter, projects, nil, nil)
+
+	resp, err := svc.Forget(context.Background(), &ForgetRequest{
+		ProjectID: projectID,
+		MemoryID:  &head,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Deleted != 2 {
+		t.Fatalf("expected 2 deleted (head + ancestor), got %d", resp.Deleted)
+	}
+	if !deleter.softDeleted[head] {
+		t.Fatal("head should be soft deleted")
+	}
+	if !deleter.softDeleted[old] {
+		t.Fatal("ancestor should be soft deleted via chain cascade")
+	}
+}
+
+func TestForget_ChainThreeDeep_DeletesAll(t *testing.T) {
+	projectID, nsID, _, project := forgetTestFixtures()
+
+	a := uuid.New()
+	b := uuid.New()
+	c := uuid.New()
+
+	deleter := newMockMemoryDeleter()
+	// A <- B <- C: A is the oldest, C is the active head.
+	deleter.memories[a] = makeSupersededMemory(a, nsID, b, nil)
+	deleter.memories[b] = makeSupersededMemory(b, nsID, c, nil)
+	deleter.memories[c] = makeMemory(c, nsID, nil)
+
+	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
+	svc := NewForgetService(deleter, projects, nil, nil)
+
+	resp, err := svc.Forget(context.Background(), &ForgetRequest{
+		ProjectID: projectID,
+		MemoryID:  &c,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Deleted != 3 {
+		t.Fatalf("expected 3 deleted (full chain), got %d", resp.Deleted)
+	}
+	for _, id := range []uuid.UUID{a, b, c} {
+		if !deleter.softDeleted[id] {
+			t.Fatalf("expected %s to be soft deleted", id)
+		}
+	}
+}
+
+func TestForget_ChainWithCycle_TerminatesViaVisited(t *testing.T) {
+	projectID, nsID, _, project := forgetTestFixtures()
+
+	a := uuid.New()
+	b := uuid.New()
+
+	// Pathological: A.SupersededBy = B and B.SupersededBy = A. Cannot occur
+	// from production code paths but is the worst case for the cascade walk.
+	// The shared visited set must terminate the walk.
+	deleter := newMockMemoryDeleter()
+	deleter.memories[a] = makeSupersededMemory(a, nsID, b, nil)
+	deleter.memories[b] = makeSupersededMemory(b, nsID, a, nil)
+
+	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
+	svc := NewForgetService(deleter, projects, nil, nil)
+
+	resp, err := svc.Forget(context.Background(), &ForgetRequest{
+		ProjectID: projectID,
+		MemoryID:  &a,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Deleted != 2 {
+		t.Fatalf("expected 2 deleted (cycle handled, no infinite loop), got %d", resp.Deleted)
+	}
+}
+
+func TestForget_HardDelete_ChainCascadesViaServiceCode(t *testing.T) {
+	projectID, nsID, _, project := forgetTestFixtures()
+
+	old := uuid.New()
+	head := uuid.New()
+	deleter := newMockMemoryDeleter()
+	deleter.memories[old] = makeSupersededMemory(old, nsID, head, nil)
+	deleter.memories[head] = makeMemory(head, nsID, nil)
+
+	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
+	svc := NewForgetService(deleter, projects, nil, nil)
+
+	resp, err := svc.Forget(context.Background(), &ForgetRequest{
+		ProjectID:  projectID,
+		MemoryID:   &head,
+		HardDelete: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Deleted != 2 {
+		t.Fatalf("expected 2 deleted (hard chain cascade), got %d", resp.Deleted)
+	}
+	// Both should hit the hard delete path: the FK ON DELETE SET NULL
+	// would null the pointer at the DB level, but the service-level walk
+	// runs first so both rows are accounted for explicitly.
+	if !deleter.hardDeleted[head] {
+		t.Fatal("head should be hard deleted")
+	}
+	if !deleter.hardDeleted[old] {
+		t.Fatal("ancestor should be hard deleted via service-code cascade")
+	}
+}
+
+func TestForget_ByTag_HitsAllChainMembersWithTag(t *testing.T) {
+	projectID, nsID, _, project := forgetTestFixtures()
+
+	old := uuid.New()
+	head := uuid.New()
+
+	tags := []string{"thread-x"}
+	oldMem := makeSupersededMemory(old, nsID, head, tags)
+	headMem := makeMemory(head, nsID, tags)
+
+	deleter := newMockMemoryDeleter()
+	deleter.memories[old] = oldMem
+	deleter.memories[head] = headMem
+	// Tag-based forget pages through ListByNamespace; in production a
+	// superseded ancestor is excluded from default listings, so a tag
+	// filter would only encounter the head. The cascade walk should then
+	// pick up the ancestor.
+	deleter.nsList = []model.Memory{*headMem}
+
+	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
+	svc := NewForgetService(deleter, projects, nil, nil)
+
+	resp, err := svc.Forget(context.Background(), &ForgetRequest{
+		ProjectID: projectID,
+		Tags:      tags,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Deleted != 2 {
+		t.Fatalf("expected 2 deleted (head listed by tag + ancestor via cascade), got %d", resp.Deleted)
+	}
+}
+
+func TestForget_ChainDoesNotDoubleCount(t *testing.T) {
+	projectID, nsID, _, project := forgetTestFixtures()
+
+	old := uuid.New()
+	head := uuid.New()
+	deleter := newMockMemoryDeleter()
+	deleter.memories[old] = makeSupersededMemory(old, nsID, head, nil)
+	deleter.memories[head] = makeMemory(head, nsID, nil)
+
+	projects := &mockForgetProjectRepo{projects: map[uuid.UUID]*model.Project{projectID: project}}
+	svc := NewForgetService(deleter, projects, nil, nil)
+
+	// Caller supplies both head and ancestor in MemoryIDs. The visited set
+	// must prevent the ancestor from being deleted twice.
+	resp, err := svc.Forget(context.Background(), &ForgetRequest{
+		ProjectID: projectID,
+		MemoryIDs: []uuid.UUID{head, old},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Deleted != 2 {
+		t.Fatalf("expected 2 deleted (no double count), got %d", resp.Deleted)
 	}
 }

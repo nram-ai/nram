@@ -454,6 +454,25 @@ paths:
       operationId: updateMemory
       tags: [Memories]
       summary: Update a memory
+      description: |
+        Tag-only and metadata-only updates mutate the row in place; the
+        response `id` matches the path id.
+
+        A content change splits the memory thread: a NEW memory row is
+        created with the new content, the old row is marked
+        `superseded_by = new id`, and the response `id` is the new (active)
+        id. The old row's enrichment (entities, relationships, embedding,
+        accumulated weights) stays attached to the old id and is reachable
+        via `include_superseded=true` reads. `previous_memory_id` echoes
+        the path id so callers correlating events or webhooks can map
+        old → new without inspecting the lineage table. `superseded=true`
+        on the response indicates the chain link was created. The forget
+        cascade walks `superseded_by` so deleting the active head also
+        deletes older versions of the same thread.
+
+        Returning the new id on a content change is a breaking change
+        from the prior in-place behavior; callers that hold the path id
+        for follow-up reads must use `response.id` instead.
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/MemoryId"
@@ -3021,6 +3040,17 @@ components:
         id:
           type: string
           format: uuid
+          description: |
+            The active memory id after the update. On a content change
+            this is a NEW id (the old row is superseded). On a tag-only
+            or metadata-only update this matches the path id.
+        previous_memory_id:
+          type: string
+          format: uuid
+          description: |
+            Always echoes the path id. On a content change this points at
+            the now-superseded ancestor; on an in-place update it equals
+            `id`.
         project_id:
           type: string
           format: uuid
@@ -3034,6 +3064,11 @@ components:
           type: string
         re_embedded:
           type: boolean
+        superseded:
+          type: boolean
+          description: |
+            True when the update created a new memory row and superseded
+            the old one. False for tag-only and metadata-only updates.
         latency_ms:
           type: integer
           format: int64

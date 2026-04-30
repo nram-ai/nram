@@ -269,6 +269,17 @@ All under `/v1/projects/{project_id}/memories`. Read operations are available to
 | `POST` | `/enrich` | Trigger enrichment |
 | `POST` | `/import` | Import a project snapshot |
 
+#### Update semantics: in-place vs. supersede chain
+
+`PUT /{id}` and the MCP `memory_update` tool branch on whether the request changes content:
+
+- **Tag-only or metadata-only updates** mutate the row in place. The response `id` matches the path id.
+- **Content updates** create a NEW memory row and mark the old row `superseded_by = new id`. The response `id` is the new (active) id; `previous_memory_id` echoes the path id. Recall, list, and graph reads filter superseded rows by default, so the new id is what surfaces; `include_superseded=true` is required to access prior versions. Old enrichment (entities, relationships, embedding, accumulated weights from recall reinforcement) stays attached to the old id, frozen with the old content. Dream pruning eventually sweeps superseded rows after a 7-day grace window.
+
+Forget on the active head walks `superseded_by` and soft-deletes the entire chain — forgetting one memory thread forgets it through all its prior versions. Pass `hard_delete=true` to bypass the soft delete; the chain walk runs in either mode.
+
+This is a breaking change from the prior in-place semantics: callers that hold the path id for follow-up reads must use `response.id` instead. Subscribers to `memory.updated` events should likewise read `memory_id` (active) and treat `previous_memory_id` as the correlation key.
+
 ### User Self-Service
 
 All under `/v1/me`.

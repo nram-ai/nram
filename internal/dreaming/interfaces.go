@@ -34,6 +34,15 @@ type MemoryWriter interface {
 	// check (stamp < updated_at) does not immediately re-invalidate the
 	// stamp on the next cycle.
 	UpdateMetadata(ctx context.Context, id, namespaceID uuid.UUID, metadata json.RawMessage) error
+	// Partial-column writes used by phases to mutate one or two fields
+	// without rewriting the whole row. Avoids clobbering concurrent
+	// writes (notably memory_update's SupersededBy pointer) that would
+	// otherwise race with a stale full-row Update.
+	UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error
+	ClearEmbeddingDim(ctx context.Context, id, namespaceID uuid.UUID) error
+	UpdateConfidence(ctx context.Context, id, namespaceID uuid.UUID, confidence float64) error
+	Demote(ctx context.Context, id, namespaceID uuid.UUID, metadata json.RawMessage) error
+	MarkSupersededBy(ctx context.Context, oldID, namespaceID, newID uuid.UUID) error
 	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	// DecayConfidence multiplicatively scales confidence for the given IDs,

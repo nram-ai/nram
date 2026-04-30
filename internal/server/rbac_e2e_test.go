@@ -171,6 +171,47 @@ func (m *rbacMemoryRepo) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID
 	return nil
 }
 
+func (m *rbacMemoryRepo) FindBySupersededBy(_ context.Context, _ uuid.UUID, id uuid.UUID) ([]uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []uuid.UUID
+	for ancestorID, mem := range m.memories {
+		if mem.SupersededBy != nil && *mem.SupersededBy == id && mem.DeletedAt == nil {
+			out = append(out, ancestorID)
+		}
+	}
+	return out, nil
+}
+
+func (m *rbacMemoryRepo) SupersedeReplacing(_ context.Context, oldID uuid.UUID, newMem *model.Memory, lineage *model.MemoryLineage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if newMem.ID == uuid.Nil {
+		newMem.ID = uuid.New()
+	}
+	if lineage.ID == uuid.Nil {
+		lineage.ID = uuid.New()
+	}
+	if lineage.MemoryID == uuid.Nil {
+		lineage.MemoryID = newMem.ID
+	}
+	old, ok := m.memories[oldID]
+	if !ok {
+		return fmt.Errorf("supersede: old memory %s not found", oldID)
+	}
+	if old.SupersededBy != nil {
+		return fmt.Errorf("supersede: old memory %s already superseded", oldID)
+	}
+	now := time.Now().UTC()
+	old.SupersededBy = &newMem.ID
+	old.SupersededAt = &now
+	old.UpdatedAt = now
+	m.memories[oldID] = old
+	cp := *newMem
+	m.memories[newMem.ID] = &cp
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Mock repos for services
 // ---------------------------------------------------------------------------
@@ -543,9 +584,9 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 
 	updateSvc := service.NewUpdateService(
-		memRepo, projectLookup, &rbacLineageCreator{},
-		nil, nil,
-		)
+		memRepo, projectLookup,
+		nil, nil, &rbacEnrichmentQueueRepo{},
+	)
 
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
@@ -1485,9 +1526,9 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 
 	updateSvc := service.NewUpdateService(
-		memRepo, projectLookup, &rbacLineageCreator{},
-		nil, nil,
-		)
+		memRepo, projectLookup,
+		nil, nil, &rbacEnrichmentQueueRepo{},
+	)
 
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, namespaceLookup,
@@ -1786,18 +1827,15 @@ func TestRBAC_AllRoles_BatchGet(t *testing.T) {
 func TestRBAC_AllRoles_Update(t *testing.T) {
 	env := newRBACFullTestEnv(t)
 
-	// Pre-store memories in each project as admin.
-	memA := rbacStoreMemoryFull(t, env, env.ProjectA.ID)
-	memB := rbacStoreMemoryFull(t, env, env.ProjectB.ID)
-
 	tests := rbacAllRoleCases(env, http.StatusOK, http.StatusForbidden)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			memID := memA
-			if tt.projectID == env.ProjectB.ID {
-				memID = memB
-			}
+			// Each subtest gets a fresh memory: a content update under
+			// the new supersede semantics chains the row, so reusing
+			// one memory across subtests would fail every call after
+			// the first successful one with "memory X is superseded".
+			memID := rbacStoreMemoryFull(t, env, tt.projectID)
 			body := map[string]interface{}{
 				"content": "updated content " + tt.name,
 			}

@@ -139,8 +139,9 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 	}
 
 	events.Emit(ctx, deps.EventBus, events.MemoryUpdated, "project:"+project.ID.String(), map[string]string{
-		"memory_id":  resp.ID.String(),
-		"project_id": project.ID.String(),
+		"memory_id":          resp.ID.String(),
+		"previous_memory_id": resp.PreviousMemoryID.String(),
+		"project_id":         project.ID.String(),
 	})
 
 	return wrapToolResult(buildMCPUpdateResponse(resp), nil)

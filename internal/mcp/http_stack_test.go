@@ -140,9 +140,9 @@ func newHTTPStackEnv(t *testing.T) *httpStackEnv {
 	updateSvc := service.NewUpdateService(
 		updater,
 		&mockProjectLookup{project: project},
-		&mockLineageCreator{},
 		nil,
 		nil,
+		&mockEnrichmentQueueRepo{},
 	)
 
 	deps := Dependencies{
@@ -234,6 +234,33 @@ func (m *memRepoUpdater) GetByID(_ context.Context, id uuid.UUID) (*model.Memory
 
 func (m *memRepoUpdater) Update(_ context.Context, mem *model.Memory) error {
 	m.memRepo.memories[mem.ID] = mem
+	return nil
+}
+
+func (m *memRepoUpdater) SupersedeReplacing(_ context.Context, oldID uuid.UUID, newMem *model.Memory, lineage *model.MemoryLineage) error {
+	if newMem.ID == uuid.Nil {
+		newMem.ID = uuid.New()
+	}
+	if lineage.ID == uuid.Nil {
+		lineage.ID = uuid.New()
+	}
+	if lineage.MemoryID == uuid.Nil {
+		lineage.MemoryID = newMem.ID
+	}
+	old, ok := m.memRepo.memories[oldID]
+	if !ok {
+		return fmt.Errorf("supersede: old memory %s not found", oldID)
+	}
+	if old.SupersededBy != nil {
+		return fmt.Errorf("supersede: old memory %s already superseded", oldID)
+	}
+	now := time.Now().UTC()
+	old.SupersededBy = &newMem.ID
+	old.SupersededAt = &now
+	old.UpdatedAt = now
+	m.memRepo.memories[oldID] = old
+	cp := *newMem
+	m.memRepo.memories[newMem.ID] = &cp
 	return nil
 }
 
@@ -1300,6 +1327,18 @@ func (m *nsAwareMemoryRepo) HardDelete(_ context.Context, id uuid.UUID, _ uuid.U
 	return nil
 }
 
+func (m *nsAwareMemoryRepo) FindBySupersededBy(_ context.Context, _ uuid.UUID, id uuid.UUID) ([]uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []uuid.UUID
+	for ancestorID, mem := range m.memories {
+		if mem.SupersededBy != nil && *mem.SupersededBy == id && mem.DeletedAt == nil {
+			out = append(out, ancestorID)
+		}
+	}
+	return out, nil
+}
+
 // nsAwareUserRepo maps userID -> *model.User.
 type nsAwareUserRepo struct {
 	users map[uuid.UUID]*model.User
@@ -1470,7 +1509,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 	updateSvc := service.NewUpdateService(
 		&nsAwareMemRepoUpdater{memRepo: memRepo},
-		projectLookup, &mockLineageCreator{}, nil, nil,
+		projectLookup, nil, nil, &mockEnrichmentQueueRepo{},
 	)
 	batchGetSvc := service.NewBatchGetService(memRepo, projectLookup)
 	exportSvc := service.NewExportService(
@@ -1543,6 +1582,33 @@ func (m *nsAwareMemRepoUpdater) GetByID(ctx context.Context, id uuid.UUID) (*mod
 
 func (m *nsAwareMemRepoUpdater) Update(_ context.Context, mem *model.Memory) error {
 	m.memRepo.memories[mem.ID] = mem
+	return nil
+}
+
+func (m *nsAwareMemRepoUpdater) SupersedeReplacing(_ context.Context, oldID uuid.UUID, newMem *model.Memory, lineage *model.MemoryLineage) error {
+	if newMem.ID == uuid.Nil {
+		newMem.ID = uuid.New()
+	}
+	if lineage.ID == uuid.Nil {
+		lineage.ID = uuid.New()
+	}
+	if lineage.MemoryID == uuid.Nil {
+		lineage.MemoryID = newMem.ID
+	}
+	old, ok := m.memRepo.memories[oldID]
+	if !ok {
+		return fmt.Errorf("supersede: old memory %s not found", oldID)
+	}
+	if old.SupersededBy != nil {
+		return fmt.Errorf("supersede: old memory %s already superseded", oldID)
+	}
+	now := time.Now().UTC()
+	old.SupersededBy = &newMem.ID
+	old.SupersededAt = &now
+	old.UpdatedAt = now
+	m.memRepo.memories[oldID] = old
+	cp := *newMem
+	m.memRepo.memories[newMem.ID] = &cp
 	return nil
 }
 

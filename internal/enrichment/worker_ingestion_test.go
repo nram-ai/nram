@@ -202,15 +202,13 @@ func TestIngestion_Disabled_PhaseSkipped(t *testing.T) {
 		t.Fatalf("processJob: %v", err)
 	}
 
-	// No metadata stamp.
-	if len(h.updater.updated) != 1 {
-		t.Fatalf("expected 1 parent update, got %d", len(h.updater.updated))
+	// No metadata stamp: MarkEnriched is called with metadata=nil so the
+	// metadata column is left untouched (only enriched + updated_at flip).
+	if len(h.updater.enrichedMarks) != 1 {
+		t.Fatalf("expected 1 parent MarkEnriched, got %d", len(h.updater.enrichedMarks))
 	}
-	if !h.updater.updated[0].Enriched {
-		t.Error("expected memory enriched=true")
-	}
-	if md := string(h.updater.updated[0].Metadata); md != "" && md != "{}" && md != "null" {
-		t.Errorf("expected empty metadata when phase disabled, got %q", md)
+	if md := h.updater.enrichedMarks[0].metadata; md != nil {
+		t.Errorf("expected nil metadata when phase disabled, got %q", string(md))
 	}
 }
 
@@ -235,10 +233,10 @@ func TestIngestion_NoMatches_AddDecisionStampsMetadata(t *testing.T) {
 		t.Fatalf("processJob: %v", err)
 	}
 
-	if len(h.updater.updated) != 1 {
-		t.Fatalf("expected 1 parent update, got %d", len(h.updater.updated))
+	if len(h.updater.enrichedMarks) != 1 {
+		t.Fatalf("expected 1 parent MarkEnriched, got %d", len(h.updater.enrichedMarks))
 	}
-	md := decodeMetadata(t, h.updater.updated[0].Metadata)
+	md := decodeMetadata(t, h.updater.enrichedMarks[0].metadata)
 	if got, _ := md["ingestion_decision"].(string); got != IngestionOpAdd {
 		t.Errorf("ingestion_decision = %q, want ADD", got)
 	}
@@ -305,31 +303,20 @@ func TestIngestion_Update_WritesLineageAndSupersedesTarget(t *testing.T) {
 		t.Errorf("lineage.ParentID = %v, want %v", lin.ParentID, target.ID)
 	}
 
-	// Two memory updates: target (with superseded_by/at) + new (with
-	// enriched + metadata).
-	if len(h.updater.updated) < 2 {
-		t.Fatalf("expected >=2 memory updates, got %d", len(h.updater.updated))
-	}
-	var targetUpdate, parentUpdate *model.Memory
-	for _, u := range h.updater.updated {
-		if u.ID == target.ID {
-			targetUpdate = u
-		}
-		if u.ID == newMem.ID {
-			parentUpdate = u
+	// Target memory marked superseded via the partial MarkSupersededBy
+	// helper (race-guarded with "AND superseded_by IS NULL"). Parent
+	// memory marked enriched via MarkEnriched with metadata.
+	var targetMark *supersedeMark
+	for i := range h.updater.supersedeMarks {
+		if h.updater.supersedeMarks[i].oldID == target.ID {
+			targetMark = &h.updater.supersedeMarks[i]
 		}
 	}
-	if targetUpdate == nil {
-		t.Fatal("expected an update to the target memory")
+	if targetMark == nil {
+		t.Fatal("expected MarkSupersededBy on the target memory")
 	}
-	if targetUpdate.SupersededBy == nil || *targetUpdate.SupersededBy != newMem.ID {
-		t.Errorf("target.SupersededBy = %v, want %v", targetUpdate.SupersededBy, newMem.ID)
-	}
-	if targetUpdate.SupersededAt == nil {
-		t.Error("target.SupersededAt should be set")
-	}
-	if targetUpdate.EmbeddingDim != nil {
-		t.Errorf("target.EmbeddingDim should be cleared on supersede; got %v", *targetUpdate.EmbeddingDim)
+	if targetMark.newID != newMem.ID {
+		t.Errorf("target MarkSupersededBy newID = %s, want %s", targetMark.newID, newMem.ID)
 	}
 	purged := false
 	for _, id := range h.vectors.deleted {
@@ -342,10 +329,16 @@ func TestIngestion_Update_WritesLineageAndSupersedesTarget(t *testing.T) {
 		t.Errorf("expected vector purge on superseded target %s; deleted=%v", target.ID, h.vectors.deleted)
 	}
 
-	if parentUpdate == nil {
-		t.Fatal("expected an update to the parent memory")
+	var parentMark *enrichedMark
+	for i := range h.updater.enrichedMarks {
+		if h.updater.enrichedMarks[i].id == newMem.ID {
+			parentMark = &h.updater.enrichedMarks[i]
+		}
 	}
-	md := decodeMetadata(t, parentUpdate.Metadata)
+	if parentMark == nil {
+		t.Fatal("expected a MarkEnriched on the parent memory")
+	}
+	md := decodeMetadata(t, parentMark.metadata)
 	if got, _ := md["ingestion_decision"].(string); got != IngestionOpUpdate {
 		t.Errorf("ingestion_decision = %q, want UPDATE", got)
 	}
@@ -468,14 +461,11 @@ func TestIngestion_MalformedJSON_FallsBackToAdd(t *testing.T) {
 	if got := lineageWithRelation(h.lineage.created, model.LineageSupersedes); len(got) != 0 {
 		t.Errorf("ADD-FALLBACK must not write supersedes lineage, got %d", len(got))
 	}
-	if len(h.updater.updated) < 1 {
-		t.Fatalf("expected at least one update on the parent")
+	parentMark := findEnrichedMark(h.updater.enrichedMarks, newMem.ID)
+	if parentMark == nil {
+		t.Fatal("expected a MarkEnriched on the new memory")
 	}
-	parentUpdate := findUpdate(h.updater.updated, newMem.ID)
-	if parentUpdate == nil {
-		t.Fatal("expected an update on the new memory")
-	}
-	md := decodeMetadata(t, parentUpdate.Metadata)
+	md := decodeMetadata(t, parentMark.metadata)
 	if got, _ := md["ingestion_decision"].(string); got != IngestionOpAddFallback {
 		t.Errorf("ingestion_decision = %q, want ADD-FALLBACK", got)
 	}
@@ -519,11 +509,11 @@ func TestIngestion_ShadowMode_LogsButDoesNotApply(t *testing.T) {
 			t.Errorf("shadow mode must not touch target memory, got %+v", u)
 		}
 	}
-	parentUpdate := findUpdate(h.updater.updated, newMem.ID)
-	if parentUpdate == nil {
-		t.Fatal("expected an update on the new memory")
+	parentMark := findEnrichedMark(h.updater.enrichedMarks, newMem.ID)
+	if parentMark == nil {
+		t.Fatal("expected a MarkEnriched on the new memory")
 	}
-	md := decodeMetadata(t, parentUpdate.Metadata)
+	md := decodeMetadata(t, parentMark.metadata)
 	if got, _ := md["ingestion_decision"].(string); got != IngestionOpAdd {
 		t.Errorf("shadow effective op = %q, want ADD", got)
 	}
@@ -552,6 +542,15 @@ func findUpdate(updates []*model.Memory, id uuid.UUID) *model.Memory {
 	for _, u := range updates {
 		if u.ID == id {
 			return u
+		}
+	}
+	return nil
+}
+
+func findEnrichedMark(marks []enrichedMark, id uuid.UUID) *enrichedMark {
+	for i := range marks {
+		if marks[i].id == id {
+			return &marks[i]
 		}
 	}
 	return nil

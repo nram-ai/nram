@@ -83,10 +83,43 @@ func (s *scriptedJudgeLLM) Models() []string { return []string{"test-model"} }
 // used by the consolidate error-path table test to exercise the
 // post-audit Create-failure branch.
 type updatingMemoryWriter struct {
-	creates         []*model.Memory
-	updates         []model.Memory
-	metadataUpdates []metadataUpdateRecord
-	createErr       error
+	creates             []*model.Memory
+	updates             []model.Memory
+	metadataUpdates     []metadataUpdateRecord
+	embeddingDimUpdates []embeddingDimUpdateRecord
+	embeddingDimClears  []idNamespaceRecord
+	confidenceUpdates   []confidenceUpdateRecord
+	demotes             []demoteRecord
+	supersedeMarks      []supersedeMarkRecord
+	createErr           error
+}
+
+type embeddingDimUpdateRecord struct {
+	ID  uuid.UUID
+	Dim int
+}
+
+type idNamespaceRecord struct {
+	ID          uuid.UUID
+	NamespaceID uuid.UUID
+}
+
+type confidenceUpdateRecord struct {
+	ID          uuid.UUID
+	NamespaceID uuid.UUID
+	Confidence  float64
+}
+
+type demoteRecord struct {
+	ID          uuid.UUID
+	NamespaceID uuid.UUID
+	Metadata    json.RawMessage
+}
+
+type supersedeMarkRecord struct {
+	OldID       uuid.UUID
+	NamespaceID uuid.UUID
+	NewID       uuid.UUID
 }
 
 type metadataUpdateRecord struct {
@@ -124,6 +157,31 @@ func (w *updatingMemoryWriter) HardDelete(_ context.Context, _ uuid.UUID, _ uuid
 }
 func (w *updatingMemoryWriter) DecayConfidence(_ context.Context, ids []uuid.UUID, _, _ float64) (int64, error) {
 	return int64(len(ids)), nil
+}
+func (w *updatingMemoryWriter) UpdateEmbeddingDim(_ context.Context, id uuid.UUID, dim int) error {
+	w.embeddingDimUpdates = append(w.embeddingDimUpdates, embeddingDimUpdateRecord{ID: id, Dim: dim})
+	return nil
+}
+func (w *updatingMemoryWriter) ClearEmbeddingDim(_ context.Context, id, namespaceID uuid.UUID) error {
+	w.embeddingDimClears = append(w.embeddingDimClears, idNamespaceRecord{ID: id, NamespaceID: namespaceID})
+	return nil
+}
+func (w *updatingMemoryWriter) UpdateConfidence(_ context.Context, id, namespaceID uuid.UUID, confidence float64) error {
+	w.confidenceUpdates = append(w.confidenceUpdates, confidenceUpdateRecord{
+		ID: id, NamespaceID: namespaceID, Confidence: confidence,
+	})
+	return nil
+}
+func (w *updatingMemoryWriter) Demote(_ context.Context, id, namespaceID uuid.UUID, metadata json.RawMessage) error {
+	cp := append(json.RawMessage(nil), metadata...)
+	w.demotes = append(w.demotes, demoteRecord{ID: id, NamespaceID: namespaceID, Metadata: cp})
+	return nil
+}
+func (w *updatingMemoryWriter) MarkSupersededBy(_ context.Context, oldID, namespaceID, newID uuid.UUID) error {
+	w.supersedeMarks = append(w.supersedeMarks, supersedeMarkRecord{
+		OldID: oldID, NamespaceID: namespaceID, NewID: newID,
+	})
+	return nil
 }
 
 // --- helpers ---
@@ -451,31 +509,26 @@ func TestAuditExistingDreams_DemotesDuplicateAndStampsNovel(t *testing.T) {
 		t.Fatalf("auditExistingDreams returned error: %v", err)
 	}
 
-	// Demote takes the full Update path (real state change); stamp-only
-	// audits go through UpdateMetadata so updated_at stays intact and
-	// the next cycle does not re-audit.
-	if len(writer.updates) != 1 {
-		t.Fatalf("expected 1 Update call (demote), got %d", len(writer.updates))
+	// Demote takes the partial Demote path (confidence=0 + clear dim +
+	// metadata in one statement) so a concurrent supersede on the row
+	// cannot be clobbered. Stamp-only audits go through UpdateMetadata
+	// so updated_at stays intact and the next cycle does not re-audit.
+	if len(writer.demotes) != 1 {
+		t.Fatalf("expected 1 Demote call, got %d", len(writer.demotes))
 	}
 	if len(writer.metadataUpdates) != 1 {
 		t.Fatalf("expected 1 UpdateMetadata call (stamp-only audit), got %d", len(writer.metadataUpdates))
 	}
 
-	demoted := &writer.updates[0]
+	demoted := writer.demotes[0]
 	if demoted.ID != dupDream.ID {
-		t.Fatalf("Update target should be duplicate dream %s, got %s", dupDream.ID, demoted.ID)
+		t.Fatalf("Demote target should be duplicate dream %s, got %s", dupDream.ID, demoted.ID)
 	}
 	stampRecord := writer.metadataUpdates[0]
 	if stampRecord.ID != novelDream.ID {
 		t.Fatalf("UpdateMetadata target should be novel dream %s, got %s", novelDream.ID, stampRecord.ID)
 	}
 
-	if demoted.Confidence != 0 {
-		t.Errorf("duplicate dream confidence should be 0, got %v", demoted.Confidence)
-	}
-	if demoted.EmbeddingDim != nil {
-		t.Errorf("duplicate dream EmbeddingDim should be cleared on demote, got %v", *demoted.EmbeddingDim)
-	}
 	if !isLowNoveltyJSON(demoted.Metadata) {
 		t.Errorf("duplicate dream metadata.low_novelty must be true; got %s", string(demoted.Metadata))
 	}
@@ -600,14 +653,11 @@ func TestAuditExistingDreams_OrphanGetsDemoted(t *testing.T) {
 	budget := NewTokenBudget(10000, 2048)
 	_, _ = phase.AuditExistingDreams(context.Background(), cycle, budget, logger, &scriptedJudgeLLM{}, []model.Memory{orphan}, settings.ints[service.SettingDreamNoveltyBackfillPerCycle])
 
-	if len(writer.updates) != 1 {
-		t.Fatalf("orphan dream must be demoted, got %d updates", len(writer.updates))
+	if len(writer.demotes) != 1 {
+		t.Fatalf("orphan dream must be demoted (Demote partial-update); got %d demotes", len(writer.demotes))
 	}
-	if writer.updates[0].Confidence != 0 {
-		t.Errorf("orphan dream confidence should be 0, got %v", writer.updates[0].Confidence)
-	}
-	if !isLowNoveltyJSON(writer.updates[0].Metadata) {
-		t.Errorf("orphan dream must be marked low_novelty; got %s", string(writer.updates[0].Metadata))
+	if !isLowNoveltyJSON(writer.demotes[0].Metadata) {
+		t.Errorf("orphan dream must be marked low_novelty; got %s", string(writer.demotes[0].Metadata))
 	}
 }
 
@@ -769,16 +819,24 @@ func TestSupersedeOriginals_PurgesOriginalVectors(t *testing.T) {
 		t.Errorf("synthesis vector should NOT be purged; got %v", purger.deleted)
 	}
 
-	// Both originals should have EmbeddingDim cleared in the persisted
-	// Update so the row state matches the vector store.
+	// Both originals should be marked superseded by the synthesis
+	// through the partial MarkSupersededBy path (which also clears
+	// embedding_dim atomically). The race-guarded WHERE clause prevents
+	// a concurrent memory_update from clobbering this write.
 	for _, id := range []uuid.UUID{srcA.ID, srcB.ID} {
-		updated := findMemoryUpdate(writer.updates, id)
-		if updated == nil {
-			t.Errorf("expected Update on superseded original %s", id)
+		var found *supersedeMarkRecord
+		for i := range writer.supersedeMarks {
+			if writer.supersedeMarks[i].OldID == id {
+				found = &writer.supersedeMarks[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Errorf("expected MarkSupersededBy on original %s", id)
 			continue
 		}
-		if updated.EmbeddingDim != nil {
-			t.Errorf("original %s should have EmbeddingDim cleared on supersede; got %v", id, *updated.EmbeddingDim)
+		if found.NewID != synthesis.ID {
+			t.Errorf("original %s should be superseded by synthesis %s, got %s", id, synthesis.ID, found.NewID)
 		}
 	}
 }
@@ -1157,11 +1215,14 @@ func TestReinforce_ConfidenceChangeDoesNotStamp(t *testing.T) {
 		t.Fatalf("reinforce returned error: %v", err)
 	}
 
-	if len(writer.updates) != 1 {
-		t.Fatalf("confidence change must call Update exactly once; got %d", len(writer.updates))
+	// Confidence change goes through the partial UpdateConfidence
+	// helper (which bumps updated_at) so a concurrent supersede on the
+	// synthesis is not clobbered.
+	if len(writer.confidenceUpdates) != 1 {
+		t.Fatalf("confidence change must call UpdateConfidence exactly once; got %d", len(writer.confidenceUpdates))
 	}
 	if len(writer.metadataUpdates) != 0 {
-		t.Errorf("confidence change must NOT stamp via UpdateMetadata (Update bumps updated_at; the bump is the re-stale signal); got %d UpdateMetadata calls", len(writer.metadataUpdates))
+		t.Errorf("confidence change must NOT stamp via UpdateMetadata (UpdateConfidence bumps updated_at; the bump is the re-stale signal); got %d UpdateMetadata calls", len(writer.metadataUpdates))
 	}
 }
 
@@ -1187,8 +1248,8 @@ func TestReinforce_ErrorScoringLeavesRowStampFree(t *testing.T) {
 	if _, err := phase.reinforce(context.Background(), cycle, budget, logger, llm, []model.Memory{synth, user}); err != nil {
 		t.Fatalf("reinforce should swallow per-call alignment errors; got %v", err)
 	}
-	if len(writer.updates) != 0 {
-		t.Errorf("error-scoring path must not Update; got %d", len(writer.updates))
+	if len(writer.updates) != 0 || len(writer.confidenceUpdates) != 0 {
+		t.Errorf("error-scoring path must not Update; got %d Update / %d UpdateConfidence", len(writer.updates), len(writer.confidenceUpdates))
 	}
 	if len(writer.metadataUpdates) != 0 {
 		t.Errorf("error-scoring path must not stamp; got %d UpdateMetadata calls", len(writer.metadataUpdates))

@@ -14,15 +14,14 @@ import (
 )
 
 // MemoryUpdater defines the memory persistence operations needed by the update service.
+// SupersedeReplacing atomically inserts a new memory row, marks the old row
+// superseded, and writes the supersedes lineage edge in one transaction.
 type MemoryUpdater interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
 	Update(ctx context.Context, mem *model.Memory) error
+	SupersedeReplacing(ctx context.Context, oldID uuid.UUID, newMem *model.Memory, lineage *model.MemoryLineage) error
 }
 
-// LineageCreator defines the lineage persistence operations needed by the update service.
-type LineageCreator interface {
-	Create(ctx context.Context, lineage *model.MemoryLineage) error
-}
 
 // UpdateRequest contains all parameters needed to update an existing memory.
 type UpdateRequest struct {
@@ -38,47 +37,62 @@ type UpdateRequest struct {
 }
 
 // UpdateResponse contains the result of a memory update operation.
+//
+// On a content change the response ID is the NEW (active) memory ID — the
+// old row is superseded and reachable only via include_superseded reads.
+// On a tags/metadata-only update the ID is unchanged. PreviousMemoryID
+// echoes the request's MemoryID so callers correlating events or webhooks
+// can map old -> new without needing to inspect the lineage table.
 type UpdateResponse struct {
-	ID              uuid.UUID `json:"id"`
-	ProjectID       uuid.UUID `json:"project_id"`
-	Content         string    `json:"content"`
-	Tags            []string  `json:"tags"`
-	PreviousContent string    `json:"previous_content"`
-	ReEmbedded      bool      `json:"re_embedded"`
-	LatencyMs       int64     `json:"latency_ms"`
+	ID               uuid.UUID `json:"id"`
+	PreviousMemoryID uuid.UUID `json:"previous_memory_id"`
+	ProjectID        uuid.UUID `json:"project_id"`
+	Content          string    `json:"content"`
+	Tags             []string  `json:"tags"`
+	PreviousContent  string    `json:"previous_content"`
+	ReEmbedded       bool      `json:"re_embedded"`
+	Superseded       bool      `json:"superseded"`
+	LatencyMs        int64     `json:"latency_ms"`
 }
 
 // UpdateService orchestrates memory updates, re-embedding, and lineage
 // tracking. token_usage recording is handled by the UsageRecordingProvider
 // middleware wrapping the registry-issued embedding provider.
 type UpdateService struct {
-	memories      MemoryUpdater
-	projects      ProjectRepository
-	lineage       LineageCreator
-	vectorStore   VectorStoreWriter
-	embedProvider func() provider.EmbeddingProvider
+	memories        MemoryUpdater
+	projects        ProjectRepository
+	vectorStore     VectorStoreWriter
+	embedProvider   func() provider.EmbeddingProvider
+	enrichmentQueue EnrichmentQueueRepository
 }
 
 // NewUpdateService creates a new UpdateService with the given dependencies.
 func NewUpdateService(
 	memories MemoryUpdater,
 	projects ProjectRepository,
-	lineage LineageCreator,
 	vectorStore VectorStoreWriter,
 	embedProvider func() provider.EmbeddingProvider,
+	enrichmentQueue EnrichmentQueueRepository,
 ) *UpdateService {
 	return &UpdateService{
-		memories:      memories,
-		projects:      projects,
-		lineage:       lineage,
-		vectorStore:   vectorStore,
-		embedProvider: embedProvider,
+		memories:        memories,
+		projects:        projects,
+		vectorStore:     vectorStore,
+		embedProvider:   embedProvider,
+		enrichmentQueue: enrichmentQueue,
 	}
 }
 
 // Update modifies an existing memory's content, tags, and/or metadata.
-// If the content changes and an embedding provider is available, the memory
-// is re-embedded and a "supersedes" lineage record is created.
+//
+// Tags-only and metadata-only updates mutate the row in place; the
+// response ID matches the input MemoryID.
+//
+// A content change splits the memory thread: a NEW memory row is created
+// with the new content, the old row is marked SupersededBy = newID, and
+// the old vector + entities + relationships stay frozen with the old
+// content. Recall surfaces the new ID by default; old versions are
+// reachable via include_superseded.
 func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*UpdateResponse, error) {
 	start := time.Now()
 
@@ -117,16 +131,28 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 		return nil, fmt.Errorf("memory %s is superseded by %s; update that memory instead", mem.ID, *mem.SupersededBy)
 	}
 
-	// Store previous content for the response.
 	previousContent := mem.Content
+	contentChanged := req.Content != nil && *req.Content != mem.Content
 
-	// Track whether content changed for re-embedding and lineage.
-	contentChanged := false
+	if contentChanged {
+		return s.updateSupersede(ctx, req, project, mem, previousContent, start)
+	}
+	return s.updateInPlace(ctx, req, project, mem, previousContent, start)
+}
 
-	// Apply updates.
-	if req.Content != nil && *req.Content != mem.Content {
+// updateInPlace handles tags-only and metadata-only updates (and content
+// updates where the new content equals the old). The memory row mutates
+// in place; no chain link is created. The response ID is the input ID.
+func (s *UpdateService) updateInPlace(
+	ctx context.Context,
+	req *UpdateRequest,
+	project *model.Project,
+	mem *model.Memory,
+	previousContent string,
+	start time.Time,
+) (*UpdateResponse, error) {
+	if req.Content != nil {
 		mem.Content = *req.Content
-		contentChanged = true
 	}
 	if req.Tags != nil {
 		mem.Tags = *req.Tags
@@ -134,91 +160,183 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 	if req.Metadata != nil {
 		mem.Metadata = *req.Metadata
 	}
-
 	mem.UpdatedAt = time.Now()
 
-	// Re-embed if content changed and provider is available.
-	reEmbedded := false
-	if contentChanged && s.embedProvider != nil {
-		ep := s.embedProvider()
-		if ep != nil {
-			dim := bestEmbeddingDimension(ep.Dimensions())
-
-			embReq := &provider.EmbeddingRequest{
-				Input:     []string{mem.Content},
-				Dimension: dim,
-			}
-
-			// Stamp ownership/correlation context so the
-			// UsageRecordingProvider middleware records a token_usage row
-			// for this re-embed call attributed to the right scope.
-			projectIDForCtx := project.ID
-			updateCtx := provider.WithUsageContext(ctx, &model.UsageContext{
-				OrgID:     req.OrgID,
-				UserID:    req.UserID,
-				ProjectID: &projectIDForCtx,
-			})
-			updateCtx = provider.WithNamespaceID(updateCtx, mem.NamespaceID)
-			updateCtx = provider.WithMemoryID(updateCtx, mem.ID)
-			updateCtx = provider.WithAPIKeyID(updateCtx, req.APIKeyID)
-			updateCtx = provider.WithOperation(updateCtx, provider.OperationEmbedding)
-
-			resp, embErr := ep.Embed(updateCtx, embReq)
-			if embErr == nil && len(resp.Embeddings) > 0 {
-				reEmbedded = true
-				embDim := len(resp.Embeddings[0])
-
-				if s.vectorStore != nil {
-					if err := s.vectorStore.Upsert(ctx, storage.VectorKindMemory, mem.ID, mem.NamespaceID, resp.Embeddings[0], embDim); err != nil {
-						// Drop dim so the row doesn't claim a vector that
-						// never landed; the backfill phase repairs on the
-						// next dream cycle.
-						slog.Warn("memory update: vector upsert failed; persisting without embedding_dim",
-							"memory", mem.ID, "dim", embDim, "err", err)
-						mem.EmbeddingDim = nil
-					} else {
-						mem.EmbeddingDim = &embDim
-					}
-				} else {
-					mem.EmbeddingDim = &embDim
-				}
-			}
-		}
-	}
-
-	// Create supersedes lineage record if content changed.
-	if contentChanged {
-		lineageRecord := &model.MemoryLineage{
-			ID:          uuid.New(),
-			NamespaceID: mem.NamespaceID,
-			MemoryID:    mem.ID,
-			ParentID:    &mem.ID,
-			Relation:    model.LineageSupersedes,
-			Context:     json.RawMessage(fmt.Sprintf(`{"previous_content":%q}`, previousContent)),
-			CreatedAt:   time.Now(),
-		}
-		_ = s.lineage.Create(ctx, lineageRecord)
-	}
-
-	// Persist the updated memory.
 	if err := s.memories.Update(ctx, mem); err != nil {
 		return nil, fmt.Errorf("failed to update memory: %w", err)
 	}
-
-	latency := time.Since(start).Milliseconds()
 
 	tags := mem.Tags
 	if tags == nil {
 		tags = []string{}
 	}
-
 	return &UpdateResponse{
-		ID:              mem.ID,
-		ProjectID:       project.ID,
-		Content:         mem.Content,
-		Tags:            tags,
-		PreviousContent: previousContent,
-		ReEmbedded:      reEmbedded,
-		LatencyMs:       latency,
+		ID:               mem.ID,
+		PreviousMemoryID: mem.ID,
+		ProjectID:        project.ID,
+		Content:          mem.Content,
+		Tags:             tags,
+		PreviousContent:  previousContent,
+		ReEmbedded:       false,
+		Superseded:       false,
+		LatencyMs:        time.Since(start).Milliseconds(),
+	}, nil
+}
+
+// updateSupersede handles a content change. It creates a new memory row,
+// marks the old row superseded, writes the supersedes lineage edge in one
+// transaction, embeds the new content, upserts the new vector, and queues
+// fresh enrichment for the new ID. The old vector, entities, and
+// relationships stay attached to the old row (frozen with the old
+// content) until phase_pruning sweeps superseded rows after their grace
+// window.
+func (s *UpdateService) updateSupersede(
+	ctx context.Context,
+	req *UpdateRequest,
+	project *model.Project,
+	mem *model.Memory,
+	previousContent string,
+	start time.Time,
+) (*UpdateResponse, error) {
+	now := time.Now().UTC()
+	newID := uuid.New()
+
+	// Inherit policy fields (Source, Importance, ExpiresAt, PurgeAfter)
+	// because the logical memory is the same — only the content moved.
+	// Reset access metrics (AccessCount, LastAccessed, Confidence) and
+	// Enriched because the new trace has no recall history yet and needs
+	// its own enrichment pass.
+	newTags := mem.Tags
+	if req.Tags != nil {
+		newTags = *req.Tags
+	}
+	if newTags == nil {
+		newTags = []string{}
+	}
+	newMetadata := mem.Metadata
+	if req.Metadata != nil {
+		newMetadata = *req.Metadata
+	}
+	newMem := &model.Memory{
+		ID:           newID,
+		NamespaceID:  mem.NamespaceID,
+		Content:      *req.Content,
+		ContentHash:  storage.HashContent(*req.Content),
+		Source:       mem.Source,
+		Tags:         newTags,
+		Confidence:   1.0,
+		Importance:   mem.Importance,
+		AccessCount:  0,
+		LastAccessed: nil,
+		ExpiresAt:    mem.ExpiresAt,
+		PurgeAfter:   mem.PurgeAfter,
+		Enriched:     false,
+		Metadata:     newMetadata,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	// Embed the new content. If the embed succeeds we set EmbeddingDim
+	// and try the vector upsert; if the vector upsert fails we drop the
+	// dim so the row stays honest. Failures here do not block the
+	// supersede write — the embedding-backfill phase will repair on the
+	// next dream cycle and the queued enrichment job runs the embed too.
+	reEmbedded := false
+	var newEmbedding []float32
+	var newEmbeddingDim int
+	if s.embedProvider != nil {
+		ep := s.embedProvider()
+		if ep != nil {
+			dim := bestEmbeddingDimension(ep.Dimensions())
+			projectIDForCtx := project.ID
+			embCtx := provider.WithUsageContext(ctx, &model.UsageContext{
+				OrgID:     req.OrgID,
+				UserID:    req.UserID,
+				ProjectID: &projectIDForCtx,
+			})
+			embCtx = provider.WithNamespaceID(embCtx, mem.NamespaceID)
+			embCtx = provider.WithMemoryID(embCtx, newID)
+			embCtx = provider.WithAPIKeyID(embCtx, req.APIKeyID)
+			embCtx = provider.WithOperation(embCtx, provider.OperationEmbedding)
+
+			resp, embErr := ep.Embed(embCtx, &provider.EmbeddingRequest{
+				Input:     []string{newMem.Content},
+				Dimension: dim,
+			})
+			if embErr == nil && len(resp.Embeddings) > 0 {
+				newEmbedding = resp.Embeddings[0]
+				newEmbeddingDim = len(newEmbedding)
+				newMem.EmbeddingDim = &newEmbeddingDim
+			} else if embErr != nil {
+				slog.Warn("memory update: embed failed; supersede proceeds without vector",
+					"old_memory", mem.ID, "new_memory", newID, "err", embErr)
+			}
+		}
+	}
+
+	lineage := &model.MemoryLineage{
+		NamespaceID: mem.NamespaceID,
+		ParentID:    &mem.ID,
+		Relation:    model.LineageSupersedes,
+		Context:     json.RawMessage(fmt.Sprintf(`{"previous_content":%q}`, previousContent)),
+	}
+
+	if err := s.memories.SupersedeReplacing(ctx, mem.ID, newMem, lineage); err != nil {
+		return nil, fmt.Errorf("failed to supersede memory: %w", err)
+	}
+
+	// Best-effort vector upsert at the new ID. The transaction has
+	// already committed; if upsert fails we patch the row to drop the
+	// dim claim so the backfill phase picks it up.
+	if newEmbedding != nil && s.vectorStore != nil {
+		if err := s.vectorStore.Upsert(ctx, storage.VectorKindMemory, newID, mem.NamespaceID, newEmbedding, newEmbeddingDim); err != nil {
+			slog.Warn("memory update: vector upsert at new ID failed; clearing embedding_dim",
+				"new_memory", newID, "dim", newEmbeddingDim, "err", err)
+			newMem.EmbeddingDim = nil
+			if uerr := s.memories.Update(ctx, newMem); uerr != nil {
+				slog.Warn("memory update: clearing embedding_dim failed",
+					"new_memory", newID, "err", uerr)
+			}
+		} else {
+			reEmbedded = true
+		}
+	}
+
+	// Best-effort: enqueue enrichment for the new ID so entities and
+	// relationships rebuild against the new content. The old row keeps
+	// its enrichment intact.
+	if s.enrichmentQueue != nil {
+		job := &model.EnrichmentJob{
+			ID:          uuid.New(),
+			MemoryID:    newID,
+			NamespaceID: mem.NamespaceID,
+			Status:      "pending",
+			Priority:    0,
+			Attempts:    0,
+			MaxAttempts: 3,
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		}
+		if err := s.enrichmentQueue.Enqueue(ctx, job); err != nil {
+			slog.Warn("memory update: enrichment enqueue failed; relying on dream backfill",
+				"new_memory", newID, "err", err)
+		}
+	}
+
+	latency := time.Since(start).Milliseconds()
+	tags := newMem.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	return &UpdateResponse{
+		ID:               newID,
+		PreviousMemoryID: mem.ID,
+		ProjectID:        project.ID,
+		Content:          newMem.Content,
+		Tags:             tags,
+		PreviousContent:  previousContent,
+		ReEmbedded:       reEmbedded,
+		Superseded:       true,
+		LatencyMs:        latency,
 	}, nil
 }

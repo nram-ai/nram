@@ -113,6 +113,16 @@ func (m *trackingMemoryDeleter) ListByNamespace(_ context.Context, _ uuid.UUID, 
 	return nil, nil
 }
 
+func (m *trackingMemoryDeleter) FindBySupersededBy(_ context.Context, _ uuid.UUID, id uuid.UUID) ([]uuid.UUID, error) {
+	var out []uuid.UUID
+	for ancestorID, mem := range m.memories {
+		if mem.SupersededBy != nil && *mem.SupersededBy == id && mem.DeletedAt == nil {
+			out = append(out, ancestorID)
+		}
+	}
+	return out, nil
+}
+
 // mockMemoryReaderForExport satisfies service.MemoryReader with an in-memory
 // slice for use in the export integration test.
 type mockMemoryReaderForExport struct {
@@ -191,9 +201,9 @@ func buildIntegUpdateService(updater *mockMemoryUpdater, project *model.Project)
 	return service.NewUpdateService(
 		updater,
 		&mockProjectLookup{project: project},
-		&mockLineageCreator{},
 		nil,
 		nil,
+		&mockEnrichmentQueueRepo{},
 	)
 }
 
@@ -614,8 +624,12 @@ func TestMCP_UpdateMemory(t *testing.T) {
 	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if resp.ID != memoryID {
-		t.Errorf("expected ID %s, got %s", memoryID, resp.ID)
+	// Content change creates a new memory ID and supersedes the old one.
+	if resp.ID == memoryID {
+		t.Errorf("content change must return a new memory ID; got original %s", memoryID)
+	}
+	if resp.ID == uuid.Nil {
+		t.Error("expected new memory ID")
 	}
 	// Without embed provider, re_embedded must be false.
 	if resp.ReEmbedded {
@@ -1264,6 +1278,11 @@ func TestMCP_UpdateEmitsEvent(t *testing.T) {
 		t.Fatalf("unexpected tool error: %s", extractText(result))
 	}
 
+	var resp mcpUpdateResponse
+	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
+		t.Fatalf("failed to unmarshal update response: %v", err)
+	}
+
 	ev, received := receiveEventWithTimeout(ch)
 	if !received {
 		t.Fatal("expected memory.updated event but none received within timeout")
@@ -1280,8 +1299,13 @@ func TestMCP_UpdateEmitsEvent(t *testing.T) {
 	if err := json.Unmarshal(ev.Data, &evData); err != nil {
 		t.Fatalf("failed to unmarshal event data: %v", err)
 	}
-	if evData["memory_id"] != memoryID.String() {
-		t.Errorf("event memory_id: expected %s, got %s", memoryID, evData["memory_id"])
+	// Content change creates a new memory ID; the event should carry the
+	// new ID as memory_id and echo the old ID as previous_memory_id.
+	if evData["memory_id"] != resp.ID.String() {
+		t.Errorf("event memory_id: expected %s (new), got %s", resp.ID, evData["memory_id"])
+	}
+	if evData["previous_memory_id"] != memoryID.String() {
+		t.Errorf("event previous_memory_id: expected %s, got %s", memoryID, evData["previous_memory_id"])
 	}
 }
 

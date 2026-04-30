@@ -242,6 +242,35 @@ func (m *e2eMemoryRepo) Update(_ context.Context, mem *model.Memory) error {
 	return nil
 }
 
+func (m *e2eMemoryRepo) SupersedeReplacing(_ context.Context, oldID uuid.UUID, newMem *model.Memory, lineage *model.MemoryLineage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if newMem.ID == uuid.Nil {
+		newMem.ID = uuid.New()
+	}
+	if lineage.ID == uuid.Nil {
+		lineage.ID = uuid.New()
+	}
+	if lineage.MemoryID == uuid.Nil {
+		lineage.MemoryID = newMem.ID
+	}
+	old, ok := m.memories[oldID]
+	if !ok {
+		return fmt.Errorf("supersede: old memory %s not found", oldID)
+	}
+	if old.SupersededBy != nil {
+		return fmt.Errorf("supersede: old memory %s already superseded", oldID)
+	}
+	now := time.Now().UTC()
+	old.SupersededBy = &newMem.ID
+	old.SupersededAt = &now
+	old.UpdatedAt = now
+	m.memories[oldID] = old
+	cp := *newMem
+	m.memories[newMem.ID] = &cp
+	return nil
+}
+
 func (m *e2eMemoryRepo) SoftDelete(_ context.Context, id uuid.UUID, _ uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -254,6 +283,18 @@ func (m *e2eMemoryRepo) HardDelete(_ context.Context, id uuid.UUID, _ uuid.UUID)
 	defer m.mu.Unlock()
 	delete(m.memories, id)
 	return nil
+}
+
+func (m *e2eMemoryRepo) FindBySupersededBy(_ context.Context, _ uuid.UUID, id uuid.UUID) ([]uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []uuid.UUID
+	for ancestorID, mem := range m.memories {
+		if mem.SupersededBy != nil && *mem.SupersededBy == id && mem.DeletedAt == nil {
+			out = append(out, ancestorID)
+		}
+	}
+	return out, nil
 }
 
 // e2eMCPStoreResult mirrors the slim mcpStoreResponse projection in
@@ -428,10 +469,10 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	updateSvc := service.NewUpdateService(
 		memRepo,
 		projectLookup,
-		&e2eLineageCreator{},
 		nil,
 		nil,
-		)
+		&e2eEnrichmentQueueRepo{},
+	)
 
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo,
@@ -1948,10 +1989,10 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 	updateSvc := service.NewUpdateService(
 		memRepo,
 		projectLookup,
-		&e2eLineageCreator{},
 		nil,
 		nil,
-		)
+		&e2eEnrichmentQueueRepo{},
+	)
 
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo,

@@ -84,6 +84,12 @@ type ExtractTokens struct {
 	Output int `json:"output"`
 }
 
+// LineageCreator defines the lineage persistence operations needed by the
+// extraction service to record extracted_from / extracted_fact edges.
+type LineageCreator interface {
+	Create(ctx context.Context, lineage *model.MemoryLineage) error
+}
+
 // ExtractionService orchestrates synchronous fact and entity extraction from memory content.
 type ExtractionService struct {
 	memories      MemoryRepository

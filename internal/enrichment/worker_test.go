@@ -61,15 +61,30 @@ func (m *mockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model
 }
 
 type mockMemoryUpdater struct {
-	mu          sync.Mutex
-	updated     []*model.Memory
-	dimUpdates  []dimUpdate
-	err         error
+	mu              sync.Mutex
+	updated         []*model.Memory
+	dimUpdates      []dimUpdate
+	enrichedMarks   []enrichedMark
+	supersedeMarks  []supersedeMark
+	err             error
+}
+
+type supersedeMark struct {
+	oldID       uuid.UUID
+	namespaceID uuid.UUID
+	newID       uuid.UUID
 }
 
 type dimUpdate struct {
 	id  uuid.UUID
 	dim int
+}
+
+type enrichedMark struct {
+	id           uuid.UUID
+	namespaceID  uuid.UUID
+	embeddingDim *int
+	metadata     json.RawMessage
 }
 
 func (m *mockMemoryUpdater) Update(_ context.Context, mem *model.Memory) error {
@@ -90,6 +105,26 @@ func (m *mockMemoryUpdater) UpdateEmbeddingDim(_ context.Context, id uuid.UUID, 
 		return m.err
 	}
 	m.dimUpdates = append(m.dimUpdates, dimUpdate{id: id, dim: dim})
+	return nil
+}
+
+func (m *mockMemoryUpdater) MarkEnriched(_ context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	m.enrichedMarks = append(m.enrichedMarks, enrichedMark{id: id, namespaceID: namespaceID, embeddingDim: embeddingDim, metadata: metadata})
+	return nil
+}
+
+func (m *mockMemoryUpdater) MarkSupersededBy(_ context.Context, oldID, namespaceID, newID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	m.supersedeMarks = append(m.supersedeMarks, supersedeMark{oldID: oldID, namespaceID: namespaceID, newID: newID})
 	return nil
 }
 
@@ -600,14 +635,13 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 		t.Errorf("expected job completed, got %v", h.queue.completed)
 	}
 
-	// Parent gets a full Update (Enriched=true plus its dim); children take
-	// the focused UpdateEmbeddingDim path so finalize doesn't rewrite every
-	// column for a brand-new row.
-	if len(h.updater.updated) != 1 || !h.updater.updated[0].Enriched {
-		t.Errorf("expected 1 parent update with Enriched=true, got %d updates", len(h.updater.updated))
+	// Parent's enriched flag, dim, and metadata land in one MarkEnriched
+	// call. Children still take the focused UpdateEmbeddingDim path.
+	if len(h.updater.enrichedMarks) != 1 {
+		t.Errorf("expected 1 parent MarkEnriched, got %d", len(h.updater.enrichedMarks))
 	}
-	if h.updater.updated[0].EmbeddingDim == nil || *h.updater.updated[0].EmbeddingDim != 3 {
-		t.Errorf("parent EmbeddingDim = %v, want 3", h.updater.updated[0].EmbeddingDim)
+	if mark := h.updater.enrichedMarks[0]; mark.embeddingDim == nil || *mark.embeddingDim != 3 {
+		t.Errorf("MarkEnriched embedding_dim = %v, want 3", mark.embeddingDim)
 	}
 	if len(h.updater.dimUpdates) != 2 {
 		t.Errorf("expected 2 child dim updates, got %d", len(h.updater.dimUpdates))
@@ -1060,8 +1094,9 @@ func TestProcessJob_NoProviders(t *testing.T) {
 	if len(h.queue.released) == 1 && h.queue.released[0] != job.ID {
 		t.Errorf("released job ID = %s, want %s", h.queue.released[0], job.ID)
 	}
-	if len(h.updater.updated) != 0 {
-		t.Error("memory should not be marked enriched when no providers ran")
+	if len(h.updater.updated) != 0 || len(h.updater.enrichedMarks) != 0 {
+		t.Errorf("memory should not be marked enriched when no providers ran; got %d full Updates and %d MarkEnriched calls",
+			len(h.updater.updated), len(h.updater.enrichedMarks))
 	}
 }
 
@@ -1436,9 +1471,17 @@ func TestProcessBatch_VectorUpsertFailure_FailsJobs(t *testing.T) {
 		}
 	}
 
-	// No memory Update should have happened — finalizeJob is the only
-	// thing that persists embedding_dim, and it must be skipped on the
-	// vectorWriteFailed flag.
+	// No memory persistence should have happened — finalizeJob is the
+	// only thing that persists enriched/embedding_dim, and it must be
+	// skipped on the vectorWriteFailed flag. That covers MarkEnriched
+	// (enriched flag), UpdateEmbeddingDim (parent + child dims), and the
+	// full-row Update used by the ingestion-decision UPDATE path.
+	if len(h.updater.enrichedMarks) != 0 {
+		t.Errorf("expected 0 MarkEnriched calls after vector batch failure; got %d", len(h.updater.enrichedMarks))
+	}
+	if len(h.updater.dimUpdates) != 0 {
+		t.Errorf("expected 0 dim updates after vector batch failure; got %d", len(h.updater.dimUpdates))
+	}
 	for _, mem := range h.updater.updated {
 		if mem.EmbeddingDim != nil {
 			t.Errorf("memory %s should not persist embedding_dim after vector batch failure; got %d",

@@ -344,8 +344,8 @@ func main() {
 		relationshipRepo, shareRepo, embedProvider,
 	)
 	updateSvc := service.NewUpdateService(
-		memoryRepo, projectRepo, lineageRepo,
-		vectorStore, embedProvider,
+		memoryRepo, projectRepo,
+		vectorStore, embedProvider, enrichmentQueueRepo,
 	)
 	forgetSvc := service.NewForgetService(
 		memoryRepo, projectRepo, vectorStore,

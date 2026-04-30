@@ -353,7 +353,7 @@ func (p *ConsolidationPhase) reinforce(
 		// Write first, then log — ensures log matches actual state.
 		synthesis.Confidence = newConfidence
 		synthesis.UpdatedAt = time.Now().UTC()
-		if err := p.memWriter.Update(ctx, &synthesis); err != nil {
+		if err := p.memWriter.UpdateConfidence(ctx, synthesis.ID, synthesis.NamespaceID, newConfidence); err != nil {
 			slog.Warn("dreaming: confidence update failed", "err", err)
 			stats["errors_update"] = stats["errors_update"].(int) + 1
 			continue
@@ -459,7 +459,7 @@ func (p *ConsolidationPhase) supersedeOriginals(
 		original.SupersededAt = &now
 		original.UpdatedAt = now
 		original.EmbeddingDim = nil // vector is purged below; keep row state in sync
-		if err := p.memWriter.Update(ctx, original); err != nil {
+		if err := p.memWriter.MarkSupersededBy(ctx, original.ID, original.NamespaceID, synthesis.ID); err != nil {
 			slog.Warn("dreaming: supersession update failed", "memory", memID, "err", err)
 			continue
 		}
@@ -794,7 +794,7 @@ func (p *ConsolidationPhase) writeAuditDecision(
 	mem.Confidence = 0
 	mem.EmbeddingDim = nil
 	mem.UpdatedAt = stampValue
-	if err := p.memWriter.Update(ctx, mem); err != nil {
+	if err := p.memWriter.Demote(ctx, mem.ID, mem.NamespaceID, encoded); err != nil {
 		slog.Warn("dreaming: audit update failed", "memory", mem.ID, "demote", true, "err", err)
 		return
 	}

@@ -39,6 +39,27 @@ func (m *mockMemoryUpdater) Update(_ context.Context, mem *model.Memory) error {
 	return nil
 }
 
+func (m *mockMemoryUpdater) SupersedeReplacing(_ context.Context, _ uuid.UUID, newMem *model.Memory, lineage *model.MemoryLineage) error {
+	if newMem.ID == uuid.Nil {
+		newMem.ID = uuid.New()
+	}
+	if lineage.ID == uuid.Nil {
+		lineage.ID = uuid.New()
+	}
+	if lineage.MemoryID == uuid.Nil {
+		lineage.MemoryID = newMem.ID
+	}
+	if m.mem != nil {
+		now := time.Now().UTC()
+		m.mem.SupersededBy = &newMem.ID
+		m.mem.SupersededAt = &now
+		m.mem.UpdatedAt = now
+	}
+	cp := *newMem
+	m.mem = &cp
+	return nil
+}
+
 type mockLineageCreator struct{}
 
 func (m *mockLineageCreator) Create(_ context.Context, _ *model.MemoryLineage) error {
@@ -82,9 +103,9 @@ func newMockUpdateService(mem *model.Memory) *service.UpdateService {
 	return service.NewUpdateService(
 		&mockMemoryUpdater{mem: mem},
 		&mockProjectLookup{project: &model.Project{ID: projectID, NamespaceID: nsID}},
-		&mockLineageCreator{},
 		nil, // no vector store
 		nil, // no embed provider
+		&mockEnrichmentQueueRepo{},
 	)
 }
 
@@ -276,13 +297,18 @@ func TestHandleMemoryUpdate_Success(t *testing.T) {
 
 	text := extractText(result)
 	// MCP update response is the slim mcpUpdateResponse — content and
-	// previous_content echoes are no longer surfaced.
+	// previous_content echoes are no longer surfaced. Content change
+	// returns a NEW memory ID (the supersede path); the input ID is
+	// echoed back as previous_memory_id for caller correlation.
 	var resp mcpUpdateResponse
 	if err := json.Unmarshal([]byte(text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if resp.ID != memoryID {
-		t.Errorf("expected memory ID %s, got %s", memoryID, resp.ID)
+	if resp.ID == memoryID {
+		t.Errorf("content change must return a new memory ID; got original %s", memoryID)
+	}
+	if resp.ID == uuid.Nil {
+		t.Error("expected non-nil new memory ID")
 	}
 }
 

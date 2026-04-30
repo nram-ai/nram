@@ -1548,3 +1548,420 @@ func TestMemoryRepo_ListByNamespaceStale_EmptyNamespace(t *testing.T) {
 		}
 	})
 }
+
+func TestMemoryRepo_FindBySupersededBy(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		head := newTestMemory(nsID)
+		head.Content = "active head"
+		if err := repo.Create(ctx, head); err != nil {
+			t.Fatalf("create head: %v", err)
+		}
+
+		ancestorA := newTestMemory(nsID)
+		ancestorA.Content = "ancestor A"
+		if err := repo.Create(ctx, ancestorA); err != nil {
+			t.Fatalf("create ancestor A: %v", err)
+		}
+		ancestorB := newTestMemory(nsID)
+		ancestorB.Content = "ancestor B"
+		if err := repo.Create(ctx, ancestorB); err != nil {
+			t.Fatalf("create ancestor B: %v", err)
+		}
+
+		now := time.Now().UTC()
+		ancestorA.SupersededBy = &head.ID
+		ancestorA.SupersededAt = &now
+		if err := repo.Update(ctx, ancestorA); err != nil {
+			t.Fatalf("supersede A: %v", err)
+		}
+		ancestorB.SupersededBy = &head.ID
+		ancestorB.SupersededAt = &now
+		if err := repo.Update(ctx, ancestorB); err != nil {
+			t.Fatalf("supersede B: %v", err)
+		}
+
+		ids, err := repo.FindBySupersededBy(ctx, nsID, head.ID)
+		if err != nil {
+			t.Fatalf("find: %v", err)
+		}
+		if len(ids) != 2 {
+			t.Fatalf("expected 2 ancestors, got %d (%v)", len(ids), ids)
+		}
+
+		got := map[uuid.UUID]bool{}
+		for _, id := range ids {
+			got[id] = true
+		}
+		if !got[ancestorA.ID] || !got[ancestorB.ID] {
+			t.Fatalf("expected both ancestors, got %v", ids)
+		}
+
+		empty, err := repo.FindBySupersededBy(ctx, nsID, ancestorA.ID)
+		if err != nil {
+			t.Fatalf("find empty: %v", err)
+		}
+		if len(empty) != 0 {
+			t.Fatalf("expected 0 ancestors of leaf, got %d", len(empty))
+		}
+	})
+}
+
+func TestMemoryRepo_FindBySupersededBy_ExcludesSoftDeleted(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		head := newTestMemory(nsID)
+		head.Content = "head"
+		if err := repo.Create(ctx, head); err != nil {
+			t.Fatalf("create head: %v", err)
+		}
+		ancestor := newTestMemory(nsID)
+		ancestor.Content = "ancestor"
+		if err := repo.Create(ctx, ancestor); err != nil {
+			t.Fatalf("create ancestor: %v", err)
+		}
+
+		now := time.Now().UTC()
+		ancestor.SupersededBy = &head.ID
+		ancestor.SupersededAt = &now
+		if err := repo.Update(ctx, ancestor); err != nil {
+			t.Fatalf("supersede: %v", err)
+		}
+		if err := repo.SoftDelete(ctx, ancestor.ID, nsID); err != nil {
+			t.Fatalf("soft delete ancestor: %v", err)
+		}
+
+		ids, err := repo.FindBySupersededBy(ctx, nsID, head.ID)
+		if err != nil {
+			t.Fatalf("find: %v", err)
+		}
+		if len(ids) != 0 {
+			t.Fatalf("expected 0 (soft-deleted excluded), got %d", len(ids))
+		}
+	})
+}
+
+func TestMemoryRepo_SupersedeReplacing(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		old := newTestMemory(nsID)
+		old.Content = "Alice works at Acme"
+		old.Enriched = true
+		dim := 768
+		old.EmbeddingDim = &dim
+		if err := repo.Create(ctx, old); err != nil {
+			t.Fatalf("create old: %v", err)
+		}
+
+		newMem := &model.Memory{
+			NamespaceID: nsID,
+			Content:     "Alice works at Beta Corp",
+			Tags:        old.Tags,
+			Confidence:  1.0,
+			Importance:  old.Importance,
+			Source:      old.Source,
+			Metadata:    old.Metadata,
+		}
+		// lineage.MemoryID is left nil; SupersedeReplacing fills it from
+		// the assigned newMem.ID since the caller cannot know that value
+		// before the helper runs.
+		lineage := &model.MemoryLineage{
+			NamespaceID: nsID,
+			ParentID:    &old.ID,
+			Relation:    model.LineageSupersedes,
+		}
+
+		err := repo.SupersedeReplacing(ctx, old.ID, newMem, lineage)
+		if err != nil {
+			t.Fatalf("SupersedeReplacing: %v", err)
+		}
+
+		if lineage.MemoryID != newMem.ID {
+			t.Fatalf("expected lineage.MemoryID = newMem.ID (%s), got %s", newMem.ID, lineage.MemoryID)
+		}
+
+		if newMem.ID == uuid.Nil {
+			t.Fatal("expected newMem.ID to be assigned")
+		}
+		if lineage.ID == uuid.Nil {
+			t.Fatal("expected lineage.ID to be assigned")
+		}
+
+		// Old row should now be superseded.
+		reloadedOld, err := repo.GetByID(ctx, old.ID)
+		if err != nil {
+			t.Fatalf("reload old: %v", err)
+		}
+		if reloadedOld.SupersededBy == nil || *reloadedOld.SupersededBy != newMem.ID {
+			t.Fatalf("expected old.superseded_by = newMem.ID, got %v", reloadedOld.SupersededBy)
+		}
+		if reloadedOld.SupersededAt == nil {
+			t.Fatal("expected old.superseded_at set")
+		}
+		// Old row's enrichment and embedding_dim should be intact: the
+		// vector survives; pruning eventually purges row + vector together.
+		if !reloadedOld.Enriched {
+			t.Fatal("expected old.enriched intact (frozen with original content)")
+		}
+		if reloadedOld.EmbeddingDim == nil || *reloadedOld.EmbeddingDim != dim {
+			t.Fatalf("expected old.embedding_dim intact (%d), got %v", dim, reloadedOld.EmbeddingDim)
+		}
+
+		// New row should exist with fresh content and Enriched=false.
+		newReloaded, err := repo.GetByID(ctx, newMem.ID)
+		if err != nil {
+			t.Fatalf("reload new: %v", err)
+		}
+		if newReloaded.Content != "Alice works at Beta Corp" {
+			t.Fatalf("unexpected new content: %q", newReloaded.Content)
+		}
+		if newReloaded.Enriched {
+			t.Fatal("expected new.enriched=false (fresh content needs enrichment)")
+		}
+		if newReloaded.SupersededBy != nil {
+			t.Fatal("expected new.superseded_by nil (active head)")
+		}
+		if newReloaded.ContentHash == "" || newReloaded.ContentHash != HashContent("Alice works at Beta Corp") {
+			t.Fatalf("expected ContentHash recomputed, got %q", newReloaded.ContentHash)
+		}
+	})
+}
+
+func TestMemoryRepo_SupersedeReplacing_ConcurrentReturnsSentinel(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		old := newTestMemory(nsID)
+		if err := repo.Create(ctx, old); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		// Pre-supersede the old row to simulate a concurrent writer winning.
+		preempt := newTestMemory(nsID)
+		preempt.Content = "preempt"
+		if err := repo.Create(ctx, preempt); err != nil {
+			t.Fatalf("create preempt: %v", err)
+		}
+		now := time.Now().UTC()
+		old.SupersededBy = &preempt.ID
+		old.SupersededAt = &now
+		if err := repo.Update(ctx, old); err != nil {
+			t.Fatalf("preempt supersede: %v", err)
+		}
+
+		newMem := &model.Memory{
+			NamespaceID: nsID,
+			Content:     "loser content",
+			Confidence:  1.0,
+		}
+		lineage := &model.MemoryLineage{
+			NamespaceID: nsID,
+			ParentID:    &old.ID,
+			Relation:    model.LineageSupersedes,
+		}
+		err := repo.SupersedeReplacing(ctx, old.ID, newMem, lineage)
+		if !errors.Is(err, ErrConcurrentSupersede) {
+			t.Fatalf("expected ErrConcurrentSupersede, got %v", err)
+		}
+
+		// The whole transaction must roll back: no new memory, no lineage row.
+		if _, err := repo.GetByID(ctx, newMem.ID); err == nil {
+			t.Fatal("expected new memory not to exist after rollback")
+		}
+	})
+}
+
+func TestMemoryRepo_SupersedeReplacing_MissingOldReturnsSentinel(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		nonExistent := uuid.New()
+		newMem := &model.Memory{
+			NamespaceID: nsID,
+			Content:     "orphan",
+			Confidence:  1.0,
+		}
+		lineage := &model.MemoryLineage{
+			NamespaceID: nsID,
+			ParentID:    &nonExistent,
+			Relation:    model.LineageSupersedes,
+		}
+		err := repo.SupersedeReplacing(ctx, nonExistent, newMem, lineage)
+		if !errors.Is(err, ErrConcurrentSupersede) {
+			t.Fatalf("expected ErrConcurrentSupersede for missing old, got %v", err)
+		}
+	})
+}
+
+// seedMemoryWithSupersededBy creates two memories: a sentinel "winner" row
+// and a primary row whose superseded_by points at the winner. Returns the
+// primary row so callers can assert its other columns survive partial
+// updates without the FK constraint biting.
+func seedMemoryWithSupersededBy(t *testing.T, ctx context.Context, repo *MemoryRepo, nsID uuid.UUID) (*model.Memory, uuid.UUID) {
+	t.Helper()
+	winner := newTestMemory(nsID)
+	winner.Content = "winner sentinel"
+	if err := repo.Create(ctx, winner); err != nil {
+		t.Fatalf("create winner: %v", err)
+	}
+	primary := newTestMemory(nsID)
+	primary.Content = "primary under test"
+	primary.SupersededBy = &winner.ID
+	now := time.Now().UTC()
+	primary.SupersededAt = &now
+	if err := repo.Create(ctx, primary); err != nil {
+		t.Fatalf("create primary: %v", err)
+	}
+	return primary, winner.ID
+}
+
+func TestMemoryRepo_ClearEmbeddingDim(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		mem, winnerID := seedMemoryWithSupersededBy(t, ctx, repo, nsID)
+		dim := 768
+		mem.EmbeddingDim = &dim
+		if err := repo.Update(ctx, mem); err != nil {
+			t.Fatalf("seed dim: %v", err)
+		}
+
+		if err := repo.ClearEmbeddingDim(ctx, mem.ID, nsID); err != nil {
+			t.Fatalf("ClearEmbeddingDim: %v", err)
+		}
+
+		got, err := repo.getByIDIncludeDeleted(ctx, mem.ID)
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if got.EmbeddingDim != nil {
+			t.Errorf("embedding_dim should be NULL, got %v", *got.EmbeddingDim)
+		}
+		if got.SupersededBy == nil || *got.SupersededBy != winnerID {
+			t.Errorf("SupersededBy clobbered: got %v, want %s", got.SupersededBy, winnerID)
+		}
+	})
+}
+
+func TestMemoryRepo_UpdateConfidence(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		mem, winnerID := seedMemoryWithSupersededBy(t, ctx, repo, nsID)
+
+		if err := repo.UpdateConfidence(ctx, mem.ID, nsID, 0.91); err != nil {
+			t.Fatalf("UpdateConfidence: %v", err)
+		}
+
+		got, err := repo.getByIDIncludeDeleted(ctx, mem.ID)
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if got.Confidence != 0.91 {
+			t.Errorf("Confidence = %f, want 0.91", got.Confidence)
+		}
+		if got.SupersededBy == nil || *got.SupersededBy != winnerID {
+			t.Errorf("SupersededBy clobbered: got %v, want %s", got.SupersededBy, winnerID)
+		}
+	})
+}
+
+func TestMemoryRepo_Demote(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		mem, winnerID := seedMemoryWithSupersededBy(t, ctx, repo, nsID)
+		dim := 1024
+		mem.Confidence = 0.8
+		mem.EmbeddingDim = &dim
+		if err := repo.Update(ctx, mem); err != nil {
+			t.Fatalf("seed state: %v", err)
+		}
+
+		newMeta := json.RawMessage(`{"low_novelty":true,"reason":"orphan"}`)
+		if err := repo.Demote(ctx, mem.ID, nsID, newMeta); err != nil {
+			t.Fatalf("Demote: %v", err)
+		}
+
+		got, err := repo.getByIDIncludeDeleted(ctx, mem.ID)
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if got.Confidence != 0 {
+			t.Errorf("Confidence = %f, want 0 after demote", got.Confidence)
+		}
+		if got.EmbeddingDim != nil {
+			t.Errorf("EmbeddingDim should be NULL after demote, got %v", *got.EmbeddingDim)
+		}
+		if !jsonEqual(string(got.Metadata), `{"low_novelty":true,"reason":"orphan"}`) {
+			t.Errorf("Metadata = %s, want low_novelty payload", string(got.Metadata))
+		}
+		if got.SupersededBy == nil || *got.SupersededBy != winnerID {
+			t.Errorf("SupersededBy clobbered: got %v, want %s", got.SupersededBy, winnerID)
+		}
+	})
+}
+
+func TestMemoryRepo_MarkSupersededBy(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		old := newTestMemory(nsID)
+		dim := 384
+		old.EmbeddingDim = &dim
+		if err := repo.Create(ctx, old); err != nil {
+			t.Fatalf("create old: %v", err)
+		}
+		newMem := newTestMemory(nsID)
+		newMem.Content = "successor"
+		if err := repo.Create(ctx, newMem); err != nil {
+			t.Fatalf("create new: %v", err)
+		}
+
+		if err := repo.MarkSupersededBy(ctx, old.ID, nsID, newMem.ID); err != nil {
+			t.Fatalf("MarkSupersededBy: %v", err)
+		}
+
+		got, err := repo.GetByID(ctx, old.ID)
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if got.SupersededBy == nil || *got.SupersededBy != newMem.ID {
+			t.Errorf("SupersededBy = %v, want %s", got.SupersededBy, newMem.ID)
+		}
+		if got.SupersededAt == nil {
+			t.Error("SupersededAt should be set")
+		}
+		if got.EmbeddingDim != nil {
+			t.Errorf("EmbeddingDim should be cleared, got %v", *got.EmbeddingDim)
+		}
+
+		// Calling again on the now-superseded row must return the
+		// concurrent-supersede sentinel; the partial UPDATE's WHERE
+		// clause requires superseded_by IS NULL.
+		err = repo.MarkSupersededBy(ctx, old.ID, nsID, uuid.New())
+		if !errors.Is(err, ErrConcurrentSupersede) {
+			t.Fatalf("second MarkSupersededBy should return ErrConcurrentSupersede, got %v", err)
+		}
+	})
+}

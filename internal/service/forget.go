@@ -19,6 +19,11 @@ type MemoryDeleter interface {
 	HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
+	// FindBySupersededBy returns the IDs of live memories whose
+	// superseded_by column equals id. Used by the forget cascade to walk
+	// supersede chains so forgetting the active head also forgets older
+	// versions of the same memory thread.
+	FindBySupersededBy(ctx context.Context, namespaceID uuid.UUID, id uuid.UUID) ([]uuid.UUID, error)
 }
 
 // VectorDeleter provides vector store deletion.
@@ -106,26 +111,22 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 
 	// Single memory ID delete.
 	if hasMemoryID {
-		ok, err := s.deleteSingle(ctx, *req.MemoryID, project.NamespaceID, req.HardDelete, visited)
+		n, err := s.deleteSingle(ctx, *req.MemoryID, project.NamespaceID, req.HardDelete, visited)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			deleted++
-		}
+		deleted += n
 	}
 
 	// Bulk delete by IDs.
 	if hasMemoryIDs {
 		for _, id := range req.MemoryIDs {
-			ok, err := s.deleteSingle(ctx, id, project.NamespaceID, req.HardDelete, visited)
+			n, err := s.deleteSingle(ctx, id, project.NamespaceID, req.HardDelete, visited)
 			if err != nil {
 				log.Printf("forget: delete %s: %v", id, err)
 				continue
 			}
-			if ok {
-				deleted++
-			}
+			deleted += n
 		}
 	}
 
@@ -144,13 +145,11 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 
 			for _, mem := range memories {
 				if hasAllTags(mem.Tags, req.Tags) {
-					ok, err := s.deleteSingle(ctx, mem.ID, project.NamespaceID, req.HardDelete, visited)
+					n, err := s.deleteSingle(ctx, mem.ID, project.NamespaceID, req.HardDelete, visited)
 					if err != nil {
 						continue
 					}
-					if ok {
-						deleted++
-					}
+					deleted += n
 				}
 			}
 
@@ -179,28 +178,50 @@ var cascadeRelations = []string{
 }
 
 // deleteSingle deletes a single memory after verifying it belongs to the given namespace.
-// Returns true if the memory was deleted, false if it was skipped (e.g., not found).
+// Returns the total number of memories deleted by this call, including any
+// cascaded supersede ancestors and extraction children. Returns 0 when the
+// memory is missing, already visited, or in another namespace.
 // The visited set is shared across all calls for one Forget request so cyclic
 // or already-handled lineage cannot loop the cascade.
-func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, hard bool, visited map[uuid.UUID]struct{}) (bool, error) {
+func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, hard bool, visited map[uuid.UUID]struct{}) (int, error) {
 	if _, ok := visited[id]; ok {
-		return false, nil
+		return 0, nil
 	}
 	visited[id] = struct{}{}
 
 	mem, err := s.memories.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil // genuinely not found
+			return 0, nil // genuinely not found
 		}
 		// Propagate real errors (SQLITE_BUSY, network, etc.) instead of
 		// silently treating them as "not found".
-		return false, fmt.Errorf("forget lookup %s: %w", id, err)
+		return 0, fmt.Errorf("forget lookup %s: %w", id, err)
 	}
 
 	// Verify memory belongs to the project's namespace.
 	if mem.NamespaceID != namespaceID {
-		return false, nil
+		return 0, nil
+	}
+
+	cascaded := 0
+
+	// Cascade: walk the supersede chain and delete older versions of this
+	// memory thread. Forgetting the active head forgets the whole thread —
+	// brain-like, since the older versions are the same logical memory at
+	// earlier points in time. The default soft-delete path needs an
+	// explicit walk because the FK ON DELETE SET NULL on
+	// memories.superseded_by only fires under hard delete.
+	ancestorIDs, err := s.memories.FindBySupersededBy(ctx, namespaceID, id)
+	if err != nil {
+		log.Printf("cascade: find supersede ancestors for %s: %v", id, err)
+	}
+	for _, ancestorID := range ancestorIDs {
+		n, err := s.deleteSingle(ctx, ancestorID, namespaceID, hard, visited)
+		if err != nil {
+			log.Printf("cascade: delete ancestor %s of %s: %v", ancestorID, id, err)
+		}
+		cascaded += n
 	}
 
 	// Cascade: delete child memories (extracted facts) before the parent.
@@ -210,9 +231,11 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 			log.Printf("cascade: find children for %s: %v", id, err)
 		}
 		for _, childID := range childIDs {
-			if _, err := s.deleteSingle(ctx, childID, namespaceID, hard, visited); err != nil {
+			n, err := s.deleteSingle(ctx, childID, namespaceID, hard, visited)
+			if err != nil {
 				log.Printf("cascade: delete child %s of %s: %v", childID, id, err)
 			}
+			cascaded += n
 		}
 	}
 
@@ -222,14 +245,14 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 		}
 
 		if err := s.memories.HardDelete(ctx, id, namespaceID); err != nil {
-			return false, fmt.Errorf("hard delete failed for %s: %w", id, err)
+			return cascaded, fmt.Errorf("hard delete failed for %s: %w", id, err)
 		}
 	} else {
 		if err := s.memories.SoftDelete(ctx, id, namespaceID); err != nil {
-			return false, fmt.Errorf("soft delete failed for %s: %w", id, err)
+			return cascaded, fmt.Errorf("soft delete failed for %s: %w", id, err)
 		}
 	}
 
-	return true, nil
+	return cascaded + 1, nil
 }
 

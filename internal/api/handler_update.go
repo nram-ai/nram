@@ -79,9 +79,14 @@ func NewUpdateHandler(svc UpdateServicer, bus events.EventBus) http.HandlerFunc 
 			return
 		}
 
+		// memory_id reflects the active head after the update. Content
+		// changes return a new ID under the supersede semantics; tag and
+		// metadata-only updates keep the input ID. previous_memory_id is
+		// always the URL path id so subscribers can correlate.
 		events.Emit(r.Context(), bus, events.MemoryUpdated, "project:"+projectID.String(), map[string]string{
-			"memory_id":  memoryID.String(),
-			"project_id": projectID.String(),
+			"memory_id":          resp.ID.String(),
+			"previous_memory_id": memoryID.String(),
+			"project_id":         projectID.String(),
 		})
 
 		writeJSON(w, http.StatusOK, resp)

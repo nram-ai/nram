@@ -43,9 +43,12 @@ func (r *MemoryRepo) AttachVectorStore(vs VectorStore) {
 	r.vectorStore = vs
 }
 
-// Create inserts a new memory. ID is generated if zero-valued.
-// Tags defaults to `[]` if nil. Metadata defaults to `{}` if nil.
-func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
+// memoryInsertArgs normalizes a *model.Memory's optional fields and returns
+// the 19-arg slice used by the memories INSERT statement, plus the
+// backend-specific INSERT query. Mutates mem to fill in defaults
+// (ID, Tags, Metadata, ContentHash, CreatedAt, UpdatedAt) so callers
+// can reuse the populated struct without an extra reload SELECT.
+func (r *MemoryRepo) memoryInsertArgs(mem *model.Memory) (string, []interface{}) {
 	if mem.ID == uuid.Nil {
 		mem.ID = uuid.New()
 	}
@@ -55,8 +58,6 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 	if mem.Metadata == nil {
 		mem.Metadata = json.RawMessage(`{}`)
 	}
-	// Fill zero timestamps from Go so the caller's struct matches the DB row
-	// without a reload SELECT after INSERT.
 	now := time.Now().UTC()
 	if mem.CreatedAt.IsZero() {
 		mem.CreatedAt = now
@@ -64,51 +65,32 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 	if mem.UpdatedAt.IsZero() {
 		mem.UpdatedAt = now
 	}
-
-	tagsVal := encodeStringArray(r.db.Backend(), mem.Tags)
-
-	var source interface{}
-	if mem.Source != nil {
-		source = *mem.Source
-	}
-
-	var embeddingDim interface{}
-	if mem.EmbeddingDim != nil {
-		embeddingDim = *mem.EmbeddingDim
-	}
-
-	var lastAccessed interface{}
-	if mem.LastAccessed != nil {
-		lastAccessed = mem.LastAccessed.UTC().Format(time.RFC3339)
-	}
-
-	var expiresAt interface{}
-	if mem.ExpiresAt != nil {
-		expiresAt = mem.ExpiresAt.UTC().Format(time.RFC3339)
-	}
-
-	var supersededBy interface{}
-	if mem.SupersededBy != nil {
-		supersededBy = mem.SupersededBy.String()
-	}
-
-	var supersededAt interface{}
-	if mem.SupersededAt != nil {
-		supersededAt = mem.SupersededAt.UTC().Format(time.RFC3339)
-	}
-
 	if mem.ContentHash == "" {
 		mem.ContentHash = HashContent(mem.Content)
 	}
 
-	var purgeAfter interface{}
+	var source, embeddingDim, lastAccessed, expiresAt, supersededBy, supersededAt, purgeAfter interface{}
+	if mem.Source != nil {
+		source = *mem.Source
+	}
+	if mem.EmbeddingDim != nil {
+		embeddingDim = *mem.EmbeddingDim
+	}
+	if mem.LastAccessed != nil {
+		lastAccessed = mem.LastAccessed.UTC().Format(time.RFC3339)
+	}
+	if mem.ExpiresAt != nil {
+		expiresAt = mem.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	if mem.SupersededBy != nil {
+		supersededBy = mem.SupersededBy.String()
+	}
+	if mem.SupersededAt != nil {
+		supersededAt = mem.SupersededAt.UTC().Format(time.RFC3339)
+	}
 	if mem.PurgeAfter != nil {
 		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
 	}
-
-	enrichedVal := EncodeBool(r.db.Backend(), mem.Enriched)
-	createdAtStr := mem.CreatedAt.UTC().Format(time.RFC3339)
-	updatedAtStr := mem.UpdatedAt.UTC().Format(time.RFC3339)
 
 	query := `INSERT INTO memories (id, namespace_id, content, content_hash, embedding_dim, source, tags,
 		confidence, importance, access_count, last_accessed, expires_at, superseded_by, superseded_at,
@@ -121,16 +103,23 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`
 	}
 
-	_, err := r.db.Exec(ctx, query,
+	return query, []interface{}{
 		mem.ID.String(), mem.NamespaceID.String(), mem.Content, mem.ContentHash,
-		embeddingDim, source, tagsVal, mem.Confidence, mem.Importance, mem.AccessCount,
-		lastAccessed, expiresAt, supersededBy, supersededAt, enrichedVal, string(mem.Metadata), purgeAfter,
-		createdAtStr, updatedAtStr,
-	)
-	if err != nil {
+		embeddingDim, source, encodeStringArray(r.db.Backend(), mem.Tags),
+		mem.Confidence, mem.Importance, mem.AccessCount,
+		lastAccessed, expiresAt, supersededBy, supersededAt,
+		EncodeBool(r.db.Backend(), mem.Enriched), string(mem.Metadata), purgeAfter,
+		mem.CreatedAt.UTC().Format(time.RFC3339), mem.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// Create inserts a new memory. ID is generated if zero-valued.
+// Tags defaults to `[]` if nil. Metadata defaults to `{}` if nil.
+func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
+	query, args := r.memoryInsertArgs(mem)
+	if _, err := r.db.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("memory create: %w", err)
 	}
-
 	return nil
 }
 
@@ -1038,6 +1027,158 @@ func (r *MemoryRepo) UpdateMetadata(ctx context.Context, id, namespaceID uuid.UU
 	return nil
 }
 
+// ClearEmbeddingDim drops embedding_dim to NULL and bumps updated_at.
+// Used by phases that detect a vector mismatch (e.g. embedding-backfill
+// after a vector store eviction) so the row stops claiming a vector
+// that no longer exists. Partial-column write so a concurrent
+// memory_update that supersedes the row cannot be clobbered.
+func (r *MemoryRepo) ClearEmbeddingDim(ctx context.Context, id, namespaceID uuid.UUID) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE memories SET embedding_dim = NULL, updated_at = ?
+		WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories SET embedding_dim = NULL, updated_at = $1
+			WHERE id = $2 AND namespace_id = $3 AND deleted_at IS NULL`
+	}
+	if _, err := r.db.Exec(ctx, query, now, id.String(), namespaceID.String()); err != nil {
+		return fmt.Errorf("memory clear embedding_dim: %w", err)
+	}
+	return nil
+}
+
+// UpdateConfidence sets confidence and bumps updated_at. Used by the
+// consolidation phase's confidence adjustment. Partial-column write so
+// a concurrent memory_update that supersedes the row cannot have its
+// supersede pointer clobbered.
+func (r *MemoryRepo) UpdateConfidence(ctx context.Context, id, namespaceID uuid.UUID, confidence float64) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE memories SET confidence = ?, updated_at = ?
+		WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories SET confidence = $1, updated_at = $2
+			WHERE id = $3 AND namespace_id = $4 AND deleted_at IS NULL`
+	}
+	if _, err := r.db.Exec(ctx, query, confidence, now, id.String(), namespaceID.String()); err != nil {
+		return fmt.Errorf("memory update confidence: %w", err)
+	}
+	return nil
+}
+
+// Demote zeroes confidence, drops embedding_dim, replaces metadata, and
+// bumps updated_at in a single statement. Used by the novelty audit
+// when it demotes a low-novelty dream-source memory. Composite partial
+// write — atomic at the row level so the demote can never partially
+// land. Other columns (including superseded_by) are not touched, so a
+// concurrent memory_update that supersedes the row keeps its chain
+// pointer intact.
+func (r *MemoryRepo) Demote(ctx context.Context, id, namespaceID uuid.UUID, metadata json.RawMessage) error {
+	if len(metadata) == 0 {
+		metadata = json.RawMessage(`{}`)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE memories SET confidence = 0, embedding_dim = NULL, metadata = ?, updated_at = ?
+		WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories SET confidence = 0, embedding_dim = NULL, metadata = $1, updated_at = $2
+			WHERE id = $3 AND namespace_id = $4 AND deleted_at IS NULL`
+	}
+	if _, err := r.db.Exec(ctx, query, string(metadata), now, id.String(), namespaceID.String()); err != nil {
+		return fmt.Errorf("memory demote: %w", err)
+	}
+	return nil
+}
+
+// MarkSupersededBy points an existing memory's superseded_by at newID,
+// stamps superseded_at and updated_at, and clears embedding_dim because
+// the caller is about to purge the vector. The WHERE clause includes
+// "AND superseded_by IS NULL" so two concurrent supersede writers
+// cannot both win — the loser gets ErrConcurrentSupersede and rolls
+// back. Used by the consolidation phase's supersedeOriginals and the
+// worker's ingestion-decision UPDATE path; SupersedeReplacing is the
+// fork that also creates the new memory atomically.
+func (r *MemoryRepo) MarkSupersededBy(ctx context.Context, oldID, namespaceID, newID uuid.UUID) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE memories
+		SET superseded_by = ?, superseded_at = ?, embedding_dim = NULL, updated_at = ?
+		WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL AND superseded_by IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories
+			SET superseded_by = $1, superseded_at = $2, embedding_dim = NULL, updated_at = $3
+			WHERE id = $4 AND namespace_id = $5 AND deleted_at IS NULL AND superseded_by IS NULL`
+	}
+	result, err := r.db.Exec(ctx, query,
+		newID.String(), now, now, oldID.String(), namespaceID.String())
+	if err != nil {
+		return fmt.Errorf("memory mark superseded_by: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("memory mark superseded_by rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrConcurrentSupersede
+	}
+	return nil
+}
+
+// MarkEnriched flips the enriched flag to true, optionally sets
+// embedding_dim and metadata, and bumps updated_at — all in one
+// statement. Other columns are not touched. The enrichment worker
+// uses this in finalize so a concurrent memory_update that supersedes
+// the row mid-flight cannot have its supersede pointer clobbered by a
+// stale full-row Update.
+func (r *MemoryRepo) MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	pg := r.db.Backend() == BackendPostgres
+
+	setClauses := []string{"enriched = "}
+	args := []interface{}{EncodeBool(r.db.Backend(), true)}
+	if embeddingDim != nil {
+		setClauses = append(setClauses, "embedding_dim = ")
+		args = append(args, *embeddingDim)
+	}
+	if len(metadata) > 0 {
+		setClauses = append(setClauses, "metadata = ")
+		args = append(args, string(metadata))
+	}
+	setClauses = append(setClauses, "updated_at = ")
+	args = append(args, now)
+	args = append(args, id.String(), namespaceID.String())
+
+	var setSQL string
+	for i, clause := range setClauses {
+		if i > 0 {
+			setSQL += ", "
+		}
+		if pg {
+			setSQL += clause + fmt.Sprintf("$%d", i+1)
+		} else {
+			setSQL += clause + "?"
+		}
+	}
+	var whereSQL string
+	if pg {
+		whereSQL = fmt.Sprintf("WHERE id = $%d AND namespace_id = $%d AND deleted_at IS NULL",
+			len(setClauses)+1, len(setClauses)+2)
+	} else {
+		whereSQL = "WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL"
+	}
+
+	query := "UPDATE memories SET " + setSQL + " " + whereSQL
+	result, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("memory mark enriched: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("memory mark enriched rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // BumpReinforcement atomically bumps access_count, last_accessed, and
 // multiplicatively nudges confidence (capped at 1.0) for the given memory IDs
 // that are not soft-deleted. factor is the multiplicative reinforcement term:
@@ -1252,6 +1393,153 @@ func (r *MemoryRepo) FindMemoriesMissingVector(ctx context.Context, namespaceID 
 		return nil, fmt.Errorf("memory find missing vector iteration: %w", err)
 	}
 	return out, nil
+}
+
+// FindBySupersededBy returns the IDs of live memories whose superseded_by
+// column equals id, scoped to namespaceID. Used by the forget service to
+// walk supersede chains so forgetting the active head also forgets the
+// older versions. Soft-deleted rows are excluded so an already-pruned
+// ancestor is not re-visited.
+func (r *MemoryRepo) FindBySupersededBy(ctx context.Context, namespaceID uuid.UUID, id uuid.UUID) ([]uuid.UUID, error) {
+	query := `SELECT id FROM memories WHERE superseded_by = ? AND namespace_id = ? AND deleted_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT id FROM memories WHERE superseded_by = $1 AND namespace_id = $2 AND deleted_at IS NULL`
+	}
+
+	rows, err := r.db.Query(ctx, query, id.String(), namespaceID.String())
+	if err != nil {
+		return nil, fmt.Errorf("memory find by superseded_by: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, fmt.Errorf("memory find by superseded_by scan: %w", err)
+		}
+		parsed, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("memory find by superseded_by parse: %w", err)
+		}
+		ids = append(ids, parsed)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory find by superseded_by iterate: %w", err)
+	}
+	return ids, nil
+}
+
+// ErrConcurrentSupersede is returned by SupersedeReplacing when the old
+// memory row has already been superseded or soft-deleted by another
+// writer. Callers should refresh the active head and retry against it.
+var ErrConcurrentSupersede = fmt.Errorf("memory was concurrently superseded or deleted")
+
+// SupersedeReplacing atomically performs the three writes that move a
+// memory thread forward when content changes:
+//  1. INSERT the new memory row (newMem) with a fresh UUID.
+//  2. UPDATE the old memory row, setting superseded_by, superseded_at,
+//     and updated_at. The old row's embedding_dim is left intact because
+//     the old vector survives in the store; phase pruning eventually
+//     soft-deletes the row and purges the vector together.
+//  3. INSERT the lineage row marking new -> old as a supersedes edge.
+//
+// The UPDATE in step 2 includes "AND superseded_by IS NULL AND deleted_at
+// IS NULL" so that two concurrent writers do not both append to the same
+// chain. The losing writer gets ErrConcurrentSupersede and the entire
+// transaction rolls back; no new memory or lineage row is left behind.
+func (r *MemoryRepo) SupersedeReplacing(
+	ctx context.Context,
+	oldID uuid.UUID,
+	newMem *model.Memory,
+	lineage *model.MemoryLineage,
+) error {
+	if newMem == nil {
+		return fmt.Errorf("supersede replacing: newMem is required")
+	}
+	if lineage == nil {
+		return fmt.Errorf("supersede replacing: lineage is required")
+	}
+
+	insertMemQuery, insertMemArgs := r.memoryInsertArgs(newMem)
+
+	if lineage.ID == uuid.Nil {
+		lineage.ID = uuid.New()
+	}
+	if lineage.MemoryID == uuid.Nil {
+		// The lineage row points new -> old; the caller cannot pre-set
+		// memory_id because newMem.ID is assigned by memoryInsertArgs.
+		lineage.MemoryID = newMem.ID
+	}
+	if lineage.Context == nil {
+		lineage.Context = json.RawMessage(`{}`)
+	}
+	if lineage.CreatedAt.IsZero() {
+		lineage.CreatedAt = newMem.CreatedAt
+	}
+
+	supersedeQuery := `UPDATE memories
+		SET superseded_by = ?, superseded_at = ?, updated_at = ?
+		WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL AND superseded_by IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		supersedeQuery = `UPDATE memories
+			SET superseded_by = $1, superseded_at = $2, updated_at = $3
+			WHERE id = $4 AND namespace_id = $5 AND deleted_at IS NULL AND superseded_by IS NULL`
+	}
+
+	var lineageParentID interface{}
+	if lineage.ParentID != nil {
+		lineageParentID = lineage.ParentID.String()
+	}
+
+	insertLineageQuery := `INSERT INTO memory_lineage (id, namespace_id, memory_id, parent_id, relation, context)
+		VALUES (?, ?, ?, ?, ?, ?)`
+	if r.db.Backend() == BackendPostgres {
+		insertLineageQuery = `INSERT INTO memory_lineage (id, namespace_id, memory_id, parent_id, relation, context)
+			VALUES ($1, $2, $3, $4, $5, $6)`
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("supersede replacing begin: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, insertMemQuery, insertMemArgs...); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("supersede replacing insert new memory: %w", err)
+	}
+
+	supersededAtStr := newMem.CreatedAt.UTC().Format(time.RFC3339)
+	result, err := tx.ExecContext(ctx, supersedeQuery,
+		newMem.ID.String(), supersededAtStr, supersededAtStr,
+		oldID.String(), newMem.NamespaceID.String(),
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("supersede replacing update old memory: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("supersede replacing rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		_ = tx.Rollback()
+		return ErrConcurrentSupersede
+	}
+
+	if _, err := tx.ExecContext(ctx, insertLineageQuery,
+		lineage.ID.String(), lineage.NamespaceID.String(), lineage.MemoryID.String(), lineageParentID,
+		lineage.Relation, string(lineage.Context),
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("supersede replacing insert lineage: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("supersede replacing commit: %w", err)
+	}
+	return nil
 }
 
 // HardDeleteSoftDeletedBefore hard-deletes rows whose deleted_at is older

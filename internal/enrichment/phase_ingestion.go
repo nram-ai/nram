@@ -446,19 +446,10 @@ func (wp *WorkerPool) applyIngestionUpdate(ctx context.Context, p *pendingJob) {
 		return
 	}
 
-	// Mark the target memory superseded by the new one and drop its
-	// vector. embedding_dim is cleared so the row state matches.
-	targetMem, err := wp.memories.GetByID(ctx, target)
-	if err != nil {
-		slog.Error("enrichment: ingestion update load target", "job", p.job.ID, "target", target, "err", err)
-		return
-	}
-	newID := p.mem.ID
-	targetMem.SupersededBy = &newID
-	targetMem.SupersededAt = &now
-	targetMem.UpdatedAt = now
-	targetMem.EmbeddingDim = nil
-	if err := wp.memUpdater.Update(ctx, targetMem); err != nil {
+	// MarkSupersededBy's WHERE clause guards on existence, deleted_at,
+	// and superseded_by — a missing or already-superseded target
+	// surfaces as ErrConcurrentSupersede with no extra round-trip.
+	if err := wp.memUpdater.MarkSupersededBy(ctx, target, p.mem.NamespaceID, p.mem.ID); err != nil {
 		slog.Error("enrichment: ingestion update target", "job", p.job.ID, "target", target, "err", err)
 		return
 	}
