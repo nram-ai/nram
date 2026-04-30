@@ -6,9 +6,20 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/nram-ai/nram/internal/config"
 	"github.com/qdrant/go-client/qdrant"
 )
+
+// QdrantConfig holds the connection parameters for a Qdrant vector store.
+// All fields are sourced from the runtime settings registry (qdrant.* keys);
+// the struct is local to the storage package because it's the only consumer.
+type QdrantConfig struct {
+	Addr             string // gRPC address, e.g. "localhost:6334"
+	APIKey           string // API key for authentication
+	UseTLS           bool   // enable TLS for the gRPC connection
+	PoolSize         uint   // gRPC connection count (0 → 3)
+	KeepAliveTime    int    // seconds between keepalive pings (0 → 10s, -1 → disabled)
+	KeepAliveTimeout uint   // seconds to wait for a keepalive ack (0 → 2s)
+}
 
 // qdrantMemoryCollections maps supported vector dimensions to their memory
 // collection names.
@@ -40,7 +51,7 @@ type QdrantStore struct {
 var _ VectorStore = (*QdrantStore)(nil)
 
 // NewQdrantStore creates a new QdrantStore connected using the given configuration.
-func NewQdrantStore(cfg config.QdrantConfig) (*QdrantStore, error) {
+func NewQdrantStore(cfg QdrantConfig) (*QdrantStore, error) {
 	host, port, err := parseQdrantAddr(cfg.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("qdrant: invalid address %q: %w", cfg.Addr, err)

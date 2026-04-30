@@ -70,14 +70,8 @@ func TestGetSettingsSchemaContainsQdrantEntries(t *testing.T) {
 // the key from this allowlist will fail the consistency check below — the
 // inverse drift this test also locks down.
 var uiOnlySchemaKeys = map[string]struct{}{
-	"enrichment.batch_size":     {},
-	"enrichment.auto_enrich":    {},
-	"memory.default_confidence": {},
-	"memory.default_importance": {},
-	"api.rate_limit_rps":        {},
-	"api.rate_limit_burst":      {},
-	"qdrant.addr":               {},
-	"qdrant.api_key":            {},
+	"qdrant.addr":    {},
+	"qdrant.api_key": {},
 }
 
 // TestSettingsSchemaRequiresRestart asserts that the RequiresRestart flag is
@@ -101,20 +95,25 @@ func TestSettingsSchemaRequiresRestart(t *testing.T) {
 		"qdrant.pool_size":                              {},
 		"qdrant.keepalive_time":                         {},
 		"qdrant.keepalive_timeout":                      {},
-		service.SettingEnrichmentWorkerCountSQLite:      {},
-		service.SettingEnrichmentWorkerCountPostgres:    {},
+		service.SettingEnrichmentWorkerCountSQLite:         {},
+		service.SettingEnrichmentWorkerCountPostgres:       {},
 		service.SettingEnrichmentWorkerPollIntervalSeconds: {},
-		service.SettingDreamSchedulerPollSeconds:        {},
-		service.SettingDreamHeartbeatInterval:           {},
-		service.SettingDreamStuckSweep:                  {},
-		service.SettingLifecycleSweepIntervalSeconds:    {},
-		service.SettingCascadeCacheTTLSeconds:           {},
-		service.SettingSettingsCacheTTLSeconds:          {},
-		service.SettingAPIRateLimitCleanupSeconds:       {},
-		service.SettingAPIRateLimitStaleSeconds:         {},
-		service.SettingEventsSubscriberBufferSize:       {},
-		service.SettingEventsReplayCapacity:             {},
-		service.SettingEventsSSEKeepaliveSeconds:        {},
+		service.SettingEnrichmentPoolTickIntervalSeconds:   {},
+		service.SettingDreamSchedulerPollSeconds:           {},
+		service.SettingDreamHeartbeatInterval:              {},
+		service.SettingDreamStuckSweep:                     {},
+		service.SettingLifecycleSweepIntervalSeconds:       {},
+		service.SettingCascadeCacheTTLSeconds:              {},
+		service.SettingSettingsCacheTTLSeconds:             {},
+		service.SettingAPIRateLimitCleanupSeconds:          {},
+		service.SettingAPIRateLimitStaleSeconds:            {},
+		service.SettingEventsSubscriberBufferSize:          {},
+		service.SettingEventsReplayCapacity:                {},
+		service.SettingEventsSSEKeepaliveSeconds:           {},
+		service.SettingHNSWM:                               {},
+		service.SettingHNSWEfConstruction:                  {},
+		service.SettingHNSWEfSearch:                        {},
+		service.SettingHNSWMaxLoadedIndexes:                {},
 	}
 
 	seen := make(map[string]bool, len(mustRestart))

@@ -1,28 +1,29 @@
+// Package config holds the bootstrap configuration for the nram server.
+//
+// This package is deliberately minimal: it carries only settings that must be
+// available before the database is open and the runtime settings registry
+// (internal/service.SettingsService) is reachable. Everything else —
+// providers, vector backends, dreaming, ranking, retention, etc. — is managed
+// at runtime through the admin UI / DB-backed settings table.
+//
+// Bootstrap surface:
+//   - Server.Host / Server.Port      bind address
+//   - Database.URL                   DB DSN
+//   - Database.MaxConnections        pool size
+//   - Database.MigrateOnStart        auto-apply migrations on first boot
+//   - LogLevel                       slog handler level
+//   - Admin.Email / Admin.Password   first-boot administrator (headless)
 package config
 
-// Config holds all bootstrap-level configuration for the nram server.
-// Runtime configuration (providers, projects, etc.) lives in the database
-// settings table and is managed through the admin UI.
+// Config holds bootstrap-only configuration for the nram server.
 type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	Database DatabaseConfig `yaml:"database"`
 	LogLevel string         `yaml:"log_level"`
 	Admin    AdminConfig    `yaml:"admin"`
-	Embed    ProviderConfig `yaml:"embed"`
-	Fact     ProviderConfig `yaml:"fact"`
-	Entity   ProviderConfig `yaml:"entity"`
-	Qdrant   QdrantConfig   `yaml:"qdrant"`
-	HNSW     HNSWConfig     `yaml:"hnsw"`
-	// EnrichmentOrphanGraceSeconds is how long a newly-created entity is
-	// protected from the orphan sweep. The producer (enrichment / dream)
-	// writes the entity row before its relationships and before its vector;
-	// without this gate, a slow embed call lets the lifecycle sweep delete
-	// the row mid-flight and the subsequent vector upsert fails with a
-	// FOREIGN KEY constraint error. Default 3600 (60 minutes).
-	EnrichmentOrphanGraceSeconds int `yaml:"enrichment_orphan_grace_seconds"`
 }
 
-// ServerConfig holds HTTP server settings.
+// ServerConfig holds HTTP listener settings.
 type ServerConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
@@ -35,39 +36,16 @@ type DatabaseConfig struct {
 	MigrateOnStart bool   `yaml:"migrate_on_start"`
 }
 
-// AdminConfig holds headless admin bootstrap credentials.
+// AdminConfig holds the headless admin bootstrap credentials. When both
+// fields are non-empty AND no users exist in the database, the server
+// creates the first administrator on startup, bypassing the setup wizard.
+// On any boot where setup is already complete, these values are ignored.
 type AdminConfig struct {
 	Email    string `yaml:"email"`
 	Password string `yaml:"password"`
 }
 
-// QdrantConfig holds Qdrant vector database connection settings.
-type QdrantConfig struct {
-	Addr             string `yaml:"addr"`              // gRPC address, e.g. "localhost:6334"
-	APIKey           string `yaml:"api_key"`            // API key for authentication
-	UseTLS           bool   `yaml:"use_tls"`            // Enable TLS for the gRPC connection
-	PoolSize         uint   `yaml:"pool_size"`          // Number of gRPC connections (0 = default of 3)
-	KeepAliveTime    int    `yaml:"keepalive_time"`     // Seconds between keepalive pings (0=10s, -1=disabled)
-	KeepAliveTimeout uint   `yaml:"keepalive_timeout"`  // Seconds to wait for keepalive ack (0=2s)
-}
-
-// ProviderConfig holds LLM/embedding provider settings.
-type ProviderConfig struct {
-	Provider string `yaml:"provider"`
-	URL      string `yaml:"url"`
-	Key      string `yaml:"key"`
-	Model    string `yaml:"model"`
-}
-
-// HNSWConfig holds configuration for the pure-Go HNSW vector index (SQLite backend).
-type HNSWConfig struct {
-	M                int `yaml:"m"`                  // Max neighbors per layer (default 16)
-	EfConstruction   int `yaml:"ef_construction"`    // Construction candidate pool size (default 200)
-	EfSearch         int `yaml:"ef_search"`          // Search candidate pool size (default 50)
-	MaxLoadedIndexes int `yaml:"max_loaded_indexes"` // Max in-memory indexes before LRU eviction (default 64)
-}
-
-// DefaultConfig returns the default configuration values.
+// DefaultConfig returns the default bootstrap configuration values.
 func DefaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
@@ -78,13 +56,6 @@ func DefaultConfig() Config {
 			MaxConnections: 20,
 			MigrateOnStart: true,
 		},
-		LogLevel:                     "info",
-		EnrichmentOrphanGraceSeconds: 3600,
-		HNSW: HNSWConfig{
-			M:                16,
-			EfConstruction:   200,
-			EfSearch:         50,
-			MaxLoadedIndexes: 64,
-		},
+		LogLevel: "info",
 	}
 }

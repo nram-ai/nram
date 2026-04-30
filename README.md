@@ -84,7 +84,16 @@ Setting `NRAM_ENABLE_ENRICHMENT_BACKFILL=1` runs the enrichment backfill at star
 
 ## Configuration
 
-nram loads configuration from (in order of precedence):
+nram has two configuration surfaces:
+
+- **Bootstrap config** (this file / env vars): the small set of values needed
+  before the database is open — listener, DSN, log level, and the optional
+  headless admin credentials. Any change requires a restart.
+- **Runtime config** (admin UI / `/v1/admin/settings`): everything else —
+  providers, vector backends, dreaming, ranking, retention, prompts, etc.
+  Stored in the `settings` table and (mostly) hot-reloadable.
+
+The loader reads (in order of precedence):
 
 1. `--config` flag
 2. `NRAM_CONFIG` environment variable
@@ -105,48 +114,40 @@ database:
 
 log_level: "info"
 
+# Headless administrator bootstrap. When both fields are set AND no users
+# exist in the database, the first administrator is created on startup,
+# bypassing the setup wizard. Otherwise these values are ignored.
 admin:
-  email: ""                  # Initial admin email (or use setup wizard)
-  password: ""               # Initial admin password
-
-# Embedding provider (required for semantic search)
-embed:
-  provider: ""               # openai, anthropic, gemini, ollama, openrouter
-  url: ""                    # Custom base URL (optional)
-  key: ""                    # API key
-  model: ""                  # Model name
-
-# Fact extraction provider (optional)
-fact:
-  provider: ""
-  url: ""
-  key: ""
-  model: ""
-
-# Entity extraction provider (optional)
-entity:
-  provider: ""
-  url: ""
-  key: ""
-  model: ""
-
-# External vector database (optional)
-qdrant:
-  addr: ""                   # gRPC address, e.g. localhost:6334
-
-# Pure-Go HNSW vector index settings (SQLite backend)
-hnsw:
-  m: 16                      # Max neighbors per layer
-  ef_construction: 200       # Construction candidate pool size
-  ef_search: 50              # Search candidate pool size
-  max_loaded_indexes: 64     # Max in-memory indexes before LRU eviction
+  email: ""
+  password: ""
 ```
 
 YAML values support environment variable interpolation: `${VAR_NAME:-default}`.
 
-Most runtime knobs (ranking weights, recall fusion weights, ingestion-decision thresholds, novelty audit, reconsolidation, dreaming budgets, retention, prompts) are stored in the `settings` table and edited at `/v1/admin/settings` (or in the admin UI). `config.yaml` provides bootstrap defaults and provider credentials; persisted settings always win at runtime so operators do not need to redeploy to retune.
+> **Removed surface (2026-04-30):** `embed.*`, `fact.*`, `entity.*`, `qdrant.*`,
+> `hnsw.*`, and `enrichment_orphan_grace_seconds` are no longer accepted in
+> `config.yaml`. Likewise `NRAM_EMBED_*`, `NRAM_FACT_*`, `NRAM_ENTITY_*`, and
+> `NRAM_ENRICHMENT_ORPHAN_GRACE_SECONDS` are no longer accepted as env vars.
+> All of these are now managed exclusively at runtime through the admin UI
+> at `/admin/settings` (or the `/v1/admin/settings` API). The loader logs a
+> WARN line for each deprecated key it sees and ignores the value.
 
-Per-project and per-user overrides for `ranking_weights`, `dedup_threshold`, and `enrichment_enabled` live on the project and user records as sparse JSON. The cascade is `system → user → project → effective`; unset fields fall through. Edit at `/v1/me/projects/{id}` (project) or `/v1/admin/users/{id}` (user). User-scope `ranking_weights` is rejected with a 400 — the cascade for weights lands at project, not user.
+### Runtime Configuration
+
+Everything outside the bootstrap surface is managed through the admin UI:
+
+- **Providers** (embedding, fact extraction, entity extraction) — `/admin/providers`
+- **Vector backend** (Qdrant address/credentials, HNSW tuning) — `/admin/settings`
+- **Dreaming**, **enrichment**, **ranking**, **recall fusion**, **reconsolidation**,
+  **retention**, **rate limits**, **lifecycle sweep**, **events**, and prompt
+  templates — `/admin/settings`
+
+Per-project and per-user overrides for `ranking_weights`, `dedup_threshold`,
+and `enrichment_enabled` live on the project and user records as sparse JSON.
+The cascade is `system → user → project → effective`; unset fields fall
+through. Edit at `/v1/me/projects/{id}` (project) or `/v1/admin/users/{id}`
+(user). User-scope `ranking_weights` is rejected with a 400 — the cascade
+for weights lands at project, not user.
 
 ### Environment Variables
 
@@ -155,18 +156,9 @@ Per-project and per-user overrides for `ranking_weights`, `dedup_threshold`, and
 | `PORT` | Server port (default: 8674) |
 | `DATABASE_URL` | PostgreSQL connection string |
 | `LOG_LEVEL` | Log level: debug, info, warn, error |
-| `NRAM_ADMIN_EMAIL` | Initial admin email |
-| `NRAM_ADMIN_PASS` | Initial admin password |
-| `NRAM_EMBED_PROVIDER` | Embedding provider name |
-| `NRAM_EMBED_URL` | Embedding provider base URL |
-| `NRAM_EMBED_KEY` | Embedding provider API key |
-| `NRAM_EMBED_MODEL` | Embedding model name |
-| `NRAM_FACT_PROVIDER` | Fact extraction provider |
-| `NRAM_FACT_KEY` | Fact extraction API key |
-| `NRAM_FACT_MODEL` | Fact extraction model |
-| `NRAM_ENTITY_PROVIDER` | Entity extraction provider |
-| `NRAM_ENTITY_KEY` | Entity extraction API key |
-| `NRAM_ENTITY_MODEL` | Entity extraction model |
+| `NRAM_CONFIG` | Path to a config file (alternative to `--config`) |
+| `NRAM_ADMIN_EMAIL` | Headless bootstrap administrator email (first boot only) |
+| `NRAM_ADMIN_PASS` | Headless bootstrap administrator password (first boot only) |
 
 ## Database
 

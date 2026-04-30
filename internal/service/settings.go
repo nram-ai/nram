@@ -14,6 +14,15 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
+// Provider slot keys. The settings table stores each LLM/embedding provider
+// configuration as a JSON blob under one of these keys; the .type/.url/.key/
+// .model constants below address sub-fields surfaced to the admin schema.
+const (
+	SettingProviderEmbedding = "provider.embedding"
+	SettingProviderFact      = "provider.fact"
+	SettingProviderEntity    = "provider.entity"
+)
+
 // Well-known setting keys.
 const (
 	SettingEmbedProvider     = "provider.embedding.type"
@@ -198,6 +207,16 @@ const (
 	SettingQdrantPoolSize         = "qdrant.pool_size"
 	SettingQdrantKeepAliveTime    = "qdrant.keepalive_time"
 	SettingQdrantKeepAliveTimeout = "qdrant.keepalive_timeout"
+
+	// HNSW (pure-Go SQLite-backed vector index) tuning. All four are read
+	// once at boot when the HNSW cache is constructed, so changes require a
+	// server restart. M and EfConstruction additionally only affect newly-
+	// built indexes — existing indexes carry their construction-time values
+	// in their on-disk snapshot.
+	SettingHNSWM                = "hnsw.m"
+	SettingHNSWEfConstruction   = "hnsw.ef_construction"
+	SettingHNSWEfSearch         = "hnsw.ef_search"
+	SettingHNSWMaxLoadedIndexes = "hnsw.max_loaded_indexes"
 
 	// Reconsolidation settings. Reinforcement on recall is the first biological
 	// intervention on the recall path: surfaced memories get their access_count,
@@ -541,6 +560,11 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingQdrantPoolSize:         "3",
 	SettingQdrantKeepAliveTime:    "10",
 	SettingQdrantKeepAliveTimeout: "2",
+
+	SettingHNSWM:                "16",
+	SettingHNSWEfConstruction:   "200",
+	SettingHNSWEfSearch:         "50",
+	SettingHNSWMaxLoadedIndexes: "64",
 
 	SettingReconsolidationMode:          ReconsolidationModeShadow,
 	SettingReconsolidationFactor:        "0.02",

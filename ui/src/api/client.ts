@@ -630,6 +630,9 @@ export interface SettingSchema {
   category: string;
   enum_values?: string[];
   requires_restart?: boolean;
+  // Recognized values: "sqlite", "postgres", "hnsw", "pgvector", "qdrant".
+  // Empty / omitted means the setting applies regardless of backend.
+  applies_to_backend?: string[];
 }
 
 export interface Webhook {

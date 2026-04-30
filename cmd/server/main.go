@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -29,6 +27,38 @@ import (
 	adminstore "github.com/nram-ai/nram/internal/storage/admin"
 	"github.com/nram-ai/nram/internal/ui"
 )
+
+// runHeadlessBootstrap creates the first administrator from the bootstrap
+// admin credentials when the database is empty. Returns true when setup is
+// complete after the call (either it already was, or this call just made it
+// so), letting the caller seed the cached SetupChecker without re-querying
+// the DB. Idempotent — re-running with the same credentials is safe.
+func runHeadlessBootstrap(ctx context.Context, store *adminstore.SetupStore, adminCfg config.AdminConfig) bool {
+	complete, err := store.IsSetupComplete(ctx)
+	if err != nil {
+		log.Printf("headless bootstrap: setup-status check failed: %v", err)
+		return false
+	}
+	if complete {
+		return true
+	}
+
+	switch {
+	case adminCfg.Email == "" && adminCfg.Password == "":
+		return false
+	case adminCfg.Email == "" || adminCfg.Password == "":
+		log.Printf("headless bootstrap: skipping — both admin.email and admin.password (or NRAM_ADMIN_EMAIL/NRAM_ADMIN_PASS) must be set")
+		return false
+	}
+
+	user, _, err := store.CompleteSetup(ctx, adminCfg.Email, adminCfg.Password)
+	if err != nil {
+		log.Printf("headless bootstrap: failed to create administrator %s: %v", adminCfg.Email, err)
+		return false
+	}
+	log.Printf("headless bootstrap: created administrator %s (id=%s)", user.Email, user.ID)
+	return true
+}
 
 // configureLogger installs a slog text handler at the level named by
 // cfg.LogLevel (info|debug|warn|error). Without this, slog defaults to INFO
@@ -178,60 +208,12 @@ func main() {
 	settingsRepo := storage.NewSettingsRepo(db)
 	settingsSvc := service.NewSettingsService(settingsRepo)
 
-	// Create provider registry.
-	// First try config file values, then overlay with DB-persisted settings
-	// (providers configured via admin UI are stored in the settings table).
-	var registry *provider.Registry
-	regCfg := provider.RegistryConfig{
-		Embedding: provider.SlotConfig{
-			Type:    cfg.Embed.Provider,
-			BaseURL: cfg.Embed.URL,
-			APIKey:  cfg.Embed.Key,
-			Model:   cfg.Embed.Model,
-		},
-		Fact: provider.SlotConfig{
-			Type:    cfg.Fact.Provider,
-			BaseURL: cfg.Fact.URL,
-			APIKey:  cfg.Fact.Key,
-			Model:   cfg.Fact.Model,
-		},
-		Entity: provider.SlotConfig{
-			Type:    cfg.Entity.Provider,
-			BaseURL: cfg.Entity.URL,
-			APIKey:  cfg.Entity.Key,
-			Model:   cfg.Entity.Model,
-		},
-	}
-
-	// Overlay DB-persisted provider settings (from admin UI) on top of config file.
-	dbSlots := []struct {
-		key  string
-		dest *provider.SlotConfig
-	}{
-		{"provider.embedding", &regCfg.Embedding},
-		{"provider.fact", &regCfg.Fact},
-		{"provider.entity", &regCfg.Entity},
-	}
-	for _, slot := range dbSlots {
-		setting, sErr := settingsRepo.Get(context.Background(), slot.key, "global")
-		if sErr != nil {
-			continue
-		}
-		var apiCfg api.ProviderSlotConfig
-		if json.Unmarshal(setting.Value, &apiCfg) == nil && apiCfg.Type != "" {
-			slot.dest.Type = apiCfg.Type
-			slot.dest.BaseURL = apiCfg.URL
-			if apiCfg.APIKey != "" {
-				slot.dest.APIKey = apiCfg.APIKey
-			}
-			slot.dest.Model = apiCfg.Model
-			if apiCfg.Timeout != nil {
-				slot.dest.Timeout = *apiCfg.Timeout
-			}
-		}
-	}
-
-	registry, err = provider.NewRegistry(regCfg, tokenUsageRepo, namespaceRepo)
+	// Create provider registry. Provider configuration lives in the DB
+	// settings table (provider.{embedding,fact,entity}) and is managed via
+	// the admin UI. On a fresh install the slots are empty and the registry
+	// reports providers unavailable until an admin completes setup.
+	regCfg := adminstore.LoadProviderRegistryConfig(context.Background(), settingsRepo)
+	registry, err := provider.NewRegistry(regCfg, tokenUsageRepo, namespaceRepo)
 	if err != nil {
 		log.Printf("warning: provider registry init failed (providers disabled): %v", err)
 		registry = nil
@@ -244,50 +226,26 @@ func main() {
 		return registry.GetEmbedding()
 	}
 
-	// Overlay DB-persisted Qdrant settings on top of config file values.
-	qdrantKeys := []struct {
-		key   string
-		apply func(string)
-	}{
-		{service.SettingQdrantAddr, func(v string) { cfg.Qdrant.Addr = v }},
-		{service.SettingQdrantAPIKey, func(v string) { cfg.Qdrant.APIKey = v }},
-		{service.SettingQdrantUseTLS, func(v string) { cfg.Qdrant.UseTLS = v == "true" }},
-		{service.SettingQdrantPoolSize, func(v string) {
-			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
-				cfg.Qdrant.PoolSize = uint(n)
-			}
-		}},
-		{service.SettingQdrantKeepAliveTime, func(v string) {
-			if n, err := strconv.Atoi(v); err == nil {
-				cfg.Qdrant.KeepAliveTime = n
-			}
-		}},
-		{service.SettingQdrantKeepAliveTimeout, func(v string) {
-			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
-				cfg.Qdrant.KeepAliveTimeout = uint(n)
-			}
-		}},
-	}
-	for _, qk := range qdrantKeys {
-		setting, sErr := settingsRepo.Get(context.Background(), qk.key, "global")
-		if sErr != nil {
-			continue
-		}
-		var val string
-		if json.Unmarshal(setting.Value, &val) != nil {
-			val = string(setting.Value)
-		}
-		if val != "" {
-			qk.apply(val)
-		}
+	// Resolve Qdrant connection settings from the runtime registry. Operators
+	// configure Qdrant through /v1/admin/settings under the qdrant.* keys; an
+	// empty addr means Qdrant is not in use and the vector store falls back
+	// to pgvector or HNSW depending on the database backend.
+	bootCtx := context.Background()
+	qdrantCfg := storage.QdrantConfig{
+		Addr:             service.ResolveOrDefault(bootCtx, settingsSvc, service.SettingQdrantAddr, "global"),
+		APIKey:           service.ResolveOrDefault(bootCtx, settingsSvc, service.SettingQdrantAPIKey, "global"),
+		UseTLS:           settingsSvc.ResolveBool(bootCtx, service.SettingQdrantUseTLS, "global"),
+		PoolSize:         uint(settingsSvc.ResolveIntWithDefault(bootCtx, service.SettingQdrantPoolSize, "global")),
+		KeepAliveTime:    settingsSvc.ResolveIntWithDefault(bootCtx, service.SettingQdrantKeepAliveTime, "global"),
+		KeepAliveTimeout: uint(settingsSvc.ResolveIntWithDefault(bootCtx, service.SettingQdrantKeepAliveTimeout, "global")),
 	}
 
 	// Create vector store.
 	// Priority: Qdrant (if configured) > PgVector (if Postgres) > HNSWStore (if SQLite).
 	var vectorStore storage.VectorStore
 	var hnswStore *storage.HNSWStore
-	if cfg.Qdrant.Addr != "" {
-		vectorStore, err = storage.NewQdrantStore(cfg.Qdrant)
+	if qdrantCfg.Addr != "" {
+		vectorStore, err = storage.NewQdrantStore(qdrantCfg)
 		if err != nil {
 			log.Printf("warning: qdrant connection failed (vector search disabled): %v", err)
 		}
@@ -303,15 +261,16 @@ func main() {
 	}
 	if vectorStore == nil && db.Backend() == storage.BackendSQLite {
 		hnswCfg := storage.HNSWConfig{
-			M:                cfg.HNSW.M,
-			EfConstruction:   cfg.HNSW.EfConstruction,
-			EfSearch:         cfg.HNSW.EfSearch,
-			MaxLoadedIndexes: cfg.HNSW.MaxLoadedIndexes,
+			M:                settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWM, "global"),
+			EfConstruction:   settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWEfConstruction, "global"),
+			EfSearch:         settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWEfSearch, "global"),
+			MaxLoadedIndexes: settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWMaxLoadedIndexes, "global"),
 		}
 		hnswStore = storage.NewHNSWStore(db.DB(), db.WriteDB(), hnswCfg)
 		vectorStore = hnswStore
 		defer hnswStore.Close()
-		log.Println("hnsw vector store initialized (SQLite backend)")
+		log.Printf("hnsw vector store initialized (SQLite backend; M=%d ef_construction=%d ef_search=%d max_loaded=%d)",
+			hnswCfg.M, hnswCfg.EfConstruction, hnswCfg.EfSearch, hnswCfg.MaxLoadedIndexes)
 	}
 
 	// Create event bus. Buffer and replay capacity are read once from
@@ -397,14 +356,12 @@ func main() {
 	recallSvc.SetFusion(loadFusionConfig(context.Background(), settingsSvc))
 	recallSvc.SetWeights(loadRankingWeights(context.Background(), settingsSvc))
 
-	// Create lifecycle service for TTL expiry and purge sweeps. The orphan-
-	// grace cutoff protects in-flight enrichment from having its newly-
-	// written entity rows deleted before the matching vector upsert lands.
+	// Create lifecycle service for TTL expiry and purge sweeps. Sweep
+	// interval, batch size, and orphan-grace cutoff are all read live from
+	// the settings registry (lifecycle.* keys) so operators can tune them
+	// from the admin UI without restarting.
 	graphPruner := service.NewGraphPruner(entityRepo, relationshipRepo)
-	lifecycleCfg := service.LifecycleConfig{
-		OrphanGrace: time.Duration(cfg.EnrichmentOrphanGraceSeconds) * time.Second,
-	}
-	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, lifecycleCfg, settingsSvc)
+	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, service.LifecycleConfig{}, settingsSvc)
 	lifecycleSvc.Start()
 	defer lifecycleSvc.Stop()
 
@@ -456,6 +413,16 @@ func main() {
 
 	// Create admin store adapters.
 	setupStore := adminstore.NewSetupStore(userRepo, namespaceRepo, orgRepo, apiKeyRepo, projectRepo, db)
+
+	// Headless administrator bootstrap. When admin.email and admin.password
+	// are both supplied via config.yaml or NRAM_ADMIN_EMAIL/NRAM_ADMIN_PASS,
+	// the first administrator is created automatically — bypassing the setup
+	// wizard. After setup is complete the call is a no-op so re-running with
+	// the same env vars is safe across restarts.
+	if runHeadlessBootstrap(context.Background(), setupStore, cfg.Admin) {
+		setupChecker.MarkComplete()
+	}
+
 	orgAdminStore := adminstore.NewOrgAdminStore(orgRepo, namespaceRepo)
 	userAdminStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, namespaceRepo, orgRepo, projectRepo)
 	projectAdminStore := adminstore.NewProjectAdminStore(db, projectRepo, namespaceRepo)

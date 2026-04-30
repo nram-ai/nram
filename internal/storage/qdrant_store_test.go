@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/nram-ai/nram/internal/config"
 	"github.com/qdrant/go-client/qdrant"
 )
 
@@ -26,7 +25,7 @@ func setupQdrantTest(t *testing.T) *QdrantStore {
 
 	addr := ensureQdrantAddr(t)
 
-	store, err := NewQdrantStore(config.QdrantConfig{Addr: addr})
+	store, err := NewQdrantStore(QdrantConfig{Addr: addr})
 	if err != nil {
 		t.Fatalf("NewQdrantStore: %v", err)
 	}
@@ -351,7 +350,7 @@ func TestQdrantCollectionName(t *testing.T) {
 func TestQdrantStore_NewWithFullConfig(t *testing.T) {
 	addr := ensureQdrantAddr(t)
 
-	store, err := NewQdrantStore(config.QdrantConfig{
+	store, err := NewQdrantStore(QdrantConfig{
 		Addr:             addr,
 		PoolSize:         2,
 		KeepAliveTime:    30,
@@ -401,7 +400,7 @@ func TestQdrantStore_NewWithFullConfig(t *testing.T) {
 func TestQdrantStore_NewWithPoolSizeOne(t *testing.T) {
 	addr := ensureQdrantAddr(t)
 
-	store, err := NewQdrantStore(config.QdrantConfig{
+	store, err := NewQdrantStore(QdrantConfig{
 		Addr:     addr,
 		PoolSize: 1,
 	})
@@ -449,7 +448,7 @@ func TestQdrantStore_NewWithPoolSizeOne(t *testing.T) {
 func TestQdrantStore_NewWithKeepAliveDisabled(t *testing.T) {
 	addr := ensureQdrantAddr(t)
 
-	store, err := NewQdrantStore(config.QdrantConfig{
+	store, err := NewQdrantStore(QdrantConfig{
 		Addr:          addr,
 		KeepAliveTime: -1,
 	})
@@ -466,7 +465,7 @@ func TestQdrantStore_NewWithKeepAliveDisabled(t *testing.T) {
 func TestQdrantStore_NewWithEmptyAPIKey(t *testing.T) {
 	addr := ensureQdrantAddr(t)
 
-	store, err := NewQdrantStore(config.QdrantConfig{
+	store, err := NewQdrantStore(QdrantConfig{
 		Addr:   addr,
 		APIKey: "",
 	})

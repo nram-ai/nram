@@ -34,6 +34,12 @@ type SettingSchema struct {
 	Category        string          `json:"category"`
 	EnumValues      []string        `json:"enum_values,omitempty"`
 	RequiresRestart bool            `json:"requires_restart,omitempty"`
+	// AppliesToBackend lets the UI scope a setting to specific runtime
+	// backends. Empty (omitted) means "applies regardless of backend". When
+	// populated, the UI hides or greys the row when the active backend is
+	// not in the list. Recognized values: "sqlite", "postgres", "hnsw",
+	// "pgvector", "qdrant".
+	AppliesToBackend []string `json:"applies_to_backend,omitempty"`
 }
 
 // settingUpdateRequest is the request body for PUT /settings.

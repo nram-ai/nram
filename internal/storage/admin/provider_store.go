@@ -343,20 +343,23 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 	}, nil
 }
 
-// buildRegistryConfigFromDB reads all three provider slot settings from the
-// database and assembles a RegistryConfig for registry reload.
-func (s *ProviderAdminStore) buildRegistryConfigFromDB(ctx context.Context) provider.RegistryConfig {
+// LoadProviderRegistryConfig reads all three provider slot settings from the
+// database and assembles a RegistryConfig. Errors fetching or decoding any
+// slot are swallowed so a malformed row in one slot doesn't poison the others
+// — the affected slot stays empty (treated as unconfigured) and its provider
+// will report unavailable until it's repaired through the admin UI.
+func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.SettingsRepo) provider.RegistryConfig {
 	var cfg provider.RegistryConfig
 	slots := []struct {
 		key  string
 		dest *provider.SlotConfig
 	}{
-		{"provider.embedding", &cfg.Embedding},
-		{"provider.fact", &cfg.Fact},
-		{"provider.entity", &cfg.Entity},
+		{service.SettingProviderEmbedding, &cfg.Embedding},
+		{service.SettingProviderFact, &cfg.Fact},
+		{service.SettingProviderEntity, &cfg.Entity},
 	}
 	for _, slot := range slots {
-		setting, err := s.deps.SettingsRepo.Get(ctx, slot.key, "global")
+		setting, err := settingsRepo.Get(ctx, slot.key, "global")
 		if err != nil {
 			continue
 		}
@@ -376,6 +379,10 @@ func (s *ProviderAdminStore) buildRegistryConfigFromDB(ctx context.Context) prov
 		*slot.dest = sc
 	}
 	return cfg
+}
+
+func (s *ProviderAdminStore) buildRegistryConfigFromDB(ctx context.Context) provider.RegistryConfig {
+	return LoadProviderRegistryConfig(ctx, s.deps.SettingsRepo)
 }
 
 func (s *ProviderAdminStore) ListOllamaModels(ctx context.Context, ollamaURL string) ([]api.OllamaModel, error) {

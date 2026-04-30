@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   useSettings,
   useSettingsSchema,
+  useSetupStatus,
   useUpdateSetting,
 } from "../hooks/useApi";
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
@@ -36,6 +37,9 @@ interface ParentGroup {
   // Hide the entire parent (and its sub-sections) when enrichment is
   // unavailable. Read-path tuning stays visible regardless.
   requiresEnrichment?: boolean;
+  // Hide the entire parent unless the active database backend is in this
+  // list. Used for storage-bound knobs (HNSW only matters on SQLite).
+  requiresBackend?: string[];
   subSections: SubSection[];
 }
 
@@ -180,6 +184,14 @@ const PARENT_GROUPS: ParentGroup[] = [
     label: "Vector Database",
     description: "Connection settings for the Qdrant vector database.",
     subSections: [{ category: "qdrant" }],
+  },
+  {
+    id: "hnsw",
+    label: "Vector Index (HNSW)",
+    description:
+      "Pure-Go HNSW index used for semantic search when the database backend is SQLite. M and ef_construction are baked into each index at build time, so changes apply only to newly-built indexes; ef_search and the cache size apply at next boot.",
+    requiresBackend: ["sqlite"],
+    subSections: [{ category: "hnsw" }],
   },
   {
     id: "lifecycle",
@@ -911,14 +923,24 @@ function SettingsEditor() {
     return out;
   }, [schemas, settings]);
 
-  // Hide enrichment- and dreaming-flavoured groups when no enrichment provider
-  // is configured. Read-path tuning (recall, ranking, etc.) stays visible.
+  // The active database backend gates groups that only matter for one
+  // storage path (HNSW is SQLite-only, for instance). useSetupStatus already
+  // exposes backend and is queried elsewhere in the app, so this reuses the
+  // react-query cache. While the lookup is in flight we default to permissive
+  // — the alternative is a brief flash where applicable groups disappear.
+  const { data: setupStatus } = useSetupStatus();
+  const activeBackend = setupStatus?.backend ?? "";
+
   const visibleGroups = useMemo(
     () =>
-      enrichmentAvailable
-        ? PARENT_GROUPS
-        : PARENT_GROUPS.filter((g) => !g.requiresEnrichment),
-    [enrichmentAvailable],
+      PARENT_GROUPS.filter((g) => {
+        if (g.requiresEnrichment && !enrichmentAvailable) return false;
+        if (g.requiresBackend && activeBackend && !g.requiresBackend.includes(activeBackend)) {
+          return false;
+        }
+        return true;
+      }),
+    [enrichmentAvailable, activeBackend],
   );
 
   return (

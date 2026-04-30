@@ -33,6 +33,7 @@ import (
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
+	adminstore "github.com/nram-ai/nram/internal/storage/admin"
 )
 
 func main() {
@@ -76,14 +77,9 @@ func main() {
 	settingsRepo := storage.NewSettingsRepo(db)
 	settingsSvc := service.NewSettingsService(settingsRepo)
 
-	// Build providers from config file values. The admin UI overlays these
-	// at runtime via the settings table, but the CLI skips that overlay —
-	// operators can export live values into the config if they need them.
-	regCfg := provider.RegistryConfig{
-		Embedding: provider.SlotConfig{Type: cfg.Embed.Provider, BaseURL: cfg.Embed.URL, APIKey: cfg.Embed.Key, Model: cfg.Embed.Model},
-		Fact:      provider.SlotConfig{Type: cfg.Fact.Provider, BaseURL: cfg.Fact.URL, APIKey: cfg.Fact.Key, Model: cfg.Fact.Model},
-		Entity:    provider.SlotConfig{Type: cfg.Entity.Provider, BaseURL: cfg.Entity.URL, APIKey: cfg.Entity.Key, Model: cfg.Entity.Model},
-	}
+	// Build providers from the runtime settings registry — the same source
+	// the admin UI writes to.
+	regCfg := adminstore.LoadProviderRegistryConfig(context.Background(), settingsRepo)
 	registry, err := provider.NewRegistry(regCfg, nil, nil)
 	if err != nil {
 		log.Fatalf("provider registry init: %v", err)

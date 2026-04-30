@@ -1,26 +1,44 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// clearEnv unsets all environment variables that affect config loading.
+// clearEnv unsets every environment variable the loader touches — both the
+// supported bootstrap variables and the deprecated ones — so each test starts
+// from a clean baseline regardless of what the developer's shell exports.
 func clearEnv(t *testing.T) {
 	t.Helper()
 	vars := []string{
 		"PORT", "LOG_LEVEL", "DATABASE_URL",
 		"NRAM_CONFIG",
 		"NRAM_ADMIN_EMAIL", "NRAM_ADMIN_PASS",
-		"NRAM_EMBED_PROVIDER", "NRAM_EMBED_URL", "NRAM_EMBED_MODEL",
-		"NRAM_FACT_PROVIDER", "NRAM_FACT_KEY", "NRAM_FACT_MODEL",
-		"NRAM_ENTITY_PROVIDER", "NRAM_ENTITY_KEY", "NRAM_ENTITY_MODEL",
 	}
+	vars = append(vars, deprecatedEnvVars...)
 	for _, v := range vars {
 		t.Setenv(v, "")
 		os.Unsetenv(v)
 	}
+}
+
+// captureSlog redirects the default slog handler to a buffer for the duration
+// of the test and returns the buffer. The original handler is restored on
+// cleanup.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	buf := new(bytes.Buffer)
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})))
+	return buf
 }
 
 func TestDefaultValues(t *testing.T) {
@@ -49,6 +67,12 @@ func TestDefaultValues(t *testing.T) {
 	if !cfg.Database.MigrateOnStart {
 		t.Error("database.migrate_on_start = false, want true")
 	}
+	if cfg.Admin.Email != "" {
+		t.Errorf("admin.email = %q, want empty", cfg.Admin.Email)
+	}
+	if cfg.Admin.Password != "" {
+		t.Errorf("admin.password = %q, want empty", cfg.Admin.Password)
+	}
 }
 
 func TestYAMLFileParsing(t *testing.T) {
@@ -68,6 +92,10 @@ database:
   migrate_on_start: false
 
 log_level: debug
+
+admin:
+  email: admin@example.com
+  password: hunter2
 `
 	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0644); err != nil {
 		t.Fatalf("writing test config: %v", err)
@@ -96,6 +124,12 @@ log_level: debug
 	if cfg.Database.MigrateOnStart {
 		t.Error("database.migrate_on_start = true, want false")
 	}
+	if cfg.Admin.Email != "admin@example.com" {
+		t.Errorf("admin.email = %q, want %q", cfg.Admin.Email, "admin@example.com")
+	}
+	if cfg.Admin.Password != "hunter2" {
+		t.Errorf("admin.password = %q, want %q", cfg.Admin.Password, "hunter2")
+	}
 }
 
 func TestEnvironmentVariableOverlay(t *testing.T) {
@@ -106,15 +140,6 @@ func TestEnvironmentVariableOverlay(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://env@localhost/envdb")
 	t.Setenv("NRAM_ADMIN_EMAIL", "admin@test.com")
 	t.Setenv("NRAM_ADMIN_PASS", "secret123")
-	t.Setenv("NRAM_EMBED_PROVIDER", "ollama")
-	t.Setenv("NRAM_EMBED_URL", "http://localhost:11434")
-	t.Setenv("NRAM_EMBED_MODEL", "nomic-embed-text")
-	t.Setenv("NRAM_FACT_PROVIDER", "openai")
-	t.Setenv("NRAM_FACT_KEY", "sk-test")
-	t.Setenv("NRAM_FACT_MODEL", "gpt-4.1-nano")
-	t.Setenv("NRAM_ENTITY_PROVIDER", "gemini")
-	t.Setenv("NRAM_ENTITY_KEY", "AIza-test")
-	t.Setenv("NRAM_ENTITY_MODEL", "gemini-2.5-flash")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -136,33 +161,6 @@ func TestEnvironmentVariableOverlay(t *testing.T) {
 	if cfg.Admin.Password != "secret123" {
 		t.Errorf("admin.password = %q, want %q", cfg.Admin.Password, "secret123")
 	}
-	if cfg.Embed.Provider != "ollama" {
-		t.Errorf("embed.provider = %q, want %q", cfg.Embed.Provider, "ollama")
-	}
-	if cfg.Embed.URL != "http://localhost:11434" {
-		t.Errorf("embed.url = %q, want %q", cfg.Embed.URL, "http://localhost:11434")
-	}
-	if cfg.Embed.Model != "nomic-embed-text" {
-		t.Errorf("embed.model = %q, want %q", cfg.Embed.Model, "nomic-embed-text")
-	}
-	if cfg.Fact.Provider != "openai" {
-		t.Errorf("fact.provider = %q, want %q", cfg.Fact.Provider, "openai")
-	}
-	if cfg.Fact.Key != "sk-test" {
-		t.Errorf("fact.key = %q, want %q", cfg.Fact.Key, "sk-test")
-	}
-	if cfg.Fact.Model != "gpt-4.1-nano" {
-		t.Errorf("fact.model = %q, want %q", cfg.Fact.Model, "gpt-4.1-nano")
-	}
-	if cfg.Entity.Provider != "gemini" {
-		t.Errorf("entity.provider = %q, want %q", cfg.Entity.Provider, "gemini")
-	}
-	if cfg.Entity.Key != "AIza-test" {
-		t.Errorf("entity.key = %q, want %q", cfg.Entity.Key, "AIza-test")
-	}
-	if cfg.Entity.Model != "gemini-2.5-flash" {
-		t.Errorf("entity.model = %q, want %q", cfg.Entity.Model, "gemini-2.5-flash")
-	}
 }
 
 func TestVariableInterpolation(t *testing.T) {
@@ -171,7 +169,6 @@ func TestVariableInterpolation(t *testing.T) {
 	dir := t.TempDir()
 	yamlPath := filepath.Join(dir, "config.yaml")
 
-	// Set one env var, leave the other unset to test default fallback.
 	t.Setenv("CUSTOM_PORT", "7777")
 
 	yamlContent := `
@@ -226,7 +223,6 @@ log_level: debug
 		t.Fatalf("writing test config: %v", err)
 	}
 
-	// Set env vars that should override YAML values.
 	t.Setenv("PORT", "5555")
 	t.Setenv("LOG_LEVEL", "error")
 	t.Setenv("DATABASE_URL", "postgres://env@localhost/envdb")
@@ -236,7 +232,6 @@ log_level: debug
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Env should win over YAML.
 	if cfg.Server.Port != 5555 {
 		t.Errorf("port = %d, want %d (env should override yaml)", cfg.Server.Port, 5555)
 	}
@@ -247,7 +242,6 @@ log_level: debug
 		t.Errorf("database.url = %q, want env value (env should override yaml)", cfg.Database.URL)
 	}
 
-	// YAML value that has no env override should remain.
 	if cfg.Server.Host != "127.0.0.1" {
 		t.Errorf("host = %q, want %q (yaml value should persist)", cfg.Server.Host, "127.0.0.1")
 	}
@@ -286,7 +280,6 @@ log_level: trace
 func TestMissingConfigFileNotError(t *testing.T) {
 	clearEnv(t)
 
-	// Load with a path that does not exist — should not error, just use defaults.
 	cfg, err := Load("/nonexistent/path/config.yaml")
 	if err != nil {
 		t.Fatalf("missing config file should not cause error, got: %v", err)
@@ -300,7 +293,6 @@ func TestMissingConfigFileNotError(t *testing.T) {
 func TestConfigFileInWorkingDirectory(t *testing.T) {
 	clearEnv(t)
 
-	// Create config.yaml in a temp dir and chdir to it.
 	dir := t.TempDir()
 	yamlPath := filepath.Join(dir, "config.yaml")
 
@@ -366,6 +358,88 @@ func TestInterpolateEnvVars(t *testing.T) {
 		got := interpolateEnvVars(tt.input)
 		if got != tt.want {
 			t.Errorf("interpolateEnvVars(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestDeprecatedYAMLKeysWarn verifies that legacy top-level keys (carried
+// from the pre-cleanup config surface) produce a WARN log line and are not
+// silently applied. The cleanup explicitly excluded these from the bootstrap
+// struct; if a future change accidentally adds them back, this test fails.
+func TestDeprecatedYAMLKeysWarn(t *testing.T) {
+	clearEnv(t)
+	logs := captureSlog(t)
+
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+
+	yamlContent := `
+server:
+  port: 8674
+
+embed:
+  provider: openai
+  url: https://api.openai.com/v1
+  key: sk-deprecated
+  model: text-embedding-3-small
+
+fact:
+  provider: anthropic
+  key: sk-ant-deprecated
+
+entity:
+  provider: gemini
+  key: AIza-deprecated
+
+qdrant:
+  addr: localhost:6334
+  api_key: qdrant-deprecated
+
+hnsw:
+  m: 32
+  ef_construction: 400
+
+enrichment_orphan_grace_seconds: 7200
+`
+	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := logs.String()
+	for _, key := range deprecatedYAMLKeys {
+		if !strings.Contains(output, "key="+key) {
+			t.Errorf("expected deprecation warning mentioning key=%q, got log:\n%s", key, output)
+		}
+	}
+
+	if cfg.Server.Port != 8674 {
+		t.Errorf("supported keys should still apply: port = %d, want 8674", cfg.Server.Port)
+	}
+}
+
+// TestDeprecatedEnvVarsWarn verifies that legacy environment variables
+// produce a WARN log line at load time.
+func TestDeprecatedEnvVarsWarn(t *testing.T) {
+	clearEnv(t)
+	logs := captureSlog(t)
+
+	t.Setenv("NRAM_EMBED_PROVIDER", "openai")
+	t.Setenv("NRAM_FACT_KEY", "sk-deprecated")
+	t.Setenv("NRAM_ENRICHMENT_ORPHAN_GRACE_SECONDS", "1234")
+
+	if _, err := Load(""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := logs.String()
+	for _, name := range []string{"NRAM_EMBED_PROVIDER", "NRAM_FACT_KEY", "NRAM_ENRICHMENT_ORPHAN_GRACE_SECONDS"} {
+		if !strings.Contains(output, "env="+name) {
+			t.Errorf("expected deprecation warning for env=%q, got log:\n%s", name, output)
 		}
 	}
 }
