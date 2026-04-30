@@ -10,8 +10,10 @@ import (
 
 // AnalyticsStore abstracts retrieval of memory analytics data.
 // When orgID is non-nil, results are scoped to that organization.
+// When userID is non-nil, results are further scoped to memories owned by
+// that user (via the user's namespace path). Both nil = global.
 type AnalyticsStore interface {
-	GetAnalytics(ctx context.Context, orgID *uuid.UUID) (*AnalyticsData, error)
+	GetAnalytics(ctx context.Context, orgID *uuid.UUID, userID *uuid.UUID) (*AnalyticsData, error)
 }
 
 // AnalyticsConfig holds the dependencies for the admin analytics handler.
@@ -63,9 +65,8 @@ func NewAdminAnalyticsHandler(cfg AnalyticsConfig) http.HandlerFunc {
 			return
 		}
 
-		orgID := resolveOrgScope(r)
-
-		data, err := cfg.Store.GetAnalytics(r.Context(), orgID)
+		orgID, userID := resolveAdminScope(r, true)
+		data, err := cfg.Store.GetAnalytics(r.Context(), orgID, userID)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to retrieve analytics"))
 			return

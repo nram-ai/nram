@@ -26,7 +26,7 @@ func TestAnalyticsStoreGetAnalytics_GlobalNoData(t *testing.T) {
 	db := setupAdminTestDB(t)
 	store := NewAnalyticsStore(db)
 
-	data, err := store.GetAnalytics(context.Background(), nil)
+	data, err := store.GetAnalytics(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatalf("GetAnalytics global returned error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestAnalyticsStoreGetAnalytics_OrgScopedNoData(t *testing.T) {
 
 	orgID, _ := insertOrgWithNamespace(t, db, ctx)
 
-	data, err := store.GetAnalytics(ctx, &orgID)
+	data, err := store.GetAnalytics(ctx, &orgID, nil)
 	if err != nil {
 		t.Fatalf("GetAnalytics org-scoped returned error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestAnalyticsStoreGetAnalytics_OrgScopedWithMemories(t *testing.T) {
 		t.Fatalf("insert memory: %v", err)
 	}
 
-	data, err := store.GetAnalytics(ctx, &orgID)
+	data, err := store.GetAnalytics(ctx, &orgID, nil)
 	if err != nil {
 		t.Fatalf("GetAnalytics org-scoped with memories returned error: %v", err)
 	}
@@ -99,11 +99,107 @@ func TestAnalyticsStoreGetAnalytics_OrgScopedNoOrg(t *testing.T) {
 	// Use a random org ID that doesn't exist in the database.
 	fakeOrgID := uuid.New()
 
-	data, err := store.GetAnalytics(ctx, &fakeOrgID)
+	data, err := store.GetAnalytics(ctx, &fakeOrgID, nil)
 	if err != nil {
 		t.Fatalf("GetAnalytics with nonexistent org returned error: %v", err)
 	}
 	if data.MemoryCounts.Total != 0 {
 		t.Errorf("expected 0 total memories, got %d", data.MemoryCounts.Total)
+	}
+}
+
+// TestAnalyticsStoreGetAnalytics_UserScoped seeds two users in the same org
+// with one memory each and confirms a user-scoped query returns only that
+// user's memory, not the teammate's.
+func TestAnalyticsStoreGetAnalytics_UserScoped(t *testing.T) {
+	db := setupAdminTestDB(t)
+	store := NewAnalyticsStore(db)
+	ctx := context.Background()
+
+	orgID, orgNsID := insertOrgWithNamespace(t, db, ctx)
+
+	// Two user namespaces under the org.
+	aliceNsID := uuid.New()
+	if _, err := db.Exec(ctx,
+		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		aliceNsID.String(), "alice", "alice", "user", "test-org/alice", 1, orgNsID.String()); err != nil {
+		t.Fatalf("insert alice namespace: %v", err)
+	}
+	bobNsID := uuid.New()
+	if _, err := db.Exec(ctx,
+		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		bobNsID.String(), "bob", "bob", "user", "test-org/bob", 1, orgNsID.String()); err != nil {
+		t.Fatalf("insert bob namespace: %v", err)
+	}
+
+	aliceID := uuid.New()
+	if _, err := db.Exec(ctx,
+		"INSERT INTO users (id, email, org_id, namespace_id) VALUES (?, ?, ?, ?)",
+		aliceID.String(), "alice@test", orgID.String(), aliceNsID.String()); err != nil {
+		t.Fatalf("insert alice: %v", err)
+	}
+	bobID := uuid.New()
+	if _, err := db.Exec(ctx,
+		"INSERT INTO users (id, email, org_id, namespace_id) VALUES (?, ?, ?, ?)",
+		bobID.String(), "bob@test", orgID.String(), bobNsID.String()); err != nil {
+		t.Fatalf("insert bob: %v", err)
+	}
+
+	// One project namespace per user.
+	aliceProjNsID := uuid.New()
+	if _, err := db.Exec(ctx,
+		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		aliceProjNsID.String(), "alice-proj", "alice-proj", "project", "test-org/alice/alice-proj", 2, aliceNsID.String()); err != nil {
+		t.Fatalf("insert alice project namespace: %v", err)
+	}
+	bobProjNsID := uuid.New()
+	if _, err := db.Exec(ctx,
+		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		bobProjNsID.String(), "bob-proj", "bob-proj", "project", "test-org/bob/bob-proj", 2, bobNsID.String()); err != nil {
+		t.Fatalf("insert bob project namespace: %v", err)
+	}
+
+	// One memory per user.
+	if _, err := db.Exec(ctx,
+		"INSERT INTO memories (id, namespace_id, content, access_count) VALUES (?, ?, ?, ?)",
+		uuid.New().String(), aliceProjNsID.String(), "alice memory", 7); err != nil {
+		t.Fatalf("insert alice memory: %v", err)
+	}
+	if _, err := db.Exec(ctx,
+		"INSERT INTO memories (id, namespace_id, content, access_count) VALUES (?, ?, ?, ?)",
+		uuid.New().String(), bobProjNsID.String(), "bob memory", 3); err != nil {
+		t.Fatalf("insert bob memory: %v", err)
+	}
+
+	data, err := store.GetAnalytics(ctx, nil, &aliceID)
+	if err != nil {
+		t.Fatalf("GetAnalytics user-scoped returned error: %v", err)
+	}
+	if data.MemoryCounts.Total != 1 {
+		t.Errorf("expected 1 total memory for alice, got %d", data.MemoryCounts.Total)
+	}
+	if len(data.MostRecalled) != 1 {
+		t.Fatalf("expected 1 most recalled, got %d", len(data.MostRecalled))
+	}
+	if data.MostRecalled[0].Content != "alice memory" {
+		t.Errorf("expected alice memory, got %q", data.MostRecalled[0].Content)
+	}
+
+	// Org-scoped sees both.
+	orgData, err := store.GetAnalytics(ctx, &orgID, nil)
+	if err != nil {
+		t.Fatalf("GetAnalytics org-scoped returned error: %v", err)
+	}
+	if orgData.MemoryCounts.Total != 2 {
+		t.Errorf("expected 2 org memories, got %d", orgData.MemoryCounts.Total)
+	}
+
+	// Global sees both.
+	globalData, err := store.GetAnalytics(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("GetAnalytics global returned error: %v", err)
+	}
+	if globalData.MemoryCounts.Total != 2 {
+		t.Errorf("expected 2 global memories, got %d", globalData.MemoryCounts.Total)
 	}
 }

@@ -9,17 +9,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
 
 // --- mock analytics store ---
 
 type mockAnalyticsStore struct {
-	data *AnalyticsData
-	err  error
+	data       *AnalyticsData
+	err        error
+	lastOrgID  *uuid.UUID
+	lastUserID *uuid.UUID
 }
 
-func (m *mockAnalyticsStore) GetAnalytics(_ context.Context, _ *uuid.UUID) (*AnalyticsData, error) {
+func (m *mockAnalyticsStore) GetAnalytics(_ context.Context, orgID *uuid.UUID, userID *uuid.UUID) (*AnalyticsData, error) {
+	m.lastOrgID = orgID
+	m.lastUserID = userID
 	return m.data, m.err
 }
 
@@ -250,5 +256,127 @@ func TestAdminAnalytics_WrongMethod(t *testing.T) {
 		if resp.Error.Message != "method not allowed" {
 			t.Errorf("%s: expected message 'method not allowed', got %q", method, resp.Error.Message)
 		}
+	}
+}
+
+// TestAdminAnalytics_RoleTiers exercises the same three-tier scope rule used
+// by the usage handler, but applied to memory analytics.
+func TestAdminAnalytics_RoleTiers(t *testing.T) {
+	adminOrg := uuid.New()
+	otherOrg := uuid.New()
+	adminUser := uuid.New()
+	ownerOrg := uuid.New()
+	ownerUser := uuid.New()
+	memberOrg := uuid.New()
+	memberUser := uuid.New()
+	drillUser := uuid.New()
+
+	cases := []struct {
+		name           string
+		auth           *auth.AuthContext
+		urlOrgID       string
+		query          string
+		wantOrgID      *uuid.UUID
+		wantUserID     *uuid.UUID
+		wantOrgIDIsNil bool
+	}{
+		{
+			name:           "admin no filter is global",
+			auth:           &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			wantOrgIDIsNil: true,
+		},
+		{
+			name:      "admin org query drills in",
+			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			query:     "org=" + otherOrg.String(),
+			wantOrgID: &otherOrg,
+		},
+		{
+			name:       "admin org and user drill",
+			auth:       &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			query:      "org=" + otherOrg.String() + "&user=" + drillUser.String(),
+			wantOrgID:  &otherOrg,
+			wantUserID: &drillUser,
+		},
+		{
+			name:      "admin URL path overrides query",
+			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			urlOrgID:  otherOrg.String(),
+			query:     "org=" + adminOrg.String(),
+			wantOrgID: &otherOrg,
+		},
+		{
+			name:      "org_owner widening attempt blocked",
+			auth:      &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
+			query:     "org=" + otherOrg.String(),
+			wantOrgID: &ownerOrg,
+		},
+		{
+			name:       "org_owner user drill",
+			auth:       &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
+			query:      "user=" + drillUser.String(),
+			wantOrgID:  &ownerOrg,
+			wantUserID: &drillUser,
+		},
+		{
+			name:       "member pinned to self ignores widening",
+			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleMember},
+			query:      "org=" + otherOrg.String() + "&user=" + drillUser.String(),
+			wantOrgID:  &memberOrg,
+			wantUserID: &memberUser,
+		},
+		{
+			name:       "readonly pinned to self",
+			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleReadonly},
+			wantOrgID:  &memberOrg,
+			wantUserID: &memberUser,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockAnalyticsStore{data: &AnalyticsData{}}
+			h := NewAdminAnalyticsHandler(AnalyticsConfig{Store: store})
+
+			url := "/v1/admin/analytics"
+			if tc.query != "" {
+				url += "?" + tc.query
+			}
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			ctx := auth.WithContext(req.Context(), tc.auth)
+			if tc.urlOrgID != "" {
+				rctx := chi.NewRouteContext()
+				rctx.URLParams.Add("org_id", tc.urlOrgID)
+				ctx = context.WithValue(ctx, chi.RouteCtxKey, rctx)
+			}
+			req = req.WithContext(ctx)
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+
+			if tc.wantOrgIDIsNil {
+				if store.lastOrgID != nil {
+					t.Errorf("expected OrgID nil (global), got %v", store.lastOrgID)
+				}
+			} else if tc.wantOrgID != nil {
+				if store.lastOrgID == nil || *store.lastOrgID != *tc.wantOrgID {
+					t.Errorf("expected OrgID %v, got %v", tc.wantOrgID, store.lastOrgID)
+				}
+			}
+
+			if tc.wantUserID == nil {
+				if store.lastUserID != nil {
+					t.Errorf("expected UserID nil, got %v", store.lastUserID)
+				}
+			} else {
+				if store.lastUserID == nil || *store.lastUserID != *tc.wantUserID {
+					t.Errorf("expected UserID %v, got %v", tc.wantUserID, store.lastUserID)
+				}
+			}
+		})
 	}
 }

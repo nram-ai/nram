@@ -41,7 +41,7 @@ func (s *rrDashboardStore) RecentActivity(_ context.Context, _ int, _ *uuid.UUID
 
 type rrAnalyticsStore struct{}
 
-func (s *rrAnalyticsStore) GetAnalytics(_ context.Context, _ *uuid.UUID) (*api.AnalyticsData, error) {
+func (s *rrAnalyticsStore) GetAnalytics(_ context.Context, _ *uuid.UUID, _ *uuid.UUID) (*api.AnalyticsData, error) {
 	return &api.AnalyticsData{}, nil
 }
 

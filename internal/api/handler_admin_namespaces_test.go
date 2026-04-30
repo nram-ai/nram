@@ -8,17 +8,21 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
 
 // --- mock dependencies ---
 
 type mockNamespaceStore struct {
-	tree []NamespaceNode
-	err  error
+	tree      []NamespaceNode
+	err       error
+	lastOrgID *uuid.UUID
 }
 
-func (m *mockNamespaceStore) GetNamespaceTree(_ context.Context, _ *uuid.UUID) ([]NamespaceNode, error) {
+func (m *mockNamespaceStore) GetNamespaceTree(_ context.Context, orgID *uuid.UUID) ([]NamespaceNode, error) {
+	m.lastOrgID = orgID
 	return m.tree, m.err
 }
 
@@ -225,5 +229,91 @@ func TestAdminNamespacesTreeWrongMethod(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("%s: expected 400, got %d", method, w.Code)
 		}
+	}
+}
+
+// TestAdminNamespacesTreeRoleTiers exercises the same scope rule as
+// /v1/dashboard and /v1/activity: admins see the global tree by default;
+// non-admins see only their own org's subtree.
+func TestAdminNamespacesTreeRoleTiers(t *testing.T) {
+	adminOrg := uuid.New()
+	otherOrg := uuid.New()
+	adminUser := uuid.New()
+	ownerOrg := uuid.New()
+	ownerUser := uuid.New()
+	memberOrg := uuid.New()
+	memberUser := uuid.New()
+
+	cases := []struct {
+		name           string
+		auth           *auth.AuthContext
+		urlOrgID       string
+		query          string
+		wantOrgID      *uuid.UUID
+		wantOrgIDIsNil bool
+	}{
+		{
+			name:           "admin no filter is global",
+			auth:           &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			wantOrgIDIsNil: true,
+		},
+		{
+			name:      "admin org query drills in",
+			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			query:     "org=" + otherOrg.String(),
+			wantOrgID: &otherOrg,
+		},
+		{
+			name:      "admin URL path drills in",
+			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			urlOrgID:  otherOrg.String(),
+			wantOrgID: &otherOrg,
+		},
+		{
+			name:      "org_owner widening attempt blocked",
+			auth:      &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
+			query:     "org=" + otherOrg.String(),
+			wantOrgID: &ownerOrg,
+		},
+		{
+			name:      "member pinned to own org",
+			auth:      &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleMember},
+			wantOrgID: &memberOrg,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockNamespaceStore{tree: []NamespaceNode{}}
+			h := NewAdminNamespacesHandler(NamespaceAdminConfig{Store: store})
+
+			url := "/v1/namespaces/tree"
+			if tc.query != "" {
+				url += "?" + tc.query
+			}
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			ctx := auth.WithContext(req.Context(), tc.auth)
+			if tc.urlOrgID != "" {
+				rctx := chi.NewRouteContext()
+				rctx.URLParams.Add("org_id", tc.urlOrgID)
+				ctx = context.WithValue(ctx, chi.RouteCtxKey, rctx)
+			}
+			req = req.WithContext(ctx)
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+
+			if tc.wantOrgIDIsNil {
+				if store.lastOrgID != nil {
+					t.Errorf("expected OrgID nil (global), got %v", store.lastOrgID)
+				}
+			} else if store.lastOrgID == nil || *store.lastOrgID != *tc.wantOrgID {
+				t.Errorf("expected OrgID %v, got %v", tc.wantOrgID, store.lastOrgID)
+			}
+		})
 	}
 }

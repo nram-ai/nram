@@ -1134,7 +1134,13 @@ export const adminAPI = {
     ),
 
   // Analytics
-  getAnalytics: () => request<AnalyticsData>("GET", "/analytics"),
+  getAnalytics: (params?: { org?: string; user?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.org) sp.set("org", params.org);
+    if (params?.user) sp.set("user", params.user);
+    const qs = sp.toString();
+    return request<AnalyticsData>("GET", `/analytics${qs ? `?${qs}` : ""}`);
+  },
   getUsage: (params?: { org?: string; user?: string; project?: string; from?: string; to?: string; group_by?: UsageGroupBy; success_only?: boolean }) => {
     const sp = new URLSearchParams();
     if (params?.org) sp.set("org", params.org);

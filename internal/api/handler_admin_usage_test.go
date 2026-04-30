@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 )
@@ -104,8 +105,6 @@ func TestAdminUsageAllFilters(t *testing.T) {
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
-	// Admin can filter by project, from, to, group_by.
-	// ?org= and ?user= are no longer accepted (admins are org-scoped via auth context).
 	url := "/v1/admin/usage?" +
 		"project=" + projectID.String() +
 		"&from=" + from.Format(time.RFC3339) +
@@ -113,7 +112,7 @@ func TestAdminUsageAllFilters(t *testing.T) {
 		"&group_by=user"
 
 	req := httptest.NewRequest(http.MethodGet, url, nil)
-	// Admin with org — scoped to their own org automatically.
+	// Administrator with no ?org= or URL path — global scope (OrgID nil).
 	ac := &auth.AuthContext{UserID: uuid.New(), OrgID: orgID, Role: auth.RoleAdministrator}
 	req = req.WithContext(auth.WithContext(req.Context(), ac))
 	w := httptest.NewRecorder()
@@ -123,8 +122,8 @@ func TestAdminUsageAllFilters(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != orgID {
-		t.Errorf("expected OrgID %s (from auth context), got %v", orgID, store.lastFilter.OrgID)
+	if store.lastFilter.OrgID != nil {
+		t.Errorf("expected nil OrgID for admin without ?org=, got %v", store.lastFilter.OrgID)
 	}
 	if store.lastFilter.UserID != nil {
 		t.Errorf("expected nil UserID for admin, got %v", store.lastFilter.UserID)
@@ -285,6 +284,137 @@ func TestAdminUsageFromToDates(t *testing.T) {
 	// Default group_by.
 	if store.lastFilter.GroupBy != "operation" {
 		t.Errorf("expected group_by operation, got %q", store.lastFilter.GroupBy)
+	}
+}
+
+// TestAdminUsageRoleTiers exercises the three-tier scope rule:
+//
+//   - administrator: global by default; URL path > ?org= drills in; ?user= drills further.
+//   - org_owner: pinned to own org (cannot widen); ?user= optionally drills into one user.
+//   - member/readonly/service: pinned to own org and own user (widening attempts ignored).
+func TestAdminUsageRoleTiers(t *testing.T) {
+	adminOrg := uuid.New()
+	otherOrg := uuid.New()
+	adminUser := uuid.New()
+	ownerOrg := uuid.New()
+	ownerUser := uuid.New()
+	memberOrg := uuid.New()
+	memberUser := uuid.New()
+	drillUser := uuid.New()
+
+	cases := []struct {
+		name           string
+		auth           *auth.AuthContext
+		urlOrgID       string // injected as chi URL param when non-empty
+		query          string
+		wantOrgID      *uuid.UUID
+		wantUserID     *uuid.UUID
+		wantOrgIDIsNil bool
+	}{
+		{
+			name:           "admin no filter is global",
+			auth:           &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			wantOrgIDIsNil: true,
+		},
+		{
+			name:      "admin org query drills in",
+			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			query:     "org=" + otherOrg.String(),
+			wantOrgID: &otherOrg,
+		},
+		{
+			name:       "admin org and user drill",
+			auth:       &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			query:      "org=" + otherOrg.String() + "&user=" + drillUser.String(),
+			wantOrgID:  &otherOrg,
+			wantUserID: &drillUser,
+		},
+		{
+			name:      "admin URL path overrides query",
+			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
+			urlOrgID:  otherOrg.String(),
+			query:     "org=" + adminOrg.String(),
+			wantOrgID: &otherOrg,
+		},
+		{
+			name:      "org_owner widening attempt blocked",
+			auth:      &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
+			query:     "org=" + otherOrg.String(),
+			wantOrgID: &ownerOrg,
+		},
+		{
+			name:       "org_owner user drill",
+			auth:       &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
+			query:      "user=" + drillUser.String(),
+			wantOrgID:  &ownerOrg,
+			wantUserID: &drillUser,
+		},
+		{
+			name:       "member pinned to self ignores widening",
+			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleMember},
+			query:      "org=" + otherOrg.String() + "&user=" + drillUser.String(),
+			wantOrgID:  &memberOrg,
+			wantUserID: &memberUser,
+		},
+		{
+			name:       "readonly pinned to self",
+			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleReadonly},
+			wantOrgID:  &memberOrg,
+			wantUserID: &memberUser,
+		},
+		{
+			name:       "service pinned to self",
+			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleService},
+			wantOrgID:  &memberOrg,
+			wantUserID: &memberUser,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockUsageStore{report: defaultUsageReport()}
+			h := NewAdminUsageHandler(UsageConfig{Store: store})
+
+			url := "/v1/admin/usage"
+			if tc.query != "" {
+				url += "?" + tc.query
+			}
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			ctx := auth.WithContext(req.Context(), tc.auth)
+			if tc.urlOrgID != "" {
+				rctx := chi.NewRouteContext()
+				rctx.URLParams.Add("org_id", tc.urlOrgID)
+				ctx = context.WithValue(ctx, chi.RouteCtxKey, rctx)
+			}
+			req = req.WithContext(ctx)
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+
+			if tc.wantOrgIDIsNil {
+				if store.lastFilter.OrgID != nil {
+					t.Errorf("expected OrgID nil (global), got %v", store.lastFilter.OrgID)
+				}
+			} else if tc.wantOrgID != nil {
+				if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != *tc.wantOrgID {
+					t.Errorf("expected OrgID %v, got %v", tc.wantOrgID, store.lastFilter.OrgID)
+				}
+			}
+
+			if tc.wantUserID == nil {
+				if store.lastFilter.UserID != nil {
+					t.Errorf("expected UserID nil, got %v", store.lastFilter.UserID)
+				}
+			} else {
+				if store.lastFilter.UserID == nil || *store.lastFilter.UserID != *tc.wantUserID {
+					t.Errorf("expected UserID %v, got %v", tc.wantUserID, store.lastFilter.UserID)
+				}
+			}
+		})
 	}
 }
 

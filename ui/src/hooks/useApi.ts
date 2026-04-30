@@ -511,10 +511,11 @@ export function useTestWebhook() {
 
 // --- Analytics ---
 
-export function useAnalytics() {
+export function useAnalytics(params?: Parameters<typeof adminAPI.getAnalytics>[0]) {
   return useQuery({
-    queryKey: ["admin", "analytics"],
-    queryFn: adminAPI.getAnalytics,
+    queryKey: ["admin", "analytics", params ?? {}],
+    queryFn: () => adminAPI.getAnalytics(params),
+    staleTime: 30_000,
   });
 }
 

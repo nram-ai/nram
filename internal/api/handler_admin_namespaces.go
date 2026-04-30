@@ -44,7 +44,7 @@ func NewAdminNamespacesHandler(cfg NamespaceAdminConfig) http.HandlerFunc {
 			return
 		}
 
-		orgID := resolveOrgScope(r)
+		orgID, _ := resolveAdminScope(r, false)
 
 		nodes, err := cfg.Store.GetNamespaceTree(r.Context(), orgID)
 		if err != nil {

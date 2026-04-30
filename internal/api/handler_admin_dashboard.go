@@ -6,9 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/nram-ai/nram/internal/auth"
 )
 
 // DashboardStore abstracts storage operations for dashboard/activity.
@@ -65,7 +63,7 @@ type DashboardConfig struct {
 // provider health, and queue depth.
 func NewAdminDashboardHandler(cfg DashboardConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		orgID := resolveOrgScope(r)
+		orgID, _ := resolveAdminScope(r, false)
 
 		stats, err := cfg.Store.DashboardStats(r.Context(), orgID)
 		if err != nil {
@@ -79,20 +77,6 @@ func NewAdminDashboardHandler(cfg DashboardConfig) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, stats)
 	}
-}
-
-// resolveOrgScope determines the org scope for a request.
-// If an {org_id} URL param is present it takes precedence; otherwise
-// scope is derived from the authenticated user's context.
-func resolveOrgScope(r *http.Request) *uuid.UUID {
-	if urlOrgID := chi.URLParam(r, "org_id"); urlOrgID != "" {
-		if id, err := uuid.Parse(urlOrgID); err == nil {
-			return &id
-		}
-	}
-	ac := auth.FromContext(r.Context())
-	scope := ScopeFromAuth(ac)
-	return scope.OrgID
 }
 
 const (
@@ -118,7 +102,7 @@ func NewAdminActivityHandler(cfg DashboardConfig) http.HandlerFunc {
 			limit = maxActivityLimit
 		}
 
-		orgID := resolveOrgScope(r)
+		orgID, _ := resolveAdminScope(r, false)
 
 		events, err := cfg.Store.RecentActivity(r.Context(), limit, orgID)
 		if err != nil {

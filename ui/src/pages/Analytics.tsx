@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
-import { useAnalytics, useUsage } from "../hooks/useApi";
-import type { AnalyticsData, UsageReport, MemoryRankItem, UsageGroup, UsageGroupBy } from "../api/client";
+import { useAnalytics, useUsage, useOrgs, useOrgUsers } from "../hooks/useApi";
+import { useAuth } from "../context/AuthContext";
+import type { AnalyticsData, Organization, User, UsageReport, MemoryRankItem, UsageGroup, UsageGroupBy } from "../api/client";
 import {
   BarChart,
   Bar,
@@ -602,6 +603,14 @@ function UsageControls({
   to,
   setFrom,
   setTo,
+  org,
+  setOrg,
+  user,
+  setUser,
+  showOrgFilter,
+  showUserFilter,
+  orgs,
+  users,
 }: {
   groupBy: UsageGroupBy;
   setGroupBy: (v: UsageGroupBy) => void;
@@ -611,6 +620,14 @@ function UsageControls({
   to: string;
   setFrom: (v: string) => void;
   setTo: (v: string) => void;
+  org?: string;
+  setOrg?: (v: string | undefined) => void;
+  user?: string;
+  setUser?: (v: string | undefined) => void;
+  showOrgFilter?: boolean;
+  showUserFilter?: boolean;
+  orgs?: Organization[];
+  users?: User[];
 }) {
   // Pending input state for the datetime fields. Committing to from/to on
   // every keystroke would refetch on every step of the spinner; commit on
@@ -676,6 +693,47 @@ function UsageControls({
             <option value="false">Errors only</option>
           </select>
         </div>
+
+        {showOrgFilter && setOrg && (
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground">
+              Organization
+            </label>
+            <select
+              value={org ?? ""}
+              onChange={(e) => setOrg(e.target.value || undefined)}
+              className="mt-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
+            >
+              <option value="">All organizations</option>
+              {(orgs ?? []).map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {showUserFilter && setUser && (
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground">
+              User
+            </label>
+            <select
+              value={user ?? ""}
+              onChange={(e) => setUser(e.target.value || undefined)}
+              className="mt-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
+              disabled={!users || users.length === 0}
+            >
+              <option value="">All users</option>
+              {(users ?? []).map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.display_name || u.email}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div>
           <label className="block text-xs font-medium text-muted-foreground">
@@ -947,18 +1005,36 @@ function CostRateEditor({
 // ---------------------------------------------------------------------------
 
 function Analytics() {
-  const analytics = useAnalytics();
+  const auth = useAuth();
 
   const [groupBy, setGroupBy] = useState<UsageGroupBy>("operation");
   const [successFilter, setSuccessFilter] = useState<boolean | undefined>(undefined);
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
+  const [org, setOrgState] = useState<string | undefined>(undefined);
+  const [user, setUser] = useState<string | undefined>(undefined);
 
+  // Switching org invalidates the previously selected user (different org's
+  // user list). Reset both atomically.
+  const setOrg = useCallback((next: string | undefined) => {
+    setOrgState(next);
+    setUser(undefined);
+  }, []);
+
+  const orgsQuery = useOrgs(auth.isAdmin);
+  // Admin's user dropdown follows the selected org; org_owner's follows their
+  // own org. Listing users across every org is intentionally out of scope.
+  const userOrgId = auth.isAdmin ? org : auth.user?.org_id;
+  const usersQuery = useOrgUsers(userOrgId ?? "");
+
+  const analytics = useAnalytics({ org, user });
   const usage = useUsage({
     group_by: groupBy,
     success_only: successFilter,
     from: from || undefined,
     to: to || undefined,
+    org,
+    user,
   });
 
   const [costRates, setCostRates] = useState<CostRate[]>(loadCostRates);
@@ -985,14 +1061,23 @@ function Analytics() {
     usage.refetch();
   }
 
+  const title = auth.isAdmin
+    ? "System Analytics"
+    : auth.isOrgOwner
+      ? "Organization Analytics"
+      : "Your Analytics";
+  const subtitle = auth.isAdmin
+    ? "Memory analytics, token usage, and billing across all organizations."
+    : auth.isOrgOwner
+      ? "Memory analytics, token usage, and billing for your organization."
+      : "Your memory analytics and token usage.";
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Memory analytics, usage metrics, and billing estimation.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
       </div>
 
       {hasError && <ErrorBanner message={errorMessage} onRetry={handleRetry} />}
@@ -1009,11 +1094,15 @@ function Analytics() {
           isLoading={analytics.isLoading}
         />
 
-        {/* Enrichment Stats */}
-        <EnrichmentStatsCards
-          data={analyticsData}
-          isLoading={analytics.isLoading}
-        />
+        {/* Enrichment stats are global by nature; the queue table has no
+            per-org or per-user attribution, so only show this card to admins
+            (who get the global rollup). */}
+        {auth.isAdmin && (
+          <EnrichmentStatsCards
+            data={analyticsData}
+            isLoading={analytics.isLoading}
+          />
+        )}
 
         {/* Most Recalled and Least Recalled */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -1057,6 +1146,15 @@ function Analytics() {
           to={to}
           setFrom={setFrom}
           setTo={setTo}
+          org={org}
+          setOrg={setOrg}
+          user={user}
+          setUser={setUser}
+          showOrgFilter={auth.isAdmin}
+          // isOrgOwner is true for admins too, so the role branch is explicit.
+          showUserFilter={auth.isAdmin ? !!org : auth.isOrgOwner}
+          orgs={orgsQuery.data}
+          users={usersQuery.data}
         />
 
         {/* Summary cards */}

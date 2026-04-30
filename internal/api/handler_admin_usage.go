@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nram-ai/nram/internal/auth"
 )
 
 // UsageStore abstracts access to token usage aggregation queries.
@@ -81,20 +80,9 @@ func NewAdminUsageHandler(cfg UsageConfig) http.HandlerFunc {
 
 		var filter UsageFilter
 
-		// Determine scope. Start with the org from URL param or auth context
-		// (resolveOrgScope handles both). Then apply role-based restrictions.
-		ac := auth.FromContext(r.Context())
-		scope := ScopeFromAuth(ac)
+		filter.OrgID, filter.UserID = resolveAdminScope(r, true)
 
-		// All roles are org-scoped via resolveOrgScope (which uses ScopeFromAuth).
-		filter.OrgID = resolveOrgScope(r)
-
-		// Non-admin member/readonly/service: also restricted to own user.
-		if !scope.IsAdmin {
-			filter.UserID = scope.UserID
-		}
-
-		// Project filter allowed for all roles within their org scope.
+		// Project filter allowed for all roles within their resolved scope.
 		if raw := q.Get("project"); raw != "" {
 			if id, err := uuid.Parse(raw); err == nil {
 				filter.ProjectID = &id
