@@ -1914,3 +1914,69 @@ func TestClusterFingerprint_DiffersOnMembershipChange(t *testing.T) {
 		t.Errorf("adding a member must change the fingerprint; abc=%q abcd=%q", abc, abcd)
 	}
 }
+
+// TestStampConsolidateLoad_WritesStampPerMember confirms the load stamp is
+// applied to every loaded memory, anchored to that memory's own UpdatedAt
+// and persisted via UpdateMetadata (which preserves UpdatedAt).
+func TestStampConsolidateLoad_WritesStampPerMember(t *testing.T) {
+	writer := &updatingMemoryWriter{}
+	phase := NewConsolidationPhase(
+		&fakeMemoryReader{},
+		writer,
+		stubLineageWriter{},
+		func() provider.LLMProvider { return nil },
+		func() provider.EmbeddingProvider { return nil },
+		noveltySettings(false),
+	)
+
+	ns := uuid.New()
+	now := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
+	members := []model.Memory{
+		{ID: uuid.New(), NamespaceID: ns, Content: "a", UpdatedAt: now.Add(-2 * time.Hour), Metadata: json.RawMessage(`{}`)},
+		{ID: uuid.New(), NamespaceID: ns, Content: "b", UpdatedAt: now.Add(-1 * time.Hour), Metadata: json.RawMessage(`{"existing":"keep"}`)},
+		{ID: uuid.New(), NamespaceID: ns, Content: "c (deleted)", UpdatedAt: now, Metadata: json.RawMessage(`{}`)},
+	}
+	deletedAt := now
+	members[2].DeletedAt = &deletedAt
+
+	phase.stampConsolidateLoad(context.Background(), members)
+
+	// Soft-deleted members are skipped: 3 members → 2 stamp writes.
+	if len(writer.metadataUpdates) != 2 {
+		t.Fatalf("expected 2 UpdateMetadata calls (soft-deleted skipped), got %d", len(writer.metadataUpdates))
+	}
+
+	// Each stamp must:
+	//   * carry ConsolidationLoadCheckedStampKey equal to the member's UpdatedAt in RFC3339Nano
+	//   * preserve any pre-existing metadata fields
+	for i, rec := range writer.metadataUpdates {
+		idx := i // first two members; deleted member is skipped
+		var meta map[string]interface{}
+		if err := json.Unmarshal(rec.Metadata, &meta); err != nil {
+			t.Fatalf("write %d: unmarshal: %v", i, err)
+		}
+		stampVal, ok := meta[ConsolidationLoadCheckedStampKey].(string)
+		if !ok {
+			t.Fatalf("write %d: stamp missing or wrong type: %#v", i, meta[ConsolidationLoadCheckedStampKey])
+		}
+		want := members[idx].UpdatedAt.UTC().Format(time.RFC3339Nano)
+		if stampVal != want {
+			t.Errorf("write %d: stamp %q != updated_at %q", i, stampVal, want)
+		}
+		if rec.ID != members[idx].ID {
+			t.Errorf("write %d: target ID %s != member ID %s", i, rec.ID, members[idx].ID)
+		}
+		if rec.NamespaceID != ns {
+			t.Errorf("write %d: namespace %s != %s", i, rec.NamespaceID, ns)
+		}
+	}
+
+	// The 'b' member's existing key must survive the stamp write.
+	var bMeta map[string]interface{}
+	if err := json.Unmarshal(writer.metadataUpdates[1].Metadata, &bMeta); err != nil {
+		t.Fatalf("unmarshal b: %v", err)
+	}
+	if bMeta["existing"] != "keep" {
+		t.Errorf("existing metadata fields must survive stamp; got %#v", bMeta["existing"])
+	}
+}

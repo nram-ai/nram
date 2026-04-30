@@ -120,6 +120,24 @@ const (
 	SettingDreamParaphraseCapPerCycle = "dreaming.paraphrase.cap_per_cycle"
 	SettingDreamParaphraseTopK        = "dreaming.paraphrase.top_k"
 
+	// Per-cycle stale-fetch caps for the three dream phases that load
+	// candidate pools via the SQL-level stale predicate. Caps the maximum
+	// number of stale rows the phase pulls into memory in a single cycle
+	// so working-set size is bounded by setting rather than by namespace
+	// size. When stale row count exceeds the cap, the phase processes the
+	// oldest-stale subset and reports residual=true so the next cycle
+	// drains the rest.
+	SettingDreamParaphraseStaleFetchMax    = "dreaming.paraphrase.stale_fetch_max"
+	SettingDreamConsolidationStaleFetchMax = "dreaming.consolidation.stale_fetch_max"
+	SettingDreamContradictionStaleFetchMax = "dreaming.contradiction.stale_fetch_max"
+
+	// Pruning phase streaming chunk. Pruning processes the namespace one
+	// batch at a time (not stamp-driven) because it has zero LLM cost and
+	// must visit every memory each cycle for confidence decay. This
+	// controls the per-batch row count: lower values reduce per-batch
+	// memory at the cost of more transactions per cycle.
+	SettingDreamPruningBatchSize = "dreaming.pruning.batch_size"
+
 	// Embedding-backfill phase: scans for memories whose embedding_dim is
 	// recorded but whose corresponding memory_vectors_<dim> row is missing
 	// (the no_vector divergence the paraphrase phase observes), then either
@@ -396,6 +414,11 @@ alignment must be a float:
 	SettingDreamParaphraseThreshold:   "0.97",
 	SettingDreamParaphraseCapPerCycle: "500",
 	SettingDreamParaphraseTopK:        "5",
+
+	SettingDreamParaphraseStaleFetchMax:    "10000",
+	SettingDreamConsolidationStaleFetchMax: "10000",
+	SettingDreamContradictionStaleFetchMax: "10000",
+	SettingDreamPruningBatchSize:           "1000",
 
 	SettingMemorySoftDeleteRetentionDays: "30",
 

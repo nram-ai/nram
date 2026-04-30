@@ -1365,3 +1365,186 @@ func TestMemoryRepo_SearchByText(t *testing.T) {
 		_ = otherNsID2
 	})
 }
+
+// TestMemoryRepo_ListByNamespaceStale exercises the SQL-level stale filter
+// that drives dreaming-phase candidate selection. Asserts: missing-stamp
+// rows are stale, fresh-stamped rows are skipped, stale-stamped rows
+// (stamp < updated_at) are returned, oldest-updated_at first, limit is
+// honored, and stamps are scoped per-key (paraphrase vs contradictions
+// don't cross-pollute). Runs against both SQLite and Postgres via
+// forEachDB.
+func TestMemoryRepo_ListByNamespaceStale(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		const paraphraseKey = "paraphrase_checked_at"
+		const contradictionKey = "contradictions_checked_at"
+
+		// Fixed reference time so updated_at and stamps are deterministic
+		// across backends. RFC3339 second-precision because Postgres
+		// timestamptz parses strings written via Format(RFC3339).
+		now := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
+
+		create := func(label string, updatedAt time.Time, metadata string) *model.Memory {
+			t.Helper()
+			mem := &model.Memory{
+				NamespaceID: nsID,
+				Content:     label,
+				Confidence:  1.0,
+				Importance:  0.5,
+				CreatedAt:   updatedAt.Add(-1 * time.Hour),
+				UpdatedAt:   updatedAt,
+				Metadata:    json.RawMessage(metadata),
+			}
+			if err := repo.Create(ctx, mem); err != nil {
+				t.Fatalf("create %s: %v", label, err)
+			}
+			return mem
+		}
+
+		// older-tail row, no stamp → stale (oldest updated_at)
+		oldest := create("oldest_unstamped", now.Add(-72*time.Hour), `{}`)
+
+		// older row with FRESH stamp (stamp >= updated_at) → not stale
+		fresh1Stamp := now.Add(-48 * time.Hour).UTC().Format(time.RFC3339Nano)
+		_ = create("fresh_stamped",
+			now.Add(-48*time.Hour),
+			`{"`+paraphraseKey+`":"`+fresh1Stamp+`"}`)
+
+		// row with STALE stamp (stamp < updated_at) → stale
+		staleStamp := now.Add(-30 * time.Hour).UTC().Format(time.RFC3339Nano)
+		stale := create("stale_stamped",
+			now.Add(-24*time.Hour),
+			`{"`+paraphraseKey+`":"`+staleStamp+`"}`)
+
+		// row stamped only under a DIFFERENT key → stale for paraphrase
+		// (other-key stamp doesn't satisfy the predicate)
+		otherKeyStamp := now.UTC().Format(time.RFC3339Nano)
+		otherKey := create("other_key_only",
+			now.Add(-12*time.Hour),
+			`{"`+contradictionKey+`":"`+otherKeyStamp+`"}`)
+
+		// newest row, no stamp → stale but later in ORDER BY
+		newest := create("newest_unstamped", now.Add(-1*time.Hour), `{}`)
+
+		// soft-deleted row, no stamp → must be excluded
+		softDel := create("soft_deleted", now.Add(-2*time.Hour), `{}`)
+		if err := repo.SoftDelete(ctx, softDel.ID, nsID); err != nil {
+			t.Fatalf("soft delete: %v", err)
+		}
+
+		// Empty stamp key → error.
+		if _, err := repo.ListByNamespaceStale(ctx, nsID, "", 100); err == nil {
+			t.Fatal("expected error on empty stamp key")
+		}
+
+		// Paraphrase stamp lookup.
+		got, err := repo.ListByNamespaceStale(ctx, nsID, paraphraseKey, 100)
+		if err != nil {
+			t.Fatalf("ListByNamespaceStale paraphrase: %v", err)
+		}
+
+		gotIDs := make([]uuid.UUID, len(got))
+		for i := range got {
+			gotIDs[i] = got[i].ID
+		}
+
+		wantSet := map[uuid.UUID]bool{
+			oldest.ID:   true,
+			stale.ID:    true,
+			otherKey.ID: true,
+			newest.ID:   true,
+		}
+		if len(got) != len(wantSet) {
+			t.Fatalf("paraphrase stale: expected %d rows, got %d (%v)", len(wantSet), len(got), gotIDs)
+		}
+		for _, id := range gotIDs {
+			if !wantSet[id] {
+				t.Errorf("paraphrase stale: unexpected row %s in result", id)
+			}
+		}
+
+		// Oldest updated_at first.
+		if len(gotIDs) >= 2 && gotIDs[0] != oldest.ID {
+			t.Errorf("ordering: expected oldest_unstamped first, got %s", gotIDs[0])
+		}
+		if len(gotIDs) >= 1 && gotIDs[len(gotIDs)-1] != newest.ID {
+			t.Errorf("ordering: expected newest_unstamped last, got %s", gotIDs[len(gotIDs)-1])
+		}
+
+		// Limit honored.
+		limited, err := repo.ListByNamespaceStale(ctx, nsID, paraphraseKey, 2)
+		if err != nil {
+			t.Fatalf("ListByNamespaceStale limit: %v", err)
+		}
+		if len(limited) != 2 {
+			t.Fatalf("limit=2: expected 2 rows, got %d", len(limited))
+		}
+		if limited[0].ID != oldest.ID {
+			t.Errorf("limit ordering: expected oldest first, got %s", limited[0].ID)
+		}
+	})
+}
+
+// TestMemoryRepo_ListByNamespaceStale_AllStamped covers the convergence
+// state where every memory has a fresh stamp — the result must be empty.
+// This is the steady-state shape of a fully-drained namespace.
+func TestMemoryRepo_ListByNamespaceStale_AllStamped(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		const key = "paraphrase_checked_at"
+		now := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
+
+		for i := 0; i < 3; i++ {
+			updated := now.Add(-time.Duration(i+1) * time.Hour)
+			stampVal := updated.UTC().Format(time.RFC3339Nano)
+			mem := &model.Memory{
+				NamespaceID: nsID,
+				Content:     "all_stamped",
+				Confidence:  1.0,
+				Importance:  0.5,
+				CreatedAt:   updated.Add(-1 * time.Hour),
+				UpdatedAt:   updated,
+				Metadata:    json.RawMessage(`{"` + key + `":"` + stampVal + `"}`),
+			}
+			if err := repo.Create(ctx, mem); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+		}
+
+		got, err := repo.ListByNamespaceStale(ctx, nsID, key, 100)
+		if err != nil {
+			t.Fatalf("ListByNamespaceStale: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("expected 0 stale rows when all stamped, got %d", len(got))
+		}
+	})
+}
+
+// TestMemoryRepo_ListByNamespaceStale_EmptyNamespace asserts the trivial
+// boundary — listing stale rows in a namespace that has none returns
+// an empty (non-nil) slice.
+func TestMemoryRepo_ListByNamespaceStale_EmptyNamespace(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		got, err := repo.ListByNamespaceStale(ctx, nsID, "paraphrase_checked_at", 100)
+		if err != nil {
+			t.Fatalf("ListByNamespaceStale empty namespace: %v", err)
+		}
+		if got == nil {
+			t.Fatal("expected non-nil empty slice")
+		}
+		if len(got) != 0 {
+			t.Fatalf("expected 0 rows in empty namespace, got %d", len(got))
+		}
+	})
+}

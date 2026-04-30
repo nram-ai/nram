@@ -139,7 +139,15 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		return false, nil
 	}
 
-	memories, err := p.memories.ListByNamespace(ctx, cycle.NamespaceID, 500, 0)
+	staleFetchMax := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamContradictionStaleFetchMax, "global")
+
+	// Push the staleness predicate into SQL so the working set is bounded
+	// by the stale-row count (capped further by staleFetchMax) rather than
+	// by namespace size. The in-memory collectStale call below stays as
+	// belt-and-suspenders for malformed stamps that may survive the SQL
+	// predicate, and to apply the same shape of filter the caller
+	// historically expected.
+	memories, err := p.memories.ListByNamespaceStale(ctx, cycle.NamespaceID, ContradictionsCheckedStampKey, staleFetchMax)
 	if err != nil {
 		return false, err
 	}

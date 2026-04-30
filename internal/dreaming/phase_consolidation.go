@@ -45,6 +45,17 @@ const ConsolidationClusterStampKey = "consolidation_cluster_checked_at"
 // structurally different group the timestamp check cannot detect.
 const ConsolidationClusterFingerprintKey = "consolidation_cluster_fingerprint"
 
+// ConsolidationLoadCheckedStampKey marks every memory the consolidation
+// phase pulled into its candidate pool this cycle, regardless of which
+// sub-phase verdict followed. Drives the SQL-level stale predicate
+// ListByNamespaceStale so the per-cycle working-set is bounded by the
+// stale-row count rather than by the namespace's total size. Anchored to
+// UpdatedAt: any memory whose row is mutated by another phase (paraphrase
+// supersession, contradiction haircut, reinforcement) advances UpdatedAt
+// and re-enters the consolidation candidate pool next cycle without
+// further coordination.
+const ConsolidationLoadCheckedStampKey = "consolidation_load_checked_at"
+
 // ConsolidationPhase consolidates clusters of related memories into synthesis
 // memories and reinforces/erodes existing syntheses based on new evidence.
 //
@@ -112,8 +123,15 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		return false, nil
 	}
 
-	// Load all memories once for all three sub-phases.
-	allMemories, err := p.memories.ListByNamespace(ctx, cycle.NamespaceID, 1000, 0)
+	// Load only memories whose consolidation-load stamp is missing or older
+	// than updated_at. The SQL-level stale predicate keeps the working-set
+	// bounded to staleFetchMax rather than namespace size; the older tail
+	// drains across cycles via residual signaling. Any row another phase
+	// mutates this cycle (paraphrase / contradiction / reinforce) advances
+	// updated_at, re-entering the candidate pool next cycle without
+	// additional coordination.
+	staleFetchMax := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamConsolidationStaleFetchMax, "global")
+	allMemories, err := p.memories.ListByNamespaceStale(ctx, cycle.NamespaceID, ConsolidationLoadCheckedStampKey, staleFetchMax)
 	if err != nil {
 		return false, err
 	}
@@ -122,7 +140,10 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	reinforceFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationReinforceFraction, 0.35)
 	consolidateFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationConsolidateFraction, 0.30)
 
-	residual := false
+	// When the stale-row count saturates the fetch cap there are likely
+	// more stale rows than this cycle could load. Surface as residual so
+	// the scheduler keeps the project dirty and the next cycle drains.
+	residual := len(allMemories) >= staleFetchMax
 
 	// Audit first so backlog drain cannot be starved by reinforce. Each
 	// sub-slice cap is recomputed against current Remaining so unspent
@@ -154,12 +175,23 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		consolidateBudget := budget.SubSlice(int(float64(budget.Remaining()) * consolidateFrac))
 		consResid, cerr := p.consolidate(ctx, cycle, consolidateBudget, logger, llm, allMemories)
 		if cerr != nil {
+			// Stamp before bailing out so partial progress survives — the
+			// rows that did get processed do not re-enter the candidate
+			// pool next cycle for no reason.
+			p.stampConsolidateLoad(ctx, allMemories)
 			return residual, cerr
 		}
 		if consResid {
 			residual = true
 		}
 	}
+
+	// Stamp every loaded memory so it does not re-enter the candidate pool
+	// next cycle unless something else mutates the row (any update bumps
+	// updated_at, which invalidates the stamp). This is the load-level
+	// fairness primitive that makes the SQL stale predicate progress
+	// across cycles.
+	p.stampConsolidateLoad(ctx, allMemories)
 
 	return residual, nil
 }
@@ -969,6 +1001,37 @@ func (p *ConsolidationPhase) stampConsolidateCluster(
 		if err := p.memWriter.UpdateMetadata(ctx, members[i].ID, members[i].NamespaceID, encoded); err != nil {
 			slog.Warn("dreaming: consolidate cluster stamp persist failed",
 				"memory", members[i].ID, "err", err)
+		}
+	}
+}
+
+// stampConsolidateLoad writes the load-level visit stamp on every memory
+// the phase pulled into its candidate pool this cycle. Anchored to each
+// row's own UpdatedAt and persisted via UpdateMetadata (which deliberately
+// does not bump updated_at), so the staleness check stamp < updated_at
+// does not self-invalidate next cycle. Persist failures are logged, never
+// returned — a failed stamp leaves that row stale, which simply reschedules
+// it for the next cycle. Independent of the per-cluster stamp written by
+// stampConsolidateCluster: a memory may participate in clustering and
+// receive both stamps, or end up unclustered and receive only this one.
+func (p *ConsolidationPhase) stampConsolidateLoad(ctx context.Context, members []model.Memory) {
+	for i := range members {
+		mem := &members[i]
+		if mem.DeletedAt != nil {
+			continue
+		}
+		meta := decodeMetadata(mem.Metadata)
+		meta[ConsolidationLoadCheckedStampKey] = mem.UpdatedAt.UTC().Format(time.RFC3339Nano)
+		encoded, err := json.Marshal(meta)
+		if err != nil {
+			slog.Warn("dreaming: consolidate load stamp marshal failed",
+				"memory", mem.ID, "err", err)
+			continue
+		}
+		mem.Metadata = encoded
+		if err := p.memWriter.UpdateMetadata(ctx, mem.ID, mem.NamespaceID, encoded); err != nil {
+			slog.Warn("dreaming: consolidate load stamp persist failed",
+				"memory", mem.ID, "err", err)
 		}
 	}
 }

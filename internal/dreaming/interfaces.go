@@ -16,6 +16,12 @@ type MemoryReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
 	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
+	// ListByNamespaceStale returns up to limit non-deleted memories whose
+	// metadata stamp at stampKey is missing or strictly predates updated_at,
+	// ordered oldest-updated_at first. Bounds dreaming-phase working-set
+	// memory by pushing the staleness predicate into SQL so unloaded rows
+	// are never resident.
+	ListByNamespaceStale(ctx context.Context, namespaceID uuid.UUID, stampKey string, limit int) ([]model.Memory, error)
 	CountByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
 }
 

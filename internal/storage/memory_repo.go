@@ -313,12 +313,21 @@ type MemoryListFilters struct {
 	// always-on deleted_at filter but is opt-in so dreaming phases that walk
 	// the full set with zero-value filters still see superseded rows.
 	HideSuperseded bool
+	// StaleStampKey, when non-empty, restricts results to rows whose
+	// metadata stamp at that key is missing OR whose stamp predates
+	// updated_at. Drives the dreaming phase staleness predicate at the
+	// SQL layer so phases never accumulate the full namespace in memory.
+	// Used by ListByNamespaceStale; ignored by other listing methods'
+	// default ORDER BY (callers requiring oldest-stale-first should use
+	// ListByNamespaceStale, which forces ORDER BY updated_at ASC).
+	StaleStampKey string
 }
 
 // IsZero reports whether no filter dimensions are active.
 func (f MemoryListFilters) IsZero() bool {
 	return len(f.Tags) == 0 && f.DateFrom == nil && f.DateTo == nil &&
-		f.Enriched == nil && f.Source == "" && f.Search == "" && !f.HideSuperseded
+		f.Enriched == nil && f.Source == "" && f.Search == "" && !f.HideSuperseded &&
+		f.StaleStampKey == ""
 }
 
 // whereBuilder accumulates WHERE clause fragments and their bind values while
@@ -395,6 +404,37 @@ func (r *MemoryRepo) buildFilterWhere(namespaceID uuid.UUID, filters MemoryListF
 		wb.add(`LOWER(content) LIKE %s ESCAPE '\'`, "%"+strings.ToLower(escapeLike(filters.Search))+"%")
 	}
 
+	if filters.StaleStampKey != "" {
+		// Row is stale when the stamp is absent OR strictly predates
+		// updated_at. The same staleness rule the in-memory isStale helpers
+		// implement (phase_paraphrase_dedup.go isParaphraseStale, etc.) —
+		// pushed into SQL so phases load only stale candidates.
+		//
+		// Postgres: metadata is JSONB. metadata->>$key returns text; cast to
+		// timestamptz for comparison. If a value is malformed the cast will
+		// abort the query — phases write stamps via time.RFC3339Nano so this
+		// requires manual metadata corruption to trigger; phases retain
+		// in-memory collectStale as belt-and-suspenders for that case.
+		//
+		// SQLite: metadata is TEXT. json_extract returns NULL for missing
+		// keys; datetime() returns NULL on unparseable strings, so a
+		// malformed stamp falls through the comparison as NULL (treated as
+		// false by < and OR), which would mark the row as fresh — defensive
+		// in-memory collectStale catches that edge case.
+		if wb.postgres {
+			ph1 := wb.bindOnly(filters.StaleStampKey)
+			ph2 := wb.bindOnly(filters.StaleStampKey)
+			wb.clauses = append(wb.clauses,
+				fmt.Sprintf("((metadata->>%s) IS NULL OR (metadata->>%s)::timestamptz < updated_at)", ph1, ph2))
+		} else {
+			path := "$." + filters.StaleStampKey
+			ph1 := wb.bindOnly(path)
+			ph2 := wb.bindOnly(path)
+			wb.clauses = append(wb.clauses,
+				fmt.Sprintf("(json_extract(metadata, %s) IS NULL OR datetime(json_extract(metadata, %s)) < datetime(updated_at))", ph1, ph2))
+		}
+	}
+
 	return wb.where(), wb.args
 }
 
@@ -438,6 +478,51 @@ func (r *MemoryRepo) ListByNamespaceFiltered(ctx context.Context, namespaceID uu
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("memory list by namespace iteration: %w", err)
+	}
+	return result, nil
+}
+
+// ListByNamespaceStale returns up to limit non-deleted memories whose
+// metadata stamp at stampKey is missing or strictly predates updated_at,
+// ordered oldest-updated_at first so the older tail drains before fresher
+// rows. Used by dreaming phases to bound per-cycle working-set memory by
+// only loading rows that need work; the in-memory collectStale checks
+// remain in each phase as defensive belt-and-suspenders for malformed
+// stamps that survive the SQL predicate.
+func (r *MemoryRepo) ListByNamespaceStale(ctx context.Context, namespaceID uuid.UUID, stampKey string, limit int) ([]model.Memory, error) {
+	if stampKey == "" {
+		return nil, fmt.Errorf("memory list stale: empty stamp key")
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	where, args := r.buildFilterWhere(namespaceID, MemoryListFilters{StaleStampKey: stampKey})
+
+	limitPH := "?"
+	if r.db.Backend() == BackendPostgres {
+		limitPH = fmt.Sprintf("$%d", len(args)+1)
+	}
+	args = append(args, limit)
+
+	query := selectMemoryColumns + ` FROM memories WHERE ` + where +
+		` ORDER BY updated_at ASC LIMIT ` + limitPH
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory list stale: %w", err)
+	}
+	defer rows.Close()
+
+	result := []model.Memory{}
+	for rows.Next() {
+		mem, err := r.scanMemoryFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *mem)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory list stale iteration: %w", err)
 	}
 	return result, nil
 }

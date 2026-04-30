@@ -81,10 +81,17 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 	if topK <= 0 {
 		topK = 5
 	}
+	staleFetchMax := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamParaphraseStaleFetchMax, "global")
 
-	memories, err := p.memories.ListByNamespace(ctx, cycle.NamespaceID, 5000, 0)
+	// Push the staleness predicate into SQL so working-set memory is bounded
+	// by the stale-row count (capped further by staleFetchMax) rather than
+	// by namespace size. The in-memory isParaphraseStale check below stays
+	// as belt-and-suspenders for malformed stamps that survive the SQL
+	// predicate (Postgres ::timestamptz cast on JSON values can succeed on
+	// near-RFC3339 strings that fail Go's time.Parse).
+	memories, err := p.memories.ListByNamespaceStale(ctx, cycle.NamespaceID, ParaphraseCheckedStampKey, staleFetchMax)
 	if err != nil {
-		return false, fmt.Errorf("paraphrase dedup: list memories: %w", err)
+		return false, fmt.Errorf("paraphrase dedup: list stale memories: %w", err)
 	}
 
 	stats := map[string]interface{}{

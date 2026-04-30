@@ -1,10 +1,12 @@
 package dreaming
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"math"
+	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -680,6 +682,53 @@ func (m *mutableMemoryStore) GetBatch(_ context.Context, ids []uuid.UUID) ([]mod
 }
 func (m *mutableMemoryStore) ListByNamespace(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
 	return m.memories, nil
+}
+func (m *mutableMemoryStore) ListByNamespaceStale(_ context.Context, _ uuid.UUID, stampKey string, limit int) ([]model.Memory, error) {
+	stampMarker := []byte(stampKey)
+	out := make([]model.Memory, 0, len(m.memories))
+	for i := range m.memories {
+		mem := m.memories[i]
+		if mem.DeletedAt != nil {
+			continue
+		}
+		if !bytes.Contains(mem.Metadata, stampMarker) {
+			out = append(out, mem)
+			continue
+		}
+		var meta map[string]interface{}
+		if err := json.Unmarshal(mem.Metadata, &meta); err != nil {
+			out = append(out, mem)
+			continue
+		}
+		raw, ok := meta[stampKey]
+		if !ok {
+			out = append(out, mem)
+			continue
+		}
+		s, ok := raw.(string)
+		if !ok || s == "" {
+			out = append(out, mem)
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t, err = time.Parse(time.RFC3339, s)
+			if err != nil {
+				out = append(out, mem)
+				continue
+			}
+		}
+		if t.Before(mem.UpdatedAt) {
+			out = append(out, mem)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].UpdatedAt.Before(out[j].UpdatedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 func (m *mutableMemoryStore) CountByNamespace(_ context.Context, _ uuid.UUID) (int, error) {
 	return len(m.memories), nil

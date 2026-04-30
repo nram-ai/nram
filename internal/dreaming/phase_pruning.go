@@ -30,6 +30,13 @@ const (
 	// Anything at or below this came from contradiction compounding past the
 	// decay floor and is explicitly devalued.
 	effectivelyZero = 0.001
+
+	// defaultPruningBatchSize is the fallback streaming chunk when the
+	// dreaming.pruning.batch_size setting is missing or invalid. Pruning
+	// processes the namespace one batch at a time to keep working-set
+	// memory bounded; the value matches the historical hardcoded cap so
+	// per-batch transaction shape is unchanged on default config.
+	defaultPruningBatchSize = 1000
 )
 
 // Prune reasons emitted by shouldPrune. Logged and surfaced upstream; pin them
@@ -74,35 +81,72 @@ func NewPruningPhase(memories MemoryReader, memWriter MemoryWriter, relWriter Re
 func (p *PruningPhase) Name() string { return model.DreamPhasePruning }
 
 func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
-	memories, err := p.memories.ListByNamespace(ctx, cycle.NamespaceID, 1000, 0)
-	if err != nil {
-		slog.Warn("dreaming: pruning failed to list memories", "err", err)
-	} else {
+	batchSize := p.resolveBatchSize(ctx)
+
+	visited := 0
+	decayed := 0
+	pruned := 0
+
+	iterErr := iterateMemoriesByNamespace(ctx, p.memories, cycle.NamespaceID, batchSize, func(batch []model.Memory) error {
+		visited += len(batch)
 		// Decay must run before threshold-based pruning so the confidence
 		// threshold check reads post-decay values.
-		if err := p.applyConfidenceDecay(ctx, cycle, memories); err != nil {
+		batchDecayed, err := p.applyConfidenceDecay(ctx, cycle, batch)
+		if err != nil {
 			slog.Warn("dreaming: confidence decay had errors", "err", err)
 		}
-		if err := p.pruneMemories(ctx, cycle, memories, logger); err != nil {
+		decayed += batchDecayed
+
+		batchPruned, err := p.pruneMemories(ctx, cycle, batch, logger)
+		if err != nil {
 			slog.Warn("dreaming: memory pruning had errors", "err", err)
 		}
+		pruned += batchPruned
+		return nil
+	})
+	if iterErr != nil {
+		slog.Warn("dreaming: pruning failed to iterate memories", "err", iterErr)
 	}
 
-	if err := p.pruneRelationships(ctx, cycle, logger); err != nil {
+	relationshipsExpired, err := p.pruneRelationships(ctx, cycle, logger)
+	if err != nil {
 		slog.Warn("dreaming: relationship pruning had errors", "err", err)
 	}
 
-	// Pruning is deterministic per cycle: it visits every memory and
-	// expires every low-weight relationship in one pass. No residual.
+	p.writePhaseSummary(ctx, logger, map[string]interface{}{
+		"visited":               visited,
+		"decayed":               decayed,
+		"pruned":                pruned,
+		"relationships_expired": relationshipsExpired,
+		"batch_size":            batchSize,
+	})
+
+	// Pruning is deterministic per cycle: it streams every memory in the
+	// namespace through per-batch decay and prune ops, and expires every
+	// low-weight relationship in one pass. No residual.
 	return false, nil
+}
+
+// resolveBatchSize reads dreaming.pruning.batch_size, falling back to the
+// historical default when the setting is missing or invalid.
+func (p *PruningPhase) resolveBatchSize(ctx context.Context) int {
+	if p.settings == nil {
+		return defaultPruningBatchSize
+	}
+	v, err := p.settings.ResolveInt(ctx, service.SettingDreamPruningBatchSize, "global")
+	if err != nil || v <= 0 {
+		return defaultPruningBatchSize
+	}
+	return v
 }
 
 // applyConfidenceDecay scales confidence of memories whose last_accessed is
 // older than the configured threshold. Mutates post-decay values onto the
 // provided slice so the subsequent prune step sees them without re-reading.
-func (p *PruningPhase) applyConfidenceDecay(ctx context.Context, cycle *model.DreamCycle, memories []model.Memory) error {
+// Returns the number of memories whose confidence was actually scaled.
+func (p *PruningPhase) applyConfidenceDecay(ctx context.Context, cycle *model.DreamCycle, memories []model.Memory) (int, error) {
 	if p.settings == nil || !p.settings.ResolveBool(ctx, service.SettingConfidenceDecayEnabled, "global") {
-		return nil
+		return 0, nil
 	}
 
 	threshold, err := p.settings.ResolveFloat(ctx, service.SettingConfidenceDecayThresholdDays, "global")
@@ -143,12 +187,12 @@ func (p *PruningPhase) applyConfidenceDecay(ctx context.Context, cycle *model.Dr
 	}
 
 	if len(eligible) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	rows, err := p.memWriter.DecayConfidence(ctx, eligible, multiplier, floor)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// Mirror the SQL clamp into the caller's slice so the next pruning step
@@ -165,10 +209,11 @@ func (p *PruningPhase) applyConfidenceDecay(ctx context.Context, cycle *model.Dr
 	slog.Info("dreaming: decayed memory confidence",
 		"count", rows, "rate", rate, "threshold_days", threshold, "floor", floor,
 		"cycle", cycle.ID)
-	return nil
+	return int(rows), nil
 }
 
-func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycle, memories []model.Memory, logger *DreamLogWriter) error {
+// pruneMemories soft-deletes memories matching shouldPrune and returns the count.
+func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycle, memories []model.Memory, logger *DreamLogWriter) (int, error) {
 	pruned := 0
 	now := time.Now().UTC()
 
@@ -186,7 +231,6 @@ func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycl
 		_ = logger.LogOperation(ctx, model.DreamPhasePruning,
 			model.DreamOpMemoryDeleted, "memory", mem.ID,
 			&mem, map[string]string{"reason": reason})
-
 		if err := p.memWriter.SoftDelete(ctx, mem.ID, cycle.NamespaceID); err != nil {
 			slog.Warn("dreaming: prune failed", "memory", mem.ID, "err", err)
 			continue
@@ -199,13 +243,14 @@ func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycl
 		slog.Info("dreaming: pruned memories", "count", pruned, "cycle", cycle.ID)
 	}
 
-	return nil
+	return pruned, nil
 }
 
-func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.DreamCycle, logger *DreamLogWriter) error {
+// pruneRelationships expires every relationship below the weight threshold and returns the count.
+func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.DreamCycle, logger *DreamLogWriter) (int64, error) {
 	expired, err := p.relWriter.ExpireLowWeight(ctx, cycle.NamespaceID, pruneRelationshipWeightThreshold)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if expired > 0 {
@@ -219,7 +264,12 @@ func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.Drea
 			"count", expired, "threshold", pruneRelationshipWeightThreshold, "cycle", cycle.ID)
 	}
 
-	return nil
+	return expired, nil
+}
+
+func (p *PruningPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWriter, stats map[string]interface{}) {
+	_ = logger.LogOperation(ctx, model.DreamPhasePruning,
+		model.DreamOpPhaseSummary, "phase", uuid.Nil, nil, stats)
 }
 
 func (p *PruningPhase) shouldPrune(mem *model.Memory, now time.Time) (bool, string) {
