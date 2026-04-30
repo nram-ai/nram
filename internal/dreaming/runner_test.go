@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/events"
+	"github.com/nram-ai/nram/internal/model"
 )
 
 // fakeCycleRepo satisfies cycleProgressRepo and records TickProgress calls so
@@ -189,5 +190,186 @@ func TestHeartbeatFallbackOnTickError(t *testing.T) {
 	}
 	if !sawFallback {
 		t.Fatalf("expected at least one heartbeat carrying the budget.Used()=444 fallback")
+	}
+}
+
+// fractionSettings overrides ResolveFloat on the existing stubSettings
+// (defined in phase_contradictions_test.go) so the runner sees configurable
+// per-phase budget fractions while every other resolver method falls
+// through to the zero-returning defaults the package's other tests share.
+type fractionSettings struct {
+	stubSettings
+	values map[string]float64
+}
+
+func (f fractionSettings) ResolveFloat(_ context.Context, key, _ string) (float64, error) {
+	if v, ok := f.values[key]; ok {
+		return v, nil
+	}
+	return 0, nil
+}
+
+// recordingPhase is a Phase test double that spends a configured token amount
+// against whatever budget the runner hands it, then returns the configured
+// error (or nil). It records the *TokenBudget pointer it received so tests
+// can assert whether the runner sliced or passed through.
+type recordingPhase struct {
+	name   string
+	spend  int
+	err    error
+	got    *TokenBudget
+	gotCap int
+}
+
+func (p *recordingPhase) Name() string { return p.name }
+func (p *recordingPhase) Execute(_ context.Context, _ *model.DreamCycle, b *TokenBudget, _ *DreamLogWriter) (bool, error) {
+	p.got = b
+	p.gotCap = b.Total()
+	if p.spend > 0 {
+		// Spend in one shot; ErrBudgetExhausted from over-spend is what we
+		// want phases to surface to the runner so the slice-cap path runs.
+		if err := b.Spend(p.spend); err != nil {
+			return false, err
+		}
+	}
+	return false, p.err
+}
+
+// noopRepo is a cycleProgressRepo that does nothing — the runner's writes are
+// not the unit under test here.
+type noopRepo struct{}
+
+func (noopRepo) Start(context.Context, uuid.UUID) error                          { return nil }
+func (noopRepo) UpdateStatus(context.Context, uuid.UUID, string, string) error   { return nil }
+func (noopRepo) TickProgress(context.Context, uuid.UUID) (int, error)            { return 0, nil }
+func (noopRepo) Complete(context.Context, uuid.UUID, json.RawMessage) error      { return nil }
+func (noopRepo) Fail(context.Context, uuid.UUID, string) error                   { return nil }
+
+// newTestRunner builds a Runner directly so tests can stub the cycle repo,
+// settings, and phase list without going through the cmd/server wiring.
+func newTestRunner(settings SettingsResolver, phases ...Phase) *Runner {
+	return &Runner{
+		cycleRepo:         noopRepo{},
+		heartbeatInterval: 5 * time.Second, // long enough that no tick fires during a test
+		settings:          settings,
+		phases:            phases,
+	}
+}
+
+// TestRunner_PerPhaseSliceLimitsLLMPhase verifies that a phase whose Spend
+// exceeds its slice cap does not end the cycle: the runner observes
+// ErrBudgetExhausted, marks the phase as residual=phase_slice_exhausted, and
+// proceeds to the next phase with a fresh slice. This is the central
+// behavioral guarantee of the per-phase reservation.
+func TestRunner_PerPhaseSliceLimitsLLMPhase(t *testing.T) {
+	// fractionSettings is keyed by setting key (the form ResolveFloat sees),
+	// not by phase name. The runner translates phase name → key via
+	// phaseFractionKeys.
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.contradiction.budget_fraction": 0.40,
+		"dreaming.consolidation.budget_fraction": 0.40,
+	}}
+	first := &recordingPhase{
+		name:  model.DreamPhaseContradictions,
+		spend: 500, // exceeds the 400 slice cap (40% of 1000)
+	}
+	second := &recordingPhase{name: model.DreamPhaseConsolidation}
+
+	r := newTestRunner(settings, first, second)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	allCompleted, hasResidual, err := r.Execute(context.Background(), cycle, budget)
+	if err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+	if allCompleted {
+		t.Error("expected allCompleted=false because the first phase reported ErrBudgetExhausted")
+	}
+	if !hasResidual {
+		t.Error("expected hasResidual=true because the slice was exhausted mid-phase")
+	}
+
+	if first.gotCap != 400 {
+		t.Errorf("first phase received slice cap=%d, want 400 (40%% of 1000)", first.gotCap)
+	}
+	if second.got == nil {
+		t.Fatal("second phase never ran — the runner broke the loop on slice exhaustion")
+	}
+	if second.gotCap != 400 {
+		t.Errorf("second phase received slice cap=%d, want 400 (its own fresh 40%% slice)", second.gotCap)
+	}
+	// Root used should be 500 (first phase's spend cascaded). Second phase's
+	// effective Remaining at entry is min(slice_local=400, root_remaining=500) = 400.
+	if budget.Used() != 500 {
+		t.Errorf("root used=%d, want 500 (first phase's spend cascaded)", budget.Used())
+	}
+	if rem := second.got.Remaining(); rem != 400 {
+		t.Errorf("second phase slice Remaining=%d, want 400 (min of slice_cap and root_remaining)", rem)
+	}
+}
+
+// TestRunner_FractionZeroPassesRootThrough verifies that SQL-only phases
+// (frac=0.0 default) receive the root TokenBudget unchanged. Their spends
+// (none in production) would charge the root directly; the runner does not
+// carve a slice for them so they are not gated by a per-phase cap.
+func TestRunner_FractionZeroPassesRootThrough(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		// No entries: pruning has no fraction registered → 0.0 default.
+	}}
+	pruning := &recordingPhase{name: model.DreamPhasePruning}
+
+	r := newTestRunner(settings, pruning)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	if pruning.got == nil {
+		t.Fatal("pruning phase never ran")
+	}
+	if pruning.got != budget {
+		t.Error("pruning phase received a sliced budget; expected the root budget pointer (frac=0 must pass through)")
+	}
+	if pruning.gotCap != 1000 {
+		t.Errorf("pruning saw cap=%d, want 1000 (the root total)", pruning.gotCap)
+	}
+}
+
+// TestRunner_LaterPhaseClampedByRootRemaining verifies that when an earlier
+// phase consumes more than its share, a later phase whose own slice cap
+// would allow more tokens than the root has left is correctly clamped by
+// the parent. SubSlice.Remaining()=min(local, parent) handles this with no
+// special-case logic in the runner.
+func TestRunner_LaterPhaseClampedByRootRemaining(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.contradiction.budget_fraction": 0.40, // cap=400 of 1000
+		"dreaming.consolidation.budget_fraction": 0.40, // cap=400 of 1000
+	}}
+	// First phase overruns: spends 800 against a 400 slice → returns
+	// ErrBudgetExhausted; root.used=800; root.remaining=200.
+	first := &recordingPhase{name: model.DreamPhaseContradictions, spend: 800}
+	second := &recordingPhase{name: model.DreamPhaseConsolidation}
+
+	r := newTestRunner(settings, first, second)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	if budget.Used() != 800 {
+		t.Errorf("root used=%d, want 800 (first phase's overrun cascaded fully)", budget.Used())
+	}
+	if second.got == nil {
+		t.Fatal("second phase never ran")
+	}
+	// Second phase's own slice cap is 400, but parent has only 200 left.
+	// Remaining must take the min.
+	if rem := second.got.Remaining(); rem != 200 {
+		t.Errorf("second phase Remaining=%d, want 200 (clamped by parent's remaining, not slice cap)", rem)
 	}
 }

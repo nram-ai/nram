@@ -74,12 +74,31 @@ func TestTokenBudget_SubSliceCanAffordRespectsBothLevels(t *testing.T) {
 	}
 	// Child cap larger than parent's remaining.
 	child := parent.SubSlice(200)
-	// 60 fits in child (local=0 used of 200) but exceeds parent's 50 remaining.
+	// 60 fits in the child's local capacity (used=0 of 200) but exceeds the
+	// parent's 50 remaining; CanAfford must walk the parent chain and reject.
 	if child.CanAfford(60) {
 		t.Error("CanAfford(60) should be false because parent cannot afford it")
 	}
 	if !child.CanAfford(50) {
 		t.Error("CanAfford(50) should be true — fits both parent and child")
+	}
+}
+
+// TestTokenBudget_CanAffordIgnoresPerCallCap verifies that CanAfford treats
+// PerCallCap as orthogonal: it is the response-MaxTokens cap, not a per-call
+// total-cost ceiling. Phases compose `EstimateTokens(prompt) + PerCallCap()`
+// before passing to CanAfford, so a fresh budget with plenty of room must
+// afford spends larger than PerCallCap.
+func TestTokenBudget_CanAffordIgnoresPerCallCap(t *testing.T) {
+	b := NewTokenBudget(1000, 100)
+	if !b.CanAfford(500) {
+		t.Error("CanAfford(500) on a 1000-cap budget with perCallCap=100 must be true (perCallCap is unrelated to total-spend fitness)")
+	}
+	if !b.CanAfford(1000) {
+		t.Error("CanAfford(1000) on a 1000-cap fresh budget must be true (boundary case: equal to remaining)")
+	}
+	if b.CanAfford(1001) {
+		t.Error("CanAfford(1001) on a 1000-cap budget must be false")
 	}
 }
 

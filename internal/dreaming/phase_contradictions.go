@@ -230,7 +230,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		// we can't afford to record.
 		estPrompt := fmt.Sprintf(promptTemplate, pair[0].Content, pair[1].Content)
 		estCost := EstimateTokens(estPrompt) + budget.PerCallCap()
-		if budget.Remaining() < estCost {
+		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: contradiction call skipped (estimated cost exceeds remaining budget)",
 				"estimate", estCost, "remaining", budget.Remaining())
 			budgetStopped = true

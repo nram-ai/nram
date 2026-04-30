@@ -93,6 +93,23 @@ const (
 	SettingDreamConsolidationReinforceFraction   = "dreaming.consolidation.reinforce_budget_fraction"
 	SettingDreamConsolidationConsolidateFraction = "dreaming.consolidation.consolidate_budget_fraction"
 
+	// Per-phase budget fractions applied at the runner level. Each LLM-spending
+	// phase receives a SubSlice of dreaming.max_tokens_per_cycle so one phase
+	// cannot consume the whole envelope and starve later phases. Fractions are
+	// interpreted relative to the cycle TOTAL (not Remaining at phase entry),
+	// so reservations are stable across cycles and operator-tunable.
+	// SQL-only phases default to 0.0, which means "no per-phase slice; share
+	// the root budget" — they run normally because they don't call WrapLLMCall
+	// and therefore don't consume the budget. Hot-reloadable per cycle.
+	SettingDreamEntityDedupFraction       = "dreaming.entity_dedup.budget_fraction"
+	SettingDreamEmbeddingBackfillFraction = "dreaming.embedding_backfill.budget_fraction"
+	SettingDreamParaphraseFraction        = "dreaming.paraphrase_dedup.budget_fraction"
+	SettingDreamTransitiveFraction        = "dreaming.transitive.budget_fraction"
+	SettingDreamContradictionFraction     = "dreaming.contradiction.budget_fraction"
+	SettingDreamConsolidationFraction     = "dreaming.consolidation.budget_fraction"
+	SettingDreamPruningFraction           = "dreaming.pruning.budget_fraction"
+	SettingDreamWeightAdjustFraction      = "dreaming.weight_adjustment.budget_fraction"
+
 	// Contradiction-detection cap. Bounds LLM pair-check calls per cycle so
 	// the phase cannot starve the rest of the pipeline. Residual is driven
 	// by the per-memory contradictions_checked_at stamp, not by this cap; the
@@ -399,6 +416,15 @@ alignment must be a float:
 	SettingDreamConsolidationAuditFraction:       "0.35",
 	SettingDreamConsolidationReinforceFraction:   "0.35",
 	SettingDreamConsolidationConsolidateFraction: "0.30",
+
+	SettingDreamEntityDedupFraction:       "0.0",
+	SettingDreamEmbeddingBackfillFraction: "0.10",
+	SettingDreamParaphraseFraction:        "0.05",
+	SettingDreamTransitiveFraction:        "0.0",
+	SettingDreamContradictionFraction:     "0.40",
+	SettingDreamConsolidationFraction:     "0.40",
+	SettingDreamPruningFraction:           "0.0",
+	SettingDreamWeightAdjustFraction:      "0.0",
 
 	SettingDreamContradictionCap:                 "2000",
 	SettingDreamContradictionLoserHaircut:        "0.85",

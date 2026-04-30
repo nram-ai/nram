@@ -8,9 +8,6 @@ import (
 // ErrBudgetExhausted is returned when a token spend exceeds the remaining budget.
 var ErrBudgetExhausted = errors.New("dream token budget exhausted")
 
-// ErrExceedsPerCallCap is returned when a single call would exceed the per-call cap.
-var ErrExceedsPerCallCap = errors.New("dream call exceeds per-call token cap")
-
 // TokenBudget tracks token consumption within a single dream cycle.
 // It is safe for concurrent use.
 //
@@ -97,11 +94,14 @@ func (b *TokenBudget) PerCallCap() int {
 	return b.perCallCap
 }
 
-// CanAfford returns true if the estimated token count fits within both
-// the remaining budget (including parent, if sub-sliced) and the per-call cap.
+// CanAfford returns true if the estimated total spend fits within the
+// remaining budget at this level and at every ancestor level (for
+// sub-slices). The per-call cap is a response-MaxTokens concern, not a
+// per-call total-cost ceiling — callers compose the two themselves via
+// EstimateTokens(prompt) + PerCallCap() before passing to CanAfford.
 func (b *TokenBudget) CanAfford(estimated int) bool {
 	b.mu.Lock()
-	localOK := estimated <= (b.total-b.used) && estimated <= b.perCallCap
+	localOK := estimated <= (b.total - b.used)
 	b.mu.Unlock()
 	if !localOK {
 		return false

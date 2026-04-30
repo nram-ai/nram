@@ -291,7 +291,7 @@ func (p *ConsolidationPhase) reinforce(
 		// Pre-flight budget check using the same prompt we'll send.
 		prompt := renderAlignmentPrompt(alignmentPromptTemplate, &synthesis, sample)
 		estCost := EstimateTokens(prompt) + budget.PerCallCap()
-		if budget.Remaining() < estCost {
+		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: alignment call skipped (estimated cost exceeds remaining budget)",
 				"cycle", cycle.ID, "synthesis", synthesis.ID,
 				"estimate", estCost, "remaining", budget.Remaining())
@@ -1131,7 +1131,7 @@ func (p *ConsolidationPhase) consolidate(
 
 		prompt := renderSynthesisPrompt(synthesisPromptTemplate, cluster)
 		estCost := EstimateTokens(prompt) + budget.PerCallCap()
-		if budget.Remaining() < estCost {
+		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: synthesis call skipped (estimated cost exceeds remaining budget)",
 				"cycle", cycle.ID, "cluster_size", len(cluster),
 				"estimate", estCost, "remaining", budget.Remaining())

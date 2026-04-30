@@ -89,6 +89,12 @@ const PARENT_GROUPS: ParentGroup[] = [
           "Discards syntheses that don't actually add anything new compared to the memories they were built from.",
       },
       {
+        category: "dreaming_phase_budget",
+        label: "Phase Budget Allocation",
+        description:
+          "Reserve a fraction of the per-cycle token budget for each phase. Without reservations, an LLM-heavy phase running early can consume the entire envelope and starve later phases. SQL-only phases default to 0 (share the root); LLM phases default to a share that protects downstream synthesis.",
+      },
+      {
         category: "dreaming_consolidation",
         label: "Consolidation Budget",
         description:

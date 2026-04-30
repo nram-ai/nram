@@ -13,8 +13,26 @@ import (
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
+
+// phaseFractionKeys maps a phase name to its budget-fraction setting key.
+// Phases not in the map (or whose key resolves to <= 0) get the root budget
+// passed through unchanged. SQL-only phases default to 0.0 so they share the
+// root and run whenever the cycle has remaining tokens; LLM-spending phases
+// default to a positive fraction so the runner carves them a SubSlice that
+// caps how much of the cycle envelope they can consume.
+var phaseFractionKeys = map[string]string{
+	model.DreamPhaseEntityDedup:       service.SettingDreamEntityDedupFraction,
+	model.DreamPhaseEmbeddingBackfill: service.SettingDreamEmbeddingBackfillFraction,
+	model.DreamPhaseParaphraseDedup:   service.SettingDreamParaphraseFraction,
+	model.DreamPhaseTransitive:        service.SettingDreamTransitiveFraction,
+	model.DreamPhaseContradictions:    service.SettingDreamContradictionFraction,
+	model.DreamPhaseConsolidation:     service.SettingDreamConsolidationFraction,
+	model.DreamPhasePruning:           service.SettingDreamPruningFraction,
+	model.DreamPhaseWeightAdjust:      service.SettingDreamWeightAdjustFraction,
+}
 
 // heartbeatTickTimeout caps how long a single TickProgress write may block.
 // Losing the heartbeat is the failure mode that makes long phases look
@@ -74,6 +92,7 @@ type Runner struct {
 	idleCheck         IdleChecker
 	heartbeatInterval time.Duration
 	bus               events.EventBus
+	settings          SettingsResolver
 	phases            []Phase
 }
 
@@ -87,12 +106,17 @@ type Runner struct {
 // heartbeat events for live UI updates. May be nil — phases bind a
 // nil-bus tracker to ctx in that case, so emits become no-ops and the
 // rest of the pipeline is unaffected. Test fixtures rely on this.
+//
+// settings resolves per-phase budget fractions on each cycle. May be nil; in
+// that case every phase receives the root budget unchanged (preserves
+// pre-feature behaviour for tests that construct a Runner directly).
 func NewRunner(
 	cycleRepo *storage.DreamCycleRepo,
 	logRepo *storage.DreamLogRepo,
 	idleCheck IdleChecker,
 	heartbeatInterval time.Duration,
 	bus events.EventBus,
+	settings SettingsResolver,
 	phases ...Phase,
 ) *Runner {
 	if heartbeatInterval <= 0 {
@@ -104,8 +128,33 @@ func NewRunner(
 		idleCheck:         idleCheck,
 		heartbeatInterval: heartbeatInterval,
 		bus:               bus,
+		settings:          settings,
 		phases:            phases,
 	}
+}
+
+// phaseFraction resolves the configured budget-fraction for a phase, clamped
+// to [0,1]. Returns 0.0 (meaning "no per-phase slice") when the resolver is
+// nil, the phase has no fraction key registered, or the value is out of range.
+//
+// Distinct from phase_consolidation.go's resolveFraction(): that helper
+// clamps to (0,1] and returns a fallback default on out-of-range input
+// because its sub-phase fractions must be positive. The runner instead
+// treats 0.0 as a first-class "no slice, share root" signal for SQL-only
+// phases, so the two cannot be unified without regressing one caller.
+func (r *Runner) phaseFraction(ctx context.Context, phaseName string) float64 {
+	if r.settings == nil {
+		return 0
+	}
+	key, ok := phaseFractionKeys[phaseName]
+	if !ok {
+		return 0
+	}
+	v, err := r.settings.ResolveFloat(ctx, key, "global")
+	if err != nil || v < 0 || v > 1 {
+		return 0
+	}
+	return v
 }
 
 // Execute runs the dream phase pipeline for the given cycle.
@@ -155,16 +204,38 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 			break
 		}
 
-		if budget.Exhausted() {
+		// Resolve the phase's budget fraction once per phase. frac>0 carves
+		// a SubSlice that caps how much of the cycle envelope the phase can
+		// consume; frac==0 (the SQL-only-phase default) passes the root
+		// through unchanged so the phase shares the cycle budget.
+		frac := r.phaseFraction(phaseCtx, phase.Name())
+		phaseBudget := budget
+		sliceCap := 0
+		if frac > 0 {
+			sliceCap = int(float64(budget.Total()) * frac)
+			phaseBudget = budget.SubSlice(sliceCap)
+		}
+
+		if phaseBudget.Exhausted() {
+			// Exhausted at this level means either:
+			//   - root drained (frac==0 path, or frac>0 with parent empty), or
+			//   - sliceCap==0 (degenerate frac that rounded to zero).
+			// Both are operationally "no budget for this phase"; distinguish
+			// the slice-zero case in the residual reason for ops visibility.
+			reason := "budget_exhausted_before_phase"
+			if frac > 0 && sliceCap == 0 {
+				reason = "phase_slice_zero"
+			}
 			slog.Info("dreaming: phase skipped, budget exhausted",
 				"phase", phase.Name(), "cycle", cycle.ID,
-				"used", budget.Used(), "total", budget.Total())
+				"used", budget.Used(), "total", budget.Total(),
+				"slice_cap", sliceCap, "reason", reason)
 			hasResidual = true
 			summaries = append(summaries, PhaseSummaryEntry{
 				Phase:          phase.Name(),
 				Skipped:        true,
 				HasResidual:    true,
-				ResidualReason: "budget_exhausted_before_phase",
+				ResidualReason: reason,
 			})
 			continue
 		}
@@ -174,7 +245,9 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		}
 
 		slog.Info("dreaming: starting phase", "phase", phase.Name(), "cycle", cycle.ID,
-			"budget_remaining", budget.Remaining())
+			"slice_cap", sliceCap,
+			"slice_remaining", phaseBudget.Remaining(),
+			"root_remaining", budget.Remaining())
 
 		tracker.SetPhase(phase.Name())
 		tracker.EmitPhaseStarted(ctx, phase.Name(), budget.Used())
@@ -183,7 +256,7 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		logger.ResetOpCount()
 		start := time.Now()
 
-		phaseResidual, err := phase.Execute(phaseCtx, cycle, budget, logger)
+		phaseResidual, err := phase.Execute(phaseCtx, cycle, phaseBudget, logger)
 
 		elapsed := time.Since(start)
 		tokensConsumed := budget.Used() - tokensBefore
@@ -202,16 +275,31 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 
 		if err != nil {
 			if errors.Is(err, ErrBudgetExhausted) {
+				// A phase reporting ErrBudgetExhausted means its budget ran
+				// out — but with per-phase slicing that may be the slice's
+				// local cap, not the root cap. Only break the cycle when the
+				// root is genuinely drained; otherwise let the next phase
+				// claim its own slice and proceed.
+				rootExhausted := budget.Exhausted()
 				slog.Info("dreaming: budget exhausted during phase",
-					"phase", phase.Name(), "cycle", cycle.ID)
+					"phase", phase.Name(), "cycle", cycle.ID,
+					"root_exhausted", rootExhausted,
+					"root_used", budget.Used(), "root_total", budget.Total())
 				entry.Error = "budget exhausted"
 				entry.HasResidual = true
-				entry.ResidualReason = "budget_exhausted_during_phase"
+				if rootExhausted {
+					entry.ResidualReason = "budget_exhausted_during_phase"
+				} else {
+					entry.ResidualReason = "phase_slice_exhausted"
+				}
 				hasResidual = true
 				summaries = append(summaries, entry)
 				tracker.EmitPhaseCompleted(ctx, phase.Name(), tokensConsumed,
 					logger.OpCount(), elapsed.Milliseconds(), true, entry.Error)
-				break
+				if rootExhausted {
+					break
+				}
+				continue
 			}
 
 			slog.Error("dreaming: phase failed",
