@@ -175,10 +175,12 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		entities = append(entities, found...)
 	}
 
-	// Collect entities and traverse relationships.
+	// Carry the model.Relationship slice (not the JSON projection) through
+	// the filter passes so the reinforcement hook at the bottom retains
+	// id and namespace without re-resolving them.
 	seenEntities := make(map[uuid.UUID]struct{})
 	var graphEntities []graphEntity
-	var graphRels []graphRelationship
+	var rels []model.Relationship
 	seenRels := make(map[uuid.UUID]struct{})
 
 	for _, ent := range entities {
@@ -193,31 +195,24 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 			MentionCount: ent.MentionCount,
 		})
 
-		rels, err := deps.Traverser.TraverseFromEntity(ctx, ent.ID, depth)
+		entRels, err := deps.Traverser.TraverseFromEntity(ctx, ent.ID, depth)
 		if err != nil {
 			continue
 		}
-		for _, rel := range rels {
+		for _, rel := range entRels {
 			if _, ok := seenRels[rel.ID]; ok {
 				continue
 			}
 			seenRels[rel.ID] = struct{}{}
-			graphRels = append(graphRels, graphRelationship{
-				SourceID:     rel.SourceID,
-				TargetID:     rel.TargetID,
-				Relation:     rel.Relation,
-				Weight:       rel.Weight,
-				ValidUntil:   rel.ValidUntil,
-				SourceMemory: rel.SourceMemory,
-			})
+			rels = append(rels, rel)
 		}
 	}
 
 	// Filter relationships by expiry and minimum weight.
 	{
 		now := time.Now()
-		filtered := graphRels[:0]
-		for _, rel := range graphRels {
+		filtered := rels[:0]
+		for _, rel := range rels {
 			// Skip expired unless include_history is set.
 			if !includeHistory && rel.ValidUntil != nil && !rel.ValidUntil.After(now) {
 				continue
@@ -228,16 +223,16 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 			}
 			filtered = append(filtered, rel)
 		}
-		graphRels = filtered
+		rels = filtered
 	}
 
 	// Drop relationships extracted from a memory that has since been
 	// superseded so the graph stays consistent with memory_list/memory_recall.
 	// One GetBatch over the distinct source-memory IDs; superseded rows are
 	// dropped in Go.
-	if !includeSuperseded && len(graphRels) > 0 {
+	if !includeSuperseded && len(rels) > 0 {
 		idSet := make(map[uuid.UUID]struct{})
-		for _, rel := range graphRels {
+		for _, rel := range rels {
 			if rel.SourceMemory != nil {
 				idSet[*rel.SourceMemory] = struct{}{}
 			}
@@ -255,8 +250,8 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 					}
 				}
 			}
-			filtered := graphRels[:0]
-			for _, rel := range graphRels {
+			filtered := rels[:0]
+			for _, rel := range rels {
 				if rel.SourceMemory == nil {
 					filtered = append(filtered, rel)
 					continue
@@ -265,11 +260,44 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 					filtered = append(filtered, rel)
 				}
 			}
-			graphRels = filtered
+			rels = filtered
 		}
 	}
 
+	// Project to JSON shape; orphan resolution runs on the projection so the
+	// reinforcement hook below only writes back edges the user actually saw.
+	graphRels := make([]graphRelationship, 0, len(rels))
+	for _, rel := range rels {
+		graphRels = append(graphRels, graphRelationship{
+			SourceID:     rel.SourceID,
+			TargetID:     rel.TargetID,
+			Relation:     rel.Relation,
+			Weight:       rel.Weight,
+			ValidUntil:   rel.ValidUntil,
+			SourceMemory: rel.SourceMemory,
+		})
+	}
 	graphEntities, graphRels = resolveGraphOrphans(ctx, deps.EntityReader, graphEntities, graphRels, namespaces)
+
+	// Orphan resolver may have pruned edges; intersect surviving (s,t,rel)
+	// triples with rels to recover (id, namespace_id) for each visible edge.
+	survived := make(map[graphEdgeKey]struct{}, len(graphRels))
+	for _, gr := range graphRels {
+		survived[graphEdgeKey{src: gr.SourceID, tgt: gr.TargetID, rel: gr.Relation}] = struct{}{}
+	}
+	var refs []service.RelationshipRef
+	for _, rel := range rels {
+		if _, ok := survived[graphEdgeKey{src: rel.SourceID, tgt: rel.TargetID, rel: rel.Relation}]; !ok {
+			continue
+		}
+		refs = append(refs, service.RelationshipRef{
+			ID:          rel.ID,
+			NamespaceID: rel.NamespaceID,
+		})
+	}
+	if deps.Recall != nil {
+		deps.Recall.ReinforceGraphEdgesAsync(refs)
+	}
 
 	if graphEntities == nil {
 		graphEntities = []graphEntity{}
@@ -284,6 +312,14 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	}
 
 	return wrapToolResult(resp, newGraphReducer(resp))
+}
+
+// graphEdgeKey identifies a graph edge by its endpoints and relation type.
+// Used to intersect the post-orphan-resolution projection back with the
+// pre-projection model slice for the reinforcement hook.
+type graphEdgeKey struct {
+	src, tgt uuid.UUID
+	rel      string
 }
 
 // resolveGraphOrphans guarantees that every relationship's endpoints appear

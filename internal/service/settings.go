@@ -129,6 +129,16 @@ const (
 	SettingDreamEmbeddingBackfillEnabled     = "dreaming.embedding_backfill.enabled"
 	SettingDreamEmbeddingBackfillCapPerCycle = "dreaming.embedding_backfill.cap_per_cycle"
 
+	// Weight-adjustment phase tuning. support_gain is the multiplier alpha in
+	// weight *= 1 + alpha * (support - 1) when a relationship's supporting
+	// memories sum to more than one unit of confidence; with the default 0.05
+	// a relationship attested by three Confidence=1.0 memories rises 10% per
+	// cycle, slow enough that orphan decay still wins on truly dead edges.
+	// recall_reinforce_delta is the additive weight bump applied per recall
+	// touch; capped by the existing 2.0 ceiling at the SQL layer.
+	SettingDreamingWeightSupportGain          = "dreaming.weight.support_gain"
+	SettingDreamingWeightRecallReinforceDelta = "dreaming.weight.recall_reinforce_delta"
+
 	// Retention for soft-deleted memories. Rows past this age are hard-deleted
 	// by the retention sweeper and their vector rows are CASCADEd alongside.
 	SettingMemorySoftDeleteRetentionDays = "memory.soft_delete_retention_days"
@@ -170,6 +180,11 @@ const (
 	// attached to a recall event before truncation, bounding event payload
 	// growth on very wide queries.
 	SettingReinforcementEventMemoryCap = "reconsolidation.event_memory_cap"
+
+	// Recall reinforcement event relationship cap. Mirrors the memory cap for
+	// the relationship.reinforced event payload. Caps how many relationship
+	// IDs are attached before truncation.
+	SettingReinforcementEventRelationshipCap = "reconsolidation.relationship_event_cap"
 
 	// Cascade resolver cache TTL. How long a parsed override blob stays in
 	// memory before the next read goes back to the repo. Operator changes
@@ -468,7 +483,11 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingConfidenceDecayRatePerCycle:  "0.02",
 	SettingConfidenceFloor:              "0.05",
 
-	SettingReinforcementEventMemoryCap: "20",
+	SettingReinforcementEventMemoryCap:       "20",
+	SettingReinforcementEventRelationshipCap: "20",
+
+	SettingDreamingWeightSupportGain:          "0.05",
+	SettingDreamingWeightRecallReinforceDelta: "0.05",
 
 	SettingCascadeCacheTTLSeconds:  "30",
 	SettingSettingsCacheTTLSeconds: "30",

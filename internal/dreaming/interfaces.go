@@ -64,7 +64,7 @@ type RelationshipReader interface {
 // RelationshipWriter creates and modifies relationships.
 type RelationshipWriter interface {
 	Create(ctx context.Context, rel *model.Relationship) error
-	Reinforce(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
+	Reinforce(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, delta float64) error
 	Expire(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	DeleteByID(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	UpdateWeight(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, weight float64) error

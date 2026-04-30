@@ -257,15 +257,12 @@ func TestRelationshipRepo_Reinforce(t *testing.T) {
 		tgtID := createTestEntity(t, ctx, db, nsID, "bob")
 
 		rel := newTestRelationship(nsID, srcID, tgtID)
+		rel.Weight = 0.5
 		if err := repo.Create(ctx, rel); err != nil {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		if rel.Weight != 1.0 {
-			t.Fatalf("expected initial weight 1.0, got %f", rel.Weight)
-		}
-
-		if err := repo.Reinforce(ctx, rel.ID, nsID); err != nil {
+		if err := repo.Reinforce(ctx, rel.ID, nsID, 0.05); err != nil {
 			t.Fatalf("failed to reinforce: %v", err)
 		}
 
@@ -274,12 +271,12 @@ func TestRelationshipRepo_Reinforce(t *testing.T) {
 			t.Fatalf("failed to get after reinforce: %v", err)
 		}
 
-		if fetched.Weight != 2.0 {
-			t.Fatalf("expected weight 2.0 after reinforce, got %f", fetched.Weight)
+		if got := fetched.Weight; got < 0.55-1e-9 || got > 0.55+1e-9 {
+			t.Fatalf("expected weight ~0.55 after delta=0.05 reinforce, got %f", got)
 		}
 
-		// Reinforce again
-		if err := repo.Reinforce(ctx, rel.ID, nsID); err != nil {
+		// Reinforce again with a different delta to verify additivity.
+		if err := repo.Reinforce(ctx, rel.ID, nsID, 0.10); err != nil {
 			t.Fatalf("failed to reinforce second time: %v", err)
 		}
 
@@ -288,8 +285,53 @@ func TestRelationshipRepo_Reinforce(t *testing.T) {
 			t.Fatalf("failed to get after second reinforce: %v", err)
 		}
 
-		if fetched.Weight != 3.0 {
-			t.Fatalf("expected weight 3.0 after second reinforce, got %f", fetched.Weight)
+		if got := fetched.Weight; got < 0.65-1e-9 || got > 0.65+1e-9 {
+			t.Fatalf("expected weight ~0.65 after second reinforce delta=0.10, got %f", got)
+		}
+	})
+}
+
+// TestRelationshipRepo_Reinforce_ClampsAt2 pins the SQL-layer ceiling. The
+// recall-side write must not run away past 2.0 even under sustained recall
+// traffic; the dream phase's calculateWeight applies the same upper bound, so
+// the two paths converge on the same maximum.
+func TestRelationshipRepo_Reinforce_ClampsAt2(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		tgtID := createTestEntity(t, ctx, db, nsID, "bob")
+
+		rel := newTestRelationship(nsID, srcID, tgtID)
+		rel.Weight = 1.95
+		if err := repo.Create(ctx, rel); err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		// Single reinforce that would overshoot the cap by 0.05.
+		if err := repo.Reinforce(ctx, rel.ID, nsID, 0.10); err != nil {
+			t.Fatalf("failed to reinforce: %v", err)
+		}
+
+		fetched, err := repo.GetByID(ctx, rel.ID)
+		if err != nil {
+			t.Fatalf("failed to get after reinforce: %v", err)
+		}
+		if fetched.Weight != 2.0 {
+			t.Fatalf("expected weight clamped at 2.0, got %f", fetched.Weight)
+		}
+
+		// Subsequent reinforces stay at the cap.
+		if err := repo.Reinforce(ctx, rel.ID, nsID, 0.50); err != nil {
+			t.Fatalf("failed to reinforce again: %v", err)
+		}
+		fetched, err = repo.GetByID(ctx, rel.ID)
+		if err != nil {
+			t.Fatalf("failed to get after saturated reinforce: %v", err)
+		}
+		if fetched.Weight != 2.0 {
+			t.Fatalf("expected weight pinned at 2.0, got %f", fetched.Weight)
 		}
 	})
 }
@@ -299,7 +341,7 @@ func TestRelationshipRepo_Reinforce_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewRelationshipRepo(db)
 
-		err := repo.Reinforce(ctx, uuid.New(), uuid.New())
+		err := repo.Reinforce(ctx, uuid.New(), uuid.New(), 0.05)
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}

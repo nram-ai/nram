@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log/slog"
 	"strconv"
 	"time"
@@ -20,6 +22,30 @@ type MemoryReinforcer interface {
 	BumpReinforcement(ctx context.Context, ids []uuid.UUID, now time.Time, factor float64) (int64, error)
 }
 
+// RelationshipReinforcer is the narrow write-capability RecallService needs to
+// reinforce graph edges after a recall surfaces them. The dream-side
+// weight_adjustment phase computes a multi-memory support multiplier; this
+// hook is its complement — it raises weight when the LLM actively touches an
+// edge, so a heavily-used relationship cannot silently atrophy under decay.
+//
+// Per-id rather than batch because the call site loops over ≤ 50 edges and
+// the (id, namespace_id) tuple membership cannot be expressed portably in
+// one prepared statement across SQLite + Postgres without backend-specific
+// SQL. The clamp at 2.0 lives at the SQL layer in RelationshipRepo.Reinforce
+// so the cap cannot drift between the recall write and the dream-phase read.
+type RelationshipReinforcer interface {
+	Reinforce(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, delta float64) error
+}
+
+// RelationshipRef pairs a relationship's id with its namespace so the recall
+// path can reinforce edges that span the primary namespace plus its
+// dependents (cross-namespace shares, global) in a single goroutine without
+// re-resolving namespace at write time.
+type RelationshipRef struct {
+	ID          uuid.UUID
+	NamespaceID uuid.UUID
+}
+
 // SettingsReader resolves setting values. Narrower than SettingsService so
 // tests can stub it cheaply.
 type SettingsReader interface {
@@ -30,10 +56,15 @@ type SettingsReader interface {
 
 // ReinforcementDeps carries the optional dependencies that activate the
 // reconsolidation hook. When any is nil the hook is effectively off.
+//
+// RelWriter is optional alongside Writer — wiring only the memory side keeps
+// the historical behavior; wiring only the relationship side enables graph
+// reinforcement without touching memory confidence. Both null = both off.
 type ReinforcementDeps struct {
-	Writer   MemoryReinforcer
-	Settings SettingsReader
-	Bus      events.EventBus
+	Writer    MemoryReinforcer
+	RelWriter RelationshipReinforcer
+	Settings  SettingsReader
+	Bus       events.EventBus
 	// Scope is the settings scope for reading reconsolidation keys.
 	// Defaults to "global" when empty.
 	Scope string
@@ -49,6 +80,20 @@ type reinforcementEvent struct {
 	MemoryIDs  []uuid.UUID `json:"memory_ids,omitempty"`
 	ElapsedMs  int64       `json:"elapsed_ms"`
 	Persisted  int64       `json:"persisted,omitempty"` // non-zero only in persist mode
+}
+
+// relReinforcementEvent is the data payload for
+// events.RelationshipReinforced. Mirrors reinforcementEvent's shape so a
+// downstream observer subscribing to both can use the same parser. Delta
+// stands in for Factor because relationship reinforcement is additive
+// (delta added to weight, capped at 2.0) rather than multiplicative.
+type relReinforcementEvent struct {
+	Mode            string      `json:"mode"`
+	Count           int         `json:"count"`
+	Delta           float64     `json:"delta"`
+	RelationshipIDs []uuid.UUID `json:"relationship_ids,omitempty"`
+	ElapsedMs       int64       `json:"elapsed_ms"`
+	Persisted       int64       `json:"persisted,omitempty"` // non-zero only in persist mode
 }
 
 // reinforce applies reconsolidation to the given memory IDs. The three
@@ -122,6 +167,107 @@ func (s *RecallService) reinforce(ctx context.Context, ids []uuid.UUID) {
 		Persisted: persisted,
 	}
 	events.Emit(ctx, s.reinforcement.Bus, events.MemoryReinforced, "global", payload)
+}
+
+// reinforceRels applies graph-edge reinforcement to the given relationships.
+// Recall side is additive (delta), dream side is multiplicative
+// (support_gain) — independent signals composing at the SQL-layer 2.0 cap.
+// Gated by SettingReconsolidationMode so the whole reconsolidation pathway
+// has one kill switch.
+func (s *RecallService) reinforceRels(ctx context.Context, refs []RelationshipRef) {
+	if len(refs) == 0 {
+		return
+	}
+	if s.reinforcement == nil || s.reinforcement.Settings == nil {
+		return
+	}
+
+	scope := s.reinforcement.Scope
+	if scope == "" {
+		scope = "global"
+	}
+
+	mode, _ := s.reinforcement.Settings.Resolve(ctx, SettingReconsolidationMode, scope)
+	if mode == "" {
+		mode = ReconsolidationModeShadow
+	}
+	if mode == ReconsolidationModeOff {
+		return
+	}
+
+	delta, err := s.reinforcement.Settings.ResolveFloat(ctx, SettingDreamingWeightRecallReinforceDelta, scope)
+	if err != nil || delta <= 0 {
+		// Mirror the recall_reinforce.go memory-side fallback: prefer the
+		// registered default to avoid drift between code and schema.
+		if def, ok := settingDefaults[SettingDreamingWeightRecallReinforceDelta]; ok {
+			if v, perr := strconv.ParseFloat(def, 64); perr == nil && v > 0 {
+				delta = v
+			}
+		}
+		if delta <= 0 {
+			delta = 0.05
+		}
+	}
+
+	start := time.Now()
+	var persisted int64
+	if mode == ReconsolidationModePersist && s.reinforcement.RelWriter != nil {
+		for _, ref := range refs {
+			if werr := s.reinforcement.RelWriter.Reinforce(ctx, ref.ID, ref.NamespaceID, delta); werr != nil {
+				// sql.ErrNoRows just means the row was expired/deleted between
+				// the read and the write. The traverser already filters expired
+				// edges; the only path here is a deletion racing the recall.
+				if errors.Is(werr, sql.ErrNoRows) {
+					continue
+				}
+				slog.Warn("recall: relationship reinforcement write failed", "err", werr, "id", ref.ID)
+				continue
+			}
+			persisted++
+		}
+	}
+
+	cap, cerr := s.reinforcement.Settings.ResolveInt(ctx, SettingReinforcementEventRelationshipCap, scope)
+	if cerr != nil || cap < 1 {
+		if def, ok := settingDefaults[SettingReinforcementEventRelationshipCap]; ok {
+			if v, perr := strconv.Atoi(def); perr == nil && v >= 1 {
+				cap = v
+			}
+		}
+	}
+	idsForEvent := make([]uuid.UUID, 0, len(refs))
+	for _, ref := range refs {
+		idsForEvent = append(idsForEvent, ref.ID)
+	}
+	if len(idsForEvent) > cap {
+		idsForEvent = idsForEvent[:cap]
+	}
+
+	payload := relReinforcementEvent{
+		Mode:            mode,
+		Count:           len(refs),
+		Delta:           delta,
+		RelationshipIDs: idsForEvent,
+		ElapsedMs:       time.Since(start).Milliseconds(),
+		Persisted:       persisted,
+	}
+	events.Emit(ctx, s.reinforcement.Bus, events.RelationshipReinforced, "global", payload)
+}
+
+// ReinforceGraphEdgesAsync fires the relationship-reinforcement hook for
+// the given refs in a goroutine. Public so MCP handlers that surface graph
+// edges outside Recall (memory_graph) write back through the same gate and
+// event as Recall itself.
+func (s *RecallService) ReinforceGraphEdgesAsync(refs []RelationshipRef) {
+	if s.reinforcement == nil || len(refs) == 0 {
+		return
+	}
+	copied := make([]RelationshipRef, len(refs))
+	copy(copied, refs)
+	go func(refs []RelationshipRef) {
+		defer func() { _ = recover() }()
+		s.reinforceRels(context.Background(), refs)
+	}(copied)
 }
 
 // SetReinforcement wires the optional reconsolidation hook. Passing a zero

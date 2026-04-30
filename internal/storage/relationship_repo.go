@@ -119,14 +119,21 @@ func (r *RelationshipRepo) Expire(ctx context.Context, id uuid.UUID, namespaceID
 	return nil
 }
 
-// Reinforce increments the weight of a relationship by 1.
-func (r *RelationshipRepo) Reinforce(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
-	query := `UPDATE relationships SET weight = weight + 1 WHERE id = ? AND namespace_id = ?`
+// Reinforce adds delta to a relationship's weight, clamped at the 2.0 ceiling
+// at the SQL layer (min on SQLite, LEAST on Postgres). Returns sql.ErrNoRows
+// if the (id, namespace_id) pair does not match a row, so callers can detect
+// and ignore deletions racing with reinforcement.
+//
+// The cap matches the upper clamp in dreaming/phase_weights.go calculateWeight
+// so the recall-side write and the dream-side adjustment cannot diverge from
+// the same ceiling.
+func (r *RelationshipRepo) Reinforce(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, delta float64) error {
+	query := `UPDATE relationships SET weight = min(weight + ?, 2.0) WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE relationships SET weight = weight + 1 WHERE id = $1 AND namespace_id = $2`
+		query = `UPDATE relationships SET weight = LEAST(weight + $1, 2.0) WHERE id = $2 AND namespace_id = $3`
 	}
 
-	result, err := r.db.Exec(ctx, query, id.String(), namespaceID.String())
+	result, err := r.db.Exec(ctx, query, delta, id.String(), namespaceID.String())
 	if err != nil {
 		return fmt.Errorf("relationship reinforce: %w", err)
 	}

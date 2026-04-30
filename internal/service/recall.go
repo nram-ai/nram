@@ -577,6 +577,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// Graph traversal if requested.
 	graphEntities := []RecallEntity{}
 	graphRelationships := []RecallRelationship{}
+	// graphRelRefs parallels graphRelationships with (id, namespace) pairs
+	// for the relationship-reinforcement hook; the JSON projection drops both.
+	var graphRelRefs []RelationshipRef
 	if req.IncludeGraph && s.entityReader != nil && s.traverser != nil {
 		// Search for entities related to the query using multiple strategies:
 		// 1. Full query string match
@@ -616,7 +619,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		if len(foundEntities) > 0 {
 			// Build set of memory IDs connected via graph.
 			graphMemoryRelevance := make(map[uuid.UUID]float64)
-			// Deduplicate relationships by ID.
+			// Dedup; also the per-recall throttle for relationship reinforcement.
 			seenRels := make(map[uuid.UUID]struct{})
 
 			for _, ent := range foundEntities {
@@ -637,6 +640,10 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 								TargetID: rel.TargetID,
 								Relation: rel.Relation,
 								Weight:   rel.Weight,
+							})
+							graphRelRefs = append(graphRelRefs, RelationshipRef{
+								ID:          rel.ID,
+								NamespaceID: rel.NamespaceID,
 							})
 						}
 						if rel.SourceMemory != nil {
@@ -805,6 +812,17 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			defer func() { _ = recover() }()
 			s.reinforce(context.Background(), ids)
 		}(ids)
+	}
+
+	// seenRels above guarantees graphRelRefs holds one entry per edge
+	// surfaced in this call — the per-relationship throttle.
+	if s.reinforcement != nil && len(graphRelRefs) > 0 {
+		refs := make([]RelationshipRef, len(graphRelRefs))
+		copy(refs, graphRelRefs)
+		go func(refs []RelationshipRef) {
+			defer func() { _ = recover() }()
+			s.reinforceRels(context.Background(), refs)
+		}(refs)
 	}
 
 	latency := time.Since(start).Milliseconds()

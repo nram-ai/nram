@@ -7,12 +7,19 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // WeightAdjustmentPhase recalibrates relationship weights and entity mention
-// counts based on the current state of the knowledge graph. Relationships
-// supported by multiple high-confidence memories are strengthened; orphaned
-// or low-confidence relationships decay.
+// counts based on the current state of the knowledge graph. Relationship
+// weights rise when supported by multiple non-deleted, high-confidence
+// memories — either direct lineage (memories whose enrichment produced an
+// edge between the same endpoints) or co-mention (memories that produced
+// rows touching both endpoints separately) — and decay otherwise. Recall
+// traffic raises weight via the recall-side reinforcement hook in
+// internal/service/recall_reinforce.go (RecallService.reinforceRels);
+// this phase is the sleep-side complement that reflects the supporting
+// memory state, not the recall pattern.
 //
 // This phase has zero token cost (heuristic-based).
 type WeightAdjustmentPhase struct {
@@ -21,6 +28,7 @@ type WeightAdjustmentPhase struct {
 	relationships RelationshipReader
 	relWriter     RelationshipWriter
 	memories      MemoryReader
+	settings      SettingsResolver
 }
 
 // NewWeightAdjustmentPhase creates a new weight adjustment phase.
@@ -30,6 +38,7 @@ func NewWeightAdjustmentPhase(
 	relationships RelationshipReader,
 	relWriter RelationshipWriter,
 	memories MemoryReader,
+	settings SettingsResolver,
 ) *WeightAdjustmentPhase {
 	return &WeightAdjustmentPhase{
 		entities:      entities,
@@ -37,43 +46,163 @@ func NewWeightAdjustmentPhase(
 		relationships: relationships,
 		relWriter:     relWriter,
 		memories:      memories,
+		settings:      settings,
 	}
 }
 
 func (p *WeightAdjustmentPhase) Name() string { return model.DreamPhaseWeightAdjust }
 
+// supportIndex pre-computes the per-pair direct-lineage set and the
+// per-entity co-mention set from one pass over active relationships in the
+// namespace. Tier 1 lookups are O(1); Tier 2 lookups are O(min(|ts|,|tt|))
+// per relationship, where ts and tt are the source-memory sets touching the
+// edge's two endpoints. pairKey is the same canonical-order key the
+// contradictions phase uses for memory-pair dedup.
+type supportIndex struct {
+	directByPair       map[pairKey]map[uuid.UUID]struct{}
+	memsTouchingEntity map[uuid.UUID]map[uuid.UUID]struct{}
+}
+
+func buildSupportIndex(rels []model.Relationship) (supportIndex, map[uuid.UUID]bool) {
+	idx := supportIndex{
+		directByPair:       make(map[pairKey]map[uuid.UUID]struct{}),
+		memsTouchingEntity: make(map[uuid.UUID]map[uuid.UUID]struct{}),
+	}
+	allMemoryIDs := make(map[uuid.UUID]bool)
+
+	for _, rel := range rels {
+		if rel.ValidUntil != nil {
+			continue
+		}
+		if rel.SourceMemory == nil {
+			continue
+		}
+		sm := *rel.SourceMemory
+		allMemoryIDs[sm] = true
+
+		pair := orderedPairKey(rel.SourceID, rel.TargetID)
+		if idx.directByPair[pair] == nil {
+			idx.directByPair[pair] = make(map[uuid.UUID]struct{})
+		}
+		idx.directByPair[pair][sm] = struct{}{}
+
+		if idx.memsTouchingEntity[rel.SourceID] == nil {
+			idx.memsTouchingEntity[rel.SourceID] = make(map[uuid.UUID]struct{})
+		}
+		idx.memsTouchingEntity[rel.SourceID][sm] = struct{}{}
+
+		if idx.memsTouchingEntity[rel.TargetID] == nil {
+			idx.memsTouchingEntity[rel.TargetID] = make(map[uuid.UUID]struct{})
+		}
+		idx.memsTouchingEntity[rel.TargetID][sm] = struct{}{}
+	}
+
+	return idx, allMemoryIDs
+}
+
+// supportSums returns the contribution of supporting memories for one
+// relationship. Tier 1 (direct lineage) memories contribute mem.Confidence;
+// Tier 2 (co-mention only, not in Tier 1) contribute 0.5 * mem.Confidence.
+// Soft-deleted and zero-confidence memories are filtered out at sum time —
+// they contribute neither support nor a tier count.
+func supportSums(
+	rel *model.Relationship,
+	idx supportIndex,
+	sourceMemories map[uuid.UUID]*model.Memory,
+) (support float64, tier1Count, tier2Count int) {
+	tier1 := idx.directByPair[orderedPairKey(rel.SourceID, rel.TargetID)]
+	for m := range tier1 {
+		mem, ok := sourceMemories[m]
+		if !ok || mem == nil || mem.DeletedAt != nil || mem.Confidence <= 0 {
+			continue
+		}
+		support += mem.Confidence
+		tier1Count++
+	}
+
+	ts := idx.memsTouchingEntity[rel.SourceID]
+	tt := idx.memsTouchingEntity[rel.TargetID]
+	small, large := ts, tt
+	if len(tt) < len(ts) {
+		small, large = tt, ts
+	}
+	for m := range small {
+		if _, inT1 := tier1[m]; inT1 {
+			continue
+		}
+		if _, inLarge := large[m]; !inLarge {
+			continue
+		}
+		mem, ok := sourceMemories[m]
+		if !ok || mem == nil || mem.DeletedAt != nil || mem.Confidence <= 0 {
+			continue
+		}
+		support += 0.5 * mem.Confidence
+		tier2Count++
+	}
+	return support, tier1Count, tier2Count
+}
+
 func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+	tokensBefore := budget.Used()
+
 	rels, err := p.relationships.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
 		return false, err
 	}
 
-	// Pre-fetch all source memories to avoid N+1 queries.
-	sourceMemoryIDs := make(map[uuid.UUID]bool)
-	for _, rel := range rels {
-		if rel.SourceMemory != nil {
-			sourceMemoryIDs[*rel.SourceMemory] = true
-		}
+	idx, allMemoryIDs := buildSupportIndex(rels)
+
+	// One batch fetch over every memory that could contribute support for
+	// any row in this pass; replaces a per-row GetByID round trip.
+	memIDs := make([]uuid.UUID, 0, len(allMemoryIDs))
+	for memID := range allMemoryIDs {
+		memIDs = append(memIDs, memID)
 	}
-	sourceMemories := make(map[uuid.UUID]*model.Memory)
-	for memID := range sourceMemoryIDs {
-		mem, err := p.memories.GetByID(ctx, memID)
-		if err == nil {
-			sourceMemories[memID] = mem
+	sourceMemories := make(map[uuid.UUID]*model.Memory, len(memIDs))
+	if len(memIDs) > 0 {
+		batch, err := p.memories.GetBatch(ctx, memIDs)
+		if err != nil {
+			slog.Warn("dreaming: weight_adjustment source-memory batch failed",
+				"err", err, "count", len(memIDs), "cycle", cycle.ID)
+		} else {
+			for i := range batch {
+				sourceMemories[batch[i].ID] = &batch[i]
+			}
 		}
 	}
 
-	adjusted := 0
-	expired := 0
+	supportGain := 0.05
+	if p.settings != nil {
+		v, err := p.settings.ResolveFloat(ctx, service.SettingDreamingWeightSupportGain, "global")
+		if err == nil && v >= 0 {
+			supportGain = v
+		}
+	}
+
+	var (
+		directionUp   int
+		directionDown int
+		directionSame int
+		expired       int
+		tier1Total    int
+		tier2Total    int
+		visited       int
+	)
 	now := time.Now().UTC()
 
 	for _, rel := range rels {
 		if rel.ValidUntil != nil {
 			continue
 		}
+		visited++
 
-		newWeight := p.calculateWeight(&rel, now, sourceMemories)
+		newWeight, t1, t2 := p.calculateWeight(&rel, now, sourceMemories, idx, supportGain)
+		tier1Total += t1
+		tier2Total += t2
+
 		if newWeight == rel.Weight {
+			directionSame++
 			continue
 		}
 
@@ -106,22 +235,58 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 			slog.Warn("dreaming: log operation failed", "err", err)
 		}
 
-		adjusted++
+		switch {
+		case newWeight > rel.Weight:
+			directionUp++
+		case newWeight < rel.Weight:
+			directionDown++
+		default:
+			directionSame++
+		}
 	}
 
 	// Reuse loaded relationships for mention count recalibration.
 	p.recalibrateMentionCounts(ctx, cycle.NamespaceID, rels, logger)
 
-	if adjusted > 0 || expired > 0 {
-		slog.Info("dreaming: weight adjustments", "adjusted", adjusted, "expired", expired, "cycle", cycle.ID)
+	if directionUp > 0 || directionDown > 0 || expired > 0 {
+		slog.Info("dreaming: weight adjustments",
+			"direction_up", directionUp,
+			"direction_down", directionDown,
+			"direction_same", directionSame,
+			"expired", expired,
+			"cycle", cycle.ID)
 	}
+
+	p.writePhaseSummary(ctx, logger, map[string]interface{}{
+		"sub_phase":        "weight_adjustment",
+		"direction_up":     directionUp,
+		"direction_down":   directionDown,
+		"direction_same":   directionSame,
+		"expired":          expired,
+		"visited":          visited,
+		"tier1_supporters": tier1Total,
+		"tier2_supporters": tier2Total,
+		"support_gain":     supportGain,
+	}, budget, tokensBefore)
 
 	// Weight adjustment scans every active relationship in one pass; no
 	// residual work can be left behind.
 	return false, nil
 }
 
-func (p *WeightAdjustmentPhase) calculateWeight(rel *model.Relationship, now time.Time, sourceMemories map[uuid.UUID]*model.Memory) float64 {
+// calculateWeight returns the new weight for rel along with the Tier 1 /
+// Tier 2 counts so the phase summary can reveal whether multi-memory
+// support is reaching any rows. The 30-day decay loop runs unchanged; the
+// support multiplier lifts weight only when summed memory confidence
+// exceeds one unit; the empty-support guard biases dead-source rows toward
+// the pruning floor.
+func (p *WeightAdjustmentPhase) calculateWeight(
+	rel *model.Relationship,
+	now time.Time,
+	sourceMemories map[uuid.UUID]*model.Memory,
+	idx supportIndex,
+	supportGain float64,
+) (float64, int, int) {
 	weight := rel.Weight
 
 	age := now.Sub(rel.ValidFrom)
@@ -133,14 +298,19 @@ func (p *WeightAdjustmentPhase) calculateWeight(rel *model.Relationship, now tim
 		}
 	}
 
-	if rel.SourceMemory != nil {
-		mem, found := sourceMemories[*rel.SourceMemory]
-		if !found {
+	support, t1, t2 := supportSums(rel, idx, sourceMemories)
+	if support > 1.0 {
+		weight = weight * (1 + supportGain*(support-1))
+	}
+
+	// Empty-support guard: when no live memory in this namespace attests
+	// the edge AND the row's recorded singular source is soft-deleted,
+	// halve the weight so dead-source rows fall through to the pruning
+	// floor faster. Missing-source rows (source row not loaded) get no
+	// extra penalty — decay alone removes them.
+	if support <= 0 && rel.SourceMemory != nil {
+		if mem, ok := sourceMemories[*rel.SourceMemory]; ok && mem != nil && mem.DeletedAt != nil {
 			weight *= 0.5
-		} else if mem.DeletedAt != nil {
-			weight *= 0.5
-		} else {
-			weight *= mem.Confidence
 		}
 	}
 
@@ -151,7 +321,37 @@ func (p *WeightAdjustmentPhase) calculateWeight(rel *model.Relationship, now tim
 		weight = 2.0
 	}
 
-	return weight
+	return weight, t1, t2
+}
+
+// writePhaseSummary emits a slog.Info line plus a DreamOpPhaseSummary
+// dream_log entry. The direction triad and tier counts in stats are how a
+// future regression like the monotonic-decay bug surfaces in dream_logs
+// without per-op spot-checking.
+func (p *WeightAdjustmentPhase) writePhaseSummary(
+	ctx context.Context,
+	logger *DreamLogWriter,
+	stats map[string]interface{},
+	budget *TokenBudget,
+	tokensBefore int,
+) {
+	stats["tokens_spent"] = budget.Used() - tokensBefore
+	stats["budget_remaining"] = budget.Remaining()
+
+	args := make([]any, 0, len(stats)*2)
+	for k, v := range stats {
+		args = append(args, k, v)
+	}
+	slog.Info("dreaming: weight_adjustment complete", args...)
+
+	if logger == nil {
+		return
+	}
+	if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust,
+		model.DreamOpPhaseSummary, "phase", uuid.Nil, nil, stats); err != nil {
+		slog.Warn("dreaming: log phase summary failed",
+			"phase", model.DreamPhaseWeightAdjust, "err", err)
+	}
 }
 
 // recalibrateMentionCounts updates entity mention counts to reflect

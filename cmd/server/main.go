@@ -381,10 +381,11 @@ func main() {
 	// mutating the DB; flip to persist via the reconsolidation.mode setting
 	// once the shadow run looks right.
 	recallSvc.SetReinforcement(&service.ReinforcementDeps{
-		Writer:   memoryRepo,
-		Settings: settingsSvc,
-		Bus:      eventBus,
-		Scope:    "global",
+		Writer:    memoryRepo,
+		RelWriter: relationshipRepo,
+		Settings:  settingsSvc,
+		Bus:       eventBus,
+		Scope:     "global",
 	})
 
 	// Hybrid recall fusion. The lexical channel is the same MemoryRepo
@@ -548,7 +549,7 @@ func main() {
 		contradictionPhase,
 		consolidationPhase,
 		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo, settingsSvc),
-		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo),
+		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo, settingsSvc),
 	)
 
 	dreamRollback := dreaming.NewRollbackService(
