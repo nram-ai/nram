@@ -1,13 +1,34 @@
 package hnsw
 
 import (
+	"bytes"
 	"math"
 	"math/rand"
+	"strconv"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 )
+
+// assertFriendsInvariant fails the test if any node has an entry in friends[L]
+// whose level is below L. Violating this invariant causes addSingle's
+// back-connection to panic with "index out of range".
+func assertFriendsInvariant(t *testing.T, g *Graph) {
+	t.Helper()
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for _, gn := range g.nodes {
+		for layer, friends := range gn.friends {
+			for _, f := range friends {
+				if f.level < layer {
+					t.Errorf("invariant violated: node %s level=%d holds friend %s level=%d at layer=%d",
+						gn.id, gn.level, f.id, f.level, layer)
+				}
+			}
+		}
+	}
+}
 
 func TestNewGraph(t *testing.T) {
 	g := NewGraph(128)
@@ -445,5 +466,68 @@ func TestSearchResultOrder(t *testing.T) {
 			t.Errorf("Results not sorted: [%d].Score=%f > [%d].Score=%f",
 				i, results[i].Score, i-1, results[i-1].Score)
 		}
+	}
+}
+
+// TestSnapshotRoundTripThenPerCallAdd reproduces the contradiction-phase
+// self-heal path that panicked in production: the graph is loaded from a
+// snapshot (Export -> Import) and then a batch of fresh ids is inserted via
+// individual Add calls (one lock acquisition per node, matching
+// HNSWStore.UpsertBatch). The test asserts no panic and that the friends-list
+// invariant holds throughout — every entry in any node's friends[L] has
+// level >= L.
+func TestSnapshotRoundTripThenPerCallAdd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("stress test; skipped under -short")
+	}
+
+	const (
+		dim      = 32
+		preCount = 500
+		newCount = 75
+	)
+
+	for trial := 0; trial < 40; trial++ {
+		seed := int64(20260430 + trial)
+		t.Run("seed="+strconv.FormatInt(seed, 10), func(t *testing.T) {
+			g := NewGraph(dim, WithSeed(seed), WithEfConstruction(200), WithEfSearch(50))
+			rng := rand.New(rand.NewSource(seed + 1))
+
+			for i := 0; i < preCount; i++ {
+				v := make([]float32, dim)
+				for j := range v {
+					v[j] = rng.Float32()*2 - 1
+				}
+				if err := g.Add(Node{ID: uuid.New(), Vector: v}); err != nil {
+					t.Fatalf("pre-populate Add %d: %v", i, err)
+				}
+			}
+			assertFriendsInvariant(t, g)
+
+			var buf bytes.Buffer
+			if err := g.Export(&buf); err != nil {
+				t.Fatalf("Export: %v", err)
+			}
+			imported, err := Import(&buf)
+			if err != nil {
+				t.Fatalf("Import: %v", err)
+			}
+			assertFriendsInvariant(t, imported)
+
+			for i := 0; i < newCount; i++ {
+				v := make([]float32, dim)
+				for j := range v {
+					v[j] = rng.Float32()*2 - 1
+				}
+				if err := imported.Add(Node{ID: uuid.New(), Vector: v}); err != nil {
+					t.Fatalf("post-snapshot Add %d: %v", i, err)
+				}
+			}
+			assertFriendsInvariant(t, imported)
+
+			if imported.Len() != preCount+newCount {
+				t.Errorf("Len: got %d, want %d", imported.Len(), preCount+newCount)
+			}
+		})
 	}
 }

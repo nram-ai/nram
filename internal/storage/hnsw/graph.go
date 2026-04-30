@@ -3,6 +3,7 @@ package hnsw
 import (
 	"container/heap"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"sort"
@@ -196,6 +197,16 @@ func (g *Graph) addSingle(n Node) error {
 
 		// Add back-connections from each selected neighbor to the new node.
 		for _, neighbor := range selected {
+			// Invariant: every entry in X.friends[L] must have level >= L.
+			if lc > neighbor.level {
+				return fmt.Errorf(
+					"hnsw: invariant violated: neighbor %s level=%d cannot accept friend at layer=%d "+
+						"(inserting %s level=%d, maxLevel=%d, ep=%s ep.level=%d)",
+					neighbor.id, neighbor.level, lc,
+					gn.id, gn.level, g.maxLevel,
+					ep.id, ep.level,
+				)
+			}
 			neighbor.friends[lc] = append(neighbor.friends[lc], gn)
 			nMaxConn := g.m
 			if lc == 0 {
