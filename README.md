@@ -2,9 +2,22 @@
 
 > **Work in Progress:** This project is under active development. Some features may be incomplete, unstable, or subject to change. Contributions and feedback are welcome, but expect rough edges as things continue to evolve.
 
-Persistent memory layer for AI agents. Store, recall, and enrich memories with vector embeddings, knowledge graphs, and a built-in admin UI.
+A self-hosted, long-term memory layer that any LLM-using tool can plug into. Store, recall, and enrich memories with vector embeddings, knowledge graphs, sleep-style consolidation, and a built-in admin UI.
 
-nram provides a self-hosted server that any AI agent can use to persist long-term memory across conversations. It supports semantic search via vector embeddings, automatic fact and entity extraction, a knowledge graph, and multi-tenant organization management - all accessible through a REST API, MCP (Model Context Protocol), or the built-in web UI.
+## What is nram?
+
+nram is a long-term memory layer that any LLM-using tool can plug into. AI assistants and chat interfaces forget everything between conversations; reference libraries (PDFs, textbooks, research notes, project decisions) sit in folders nobody searches; the tools you use day to day (Claude, ChatGPT, Cursor, Obsidian, custom apps) each invent their own half-baked memory and none of them talk to each other. nram is the shared substrate underneath all of that. You run it on your own machine or server, and everything else connects in.
+
+People use it for four overlapping things:
+
+- *"My AI assistant should remember things about me and my projects."* **Conversational memory** — point Claude.ai or ChatGPT or Cursor at nram via MCP and they read/write a persistent memory that survives across sessions, across tools, and across vendors.
+- *"I have a corpus of reference material — textbooks, PDFs, research notes, company docs — and I want to ask questions of it that actually find what I mean."* **Document-corpus memory** — store the corpus as memories and get semantic search, an entity-deduped knowledge graph, and consolidation over the whole pile. Same job as NotebookLM / AnythingLLM / Khoj, different shape: nram is the substrate, not a chat UI.
+- *"I want my AI to behave consistently — follow my rules, remember my preferences, avoid the same mistakes, apply the same conventions across every session and every tool."* **Procedural and behavioral memory** — store rules, conventions, dos and don'ts, named failure modes, standing protocols, and preferences as memories the assistant pulls at session start and treats as binding. The included `behavioral-contract` pattern is exactly this: vendor-independent rules pulled before responding to any user message.
+- *"I want my coding agent / research agent / custom agent to actually accumulate knowledge instead of starting from scratch every run."* **Agent memory** — what the original agent-memory projects (Mem0, Letta, Zep, Graphiti) target; nram serves the same role with sleep-style consolidation and a knowledge graph layered on top.
+
+What makes it more than a database with vector search: semantic recall (find by meaning, not by keyword) plus automatic fact and entity extraction (the system pulls structured information out of your free-text memories) plus a knowledge graph (entities and relationships built up over time). On top of all of that, a *dreaming* cycle runs in the background — it dedups near-duplicates, detects contradictions between memories, consolidates related memories into higher-level summaries, and prunes the stuff you never use. Think of it as a notebook that quietly reorganizes itself overnight.
+
+How things connect: **MCP** is the standard way Claude / ChatGPT / Cursor / your custom agent plug in tools — works out of the box, OAuth auto-discovers, no API key juggling. The **REST API** lets any code that can speak HTTP store and recall memories. The **web UI** is the dashboard for managing organizations, projects, providers, the knowledge graph, and the dreaming cycle.
 
 ## Features
 
@@ -32,44 +45,123 @@ nram provides a self-hosted server that any AI agent can use to persist long-ter
 
 ## Quick Start
 
-### Prerequisites
+> **Read this first (1 minute) — please actually read it.** Most reported issues
+> trace back to one of these three points:
+>
+> - **nram needs an LLM provider to do anything beyond storing raw text.** Without
+>   one, semantic search silently falls back to keyword-only matches and the
+>   knowledge graph stays empty. **You will not get an error.** The system just
+>   runs degraded.
+> - **The setup wizard does not configure providers.** You configure providers
+>   yourself on the **Provider Config** page after the wizard finishes. Skipping
+>   this step is the #1 cause of "search doesn't work" issues.
+> - **Pick the right embedding model.** Ollama's commonly-suggested
+>   `nomic-embed-text` has a **2048-token context window**. Memories longer than
+>   that are silently truncated before embedding, with no warning anywhere. See
+>   [Recommended Models](#recommended-models) below for what to use instead.
 
-- Go 1.26+ (for building from source)
-- Node.js 18+ (for building the admin UI)
+### Step 1 — Install prerequisites
 
-### Build
+Versions, with a one-liner check for each:
+
+| Tool | Required | Check |
+|---|---|---|
+| Go | 1.26+ | `go version` |
+| Node.js | 18+ | `node --version` |
+| npm | any (build uses `npm ci`, **not** pnpm or yarn) | `npm --version` |
+| Ollama | optional, for local LLMs | `ollama --version` — skip if you're using OpenAI / Anthropic / Gemini / OpenRouter |
+
+### Step 2 — Build
 
 ```bash
-# Full build (UI + server binary)
+git clone <repo-url> nram && cd nram
 make build
+```
 
-# Or build components separately
+Output: a single binary `./nram` with the React UI embedded. One target, do not
+try to be clever. If you need to build the UI and server separately:
+
+```bash
 make build-ui       # Build React UI and embed into Go binary
 make build-server   # Compile Go server to ./nram
-
-# Operator-only auxiliary binary (drains the dream novelty-audit backlog
-# for a single project without going through the scheduler)
-go build -o ./backfill-audit ./cmd/backfill-audit
 ```
 
-### Run
+### Step 3 — Run
 
 ```bash
-# Start with defaults (SQLite, port 8674)
 ./nram
-
-# Start with a config file
-./nram --config config.yaml
-
-# Start with environment variables
-DATABASE_URL=postgres://user:pass@localhost/nram PORT=8674 ./nram
 ```
 
-On first launch, navigate to `http://localhost:8674` to complete the setup wizard (create the initial admin account).
+Defaults: port **8674**, database **SQLite** (`nram.db` in the working directory).
+To use Postgres, set `DATABASE_URL` and restart:
 
-> **Required for enrichment, dreaming, and semantic recall:** nram ships with **no LLM provider configured**, so memories are stored as raw text only — embeddings, fact/entity extraction, the knowledge graph, dreaming consolidation, and the novelty audit are all **disabled** until you add a provider. After completing the setup wizard, open **Provider Config** in the admin UI and configure at minimum an **embedding** provider (for semantic search) and a **fact** + **entity** provider (for enrichment and dreaming). OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint works. Provider changes hot-reload — no restart needed.
+```bash
+DATABASE_URL=postgres://user:pass@localhost:5432/nram ./nram
+```
 
-#### Operator Flags
+### Step 4 — Open the setup wizard
+
+Navigate to `http://localhost:8674`. Create the initial admin account. **Save the
+API key shown on the completion screen — it is not shown again.**
+
+### Step 5 — Configure an LLM provider (REQUIRED — do not skip)
+
+Open **Settings → Providers** in the admin UI. Configure at minimum:
+
+- **Embedding** slot — for semantic search
+- **Fact Extraction** slot — for the knowledge graph and dreaming
+- **Entity Extraction** slot — for the knowledge graph and dreaming
+
+See [Recommended Models](#recommended-models) below for what to put in each slot.
+Any of OpenAI, Anthropic (chat slots only — Anthropic does not offer embeddings),
+Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint works.
+Provider changes hot-reload — no restart needed.
+
+**Skip this step and nothing meaningful works.** You'll have a glorified text
+store: every recall returns keyword matches, the knowledge graph stays empty,
+enrichment jobs queue forever and never run. The system will not warn you. This
+is not a bug; it is the consequence of running without providers.
+
+### Step 6 — Verify
+
+```bash
+curl http://localhost:8674/v1/health
+```
+
+All three providers should report `"status": "ok"`. Example healthy response:
+
+```json
+{
+  "status": "ok",
+  "backend": "sqlite",
+  "providers": {
+    "embedding":        { "status": "ok", "provider": "ollama" },
+    "fact_extraction":  { "status": "ok", "provider": "ollama", "model": "qwen3:8b" },
+    "entity_extraction":{ "status": "ok", "provider": "ollama", "model": "qwen3:8b" }
+  },
+  "enrichment_queue": { "pending": 0, "processing": 0, "failed": 0 }
+}
+```
+
+If any provider slot is missing, gray, or shows a status other than `ok`, fix
+that before moving on. Do not store memories yet — embeddings and enrichment will
+not run for them, and you'll have to re-embed later (`--reembed-all-memories`).
+
+### Step 7 — Connect a client (MCP)
+
+For Claude Code:
+
+```bash
+claude mcp add --transport http nram http://localhost:8674/mcp
+```
+
+For Claude Desktop, ChatGPT, Cursor, or any other MCP client: point the client at
+`http://localhost:8674/mcp`. OAuth auto-discovery handles the rest — no API key
+juggling needed.
+
+For tools that don't support OAuth, use the API key from Step 4 as a Bearer token.
+
+### Operator Flags
 
 | Flag | Description |
 |---|---|
@@ -81,6 +173,113 @@ On first launch, navigate to `http://localhost:8674` to complete the setup wizar
 Setting `NRAM_ENABLE_ENRICHMENT_BACKFILL=1` runs the enrichment backfill at startup without forcing an exit.
 
 > **Renamed:** the previous `NRAM_ENABLE_EMBED_BACKFILL` env var and `--backfill-embeddings` flag are no longer honored — update your deployment env. The flag and var were renamed alongside a fix that makes backfill skip fact/entity extraction for memories whose lineage and relationship rows already exist, so re-runs cost only the embed call.
+
+### Troubleshooting
+
+**"I stored memories but recall returns nothing relevant — only literal keyword
+matches."** No embedding provider configured, or the configured embedding provider
+is unhealthy. Check `curl /v1/health` → `providers.embedding.status` should be
+`ok`. Without a working embedding provider, recall falls back to lexical-only
+(BM25 / FTS5) — this is by design, but it looks like a bug if you didn't expect
+it. Fix: configure an embedding provider in Step 5, then run
+`./nram --backfill-enrichment` once to embed the memories you stored before
+configuring it.
+
+**"The Enrichment Queue page shows jobs, but the count never goes down."**
+Fact-extraction or entity-extraction provider not configured. The worker claims
+each job, sees the provider registry is incomplete, and silently re-releases the
+job — no failure row, no error log unless you're watching at INFO+. Fix: configure
+both fact and entity slots in Step 5.
+
+**"I changed `embed.url` / `qdrant.addr` / `NRAM_FACT_*` / `NRAM_EMBED_*` in
+config.yaml or my env and the change didn't take."** Those keys were removed
+2026-04-30 and are silently ignored (with a WARN log only). All provider, vector,
+fact, and entity settings live in the database now and are managed at
+`/admin/providers` and `/admin/settings`. Provider changes hot-reload — no
+restart needed.
+
+**"My recall quality got worse after a long memory ingest."** Probably the
+`nomic-embed-text` 2048-token-context trap. See
+[Recommended Models](#recommended-models) below — switch to
+`qwen3-embedding:0.6b` (or another long-context embedding model) and run
+`./nram --reembed-all-memories` once to re-embed your existing memories with the
+new model.
+
+## Recommended Models
+
+nram is provider-agnostic, but the choice of **embedding model** in particular has
+a big effect on recall quality. Three tiers below — pick one and move on.
+
+### Tier 1 — Lite (fits on a laptop, slow but works)
+
+| Slot | Model | Where | Notes |
+|---|---|---|---|
+| Embedding | `qwen3-embedding:0.6b` | Ollama | ~600M params, ~1.2GB on disk |
+| Fact | `qwen3:4b` | Ollama | 4B params, ~2.5GB on disk, Q4_K_M |
+| Entity | `qwen3:4b` | Ollama | Same model is fine for both extraction slots |
+
+### Tier 2 — Recommended (proven; what nram's own author runs)
+
+| Slot | Model | Where | Notes |
+|---|---|---|---|
+| Embedding | `qwen3-embedding:0.6b` (with bumped `num_ctx`) | Ollama | Trained at 32K context — bump Ollama's default `num_ctx` of 2048 via a Modelfile (see below) to actually benefit from it |
+| Fact | `qwen3:8b` | Ollama | 8.2B params, ~5.2GB on disk, Q4_K_M — strong extraction quality |
+| Entity | `qwen3:8b` | Ollama | Same model |
+
+### Tier 3 — Cloud (best quality, no local GPU needed)
+
+| Slot | Model | Where | Notes |
+|---|---|---|---|
+| Embedding | `text-embedding-3-small` | OpenAI | 8K context, 1536 dims |
+| Fact | `gpt-4o-mini` *or* `claude-haiku-4-5-20251001` | OpenAI / Anthropic | Cheap, fast, good extraction quality |
+| Entity | `gpt-4o-mini` *or* `claude-haiku-4-5-20251001` | OpenAI / Anthropic | Same model |
+
+> Anthropic does **not** offer an embeddings API. If you want Claude for fact /
+> entity extraction, pair it with OpenAI or Ollama for the embedding slot.
+
+### Why not `nomic-embed-text`?
+
+It is the most commonly suggested Ollama embedding model and the worst trap in
+this whole system:
+
+- `nomic-embed-text` has a **2048-token training context**.
+- Ollama's default `num_ctx` is also 2048, so anything past roughly 1500 words of
+  a memory is silently dropped before embedding.
+- nram does not pre-truncate your text or warn you. Ollama returns a vector
+  computed from the truncated prefix and nram stores it as if it represented the
+  whole memory.
+- Result: long memories are embedded as if they were short. Recall quality
+  degrades quietly. You won't see an error. You'll just get worse results, and
+  the longer your memories, the worse it gets.
+
+Use `qwen3-embedding:0.6b` (or any embedding model with a longer trained context)
+and you avoid the trap entirely.
+
+### Bumping `num_ctx` for Ollama embeddings
+
+By default, Ollama caps context at 2048 tokens regardless of what the underlying
+model was trained for. To actually use `qwen3-embedding:0.6b`'s 32K trained
+context, create a Modelfile that pins a larger `num_ctx`:
+
+```
+FROM qwen3-embedding:0.6b
+PARAMETER num_ctx 8192
+```
+
+```bash
+ollama create qwen3-embedding-8k -f Modelfile
+```
+
+Then point nram's embedding slot at `qwen3-embedding-8k` instead of the base
+`qwen3-embedding:0.6b` tag. 8K is a reasonable default; raise it further if your
+memories are long-form documents and you have the VRAM.
+
+### Embedding dimensions
+
+You do **not** need to enter the embedding model's dimension count. nram
+auto-detects dimensions on the first call to a new embedding provider by sending
+a probe string and reading the response shape. The detected dimension count is
+displayed in the provider status read-back after the first successful call.
 
 ## Configuration
 

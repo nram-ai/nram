@@ -76,9 +76,9 @@ const MODEL_HINTS: Record<string, Record<string, string>> = {
     entity: "e.g. gpt-4o-mini",
   },
   ollama: {
-    embedding: "e.g. nomic-embed-text",
-    fact: "e.g. llama3, mistral, gemma2",
-    entity: "e.g. llama3, mistral, gemma2",
+    embedding: "e.g. qwen3-embedding:0.6b — avoid nomic-embed-text (2048-tok ctx silently truncates long memories). See README → Recommended Models.",
+    fact: "e.g. qwen3:8b, llama3.1, gemma2",
+    entity: "e.g. qwen3:8b, llama3.1, gemma2",
   },
   gemini: {
     embedding: "e.g. text-embedding-004",

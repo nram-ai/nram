@@ -84,7 +84,7 @@ function BackendBanners({ backend }: { backend: string }) {
           <div>
             <p className="text-sm font-medium text-amber-800 dark:text-amber-200">LLM providers not configured</p>
             <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-              Memories are stored as raw text only. Configure an <strong>embedding</strong> provider for semantic recall and a <strong>fact</strong> + <strong>entity</strong> provider for enrichment, dreaming, and the knowledge graph. Provider changes hot-reload — no restart.
+              Memories are stored as raw text only. Configure an <strong>embedding</strong> provider for semantic recall and a <strong>fact</strong> + <strong>entity</strong> provider for enrichment, dreaming, and the knowledge graph. Provider changes hot-reload — no restart. <strong>New users:</strong> see the project README's <em>Recommended Models</em> section for a 60-second starter pick (and to avoid the <code>nomic-embed-text</code> 2048-token-context truncation trap).
             </p>
             <a href="/providers" className="mt-1 inline-block text-sm font-medium text-amber-800 underline hover:no-underline dark:text-amber-200">
               Settings &rarr; Providers
