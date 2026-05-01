@@ -45,20 +45,20 @@ How things connect: **MCP** is the standard way Claude / ChatGPT / Cursor / your
 
 ## Quick Start
 
-> **Read this first (1 minute) — please actually read it.** Most reported issues
-> trace back to one of these three points:
+> **Read this before starting.** Most setup issues trace back to one of these
+> three points:
 >
-> - **nram needs an LLM provider to do anything beyond storing raw text.** Without
->   one, semantic search silently falls back to keyword-only matches and the
->   knowledge graph stays empty. **You will not get an error.** The system just
->   runs degraded.
-> - **The setup wizard does not configure providers.** You configure providers
->   yourself on the **Provider Config** page after the wizard finishes. Skipping
->   this step is the #1 cause of "search doesn't work" issues.
+> - **nram needs an LLM provider to do anything beyond storing raw text.**
+>   Without one, semantic search falls back to keyword-only matches and the
+>   knowledge graph stays empty. No error is raised; the system runs in a
+>   degraded mode.
+> - **The setup wizard does not configure providers.** Providers are configured
+>   on the **Provider Config** page after the wizard finishes. This is the most
+>   common cause of "search doesn't work" reports.
 > - **Pick the right embedding model.** Ollama's commonly-suggested
->   `nomic-embed-text` has a **2048-token context window**. Memories longer than
->   that are silently truncated before embedding, with no warning anywhere. See
->   [Recommended Models](#recommended-models) below for what to use instead.
+>   `nomic-embed-text` has a 2048-token context window. Memories longer than
+>   that are silently truncated before embedding. See
+>   [Recommended Models](#recommended-models) below for alternatives.
 
 ### Step 1 — Install prerequisites
 
@@ -78,8 +78,8 @@ git clone <repo-url> nram && cd nram
 make build
 ```
 
-Output: a single binary `./nram` with the React UI embedded. One target, do not
-try to be clever. If you need to build the UI and server separately:
+Output: a single binary `./nram` with the React UI embedded. To build the UI
+and server separately:
 
 ```bash
 make build-ui       # Build React UI and embed into Go binary
@@ -104,7 +104,7 @@ DATABASE_URL=postgres://user:pass@localhost:5432/nram ./nram
 Navigate to `http://localhost:8674`. Create the initial admin account. **Save the
 API key shown on the completion screen — it is not shown again.**
 
-### Step 5 — Configure an LLM provider (REQUIRED — do not skip)
+### Step 5 — Configure an LLM provider (required)
 
 Open **Settings → Providers** in the admin UI. Configure at minimum:
 
@@ -117,10 +117,10 @@ Any of OpenAI, Anthropic (chat slots only — Anthropic does not offer embedding
 Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint works.
 Provider changes hot-reload — no restart needed.
 
-**Skip this step and nothing meaningful works.** You'll have a glorified text
-store: every recall returns keyword matches, the knowledge graph stays empty,
-enrichment jobs queue forever and never run. The system will not warn you. This
-is not a bug; it is the consequence of running without providers.
+Without configured providers, recall falls back to keyword-only matches, the
+knowledge graph stays empty, and enrichment jobs queue without running. No
+warning is raised — this is the intended behavior when providers are absent,
+not a bug.
 
 ### Step 6 — Verify
 
@@ -143,9 +143,10 @@ All three providers should report `"status": "ok"`. Example healthy response:
 }
 ```
 
-If any provider slot is missing, gray, or shows a status other than `ok`, fix
-that before moving on. Do not store memories yet — embeddings and enrichment will
-not run for them, and you'll have to re-embed later (`--reembed-all-memories`).
+If any provider slot is missing or reports a status other than `ok`, resolve
+it before storing memories. Memories stored without working providers will not
+be embedded or enriched, and re-embedding via `--reembed-all-memories` will be
+required afterward.
 
 ### Step 7 — Connect a client (MCP)
 
@@ -180,16 +181,16 @@ Setting `NRAM_ENABLE_ENRICHMENT_BACKFILL=1` runs the enrichment backfill at star
 matches."** No embedding provider configured, or the configured embedding provider
 is unhealthy. Check `curl /v1/health` → `providers.embedding.status` should be
 `ok`. Without a working embedding provider, recall falls back to lexical-only
-(BM25 / FTS5) — this is by design, but it looks like a bug if you didn't expect
-it. Fix: configure an embedding provider in Step 5, then run
+(BM25 / FTS5) — this is by design, but can be unexpected. Fix: configure an
+embedding provider in Step 5, then run
 `./nram --backfill-enrichment` once to embed the memories you stored before
 configuring it.
 
 **"The Enrichment Queue page shows jobs, but the count never goes down."**
 Fact-extraction or entity-extraction provider not configured. The worker claims
 each job, sees the provider registry is incomplete, and silently re-releases the
-job — no failure row, no error log unless you're watching at INFO+. Fix: configure
-both fact and entity slots in Step 5.
+job — no failure row is recorded, and no error log appears unless logging is at
+INFO or higher. Fix: configure both fact and entity slots in Step 5.
 
 **"I changed `embed.url` / `qdrant.addr` / `NRAM_FACT_*` / `NRAM_EMBED_*` in
 config.yaml or my env and the change didn't take."** Those keys were removed
@@ -198,8 +199,8 @@ fact, and entity settings live in the database now and are managed at
 `/admin/providers` and `/admin/settings`. Provider changes hot-reload — no
 restart needed.
 
-**"My recall quality got worse after a long memory ingest."** Probably the
-`nomic-embed-text` 2048-token-context trap. See
+**"My recall quality got worse after a long memory ingest."** Likely the
+`nomic-embed-text` 2048-token context limit. See
 [Recommended Models](#recommended-models) below — switch to
 `qwen3-embedding:0.6b` (or another long-context embedding model) and run
 `./nram --reembed-all-memories` once to re-embed your existing memories with the
@@ -222,7 +223,7 @@ a big effect on recall quality. Three tiers below — pick one and move on.
 
 | Slot | Model | Where | Notes |
 |---|---|---|---|
-| Embedding | `qwen3-embedding:0.6b` (with bumped `num_ctx`) | Ollama | Trained at 32K context — bump Ollama's default `num_ctx` of 2048 via a Modelfile (see below) to actually benefit from it |
+| Embedding | `qwen3-embedding:0.6b` (with bumped `num_ctx`) | Ollama | Trained at 32K context. Bump Ollama's default `num_ctx` of 2048 via a Modelfile (see below) to use the full trained context |
 | Fact | `qwen3:8b` | Ollama | 8.2B params, ~5.2GB on disk, Q4_K_M — strong extraction quality |
 | Entity | `qwen3:8b` | Ollama | Same model |
 
@@ -239,21 +240,21 @@ a big effect on recall quality. Three tiers below — pick one and move on.
 
 ### Why not `nomic-embed-text`?
 
-It is the most commonly suggested Ollama embedding model and the worst trap in
-this whole system:
+`nomic-embed-text` is a commonly suggested Ollama embedding model, but it has
+a limitation worth knowing about before choosing it:
 
 - `nomic-embed-text` has a **2048-token training context**.
-- Ollama's default `num_ctx` is also 2048, so anything past roughly 1500 words of
-  a memory is silently dropped before embedding.
-- nram does not pre-truncate your text or warn you. Ollama returns a vector
-  computed from the truncated prefix and nram stores it as if it represented the
-  whole memory.
+- Ollama's default `num_ctx` is also 2048, so anything past roughly 1500 words
+  of a memory is truncated before embedding.
+- nram does not pre-truncate the text or surface a warning. Ollama returns a
+  vector computed from the truncated prefix and nram stores it as if it
+  represented the whole memory.
 - Result: long memories are embedded as if they were short. Recall quality
-  degrades quietly. You won't see an error. You'll just get worse results, and
-  the longer your memories, the worse it gets.
+  degrades silently — no error surfaces, but longer memories produce
+  progressively worse results.
 
-Use `qwen3-embedding:0.6b` (or any embedding model with a longer trained context)
-and you avoid the trap entirely.
+Using `qwen3-embedding:0.6b` (or any embedding model with a longer trained
+context) avoids this issue.
 
 ### Bumping `num_ctx` for Ollama embeddings
 
