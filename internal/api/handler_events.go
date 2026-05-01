@@ -31,7 +31,9 @@ func NewEventsHandler(bus events.EventBus, keepalive time.Duration) http.Handler
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
+		// Disable buffering on nginx, Cloudflare, and similar proxies; without
+		// this they hold SSE frames until the response closes.
+		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 

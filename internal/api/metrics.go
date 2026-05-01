@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -113,6 +115,9 @@ func NewMetrics() *Metrics {
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.
+// Flush/Hijack/Unwrap delegate so streaming handlers (SSE, MCP) keep
+// working through this middleware — without them, w.(http.Flusher) fails
+// and the endpoint 500s.
 type statusRecorder struct {
 	http.ResponseWriter
 	statusCode int
@@ -122,6 +127,22 @@ func (sr *statusRecorder) WriteHeader(code int) {
 	sr.statusCode = code
 	sr.ResponseWriter.WriteHeader(code)
 }
+
+func (sr *statusRecorder) Flush() {
+	if f, ok := sr.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (sr *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := sr.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
+}
+
+// Unwrap exposes the underlying writer for http.ResponseController callers.
+func (sr *statusRecorder) Unwrap() http.ResponseWriter { return sr.ResponseWriter }
 
 // MetricsMiddleware returns HTTP middleware that records request count,
 // duration, and in-flight gauge using the provided Metrics instance.

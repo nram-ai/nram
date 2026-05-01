@@ -231,6 +231,49 @@ func TestEventsHandler_Keepalive(t *testing.T) {
 	}
 }
 
+// Pins the metrics-wrapped path: bare httptest.ResponseRecorder implements
+// Flush() natively, so the other tests pass even if statusRecorder strips
+// the interface. This test only catches the bug if the wrapper delegates.
+func TestEventsHandler_FlushesThroughMetricsMiddleware(t *testing.T) {
+	bus := events.NewMemoryBus(0, 0)
+	defer bus.Close()
+
+	metrics := NewMetrics()
+	handler := MetricsMiddleware(metrics)(NewEventsHandler(bus, 0))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/events", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	publishTestEvent(t, bus, "evt-mw", events.MemoryCreated, "org/proj")
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 through metrics middleware, got %d body=%q", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("expected Content-Type text/event-stream, got %q", ct)
+	}
+	if xab := rec.Header().Get("X-Accel-Buffering"); xab != "no" {
+		t.Errorf("expected X-Accel-Buffering=no for proxy passthrough, got %q", xab)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "id: evt-mw") {
+		t.Errorf("expected event delivered through metrics wrapper, got:\n%s", body)
+	}
+}
+
 func TestEventsHandler_ReplayWithScopeFilter(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
