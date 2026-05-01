@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -54,30 +55,35 @@ func NewOrgAnalyticsHandler(cfg OrgAnalyticsConfig) http.HandlerFunc {
 
 		counts, err := cfg.Store.OrgMemoryCounts(ctx, *orgID)
 		if err != nil {
+			log.Printf("api: OrgAnalytics OrgMemoryCounts: %v", err)
 			WriteError(w, ErrInternal("failed to retrieve memory counts"))
 			return
 		}
 
 		dist, err := cfg.Store.RecallDistribution(ctx, orgID)
 		if err != nil {
+			log.Printf("api: OrgAnalytics RecallDistribution: %v", err)
 			WriteError(w, ErrInternal("failed to retrieve recall distribution"))
 			return
 		}
 
 		projects, err := cfg.Store.ProjectBreakdown(ctx, *orgID)
 		if err != nil {
+			log.Printf("api: OrgAnalytics ProjectBreakdown: %v", err)
 			WriteError(w, ErrInternal("failed to retrieve project breakdown"))
 			return
 		}
 
 		entityHist, err := cfg.Store.EntityTypeHistogram(ctx, orgID)
 		if err != nil {
+			log.Printf("api: OrgAnalytics EntityTypeHistogram: %v", err)
 			WriteError(w, ErrInternal("failed to retrieve entity histogram"))
 			return
 		}
 
 		relHist, err := cfg.Store.RelationshipTypeHistogram(ctx, orgID)
 		if err != nil {
+			log.Printf("api: OrgAnalytics RelationshipTypeHistogram: %v", err)
 			WriteError(w, ErrInternal("failed to retrieve relationship histogram"))
 			return
 		}

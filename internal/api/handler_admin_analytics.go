@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"time"
 
@@ -77,6 +78,7 @@ func NewAdminAnalyticsHandler(cfg AnalyticsConfig) http.HandlerFunc {
 		orgID, userID := SelfScope(auth.FromContext(r.Context()))
 		data, err := cfg.Store.GetAnalytics(r.Context(), orgID, userID)
 		if err != nil {
+			log.Printf("api: AdminAnalytics: %v", err)
 			WriteError(w, ErrInternal("failed to retrieve analytics"))
 			return
 		}
