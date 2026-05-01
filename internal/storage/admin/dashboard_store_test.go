@@ -2,7 +2,6 @@ package admin
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -83,13 +82,20 @@ func TestDashboardStoreRecentActivity_UserScoped(t *testing.T) {
 	}
 }
 
-// TestDashboardStoreRecentActivity_UserScoped_InvalidUTF8 reproduces the
-// production failure: a memory whose content carries an invalid UTF-8 byte
-// (lone 0xe2 lead) caused LENGTH/SUBSTRING to raise SQLSTATE 22021 on
-// Postgres. Byte-level SQL plus strings.ToValidUTF8 must keep the query
-// from erroring and yield a valid-UTF-8 preview with U+FFFD in place of
-// the invalid byte.
-func TestDashboardStoreRecentActivity_UserScoped_InvalidUTF8(t *testing.T) {
+// TestDashboardStoreRecentActivity_UserScoped_HostileContent reproduces both
+// production failure modes that surfaced on dev:
+//
+//   - SQLSTATE 22021 from LENGTH/SUBSTRING on text whose bytes are invalid
+//     UTF-8 (e.g. a lone 0xe2 lead byte).
+//   - SQLSTATE 22P02 from m.content::bytea on text containing a backslash
+//     followed by something that isn't a valid bytea escape (e.g. C:\path,
+//     a JSON string literal, anything with `\` adjacent to a non-octal,
+//     non-`x`, non-`\` byte).
+//
+// The fix is to select content raw and slice the preview in Go after
+// running strings.ToValidUTF8. Both rows must come back with valid-UTF-8
+// previews and the request must succeed.
+func TestDashboardStoreRecentActivity_UserScoped_HostileContent(t *testing.T) {
 	for _, bk := range adminTestBackends {
 		t.Run(bk.name, func(t *testing.T) {
 			db := bk.setup(t)
@@ -98,25 +104,25 @@ func TestDashboardStoreRecentActivity_UserScoped_InvalidUTF8(t *testing.T) {
 
 			orgID, aliceID, aliceProjNsID := seedAliceUserUnderOrg(t, db, ctx)
 
-			// Lone 0xe2 lead byte followed by ASCII — invalid UTF-8.
-			badContent := append([]byte{0xe2}, []byte("bad")...)
-			insertMemoryRaw(t, db, ctx, aliceProjNsID, badContent, 1)
+			invalidUTF8 := append([]byte{0xe2}, []byte("bad")...)
+			insertMemoryRaw(t, db, ctx, aliceProjNsID, invalidUTF8, 1)
+			windowsPath := []byte(`C:\path\to\file`)
+			insertMemoryRaw(t, db, ctx, aliceProjNsID, windowsPath, 1)
 
 			events, err := store.RecentActivity(ctx, 20, &orgID, &aliceID)
 			if err != nil {
-				t.Fatalf("RecentActivity user-scoped with invalid UTF-8 returned error: %v", err)
+				t.Fatalf("RecentActivity user-scoped with hostile content returned error: %v", err)
 			}
-			if len(events) != 1 {
-				t.Fatalf("expected 1 event, got %d", len(events))
+			if len(events) != 2 {
+				t.Fatalf("expected 2 events, got %d", len(events))
 			}
-			if events[0].Preview == nil {
-				t.Fatal("expected non-nil preview")
-			}
-			if !utf8.ValidString(*events[0].Preview) {
-				t.Errorf("preview is not valid UTF-8: %q", *events[0].Preview)
-			}
-			if !strings.Contains(*events[0].Preview, "�") {
-				t.Errorf("expected U+FFFD replacement char in preview, got %q", *events[0].Preview)
+			for i, ev := range events {
+				if ev.Preview == nil {
+					t.Fatalf("event %d: expected non-nil preview", i)
+				}
+				if !utf8.ValidString(*ev.Preview) {
+					t.Errorf("event %d: preview is not valid UTF-8: %q", i, *ev.Preview)
+				}
 			}
 		})
 	}

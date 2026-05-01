@@ -161,22 +161,23 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 
 	switch {
 	case userID != nil:
-		// Length and preview use byte-level operations so a row with invalid
-		// UTF-8 in content does not raise SQLSTATE 22021 mid-query. Caller
-		// sanitizes the bytes via strings.ToValidUTF8 before exposing.
+		// Select content raw and slice the preview client-side. Text-aware
+		// LENGTH/SUBSTRING raise SQLSTATE 22021 on rows with invalid UTF-8;
+		// content::bytea raises SQLSTATE 22P02 on rows whose content contains
+		// a backslash followed by something that's not a valid bytea escape
+		// (e.g. a Windows path). octet_length stays server-side because it
+		// does not validate UTF-8. Preview gets sanitized in Go.
 		lengthExpr := "length(CAST(m.content AS BLOB))"
-		previewExpr := "substr(CAST(m.content AS BLOB), 1, 100)"
 		if s.db.Backend() == storage.BackendPostgres {
 			lengthExpr = "octet_length(m.content)"
-			previewExpr = "substring(m.content::bytea from 1 for 100)"
 		}
 		prefix := namespacePrefixSubquery(s.db.Backend(), "users", "o.id", "$1", "?")
-		query = fmt.Sprintf(`SELECT m.id, %s, %s, m.access_count, m.created_at
+		query = fmt.Sprintf(`SELECT m.id, %s, m.content, m.access_count, m.created_at
 			FROM memories m
 			JOIN namespaces mn ON m.namespace_id = mn.id
 			WHERE m.deleted_at IS NULL
 			AND mn.path LIKE %s
-			%s LIMIT %d`, lengthExpr, previewExpr, prefix, orderClause, limit)
+			%s LIMIT %d`, lengthExpr, prefix, orderClause, limit)
 		args = []interface{}{userID.String()}
 
 	case orgID != nil:
@@ -204,9 +205,9 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 	for rows.Next() {
 		var idStr, createdAtStr string
 		var lengthChars, accessCount int
-		var previewBytes []byte
+		var contentBytes []byte
 		if wantPreview {
-			if err := rows.Scan(&idStr, &lengthChars, &previewBytes, &accessCount, &createdAtStr); err != nil {
+			if err := rows.Scan(&idStr, &lengthChars, &contentBytes, &accessCount, &createdAtStr); err != nil {
 				return nil, fmt.Errorf("ranked memories scan: %w", err)
 			}
 		} else {
@@ -229,6 +230,10 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 			CreatedAt:   createdAt,
 		}
 		if wantPreview {
+			previewBytes := contentBytes
+			if len(previewBytes) > 100 {
+				previewBytes = previewBytes[:100]
+			}
 			p := strings.ToValidUTF8(string(previewBytes), "�")
 			item.Preview = &p
 		}

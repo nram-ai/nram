@@ -168,9 +168,9 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID, u
 	for rows.Next() {
 		var idStr, createdAtStr string
 		var lengthChars int
-		var previewBytes []byte
+		var contentBytes []byte
 		if wantPreview {
-			if err := rows.Scan(&idStr, &lengthChars, &previewBytes, &createdAtStr); err != nil {
+			if err := rows.Scan(&idStr, &lengthChars, &contentBytes, &createdAtStr); err != nil {
 				return nil, fmt.Errorf("recent activity scan: %w", err)
 			}
 		} else {
@@ -190,10 +190,16 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID, u
 			Timestamp:   ts,
 		}
 		if wantPreview {
-			// Preview comes back as raw bytes from a bytea/BLOB SUBSTRING so
-			// queries don't fail on rows whose content has invalid UTF-8 (the
-			// text-aware LENGTH/SUBSTRING path raises SQLSTATE 22021 on Postgres).
-			// Replace any invalid sequences with U+FFFD before exposing.
+			// Slice the first 100 bytes locally rather than server-side. Any
+			// text-aware Postgres function would raise on rows with invalid
+			// UTF-8, and content::bytea parses the text as a bytea literal so
+			// it raises on rows that contain a `\` followed by a non-escape.
+			// Selecting raw and slicing in Go sidesteps both. ToValidUTF8
+			// replaces invalid sequences with U+FFFD before exposing.
+			previewBytes := contentBytes
+			if len(previewBytes) > 100 {
+				previewBytes = previewBytes[:100]
+			}
 			p := strings.ToValidUTF8(string(previewBytes), "�")
 			ev.Preview = &p
 		}
@@ -285,24 +291,27 @@ func (s *DashboardStore) orgRecentActivityQuery() string {
 }
 
 // userRecentActivityQuery selects memories owned by a single user (filtered
-// on the user's namespace prefix) and includes a 100-byte content preview.
-// Self-tier only — callers are looking at their own data.
+// on the user's namespace prefix). Self-tier only — callers are looking at
+// their own data.
 //
-// Length and preview use byte-level operations (octet_length / bytea
-// substring on Postgres, BLOB cast on SQLite) so a row whose content has
-// invalid UTF-8 does not raise SQLSTATE 22021 mid-query. The caller
-// sanitizes the returned bytes via strings.ToValidUTF8 before exposing.
+// Content is selected raw (no text-aware function and no bytea cast) so a
+// row whose content has invalid UTF-8 (raises SQLSTATE 22021 under
+// LENGTH/SUBSTRING) or contains a backslash followed by something that's
+// not a valid bytea escape (raises SQLSTATE 22P02 under content::bytea)
+// does not blow up mid-query. The driver scans the column into []byte
+// without validation; the caller computes the 100-byte preview locally and
+// runs strings.ToValidUTF8 before exposing.
+//
+// octet_length stays server-side because it does not validate UTF-8.
 func (s *DashboardStore) userRecentActivityQuery() string {
 	prefix := namespacePrefixSubquery(s.db.Backend(), "users", "o.id", "$1", "?")
 	lengthExpr := "length(CAST(m.content AS BLOB))"
-	previewExpr := "substr(CAST(m.content AS BLOB), 1, 100)"
 	limitPlace := "?"
 	if s.db.Backend() == storage.BackendPostgres {
 		lengthExpr = "octet_length(m.content)"
-		previewExpr = "substring(m.content::bytea from 1 for 100)"
 		limitPlace = "$2"
 	}
-	return `SELECT m.id, ` + lengthExpr + `, ` + previewExpr + `, m.created_at FROM memories m
+	return `SELECT m.id, ` + lengthExpr + `, m.content, m.created_at FROM memories m
 		JOIN namespaces mn ON m.namespace_id = mn.id
 		WHERE mn.path LIKE ` + prefix + `
 		AND m.deleted_at IS NULL

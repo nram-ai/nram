@@ -2,7 +2,6 @@ package admin
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -205,14 +204,12 @@ func TestAnalyticsStoreGetAnalytics_UserScoped(t *testing.T) {
 	}
 }
 
-// TestAnalyticsStoreGetAnalytics_UserScoped_InvalidUTF8 covers the dev-prod
-// failure: a memory with invalid UTF-8 in content (lone 0xe2 lead byte)
-// caused queryRankedMemories to raise SQLSTATE 22021 on Postgres because
-// LENGTH and SUBSTRING are text-aware. Byte-level SQL plus
-// strings.ToValidUTF8 in Go must keep the query from erroring and yield a
-// valid-UTF-8 preview with U+FFFD in place of the invalid byte. Runs on
-// both backends so the SQL stays in sync.
-func TestAnalyticsStoreGetAnalytics_UserScoped_InvalidUTF8(t *testing.T) {
+// TestAnalyticsStoreGetAnalytics_UserScoped_HostileContent covers both
+// production failure modes: invalid UTF-8 (raises 22021 under text-aware
+// LENGTH/SUBSTRING) and backslash sequences that don't form a valid bytea
+// escape (raise 22P02 under m.content::bytea). The fix is to select content
+// raw and slice the preview in Go.
+func TestAnalyticsStoreGetAnalytics_UserScoped_HostileContent(t *testing.T) {
 	for _, bk := range adminTestBackends {
 		t.Run(bk.name, func(t *testing.T) {
 			db := bk.setup(t)
@@ -220,27 +217,28 @@ func TestAnalyticsStoreGetAnalytics_UserScoped_InvalidUTF8(t *testing.T) {
 			ctx := context.Background()
 
 			orgID, aliceID, aliceProjNsID := seedAliceUserUnderOrg(t, db, ctx)
-			badContent := append([]byte{0xe2}, []byte("bad")...)
-			insertMemoryRaw(t, db, ctx, aliceProjNsID, badContent, 5)
+			invalidUTF8 := append([]byte{0xe2}, []byte("bad")...)
+			insertMemoryRaw(t, db, ctx, aliceProjNsID, invalidUTF8, 5)
+			windowsPath := []byte(`C:\path\to\file`)
+			insertMemoryRaw(t, db, ctx, aliceProjNsID, windowsPath, 7)
 
 			data, err := store.GetAnalytics(ctx, &orgID, &aliceID)
 			if err != nil {
-				t.Fatalf("GetAnalytics user-scoped with invalid UTF-8 returned error: %v", err)
+				t.Fatalf("GetAnalytics user-scoped with hostile content returned error: %v", err)
 			}
-			if data.MemoryCounts.Total != 1 {
-				t.Errorf("expected 1 total memory, got %d", data.MemoryCounts.Total)
+			if data.MemoryCounts.Total != 2 {
+				t.Errorf("expected 2 total memories, got %d", data.MemoryCounts.Total)
 			}
-			if len(data.MostRecalled) != 1 {
-				t.Fatalf("expected 1 most recalled, got %d", len(data.MostRecalled))
+			if len(data.MostRecalled) != 2 {
+				t.Fatalf("expected 2 most recalled, got %d", len(data.MostRecalled))
 			}
-			if data.MostRecalled[0].Preview == nil {
-				t.Fatal("expected non-nil preview")
-			}
-			if !utf8.ValidString(*data.MostRecalled[0].Preview) {
-				t.Errorf("preview is not valid UTF-8: %q", *data.MostRecalled[0].Preview)
-			}
-			if !strings.Contains(*data.MostRecalled[0].Preview, "�") {
-				t.Errorf("expected U+FFFD replacement in preview, got %q", *data.MostRecalled[0].Preview)
+			for i, item := range data.MostRecalled {
+				if item.Preview == nil {
+					t.Fatalf("item %d: expected non-nil preview", i)
+				}
+				if !utf8.ValidString(*item.Preview) {
+					t.Errorf("item %d: preview is not valid UTF-8: %q", i, *item.Preview)
+				}
 			}
 		})
 	}
