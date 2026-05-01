@@ -43,6 +43,9 @@ const (
 	EnrichmentJobStarted   = "enrichment.job.started"
 	EnrichmentJobCompleted = "enrichment.job.completed"
 	EnrichmentPoolTick     = "enrichment.pool.tick"
+	// Emitted by the StuckJobSweeper when it auto-requeues a presumed-dead
+	// worker's job. Payload is built in internal/enrichment/sweeper.go.
+	EnrichmentJobRequeued = "enrichment.job.requeued"
 )
 
 // Event represents a single event in the system.

@@ -62,7 +62,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 		if err := queueRepo.Enqueue(ctx, completedJob); err != nil {
 			t.Fatalf("seed completed job: %v", err)
 		}
-		if err := queueRepo.Complete(ctx, completedJob.ID); err != nil {
+		if err := queueRepo.Complete(ctx, completedJob.ID, ""); err != nil {
 			t.Fatalf("mark completed: %v", err)
 		}
 

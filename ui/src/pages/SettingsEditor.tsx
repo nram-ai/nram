@@ -71,7 +71,7 @@ const PARENT_GROUPS: ParentGroup[] = [
         category: "enrichment_performance",
         label: "Worker Performance",
         description:
-          "Throughput and concurrency for the enrichment worker pool, plus the model parameters used for fact and entity extraction. Most fields hot-reload; the worker count and poll interval need a restart.",
+          "Throughput and concurrency for the enrichment worker pool, plus the model parameters used for fact and entity extraction. Also covers gone-worker recovery: heartbeat interval, stuck-job sweep cadence, and the staleness threshold past which an in-flight job is auto-requeued. Most fields hot-reload; the worker count, poll interval, heartbeat interval, and sweep interval need a restart.",
       },
     ],
   },

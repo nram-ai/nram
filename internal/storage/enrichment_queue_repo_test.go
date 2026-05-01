@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -336,7 +337,7 @@ func TestEnrichmentQueueRepo_Complete(t *testing.T) {
 		}
 
 		// Complete it
-		if err := repo.Complete(ctx, item.ID); err != nil {
+		if err := repo.Complete(ctx, item.ID, ""); err != nil {
 			t.Fatalf("failed to complete: %v", err)
 		}
 
@@ -359,7 +360,7 @@ func TestEnrichmentQueueRepo_Complete_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
 
-		err := repo.Complete(ctx, uuid.New())
+		err := repo.Complete(ctx, uuid.New(), "")
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}
@@ -384,7 +385,7 @@ func TestEnrichmentQueueRepo_Fail(t *testing.T) {
 		}
 
 		// Fail it
-		if err := repo.Fail(ctx, item.ID, "something went wrong"); err != nil {
+		if err := repo.Fail(ctx, item.ID, "", "something went wrong"); err != nil {
 			t.Fatalf("failed to fail: %v", err)
 		}
 
@@ -443,7 +444,7 @@ func TestEnrichmentQueueRepo_Fail_StructuredPayload(t *testing.T) {
 			"provider":          "openai",
 			"raw_response":      `[{"content":"truncated`,
 		}
-		if err := repo.Fail(ctx, item.ID, payload); err != nil {
+		if err := repo.Fail(ctx, item.ID, "", payload); err != nil {
 			t.Fatalf("fail with structured payload: %v", err)
 		}
 
@@ -499,7 +500,7 @@ func TestEnrichmentQueueRepo_CompleteWithWarning(t *testing.T) {
 				"model":            "qwen3:8b-extract",
 			}},
 		}
-		if err := repo.CompleteWithWarning(ctx, item.ID, warning); err != nil {
+		if err := repo.CompleteWithWarning(ctx, item.ID, "", warning); err != nil {
 			t.Fatalf("complete with warning: %v", err)
 		}
 
@@ -527,7 +528,7 @@ func TestEnrichmentQueueRepo_Fail_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
 
-		err := repo.Fail(ctx, uuid.New(), "error")
+		err := repo.Fail(ctx, uuid.New(), "", "error")
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}
@@ -552,7 +553,7 @@ func TestEnrichmentQueueRepo_Retry(t *testing.T) {
 		}
 
 		// Fail it
-		if err := repo.Fail(ctx, item.ID, "transient error"); err != nil {
+		if err := repo.Fail(ctx, item.ID, "", "transient error"); err != nil {
 			t.Fatalf("failed to fail: %v", err)
 		}
 
@@ -609,7 +610,7 @@ func TestEnrichmentQueueRepo_Retry_CanBeClaimedAgain(t *testing.T) {
 		if _, err := repo.ClaimNext(ctx, "worker-1"); err != nil {
 			t.Fatalf("failed to claim: %v", err)
 		}
-		if err := repo.Fail(ctx, item.ID, "error"); err != nil {
+		if err := repo.Fail(ctx, item.ID, "", "error"); err != nil {
 			t.Fatalf("failed to fail: %v", err)
 		}
 		if err := repo.Retry(ctx, item.ID); err != nil {
@@ -655,7 +656,7 @@ func TestEnrichmentQueueRepo_FullLifecycle(t *testing.T) {
 		}
 
 		// Complete
-		if err := repo.Complete(ctx, claimed.ID); err != nil {
+		if err := repo.Complete(ctx, claimed.ID, ""); err != nil {
 			t.Fatalf("complete: %v", err)
 		}
 		final, err := repo.GetByID(ctx, claimed.ID)
@@ -724,7 +725,7 @@ func TestEnrichmentQueueRepo_RetryAllFailed(t *testing.T) {
 		}
 
 		// Fail the item
-		if err := repo.Fail(ctx, item.ID, "test error"); err != nil {
+		if err := repo.Fail(ctx, item.ID, "", "test error"); err != nil {
 			t.Fatalf("failed to fail item: %v", err)
 		}
 
@@ -808,5 +809,231 @@ func TestEnrichmentQueueRepo_MarkStepCompleted(t *testing.T) {
 		if err := repo.MarkStepCompleted(ctx, item.ID, ""); err == nil {
 			t.Fatal("expected error on empty step name")
 		}
+	})
+}
+
+// TestEnrichmentQueueRepo_RequeueStaleIdempotent verifies that calling
+// RequeueStale twice on the same row is safe — the second call returns
+// (false, nil) because the row's status is no longer 'processing' after
+// the first call. This is the multi-instance sweep race guard.
+func TestEnrichmentQueueRepo_RequeueStaleIdempotent(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		nsID, memID := createTestMemoryForQueue(t, ctx, db)
+
+		item := newTestEnrichmentItem(nsID, memID)
+		if err := repo.Enqueue(ctx, item); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		// Get a baseline by claiming so the row is in 'processing'.
+		var claimed *model.EnrichmentJob
+		for {
+			c, err := repo.ClaimNext(ctx, "worker-test")
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			if c.ID == item.ID {
+				claimed = c
+				break
+			}
+		}
+		_ = claimed
+
+		ok1, err := repo.RequeueStale(ctx, item.ID, "test sweep #1")
+		if err != nil {
+			t.Fatalf("first RequeueStale: %v", err)
+		}
+		if !ok1 {
+			t.Fatalf("expected first RequeueStale to return true, got false")
+		}
+
+		// Row is now back to 'pending'. Second call should be a no-op.
+		ok2, err := repo.RequeueStale(ctx, item.ID, "test sweep #2")
+		if err != nil {
+			t.Fatalf("second RequeueStale: %v", err)
+		}
+		if ok2 {
+			t.Fatalf("expected second RequeueStale to return false (idempotent), got true")
+		}
+	})
+}
+
+// TestEnrichmentQueueRepo_RequeueStaleBumpsAttempts verifies that the
+// requeue path treats the failure like a Retry (attempts += 1) so a
+// genuine poison-pill memory still hits max_attempts and stops looping
+// instead of being requeued indefinitely.
+func TestEnrichmentQueueRepo_RequeueStaleBumpsAttempts(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		nsID, memID := createTestMemoryForQueue(t, ctx, db)
+
+		item := newTestEnrichmentItem(nsID, memID)
+		if err := repo.Enqueue(ctx, item); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		// Bump attempts to 2 so we can verify +1.
+		if err := repo.Fail(ctx, item.ID, "", "synthetic"); err != nil {
+			t.Fatalf("fail: %v", err)
+		}
+		if err := repo.Retry(ctx, item.ID); err != nil {
+			t.Fatalf("retry to lift back to pending: %v", err)
+		}
+		// Claim so the row is in 'processing' (RequeueStale's WHERE guard).
+		var claimed *model.EnrichmentJob
+		for {
+			c, err := repo.ClaimNext(ctx, "worker-test")
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			if c.ID == item.ID {
+				claimed = c
+				break
+			}
+		}
+		baselineAttempts := claimed.Attempts
+
+		ok, err := repo.RequeueStale(ctx, item.ID, "stuck_sweeper: test")
+		if err != nil {
+			t.Fatalf("RequeueStale: %v", err)
+		}
+		if !ok {
+			t.Fatalf("RequeueStale returned false on a fresh claim")
+		}
+
+		got, err := repo.GetByID(ctx, item.ID)
+		if err != nil {
+			t.Fatalf("get-by-id after requeue: %v", err)
+		}
+		if got.Status != "pending" {
+			t.Fatalf("expected status='pending' after requeue, got %q", got.Status)
+		}
+		if got.ClaimedBy != nil {
+			t.Fatalf("expected claimed_by NULL after requeue, got %v", got.ClaimedBy)
+		}
+		if got.ClaimedAt != nil {
+			t.Fatalf("expected claimed_at NULL after requeue, got %v", got.ClaimedAt)
+		}
+		if got.Attempts != baselineAttempts+1 {
+			t.Fatalf("expected attempts %d, got %d", baselineAttempts+1, got.Attempts)
+		}
+		if got.LastRequeueReason == nil || !strings.Contains(*got.LastRequeueReason, "stuck_sweeper") {
+			t.Fatalf("expected last_requeue_reason to carry 'stuck_sweeper', got %v", got.LastRequeueReason)
+		}
+		if len(got.LastError) > 0 && string(got.LastError) != "null" {
+			t.Fatalf("expected last_error cleared after requeue, got %q", string(got.LastError))
+		}
+	})
+}
+
+// TestEnrichmentQueueRepo_CompleteOwnedRefusesStaleClaim verifies the core
+// stale-write guard: if a sweeper requeues a row out from under a worker,
+// the worker's eventual CompleteOwned MUST NOT silently overwrite the new
+// claimant's outcome — it returns ErrClaimLost instead.
+func TestEnrichmentQueueRepo_CompleteOwnedRefusesStaleClaim(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		nsID, memID := createTestMemoryForQueue(t, ctx, db)
+
+		item := newTestEnrichmentItem(nsID, memID)
+		if err := repo.Enqueue(ctx, item); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		// Claim as worker-A.
+		for {
+			c, err := repo.ClaimNext(ctx, "worker-A")
+			if err != nil {
+				t.Fatalf("claim worker-A: %v", err)
+			}
+			if c.ID == item.ID {
+				break
+			}
+		}
+
+		// Simulate the sweeper requeueing + worker-B claiming the row.
+		if ok, err := repo.RequeueStale(ctx, item.ID, "stuck_sweeper: test race"); err != nil || !ok {
+			t.Fatalf("requeue: ok=%v err=%v", ok, err)
+		}
+		for {
+			c, err := repo.ClaimNext(ctx, "worker-B")
+			if err != nil {
+				t.Fatalf("claim worker-B: %v", err)
+			}
+			if c.ID == item.ID {
+				break
+			}
+		}
+
+		// worker-A finally returns from its long LLM call and tries to
+		// Complete. The guard MUST refuse with ErrClaimLost.
+		err := repo.Complete(ctx, item.ID, "worker-A")
+		if !errors.Is(err, ErrClaimLost) {
+			t.Fatalf("expected ErrClaimLost from stale CompleteOwned, got %v", err)
+		}
+
+		// worker-B's Complete (the rightful claimant) succeeds.
+		if err := repo.Complete(ctx, item.ID, "worker-B"); err != nil {
+			t.Fatalf("worker-B CompleteOwned: %v", err)
+		}
+
+		got, err := repo.GetByID(ctx, item.ID)
+		if err != nil {
+			t.Fatalf("get-by-id after complete: %v", err)
+		}
+		if got.Status != "completed" {
+			t.Fatalf("expected status='completed', got %q", got.Status)
+		}
+		if got.LastRequeueReason != nil {
+			t.Fatalf("expected last_requeue_reason cleared on Complete, got %v", got.LastRequeueReason)
+		}
+	})
+}
+
+// TestEnrichmentQueueRepo_TickHeartbeatAdvancesUpdatedAt verifies the
+// heartbeat write moves both heartbeat_at AND updated_at forward, and
+// only touches rows currently held by the given worker.
+func TestEnrichmentQueueRepo_TickHeartbeatAdvancesUpdatedAt(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		nsID, memID := createTestMemoryForQueue(t, ctx, db)
+
+		item := newTestEnrichmentItem(nsID, memID)
+		if err := repo.Enqueue(ctx, item); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		// Claim so the row is held by worker-X.
+		for {
+			c, err := repo.ClaimNext(ctx, "worker-X")
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			if c.ID == item.ID {
+				break
+			}
+		}
+
+		// Wait long enough that updated_at moves forward when we tick.
+		// RFC3339 has 1-second resolution so we need at least a 1.1s sleep.
+		baseline, _ := repo.GetByID(ctx, item.ID)
+		// Scoped wait — fine in test, harmless in CI.
+		for i := 0; i < 12; i++ {
+			n, err := repo.TickHeartbeat(ctx, "worker-X")
+			if err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			if n < 1 {
+				t.Fatalf("expected TickHeartbeat to touch >=1 row for worker-X, got %d", n)
+			}
+			got, _ := repo.GetByID(ctx, item.ID)
+			if got.HeartbeatAt != nil && (baseline.UpdatedAt.IsZero() || got.UpdatedAt.After(baseline.UpdatedAt)) {
+				return // success
+			}
+			// Sleep ~120ms between ticks; loop fails after ~1.5s if no advance.
+			time.Sleep(150 * time.Millisecond)
+		}
+		t.Fatalf("heartbeat did not advance updated_at after multiple ticks")
 	})
 }

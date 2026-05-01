@@ -266,15 +266,14 @@ func (r *DreamCycleRepo) Abandon(ctx context.Context, id uuid.UUID, reason strin
 	return rows > 0, nil
 }
 
-// staleScanLimit caps a single ListStale call so a deployment that crashes
-// thousands of cycles can't pull them all into memory at once. The sweeper
-// runs on a periodic ticker, so anything past the limit drains on the next
-// tick.
-const staleScanLimit = 1000
+// stuckScanLimit caps a single ListStale / ListStaleClaimed call so a
+// deployment that crashes thousands of in-flight rows can't pull them all
+// into memory at once. Shared by the dream and enrichment sweepers.
+const stuckScanLimit = 1000
 
 // ListStale returns running cycles whose updated_at is older than the given
 // threshold. The stuck-cycle sweeper uses this to find cycles whose worker
-// is presumed gone (crash, OOM, deploy mid-cycle). Bounded by staleScanLimit.
+// is presumed gone (crash, OOM, deploy mid-cycle). Bounded by stuckScanLimit.
 func (r *DreamCycleRepo) ListStale(ctx context.Context, threshold time.Duration) ([]model.DreamCycle, error) {
 	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
 
@@ -283,7 +282,7 @@ func (r *DreamCycleRepo) ListStale(ctx context.Context, threshold time.Duration)
 		query = selectDreamCycleColumns + ` FROM dream_cycles WHERE status = 'running' AND updated_at < $1 ORDER BY updated_at ASC LIMIT $2`
 	}
 
-	rows, err := r.db.Query(ctx, query, cutoff, staleScanLimit)
+	rows, err := r.db.Query(ctx, query, cutoff, stuckScanLimit)
 	if err != nil {
 		return nil, fmt.Errorf("dream cycle list stale: %w", err)
 	}

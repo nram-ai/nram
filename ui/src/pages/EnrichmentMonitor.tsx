@@ -162,6 +162,21 @@ function useEnrichmentLiveState() {
           });
           break;
         }
+        case "enrichment.job.requeued": {
+          // Sweeper auto-requeued a stuck job. Drop any live-job state for
+          // it (the original claim is gone) and refresh the queue cache so
+          // the row's status flips to 'pending' and the RequeuedPill renders.
+          if (data.job_id) {
+            setLiveJobs((prev) => {
+              const next = { ...prev };
+              delete next[data.job_id];
+              return next;
+            });
+          }
+          qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+          qc.invalidateQueries({ queryKey: ["me", "enrichment"] });
+          break;
+        }
         default:
           break;
       }
@@ -181,6 +196,66 @@ function StageChip({ stage }: { stage: string }) {
   return (
     <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
       {STAGE_LABELS[stage] ?? stage}
+    </span>
+  );
+}
+
+// Row-level alert state: at most one of stale/requeued applies per row, so a
+// discriminated union beats two parallel booleans plus a tint string. Keeping
+// the threshold check on the server (item.is_stale_diagnostic) avoids
+// shipping enrichment.stuck_threshold_seconds to the UI on every poll.
+type RowAlert =
+  | { kind: "stale"; ageMs: number }
+  | { kind: "requeued"; reason: string }
+  | null;
+
+const ROW_TINTS: Record<NonNullable<RowAlert>["kind"], string> = {
+  stale: "bg-amber-50/40 dark:bg-amber-950/30",
+  requeued: "bg-red-50/40 dark:bg-red-950/30",
+};
+
+function rowAlert(item: EnrichmentQueueItem): RowAlert {
+  if (item.last_requeue_reason && item.status === "pending") {
+    return { kind: "requeued", reason: item.last_requeue_reason };
+  }
+  if (
+    item.status === "processing" &&
+    item.is_stale_diagnostic &&
+    item.claimed_at_age_ms != null
+  ) {
+    return { kind: "stale", ageMs: item.claimed_at_age_ms };
+  }
+  return null;
+}
+
+function StaleDiagnosticPill({
+  claimedAtAgeMs,
+  claimedBy,
+}: {
+  claimedAtAgeMs: number;
+  claimedBy?: string;
+}) {
+  const secs = Math.max(0, Math.floor(claimedAtAgeMs / 1000));
+  const title = claimedBy
+    ? `Worker ${claimedBy} has held this row for ${formatElapsed(secs)} without finishing. The stuck-job sweeper will auto-requeue it once it crosses the staleness threshold.`
+    : `This row has been claimed for ${formatElapsed(secs)} without finishing. The stuck-job sweeper will auto-requeue it.`;
+  return (
+    <span
+      className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+      title={title}
+    >
+      stale {formatElapsed(secs)}
+    </span>
+  );
+}
+
+function RequeuedPill({ reason }: { reason: string }) {
+  return (
+    <span
+      className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-800 dark:bg-red-900/40 dark:text-red-200"
+      title={reason}
+    >
+      requeued
     </span>
   );
 }
@@ -521,11 +596,13 @@ function QueueTable({
             const isFailed = item.status === "failed";
             const badgeCls =
               STATUS_BADGES[item.status] || STATUS_BADGES.pending;
+            const alert = rowAlert(item);
+            const rowTint = alert ? ROW_TINTS[alert.kind] : "";
 
             return (
               <tr
                 key={item.id}
-                className="hover:bg-muted/30 transition-colors"
+                className={`hover:bg-muted/30 transition-colors ${rowTint}`}
               >
                 {showWriteActions && (
                   <td className="px-3 py-2.5">
@@ -553,6 +630,15 @@ function QueueTable({
                     >
                       {item.status}
                     </span>
+                    {alert?.kind === "stale" && (
+                      <StaleDiagnosticPill
+                        claimedAtAgeMs={alert.ageMs}
+                        claimedBy={item.claimed_by}
+                      />
+                    )}
+                    {alert?.kind === "requeued" && (
+                      <RequeuedPill reason={alert.reason} />
+                    )}
                     {item.status === "processing" &&
                       (() => {
                         const lj = liveJobs[item.id];

@@ -445,7 +445,7 @@ func main() {
 		DB:           db,
 	})
 	oauthAdminStore := adminstore.NewOAuthAdminStore(oauthRepo)
-	enrichmentAdminStore := adminstore.NewEnrichmentAdminStore(enrichmentQueueRepo, settingsRepo, db)
+	enrichmentAdminStore := adminstore.NewEnrichmentAdminStore(enrichmentQueueRepo, settingsRepo, settingsSvc, db)
 
 	// Provider accessors for enrichment test prompt.
 	factProvider := func() provider.LLMProvider {
@@ -485,6 +485,19 @@ func main() {
 	workerPool.Start()
 	defer workerPool.Stop()
 	log.Println("enrichment worker pool started")
+
+	// Warn (once) if any provider-load knob is raised above its safe default.
+	service.CheckProviderLoadDefaults(context.Background(), settingsSvc)
+
+	// Sweeper recovers rows wedged in 'processing' by dead workers. Deferred
+	// Stop runs before workerPool.Stop (LIFO) so a final sweep on shutdown
+	// does not race a worker normally finishing its batch.
+	enrichmentStuckSweeper := enrichment.NewStuckJobSweeper(
+		enrichmentQueueRepo, settingsSvc, eventBus,
+	)
+	enrichmentStuckSweeper.Start()
+	defer enrichmentStuckSweeper.Stop()
+	log.Println("enrichment stuck-job sweeper started")
 
 	// Create dreaming system.
 	dreamCycleRepo := storage.NewDreamCycleRepo(db)

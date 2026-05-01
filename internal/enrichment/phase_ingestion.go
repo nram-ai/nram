@@ -3,6 +3,7 @@ package enrichment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -373,13 +374,22 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 		stampIngestionMetadata(p)
 		p.mem.UpdatedAt = time.Now().UTC()
 		if err := wp.memUpdater.Update(ctx, p.mem); err != nil {
-			_ = wp.queue.Fail(ctx, p.job.ID, fmt.Sprintf("update memory: %v", err))
+			if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, fmt.Sprintf("update memory: %v", err)); failErr != nil {
+				logClaimLostOr(failErr, "enrichment: fail-mark after memory update fallback", "job", p.job.ID, "worker", p.workerID)
+			}
 			return fmt.Errorf("update memory: %w", err)
 		}
 		// token_usage rows for the ingestion-decision phase (LLM + embed)
 		// are written by the UsageRecordingProvider middleware on every
 		// wrapped Complete/Embed call.
-		return wp.queue.Complete(ctx, p.job.ID)
+		if err := wp.queue.Complete(ctx, p.job.ID, p.workerID); err != nil {
+			if errors.Is(err, storage.ErrClaimLost) {
+				slog.Info("enrichment: complete dropped — claim lost", "job", p.job.ID, "worker", p.workerID)
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
 
 	// Stamp metadata BEFORE soft-delete. The Update path filters
@@ -393,7 +403,9 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 	}
 
 	if err := wp.memSoftDeleter.SoftDelete(ctx, p.mem.ID, p.mem.NamespaceID); err != nil {
-		_ = wp.queue.Fail(ctx, p.job.ID, fmt.Sprintf("ingestion delete soft-delete: %v", err))
+		if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, fmt.Sprintf("ingestion delete soft-delete: %v", err)); failErr != nil {
+			logClaimLostOr(failErr, "enrichment: fail-mark after soft-delete", "job", p.job.ID, "worker", p.workerID)
+		}
 		return fmt.Errorf("ingestion delete soft-delete: %w", err)
 	}
 	slog.Info("enrichment: ingestion_decision_apply",
@@ -406,7 +418,11 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 	// token_usage rows for the ingestion-decision phase (LLM + embed) are
 	// written by the UsageRecordingProvider middleware on every wrapped call.
 
-	if err := wp.queue.Complete(ctx, p.job.ID); err != nil {
+	if err := wp.queue.Complete(ctx, p.job.ID, p.workerID); err != nil {
+		if errors.Is(err, storage.ErrClaimLost) {
+			slog.Info("enrichment: complete dropped — claim lost", "job", p.job.ID, "worker", p.workerID)
+			return nil
+		}
 		return fmt.Errorf("complete job: %w", err)
 	}
 	return nil

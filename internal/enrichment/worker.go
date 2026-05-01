@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"strings"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,21 +128,29 @@ func extractionFailPayload(err error) any {
 // given payload. payload is JSON-marshalled into last_error: pass an
 // *service.ExtractionFailure for parse failures (so finish_reason,
 // prompt_tokens, completion_tokens, and raw_response land on the queue
-// row), or a plain string for non-extraction failures (memory lookup,
-// vector upsert, lifecycle errors). Release errors are logged at WARN
-// since the job is in an indeterminate but self-healing state.
-func (wp *WorkerPool) requeueOrFail(ctx context.Context, jobID uuid.UUID, err error, payload any) {
+// row), or a plain string for non-extraction failures.
+func (wp *WorkerPool) requeueOrFail(ctx context.Context, workerID string, jobID uuid.UUID, err error, payload any) {
 	if isTransientLLMErr(err) {
-		if relErr := wp.queue.Release(ctx, jobID); relErr != nil {
-			slog.Warn("enrichment: queue release after transient failure",
-				"job", jobID, "err", relErr)
+		if relErr := wp.queue.Release(ctx, jobID, workerID); relErr != nil {
+			logClaimLostOr(relErr, "enrichment: queue release after transient failure",
+				"job", jobID, "worker", workerID)
 		}
 		return
 	}
-	if failErr := wp.queue.Fail(ctx, jobID, payload); failErr != nil {
-		slog.Warn("enrichment: queue fail",
-			"job", jobID, "err", failErr)
+	if failErr := wp.queue.Fail(ctx, jobID, workerID, payload); failErr != nil {
+		logClaimLostOr(failErr, "enrichment: queue fail",
+			"job", jobID, "worker", workerID)
 	}
+}
+
+// logClaimLostOr drops ErrClaimLost at INFO (expected race with the stuck
+// sweeper) and surfaces other errors at WARN.
+func logClaimLostOr(err error, msg string, attrs ...any) {
+	if errors.Is(err, storage.ErrClaimLost) {
+		slog.Info(msg+": claim lost (row was reassigned to another worker)", attrs...)
+		return
+	}
+	slog.Warn(msg, append(attrs, "err", err)...)
 }
 
 // ---------------------------------------------------------------------------
@@ -181,11 +190,15 @@ type MemoryCreator interface {
 type QueueClaimer interface {
 	ClaimNext(ctx context.Context, workerID string) (*model.EnrichmentJob, error)
 	ClaimNextBatch(ctx context.Context, workerID string, max int) ([]*model.EnrichmentJob, error)
-	Complete(ctx context.Context, id uuid.UUID) error
-	CompleteWithWarning(ctx context.Context, id uuid.UUID, payload any) error
-	Fail(ctx context.Context, id uuid.UUID, payload any) error
-	Release(ctx context.Context, id uuid.UUID) error
+	// Pass workerID to enable the stale-write guard (returns
+	// storage.ErrClaimLost if the row's claimed_by has changed since the
+	// worker claimed it); pass "" for unguarded operator paths.
+	Complete(ctx context.Context, id uuid.UUID, workerID string) error
+	CompleteWithWarning(ctx context.Context, id uuid.UUID, workerID string, payload any) error
+	Fail(ctx context.Context, id uuid.UUID, workerID string, payload any) error
+	Release(ctx context.Context, id uuid.UUID, workerID string) error
 	MarkStepCompleted(ctx context.Context, id uuid.UUID, step string) error
+	TickHeartbeat(ctx context.Context, workerID string) (int, error)
 }
 
 // EntityUpserter creates or updates an entity record and supports lookup
@@ -368,6 +381,13 @@ func NewWorkerPool(
 	}
 }
 
+// heartbeatTickTimeout caps how long a single TickHeartbeat write may block.
+// Losing the heartbeat is what makes a long batch look frozen to the
+// StuckJobSweeper, so a stuck writer must deadline rather than stall the loop.
+const heartbeatTickTimeout = 10 * time.Second
+
+const defaultHeartbeatInterval = 30 * time.Second
+
 // Start launches the configured number of worker goroutines. Each loops
 // until the pool is stopped: claim a job, process it, repeat (or sleep on
 // empty queue).
@@ -375,8 +395,10 @@ func (wp *WorkerPool) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	wp.cancel = cancel
 
+	workerIDs := make([]string, wp.config.Workers)
 	for i := range wp.config.Workers {
 		workerID := fmt.Sprintf("worker-%d", i)
+		workerIDs[i] = workerID
 		wp.wg.Add(1)
 		go wp.run(ctx, workerID)
 	}
@@ -390,6 +412,70 @@ func (wp *WorkerPool) Start() {
 			defer wp.wg.Done()
 			wp.progress.runTickLoop(ctx)
 		}()
+	}
+
+	// Per-worker heartbeat so the StuckJobSweeper can distinguish a long
+	// batch from a dead worker.
+	wp.wg.Add(1)
+	go wp.runHeartbeat(ctx, workerIDs)
+}
+
+// runHeartbeat periodically stamps heartbeat_at/updated_at for every row
+// currently held by each worker in the pool. The loop must survive a single
+// bad tick (panic, DB lock, slow write); losing it is what makes long
+// batches look stalled to the sweeper.
+func (wp *WorkerPool) runHeartbeat(ctx context.Context, workerIDs []string) {
+	defer wp.wg.Done()
+
+	interval := defaultHeartbeatInterval
+	if wp.settings != nil {
+		resolved := wp.settings.ResolveDurationSecondsWithDefault(ctx,
+			service.SettingEnrichmentHeartbeatSeconds, "global")
+		if resolved >= time.Second {
+			interval = resolved
+		}
+	}
+
+	tick := func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("enrichment: heartbeat tick panic recovered",
+					"panic", rec, "stack", string(debug.Stack()))
+			}
+		}()
+
+		tickCtx, cancel := context.WithTimeout(ctx, heartbeatTickTimeout)
+		defer cancel()
+
+		for _, workerID := range workerIDs {
+			n, err := wp.queue.TickHeartbeat(tickCtx, workerID)
+			if err != nil && ctx.Err() == nil {
+				slog.Warn("enrichment: heartbeat tick failed",
+					"worker", workerID, "err", err)
+				continue
+			}
+			if n > 0 {
+				slog.Debug("enrichment: heartbeat tick",
+					"worker", workerID, "claimed_jobs", n)
+			}
+		}
+	}
+
+	// Initial tick on entry so any rows already claimed (e.g. after a crash
+	// recovery + immediate restart) carry a fresh heartbeat_at without
+	// waiting for the first interval to elapse.
+	tick()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tick()
+		}
 	}
 }
 
@@ -573,6 +659,7 @@ type entityFact struct {
 type pendingJob struct {
 	job           *model.EnrichmentJob
 	mem           *model.Memory
+	workerID      string // owner of the claim — passed to *Owned write methods so a sweeper-requeued row is not silently overwritten by this worker.
 	children      []childFact
 	entities      []entityFact
 	factUsage     *provider.TokenUsage
@@ -614,7 +701,7 @@ type pendingJob struct {
 }
 
 func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *model.EnrichmentJob) error {
-	p, err := wp.runPreEmbed(ctx, job)
+	p, err := wp.runPreEmbed(ctx, workerID, job)
 	if err != nil {
 		return err
 	}
@@ -656,7 +743,7 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 			defer func() { <-sem; wg.Done() }()
 			jobStartTimes[i] = time.Now().UTC()
 			wp.progress.JobStarted(ctx, job, nil, workerID)
-			p, err := wp.runPreEmbed(ctx, job)
+			p, err := wp.runPreEmbed(ctx, workerID, job)
 			if err != nil {
 				preEmbedErrs[i] = err
 				wp.logBreakerOrError(ctx, "enrichment: batch pre-embed failed",
@@ -749,12 +836,12 @@ func earliestBreakerRetry(errs []error) time.Time {
 // entity/relationship upsert for a single job. On fatal failure it marks the
 // job failed and returns an error; on success returns a pendingJob with
 // parent+children ready for the shared embed step.
-func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob) (*pendingJob, error) {
+func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *model.EnrichmentJob) (*pendingJob, error) {
 	mem, err := wp.memories.GetByID(ctx, job.MemoryID)
 	if err != nil {
-		failErr := wp.queue.Fail(ctx, job.ID, fmt.Sprintf("memory lookup: %v", err))
+		failErr := wp.queue.Fail(ctx, job.ID, workerID, fmt.Sprintf("memory lookup: %v", err))
 		if failErr != nil {
-			slog.Error("enrichment: fail-mark error", "job", job.ID, "err", failErr)
+			logClaimLostOr(failErr, "enrichment: fail-mark error", "job", job.ID, "worker", workerID)
 		}
 		return nil, fmt.Errorf("memory lookup: %w", err)
 	}
@@ -766,8 +853,8 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 	// back. Returning (nil, nil) signals to callers that nothing further
 	// should happen with this job.
 	if wp.cascade != nil && !wp.cascade.ResolveEnrichmentEnabled(ctx, mem.NamespaceID) {
-		if err := wp.queue.Complete(ctx, job.ID); err != nil {
-			slog.Error("enrichment: complete-skipped error", "job", job.ID, "err", err)
+		if err := wp.queue.Complete(ctx, job.ID, workerID); err != nil {
+			logClaimLostOr(err, "enrichment: complete-skipped error", "job", job.ID, "worker", workerID)
 		}
 		slog.Info("enrichment: skipped per cascade",
 			"job", job.ID, "memory", mem.ID, "namespace", mem.NamespaceID)
@@ -788,7 +875,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 	// the phase: re-judging would create duplicate lineage edges.
 	ingestion := wp.runIngestionDecision(ctx, job, mem)
 	if ingestion != nil && ingestion.decision == IngestionOpDelete {
-		p := &pendingJob{job: job, mem: mem}
+		p := &pendingJob{job: job, mem: mem, workerID: workerID}
 		p.applyIngestion(ingestion)
 		return p, nil
 	}
@@ -801,7 +888,9 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 	// batch is claimed. Release (no attempts bump) so the backlog drains
 	// automatically when the admin restores the slot.
 	if !(hasFact && hasEntity && hasEmbed) {
-		_ = wp.queue.Release(ctx, job.ID)
+		if relErr := wp.queue.Release(ctx, job.ID, workerID); relErr != nil {
+			logClaimLostOr(relErr, "enrichment: release on closed gate", "job", job.ID, "worker", workerID)
+		}
 		return nil, fmt.Errorf("enrichment gate closed mid-batch; job released")
 	}
 
@@ -877,14 +966,14 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 		// Treat as transient only when *both* legs are: if one leg is a real
 		// fault, burning a queue attempt is the right policy.
 		if isTransientLLMErr(factErr) && isTransientLLMErr(entityErr) {
-			wp.requeueOrFail(ctx, job.ID, factErr, joined.Error())
+			wp.requeueOrFail(ctx, workerID, job.ID, factErr, joined.Error())
 		} else {
-			wp.requeueOrFail(ctx, job.ID, errNonTransient, joined.Error())
+			wp.requeueOrFail(ctx, workerID, job.ID, errNonTransient, joined.Error())
 		}
 		return nil, fmt.Errorf("extraction failed: %w", joined)
 	}
 	if hasFact && factErr != nil {
-		wp.requeueOrFail(ctx, job.ID, factErr, extractionFailPayload(factErr))
+		wp.requeueOrFail(ctx, workerID, job.ID, factErr, extractionFailPayload(factErr))
 		return nil, fmt.Errorf("fact extraction: %w", factErr)
 	}
 	// Entity-only failure is intentionally soft: facts may have succeeded and
@@ -948,6 +1037,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, job *model.EnrichmentJob)
 	p := &pendingJob{
 		job:                    job,
 		mem:                    mem,
+		workerID:               workerID,
 		children:               children,
 		entities:               entities,
 		factUsage:              factUsage,
@@ -1221,9 +1311,9 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 					if p.shortCircuitDelete() {
 						continue
 					}
-					if relErr := wp.queue.Release(ctx, p.job.ID); relErr != nil {
-						slog.Warn("enrichment: queue release after transient embed failure",
-							"job", p.job.ID, "err", relErr)
+					if relErr := wp.queue.Release(ctx, p.job.ID, p.workerID); relErr != nil {
+						logClaimLostOr(relErr, "enrichment: queue release after transient embed failure",
+							"job", p.job.ID, "worker", p.workerID)
 					}
 				}
 			}
@@ -1320,9 +1410,9 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 				continue
 			}
 			p.vectorWriteFailed = true
-			if failErr := wp.queue.Fail(ctx, p.job.ID, fmt.Sprintf("vector upsert batch: %v", err)); failErr != nil {
-				slog.Warn("enrichment: queue fail after vector batch failure",
-					"job", p.job.ID, "err", failErr)
+			if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, fmt.Sprintf("vector upsert batch: %v", err)); failErr != nil {
+				logClaimLostOr(failErr, "enrichment: queue fail after vector batch failure",
+					"job", p.job.ID, "worker", p.workerID)
 			}
 		}
 		return
@@ -1419,7 +1509,9 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 	p.mem.Enriched = true
 	p.mem.UpdatedAt = time.Now().UTC()
 	if err := wp.memUpdater.MarkEnriched(ctx, p.mem.ID, p.mem.NamespaceID, p.mem.EmbeddingDim, stampedMetadata); err != nil {
-		_ = wp.queue.Fail(ctx, p.job.ID, fmt.Sprintf("update memory enriched: %v", err))
+		if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, fmt.Sprintf("update memory enriched: %v", err)); failErr != nil {
+			logClaimLostOr(failErr, "enrichment: fail-mark after memory update", "job", p.job.ID, "worker", p.workerID)
+		}
 		return fmt.Errorf("update memory: %w", err)
 	}
 
@@ -1462,10 +1554,18 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 	}
 
 	if p.partialRecoveryWarning != nil {
-		if err := wp.queue.CompleteWithWarning(ctx, p.job.ID, p.partialRecoveryWarning); err != nil {
+		if err := wp.queue.CompleteWithWarning(ctx, p.job.ID, p.workerID, p.partialRecoveryWarning); err != nil {
+			if errors.Is(err, storage.ErrClaimLost) {
+				slog.Info("enrichment: complete-with-warning dropped — claim lost", "job", p.job.ID, "worker", p.workerID)
+				return nil
+			}
 			return fmt.Errorf("complete job (with warning): %w", err)
 		}
-	} else if err := wp.queue.Complete(ctx, p.job.ID); err != nil {
+	} else if err := wp.queue.Complete(ctx, p.job.ID, p.workerID); err != nil {
+		if errors.Is(err, storage.ErrClaimLost) {
+			slog.Info("enrichment: complete dropped — claim lost", "job", p.job.ID, "worker", p.workerID)
+			return nil
+		}
 		return fmt.Errorf("complete job: %w", err)
 	}
 

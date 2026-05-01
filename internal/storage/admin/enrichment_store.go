@@ -9,14 +9,18 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
 // EnrichmentAdminStore implements api.EnrichmentAdminStore by wrapping
-// EnrichmentQueueRepo and SettingsRepo for pause state.
+// EnrichmentQueueRepo and SettingsRepo. settingsSvc resolves
+// enrichment.stuck_threshold_seconds for the is_stale_diagnostic flag on
+// each hydrated queue item.
 type EnrichmentAdminStore struct {
 	queueRepo    *storage.EnrichmentQueueRepo
 	settingsRepo *storage.SettingsRepo
+	settingsSvc  *service.SettingsService
 	db           storage.DB
 }
 
@@ -24,13 +28,63 @@ type EnrichmentAdminStore struct {
 func NewEnrichmentAdminStore(
 	queueRepo *storage.EnrichmentQueueRepo,
 	settingsRepo *storage.SettingsRepo,
+	settingsSvc *service.SettingsService,
 	db storage.DB,
 ) *EnrichmentAdminStore {
 	return &EnrichmentAdminStore{
 		queueRepo:    queueRepo,
 		settingsRepo: settingsRepo,
+		settingsSvc:  settingsSvc,
 		db:           db,
 	}
+}
+
+// hydrateQueueItem builds the api-layer EnrichmentQueueItem from the model
+// row plus the stuck threshold (in ms). Centralized so the SelfQueueStatus
+// and QueueStatus paths stay in sync as the UI grows.
+func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, staleThresholdMs int64, now time.Time) api.EnrichmentQueueItem {
+	lastErr := ""
+	if item.LastError != nil {
+		lastErr = string(item.LastError)
+	}
+	out := api.EnrichmentQueueItem{
+		ID:                item.ID,
+		MemoryID:          item.MemoryID,
+		Status:            item.Status,
+		Attempts:          item.Attempts,
+		MaxAttempts:       item.MaxAttempts,
+		LastError:         lastErr,
+		CreatedAt:         item.CreatedAt,
+		ClaimedBy:         item.ClaimedBy,
+		LastRequeueReason: item.LastRequeueReason,
+	}
+	if item.Status == model.EnrichmentStatusProcessing && item.ClaimedAt != nil {
+		ageMs := now.Sub(*item.ClaimedAt).Milliseconds()
+		if ageMs < 0 {
+			ageMs = 0
+		}
+		out.ClaimedAtAgeMs = &ageMs
+		// Half-threshold is the early-warning point — same intent as
+		// dreaming's is_stale_diagnostic.
+		if staleThresholdMs > 0 && ageMs > staleThresholdMs/2 {
+			out.IsStaleDiagnostic = true
+		}
+	}
+	return out
+}
+
+// staleThresholdMs returns enrichment.stuck_threshold_seconds in ms, with a
+// safe fallback if the setting service is unwired.
+func (s *EnrichmentAdminStore) staleThresholdMs(ctx context.Context) int64 {
+	if s.settingsSvc == nil {
+		return int64((30 * time.Minute).Milliseconds())
+	}
+	d := s.settingsSvc.ResolveDurationSecondsWithDefault(ctx,
+		service.SettingEnrichmentStuckThreshold, "global")
+	if d < time.Second {
+		d = 30 * time.Minute
+	}
+	return d.Milliseconds()
 }
 
 // SelfQueueStatus returns the queue items whose memory.namespace_id is
@@ -81,14 +135,16 @@ func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespac
 	// Recent items in caller's scope.
 	var itemsQ string
 	if s.db.Backend() == storage.BackendPostgres {
-		itemsQ = `SELECT eq.id, eq.memory_id, eq.status, eq.attempts, eq.last_error, eq.created_at
+		itemsQ = `SELECT eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
+				eq.claimed_by, eq.claimed_at, eq.last_requeue_reason
 			FROM enrichment_queue eq
 			JOIN memories m ON eq.memory_id = m.id
 			JOIN namespaces n ON m.namespace_id = n.id
 			WHERE n.path = $1 OR n.path LIKE $2
 			ORDER BY eq.created_at DESC LIMIT 50`
 	} else {
-		itemsQ = `SELECT eq.id, eq.memory_id, eq.status, eq.attempts, eq.last_error, eq.created_at
+		itemsQ = `SELECT eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
+				eq.claimed_by, eq.claimed_at, eq.last_requeue_reason
 			FROM enrichment_queue eq
 			JOIN memories m ON eq.memory_id = m.id
 			JOIN namespaces n ON m.namespace_id = n.id
@@ -101,31 +157,44 @@ func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespac
 	}
 	defer rows.Close()
 
+	threshold := s.staleThresholdMs(ctx)
+	now := time.Now().UTC()
 	queueItems := []api.EnrichmentQueueItem{}
 	for rows.Next() {
 		var (
-			idStr, memIDStr, status, createdAtStr string
-			attempts                              int
-			lastErr                               *string
+			idStr, memIDStr, status, createdAtStr      string
+			attempts, maxAttempts                      int
+			lastErr, claimedBy, claimedAtStr, requeue  *string
 		)
-		if err := rows.Scan(&idStr, &memIDStr, &status, &attempts, &lastErr, &createdAtStr); err != nil {
+		if err := rows.Scan(&idStr, &memIDStr, &status, &attempts, &maxAttempts, &lastErr, &createdAtStr,
+			&claimedBy, &claimedAtStr, &requeue); err != nil {
 			return nil, fmt.Errorf("self queue scan: %w", err)
 		}
 		id, _ := uuid.Parse(idStr)
 		memID, _ := uuid.Parse(memIDStr)
 		ts, _ := parseQueueTime(createdAtStr)
-		errStr := ""
+		var lastErrJSON json.RawMessage
 		if lastErr != nil {
-			errStr = *lastErr
+			lastErrJSON = json.RawMessage(*lastErr)
 		}
-		queueItems = append(queueItems, api.EnrichmentQueueItem{
-			ID:        id,
-			MemoryID:  memID,
-			Status:    status,
-			Attempts:  attempts,
-			LastError: errStr,
-			CreatedAt: ts,
-		})
+		var claimedAt *time.Time
+		if claimedAtStr != nil && *claimedAtStr != "" {
+			if t, perr := parseQueueTime(*claimedAtStr); perr == nil {
+				claimedAt = &t
+			}
+		}
+		queueItems = append(queueItems, s.hydrateQueueItem(model.EnrichmentJob{
+			ID:                id,
+			MemoryID:          memID,
+			Status:            status,
+			Attempts:          attempts,
+			MaxAttempts:       maxAttempts,
+			LastError:         lastErrJSON,
+			CreatedAt:         ts,
+			ClaimedBy:         claimedBy,
+			ClaimedAt:         claimedAt,
+			LastRequeueReason: requeue,
+		}, threshold, now))
 	}
 
 	paused, _ := s.IsPaused(ctx)
@@ -157,31 +226,16 @@ func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context) (*api.Enrichment
 		return nil, fmt.Errorf("queue status counts: %w", err)
 	}
 
-	// Get completed count.
-	var completed int
-	row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM enrichment_queue WHERE status = 'completed'")
-	row.Scan(&completed)
-
-	// Get recent items.
 	items, err := s.queueRepo.ListRecent(ctx, 50)
 	if err != nil {
 		return nil, fmt.Errorf("queue status items: %w", err)
 	}
 
-	queueItems := []api.EnrichmentQueueItem{}
+	threshold := s.staleThresholdMs(ctx)
+	now := time.Now().UTC()
+	queueItems := make([]api.EnrichmentQueueItem, 0, len(items))
 	for _, item := range items {
-		lastErr := ""
-		if item.LastError != nil {
-			lastErr = string(item.LastError)
-		}
-		queueItems = append(queueItems, api.EnrichmentQueueItem{
-			ID:        item.ID,
-			MemoryID:  item.MemoryID,
-			Status:    item.Status,
-			Attempts:  item.Attempts,
-			LastError: lastErr,
-			CreatedAt: item.CreatedAt,
-		})
+		queueItems = append(queueItems, s.hydrateQueueItem(item, threshold, now))
 	}
 
 	paused, _ := s.IsPaused(ctx)
@@ -190,7 +244,7 @@ func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context) (*api.Enrichment
 		Counts: api.EnrichmentQueueCounts{
 			Pending:    stats.Pending,
 			Processing: stats.Processing,
-			Completed:  completed,
+			Completed:  stats.Completed,
 			Failed:     stats.Failed,
 		},
 		Items:  queueItems,

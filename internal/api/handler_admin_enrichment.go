@@ -52,13 +52,21 @@ type EnrichmentQueueCounts struct {
 }
 
 // EnrichmentQueueItem describes a single item in the enrichment queue.
+// is_stale_diagnostic is true when claimed_at_age_ms exceeds half of
+// enrichment.stuck_threshold_seconds. claimed_at_age_ms is populated only
+// when status='processing'.
 type EnrichmentQueueItem struct {
-	ID        uuid.UUID `json:"id"`
-	MemoryID  uuid.UUID `json:"memory_id"`
-	Status    string    `json:"status"`
-	Attempts  int       `json:"attempts"`
-	LastError string    `json:"last_error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                uuid.UUID `json:"id"`
+	MemoryID          uuid.UUID `json:"memory_id"`
+	Status            string    `json:"status"`
+	Attempts          int       `json:"attempts"`
+	MaxAttempts       int       `json:"max_attempts,omitempty"`
+	LastError         string    `json:"last_error,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	ClaimedBy         *string   `json:"claimed_by,omitempty"`
+	ClaimedAtAgeMs    *int64    `json:"claimed_at_age_ms,omitempty"`
+	IsStaleDiagnostic bool      `json:"is_stale_diagnostic"`
+	LastRequeueReason *string   `json:"last_requeue_reason,omitempty"`
 }
 
 // enrichmentRetryRequest is the request body for POST /enrichment/retry.

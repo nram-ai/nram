@@ -13,6 +13,19 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
+// ErrClaimLost is returned by Complete / CompleteWithWarning / Fail / Release
+// when a non-empty workerID was passed and no longer matches the row's
+// claimed_by. Callers should log and drop.
+var ErrClaimLost = errors.New("enrichment queue: claim lost (row was reassigned)")
+
+// Enrichment queue status values. Mirrors the schema's CHECK-able set.
+const (
+	statusPending    = model.EnrichmentStatusPending
+	statusProcessing = model.EnrichmentStatusProcessing
+	statusCompleted  = model.EnrichmentStatusCompleted
+	statusFailed     = model.EnrichmentStatusFailed
+)
+
 // isSQLiteBusy returns true if the error is a SQLITE_BUSY contention error.
 func isSQLiteBusy(err error) bool {
 	if err == nil {
@@ -27,6 +40,7 @@ func isSQLiteBusy(err error) bool {
 type QueueStats struct {
 	Pending    int `json:"pending"`
 	Processing int `json:"processing"`
+	Completed  int `json:"completed"`
 	Failed     int `json:"failed"`
 }
 
@@ -279,27 +293,45 @@ func (r *EnrichmentQueueRepo) ClaimNextBatch(ctx context.Context, workerID strin
 	return items, nil
 }
 
-// setStatus updates an enrichment_queue row's status, last_error, and
-// timestamps in one round-trip. Shared body of Complete / CompleteWithWarning
-// / Fail so the SQLite/Postgres branch and rows-affected dance live in one
-// place. lastError nil clears the column; bumpAttempts adds attempts+1
-// (Fail-only); setCompletedAt writes completed_at (Complete-paths only).
-func (r *EnrichmentQueueRepo) setStatus(ctx context.Context, id uuid.UUID, status string, lastError *string, bumpAttempts, setCompletedAt bool) error {
+// setStatusOpts groups setStatus's mode flags so the caller's intent is
+// readable at call sites instead of a tuple of unlabeled booleans.
+type setStatusOpts struct {
+	lastError          *string // nil clears the column
+	workerID           string  // "" = unguarded; non-empty adds AND claimed_by = ?
+	bumpAttempts       bool
+	setCompletedAt     bool
+	clearRequeueReason bool
+}
+
+// setStatus is the shared body of Complete / CompleteWithWarning / Fail.
+// Returns ErrClaimLost when opts.workerID is set and the row's claimed_by
+// no longer matches; sql.ErrNoRows when the row is missing entirely.
+func (r *EnrichmentQueueRepo) setStatus(ctx context.Context, id uuid.UUID, status string, opts setStatusOpts) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	parts := []string{"status = ?", "last_error = ?"}
-	args := []any{status, lastErrorArg(lastError)}
-	if bumpAttempts {
+	args := []any{status, lastErrorArg(opts.lastError)}
+	if opts.bumpAttempts {
 		parts = append(parts, "attempts = attempts + 1")
 	}
-	if setCompletedAt {
+	if opts.setCompletedAt {
 		parts = append(parts, "completed_at = ?")
 		args = append(args, now)
 	}
+	if opts.clearRequeueReason {
+		parts = append(parts, "last_requeue_reason = NULL")
+	}
 	parts = append(parts, "updated_at = ?")
-	args = append(args, now, id.String())
+	args = append(args, now)
 
-	query := "UPDATE enrichment_queue SET " + strings.Join(parts, ", ") + " WHERE id = ?"
+	where := "id = ?"
+	args = append(args, id.String())
+	if opts.workerID != "" {
+		where += " AND claimed_by = ?"
+		args = append(args, opts.workerID)
+	}
+
+	query := "UPDATE enrichment_queue SET " + strings.Join(parts, ", ") + " WHERE " + where
 	if r.db.Backend() == BackendPostgres {
 		query = postgresPlaceholders(query)
 	}
@@ -313,6 +345,9 @@ func (r *EnrichmentQueueRepo) setStatus(ctx context.Context, id uuid.UUID, statu
 		return fmt.Errorf("enrichment queue %s rows affected: %w", status, err)
 	}
 	if rows == 0 {
+		if opts.workerID != "" {
+			return ErrClaimLost
+		}
 		return sql.ErrNoRows
 	}
 	return nil
@@ -356,34 +391,47 @@ func marshalLastError(payload any) (string, error) {
 	return string(encoded), nil
 }
 
-// Complete marks an enrichment queue item as "completed", clears any stale
-// last_error (a retry that ultimately succeeded should not still surface its
-// prior failure), and sets completed_at.
-func (r *EnrichmentQueueRepo) Complete(ctx context.Context, id uuid.UUID) error {
-	return r.setStatus(ctx, id, "completed", nil, false, true)
+// Complete marks an enrichment queue item as "completed", clears stale
+// last_error and last_requeue_reason, and sets completed_at. Pass workerID
+// to enable the stale-write guard (returns ErrClaimLost if the row was
+// reassigned to another worker since the claim); pass "" for admin-
+// initiated paths that don't care about claim ownership.
+func (r *EnrichmentQueueRepo) Complete(ctx context.Context, id uuid.UUID, workerID string) error {
+	return r.setStatus(ctx, id, statusCompleted, setStatusOpts{
+		setCompletedAt:     true,
+		clearRequeueReason: true,
+		workerID:           workerID,
+	})
 }
 
-// CompleteWithWarning marks the row "completed" but preserves a structured
+// CompleteWithWarning marks the row "completed" while preserving a structured
 // payload on last_error so admin surfaces can flag the job as "completed but
-// degraded." Used by the partial-recovery path. Callers passing a nil payload
-// should use Complete instead.
-func (r *EnrichmentQueueRepo) CompleteWithWarning(ctx context.Context, id uuid.UUID, payload any) error {
+// degraded." Same workerID semantics as Complete.
+func (r *EnrichmentQueueRepo) CompleteWithWarning(ctx context.Context, id uuid.UUID, workerID string, payload any) error {
 	encoded, err := marshalLastError(payload)
 	if err != nil {
 		return fmt.Errorf("enrichment queue complete-with-warning marshal payload: %w", err)
 	}
-	return r.setStatus(ctx, id, "completed", &encoded, false, true)
+	return r.setStatus(ctx, id, statusCompleted, setStatusOpts{
+		lastError:          &encoded,
+		setCompletedAt:     true,
+		clearRequeueReason: true,
+		workerID:           workerID,
+	})
 }
 
 // Fail marks the row "failed", stores the JSON-encoded payload as last_error,
-// and increments the attempts counter. payload may be any JSON-marshallable
-// value — string, *ExtractionFailure, etc.
-func (r *EnrichmentQueueRepo) Fail(ctx context.Context, id uuid.UUID, payload any) error {
+// and increments the attempts counter. Same workerID semantics as Complete.
+func (r *EnrichmentQueueRepo) Fail(ctx context.Context, id uuid.UUID, workerID string, payload any) error {
 	encoded, err := marshalLastError(payload)
 	if err != nil {
 		return fmt.Errorf("enrichment queue fail marshal payload: %w", err)
 	}
-	return r.setStatus(ctx, id, "failed", &encoded, true, false)
+	return r.setStatus(ctx, id, statusFailed, setStatusOpts{
+		lastError:    &encoded,
+		bumpAttempts: true,
+		workerID:     workerID,
+	})
 }
 
 // MarkStepCompleted appends a step name to the enrichment job's
@@ -446,44 +494,52 @@ func (r *EnrichmentQueueRepo) MarkStepCompleted(ctx context.Context, id uuid.UUI
 	return nil
 }
 
-// Release resets a claimed enrichment queue item back to "pending" status
-// without bumping the attempts counter. Used when the worker decides to
-// defer processing (e.g., the enrichment-available gate flipped closed
-// mid-batch) rather than fail the job. Distinct from Retry, which is for
-// transient processing failures and counts toward the retry budget.
-func (r *EnrichmentQueueRepo) Release(ctx context.Context, id uuid.UUID) error {
+// Release resets a claimed enrichment queue item back to "pending" without
+// bumping the attempts counter. Used when the worker defers a job (e.g. the
+// enrichment-available gate flipped closed mid-batch) rather than fails it.
+// Pass workerID to enable the stale-write guard; "" for unguarded.
+func (r *EnrichmentQueueRepo) Release(ctx context.Context, id uuid.UUID, workerID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?`
+	args := []any{now, id.String()}
+	where := "id = ?"
+	if workerID != "" {
+		where += " AND claimed_by = ?"
+		args = append(args, workerID)
+	}
+	query := "UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL, updated_at = ? WHERE " + where
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = $1 WHERE id = $2`
+		query = postgresPlaceholders(query)
 	}
 
-	result, err := r.db.Exec(ctx, query, now, id.String())
+	result, err := r.db.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("enrichment queue release: %w", err)
 	}
-
 	rows, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("enrichment queue release rows affected: %w", err)
 	}
 	if rows == 0 {
+		if workerID != "" {
+			return ErrClaimLost
+		}
 		return sql.ErrNoRows
 	}
 	return nil
 }
 
 // Retry resets an enrichment queue item back to "pending" status, clears the
-// worker_id, claimed_at, and any stale last_error from the prior attempt
-// (so admin views show a clean slate while the new attempt is in flight),
-// and increments the attempts counter.
+// worker_id, claimed_at, heartbeat_at, last_requeue_reason, and any stale
+// last_error from the prior attempt (so admin views show a clean slate while
+// the new attempt is in flight), and increments the attempts counter.
+// Operator-initiated retry — unguarded.
 func (r *EnrichmentQueueRepo) Retry(ctx context.Context, id uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, last_error = NULL, attempts = attempts + 1, updated_at = ? WHERE id = ?`
+	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL, last_error = NULL, last_requeue_reason = NULL, attempts = attempts + 1, updated_at = ? WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, last_error = NULL, attempts = attempts + 1, updated_at = $1 WHERE id = $2`
+		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL, last_error = NULL, last_requeue_reason = NULL, attempts = attempts + 1, updated_at = $1 WHERE id = $2`
 	}
 
 	result, err := r.db.Exec(ctx, query, now, id.String())
@@ -499,6 +555,129 @@ func (r *EnrichmentQueueRepo) Retry(ctx context.Context, id uuid.UUID) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// TickHeartbeat updates heartbeat_at AND updated_at to now() for every row
+// currently held by workerID. One write per tick covers every job this
+// worker holds — heartbeat is per-worker because in-flight rows for the same
+// worker share the same liveness signal: if the worker is alive, all its
+// rows are.
+func (r *EnrichmentQueueRepo) TickHeartbeat(ctx context.Context, workerID string) (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	query := `UPDATE enrichment_queue SET heartbeat_at = ?, updated_at = ?
+		WHERE claimed_by = ? AND status = 'processing'`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE enrichment_queue SET heartbeat_at = $1, updated_at = $2
+			WHERE claimed_by = $3 AND status = 'processing'`
+	}
+
+	res, err := r.db.Exec(ctx, query, now, now, workerID)
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue tick heartbeat: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue tick heartbeat rows affected: %w", err)
+	}
+	return int(rows), nil
+}
+
+// ListStaleClaimed returns enrichment_queue rows in status='processing' whose
+// updated_at is older than the given threshold — jobs whose claiming worker
+// is presumed gone (crash, OOM, host reboot mid-batch). Bounded by
+// stuckScanLimit so a flood doesn't lock the writer.
+func (r *EnrichmentQueueRepo) ListStaleClaimed(ctx context.Context, threshold time.Duration) ([]*model.EnrichmentJob, error) {
+	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
+
+	query := selectEnrichmentQueueColumns + ` FROM enrichment_queue
+		WHERE status = 'processing' AND updated_at < ?
+		ORDER BY updated_at ASC LIMIT ?`
+	if r.db.Backend() == BackendPostgres {
+		query = selectEnrichmentQueueColumns + ` FROM enrichment_queue
+			WHERE status = 'processing' AND updated_at < $1
+			ORDER BY updated_at ASC LIMIT $2`
+	}
+
+	rows, err := r.db.Query(ctx, query, cutoff, stuckScanLimit)
+	if err != nil {
+		return nil, fmt.Errorf("enrichment queue list stale claimed: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]*model.EnrichmentJob, 0)
+	for rows.Next() {
+		item, err := r.scanItemFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("enrichment queue list stale claimed iteration: %w", err)
+	}
+	return result, nil
+}
+
+// CountStaleClaimed returns how many in-flight rows have updated_at older
+// than the threshold. Used by the admin status endpoint at every poll
+// without the slice allocation of ListStaleClaimed.
+func (r *EnrichmentQueueRepo) CountStaleClaimed(ctx context.Context, threshold time.Duration) (int, error) {
+	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
+
+	query := `SELECT COUNT(*) FROM enrichment_queue WHERE status = 'processing' AND updated_at < ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM enrichment_queue WHERE status = 'processing' AND updated_at < $1`
+	}
+
+	var n int
+	row := r.db.QueryRow(ctx, query, cutoff)
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("enrichment queue count stale claimed: %w", err)
+	}
+	return n, nil
+}
+
+// RequeueStale resets a stuck in-flight row back to "pending", clears the
+// claim/heartbeat/last_error fields, bumps attempts, and stamps
+// last_requeue_reason for admin display. The `WHERE status='processing'`
+// guard makes this idempotent: a second sweep or a worker that finished
+// between ListStaleClaimed and RequeueStale produces a no-op (returns false).
+func (r *EnrichmentQueueRepo) RequeueStale(ctx context.Context, id uuid.UUID, reason string) (bool, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	query := `UPDATE enrichment_queue SET
+		status              = 'pending',
+		claimed_by          = NULL,
+		claimed_at          = NULL,
+		heartbeat_at        = NULL,
+		last_error          = NULL,
+		last_requeue_reason = ?,
+		attempts            = attempts + 1,
+		updated_at          = ?
+		WHERE id = ? AND status = 'processing'`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE enrichment_queue SET
+			status              = 'pending',
+			claimed_by          = NULL,
+			claimed_at          = NULL,
+			heartbeat_at        = NULL,
+			last_error          = NULL,
+			last_requeue_reason = $1,
+			attempts            = attempts + 1,
+			updated_at          = $2
+			WHERE id = $3 AND status = 'processing'`
+	}
+
+	res, err := r.db.Exec(ctx, query, reason, now, id.String())
+	if err != nil {
+		return false, fmt.Errorf("enrichment queue requeue stale: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("enrichment queue requeue stale rows affected: %w", err)
+	}
+	return rows > 0, nil
 }
 
 // DeleteByNamespace deletes all enrichment queue entries for a namespace.
@@ -536,21 +715,21 @@ func (r *EnrichmentQueueRepo) reload(ctx context.Context, item *model.Enrichment
 }
 
 const selectEnrichmentQueueColumns = `SELECT id, memory_id, namespace_id, status, priority,
-	claimed_at, claimed_by, attempts, max_attempts, last_error, steps_completed,
-	completed_at, created_at, updated_at`
+	claimed_at, claimed_by, heartbeat_at, attempts, max_attempts, last_error, last_requeue_reason,
+	steps_completed, completed_at, created_at, updated_at`
 
 func (r *EnrichmentQueueRepo) scanItem(row *sql.Row) (*model.EnrichmentJob, error) {
 	var item model.EnrichmentJob
 	var idStr, memoryIDStr, namespaceIDStr string
-	var claimedAtStr, claimedBy sql.NullString
+	var claimedAtStr, claimedBy, heartbeatAtStr, lastRequeueReason sql.NullString
 	var lastErrorStr, completedAtStr sql.NullString
 	var stepsCompletedStr string
 	var createdAtStr, updatedAtStr string
 
 	err := row.Scan(
 		&idStr, &memoryIDStr, &namespaceIDStr, &item.Status, &item.Priority,
-		&claimedAtStr, &claimedBy, &item.Attempts, &item.MaxAttempts,
-		&lastErrorStr, &stepsCompletedStr,
+		&claimedAtStr, &claimedBy, &heartbeatAtStr, &item.Attempts, &item.MaxAttempts,
+		&lastErrorStr, &lastRequeueReason, &stepsCompletedStr,
 		&completedAtStr, &createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
@@ -558,15 +737,15 @@ func (r *EnrichmentQueueRepo) scanItem(row *sql.Row) (*model.EnrichmentJob, erro
 	}
 
 	return r.populateItem(&item, idStr, memoryIDStr, namespaceIDStr,
-		claimedAtStr, claimedBy, lastErrorStr, stepsCompletedStr,
-		completedAtStr, createdAtStr, updatedAtStr)
+		claimedAtStr, claimedBy, heartbeatAtStr, lastErrorStr, lastRequeueReason,
+		stepsCompletedStr, completedAtStr, createdAtStr, updatedAtStr)
 }
 
 func (r *EnrichmentQueueRepo) populateItem(
 	item *model.EnrichmentJob,
 	idStr, memoryIDStr, namespaceIDStr string,
-	claimedAtStr, claimedBy sql.NullString,
-	lastErrorStr sql.NullString,
+	claimedAtStr, claimedBy, heartbeatAtStr sql.NullString,
+	lastErrorStr, lastRequeueReason sql.NullString,
 	stepsCompletedStr string,
 	completedAtStr sql.NullString,
 	createdAtStr, updatedAtStr string,
@@ -604,8 +783,21 @@ func (r *EnrichmentQueueRepo) populateItem(
 		item.ClaimedBy = &s
 	}
 
+	if heartbeatAtStr.Valid {
+		t, err := time.Parse(time.RFC3339, heartbeatAtStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("enrichment queue parse heartbeat_at: %w", err)
+		}
+		item.HeartbeatAt = &t
+	}
+
 	if lastErrorStr.Valid {
 		item.LastError = json.RawMessage(lastErrorStr.String)
+	}
+
+	if lastRequeueReason.Valid {
+		s := lastRequeueReason.String
+		item.LastRequeueReason = &s
 	}
 
 	item.StepsCompleted = json.RawMessage(stepsCompletedStr)
@@ -652,6 +844,8 @@ func (r *EnrichmentQueueRepo) CountByStatus(ctx context.Context) (*QueueStats, e
 			stats.Pending = count
 		case "processing":
 			stats.Processing = count
+		case "completed":
+			stats.Completed = count
 		case "failed":
 			stats.Failed = count
 		}
@@ -662,15 +856,15 @@ func (r *EnrichmentQueueRepo) CountByStatus(ctx context.Context) (*QueueStats, e
 func (r *EnrichmentQueueRepo) scanItemFromRows(rows *sql.Rows) (*model.EnrichmentJob, error) {
 	var item model.EnrichmentJob
 	var idStr, memoryIDStr, namespaceIDStr string
-	var claimedAtStr, claimedBy sql.NullString
+	var claimedAtStr, claimedBy, heartbeatAtStr, lastRequeueReason sql.NullString
 	var lastErrorStr, completedAtStr sql.NullString
 	var stepsCompletedStr string
 	var createdAtStr, updatedAtStr string
 
 	err := rows.Scan(
 		&idStr, &memoryIDStr, &namespaceIDStr, &item.Status, &item.Priority,
-		&claimedAtStr, &claimedBy, &item.Attempts, &item.MaxAttempts,
-		&lastErrorStr, &stepsCompletedStr,
+		&claimedAtStr, &claimedBy, &heartbeatAtStr, &item.Attempts, &item.MaxAttempts,
+		&lastErrorStr, &lastRequeueReason, &stepsCompletedStr,
 		&completedAtStr, &createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
@@ -678,8 +872,8 @@ func (r *EnrichmentQueueRepo) scanItemFromRows(rows *sql.Rows) (*model.Enrichmen
 	}
 
 	return r.populateItem(&item, idStr, memoryIDStr, namespaceIDStr,
-		claimedAtStr, claimedBy, lastErrorStr, stepsCompletedStr,
-		completedAtStr, createdAtStr, updatedAtStr)
+		claimedAtStr, claimedBy, heartbeatAtStr, lastErrorStr, lastRequeueReason,
+		stepsCompletedStr, completedAtStr, createdAtStr, updatedAtStr)
 }
 
 // ListRecent returns the most recent enrichment queue items, ordered by created_at DESC.
@@ -713,10 +907,10 @@ func (r *EnrichmentQueueRepo) ListRecent(ctx context.Context, limit int) ([]mode
 func (r *EnrichmentQueueRepo) RetryAllFailed(ctx context.Context) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, completed_at = NULL, updated_at = ?
+	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL, last_requeue_reason = NULL, completed_at = NULL, updated_at = ?
 		WHERE status = 'failed'`
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, completed_at = NULL, updated_at = $1
+		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL, last_requeue_reason = NULL, completed_at = NULL, updated_at = $1
 			WHERE status = 'failed'`
 	}
 

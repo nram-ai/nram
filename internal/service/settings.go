@@ -271,6 +271,18 @@ const (
 	SettingEnrichmentPoolTickIntervalSeconds = "enrichment.pool_tick_interval_seconds"
 	SettingEnrichmentIngestionRationaleMaxLen         = "enrichment.ingestion.rationale_max_len"
 
+	// Stuck-job detection and recovery for the enrichment worker pool.
+	// Mirror the dreaming.stuck_* / dreaming.heartbeat_interval_seconds
+	// design: workers tick heartbeat_at every HeartbeatSeconds while a job
+	// is claimed; the StuckJobSweeper triggers on updated_at staleness past
+	// StuckThreshold (the safer signal — heartbeat is for diagnostics) and
+	// requeues stuck rows on a SweepSeconds cadence. Threshold must exceed
+	// the longest legitimate batch runtime so a slow LLM is not mistaken
+	// for a dead worker.
+	SettingEnrichmentHeartbeatSeconds = "enrichment.worker.heartbeat_seconds"
+	SettingEnrichmentStuckThreshold   = "enrichment.stuck_threshold_seconds"
+	SettingEnrichmentStuckSweep       = "enrichment.stuck_sweep_seconds"
+
 	// Fact and entity extraction LLM-call tunables. Resolved per call by both
 	// ExtractionService (sync HTTP path) and WorkerPool (async queue worker)
 	// so changes hot-reload within the cascade cache TTL. max_tokens caps
@@ -458,7 +470,7 @@ alignment must be a float:
 	SettingDreamParaphraseEnabled:     "true",
 	SettingDreamParaphraseThreshold:   "0.97",
 	SettingDreamParaphraseCapPerCycle: "500",
-	SettingDreamParaphraseTopK:        "5",
+	SettingDreamParaphraseTopK:        "1",
 
 	SettingDreamParaphraseStaleFetchMax:    "10000",
 	SettingDreamConsolidationStaleFetchMax: "10000",
@@ -582,17 +594,27 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingCascadeCacheTTLSeconds:  "30",
 	SettingSettingsCacheTTLSeconds: "30",
 
-	SettingEnrichmentWorkerBatchClaimSize:         "16",
-	SettingEnrichmentWorkerPreEmbedConcurrency:    "4",
+	// Concurrency-shaped defaults are intentionally set to 1 ("safe-for-Ollama").
+	// A 1-GPU local provider (Ollama on a workstation, llama.cpp, etc.) is the
+	// most common nram backend and the easiest to overload — concurrent calls
+	// queue at the model level and look like deadlocks to the operator. The
+	// startup load-warning helper (internal/service/load_warnings.go) flags
+	// any of these knobs raised above 1 so an operator who is intentionally
+	// running a hosted/multi-GPU provider sees a reminder of the risk.
+	SettingEnrichmentWorkerBatchClaimSize:         "1",
+	SettingEnrichmentWorkerPreEmbedConcurrency:    "1",
 	SettingEnrichmentWorkerEmbedTimeoutSeconds:    "30",
 	SettingEnrichmentWorkerEmbedInputCap:          "256",
 	SettingEnrichmentWorkerBreakerEscalateSeconds: "300",
 	SettingEnrichmentWorkerMaxBackoffSeconds:      "30",
 	SettingEnrichmentWorkerCountSQLite:            "1",
-	SettingEnrichmentWorkerCountPostgres:          "2",
+	SettingEnrichmentWorkerCountPostgres:          "1",
 	SettingEnrichmentWorkerPollIntervalSeconds:    "5",
 	SettingEnrichmentPoolTickIntervalSeconds:      "5",
 	SettingEnrichmentIngestionRationaleMaxLen:     "500",
+	SettingEnrichmentHeartbeatSeconds:             "30",
+	SettingEnrichmentStuckThreshold:               "1800",
+	SettingEnrichmentStuckSweep:                   "300",
 
 	SettingFactExtractionMaxTokens:          "4096",
 	SettingEntityExtractionMaxTokens:        "4096",
@@ -607,7 +629,7 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingEntityExtractionSyncTemperature:  "0.1",
 	SettingEntityExtractionAsyncTemperature: "0.2",
 
-	SettingDreamContradictionNeighbors: "4",
+	SettingDreamContradictionNeighbors: "1",
 	SettingDreamEntityMergeThreshold:   "0.92",
 	SettingDreamSchedulerPollSeconds:   "30",
 	SettingDreamHeartbeatInterval:      "30",

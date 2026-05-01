@@ -993,8 +993,17 @@ export interface EnrichmentQueueItem {
   memory_id: string;
   status: string;
   attempts: number;
+  max_attempts?: number;
   last_error?: string;
   created_at: string;
+  // Populated by the EnrichmentAdminStore so the EnrichmentMonitor can render
+  // the StaleDiagnosticPill (yellow, before the StuckJobSweeper has fired)
+  // and RequeuedPill (red, after the sweeper has auto-requeued the row).
+  // claimed_at_age_ms is only populated when status === "processing".
+  claimed_by?: string;
+  claimed_at_age_ms?: number;
+  is_stale_diagnostic: boolean;
+  last_requeue_reason?: string;
 }
 
 export interface EnrichmentQueueStatus {

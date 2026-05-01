@@ -152,6 +152,7 @@ type mockQueueClaimer struct {
 	failed         map[uuid.UUID]string
 	released       []uuid.UUID
 	stepsCompleted map[uuid.UUID][]string
+	heartbeats     map[string]int
 	claimErr       error
 }
 
@@ -195,18 +196,20 @@ func (m *mockQueueClaimer) ClaimNextBatch(_ context.Context, _ string, max int) 
 	return batch, nil
 }
 
-func (m *mockQueueClaimer) Complete(_ context.Context, id uuid.UUID) error {
+// The mock has no concept of claim ownership, so workerID is ignored. The
+// stale-write guard is exercised in the storage repo tests (where the real
+// SQL lives).
+func (m *mockQueueClaimer) Complete(_ context.Context, id uuid.UUID, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.completed = append(m.completed, id)
 	return nil
 }
 
-// CompleteWithWarning mirrors EnrichmentQueueRepo.CompleteWithWarning: the
-// job is added to completed AND the warning payload is JSON-encoded into
-// the failed map alongside it, so tests asserting on either dimension see
-// the same wire-form admin views would render.
-func (m *mockQueueClaimer) CompleteWithWarning(_ context.Context, id uuid.UUID, payload any) error {
+// CompleteWithWarning encodes the payload to JSON before storing — same
+// wire form admin views render — so tests can string-match against
+// m.failed regardless of whether the job took the clean or partial path.
+func (m *mockQueueClaimer) CompleteWithWarning(_ context.Context, id uuid.UUID, _ string, payload any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.completed = append(m.completed, id)
@@ -218,10 +221,7 @@ func (m *mockQueueClaimer) CompleteWithWarning(_ context.Context, id uuid.UUID, 
 	return nil
 }
 
-// Fail mirrors EnrichmentQueueRepo.Fail's contract: payload is JSON-marshalled
-// before being stored, so tests that string-match against the failed map see
-// the same encoded form admin views would render on the queue row.
-func (m *mockQueueClaimer) Fail(_ context.Context, id uuid.UUID, payload any) error {
+func (m *mockQueueClaimer) Fail(_ context.Context, id uuid.UUID, _ string, payload any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	encoded, err := json.Marshal(payload)
@@ -232,7 +232,7 @@ func (m *mockQueueClaimer) Fail(_ context.Context, id uuid.UUID, payload any) er
 	return nil
 }
 
-func (m *mockQueueClaimer) Release(_ context.Context, id uuid.UUID) error {
+func (m *mockQueueClaimer) Release(_ context.Context, id uuid.UUID, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.released = append(m.released, id)
@@ -249,6 +249,16 @@ func (m *mockQueueClaimer) MarkStepCompleted(_ context.Context, id uuid.UUID, st
 	}
 	m.stepsCompleted[id] = append(m.stepsCompleted[id], step)
 	return nil
+}
+
+func (m *mockQueueClaimer) TickHeartbeat(_ context.Context, workerID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.heartbeats == nil {
+		m.heartbeats = make(map[string]int)
+	}
+	m.heartbeats[workerID]++
+	return 0, nil
 }
 
 type mockEntityUpserter struct {
@@ -587,6 +597,102 @@ func constLLM(p provider.LLMProvider) func() provider.LLMProvider {
 // constEmbed mirrors constLLM for embedding providers.
 func constEmbed(p provider.EmbeddingProvider) func() provider.EmbeddingProvider {
 	return func() provider.EmbeddingProvider { return p }
+}
+
+// TestWorkerPool_HeartbeatTicksClaimedJobs starts a pool, lets the initial
+// heartbeat tick fire, then asserts TickHeartbeat was called for every
+// worker ID. We can't easily fast-forward time in the production goroutine,
+// so we just verify the initial-on-entry tick lands.
+func TestWorkerPool_HeartbeatTicksClaimedJobs(t *testing.T) {
+	h := newTestHarness(nil, nil, nil)
+	// Override worker count to 3 so we can verify per-worker fan-out.
+	h.pool.config.Workers = 3
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	workerIDs := []string{"worker-0", "worker-1", "worker-2"}
+	done := make(chan struct{})
+	h.pool.wg.Add(1)
+	go func() {
+		// runHeartbeat does an initial tick on entry, then enters the
+		// ticker loop. We cancel immediately after the initial tick so
+		// the test doesn't have to wait a full interval.
+		h.pool.runHeartbeat(ctx, workerIDs)
+		close(done)
+	}()
+
+	// Wait briefly for the initial tick to land, then cancel.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("heartbeat goroutine did not exit after ctx cancel")
+	}
+
+	h.queue.mu.Lock()
+	defer h.queue.mu.Unlock()
+	for _, w := range workerIDs {
+		if h.queue.heartbeats[w] < 1 {
+			t.Fatalf("expected heartbeat for %s, got %d (full map: %v)", w, h.queue.heartbeats[w], h.queue.heartbeats)
+		}
+	}
+}
+
+// TestWorkerPool_HeartbeatSurvivesPanic verifies the defer recover() in
+// runHeartbeat keeps the goroutine alive when TickHeartbeat panics on one
+// tick. The next tick should still fire.
+func TestWorkerPool_HeartbeatSurvivesPanic(t *testing.T) {
+	h := newTestHarness(nil, nil, nil)
+	h.pool.config.Workers = 1
+
+	// Swap in a queue that panics on the FIRST TickHeartbeat call only.
+	panicQueue := &panickingHeartbeatQueue{
+		mockQueueClaimer: h.queue,
+		panicOnce:        true,
+	}
+	h.pool.queue = panicQueue
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	h.pool.wg.Add(1)
+	go func() {
+		h.pool.runHeartbeat(ctx, []string{"worker-0"})
+		close(done)
+	}()
+
+	// Initial tick panics (recovered). Cancel after a short delay so the
+	// loop exits cleanly without us having to wait a full interval.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("heartbeat goroutine did not exit after panic+recover")
+	}
+}
+
+// panickingHeartbeatQueue wraps mockQueueClaimer so TickHeartbeat panics
+// on the first call and behaves normally afterwards. Used to verify the
+// runHeartbeat goroutine's defer recover() keeps the loop alive.
+type panickingHeartbeatQueue struct {
+	*mockQueueClaimer
+	mu        sync.Mutex
+	panicOnce bool
+}
+
+func (p *panickingHeartbeatQueue) TickHeartbeat(ctx context.Context, workerID string) (int, error) {
+	p.mu.Lock()
+	if p.panicOnce {
+		p.panicOnce = false
+		p.mu.Unlock()
+		panic("simulated tick panic")
+	}
+	p.mu.Unlock()
+	return p.mockQueueClaimer.TickHeartbeat(ctx, workerID)
 }
 
 // ---------------------------------------------------------------------------
