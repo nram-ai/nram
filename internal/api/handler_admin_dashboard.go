@@ -11,12 +11,16 @@ import (
 )
 
 // DashboardStore abstracts storage operations for dashboard/activity.
-// When orgID is non-nil, results are scoped to that organization.
+// When orgID is non-nil, results are scoped to that organization. When
+// userID is also non-nil, results are further scoped to memories owned by
+// that user (via the user's namespace path) and a short content preview is
+// included on each event so the caller's own dashboard can render its own
+// memories. Org/system tiers (userID == nil) remain content-free.
 type DashboardStore interface {
 	// DashboardStats returns aggregate stats for the dashboard.
 	DashboardStats(ctx context.Context, orgID *uuid.UUID) (*DashboardStatsData, error)
 	// RecentActivity returns the most recent activity events, up to limit.
-	RecentActivity(ctx context.Context, limit int, orgID *uuid.UUID) ([]ActivityEvent, error)
+	RecentActivity(ctx context.Context, limit int, orgID, userID *uuid.UUID) ([]ActivityEvent, error)
 }
 
 // DashboardStatsData holds aggregate statistics for the admin dashboard.
@@ -46,16 +50,17 @@ type DashboardQueueStats struct {
 
 // ActivityEvent represents a single recent activity entry.
 //
-// Privacy: this struct intentionally does NOT carry a memory content preview.
-// The previous design returned the first 100 chars of memory.content in
-// `summary`, which leaked content into the dashboard UI. Length is exposed
-// as a size hint instead.
+// Privacy: Preview is populated only on the self-tier (caller's own
+// memories) — that is, when the store is called with both orgID and userID
+// set to the caller's IDs. Org and system tiers (userID nil) leave Preview
+// nil so cross-tenant feeds remain content-free.
 type ActivityEvent struct {
 	ID          string     `json:"id"`
 	Type        string     `json:"type"`
 	ProjectID   *uuid.UUID `json:"project_id,omitempty"`
 	UserID      *uuid.UUID `json:"user_id,omitempty"`
 	LengthChars int        `json:"length_chars,omitempty"`
+	Preview     *string    `json:"preview,omitempty"`
 	Timestamp   time.Time  `json:"timestamp"`
 }
 
@@ -112,10 +117,11 @@ func NewAdminActivityHandler(cfg DashboardConfig) http.HandlerFunc {
 		}
 
 		// Self-tier: caller's own activity feed. Admin viewing /v1/activity
-		// sees admin's own activity. Org/system feeds move to dedicated routes.
-		orgID, _ := SelfScope(auth.FromContext(r.Context()))
+		// sees admin's own activity. Both org and user scope are passed so
+		// the store can attach a content preview for the caller's own memories.
+		orgID, userID := SelfScope(auth.FromContext(r.Context()))
 
-		events, err := cfg.Store.RecentActivity(r.Context(), limit, orgID)
+		events, err := cfg.Store.RecentActivity(r.Context(), limit, orgID, userID)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to retrieve activity events"))
 			return

@@ -23,6 +23,7 @@ type mockDashboardStore struct {
 	activityErr error
 	lastLimit   int
 	lastOrgID   *uuid.UUID
+	lastUserID  *uuid.UUID
 }
 
 func (m *mockDashboardStore) DashboardStats(_ context.Context, orgID *uuid.UUID) (*DashboardStatsData, error) {
@@ -30,9 +31,10 @@ func (m *mockDashboardStore) DashboardStats(_ context.Context, orgID *uuid.UUID)
 	return m.stats, m.statsErr
 }
 
-func (m *mockDashboardStore) RecentActivity(_ context.Context, limit int, orgID *uuid.UUID) ([]ActivityEvent, error) {
+func (m *mockDashboardStore) RecentActivity(_ context.Context, limit int, orgID, userID *uuid.UUID) ([]ActivityEvent, error) {
 	m.lastLimit = limit
 	m.lastOrgID = orgID
+	m.lastUserID = userID
 	return m.events, m.activityErr
 }
 

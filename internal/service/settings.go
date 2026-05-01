@@ -68,7 +68,6 @@ const (
 	SettingDreamInitialConfidence     = "dreaming.initial_confidence"
 	SettingDreamSupersessionThreshold = "dreaming.supersession_threshold"
 	SettingDreamLogRetention          = "dreaming.log_retention_days"
-	SettingDreamProjectEnabled        = "dreaming.project.enabled"
 	SettingDreamContradictionPrompt   = "dreaming.contradiction_prompt"
 	SettingDreamSynthesisPrompt       = "dreaming.synthesis_prompt"
 	SettingDreamAlignmentPrompt       = "dreaming.alignment_prompt"

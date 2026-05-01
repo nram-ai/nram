@@ -35,7 +35,7 @@ func (s *rrDashboardStore) DashboardStats(_ context.Context, _ *uuid.UUID) (*api
 	}, nil
 }
 
-func (s *rrDashboardStore) RecentActivity(_ context.Context, _ int, _ *uuid.UUID) ([]api.ActivityEvent, error) {
+func (s *rrDashboardStore) RecentActivity(_ context.Context, _ int, _, _ *uuid.UUID) ([]api.ActivityEvent, error) {
 	return []api.ActivityEvent{}, nil
 }
 

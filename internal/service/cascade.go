@@ -71,6 +71,7 @@ func NewCascadeResolver(s *SettingsService, projects CascadeProjectReader, users
 
 type effectiveRoot struct {
 	EnrichmentEnabled json.RawMessage `json:"enrichment_enabled"`
+	DreamingEnabled   json.RawMessage `json:"dreaming_enabled"`
 	DedupThreshold    json.RawMessage `json:"dedup_threshold"`
 }
 
@@ -151,6 +152,23 @@ func (r *CascadeResolver) ResolveEnrichmentEnabled(ctx context.Context, namespac
 	root := r.resolveOverrideJSON(ctx, namespaceID)
 	if ov, err := ParseEnrichmentEnabledOverride(root.EnrichmentEnabled); err == nil {
 		base = MergeEnrichmentEnabled(base, ov)
+	}
+	return base
+}
+
+// ResolveDreamingEnabled returns the effective dreaming_enabled value for
+// the given namespace, walking system → user/project layer in the same
+// shape as ResolveEnrichmentEnabled. The base layer reads
+// SettingDreamingEnabled (global) so flipping the system toggle is visible
+// to every namespace that has not set its own override.
+func (r *CascadeResolver) ResolveDreamingEnabled(ctx context.Context, namespaceID uuid.UUID) bool {
+	base := false
+	if r.settings != nil {
+		base = r.settings.ResolveBool(ctx, SettingDreamingEnabled, "global")
+	}
+	root := r.resolveOverrideJSON(ctx, namespaceID)
+	if ov, err := ParseDreamingEnabledOverride(root.DreamingEnabled); err == nil {
+		base = MergeDreamingEnabled(base, ov)
 	}
 	return base
 }

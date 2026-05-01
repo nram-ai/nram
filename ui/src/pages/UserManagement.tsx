@@ -691,6 +691,7 @@ function UserDetailPanel({
   // with a 400. Migration 000026/000023 strips the dead field from
   // existing rows; the parser here ignores it on read for safety.
   const [editEnrichmentEnabled, setEditEnrichmentEnabled] = useState<boolean | undefined>(undefined);
+  const [editDreamingEnabled, setEditDreamingEnabled] = useState<boolean | undefined>(undefined);
   const [editDedupThreshold, setEditDedupThreshold] = useState<number | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -707,6 +708,10 @@ function UserDetailPanel({
       const enrichRaw = settings.enrichment_enabled;
       setEditEnrichmentEnabled(
         typeof enrichRaw === "boolean" ? enrichRaw : undefined,
+      );
+      const dreamRaw = settings.dreaming_enabled;
+      setEditDreamingEnabled(
+        typeof dreamRaw === "boolean" ? dreamRaw : undefined,
       );
       const dedupRaw = settings.dedup_threshold;
       setEditDedupThreshold(
@@ -738,6 +743,7 @@ function UserDetailPanel({
     const settings = buildUserSettingsPayload({
       dedup_threshold: editDedupThreshold,
       enrichment_enabled: editEnrichmentEnabled,
+      dreaming_enabled: editDreamingEnabled,
     });
     const data: UpdateUserRequest = {
       display_name: editDisplayName,
@@ -759,6 +765,7 @@ function UserDetailPanel({
     editRole,
     editDisabled,
     editEnrichmentEnabled,
+    editDreamingEnabled,
     editDedupThreshold,
     isAdmin,
     adminUpdateMut,
@@ -917,6 +924,21 @@ function UserDetailPanel({
                   className="rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   value={triStateValue(editEnrichmentEnabled)}
                   onChange={(e) => setEditEnrichmentEnabled(fromTriState(e.target.value))}
+                >
+                  <option value="inherit">Inherit system</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  Dreaming Enabled
+                </label>
+                <select
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={triStateValue(editDreamingEnabled)}
+                  onChange={(e) => setEditDreamingEnabled(fromTriState(e.target.value))}
                 >
                   <option value="inherit">Inherit system</option>
                   <option value="on">On</option>

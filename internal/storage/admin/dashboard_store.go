@@ -129,14 +129,23 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID *uuid.UUID) (
 	return stats, nil
 }
 
-func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID *uuid.UUID) ([]api.ActivityEvent, error) {
-	// Privacy: SELECT computes LENGTH(content) instead of pulling the body.
-	// The activity feed exposes only event type + size hint; content stays
-	// in the database.
+func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID, userID *uuid.UUID) ([]api.ActivityEvent, error) {
+	// Privacy: only the self-tier (userID != nil — caller's own memories,
+	// scoped via the user's namespace prefix) selects a content preview.
+	// Org-scoped (orgID set, userID nil) and global (both nil) keep the
+	// length-only shape so cross-tenant feeds never carry content.
 	var query string
 	var args []interface{}
+	wantPreview := userID != nil
 
-	if orgID == nil {
+	switch {
+	case userID != nil:
+		query = s.userRecentActivityQuery()
+		args = []interface{}{userID.String(), limit}
+	case orgID != nil:
+		query = s.orgRecentActivityQuery()
+		args = []interface{}{orgID.String(), limit}
+	default:
 		query = `SELECT id, LENGTH(content), created_at FROM memories
 			WHERE deleted_at IS NULL
 			ORDER BY created_at DESC LIMIT ?`
@@ -146,9 +155,6 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID *u
 				ORDER BY created_at DESC LIMIT $1`
 		}
 		args = []interface{}{limit}
-	} else {
-		query = s.orgRecentActivityQuery()
-		args = []interface{}{orgID.String(), limit}
 	}
 
 	rows, err := s.db.Query(ctx, query, args...)
@@ -161,20 +167,32 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID *u
 	for rows.Next() {
 		var idStr, createdAtStr string
 		var lengthChars int
-		if err := rows.Scan(&idStr, &lengthChars, &createdAtStr); err != nil {
-			return nil, fmt.Errorf("recent activity scan: %w", err)
+		var preview string
+		if wantPreview {
+			if err := rows.Scan(&idStr, &lengthChars, &preview, &createdAtStr); err != nil {
+				return nil, fmt.Errorf("recent activity scan: %w", err)
+			}
+		} else {
+			if err := rows.Scan(&idStr, &lengthChars, &createdAtStr); err != nil {
+				return nil, fmt.Errorf("recent activity scan: %w", err)
+			}
 		}
 		ts, err := time.Parse(time.RFC3339, createdAtStr)
 		if err != nil {
 			return nil, fmt.Errorf("recent activity parse timestamp: %w", err)
 		}
 
-		events = append(events, api.ActivityEvent{
+		ev := api.ActivityEvent{
 			ID:          idStr,
 			Type:        "memory.created",
 			LengthChars: lengthChars,
 			Timestamp:   ts,
-		})
+		}
+		if wantPreview {
+			p := preview
+			ev.Preview = &p
+		}
+		events = append(events, ev)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("recent activity iteration: %w", err)
@@ -249,16 +267,32 @@ func (s *DashboardStore) orgMemoriesByProjectQuery() string {
 }
 
 func (s *DashboardStore) orgRecentActivityQuery() string {
+	prefix := namespacePrefixSubquery(s.db.Backend(), "organizations", "o.id", "$1", "?")
+	limitPlace := "?"
 	if s.db.Backend() == storage.BackendPostgres {
-		return `SELECT m.id, LENGTH(m.content), m.created_at FROM memories m
-			JOIN namespaces mn ON m.namespace_id = mn.id
-			WHERE mn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
-			AND m.deleted_at IS NULL
-			ORDER BY m.created_at DESC LIMIT $2`
+		limitPlace = "$2"
 	}
 	return `SELECT m.id, LENGTH(m.content), m.created_at FROM memories m
 		JOIN namespaces mn ON m.namespace_id = mn.id
-		WHERE mn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
+		WHERE mn.path LIKE ` + prefix + `
 		AND m.deleted_at IS NULL
-		ORDER BY m.created_at DESC LIMIT ?`
+		ORDER BY m.created_at DESC LIMIT ` + limitPlace
+}
+
+// userRecentActivityQuery selects memories owned by a single user (filtered
+// on the user's namespace prefix) and includes a 100-char content preview.
+// Self-tier only — callers are looking at their own data.
+func (s *DashboardStore) userRecentActivityQuery() string {
+	prefix := namespacePrefixSubquery(s.db.Backend(), "users", "o.id", "$1", "?")
+	previewExpr := "SUBSTR(m.content, 1, 100)"
+	limitPlace := "?"
+	if s.db.Backend() == storage.BackendPostgres {
+		previewExpr = "SUBSTRING(m.content FROM 1 FOR 100)"
+		limitPlace = "$2"
+	}
+	return `SELECT m.id, LENGTH(m.content), ` + previewExpr + `, m.created_at FROM memories m
+		JOIN namespaces mn ON m.namespace_id = mn.id
+		WHERE mn.path LIKE ` + prefix + `
+		AND m.deleted_at IS NULL
+		ORDER BY m.created_at DESC LIMIT ` + limitPlace
 }

@@ -42,6 +42,11 @@ export interface AuthContextValue {
   hasMinRole: (role: string) => boolean;
   login: (token: string, user: UserInfo) => void;
   logout: () => void;
+  // setUser overrides the cached profile in localStorage and the context
+  // state. Use after a /v1/me/profile fetch so the whole app picks up
+  // server-side profile changes (display name edits, role changes) without
+  // waiting for a re-login. Token is unchanged.
+  setUser: (user: UserInfo) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -124,6 +129,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(userInfo);
   }, []);
 
+  const refreshUser = useCallback((userInfo: UserInfo) => {
+    localStorage.setItem("nram_user", JSON.stringify(userInfo));
+    setUser(userInfo);
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem("nram_token");
     localStorage.removeItem("nram_user");
@@ -153,6 +163,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     hasMinRole,
     login,
     logout,
+    setUser: refreshUser,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

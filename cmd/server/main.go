@@ -560,7 +560,7 @@ func main() {
 	// restart.
 	dreamScheduler := dreaming.NewScheduler(
 		dreaming.SchedulerConfig{EnrichmentAvailable: enrichmentAvailable},
-		settingsSvc, dreamDirtyRepo, dreamCycleRepo,
+		settingsSvc, cascadeResolver, dreamDirtyRepo, dreamCycleRepo,
 		projectRepo, workerPool, dreamRunner, eventBus, dreamRetention,
 	)
 	dreamScheduler.Start()
@@ -580,7 +580,7 @@ func main() {
 
 	dreamAdminStore := adminstore.NewDreamAdminStore(
 		dreamCycleRepo, dreamLogRepo, dreamDirtyRepo, settingsRepo,
-		settingsSvc, dreamScheduler,
+		settingsSvc, dreamScheduler, projectRepo, cascadeResolver,
 	)
 
 	// Create auth config for login/lookup handlers.
@@ -653,6 +653,7 @@ func main() {
 		MeOAuthClients:      api.NewMeOAuthClientsHandler(oauthRepo),
 		MeOAuthClientRevoke: api.NewMeOAuthClientRevokeHandler(oauthRepo, auditStore),
 		MeChangePassword:    api.NewMeChangePasswordHandler(userRepo, auditStore),
+		MeProfile:           api.NewMeProfileHandler(userRepo),
 
 		// Self-tier system-pipeline observability — read-only views of the
 		// caller's own dream cycles + enrichment queue items. Write

@@ -28,6 +28,19 @@ type DreamSettingsResolver interface {
 	ResolveIntWithDefault(ctx context.Context, key, scope string) int
 }
 
+// DreamProjectReader looks up a project so ProjectStatus can resolve the
+// project's namespace for cascade-based dreaming-enabled lookups.
+type DreamProjectReader interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error)
+}
+
+// DreamingResolver returns the effective dreaming-enabled flag for a
+// namespace by composing the global setting with any per-project / per-user
+// override stored in Settings JSON. Implemented by service.CascadeResolver.
+type DreamingResolver interface {
+	ResolveDreamingEnabled(ctx context.Context, namespaceID uuid.UUID) bool
+}
+
 // DreamAdminStore provides admin-level access to dream cycle data.
 // It implements api.DreamAdminStore.
 type DreamAdminStore struct {
@@ -37,12 +50,15 @@ type DreamAdminStore struct {
 	settingsRepo *storage.SettingsRepo
 	settings     DreamSettingsResolver
 	canceller    DreamCycleCanceller
+	projects     DreamProjectReader
+	cascade      DreamingResolver
 }
 
 // NewDreamAdminStore creates a new DreamAdminStore. canceller may be nil
 // during tests or migrations that don't run a live scheduler; abandon then
 // degrades to a pure DB write that the in-process runner picks up at the
-// next phase boundary.
+// next phase boundary. projects + cascade are both required for ProjectStatus
+// to report the same enabled flag the scheduler observes.
 func NewDreamAdminStore(
 	cycleRepo *storage.DreamCycleRepo,
 	logRepo *storage.DreamLogRepo,
@@ -50,6 +66,8 @@ func NewDreamAdminStore(
 	settingsRepo *storage.SettingsRepo,
 	settings DreamSettingsResolver,
 	canceller DreamCycleCanceller,
+	projects DreamProjectReader,
+	cascade DreamingResolver,
 ) *DreamAdminStore {
 	return &DreamAdminStore{
 		cycleRepo:    cycleRepo,
@@ -58,6 +76,8 @@ func NewDreamAdminStore(
 		settingsRepo: settingsRepo,
 		settings:     settings,
 		canceller:    canceller,
+		projects:     projects,
+		cascade:      cascade,
 	}
 }
 
@@ -143,7 +163,12 @@ func (s *DreamAdminStore) Status(ctx context.Context) (*api.DreamStatusResponse,
 	}, nil
 }
 
-// ProjectStatus returns the dream status for a specific project.
+// ProjectStatus returns the dream status for a specific project. The
+// Enabled flag mirrors what the scheduler sees (cascade resolver: global
+// dreaming.enabled merged with the project's own Settings.dreaming_enabled
+// override). If the project lookup fails — e.g. the row was deleted between
+// the caller's request and this query — Enabled is reported as false rather
+// than synthesized from a partial cascade.
 func (s *DreamAdminStore) ProjectStatus(ctx context.Context, projectID uuid.UUID) (*api.DreamProjectStatusResponse, error) {
 	dirty, _ := s.dirtyRepo.IsDirty(ctx, projectID)
 	cycles, _ := s.cycleRepo.ListByProject(ctx, projectID, 10)
@@ -157,8 +182,15 @@ func (s *DreamAdminStore) ProjectStatus(ctx context.Context, projectID uuid.UUID
 		lastDream = &cycles[0]
 	}
 
+	enabled := false
+	if s.projects != nil && s.cascade != nil {
+		if proj, err := s.projects.GetByID(ctx, projectID); err == nil && proj != nil {
+			enabled = s.cascade.ResolveDreamingEnabled(ctx, proj.NamespaceID)
+		}
+	}
+
 	return &api.DreamProjectStatusResponse{
-		Enabled:   s.isProjectEnabled(ctx, projectID),
+		Enabled:   enabled,
 		Dirty:     dirty,
 		LastDream: lastDream,
 		Cycles:    cycles,
@@ -224,32 +256,6 @@ func (s *DreamAdminStore) SetEnabled(ctx context.Context, enabled bool) error {
 		Value: json.RawMessage(value),
 		Scope: "global",
 	})
-}
-
-// SetProjectEnabled sets the dreaming enabled state for a specific project.
-func (s *DreamAdminStore) SetProjectEnabled(ctx context.Context, projectID uuid.UUID, enabled bool) error {
-	val := "false"
-	if enabled {
-		val = "true"
-	}
-	value, _ := json.Marshal(val)
-	return s.settingsRepo.Set(ctx, &model.Setting{
-		Key:   service.SettingDreamProjectEnabled,
-		Value: json.RawMessage(value),
-		Scope: "project:" + projectID.String(),
-	})
-}
-
-func (s *DreamAdminStore) isProjectEnabled(ctx context.Context, projectID uuid.UUID) bool {
-	setting, err := s.settingsRepo.Get(ctx, service.SettingDreamProjectEnabled, "project:"+projectID.String())
-	if err != nil {
-		return true // default: enabled (opt-out)
-	}
-	var val string
-	if err := json.Unmarshal(setting.Value, &val); err != nil {
-		return true
-	}
-	return val == "true" || val == "1"
 }
 
 func (s *DreamAdminStore) isEnabled(ctx context.Context) bool {

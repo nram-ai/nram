@@ -186,11 +186,21 @@ func (s *AggregatesStore) OrgBreakdown(ctx context.Context) ([]api.OrgAggregate,
 // "users"; idCol is the column name on that table to filter by; pgPlace and
 // sqlitePlace are the bind placeholders.
 func (s *AggregatesStore) namespacePrefixSubquery(parentTable, idCol, pgPlace, sqlitePlace string) string {
-	if s.db.Backend() == storage.BackendPostgres {
-		return fmt.Sprintf(`(SELECT n.path || '/' || '%%' FROM namespaces n JOIN %s p ON p.namespace_id = n.id WHERE %s = %s)`,
+	return namespacePrefixSubquery(s.db.Backend(), parentTable, idCol, pgPlace, sqlitePlace)
+}
+
+// namespacePrefixSubquery is the package-level shared SQL fragment builder.
+// Multiple stores compose org/user-scoped reads via the same subquery shape;
+// keeping it here avoids reintroducing the alias bug that motivated the
+// helper in the first place. The parent table is always aliased `o` inside
+// the subquery regardless of whether parentTable is "organizations" or
+// "users", so idCol must be "o.id" (or another column on the parent).
+func namespacePrefixSubquery(backend, parentTable, idCol, pgPlace, sqlitePlace string) string {
+	if backend == storage.BackendPostgres {
+		return fmt.Sprintf(`(SELECT n.path || '/' || '%%' FROM namespaces n JOIN %s o ON o.namespace_id = n.id WHERE %s = %s)`,
 			parentTable, idCol, pgPlace)
 	}
-	return fmt.Sprintf(`(SELECT n.path || '/%%' FROM namespaces n JOIN %s p ON p.namespace_id = n.id WHERE %s = %s)`,
+	return fmt.Sprintf(`(SELECT n.path || '/%%' FROM namespaces n JOIN %s o ON o.namespace_id = n.id WHERE %s = %s)`,
 		parentTable, idCol, sqlitePlace)
 }
 

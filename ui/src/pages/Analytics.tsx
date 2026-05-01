@@ -10,20 +10,21 @@ import {
   useOrgUsers,
 } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
-import type {
-  AnalyticsData,
-  Organization,
-  User,
-  UsageReport,
-  MemoryRankItem,
-  UsageGroup,
-  UsageGroupBy,
-  OrgAnalyticsData,
-  SystemAnalyticsData,
-  HistogramBucket,
-  TypeBucket,
-  OrgAggregate,
-  ProjectAggregate,
+import {
+  memoryRowLabel,
+  type AnalyticsData,
+  type Organization,
+  type User,
+  type UsageReport,
+  type MemoryRankItem,
+  type UsageGroup,
+  type UsageGroupBy,
+  type OrgAnalyticsData,
+  type SystemAnalyticsData,
+  type HistogramBucket,
+  type TypeBucket,
+  type OrgAggregate,
+  type ProjectAggregate,
 } from "../api/client";
 
 type AnalyticsTier = "self" | "org" | "system";
@@ -225,7 +226,7 @@ function MemoryRankTable({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
-                  <th className="pb-2 font-medium">Memory ID</th>
+                  <th className="pb-2 font-medium">Memory</th>
                   <th className="pb-2 text-right font-medium">Length</th>
                   <th className="pb-2 text-right font-medium">Access Count</th>
                   <th className="pb-2 text-right font-medium">Created</th>
@@ -234,8 +235,11 @@ function MemoryRankTable({
               <tbody className="divide-y divide-border">
                 {items.map((item) => (
                   <tr key={item.id}>
-                    <td className="max-w-xs py-2 font-mono text-xs text-muted-foreground" title={item.id}>
-                      {item.id.slice(0, 8)}…
+                    <td
+                      className={`max-w-xs truncate py-2 text-xs ${item.preview ? "text-foreground" : "font-mono text-muted-foreground"}`}
+                      title={item.preview ?? item.id}
+                    >
+                      {memoryRowLabel(item)}
                     </td>
                     <td className="py-2 text-right font-mono text-xs text-muted-foreground">
                       {item.length_chars.toLocaleString()} chars
@@ -1060,14 +1064,18 @@ function AggregateAnalyticsPanel({
         />
         <AggregateBucketCard
           title="Entity Types"
-          description="Entities grouped by type"
-          buckets={(entityHistogram ?? []).map((b) => ({ label: b.type, count: b.count }))}
+          description="Top 20 entity types"
+          buckets={(entityHistogram ?? [])
+            .slice(0, 20)
+            .map((b) => ({ label: b.type, count: b.count }))}
         />
       </div>
       <AggregateBucketCard
         title="Relationship Types"
-        description="Relationships grouped by relation label"
-        buckets={(relationshipHistogram ?? []).map((b) => ({ label: b.type, count: b.count }))}
+        description="Top 20 relationship types"
+        buckets={(relationshipHistogram ?? [])
+          .slice(0, 20)
+          .map((b) => ({ label: b.type, count: b.count }))}
       />
       {orgBreakdown && orgBreakdown.length > 0 && (
         <div className="rounded-lg border border-border bg-card">

@@ -36,10 +36,7 @@ func (m *mockDreamAdminStore) GetCycle(_ context.Context, _ uuid.UUID) (*model.D
 func (m *mockDreamAdminStore) GetCycleLogs(_ context.Context, _ uuid.UUID) ([]model.DreamLog, error) {
 	return nil, nil
 }
-func (m *mockDreamAdminStore) SetEnabled(_ context.Context, _ bool) error              { return nil }
-func (m *mockDreamAdminStore) SetProjectEnabled(_ context.Context, _ uuid.UUID, _ bool) error {
-	return nil
-}
+func (m *mockDreamAdminStore) SetEnabled(_ context.Context, _ bool) error { return nil }
 func (m *mockDreamAdminStore) AbandonCycle(_ context.Context, id uuid.UUID, reason string) (bool, error) {
 	m.lastCycleID = id
 	m.lastReason = reason

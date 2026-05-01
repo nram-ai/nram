@@ -30,11 +30,13 @@ export interface ProjectFormState {
   confidence: number | undefined;
   dedup_threshold: number | undefined;
   enrichment_enabled: boolean | undefined;
+  dreaming_enabled: boolean | undefined;
 }
 
 export interface UserFormState {
   dedup_threshold: number | undefined;
   enrichment_enabled: boolean | undefined;
+  dreaming_enabled: boolean | undefined;
 }
 
 // Build the project.settings JSON the API expects. An entirely-unset
@@ -51,6 +53,7 @@ export function buildProjectSettingsPayload(state: ProjectFormState): ProjectSet
   const settings: ProjectSettings = {};
   if (state.dedup_threshold !== undefined) settings.dedup_threshold = state.dedup_threshold;
   if (state.enrichment_enabled !== undefined) settings.enrichment_enabled = state.enrichment_enabled;
+  if (state.dreaming_enabled !== undefined) settings.dreaming_enabled = state.dreaming_enabled;
   if (Object.keys(rankingOverride).length > 0) settings.ranking_weights = rankingOverride;
   return settings;
 }
@@ -62,5 +65,6 @@ export function buildUserSettingsPayload(state: UserFormState): Record<string, u
   const settings: Record<string, unknown> = {};
   if (state.dedup_threshold !== undefined) settings.dedup_threshold = state.dedup_threshold;
   if (state.enrichment_enabled !== undefined) settings.enrichment_enabled = state.enrichment_enabled;
+  if (state.dreaming_enabled !== undefined) settings.dreaming_enabled = state.dreaming_enabled;
   return settings;
 }

@@ -1,3 +1,5 @@
+import type { UserInfo } from "../context/AuthContext";
+
 /** Base URL is auto-detected: same origin in production, proxied in dev. */
 const BASE_URL = "/v1";
 
@@ -122,7 +124,25 @@ export interface ActivityEvent {
   project_id?: string;
   user_id?: string;
   length_chars?: number;
+  // Populated only on the self-tier (caller's own data); first ~100 chars
+  // of memory content as a preview. Org/system tiers stay aggregate-only.
+  preview?: string;
   timestamp: string;
+}
+
+// memoryRowLabel renders the primary display text for a memory row in the
+// dashboard activity feed and the analytics ranked-list tables. Self-tier
+// shows a content preview when present; org/system tiers fall back to a
+// length hint, then to a truncated ID. Both consumers go through this so
+// the privacy-tier rendering rule lives in one place.
+export function memoryRowLabel(row: {
+  preview?: string;
+  length_chars?: number;
+  id: string;
+}): string {
+  if (row.preview) return row.preview;
+  if (row.length_chars != null) return `${row.length_chars.toLocaleString()} chars`;
+  return row.id.slice(0, 8) + "…";
 }
 
 export interface ActivityResponse {
@@ -475,6 +495,7 @@ export interface ProjectRankingWeights {
 export interface ProjectSettings {
   dedup_threshold?: number;
   enrichment_enabled?: boolean;
+  dreaming_enabled?: boolean;
   ranking_weights?: ProjectRankingWeights;
 }
 
@@ -485,6 +506,7 @@ export interface ProjectSettings {
 export interface UserSettings {
   dedup_threshold?: number;
   enrichment_enabled?: boolean;
+  dreaming_enabled?: boolean;
 }
 
 export interface ProjectOwner {
@@ -665,6 +687,9 @@ export interface MemoryRankItem {
   access_count: number;
   project_id?: string | null;
   length_chars: number;
+  // Populated only on the self-tier (caller's own data); first ~100 chars
+  // of memory content as a preview. Org/system tiers stay aggregate-only.
+  preview?: string;
   created_at: string;
 }
 
@@ -1494,7 +1519,15 @@ export function changePassword(currentPassword: string, newPassword: string): Pr
   return request("POST", "/me/password", { current_password: currentPassword, new_password: newPassword });
 }
 
+// MeProfile is the shape returned by GET /v1/me/profile. It mirrors the
+// login response (and the JWT session claims), so AuthContext.UserInfo and
+// MeProfile share the same definition. Refetching from the server lets the
+// SPA pick up profile changes that happened after the JWT was issued.
+export type MeProfile = UserInfo;
+
 export const meAPI = {
+  getProfile: () => request<MeProfile>("GET", "/me/profile"),
+
   listPasskeys: () =>
     request<{ data: Passkey[] }>("GET", "/me/passkeys").then((r) => r.data),
   registerPasskeyBegin: (data: { name: string }) =>

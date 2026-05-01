@@ -119,6 +119,15 @@ type SettingsResolver interface {
 	ResolveDurationSecondsWithDefault(ctx context.Context, key, scope string) time.Duration
 }
 
+// CascadeResolver computes the effective dreaming-enabled flag for a
+// namespace by walking system → user/project layers. Implemented by
+// service.CascadeResolver. The scheduler reads through this resolver so the
+// per-project dreaming_enabled override stored in project.Settings JSON is
+// honored without re-implementing the cascade locally.
+type CascadeResolver interface {
+	ResolveDreamingEnabled(ctx context.Context, namespaceID uuid.UUID) bool
+}
+
 // VectorPurger removes a vector from the active vector store. The dreaming
 // system calls it whenever a memory or entity transitions to a state in which
 // it should no longer surface via vector search: soft-delete, novelty-audit

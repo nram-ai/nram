@@ -343,6 +343,7 @@ function ProjectDetailPanel({
   // Sparse override state: undefined means "inherit system default."
   const [editDedupThreshold, setEditDedupThreshold] = useState<number | undefined>(undefined);
   const [editEnrichmentEnabled, setEditEnrichmentEnabled] = useState<boolean | undefined>(undefined);
+  const [editDreamingEnabled, setEditDreamingEnabled] = useState<boolean | undefined>(undefined);
   const [editSimilarity, setEditSimilarity] = useState<number | undefined>(undefined);
   const [editRecency, setEditRecency] = useState<number | undefined>(undefined);
   const [editImportance, setEditImportance] = useState<number | undefined>(undefined);
@@ -366,6 +367,7 @@ function ProjectDetailPanel({
       const settings = project.settings;
       setEditDedupThreshold(settings?.dedup_threshold);
       setEditEnrichmentEnabled(settings?.enrichment_enabled);
+      setEditDreamingEnabled(settings?.dreaming_enabled);
       const rw = settings?.ranking_weights;
       const legacyRelevance = (rw as { relevance?: number } | undefined)?.relevance;
       setEditSimilarity(rw?.similarity ?? legacyRelevance);
@@ -418,6 +420,7 @@ function ProjectDetailPanel({
       confidence: editConfidence,
       dedup_threshold: editDedupThreshold,
       enrichment_enabled: editEnrichmentEnabled,
+      dreaming_enabled: editDreamingEnabled,
     });
     const data: ProjectUpdateRequest = {
       name: editName,
@@ -614,6 +617,22 @@ function ProjectDetailPanel({
                   className="rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   value={triStateValue(editEnrichmentEnabled)}
                   onChange={(e) => setEditEnrichmentEnabled(fromTriState(e.target.value))}
+                >
+                  <option value="inherit">Inherit system</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+
+              {/* Dreaming enabled — three-state, mirrors the enrichment toggle. */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  Dreaming Enabled
+                </label>
+                <select
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={triStateValue(editDreamingEnabled)}
+                  onChange={(e) => setEditDreamingEnabled(fromTriState(e.target.value))}
                 >
                   <option value="inherit">Inherit system</option>
                   <option value="on">On</option>

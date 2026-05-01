@@ -41,11 +41,14 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	Token string    `json:"token"`
-	User  loginUser `json:"user"`
+	Token string      `json:"token"`
+	User  SessionUser `json:"user"`
 }
 
-type loginUser struct {
+// SessionUser is the JSON shape returned by both POST /v1/auth/login and
+// GET /v1/me/profile. The fields mirror the JWT session claims so the SPA
+// can hydrate AuthContext from either endpoint without an adapter.
+type SessionUser struct {
 	ID          uuid.UUID `json:"id"`
 	Email       string    `json:"email"`
 	DisplayName string    `json:"display_name"`
@@ -112,7 +115,7 @@ func NewLoginHandler(cfg AuthConfig) http.HandlerFunc {
 			return
 		}
 
-		token, err := auth.GenerateJWT(user.ID, user.OrgID, user.Role, cfg.JWTSecret, 24*time.Hour)
+		token, err := auth.GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, cfg.JWTSecret, 24*time.Hour)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to generate token"))
 			return
@@ -123,7 +126,7 @@ func NewLoginHandler(cfg AuthConfig) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, loginResponse{
 			Token: token,
-			User: loginUser{
+			User: SessionUser{
 				ID:          user.ID,
 				Email:       user.Email,
 				DisplayName: user.DisplayName,

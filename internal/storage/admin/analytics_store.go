@@ -151,47 +151,36 @@ func (s *AnalyticsStore) GetAnalytics(ctx context.Context, orgID *uuid.UUID, use
 }
 
 func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause string, limit int, orgID *uuid.UUID, userID *uuid.UUID) ([]api.MemoryRankItem, error) {
-	// Privacy: SELECT computes LENGTH(m.content) instead of pulling the body.
-	// The ranked-list view exposes only the size and access pattern; the text
-	// itself never leaves the database.
+	// Privacy: only the self-tier (userID set — caller's own memories) selects
+	// a 100-char preview. Org-scoped and global queries keep the length-only
+	// shape so cross-tenant ranked lists stay content-free.
 	var query string
 	var args []interface{}
+	wantPreview := userID != nil
 
 	switch {
 	case userID != nil:
+		previewExpr := "SUBSTR(m.content, 1, 100)"
 		if s.db.Backend() == storage.BackendPostgres {
-			query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
-				FROM memories m
-				JOIN namespaces mn ON m.namespace_id = mn.id
-				WHERE m.deleted_at IS NULL
-				AND mn.path LIKE (SELECT n.path || '/' || '%%' FROM namespaces n JOIN users u ON u.namespace_id = n.id WHERE u.id = $1)
-				%s LIMIT %d`, orderClause, limit)
-		} else {
-			query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
-				FROM memories m
-				JOIN namespaces mn ON m.namespace_id = mn.id
-				WHERE m.deleted_at IS NULL
-				AND mn.path LIKE (SELECT n.path || '/%%' FROM namespaces n JOIN users u ON u.namespace_id = n.id WHERE u.id = ?)
-				%s LIMIT %d`, orderClause, limit)
+			previewExpr = "SUBSTRING(m.content FROM 1 FOR 100)"
 		}
+		prefix := namespacePrefixSubquery(s.db.Backend(), "users", "o.id", "$1", "?")
+		query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), %s, m.access_count, m.created_at
+			FROM memories m
+			JOIN namespaces mn ON m.namespace_id = mn.id
+			WHERE m.deleted_at IS NULL
+			AND mn.path LIKE %s
+			%s LIMIT %d`, previewExpr, prefix, orderClause, limit)
 		args = []interface{}{userID.String()}
 
 	case orgID != nil:
-		if s.db.Backend() == storage.BackendPostgres {
-			query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
-				FROM memories m
-				JOIN namespaces mn ON m.namespace_id = mn.id
-				WHERE m.deleted_at IS NULL
-				AND mn.path LIKE (SELECT n.path || '/' || '%%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
-				%s LIMIT %d`, orderClause, limit)
-		} else {
-			query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
-				FROM memories m
-				JOIN namespaces mn ON m.namespace_id = mn.id
-				WHERE m.deleted_at IS NULL
-				AND mn.path LIKE (SELECT n.path || '/%%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
-				%s LIMIT %d`, orderClause, limit)
-		}
+		prefix := namespacePrefixSubquery(s.db.Backend(), "organizations", "o.id", "$1", "?")
+		query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
+			FROM memories m
+			JOIN namespaces mn ON m.namespace_id = mn.id
+			WHERE m.deleted_at IS NULL
+			AND mn.path LIKE %s
+			%s LIMIT %d`, prefix, orderClause, limit)
 		args = []interface{}{orgID.String()}
 
 	default:
@@ -209,8 +198,15 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 	for rows.Next() {
 		var idStr, createdAtStr string
 		var lengthChars, accessCount int
-		if err := rows.Scan(&idStr, &lengthChars, &accessCount, &createdAtStr); err != nil {
-			return nil, fmt.Errorf("ranked memories scan: %w", err)
+		var preview string
+		if wantPreview {
+			if err := rows.Scan(&idStr, &lengthChars, &preview, &accessCount, &createdAtStr); err != nil {
+				return nil, fmt.Errorf("ranked memories scan: %w", err)
+			}
+		} else {
+			if err := rows.Scan(&idStr, &lengthChars, &accessCount, &createdAtStr); err != nil {
+				return nil, fmt.Errorf("ranked memories scan: %w", err)
+			}
 		}
 		id, err := uuid.Parse(idStr)
 		if err != nil {
@@ -220,12 +216,17 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 		if err != nil {
 			return nil, fmt.Errorf("ranked memories parse created_at: %w", err)
 		}
-		items = append(items, api.MemoryRankItem{
+		item := api.MemoryRankItem{
 			ID:          id,
 			AccessCount: accessCount,
 			LengthChars: lengthChars,
 			CreatedAt:   createdAt,
-		})
+		}
+		if wantPreview {
+			p := preview
+			item.Preview = &p
+		}
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("ranked memories iteration: %w", err)

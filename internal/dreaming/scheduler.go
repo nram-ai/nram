@@ -51,6 +51,7 @@ func (c SchedulerConfig) withDefaults(ctx context.Context, settings SettingsReso
 type Scheduler struct {
 	config    SchedulerConfig
 	settings  SettingsResolver
+	cascade   CascadeResolver
 	dirtyRepo *storage.DreamDirtyRepo
 	cycleRepo *storage.DreamCycleRepo
 	projects  ProjectReader
@@ -71,10 +72,14 @@ type Scheduler struct {
 	wg     sync.WaitGroup
 }
 
-// NewScheduler creates a new dream scheduler.
+// NewScheduler creates a new dream scheduler. cascade is required: it
+// resolves per-project dreaming_enabled overrides through the same path
+// project/user settings PATCHes write, so a UI toggle takes effect without
+// any direct settings-table writes from the dreaming subsystem.
 func NewScheduler(
 	config SchedulerConfig,
 	settings SettingsResolver,
+	cascade CascadeResolver,
 	dirtyRepo *storage.DreamDirtyRepo,
 	cycleRepo *storage.DreamCycleRepo,
 	projects ProjectReader,
@@ -86,6 +91,7 @@ func NewScheduler(
 	return &Scheduler{
 		config:       config.withDefaults(context.Background(), settings),
 		settings:     settings,
+		cascade:      cascade,
 		dirtyRepo:    dirtyRepo,
 		cycleRepo:    cycleRepo,
 		projects:     projects,
@@ -366,9 +372,12 @@ func (s *Scheduler) runCycle(ctx context.Context, project *model.Project) {
 }
 
 func (s *Scheduler) isProjectDreamingEnabled(ctx context.Context, project *model.Project) bool {
-	val, err := s.settings.Resolve(ctx, service.SettingDreamProjectEnabled, "project:"+project.ID.String())
-	if err != nil || val == "" {
-		return true // default: enabled (opt-out)
+	// Cascade composes global dreaming.enabled with the project's
+	// settings.dreaming_enabled override. nil-cascade is a test path —
+	// fall back to the global flag rather than the opt-out default.
+	if s.cascade != nil {
+		return s.cascade.ResolveDreamingEnabled(ctx, project.NamespaceID)
 	}
+	val, _ := s.settings.Resolve(ctx, service.SettingDreamingEnabled, "global")
 	return val == "true" || val == "1"
 }

@@ -357,7 +357,7 @@ func (s *rbacDashboardStore) DashboardStats(_ context.Context, _ *uuid.UUID) (*a
 	}, nil
 }
 
-func (s *rbacDashboardStore) RecentActivity(_ context.Context, _ int, _ *uuid.UUID) ([]api.ActivityEvent, error) {
+func (s *rbacDashboardStore) RecentActivity(_ context.Context, _ int, _, _ *uuid.UUID) ([]api.ActivityEvent, error) {
 	return []api.ActivityEvent{}, nil
 }
 

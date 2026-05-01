@@ -457,6 +457,49 @@ func NewMeChangePasswordHandler(repo PasswordChanger, audit ...AuditStore) http.
 	}
 }
 
+// MeProfileGetter loads the authenticated user's record for the profile endpoint.
+type MeProfileGetter interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
+}
+
+// NewMeProfileHandler returns an http.HandlerFunc for GET /v1/me/profile.
+// Reads the authenticated user's record and returns the SessionUser shape so
+// the SPA can hydrate AuthContext from the server instead of relying on JWT
+// claims that may have been issued before a profile change.
+func NewMeProfileHandler(repo MeProfileGetter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			WriteError(w, &APIError{
+				Code:    "method_not_allowed",
+				Message: "method not allowed",
+				Status:  http.StatusMethodNotAllowed,
+			})
+			return
+		}
+
+		ac := auth.FromContext(r.Context())
+		if ac == nil {
+			WriteError(w, ErrUnauthorized("authentication required"))
+			return
+		}
+
+		user, err := repo.GetByID(r.Context(), ac.UserID)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to load user"))
+			return
+		}
+
+		writeJSON(w, http.StatusOK, SessionUser{
+			ID:          user.ID,
+			Email:       user.Email,
+			DisplayName: user.DisplayName,
+			Role:        user.Role,
+			OrgID:       user.OrgID,
+		})
+	}
+}
+
 // generateClientID creates a random client ID with the "nram_" prefix.
 func generateClientID() (string, error) {
 	b := make([]byte, 16)

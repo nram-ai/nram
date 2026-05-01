@@ -41,15 +41,16 @@ type MemoryCountsData struct {
 
 // MemoryRankItem represents a single memory entry in a ranked list.
 //
-// Privacy: this struct intentionally does NOT carry the memory body. Admin
-// surfaces aggregate access patterns over memories the caller owns; rendering
-// the body in a ranked-list view leaks content into the dashboard layer where
-// it does not belong. Length is exposed as a size hint instead.
+// Privacy: Preview is populated only on the self-tier (the analytics store
+// is called with userID set, scoping to the caller's own memories). Org and
+// global aggregations leave Preview nil so cross-tenant ranked lists remain
+// content-free.
 type MemoryRankItem struct {
 	ID          uuid.UUID  `json:"id"`
 	AccessCount int        `json:"access_count"`
 	ProjectID   *uuid.UUID `json:"project_id,omitempty"`
 	LengthChars int        `json:"length_chars"`
+	Preview     *string    `json:"preview,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
 

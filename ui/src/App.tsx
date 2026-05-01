@@ -117,7 +117,7 @@ const navItems: NavItem[] = [
   { path: "/settings", label: "Settings", section: "Configuration", minRole: "administrator" },
   { path: "/prompt-templates", label: "Prompt Templates", section: "Configuration", minRole: "administrator", requiresEnrichment: true },
   { path: "/webhooks", label: "Webhooks", section: "Configuration", minRole: "administrator" },
-  { path: "/oauth", label: "OAuth Clients", section: "Configuration", minRole: "administrator" },
+  { path: "/oauth", label: "OAuth Clients", section: "Configuration" },
   { path: "/idp", label: "Identity Providers", section: "Configuration", minRole: "org_owner" },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
   { path: "/database", label: "Database", section: "System", minRole: "administrator" },
@@ -308,7 +308,7 @@ function AppLayout() {
                 <Route path="/analytics" element={<Analytics />} />
                 <Route path="/import" element={<BulkImport />} />
                 <Route path="/webhooks" element={<RequireRole minRole="administrator"><WebhookManagement /></RequireRole>} />
-                <Route path="/oauth" element={<RequireRole minRole="administrator"><OAuthClients /></RequireRole>} />
+                <Route path="/oauth" element={<OAuthClients />} />
                 <Route path="/idp" element={<RequireRole minRole="org_owner"><IdPConfiguration /></RequireRole>} />
                 <Route path="/mcp-config" element={<MCPConfigGenerator />} />
                 <Route path="/account" element={<MyAccount />} />

@@ -58,6 +58,7 @@ function authStub(role: "administrator" | "org_owner" | "member") {
     hasMinRole: () => true,
     login: vi.fn(),
     logout: vi.fn(),
+    setUser: vi.fn(),
   };
 }
 

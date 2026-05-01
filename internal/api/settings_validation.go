@@ -37,6 +37,7 @@ type settingsRoot struct {
 	RankingWeights    json.RawMessage `json:"ranking_weights"`
 	DedupThreshold    json.RawMessage `json:"dedup_threshold"`
 	EnrichmentEnabled json.RawMessage `json:"enrichment_enabled"`
+	DreamingEnabled   json.RawMessage `json:"dreaming_enabled"`
 }
 
 // ValidateProjectSettingsJSON parses the validatable fields of a project's
@@ -58,6 +59,9 @@ func ValidateProjectSettingsJSON(raw json.RawMessage) error {
 		return err
 	}
 	if _, err := service.ParseEnrichmentEnabledOverride(root.EnrichmentEnabled); err != nil {
+		return err
+	}
+	if _, err := service.ParseDreamingEnabledOverride(root.DreamingEnabled); err != nil {
 		return err
 	}
 	return nil
@@ -86,6 +90,9 @@ func ValidateUserSettingsJSON(raw json.RawMessage) error {
 		return err
 	}
 	if _, err := service.ParseEnrichmentEnabledOverride(root.EnrichmentEnabled); err != nil {
+		return err
+	}
+	if _, err := service.ParseDreamingEnabledOverride(root.DreamingEnabled); err != nil {
 		return err
 	}
 	return nil

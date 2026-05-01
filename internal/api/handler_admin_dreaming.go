@@ -19,7 +19,6 @@ type DreamAdminStore interface {
 	GetCycle(ctx context.Context, cycleID uuid.UUID) (*model.DreamCycle, error)
 	GetCycleLogs(ctx context.Context, cycleID uuid.UUID) ([]model.DreamLog, error)
 	SetEnabled(ctx context.Context, enabled bool) error
-	SetProjectEnabled(ctx context.Context, projectID uuid.UUID, enabled bool) error
 	// AbandonCycle transitions a non-terminal cycle to failed, cancelling the
 	// in-flight ctx if owned by the local scheduler. Returns false iff the
 	// cycle was already terminal (handler should respond 409).
@@ -62,14 +61,16 @@ type DreamAdminConfig struct {
 //   - GET  /dreaming/cycles/{id}           — cycle detail with logs
 //   - POST /dreaming/cycles/{id}/abandon   — abandon a stuck/running cycle
 //   - POST /dreaming/enable                — {"enabled": bool}
-//   - POST /dreaming/project/enable        — {"project_id": "...", "enabled": bool}
 //   - POST /dreaming/rollback              — {"cycle_id": "..."}
+//
+// Per-project dreaming is now a Settings JSON override
+// (project.settings.dreaming_enabled) saved through the project-update PATCH.
 func NewAdminDreamingHandler(cfg DreamAdminConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sub := extractDreamingSubPath(r.URL.Path)
 
 		// Write operations require administrator role.
-		if sub == "enable" || sub == "rollback" || strings.HasPrefix(sub, "project/") || strings.HasSuffix(sub, "/abandon") {
+		if sub == "enable" || sub == "rollback" || strings.HasSuffix(sub, "/abandon") {
 			ac := auth.FromContext(r.Context())
 			if ac == nil || ac.Role != auth.RoleAdministrator {
 				http.Error(w, "forbidden: administrator required", http.StatusForbidden)
@@ -90,8 +91,6 @@ func NewAdminDreamingHandler(cfg DreamAdminConfig) http.HandlerFunc {
 			handleDreamCycleDetail(w, r, cfg, cycleIDStr)
 		case sub == "enable":
 			handleDreamEnable(w, r, cfg)
-		case sub == "project/enable":
-			handleDreamProjectEnable(w, r, cfg)
 		case sub == "rollback":
 			handleDreamRollback(w, r, cfg)
 		default:
@@ -206,34 +205,6 @@ func handleDreamEnable(w http.ResponseWriter, r *http.Request, cfg DreamAdminCon
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"enabled": body.Enabled})
-}
-
-type dreamProjectEnableRequest struct {
-	ProjectID uuid.UUID `json:"project_id"`
-	Enabled   bool      `json:"enabled"`
-}
-
-func handleDreamProjectEnable(w http.ResponseWriter, r *http.Request, cfg DreamAdminConfig) {
-	if r.Method != http.MethodPost {
-		WriteError(w, ErrBadRequest("method not allowed"))
-		return
-	}
-
-	var body dreamProjectEnableRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		WriteError(w, ErrBadRequest("invalid JSON body"))
-		return
-	}
-
-	if err := cfg.Store.SetProjectEnabled(r.Context(), body.ProjectID, body.Enabled); err != nil {
-		WriteError(w, ErrInternal("failed to set project dreaming state"))
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"project_id": body.ProjectID,
-		"enabled":    body.Enabled,
-	})
 }
 
 func handleDreamAbandon(w http.ResponseWriter, r *http.Request, cfg DreamAdminConfig, cycleIDStr string) {

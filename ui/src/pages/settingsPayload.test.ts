@@ -18,6 +18,7 @@ const emptyProjectState = {
   confidence: undefined,
   dedup_threshold: undefined,
   enrichment_enabled: undefined,
+  dreaming_enabled: undefined,
 };
 
 describe("buildProjectSettingsPayload", () => {
@@ -80,6 +81,7 @@ describe("buildProjectSettingsPayload", () => {
       confidence: 0.05,
       dedup_threshold: 0.92,
       enrichment_enabled: true,
+      dreaming_enabled: true,
     });
     expect(payload).toEqual({
       ranking_weights: {
@@ -92,7 +94,16 @@ describe("buildProjectSettingsPayload", () => {
       },
       dedup_threshold: 0.92,
       enrichment_enabled: true,
+      dreaming_enabled: true,
     });
+  });
+
+  it("preserves false dreaming_enabled (false is a valid override)", () => {
+    const payload = buildProjectSettingsPayload({
+      ...emptyProjectState,
+      dreaming_enabled: false,
+    });
+    expect(payload).toEqual({ dreaming_enabled: false });
   });
 });
 
@@ -102,6 +113,7 @@ describe("buildUserSettingsPayload", () => {
       buildUserSettingsPayload({
         dedup_threshold: undefined,
         enrichment_enabled: undefined,
+        dreaming_enabled: undefined,
       }),
     ).toEqual({});
   });
@@ -116,6 +128,7 @@ describe("buildUserSettingsPayload", () => {
     const payload = buildUserSettingsPayload({
       dedup_threshold: 0.85,
       enrichment_enabled: true,
+      dreaming_enabled: undefined,
       // @ts-expect-error — UserFormState forbids this field.
       ranking_weights: { similarity: 0.5 },
     });
@@ -127,8 +140,19 @@ describe("buildUserSettingsPayload", () => {
       buildUserSettingsPayload({
         dedup_threshold: undefined,
         enrichment_enabled: false,
+        dreaming_enabled: undefined,
       }),
     ).toEqual({ enrichment_enabled: false });
+  });
+
+  it("preserves false dreaming_enabled at user scope", () => {
+    expect(
+      buildUserSettingsPayload({
+        dedup_threshold: undefined,
+        enrichment_enabled: undefined,
+        dreaming_enabled: false,
+      }),
+    ).toEqual({ dreaming_enabled: false });
   });
 
   it("preserves zero dedup_threshold", () => {
@@ -136,17 +160,23 @@ describe("buildUserSettingsPayload", () => {
       buildUserSettingsPayload({
         dedup_threshold: 0,
         enrichment_enabled: undefined,
+        dreaming_enabled: undefined,
       }),
     ).toEqual({ dedup_threshold: 0 });
   });
 
-  it("emits both fields when each is set", () => {
+  it("emits all fields when each is set", () => {
     expect(
       buildUserSettingsPayload({
         dedup_threshold: 0.92,
         enrichment_enabled: true,
+        dreaming_enabled: true,
       }),
-    ).toEqual({ dedup_threshold: 0.92, enrichment_enabled: true });
+    ).toEqual({
+      dedup_threshold: 0.92,
+      enrichment_enabled: true,
+      dreaming_enabled: true,
+    });
   });
 });
 

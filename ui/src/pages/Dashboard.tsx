@@ -13,11 +13,12 @@ import {
 } from "../hooks/useApi";
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import { useAuth } from "../context/AuthContext";
-import type {
-  ProjectMemoryCount,
-  ActivityEvent,
-  ProviderSlot,
-  OrgAggregate,
+import {
+  memoryRowLabel,
+  type ProjectMemoryCount,
+  type ActivityEvent,
+  type ProviderSlot,
+  type OrgAggregate,
 } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -333,10 +334,11 @@ function ActivityFeed({
                   >
                     {badge.label}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                    {ev.length_chars != null
-                      ? `${ev.length_chars.toLocaleString()} chars`
-                      : ev.id.slice(0, 8) + "…"}
+                  <span
+                    className="min-w-0 flex-1 truncate text-muted-foreground"
+                    title={ev.preview ?? undefined}
+                  >
+                    {memoryRowLabel(ev)}
                   </span>
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {relativeTime(ev.timestamp)}

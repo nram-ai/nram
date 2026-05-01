@@ -546,7 +546,12 @@ export function useUpdateSetting() {
     mutationFn: ({ key, value, scope }: { key: string; value: unknown; scope: string }) =>
       adminAPI.updateSetting(key, value, scope),
     onSuccess: () => {
+      // Settings, dreaming, and self-tier dreaming all read from the same
+      // global key (dreaming.enabled). A change to one must invalidate the
+      // others or each page renders a stale view of the same field.
       qc.invalidateQueries({ queryKey: ["admin", "settings"] });
+      qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+      qc.invalidateQueries({ queryKey: ["me", "dreaming"] });
     },
   });
 }
@@ -761,6 +766,8 @@ export function useSetDreamingEnabled() {
     mutationFn: (enabled: boolean) => adminAPI.setDreamingEnabled(enabled),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+      qc.invalidateQueries({ queryKey: ["admin", "settings"] });
+      qc.invalidateQueries({ queryKey: ["me", "dreaming"] });
     },
   });
 }
@@ -1064,6 +1071,15 @@ export function useDeleteIdPConfig() {
 }
 
 // --- Me API hooks ---
+
+// Self profile, refetched from /v1/me/profile so MyAccount renders fresh
+// server truth instead of relying solely on whatever the JWT was issued with.
+export function useMeProfile() {
+  return useQuery({
+    queryKey: ["me", "profile"],
+    queryFn: meAPI.getProfile,
+  });
+}
 
 export function useMeProjects() {
   return useQuery({
