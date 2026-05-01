@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -167,9 +168,9 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID, u
 	for rows.Next() {
 		var idStr, createdAtStr string
 		var lengthChars int
-		var preview string
+		var previewBytes []byte
 		if wantPreview {
-			if err := rows.Scan(&idStr, &lengthChars, &preview, &createdAtStr); err != nil {
+			if err := rows.Scan(&idStr, &lengthChars, &previewBytes, &createdAtStr); err != nil {
 				return nil, fmt.Errorf("recent activity scan: %w", err)
 			}
 		} else {
@@ -189,7 +190,11 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID, u
 			Timestamp:   ts,
 		}
 		if wantPreview {
-			p := preview
+			// Preview comes back as raw bytes from a bytea/BLOB SUBSTRING so
+			// queries don't fail on rows whose content has invalid UTF-8 (the
+			// text-aware LENGTH/SUBSTRING path raises SQLSTATE 22021 on Postgres).
+			// Replace any invalid sequences with U+FFFD before exposing.
+			p := strings.ToValidUTF8(string(previewBytes), "�")
 			ev.Preview = &p
 		}
 		events = append(events, ev)
@@ -280,17 +285,24 @@ func (s *DashboardStore) orgRecentActivityQuery() string {
 }
 
 // userRecentActivityQuery selects memories owned by a single user (filtered
-// on the user's namespace prefix) and includes a 100-char content preview.
+// on the user's namespace prefix) and includes a 100-byte content preview.
 // Self-tier only — callers are looking at their own data.
+//
+// Length and preview use byte-level operations (octet_length / bytea
+// substring on Postgres, BLOB cast on SQLite) so a row whose content has
+// invalid UTF-8 does not raise SQLSTATE 22021 mid-query. The caller
+// sanitizes the returned bytes via strings.ToValidUTF8 before exposing.
 func (s *DashboardStore) userRecentActivityQuery() string {
 	prefix := namespacePrefixSubquery(s.db.Backend(), "users", "o.id", "$1", "?")
-	previewExpr := "SUBSTR(m.content, 1, 100)"
+	lengthExpr := "length(CAST(m.content AS BLOB))"
+	previewExpr := "substr(CAST(m.content AS BLOB), 1, 100)"
 	limitPlace := "?"
 	if s.db.Backend() == storage.BackendPostgres {
-		previewExpr = "SUBSTRING(m.content FROM 1 FOR 100)"
+		lengthExpr = "octet_length(m.content)"
+		previewExpr = "substring(m.content::bytea from 1 for 100)"
 		limitPlace = "$2"
 	}
-	return `SELECT m.id, LENGTH(m.content), ` + previewExpr + `, m.created_at FROM memories m
+	return `SELECT m.id, ` + lengthExpr + `, ` + previewExpr + `, m.created_at FROM memories m
 		JOIN namespaces mn ON m.namespace_id = mn.id
 		WHERE mn.path LIKE ` + prefix + `
 		AND m.deleted_at IS NULL

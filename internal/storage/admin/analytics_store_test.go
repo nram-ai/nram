@@ -2,7 +2,9 @@ package admin
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/storage"
@@ -13,12 +15,9 @@ func insertOrgWithNamespace(t *testing.T, db storage.DB, ctx context.Context) (o
 	t.Helper()
 	nsID = insertTestNamespace(t, db, ctx)
 	orgID = uuid.New()
-	_, err := db.Exec(ctx,
+	execSeed(t, db, ctx,
 		"INSERT INTO organizations (id, name, slug, namespace_id) VALUES (?, ?, ?, ?)",
 		orgID.String(), "Test Org", "test-org", nsID.String())
-	if err != nil {
-		t.Fatalf("insert org: %v", err)
-	}
 	return orgID, nsID
 }
 
@@ -171,7 +170,9 @@ func TestAnalyticsStoreGetAnalytics_UserScoped(t *testing.T) {
 		t.Fatalf("insert bob memory: %v", err)
 	}
 
-	data, err := store.GetAnalytics(ctx, nil, &aliceID)
+	// Production-shape self-tier call: SelfScope returns both pointers
+	// non-nil, and the store dispatches to the userID branch.
+	data, err := store.GetAnalytics(ctx, &orgID, &aliceID)
 	if err != nil {
 		t.Fatalf("GetAnalytics user-scoped returned error: %v", err)
 	}
@@ -201,5 +202,46 @@ func TestAnalyticsStoreGetAnalytics_UserScoped(t *testing.T) {
 	}
 	if globalData.MemoryCounts.Total != 2 {
 		t.Errorf("expected 2 global memories, got %d", globalData.MemoryCounts.Total)
+	}
+}
+
+// TestAnalyticsStoreGetAnalytics_UserScoped_InvalidUTF8 covers the dev-prod
+// failure: a memory with invalid UTF-8 in content (lone 0xe2 lead byte)
+// caused queryRankedMemories to raise SQLSTATE 22021 on Postgres because
+// LENGTH and SUBSTRING are text-aware. Byte-level SQL plus
+// strings.ToValidUTF8 in Go must keep the query from erroring and yield a
+// valid-UTF-8 preview with U+FFFD in place of the invalid byte. Runs on
+// both backends so the SQL stays in sync.
+func TestAnalyticsStoreGetAnalytics_UserScoped_InvalidUTF8(t *testing.T) {
+	for _, bk := range adminTestBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			db := bk.setup(t)
+			store := NewAnalyticsStore(db)
+			ctx := context.Background()
+
+			orgID, aliceID, aliceProjNsID := seedAliceUserUnderOrg(t, db, ctx)
+			badContent := append([]byte{0xe2}, []byte("bad")...)
+			insertMemoryRaw(t, db, ctx, aliceProjNsID, badContent, 5)
+
+			data, err := store.GetAnalytics(ctx, &orgID, &aliceID)
+			if err != nil {
+				t.Fatalf("GetAnalytics user-scoped with invalid UTF-8 returned error: %v", err)
+			}
+			if data.MemoryCounts.Total != 1 {
+				t.Errorf("expected 1 total memory, got %d", data.MemoryCounts.Total)
+			}
+			if len(data.MostRecalled) != 1 {
+				t.Fatalf("expected 1 most recalled, got %d", len(data.MostRecalled))
+			}
+			if data.MostRecalled[0].Preview == nil {
+				t.Fatal("expected non-nil preview")
+			}
+			if !utf8.ValidString(*data.MostRecalled[0].Preview) {
+				t.Errorf("preview is not valid UTF-8: %q", *data.MostRecalled[0].Preview)
+			}
+			if !strings.Contains(*data.MostRecalled[0].Preview, "�") {
+				t.Errorf("expected U+FFFD replacement in preview, got %q", *data.MostRecalled[0].Preview)
+			}
+		})
 	}
 }

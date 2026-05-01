@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -160,17 +161,22 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 
 	switch {
 	case userID != nil:
-		previewExpr := "SUBSTR(m.content, 1, 100)"
+		// Length and preview use byte-level operations so a row with invalid
+		// UTF-8 in content does not raise SQLSTATE 22021 mid-query. Caller
+		// sanitizes the bytes via strings.ToValidUTF8 before exposing.
+		lengthExpr := "length(CAST(m.content AS BLOB))"
+		previewExpr := "substr(CAST(m.content AS BLOB), 1, 100)"
 		if s.db.Backend() == storage.BackendPostgres {
-			previewExpr = "SUBSTRING(m.content FROM 1 FOR 100)"
+			lengthExpr = "octet_length(m.content)"
+			previewExpr = "substring(m.content::bytea from 1 for 100)"
 		}
 		prefix := namespacePrefixSubquery(s.db.Backend(), "users", "o.id", "$1", "?")
-		query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), %s, m.access_count, m.created_at
+		query = fmt.Sprintf(`SELECT m.id, %s, %s, m.access_count, m.created_at
 			FROM memories m
 			JOIN namespaces mn ON m.namespace_id = mn.id
 			WHERE m.deleted_at IS NULL
 			AND mn.path LIKE %s
-			%s LIMIT %d`, previewExpr, prefix, orderClause, limit)
+			%s LIMIT %d`, lengthExpr, previewExpr, prefix, orderClause, limit)
 		args = []interface{}{userID.String()}
 
 	case orgID != nil:
@@ -198,9 +204,9 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 	for rows.Next() {
 		var idStr, createdAtStr string
 		var lengthChars, accessCount int
-		var preview string
+		var previewBytes []byte
 		if wantPreview {
-			if err := rows.Scan(&idStr, &lengthChars, &preview, &accessCount, &createdAtStr); err != nil {
+			if err := rows.Scan(&idStr, &lengthChars, &previewBytes, &accessCount, &createdAtStr); err != nil {
 				return nil, fmt.Errorf("ranked memories scan: %w", err)
 			}
 		} else {
@@ -223,7 +229,7 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 			CreatedAt:   createdAt,
 		}
 		if wantPreview {
-			p := preview
+			p := strings.ToValidUTF8(string(previewBytes), "�")
 			item.Preview = &p
 		}
 		items = append(items, item)
