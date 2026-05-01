@@ -975,7 +975,7 @@ export interface DreamCycle {
 
 // Self-tier aggregate status returned by /v1/me/dreaming with no project_id.
 export interface MeDreamingAggregateStatus {
-  any_dirty: boolean;
+  dirty_count: number;
   project_count: number;
 }
 

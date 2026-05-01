@@ -1096,7 +1096,7 @@ export default function DreamingMonitor() {
     const cycles = selfCyclesQuery.data ?? [];
     return {
       cycles,
-      dirtyCount: s?.any_dirty ? 1 : 0,
+      dirtyCount: s?.dirty_count ?? 0,
       stuckCount: cycles.filter((c) => c.is_abandonable).length,
       isLoading: selfStatusQuery.isLoading,
       isError: selfStatusQuery.isError,
@@ -1207,12 +1207,12 @@ export default function DreamingMonitor() {
                 <>
                   <span
                     className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                      selfStatusQuery.data?.any_dirty
+                      (selfStatusQuery.data?.dirty_count ?? 0) > 0
                         ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
                         : "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
                     }`}
                   >
-                    {selfStatusQuery.data?.any_dirty ? "Any dirty" : "All quiet"}
+                    {(selfStatusQuery.data?.dirty_count ?? 0) > 0 ? "Dirty" : "All quiet"}
                   </span>
                   <span className="text-sm text-muted-foreground">
                     {selfStatusQuery.data?.project_count ?? 0}

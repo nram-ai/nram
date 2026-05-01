@@ -10,11 +10,12 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
-// MeDreamingAggregateStatus is the self-tier no-project status response: a
-// rolled-up dirty indicator plus the count of caller-owned projects.
+// MeDreamingAggregateStatus is the self-tier no-project status response: the
+// number of caller-owned projects with pending changes, plus the total count
+// of caller-owned projects.
 type MeDreamingAggregateStatus struct {
-	AnyDirty     bool `json:"any_dirty"`
-	ProjectCount int  `json:"project_count"`
+	DirtyCount   int `json:"dirty_count"`
+	ProjectCount int `json:"project_count"`
 }
 
 // MeDreamProjectAccess looks up a project to verify caller ownership and
@@ -127,7 +128,7 @@ func handleMeDreamStatus(w http.ResponseWriter, r *http.Request, cfg MeDreamingC
 			return
 		}
 		writeJSON(w, http.StatusOK, MeDreamingAggregateStatus{
-			AnyDirty:     dirtyCount > 0,
+			DirtyCount:   dirtyCount,
 			ProjectCount: projectCount,
 		})
 		return
