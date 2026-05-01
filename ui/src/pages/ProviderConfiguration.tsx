@@ -933,6 +933,32 @@ function ProviderSlotCard({
                 </div>
               )}
               <div>
+                <span
+                  className="text-muted-foreground"
+                  title={
+                    isEmbedding
+                      ? "Maximum input length the model can encode in a single request. Memory content longer than this is silently truncated by the provider — small windows (e.g. 2048) are a frequent cause of degraded recall on long memories."
+                      : "Maximum input + output tokens the model can process in a single request. Caps the prompt the enrichment pipeline can build (recall hits + memory content) plus the model's response."
+                  }
+                >
+                  Context
+                </span>
+                <p className="font-medium text-foreground">
+                  {slot.context_window != null && slot.context_window > 0 ? (
+                    <>
+                      {slot.context_window.toLocaleString()}{" "}
+                      <span className="text-xs font-normal text-muted-foreground">
+                        tokens
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-xs font-normal text-muted-foreground">
+                      see provider docs
+                    </span>
+                  )}
+                </p>
+              </div>
+              <div>
                 <span className="text-muted-foreground">Status</span>
                 <p className="text-xs text-foreground">
                   {slot.status ?? "unknown"}

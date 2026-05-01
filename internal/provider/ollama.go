@@ -59,6 +59,20 @@ type ollamaPullRequest struct {
 	Stream bool   `json:"stream"`
 }
 
+// ollamaShowRequest is the request body for POST /api/show.
+type ollamaShowRequest struct {
+	Name string `json:"name"`
+}
+
+// ollamaShowResponse is the response body from POST /api/show. ModelInfo is
+// a free-form map keyed by architecture-prefixed names (e.g.
+// "llama.context_length", "qwen2.context_length", "bert.context_length")
+// because Ollama exposes the raw GGUF metadata. We treat it as a generic
+// map and pull `*.context_length` out lazily.
+type ollamaShowResponse struct {
+	ModelInfo map[string]any `json:"model_info"`
+}
+
 // NewOllamaClient creates a new OllamaClient with the given configuration.
 func NewOllamaClient(config OllamaConfig) *OllamaClient {
 	timeout := config.Timeout
@@ -184,6 +198,67 @@ func (c *OllamaClient) PullModel(ctx context.Context, name string, progress func
 	}
 
 	return nil
+}
+
+// ContextLength queries POST /api/show for the named model and returns the
+// architecture-specific context_length from the GGUF metadata. Returns 0
+// (no error) when Ollama responds but the metadata does not advertise a
+// context_length — the caller treats that as "unknown" and the UI shows
+// the muted fallback. A non-nil error means the HTTP call itself failed.
+//
+// The architecture key in model_info varies per family (llama, qwen2,
+// bert, gemma, etc.), so we scan for any entry whose key ends in
+// ".context_length" rather than hard-coding a per-arch list. This keeps
+// the surface working for new model families without code changes.
+func (c *OllamaClient) ContextLength(ctx context.Context, modelName string) (int, error) {
+	url := c.config.BaseURL + "/api/show"
+
+	body, err := json.Marshal(ollamaShowRequest{Name: modelName})
+	if err != nil {
+		return 0, fmt.Errorf("ollama: marshal show request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("ollama: create show request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("ollama: show request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("ollama: read show response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("ollama: show returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var show ollamaShowResponse
+	if err := json.Unmarshal(respBody, &show); err != nil {
+		return 0, fmt.Errorf("ollama: unmarshal show response: %w", err)
+	}
+
+	for k, v := range show.ModelInfo {
+		if !strings.HasSuffix(k, ".context_length") {
+			continue
+		}
+		switch n := v.(type) {
+		case float64:
+			return int(n), nil
+		case int:
+			return n, nil
+		case int64:
+			return int(n), nil
+		}
+	}
+
+	return 0, nil
 }
 
 // ProbeURL performs a simple health check against the Ollama server.

@@ -55,16 +55,20 @@ type ProviderConfigResponse struct {
 
 // ProviderSlotStatus describes the current state of a single provider
 // slot. Dimensions is the embedder's probed output dim (Registry.EmbeddingDim);
-// nil for non-embedding slots and on probe failure.
+// nil for non-embedding slots and on probe failure. ContextWindow is the
+// model's max input length in tokens, populated only for providers that
+// expose it via API (Ollama via /api/show, OpenRouter via /models). Other
+// providers leave it nil and the UI shows a "see provider docs" placeholder.
 type ProviderSlotStatus struct {
-	Configured bool   `json:"configured"`
-	Type       string `json:"type,omitempty"`
-	URL        string `json:"url,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Dimensions *int   `json:"dimensions,omitempty"`
-	Timeout    *int   `json:"timeout,omitempty"`
-	Status     string `json:"status"`
-	LatencyMs  *int64 `json:"latency_ms,omitempty"`
+	Configured    bool   `json:"configured"`
+	Type          string `json:"type,omitempty"`
+	URL           string `json:"url,omitempty"`
+	Model         string `json:"model,omitempty"`
+	Dimensions    *int   `json:"dimensions,omitempty"`
+	ContextWindow *int   `json:"context_window,omitempty"`
+	Timeout       *int   `json:"timeout,omitempty"`
+	Status        string `json:"status"`
+	LatencyMs     *int64 `json:"latency_ms,omitempty"`
 }
 
 // ProviderTestRequest is the request body for POST /providers/test.

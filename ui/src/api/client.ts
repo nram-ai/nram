@@ -588,6 +588,13 @@ export interface ProviderSlot {
   url: string;
   model: string;
   dimensions?: number | null;
+  /**
+   * Model context window in tokens. Populated only for providers that
+   * report it via API (Ollama via /api/show, OpenRouter via /models).
+   * Other providers (OpenAI, Anthropic, Gemini, Custom) leave this null
+   * and the UI shows a "see provider docs" placeholder.
+   */
+  context_window?: number | null;
   timeout?: number | null;
   status?: string;
   latency_ms?: number | null;
@@ -1024,8 +1031,12 @@ export interface EnrichmentQueueItem {
   // Populated by the EnrichmentAdminStore so the EnrichmentMonitor can render
   // the StaleDiagnosticPill (yellow, before the StuckJobSweeper has fired)
   // and RequeuedPill (red, after the sweeper has auto-requeued the row).
-  // claimed_at_age_ms is only populated when status === "processing".
+  // claimed_at and claimed_at_age_ms are only populated when status ===
+  // "processing"; both reset on retry/requeue (so the row's "no progress"
+  // pill anchors to the current attempt, not cumulative wait since
+  // created_at).
   claimed_by?: string;
+  claimed_at?: string;
   claimed_at_age_ms?: number;
   is_stale_diagnostic: boolean;
   last_requeue_reason?: string;
@@ -1525,8 +1536,23 @@ export function changePassword(currentPassword: string, newPassword: string): Pr
 // SPA pick up profile changes that happened after the JWT was issued.
 export type MeProfile = UserInfo;
 
+// MeCapabilities is the shape returned by GET /v1/me/capabilities. Two
+// booleans drive sidebar nav visibility for the Enrichment Queue and
+// Dreaming entries; the endpoint is callable by any authenticated user, so
+// non-admins no longer need to probe the admin-only /admin/providers route.
+export interface MeCapabilities {
+  enrichment_available: boolean;
+  dreaming_enabled: boolean;
+}
+
 export const meAPI = {
   getProfile: () => request<MeProfile>("GET", "/me/profile"),
+
+  // Self-tier capability flags. Callable by any authenticated user — the
+  // sidebar nav uses this to decide whether to render Enrichment Queue and
+  // Dreaming entries without paying the admin-only /admin/providers probe.
+  getCapabilities: () =>
+    request<MeCapabilities>("GET", "/me/capabilities"),
 
   listPasskeys: () =>
     request<{ data: Passkey[] }>("GET", "/me/passkeys").then((r) => r.data),

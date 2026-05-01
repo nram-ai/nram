@@ -183,6 +183,7 @@ const PARENT_GROUPS: ParentGroup[] = [
     id: "vector_db",
     label: "Vector Database",
     description: "Connection settings for the Qdrant vector database.",
+    requiresBackend: ["postgres"],
     subSections: [{ category: "qdrant" }],
   },
   {

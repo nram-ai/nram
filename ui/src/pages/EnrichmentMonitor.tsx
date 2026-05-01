@@ -642,7 +642,13 @@ function QueueTable({
                     {item.status === "processing" &&
                       (() => {
                         const lj = liveJobs[item.id];
-                        const startedIso = lj?.startedAt ?? item.created_at;
+                        // Anchor the elapsed timer to the current claim, not
+                        // to original queue insertion. Retry/RequeueStale
+                        // null out claimed_at on the backend, so item.claimed_at
+                        // reflects only the active attempt — that's what the
+                        // user thinks of as "how long has this been running."
+                        const startedIso =
+                          lj?.startedAt ?? item.claimed_at ?? item.created_at;
                         const secs = elapsedSeconds(startedIso);
                         return (
                           <>

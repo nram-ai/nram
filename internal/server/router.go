@@ -62,6 +62,10 @@ type Handlers struct {
 	// /v1/admin/.
 	MeDreaming   http.HandlerFunc
 	MeEnrichment http.HandlerFunc
+	// Self-tier capability flags. Drives sidebar nav visibility for the
+	// Enrichment Queue / Dreaming entries without requiring non-admins to
+	// probe the admin-only /v1/admin/providers endpoint.
+	MeCapabilities http.HandlerFunc
 
 	// Org-scoped handlers
 	OrgUsers http.HandlerFunc
@@ -305,6 +309,11 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				r.HandleFunc("/dreaming/*", handler(handlers.MeDreaming))
 				r.Get("/enrichment", handler(handlers.MeEnrichment))
 			})
+
+			// Self-tier capability flags. Two booleans — no provider config,
+			// no slot details, no secrets. Sidebar nav reads this to decide
+			// whether to show Enrichment Queue / Dreaming entries.
+			r.Get("/capabilities", handler(handlers.MeCapabilities))
 		})
 
 		// Scoped data-viewing routes (all authenticated users — scope auto-applied).

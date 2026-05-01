@@ -669,6 +669,10 @@ func main() {
 			Store: enrichmentAdminStore,
 			Users: userRepo,
 		}),
+		MeCapabilities: api.NewMeCapabilitiesHandler(api.MeCapabilitiesConfig{
+			EnrichmentAvailable: enrichmentAvailable,
+			Settings:            settingsSvc,
+		}),
 
 		// Passkey management handlers. Register-finish gets an
 		// audit-on-success wrapper because the upstream webauthn handler

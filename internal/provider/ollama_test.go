@@ -353,3 +353,102 @@ func TestOllamaCustomConfigValues(t *testing.T) {
 		t.Errorf("PullTimeout = %v, want %v", c.config.PullTimeout, 30*time.Minute)
 	}
 }
+
+func TestOllamaContextLength_ParsesQwen2Family(t *testing.T) {
+	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
+		"/api/show": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				t.Errorf("expected POST, got %s", r.Method)
+			}
+			var body ollamaShowRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.Name != "qwen3:8b" {
+				t.Errorf("expected name=qwen3:8b, got %q", body.Name)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"model_info":{"qwen2.context_length":40960,"qwen2.attention.head_count":32}}`))
+		},
+	})
+	defer srv.Close()
+
+	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
+	got, err := c.ContextLength(context.Background(), "qwen3:8b")
+	if err != nil {
+		t.Fatalf("ContextLength: %v", err)
+	}
+	if got != 40960 {
+		t.Errorf("got %d, want 40960", got)
+	}
+}
+
+func TestOllamaContextLength_ParsesAnyArchKey(t *testing.T) {
+	// Different model families use different architecture prefixes — the
+	// detector must scan for any *.context_length key, not hard-code the
+	// list.
+	cases := map[string]int{
+		`{"model_info":{"llama.context_length":8192}}`:           8192,
+		`{"model_info":{"gemma.context_length":2048}}`:           2048,
+		`{"model_info":{"bert.context_length":512}}`:             512,
+		`{"model_info":{"unknown_arch.context_length":131072}}`:  131072,
+	}
+	for body, want := range cases {
+		body, want := body, want
+		t.Run(body, func(t *testing.T) {
+			srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
+				"/api/show": func(w http.ResponseWriter, r *http.Request) {
+					w.Write([]byte(body))
+				},
+			})
+			defer srv.Close()
+			c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
+			got, err := c.ContextLength(context.Background(), "any:tag")
+			if err != nil {
+				t.Fatalf("ContextLength: %v", err)
+			}
+			if got != want {
+				t.Errorf("got %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestOllamaContextLength_MissingFieldReturnsZero(t *testing.T) {
+	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
+		"/api/show": func(w http.ResponseWriter, r *http.Request) {
+			// Real Ollama responses sometimes lack model_info entirely; the
+			// detector must treat this as "unknown" without surfacing an
+			// error.
+			w.Write([]byte(`{"details":{"family":"llama"}}`))
+		},
+	})
+	defer srv.Close()
+
+	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
+	got, err := c.ContextLength(context.Background(), "any:tag")
+	if err != nil {
+		t.Fatalf("ContextLength: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("got %d, want 0", got)
+	}
+}
+
+func TestOllamaContextLength_ServerError(t *testing.T) {
+	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
+		"/api/show": func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "model not found", http.StatusNotFound)
+		},
+	})
+	defer srv.Close()
+
+	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
+	_, err := c.ContextLength(context.Background(), "missing:tag")
+	if err == nil {
+		t.Fatal("expected error on 404, got nil")
+	}
+	if !contains(err.Error(), "status 404") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "status 404")
+	}
+}

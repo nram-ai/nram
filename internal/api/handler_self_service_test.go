@@ -499,3 +499,120 @@ func TestMeAPIKeys_Unauthenticated(t *testing.T) {
 		t.Errorf("expected unauthorized, got %+v", envelope.Error)
 	}
 }
+
+// --- Capabilities tests ---
+
+type fakeCapabilityResolver struct {
+	resolveFn func(ctx context.Context, key, scope string) bool
+}
+
+func (f *fakeCapabilityResolver) ResolveBool(ctx context.Context, key, scope string) bool {
+	if f.resolveFn != nil {
+		return f.resolveFn(ctx, key, scope)
+	}
+	return false
+}
+
+func TestMeCapabilities_ReturnsBothFlags(t *testing.T) {
+	handler := NewMeCapabilitiesHandler(MeCapabilitiesConfig{
+		EnrichmentAvailable: func() bool { return true },
+		Settings: &fakeCapabilityResolver{
+			resolveFn: func(_ context.Context, key, scope string) bool {
+				if key != "dreaming.enabled" {
+					t.Errorf("expected key dreaming.enabled, got %q", key)
+				}
+				if scope != "global" {
+					t.Errorf("expected scope global, got %q", scope)
+				}
+				return true
+			},
+		},
+	})
+
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "member"}
+	w := doSelfServiceRequest(handler, http.MethodGet, "/v1/me/capabilities", nil, ac)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp MeCapabilitiesResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if !resp.EnrichmentAvailable {
+		t.Error("expected enrichment_available=true")
+	}
+	if !resp.DreamingEnabled {
+		t.Error("expected dreaming_enabled=true")
+	}
+}
+
+func TestMeCapabilities_AvailableClosed(t *testing.T) {
+	handler := NewMeCapabilitiesHandler(MeCapabilitiesConfig{
+		EnrichmentAvailable: func() bool { return false },
+		Settings: &fakeCapabilityResolver{
+			resolveFn: func(context.Context, string, string) bool { return false },
+		},
+	})
+
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "readonly"}
+	w := doSelfServiceRequest(handler, http.MethodGet, "/v1/me/capabilities", nil, ac)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp MeCapabilitiesResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.EnrichmentAvailable || resp.DreamingEnabled {
+		t.Errorf("expected both flags false, got %+v", resp)
+	}
+}
+
+func TestMeCapabilities_Unauthenticated(t *testing.T) {
+	handler := NewMeCapabilitiesHandler(MeCapabilitiesConfig{
+		EnrichmentAvailable: func() bool { return true },
+	})
+
+	w := doSelfServiceRequest(handler, http.MethodGet, "/v1/me/capabilities", nil, nil)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMeCapabilities_MethodNotAllowed(t *testing.T) {
+	handler := NewMeCapabilitiesHandler(MeCapabilitiesConfig{
+		EnrichmentAvailable: func() bool { return true },
+	})
+
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "member"}
+	w := doSelfServiceRequest(handler, http.MethodPost, "/v1/me/capabilities", nil, ac)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMeCapabilities_NilDependenciesAreSafe(t *testing.T) {
+	// A misconfigured handler (nil EnrichmentAvailable, nil Settings) should
+	// still return 200 with both flags false rather than panic — the SPA
+	// renders the closed-gate state gracefully.
+	handler := NewMeCapabilitiesHandler(MeCapabilitiesConfig{})
+
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "member"}
+	w := doSelfServiceRequest(handler, http.MethodGet, "/v1/me/capabilities", nil, ac)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp MeCapabilitiesResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.EnrichmentAvailable || resp.DreamingEnabled {
+		t.Errorf("expected both flags false, got %+v", resp)
+	}
+}

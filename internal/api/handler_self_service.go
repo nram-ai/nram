@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -497,6 +498,69 @@ func NewMeProfileHandler(repo MeProfileGetter) http.HandlerFunc {
 			Role:        user.Role,
 			OrgID:       user.OrgID,
 		})
+	}
+}
+
+// MeCapabilitiesResponse is the body of GET /v1/me/capabilities.
+//
+// Booleans only — the goal is to give the SPA enough signal to decide which
+// nav entries and feature affordances to render, without leaking any
+// provider config, secrets, or admin-only state. enrichment_available
+// mirrors the EnrichmentGate signal (all three slots configured); dreaming
+// _enabled mirrors the cascade-resolved dreaming.enabled global setting.
+type MeCapabilitiesResponse struct {
+	EnrichmentAvailable bool `json:"enrichment_available"`
+	DreamingEnabled     bool `json:"dreaming_enabled"`
+}
+
+// CapabilityResolver supplies the SettingsService.ResolveBool surface used by
+// NewMeCapabilitiesHandler. Narrowed to one method so tests don't need to
+// stand up the full settings service.
+type CapabilityResolver interface {
+	ResolveBool(ctx context.Context, key string, scope string) bool
+}
+
+// MeCapabilitiesConfig wires NewMeCapabilitiesHandler.
+//
+// EnrichmentAvailable is the same closure that gates EnrichmentGate
+// middleware, so the answer matches "would the server let me hit /enrich
+// right now." Settings is the cascade-aware resolver used to read
+// dreaming.enabled at global scope.
+type MeCapabilitiesConfig struct {
+	EnrichmentAvailable func() bool
+	Settings            CapabilityResolver
+}
+
+// NewMeCapabilitiesHandler returns a GET-only handler at /v1/me/capabilities
+// that returns the booleans driving sidebar nav visibility for non-admin
+// users. Authentication is required (the AuthMiddleware sits above the
+// /v1/me group); no role check.
+func NewMeCapabilitiesHandler(cfg MeCapabilitiesConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			WriteError(w, &APIError{
+				Code:    "method_not_allowed",
+				Message: "method not allowed",
+				Status:  http.StatusMethodNotAllowed,
+			})
+			return
+		}
+
+		if auth.FromContext(r.Context()) == nil {
+			WriteError(w, ErrUnauthorized("authentication required"))
+			return
+		}
+
+		resp := MeCapabilitiesResponse{}
+		if cfg.EnrichmentAvailable != nil {
+			resp.EnrichmentAvailable = cfg.EnrichmentAvailable()
+		}
+		if cfg.Settings != nil {
+			resp.DreamingEnabled = cfg.Settings.ResolveBool(r.Context(), service.SettingDreamingEnabled, "global")
+		}
+
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 

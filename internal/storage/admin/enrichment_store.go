@@ -59,6 +59,7 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, staleT
 		LastRequeueReason: item.LastRequeueReason,
 	}
 	if item.Status == model.EnrichmentStatusProcessing && item.ClaimedAt != nil {
+		out.ClaimedAt = item.ClaimedAt
 		ageMs := now.Sub(*item.ClaimedAt).Milliseconds()
 		if ageMs < 0 {
 			ageMs = 0

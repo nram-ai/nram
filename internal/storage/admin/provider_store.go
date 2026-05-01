@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/enrichment"
 	"github.com/nram-ai/nram/internal/model"
@@ -41,18 +43,38 @@ type ProviderAdminStore struct {
 	deps ProviderAdminDeps
 
 	cascadeMu sync.Mutex // serializes destructive embedding-model swaps
+
+	// contextWindowCache memoizes the last detected context_length per
+	// (type|url|model) tuple so back-to-back GetProviderConfig calls don't
+	// hammer Ollama's /api/show or OpenRouter's /models on every page render.
+	// Entries expire after contextWindowCacheTTL; a slot edit also invalidates
+	// the cache key implicitly because the tuple changes.
+	contextWindowMu    sync.Mutex
+	contextWindowCache map[string]contextWindowCacheEntry
 }
+
+type contextWindowCacheEntry struct {
+	value     int
+	storedAt  time.Time
+}
+
+const contextWindowCacheTTL = 60 * time.Second
 
 func NewProviderAdminStore(deps ProviderAdminDeps) *ProviderAdminStore {
 	return &ProviderAdminStore{deps: deps}
 }
 
 func (s *ProviderAdminStore) GetProviderConfig(ctx context.Context) (*api.ProviderConfigResponse, error) {
-	resp := &api.ProviderConfigResponse{
-		Embedding: s.slotStatus(ctx, "embedding"),
-		Fact:      s.slotStatus(ctx, "fact"),
-		Entity:    s.slotStatus(ctx, "entity"),
-	}
+	// Probe the three slots concurrently — each call may issue an HTTP
+	// request to Ollama (/api/show) or OpenRouter (/models) on a cache
+	// miss, so the worst-case wall time was 3 × probe-timeout. errgroup
+	// caps it at one probe-timeout regardless of slot count.
+	resp := &api.ProviderConfigResponse{}
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error { resp.Embedding = s.slotStatus(gctx, "embedding"); return nil })
+	g.Go(func() error { resp.Fact = s.slotStatus(gctx, "fact"); return nil })
+	g.Go(func() error { resp.Entity = s.slotStatus(gctx, "entity"); return nil })
+	_ = g.Wait()
 	return resp, nil
 }
 
@@ -102,15 +124,86 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 		}
 	}
 
-	return api.ProviderSlotStatus{
-		Configured: true,
-		Type:       persisted.Type,
-		URL:        persisted.URL,
-		Model:      persisted.Model,
-		Dimensions: dimensions,
-		Timeout:    persisted.Timeout,
-		Status:     status,
+	// Best-effort context-window detection. Only providers that expose it
+	// via API are queried; the rest get nil and the UI renders the muted
+	// "see provider docs" placeholder. Failures are swallowed — a flaky
+	// Ollama instance must not break the whole providers page.
+	var contextWindow *int
+	if alive {
+		if cw := s.detectContextWindow(ctx, persisted); cw > 0 {
+			contextWindow = &cw
+		}
 	}
+
+	return api.ProviderSlotStatus{
+		Configured:    true,
+		Type:          persisted.Type,
+		URL:           persisted.URL,
+		Model:         persisted.Model,
+		Dimensions:    dimensions,
+		ContextWindow: contextWindow,
+		Timeout:       persisted.Timeout,
+		Status:        status,
+	}
+}
+
+// detectContextWindow returns the configured model's max input length in
+// tokens for providers that report it via API. Returns 0 (no error) for
+// providers that don't, for unknown models, and on probe failures —
+// callers treat 0 as "unknown" and render the fallback.
+//
+// Results are cached for contextWindowCacheTTL to avoid hammering Ollama
+// or OpenRouter on every providers-page render. Cache keyed on the
+// (type, url, model) tuple so any slot edit naturally invalidates. The
+// nul-byte separator prevents collisions when a URL contains pipes or
+// other separator-like characters.
+func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.ProviderSlotConfig) int {
+	if slot == nil || slot.Model == "" {
+		return 0
+	}
+	// Skip providers that don't expose context_length via API — avoids the
+	// per-render cache lookup and write for OpenAI / Anthropic / Gemini /
+	// Custom slots.
+	if slot.Type != provider.ProviderTypeOllama && slot.Type != provider.ProviderTypeOpenRouter {
+		return 0
+	}
+
+	cacheKey := slot.Type + "\x00" + slot.URL + "\x00" + slot.Model
+
+	s.contextWindowMu.Lock()
+	if s.contextWindowCache == nil {
+		s.contextWindowCache = map[string]contextWindowCacheEntry{}
+	}
+	if entry, ok := s.contextWindowCache[cacheKey]; ok && time.Since(entry.storedAt) < contextWindowCacheTTL {
+		s.contextWindowMu.Unlock()
+		return entry.value
+	}
+	s.contextWindowMu.Unlock()
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	value := 0
+	switch slot.Type {
+	case provider.ProviderTypeOllama:
+		client := provider.NewOllamaClient(provider.OllamaConfig{BaseURL: s.resolveOllamaURL(slot.URL)})
+		if cw, err := client.ContextLength(probeCtx, slot.Model); err == nil {
+			value = cw
+		}
+	case provider.ProviderTypeOpenRouter:
+		if cw, err := provider.OpenRouterContextLength(probeCtx, slot.URL, slot.APIKey, slot.Model); err == nil {
+			value = cw
+		}
+	}
+
+	s.contextWindowMu.Lock()
+	s.contextWindowCache[cacheKey] = contextWindowCacheEntry{
+		value:    value,
+		storedAt: time.Now(),
+	}
+	s.contextWindowMu.Unlock()
+
+	return value
 }
 
 func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderTestRequest) (*api.ProviderTestResult, error) {

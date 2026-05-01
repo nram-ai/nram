@@ -414,6 +414,7 @@ export function useUpdateProviderSlot() {
     }) => adminAPI.updateProviderSlot(slot, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "provider-slots"] });
+      qc.invalidateQueries({ queryKey: ["me", "capabilities"] });
     },
   });
 }
@@ -768,6 +769,7 @@ export function useSetDreamingEnabled() {
       qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
       qc.invalidateQueries({ queryKey: ["admin", "settings"] });
       qc.invalidateQueries({ queryKey: ["me", "dreaming"] });
+      qc.invalidateQueries({ queryKey: ["me", "capabilities"] });
     },
   });
 }
