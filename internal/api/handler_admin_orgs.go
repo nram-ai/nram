@@ -26,6 +26,8 @@ type OrgStore interface {
 // OrgAdminConfig holds the dependencies for the admin orgs handler.
 type OrgAdminConfig struct {
 	Store OrgStore
+	// Audit is optional; emits an event after each privileged org action.
+	Audit AuditStore
 }
 
 // createOrgRequest is the JSON body for POST /v1/admin/orgs.
@@ -61,7 +63,7 @@ func NewAdminOrgsHandler(cfg OrgAdminConfig) http.HandlerFunc {
 			case http.MethodGet:
 				handleListOrgs(w, r, cfg.Store)
 			case http.MethodPost:
-				handleCreateOrg(w, r, cfg.Store)
+				handleCreateOrg(w, r, cfg)
 			default:
 				WriteError(w, ErrBadRequest("method not allowed"))
 			}
@@ -79,9 +81,9 @@ func NewAdminOrgsHandler(cfg OrgAdminConfig) http.HandlerFunc {
 		case http.MethodGet:
 			handleGetOrg(w, r, cfg.Store, id)
 		case http.MethodPut:
-			handleUpdateOrg(w, r, cfg.Store, id)
+			handleUpdateOrg(w, r, cfg, id)
 		case http.MethodDelete:
-			handleDeleteOrg(w, r, cfg.Store, id)
+			handleDeleteOrg(w, r, cfg, id)
 		default:
 			WriteError(w, ErrBadRequest("method not allowed"))
 		}
@@ -139,7 +141,7 @@ func handleListOrgs(w http.ResponseWriter, r *http.Request, store OrgStore) {
 	})
 }
 
-func handleCreateOrg(w http.ResponseWriter, r *http.Request, store OrgStore) {
+func handleCreateOrg(w http.ResponseWriter, r *http.Request, cfg OrgAdminConfig) {
 	var body createOrgRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid request body"))
@@ -155,11 +157,18 @@ func handleCreateOrg(w http.ResponseWriter, r *http.Request, store OrgStore) {
 		return
 	}
 
-	org, err := store.CreateOrg(r.Context(), body.Name, body.Slug)
+	org, err := cfg.Store.CreateOrg(r.Context(), body.Name, body.Slug)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to create organization"))
 		return
 	}
+
+	tryAudit(cfg.Audit, r, AuditActionOrgCreate, &AuditEvent{
+		TargetType:  "organization",
+		TargetID:    &org.ID,
+		TargetOrgID: &org.ID,
+		Details:     mustJSON(map[string]string{"name": body.Name, "slug": body.Slug}),
+	})
 
 	writeJSON(w, http.StatusCreated, org)
 }
@@ -178,14 +187,14 @@ func handleGetOrg(w http.ResponseWriter, r *http.Request, store OrgStore, id uui
 	writeJSON(w, http.StatusOK, org)
 }
 
-func handleUpdateOrg(w http.ResponseWriter, r *http.Request, store OrgStore, id uuid.UUID) {
+func handleUpdateOrg(w http.ResponseWriter, r *http.Request, cfg OrgAdminConfig, id uuid.UUID) {
 	var body updateOrgRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid request body"))
 		return
 	}
 
-	org, err := store.UpdateOrg(r.Context(), id, body.Name, body.Slug, body.Settings)
+	org, err := cfg.Store.UpdateOrg(r.Context(), id, body.Name, body.Slug, body.Settings)
 	if err != nil {
 		if isOrgNotFound(err) {
 			WriteError(w, ErrNotFound("organization not found"))
@@ -195,11 +204,17 @@ func handleUpdateOrg(w http.ResponseWriter, r *http.Request, store OrgStore, id 
 		return
 	}
 
+	tryAudit(cfg.Audit, r, AuditActionOrgUpdate, &AuditEvent{
+		TargetType:  "organization",
+		TargetID:    &id,
+		TargetOrgID: &id,
+	})
+
 	writeJSON(w, http.StatusOK, org)
 }
 
-func handleDeleteOrg(w http.ResponseWriter, r *http.Request, store OrgStore, id uuid.UUID) {
-	err := store.DeleteOrg(r.Context(), id)
+func handleDeleteOrg(w http.ResponseWriter, r *http.Request, cfg OrgAdminConfig, id uuid.UUID) {
+	err := cfg.Store.DeleteOrg(r.Context(), id)
 	if err != nil {
 		if isOrgNotFound(err) {
 			WriteError(w, ErrNotFound("organization not found"))
@@ -208,6 +223,12 @@ func handleDeleteOrg(w http.ResponseWriter, r *http.Request, store OrgStore, id 
 		WriteError(w, ErrInternal("failed to delete organization"))
 		return
 	}
+
+	tryAudit(cfg.Audit, r, AuditActionOrgDelete, &AuditEvent{
+		TargetType:  "organization",
+		TargetID:    &id,
+		TargetOrgID: &id,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -222,6 +222,24 @@ describe("API Client E2E", () => {
         protocol: "http:",
       },
     };
+
+    // Configure stub provider slots so the EnrichmentGate opens in the
+    // suite. Every dreaming/enrichment route is wrapped in EnrichmentGate
+    // which returns 503 until all three slots (embedding, fact, entity)
+    // have a provider. We don't need the providers to actually work for
+    // the e2e tests — only the gate-passing record.
+    for (const slot of ["embedding", "fact", "entity"]) {
+      try {
+        await adminAPI.updateProviderSlot(slot, {
+          type: "ollama",
+          url: "http://localhost:11434",
+          model: slot === "embedding" ? "nomic-embed-text" : "llama3",
+        });
+      } catch {
+        // Suite tolerates unconfigured providers — the gate-dependent tests
+        // will surface their own failure if this stub setup didn't take.
+      }
+    }
   }, 45000);
 
   afterAll(async () => {
@@ -601,8 +619,16 @@ describe("API Client E2E", () => {
         content: "Updated E2E content.",
         tags: ["e2e", "updated"],
       });
-      expect(res.id).toBe(storedMemoryId);
+      // Content-change update returns a NEW id under supersede semantics
+      // (per service/update.go). previous_memory_id echoes the input id.
+      expect(typeof res.id).toBe("string");
+      expect(res.id).not.toBe(storedMemoryId);
+      expect(res.previous_memory_id).toBe(storedMemoryId);
+      expect(res.superseded).toBe(true);
       expect(res.content).toBe("Updated E2E content.");
+      // Re-point storedMemoryId to the active head so subsequent tests
+      // chain off the new memory.
+      storedMemoryId = res.id;
     });
 
     it("get() confirms update persisted", async () => {
@@ -636,7 +662,10 @@ describe("API Client E2E", () => {
         ids: [storedMemoryId],
       });
       expect(typeof res.deleted).toBe("number");
-      expect(res.deleted).toBe(1);
+      // Forget on the active head walks the supersede chain and soft-deletes
+      // the entire chain (per service/forget.go), so deleted >= 1: at least
+      // the head, plus any superseded ancestors.
+      expect(res.deleted).toBeGreaterThanOrEqual(1);
       expect(typeof res.latency_ms).toBe("number");
     });
 

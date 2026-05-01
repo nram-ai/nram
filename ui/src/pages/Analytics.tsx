@@ -1,7 +1,32 @@
 import { useState, useMemo, useCallback } from "react";
-import { useAnalytics, useUsage, useOrgs, useOrgUsers } from "../hooks/useApi";
+import {
+  useAnalytics,
+  useUsage,
+  useOrgAnalytics,
+  useOrgUsage,
+  useSystemAnalytics,
+  useSystemUsage,
+  useOrgs,
+  useOrgUsers,
+} from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
-import type { AnalyticsData, Organization, User, UsageReport, MemoryRankItem, UsageGroup, UsageGroupBy } from "../api/client";
+import type {
+  AnalyticsData,
+  Organization,
+  User,
+  UsageReport,
+  MemoryRankItem,
+  UsageGroup,
+  UsageGroupBy,
+  OrgAnalyticsData,
+  SystemAnalyticsData,
+  HistogramBucket,
+  TypeBucket,
+  OrgAggregate,
+  ProjectAggregate,
+} from "../api/client";
+
+type AnalyticsTier = "self" | "org" | "system";
 import {
   BarChart,
   Bar,
@@ -74,11 +99,6 @@ function isOutputNA(group: UsageGroup): boolean {
 
 function formatOutputTokens(group: UsageGroup): string {
   return isOutputNA(group) ? "N/A" : group.tokens_output.toLocaleString();
-}
-
-function truncateContent(content: string, maxLen = 80): string {
-  if (content.length <= maxLen) return content;
-  return content.slice(0, maxLen) + "...";
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +225,8 @@ function MemoryRankTable({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
-                  <th className="pb-2 font-medium">Content</th>
+                  <th className="pb-2 font-medium">Memory ID</th>
+                  <th className="pb-2 text-right font-medium">Length</th>
                   <th className="pb-2 text-right font-medium">Access Count</th>
                   <th className="pb-2 text-right font-medium">Created</th>
                 </tr>
@@ -213,8 +234,11 @@ function MemoryRankTable({
               <tbody className="divide-y divide-border">
                 {items.map((item) => (
                   <tr key={item.id}>
-                    <td className="max-w-xs py-2" title={item.content}>
-                      {truncateContent(item.content)}
+                    <td className="max-w-xs py-2 font-mono text-xs text-muted-foreground" title={item.id}>
+                      {item.id.slice(0, 8)}…
+                    </td>
+                    <td className="py-2 text-right font-mono text-xs text-muted-foreground">
+                      {item.length_chars.toLocaleString()} chars
                     </td>
                     <td className="py-2 text-right font-mono">
                       {item.access_count.toLocaleString()}
@@ -1000,6 +1024,153 @@ function CostRateEditor({
   );
 }
 
+// AggregateAnalyticsPanel renders org-tier and system-tier analytics
+// payloads: recall-distribution histogram + entity/relationship type
+// histograms + breakdown rows. No per-memory data, no content fields.
+function AggregateAnalyticsPanel({
+  recallDistribution,
+  entityHistogram,
+  relationshipHistogram,
+  orgBreakdown,
+  projectBreakdown,
+  isLoading,
+}: {
+  recallDistribution?: HistogramBucket[];
+  entityHistogram?: TypeBucket[];
+  relationshipHistogram?: TypeBucket[];
+  orgBreakdown?: OrgAggregate[];
+  projectBreakdown?: ProjectAggregate[];
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <SkeletonChart />
+        <SkeletonChart />
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <AggregateBucketCard
+          title="Recall Distribution"
+          description="Memories grouped by access-count bucket"
+          buckets={(recallDistribution ?? []).map((b) => ({ label: b.range, count: b.count }))}
+        />
+        <AggregateBucketCard
+          title="Entity Types"
+          description="Entities grouped by type"
+          buckets={(entityHistogram ?? []).map((b) => ({ label: b.type, count: b.count }))}
+        />
+      </div>
+      <AggregateBucketCard
+        title="Relationship Types"
+        description="Relationships grouped by relation label"
+        buckets={(relationshipHistogram ?? []).map((b) => ({ label: b.type, count: b.count }))}
+      />
+      {orgBreakdown && orgBreakdown.length > 0 && (
+        <div className="rounded-lg border border-border bg-card">
+          <div className="border-b px-4 py-3">
+            <h3 className="text-sm font-semibold">Per-Organization Breakdown</h3>
+          </div>
+          <div className="overflow-x-auto p-4">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="pb-2 font-medium">Org</th>
+                  <th className="pb-2 text-right font-medium">Memories</th>
+                  <th className="pb-2 text-right font-medium">Users</th>
+                  <th className="pb-2 text-right font-medium">Projects</th>
+                  <th className="pb-2 text-right font-medium">Entities</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orgBreakdown.map((o) => (
+                  <tr key={o.org_id} className="border-b last:border-0">
+                    <td className="py-2">{o.org_name}</td>
+                    <td className="py-2 text-right font-mono">{o.total_memories.toLocaleString()}</td>
+                    <td className="py-2 text-right font-mono">{o.total_users.toLocaleString()}</td>
+                    <td className="py-2 text-right font-mono">{o.total_projects.toLocaleString()}</td>
+                    <td className="py-2 text-right font-mono">{o.total_entities.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {projectBreakdown && projectBreakdown.length > 0 && (
+        <div className="rounded-lg border border-border bg-card">
+          <div className="border-b px-4 py-3">
+            <h3 className="text-sm font-semibold">Per-Project Breakdown</h3>
+          </div>
+          <div className="overflow-x-auto p-4">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="pb-2 font-medium">Project</th>
+                  <th className="pb-2 text-right font-medium">Memories</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projectBreakdown.map((p) => (
+                  <tr key={p.project_id} className="border-b last:border-0">
+                    <td className="py-2">{p.project_name}</td>
+                    <td className="py-2 text-right font-mono">{p.total_memories.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AggregateBucketCard({
+  title,
+  description,
+  buckets,
+}: {
+  title: string;
+  description: string;
+  buckets: { label: string; count: number }[];
+}) {
+  const max = buckets.reduce((m, b) => Math.max(m, b.count), 0);
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="border-b px-4 py-3">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <div className="p-4">
+        {buckets.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No data.</p>
+        ) : (
+          <ul className="space-y-1 text-xs">
+            {buckets.map((b) => (
+              <li key={b.label} className="flex items-center gap-2">
+                <span className="w-24 truncate font-mono text-muted-foreground" title={b.label}>
+                  {b.label}
+                </span>
+                <div className="flex-1">
+                  <div
+                    className="h-3 rounded bg-blue-500/30"
+                    style={{ width: `${max ? (b.count / max) * 100 : 0}%` }}
+                  />
+                </div>
+                <span className="w-12 text-right font-mono">{b.count.toLocaleString()}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main Analytics Page
 // ---------------------------------------------------------------------------
@@ -1007,35 +1178,69 @@ function CostRateEditor({
 function Analytics() {
   const auth = useAuth();
 
+  // Tier picker — admin gets all three, org_owner gets self+org, others
+  // get self only. The pre-fix `org` / `user` widening dropdowns are
+  // gone; tier selection drives which endpoint we hit.
+  const availableTiers: AnalyticsTier[] = auth.isAdmin
+    ? ["self", "org", "system"]
+    : auth.isOrgOwner
+      ? ["self", "org"]
+      : ["self"];
+  const [tier, setTier] = useState<AnalyticsTier>("self");
+  const myOrgId = auth.user?.org_id;
+  const orgIdForFetch = tier === "org" ? myOrgId : undefined;
+
   const [groupBy, setGroupBy] = useState<UsageGroupBy>("operation");
   const [successFilter, setSuccessFilter] = useState<boolean | undefined>(undefined);
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
+  // Legacy org/user state retained because handful of memo/computed values
+  // still reference them. Setting these has no network effect post-leak-fix.
   const [org, setOrgState] = useState<string | undefined>(undefined);
   const [user, setUser] = useState<string | undefined>(undefined);
 
-  // Switching org invalidates the previously selected user (different org's
-  // user list). Reset both atomically.
   const setOrg = useCallback((next: string | undefined) => {
     setOrgState(next);
     setUser(undefined);
   }, []);
 
   const orgsQuery = useOrgs(auth.isAdmin);
-  // Admin's user dropdown follows the selected org; org_owner's follows their
-  // own org. Listing users across every org is intentionally out of scope.
   const userOrgId = auth.isAdmin ? org : auth.user?.org_id;
   const usersQuery = useOrgUsers(userOrgId ?? "");
 
-  const analytics = useAnalytics({ org, user });
-  const usage = useUsage({
+  // Tier-A self analytics + usage (always fetched as the default).
+  const selfAnalytics = useAnalytics();
+  const selfUsage = useUsage({
     group_by: groupBy,
     success_only: successFilter,
     from: from || undefined,
     to: to || undefined,
-    org,
-    user,
   });
+
+  // Tier-B (org-aggregate). Disabled when tier !== "org".
+  const orgAnalytics = useOrgAnalytics(orgIdForFetch);
+  const orgUsage = useOrgUsage(orgIdForFetch, {
+    from: from || undefined,
+    to: to || undefined,
+    group_by: groupBy,
+  });
+
+  // Tier-C (system-aggregate). Gated on tier so the inactive tier doesn't
+  // fire admin-only requests.
+  const systemAnalytics = useSystemAnalytics({ enabled: tier === "system" });
+  const systemUsage = useSystemUsage(
+    {
+      from: from || undefined,
+      to: to || undefined,
+      group_by: groupBy,
+    },
+    { enabled: tier === "system" },
+  );
+
+  const analytics =
+    tier === "system" ? systemAnalytics : tier === "org" ? orgAnalytics : selfAnalytics;
+  const usage =
+    tier === "system" ? systemUsage : tier === "org" ? orgUsage : selfUsage;
 
   const [costRates, setCostRates] = useState<CostRate[]>(loadCostRates);
 
@@ -1044,7 +1249,15 @@ function Analytics() {
     saveCostRates(rates);
   }, []);
 
-  const analyticsData = analytics.data as AnalyticsData | undefined;
+  // Self-tier analytics carry the legacy AnalyticsData shape (with ranked
+  // memory lists). Org/system tiers carry aggregate shapes — different
+  // fields entirely. Branch the renderer by tier.
+  const selfAnalyticsData =
+    tier === "self" ? (analytics.data as AnalyticsData | undefined) : undefined;
+  const orgAnalyticsData =
+    tier === "org" ? (analytics.data as OrgAnalyticsData | undefined) : undefined;
+  const systemAnalyticsData =
+    tier === "system" ? (analytics.data as SystemAnalyticsData | undefined) : undefined;
   const usageData = usage.data as UsageReport | undefined;
   const groups = usageData?.groups ?? [];
 
@@ -1061,23 +1274,65 @@ function Analytics() {
     usage.refetch();
   }
 
-  const title = auth.isAdmin
-    ? "System Analytics"
-    : auth.isOrgOwner
-      ? "Organization Analytics"
-      : "Your Analytics";
-  const subtitle = auth.isAdmin
-    ? "Memory analytics, token usage, and billing across all organizations."
-    : auth.isOrgOwner
-      ? "Memory analytics, token usage, and billing for your organization."
-      : "Your memory analytics and token usage.";
+  const title =
+    tier === "system"
+      ? "System Analytics"
+      : tier === "org"
+        ? "Organization Analytics"
+        : "My Analytics";
+  const subtitle =
+    tier === "system"
+      ? "System-wide memory analytics, recall distribution, and token usage."
+      : tier === "org"
+        ? "Aggregate memory analytics, recall distribution, and token usage for your organization."
+        : "Your memory analytics and token usage.";
+
+  // Memory counts shape varies by tier — self uses memory_counts, system
+  // uses total_memory_counts. Normalize to the self-tier shape for the
+  // existing MemoryCountCards renderer.
+  const counts =
+    tier === "system"
+      ? systemAnalyticsData
+        ? { memory_counts: systemAnalyticsData.total_memory_counts, enrichment_stats: systemAnalyticsData.enrichment_stats } as AnalyticsData
+        : undefined
+      : tier === "org"
+        ? orgAnalyticsData
+          ? { memory_counts: orgAnalyticsData.memory_counts, enrichment_stats: orgAnalyticsData.enrichment_stats } as AnalyticsData
+          : undefined
+        : selfAnalyticsData;
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+        </div>
+        {availableTiers.length > 1 && (
+          <div
+            className="inline-flex rounded-md border bg-card p-0.5"
+            role="tablist"
+            aria-label="Analytics scope"
+          >
+            {availableTiers.map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={tier === t}
+                onClick={() => setTier(t)}
+                className={`rounded px-3 py-1 text-xs font-medium ${
+                  tier === t
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                {t === "self" ? "Mine" : t === "org" ? "Org" : "System"}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {hasError && <ErrorBanner message={errorMessage} onRetry={handleRetry} />}
@@ -1088,45 +1343,67 @@ function Analytics() {
           Memory Analytics
         </h2>
 
-        {/* Summary cards */}
+        {/* Summary cards (counts only, shape-normalized across tiers) */}
         <MemoryCountCards
-          data={analyticsData}
+          data={counts}
           isLoading={analytics.isLoading}
         />
 
         {/* Enrichment stats are global by nature; the queue table has no
-            per-org or per-user attribution, so only show this card to admins
-            (who get the global rollup). */}
-        {auth.isAdmin && (
+            per-org or per-user attribution. Show on self (admin sees own
+            stats) and on system (admin sees global rollup). */}
+        {(tier === "self" && auth.isAdmin) || tier === "system" ? (
           <EnrichmentStatsCards
-            data={analyticsData}
+            data={counts}
+            isLoading={analytics.isLoading}
+          />
+        ) : null}
+
+        {tier === "self" ? (
+          <>
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <MemoryRankTable
+                title="Most Recalled"
+                description="Your memories with the highest access counts"
+                items={selfAnalyticsData?.most_recalled ?? []}
+                isLoading={analytics.isLoading}
+              />
+              <MemoryRankTable
+                title="Least Recalled"
+                description="Your memories with the lowest access counts"
+                items={selfAnalyticsData?.least_recalled ?? []}
+                isLoading={analytics.isLoading}
+              />
+            </div>
+            <MemoryRankTable
+              title="Dead Weight"
+              description="Memories you've never recalled"
+              items={selfAnalyticsData?.dead_weight ?? []}
+              isLoading={analytics.isLoading}
+            />
+          </>
+        ) : (
+          <AggregateAnalyticsPanel
+            recallDistribution={
+              tier === "system"
+                ? systemAnalyticsData?.recall_distribution
+                : orgAnalyticsData?.recall_distribution
+            }
+            entityHistogram={
+              tier === "system"
+                ? systemAnalyticsData?.entity_type_histogram
+                : orgAnalyticsData?.entity_type_histogram
+            }
+            relationshipHistogram={
+              tier === "system"
+                ? systemAnalyticsData?.relationship_type_histogram
+                : orgAnalyticsData?.relationship_type_histogram
+            }
+            orgBreakdown={tier === "system" ? systemAnalyticsData?.org_breakdown : undefined}
+            projectBreakdown={tier === "org" ? orgAnalyticsData?.project_breakdown : undefined}
             isLoading={analytics.isLoading}
           />
         )}
-
-        {/* Most Recalled and Least Recalled */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <MemoryRankTable
-            title="Most Recalled"
-            description="Memories with the highest access counts"
-            items={analyticsData?.most_recalled ?? []}
-            isLoading={analytics.isLoading}
-          />
-          <MemoryRankTable
-            title="Least Recalled"
-            description="Memories with the lowest access counts"
-            items={analyticsData?.least_recalled ?? []}
-            isLoading={analytics.isLoading}
-          />
-        </div>
-
-        {/* Dead weight */}
-        <MemoryRankTable
-          title="Dead Weight"
-          description="Memories that have never been recalled"
-          items={analyticsData?.dead_weight ?? []}
-          isLoading={analytics.isLoading}
-        />
       </div>
 
       {/* Divider */}

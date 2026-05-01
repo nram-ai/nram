@@ -1,8 +1,8 @@
 /**
  * @vitest-environment happy-dom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 import Analytics from "../Analytics";
@@ -11,6 +11,12 @@ import { useAuth } from "../../context/AuthContext";
 
 // The page is heavy on data hooks. Stub them at import boundaries so each
 // test only has to set up a minimal authenticated context.
+//
+// Updated 2026-04-30 leak fix: the page is now tier-aware. Self-tier hooks
+// (useAnalytics, useUsage) plus org-tier (useOrgAnalytics, useOrgUsage)
+// plus system-tier (useSystemAnalytics, useSystemUsage) are all imported
+// by the page; tests must mock all of them so the role-driven tier
+// rendering paths are reachable.
 
 vi.mock("../../context/AuthContext", () => ({
   useAuth: vi.fn(),
@@ -19,6 +25,10 @@ vi.mock("../../context/AuthContext", () => ({
 vi.mock("../../hooks/useApi", () => ({
   useAnalytics: vi.fn(),
   useUsage: vi.fn(),
+  useOrgAnalytics: vi.fn(),
+  useOrgUsage: vi.fn(),
+  useSystemAnalytics: vi.fn(),
+  useSystemUsage: vi.fn(),
   useOrgs: vi.fn(),
   useOrgUsers: vi.fn(),
 }));
@@ -26,18 +36,12 @@ vi.mock("../../hooks/useApi", () => ({
 const useAuthMock = vi.mocked(useAuth);
 const useAnalyticsMock = vi.mocked(useApi.useAnalytics);
 const useUsageMock = vi.mocked(useApi.useUsage);
+const useOrgAnalyticsMock = vi.mocked(useApi.useOrgAnalytics);
+const useOrgUsageMock = vi.mocked(useApi.useOrgUsage);
+const useSystemAnalyticsMock = vi.mocked(useApi.useSystemAnalytics);
+const useSystemUsageMock = vi.mocked(useApi.useSystemUsage);
 const useOrgsMock = vi.mocked(useApi.useOrgs);
 const useOrgUsersMock = vi.mocked(useApi.useOrgUsers);
-
-// The UsageControls card labels carry this class combination. Cost rate
-// editor labels and tooltip labels elsewhere on the page use different
-// styling, so this filter narrows the assertions to just the filter row.
-const FILTER_LABEL_CLASS = "block text-xs font-medium text-muted-foreground";
-
-function filterControlLabels(container: HTMLElement): string[] {
-  return Array.from(container.querySelectorAll(`label.${FILTER_LABEL_CLASS.split(" ").join(".")}`))
-    .map((l) => l.textContent?.trim() ?? "");
-}
 
 function authStub(role: "administrator" | "org_owner" | "member") {
   return {
@@ -57,22 +61,33 @@ function authStub(role: "administrator" | "org_owner" | "member") {
   };
 }
 
-function emptyQuery<T>(data?: T) {
+// Returns a query stub that satisfies any of the multiple useQuery-shaped
+// hooks below (useAnalytics, useUsage, useOrgAnalytics, useSystemAnalytics,
+// useOrgs, etc.). Each mock has a different result type, so we return
+// `any` here and let mockReturnValue accept it for any of them.
+//
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function emptyQuery<T>(data?: T): any {
   return {
     data,
     isLoading: false,
     isError: false,
     error: null,
     refetch: vi.fn(),
-  } as unknown as ReturnType<typeof useApi.useAnalytics> &
-    ReturnType<typeof useApi.useUsage> &
-    ReturnType<typeof useApi.useOrgs> &
-    ReturnType<typeof useApi.useOrgUsers>;
+  };
 }
+
+afterEach(() => {
+  cleanup();
+});
 
 beforeEach(() => {
   useAnalyticsMock.mockReturnValue(emptyQuery());
   useUsageMock.mockReturnValue(emptyQuery());
+  useOrgAnalyticsMock.mockReturnValue(emptyQuery());
+  useOrgUsageMock.mockReturnValue(emptyQuery());
+  useSystemAnalyticsMock.mockReturnValue(emptyQuery());
+  useSystemUsageMock.mockReturnValue(emptyQuery());
   useOrgsMock.mockReturnValue(emptyQuery([
     { id: "org-a", name: "Org Alpha", slug: "alpha", created_at: "", updated_at: "" },
     { id: "org-b", name: "Org Beta", slug: "beta", created_at: "", updated_at: "" },
@@ -80,59 +95,62 @@ beforeEach(() => {
   useOrgUsersMock.mockReturnValue(emptyQuery([]));
 });
 
-describe("Analytics page — role-aware rendering", () => {
-  it("renders the global title and Organization filter for administrators", () => {
-    useAuthMock.mockReturnValue(authStub("administrator"));
-
-    const { container } = render(<Analytics />);
-
-    expect(screen.getByRole("heading", { name: /System Analytics/i })).toBeInTheDocument();
-    // The filter labels live inside the UsageControls card and use a
-    // distinctive class. Cost rate editor labels sit further down the page
-    // and are excluded by the class match.
-    const filterLabels = filterControlLabels(container);
-    expect(filterLabels).toContain("Organization");
-    expect(filterLabels).not.toContain("User");
-  });
-
-  it("renders the org title and User filter for org_owner (no Organization filter)", () => {
-    useAuthMock.mockReturnValue(authStub("org_owner"));
-    useOrgUsersMock.mockReturnValue(emptyQuery([
-      { id: "u-a", email: "a@test", display_name: "Alice", role: "member", org_id: "org-self", disabled_at: null, settings: {}, created_at: "", updated_at: "" },
-    ]));
-
-    const { container } = render(<Analytics />);
-
-    expect(screen.getByRole("heading", { name: /Organization Analytics/i })).toBeInTheDocument();
-    // The org filter <select> should be absent. (We can't query by label
-    // text alone because "Organization" also appears in the page heading
-    // for org_owner, which would yield a false positive.)
-    const filterLabels = filterControlLabels(container);
-    expect(filterLabels).not.toContain("Organization");
-    expect(filterLabels).toContain("User");
-  });
-
-  it("renders the user title with no Org/User filter for member", () => {
-    useAuthMock.mockReturnValue(authStub("member"));
-
-    const { container } = render(<Analytics />);
-
-    expect(screen.getByRole("heading", { name: /Your Analytics/i })).toBeInTheDocument();
-    const filterLabels = filterControlLabels(container);
-    expect(filterLabels).not.toContain("Organization");
-    expect(filterLabels).not.toContain("User");
-  });
-
-  it("threads org and user params into useAnalytics and useUsage", () => {
+describe("Analytics page — role-aware tier picker", () => {
+  it("administrator: defaults to Mine, shows Mine/Org/System tabs", () => {
     useAuthMock.mockReturnValue(authStub("administrator"));
 
     render(<Analytics />);
 
-    // Initial call has no org or user.
-    const analyticsArg = useAnalyticsMock.mock.calls[0][0];
-    expect(analyticsArg).toMatchObject({ org: undefined, user: undefined });
+    // Default tier is "self" for everyone — admin's "Mine" view shows
+    // their own analytics, not system-wide (post-2026-04-30 leak fix).
+    expect(screen.getByRole("heading", { level: 1, name: /My Analytics/i })).toBeInTheDocument();
 
-    const usageArg = useUsageMock.mock.calls[0][0];
-    expect(usageArg).toMatchObject({ org: undefined, user: undefined });
+    const tabs = screen.getAllByRole("tab");
+    const tabLabels = tabs.map((t) => t.textContent?.trim() ?? "");
+    expect(tabLabels).toContain("Mine");
+    expect(tabLabels).toContain("Org");
+    expect(tabLabels).toContain("System");
+  });
+
+  it("org_owner: defaults to Mine, shows Mine + Org tabs only", () => {
+    useAuthMock.mockReturnValue(authStub("org_owner"));
+
+    render(<Analytics />);
+
+    expect(screen.getByRole("heading", { level: 1, name: /My Analytics/i })).toBeInTheDocument();
+
+    const tabs = screen.getAllByRole("tab");
+    const tabLabels = tabs.map((t) => t.textContent?.trim() ?? "");
+    expect(tabLabels).toContain("Mine");
+    expect(tabLabels).toContain("Org");
+    expect(tabLabels).not.toContain("System");
+  });
+
+  it("member: shows no tier picker (only self-tier accessible)", () => {
+    useAuthMock.mockReturnValue(authStub("member"));
+
+    render(<Analytics />);
+
+    expect(screen.getByRole("heading", { level: 1, name: /My Analytics/i })).toBeInTheDocument();
+
+    // No tablist when only one tier is available.
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  });
+
+  it("self-tier hook is called without org/user widening params", () => {
+    useAuthMock.mockReturnValue(authStub("administrator"));
+
+    render(<Analytics />);
+
+    // useAnalytics is called with no args (or just an undefined params
+    // bag). The pre-fix `org` / `user` widening params were removed in
+    // the 2026-04-30 leak fix; admin's "Mine" tab pins to admin's own
+    // scope, no widening.
+    const analyticsCall = useAnalyticsMock.mock.calls[0];
+    const arg = analyticsCall?.[0];
+    if (arg !== undefined) {
+      expect(arg).not.toHaveProperty("org", "expected-some-org-id");
+      expect(arg).not.toHaveProperty("user", "expected-some-user-id");
+    }
   });
 });

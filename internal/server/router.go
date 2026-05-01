@@ -55,6 +55,12 @@ type Handlers struct {
 	MeOAuthClients      http.HandlerFunc
 	MeOAuthClientRevoke http.HandlerFunc
 	MeChangePassword    http.HandlerFunc
+	// Self-tier system-pipeline observability — added 2026-04-30 so project
+	// owners can see their own dream cycles + enrichment queue items after
+	// the cross-tenant /v1/dreaming and /v1/enrichment routes moved under
+	// /v1/admin/.
+	MeDreaming   http.HandlerFunc
+	MeEnrichment http.HandlerFunc
 
 	// Org-scoped handlers
 	OrgUsers http.HandlerFunc
@@ -96,7 +102,11 @@ type Handlers struct {
 	IdPLogin    http.HandlerFunc
 	IdPCallback http.HandlerFunc
 
-	// Admin handlers
+	// Admin handlers — tier-A "self" for AdminDashboard / AdminActivity /
+	// AdminAnalytics / AdminUsage / AdminGraph / AdminNamespaces.
+	// Mounted at /v1/dashboard, /v1/activity, /v1/analytics, /v1/usage,
+	// /v1/graph, /v1/namespaces/tree. Self-scoped to caller (post-2026-04-30
+	// leak fix); admin sees own data only on these surfaces.
 	AdminSetupStatus http.HandlerFunc
 	AdminSetup       http.HandlerFunc
 	AdminDashboard   http.HandlerFunc
@@ -115,6 +125,23 @@ type Handlers struct {
 	AdminDatabase    http.HandlerFunc
 	AdminGraph       http.HandlerFunc
 	AdminDreaming    http.HandlerFunc
+
+	// Tier-B (org-aggregate) handlers at /v1/orgs/{org_id}/{dashboard,
+	// activity,analytics,usage}. Caller must be RoleOrgOwner+ of the org.
+	// Aggregate counts + distributions only; no row-level user/memory data,
+	// no content.
+	OrgDashboard http.HandlerFunc
+	OrgActivity  http.HandlerFunc
+	OrgAnalytics http.HandlerFunc
+	OrgUsage     http.HandlerFunc
+
+	// Tier-C (system-aggregate) handlers at /v1/admin/system/{dashboard,
+	// activity,analytics,usage}. RoleAdministrator only. System totals +
+	// per-org breakdown rows; no per-user, no per-memory, no content.
+	SystemDashboard http.HandlerFunc
+	SystemActivity  http.HandlerFunc
+	SystemAnalytics http.HandlerFunc
+	SystemUsage     http.HandlerFunc
 }
 
 // notImplemented returns a handler that responds with 501 Not Implemented.
@@ -264,36 +291,46 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Post("/passkeys/register/begin", handler(handlers.MePasskeyRegisterBegin))
 			r.Post("/passkeys/register/finish", handler(handlers.MePasskeyRegisterFinish))
 			r.Delete("/passkeys/{id}", handler(handlers.MePasskeyDelete))
+
+			// Self-tier dream + enrichment observability. Read-only;
+			// write operations remain admin-only at /v1/admin/dreaming
+			// and /v1/admin/enrichment. Wrapped in EnrichmentGate.
+			r.Group(func(r chi.Router) {
+				if config.EnrichmentGate != nil {
+					r.Use(config.EnrichmentGate)
+				}
+				r.HandleFunc("/dreaming", handler(handlers.MeDreaming))
+				r.HandleFunc("/dreaming/*", handler(handlers.MeDreaming))
+				r.Get("/enrichment", handler(handlers.MeEnrichment))
+			})
 		})
 
 		// Scoped data-viewing routes (all authenticated users — scope auto-applied).
+		// Tier-A self-data routes. Each handler self-scopes via SelfScope —
+		// admin sees admin's own data here, not system-wide. Cross-tenant
+		// drill-down moved to /v1/admin/system/* and /v1/orgs/{id}/* (the
+		// per-tier handler split is staged for follow-up; today these still
+		// use the legacy single-handler instances pinned to self-scope).
 		r.Get("/v1/dashboard", handler(handlers.AdminDashboard))
 		r.Get("/v1/activity", handler(handlers.AdminActivity))
 		r.Get("/v1/analytics", handler(handlers.AdminAnalytics))
 		r.Get("/v1/usage", handler(handlers.AdminUsage))
 		r.Get("/v1/graph", handler(handlers.AdminGraph))
 		r.Get("/v1/namespaces/tree", handler(handlers.AdminNamespaces))
-		// Enrichment + dreaming admin/monitoring endpoints are gated behind
-		// the enrichment-available signal — returns 503 unless all three
-		// provider slots are configured. /admin/providers is intentionally
-		// not gated; admins must reach it to configure the slots.
-		r.Group(func(r chi.Router) {
-			if config.EnrichmentGate != nil {
-				r.Use(config.EnrichmentGate)
-			}
-			r.HandleFunc("/v1/enrichment", handler(handlers.AdminEnrichment))
-			r.HandleFunc("/v1/enrichment/*", handler(handlers.AdminEnrichment))
-			r.HandleFunc("/v1/dreaming", handler(handlers.AdminDreaming))
-			r.HandleFunc("/v1/dreaming/*", handler(handlers.AdminDreaming))
-		})
 
 		// Org-scoped routes.
 		r.Route("/v1/orgs/{org_id}", func(r chi.Router) {
 			r.Use(api.OrgAccessMiddleware())
 
-			// Data viewing (member+ in org).
-			r.Get("/analytics", handler(handlers.AdminAnalytics))
-			r.Get("/usage", handler(handlers.AdminUsage))
+			// Tier-B aggregate data viewing — handlers gate on
+			// requireOrgOwner internally; admin passes via the
+			// OrgAccessMiddleware admin short-circuit. Each handler
+			// returns aggregate counts + distributions; no row-level
+			// user/memory data, no content fields.
+			r.Get("/dashboard", handler(handlers.OrgDashboard))
+			r.Get("/activity", handler(handlers.OrgActivity))
+			r.Get("/analytics", handler(handlers.OrgAnalytics))
+			r.Get("/usage", handler(handlers.OrgUsage))
 
 			// Management (org_owner+).
 			r.Group(func(r chi.Router) {
@@ -307,14 +344,29 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			})
 
 		// Admin routes (require administrator role).
+		//
+		// 2026-04-30 leak fix:
+		//   - /v1/admin/projects deleted: admins use the self-tier
+		//     /v1/me/projects like every other role. Cross-tenant project
+		//     listing exposed user-authored project names + descriptions
+		//     and was a privacy leak.
+		//   - /v1/admin/oauth retained because the same handler also serves
+		//     the IdP-config admin sub-paths (/admin/oauth/idp/*); only the
+		//     /admin/oauth/clients/* sub-path is the cross-tenant OAuth-client
+		//     listing leak. Frontend now calls /me/oauth-clients for that;
+		//     a follow-up will split the handler so the /clients sub-path
+		//     can be removed cleanly.
+		//   - /v1/dreaming + /v1/enrichment moved here from the authenticated-
+		//     public group. Today they were callable by any authenticated
+		//     user and returned system-wide cycle/queue data — admin-gated
+		//     now, since these are system-ops surfaces (admin sees full
+		//     pipeline visibility for debugging, no other role does).
 		r.Route("/v1/admin", func(r chi.Router) {
 			r.Use(auth.RequireRole(auth.RoleAdministrator))
 			r.HandleFunc("/orgs", handler(handlers.AdminOrgs))
 			r.HandleFunc("/orgs/*", handler(handlers.AdminOrgs))
 			r.HandleFunc("/users", handler(handlers.AdminUsers))
 			r.HandleFunc("/users/*", handler(handlers.AdminUsers))
-			r.HandleFunc("/projects", handler(handlers.AdminProjects))
-			r.HandleFunc("/projects/*", handler(handlers.AdminProjects))
 			r.HandleFunc("/providers", handler(handlers.AdminProviders))
 			r.HandleFunc("/providers/*", handler(handlers.AdminProviders))
 			r.HandleFunc("/settings", handler(handlers.AdminSettings))
@@ -324,6 +376,28 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/webhooks/*", handler(handlers.AdminWebhooks))
 			r.HandleFunc("/database", handler(handlers.AdminDatabase))
 			r.HandleFunc("/database/*", handler(handlers.AdminDatabase))
+
+			// Tier-C (system-aggregate) data views — admin-only by virtue
+			// of being inside this /v1/admin route group. System totals +
+			// per-org breakdown rows; no per-user, no per-memory, no
+			// content.
+			r.Get("/system/dashboard", handler(handlers.SystemDashboard))
+			r.Get("/system/activity", handler(handlers.SystemActivity))
+			r.Get("/system/analytics", handler(handlers.SystemAnalytics))
+			r.Get("/system/usage", handler(handlers.SystemUsage))
+
+			// System-ops pipelines (admin-only, full cross-tenant
+			// observability for debugging). Wrapped in EnrichmentGate so
+			// the routes return 503 until all provider slots are configured.
+			r.Group(func(r chi.Router) {
+				if config.EnrichmentGate != nil {
+					r.Use(config.EnrichmentGate)
+				}
+				r.HandleFunc("/enrichment", handler(handlers.AdminEnrichment))
+				r.HandleFunc("/enrichment/*", handler(handlers.AdminEnrichment))
+				r.HandleFunc("/dreaming", handler(handlers.AdminDreaming))
+				r.HandleFunc("/dreaming/*", handler(handlers.AdminDreaming))
+			})
 		})
 	})
 

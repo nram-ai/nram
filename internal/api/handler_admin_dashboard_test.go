@@ -172,18 +172,18 @@ func TestActivityReturnsEvents(t *testing.T) {
 	store := &mockDashboardStore{
 		events: []ActivityEvent{
 			{
-				ID:        "evt-1",
-				Type:      "store",
-				Summary:   "Stored memory abc",
-				ProjectID: &projID,
-				UserID:    &userID,
-				Timestamp: ts,
+				ID:          "evt-1",
+				Type:        "store",
+				LengthChars: 17,
+				ProjectID:   &projID,
+				UserID:      &userID,
+				Timestamp:   ts,
 			},
 			{
-				ID:        "evt-2",
-				Type:      "recall",
-				Summary:   "Recalled memories for query",
-				Timestamp: ts.Add(-time.Minute),
+				ID:          "evt-2",
+				Type:        "recall",
+				LengthChars: 0,
+				Timestamp:   ts.Add(-time.Minute),
 			},
 		},
 	}
@@ -307,60 +307,26 @@ func TestActivityLimitCappedAt100(t *testing.T) {
 }
 
 // TestDashboardRoleTiers exercises the scope rule on /v1/dashboard and
-// /v1/activity:
-//   - administrator: global by default; URL path or ?org= drills into one org.
-//   - org_owner / member / readonly / service: pinned to own org.
-func TestDashboardRoleTiers(t *testing.T) {
+// TestDashboardSelfScope verifies the post-fix tier-A semantics: /v1/dashboard
+// and /v1/activity always pin to the caller's own scope. Widening attempts
+// via ?org= or URL-path org_id are ignored regardless of role. Cross-tenant
+// dashboards moved to /v1/admin/system/* and /v1/orgs/{id}/*.
+func TestDashboardSelfScope(t *testing.T) {
 	adminOrg := uuid.New()
 	otherOrg := uuid.New()
 	adminUser := uuid.New()
-	ownerOrg := uuid.New()
-	ownerUser := uuid.New()
-	memberOrg := uuid.New()
-	memberUser := uuid.New()
 
 	cases := []struct {
-		name           string
-		auth           *auth.AuthContext
-		urlOrgID       string
-		query          string
-		wantOrgID      *uuid.UUID
-		wantOrgIDIsNil bool
+		name     string
+		auth     *auth.AuthContext
+		query    string
+		urlOrgID string
 	}{
-		{
-			name:           "admin no filter is global",
-			auth:           &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			wantOrgIDIsNil: true,
-		},
-		{
-			name:      "admin org query drills in",
-			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			query:     "org=" + otherOrg.String(),
-			wantOrgID: &otherOrg,
-		},
-		{
-			name:      "admin URL path drills in",
-			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			urlOrgID:  otherOrg.String(),
-			wantOrgID: &otherOrg,
-		},
-		{
-			name:      "org_owner widening attempt blocked",
-			auth:      &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
-			query:     "org=" + otherOrg.String(),
-			wantOrgID: &ownerOrg,
-		},
-		{
-			name:      "member pinned to own org",
-			auth:      &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleMember},
-			query:     "org=" + otherOrg.String(),
-			wantOrgID: &memberOrg,
-		},
-		{
-			name:      "readonly pinned to own org",
-			auth:      &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleReadonly},
-			wantOrgID: &memberOrg,
-		},
+		{name: "admin alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}},
+		{name: "admin ?org=other ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, query: "org=" + otherOrg.String()},
+		{name: "admin URL path ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, urlOrgID: otherOrg.String()},
+		{name: "org_owner alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleOrgOwner}},
+		{name: "member alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleMember}},
 	}
 
 	for _, tc := range cases {
@@ -388,12 +354,8 @@ func TestDashboardRoleTiers(t *testing.T) {
 				t.Fatalf("expected 200, got %d", w.Code)
 			}
 
-			if tc.wantOrgIDIsNil {
-				if store.lastOrgID != nil {
-					t.Errorf("expected OrgID nil (global), got %v", store.lastOrgID)
-				}
-			} else if store.lastOrgID == nil || *store.lastOrgID != *tc.wantOrgID {
-				t.Errorf("expected OrgID %v, got %v", tc.wantOrgID, store.lastOrgID)
+			if store.lastOrgID == nil || *store.lastOrgID != tc.auth.OrgID {
+				t.Errorf("expected OrgID = caller's own org %v, got %v", tc.auth.OrgID, store.lastOrgID)
 			}
 		})
 
@@ -421,12 +383,8 @@ func TestDashboardRoleTiers(t *testing.T) {
 				t.Fatalf("expected 200, got %d", w.Code)
 			}
 
-			if tc.wantOrgIDIsNil {
-				if store.lastOrgID != nil {
-					t.Errorf("expected OrgID nil (global), got %v", store.lastOrgID)
-				}
-			} else if store.lastOrgID == nil || *store.lastOrgID != *tc.wantOrgID {
-				t.Errorf("expected OrgID %v, got %v", tc.wantOrgID, store.lastOrgID)
+			if store.lastOrgID == nil || *store.lastOrgID != tc.auth.OrgID {
+				t.Errorf("expected OrgID = caller's own org %v, got %v", tc.auth.OrgID, store.lastOrgID)
 			}
 		})
 	}

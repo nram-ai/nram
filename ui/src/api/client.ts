@@ -110,12 +110,18 @@ export interface DashboardData {
   enrichment_queue?: EnrichmentQueueStats;
 }
 
+/**
+ * Privacy: this interface intentionally does NOT carry a memory content
+ * preview. The previous design returned the first 100 chars of memory.content
+ * in `summary`, which leaked content into the dashboard UI. Length is exposed
+ * as a size hint instead.
+ */
 export interface ActivityEvent {
   id: string;
   type: string;
-  summary: string;
   project_id?: string;
   user_id?: string;
+  length_chars?: number;
   timestamp: string;
 }
 
@@ -648,12 +654,114 @@ export interface Webhook {
   updated_at: string;
 }
 
+/**
+ * Privacy: this interface intentionally does NOT carry the memory body.
+ * The previous design returned `content`, leaking memory text into the
+ * dashboard layer. The backend now returns `length_chars` as a size hint
+ * and the body stays in the database.
+ */
 export interface MemoryRankItem {
   id: string;
-  content: string;
   access_count: number;
   project_id?: string | null;
+  length_chars: number;
   created_at: string;
+}
+
+// Aggregate types for tier-B (org) and tier-C (system) responses. See
+// internal/api/aggregate_types.go for the Go-side authoritative shapes.
+// These intentionally carry NO content fields — only counts, distributions,
+// and tenancy-metadata labels (org name, project name, type label).
+
+export interface HistogramBucket {
+  range: string;
+  count: number;
+}
+
+export interface DailyBucket {
+  date: string;
+  count: number;
+}
+
+export interface TypeBucket {
+  type: string;
+  count: number;
+}
+
+export interface OrgAggregate {
+  org_id: string;
+  org_name: string;
+  total_memories: number;
+  total_users: number;
+  total_projects: number;
+  total_entities: number;
+}
+
+export interface ProjectAggregate {
+  project_id: string;
+  project_name: string;
+  total_memories: number;
+}
+
+export interface OrgAnalyticsData {
+  memory_counts: AnalyticsData["memory_counts"];
+  recall_distribution: HistogramBucket[];
+  enrichment_stats: AnalyticsData["enrichment_stats"];
+  project_breakdown: ProjectAggregate[];
+  entity_type_histogram: TypeBucket[];
+  relationship_type_histogram: TypeBucket[];
+}
+
+export interface SystemAnalyticsData {
+  total_memory_counts: AnalyticsData["memory_counts"];
+  recall_distribution: HistogramBucket[];
+  enrichment_stats: AnalyticsData["enrichment_stats"];
+  org_breakdown: OrgAggregate[];
+  entity_type_histogram: TypeBucket[];
+  relationship_type_histogram: TypeBucket[];
+}
+
+export interface OrgDashboardData {
+  total_memories: number;
+  total_projects: number;
+  total_users: number;
+  total_entities: number;
+  memories_by_project: ProjectMemoryCount[];
+  enrichment_queue?: EnrichmentQueueStats;
+}
+
+export interface SystemDashboardData {
+  total_memories: number;
+  total_projects: number;
+  total_users: number;
+  total_entities: number;
+  total_organizations: number;
+  org_breakdown: OrgAggregate[];
+  enrichment_queue?: EnrichmentQueueStats;
+}
+
+export interface AuditEvent {
+  id: string;
+  occurred_at: string;
+  actor_user_id?: string;
+  actor_role?: string;
+  action: string;
+  target_type?: string;
+  target_id?: string;
+  target_org_id?: string;
+  source_ip?: string;
+  user_agent?: string;
+  details?: unknown;
+}
+
+export interface OrgActivityResponse {
+  daily_creation: DailyBucket[];
+  audit_events: AuditEvent[];
+}
+
+export interface SystemActivityResponse {
+  daily_creation: DailyBucket[];
+  audit_events: AuditEvent[];
 }
 
 export interface AnalyticsData {
@@ -840,6 +948,16 @@ export interface DreamStatusResponse {
   dirty_count: number;
   stuck_count: number;
   recent_cycles: DreamCycle[];
+}
+
+// Per-project dream status, returned by /v1/me/dreaming?project_id=...
+// Distinct from system-wide DreamStatusResponse: self-tier callers see
+// only their own project's state, with last_dream + full cycle list.
+export interface DreamProjectStatusResponse {
+  enabled: boolean;
+  dirty: boolean;
+  last_dream: DreamCycle | null;
+  cycles: DreamCycle[];
 }
 
 export interface DreamAbandonResponse {
@@ -1087,10 +1205,13 @@ export const adminAPI = {
   revokeAPIKey: (userId: string, keyId: string) =>
     request<void>("DELETE", `/admin/users/${userId}/api-keys/${keyId}`),
 
-  // Projects
-  listProjects: () => request<{ data: Project[] }>("GET", "/admin/projects").then(r => r.data),
+  // Projects — repointed from /admin/projects (deleted) to /me/projects in
+  // the 2026-04-30 leak fix. Cross-tenant project listings exposed
+  // user-authored project names + descriptions and were a privacy leak;
+  // admins now see and manage their own projects like every other role.
+  listProjects: () => request<{ data: Project[] }>("GET", "/me/projects").then(r => r.data),
   createProject: (data: AdminCreateProjectRequest) =>
-    request<Project>("POST", "/admin/projects", data),
+    request<Project>("POST", "/me/projects", data),
   // Provider slots — backend returns { embedding: {...}, fact: {...}, entity: {...} }
   getProviderSlots: () =>
     request<ProviderConfigResponse>("GET", "/admin/providers").then((r) => {
@@ -1136,18 +1257,15 @@ export const adminAPI = {
       `/admin/webhooks/${id}/test`,
     ),
 
-  // Analytics
-  getAnalytics: (params?: { org?: string; user?: string }) => {
+  // Analytics — tier-A self-scoped. The pre-fix `org` and `user` widening
+  // params were removed; the server ignores them now (resolveAdminScope is
+  // gone). Use orgAPI.getAnalytics(orgId) or systemAPI.getAnalytics() for
+  // wider tiers. Org/user filters in the UI must drive tier selection,
+  // not query-string widening.
+  getAnalytics: () =>
+    request<AnalyticsData>("GET", "/analytics"),
+  getUsage: (params?: { project?: string; from?: string; to?: string; group_by?: UsageGroupBy; success_only?: boolean }) => {
     const sp = new URLSearchParams();
-    if (params?.org) sp.set("org", params.org);
-    if (params?.user) sp.set("user", params.user);
-    const qs = sp.toString();
-    return request<AnalyticsData>("GET", `/analytics${qs ? `?${qs}` : ""}`);
-  },
-  getUsage: (params?: { org?: string; user?: string; project?: string; from?: string; to?: string; group_by?: UsageGroupBy; success_only?: boolean }) => {
-    const sp = new URLSearchParams();
-    if (params?.org) sp.set("org", params.org);
-    if (params?.user) sp.set("user", params.user);
     if (params?.project) sp.set("project", params.project);
     if (params?.from) sp.set("from", params.from);
     if (params?.to) sp.set("to", params.to);
@@ -1172,38 +1290,38 @@ export const adminAPI = {
 
   // Dreaming
   getDreamingStatus: () =>
-    request<DreamStatusResponse>("GET", "/dreaming"),
+    request<DreamStatusResponse>("GET", "/admin/dreaming"),
   getDreamingCycles: (projectId?: string) => {
     const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
-    return request<DreamCycle[]>("GET", `/dreaming/cycles${qs}`);
+    return request<DreamCycle[]>("GET", `/admin/dreaming/cycles${qs}`);
   },
   getDreamingCycleDetail: (cycleId: string) =>
-    request<DreamCycleDetail>("GET", `/dreaming/cycles/${cycleId}`),
+    request<DreamCycleDetail>("GET", `/admin/dreaming/cycles/${cycleId}`),
   setDreamingEnabled: (enabled: boolean) =>
-    request<DreamEnableResponse>("POST", "/dreaming/enable", { enabled }),
+    request<DreamEnableResponse>("POST", "/admin/dreaming/enable", { enabled }),
   setProjectDreamingEnabled: (projectId: string, enabled: boolean) =>
-    request<{ project_id: string; enabled: boolean }>("POST", "/dreaming/project/enable", {
+    request<{ project_id: string; enabled: boolean }>("POST", "/admin/dreaming/project/enable", {
       project_id: projectId,
       enabled,
     }),
   rollbackDreamCycle: (cycleId: string) =>
-    request<DreamRollbackResponse>("POST", "/dreaming/rollback", { cycle_id: cycleId }),
+    request<DreamRollbackResponse>("POST", "/admin/dreaming/rollback", { cycle_id: cycleId }),
   abandonDreamCycle: (cycleId: string) =>
-    request<DreamAbandonResponse>("POST", `/dreaming/cycles/${cycleId}/abandon`),
+    request<DreamAbandonResponse>("POST", `/admin/dreaming/cycles/${cycleId}/abandon`),
 
   // Enrichment
   getEnrichmentStatus: () =>
-    request<EnrichmentQueueStatus>("GET", "/enrichment"),
+    request<EnrichmentQueueStatus>("GET", "/admin/enrichment"),
   retryEnrichment: (ids?: string[]) =>
-    request<EnrichmentRetryResponse>("POST", "/enrichment/retry", { ids: ids ?? [] }),
+    request<EnrichmentRetryResponse>("POST", "/admin/enrichment/retry", { ids: ids ?? [] }),
   pauseEnrichment: (paused: boolean) =>
-    request<EnrichmentPauseResponse>("POST", "/enrichment/pause", { paused }),
+    request<EnrichmentPauseResponse>("POST", "/admin/enrichment/pause", { paused }),
   testExtractionPrompt: (
     type: "fact" | "entity",
     prompt: string,
     sampleInput: string,
   ) =>
-    request<ExtractionTestResult>("POST", "/enrichment/test-prompt", {
+    request<ExtractionTestResult>("POST", "/admin/enrichment/test-prompt", {
       type,
       prompt,
       sample_input: sampleInput,
@@ -1236,13 +1354,21 @@ export const adminAPI = {
     request<void>("DELETE", `/admin/oauth/idp/${id}`),
 };
 
+/**
+ * Per `service/update.go`: a content change creates a new memory row chained
+ * to the old via SupersededBy and returns the NEW memory's id. Tags/metadata-
+ * only updates mutate in place and id == previous_memory_id. previous_memory_id
+ * always echoes the request's memory id so callers can correlate.
+ */
 export interface UpdateMemoryResponse {
   id: string;
+  previous_memory_id: string;
   project_id: string;
   content: string;
   tags: string[];
   previous_content?: string;
   re_embedded: boolean;
+  superseded: boolean;
   latency_ms: number;
 }
 
@@ -1398,6 +1524,29 @@ export const meAPI = {
 
   recall: (body: RecallRequest) =>
     request<RecallResponse>("POST", "/me/memories/recall", body),
+
+  // Self-tier dreaming observability. Read-only — write operations
+  // (enable, abandon, rollback, project/enable) remain admin-only at
+  // /admin/dreaming/*. Status requires a project_id so the caller scopes
+  // to a project they own; cycles list is also project-scoped.
+  getDreamingProjectStatus: (projectId: string) =>
+    request<DreamProjectStatusResponse>(
+      "GET",
+      `/me/dreaming?project_id=${encodeURIComponent(projectId)}`,
+    ),
+  getDreamingCycles: (projectId: string) =>
+    request<DreamCycle[]>(
+      "GET",
+      `/me/dreaming/cycles?project_id=${encodeURIComponent(projectId)}`,
+    ),
+  getDreamingCycleDetail: (cycleId: string) =>
+    request<DreamCycleDetail>("GET", `/me/dreaming/cycles/${cycleId}`),
+
+  // Self-tier enrichment queue: caller's own queue items + caller-scoped
+  // counts. Write operations (retry, pause, test-prompt) remain admin-only
+  // at /admin/enrichment/*.
+  getEnrichmentStatus: () =>
+    request<EnrichmentQueueStatus>("GET", "/me/enrichment"),
 };
 
 // --- Org API (org-scoped endpoints) ---
@@ -1435,7 +1584,7 @@ export const orgAPI = {
     request<void>("DELETE", `/orgs/${orgId}/users/${userId}/api-keys/${keyId}`),
 
   getAnalytics: (orgId: string) =>
-    request<AnalyticsData>("GET", `/orgs/${orgId}/analytics`),
+    request<OrgAnalyticsData>("GET", `/orgs/${orgId}/analytics`),
   getUsage: (orgId: string, params?: { from?: string; to?: string; group_by?: string }) => {
     const sp = new URLSearchParams();
     if (params?.from) sp.set("from", params.from);
@@ -1444,6 +1593,11 @@ export const orgAPI = {
     const qs = sp.toString();
     return request<UsageReport>("GET", `/orgs/${orgId}/usage${qs ? `?${qs}` : ""}`);
   },
+  // Tier-B (org-aggregate) dashboard + activity. Added 2026-04-30 leak fix.
+  getDashboard: (orgId: string) =>
+    request<OrgDashboardData>("GET", `/orgs/${orgId}/dashboard`),
+  getActivity: (orgId: string) =>
+    request<OrgActivityResponse>("GET", `/orgs/${orgId}/activity`),
 
   listOrgIdPs: (orgId: string) =>
     request<IdPConfig[]>("GET", `/orgs/${orgId}/idp`),
@@ -1480,4 +1634,27 @@ export interface HealthResponse {
 
 export const healthAPI = {
   check: () => request<HealthResponse>("GET", "/health"),
+};
+
+// --- System API (tier-C: admin-only system aggregate views) ---
+//
+// Mounted server-side at /v1/admin/system/*. RoleAdministrator only;
+// non-admin callers get 403. Returns system totals + per-org breakdown
+// rows (no per-user, no per-memory, no content). See aggregate_types.go
+// for the authoritative shapes.
+export const systemAPI = {
+  getDashboard: () =>
+    request<SystemDashboardData>("GET", "/admin/system/dashboard"),
+  getActivity: () =>
+    request<SystemActivityResponse>("GET", "/admin/system/activity"),
+  getAnalytics: () =>
+    request<SystemAnalyticsData>("GET", "/admin/system/analytics"),
+  getUsage: (params?: { from?: string; to?: string; group_by?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.from) sp.set("from", params.from);
+    if (params?.to) sp.set("to", params.to);
+    if (params?.group_by) sp.set("group_by", params.group_by);
+    const qs = sp.toString();
+    return request<UsageReport>("GET", `/admin/system/usage${qs ? `?${qs}` : ""}`);
+  },
 };

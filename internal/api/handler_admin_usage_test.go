@@ -112,8 +112,8 @@ func TestAdminUsageAllFilters(t *testing.T) {
 		"&group_by=user"
 
 	req := httptest.NewRequest(http.MethodGet, url, nil)
-	// Administrator with no ?org= or URL path — global scope (OrgID nil).
-	ac := &auth.AuthContext{UserID: uuid.New(), OrgID: orgID, Role: auth.RoleAdministrator}
+	adminUser := uuid.New()
+	ac := &auth.AuthContext{UserID: adminUser, OrgID: orgID, Role: auth.RoleAdministrator}
 	req = req.WithContext(auth.WithContext(req.Context(), ac))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -122,11 +122,12 @@ func TestAdminUsageAllFilters(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	if store.lastFilter.OrgID != nil {
-		t.Errorf("expected nil OrgID for admin without ?org=, got %v", store.lastFilter.OrgID)
+	// Self-tier post-fix: admin sees their own org+user, not global.
+	if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != orgID {
+		t.Errorf("expected OrgID = admin's own org %v, got %v", orgID, store.lastFilter.OrgID)
 	}
-	if store.lastFilter.UserID != nil {
-		t.Errorf("expected nil UserID for admin, got %v", store.lastFilter.UserID)
+	if store.lastFilter.UserID == nil || *store.lastFilter.UserID != adminUser {
+		t.Errorf("expected UserID = admin's own user %v, got %v", adminUser, store.lastFilter.UserID)
 	}
 	if store.lastFilter.ProjectID == nil || *store.lastFilter.ProjectID != projectID {
 		t.Errorf("expected ProjectID %s, got %v", projectID, store.lastFilter.ProjectID)
@@ -287,87 +288,29 @@ func TestAdminUsageFromToDates(t *testing.T) {
 	}
 }
 
-// TestAdminUsageRoleTiers exercises the three-tier scope rule:
-//
-//   - administrator: global by default; URL path > ?org= drills in; ?user= drills further.
-//   - org_owner: pinned to own org (cannot widen); ?user= optionally drills into one user.
-//   - member/readonly/service: pinned to own org and own user (widening attempts ignored).
-func TestAdminUsageRoleTiers(t *testing.T) {
+// TestAdminUsageSelfScope verifies the post-fix tier-A semantics: /v1/usage
+// always pins to the caller's own scope. Widening attempts via ?org=, ?user=,
+// or URL-path org_id are ignored regardless of role. The widening capability
+// was removed in the 2026-04-30 leak fix; admin's cross-tenant view moves to
+// /v1/admin/system/usage and /v1/orgs/{id}/usage.
+func TestAdminUsageSelfScope(t *testing.T) {
 	adminOrg := uuid.New()
 	otherOrg := uuid.New()
 	adminUser := uuid.New()
-	ownerOrg := uuid.New()
-	ownerUser := uuid.New()
-	memberOrg := uuid.New()
-	memberUser := uuid.New()
-	drillUser := uuid.New()
+	otherUser := uuid.New()
 
 	cases := []struct {
-		name           string
-		auth           *auth.AuthContext
-		urlOrgID       string // injected as chi URL param when non-empty
-		query          string
-		wantOrgID      *uuid.UUID
-		wantUserID     *uuid.UUID
-		wantOrgIDIsNil bool
+		name     string
+		auth     *auth.AuthContext
+		query    string
+		urlOrgID string
 	}{
-		{
-			name:           "admin no filter is global",
-			auth:           &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			wantOrgIDIsNil: true,
-		},
-		{
-			name:      "admin org query drills in",
-			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			query:     "org=" + otherOrg.String(),
-			wantOrgID: &otherOrg,
-		},
-		{
-			name:       "admin org and user drill",
-			auth:       &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			query:      "org=" + otherOrg.String() + "&user=" + drillUser.String(),
-			wantOrgID:  &otherOrg,
-			wantUserID: &drillUser,
-		},
-		{
-			name:      "admin URL path overrides query",
-			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			urlOrgID:  otherOrg.String(),
-			query:     "org=" + adminOrg.String(),
-			wantOrgID: &otherOrg,
-		},
-		{
-			name:      "org_owner widening attempt blocked",
-			auth:      &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
-			query:     "org=" + otherOrg.String(),
-			wantOrgID: &ownerOrg,
-		},
-		{
-			name:       "org_owner user drill",
-			auth:       &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
-			query:      "user=" + drillUser.String(),
-			wantOrgID:  &ownerOrg,
-			wantUserID: &drillUser,
-		},
-		{
-			name:       "member pinned to self ignores widening",
-			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleMember},
-			query:      "org=" + otherOrg.String() + "&user=" + drillUser.String(),
-			wantOrgID:  &memberOrg,
-			wantUserID: &memberUser,
-		},
-		{
-			name:       "readonly pinned to self",
-			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleReadonly},
-			wantOrgID:  &memberOrg,
-			wantUserID: &memberUser,
-		},
-		{
-			name:       "service pinned to self",
-			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleService},
-			wantOrgID:  &memberOrg,
-			wantUserID: &memberUser,
-		},
+		{name: "admin alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}},
+		{name: "admin ?org=other ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, query: "org=" + otherOrg.String()},
+		{name: "admin ?user=other ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, query: "user=" + otherUser.String()},
+		{name: "admin URL path ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, urlOrgID: otherOrg.String()},
+		{name: "org_owner alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleOrgOwner}},
+		{name: "member alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleMember}},
 	}
 
 	for _, tc := range cases {
@@ -375,7 +318,7 @@ func TestAdminUsageRoleTiers(t *testing.T) {
 			store := &mockUsageStore{report: defaultUsageReport()}
 			h := NewAdminUsageHandler(UsageConfig{Store: store})
 
-			url := "/v1/admin/usage"
+			url := "/v1/usage"
 			if tc.query != "" {
 				url += "?" + tc.query
 			}
@@ -395,46 +338,40 @@ func TestAdminUsageRoleTiers(t *testing.T) {
 				t.Fatalf("expected 200, got %d", w.Code)
 			}
 
-			if tc.wantOrgIDIsNil {
-				if store.lastFilter.OrgID != nil {
-					t.Errorf("expected OrgID nil (global), got %v", store.lastFilter.OrgID)
-				}
-			} else if tc.wantOrgID != nil {
-				if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != *tc.wantOrgID {
-					t.Errorf("expected OrgID %v, got %v", tc.wantOrgID, store.lastFilter.OrgID)
-				}
+			// Self-tier: caller's own org+user, no exceptions.
+			if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != tc.auth.OrgID {
+				t.Errorf("expected OrgID = caller's org %v, got %v", tc.auth.OrgID, store.lastFilter.OrgID)
 			}
-
-			if tc.wantUserID == nil {
-				if store.lastFilter.UserID != nil {
-					t.Errorf("expected UserID nil, got %v", store.lastFilter.UserID)
-				}
-			} else {
-				if store.lastFilter.UserID == nil || *store.lastFilter.UserID != *tc.wantUserID {
-					t.Errorf("expected UserID %v, got %v", tc.wantUserID, store.lastFilter.UserID)
-				}
+			if store.lastFilter.UserID == nil || *store.lastFilter.UserID != tc.auth.UserID {
+				t.Errorf("expected UserID = caller's user %v, got %v", tc.auth.UserID, store.lastFilter.UserID)
 			}
 		})
 	}
 }
 
-func TestAdminUsageInvalidUUIDIgnored(t *testing.T) {
+// TestAdminUsageQueryParamsIgnoredOnSelfTier verifies that the post-fix
+// self-tier handler ignores ?org= entirely (regardless of well-formedness).
+// The widening param is gone; only the auth context determines scope.
+func TestAdminUsageQueryParamsIgnoredOnSelfTier(t *testing.T) {
 	store := &mockUsageStore{report: defaultUsageReport()}
 	h := NewAdminUsageHandler(UsageConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/usage?org=not-a-uuid", nil)
-	// Admin context — invalid UUID should be silently ignored.
-	ac := &auth.AuthContext{UserID: uuid.New(), Role: auth.RoleAdministrator}
-	req = req.WithContext(auth.WithContext(req.Context(), ac))
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
+	someOrg := uuid.New()
+	for _, q := range []string{"org=not-a-uuid", "org=" + uuid.New().String(), ""} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/usage?"+q, nil)
+		adminUser := uuid.New()
+		ac := &auth.AuthContext{UserID: adminUser, OrgID: someOrg, Role: auth.RoleAdministrator}
+		req = req.WithContext(auth.WithContext(req.Context(), ac))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
 
-	// Invalid UUID should be silently ignored — OrgID remains nil.
-	if store.lastFilter.OrgID != nil {
-		t.Errorf("expected OrgID to be nil for invalid UUID, got %v", store.lastFilter.OrgID)
+		// Always pinned to caller's own org.
+		if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != someOrg {
+			t.Errorf("query %q: expected OrgID = caller's org, got %v", q, store.lastFilter.OrgID)
+		}
 	}
 }

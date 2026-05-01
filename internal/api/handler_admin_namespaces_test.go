@@ -232,54 +232,26 @@ func TestAdminNamespacesTreeWrongMethod(t *testing.T) {
 	}
 }
 
-// TestAdminNamespacesTreeRoleTiers exercises the same scope rule as
-// /v1/dashboard and /v1/activity: admins see the global tree by default;
-// non-admins see only their own org's subtree.
-func TestAdminNamespacesTreeRoleTiers(t *testing.T) {
+// TestAdminNamespacesTreeSelfScope verifies the post-fix tier-A semantics:
+// /v1/namespaces/tree always pins to the caller's own org subtree. Widening
+// attempts are ignored. Cross-tenant namespace inspection moves to
+// /v1/admin/orgs (tenancy listing) and the per-org dashboard.
+func TestAdminNamespacesTreeSelfScope(t *testing.T) {
 	adminOrg := uuid.New()
 	otherOrg := uuid.New()
 	adminUser := uuid.New()
-	ownerOrg := uuid.New()
-	ownerUser := uuid.New()
-	memberOrg := uuid.New()
-	memberUser := uuid.New()
 
 	cases := []struct {
-		name           string
-		auth           *auth.AuthContext
-		urlOrgID       string
-		query          string
-		wantOrgID      *uuid.UUID
-		wantOrgIDIsNil bool
+		name     string
+		auth     *auth.AuthContext
+		query    string
+		urlOrgID string
 	}{
-		{
-			name:           "admin no filter is global",
-			auth:           &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			wantOrgIDIsNil: true,
-		},
-		{
-			name:      "admin org query drills in",
-			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			query:     "org=" + otherOrg.String(),
-			wantOrgID: &otherOrg,
-		},
-		{
-			name:      "admin URL path drills in",
-			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			urlOrgID:  otherOrg.String(),
-			wantOrgID: &otherOrg,
-		},
-		{
-			name:      "org_owner widening attempt blocked",
-			auth:      &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
-			query:     "org=" + otherOrg.String(),
-			wantOrgID: &ownerOrg,
-		},
-		{
-			name:      "member pinned to own org",
-			auth:      &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleMember},
-			wantOrgID: &memberOrg,
-		},
+		{name: "admin alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}},
+		{name: "admin ?org=other ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, query: "org=" + otherOrg.String()},
+		{name: "admin URL path ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, urlOrgID: otherOrg.String()},
+		{name: "org_owner alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleOrgOwner}},
+		{name: "member alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleMember}},
 	}
 
 	for _, tc := range cases {
@@ -307,12 +279,8 @@ func TestAdminNamespacesTreeRoleTiers(t *testing.T) {
 				t.Fatalf("expected 200, got %d", w.Code)
 			}
 
-			if tc.wantOrgIDIsNil {
-				if store.lastOrgID != nil {
-					t.Errorf("expected OrgID nil (global), got %v", store.lastOrgID)
-				}
-			} else if store.lastOrgID == nil || *store.lastOrgID != *tc.wantOrgID {
-				t.Errorf("expected OrgID %v, got %v", tc.wantOrgID, store.lastOrgID)
+			if store.lastOrgID == nil || *store.lastOrgID != tc.auth.OrgID {
+				t.Errorf("expected OrgID = caller's own org %v, got %v", tc.auth.OrgID, store.lastOrgID)
 			}
 		})
 	}

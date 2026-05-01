@@ -68,13 +68,19 @@ type createOAuthClientResponse struct {
 
 // NewMeAPIKeysHandler returns an http.HandlerFunc that handles
 // GET /v1/me/api-keys (list) and POST /v1/me/api-keys (create).
-func NewMeAPIKeysHandler(keys APIKeyManager) http.HandlerFunc {
+// audit is variadic for backward compat with existing tests; pass at most
+// one. When set, an audit event is appended after each successful create.
+func NewMeAPIKeysHandler(keys APIKeyManager, audit ...AuditStore) http.HandlerFunc {
+	var auditStore AuditStore
+	if len(audit) > 0 {
+		auditStore = audit[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			handleListAPIKeys(w, r, keys)
 		case http.MethodPost:
-			handleCreateAPIKey(w, r, keys)
+			handleCreateAPIKey(w, r, keys, auditStore)
 		default:
 			w.Header().Set("Allow", "GET, POST")
 			WriteError(w, &APIError{
@@ -108,7 +114,7 @@ func handleListAPIKeys(w http.ResponseWriter, r *http.Request, keys APIKeyManage
 	})
 }
 
-func handleCreateAPIKey(w http.ResponseWriter, r *http.Request, keys APIKeyManager) {
+func handleCreateAPIKey(w http.ResponseWriter, r *http.Request, keys APIKeyManager, audit AuditStore) {
 	ac := auth.FromContext(r.Context())
 	if ac == nil {
 		WriteError(w, ErrUnauthorized("authentication required"))
@@ -139,6 +145,12 @@ func handleCreateAPIKey(w http.ResponseWriter, r *http.Request, keys APIKeyManag
 		return
 	}
 
+	tryAudit(audit, r, AuditActionAPIKeyIssue, &AuditEvent{
+		TargetType: "api_key",
+		TargetID:   &key.ID,
+		Details:    mustJSON(map[string]string{"label": body.Name}),
+	})
+
 	writeJSON(w, http.StatusCreated, createAPIKeyResponse{
 		ID:        key.ID,
 		Key:       rawKey,
@@ -149,8 +161,12 @@ func handleCreateAPIKey(w http.ResponseWriter, r *http.Request, keys APIKeyManag
 }
 
 // NewMeAPIKeyRevokeHandler returns an http.HandlerFunc that handles
-// DELETE /v1/me/api-keys/{id}.
-func NewMeAPIKeyRevokeHandler(keys APIKeyManager) http.HandlerFunc {
+// DELETE /v1/me/api-keys/{id}. audit is variadic for backward compat.
+func NewMeAPIKeyRevokeHandler(keys APIKeyManager, audit ...AuditStore) http.HandlerFunc {
+	var auditStore AuditStore
+	if len(audit) > 0 {
+		auditStore = audit[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		ac := auth.FromContext(r.Context())
 		if ac == nil {
@@ -180,6 +196,11 @@ func NewMeAPIKeyRevokeHandler(keys APIKeyManager) http.HandlerFunc {
 			WriteError(w, ErrInternal("failed to revoke api key"))
 			return
 		}
+
+		tryAudit(auditStore, r, AuditActionAPIKeyRevoke, &AuditEvent{
+			TargetType: "api_key",
+			TargetID:   &id,
+		})
 
 		writeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
 	}
@@ -282,8 +303,12 @@ func handleCreateOAuthClient(w http.ResponseWriter, r *http.Request, clients OAu
 }
 
 // NewMeOAuthClientRevokeHandler returns an http.HandlerFunc that handles
-// DELETE /v1/me/oauth-clients/{id}.
-func NewMeOAuthClientRevokeHandler(clients OAuthClientManager) http.HandlerFunc {
+// DELETE /v1/me/oauth-clients/{id}. audit is variadic for backward compat.
+func NewMeOAuthClientRevokeHandler(clients OAuthClientManager, audit ...AuditStore) http.HandlerFunc {
+	var auditStore AuditStore
+	if len(audit) > 0 {
+		auditStore = audit[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		ac := auth.FromContext(r.Context())
 		if ac == nil {
@@ -333,6 +358,11 @@ func NewMeOAuthClientRevokeHandler(clients OAuthClientManager) http.HandlerFunc 
 			}
 		}
 
+		tryAudit(auditStore, r, AuditActionOAuthClientRevoke, &AuditEvent{
+			TargetType: "oauth_client",
+			TargetID:   &id,
+		})
+
 		writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 	}
 }
@@ -350,8 +380,13 @@ type changePasswordRequest struct {
 }
 
 // NewMeChangePasswordHandler returns an http.HandlerFunc that handles
-// POST /v1/me/password (self-service password change).
-func NewMeChangePasswordHandler(repo PasswordChanger) http.HandlerFunc {
+// POST /v1/me/password (self-service password change). audit is variadic
+// for backward compat with existing test callers.
+func NewMeChangePasswordHandler(repo PasswordChanger, audit ...AuditStore) http.HandlerFunc {
+	var auditStore AuditStore
+	if len(audit) > 0 {
+		auditStore = audit[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
@@ -411,6 +446,12 @@ func NewMeChangePasswordHandler(repo PasswordChanger) http.HandlerFunc {
 			WriteError(w, ErrInternal("failed to update password"))
 			return
 		}
+
+		uid := ac.UserID
+		tryAudit(auditStore, r, AuditActionUserPasswordChange, &AuditEvent{
+			TargetType: "user",
+			TargetID:   &uid,
+		})
 
 		writeJSON(w, http.StatusOK, map[string]bool{"changed": true})
 	}

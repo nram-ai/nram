@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
 )
 
@@ -32,6 +33,10 @@ type UserAdminStore interface {
 // UserAdminConfig holds the dependencies for the admin users handler.
 type UserAdminConfig struct {
 	Store UserAdminStore
+	// Audit is optional; when set, every privileged user action (create,
+	// delete, role change, API key issue/revoke) appends an event after
+	// the action commits. Failures are logged but do not fail the request.
+	Audit AuditStore
 }
 
 // createUserRequest is the JSON body for POST /v1/admin/users.
@@ -97,7 +102,7 @@ func NewAdminUsersHandler(cfg UserAdminConfig) http.HandlerFunc {
 			case http.MethodGet:
 				handleAdminListUsers(w, r, cfg.Store)
 			case http.MethodPost:
-				handleAdminCreateUser(w, r, cfg.Store)
+				handleAdminCreateUser(w, r, cfg)
 			default:
 				WriteError(w, ErrBadRequest("method not allowed"))
 			}
@@ -119,9 +124,9 @@ func NewAdminUsersHandler(cfg UserAdminConfig) http.HandlerFunc {
 			case http.MethodGet:
 				handleAdminGetUser(w, r, cfg.Store, userID)
 			case http.MethodPut:
-				handleAdminUpdateUser(w, r, cfg.Store, userID)
+				handleAdminUpdateUser(w, r, cfg, userID)
 			case http.MethodDelete:
-				handleAdminDeleteUser(w, r, cfg.Store, userID)
+				handleAdminDeleteUser(w, r, cfg, userID)
 			default:
 				WriteError(w, ErrBadRequest("method not allowed"))
 			}
@@ -140,7 +145,7 @@ func NewAdminUsersHandler(cfg UserAdminConfig) http.HandlerFunc {
 			case http.MethodGet:
 				handleAdminListAPIKeys(w, r, cfg.Store, userID)
 			case http.MethodPost:
-				handleAdminGenerateAPIKey(w, r, cfg.Store, userID)
+				handleAdminGenerateAPIKey(w, r, cfg, userID)
 			default:
 				WriteError(w, ErrBadRequest("method not allowed"))
 			}
@@ -156,7 +161,7 @@ func NewAdminUsersHandler(cfg UserAdminConfig) http.HandlerFunc {
 			}
 
 			if r.Method == http.MethodDelete {
-				handleAdminRevokeAPIKey(w, r, cfg.Store, keyID)
+				handleAdminRevokeAPIKey(w, r, cfg, keyID)
 				return
 			}
 			WriteError(w, ErrBadRequest("method not allowed"))
@@ -166,6 +171,11 @@ func NewAdminUsersHandler(cfg UserAdminConfig) http.HandlerFunc {
 		WriteError(w, ErrNotFound("not found"))
 	}
 }
+
+// _ = auth keeps the auth import live even if no other reference survives
+// after refactors (e.g. when AuthContext isn't used in this file
+// directly). Remove if/when other auth references are added elsewhere.
+var _ = auth.RoleAdministrator
 
 // isUserNotFound returns true if the error represents a not-found condition.
 func isUserNotFound(err error) bool {
@@ -218,7 +228,7 @@ func handleAdminListUsers(w http.ResponseWriter, r *http.Request, store UserAdmi
 	})
 }
 
-func handleAdminCreateUser(w http.ResponseWriter, r *http.Request, store UserAdminStore) {
+func handleAdminCreateUser(w http.ResponseWriter, r *http.Request, cfg UserAdminConfig) {
 	var body createUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid request body"))
@@ -255,13 +265,39 @@ func handleAdminCreateUser(w http.ResponseWriter, r *http.Request, store UserAdm
 		}
 	}
 
-	user, err := store.CreateUser(r.Context(), body.Email, body.DisplayName, body.Password, body.Role, orgID)
+	user, err := cfg.Store.CreateUser(r.Context(), body.Email, body.DisplayName, body.Password, body.Role, orgID)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to create user"))
 		return
 	}
 
+	tryAudit(cfg.Audit, r, AuditActionUserProvision, &AuditEvent{
+		TargetType:  "user",
+		TargetID:    &user.ID,
+		TargetOrgID: nullableTargetOrgID(user.OrgID),
+		Details:     mustJSON(map[string]string{"email": body.Email, "role": body.Role}),
+	})
+
 	writeJSON(w, http.StatusCreated, user)
+}
+
+// nullableTargetOrgID returns &id when id != Nil, else nil. Convenience
+// for filling AuditEvent.TargetOrgID from non-pointer fields.
+func nullableTargetOrgID(id uuid.UUID) *uuid.UUID {
+	if id == uuid.Nil {
+		return nil
+	}
+	return &id
+}
+
+// mustJSON marshals a value to json.RawMessage; returns "{}" on error.
+// Used for AuditEvent.Details.
+func mustJSON(v interface{}) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return json.RawMessage(b)
 }
 
 func handleAdminGetUser(w http.ResponseWriter, r *http.Request, store UserAdminStore, id uuid.UUID) {
@@ -291,7 +327,7 @@ func handleAdminGetUser(w http.ResponseWriter, r *http.Request, store UserAdminS
 	writeJSON(w, http.StatusOK, userDetailResponse{User: user, APIKeys: keys})
 }
 
-func handleAdminUpdateUser(w http.ResponseWriter, r *http.Request, store UserAdminStore, id uuid.UUID) {
+func handleAdminUpdateUser(w http.ResponseWriter, r *http.Request, cfg UserAdminConfig, id uuid.UUID) {
 	var body updateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid request body"))
@@ -307,7 +343,7 @@ func handleAdminUpdateUser(w http.ResponseWriter, r *http.Request, store UserAdm
 		return
 	}
 
-	user, err := store.UpdateUser(r.Context(), id, body.DisplayName, body.Role, body.Settings)
+	user, err := cfg.Store.UpdateUser(r.Context(), id, body.DisplayName, body.Role, body.Settings)
 	if err != nil {
 		if isUserNotFound(err) {
 			WriteError(w, ErrNotFound("user not found"))
@@ -317,12 +353,24 @@ func handleAdminUpdateUser(w http.ResponseWriter, r *http.Request, store UserAdm
 		return
 	}
 
+	// Role-change is the privacy-sensitive part of an update; emit the
+	// audit event whenever a role is supplied (even if it didn't change,
+	// to capture the attempt).
+	if body.Role != "" {
+		tryAudit(cfg.Audit, r, AuditActionUserRoleChange, &AuditEvent{
+			TargetType:  "user",
+			TargetID:    &user.ID,
+			TargetOrgID: nullableTargetOrgID(user.OrgID),
+			Details:     mustJSON(map[string]string{"new_role": body.Role}),
+		})
+	}
+
 	writeJSON(w, http.StatusOK, user)
 }
 
-func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request, store UserAdminStore, id uuid.UUID) {
+func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request, cfg UserAdminConfig, id uuid.UUID) {
 	// Check if the user is an admin and if they are the last one.
-	user, err := store.GetUser(r.Context(), id)
+	user, err := cfg.Store.GetUser(r.Context(), id)
 	if err != nil {
 		if isUserNotFound(err) {
 			WriteError(w, ErrNotFound("user not found"))
@@ -333,7 +381,7 @@ func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request, store UserAdm
 	}
 
 	if user.Role == "administrator" {
-		count, err := store.CountAdmins(r.Context())
+		count, err := cfg.Store.CountAdmins(r.Context())
 		if err != nil {
 			WriteError(w, ErrInternal("failed to count administrators"))
 			return
@@ -344,7 +392,7 @@ func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request, store UserAdm
 		}
 	}
 
-	if err := store.DeleteUser(r.Context(), id); err != nil {
+	if err := cfg.Store.DeleteUser(r.Context(), id); err != nil {
 		if isUserNotFound(err) {
 			WriteError(w, ErrNotFound("user not found"))
 			return
@@ -352,6 +400,13 @@ func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request, store UserAdm
 		WriteError(w, ErrInternal("failed to delete user"))
 		return
 	}
+
+	tryAudit(cfg.Audit, r, AuditActionUserDelete, &AuditEvent{
+		TargetType:  "user",
+		TargetID:    &user.ID,
+		TargetOrgID: nullableTargetOrgID(user.OrgID),
+		Details:     mustJSON(map[string]string{"email": user.Email, "role": user.Role}),
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -399,7 +454,7 @@ func handleAdminListAPIKeys(w http.ResponseWriter, r *http.Request, store UserAd
 	})
 }
 
-func handleAdminGenerateAPIKey(w http.ResponseWriter, r *http.Request, store UserAdminStore, userID uuid.UUID) {
+func handleAdminGenerateAPIKey(w http.ResponseWriter, r *http.Request, cfg UserAdminConfig, userID uuid.UUID) {
 	var body generateAPIKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid request body"))
@@ -411,7 +466,7 @@ func handleAdminGenerateAPIKey(w http.ResponseWriter, r *http.Request, store Use
 		return
 	}
 
-	key, rawKey, err := store.GenerateAPIKey(r.Context(), userID, body.Label, body.Scopes, body.ExpiresAt)
+	key, rawKey, err := cfg.Store.GenerateAPIKey(r.Context(), userID, body.Label, body.Scopes, body.ExpiresAt)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to generate api key"))
 		return
@@ -432,11 +487,18 @@ func handleAdminGenerateAPIKey(w http.ResponseWriter, r *http.Request, store Use
 	for i, s := range key.Scopes {
 		resp.Scopes[i] = s.String()
 	}
+
+	tryAudit(cfg.Audit, r, AuditActionAPIKeyIssue, &AuditEvent{
+		TargetType: "api_key",
+		TargetID:   &key.ID,
+		Details:    mustJSON(map[string]string{"label": body.Label, "user_id": userID.String()}),
+	})
+
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-func handleAdminRevokeAPIKey(w http.ResponseWriter, r *http.Request, store UserAdminStore, keyID uuid.UUID) {
-	err := store.RevokeAPIKey(r.Context(), keyID)
+func handleAdminRevokeAPIKey(w http.ResponseWriter, r *http.Request, cfg UserAdminConfig, keyID uuid.UUID) {
+	err := cfg.Store.RevokeAPIKey(r.Context(), keyID)
 	if err != nil {
 		if isUserNotFound(err) {
 			WriteError(w, ErrNotFound("api key not found"))
@@ -445,6 +507,11 @@ func handleAdminRevokeAPIKey(w http.ResponseWriter, r *http.Request, store UserA
 		WriteError(w, ErrInternal("failed to revoke api key"))
 		return
 	}
+
+	tryAudit(cfg.Audit, r, AuditActionAPIKeyRevoke, &AuditEvent{
+		TargetType: "api_key",
+		TargetID:   &keyID,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

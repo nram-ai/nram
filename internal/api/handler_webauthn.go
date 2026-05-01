@@ -52,8 +52,13 @@ func NewMePasskeysListHandler(creds WebAuthnCredManager) http.HandlerFunc {
 }
 
 // NewMePasskeyDeleteHandler returns a handler that deletes a passkey owned by
-// the authenticated user. DELETE /v1/me/passkeys/{id}
-func NewMePasskeyDeleteHandler(creds WebAuthnCredManager) http.HandlerFunc {
+// the authenticated user. DELETE /v1/me/passkeys/{id}. audit is variadic
+// for backward compat.
+func NewMePasskeyDeleteHandler(creds WebAuthnCredManager, audit ...AuditStore) http.HandlerFunc {
+	var auditStore AuditStore
+	if len(audit) > 0 {
+		auditStore = audit[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			WriteError(w, ErrBadRequest("method not allowed"))
@@ -88,6 +93,11 @@ func NewMePasskeyDeleteHandler(creds WebAuthnCredManager) http.HandlerFunc {
 			WriteError(w, ErrInternal("failed to delete passkey"))
 			return
 		}
+
+		tryAudit(auditStore, r, AuditActionPasskeyDelete, &AuditEvent{
+			TargetType: "passkey",
+			TargetID:   &id,
+		})
 
 		w.WriteHeader(http.StatusNoContent)
 	}

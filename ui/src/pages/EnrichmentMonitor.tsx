@@ -11,7 +11,14 @@ import {
   elapsedSeconds,
   formatElapsed,
 } from "../hooks/useElapsedTicker";
+import { useAuth } from "../context/AuthContext";
 import type { EnrichmentQueueItem } from "../api/client";
+
+// Tier picker — administrators can switch between their own queue items
+// (the "Mine" tab, /v1/me/enrichment) and the cross-tenant pipeline view
+// (the "System" tab, /v1/admin/enrichment). Non-admin callers see only
+// "Mine" with no UI affordance for system access.
+type EnrichmentTier = "self" | "system";
 
 // Live SSE state for the enrichment worker pool. liveJobs is keyed by
 // queue job id (the EnrichmentQueueItem.id, identical to the worker's
@@ -138,7 +145,10 @@ function useEnrichmentLiveState() {
           // Authoritative refresh — the row's status flipped to
           // completed/failed, the queue endpoint will reflect it on the
           // next poll, but we invalidate so the UI updates immediately.
+          // Refresh both tier caches; the SSE hook is shared between
+          // admin (system) and self viewers.
           qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+          qc.invalidateQueries({ queryKey: ["me", "enrichment"] });
           break;
         }
         case "enrichment.pool.tick": {
@@ -365,6 +375,7 @@ function QueueTable({
   onRetryOne,
   retrying,
   liveJobs,
+  showWriteActions = true,
 }: {
   items: EnrichmentQueueItem[];
   selectedIds: Set<string>;
@@ -373,6 +384,7 @@ function QueueTable({
   onRetryOne: (id: string) => void;
   retrying: boolean;
   liveJobs: Record<string, LiveJob>;
+  showWriteActions?: boolean;
 }) {
   // Re-render every second so processing-row Elapsed counters tick.
   const hasProcessing = items.some((i) => i.status === "processing");
@@ -454,16 +466,18 @@ function QueueTable({
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border bg-muted/50">
-            <th className="px-3 py-2.5 text-left">
-              <input
-                type="checkbox"
-                checked={allFailedSelected && failedIds.size > 0}
-                onChange={onToggleSelectAll}
-                disabled={failedIds.size === 0}
-                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary disabled:opacity-30"
-                title="Select all failed items"
-              />
-            </th>
+            {showWriteActions && (
+              <th className="px-3 py-2.5 text-left">
+                <input
+                  type="checkbox"
+                  checked={allFailedSelected && failedIds.size > 0}
+                  onChange={onToggleSelectAll}
+                  disabled={failedIds.size === 0}
+                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary disabled:opacity-30"
+                  title="Select all failed items"
+                />
+              </th>
+            )}
             <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
               Memory ID
             </th>
@@ -513,15 +527,17 @@ function QueueTable({
                 key={item.id}
                 className="hover:bg-muted/30 transition-colors"
               >
-                <td className="px-3 py-2.5">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(item.id)}
-                    onChange={() => onToggleSelect(item.id)}
-                    disabled={!isFailed}
-                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary disabled:opacity-30"
-                  />
-                </td>
+                {showWriteActions && (
+                  <td className="px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(item.id)}
+                      onChange={() => onToggleSelect(item.id)}
+                      disabled={!isFailed}
+                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary disabled:opacity-30"
+                    />
+                  </td>
+                )}
                 <td className="px-3 py-2.5">
                   <span
                     className="font-mono text-xs text-foreground"
@@ -565,18 +581,20 @@ function QueueTable({
                     {relativeTime(item.created_at)}
                   </span>
                 </td>
-                <td className="px-3 py-2.5">
-                  {isFailed && (
-                    <button
-                      type="button"
-                      onClick={() => onRetryOne(item.id)}
-                      disabled={retrying}
-                      className="rounded-md border border-input px-2 py-1 text-xs font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Retry
-                    </button>
-                  )}
-                </td>
+                {showWriteActions && (
+                  <td className="px-3 py-2.5">
+                    {isFailed && (
+                      <button
+                        type="button"
+                        onClick={() => onRetryOne(item.id)}
+                        disabled={retrying}
+                        className="rounded-md border border-input px-2 py-1 text-xs font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Retry
+                      </button>
+                    )}
+                  </td>
+                )}
               </tr>
             );
           })}
@@ -593,9 +611,19 @@ function QueueTable({
 function EnrichmentMonitor() {
   const { liveJobs, poolTick, connected } = useEnrichmentLiveState();
   const statusIntervalMs = connected ? 10_000 : 3_000;
-  const statusQuery = useEnrichmentStatus({ intervalMs: statusIntervalMs });
+  const { isAdmin } = useAuth();
+
+  // Default to self-tier for everyone. Non-admin users have no system
+  // option; admin can switch via the tab picker.
+  const [tier, setTier] = useState<EnrichmentTier>("self");
+
+  const statusQuery = useEnrichmentStatus({
+    intervalMs: statusIntervalMs,
+    tier,
+  });
   const retryMutation = useRetryEnrichment();
   const pauseMutation = usePauseEnrichment();
+  const showWriteActions = tier === "system" && isAdmin;
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -679,12 +707,46 @@ function EnrichmentMonitor() {
       {/* Page header */}
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Enrichment Queue
+          {tier === "system" ? "Enrichment Queue" : "My Enrichment Queue"}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Monitor the enrichment processing queue and manage worker state.
+          {tier === "system"
+            ? "Monitor the enrichment processing queue and manage worker state."
+            : "Read-only view of your own enrichment queue items. Worker controls are administrator-only."}
         </p>
       </div>
+
+      {/* Tier picker — admin only. Non-admin users have no system view. */}
+      {isAdmin && (
+        <div className="mb-6 border-b">
+          <nav className="-mb-px flex gap-6" role="tablist" aria-label="Enrichment scope">
+            <button
+              role="tab"
+              aria-selected={tier === "self"}
+              onClick={() => setTier("self")}
+              className={`border-b-2 px-1 py-3 text-sm font-medium ${
+                tier === "self"
+                  ? "border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Mine
+            </button>
+            <button
+              role="tab"
+              aria-selected={tier === "system"}
+              onClick={() => setTier("system")}
+              className={`border-b-2 px-1 py-3 text-sm font-medium ${
+                tier === "system"
+                  ? "border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              System
+            </button>
+          </nav>
+        </div>
+      )}
 
       {/* Loading state */}
       {statusQuery.isLoading && (
@@ -736,7 +798,9 @@ function EnrichmentMonitor() {
             />
           </div>
 
-          {/* Controls bar */}
+          {/* Controls bar — write actions (pause/retry) only on the system */}
+          {/* tier for administrators. Self tier is strictly read-only. */}
+          {showWriteActions && (
           <div className="flex flex-wrap items-center gap-3">
             {/* Pause/Resume button */}
             <button
@@ -824,6 +888,7 @@ function EnrichmentMonitor() {
               </button>
             )}
           </div>
+          )}
 
           {/* Mutation feedback */}
           {retryMutation.isSuccess && (
@@ -897,6 +962,7 @@ function EnrichmentMonitor() {
               onRetryOne={handleRetryOne}
               retrying={retryMutation.isPending}
               liveJobs={liveJobs}
+              showWriteActions={showWriteActions}
             />
           </div>
 

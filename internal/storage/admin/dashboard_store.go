@@ -130,15 +130,18 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID *uuid.UUID) (
 }
 
 func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID *uuid.UUID) ([]api.ActivityEvent, error) {
+	// Privacy: SELECT computes LENGTH(content) instead of pulling the body.
+	// The activity feed exposes only event type + size hint; content stays
+	// in the database.
 	var query string
 	var args []interface{}
 
 	if orgID == nil {
-		query = `SELECT id, content, created_at FROM memories
+		query = `SELECT id, LENGTH(content), created_at FROM memories
 			WHERE deleted_at IS NULL
 			ORDER BY created_at DESC LIMIT ?`
 		if s.db.Backend() == storage.BackendPostgres {
-			query = `SELECT id, content, created_at FROM memories
+			query = `SELECT id, LENGTH(content), created_at FROM memories
 				WHERE deleted_at IS NULL
 				ORDER BY created_at DESC LIMIT $1`
 		}
@@ -156,8 +159,9 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID *u
 
 	events := []api.ActivityEvent{}
 	for rows.Next() {
-		var idStr, content, createdAtStr string
-		if err := rows.Scan(&idStr, &content, &createdAtStr); err != nil {
+		var idStr, createdAtStr string
+		var lengthChars int
+		if err := rows.Scan(&idStr, &lengthChars, &createdAtStr); err != nil {
 			return nil, fmt.Errorf("recent activity scan: %w", err)
 		}
 		ts, err := time.Parse(time.RFC3339, createdAtStr)
@@ -165,17 +169,11 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID *u
 			return nil, fmt.Errorf("recent activity parse timestamp: %w", err)
 		}
 
-		// Truncate content for summary.
-		summary := content
-		if len(summary) > 100 {
-			summary = summary[:100] + "..."
-		}
-
 		events = append(events, api.ActivityEvent{
-			ID:        idStr,
-			Type:      "memory.created",
-			Summary:   summary,
-			Timestamp: ts,
+			ID:          idStr,
+			Type:        "memory.created",
+			LengthChars: lengthChars,
+			Timestamp:   ts,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -252,13 +250,13 @@ func (s *DashboardStore) orgMemoriesByProjectQuery() string {
 
 func (s *DashboardStore) orgRecentActivityQuery() string {
 	if s.db.Backend() == storage.BackendPostgres {
-		return `SELECT m.id, m.content, m.created_at FROM memories m
+		return `SELECT m.id, LENGTH(m.content), m.created_at FROM memories m
 			JOIN namespaces mn ON m.namespace_id = mn.id
 			WHERE mn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
 			AND m.deleted_at IS NULL
 			ORDER BY m.created_at DESC LIMIT $2`
 	}
-	return `SELECT m.id, m.content, m.created_at FROM memories m
+	return `SELECT m.id, LENGTH(m.content), m.created_at FROM memories m
 		JOIN namespaces mn ON m.namespace_id = mn.id
 		WHERE mn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
 		AND m.deleted_at IS NULL

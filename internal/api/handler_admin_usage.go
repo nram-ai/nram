@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
 
 // UsageStore abstracts access to token usage aggregation queries.
@@ -80,7 +81,11 @@ func NewAdminUsageHandler(cfg UsageConfig) http.HandlerFunc {
 
 		var filter UsageFilter
 
-		filter.OrgID, filter.UserID = resolveAdminScope(r, true)
+		// Self-tier: caller's own usage. Admin viewing /v1/usage gets admin's
+		// own usage (not system-wide). Cross-org usage drill-down moves to
+		// /v1/admin/system/usage and /v1/orgs/{org_id}/usage with their own
+		// handlers.
+		filter.OrgID, filter.UserID = SelfScope(auth.FromContext(r.Context()))
 
 		// Project filter allowed for all roles within their resolved scope.
 		if raw := q.Get("project"); raw != "" {

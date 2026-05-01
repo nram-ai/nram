@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
 
 // DashboardStore abstracts storage operations for dashboard/activity.
@@ -44,13 +45,18 @@ type DashboardQueueStats struct {
 }
 
 // ActivityEvent represents a single recent activity entry.
+//
+// Privacy: this struct intentionally does NOT carry a memory content preview.
+// The previous design returned the first 100 chars of memory.content in
+// `summary`, which leaked content into the dashboard UI. Length is exposed
+// as a size hint instead.
 type ActivityEvent struct {
-	ID        string     `json:"id"`
-	Type      string     `json:"type"`
-	Summary   string     `json:"summary"`
-	ProjectID *uuid.UUID `json:"project_id,omitempty"`
-	UserID    *uuid.UUID `json:"user_id,omitempty"`
-	Timestamp time.Time  `json:"timestamp"`
+	ID          string     `json:"id"`
+	Type        string     `json:"type"`
+	ProjectID   *uuid.UUID `json:"project_id,omitempty"`
+	UserID      *uuid.UUID `json:"user_id,omitempty"`
+	LengthChars int        `json:"length_chars,omitempty"`
+	Timestamp   time.Time  `json:"timestamp"`
 }
 
 // DashboardConfig holds the dependencies for the dashboard and activity handlers.
@@ -63,7 +69,10 @@ type DashboardConfig struct {
 // provider health, and queue depth.
 func NewAdminDashboardHandler(cfg DashboardConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		orgID, _ := resolveAdminScope(r, false)
+		// Self-tier: caller's own dashboard. Admin viewing /v1/dashboard sees
+		// admin's own data, not the system-wide view. Cross-tenant dashboards
+		// move to /v1/admin/system/dashboard and /v1/orgs/{org_id}/dashboard.
+		orgID, _ := SelfScope(auth.FromContext(r.Context()))
 
 		stats, err := cfg.Store.DashboardStats(r.Context(), orgID)
 		if err != nil {
@@ -102,7 +111,9 @@ func NewAdminActivityHandler(cfg DashboardConfig) http.HandlerFunc {
 			limit = maxActivityLimit
 		}
 
-		orgID, _ := resolveAdminScope(r, false)
+		// Self-tier: caller's own activity feed. Admin viewing /v1/activity
+		// sees admin's own activity. Org/system feeds move to dedicated routes.
+		orgID, _ := SelfScope(auth.FromContext(r.Context()))
 
 		events, err := cfg.Store.RecentActivity(r.Context(), limit, orgID)
 		if err != nil {

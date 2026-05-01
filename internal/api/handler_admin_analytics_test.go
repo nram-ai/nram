@@ -46,7 +46,7 @@ func TestAdminAnalytics_Success(t *testing.T) {
 			MostRecalled: []MemoryRankItem{
 				{
 					ID:          uuid.New(),
-					Content:     "frequently recalled memory",
+					LengthChars: len("frequently recalled memory"),
 					AccessCount: 42,
 					ProjectID:   &pid,
 					CreatedAt:   now,
@@ -55,7 +55,7 @@ func TestAdminAnalytics_Success(t *testing.T) {
 			LeastRecalled: []MemoryRankItem{
 				{
 					ID:          uuid.New(),
-					Content:     "rarely recalled memory",
+					LengthChars: len("rarely recalled memory"),
 					AccessCount: 1,
 					CreatedAt:   now,
 				},
@@ -63,7 +63,7 @@ func TestAdminAnalytics_Success(t *testing.T) {
 			DeadWeight: []MemoryRankItem{
 				{
 					ID:          uuid.New(),
-					Content:     "never accessed memory",
+					LengthChars: len("never accessed memory"),
 					AccessCount: 0,
 					CreatedAt:   now,
 				},
@@ -111,8 +111,8 @@ func TestAdminAnalytics_Success(t *testing.T) {
 	if resp.MostRecalled[0].AccessCount != 42 {
 		t.Errorf("expected access_count 42, got %d", resp.MostRecalled[0].AccessCount)
 	}
-	if resp.MostRecalled[0].Content != "frequently recalled memory" {
-		t.Errorf("expected content 'frequently recalled memory', got %q", resp.MostRecalled[0].Content)
+	if resp.MostRecalled[0].LengthChars != len("frequently recalled memory") {
+		t.Errorf("expected length_chars %d, got %d", len("frequently recalled memory"), resp.MostRecalled[0].LengthChars)
 	}
 	if resp.MostRecalled[0].ProjectID == nil {
 		t.Error("expected project_id to be set on most recalled item")
@@ -259,78 +259,30 @@ func TestAdminAnalytics_WrongMethod(t *testing.T) {
 	}
 }
 
-// TestAdminAnalytics_RoleTiers exercises the same three-tier scope rule used
-// by the usage handler, but applied to memory analytics.
-func TestAdminAnalytics_RoleTiers(t *testing.T) {
+// TestAdminAnalytics_SelfScope verifies the post-fix tier-A semantics: the
+// /v1/analytics handler always returns the caller's own scope and ignores
+// any ?org= / ?user= widening attempt by any role, including administrator.
+// The widening capability was removed in the 2026-04-30 leak fix; admin
+// drilling moves to /v1/admin/system/analytics and /v1/orgs/{id}/analytics.
+func TestAdminAnalytics_SelfScope(t *testing.T) {
 	adminOrg := uuid.New()
 	otherOrg := uuid.New()
 	adminUser := uuid.New()
-	ownerOrg := uuid.New()
-	ownerUser := uuid.New()
-	memberOrg := uuid.New()
-	memberUser := uuid.New()
-	drillUser := uuid.New()
+	otherUser := uuid.New()
 
 	cases := []struct {
-		name           string
-		auth           *auth.AuthContext
-		urlOrgID       string
-		query          string
-		wantOrgID      *uuid.UUID
-		wantUserID     *uuid.UUID
-		wantOrgIDIsNil bool
+		name string
+		auth *auth.AuthContext
+		// query/urlOrgID are widening attempts that MUST be ignored.
+		query    string
+		urlOrgID string
 	}{
-		{
-			name:           "admin no filter is global",
-			auth:           &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			wantOrgIDIsNil: true,
-		},
-		{
-			name:      "admin org query drills in",
-			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			query:     "org=" + otherOrg.String(),
-			wantOrgID: &otherOrg,
-		},
-		{
-			name:       "admin org and user drill",
-			auth:       &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			query:      "org=" + otherOrg.String() + "&user=" + drillUser.String(),
-			wantOrgID:  &otherOrg,
-			wantUserID: &drillUser,
-		},
-		{
-			name:      "admin URL path overrides query",
-			auth:      &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator},
-			urlOrgID:  otherOrg.String(),
-			query:     "org=" + adminOrg.String(),
-			wantOrgID: &otherOrg,
-		},
-		{
-			name:      "org_owner widening attempt blocked",
-			auth:      &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
-			query:     "org=" + otherOrg.String(),
-			wantOrgID: &ownerOrg,
-		},
-		{
-			name:       "org_owner user drill",
-			auth:       &auth.AuthContext{UserID: ownerUser, OrgID: ownerOrg, Role: auth.RoleOrgOwner},
-			query:      "user=" + drillUser.String(),
-			wantOrgID:  &ownerOrg,
-			wantUserID: &drillUser,
-		},
-		{
-			name:       "member pinned to self ignores widening",
-			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleMember},
-			query:      "org=" + otherOrg.String() + "&user=" + drillUser.String(),
-			wantOrgID:  &memberOrg,
-			wantUserID: &memberUser,
-		},
-		{
-			name:       "readonly pinned to self",
-			auth:       &auth.AuthContext{UserID: memberUser, OrgID: memberOrg, Role: auth.RoleReadonly},
-			wantOrgID:  &memberOrg,
-			wantUserID: &memberUser,
-		},
+		{name: "admin alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}},
+		{name: "admin with ?org=other ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, query: "org=" + otherOrg.String()},
+		{name: "admin with ?user=other ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, query: "user=" + otherUser.String()},
+		{name: "admin URL path ignored", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleAdministrator}, urlOrgID: otherOrg.String()},
+		{name: "org_owner alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleOrgOwner}},
+		{name: "member alone", auth: &auth.AuthContext{UserID: adminUser, OrgID: adminOrg, Role: auth.RoleMember}},
 	}
 
 	for _, tc := range cases {
@@ -338,7 +290,7 @@ func TestAdminAnalytics_RoleTiers(t *testing.T) {
 			store := &mockAnalyticsStore{data: &AnalyticsData{}}
 			h := NewAdminAnalyticsHandler(AnalyticsConfig{Store: store})
 
-			url := "/v1/admin/analytics"
+			url := "/v1/analytics"
 			if tc.query != "" {
 				url += "?" + tc.query
 			}
@@ -358,24 +310,13 @@ func TestAdminAnalytics_RoleTiers(t *testing.T) {
 				t.Fatalf("expected 200, got %d", w.Code)
 			}
 
-			if tc.wantOrgIDIsNil {
-				if store.lastOrgID != nil {
-					t.Errorf("expected OrgID nil (global), got %v", store.lastOrgID)
-				}
-			} else if tc.wantOrgID != nil {
-				if store.lastOrgID == nil || *store.lastOrgID != *tc.wantOrgID {
-					t.Errorf("expected OrgID %v, got %v", tc.wantOrgID, store.lastOrgID)
-				}
+			// Self-tier: must always pin to the caller's own org+user,
+			// regardless of widening attempts.
+			if store.lastOrgID == nil || *store.lastOrgID != tc.auth.OrgID {
+				t.Errorf("expected OrgID = caller's org %v, got %v", tc.auth.OrgID, store.lastOrgID)
 			}
-
-			if tc.wantUserID == nil {
-				if store.lastUserID != nil {
-					t.Errorf("expected UserID nil, got %v", store.lastUserID)
-				}
-			} else {
-				if store.lastUserID == nil || *store.lastUserID != *tc.wantUserID {
-					t.Errorf("expected UserID %v, got %v", tc.wantUserID, store.lastUserID)
-				}
+			if store.lastUserID == nil || *store.lastUserID != tc.auth.UserID {
+				t.Errorf("expected UserID = caller's user %v, got %v", tc.auth.UserID, store.lastUserID)
 			}
 		})
 	}

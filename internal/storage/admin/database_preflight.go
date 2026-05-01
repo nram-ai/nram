@@ -48,6 +48,7 @@ var preflightTables = []string{
 	"webhooks",
 	"memory_shares",
 	"api_keys",
+	"audit_events",
 	"settings",
 	"entities",
 	"memories",

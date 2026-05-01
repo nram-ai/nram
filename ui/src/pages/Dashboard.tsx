@@ -2,6 +2,10 @@ import { useState, useMemo } from "react";
 import {
   useDashboard,
   useActivity,
+  useOrgDashboard,
+  useOrgActivity,
+  useSystemDashboard,
+  useSystemActivity,
   useMeProjects,
   useProviderSlots,
   useStoreMemory,
@@ -13,6 +17,7 @@ import type {
   ProjectMemoryCount,
   ActivityEvent,
   ProviderSlot,
+  OrgAggregate,
 } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -179,6 +184,127 @@ function MemoryCountsTable({
   );
 }
 
+// OrgBreakdownTable renders the per-org rows from a SystemDashboardData
+// response. Counts only — no content fields, no per-user data.
+function OrgBreakdownTable({
+  rows,
+  isLoading,
+}: {
+  rows: OrgAggregate[];
+  isLoading: boolean;
+}) {
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="border-b px-4 py-3">
+        <h2 className="text-sm font-semibold">Per-Organization Breakdown</h2>
+      </div>
+      <div className="p-4">
+        {isLoading ? (
+          <SkeletonRows count={4} />
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No organizations.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-muted-foreground">
+                <th className="pb-2 font-medium">Org</th>
+                <th className="pb-2 text-right font-medium">Memories</th>
+                <th className="pb-2 text-right font-medium">Users</th>
+                <th className="pb-2 text-right font-medium">Projects</th>
+                <th className="pb-2 text-right font-medium">Entities</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((o) => (
+                <tr key={o.org_id} className="border-b last:border-0">
+                  <td className="py-2">{o.org_name}</td>
+                  <td className="py-2 text-right font-mono">{o.total_memories.toLocaleString()}</td>
+                  <td className="py-2 text-right font-mono">{o.total_users.toLocaleString()}</td>
+                  <td className="py-2 text-right font-mono">{o.total_projects.toLocaleString()}</td>
+                  <td className="py-2 text-right font-mono">{o.total_entities.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// AggregateActivity renders the tier-B/C activity payload: daily-creation
+// histogram + audit-event stream. No per-row memory data, no content.
+function AggregateActivity({
+  data,
+  isLoading,
+}: {
+  data: {
+    daily_creation?: { date: string; count: number }[];
+    audit_events?: { id: string; action: string; occurred_at: string }[];
+  } | undefined;
+  isLoading: boolean;
+}) {
+  const daily = data?.daily_creation ?? [];
+  const audit = data?.audit_events ?? [];
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border bg-card">
+        <div className="border-b px-4 py-3">
+          <h2 className="text-sm font-semibold">Daily Memory Creation</h2>
+        </div>
+        <div className="p-4">
+          {isLoading ? (
+            <SkeletonRows count={5} />
+          ) : daily.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No activity in window.</p>
+          ) : (
+            <ul className="space-y-1 text-xs">
+              {daily.slice(-14).map((d) => (
+                <li key={d.date} className="flex items-center gap-2">
+                  <span className="w-24 font-mono text-muted-foreground">{d.date}</span>
+                  <div className="flex-1">
+                    <div
+                      className="h-3 rounded bg-blue-500/30"
+                      style={{ width: `${Math.min(100, d.count * 5)}%` }}
+                    />
+                  </div>
+                  <span className="w-10 text-right font-mono">{d.count}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-lg border bg-card">
+        <div className="border-b px-4 py-3">
+          <h2 className="text-sm font-semibold">Audit Events</h2>
+        </div>
+        <div className="max-h-80 overflow-y-auto p-4">
+          {isLoading ? (
+            <SkeletonRows count={6} />
+          ) : audit.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No audit events.</p>
+          ) : (
+            <ul className="space-y-2 text-xs">
+              {audit.map((e) => (
+                <li key={e.id} className="flex items-start gap-2">
+                  <code className="shrink-0 rounded bg-muted px-1 py-0.5 font-mono">
+                    {e.action}
+                  </code>
+                  <span className="text-muted-foreground">
+                    {new Date(e.occurred_at).toLocaleString()}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ActivityFeed({
   events,
   isLoading,
@@ -207,7 +333,11 @@ function ActivityFeed({
                   >
                     {badge.label}
                   </span>
-                  <span className="min-w-0 flex-1 truncate">{ev.summary}</span>
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                    {ev.length_chars != null
+                      ? `${ev.length_chars.toLocaleString()} chars`
+                      : ev.id.slice(0, 8) + "…"}
+                  </span>
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {relativeTime(ev.timestamp)}
                   </span>
@@ -534,15 +664,37 @@ function ErrorBanner({
 // Main Dashboard
 // ---------------------------------------------------------------------------
 
+type DashboardTier = "self" | "org" | "system";
+
 function Dashboard() {
   const auth = useAuth();
-  const dashboard = useDashboard();
-  const activity = useActivity(20);
+
+  // Tier picker — admin gets all three; org_owner gets self + org; everyone
+  // else only sees self. Default tier is self for everyone (post-2026-04-30
+  // leak fix: admin's "Mine" tab shows admin's OWN data, not system-wide).
+  const availableTiers: DashboardTier[] = auth.isAdmin
+    ? ["self", "org", "system"]
+    : auth.isOrgOwner
+      ? ["self", "org"]
+      : ["self"];
+  const [tier, setTier] = useState<DashboardTier>("self");
+  const myOrgId = auth.user?.org_id;
+  const orgIdForFetch = tier === "org" ? myOrgId : undefined;
+
+  // Each tier's hooks are gated by `enabled` so the inactive tiers don't
+  // fetch. orgIdForFetch=undefined gates the org hooks; the system hooks
+  // gate explicitly on the active tier. Self always fetches (cheap, also
+  // shown alongside Org-tier project lists).
+  const selfDashboard = useDashboard();
+  const selfActivity = useActivity(20);
+  const orgDashboard = useOrgDashboard(orgIdForFetch);
+  const orgActivity = useOrgActivity(orgIdForFetch);
+  const systemDashboard = useSystemDashboard({ enabled: tier === "system" });
+  const systemActivity = useSystemActivity({ enabled: tier === "system" });
+
   const projects = useMeProjects();
   const providerSlots = useProviderSlots();
 
-  const dashData = dashboard.data;
-  const activityEvents = Array.isArray(activity.data?.events) ? activity.data.events : [];
   const projectList = Array.isArray(projects.data) ? projects.data : [];
   const slotList = Array.isArray(providerSlots.data) ? providerSlots.data : [];
 
@@ -550,52 +702,126 @@ function Dashboard() {
   // surface admins use to fix the missing slot.
   const { available: enrichmentAvailable } = useEnrichmentAvailable();
 
-  const hasError = dashboard.isError || activity.isError;
-  const errorMessage = dashboard.error?.message ?? activity.error?.message ?? "";
+  // Pick the active tier's query results.
+  const activeDash =
+    tier === "system" ? systemDashboard : tier === "org" ? orgDashboard : selfDashboard;
+  const activeActivity =
+    tier === "system" ? systemActivity : tier === "org" ? orgActivity : selfActivity;
+
+  const hasError = activeDash.isError || activeActivity.isError;
+  const errorMessage =
+    activeDash.error?.message ?? activeActivity.error?.message ?? "";
 
   function handleRetry() {
-    dashboard.refetch();
-    activity.refetch();
+    activeDash.refetch();
+    activeActivity.refetch();
   }
 
-  const title = auth.isAdmin
-    ? "System Overview"
-    : auth.isOrgOwner
-      ? "Organization Overview"
-      : "Dashboard";
+  const title =
+    tier === "system"
+      ? "System Overview"
+      : tier === "org"
+        ? "Organization Overview"
+        : "My Dashboard";
+  const subtitle =
+    tier === "system"
+      ? "System-wide metrics, per-org breakdowns, audit events."
+      : tier === "org"
+        ? "Aggregate metrics for your organization."
+        : "Your projects and activity.";
+
+  // Normalize the dashboard data shape across tiers. Self-tier returns
+  // DashboardData (with memories_by_project), org-tier returns
+  // OrgDashboardData (with memories_by_project), system-tier returns
+  // SystemDashboardData (with org_breakdown, no memories_by_project).
+  const totalMemories = activeDash.data?.total_memories ?? 0;
+  const totalProjects = activeDash.data?.total_projects ?? 0;
+  const totalEntities = activeDash.data?.total_entities ?? 0;
+  const enrichmentQueue =
+    "enrichment_queue" in (activeDash.data ?? {})
+      ? (activeDash.data as { enrichment_queue?: { pending: number; processing: number; failed: number } | null }).enrichment_queue ?? undefined
+      : undefined;
+  const memoriesByProject: ProjectMemoryCount[] =
+    tier === "system"
+      ? []
+      : ((activeDash.data as { memories_by_project?: ProjectMemoryCount[] } | undefined)
+          ?.memories_by_project ?? []);
+  const orgBreakdown: OrgAggregate[] =
+    tier === "system"
+      ? ((activeDash.data as { org_breakdown?: OrgAggregate[] } | undefined)
+          ?.org_breakdown ?? [])
+      : [];
+  const activityEvents: ActivityEvent[] =
+    tier === "self"
+      ? (Array.isArray((selfActivity.data as { events?: ActivityEvent[] } | undefined)?.events)
+          ? ((selfActivity.data as { events?: ActivityEvent[] }).events as ActivityEvent[])
+          : [])
+      : []; // tier-B/C activity is audit-event + histogram; rendered by AuditEventList below.
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {auth.isAdmin ? "System-wide metrics and activity." : "Your projects and activity."}
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+        </div>
+        {availableTiers.length > 1 && (
+          <div
+            className="inline-flex rounded-md border bg-card p-0.5"
+            role="tablist"
+            aria-label="Dashboard scope"
+          >
+            {availableTiers.map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={tier === t}
+                onClick={() => setTier(t)}
+                className={`rounded px-3 py-1 text-xs font-medium ${
+                  tier === t
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                {t === "self" ? "Mine" : t === "org" ? "Org" : "System"}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {hasError && <ErrorBanner message={errorMessage} onRetry={handleRetry} />}
 
       {/* Summary cards */}
       <SummaryCards
-        totalMemories={dashData?.total_memories ?? 0}
-        totalProjects={dashData?.total_projects ?? 0}
-        totalEntities={dashData?.total_entities ?? 0}
-        isLoading={dashboard.isLoading}
+        totalMemories={totalMemories}
+        totalProjects={totalProjects}
+        totalEntities={totalEntities}
+        isLoading={activeDash.isLoading}
       />
 
-      {/* Middle section: 2/3 left, 1/3 right (sidebar only for admins) */}
-      <div className={`grid grid-cols-1 gap-6 ${auth.isAdmin ? "lg:grid-cols-3" : ""}`}>
-        <div className={`space-y-6 ${auth.isAdmin ? "lg:col-span-2" : ""}`}>
-          <MemoryCountsTable
-            data={dashData?.memories_by_project ?? []}
-            isLoading={dashboard.isLoading}
-          />
-          <ActivityFeed
-            events={activityEvents}
-            isLoading={activity.isLoading}
-          />
+      {/* Middle section: 2/3 left, 1/3 right (sidebar only for admins on self tier) */}
+      <div className={`grid grid-cols-1 gap-6 ${auth.isAdmin && tier === "self" ? "lg:grid-cols-3" : ""}`}>
+        <div className={`space-y-6 ${auth.isAdmin && tier === "self" ? "lg:col-span-2" : ""}`}>
+          {tier === "system" ? (
+            <OrgBreakdownTable rows={orgBreakdown} isLoading={activeDash.isLoading} />
+          ) : (
+            <MemoryCountsTable
+              data={memoriesByProject}
+              isLoading={activeDash.isLoading}
+            />
+          )}
+          {tier === "self" ? (
+            <ActivityFeed events={activityEvents} isLoading={activeActivity.isLoading} />
+          ) : (
+            <AggregateActivity
+              data={activeActivity.data as { daily_creation?: { date: string; count: number }[]; audit_events?: { id: string; action: string; occurred_at: string }[] } | undefined}
+              isLoading={activeActivity.isLoading}
+            />
+          )}
         </div>
-        {auth.isAdmin && (
+        {auth.isAdmin && tier === "self" && (
           <div className="space-y-6">
             <ProviderHealthCards
               slots={slotList}
@@ -604,18 +830,18 @@ function Dashboard() {
             {enrichmentAvailable && (
               <>
                 <EnrichmentQueueCard
-                  queue={dashData?.enrichment_queue ?? undefined}
-                  isLoading={dashboard.isLoading}
+                  queue={enrichmentQueue}
+                  isLoading={activeDash.isLoading}
                 />
-                <DreamingStatusCard isLoading={dashboard.isLoading} />
+                <DreamingStatusCard isLoading={activeDash.isLoading} />
               </>
             )}
           </div>
         )}
       </div>
 
-      {/* Quick store — only show for users with write access */}
-      {auth.canWrite && (
+      {/* Quick store — only show for users with write access on the self tab */}
+      {auth.canWrite && tier === "self" && (
         <QuickStore
           projects={projectList}
           isLoadingProjects={projects.isLoading}

@@ -9,6 +9,7 @@ import {
   adminAPI,
   meAPI,
   orgAPI,
+  systemAPI,
   authAPI,
   changePassword,
   memoryAPI,
@@ -48,6 +49,7 @@ import {
   type Passkey,
   type LoginResponse,
   type SystemRankingWeights,
+  type UsageGroupBy,
 } from "../api/client";
 import {
   isWebAuthnAvailable,
@@ -86,23 +88,113 @@ export function useCompleteSetup() {
   });
 }
 
-// --- Dashboard ---
+// --- Dashboard / Activity (tier-A self-scoped) ---
+//
+// useDashboard / useActivity hit the self-tier endpoints (/v1/dashboard,
+// /v1/activity). Admin sees admin's own data here, not system-wide. Use
+// useOrgDashboard / useSystemDashboard for the wider tiers.
 
 export function useDashboard() {
   return useQuery({
-    queryKey: ["admin", "dashboard"],
+    queryKey: ["self", "dashboard"],
     queryFn: adminAPI.getDashboard,
     refetchInterval: 30_000,
   });
 }
 
-// --- Activity ---
-
 export function useActivity(limit = 20) {
   return useQuery({
-    queryKey: ["admin", "activity", limit],
+    queryKey: ["self", "activity", limit],
     queryFn: () => adminAPI.getActivity(limit),
     refetchInterval: 30_000,
+  });
+}
+
+// --- Tier-B (org-aggregate) hooks ---
+//
+// Caller must be RoleOrgOwner+ of the org. Aggregate counts + distributions
+// only — no row-level user/memory data, no content fields.
+
+export function useOrgDashboard(orgId: string | undefined) {
+  return useQuery({
+    queryKey: ["org", "dashboard", orgId],
+    queryFn: () => orgAPI.getDashboard(orgId!),
+    enabled: !!orgId,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useOrgActivity(orgId: string | undefined) {
+  return useQuery({
+    queryKey: ["org", "activity", orgId],
+    queryFn: () => orgAPI.getActivity(orgId!),
+    enabled: !!orgId,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useOrgAnalytics(orgId: string | undefined) {
+  return useQuery({
+    queryKey: ["org", "analytics", orgId],
+    queryFn: () => orgAPI.getAnalytics(orgId!),
+    enabled: !!orgId,
+    staleTime: 30_000,
+  });
+}
+
+export function useOrgUsage(
+  orgId: string | undefined,
+  params?: Parameters<typeof orgAPI.getUsage>[1],
+) {
+  return useQuery({
+    queryKey: ["org", "usage", orgId, params ?? {}],
+    queryFn: () => orgAPI.getUsage(orgId!, params),
+    enabled: !!orgId,
+    staleTime: 30_000,
+  });
+}
+
+// --- Tier-C (system-aggregate) hooks ---
+//
+// RoleAdministrator only (server-enforced via /v1/admin/* gate). System
+// totals + per-org breakdown rows.
+
+export function useSystemDashboard(opts: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ["system", "dashboard"],
+    queryFn: systemAPI.getDashboard,
+    refetchInterval: 30_000,
+    enabled: opts.enabled ?? true,
+  });
+}
+
+export function useSystemActivity(opts: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ["system", "activity"],
+    queryFn: systemAPI.getActivity,
+    refetchInterval: 30_000,
+    enabled: opts.enabled ?? true,
+  });
+}
+
+export function useSystemAnalytics(opts: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ["system", "analytics"],
+    queryFn: systemAPI.getAnalytics,
+    staleTime: 30_000,
+    enabled: opts.enabled ?? true,
+  });
+}
+
+export function useSystemUsage(
+  params?: Parameters<typeof systemAPI.getUsage>[0],
+  opts: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["system", "usage", params ?? {}],
+    queryFn: () => systemAPI.getUsage(params),
+    staleTime: 30_000,
+    enabled: opts.enabled ?? true,
   });
 }
 
@@ -510,19 +602,42 @@ export function useTestWebhook() {
 }
 
 // --- Analytics ---
-
-export function useAnalytics(params?: Parameters<typeof adminAPI.getAnalytics>[0]) {
+//
+// useAnalytics is the self-tier hook (mounted at /v1/analytics). The
+// pre-fix `org` / `user` widening params were removed; for cross-tenant
+// views use useOrgAnalytics(orgId) or useSystemAnalytics() instead.
+//
+// The optional `params` argument is preserved for source-compat with
+// callers that still pass `{ org, user }` — the values are now silently
+// ignored by both the client (no params attached to the request URL)
+// and the server (the widening primitive is gone). Callers should
+// migrate to the tier-specific hook for their visibility intent.
+export function useAnalytics(_params?: { org?: string; user?: string }) {
   return useQuery({
-    queryKey: ["admin", "analytics", params ?? {}],
-    queryFn: () => adminAPI.getAnalytics(params),
+    queryKey: ["self", "analytics"],
+    queryFn: () => adminAPI.getAnalytics(),
     staleTime: 30_000,
   });
 }
 
-export function useUsage(params?: Parameters<typeof adminAPI.getUsage>[0]) {
+// useUsage is the self-tier hook (mounted at /v1/usage). org/user widening
+// params are deprecated and silently ignored. Use useOrgUsage(orgId, ...)
+// or useSystemUsage(...) for wider tiers.
+export function useUsage(params?: { org?: string; user?: string; project?: string; from?: string; to?: string; group_by?: UsageGroupBy; success_only?: boolean }) {
+  // Strip the deprecated org/user keys before passing to the API client
+  // so the typing matches and no widening lands in the URL.
+  const apiParams = params
+    ? {
+        project: params.project,
+        from: params.from,
+        to: params.to,
+        group_by: params.group_by,
+        success_only: params.success_only,
+      }
+    : undefined;
   return useQuery({
-    queryKey: ["admin", "usage", params ?? {}],
-    queryFn: () => adminAPI.getUsage(params),
+    queryKey: ["self", "usage", apiParams ?? {}],
+    queryFn: () => adminAPI.getUsage(apiParams),
     staleTime: 30_000,
   });
 }
@@ -578,26 +693,63 @@ export function useMigrationAudit() {
 // disconnected (3s/5s) and relax it back to the defaults (10s/15s) when SSE
 // is healthy. The detail hook only polls when a cycle is actively running.
 
-export function useDreamingStatus(opts: { intervalMs?: number } = {}) {
+export function useDreamingStatus(
+  opts: { intervalMs?: number; enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: ["admin", "dreaming"],
     queryFn: adminAPI.getDreamingStatus,
     refetchInterval: opts.intervalMs ?? 10_000,
+    enabled: opts.enabled ?? true,
   });
 }
 
-export function useDreamingCycles(projectId?: string, opts: { intervalMs?: number } = {}) {
+// Per-project dream status for the self tier. The /v1/me/dreaming
+// endpoint requires a project_id and returns a project-scoped shape
+// (DreamProjectStatusResponse) distinct from the system-wide status.
+export function useMyDreamingProjectStatus(
+  projectId: string | null,
+  opts: { intervalMs?: number } = {},
+) {
   return useQuery({
-    queryKey: ["admin", "dreaming", "cycles", projectId],
-    queryFn: () => adminAPI.getDreamingCycles(projectId),
+    queryKey: ["me", "dreaming", "project", projectId],
+    queryFn: () => meAPI.getDreamingProjectStatus(projectId!),
+    enabled: !!projectId,
+    refetchInterval: opts.intervalMs ?? 10_000,
+  });
+}
+
+// Dream cycles list. Tier "system" hits /admin/dreaming/cycles (admin
+// only, optional project filter); tier "self" hits /me/dreaming/cycles
+// (project_id required, server enforces caller ownership).
+export function useDreamingCycles(
+  projectId?: string,
+  opts: { intervalMs?: number; tier?: "self" | "system"; enabled?: boolean } = {},
+) {
+  const tier = opts.tier ?? "system";
+  const tierEnabled = tier === "system" ? true : !!projectId;
+  return useQuery({
+    queryKey: [tier === "self" ? "me" : "admin", "dreaming", "cycles", projectId],
+    queryFn: () =>
+      tier === "self"
+        ? meAPI.getDreamingCycles(projectId!)
+        : adminAPI.getDreamingCycles(projectId),
+    enabled: (opts.enabled ?? true) && tierEnabled,
     refetchInterval: opts.intervalMs ?? 15_000,
   });
 }
 
-export function useDreamingCycleDetail(cycleId: string | null, opts: { intervalMs?: number } = {}) {
+export function useDreamingCycleDetail(
+  cycleId: string | null,
+  opts: { intervalMs?: number; tier?: "self" | "system" } = {},
+) {
+  const tier = opts.tier ?? "system";
   return useQuery({
-    queryKey: ["admin", "dreaming", "cycle", cycleId],
-    queryFn: () => adminAPI.getDreamingCycleDetail(cycleId!),
+    queryKey: [tier === "self" ? "me" : "admin", "dreaming", "cycle", cycleId],
+    queryFn: () =>
+      tier === "self"
+        ? meAPI.getDreamingCycleDetail(cycleId!)
+        : adminAPI.getDreamingCycleDetail(cycleId!),
     enabled: !!cycleId,
     refetchInterval: opts.intervalMs,
   });
@@ -635,10 +787,14 @@ export function useAbandonDreamCycle() {
 
 // --- Enrichment ---
 
-export function useEnrichmentStatus(opts: { intervalMs?: number } = {}) {
+export function useEnrichmentStatus(
+  opts: { intervalMs?: number; tier?: "self" | "system" } = {},
+) {
+  const tier = opts.tier ?? "system";
   return useQuery({
-    queryKey: ["admin", "enrichment"],
-    queryFn: adminAPI.getEnrichmentStatus,
+    queryKey: [tier === "self" ? "me" : "admin", "enrichment"],
+    queryFn:
+      tier === "self" ? meAPI.getEnrichmentStatus : adminAPI.getEnrichmentStatus,
     refetchInterval: opts.intervalMs ?? 10_000,
   });
 }
@@ -1166,21 +1322,9 @@ export function useRevokeOrgUserAPIKey() {
   });
 }
 
-export function useOrgAnalytics(orgId: string) {
-  return useQuery({
-    queryKey: ["org", orgId, "analytics"],
-    queryFn: () => orgAPI.getAnalytics(orgId),
-    enabled: !!orgId,
-  });
-}
-
-export function useOrgUsage(orgId: string) {
-  return useQuery({
-    queryKey: ["org", orgId, "usage"],
-    queryFn: () => orgAPI.getUsage(orgId),
-    enabled: !!orgId,
-  });
-}
+// useOrgAnalytics + useOrgUsage are defined above in the tier-B hooks
+// section (added 2026-04-30 leak fix); they replace the earlier
+// declarations that lived here.
 
 export function useOrgIdPConfigs(orgId: string) {
   return useQuery({

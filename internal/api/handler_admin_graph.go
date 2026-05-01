@@ -131,54 +131,64 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 			return
 		}
 
-		// Verify the requesting user has access to this project's org.
+		// Verify the requesting user has access to this project's namespace.
+		// Privacy: the previous implementation allowed administrators to
+		// bypass this check, exposing every tenant's entity names and
+		// relationship labels through /v1/graph. The bypass is removed —
+		// admin views only their own org's project graphs through this
+		// endpoint, like any other role. Cross-tenant graph aggregates
+		// (entity-type / relationship-type histograms) are exposed via the
+		// org-aggregate and system-aggregate analytics handlers instead.
 		ac := auth.FromContext(r.Context())
-		if ac != nil && ac.Role != auth.RoleAdministrator {
-			if ac.OrgID == uuid.Nil {
-				writeJSON(w, http.StatusForbidden, map[string]string{
-					"error": "user does not have an organization assigned",
-				})
-				return
-			}
+		if ac == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "authentication required",
+			})
+			return
+		}
+		if ac.OrgID == uuid.Nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "user does not have an organization assigned",
+			})
+			return
+		}
+		if cfg.Namespaces == nil || cfg.Orgs == nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "access denied: org verification unavailable",
+			})
+			return
+		}
 
-			if cfg.Namespaces == nil || cfg.Orgs == nil {
-				writeJSON(w, http.StatusForbidden, map[string]string{
-					"error": "access denied: org verification unavailable",
-				})
-				return
-			}
+		ns, nsErr := cfg.Namespaces.GetByID(r.Context(), project.NamespaceID)
+		if nsErr != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "access denied to this project",
+			})
+			return
+		}
 
-			ns, nsErr := cfg.Namespaces.GetByID(r.Context(), project.NamespaceID)
-			if nsErr != nil {
-				writeJSON(w, http.StatusForbidden, map[string]string{
-					"error": "access denied to this project",
-				})
-				return
-			}
+		org, orgErr := cfg.Orgs.GetByID(r.Context(), ac.OrgID)
+		if orgErr != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "access denied to this project",
+			})
+			return
+		}
 
-			org, orgErr := cfg.Orgs.GetByID(r.Context(), ac.OrgID)
-			if orgErr != nil {
-				writeJSON(w, http.StatusForbidden, map[string]string{
-					"error": "access denied to this project",
-				})
-				return
-			}
+		orgNS, orgNSErr := cfg.Namespaces.GetByID(r.Context(), org.NamespaceID)
+		if orgNSErr != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "access denied to this project",
+			})
+			return
+		}
 
-			orgNS, orgNSErr := cfg.Namespaces.GetByID(r.Context(), org.NamespaceID)
-			if orgNSErr != nil {
-				writeJSON(w, http.StatusForbidden, map[string]string{
-					"error": "access denied to this project",
-				})
-				return
-			}
-
-			prefix := orgNS.Path + "/"
-			if !strings.HasPrefix(ns.Path, prefix) && ns.Path != orgNS.Path {
-				writeJSON(w, http.StatusForbidden, map[string]string{
-					"error": "access denied to this project",
-				})
-				return
-			}
+		prefix := orgNS.Path + "/"
+		if !strings.HasPrefix(ns.Path, prefix) && ns.Path != orgNS.Path {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "access denied to this project",
+			})
+			return
 		}
 
 		entities, err := cfg.Entities.ListByNamespace(r.Context(), project.NamespaceID)

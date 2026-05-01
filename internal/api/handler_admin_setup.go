@@ -29,6 +29,9 @@ type SetupConfig struct {
 	// OnComplete is called after setup succeeds to flip the cached setup flag.
 	// May be nil.
 	OnComplete func()
+	// Audit is optional; when set, an event is appended after setup
+	// completes. The event records the bootstrap admin's identity.
+	Audit AuditStore
 }
 
 type setupStatusResponse struct {
@@ -120,6 +123,27 @@ func NewAdminSetupHandler(cfg SetupConfig) http.HandlerFunc {
 
 		if cfg.OnComplete != nil {
 			cfg.OnComplete()
+		}
+
+		// Audit the bootstrap. The actor is the just-created admin
+		// (auth.FromContext is nil at this point because setup is the
+		// pre-auth path), so we synthesize the actor identity from the
+		// freshly created user record.
+		if cfg.Audit != nil {
+			uid := user.ID
+			oid := user.OrgID
+			ev := AuditEvent{
+				ActorUserID: &uid,
+				ActorRole:   string(user.Role),
+				Action:      AuditActionSetupComplete,
+				TargetType:  "user",
+				TargetID:    &uid,
+				TargetOrgID: nullableTargetOrgID(oid),
+				SourceIP:    clientIPFromRequest(r),
+				UserAgent:   r.UserAgent(),
+				Details:     mustJSON(map[string]string{"email": req.Email}),
+			}
+			_ = cfg.Audit.Append(ctx, ev)
 		}
 
 		writeJSON(w, http.StatusCreated, setupResponse{

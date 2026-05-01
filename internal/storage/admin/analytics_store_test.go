@@ -181,8 +181,8 @@ func TestAnalyticsStoreGetAnalytics_UserScoped(t *testing.T) {
 	if len(data.MostRecalled) != 1 {
 		t.Fatalf("expected 1 most recalled, got %d", len(data.MostRecalled))
 	}
-	if data.MostRecalled[0].Content != "alice memory" {
-		t.Errorf("expected alice memory, got %q", data.MostRecalled[0].Content)
+	if data.MostRecalled[0].LengthChars != len("alice memory") {
+		t.Errorf("expected length %d for alice memory, got %d", len("alice memory"), data.MostRecalled[0].LengthChars)
 	}
 
 	// Org-scoped sees both.

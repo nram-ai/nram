@@ -431,6 +431,8 @@ func main() {
 	dashboardStore := adminstore.NewDashboardStore(db, enrichmentQueueRepo)
 	analyticsStore := adminstore.NewAnalyticsStore(db)
 	usageStore := adminstore.NewUsageStore(db)
+	aggregatesStore := adminstore.NewAggregatesStore(db)
+	auditStore := adminstore.NewAuditStore(db)
 	databaseAdminStore := adminstore.NewDatabaseAdminStore(db)
 	namespaceAdminStore := adminstore.NewNamespaceAdminStore(db)
 	providerAdminStore := adminstore.NewProviderAdminStore(adminstore.ProviderAdminDeps{
@@ -633,17 +635,39 @@ func main() {
 		MeProjects:          api.NewMeProjectsHandler(projectRepo, userRepo, namespaceRepo),
 		MeProjectItem:       api.NewMeProjectItemHandler(projectRepo, userRepo),
 		MeProjectDelete:     api.NewMeProjectDeleteHandler(projectDeleteSvc, projectRepo, userRepo),
-		MeAPIKeys:           api.NewMeAPIKeysHandler(apiKeyRepo),
-		MeAPIKeyRevoke:      api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
+		MeAPIKeys:           api.NewMeAPIKeysHandler(apiKeyRepo, auditStore),
+		MeAPIKeyRevoke:      api.NewMeAPIKeyRevokeHandler(apiKeyRepo, auditStore),
 		MeOAuthClients:      api.NewMeOAuthClientsHandler(oauthRepo),
-		MeOAuthClientRevoke: api.NewMeOAuthClientRevokeHandler(oauthRepo),
-		MeChangePassword:    api.NewMeChangePasswordHandler(userRepo),
+		MeOAuthClientRevoke: api.NewMeOAuthClientRevokeHandler(oauthRepo, auditStore),
+		MeChangePassword:    api.NewMeChangePasswordHandler(userRepo, auditStore),
 
-		// Passkey management handlers
-		MePasskeysList:          api.NewMePasskeysListHandler(webauthnRepo),
-		MePasskeyRegisterBegin:  webauthnHandler.RegisterBeginHandler(),
-		MePasskeyRegisterFinish: webauthnHandler.RegisterFinishHandler(),
-		MePasskeyDelete:         api.NewMePasskeyDeleteHandler(webauthnRepo),
+		// Self-tier system-pipeline observability — read-only views of the
+		// caller's own dream cycles + enrichment queue items. Write
+		// operations (enable/abandon/rollback for dreaming, retry/pause
+		// for enrichment) remain admin-only at /v1/admin/*.
+		MeDreaming: api.NewSelfDreamingHandler(api.MeDreamingConfig{
+			Store:      dreamAdminStore,
+			Projects:   projectRepo,
+			Namespaces: namespaceRepo,
+			Users:      userRepo,
+		}),
+		MeEnrichment: api.NewSelfEnrichmentHandler(api.MeEnrichmentConfig{
+			Store: enrichmentAdminStore,
+			Users: userRepo,
+		}),
+
+		// Passkey management handlers. Register-finish gets an
+		// audit-on-success wrapper because the upstream webauthn handler
+		// returns http.Handler and we don't want to fork its package.
+		MePasskeysList:         api.NewMePasskeysListHandler(webauthnRepo),
+		MePasskeyRegisterBegin: webauthnHandler.RegisterBeginHandler(),
+		MePasskeyRegisterFinish: api.AuditOnSuccess(
+			auditStore,
+			api.AuditActionPasskeyRegister,
+			"passkey",
+			webauthnHandler.RegisterFinishHandler(),
+		).ServeHTTP,
+		MePasskeyDelete: api.NewMePasskeyDeleteHandler(webauthnRepo, auditStore),
 
 		// Org-scoped handlers
 		OrgUsers: api.NewOrgUsersHandler(api.OrgUserConfig{Store: userAdminStore}),
@@ -675,8 +699,13 @@ func main() {
 		OAuthProtectedResource: oauthServer.ProtectedResourceHandler(),
 
 		// IdP SSO handlers
-		IdPLogin:    idpHandler.LoginHandler(),
-		IdPCallback: idpHandler.CallbackHandler(),
+		IdPLogin: idpHandler.LoginHandler(),
+		IdPCallback: api.AuditOnSuccess(
+			auditStore,
+			api.AuditActionIdPLogin,
+			"user",
+			idpHandler.CallbackHandler(),
+		).ServeHTTP,
 
 		// Admin handlers
 		AdminSetupStatus: api.NewAdminSetupStatusHandler(api.SetupConfig{Store: setupStore}),
@@ -684,11 +713,12 @@ func main() {
 			Store:      setupStore,
 			JWTSecret:  jwtSecret,
 			OnComplete: setupChecker.MarkComplete,
+			Audit:      auditStore,
 		}),
 		AdminDashboard: api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashboardStore}),
 		AdminActivity:  api.NewAdminActivityHandler(api.DashboardConfig{Store: dashboardStore}),
-		AdminOrgs:      api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore}),
-		AdminUsers:     api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore}),
+		AdminOrgs:  api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore, Audit: auditStore}),
+		AdminUsers: api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore, Audit: auditStore}),
 		AdminProjects:  api.NewAdminProjectsHandler(api.ProjectAdminConfig{Store: projectAdminStore}),
 		AdminProviders: api.NewAdminProvidersHandler(api.ProviderAdminConfig{Store: providerAdminStore}),
 		AdminSettings:  api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
@@ -722,6 +752,38 @@ func main() {
 			Store:    dreamAdminStore,
 			Rollback: dreamRollback,
 		}),
+
+		// Tier-B (org-aggregate) handlers — caller must be RoleOrgOwner+
+		// of the org passed in {org_id}. Aggregate counts + distributions
+		// only.
+		OrgDashboard: api.NewOrgDashboardHandler(api.OrgDashboardConfig{
+			Store: aggregatesStore,
+			Audit: auditStore,
+		}),
+		OrgActivity: api.NewOrgActivityHandler(api.OrgDashboardConfig{
+			Store: aggregatesStore,
+			Audit: auditStore,
+		}),
+		OrgAnalytics: api.NewOrgAnalyticsHandler(api.OrgAnalyticsConfig{
+			Store: aggregatesStore,
+		}),
+		OrgUsage: api.NewAdminUsageHandler(api.UsageConfig{Store: usageStore}),
+
+		// Tier-C (system-aggregate) handlers — RoleAdministrator only via
+		// the /v1/admin route group gate. System totals + per-org rows;
+		// no per-user, no per-memory, no content.
+		SystemDashboard: api.NewSystemDashboardHandler(api.SystemDashboardConfig{
+			Store: aggregatesStore,
+			Audit: auditStore,
+		}),
+		SystemActivity: api.NewSystemActivityHandler(api.SystemDashboardConfig{
+			Store: aggregatesStore,
+			Audit: auditStore,
+		}),
+		SystemAnalytics: api.NewSystemAnalyticsHandler(api.SystemAnalyticsConfig{
+			Store: aggregatesStore,
+		}),
+		SystemUsage: api.NewAdminUsageHandler(api.UsageConfig{Store: usageStore}),
 	}
 
 	// Build router config with auth middleware and rate limiter. Cleanup

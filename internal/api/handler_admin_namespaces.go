@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
 
 // NamespaceNode represents a single node in the namespace hierarchy tree.
@@ -44,7 +45,10 @@ func NewAdminNamespacesHandler(cfg NamespaceAdminConfig) http.HandlerFunc {
 			return
 		}
 
-		orgID, _ := resolveAdminScope(r, false)
+		// Self-tier: caller's own namespace subtree. Admin viewing
+		// /v1/namespaces/tree sees admin's own org subtree, not the entire
+		// system. (Cross-tenant namespace listings live under /v1/admin/orgs.)
+		orgID, _ := SelfScope(auth.FromContext(r.Context()))
 
 		nodes, err := cfg.Store.GetNamespaceTree(r.Context(), orgID)
 		if err != nil {

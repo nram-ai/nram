@@ -151,20 +151,23 @@ func (s *AnalyticsStore) GetAnalytics(ctx context.Context, orgID *uuid.UUID, use
 }
 
 func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause string, limit int, orgID *uuid.UUID, userID *uuid.UUID) ([]api.MemoryRankItem, error) {
+	// Privacy: SELECT computes LENGTH(m.content) instead of pulling the body.
+	// The ranked-list view exposes only the size and access pattern; the text
+	// itself never leaves the database.
 	var query string
 	var args []interface{}
 
 	switch {
 	case userID != nil:
 		if s.db.Backend() == storage.BackendPostgres {
-			query = fmt.Sprintf(`SELECT m.id, m.content, m.access_count, m.created_at
+			query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
 				FROM memories m
 				JOIN namespaces mn ON m.namespace_id = mn.id
 				WHERE m.deleted_at IS NULL
 				AND mn.path LIKE (SELECT n.path || '/' || '%%' FROM namespaces n JOIN users u ON u.namespace_id = n.id WHERE u.id = $1)
 				%s LIMIT %d`, orderClause, limit)
 		} else {
-			query = fmt.Sprintf(`SELECT m.id, m.content, m.access_count, m.created_at
+			query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
 				FROM memories m
 				JOIN namespaces mn ON m.namespace_id = mn.id
 				WHERE m.deleted_at IS NULL
@@ -175,14 +178,14 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 
 	case orgID != nil:
 		if s.db.Backend() == storage.BackendPostgres {
-			query = fmt.Sprintf(`SELECT m.id, m.content, m.access_count, m.created_at
+			query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
 				FROM memories m
 				JOIN namespaces mn ON m.namespace_id = mn.id
 				WHERE m.deleted_at IS NULL
 				AND mn.path LIKE (SELECT n.path || '/' || '%%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
 				%s LIMIT %d`, orderClause, limit)
 		} else {
-			query = fmt.Sprintf(`SELECT m.id, m.content, m.access_count, m.created_at
+			query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
 				FROM memories m
 				JOIN namespaces mn ON m.namespace_id = mn.id
 				WHERE m.deleted_at IS NULL
@@ -192,7 +195,7 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 		args = []interface{}{orgID.String()}
 
 	default:
-		query = fmt.Sprintf(`SELECT m.id, m.content, m.access_count, m.created_at
+		query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at
 			FROM memories m WHERE m.deleted_at IS NULL %s LIMIT %d`, orderClause, limit)
 	}
 
@@ -204,9 +207,9 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 
 	items := []api.MemoryRankItem{}
 	for rows.Next() {
-		var idStr, content, createdAtStr string
-		var accessCount int
-		if err := rows.Scan(&idStr, &content, &accessCount, &createdAtStr); err != nil {
+		var idStr, createdAtStr string
+		var lengthChars, accessCount int
+		if err := rows.Scan(&idStr, &lengthChars, &accessCount, &createdAtStr); err != nil {
 			return nil, fmt.Errorf("ranked memories scan: %w", err)
 		}
 		id, err := uuid.Parse(idStr)
@@ -219,8 +222,8 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 		}
 		items = append(items, api.MemoryRankItem{
 			ID:          id,
-			Content:     content,
 			AccessCount: accessCount,
+			LengthChars: lengthChars,
 			CreatedAt:   createdAt,
 		})
 	}

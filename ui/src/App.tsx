@@ -121,8 +121,8 @@ const navItems: NavItem[] = [
   { path: "/idp", label: "Identity Providers", section: "Configuration", minRole: "org_owner" },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
   { path: "/database", label: "Database", section: "System", minRole: "administrator" },
-  { path: "/enrichment", label: "Enrichment Queue", section: "System", minRole: "administrator", requiresEnrichment: true },
-  { path: "/dreaming", label: "Dreaming", section: "System", minRole: "administrator", requiresEnrichment: true },
+  { path: "/enrichment", label: "Enrichment Queue", section: "System", requiresEnrichment: true },
+  { path: "/dreaming", label: "Dreaming", section: "System", requiresEnrichment: true },
   { path: "/analytics", label: "Analytics", section: "System" },
   { path: "/import", label: "Bulk Import", section: "System", writeOnly: true },
   { path: "/account", label: "My Account", section: "Account" },
@@ -301,8 +301,8 @@ function AppLayout() {
                 <Route path="/prompt-templates" element={<RequireRole minRole="administrator"><PromptTemplates /></RequireRole>} />
                 <Route path="/extraction-prompts" element={<Navigate to="/prompt-templates" replace />} />
                 <Route path="/database" element={<RequireRole minRole="administrator"><DatabaseManagement /></RequireRole>} />
-                <Route path="/enrichment" element={<RequireRole minRole="administrator"><EnrichmentMonitor /></RequireRole>} />
-                <Route path="/dreaming" element={<RequireRole minRole="administrator"><DreamingMonitor /></RequireRole>} />
+                <Route path="/enrichment" element={<EnrichmentMonitor />} />
+                <Route path="/dreaming" element={<DreamingMonitor />} />
                 <Route path="/graph" element={<GraphVisualization />} />
                 <Route path="/entities" element={<EntityBrowser />} />
                 <Route path="/analytics" element={<Analytics />} />

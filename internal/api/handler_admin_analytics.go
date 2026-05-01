@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/auth"
 )
 
 // AnalyticsStore abstracts retrieval of memory analytics data.
@@ -39,11 +40,16 @@ type MemoryCountsData struct {
 }
 
 // MemoryRankItem represents a single memory entry in a ranked list.
+//
+// Privacy: this struct intentionally does NOT carry the memory body. Admin
+// surfaces aggregate access patterns over memories the caller owns; rendering
+// the body in a ranked-list view leaks content into the dashboard layer where
+// it does not belong. Length is exposed as a size hint instead.
 type MemoryRankItem struct {
 	ID          uuid.UUID  `json:"id"`
-	Content     string     `json:"content"`
 	AccessCount int        `json:"access_count"`
 	ProjectID   *uuid.UUID `json:"project_id,omitempty"`
+	LengthChars int        `json:"length_chars"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
@@ -65,7 +71,9 @@ func NewAdminAnalyticsHandler(cfg AnalyticsConfig) http.HandlerFunc {
 			return
 		}
 
-		orgID, userID := resolveAdminScope(r, true)
+		// Self-tier: caller's own data. The widening helper (?org=/?user=)
+		// was removed; admin viewing /v1/analytics gets admin's own analytics.
+		orgID, userID := SelfScope(auth.FromContext(r.Context()))
 		data, err := cfg.Store.GetAnalytics(r.Context(), orgID, userID)
 		if err != nil {
 			WriteError(w, ErrInternal("failed to retrieve analytics"))
