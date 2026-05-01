@@ -10,9 +10,18 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
-// MeDreamProjectAccess looks up a project to verify caller ownership.
+// MeDreamingAggregateStatus is the self-tier no-project status response: a
+// rolled-up dirty indicator plus the count of caller-owned projects.
+type MeDreamingAggregateStatus struct {
+	AnyDirty     bool `json:"any_dirty"`
+	ProjectCount int  `json:"project_count"`
+}
+
+// MeDreamProjectAccess looks up a project to verify caller ownership and
+// resolve a single project's name for the cycles list response.
 type MeDreamProjectAccess interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error)
+	CountByUser(ctx context.Context, ownerNamespaceID uuid.UUID) (int, error)
 }
 
 // MeDreamNamespaceLookup retrieves a namespace by ID for ownership chain
@@ -103,19 +112,32 @@ func (c MeDreamingConfig) projectOwnedByCaller(ctx context.Context, projectID uu
 }
 
 func handleMeDreamStatus(w http.ResponseWriter, r *http.Request, cfg MeDreamingConfig, callerNS *model.Namespace) {
-	// Caller's status is fundamentally a per-project query; without a
-	// project_id we cannot meaningfully report a "self status". Require it.
+	// project_id optional: when set, return per-project status; when omitted,
+	// return aggregate any-dirty + project count for the caller's projects.
 	pidStr := r.URL.Query().Get("project_id")
 	if pidStr == "" {
-		WriteError(w, ErrBadRequest("project_id query parameter is required"))
+		dirtyCount, err := cfg.Store.SelfDreamingDirtyCount(r.Context(), callerNS)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to compute aggregate dreaming status"))
+			return
+		}
+		projectCount, err := cfg.Projects.CountByUser(r.Context(), callerNS.ID)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to count caller projects"))
+			return
+		}
+		writeJSON(w, http.StatusOK, MeDreamingAggregateStatus{
+			AnyDirty:     dirtyCount > 0,
+			ProjectCount: projectCount,
+		})
 		return
 	}
+
 	pid, err := uuid.Parse(pidStr)
 	if err != nil {
 		WriteError(w, ErrBadRequest("invalid project_id"))
 		return
 	}
-
 	if !cfg.projectOwnedByCaller(r.Context(), pid, callerNS) {
 		WriteError(w, ErrForbidden("project is not owned by caller"))
 		return
@@ -130,22 +152,38 @@ func handleMeDreamStatus(w http.ResponseWriter, r *http.Request, cfg MeDreamingC
 }
 
 func handleMeDreamCyclesList(w http.ResponseWriter, r *http.Request, cfg MeDreamingConfig, callerNS *model.Namespace) {
+	// project_id optional: when set, filter to that project; when omitted,
+	// list cycles across all of the caller's projects via namespace prefix.
+	// Either path returns model.DreamCycle with ProjectName populated.
+	var (
+		cycles []model.DreamCycle
+		err    error
+	)
 	pidStr := r.URL.Query().Get("project_id")
-	if pidStr == "" {
-		WriteError(w, ErrBadRequest("project_id query parameter is required"))
-		return
+	if pidStr != "" {
+		pid, parseErr := uuid.Parse(pidStr)
+		if parseErr != nil {
+			WriteError(w, ErrBadRequest("invalid project_id"))
+			return
+		}
+		if !cfg.projectOwnedByCaller(r.Context(), pid, callerNS) {
+			WriteError(w, ErrForbidden("project is not owned by caller"))
+			return
+		}
+		cycles, err = cfg.Store.ListCycles(r.Context(), &pid, 50)
+		if err == nil && len(cycles) > 0 {
+			// Single-project branch: one project, one name lookup.
+			if proj, perr := cfg.Projects.GetByID(r.Context(), pid); perr == nil && proj != nil {
+				for i := range cycles {
+					cycles[i].ProjectName = proj.Name
+				}
+			}
+		}
+	} else {
+		// Multi-project branch: ListSelfCycles already populates ProjectName
+		// via the JOIN in DreamCycleRepo.ListByNamespacePathPrefix.
+		cycles, err = cfg.Store.ListSelfCycles(r.Context(), callerNS, 50)
 	}
-	pid, err := uuid.Parse(pidStr)
-	if err != nil {
-		WriteError(w, ErrBadRequest("invalid project_id"))
-		return
-	}
-	if !cfg.projectOwnedByCaller(r.Context(), pid, callerNS) {
-		WriteError(w, ErrForbidden("project is not owned by caller"))
-		return
-	}
-
-	cycles, err := cfg.Store.ListCycles(r.Context(), &pid, 50)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to list dream cycles"))
 		return

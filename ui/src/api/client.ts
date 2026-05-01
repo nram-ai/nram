@@ -753,12 +753,20 @@ export interface SystemAnalyticsData {
   relationship_type_histogram: TypeBucket[];
 }
 
+export interface UserAggregate {
+  user_id: string;
+  email: string;
+  total_memories: number;
+  total_projects: number;
+  total_entities: number;
+}
+
 export interface OrgDashboardData {
   total_memories: number;
   total_projects: number;
   total_users: number;
   total_entities: number;
-  memories_by_project: ProjectMemoryCount[];
+  user_breakdown: UserAggregate[];
   enrichment_queue?: EnrichmentQueueStats;
 }
 
@@ -960,6 +968,15 @@ export interface DreamCycle {
   // threshold; only these are eligible for the Abandon action.
   is_stale_diagnostic: boolean;
   is_abandonable: boolean;
+  // Populated only by /v1/me/dreaming/cycles. Admin /v1/admin/dreaming/cycles
+  // intentionally leaves this empty so the UI falls through to project_id.
+  project_name?: string;
+}
+
+// Self-tier aggregate status returned by /v1/me/dreaming with no project_id.
+export interface MeDreamingAggregateStatus {
+  any_dirty: boolean;
+  project_count: number;
 }
 
 export interface DreamLog {
@@ -1023,6 +1040,11 @@ export interface EnrichmentQueueCounts {
 export interface EnrichmentQueueItem {
   id: string;
   memory_id: string;
+  // Populated whenever the memory's project is resolvable. project_name is
+  // populated only on self/org-tier responses; the admin/system tier leaves
+  // it empty so the UI falls through to the UUID.
+  project_id?: string;
+  project_name?: string;
   status: string;
   attempts: number;
   max_attempts?: number;
@@ -1593,19 +1615,24 @@ export const meAPI = {
   recall: (body: RecallRequest) =>
     request<RecallResponse>("POST", "/me/memories/recall", body),
 
-  // Self-tier dreaming observability. Read-only — write operations
-  // (enable, abandon, rollback, project/enable) remain admin-only at
-  // /admin/dreaming/*. Status requires a project_id so the caller scopes
-  // to a project they own; cycles list is also project-scoped.
+  // Self-tier dreaming observability. Read-only — write operations remain
+  // admin-only at /admin/dreaming/*. Status returns per-project state when
+  // a project_id is supplied, otherwise the aggregate any-dirty indicator.
+  // Cycles list filters to one project when project_id is supplied,
+  // otherwise lists across all of the caller's projects.
   getDreamingProjectStatus: (projectId: string) =>
     request<DreamProjectStatusResponse>(
       "GET",
       `/me/dreaming?project_id=${encodeURIComponent(projectId)}`,
     ),
-  getDreamingCycles: (projectId: string) =>
+  getDreamingAggregateStatus: () =>
+    request<MeDreamingAggregateStatus>("GET", "/me/dreaming"),
+  getDreamingCycles: (projectId?: string) =>
     request<DreamCycle[]>(
       "GET",
-      `/me/dreaming/cycles?project_id=${encodeURIComponent(projectId)}`,
+      projectId
+        ? `/me/dreaming/cycles?project_id=${encodeURIComponent(projectId)}`
+        : "/me/dreaming/cycles",
     ),
   getDreamingCycleDetail: (cycleId: string) =>
     request<DreamCycleDetail>("GET", `/me/dreaming/cycles/${cycleId}`),

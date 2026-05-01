@@ -608,3 +608,60 @@ func TestUserRepo_CountAdmins(t *testing.T) {
 		}
 	})
 }
+
+// TestUserRepo_GetByID_PopulatesOrganization verifies the LEFT JOIN added to
+// the user-repo read paths surfaces the organization name in
+// User.Organization. The User Management UI reads user.organization?.name;
+// this asserts the field is wired end-to-end at the storage layer.
+func TestUserRepo_GetByID_PopulatesOrganization(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		user := createTestUser(t, ctx, db)
+		repo := NewUserRepo(db)
+
+		got, err := repo.GetByID(ctx, user.ID)
+		if err != nil {
+			t.Fatalf("GetByID failed: %v", err)
+		}
+		if got.Organization == nil {
+			t.Fatal("expected non-nil Organization on user")
+		}
+		if got.Organization.ID != got.OrgID {
+			t.Errorf("Organization.ID: got %s want %s", got.Organization.ID, got.OrgID)
+		}
+		if got.Organization.Name == "" {
+			t.Error("Organization.Name should be populated by the JOIN")
+		}
+	})
+}
+
+// TestUserRepo_ListAllPaged_PopulatesOrganization confirms the JOIN also
+// applies on the rows-scan path used by the admin user-management list.
+func TestUserRepo_ListAllPaged_PopulatesOrganization(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		seeded := createTestUser(t, ctx, db)
+		repo := NewUserRepo(db)
+
+		users, err := repo.ListAllPaged(ctx, 100, 0)
+		if err != nil {
+			t.Fatalf("ListAllPaged failed: %v", err)
+		}
+		var found *model.User
+		for i := range users {
+			if users[i].ID == seeded.ID {
+				found = &users[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatalf("seeded user %s missing from ListAllPaged result", seeded.ID)
+		}
+		if found.Organization == nil {
+			t.Fatal("expected non-nil Organization on listed user")
+		}
+		if found.Organization.Name == "" {
+			t.Error("Organization.Name should be populated for listed user")
+		}
+	})
+}

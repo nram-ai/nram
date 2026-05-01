@@ -29,6 +29,15 @@ func NewUserRepo(db DB) *UserRepo {
 	return &UserRepo{db: db}
 }
 
+// userSelectColumns is the canonical SELECT clause for users. Aliases all
+// user columns under u. and joins organizations as o. so a trailing o.name
+// can be selected for embedding in the User.Organization field. Every read
+// path uses the same column shape so the shared scanUser/scanUserFromRows
+// helpers stay coherent.
+const userSelectColumns = `u.id, u.email, u.display_name, u.password_hash, u.org_id, u.namespace_id, u.role, u.settings, u.created_at, u.updated_at, u.last_login, u.disabled_at, o.name`
+
+const userFromJoin = `FROM users u LEFT JOIN organizations o ON u.org_id = o.id`
+
 func (r *UserRepo) Create(ctx context.Context, user *model.User, nsRepo *NamespaceRepo, projectRepo *ProjectRepo, orgNamespacePath string) error {
 	if user.ID == uuid.Nil {
 		user.ID = uuid.New()
@@ -91,11 +100,9 @@ func (r *UserRepo) Create(ctx context.Context, user *model.User, nsRepo *Namespa
 }
 
 func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
-	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-		FROM users WHERE id = ?`
+	query := `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-			FROM users WHERE id = $1`
+		query = `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.id = $1`
 	}
 
 	row := r.db.QueryRow(ctx, query, id.String())
@@ -108,11 +115,9 @@ func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.User, erro
 // sql.ErrNoRows when the namespace is not a user's personal namespace
 // (typically because it is a project namespace instead).
 func (r *UserRepo) GetByNamespaceID(ctx context.Context, namespaceID uuid.UUID) (*model.User, error) {
-	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-		FROM users WHERE namespace_id = ?`
+	query := `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-			FROM users WHERE namespace_id = $1`
+		query = `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.namespace_id = $1`
 	}
 
 	row := r.db.QueryRow(ctx, query, namespaceID.String())
@@ -120,11 +125,9 @@ func (r *UserRepo) GetByNamespaceID(ctx context.Context, namespaceID uuid.UUID) 
 }
 
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*model.User, error) {
-	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-		FROM users WHERE email = ?`
+	query := `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.email = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-			FROM users WHERE email = $1`
+		query = `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.email = $1`
 	}
 
 	row := r.db.QueryRow(ctx, query, email)
@@ -164,11 +167,9 @@ func (r *UserRepo) Authenticate(ctx context.Context, email, password string) (*m
 }
 
 func (r *UserRepo) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]model.User, error) {
-	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-		FROM users WHERE org_id = ? ORDER BY email`
+	query := `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.org_id = ? ORDER BY u.email`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-			FROM users WHERE org_id = $1 ORDER BY email`
+		query = `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.org_id = $1 ORDER BY u.email`
 	}
 
 	rows, err := r.db.Query(ctx, query, orgID.String())
@@ -207,11 +208,9 @@ func (r *UserRepo) CountByOrg(ctx context.Context, orgID uuid.UUID) (int, error)
 
 // ListByOrgPaged returns users in the given organization with LIMIT and OFFSET applied.
 func (r *UserRepo) ListByOrgPaged(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]model.User, error) {
-	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-		FROM users WHERE org_id = ? ORDER BY email LIMIT ? OFFSET ?`
+	query := `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.org_id = ? ORDER BY u.email LIMIT ? OFFSET ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-			FROM users WHERE org_id = $1 ORDER BY email LIMIT $2 OFFSET $3`
+		query = `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` WHERE u.org_id = $1 ORDER BY u.email LIMIT $2 OFFSET $3`
 	}
 
 	rows, err := r.db.Query(ctx, query, orgID.String(), limit, offset)
@@ -236,8 +235,7 @@ func (r *UserRepo) ListByOrgPaged(ctx context.Context, orgID uuid.UUID, limit, o
 
 // ListAll returns all users ordered by email.
 func (r *UserRepo) ListAll(ctx context.Context) ([]model.User, error) {
-	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-		FROM users ORDER BY email`
+	query := `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` ORDER BY u.email`
 
 	rows, err := r.db.Query(ctx, query)
 	if err != nil {
@@ -271,11 +269,9 @@ func (r *UserRepo) CountAll(ctx context.Context) (int, error) {
 
 // ListAllPaged returns all users ordered by email with LIMIT and OFFSET applied.
 func (r *UserRepo) ListAllPaged(ctx context.Context, limit, offset int) ([]model.User, error) {
-	query := `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-		FROM users ORDER BY email LIMIT ? OFFSET ?`
+	query := `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` ORDER BY u.email LIMIT ? OFFSET ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT id, email, display_name, password_hash, org_id, namespace_id, role, settings, created_at, updated_at, last_login, disabled_at
-			FROM users ORDER BY email LIMIT $1 OFFSET $2`
+		query = `SELECT ` + userSelectColumns + ` ` + userFromJoin + ` ORDER BY u.email LIMIT $1 OFFSET $2`
 	}
 
 	rows, err := r.db.Query(ctx, query, limit, offset)
@@ -404,12 +400,14 @@ func (r *UserRepo) scanUser(row *sql.Row) (*model.User, error) {
 	var createdAtStr, updatedAtStr string
 	var passwordHash sql.NullString
 	var lastLoginStr, disabledAtStr sql.NullString
+	var orgName sql.NullString
 
 	err := row.Scan(
 		&idStr, &user.Email, &user.DisplayName, &passwordHash,
 		&orgIDStr, &namespaceIDStr, &user.Role,
 		&settingsStr, &createdAtStr, &updatedAtStr,
 		&lastLoginStr, &disabledAtStr,
+		&orgName,
 	)
 	if err != nil {
 		return nil, err
@@ -426,6 +424,10 @@ func (r *UserRepo) scanUser(row *sql.Row) (*model.User, error) {
 		return nil, fmt.Errorf("user scan parse org_id: %w", err)
 	}
 	user.OrgID = orgID
+
+	if orgName.Valid {
+		user.Organization = &model.ProjectOrg{ID: orgID, Name: orgName.String}
+	}
 
 	nsID, err := uuid.Parse(namespaceIDStr)
 	if err != nil {
@@ -474,12 +476,14 @@ func (r *UserRepo) scanUserFromRows(rows *sql.Rows) (*model.User, error) {
 	var createdAtStr, updatedAtStr string
 	var passwordHash sql.NullString
 	var lastLoginStr, disabledAtStr sql.NullString
+	var orgName sql.NullString
 
 	err := rows.Scan(
 		&idStr, &user.Email, &user.DisplayName, &passwordHash,
 		&orgIDStr, &namespaceIDStr, &user.Role,
 		&settingsStr, &createdAtStr, &updatedAtStr,
 		&lastLoginStr, &disabledAtStr,
+		&orgName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("user scan rows: %w", err)
@@ -496,6 +500,10 @@ func (r *UserRepo) scanUserFromRows(rows *sql.Rows) (*model.User, error) {
 		return nil, fmt.Errorf("user scan rows parse org_id: %w", err)
 	}
 	user.OrgID = orgID
+
+	if orgName.Valid {
+		user.Organization = &model.ProjectOrg{ID: orgID, Name: orgName.String}
+	}
 
 	nsID, err := uuid.Parse(namespaceIDStr)
 	if err != nil {

@@ -58,9 +58,16 @@ type EnrichmentQueueCounts struct {
 // retry/requeue (Retry + RequeueStale null it out and the next worker
 // re-claims), so the UI can use it as the anchor for "time on this attempt"
 // without paying for the cumulative wait since job creation.
+//
+// ProjectID is populated whenever the memory's project is resolvable.
+// ProjectName is populated only on self/org tier responses; the system tier
+// intentionally leaves it empty so admins see UUIDs and the UI falls
+// through.
 type EnrichmentQueueItem struct {
 	ID                uuid.UUID  `json:"id"`
 	MemoryID          uuid.UUID  `json:"memory_id"`
+	ProjectID         *uuid.UUID `json:"project_id,omitempty"`
+	ProjectName       string     `json:"project_name,omitempty"`
 	Status            string     `json:"status"`
 	Attempts          int        `json:"attempts"`
 	MaxAttempts       int        `json:"max_attempts,omitempty"`

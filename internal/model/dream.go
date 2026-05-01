@@ -69,10 +69,11 @@ func MemorySource(m *Memory) string {
 // DreamCycle represents a single dream processing run for a project.
 //
 // HeartbeatAt is updated by the runner during phase execution (independent
-// of phase-boundary writes that touch UpdatedAt). IsStaleDiagnostic and
-// IsAbandonable are NOT persisted — they're computed by the admin store at
-// read time using settings-resolved thresholds and remain zero on direct
-// repo scans.
+// of phase-boundary writes that touch UpdatedAt). IsStaleDiagnostic,
+// IsAbandonable, and ProjectName are NOT persisted — they're computed at
+// read time and remain zero/empty on direct repo scans. ProjectName is
+// populated only by self/org-tier read paths that JOIN projects; admin
+// paths leave it empty so cross-tenant views show project_id only.
 type DreamCycle struct {
 	ID           uuid.UUID       `json:"id"`
 	ProjectID    uuid.UUID       `json:"project_id"`
@@ -89,8 +90,9 @@ type DreamCycle struct {
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
 
-	IsStaleDiagnostic bool `json:"is_stale_diagnostic"`
-	IsAbandonable     bool `json:"is_abandonable"`
+	IsStaleDiagnostic bool   `json:"is_stale_diagnostic"`
+	IsAbandonable     bool   `json:"is_abandonable"`
+	ProjectName       string `json:"project_name,omitempty"`
 }
 
 // DreamLog records a single mutation performed during a dream cycle,

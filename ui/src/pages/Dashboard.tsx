@@ -19,6 +19,7 @@ import {
   type ActivityEvent,
   type ProviderSlot,
   type OrgAggregate,
+  type UserAggregate,
 } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -223,6 +224,53 @@ function OrgBreakdownTable({
                   <td className="py-2 text-right font-mono">{o.total_users.toLocaleString()}</td>
                   <td className="py-2 text-right font-mono">{o.total_projects.toLocaleString()}</td>
                   <td className="py-2 text-right font-mono">{o.total_entities.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// UserBreakdownTable renders the per-user rows from an OrgDashboardData
+// response. Counts only — no content, no per-project rows. Email is the
+// only identity field shown.
+function UserBreakdownTable({
+  rows,
+  isLoading,
+}: {
+  rows: UserAggregate[];
+  isLoading: boolean;
+}) {
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="border-b px-4 py-3">
+        <h2 className="text-sm font-semibold">Per-User Breakdown</h2>
+      </div>
+      <div className="p-4">
+        {isLoading ? (
+          <SkeletonRows count={4} />
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No users.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-muted-foreground">
+                <th className="pb-2 font-medium">Email</th>
+                <th className="pb-2 text-right font-medium">Memories</th>
+                <th className="pb-2 text-right font-medium">Projects</th>
+                <th className="pb-2 text-right font-medium">Entities</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((u) => (
+                <tr key={u.user_id} className="border-b last:border-0">
+                  <td className="py-2">{u.email}</td>
+                  <td className="py-2 text-right font-mono">{u.total_memories.toLocaleString()}</td>
+                  <td className="py-2 text-right font-mono">{u.total_projects.toLocaleString()}</td>
+                  <td className="py-2 text-right font-mono">{u.total_entities.toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>
@@ -734,8 +782,8 @@ function Dashboard() {
 
   // Normalize the dashboard data shape across tiers. Self-tier returns
   // DashboardData (with memories_by_project), org-tier returns
-  // OrgDashboardData (with memories_by_project), system-tier returns
-  // SystemDashboardData (with org_breakdown, no memories_by_project).
+  // OrgDashboardData (with user_breakdown — per-user, not per-project),
+  // system-tier returns SystemDashboardData (with org_breakdown).
   const totalMemories = activeDash.data?.total_memories ?? 0;
   const totalProjects = activeDash.data?.total_projects ?? 0;
   const totalEntities = activeDash.data?.total_entities ?? 0;
@@ -744,10 +792,15 @@ function Dashboard() {
       ? (activeDash.data as { enrichment_queue?: { pending: number; processing: number; failed: number } | null }).enrichment_queue ?? undefined
       : undefined;
   const memoriesByProject: ProjectMemoryCount[] =
-    tier === "system"
-      ? []
-      : ((activeDash.data as { memories_by_project?: ProjectMemoryCount[] } | undefined)
-          ?.memories_by_project ?? []);
+    tier === "self"
+      ? ((activeDash.data as { memories_by_project?: ProjectMemoryCount[] } | undefined)
+          ?.memories_by_project ?? [])
+      : [];
+  const userBreakdown: UserAggregate[] =
+    tier === "org"
+      ? ((activeDash.data as { user_breakdown?: UserAggregate[] } | undefined)
+          ?.user_breakdown ?? [])
+      : [];
   const orgBreakdown: OrgAggregate[] =
     tier === "system"
       ? ((activeDash.data as { org_breakdown?: OrgAggregate[] } | undefined)
@@ -808,6 +861,8 @@ function Dashboard() {
         <div className={`space-y-6 ${auth.isAdmin && tier === "self" ? "lg:col-span-2" : ""}`}>
           {tier === "system" ? (
             <OrgBreakdownTable rows={orgBreakdown} isLoading={activeDash.isLoading} />
+          ) : tier === "org" ? (
+            <UserBreakdownTable rows={userBreakdown} isLoading={activeDash.isLoading} />
           ) : (
             <MemoryCountsTable
               data={memoriesByProject}

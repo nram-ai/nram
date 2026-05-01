@@ -145,6 +145,33 @@ func (r *DreamDirtyRepo) IsDirty(ctx context.Context, projectID uuid.UUID) (bool
 	return count > 0, nil
 }
 
+// CountDirtyByNamespacePathPrefix returns the number of dirty projects
+// whose namespace path is equal to or descended from prefix. Used by the
+// self-tier dreaming page to render an aggregate "any-of-mine-dirty" badge
+// without exposing per-project state across orgs/users.
+func (r *DreamDirtyRepo) CountDirtyByNamespacePathPrefix(ctx context.Context, prefix string) (int, error) {
+	likePattern := prefix + "/%"
+	var query string
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM dream_project_dirty dpd
+			JOIN projects p ON p.id = dpd.project_id
+			JOIN namespaces n ON n.id = p.namespace_id
+			WHERE dpd.dirty_since IS NOT NULL AND (n.path = $1 OR n.path LIKE $2)`
+	} else {
+		query = `SELECT COUNT(*) FROM dream_project_dirty dpd
+			JOIN projects p ON p.id = dpd.project_id
+			JOIN namespaces n ON n.id = p.namespace_id
+			WHERE dpd.dirty_since IS NOT NULL AND (n.path = ? OR n.path LIKE ?)`
+	}
+
+	var count int
+	err := r.db.QueryRow(ctx, query, prefix, likePattern).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("dream dirty count by namespace prefix: %w", err)
+	}
+	return count, nil
+}
+
 // CountDirty returns the total number of dirty projects.
 func (r *DreamDirtyRepo) CountDirty(ctx context.Context) (int, error) {
 	query := `SELECT COUNT(*) FROM dream_project_dirty WHERE dirty_since IS NOT NULL`

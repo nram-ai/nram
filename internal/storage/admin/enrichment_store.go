@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -39,10 +40,10 @@ func NewEnrichmentAdminStore(
 	}
 }
 
-// hydrateQueueItem builds the api-layer EnrichmentQueueItem from the model
-// row plus the stuck threshold (in ms). Centralized so the SelfQueueStatus
-// and QueueStatus paths stay in sync as the UI grows.
-func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, staleThresholdMs int64, now time.Time) api.EnrichmentQueueItem {
+// hydrateQueueItem builds the api-layer EnrichmentQueueItem from a queue
+// row. projectName is empty on admin-tier callers; the UI falls through
+// to project_id.
+func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projectID *uuid.UUID, projectName string, staleThresholdMs int64, now time.Time) api.EnrichmentQueueItem {
 	lastErr := ""
 	if item.LastError != nil {
 		lastErr = string(item.LastError)
@@ -50,6 +51,8 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, staleT
 	out := api.EnrichmentQueueItem{
 		ID:                item.ID,
 		MemoryID:          item.MemoryID,
+		ProjectID:         projectID,
+		ProjectName:       projectName,
 		Status:            item.Status,
 		Attempts:          item.Attempts,
 		MaxAttempts:       item.MaxAttempts,
@@ -88,12 +91,80 @@ func (s *EnrichmentAdminStore) staleThresholdMs(ctx context.Context) int64 {
 	return d.Milliseconds()
 }
 
+// queueItemSelectColumns is the projection shared between SelfQueueStatus
+// (with p.name) and QueueStatus (without). When withName is true the SELECT
+// adds `p.name` so self-tier callers see project names; admin paths leave
+// it off and surface project_id only.
+func queueItemSelectColumns(withName bool) string {
+	cols := `eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
+		eq.claimed_by, eq.claimed_at, eq.last_requeue_reason, p.id`
+	if withName {
+		cols += `, p.name`
+	}
+	return cols
+}
+
+// scanQueueItem reads one row and builds an EnrichmentQueueItem. When
+// withName is true the scan reads p.name from the trailing column; otherwise
+// the row stops at p.id.
+func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, threshold int64, now time.Time) (api.EnrichmentQueueItem, error) {
+	var (
+		idStr, memIDStr, status, createdAtStr     string
+		attempts, maxAttempts                     int
+		lastErr, claimedBy, claimedAtStr, requeue *string
+		projectIDStr                              *string
+		projectName                               *string
+	)
+	dest := []any{&idStr, &memIDStr, &status, &attempts, &maxAttempts, &lastErr, &createdAtStr,
+		&claimedBy, &claimedAtStr, &requeue, &projectIDStr}
+	if withName {
+		dest = append(dest, &projectName)
+	}
+	if err := rows.Scan(dest...); err != nil {
+		return api.EnrichmentQueueItem{}, err
+	}
+
+	id, _ := uuid.Parse(idStr)
+	memID, _ := uuid.Parse(memIDStr)
+	ts, _ := parseQueueTime(createdAtStr)
+	var lastErrJSON json.RawMessage
+	if lastErr != nil {
+		lastErrJSON = json.RawMessage(*lastErr)
+	}
+	var claimedAt *time.Time
+	if claimedAtStr != nil && *claimedAtStr != "" {
+		if t, perr := parseQueueTime(*claimedAtStr); perr == nil {
+			claimedAt = &t
+		}
+	}
+	var pid *uuid.UUID
+	if projectIDStr != nil && *projectIDStr != "" {
+		if pu, perr := uuid.Parse(*projectIDStr); perr == nil {
+			pid = &pu
+		}
+	}
+	pname := ""
+	if projectName != nil {
+		pname = *projectName
+	}
+	return s.hydrateQueueItem(model.EnrichmentJob{
+		ID:                id,
+		MemoryID:          memID,
+		Status:            status,
+		Attempts:          attempts,
+		MaxAttempts:       maxAttempts,
+		LastError:         lastErrJSON,
+		CreatedAt:         ts,
+		ClaimedBy:         claimedBy,
+		ClaimedAt:         claimedAt,
+		LastRequeueReason: requeue,
+	}, pid, pname, threshold, now), nil
+}
+
 // SelfQueueStatus returns the queue items whose memory.namespace_id is
 // descended from the given user namespace. Counts are also scoped to the
-// caller — they reflect only the caller's queue, not the system-wide
-// queue. Used by the tier-A /v1/me/enrichment handler.
+// caller. Used by /v1/me/enrichment.
 func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespaceID uuid.UUID) (*api.EnrichmentQueueStatus, error) {
-	// Resolve caller's namespace path so we can filter by prefix.
 	var callerPath string
 	row := s.db.QueryRow(ctx, "SELECT path FROM namespaces WHERE id = ?", userNamespaceID.String())
 	if s.db.Backend() == storage.BackendPostgres {
@@ -106,16 +177,15 @@ func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespac
 	prefixPattern := callerPath + "/%"
 	exactPath := callerPath
 
-	// Counts.
 	var counts api.EnrichmentQueueCounts
 	for _, st := range []struct {
 		status string
 		dest   *int
 	}{
-		{"pending", &counts.Pending},
-		{"processing", &counts.Processing},
-		{"completed", &counts.Completed},
-		{"failed", &counts.Failed},
+		{model.EnrichmentStatusPending, &counts.Pending},
+		{model.EnrichmentStatusProcessing, &counts.Processing},
+		{model.EnrichmentStatusCompleted, &counts.Completed},
+		{model.EnrichmentStatusFailed, &counts.Failed},
 	} {
 		var q string
 		if s.db.Backend() == storage.BackendPostgres {
@@ -133,22 +203,22 @@ func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespac
 		_ = row.Scan(st.dest)
 	}
 
-	// Recent items in caller's scope.
+	cols := queueItemSelectColumns(true)
 	var itemsQ string
 	if s.db.Backend() == storage.BackendPostgres {
-		itemsQ = `SELECT eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
-				eq.claimed_by, eq.claimed_at, eq.last_requeue_reason
+		itemsQ = `SELECT ` + cols + `
 			FROM enrichment_queue eq
 			JOIN memories m ON eq.memory_id = m.id
 			JOIN namespaces n ON m.namespace_id = n.id
+			LEFT JOIN projects p ON p.namespace_id = m.namespace_id
 			WHERE n.path = $1 OR n.path LIKE $2
 			ORDER BY eq.created_at DESC LIMIT 50`
 	} else {
-		itemsQ = `SELECT eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
-				eq.claimed_by, eq.claimed_at, eq.last_requeue_reason
+		itemsQ = `SELECT ` + cols + `
 			FROM enrichment_queue eq
 			JOIN memories m ON eq.memory_id = m.id
 			JOIN namespaces n ON m.namespace_id = n.id
+			LEFT JOIN projects p ON p.namespace_id = m.namespace_id
 			WHERE n.path = ? OR n.path LIKE ?
 			ORDER BY eq.created_at DESC LIMIT 50`
 	}
@@ -162,40 +232,11 @@ func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespac
 	now := time.Now().UTC()
 	queueItems := []api.EnrichmentQueueItem{}
 	for rows.Next() {
-		var (
-			idStr, memIDStr, status, createdAtStr      string
-			attempts, maxAttempts                      int
-			lastErr, claimedBy, claimedAtStr, requeue  *string
-		)
-		if err := rows.Scan(&idStr, &memIDStr, &status, &attempts, &maxAttempts, &lastErr, &createdAtStr,
-			&claimedBy, &claimedAtStr, &requeue); err != nil {
+		item, err := s.scanQueueItem(rows, true, threshold, now)
+		if err != nil {
 			return nil, fmt.Errorf("self queue scan: %w", err)
 		}
-		id, _ := uuid.Parse(idStr)
-		memID, _ := uuid.Parse(memIDStr)
-		ts, _ := parseQueueTime(createdAtStr)
-		var lastErrJSON json.RawMessage
-		if lastErr != nil {
-			lastErrJSON = json.RawMessage(*lastErr)
-		}
-		var claimedAt *time.Time
-		if claimedAtStr != nil && *claimedAtStr != "" {
-			if t, perr := parseQueueTime(*claimedAtStr); perr == nil {
-				claimedAt = &t
-			}
-		}
-		queueItems = append(queueItems, s.hydrateQueueItem(model.EnrichmentJob{
-			ID:                id,
-			MemoryID:          memID,
-			Status:            status,
-			Attempts:          attempts,
-			MaxAttempts:       maxAttempts,
-			LastError:         lastErrJSON,
-			CreatedAt:         ts,
-			ClaimedBy:         claimedBy,
-			ClaimedAt:         claimedAt,
-			LastRequeueReason: requeue,
-		}, threshold, now))
+		queueItems = append(queueItems, item)
 	}
 
 	paused, _ := s.IsPaused(ctx)
@@ -221,22 +262,36 @@ func parseQueueTime(s string) (t time.Time, err error) {
 	return time.Time{}, fmt.Errorf("unparseable timestamp: %s", s)
 }
 
+// QueueStatus returns the system-wide queue. Items carry project_id (no
+// project_name) so cross-tenant admins see UUIDs only — matching the
+// privacy posture for system-tier dreaming cycles.
 func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context) (*api.EnrichmentQueueStatus, error) {
 	stats, err := s.queueRepo.CountByStatus(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("queue status counts: %w", err)
 	}
 
-	items, err := s.queueRepo.ListRecent(ctx, 50)
+	cols := queueItemSelectColumns(false)
+	itemsQ := `SELECT ` + cols + `
+		FROM enrichment_queue eq
+		JOIN memories m ON eq.memory_id = m.id
+		LEFT JOIN projects p ON p.namespace_id = m.namespace_id
+		ORDER BY eq.created_at DESC LIMIT 50`
+	rows, err := s.db.Query(ctx, itemsQ)
 	if err != nil {
 		return nil, fmt.Errorf("queue status items: %w", err)
 	}
+	defer rows.Close()
 
 	threshold := s.staleThresholdMs(ctx)
 	now := time.Now().UTC()
-	queueItems := make([]api.EnrichmentQueueItem, 0, len(items))
-	for _, item := range items {
-		queueItems = append(queueItems, s.hydrateQueueItem(item, threshold, now))
+	queueItems := []api.EnrichmentQueueItem{}
+	for rows.Next() {
+		item, err := s.scanQueueItem(rows, false, threshold, now)
+		if err != nil {
+			return nil, fmt.Errorf("queue status scan: %w", err)
+		}
+		queueItems = append(queueItems, item)
 	}
 
 	paused, _ := s.IsPaused(ctx)

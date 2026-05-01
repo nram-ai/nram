@@ -127,3 +127,44 @@ func TestDreamDirtyRepo_ListDirtyProjects_TiebreakerOnProjectID(t *testing.T) {
 		}
 	})
 }
+
+// TestDreamDirtyRepo_CountDirtyByNamespacePathPrefix verifies the prefix-
+// scoped count used by the self-tier dreaming page's aggregate "any-of-mine-
+// dirty" badge. Only dirty projects under the caller's namespace path should
+// contribute to the count; another user's dirty project must not leak in.
+func TestDreamDirtyRepo_CountDirtyByNamespacePathPrefix(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsRepo := NewNamespaceRepo(db)
+		repo := NewDreamDirtyRepo(db)
+
+		mine, _ := createTestProject(t, ctx, db, "mine-"+uuid.New().String()[:8])
+		theirs, _ := createTestProject(t, ctx, db, "theirs-"+uuid.New().String()[:8])
+
+		// Caller's user-namespace path.
+		mineNS, err := nsRepo.GetByID(ctx, mine.NamespaceID)
+		if err != nil {
+			t.Fatalf("get mine ns: %v", err)
+		}
+		userNS, err := nsRepo.GetByID(ctx, *mineNS.ParentID)
+		if err != nil {
+			t.Fatalf("get user ns: %v", err)
+		}
+
+		// Both projects dirty.
+		if err := repo.MarkDirty(ctx, mine.ID); err != nil {
+			t.Fatalf("mark mine dirty: %v", err)
+		}
+		if err := repo.MarkDirty(ctx, theirs.ID); err != nil {
+			t.Fatalf("mark theirs dirty: %v", err)
+		}
+
+		count, err := repo.CountDirtyByNamespacePathPrefix(ctx, userNS.Path)
+		if err != nil {
+			t.Fatalf("CountDirtyByNamespacePathPrefix: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("count: got %d want 1 (sibling user's dirty project must not leak)", count)
+		}
+	})
+}

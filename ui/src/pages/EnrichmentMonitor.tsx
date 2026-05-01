@@ -556,6 +556,9 @@ function QueueTable({
             <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
               Memory ID
             </th>
+            <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
+              Project
+            </th>
             <th className="px-3 py-2.5 text-left">
               <SortHeader
                 label="Status"
@@ -622,6 +625,16 @@ function QueueTable({
                   >
                     {truncateId(item.memory_id)}
                   </span>
+                </td>
+                <td
+                  className="px-3 py-2.5 text-xs text-muted-foreground"
+                  title={item.project_id ?? ""}
+                >
+                  {item.project_name
+                    ? item.project_name
+                    : item.project_id
+                      ? truncateId(item.project_id)
+                      : "—"}
                 </td>
                 <td className="px-3 py-2.5">
                   <div className="flex flex-wrap items-center gap-1.5">

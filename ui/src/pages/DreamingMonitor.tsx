@@ -1,11 +1,10 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useDreamingStatus,
   useDreamingCycles,
   useDreamingCycleDetail,
-  useMyDreamingProjectStatus,
-  useMeProjects,
+  useMyDreamingAggregateStatus,
   useSetDreamingEnabled,
   useRollbackDreamCycle,
   useAbandonDreamCycle,
@@ -514,6 +513,7 @@ function CycleTable({
   isAbandoning,
   live,
   showWriteActions = true,
+  showProjectName = false,
 }: {
   cycles: DreamCycle[];
   onSelect: (id: string) => void;
@@ -522,6 +522,10 @@ function CycleTable({
   isAbandoning: boolean;
   live: Record<string, LiveCycleState>;
   showWriteActions?: boolean;
+  // showProjectName toggles the rendering of project_name vs project_id in
+  // the Project column. Self/org-tier responses populate project_name; the
+  // system tier intentionally leaves it empty so admins see UUIDs only.
+  showProjectName?: boolean;
 }) {
   if (cycles.length === 0) {
     return (
@@ -537,6 +541,7 @@ function CycleTable({
         <thead>
           <tr className="border-b bg-muted/50 text-left">
             <th className="px-4 py-3 font-medium text-muted-foreground">Status</th>
+            <th className="px-4 py-3 font-medium text-muted-foreground">Project</th>
             <th className="px-4 py-3 font-medium text-muted-foreground">Phase</th>
             <th className="px-4 py-3 font-medium text-muted-foreground">Tokens</th>
             <th className="px-4 py-3 font-medium text-muted-foreground">Duration</th>
@@ -577,6 +582,11 @@ function CycleTable({
                         return ts ? <LastActivityChip iso={ts} /> : null;
                       })()}
                   </div>
+                </td>
+                <td className="px-4 py-3 text-muted-foreground" title={cycle.project_id}>
+                  {showProjectName
+                    ? (cycle.project_name ?? cycle.project_id)
+                    : cycle.project_id}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {(() => {
@@ -978,16 +988,6 @@ export default function DreamingMonitor() {
   // 2026-04-30 privacy plan and can switch to "System" via the tab picker.
   const [tier, setTier] = useState<DreamingTier>("self");
 
-  // Self-tier requires a project_id; we let the user pick from their own
-  // projects. Defaulting to the first project lets the page render
-  // immediately without an empty intermediate state.
-  const projectsQuery = useMeProjects();
-  const projects = projectsQuery.data ?? [];
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  useEffect(() => {
-    setSelectedProjectId((cur) => cur ?? projects[0]?.id ?? null);
-  }, [projects]);
-
   // System-tier (admin only): live system status + system-wide cycles list.
   // Both queries are gated by `enabled` rather than just refetchInterval —
   // refetchInterval=0 only stops polling, the initial fetch still fires.
@@ -1001,17 +1001,19 @@ export default function DreamingMonitor() {
     enabled: tier === "system",
   });
 
-  // Self-tier: per-project status + cycles list scoped to the selected
-  // project. Both endpoints require a project_id and the server checks
-  // ownership against the caller's namespace.
-  const selfStatusQuery = useMyDreamingProjectStatus(
-    tier === "self" ? selectedProjectId : null,
-    { intervalMs: statusIntervalMs },
-  );
-  const selfCyclesQuery = useDreamingCycles(
-    tier === "self" ? (selectedProjectId ?? undefined) : undefined,
-    { intervalMs: cyclesIntervalMs, tier: "self" },
-  );
+  // Self-tier: aggregate "any-of-mine-dirty" status + cycles across all of
+  // the caller's projects. The project picker has been removed in favor of
+  // a unified all-projects list; the per-project status panel is replaced
+  // by a rolled-up dirty/quiet badge.
+  const selfStatusQuery = useMyDreamingAggregateStatus({
+    intervalMs: statusIntervalMs,
+    enabled: tier === "self",
+  });
+  const selfCyclesQuery = useDreamingCycles(undefined, {
+    intervalMs: cyclesIntervalMs,
+    tier: "self",
+    enabled: tier === "self",
+  });
 
   const enableMutation = useSetDreamingEnabled();
   const rollbackMutation = useRollbackDreamCycle();
@@ -1075,18 +1077,17 @@ export default function DreamingMonitor() {
     [abandonMutation, showToast],
   );
 
-  // Tier-normalized view of the status + cycles. Self-tier has no
-  // dirty/stuck counters in its response shape; we derive a comparable
-  // pair from the per-project boolean and the cycles list.
+  // Tier-normalized view: self has no dirty/stuck counters in its response
+  // shape, so derive them from the aggregate dirty boolean and the cycles
+  // list. enabledFlag is system-only — self renders an aggregate dirty pill
+  // instead and reads selfStatusQuery directly.
   const view = (() => {
     if (tier === "system") {
       const s = systemStatusQuery.data;
-      const cycles = systemCyclesQuery.data ?? [];
       return {
-        cycles,
+        cycles: systemCyclesQuery.data ?? [],
         dirtyCount: s?.dirty_count ?? 0,
         stuckCount: s?.stuck_count ?? 0,
-        enabledFlag: s?.enabled ?? false,
         isLoading: systemStatusQuery.isLoading,
         isError: systemStatusQuery.isError,
       };
@@ -1095,15 +1096,14 @@ export default function DreamingMonitor() {
     const cycles = selfCyclesQuery.data ?? [];
     return {
       cycles,
-      dirtyCount: s?.dirty ? 1 : 0,
+      dirtyCount: s?.any_dirty ? 1 : 0,
       stuckCount: cycles.filter((c) => c.is_abandonable).length,
-      enabledFlag: s?.enabled ?? false,
-      isLoading:
-        projectsQuery.isLoading || (!!selectedProjectId && selfStatusQuery.isLoading),
+      isLoading: selfStatusQuery.isLoading,
       isError: selfStatusQuery.isError,
     };
   })();
-  const { cycles, dirtyCount, stuckCount, enabledFlag, isLoading, isError } = view;
+  const { cycles, dirtyCount, stuckCount, isLoading, isError } = view;
+  const enabledFlag = tier === "system" ? (systemStatusQuery.data?.enabled ?? false) : false;
 
   const { runningCount, completedCount, failedCount } = useMemo(() => ({
     runningCount: cycles.filter((c) => c.status === "running").length,
@@ -1167,36 +1167,6 @@ export default function DreamingMonitor() {
         </div>
       )}
 
-      {/* Self-tier: project picker */}
-      {tier === "self" && (
-        <div className="rounded-lg border bg-card p-4">
-          <label htmlFor="dreaming-project" className="block text-sm font-medium">
-            Project
-          </label>
-          {projects.length === 0 ? (
-            <p className="mt-2 text-sm text-muted-foreground">
-              No projects yet — create a project to view dream cycles.
-            </p>
-          ) : (
-            <select
-              id="dreaming-project"
-              className="mt-2 w-full rounded-md border bg-background px-3 py-2 text-sm md:w-auto"
-              value={selectedProjectId ?? ""}
-              onChange={(e) => {
-                setSelectedProjectId(e.target.value);
-                setSelectedCycleId(null);
-              }}
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-      )}
-
       {/* Loading */}
       {isLoading && (
         <div className="flex items-center justify-center py-16">
@@ -1214,10 +1184,11 @@ export default function DreamingMonitor() {
       )}
 
       {/* Content */}
-      {!isLoading && !isError && (tier === "system" || !!selectedProjectId) && (
+      {!isLoading && !isError && (
         <>
           {/* Controls — system tier renders the enable/disable toggle; */}
-          {/* self tier shows the read-only status flag instead. */}
+          {/* self tier shows the rolled-up "any-of-mine-dirty" badge plus */}
+          {/* the count of caller-owned projects. */}
           <div className="flex items-center justify-between rounded-lg border bg-card p-4">
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium">Dreaming</span>
@@ -1233,9 +1204,22 @@ export default function DreamingMonitor() {
                   </span>
                 </>
               ) : (
-                <span className="text-sm text-muted-foreground">
-                  {enabledFlag ? "Enabled" : "Disabled"}
-                </span>
+                <>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                      selfStatusQuery.data?.any_dirty
+                        ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
+                        : "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                    }`}
+                  >
+                    {selfStatusQuery.data?.any_dirty ? "Any dirty" : "All quiet"}
+                  </span>
+                  <span className="text-sm text-muted-foreground">
+                    {selfStatusQuery.data?.project_count ?? 0}
+                    {" "}
+                    {selfStatusQuery.data?.project_count === 1 ? "project" : "projects"}
+                  </span>
+                </>
               )}
             </div>
             <p className="text-xs text-muted-foreground">
@@ -1312,6 +1296,7 @@ export default function DreamingMonitor() {
                 isAbandoning={abandonMutation.isPending}
                 live={live}
                 showWriteActions={showWriteActions}
+                showProjectName={tier === "self"}
               />
             </div>
           )}

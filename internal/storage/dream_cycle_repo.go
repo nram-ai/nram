@@ -343,6 +343,68 @@ func (r *DreamCycleRepo) ListByProject(ctx context.Context, projectID uuid.UUID,
 	return r.scanRows(rows)
 }
 
+// ListByNamespacePathPrefix returns cycles whose project's namespace path is
+// equal to or descended from prefix, with each row's ProjectName populated
+// from the joined project. The handler doesn't need a separate name lookup.
+func (r *DreamCycleRepo) ListByNamespacePathPrefix(ctx context.Context, prefix string, limit int) ([]model.DreamCycle, error) {
+	likePattern := prefix + "/%"
+	const dcCols = `SELECT dc.id, dc.project_id, dc.namespace_id, dc.status, dc.phase,
+		dc.tokens_used, dc.token_budget, dc.phase_summary, dc.error,
+		dc.started_at, dc.completed_at, dc.heartbeat_at, dc.created_at, dc.updated_at,
+		p.name`
+
+	var query string
+	if r.db.Backend() == BackendPostgres {
+		query = dcCols + ` FROM dream_cycles dc
+			JOIN projects p ON p.id = dc.project_id
+			JOIN namespaces n ON n.id = p.namespace_id
+			WHERE n.path = $1 OR n.path LIKE $2
+			ORDER BY dc.created_at DESC LIMIT $3`
+	} else {
+		query = dcCols + ` FROM dream_cycles dc
+			JOIN projects p ON p.id = dc.project_id
+			JOIN namespaces n ON n.id = p.namespace_id
+			WHERE n.path = ? OR n.path LIKE ?
+			ORDER BY dc.created_at DESC LIMIT ?`
+	}
+
+	rows, err := r.db.Query(ctx, query, prefix, likePattern, limit)
+	if err != nil {
+		return nil, fmt.Errorf("dream cycle list by namespace prefix: %w", err)
+	}
+	defer rows.Close()
+
+	var result []model.DreamCycle
+	for rows.Next() {
+		var c model.DreamCycle
+		var idStr, projectIDStr, namespaceIDStr string
+		var phaseSummaryStr string
+		var errorStr, startedAtStr, completedAtStr, heartbeatAtStr sql.NullString
+		var createdAtStr, updatedAtStr string
+		var projectName string
+
+		if err := rows.Scan(
+			&idStr, &projectIDStr, &namespaceIDStr, &c.Status, &c.Phase,
+			&c.TokensUsed, &c.TokenBudget, &phaseSummaryStr, &errorStr,
+			&startedAtStr, &completedAtStr, &heartbeatAtStr, &createdAtStr, &updatedAtStr,
+			&projectName,
+		); err != nil {
+			return nil, fmt.Errorf("dream cycle scan rows: %w", err)
+		}
+		populated, err := r.populate(&c, idStr, projectIDStr, namespaceIDStr, phaseSummaryStr,
+			errorStr, startedAtStr, completedAtStr, heartbeatAtStr, createdAtStr, updatedAtStr)
+		if err != nil {
+			return nil, err
+		}
+		populated.ProjectName = projectName
+		result = append(result, *populated)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("dream cycle iter rows: %w", err)
+	}
+	return result, nil
+}
+
 // ListRecent returns recent dream cycles across all projects.
 func (r *DreamCycleRepo) ListRecent(ctx context.Context, limit int) ([]model.DreamCycle, error) {
 	query := selectDreamCycleColumns + ` FROM dream_cycles ORDER BY created_at DESC LIMIT ?`

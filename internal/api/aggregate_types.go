@@ -50,6 +50,22 @@ type ProjectAggregate struct {
 	TotalMemories int       `json:"total_memories"`
 }
 
+// UserAggregate is one row of a per-user breakdown returned by tier-B
+// dashboard. Bucketed inside a single org so an org_owner sees how their
+// org's storage is distributed across users without learning anything
+// project-shaped — projects in nram are typically user-owned, so a
+// per-project view inside an org is itself a per-user signal.
+//
+// Email is the only identity field carried; display_name is excluded by
+// design.
+type UserAggregate struct {
+	UserID        uuid.UUID `json:"user_id"`
+	Email         string    `json:"email"`
+	TotalMemories int       `json:"total_memories"`
+	TotalProjects int       `json:"total_projects"`
+	TotalEntities int       `json:"total_entities"`
+}
+
 // OrgAnalyticsData is the tier-B (org-aggregate) analytics response.
 // Returned by NewOrgAnalyticsHandler at /v1/orgs/{org_id}/analytics.
 type OrgAnalyticsData struct {
@@ -72,14 +88,17 @@ type SystemAnalyticsData struct {
 	RelationshipTypeHistogram []TypeBucket        `json:"relationship_type_histogram"`
 }
 
-// OrgDashboardData is the tier-B (org-aggregate) dashboard response.
+// OrgDashboardData is the tier-B (org-aggregate) dashboard response. The
+// breakdown is bucketed per-USER (not per-project) — a per-project view
+// inside an org leaks individual users' memory activity to every org_owner,
+// since projects are user-owned.
 type OrgDashboardData struct {
-	TotalMemories     int                  `json:"total_memories"`
-	TotalProjects     int                  `json:"total_projects"`
-	TotalUsers        int                  `json:"total_users"`
-	TotalEntities     int                  `json:"total_entities"`
-	MemoriesByProject []ProjectMemoryCount `json:"memories_by_project"`
-	EnrichmentQueue   *DashboardQueueStats `json:"enrichment_queue,omitempty"`
+	TotalMemories   int                  `json:"total_memories"`
+	TotalProjects   int                  `json:"total_projects"`
+	TotalUsers      int                  `json:"total_users"`
+	TotalEntities   int                  `json:"total_entities"`
+	UserBreakdown   []UserAggregate      `json:"user_breakdown"`
+	EnrichmentQueue *DashboardQueueStats `json:"enrichment_queue,omitempty"`
 }
 
 // SystemDashboardData is the tier-C (system-aggregate) dashboard response.

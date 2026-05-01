@@ -134,6 +134,19 @@ func (r *ProjectRepo) ListByUser(ctx context.Context, ownerNamespaceID uuid.UUID
 	return result, nil
 }
 
+// CountByUser returns the number of projects owned by the given namespace.
+func (r *ProjectRepo) CountByUser(ctx context.Context, ownerNamespaceID uuid.UUID) (int, error) {
+	query := `SELECT COUNT(*) FROM projects WHERE owner_namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM projects WHERE owner_namespace_id = $1`
+	}
+	var n int
+	if err := r.db.QueryRow(ctx, query, ownerNamespaceID.String()).Scan(&n); err != nil {
+		return 0, fmt.Errorf("project count by user: %w", err)
+	}
+	return n, nil
+}
+
 // ListAll returns all projects ordered by name.
 func (r *ProjectRepo) ListAll(ctx context.Context) ([]model.Project, error) {
 	query := selectProjectColumns + ` FROM projects p` + projectJoins + ` ORDER BY p.name`

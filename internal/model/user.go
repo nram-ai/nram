@@ -13,6 +13,7 @@ type User struct {
 	DisplayName  string          `json:"display_name"`
 	PasswordHash *string         `json:"-"`
 	OrgID        uuid.UUID       `json:"org_id"`
+	Organization *ProjectOrg     `json:"organization,omitempty"`
 	NamespaceID  uuid.UUID       `json:"namespace_id"`
 	Role         string          `json:"role"`
 	Settings     json.RawMessage `json:"settings"`

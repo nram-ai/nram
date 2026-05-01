@@ -11,10 +11,11 @@ import (
 )
 
 // OrgDashboardAggregator is the storage surface consumed by tier-B
-// dashboard. Implemented by storage/admin.AggregatesStore + DashboardStore.
+// dashboard. Implemented by storage/admin.AggregatesStore.
 type OrgDashboardAggregator interface {
 	OrgMemoryCounts(ctx context.Context, orgID uuid.UUID) (MemoryCountsData, error)
-	ProjectBreakdown(ctx context.Context, orgID uuid.UUID) ([]ProjectAggregate, error)
+	UserBreakdown(ctx context.Context, orgID uuid.UUID) ([]UserAggregate, error)
+	OrgEnrichmentQueueStats(ctx context.Context, orgID uuid.UUID) (*DashboardQueueStats, error)
 	ActivityHistogram(ctx context.Context, orgID *uuid.UUID, days int) ([]DailyBucket, error)
 }
 
@@ -61,26 +62,38 @@ func NewOrgDashboardHandler(cfg OrgDashboardConfig) http.HandlerFunc {
 			return
 		}
 
-		projects, err := cfg.Store.ProjectBreakdown(ctx, *orgID)
+		users, err := cfg.Store.UserBreakdown(ctx, *orgID)
 		if err != nil {
-			WriteError(w, ErrInternal("failed to retrieve project breakdown"))
+			WriteError(w, ErrInternal("failed to retrieve user breakdown"))
 			return
 		}
+		if users == nil {
+			users = []UserAggregate{}
+		}
 
-		// Convert ProjectAggregate to ProjectMemoryCount for shape parity
-		// with the legacy dashboard. Subset of fields — no content.
-		memoriesByProject := make([]ProjectMemoryCount, 0, len(projects))
-		for _, p := range projects {
-			memoriesByProject = append(memoriesByProject, ProjectMemoryCount{
-				ProjectID:   p.ProjectID,
-				ProjectName: p.ProjectName,
-				Count:       p.TotalMemories,
-			})
+		// Org-level totals are derivable from the per-user breakdown:
+		// projects/entities are user-owned, so summing per-user counts gives
+		// the org total. Memory counts come from OrgMemoryCounts above —
+		// it's authoritative across the whole org subtree (not just under
+		// users).
+		var projCount, entityCount int
+		for _, u := range users {
+			projCount += u.TotalProjects
+			entityCount += u.TotalEntities
+		}
+
+		queueStats, err := cfg.Store.OrgEnrichmentQueueStats(ctx, *orgID)
+		if err != nil {
+			queueStats = nil
 		}
 
 		writeJSON(w, http.StatusOK, OrgDashboardData{
-			TotalMemories:     counts.Total,
-			MemoriesByProject: memoriesByProject,
+			TotalMemories:   counts.Total,
+			TotalProjects:   projCount,
+			TotalUsers:      len(users),
+			TotalEntities:   entityCount,
+			UserBreakdown:   users,
+			EnrichmentQueue: queueStats,
 		})
 	}
 }

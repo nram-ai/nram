@@ -384,3 +384,59 @@ func TestDreamCycleRepo_Complete_DerivesTokensUsedFromUsageRows(t *testing.T) {
 		}
 	})
 }
+
+// TestDreamCycleRepo_ListByNamespacePathPrefix verifies the JOIN-based prefix
+// filter used by the self-tier dreaming page. Cycles whose project's
+// namespace path is equal to the caller's path or descended from it must be
+// included; sibling-user cycles must be excluded.
+func TestDreamCycleRepo_ListByNamespacePathPrefix(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsRepo := NewNamespaceRepo(db)
+		repo := NewDreamCycleRepo(db)
+
+		// Caller's project + sibling user's project.
+		mine, _ := createTestProject(t, ctx, db, "mine-"+uuid.New().String()[:8])
+		theirs, _ := createTestProject(t, ctx, db, "theirs-"+uuid.New().String()[:8])
+
+		// Resolve caller's user namespace path — that's the prefix passed to
+		// the new method. createTestProject creates the project under a fresh
+		// user, with parent_id pointing at the user namespace.
+		mineNS, err := nsRepo.GetByID(ctx, mine.NamespaceID)
+		if err != nil {
+			t.Fatalf("get mine ns: %v", err)
+		}
+		if mineNS.ParentID == nil {
+			t.Fatalf("project namespace has no parent")
+		}
+		userNS, err := nsRepo.GetByID(ctx, *mineNS.ParentID)
+		if err != nil {
+			t.Fatalf("get user ns: %v", err)
+		}
+		callerPath := userNS.Path
+
+		mineCycle := createRunningCycle(t, ctx, repo, mine.ID, mine.NamespaceID, 0)
+		_ = createRunningCycle(t, ctx, repo, theirs.ID, theirs.NamespaceID, 0)
+
+		got, err := repo.ListByNamespacePathPrefix(ctx, callerPath, 50)
+		if err != nil {
+			t.Fatalf("ListByNamespacePathPrefix: %v", err)
+		}
+
+		var sawMine, sawTheirs bool
+		for _, c := range got {
+			if c.ID == mineCycle.ID {
+				sawMine = true
+			}
+			if c.ProjectID == theirs.ID {
+				sawTheirs = true
+			}
+		}
+		if !sawMine {
+			t.Errorf("caller's cycle missing from prefix-filtered result")
+		}
+		if sawTheirs {
+			t.Errorf("sibling user's cycle leaked across the prefix filter")
+		}
+	})
+}

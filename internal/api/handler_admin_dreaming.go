@@ -16,6 +16,14 @@ type DreamAdminStore interface {
 	Status(ctx context.Context) (*DreamStatusResponse, error)
 	ProjectStatus(ctx context.Context, projectID uuid.UUID) (*DreamProjectStatusResponse, error)
 	ListCycles(ctx context.Context, projectID *uuid.UUID, limit int) ([]model.DreamCycle, error)
+	// ListSelfCycles returns cycles whose project namespace is descended from
+	// callerNS.Path (or equal to it). Used by the self-tier dreaming page to
+	// list cycles across all of a caller's projects.
+	ListSelfCycles(ctx context.Context, callerNS *model.Namespace, limit int) ([]model.DreamCycle, error)
+	// SelfDreamingDirtyCount returns the number of caller-owned projects with
+	// pending user-originated changes (dirty). Used to render the aggregate
+	// "any-of-mine-dirty" badge in the self-tier dreaming view.
+	SelfDreamingDirtyCount(ctx context.Context, callerNS *model.Namespace) (int, error)
 	GetCycle(ctx context.Context, cycleID uuid.UUID) (*model.DreamCycle, error)
 	GetCycleLogs(ctx context.Context, cycleID uuid.UUID) ([]model.DreamLog, error)
 	SetEnabled(ctx context.Context, enabled bool) error

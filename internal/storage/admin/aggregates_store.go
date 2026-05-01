@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -273,6 +274,99 @@ func (s *AggregatesStore) RelationshipTypeHistogram(ctx context.Context, orgID *
 		out = append(out, api.TypeBucket{Type: t, Count: c})
 	}
 	return out, nil
+}
+
+// UserBreakdown returns one UserAggregate row per user in the given org,
+// each row's counts scoped to that user's namespace subtree. Email is the
+// only identity field carried; no content, no per-project rows.
+//
+// One round-trip: per-user counts are correlated subqueries inside a single
+// SELECT so a 100-user org is one query, not 1 + 3*100.
+func (s *AggregatesStore) UserBreakdown(ctx context.Context, orgID uuid.UUID) ([]api.UserAggregate, error) {
+	ph := "?"
+	if s.db.Backend() == storage.BackendPostgres {
+		ph = "$1"
+	}
+	q := `SELECT u.id, u.email,
+		(SELECT COUNT(*) FROM memories m
+		 JOIN namespaces mn ON mn.id = m.namespace_id
+		 WHERE mn.path LIKE un.path || '/%' AND m.deleted_at IS NULL),
+		(SELECT COUNT(*) FROM projects p
+		 JOIN namespaces pn ON pn.id = p.namespace_id
+		 WHERE pn.path LIKE un.path || '/%'),
+		(SELECT COUNT(*) FROM entities e
+		 JOIN namespaces en ON en.id = e.namespace_id
+		 WHERE en.path LIKE un.path || '/%')
+	FROM users u
+	JOIN namespaces un ON un.id = u.namespace_id
+	WHERE u.org_id = ` + ph + `
+	ORDER BY u.email`
+
+	rows, err := s.db.Query(ctx, q, orgID.String())
+	if err != nil {
+		return nil, fmt.Errorf("user breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	out := []api.UserAggregate{}
+	for rows.Next() {
+		var idStr, email string
+		var memCount, projCount, entCount int
+		if err := rows.Scan(&idStr, &email, &memCount, &projCount, &entCount); err != nil {
+			return nil, fmt.Errorf("user breakdown scan: %w", err)
+		}
+		id, parseErr := uuid.Parse(idStr)
+		if parseErr != nil {
+			continue
+		}
+		out = append(out, api.UserAggregate{
+			UserID:        id,
+			Email:         email,
+			TotalMemories: memCount,
+			TotalProjects: projCount,
+			TotalEntities: entCount,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("user breakdown iter: %w", err)
+	}
+	return out, nil
+}
+
+// OrgEnrichmentQueueStats returns pending/processing/failed queue counts
+// scoped to the org's namespace subtree (via enrichment_queue.namespace_id).
+func (s *AggregatesStore) OrgEnrichmentQueueStats(ctx context.Context, orgID uuid.UUID) (*api.DashboardQueueStats, error) {
+	ph := s.namespacePrefixSubquery("organizations", "o.id", "$1", "?")
+	q := `SELECT eq.status, COUNT(*) FROM enrichment_queue eq
+		JOIN namespaces en ON eq.namespace_id = en.id
+		WHERE en.path LIKE ` + ph + `
+		GROUP BY eq.status`
+	rows, err := s.db.Query(ctx, q, orgID.String())
+	if err != nil {
+		return nil, fmt.Errorf("org enrichment queue stats: %w", err)
+	}
+	defer rows.Close()
+
+	stats := &api.DashboardQueueStats{}
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, fmt.Errorf("org enrichment queue scan: %w", err)
+		}
+		switch status {
+		case model.EnrichmentStatusPending:
+			stats.Pending = count
+		case model.EnrichmentStatusProcessing:
+			stats.Processing = count
+		case model.EnrichmentStatusFailed:
+			stats.Failed = count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("org enrichment queue iter: %w", err)
+	}
+	return stats, nil
 }
 
 // ProjectBreakdown returns one ProjectAggregate row per project in the

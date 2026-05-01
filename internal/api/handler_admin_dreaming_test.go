@@ -30,6 +30,12 @@ func (m *mockDreamAdminStore) ProjectStatus(_ context.Context, _ uuid.UUID) (*Dr
 func (m *mockDreamAdminStore) ListCycles(_ context.Context, _ *uuid.UUID, _ int) ([]model.DreamCycle, error) {
 	return nil, nil
 }
+func (m *mockDreamAdminStore) ListSelfCycles(_ context.Context, _ *model.Namespace, _ int) ([]model.DreamCycle, error) {
+	return nil, nil
+}
+func (m *mockDreamAdminStore) SelfDreamingDirtyCount(_ context.Context, _ *model.Namespace) (int, error) {
+	return 0, nil
+}
 func (m *mockDreamAdminStore) GetCycle(_ context.Context, _ uuid.UUID) (*model.DreamCycle, error) {
 	return &model.DreamCycle{}, nil
 }

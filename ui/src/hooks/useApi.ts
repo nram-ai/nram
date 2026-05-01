@@ -725,22 +725,33 @@ export function useMyDreamingProjectStatus(
   });
 }
 
-// Dream cycles list. Tier "system" hits /admin/dreaming/cycles (admin
-// only, optional project filter); tier "self" hits /me/dreaming/cycles
-// (project_id required, server enforces caller ownership).
+// Self-tier aggregate dreaming status: rolled-up any-of-mine-dirty badge
+// plus the count of caller-owned projects.
+export function useMyDreamingAggregateStatus(
+  opts: { intervalMs?: number; enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["me", "dreaming", "aggregate"],
+    queryFn: meAPI.getDreamingAggregateStatus,
+    enabled: opts.enabled ?? true,
+    refetchInterval: opts.intervalMs ?? 10_000,
+  });
+}
+
+// Dream cycles list. tier="system" hits /admin/dreaming/cycles;
+// tier="self" hits /me/dreaming/cycles. project_id is optional on both.
 export function useDreamingCycles(
   projectId?: string,
   opts: { intervalMs?: number; tier?: "self" | "system"; enabled?: boolean } = {},
 ) {
   const tier = opts.tier ?? "system";
-  const tierEnabled = tier === "system" ? true : !!projectId;
   return useQuery({
     queryKey: [tier === "self" ? "me" : "admin", "dreaming", "cycles", projectId],
     queryFn: () =>
       tier === "self"
-        ? meAPI.getDreamingCycles(projectId!)
+        ? meAPI.getDreamingCycles(projectId)
         : adminAPI.getDreamingCycles(projectId),
-    enabled: (opts.enabled ?? true) && tierEnabled,
+    enabled: opts.enabled ?? true,
     refetchInterval: opts.intervalMs ?? 15_000,
   });
 }

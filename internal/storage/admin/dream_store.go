@@ -215,6 +215,30 @@ func (s *DreamAdminStore) ListCycles(ctx context.Context, projectID *uuid.UUID, 
 	return cycles, nil
 }
 
+// ListSelfCycles returns cycles whose project namespace is equal to or
+// descended from callerNS.Path. Each row's ProjectName is populated by the
+// underlying repo via the projects JOIN.
+func (s *DreamAdminStore) ListSelfCycles(ctx context.Context, callerNS *model.Namespace, limit int) ([]model.DreamCycle, error) {
+	if callerNS == nil {
+		return []model.DreamCycle{}, nil
+	}
+	cycles, err := s.cycleRepo.ListByNamespacePathPrefix(ctx, callerNS.Path, limit)
+	if err != nil {
+		return nil, err
+	}
+	s.decorateAll(ctx, cycles)
+	return cycles, nil
+}
+
+// SelfDreamingDirtyCount returns the number of caller-owned projects with
+// pending user-originated changes.
+func (s *DreamAdminStore) SelfDreamingDirtyCount(ctx context.Context, callerNS *model.Namespace) (int, error) {
+	if callerNS == nil {
+		return 0, nil
+	}
+	return s.dirtyRepo.CountDirtyByNamespacePathPrefix(ctx, callerNS.Path)
+}
+
 // GetCycleLogs returns the log entries for a specific cycle.
 func (s *DreamAdminStore) GetCycleLogs(ctx context.Context, cycleID uuid.UUID) ([]model.DreamLog, error) {
 	return s.logRepo.ListByCycle(ctx, cycleID)
