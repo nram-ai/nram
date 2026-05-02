@@ -13,6 +13,8 @@ import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import { useAuth } from "../context/AuthContext";
 import { useSelectedProject } from "../context/ProjectContext";
 import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck } from "../lib/icons";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -77,8 +79,8 @@ function downloadJson(data: unknown, filename: string) {
 // ---------------------------------------------------------------------------
 
 const TAG_COLORS = [
-  "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
-  "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
+  "bg-info/10 text-info",
+  "bg-success/10 text-success",
   "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300",
   "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300",
   "bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-300",
@@ -424,9 +426,7 @@ function MemoryCard({
           aria-label={isSelected ? "Deselect memory" : "Select memory"}
         >
           {isSelected && (
-            <svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3.5 8.5L6.5 11.5L12.5 4.5" />
-            </svg>
+            <FontAwesomeIcon icon={faCheck} className="h-4 w-4" />
           )}
         </button>
         <div className="min-w-0 flex-1">
@@ -436,7 +436,7 @@ function MemoryCard({
               <TagChip key={tag} tag={tag} />
             ))}
             {score !== undefined && (
-              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-mono text-amber-800 dark:bg-amber-900 dark:text-amber-300">
+              <span className="rounded bg-warning/20 px-1.5 py-0.5 text-xs font-mono text-warning">
                 {score.toFixed(3)}
               </span>
             )}
@@ -445,19 +445,19 @@ function MemoryCard({
             <span>{formatDate(memory.created_at)}</span>
             {memory.source && <span>Source: {memory.source}</span>}
             {memory.enriched && !isChild && (
-              <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 dark:bg-green-900 dark:text-green-300">
+              <span className="rounded bg-success/20 px-1.5 py-0.5 text-success">
                 enriched
               </span>
             )}
             {isChild && (
-              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+              <span className="rounded bg-info/20 px-1.5 py-0.5 text-info">
                 extracted fact
               </span>
             )}
             {hasChildren && (
               <button
                 type="button"
-                className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 font-medium text-blue-800 transition-colors hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300 dark:hover:bg-blue-900"
+                className="inline-flex items-center gap-1 rounded-full border border-info/40 bg-info/10 px-2 py-0.5 font-medium text-info transition-colors hover:bg-info/20"
                 onClick={(e) => {
                   e.stopPropagation();
                   onToggleExpand?.();
@@ -570,7 +570,7 @@ function MemoryDetailPanel({
 
         {detail.isError && (
           <div className="p-6">
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed to load memory: {detail.error?.message}
             </p>
           </div>
@@ -685,12 +685,12 @@ function MemoryDetailPanel({
               <div className="flex items-center gap-3 border-t pt-4">
                 {confirmDelete ? (
                   <>
-                    <span className="text-sm text-red-600 dark:text-red-400">
+                    <span className="text-sm text-destructive">
                       Confirm delete?
                     </span>
                     <button
                       type="button"
-                      className="rounded bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+                      className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
                       onClick={handleDelete}
                       disabled={deleteMut.isPending}
                     >
@@ -707,7 +707,7 @@ function MemoryDetailPanel({
                 ) : (
                   <button
                     type="button"
-                    className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                    className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
                     onClick={() => setConfirmDelete(true)}
                   >
                     Delete Memory
@@ -768,12 +768,12 @@ function BulkActionsBar({
 
       {confirmDelete && onDelete ? (
         <>
-          <span className="text-sm text-red-600 dark:text-red-400">
+          <span className="text-sm text-destructive">
             Delete {selectedCount} memories?
           </span>
           <button
             type="button"
-            className="rounded bg-red-600 px-3 py-1 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+            className="rounded bg-destructive px-3 py-1 text-sm text-white hover:bg-destructive disabled:opacity-50"
             onClick={() => {
               onDelete();
               setConfirmDelete(false);
@@ -795,7 +795,7 @@ function BulkActionsBar({
           {onDelete && (
             <button
               type="button"
-              className="rounded border border-red-300 px-3 py-1 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+              className="rounded border border-destructive/40 px-3 py-1 text-sm text-destructive hover:bg-destructive/10"
               onClick={() => setConfirmDelete(true)}
             >
               Delete
@@ -1465,7 +1465,7 @@ function MemoryBrowser() {
         {/* Memory list */}
         <div className="flex min-w-0 flex-1 flex-col">
           {isError && (
-            <div className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+            <div className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
               Failed to load memories: {errorMessage ?? "Unknown error"}
             </div>
           )}
@@ -1534,7 +1534,7 @@ function MemoryBrowser() {
                   )}
 
                 {selectionScope === "all-matching" && allMatchingTruncation && (
-                  <span className="text-xs text-amber-600 dark:text-amber-400">
+                  <span className="text-xs text-warning">
                     (capped at {allMatchingTruncation.shown} of {allMatchingTruncation.total})
                   </span>
                 )}

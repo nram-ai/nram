@@ -4,6 +4,70 @@
 
 @layer base {
   :root {
+    /* Light mode (inverted lightness on greyscale tokens; saturated tokens
+       hold the same value as dark mode per design decision). */
+    --background: 222 47% 94%;
+    --foreground: 210 40% 2%;
+    --card: 223 47% 92%;
+    --card-foreground: 210 40% 2%;
+    --primary: 210 40% 2%;
+    --primary-foreground: 222 47% 94%;
+    --secondary: 217 33% 86%;
+    --secondary-foreground: 210 40% 2%;
+    --muted: 217 33% 86%;
+    --muted-foreground: 215 20% 35%;
+    --accent: 217 33% 83%;
+    --accent-foreground: 210 40% 2%;
+    --destructive: 0 63% 50%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 33% 82%;
+    --input: 217 33% 82%;
+    --ring: 212 100% 60%;
+    --radius: 0.5rem;
+
+    /* Component-scoped tokens (saturated; same value in both modes). */
+    --switch-on: 142 71% 45%;
+
+    /* Semantic tokens (light values; iterate in dev). */
+    --success: 142 71% 38%;
+    --success-foreground: 210 40% 98%;
+    --warning: 38 92% 42%;
+    --warning-foreground: 210 40% 98%;
+    --info: 212 100% 50%;
+    --info-foreground: 210 40% 98%;
+
+    /* Knowledge-graph node colors per entity type (light values). */
+    --graph-person-bg: 215 60% 88%;
+    --graph-person-border: 215 70% 50%;
+    --graph-person-text: 215 80% 18%;
+    --graph-organization-bg: 142 50% 88%;
+    --graph-organization-border: 142 60% 38%;
+    --graph-organization-text: 142 70% 18%;
+    --graph-concept-bg: 28 70% 88%;
+    --graph-concept-border: 28 80% 45%;
+    --graph-concept-text: 28 80% 18%;
+    --graph-location-bg: 320 50% 90%;
+    --graph-location-border: 320 60% 50%;
+    --graph-location-text: 320 70% 22%;
+    --graph-technology-bg: 165 50% 88%;
+    --graph-technology-border: 165 60% 38%;
+    --graph-technology-text: 165 70% 18%;
+    --graph-event-bg: 230 60% 90%;
+    --graph-event-border: 230 70% 50%;
+    --graph-event-text: 230 80% 22%;
+    --graph-product-bg: 350 60% 90%;
+    --graph-product-border: 350 70% 50%;
+    --graph-product-text: 350 80% 22%;
+    --graph-tool-bg: 255 50% 90%;
+    --graph-tool-border: 255 60% 50%;
+    --graph-tool-text: 255 70% 22%;
+    --graph-default-bg: 220 15% 88%;
+    --graph-default-border: 220 10% 50%;
+    --graph-default-text: 220 15% 22%;
+  }
+
+  .dark {
+    /* Dark mode (current values, preserved). */
     --background: 222 47% 6%;
     --foreground: 210 40% 98%;
     --card: 223 47% 8%;
@@ -21,7 +85,44 @@
     --border: 217 33% 18%;
     --input: 217 33% 18%;
     --ring: 212 100% 60%;
-    --radius: 0.5rem;
+
+    --switch-on: 142 71% 45%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 210 40% 98%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 210 40% 98%;
+    --info: 212 100% 60%;
+    --info-foreground: 210 40% 98%;
+
+    /* Knowledge-graph node colors (dark; sourced from EntityBrowser hexes). */
+    --graph-person-bg: 215 50% 25%;
+    --graph-person-border: 215 91% 68%;
+    --graph-person-text: 215 91% 87%;
+    --graph-organization-bg: 142 64% 19%;
+    --graph-organization-border: 142 69% 58%;
+    --graph-organization-text: 142 76% 86%;
+    --graph-concept-bg: 28 89% 14%;
+    --graph-concept-border: 38 92% 50%;
+    --graph-concept-text: 49 96% 89%;
+    --graph-location-bg: 318 47% 19%;
+    --graph-location-border: 326 86% 70%;
+    --graph-location-text: 327 86% 92%;
+    --graph-technology-bg: 161 88% 17%;
+    --graph-technology-border: 156 64% 51%;
+    --graph-technology-text: 152 76% 89%;
+    --graph-event-bg: 240 56% 35%;
+    --graph-event-border: 234 89% 74%;
+    --graph-event-text: 226 100% 93%;
+    --graph-product-bg: 343 87% 16%;
+    --graph-product-border: 351 95% 71%;
+    --graph-product-text: 356 100% 95%;
+    --graph-tool-bg: 254 71% 23%;
+    --graph-tool-border: 250 95% 76%;
+    --graph-tool-text: 252 100% 95%;
+    --graph-default-bg: 220 13% 28%;
+    --graph-default-border: 220 9% 46%;
+    --graph-default-text: 220 14% 75%;
   }
 
   * {

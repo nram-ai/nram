@@ -4,6 +4,10 @@ import { useSetupStatus } from "./hooks/useApi";
 import { useEnrichmentAvailable } from "./hooks/useEnrichmentAvailable";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ProjectProvider } from "./context/ProjectContext";
+import { ThemeProvider } from "./context/ThemeContext";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBars, faXmark, faSun, faMoon, faRightFromBracket } from "./lib/icons";
+import { useTheme } from "./context/ThemeContext";
 import RequireRole from "./components/RequireRole";
 import Dashboard from "./pages/Dashboard";
 // Dashboard, Login, and SetupWizard stay eager: they are the only pages an
@@ -67,11 +71,11 @@ class ErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <div className="flex flex-col items-center justify-center py-16 gap-4">
-          <div className="rounded-lg border border-red-300 bg-red-50 p-6 max-w-lg dark:border-red-800 dark:bg-red-900/30">
-            <h2 className="text-lg font-semibold text-red-800 dark:text-red-200 mb-2">
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-6 max-w-lg">
+            <h2 className="text-lg font-semibold text-destructive mb-2">
               Something went wrong
             </h2>
-            <p className="text-sm text-red-700 dark:text-red-300 mb-4">
+            <p className="text-sm text-destructive mb-4">
               {this.state.error?.message || "An unexpected error occurred."}
             </p>
             <button
@@ -168,6 +172,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 function AppLayout() {
   const auth = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { available: enrichmentAvailable } = useEnrichmentAvailable();
@@ -206,11 +211,7 @@ function AppLayout() {
           className="mr-3 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
           aria-label="Open navigation"
         >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="3" y1="6" x2="21" y2="6" />
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="18" x2="21" y2="18" />
-          </svg>
+          <FontAwesomeIcon icon={faBars} className="h-6 w-6" />
         </button>
         <h1 className="text-lg font-semibold tracking-tight">nram</h1>
       </div>
@@ -242,10 +243,7 @@ function AppLayout() {
             className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground md:hidden"
             aria-label="Close navigation"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            <FontAwesomeIcon icon={faXmark} className="h-5 w-5" />
           </button>
         </div>
         <nav className="px-2 pb-4 flex-1">
@@ -276,13 +274,26 @@ function AppLayout() {
             </div>
           ))}
         </nav>
-        <div className="border-t border-border px-2 py-3">
+        <div className="border-t border-border px-2 py-3 space-y-1">
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-2.5 md:py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            <FontAwesomeIcon
+              icon={theme === "dark" ? faSun : faMoon}
+              className="h-4 w-4"
+            />
+            <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+          </button>
           <button
             type="button"
             onClick={handleLogout}
-            className="block w-full rounded-md px-2 py-2.5 md:py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-2.5 md:py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
           >
-            Logout
+            <FontAwesomeIcon icon={faRightFromBracket} className="h-4 w-4" />
+            <span>Logout</span>
           </button>
         </div>
       </aside>
@@ -324,15 +335,17 @@ function AppLayout() {
 function App() {
   return (
     <AuthProvider>
-      <ProjectProvider>
-        <SetupGuard>
-          <Routes>
-            <Route path="/setup" element={<SetupWizard />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
-          </Routes>
-        </SetupGuard>
-      </ProjectProvider>
+      <ThemeProvider>
+        <ProjectProvider>
+          <SetupGuard>
+            <Routes>
+              <Route path="/setup" element={<SetupWizard />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
+            </Routes>
+          </SetupGuard>
+        </ProjectProvider>
+      </ThemeProvider>
     </AuthProvider>
   );
 }

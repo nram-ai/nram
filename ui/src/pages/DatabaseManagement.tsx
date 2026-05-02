@@ -12,6 +12,8 @@ import type {
   PreflightReport,
   ResetMode,
 } from "../api/client";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faSpinner, faCircleExclamation, faTriangleExclamation, faCheck, faCircleCheck } from "../lib/icons";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -35,27 +37,7 @@ function poolBarWidth(value: number, max: number): string {
 // ---------------------------------------------------------------------------
 
 function Spinner({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg
-      className={`animate-spin ${className}`}
-      fill="none"
-      viewBox="0 0 24 24"
-    >
-      <circle
-        className="opacity-25"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="4"
-      />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-      />
-    </svg>
-  );
+  return <FontAwesomeIcon icon={faSpinner} spin className={className} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +203,7 @@ function MigratingIndicator() {
         </p>
       )}
       {elapsed > 120 && (
-        <p className="text-xs text-amber-600 dark:text-amber-400">
+        <p className="text-xs text-warning">
           This is taking longer than expected. Check the server logs for errors. If the server process has stopped, you may need to resolve the issue and restart.
         </p>
       )}
@@ -233,34 +215,22 @@ function MigrationErrorDisplay({ error }: { error: string }) {
   const parsed = useMemo(() => parseMigrationError(error), [error]);
 
   return (
-    <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-700 dark:bg-red-900/30">
+    <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
       <div className="flex items-start gap-3">
-        <svg
-          className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600 dark:text-red-400"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-          />
-        </svg>
+        <FontAwesomeIcon icon={faCircleExclamation} className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" />
         <div className="space-y-1">
-          <p className="text-sm font-semibold text-red-800 dark:text-red-200">
+          <p className="text-sm font-semibold text-destructive">
             {parsed.title}
           </p>
-          <p className="text-sm text-red-700 dark:text-red-300">
+          <p className="text-sm text-destructive">
             {parsed.description}
           </p>
           {parsed.hint && (
-            <div className="mt-2 rounded-md border border-red-200 bg-red-100/50 px-3 py-2 dark:border-red-800 dark:bg-red-950/50">
-              <p className="text-xs font-medium text-red-800 dark:text-red-300">
+            <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/50 px-3 py-2">
+              <p className="text-xs font-medium text-destructive">
                 How to fix:
               </p>
-              <code className="mt-1 block text-xs text-red-700 dark:text-red-400">
+              <code className="mt-1 block text-xs text-destructive">
                 {parsed.hint}
               </code>
             </div>
@@ -415,7 +385,7 @@ function SQLiteView({
       <div className="rounded-lg border border-border bg-card shadow-sm">
         <div className="border-b border-border px-5 py-4">
           <div className="flex items-center gap-3">
-            <span className="inline-block h-3 w-3 rounded-full bg-blue-500" />
+            <span className="inline-block h-3 w-3 rounded-full bg-info" />
             <h3 className="text-sm font-semibold text-foreground">
               SQLite Backend
             </h3>
@@ -440,26 +410,14 @@ function SQLiteView({
       </div>
 
       {/* Warning banner */}
-      <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
+      <div className="rounded-lg border border-warning/40 bg-warning/10 p-4">
         <div className="flex items-start gap-3">
-          <svg
-            className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"
-            />
-          </svg>
+          <FontAwesomeIcon icon={faTriangleExclamation} className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
           <div>
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+            <p className="text-sm font-medium text-warning">
               Single-Instance Backend
             </p>
-            <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+            <p className="mt-1 text-sm text-warning">
               SQLite supports the full feature set — vector search (pure-Go
               HNSW), hybrid recall (FTS5), enrichment, dreaming, knowledge
               graph, and every MCP tool. Upgrade to PostgreSQL only if you
@@ -513,24 +471,12 @@ function SQLiteView({
                       isActive
                         ? "bg-primary text-primary-foreground"
                         : isPast
-                          ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
+                          ? "bg-success/10 text-success"
                           : "bg-muted text-muted-foreground"
                     }`}
                   >
                     {isPast && !isActive ? (
-                      <svg
-                        className="mr-1 h-3 w-3"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
+                      <FontAwesomeIcon icon={faCheck} className="mr-1 h-3 w-3" />
                     ) : null}
                     {s.label}
                   </span>
@@ -632,7 +578,7 @@ function SQLiteView({
                 </button>
               </div>
               {preflightBlocking && (
-                <p className="text-xs text-red-600 dark:text-red-400">
+                <p className="text-xs text-destructive">
                   Resolve the preflight errors above before proceeding.
                 </p>
               )}
@@ -697,25 +643,13 @@ function SQLiteView({
           {/* Step 5: Complete */}
           {step === "complete" && (
             <div className="space-y-4">
-              <div className="flex items-start gap-3 rounded-md bg-green-50 p-4 dark:bg-green-900/30">
-                <svg
-                  className="mt-0.5 h-5 w-5 flex-shrink-0 text-green-600 dark:text-green-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M5 13l4 4L19 7"
-                  />
-                </svg>
+              <div className="flex items-start gap-3 rounded-md bg-success/10 p-4">
+                <FontAwesomeIcon icon={faCircleCheck} className="mt-0.5 h-5 w-5 flex-shrink-0 text-success" />
                 <div>
-                  <p className="text-sm font-medium text-green-800 dark:text-green-200">
+                  <p className="text-sm font-medium text-success">
                     Migration Complete
                   </p>
-                  <p className="mt-1 text-sm text-green-700 dark:text-green-300">
+                  <p className="mt-1 text-sm text-success">
                     Your data has been successfully migrated to PostgreSQL.
                   </p>
                 </div>
@@ -723,17 +657,17 @@ function SQLiteView({
 
               {migrationStats && <MigrationStatsPanel stats={migrationStats} />}
 
-              <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950/30">
-                <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+              <div className="rounded-lg border border-warning/40 bg-warning/10 p-4">
+                <p className="text-sm font-medium text-warning">
                   Restart Required
                 </p>
-                <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                <p className="mt-1 text-sm text-warning">
                   The server is still running on SQLite. Restart nram with the Postgres connection URL to complete the switch:
                 </p>
-                <pre className="mt-2 overflow-x-auto rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-mono dark:border-amber-700 dark:bg-amber-950/50">
+                <pre className="mt-2 overflow-x-auto rounded-md border border-warning/40 bg-white px-3 py-2 text-sm font-mono dark:bg-warning/15">
                   DATABASE_URL="{dbUrl}" nram
                 </pre>
-                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                <p className="mt-2 text-xs text-warning">
                   Or set <code className="font-mono">database.url</code> in your config file, then restart.
                 </p>
               </div>
@@ -756,7 +690,7 @@ function PreflightChecklist({ report }: { report: PreflightReport }) {
         <p className="text-sm font-medium text-foreground">
           Preflight Results{" "}
           <span
-            className={`ml-2 text-xs ${report.ok ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}
+            className={`ml-2 text-xs ${report.ok ? "text-success" : "text-destructive"}`}
           >
             {report.ok ? "ALL OK" : "ISSUES FOUND"}
           </span>
@@ -766,10 +700,10 @@ function PreflightChecklist({ report }: { report: PreflightReport }) {
         {report.checks.map((c) => {
           const color =
             c.status === "ok"
-              ? "text-green-600 dark:text-green-400"
+              ? "text-success"
               : c.status === "warn"
-                ? "text-amber-600 dark:text-amber-400"
-                : "text-red-600 dark:text-red-400";
+                ? "text-warning"
+                : "text-destructive";
           return (
             <li key={c.name} className="px-4 py-3">
               <div className="flex items-start gap-3">
@@ -844,11 +778,11 @@ function ResetOptions({
     ? Object.values(targetCounts).reduce((a, b) => a + b, 0)
     : 0;
   return (
-    <div className="rounded-md border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
-      <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+    <div className="rounded-md border border-warning/40 bg-warning/10 p-4">
+      <p className="text-sm font-medium text-warning">
         Leftover data detected
       </p>
-      <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+      <p className="mt-1 text-sm text-warning">
         The target database already contains {total.toLocaleString()} nram rows.
         Migration will not insert duplicates but row-count validation will fail.
         Choose a reset strategy:
@@ -858,7 +792,7 @@ function ResetOptions({
           type="button"
           disabled={pending}
           onClick={() => onReset("truncate")}
-          className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50"
+          className="rounded-md bg-warning px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-warning disabled:opacity-50"
         >
           {pending ? "Resetting..." : "TRUNCATE (preserve schema)"}
         </button>
@@ -866,12 +800,12 @@ function ResetOptions({
           type="button"
           disabled={pending}
           onClick={() => onReset("drop_schema")}
-          className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-50"
+          className="rounded-md bg-destructive px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-destructive disabled:opacity-50"
         >
           {pending ? "Resetting..." : "DROP TABLES (rebuild schema)"}
         </button>
       </div>
-      <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+      <p className="mt-2 text-xs text-warning">
         TRUNCATE is usually what you want — fast, keeps pgvector enabled, owner
         privileges are sufficient. DROP TABLES is heavier and requires the
         migration to recreate the schema on the next run.
@@ -883,11 +817,11 @@ function ResetOptions({
 function OrphanAuditSummary({ audit }: { audit: MigrationAudit }) {
   if (audit.total_orphans === 0) {
     return (
-      <div className="rounded-md bg-green-50 p-4 dark:bg-green-900/30">
-        <p className="text-sm font-medium text-green-800 dark:text-green-200">
+      <div className="rounded-md bg-success/10 p-4">
+        <p className="text-sm font-medium text-success">
           No orphans found
         </p>
-        <p className="mt-1 text-sm text-green-700 dark:text-green-300">
+        <p className="mt-1 text-sm text-success">
           Every FK in the source database points at a valid parent. Migration
           should complete without dropping any rows.
         </p>
@@ -896,12 +830,12 @@ function OrphanAuditSummary({ audit }: { audit: MigrationAudit }) {
   }
 
   return (
-    <div className="rounded-md border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
-      <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+    <div className="rounded-md border border-warning/40 bg-warning/10 p-4">
+      <p className="text-sm font-medium text-warning">
         {audit.total_orphans.toLocaleString()} orphan row
         {audit.total_orphans === 1 ? "" : "s"} will be dropped
       </p>
-      <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+      <p className="mt-1 text-sm text-warning">
         These rows reference a parent (namespace, memory, entity, etc.) that no
         longer exists in SQLite. They would cause Postgres FK violations. The
         migrator will skip them and record each skip in the final report.
@@ -910,7 +844,7 @@ function OrphanAuditSummary({ audit }: { audit: MigrationAudit }) {
       <div className="mt-3 overflow-x-auto">
         <table className="min-w-full divide-y divide-amber-300 text-xs dark:divide-amber-700">
           <thead>
-            <tr className="text-left text-amber-800 dark:text-amber-200">
+            <tr className="text-left text-warning">
               <th className="py-1 pr-4">Table.Column</th>
               <th className="py-1 pr-4">References</th>
               <th className="py-1 text-right">Count</th>
@@ -922,7 +856,7 @@ function OrphanAuditSummary({ audit }: { audit: MigrationAudit }) {
                 <td className="py-1 pr-4">
                   {o.table}.{o.column}
                 </td>
-                <td className="py-1 pr-4 text-amber-700 dark:text-amber-400">
+                <td className="py-1 pr-4 text-warning">
                   {o.references}
                 </td>
                 <td className="py-1 text-right font-bold">
@@ -934,7 +868,7 @@ function OrphanAuditSummary({ audit }: { audit: MigrationAudit }) {
         </table>
       </div>
       {audit.errors && audit.errors.length > 0 && (
-        <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+        <p className="mt-2 text-xs text-warning">
           {audit.errors.length} FK relation
           {audit.errors.length === 1 ? " was" : "s were"} not audited (see
           server logs).
@@ -982,14 +916,14 @@ function MigrationStatsPanel({ stats }: { stats: MigrationStats }) {
       )}
       {skippedEntries.length > 0 && (
         <details className="mt-2" open>
-          <summary className="cursor-pointer text-xs font-medium text-amber-700 dark:text-amber-400">
+          <summary className="cursor-pointer text-xs font-medium text-warning">
             Orphan rows dropped ({skippedEntries.length} FK relations)
           </summary>
           <div className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2 text-xs font-mono">
             {skippedEntries.map(([k, n]) => (
               <div key={k} className="flex justify-between gap-2">
                 <span className="text-muted-foreground">{k}</span>
-                <span className="text-amber-700 dark:text-amber-400">
+                <span className="text-warning">
                   {n.toLocaleString()}
                 </span>
               </div>
@@ -1014,7 +948,7 @@ function MigrationStatsPanel({ stats }: { stats: MigrationStats }) {
       )}
       {resetEntries.length > 0 && (
         <details className="mt-2" open>
-          <summary className="cursor-pointer text-xs font-medium text-blue-700 dark:text-blue-400">
+          <summary className="cursor-pointer text-xs font-medium text-info">
             In-flight jobs normalized ({resetEntries.length})
           </summary>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -1027,7 +961,7 @@ function MigrationStatsPanel({ stats }: { stats: MigrationStats }) {
             {resetEntries.map(([k, n]) => (
               <div key={k} className="flex justify-between gap-2">
                 <span className="text-muted-foreground">{k}</span>
-                <span className="text-blue-700 dark:text-blue-400">
+                <span className="text-info">
                   {n.toLocaleString()}
                 </span>
               </div>
@@ -1075,7 +1009,7 @@ function PostgresView({
       <div className="rounded-lg border border-border bg-card shadow-sm">
         <div className="border-b border-border px-5 py-4">
           <div className="flex items-center gap-3">
-            <span className="inline-block h-3 w-3 rounded-full bg-green-500" />
+            <span className="inline-block h-3 w-3 rounded-full bg-success" />
             <h3 className="text-sm font-semibold text-foreground">
               PostgreSQL Backend
             </h3>
@@ -1127,7 +1061,7 @@ function PostgresView({
             </div>
             <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-muted">
               <div
-                className="h-full rounded-full bg-blue-500 transition-all duration-300"
+                className="h-full rounded-full bg-info transition-all duration-300"
                 style={{ width: poolBarWidth(activeConns, maxConns) }}
               />
             </div>
@@ -1143,7 +1077,7 @@ function PostgresView({
             </div>
             <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-muted">
               <div
-                className="h-full rounded-full bg-green-500 transition-all duration-300"
+                className="h-full rounded-full bg-success transition-all duration-300"
                 style={{ width: poolBarWidth(idleConns, maxConns) }}
               />
             </div>
@@ -1197,8 +1131,8 @@ function DatabaseManagement() {
 
       {/* Error state */}
       {isError && !isLoading && (
-        <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/30">
-          <p className="text-sm text-red-800 dark:text-red-300">
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+          <p className="text-sm text-destructive">
             Failed to load database information. Please try refreshing the page.
           </p>
         </div>

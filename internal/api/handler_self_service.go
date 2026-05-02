@@ -463,6 +463,14 @@ type MeProfileGetter interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
 }
 
+// MeProfileUpdater extends MeProfileGetter with the Update method needed by
+// the PATCH handler. Narrowed to the methods the handler uses so tests can
+// supply a fake without standing up the full UserRepo.
+type MeProfileUpdater interface {
+	MeProfileGetter
+	Update(ctx context.Context, user *model.User) error
+}
+
 // NewMeProfileHandler returns an http.HandlerFunc for GET /v1/me/profile.
 // Reads the authenticated user's record and returns the SessionUser shape so
 // the SPA can hydrate AuthContext from the server instead of relying on JWT
@@ -491,13 +499,77 @@ func NewMeProfileHandler(repo MeProfileGetter) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, SessionUser{
-			ID:          user.ID,
-			Email:       user.Email,
-			DisplayName: user.DisplayName,
-			Role:        user.Role,
-			OrgID:       user.OrgID,
-		})
+		writeJSON(w, http.StatusOK, newSessionUser(user))
+	}
+}
+
+// meProfilePatchRequest is the body shape accepted by PATCH /v1/me/profile.
+// Currently only `theme` is settable; future user-owned profile fields can
+// be added here as nullable pointers so partial updates remain expressible.
+type meProfilePatchRequest struct {
+	Theme *string `json:"theme,omitempty"`
+}
+
+// NewMeProfilePatchHandler returns an http.HandlerFunc for PATCH /v1/me/profile.
+// Currently the only patchable field is `theme` (must be "light" or "dark").
+// The updated user is loaded, mutated, and persisted via repo.Update; the
+// response mirrors the GET shape so the SPA can replace its cached user
+// object with the response without an extra round-trip.
+func NewMeProfilePatchHandler(repo MeProfileUpdater) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			w.Header().Set("Allow", "PATCH")
+			WriteError(w, &APIError{
+				Code:    "method_not_allowed",
+				Message: "method not allowed",
+				Status:  http.StatusMethodNotAllowed,
+			})
+			return
+		}
+
+		ac := auth.FromContext(r.Context())
+		if ac == nil {
+			WriteError(w, ErrUnauthorized("authentication required"))
+			return
+		}
+
+		var req meProfilePatchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			WriteError(w, ErrBadRequest("invalid request body"))
+			return
+		}
+
+		if req.Theme != nil {
+			t := *req.Theme
+			if t != ThemeLight && t != ThemeDark {
+				WriteError(w, ErrBadRequest("theme must be \"light\" or \"dark\""))
+				return
+			}
+		}
+
+		user, err := repo.GetByID(r.Context(), ac.UserID)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to load user"))
+			return
+		}
+
+		dirty := false
+		if req.Theme != nil {
+			if err := user.SetSettingString("theme", *req.Theme); err != nil {
+				WriteError(w, ErrInternal("failed to update settings"))
+				return
+			}
+			dirty = true
+		}
+
+		if dirty {
+			if err := repo.Update(r.Context(), user); err != nil {
+				WriteError(w, ErrInternal("failed to save profile"))
+				return
+			}
+		}
+
+		writeJSON(w, http.StatusOK, newSessionUser(user))
 	}
 }
 

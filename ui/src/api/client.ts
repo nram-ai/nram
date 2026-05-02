@@ -1579,8 +1579,17 @@ export interface MeCapabilities {
   dreaming_enabled: boolean;
 }
 
+export type Theme = "light" | "dark";
+
+export interface MeProfilePatchRequest {
+  theme?: Theme;
+}
+
 export const meAPI = {
   getProfile: () => request<MeProfile>("GET", "/me/profile"),
+
+  updateProfile: (data: MeProfilePatchRequest) =>
+    request<MeProfile>("PATCH", "/me/profile", data),
 
   // Self-tier capability flags. Callable by any authenticated user — the
   // sidebar nav uses this to decide whether to render Enrichment Queue and

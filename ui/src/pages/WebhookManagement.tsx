@@ -43,7 +43,7 @@ const ALL_EVENT_TYPES = [
 const EVENT_GROUPS = ["Memory", "Entity", "Relationship"] as const;
 
 const EVENT_CHIP_COLORS: Record<string, string> = {
-  Memory: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
+  Memory: "bg-info/10 text-info",
   Entity: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300",
   Relationship: "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-300",
 };
@@ -52,7 +52,7 @@ function eventChipColor(event: string): string {
   if (event.startsWith("memory.")) return EVENT_CHIP_COLORS["Memory"];
   if (event.startsWith("entity.")) return EVENT_CHIP_COLORS["Entity"];
   if (event.startsWith("relationship.")) return EVENT_CHIP_COLORS["Relationship"];
-  return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300";
+  return "bg-muted text-muted-foreground";
 }
 
 // ---------------------------------------------------------------------------
@@ -186,12 +186,12 @@ function WebhookFormDialog({
             {/* URL */}
             <div>
               <label className="mb-1 block text-sm font-medium text-muted-foreground">
-                URL <span className="text-red-500">*</span>
+                URL <span className="text-destructive">*</span>
               </label>
               <input
                 type="text"
                 className={`w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring ${
-                  !urlValid ? "border-red-500" : ""
+                  !urlValid ? "border-destructive/40" : ""
                 }`}
                 placeholder="https://example.com/webhook"
                 value={form.url}
@@ -200,7 +200,7 @@ function WebhookFormDialog({
                 required
               />
               {!urlValid && (
-                <p className="mt-1 text-xs text-red-500">
+                <p className="mt-1 text-xs text-destructive">
                   Please enter a valid HTTP or HTTPS URL.
                 </p>
               )}
@@ -299,7 +299,7 @@ function WebhookFormDialog({
 
             {/* Error */}
             {error && (
-              <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {error}
               </div>
             )}
@@ -396,11 +396,11 @@ function TestResultDialog({
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium">Status:</span>
             {result.success ? (
-              <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-300">
+              <span className="inline-flex items-center rounded-full bg-success/20 px-2.5 py-0.5 text-xs font-medium text-success">
                 Success
               </span>
             ) : (
-              <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900 dark:text-red-300">
+              <span className="inline-flex items-center rounded-full bg-destructive/20 px-2.5 py-0.5 text-xs font-medium text-destructive">
                 Failed
               </span>
             )}
@@ -555,7 +555,7 @@ function WebhookManagement() {
 
       {/* Error */}
       {webhooksQuery.isError && (
-        <div className="mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+        <div className="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
           Failed to load webhooks: {webhooksQuery.error?.message ?? "Unknown error"}
         </div>
       )}
@@ -608,7 +608,7 @@ function WebhookManagement() {
                       {wh.url}
                     </div>
                     {wh.failure_count !== undefined && wh.failure_count > 0 && (
-                      <div className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                      <div className="mt-0.5 text-xs text-warning">
                         {wh.failure_count} failure{wh.failure_count !== 1 ? "s" : ""}
                         {wh.last_status !== undefined && (
                           <span className="ml-1">(last: {wh.last_status})</span>
@@ -645,11 +645,11 @@ function WebhookManagement() {
                       title={wh.active ? "Click to disable" : "Click to enable"}
                     >
                       {wh.active ? (
-                        <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-300">
+                        <span className="inline-flex items-center rounded-full bg-success/20 px-2.5 py-0.5 text-xs font-medium text-success">
                           Enabled
                         </span>
                       ) : (
-                        <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800 dark:bg-gray-800 dark:text-gray-300">
+                        <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
                           Disabled
                         </span>
                       )}
@@ -680,7 +680,7 @@ function WebhookManagement() {
                       </button>
                       <button
                         type="button"
-                        className="rounded border border-red-300 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                        className="rounded border border-destructive/40 px-2.5 py-1 text-xs text-destructive hover:bg-destructive/10"
                         onClick={() => setDeletingWebhook(wh)}
                       >
                         Delete

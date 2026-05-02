@@ -48,22 +48,22 @@ function activityBadge(type: string): { label: string; cls: string } {
     case "store":
       return {
         label: "Store",
-        cls: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
+        cls: "bg-success/10 text-success",
       };
     case "recall":
       return {
         label: "Recall",
-        cls: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
+        cls: "bg-info/10 text-info",
       };
     case "forget":
       return {
         label: "Forget",
-        cls: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
+        cls: "bg-destructive/10 text-destructive",
       };
     default:
       return {
         label: type,
-        cls: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
+        cls: "bg-muted text-muted-foreground",
       };
   }
 }
@@ -313,7 +313,7 @@ function AggregateActivity({
                   <span className="w-24 font-mono text-muted-foreground">{d.date}</span>
                   <div className="flex-1">
                     <div
-                      className="h-3 rounded bg-blue-500/30"
+                      className="h-3 rounded bg-info/30"
                       style={{ width: `${Math.min(100, d.count * 5)}%` }}
                     />
                   </div>
@@ -432,14 +432,14 @@ function ProviderHealthCards({
       <div className="divide-y">
         {slots.map((s) => {
           const isOk = s.status === "ok";
-          let dotColor = "bg-gray-400";
+          let dotColor = "bg-muted-foreground";
           let statusText = "Not configured";
 
           if (s.configured && isOk) {
-            dotColor = "bg-green-500";
+            dotColor = "bg-success";
             statusText = s.type;
           } else if (s.configured && !isOk) {
-            dotColor = "bg-red-500";
+            dotColor = "bg-destructive";
             statusText = `${s.type} (${s.status ?? "unhealthy"})`;
           }
 
@@ -488,13 +488,13 @@ function EnrichmentQueueCard({
           <p className="text-xs text-muted-foreground">Pending</p>
         </div>
         <div className="flex-1 text-center">
-          <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+          <p className="text-2xl font-bold text-info">
             {processing}
           </p>
           <p className="text-xs text-muted-foreground">Processing</p>
         </div>
         <div className="flex-1 text-center">
-          <p className="text-2xl font-bold text-red-600 dark:text-red-400">
+          <p className="text-2xl font-bold text-destructive">
             {failed}
           </p>
           <p className="text-xs text-muted-foreground">Failed</p>
@@ -520,8 +520,8 @@ function DreamingStatusCard({ isLoading }: { isLoading: boolean }) {
         <span
           className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
             status.enabled
-              ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
-              : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+              ? "bg-success/10 text-success"
+              : "bg-muted text-muted-foreground"
           }`}
         >
           {status.enabled ? "Enabled" : "Disabled"}
@@ -535,13 +535,13 @@ function DreamingStatusCard({ isLoading }: { isLoading: boolean }) {
           <p className="text-xs text-muted-foreground">Dirty</p>
         </div>
         <div className="flex-1 text-center">
-          <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+          <p className="text-2xl font-bold text-info">
             {running}
           </p>
           <p className="text-xs text-muted-foreground">Active</p>
         </div>
         <div className="flex-1 text-center">
-          <p className="text-2xl font-bold text-green-600 dark:text-green-400">
+          <p className="text-2xl font-bold text-success">
             {completed}
           </p>
           <p className="text-xs text-muted-foreground">Completed</p>
@@ -674,7 +674,7 @@ function QuickStore({
           </button>
           {feedback && (
             <p
-              className={`text-sm ${feedback.type === "success" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}
+              className={`text-sm ${feedback.type === "success" ? "text-success" : "text-destructive"}`}
             >
               {feedback.msg}
             </p>
@@ -697,11 +697,11 @@ function ErrorBanner({
   onRetry: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+    <div className="flex items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
       <span className="flex-1">{message}</span>
       <button
         type="button"
-        className="shrink-0 rounded-md border border-red-300 px-3 py-1 text-xs font-medium hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900"
+        className="shrink-0 rounded-md border border-destructive/40 px-3 py-1 text-xs font-medium hover:bg-destructive/20"
         onClick={onRetry}
       >
         Retry

@@ -54,8 +54,8 @@ function useDebounce<T>(value: T, delay: number): T {
 // ---------------------------------------------------------------------------
 
 const TAG_COLORS = [
-  "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
-  "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
+  "bg-info/10 text-info",
+  "bg-success/10 text-success",
   "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300",
   "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300",
   "bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-300",
@@ -518,7 +518,7 @@ function ProjectDetailPanel({
 
         {detailQuery.isError && (
           <div className="p-6">
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed to load project: {detailQuery.error?.message}
             </p>
           </div>
@@ -746,14 +746,14 @@ function ProjectDetailPanel({
                       </div>
                     </div>
                     {weightWarning && (
-                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                      <p className="mt-1 text-xs text-warning">
                         Effective weights do not sum to 1.0 (currently {weightSum.toFixed(3)}).
                         Recall will still work, but the score scale shifts; review the override.
                       </p>
                     )}
                   </>
                 ) : (
-                  <div className="rounded border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+                  <div className="rounded border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
                     Ranking weight schema unavailable. The server did not return
                     default values for {weightsResolution.missingKeys.join(", ") || "one or more keys"}.
                     Ranking-weight overrides cannot be edited until the schema
@@ -779,7 +779,7 @@ function ProjectDetailPanel({
               </button>
 
               {updateMut.isError && (
-                <span className="text-sm text-red-600 dark:text-red-400">
+                <span className="text-sm text-destructive">
                   Failed to save: {updateMut.error?.message}
                 </span>
               )}
@@ -788,12 +788,12 @@ function ProjectDetailPanel({
 
               {confirmDelete ? (
                 <>
-                  <span className="text-sm text-red-600 dark:text-red-400">
+                  <span className="text-sm text-destructive">
                     This will permanently delete all memories, vectors, entities, and relationships in this project. This action cannot be undone. Continue?
                   </span>
                   <button
                     type="button"
-                    className="rounded bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+                    className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
                     onClick={handleDelete}
                     disabled={deleteMut.isPending}
                   >
@@ -810,7 +810,7 @@ function ProjectDetailPanel({
               ) : (
                 <button
                   type="button"
-                  className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                  className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
                   onClick={() => setConfirmDelete(true)}
                 >
                   Delete Project
@@ -886,7 +886,7 @@ function CreateMeProjectDialog({ onClose }: { onClose: () => void }) {
             />
           </div>
           {createMut.isError && (
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed: {createMut.error?.message}
             </p>
           )}
@@ -1001,7 +1001,7 @@ function ProjectManagement() {
       {/* Table */}
       <div className="flex-1 overflow-auto rounded-lg border">
         {projectsQuery.isError && (
-          <div className="m-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+          <div className="m-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
             Failed to load projects: {projectsQuery.error?.message ?? "Unknown error"}
           </div>
         )}
@@ -1224,12 +1224,12 @@ function ProjectReadOnlyPanel({
                 <div className="flex-1" />
                 {confirmDelete ? (
                   <>
-                    <span className="text-sm text-red-600 dark:text-red-400">
+                    <span className="text-sm text-destructive">
                       This will permanently delete all memories, vectors, entities, and relationships in this project. This action cannot be undone. Continue?
                     </span>
                     <button
                       type="button"
-                      className="rounded bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+                      className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
                       onClick={handleDelete}
                       disabled={deleteMut.isPending}
                     >
@@ -1246,7 +1246,7 @@ function ProjectReadOnlyPanel({
                 ) : (
                   <button
                     type="button"
-                    className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                    className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
                     onClick={() => setConfirmDelete(true)}
                   >
                     Delete Project

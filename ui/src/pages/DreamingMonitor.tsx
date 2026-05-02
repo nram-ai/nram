@@ -12,6 +12,9 @@ import {
 import { useEventStream } from "../hooks/useEventStream";
 import { useElapsedTicker, elapsedSeconds } from "../hooks/useElapsedTicker";
 import { useAuth } from "../context/AuthContext";
+import Switch from "../components/Switch";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faSpinner } from "../lib/icons";
 import type { DreamCycle, DreamLog } from "../api/client";
 
 // Tier picker — administrators choose between their own per-project view
@@ -71,9 +74,9 @@ const ABANDON_CONFIRM =
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300",
-  running: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
-  completed: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
-  failed: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300",
+  running: "bg-info/10 text-info",
+  completed: "bg-success/10 text-success",
+  failed: "bg-destructive/10 text-destructive",
   rolled_back: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300",
 };
 
@@ -87,13 +90,13 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 const OP_COLORS: Record<string, string> = {
-  entity_merged: "text-blue-600 dark:text-blue-400",
-  relationship_created: "text-green-600 dark:text-green-400",
+  entity_merged: "text-info",
+  relationship_created: "text-success",
   contradiction_detected: "text-orange-600 dark:text-orange-400",
   memory_created: "text-emerald-600 dark:text-emerald-400",
   confidence_adjusted: "text-cyan-600 dark:text-cyan-400",
   memory_superseded: "text-purple-600 dark:text-purple-400",
-  memory_deleted: "text-red-600 dark:text-red-400",
+  memory_deleted: "text-destructive",
   relationship_updated: "text-yellow-600 dark:text-yellow-400",
   entity_updated: "text-indigo-600 dark:text-indigo-400",
 };
@@ -304,12 +307,7 @@ function useDreamingLiveState() {
 // ---------------------------------------------------------------------------
 
 function Spinner() {
-  return (
-    <svg className="h-5 w-5 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-    </svg>
-  );
+  return <FontAwesomeIcon icon={faSpinner} spin className="h-5 w-5 text-muted-foreground" />;
 }
 
 function StatCard({ label, value, color }: { label: string; value: string | number; color?: string }) {
@@ -323,45 +321,16 @@ function StatCard({ label, value, color }: { label: string; value: string | numb
 
 function StatusBadge({ status }: { status: string }) {
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[status] ?? "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300"}`}>
+    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[status] ?? "bg-muted text-muted-foreground"}`}>
       {status.replace(/_/g, " ")}
     </span>
-  );
-}
-
-function Toggle({
-  enabled,
-  onChange,
-  disabled,
-}: {
-  enabled: boolean;
-  onChange: (val: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={enabled}
-      disabled={disabled}
-      onClick={() => onChange(!enabled)}
-      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${enabled ? "bg-green-600" : "bg-muted"}`}
-    >
-      <span
-        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ${enabled ? "translate-x-5" : "translate-x-0"}`}
-      />
-    </button>
   );
 }
 
 function StatusToast({ message, type }: { message: string; type: "success" | "error" }) {
   return (
     <div
-      className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium shadow-lg transition-all ${
-        type === "success"
-          ? "bg-green-50 text-green-800 dark:bg-green-900/50 dark:text-green-200"
-          : "bg-red-50 text-red-800 dark:bg-red-900/50 dark:text-red-200"
-      }`}
+      className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium shadow-lg transition-all ${ type === "success" ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive" }`}
     >
       {type === "success" ? "\u2713" : "\u2717"} {message}
     </div>
@@ -374,7 +343,7 @@ function StatusToast({ message, type }: { message: string; type: "success" | "er
 
 function StuckPill() {
   return (
-    <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800 dark:bg-red-900/40 dark:text-red-200">
+    <span className="inline-flex items-center rounded-full bg-destructive/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-destructive">
       stuck
     </span>
   );
@@ -383,7 +352,7 @@ function StuckPill() {
 function StaleDiagnosticPill() {
   return (
     <span
-      className="inline-flex items-center rounded-full bg-amber-100/70 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+      className="inline-flex items-center rounded-full bg-warning/70 px-2 py-0.5 text-[10px] font-medium text-warning"
       title="Heartbeat is stale — the worker may have stopped making progress."
     >
       no recent activity
@@ -413,10 +382,10 @@ function InFlightCallChip({ call }: { call: LiveInFlightCall }) {
   const secs = elapsedSeconds(call.started_at);
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-800 dark:bg-blue-900/40 dark:text-blue-200"
+      className="inline-flex items-center gap-1 rounded-full bg-info/20 px-2 py-0.5 text-[10px] font-medium text-info"
       title={call.target_id ? `Target: ${call.target_id}` : undefined}
     >
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-600 dark:bg-blue-400" />
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-info" />
       awaiting {operationLabel(call.operation)} · {secs}s
     </span>
   );
@@ -450,10 +419,10 @@ function LastActivityChip({ iso }: { iso: string }) {
     "inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200";
   if (secs > 120) {
     cls =
-      "inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-800 dark:bg-red-900/30 dark:text-red-200";
+      "inline-flex items-center rounded-full bg-destructive/20 px-2 py-0.5 text-[10px] font-medium text-destructive";
   } else if (secs > 30) {
     cls =
-      "inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-200";
+      "inline-flex items-center rounded-full bg-warning/20 px-2 py-0.5 text-[10px] font-medium text-warning";
   }
   return <span className={cls}>active {secs}s ago</span>;
 }
@@ -469,7 +438,7 @@ function DreamingActivityBanner({
   if (running.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-dashed border-blue-300 bg-blue-50/50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+    <div className="rounded-lg border border-dashed border-info/40 bg-info/50 p-4">
       <div className="space-y-2">
         {running.slice(0, 2).map((cycle) => {
           const ls = live[cycle.id];
@@ -479,7 +448,7 @@ function DreamingActivityBanner({
             ls?.lastActivityAt ?? cycle.heartbeat_at ?? cycle.updated_at;
           return (
             <div key={cycle.id} className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="font-medium text-blue-900 dark:text-blue-200">Cycle running</span>
+              <span className="font-medium text-info">Cycle running</span>
               <span className="text-muted-foreground">
                 {phase ? PHASE_LABELS[phase] ?? phase : "starting"}
               </span>
@@ -552,7 +521,7 @@ function CycleTable({
         <tbody>
           {cycles.map((cycle) => {
             const rowTint = cycle.is_abandonable
-              ? "bg-red-50/40 dark:bg-red-900/10"
+              ? "bg-destructive/40"
               : "";
             return (
               <tr
@@ -611,7 +580,7 @@ function CycleTable({
                         onAbandon(cycle.id);
                       }}
                       disabled={isAbandoning}
-                      className="rounded-md border border-red-300 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50"
+                      className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
                     >
                       Abandon
                     </button>
@@ -673,8 +642,8 @@ function CycleDetail({
 
   if (isError || !data) {
     return (
-      <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/30">
-        <p className="text-sm text-red-800 dark:text-red-300">Failed to load cycle details.</p>
+      <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+        <p className="text-sm text-destructive">Failed to load cycle details.</p>
       </div>
     );
   }
@@ -717,7 +686,7 @@ function CycleDetail({
             <button
               onClick={() => onAbandon(cycle.id)}
               disabled={isAbandoning}
-              className="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
             >
               {isAbandoning ? "Abandoning..." : "Abandon"}
             </button>
@@ -726,7 +695,7 @@ function CycleDetail({
             <button
               onClick={() => onRollback(cycle.id)}
               disabled={isRollingBack}
-              className="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
             >
               {isRollingBack ? "Rolling back..." : "Rollback"}
             </button>
@@ -770,7 +739,7 @@ function CycleDetail({
       )}
 
       {cycle.error && (
-        <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
           {cycle.error}
         </div>
       )}
@@ -803,9 +772,9 @@ function CycleDetail({
                       {ps.skipped ? (
                         <span className="text-xs text-muted-foreground">skipped</span>
                       ) : ps.error ? (
-                        <span className="text-xs text-red-600 dark:text-red-400">{ps.error}</span>
+                        <span className="text-xs text-destructive">{ps.error}</span>
                       ) : (
-                        <span className="text-xs text-green-600 dark:text-green-400">ok</span>
+                        <span className="text-xs text-success">ok</span>
                       )}
                     </td>
                   </tr>
@@ -846,7 +815,7 @@ function LiveActivitySection({ state }: { state?: LiveCycleState }) {
 
   if (!state) {
     return (
-      <div className="rounded-md border border-blue-200 bg-blue-50/40 p-3 text-xs text-muted-foreground dark:border-blue-900/40 dark:bg-blue-900/10">
+      <div className="rounded-md border border-info/40 bg-info/40 p-3 text-xs text-muted-foreground">
         Waiting for live activity… (events will appear here as the runner emits them)
       </div>
     );
@@ -854,14 +823,14 @@ function LiveActivitySection({ state }: { state?: LiveCycleState }) {
 
   const { currentCall, recentCalls } = state;
   return (
-    <div className="rounded-md border border-blue-200 bg-blue-50/40 p-3 dark:border-blue-900/40 dark:bg-blue-900/10">
-      <h4 className="mb-2 text-sm font-semibold text-blue-900 dark:text-blue-200">
+    <div className="rounded-md border border-info/40 bg-info/40 p-3">
+      <h4 className="mb-2 text-sm font-semibold text-info">
         Live Activity
       </h4>
 
       {currentCall && (
         <div className="mb-2 flex items-center gap-2 text-xs">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600 dark:bg-blue-400" />
+          <span className="h-2 w-2 animate-pulse rounded-full bg-info" />
           <span className="font-medium">In flight:</span>
           <span>{operationLabel(currentCall.operation)}</span>
           <span className="font-mono text-[11px] text-muted-foreground">
@@ -882,10 +851,10 @@ function LiveActivitySection({ state }: { state?: LiveCycleState }) {
             const status = !finished ? "running" : c.ok ? "ok" : "error";
             const statusCls =
               status === "running"
-                ? "text-blue-600 dark:text-blue-400"
+                ? "text-info"
                 : status === "ok"
-                ? "text-green-600 dark:text-green-400"
-                : "text-red-600 dark:text-red-400";
+                ? "text-success"
+                : "text-destructive";
             return (
               <div
                 key={c.call_id}
@@ -909,7 +878,7 @@ function LiveActivitySection({ state }: { state?: LiveCycleState }) {
                   </span>
                 )}
                 {c.error && (
-                  <span className="truncate text-[11px] text-red-600 dark:text-red-400">
+                  <span className="truncate text-[11px] text-destructive">
                     {c.error}
                   </span>
                 )}
@@ -1176,8 +1145,8 @@ export default function DreamingMonitor() {
 
       {/* Error */}
       {isError && !isLoading && (
-        <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/30">
-          <p className="text-sm text-red-800 dark:text-red-300">
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+          <p className="text-sm text-destructive">
             Failed to load dreaming status.
           </p>
         </div>
@@ -1194,8 +1163,8 @@ export default function DreamingMonitor() {
               <span className="text-sm font-medium">Dreaming</span>
               {tier === "system" ? (
                 <>
-                  <Toggle
-                    enabled={enabledFlag}
+                  <Switch
+                    checked={enabledFlag}
                     onChange={handleToggleEnabled}
                     disabled={enableMutation.isPending}
                   />
@@ -1209,7 +1178,7 @@ export default function DreamingMonitor() {
                     className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
                       (selfStatusQuery.data?.dirty_count ?? 0) > 0
                         ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
-                        : "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                        : "bg-success/10 text-success"
                     }`}
                   >
                     {(selfStatusQuery.data?.dirty_count ?? 0) > 0 ? "Dirty" : "All quiet"}
@@ -1241,26 +1210,26 @@ export default function DreamingMonitor() {
             <StatCard
               label="Active"
               value={runningCount}
-              color={runningCount > 0 ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground"}
+              color={runningCount > 0 ? "text-info" : "text-muted-foreground"}
             />
             <StatCard
               label="Stuck"
               value={stuckCount}
               color={
                 stuckCount > 0
-                  ? "text-red-600 dark:text-red-400"
+                  ? "text-destructive"
                   : "text-muted-foreground"
               }
             />
             <StatCard
               label="Completed"
               value={completedCount}
-              color="text-green-600 dark:text-green-400"
+              color="text-success"
             />
             <StatCard
               label="Failed"
               value={failedCount}
-              color={failedCount > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}
+              color={failedCount > 0 ? "text-destructive" : "text-muted-foreground"}
             />
           </div>
 

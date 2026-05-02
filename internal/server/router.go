@@ -56,6 +56,7 @@ type Handlers struct {
 	MeOAuthClientRevoke http.HandlerFunc
 	MeChangePassword    http.HandlerFunc
 	MeProfile           http.HandlerFunc
+	MeProfilePatch      http.HandlerFunc
 	// Self-tier system-pipeline observability — added 2026-04-30 so project
 	// owners can see their own dream cycles + enrichment queue items after
 	// the cross-tenant /v1/dreaming and /v1/enrichment routes moved under
@@ -293,6 +294,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Delete("/oauth-clients/{id}", handler(handlers.MeOAuthClientRevoke))
 			r.Post("/password", handler(handlers.MeChangePassword))
 			r.Get("/profile", handler(handlers.MeProfile))
+			r.Patch("/profile", handler(handlers.MeProfilePatch))
 			r.Get("/passkeys", handler(handlers.MePasskeysList))
 			r.Post("/passkeys/register/begin", handler(handlers.MePasskeyRegisterBegin))
 			r.Post("/passkeys/register/finish", handler(handlers.MePasskeyRegisterFinish))

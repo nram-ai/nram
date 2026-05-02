@@ -664,6 +664,7 @@ func main() {
 		MeOAuthClientRevoke: api.NewMeOAuthClientRevokeHandler(oauthRepo, auditStore),
 		MeChangePassword:    api.NewMeChangePasswordHandler(userRepo, auditStore),
 		MeProfile:           api.NewMeProfileHandler(userRepo),
+		MeProfilePatch:      api.NewMeProfilePatchHandler(userRepo),
 
 		// Self-tier system-pipeline observability — read-only views of the
 		// caller's own dream cycles + enrichment queue items. Write

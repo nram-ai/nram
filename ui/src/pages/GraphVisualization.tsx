@@ -477,9 +477,9 @@ function GraphVisualization() {
       )}
 
       {selectedProjectId && !isLoading && graphError && (
-        <div className="flex flex-1 min-h-0 items-center justify-center rounded-lg border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/30">
+        <div className="flex flex-1 min-h-0 items-center justify-center rounded-lg border border-destructive/40 bg-destructive/10">
           <div className="text-center">
-            <p className="text-sm text-red-800 dark:text-red-300">
+            <p className="text-sm text-destructive">
               Failed to load graph data. Please try again.
             </p>
           </div>

@@ -16,6 +16,8 @@ import type {
   OllamaModel,
 } from "../api/client";
 import { APIError } from "../api/client";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck, faXmark, faSpinner } from "../lib/icons";
 
 const INGESTION_MODEL_SETTING_KEY = "enrichment.ingestion_decision.model";
 
@@ -46,15 +48,15 @@ const PROVIDER_TYPES = [
 
 const PROVIDER_BADGE_COLORS: Record<string, string> = {
   openai:
-    "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
+    "bg-success/10 text-success",
   ollama:
     "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300",
-  gemini: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
+  gemini: "bg-info/10 text-info",
   anthropic:
     "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300",
   openrouter:
     "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-300",
-  custom: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
+  custom: "bg-muted text-muted-foreground",
 };
 
 const DEFAULT_URLS: Record<string, string> = {
@@ -130,15 +132,15 @@ function StatusDot({
 }) {
   if (!configured) {
     return (
-      <span className="inline-block h-3 w-3 rounded-full bg-gray-400 dark:bg-gray-600" />
+      <span className="inline-block h-3 w-3 rounded-full bg-muted-foreground" />
     );
   }
   return (
     <span
       className={`inline-block h-3 w-3 rounded-full ${
         healthy
-          ? "bg-green-500 dark:bg-green-400"
-          : "bg-red-500 dark:bg-red-400"
+          ? "bg-success"
+          : "bg-destructive"
       }`}
     />
   );
@@ -151,19 +153,15 @@ function StatusDot({
 function TestResultDisplay({ result }: { result: TestProviderResult }) {
   if (result.success) {
     return (
-      <div className="mt-2 flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm text-green-800 dark:bg-green-900/30 dark:text-green-300">
-        <svg className="h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-        </svg>
+      <div className="mt-2 flex items-center gap-2 rounded-md bg-success/10 px-3 py-2 text-sm text-success">
+        <FontAwesomeIcon icon={faCheck} className="h-4 w-4 flex-shrink-0" />
         Connection successful ({result.latency_ms}ms)
       </div>
     );
   }
   return (
-    <div className="mt-2 flex items-center gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-900/30 dark:text-red-300">
-      <svg className="h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-      </svg>
+    <div className="mt-2 flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
       {result.message || "Connection failed"}
     </div>
   );
@@ -222,10 +220,7 @@ function OllamaModelPicker({
         >
           {ollamaModelsQuery.isFetching ? (
             <span className="flex items-center gap-1.5">
-              <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
+              <FontAwesomeIcon icon={faSpinner} spin className="h-3.5 w-3.5" />
               Loading...
             </span>
           ) : (
@@ -235,7 +230,7 @@ function OllamaModelPicker({
       </div>
 
       {ollamaModelsQuery.isError && (
-        <p className="text-sm text-red-600 dark:text-red-400">
+        <p className="text-sm text-destructive">
           Failed to load models. Ensure Ollama is running at {ollamaUrl}.
         </p>
       )}
@@ -272,7 +267,7 @@ function OllamaModelPicker({
                       {(m.size / (1024 * 1024 * 1024)).toFixed(1)} GB
                     </span>
                     {isEmbed && (
-                      <span className="ml-2 inline-flex items-center rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                      <span className="ml-2 inline-flex items-center rounded-full bg-info/20 px-1.5 py-0.5 text-[10px] font-medium text-info">
                         embedding
                       </span>
                     )}
@@ -282,7 +277,7 @@ function OllamaModelPicker({
                       </span>
                     )}
                     {mismatch && (
-                      <span className="ml-1 text-[10px] text-amber-600 dark:text-amber-400">
+                      <span className="ml-1 text-[10px] text-warning">
                         (wrong type for this slot)
                       </span>
                     )}
@@ -310,10 +305,7 @@ function OllamaModelPicker({
         >
           {pullMutation.isPending ? (
             <span className="flex items-center gap-1.5">
-              <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
+              <FontAwesomeIcon icon={faSpinner} spin className="h-3.5 w-3.5" />
               Pulling...
             </span>
           ) : (
@@ -322,12 +314,12 @@ function OllamaModelPicker({
         </button>
       </div>
       {pullMutation.isError && (
-        <p className="text-sm text-red-600 dark:text-red-400">
+        <p className="text-sm text-destructive">
           Failed to pull model: {(pullMutation.error as Error).message}
         </p>
       )}
       {pullMutation.isSuccess && (
-        <p className="text-sm text-green-600 dark:text-green-400">
+        <p className="text-sm text-success">
           Model pulled successfully.
         </p>
       )}
@@ -518,10 +510,7 @@ function ProviderSlotEditForm({
         >
           {saving ? (
             <span className="flex items-center gap-1.5">
-              <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
+              <FontAwesomeIcon icon={faSpinner} spin className="h-3.5 w-3.5" />
               Saving...
             </span>
           ) : (
@@ -611,7 +600,7 @@ function IngestionDecisionModelOverride({
           </p>
         </div>
         {storedValue && (
-          <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+          <span className="inline-flex items-center rounded-full bg-info/20 px-2 py-0.5 text-xs font-medium text-info">
             Override active
           </span>
         )}
@@ -663,12 +652,12 @@ function IngestionDecisionModelOverride({
           </button>
         )}
         {updateSetting.isSuccess && !dirty && (
-          <span className="text-xs text-green-700 dark:text-green-400">
+          <span className="text-xs text-success">
             Saved
           </span>
         )}
         {updateSetting.isError && (
-          <span className="text-xs text-red-600 dark:text-red-400">
+          <span className="text-xs text-destructive">
             {(updateSetting.error as Error).message}
           </span>
         )}
@@ -825,12 +814,12 @@ function ProviderSlotCard({
             queue drains in the background; the entity loop runs in a
             detached goroutine on the server. */}
         {cascadeResult && (
-          <div className="mb-4 rounded-md border border-blue-300 bg-blue-50 p-3 dark:border-blue-700 dark:bg-blue-900/30">
-            <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
+          <div className="mb-4 rounded-md border border-info/40 bg-info/10 p-3">
+            <p className="text-sm font-medium text-info">
               Embedding model switched: {cascadeResult.old_model} →{" "}
               {cascadeResult.new_model}
             </p>
-            <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">
+            <p className="mt-1 text-xs text-info">
               {cascadeResult.memory_jobs_enqueued ?? 0} memory re-embed jobs
               queued, {cascadeResult.entities_affected ?? 0} entities queued
               for re-embed in the background. Recall is degraded until the
@@ -839,7 +828,7 @@ function ProviderSlotCard({
             <button
               type="button"
               onClick={() => setCascadeResult(null)}
-              className="mt-2 text-xs font-medium text-blue-700 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+              className="mt-2 text-xs font-medium text-info hover:text-info"
             >
               Dismiss
             </button>
@@ -850,18 +839,18 @@ function ProviderSlotCard({
             only when an embedding-model change was attempted and the
             server gated the cascade on confirm_invalidate. */}
         {pendingConfirm && (
-          <div className="mb-4 rounded-md border-2 border-red-400 bg-red-50 p-3 dark:border-red-600 dark:bg-red-900/30">
-            <p className="text-sm font-semibold text-red-900 dark:text-red-100">
+          <div className="mb-4 rounded-md border-2 border-destructive/40 bg-destructive/10 p-3">
+            <p className="text-sm font-semibold text-destructive">
               Confirm embedding model switch
             </p>
-            <p className="mt-1 text-sm text-red-800 dark:text-red-200">
+            <p className="mt-1 text-sm text-destructive">
               Switching from{" "}
               <span className="font-mono text-xs">{pendingConfirm.result.old_model}</span>{" "}
               to{" "}
               <span className="font-mono text-xs">{pendingConfirm.result.new_model}</span>{" "}
               will:
             </p>
-            <ul className="mt-1 ml-5 list-disc text-xs text-red-800 dark:text-red-200">
+            <ul className="mt-1 ml-5 list-disc text-xs text-destructive">
               <li>
                 Clear all memory and entity vectors across every dimension
                 table
@@ -876,7 +865,7 @@ function ProviderSlotCard({
                 model
               </li>
             </ul>
-            <p className="mt-2 text-xs text-red-700 dark:text-red-300">
+            <p className="mt-2 text-xs text-destructive">
               Recall returns no results for unprocessed rows during the
               re-embed window (typically 5–15 minutes).
             </p>
@@ -885,14 +874,14 @@ function ProviderSlotCard({
                 type="button"
                 onClick={confirmSwitch}
                 disabled={updateMutation.isPending}
-                className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                className="rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-white hover:bg-destructive disabled:opacity-50"
               >
                 {updateMutation.isPending ? "Switching..." : "Confirm Switch & Re-embed"}
               </button>
               <button
                 type="button"
                 onClick={() => setPendingConfirm(null)}
-                className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 dark:border-red-600 dark:text-red-200 dark:hover:bg-red-900/50"
+                className="rounded-md border border-destructive/40 px-3 py-1.5 text-sm font-medium text-destructive hover:bg-destructive/20"
               >
                 Cancel
               </button>
@@ -983,25 +972,7 @@ function ProviderSlotCard({
               >
                 {testMutation.isPending ? (
                   <span className="flex items-center gap-1.5">
-                    <svg
-                      className="h-3.5 w-3.5 animate-spin"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                      />
-                    </svg>
+                    <FontAwesomeIcon icon={faSpinner} spin className="h-3.5 w-3.5" />
                     Testing...
                   </span>
                 ) : (
@@ -1025,7 +996,7 @@ function ProviderSlotCard({
 
             {/* Update error */}
             {updateMutation.isError && (
-              <p className="text-sm text-red-600 dark:text-red-400">
+              <p className="text-sm text-destructive">
                 Failed to update: {(updateMutation.error as Error).message}
               </p>
             )}
@@ -1093,32 +1064,14 @@ function ProviderConfiguration() {
       {/* Loading state */}
       {isLoading && (
         <div className="flex items-center justify-center py-16">
-          <svg
-            className="h-8 w-8 animate-spin text-muted-foreground"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="4"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-            />
-          </svg>
+          <FontAwesomeIcon icon={faSpinner} spin className="h-8 w-8 text-muted-foreground" />
         </div>
       )}
 
       {/* Error state */}
       {isError && !isLoading && (
-        <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/30">
-          <p className="text-sm text-red-800 dark:text-red-300">
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+          <p className="text-sm text-destructive">
             Failed to load provider configuration. Please try refreshing the
             page.
           </p>

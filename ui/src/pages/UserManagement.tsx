@@ -26,6 +26,7 @@ import type {
   GenerateAPIKeyRequest,
   Organization,
 } from "../api/client";
+import Switch from "../components/Switch";
 import {
   buildUserSettingsPayload,
   fromTriState,
@@ -60,23 +61,23 @@ function roleBadgeClass(role: string): string {
     case "administrator":
       return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300";
     case "org_owner":
-      return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300";
+      return "bg-warning/10 text-warning";
     case "member":
-      return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300";
+      return "bg-info/10 text-info";
     case "viewer":
-      return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300";
+      return "bg-muted text-muted-foreground";
     case "service_account":
-      return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300";
+      return "bg-success/10 text-success";
     default:
-      return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300";
+      return "bg-muted text-muted-foreground";
   }
 }
 
 function statusBadge(disabled: boolean): string {
   if (disabled) {
-    return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300";
+    return "bg-destructive/10 text-destructive";
   }
-  return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300";
+  return "bg-success/10 text-success";
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +206,7 @@ function CreateUserDialog({
         <div className="mt-4 space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-muted-foreground">
-              Email <span className="text-red-500">*</span>
+              Email <span className="text-destructive">*</span>
             </label>
             <input
               type="email"
@@ -230,7 +231,7 @@ function CreateUserDialog({
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-muted-foreground">
-              Password <span className="text-red-500">*</span>
+              Password <span className="text-destructive">*</span>
             </label>
             <input
               type="password"
@@ -240,14 +241,14 @@ function CreateUserDialog({
               placeholder="Minimum 8 characters"
             />
             {password.length > 0 && password.length < 8 && (
-              <p className="mt-1 text-xs text-red-500">
+              <p className="mt-1 text-xs text-destructive">
                 Password must be at least 8 characters.
               </p>
             )}
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-muted-foreground">
-              Role <span className="text-red-500">*</span>
+              Role <span className="text-destructive">*</span>
             </label>
             <select
               className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -280,7 +281,7 @@ function CreateUserDialog({
           </div>
 
           {createMut.isError && (
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed to create: {createMut.error?.message}
             </p>
           )}
@@ -385,8 +386,8 @@ function GenerateAPIKeyDialog({
         <div className="relative z-10 w-full max-w-lg rounded-lg border bg-background p-6 shadow-xl">
           <h2 className="text-lg font-semibold">API Key Generated</h2>
           <div className="mt-4 space-y-4">
-            <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-4 dark:border-amber-600 dark:bg-amber-950">
-              <p className="mb-2 text-sm font-semibold text-amber-800 dark:text-amber-300">
+            <div className="rounded-lg border-2 border-warning/40 bg-warning/10 p-4">
+              <p className="mb-2 text-sm font-semibold text-warning">
                 Copy this key now. It will not be shown again.
               </p>
               <div className="flex items-center gap-2">
@@ -425,7 +426,7 @@ function GenerateAPIKeyDialog({
         <div className="mt-4 space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-muted-foreground">
-              Label <span className="text-red-500">*</span>
+              Label <span className="text-destructive">*</span>
             </label>
             <input
               type="text"
@@ -467,7 +468,7 @@ function GenerateAPIKeyDialog({
           </div>
 
           {generateMut.isError && (
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed to generate: {generateMut.error?.message}
             </p>
           )}
@@ -610,7 +611,7 @@ function APIKeyTable({
                       <span className="inline-flex items-center gap-1">
                         <button
                           type="button"
-                          className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
+                          className="rounded bg-destructive px-2 py-1 text-xs text-white hover:bg-destructive disabled:opacity-50"
                           onClick={() => handleRevoke(key.id)}
                           disabled={revokeMut.isPending}
                         >
@@ -627,7 +628,7 @@ function APIKeyTable({
                     ) : (
                       <button
                         type="button"
-                        className="rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                        className="rounded border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
                         onClick={() => setConfirmRevokeId(key.id)}
                       >
                         Revoke
@@ -823,7 +824,7 @@ function UserDetailPanel({
 
         {detailQuery.isError && (
           <div className="p-6">
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed to load user: {detailQuery.error?.message}
             </p>
           </div>
@@ -887,19 +888,10 @@ function UserDetailPanel({
               <label className="text-sm font-medium text-muted-foreground">
                 Status
               </label>
-              <button
-                type="button"
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-ring ${
-                  !editDisabled ? "bg-green-500" : "bg-gray-300 dark:bg-gray-600"
-                }`}
-                onClick={() => setEditDisabled(!editDisabled)}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-lg transition-transform ${
-                    !editDisabled ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </button>
+              <Switch
+                checked={!editDisabled}
+                onChange={(v) => setEditDisabled(!v)}
+              />
               <span className="text-sm">
                 {editDisabled ? "Disabled" : "Active"}
               </span>
@@ -997,7 +989,7 @@ function UserDetailPanel({
               </button>
 
               {updateMut.isError && (
-                <span className="text-sm text-red-600 dark:text-red-400">
+                <span className="text-sm text-destructive">
                   Failed to save: {updateMut.error?.message}
                 </span>
               )}
@@ -1006,7 +998,7 @@ function UserDetailPanel({
 
               {confirmDelete ? (
                 <>
-                  <span className="text-sm text-red-600 dark:text-red-400">
+                  <span className="text-sm text-destructive">
                     {isLastAdmin
                       ? "Cannot delete the last administrator."
                       : "Delete this user? This cannot be undone."}
@@ -1014,7 +1006,7 @@ function UserDetailPanel({
                   {!isLastAdmin && (
                     <button
                       type="button"
-                      className="rounded bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+                      className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
                       onClick={handleDelete}
                       disabled={deleteMut.isPending}
                     >
@@ -1032,7 +1024,7 @@ function UserDetailPanel({
               ) : (
                 <button
                   type="button"
-                  className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                  className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
                   onClick={() => setConfirmDelete(true)}
                 >
                   Delete User
@@ -1041,7 +1033,7 @@ function UserDetailPanel({
             </div>
 
             {deleteMut.isError && (
-              <p className="text-sm text-red-600 dark:text-red-400">
+              <p className="text-sm text-destructive">
                 Failed to delete: {deleteMut.error?.message}
               </p>
             )}
@@ -1098,7 +1090,7 @@ function CreateOrgUserDialog({
         <div className="mt-4 space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-muted-foreground">
-              Email <span className="text-red-500">*</span>
+              Email <span className="text-destructive">*</span>
             </label>
             <input
               type="email"
@@ -1123,7 +1115,7 @@ function CreateOrgUserDialog({
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-muted-foreground">
-              Password <span className="text-red-500">*</span>
+              Password <span className="text-destructive">*</span>
             </label>
             <input
               type="password"
@@ -1133,14 +1125,14 @@ function CreateOrgUserDialog({
               placeholder="Minimum 8 characters"
             />
             {password.length > 0 && password.length < 8 && (
-              <p className="mt-1 text-xs text-red-500">
+              <p className="mt-1 text-xs text-destructive">
                 Password must be at least 8 characters.
               </p>
             )}
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-muted-foreground">
-              Role <span className="text-red-500">*</span>
+              Role <span className="text-destructive">*</span>
             </label>
             <select
               className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -1156,7 +1148,7 @@ function CreateOrgUserDialog({
           </div>
 
           {createMut.isError && (
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed to create: {createMut.error?.message}
             </p>
           )}
@@ -1281,7 +1273,7 @@ function UserManagement() {
           {/* Table */}
           <div className="flex-1 overflow-auto rounded-lg border">
             {usersQuery.isError && (
-              <div className="m-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+              <div className="m-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
                 Failed to load users:{" "}
                 {usersQuery.error?.message ?? "Unknown error"}
               </div>

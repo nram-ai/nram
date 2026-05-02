@@ -180,14 +180,14 @@ function CreateClientDialog({
                   <label className="text-xs font-medium text-muted-foreground">
                     Client Secret
                   </label>
-                  <div className="mt-1 rounded border border-amber-500 bg-amber-50 p-2 dark:bg-amber-950">
+                  <div className="mt-1 rounded border border-warning/40 bg-warning/10 p-2">
                     <div className="flex items-center gap-1">
                       <code className="text-sm break-all">
                         {createdClient.client_secret}
                       </code>
                       <CopyButton text={createdClient.client_secret} />
                     </div>
-                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                    <p className="mt-1 text-xs text-warning">
                       This secret will not be shown again. Copy it now.
                     </p>
                   </div>
@@ -431,8 +431,8 @@ function OAuthClientsSection() {
                     <span
                       className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
                         client.type === "auto"
-                          ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300"
-                          : "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
+                          ? "bg-info/10 text-info"
+                          : "bg-success/10 text-success"
                       }`}
                     >
                       {client.type === "auto" ? "auto-registered" : "manual"}

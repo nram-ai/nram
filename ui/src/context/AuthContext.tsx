@@ -12,6 +12,7 @@ export interface UserInfo {
   display_name: string;
   role: string;
   org_id: string;
+  theme?: "light" | "dark" | "";
 }
 
 // ---------------------------------------------------------------------------

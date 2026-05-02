@@ -45,6 +45,13 @@ type loginResponse struct {
 	User  SessionUser `json:"user"`
 }
 
+// Allowed values for SessionUser.Theme. "" means the user has not picked,
+// in which case the SPA falls back to the prefers-color-scheme media query.
+const (
+	ThemeLight = "light"
+	ThemeDark  = "dark"
+)
+
 // SessionUser is the JSON shape returned by both POST /v1/auth/login and
 // GET /v1/me/profile. The fields mirror the JWT session claims so the SPA
 // can hydrate AuthContext from either endpoint without an adapter.
@@ -54,6 +61,18 @@ type SessionUser struct {
 	DisplayName string    `json:"display_name"`
 	Role        string    `json:"role"`
 	OrgID       uuid.UUID `json:"org_id"`
+	Theme       string    `json:"theme"`
+}
+
+func newSessionUser(u *model.User) SessionUser {
+	return SessionUser{
+		ID:          u.ID,
+		Email:       u.Email,
+		DisplayName: u.DisplayName,
+		Role:        u.Role,
+		OrgID:       u.OrgID,
+		Theme:       u.GetSettingString("theme"),
+	}
 }
 
 type lookupRequest struct {
@@ -126,13 +145,7 @@ func NewLoginHandler(cfg AuthConfig) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, loginResponse{
 			Token: token,
-			User: SessionUser{
-				ID:          user.ID,
-				Email:       user.Email,
-				DisplayName: user.DisplayName,
-				Role:        user.Role,
-				OrgID:       user.OrgID,
-			},
+			User:  newSessionUser(user),
 		})
 	}
 }

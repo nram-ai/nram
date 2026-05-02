@@ -616,3 +616,221 @@ func TestMeCapabilities_NilDependenciesAreSafe(t *testing.T) {
 		t.Errorf("expected both flags false, got %+v", resp)
 	}
 }
+
+// --- MeProfile / MeProfilePatch tests ---
+
+type mockMeProfileRepo struct {
+	user      *model.User
+	updateErr error
+	updated   *model.User
+}
+
+func (m *mockMeProfileRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
+	if m.user == nil {
+		return nil, fmt.Errorf("not found")
+	}
+	cp := *m.user
+	return &cp, nil
+}
+
+func (m *mockMeProfileRepo) Update(ctx context.Context, user *model.User) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	cp := *user
+	m.updated = &cp
+	m.user = &cp
+	return nil
+}
+
+func TestMeProfile_GetReturnsThemeFromSettings(t *testing.T) {
+	userID := uuid.New()
+	repo := &mockMeProfileRepo{
+		user: &model.User{
+			ID:          userID,
+			Email:       "u@example.com",
+			DisplayName: "U",
+			Role:        "member",
+			OrgID:       uuid.New(),
+			Settings:    json.RawMessage(`{"theme":"light"}`),
+		},
+	}
+
+	handler := NewMeProfileHandler(repo)
+	ac := &auth.AuthContext{UserID: userID, Role: "member"}
+	w := doSelfServiceRequest(handler, http.MethodGet, "/v1/me/profile", nil, ac)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp SessionUser
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.Theme != "light" {
+		t.Errorf("expected theme=light, got %q", resp.Theme)
+	}
+}
+
+func TestMeProfile_GetReturnsEmptyThemeWhenUnset(t *testing.T) {
+	userID := uuid.New()
+	repo := &mockMeProfileRepo{
+		user: &model.User{
+			ID:       userID,
+			Email:    "u@example.com",
+			Role:     "member",
+			OrgID:    uuid.New(),
+			Settings: json.RawMessage(`{}`),
+		},
+	}
+
+	handler := NewMeProfileHandler(repo)
+	ac := &auth.AuthContext{UserID: userID, Role: "member"}
+	w := doSelfServiceRequest(handler, http.MethodGet, "/v1/me/profile", nil, ac)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp SessionUser
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.Theme != "" {
+		t.Errorf("expected empty theme, got %q", resp.Theme)
+	}
+}
+
+func TestMeProfilePatch_SetsTheme(t *testing.T) {
+	userID := uuid.New()
+	repo := &mockMeProfileRepo{
+		user: &model.User{
+			ID:       userID,
+			Email:    "u@example.com",
+			Role:     "member",
+			OrgID:    uuid.New(),
+			Settings: json.RawMessage(`{}`),
+		},
+	}
+
+	handler := NewMeProfilePatchHandler(repo)
+	ac := &auth.AuthContext{UserID: userID, Role: "member"}
+	body := map[string]string{"theme": "dark"}
+	w := doSelfServiceRequest(handler, http.MethodPatch, "/v1/me/profile", body, ac)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp SessionUser
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.Theme != "dark" {
+		t.Errorf("expected theme=dark in response, got %q", resp.Theme)
+	}
+	if repo.updated == nil {
+		t.Fatal("expected Update to be called")
+	}
+	if got := repo.updated.GetSettingString("theme"); got != "dark" {
+		t.Errorf("expected persisted theme=dark, got %q", got)
+	}
+}
+
+func TestMeProfilePatch_PreservesOtherSettings(t *testing.T) {
+	userID := uuid.New()
+	repo := &mockMeProfileRepo{
+		user: &model.User{
+			ID:       userID,
+			Email:    "u@example.com",
+			Role:     "member",
+			OrgID:    uuid.New(),
+			Settings: json.RawMessage(`{"locale":"en-GB","other":42}`),
+		},
+	}
+
+	handler := NewMeProfilePatchHandler(repo)
+	ac := &auth.AuthContext{UserID: userID, Role: "member"}
+	body := map[string]string{"theme": "light"}
+	w := doSelfServiceRequest(handler, http.MethodPatch, "/v1/me/profile", body, ac)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(repo.updated.Settings, &persisted); err != nil {
+		t.Fatalf("decode persisted settings: %v", err)
+	}
+	if persisted["theme"] != "light" {
+		t.Errorf("expected theme=light, got %v", persisted["theme"])
+	}
+	if persisted["locale"] != "en-GB" {
+		t.Errorf("expected locale=en-GB preserved, got %v", persisted["locale"])
+	}
+	if persisted["other"] != float64(42) {
+		t.Errorf("expected other=42 preserved, got %v", persisted["other"])
+	}
+}
+
+func TestMeProfilePatch_RejectsInvalidTheme(t *testing.T) {
+	userID := uuid.New()
+	repo := &mockMeProfileRepo{
+		user: &model.User{ID: userID, Settings: json.RawMessage(`{}`)},
+	}
+
+	handler := NewMeProfilePatchHandler(repo)
+	ac := &auth.AuthContext{UserID: userID, Role: "member"}
+	body := map[string]string{"theme": "neon"}
+	w := doSelfServiceRequest(handler, http.MethodPatch, "/v1/me/profile", body, ac)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.updated != nil {
+		t.Error("expected Update NOT to be called for invalid theme")
+	}
+}
+
+func TestMeProfilePatch_NoOpSkipsUpdate(t *testing.T) {
+	userID := uuid.New()
+	repo := &mockMeProfileRepo{
+		user: &model.User{
+			ID:       userID,
+			Settings: json.RawMessage(`{"theme":"dark"}`),
+		},
+	}
+
+	handler := NewMeProfilePatchHandler(repo)
+	ac := &auth.AuthContext{UserID: userID, Role: "member"}
+	w := doSelfServiceRequest(handler, http.MethodPatch, "/v1/me/profile", map[string]any{}, ac)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.updated != nil {
+		t.Error("expected Update NOT to be called when no fields supplied")
+	}
+	var resp SessionUser
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.Theme != "dark" {
+		t.Errorf("expected response theme unchanged at dark, got %q", resp.Theme)
+	}
+}
+
+func TestMeProfilePatch_Unauthenticated(t *testing.T) {
+	handler := NewMeProfilePatchHandler(&mockMeProfileRepo{})
+	w := doSelfServiceRequest(handler, http.MethodPatch, "/v1/me/profile", map[string]string{"theme": "dark"}, nil)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMeProfilePatch_MethodNotAllowed(t *testing.T) {
+	repo := &mockMeProfileRepo{user: &model.User{ID: uuid.New(), Settings: json.RawMessage(`{}`)}}
+	handler := NewMeProfilePatchHandler(repo)
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "member"}
+	w := doSelfServiceRequest(handler, http.MethodGet, "/v1/me/profile", nil, ac)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d: %s", w.Code, w.Body.String())
+	}
+}

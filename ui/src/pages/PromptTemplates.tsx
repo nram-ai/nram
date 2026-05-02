@@ -6,6 +6,8 @@ import {
   useTestExtractionPrompt,
 } from "../hooks/useApi";
 import type { Setting, SettingSchema } from "../api/client";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck, faXmark, faSpinner } from "../lib/icons";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -118,40 +120,12 @@ function StatusToast({
 }) {
   return (
     <div
-      className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium shadow-lg transition-all ${
-        type === "success"
-          ? "bg-green-50 text-green-800 dark:bg-green-900/80 dark:text-green-200"
-          : "bg-red-50 text-red-800 dark:bg-red-900/80 dark:text-red-200"
-      }`}
+      className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium shadow-lg transition-all ${ type === "success" ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive" }`}
     >
       {type === "success" ? (
-        <svg
-          className="h-4 w-4 flex-shrink-0"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M5 13l4 4L19 7"
-          />
-        </svg>
+        <FontAwesomeIcon icon={faCheck} className="h-4 w-4 flex-shrink-0" />
       ) : (
-        <svg
-          className="h-4 w-4 flex-shrink-0"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M6 18L18 6M6 6l12 12"
-          />
-        </svg>
+        <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
       )}
       {message}
     </div>
@@ -163,23 +137,7 @@ function StatusToast({
 // ---------------------------------------------------------------------------
 
 function Spinner({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg className={`animate-spin ${className}`} fill="none" viewBox="0 0 24 24">
-      <circle
-        className="opacity-25"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="4"
-      />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-      />
-    </svg>
-  );
+  return <FontAwesomeIcon icon={faSpinner} spin className={className} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,12 +250,12 @@ function PromptEditorCard({
           </div>
           <div className="flex items-center gap-2">
             {isCustomized && (
-              <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+              <span className="inline-flex items-center rounded-full bg-info/20 px-2 py-0.5 text-xs font-medium text-info">
                 Customized
               </span>
             )}
             {!isCustomized && (
-              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+              <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                 Default
               </span>
             )}
@@ -512,12 +470,12 @@ function SimplePromptEditorCard({
           </div>
           <div className="flex items-center gap-2">
             {isCustomized && (
-              <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+              <span className="inline-flex items-center rounded-full bg-info/20 px-2 py-0.5 text-xs font-medium text-info">
                 Customized
               </span>
             )}
             {!isCustomized && (
-              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+              <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                 Default
               </span>
             )}
@@ -791,8 +749,8 @@ export default function PromptTemplates() {
 
       {/* Error state */}
       {isError && !isLoading && (
-        <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/30">
-          <p className="text-sm text-red-800 dark:text-red-300">
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+          <p className="text-sm text-destructive">
             Failed to load settings. Please try refreshing the page.
           </p>
         </div>

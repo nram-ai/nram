@@ -36,11 +36,11 @@ function roleBadgeClass(role: string): string {
     case "admin":
       return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300";
     case "member":
-      return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300";
+      return "bg-info/10 text-info";
     case "viewer":
-      return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300";
+      return "bg-muted text-muted-foreground";
     default:
-      return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300";
+      return "bg-muted text-muted-foreground";
   }
 }
 
@@ -161,7 +161,7 @@ function CreateOrgDialog({ onClose }: { onClose: () => void }) {
         <div className="mt-4 space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-muted-foreground">
-              Name <span className="text-red-500">*</span>
+              Name <span className="text-destructive">*</span>
             </label>
             <input
               type="text"
@@ -189,7 +189,7 @@ function CreateOrgDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           {createMut.isError && (
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed to create: {createMut.error?.message}
             </p>
           )}
@@ -310,7 +310,7 @@ function OrgDetailPanel({
 
         {detailQuery.isError && (
           <div className="p-6">
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed to load organization: {detailQuery.error?.message}
             </p>
           </div>
@@ -373,9 +373,9 @@ function OrgDetailPanel({
                   {owners.map((owner) => (
                     <span
                       key={owner.id}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-300"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-warning/20 px-3 py-1 text-xs font-medium text-warning"
                     >
-                      <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+                      <span className="inline-block h-2 w-2 rounded-full bg-warning" />
                       {owner.display_name || owner.email}
                     </span>
                   ))}
@@ -427,7 +427,7 @@ function OrgDetailPanel({
                           </td>
                           <td className="px-4 py-2 text-right text-xs">
                             {ownerIds.has(user.id) && (
-                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-300">
+                              <span className="rounded-full bg-warning/20 px-2 py-0.5 text-xs font-medium text-warning">
                                 owner
                               </span>
                             )}
@@ -462,7 +462,7 @@ function OrgDetailPanel({
               </button>
 
               {updateMut.isError && (
-                <span className="text-sm text-red-600 dark:text-red-400">
+                <span className="text-sm text-destructive">
                   Failed to save: {updateMut.error?.message}
                 </span>
               )}
@@ -471,12 +471,12 @@ function OrgDetailPanel({
 
               {confirmDelete ? (
                 <>
-                  <span className="text-sm text-red-600 dark:text-red-400">
+                  <span className="text-sm text-destructive">
                     Delete this organization? This cannot be undone.
                   </span>
                   <button
                     type="button"
-                    className="rounded bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+                    className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
                     onClick={handleDelete}
                     disabled={deleteMut.isPending}
                   >
@@ -493,7 +493,7 @@ function OrgDetailPanel({
               ) : (
                 <button
                   type="button"
-                  className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                  className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
                   onClick={() => setConfirmDelete(true)}
                 >
                   Delete Organization
@@ -580,7 +580,7 @@ function OrganizationManagement() {
           {/* Table */}
           <div className="flex-1 overflow-auto rounded-lg border">
             {orgsQuery.isError && (
-              <div className="m-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+              <div className="m-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
                 Failed to load organizations: {orgsQuery.error?.message ?? "Unknown error"}
               </div>
             )}

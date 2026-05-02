@@ -136,11 +136,11 @@ function ErrorBanner({
   onRetry: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+    <div className="flex items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
       <span className="flex-1">{message}</span>
       <button
         type="button"
-        className="shrink-0 rounded-md border border-red-300 px-3 py-1 text-xs font-medium hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900"
+        className="shrink-0 rounded-md border border-destructive/40 px-3 py-1 text-xs font-medium hover:bg-destructive/20"
         onClick={onRetry}
       >
         Retry
@@ -174,9 +174,9 @@ function MemoryCountCards({
   const counts = data?.memory_counts ?? { total: 0, active: 0, deleted: 0, enriched: 0 };
 
   const cards = [
-    { label: "Total Memories", value: formatNumber(counts.total), color: "text-blue-600 dark:text-blue-400" },
-    { label: "Active", value: formatNumber(counts.active), color: "text-green-600 dark:text-green-400" },
-    { label: "Deleted", value: formatNumber(counts.deleted), color: "text-red-600 dark:text-red-400" },
+    { label: "Total Memories", value: formatNumber(counts.total), color: "text-info" },
+    { label: "Active", value: formatNumber(counts.active), color: "text-success" },
+    { label: "Deleted", value: formatNumber(counts.deleted), color: "text-destructive" },
     { label: "Enriched", value: formatNumber(counts.enriched), color: "text-purple-600 dark:text-purple-400" },
   ];
 
@@ -291,10 +291,10 @@ function EnrichmentStatsCards({
   };
 
   const cards = [
-    { label: "Total Processed", value: formatNumber(stats.total_processed), color: "text-blue-600 dark:text-blue-400" },
-    { label: "Success Rate", value: formatPercent(stats.success_rate), color: "text-green-600 dark:text-green-400" },
-    { label: "Failure Rate", value: formatPercent(stats.failure_rate), color: "text-red-600 dark:text-red-400" },
-    { label: "Avg Latency", value: `${stats.avg_latency_ms.toLocaleString()}ms`, color: "text-amber-600 dark:text-amber-400" },
+    { label: "Total Processed", value: formatNumber(stats.total_processed), color: "text-info" },
+    { label: "Success Rate", value: formatPercent(stats.success_rate), color: "text-success" },
+    { label: "Failure Rate", value: formatPercent(stats.failure_rate), color: "text-destructive" },
+    { label: "Avg Latency", value: `${stats.avg_latency_ms.toLocaleString()}ms`, color: "text-warning" },
   ];
 
   return (
@@ -359,7 +359,7 @@ function TokenUsageSummaryCards({
   }
 
   const cards = [
-    { label: "Total Input Tokens", value: formatNumber(summary.totalInput), color: "text-blue-600 dark:text-blue-400" },
+    { label: "Total Input Tokens", value: formatNumber(summary.totalInput), color: "text-info" },
     { label: "Total Output Tokens", value: formatNumber(summary.totalOutput), color: "text-cyan-600 dark:text-cyan-400" },
     { label: "Total Calls", value: formatNumber(summary.totalCalls), color: "text-indigo-600 dark:text-indigo-400" },
     { label: "Estimated Cost", value: formatCost(summary.totalCost), color: "text-emerald-600 dark:text-emerald-400" },
@@ -399,8 +399,8 @@ function renderGroupKey(groupBy: UsageGroupBy, key: string) {
       <span
         className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
           ok
-            ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
-            : "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300"
+            ? "bg-success/10 text-success"
+            : "bg-destructive/10 text-destructive"
         }`}
       >
         {ok ? "Success" : "Failed"}
@@ -483,7 +483,7 @@ function UsageBreakdownTable({
                   </td>
                   <td
                     className={`py-2 text-right font-mono ${
-                      g.error_count > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                      g.error_count > 0 ? "text-destructive" : "text-muted-foreground"
                     }`}
                   >
                     {g.error_count.toLocaleString()}
@@ -938,7 +938,7 @@ function CostRateEditor({
                     <td className="py-2">
                       <button
                         type="button"
-                        className="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                        className="text-xs text-destructive hover:text-destructive"
                         onClick={() => handleRemove(rate.key)}
                       >
                         Remove
@@ -1165,7 +1165,7 @@ function AggregateBucketCard({
                 </span>
                 <div className="flex-1">
                   <div
-                    className="h-3 rounded bg-blue-500/30"
+                    className="h-3 rounded bg-info/30"
                     style={{ width: `${max ? (b.count / max) * 100 : 0}%` }}
                   />
                 </div>

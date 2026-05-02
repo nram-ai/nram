@@ -501,18 +501,18 @@ function CallbackUrlField() {
   }, []);
 
   return (
-    <div className="rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950">
-      <label className="text-xs font-medium text-blue-700 dark:text-blue-300">
+    <div className="rounded-md border border-info/40 bg-info/10 p-3">
+      <label className="text-xs font-medium text-info">
         Callback URL (enter this in your IdP)
       </label>
       <div className="mt-1 flex items-center gap-2">
-        <code className="flex-1 rounded bg-white px-2 py-1 text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100">
+        <code className="flex-1 rounded bg-white px-2 py-1 text-xs text-info dark:bg-info/40">
           {IDP_CALLBACK_URL}
         </code>
         <button
           type="button"
           onClick={handleCopy}
-          className="shrink-0 rounded-md border border-blue-300 bg-white px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800"
+          className="shrink-0 rounded-md border border-info/40 bg-white px-2 py-1 text-xs font-medium text-info hover:bg-info/20 dark:bg-info/40"
         >
           {copied ? "Copied" : "Copy"}
         </button>
@@ -1023,8 +1023,8 @@ function IdPTable({
                 <span
                   className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
                     cfg.auto_provision
-                      ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
-                      : "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300"
+                      ? "bg-success/10 text-success"
+                      : "bg-muted text-muted-foreground"
                   }`}
                 >
                   {cfg.auto_provision ? "Enabled" : "Disabled"}

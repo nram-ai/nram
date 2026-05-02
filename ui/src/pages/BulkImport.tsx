@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useMeProjects, useStoreMemory } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
 import type { Project, StoreMemoryRequest } from "../api/client";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUpload } from "../lib/icons";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -459,19 +461,7 @@ function UploadStep({
           onChange={handleChange}
         />
         <div className="flex flex-col items-center gap-3">
-          <svg
-            className="h-10 w-10 text-muted-foreground"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
-            />
-          </svg>
+          <FontAwesomeIcon icon={faUpload} className="h-10 w-10 text-muted-foreground" />
           <div>
             <p className="text-sm font-medium text-foreground">
               Drop a file here or click to browse
@@ -484,7 +474,7 @@ function UploadStep({
       </div>
 
       {error && (
-        <div className="mt-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
+        <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
           {error}
         </div>
       )}
@@ -553,7 +543,7 @@ function MapFieldsStep({
       {/* Project selector */}
       <div>
         <label className="block text-sm font-medium mb-1.5">
-          Target Project <span className="text-red-500">*</span>
+          Target Project <span className="text-destructive">*</span>
         </label>
         <select
           className={selectClass}
@@ -581,7 +571,7 @@ function MapFieldsStep({
           {/* Content */}
           <div>
             <label className="block text-sm font-medium mb-1.5">
-              Content <span className="text-red-500">*</span>
+              Content <span className="text-destructive">*</span>
             </label>
             <select
               className={selectClass}
@@ -935,11 +925,7 @@ function ImportStep({
       <div className="rounded-lg border border-border bg-card p-6">
         <div className="flex items-center gap-3 mb-4">
           <div
-            className={`flex h-10 w-10 items-center justify-center rounded-full text-lg ${
-              result!.failed === 0
-                ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
-                : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"
-            }`}
+            className={`flex h-10 w-10 items-center justify-center rounded-full text-lg ${ result!.failed === 0 ? "bg-success/20 text-success" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300" }`}
           >
             {result!.failed === 0 ? "\u2713" : "!"}
           </div>
@@ -959,13 +945,13 @@ function ImportStep({
             <p className="text-xs text-muted-foreground">Total</p>
           </div>
           <div className="rounded-md border border-border p-3 text-center">
-            <p className="text-lg font-semibold text-green-600 dark:text-green-400">
+            <p className="text-lg font-semibold text-success">
               {result!.success}
             </p>
             <p className="text-xs text-muted-foreground">Imported</p>
           </div>
           <div className="rounded-md border border-border p-3 text-center">
-            <p className="text-lg font-semibold text-red-600 dark:text-red-400">
+            <p className="text-lg font-semibold text-destructive">
               {result!.failed}
             </p>
             <p className="text-xs text-muted-foreground">Failed</p>
@@ -974,8 +960,8 @@ function ImportStep({
 
         {/* Errors */}
         {result!.errors.length > 0 && (
-          <div className="rounded-md border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950">
-            <p className="text-sm font-medium text-red-700 dark:text-red-400 mb-1">
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3">
+            <p className="text-sm font-medium text-destructive mb-1">
               Errors ({result!.errors.length}
               {result!.errors.length >= 50 ? "+" : ""})
             </p>
@@ -983,7 +969,7 @@ function ImportStep({
               {result!.errors.map((err, i) => (
                 <p
                   key={i}
-                  className="text-xs text-red-600 dark:text-red-400 py-0.5"
+                  className="text-xs text-destructive py-0.5"
                 >
                   {err}
                 </p>

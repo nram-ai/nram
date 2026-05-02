@@ -33,15 +33,15 @@ function roleBadgeClass(role: string): string {
     case "administrator":
       return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300";
     case "org_owner":
-      return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300";
+      return "bg-warning/10 text-warning";
     case "member":
-      return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300";
+      return "bg-info/10 text-info";
     case "readonly":
-      return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300";
+      return "bg-muted text-muted-foreground";
     case "service":
-      return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300";
+      return "bg-success/10 text-success";
     default:
-      return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300";
+      return "bg-muted text-muted-foreground";
   }
 }
 
@@ -93,7 +93,7 @@ function APIKeyRow({
           <span className="inline-flex items-center gap-2">
             <button
               type="button"
-              className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
+              className="rounded bg-destructive px-2 py-1 text-xs text-white hover:bg-destructive disabled:opacity-50"
               onClick={() => onRevoke(apiKey.id)}
               disabled={revoking}
             >
@@ -110,7 +110,7 @@ function APIKeyRow({
         ) : (
           <button
             type="button"
-            className="rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+            className="rounded border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
             onClick={() => setConfirmRevoke(true)}
           >
             Revoke
@@ -252,7 +252,7 @@ function ChangePasswordCard() {
             autoComplete="new-password"
           />
           {tooShort && (
-            <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+            <p className="mt-1 text-xs text-destructive">
               Must be at least 8 characters.
             </p>
           )}
@@ -269,7 +269,7 @@ function ChangePasswordCard() {
             autoComplete="new-password"
           />
           {mismatch && (
-            <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+            <p className="mt-1 text-xs text-destructive">
               Passwords do not match.
             </p>
           )}
@@ -277,11 +277,7 @@ function ChangePasswordCard() {
 
         {feedback && (
           <div
-            className={`rounded-md px-3 py-2 text-sm ${
-              feedback.type === "success"
-                ? "bg-green-50 text-green-800 dark:bg-green-950/30 dark:text-green-300"
-                : "bg-red-50 text-red-800 dark:bg-red-950/30 dark:text-red-300"
-            }`}
+            className={`rounded-md px-3 py-2 text-sm ${ feedback.type === "success" ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive" }`}
           >
             {feedback.message}
           </div>
@@ -330,7 +326,7 @@ function PasskeyRow({
           <span className="inline-flex items-center gap-2">
             <button
               type="button"
-              className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
+              className="rounded bg-destructive px-2 py-1 text-xs text-white hover:bg-destructive disabled:opacity-50"
               onClick={() => onDelete(passkey.id)}
               disabled={deleting}
             >
@@ -347,7 +343,7 @@ function PasskeyRow({
         ) : (
           <button
             type="button"
-            className="rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+            className="rounded border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
             onClick={() => setConfirmDelete(true)}
           >
             Delete
@@ -415,7 +411,7 @@ function CreatePasskeyForm({ onCreated }: { onCreated: () => void }) {
         </button>
       </div>
       {error && (
-        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        <p className="text-sm text-destructive">{error}</p>
       )}
     </div>
   );
@@ -521,7 +517,7 @@ function MyAccount() {
           </div>
           <button
             type="button"
-            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+            className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
             onClick={() => auth.logout()}
           >
             Logout
@@ -573,7 +569,7 @@ function MyAccount() {
             )}
 
             {passkeysQuery.isError && (
-              <p className="text-sm text-red-600 dark:text-red-400">
+              <p className="text-sm text-destructive">
                 Failed to load passkeys: {passkeysQuery.error?.message}
               </p>
             )}
@@ -589,17 +585,17 @@ function MyAccount() {
         <div className="p-4 space-y-4">
           {/* New key banner */}
           {newKeyValue && (
-            <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-4 dark:border-amber-600 dark:bg-amber-950/30">
-              <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+            <div className="rounded-lg border-2 border-warning/40 bg-warning/10 p-4">
+              <p className="text-sm font-semibold text-warning">
                 New API Key — save this now, it will not be shown again
               </p>
               <div className="mt-2 flex items-center gap-2">
-                <code className="flex-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-mono break-all dark:border-amber-700 dark:bg-amber-950/50">
+                <code className="flex-1 rounded-md border border-warning/40 bg-white px-3 py-2 text-sm font-mono break-all dark:bg-warning/15">
                   {newKeyValue}
                 </code>
                 <button
                   type="button"
-                  className="shrink-0 rounded border px-3 py-1.5 text-xs font-medium hover:bg-amber-100 dark:hover:bg-amber-900"
+                  className="shrink-0 rounded border px-3 py-1.5 text-xs font-medium hover:bg-warning/25"
                   onClick={() => handleCopy(newKeyValue)}
                 >
                   {copied ? "Copied" : "Copy"}
@@ -607,7 +603,7 @@ function MyAccount() {
               </div>
               <button
                 type="button"
-                className="mt-2 text-xs text-amber-700 hover:underline dark:text-amber-300"
+                className="mt-2 text-xs text-warning hover:underline"
                 onClick={() => setNewKeyValue(null)}
               >
                 Dismiss
@@ -652,7 +648,7 @@ function MyAccount() {
           )}
 
           {apiKeysQuery.isError && (
-            <p className="text-sm text-red-600 dark:text-red-400">
+            <p className="text-sm text-destructive">
               Failed to load API keys: {apiKeysQuery.error?.message}
             </p>
           )}

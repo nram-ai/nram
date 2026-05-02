@@ -2,23 +2,42 @@ import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMeProjects, useGraph } from "../hooks/useApi";
 import { useSelectedProject } from "../context/ProjectContext";
+import { useTheme } from "../context/ThemeContext";
 import type { GraphEntity } from "../api/client";
 
-const ENTITY_TYPE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  person: { bg: "#1e3a5f", border: "#60a5fa", text: "#bfdbfe" },
-  organization: { bg: "#14532d", border: "#4ade80", text: "#bbf7d0" },
-  concept: { bg: "#451a03", border: "#fbbf24", text: "#fef3c7" },
-  location: { bg: "#4a1942", border: "#f472b6", text: "#fce7f3" },
-  event: { bg: "#312e81", border: "#818cf8", text: "#e0e7ff" },
-  technology: { bg: "#064e3b", border: "#34d399", text: "#d1fae5" },
-  product: { bg: "#4c0519", border: "#fb7185", text: "#ffe4e6" },
-  tool: { bg: "#2e1065", border: "#a78bfa", text: "#ede9fe" },
-};
+const KNOWN_ENTITY_TYPES = [
+  "person",
+  "organization",
+  "concept",
+  "location",
+  "event",
+  "technology",
+  "product",
+  "tool",
+] as const;
 
-const DEFAULT_COLOR = { bg: "#1f2937", border: "#6b7280", text: "#d1d5db" };
+type GraphColor = { bg: string; border: string; text: string };
+type GraphColorMap = Record<string, GraphColor>;
 
-function getEntityColor(entityType: string) {
-  return ENTITY_TYPE_COLORS[entityType.toLowerCase()] || DEFAULT_COLOR;
+function buildGraphColorMap(): GraphColorMap {
+  const root = getComputedStyle(document.documentElement);
+  const hsl = (slug: string, key: string) =>
+    `hsl(${root.getPropertyValue(`--graph-${slug}-${key}`).trim()})`;
+  const slugs = [...KNOWN_ENTITY_TYPES, "default"];
+  const out: GraphColorMap = {};
+  for (const slug of slugs) {
+    out[slug] = { bg: hsl(slug, "bg"), border: hsl(slug, "border"), text: hsl(slug, "text") };
+  }
+  return out;
+}
+
+function colorFor(map: GraphColorMap, entityType: string): GraphColor {
+  return map[entityType.toLowerCase()] ?? map.default;
+}
+
+function useGraphColorMap(): GraphColorMap {
+  const { theme } = useTheme();
+  return useMemo(buildGraphColorMap, [theme]);
 }
 
 function formatDate(dateStr: string): string {
@@ -36,7 +55,8 @@ interface DetailPanelProps {
 }
 
 function DetailPanel({ entity, connections, onClose }: DetailPanelProps) {
-  const colors = getEntityColor(entity.entity_type);
+  const colorMap = useGraphColorMap();
+  const colors = colorFor(colorMap, entity.entity_type);
 
   return (
     <div className="fixed inset-y-0 right-0 w-full sm:w-96 bg-card border-l border-border shadow-lg z-50 overflow-y-auto">
@@ -149,6 +169,7 @@ function EntityBrowser() {
   const [searchText, setSearchText] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
+  const colorMap = useGraphColorMap();
 
   useEffect(() => {
     if (!selectedProjectId && projects && projects.length > 0) {
@@ -279,9 +300,9 @@ function EntityBrowser() {
       )}
 
       {selectedProjectId && !isLoading && graphError && (
-        <div className="flex items-center justify-center rounded-lg border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/30 h-[500px]">
+        <div className="flex items-center justify-center rounded-lg border border-destructive/40 bg-destructive/10 h-[500px]">
           <div className="text-center">
-            <p className="text-sm text-red-800 dark:text-red-300">
+            <p className="text-sm text-destructive">
               Failed to load entity data. Please try again.
             </p>
           </div>
@@ -342,7 +363,7 @@ function EntityBrowser() {
             {/* Mobile card layout */}
             <div className="space-y-3 md:hidden">
               {filteredEntities.map((entity) => {
-                const colors = getEntityColor(entity.entity_type);
+                const colors = colorFor(colorMap, entity.entity_type);
                 return (
                   <div
                     key={entity.id}
@@ -408,7 +429,7 @@ function EntityBrowser() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filteredEntities.map((entity) => {
-                    const colors = getEntityColor(entity.entity_type);
+                    const colors = colorFor(colorMap, entity.entity_type);
                     return (
                       <tr
                         key={entity.id}

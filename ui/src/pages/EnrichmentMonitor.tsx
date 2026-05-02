@@ -12,6 +12,17 @@ import {
   formatElapsed,
 } from "../hooks/useElapsedTicker";
 import { useAuth } from "../context/AuthContext";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import {
+  faSpinner,
+  faChevronUp,
+  faChevronDown,
+  faFolderOpen,
+  faCirclePlay,
+  faCirclePause,
+  faCheck,
+  faXmark,
+} from "../lib/icons";
 import type { EnrichmentQueueItem } from "../api/client";
 
 // Tier picker — administrators can switch between their own queue items
@@ -47,10 +58,10 @@ const STATUS_BADGES: Record<string, string> = {
   pending:
     "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
   processing:
-    "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
+    "bg-info/10 text-info",
   completed:
-    "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
-  failed: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+    "bg-success/10 text-success",
+  failed: "bg-destructive/10 text-destructive",
 };
 
 type SortField = "status" | "attempts" | "created_at";
@@ -86,27 +97,7 @@ function truncateId(id: string): string {
 // ---------------------------------------------------------------------------
 
 function Spinner({ className = "h-3.5 w-3.5" }: { className?: string }) {
-  return (
-    <svg
-      className={`animate-spin ${className}`}
-      fill="none"
-      viewBox="0 0 24 24"
-    >
-      <circle
-        className="opacity-25"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="4"
-      />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-      />
-    </svg>
-  );
+  return <FontAwesomeIcon icon={faSpinner} spin className={className} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +185,7 @@ const STAGE_LABELS: Record<string, string> = {
 
 function StageChip({ stage }: { stage: string }) {
   return (
-    <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+    <span className="inline-flex items-center rounded-full bg-info/10 px-2 py-0.5 text-[10px] font-medium text-info">
       {STAGE_LABELS[stage] ?? stage}
     </span>
   );
@@ -210,8 +201,8 @@ type RowAlert =
   | null;
 
 const ROW_TINTS: Record<NonNullable<RowAlert>["kind"], string> = {
-  stale: "bg-amber-50/40 dark:bg-amber-950/30",
-  requeued: "bg-red-50/40 dark:bg-red-950/30",
+  stale: "bg-warning/40",
+  requeued: "bg-destructive/40",
 };
 
 function rowAlert(item: EnrichmentQueueItem): RowAlert {
@@ -241,7 +232,7 @@ function StaleDiagnosticPill({
     : `This row has been claimed for ${formatElapsed(secs)} without finishing. The stuck-job sweeper will auto-requeue it.`;
   return (
     <span
-      className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+      className="inline-flex items-center rounded-full bg-warning/20 px-2 py-0.5 text-[10px] font-semibold text-warning"
       title={title}
     >
       stale {formatElapsed(secs)}
@@ -252,7 +243,7 @@ function StaleDiagnosticPill({
 function RequeuedPill({ reason }: { reason: string }) {
   return (
     <span
-      className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-800 dark:bg-red-900/40 dark:text-red-200"
+      className="inline-flex items-center rounded-full bg-destructive/20 px-2 py-0.5 text-[10px] font-semibold text-destructive"
       title={reason}
     >
       requeued
@@ -264,8 +255,8 @@ function NoProgressChip({ secs }: { secs: number }) {
   if (secs <= 60) return null;
   const cls =
     secs > 300
-      ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
-      : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200";
+      ? "bg-destructive/10 text-destructive"
+      : "bg-warning/10 text-warning";
   return (
     <span
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}
@@ -305,15 +296,15 @@ function EnrichmentPoolBanner({
   const oldestSecs = elapsedSeconds(oldestIso);
 
   let oldestCls = "text-emerald-700 dark:text-emerald-300";
-  if (oldestSecs > 300) oldestCls = "text-red-700 dark:text-red-300";
-  else if (oldestSecs > 60) oldestCls = "text-amber-700 dark:text-amber-300";
+  if (oldestSecs > 300) oldestCls = "text-destructive";
+  else if (oldestSecs > 60) oldestCls = "text-warning";
 
   const stages = tick?.byStage ?? {};
 
   return (
-    <div className="rounded-lg border border-dashed border-blue-300 bg-blue-50/50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+    <div className="rounded-lg border border-dashed border-info/40 bg-info/50 p-4">
       <div className="flex flex-wrap items-center gap-3 text-xs">
-        <span className="font-medium text-blue-900 dark:text-blue-200">
+        <span className="font-medium text-info">
           Worker pool active
         </span>
         <span className="font-mono">
@@ -383,7 +374,7 @@ function ErrorCell({ error }: { error?: string }) {
 
   return (
     <div className="max-w-xs">
-      <p className={`text-xs text-red-600 dark:text-red-400 ${!expanded && isLong ? "line-clamp-2" : ""}`}>
+      <p className={`text-xs text-destructive ${!expanded && isLong ? "line-clamp-2" : ""}`}>
         {error}
       </p>
       {isLong && (
@@ -426,13 +417,7 @@ function SortHeader({
     >
       {label}
       {isActive && (
-        <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          {currentDir === "asc" ? (
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-          ) : (
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          )}
-        </svg>
+        <FontAwesomeIcon icon={currentDir === "asc" ? faChevronUp : faChevronDown} className="h-3 w-3" />
       )}
     </button>
   );
@@ -513,19 +498,7 @@ function QueueTable({
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center rounded-lg border border-border bg-card py-12 shadow-sm">
-        <svg
-          className="h-12 w-12 text-muted-foreground/40"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-          />
-        </svg>
+        <FontAwesomeIcon icon={faFolderOpen} className="h-12 w-12 text-muted-foreground/40" />
         <p className="mt-3 text-sm font-medium text-muted-foreground">
           No items in the enrichment queue
         </p>
@@ -548,7 +521,7 @@ function QueueTable({
                   checked={allFailedSelected && failedIds.size > 0}
                   onChange={onToggleSelectAll}
                   disabled={failedIds.size === 0}
-                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary disabled:opacity-30"
+                  className="h-4 w-4 rounded border-input text-primary focus:ring-primary disabled:opacity-30"
                   title="Select all failed items"
                 />
               </th>
@@ -614,7 +587,7 @@ function QueueTable({
                       checked={selectedIds.has(item.id)}
                       onChange={() => onToggleSelect(item.id)}
                       disabled={!isFailed}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary disabled:opacity-30"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary disabled:opacity-30"
                     />
                   </td>
                 )}
@@ -862,8 +835,8 @@ function EnrichmentMonitor() {
 
       {/* Error state */}
       {statusQuery.isError && !statusQuery.isLoading && (
-        <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/30">
-          <p className="text-sm text-red-800 dark:text-red-300">
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+          <p className="text-sm text-destructive">
             Failed to load enrichment status. Please try refreshing the page.
           </p>
         </div>
@@ -889,17 +862,17 @@ function EnrichmentMonitor() {
             <StatCard
               label="Processing"
               count={counts.processing}
-              colorClass="text-blue-600 dark:text-blue-400"
+              colorClass="text-info"
             />
             <StatCard
               label="Completed"
               count={counts.completed}
-              colorClass="text-green-600 dark:text-green-400"
+              colorClass="text-success"
             />
             <StatCard
               label="Failed"
               count={counts.failed}
-              colorClass="text-red-600 dark:text-red-400"
+              colorClass="text-destructive"
             />
           </div>
 
@@ -914,46 +887,16 @@ function EnrichmentMonitor() {
               disabled={pauseMutation.isPending}
               className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${
                 isPaused
-                  ? "bg-green-600 text-white hover:bg-green-700"
+                  ? "bg-success text-white hover:bg-success"
                   : "bg-yellow-600 text-white hover:bg-yellow-700"
               }`}
             >
               {pauseMutation.isPending ? (
                 <Spinner />
               ) : isPaused ? (
-                <svg
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
+                <FontAwesomeIcon icon={faCirclePlay} className="h-4 w-4" />
               ) : (
-                <svg
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
+                <FontAwesomeIcon icon={faCirclePause} className="h-4 w-4" />
               )}
               {isPaused ? "Resume Workers" : "Pause Workers"}
             </button>
@@ -986,7 +929,7 @@ function EnrichmentMonitor() {
                 type="button"
                 onClick={handleRetryAllFailed}
                 disabled={retryMutation.isPending}
-                className="inline-flex items-center gap-1.5 rounded-md border border-red-300 px-3 py-2 text-sm font-medium text-red-700 shadow-sm hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 px-3 py-2 text-sm font-medium text-destructive shadow-sm hover:bg-destructive/10 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {retryMutation.isPending && <Spinner />}
                 Retry All Failed ({failedItems.length})
@@ -997,58 +940,22 @@ function EnrichmentMonitor() {
 
           {/* Mutation feedback */}
           {retryMutation.isSuccess && (
-            <div className="flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm text-green-800 dark:bg-green-900/30 dark:text-green-300">
-              <svg
-                className="h-4 w-4 flex-shrink-0"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
+            <div className="flex items-center gap-2 rounded-md bg-success/10 px-3 py-2 text-sm text-success">
+              <FontAwesomeIcon icon={faCheck} className="h-4 w-4 flex-shrink-0" />
               {retryMutation.data.retried} item(s) queued for retry.
             </div>
           )}
 
           {retryMutation.isError && (
-            <div className="flex items-center gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-900/30 dark:text-red-300">
-              <svg
-                className="h-4 w-4 flex-shrink-0"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
+            <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
               Failed to retry: {(retryMutation.error as Error).message}
             </div>
           )}
 
           {pauseMutation.isError && (
-            <div className="flex items-center gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-900/30 dark:text-red-300">
-              <svg
-                className="h-4 w-4 flex-shrink-0"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
+            <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
               Failed to update pause state:{" "}
               {(pauseMutation.error as Error).message}
             </div>

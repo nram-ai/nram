@@ -7,6 +7,9 @@ import {
 } from "../hooks/useApi";
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import type { Setting, SettingSchema } from "../api/client";
+import Switch from "../components/Switch";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck, faXmark, faCircleQuestion, faSpinner } from "../lib/icons";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -283,7 +286,7 @@ function ScopeBadge({ scope }: { scope: string }) {
     <span
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
         isGlobal
-          ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300"
+          ? "bg-info/10 text-info"
           : "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300"
       }`}
     >
@@ -305,76 +308,15 @@ function StatusToast({
 }) {
   return (
     <div
-      className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium shadow-lg transition-all ${
-        type === "success"
-          ? "bg-green-50 text-green-800 dark:bg-green-900/80 dark:text-green-200"
-          : "bg-red-50 text-red-800 dark:bg-red-900/80 dark:text-red-200"
-      }`}
+      className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium shadow-lg transition-all ${ type === "success" ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive" }`}
     >
       {type === "success" ? (
-        <svg
-          className="h-4 w-4 flex-shrink-0"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M5 13l4 4L19 7"
-          />
-        </svg>
+        <FontAwesomeIcon icon={faCheck} className="h-4 w-4 flex-shrink-0" />
       ) : (
-        <svg
-          className="h-4 w-4 flex-shrink-0"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M6 18L18 6M6 6l12 12"
-          />
-        </svg>
+        <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
       )}
       {message}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Toggle Switch
-// ---------------------------------------------------------------------------
-
-function Toggle({
-  checked,
-  onChange,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${
-        checked ? "bg-primary" : "bg-gray-300 dark:bg-gray-600"
-      } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
-    >
-      <span
-        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-          checked ? "translate-x-5" : "translate-x-0"
-        }`}
-      />
-    </button>
   );
 }
 
@@ -400,17 +342,7 @@ function HelpTooltip({ text }: { text: string }) {
         }}
         className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
       >
-        <svg
-          className="h-3.5 w-3.5"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <circle cx="12" cy="12" r="10" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9.5 9a2.5 2.5 0 015 0c0 1.5-2.5 2-2.5 4" />
-          <circle cx="12" cy="17" r="0.5" fill="currentColor" />
-        </svg>
+        <FontAwesomeIcon icon={faCircleQuestion} className="h-3.5 w-3.5" />
       </button>
       {open && (
         <span
@@ -617,7 +549,7 @@ function InlineSettingEditor({
           <span className="text-xs text-muted-foreground">(default)</span>
         )}
         {requiresRestart && (
-          <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-300">
+          <span className="inline-flex items-center rounded-full bg-warning/20 px-2 py-0.5 text-xs font-medium text-warning">
             Requires a server restart
           </span>
         )}
@@ -634,7 +566,7 @@ function InlineSettingEditor({
     return (
       <div className="flex items-center justify-between py-3">
         <div className="flex-1 min-w-0">{headerRow}</div>
-        <Toggle
+        <Switch
           checked={boolVal}
           disabled={saving}
           onChange={(v) => onSave(schema.key, v, currentScope)}
@@ -746,25 +678,7 @@ function InlineSettingEditor({
         >
           {saving ? (
             <span className="flex items-center gap-1.5">
-              <svg
-                className="h-3.5 w-3.5 animate-spin"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                />
-              </svg>
+              <FontAwesomeIcon icon={faSpinner} spin className="h-3.5 w-3.5" />
               Saving...
             </span>
           ) : (
@@ -969,32 +883,14 @@ function SettingsEditor() {
       {/* Loading state */}
       {isLoading && (
         <div className="flex items-center justify-center py-16">
-          <svg
-            className="h-8 w-8 animate-spin text-muted-foreground"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="4"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-            />
-          </svg>
+          <FontAwesomeIcon icon={faSpinner} spin className="h-8 w-8 text-muted-foreground" />
         </div>
       )}
 
       {/* Error state */}
       {isError && !isLoading && (
-        <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/30">
-          <p className="text-sm text-red-800 dark:text-red-300">
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+          <p className="text-sm text-destructive">
             Failed to load settings. Please try refreshing the page.
           </p>
         </div>
