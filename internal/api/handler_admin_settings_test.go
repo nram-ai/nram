@@ -27,6 +27,8 @@ type mockSettingsAdminStore struct {
 
 	// capture args
 	listScope    string
+	listLimit    int
+	listOffset   int
 	updatedKey   string
 	updatedValue json.RawMessage
 	updatedScope string
@@ -39,6 +41,8 @@ func (m *mockSettingsAdminStore) CountSettings(_ context.Context, scope string) 
 
 func (m *mockSettingsAdminStore) ListSettings(_ context.Context, scope string, limit, offset int) ([]model.Setting, error) {
 	m.listScope = scope
+	m.listLimit = limit
+	m.listOffset = offset
 	return m.settings, m.listErr
 }
 
@@ -703,5 +707,54 @@ func TestAdminSettingsUpdateInvalidJSON(t *testing.T) {
 	}
 	if resp.Error.Code != "bad_request" {
 		t.Errorf("expected code bad_request, got %q", resp.Error.Code)
+	}
+}
+
+// TestAdminSettingsListSettingsDefaultLimitCoversRegistry pins the contract
+// that GET /admin/settings with no ?limit= supplied must request enough rows
+// to cover the whole schema registry. The bootstrap seeder writes one row
+// per registered key (~170 today); a smaller default silently truncates the
+// GET response and the UI re-renders the missing keys using the schema
+// default, making operator toggles appear to do nothing even when the PUT
+// succeeded. If the registry ever grows past the floor, both the handler
+// default and this assertion must move together.
+func TestAdminSettingsListSettingsDefaultLimitCoversRegistry(t *testing.T) {
+	const minDefaultLimit = 500
+
+	store := &mockSettingsAdminStore{}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/settings", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if store.listLimit < minDefaultLimit {
+		t.Fatalf("default page size regressed: handler asked store for limit=%d, "+
+			"want >= %d. The seeder writes ~166 rows; a smaller default silently "+
+			"truncates the GET response and breaks every setting whose key sorts "+
+			"past the page boundary.", store.listLimit, minDefaultLimit)
+	}
+	if store.listOffset != 0 {
+		t.Errorf("expected default offset 0, got %d", store.listOffset)
+	}
+}
+
+// TestAdminSettingsListSettingsExplicitLimitHonored pins the contract that
+// an explicit ?limit= is respected — the no-arg default is a floor, not a
+// minimum, so external callers that paginate deliberately keep working.
+func TestAdminSettingsListSettingsExplicitLimitHonored(t *testing.T) {
+	store := &mockSettingsAdminStore{}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/settings?limit=25", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if store.listLimit != 25 {
+		t.Fatalf("explicit ?limit=25 ignored: store received limit=%d", store.listLimit)
 	}
 }

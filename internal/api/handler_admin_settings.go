@@ -13,6 +13,15 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
+// settingsListMaxLimit is the default and maximum page size for
+// GET /admin/settings. The endpoint is a 1:1 companion to GET
+// /admin/settings?schema=true (which is unpaginated): both must always
+// reflect every registered key, so the floor needs to clear the whole
+// schema registry (~170 entries today) with multi-year headroom. The UI
+// requests this same limit explicitly; if the registry ever exceeds it,
+// both sides have to grow together.
+const settingsListMaxLimit = 500
+
 // SettingsAdminStore abstracts storage operations for the settings admin API.
 type SettingsAdminStore interface {
 	CountSettings(ctx context.Context, scope string) (int, error)
@@ -85,14 +94,20 @@ func NewAdminSettingsHandler(cfg SettingsAdminConfig) http.HandlerFunc {
 func handleListSettings(w http.ResponseWriter, r *http.Request, cfg SettingsAdminConfig) {
 	scope := r.URL.Query().Get("scope")
 
-	limit := 50
+	// The settings registry is bounded compile-time data (~170 entries today)
+	// and conceptually a 1:1 companion to GET /settings?schema=true, which is
+	// unpaginated. The default page size must comfortably cover the whole
+	// registry — otherwise the bootstrap seeder writes rows the UI never
+	// reads, and operator changes to keys past the page boundary appear lost
+	// even though the PUT succeeded.
+	limit := settingsListMaxLimit
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			limit = n
 		}
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > settingsListMaxLimit {
+		limit = settingsListMaxLimit
 	}
 
 	offset := 0

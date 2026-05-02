@@ -1309,7 +1309,12 @@ export const adminAPI = {
 
   // Settings
   getSettings: (scope?: string) => {
-    const params = scope ? `?scope=${encodeURIComponent(scope)}` : "";
+    // limit is pinned explicitly so the UI's correctness does not silently
+    // depend on the server's default page size. The registry is bounded
+    // compile-time data; we want the whole list, not a page.
+    const params = scope
+      ? `?limit=500&scope=${encodeURIComponent(scope)}`
+      : `?limit=500`;
     return request<{ data: Setting[] }>("GET", `/admin/settings${params}`);
   },
   getSettingsSchema: () =>
