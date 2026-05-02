@@ -132,6 +132,10 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 	}
 
 	promptTemplate := service.ResolveOrDefault(ctx, cd.settings, service.SettingDreamContradictionPrompt, "global")
+	temperature := service.GetDefaultFloat(service.SettingEnrichmentConflictTemperature)
+	if cd.settings != nil {
+		temperature = cd.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentConflictTemperature, "global")
+	}
 	var conflicts []ConflictResult
 
 	for _, result := range results {
@@ -159,7 +163,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 				{Role: "user", Content: prompt},
 			},
 			MaxTokens:   256,
-			Temperature: 0.1,
+			Temperature: temperature,
 			JSONMode:    true,
 		})
 		if err != nil {

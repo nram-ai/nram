@@ -216,6 +216,11 @@ type RecallService struct {
 	embedProvider func() provider.EmbeddingProvider
 	weights       RankingWeights
 	fusion        FusionConfig
+	// settings is optional. When nil, ranking and pagination knobs fall
+	// back to the registered defaults via service.GetDefault*. Wired in
+	// production via SetSettings so operators can retune recall scoring
+	// (recency decay, over-fetch multiplier, default limit/depth) live.
+	settings *SettingsService
 	// reinforcement is optional. When nil (the default, matching all existing
 	// callers), recall has no read-path write. When wired via SetReinforcement,
 	// every successful recall asynchronously bumps access_count, last_accessed,
@@ -253,6 +258,14 @@ func NewRecallService(
 // SetWeights overrides the default ranking weights.
 func (s *RecallService) SetWeights(w RankingWeights) {
 	s.weights = w
+}
+
+// SetSettings wires the settings service so recall scoring knobs (recency
+// decay, graph hop multiplier, over-fetch shape, default limit/depth)
+// resolve through the registry. Optional — when nil, the registered
+// defaults apply via service.GetDefault*.
+func (s *RecallService) SetSettings(svc *SettingsService) {
+	s.settings = svc
 }
 
 // SetLexical wires the lexical (BM25/tsvector) searcher used by the hybrid
@@ -296,16 +309,19 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		return nil, fmt.Errorf("query is required")
 	}
 
-	// Apply defaults.
+	// Apply defaults from the registry (with in-code fallback when settings
+	// hasn't been wired — preserves the test-only constructor path).
 	limit := req.Limit
 	if limit <= 0 {
-		limit = 10
+		limit = s.recallDefaultLimit(ctx)
 	}
 	threshold := req.Threshold
 	graphDepth := req.GraphDepth
 	if graphDepth <= 0 {
-		graphDepth = 2
+		graphDepth = s.recallGraphDefaultDepth(ctx)
 	}
+	graphHopMultiplier := s.recallGraphHopMultiplier(ctx)
+	overfetchLimit := s.recallOverfetch(ctx, limit)
 
 	// Determine namespace ID.
 	var namespaceID uuid.UUID
@@ -399,11 +415,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				// ignore the dimension parameter and return their native size.
 				actualDim := len(resp.Embeddings[0])
 
-				// Over-fetch for re-ranking.
-				topK := limit * 3
-				if topK < 10 {
-					topK = 10
-				}
+				// Over-fetch for re-ranking. Pool size is overfetchLimit
+				// resolved once at Recall entry from the registry knobs.
+				topK := overfetchLimit
 
 				// Search primary namespace.
 				searchNamespaces := []uuid.UUID{namespaceID}
@@ -471,7 +485,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// Fall back to listing by namespace if no embedding was used.
 	if !embeddingUsed {
 		seenIDs := make(map[uuid.UUID]bool)
-		memories, err := s.memories.ListByNamespace(ctx, namespaceID, limit*3, 0)
+		memories, err := s.memories.ListByNamespace(ctx, namespaceID, overfetchLimit, 0)
 		if err == nil {
 			for _, mem := range memories {
 				seenIDs[mem.ID] = true
@@ -486,7 +500,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		}
 		// Also include global namespace memories in text fallback.
 		if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
-			globalMems, err := s.memories.ListByNamespace(ctx, *req.GlobalNamespaceID, limit*3, 0)
+			globalMems, err := s.memories.ListByNamespace(ctx, *req.GlobalNamespaceID, overfetchLimit, 0)
 			if err == nil {
 				for _, mem := range globalMems {
 					if !seenIDs[mem.ID] {
@@ -528,7 +542,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					}
 				}
 				// Fetch memories from the source namespace.
-				sharedMems, err := s.memories.ListByNamespace(ctx, share.SourceNsID, limit*3, 0)
+				sharedMems, err := s.memories.ListByNamespace(ctx, share.SourceNsID, overfetchLimit, 0)
 				if err == nil {
 					for _, mem := range sharedMems {
 						slug := sourceNsSlug
@@ -647,9 +661,11 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							})
 						}
 						if rel.SourceMemory != nil {
-							// Compute graph relevance: 1/(1+hops) * weight.
-							// We approximate hops as 1 for directly connected relationships.
-							relevance := 1.0 / 2.0 * rel.Weight
+							// Compute graph relevance: hop_multiplier * weight.
+							// hop_multiplier defaults to 0.5 (the historical
+							// 1.0/2.0 = "approximate hops as 1") and is
+							// operator-tunable via ranking.graph.hop_multiplier.
+							relevance := graphHopMultiplier * rel.Weight
 							if existing, ok := graphMemoryRelevance[*rel.SourceMemory]; !ok || relevance > existing {
 								graphMemoryRelevance[*rel.SourceMemory] = relevance
 							}
@@ -669,6 +685,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 	// Compute final scores using the ranking formula.
 	now := time.Now()
+	recencyDecayPerHour := s.recallRecencyDecay(ctx)
 
 	// Find max access count for frequency normalization.
 	maxAccess := 0
@@ -717,8 +734,8 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// from the candidate's owning project, so a single sort can score
 	// candidates from different projects under different effective weights.
 	sort.Slice(candidates, func(i, j int) bool {
-		si := computeScore(candidates[i], resolveWeights(candidates[i].projectID), now, maxAccess)
-		sj := computeScore(candidates[j], resolveWeights(candidates[j].projectID), now, maxAccess)
+		si := computeScore(candidates[i], resolveWeights(candidates[i].projectID), now, maxAccess, recencyDecayPerHour)
+		sj := computeScore(candidates[j], resolveWeights(candidates[j].projectID), now, maxAccess, recencyDecayPerHour)
 		return si > sj
 	})
 
@@ -747,7 +764,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			}
 		}
 
-		score := computeScore(c, resolveWeights(c.projectID), now, maxAccess)
+		score := computeScore(c, resolveWeights(c.projectID), now, maxAccess, recencyDecayPerHour)
 		if score < threshold {
 			continue
 		}
@@ -952,9 +969,11 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 }
 
 // computeScore calculates the composite ranking score for a candidate.
-func computeScore(c scoredMemory, w RankingWeights, now time.Time, maxAccess int) float64 {
+// recencyDecayPerHour drives the exp(-rate * hours_since_creation) term;
+// the registered default is 0.01 (~69h half-life).
+func computeScore(c scoredMemory, w RankingWeights, now time.Time, maxAccess int, recencyDecayPerHour float64) float64 {
 	hoursSinceCreation := now.Sub(c.memory.CreatedAt).Hours()
-	recencyScore := math.Exp(-0.01 * hoursSinceCreation)
+	recencyScore := math.Exp(-recencyDecayPerHour * hoursSinceCreation)
 
 	var frequencyScore float64
 	if maxAccess > 0 {
@@ -967,6 +986,58 @@ func computeScore(c scoredMemory, w RankingWeights, now time.Time, maxAccess int
 		w.Frequency*frequencyScore +
 		w.GraphRelevance*c.graphRelevance +
 		w.Confidence*clampScore(c.memory.Confidence)
+}
+
+// recallDefaultLimit returns the default page size when the caller passes
+// limit <= 0. Falls back to the registered default when settings is nil.
+func (s *RecallService) recallDefaultLimit(ctx context.Context) int {
+	if s.settings == nil {
+		return GetDefaultInt(SettingRecallDefaultLimit)
+	}
+	return s.settings.ResolveIntWithDefault(ctx, SettingRecallDefaultLimit, "global")
+}
+
+// recallGraphDefaultDepth returns the default graph traversal depth when
+// the caller passes graph_depth <= 0.
+func (s *RecallService) recallGraphDefaultDepth(ctx context.Context) int {
+	if s.settings == nil {
+		return GetDefaultInt(SettingRecallGraphDefaultDepth)
+	}
+	return s.settings.ResolveIntWithDefault(ctx, SettingRecallGraphDefaultDepth, "global")
+}
+
+// recallRecencyDecay returns the per-hour decay rate for the recency term.
+func (s *RecallService) recallRecencyDecay(ctx context.Context) float64 {
+	if s.settings == nil {
+		return GetDefaultFloat(SettingRankingRecencyDecayPerHour)
+	}
+	return s.settings.ResolveFloatWithDefault(ctx, SettingRankingRecencyDecayPerHour, "global")
+}
+
+// recallGraphHopMultiplier returns the per-hop multiplier applied to the
+// graph-traversal contribution. Default 0.5 matches the historical 1.0/2.0
+// approximation when hops≈1.
+func (s *RecallService) recallGraphHopMultiplier(ctx context.Context) float64 {
+	if s.settings == nil {
+		return GetDefaultFloat(SettingRankingGraphHopMultiplier)
+	}
+	return s.settings.ResolveFloatWithDefault(ctx, SettingRankingGraphHopMultiplier, "global")
+}
+
+// recallOverfetch sizes the candidate pool the score-and-rerank pass
+// selects from: limit * overfetch_multiplier, floored at overfetch_min.
+func (s *RecallService) recallOverfetch(ctx context.Context, limit int) int {
+	mul := GetDefaultFloat(SettingRecallOverfetchMultiplier)
+	floor := GetDefaultInt(SettingRecallOverfetchMin)
+	if s.settings != nil {
+		mul = s.settings.ResolveFloatWithDefault(ctx, SettingRecallOverfetchMultiplier, "global")
+		floor = s.settings.ResolveIntWithDefault(ctx, SettingRecallOverfetchMin, "global")
+	}
+	out := int(math.Round(float64(limit) * mul))
+	if out < floor {
+		out = floor
+	}
+	return out
 }
 
 // clampScore ensures a score is in the [0, 1] range.

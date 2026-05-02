@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +51,8 @@ type SettingsReader interface {
 	Resolve(ctx context.Context, key string, scope string) (string, error)
 	ResolveFloat(ctx context.Context, key string, scope string) (float64, error)
 	ResolveInt(ctx context.Context, key string, scope string) (int, error)
+	ResolveFloatWithDefault(ctx context.Context, key, scope string) float64
+	ResolveIntWithDefault(ctx context.Context, key, scope string) int
 }
 
 // ReinforcementDeps carries the optional dependencies that activate the
@@ -128,14 +129,15 @@ func (s *RecallService) reinforce(ctx context.Context, ids []uuid.UUID) {
 		return
 	}
 
-	factor, err := s.reinforcement.Settings.ResolveFloat(ctx, SettingReconsolidationFactor, scope)
-	if err != nil || factor <= 0 {
-		factor = 0.02
+	factor := s.reinforcement.Settings.ResolveFloatWithDefault(ctx, SettingReconsolidationFactor, scope)
+	if factor <= 0 {
+		factor = GetDefaultFloat(SettingReconsolidationFactor)
 	}
 
 	start := time.Now()
 	var persisted int64
 	if mode == ReconsolidationModePersist && s.reinforcement.Writer != nil {
+		var err error
 		persisted, err = s.reinforcement.Writer.BumpReinforcement(ctx, ids, time.Now().UTC(), factor)
 		if err != nil {
 			slog.Warn("recall: reinforcement write failed", "err", err, "count", len(ids))
@@ -143,15 +145,9 @@ func (s *RecallService) reinforce(ctx context.Context, ids []uuid.UUID) {
 		}
 	}
 
-	cap, cerr := s.reinforcement.Settings.ResolveInt(ctx, SettingReinforcementEventMemoryCap, scope)
-	if cerr != nil || cap < 1 {
-		// Fall through to the registered default to avoid drift between code
-		// and schema; see settingDefaults[SettingReinforcementEventMemoryCap].
-		if def, ok := settingDefaults[SettingReinforcementEventMemoryCap]; ok {
-			if v, perr := strconv.Atoi(def); perr == nil && v >= 1 {
-				cap = v
-			}
-		}
+	cap := s.reinforcement.Settings.ResolveIntWithDefault(ctx, SettingReinforcementEventMemoryCap, scope)
+	if cap < 1 {
+		cap = GetDefaultInt(SettingReinforcementEventMemoryCap)
 	}
 	idsForEvent := ids
 	if len(idsForEvent) > cap {
@@ -195,18 +191,9 @@ func (s *RecallService) reinforceRels(ctx context.Context, refs []RelationshipRe
 		return
 	}
 
-	delta, err := s.reinforcement.Settings.ResolveFloat(ctx, SettingDreamingWeightRecallReinforceDelta, scope)
-	if err != nil || delta <= 0 {
-		// Mirror the recall_reinforce.go memory-side fallback: prefer the
-		// registered default to avoid drift between code and schema.
-		if def, ok := settingDefaults[SettingDreamingWeightRecallReinforceDelta]; ok {
-			if v, perr := strconv.ParseFloat(def, 64); perr == nil && v > 0 {
-				delta = v
-			}
-		}
-		if delta <= 0 {
-			delta = 0.05
-		}
+	delta := s.reinforcement.Settings.ResolveFloatWithDefault(ctx, SettingDreamingWeightRecallReinforceDelta, scope)
+	if delta <= 0 {
+		delta = GetDefaultFloat(SettingDreamingWeightRecallReinforceDelta)
 	}
 
 	start := time.Now()
@@ -227,13 +214,9 @@ func (s *RecallService) reinforceRels(ctx context.Context, refs []RelationshipRe
 		}
 	}
 
-	cap, cerr := s.reinforcement.Settings.ResolveInt(ctx, SettingReinforcementEventRelationshipCap, scope)
-	if cerr != nil || cap < 1 {
-		if def, ok := settingDefaults[SettingReinforcementEventRelationshipCap]; ok {
-			if v, perr := strconv.Atoi(def); perr == nil && v >= 1 {
-				cap = v
-			}
-		}
+	cap := s.reinforcement.Settings.ResolveIntWithDefault(ctx, SettingReinforcementEventRelationshipCap, scope)
+	if cap < 1 {
+		cap = GetDefaultInt(SettingReinforcementEventRelationshipCap)
 	}
 	idsForEvent := make([]uuid.UUID, 0, len(refs))
 	for _, ref := range refs {

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -582,7 +583,7 @@ func newTestHarness(
 		h.reader, h.updater, h.creator, nil, h.queue,
 		h.entities, h.rels, h.lineage, h.vectors,
 		factFn, entityFn, embedFn,
-		nil, nil, nil, nil, nil,
+		nil, nil, service.NewNoopSettingsService(), nil, nil,
 	)
 	return h
 }

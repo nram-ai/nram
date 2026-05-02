@@ -122,7 +122,7 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 		Messages:    []provider.Message{{Role: "user", Content: renderIngestionPrompt(cfg.prompt, cfg.topK, mem.Content, matches)}},
 		Model:       cfg.model,
 		MaxTokens:   512,
-		Temperature: 0.0,
+		Temperature: wp.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentIngestionDecisionTemperature, "global"),
 		JSONMode:    true,
 	}
 

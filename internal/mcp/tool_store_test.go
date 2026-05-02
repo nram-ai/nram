@@ -609,6 +609,7 @@ func newMockStoreService(memID, projectID uuid.UUID, slug string) *service.Store
 		&mockNamespaceLookup{ns: &model.Namespace{ID: uuid.New()}},
 		&mockIngestionLogRepo{},
 		&mockEnrichmentQueueRepo{},
+		nil,
 	)
 }
 

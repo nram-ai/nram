@@ -48,7 +48,7 @@ type fakeStuckStore struct {
 	abandonErr error
 }
 
-func (s *fakeStuckStore) ListStale(_ context.Context, _ time.Duration) ([]model.DreamCycle, error) {
+func (s *fakeStuckStore) ListStale(_ context.Context, _ time.Duration, _ int) ([]model.DreamCycle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]model.DreamCycle, len(s.stale))

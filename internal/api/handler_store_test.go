@@ -118,6 +118,7 @@ func newTestStoreService(projectRepo service.ProjectRepository) *service.StoreSe
 		&mockNamespaceRepo{},
 		&mockIngestionLogRepo{},
 		&mockEnrichmentQueueRepo{},
+		nil,
 	)
 }
 
@@ -267,6 +268,7 @@ func TestStoreHandler_ServiceError_Internal(t *testing.T) {
 		&mockNamespaceRepo{},
 		&mockIngestionLogRepo{},
 		&mockEnrichmentQueueRepo{},
+		nil,
 	)
 	router := newTestRouter(NewStoreHandler(svc, nil))
 

@@ -143,13 +143,13 @@ func (s *staticDreamSettings) ResolveIntWithDefault(ctx context.Context, key, sc
 	if v, ok := s.ints[key]; ok {
 		return v
 	}
-	return 0
+	return service.GetDefaultInt(key)
 }
 func (s *staticDreamSettings) ResolveFloatWithDefault(ctx context.Context, key, scope string) float64 {
 	if v, ok := s.floats[key]; ok {
 		return v
 	}
-	return 0
+	return service.GetDefaultFloat(key)
 }
 func (s *staticDreamSettings) ResolveDurationSecondsWithDefault(ctx context.Context, key, scope string) time.Duration {
 	return time.Duration(s.ResolveIntWithDefault(ctx, key, scope)) * time.Second
@@ -325,8 +325,9 @@ func TestApplyConfidenceDecay_BadSettingsFallBackToDefaults(t *testing.T) {
 	if call.Multiplier < 0.98-1e-9 || call.Multiplier > 0.98+1e-9 {
 		t.Errorf("default multiplier: want 0.98, got %v", call.Multiplier)
 	}
-	if call.Floor != defaultConfidenceFloor {
-		t.Errorf("default floor: want %v, got %v", defaultConfidenceFloor, call.Floor)
+	wantFloor := service.GetDefaultFloat(service.SettingConfidenceFloor)
+	if call.Floor != wantFloor {
+		t.Errorf("default floor: want %v, got %v", wantFloor, call.Floor)
 	}
 }
 

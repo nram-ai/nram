@@ -230,7 +230,7 @@ func TestDreamCycleRepo_ListStale(t *testing.T) {
 		setCycleTimestamps(t, ctx, db, completed.ID, time.Now().Add(-30*time.Minute), nil)
 
 		// Threshold 10 minutes — old qualifies, fresh does not.
-		stale, err := repo.ListStale(ctx, 10*time.Minute)
+		stale, err := repo.ListStale(ctx, 10*time.Minute, 0)
 		if err != nil {
 			t.Fatalf("list stale: %v", err)
 		}
@@ -248,7 +248,7 @@ func TestDreamCycleRepo_ListStale(t *testing.T) {
 		// Threshold 5 minutes — both old and fresh would be stale once we
 		// park fresh too. Verify the boundary.
 		setCycleTimestamps(t, ctx, db, fresh.ID, time.Now().Add(-6*time.Minute), nil)
-		stale, _ = repo.ListStale(ctx, 5*time.Minute)
+		stale, _ = repo.ListStale(ctx, 5*time.Minute, 0)
 		got = got[:0]
 		for _, c := range stale {
 			if mine[c.ID] {

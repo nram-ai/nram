@@ -367,6 +367,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	storeSvc := service.NewStoreService(
 		memRepo, projectLookup, namespaceLookup,
 		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
+		nil,
 	)
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, namespaceLookup,

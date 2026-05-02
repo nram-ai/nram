@@ -208,6 +208,13 @@ func main() {
 	settingsRepo := storage.NewSettingsRepo(db)
 	settingsSvc := service.NewSettingsService(settingsRepo)
 
+	// Seed registered defaults at boot so SELECT key FROM settings reflects
+	// the full schema surface area instead of the subset operators have
+	// touched. Idempotent; never overwrites operator-set values.
+	if err := seedRegisteredSettings(context.Background(), settingsRepo); err != nil {
+		log.Printf("warning: settings seed failed: %v", err)
+	}
+
 	// Create provider registry. Provider configuration lives in the DB
 	// settings table (provider.{embedding,fact,entity}) and is managed via
 	// the admin UI. On a fresh install the slots are empty and the registry
@@ -296,6 +303,7 @@ func main() {
 	storeSvc := service.NewStoreService(
 		memoryRepo, projectRepo, namespaceRepo,
 		ingestionLogRepo, enrichmentQueueRepo,
+		settingsSvc,
 	)
 	recallSvc := service.NewRecallService(
 		memoryRepo, projectRepo, namespaceRepo,
@@ -333,6 +341,7 @@ func main() {
 	)
 	importSvc := service.NewImportService(
 		memoryRepo, projectRepo, namespaceRepo, ingestionLogRepo,
+		settingsSvc,
 	)
 
 	// Reconsolidation hook on recall. Mode defaults to shadow (observable-only
@@ -355,6 +364,7 @@ func main() {
 	recallSvc.SetLexical(memoryRepo)
 	recallSvc.SetFusion(loadFusionConfig(context.Background(), settingsSvc))
 	recallSvc.SetWeights(loadRankingWeights(context.Background(), settingsSvc))
+	recallSvc.SetSettings(settingsSvc)
 
 	// Create lifecycle service for TTL expiry and purge sweeps. Sweep
 	// interval, batch size, and orphan-grace cutoff are all read live from
@@ -531,7 +541,7 @@ func main() {
 		// Paraphrase dedup runs before contradiction so the LLM-judge pair
 		// walk operates on a deduped memory set.
 		dreaming.NewParaphraseDedupPhase(memoryRepo, memoryRepo, vectorStore, vectorStore, embedProvider, settingsSvc),
-		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo),
+		dreaming.NewTransitivePhase(entityRepo, relationshipRepo, relationshipRepo, settingsSvc),
 		contradictionPhase,
 		consolidationPhase,
 		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo, settingsSvc),
@@ -862,6 +872,18 @@ func main() {
 	}
 
 	log.Println("server stopped")
+}
+
+// seedRegisteredSettings inserts one row per registered schema entry, using
+// INSERT ... ON CONFLICT DO NOTHING so operator-set values survive untouched.
+// Idempotent on every boot — every key the admin UI surfaces has a row.
+func seedRegisteredSettings(ctx context.Context, repo *storage.SettingsRepo) error {
+	schemas := adminstore.SettingsSchemas()
+	defaults := make(map[string]string, len(schemas))
+	for _, s := range schemas {
+		defaults[s.Key] = string(s.DefaultValue)
+	}
+	return service.SeedSettingsDefaults(ctx, repo, defaults)
 }
 
 // loadRankingWeights pulls the ranking.weight.* settings into a RankingWeights.

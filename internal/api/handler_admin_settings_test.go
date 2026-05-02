@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -392,6 +393,188 @@ func TestAdminSettingsUpdateNotFoundError(t *testing.T) {
 	}
 	if resp.Error.Code != "not_found" {
 		t.Errorf("expected code not_found, got %q", resp.Error.Code)
+	}
+}
+
+// rangeSchemas returns a fixture with a numeric setting bounded to [0, 1]
+// step 0.05 — used by the range-enforcement tests below.
+func rangeSchemas() []SettingSchema {
+	min0 := 0.0
+	max1 := 1.0
+	step := 0.05
+	return []SettingSchema{
+		{
+			Key:          "ranking.weight.similarity",
+			Type:         "number",
+			DefaultValue: json.RawMessage(`0.5`),
+			Min:          &min0,
+			Max:          &max1,
+			Step:         &step,
+		},
+		{
+			Key:          "memory.max_facts",
+			Type:         "number",
+			DefaultValue: json.RawMessage(`1000`),
+			// No Min/Max — unbounded numeric, validation is a no-op.
+		},
+		{
+			Key:          "enrichment.enabled",
+			Type:         "boolean",
+			DefaultValue: json.RawMessage(`true`),
+			// Booleans bypass numeric validation entirely.
+		},
+	}
+}
+
+func TestAdminSettingsUpdate_RejectsBelowMinimum(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: rangeSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"ranking.weight.similarity","value":-0.1,"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != "" {
+		t.Error("UpdateSetting should not be called when validation fails")
+	}
+	if !strings.Contains(w.Body.String(), "below schema minimum") {
+		t.Errorf("error message should name the bound; got %s", w.Body.String())
+	}
+}
+
+func TestAdminSettingsUpdate_RejectsAboveMaximum(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: rangeSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"ranking.weight.similarity","value":1.5,"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != "" {
+		t.Error("UpdateSetting should not be called when validation fails")
+	}
+	if !strings.Contains(w.Body.String(), "above schema maximum") {
+		t.Errorf("error message should name the bound; got %s", w.Body.String())
+	}
+}
+
+func TestAdminSettingsUpdate_AcceptsBoundaryValues(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: rangeSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	for _, v := range []string{"0", "1", "0.5"} {
+		store.updatedKey = ""
+		body := `{"key":"ranking.weight.similarity","value":` + v + `,"scope":"global"}`
+		req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{
+			UserID: uuid.New(),
+			Role:   "admin",
+		}))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("value %s: expected 200, got %d; body: %s", v, w.Code, w.Body.String())
+		}
+		if store.updatedKey != "ranking.weight.similarity" {
+			t.Errorf("value %s: UpdateSetting should be called", v)
+		}
+	}
+}
+
+func TestAdminSettingsUpdate_AcceptsStringEncodedNumbers(t *testing.T) {
+	// Some clients round-trip JSON numbers as strings; the validator
+	// tolerates both shapes so it doesn't reject valid values on a
+	// shape technicality.
+	store := &mockSettingsAdminStore{schemas: rangeSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"ranking.weight.similarity","value":"0.75","scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{
+		UserID: uuid.New(),
+		Role:   "admin",
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminSettingsUpdate_RejectsNonNumericForNumericKey(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: rangeSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"ranking.weight.similarity","value":"not a number","scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminSettingsUpdate_SkipsValidationForUnboundedNumeric(t *testing.T) {
+	// memory.max_facts in rangeSchemas() has no Min/Max — any numeric
+	// value should pass through.
+	store := &mockSettingsAdminStore{schemas: rangeSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"memory.max_facts","value":99999999,"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{
+		UserID: uuid.New(),
+		Role:   "admin",
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminSettingsUpdate_SkipsValidationForUnknownKey(t *testing.T) {
+	// Forward-compat: a key the schema hasn't been updated for should
+	// still allow writes (otherwise rolling deploys break).
+	store := &mockSettingsAdminStore{schemas: rangeSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"some.future.unregistered.key","value":42,"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{
+		UserID: uuid.New(),
+		Role:   "admin",
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for unknown key (forward-compat), got %d; body: %s",
+			w.Code, w.Body.String())
+	}
+}
+
+func TestAdminSettingsUpdate_SkipsValidationForBooleanKey(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: rangeSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"enrichment.enabled","value":true,"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{
+		UserID: uuid.New(),
+		Role:   "admin",
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 

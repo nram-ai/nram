@@ -137,9 +137,9 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		return false, err
 	}
 
-	auditFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationAuditFraction, 0.35)
-	reinforceFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationReinforceFraction, 0.35)
-	consolidateFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationConsolidateFraction, 0.30)
+	auditFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationAuditFraction)
+	reinforceFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationReinforceFraction)
+	consolidateFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationConsolidateFraction)
 
 	// When the stale-row count saturates the fetch cap there are likely
 	// more stale rows than this cycle could load. Surface as residual so
@@ -198,13 +198,15 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 }
 
 // resolveFraction resolves a fractional setting, clamping to (0,1]. On error
-// or out-of-range value it returns the supplied default.
-func resolveFraction(ctx context.Context, settings SettingsResolver, key string, fallback float64) float64 {
+// or out-of-range value it returns the registered default from
+// service.settingDefaults so the registry remains the single source of
+// truth (no per-call-site fallback literal that can drift).
+func resolveFraction(ctx context.Context, settings SettingsResolver, key string) float64 {
 	v, err := settings.ResolveFloat(ctx, key, "global")
-	if err != nil || v <= 0 || v > 1 {
-		return fallback
+	if err == nil && v > 0 && v <= 1 {
+		return v
 	}
-	return v
+	return service.GetDefaultFloat(key)
 }
 
 // reinforce evaluates existing dream-originated synthesis memories against
@@ -261,14 +263,9 @@ func (p *ConsolidationPhase) reinforce(
 		"cycle", cycle.ID, "syntheses", len(syntheses), "stale", len(stale),
 		"user_memories", len(userMemories), "budget_remaining", budget.Remaining())
 
-	initialConfidence, _ := p.settings.ResolveFloat(ctx, service.SettingDreamInitialConfidence, "global")
-	if initialConfidence == 0 {
-		initialConfidence = 0.3
-	}
-	supersessionThreshold, _ := p.settings.ResolveFloat(ctx, service.SettingDreamSupersessionThreshold, "global")
-	if supersessionThreshold == 0 {
-		supersessionThreshold = 0.85
-	}
+	supersessionThreshold := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamSupersessionThreshold, "global")
+	alignmentSampleSize := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamConsolidationAlignmentSampleSize, "global")
+	alignmentTemperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamAlignmentTemperature, "global")
 
 	alignmentPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamAlignmentPrompt, "global")
 
@@ -283,7 +280,7 @@ func (p *ConsolidationPhase) reinforce(
 		visited++
 
 		// Get a sample of user memories to evaluate against.
-		sample := sampleMemories(userMemories, 5)
+		sample := sampleMemories(userMemories, alignmentSampleSize)
 		if len(sample) == 0 {
 			continue
 		}
@@ -301,7 +298,7 @@ func (p *ConsolidationPhase) reinforce(
 
 		callStart := time.Now()
 		alignmentCtx := provider.WithMemoryID(ctx, synthesis.ID)
-		alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, synthesis.ID, prompt, budget)
+		alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, synthesis.ID, prompt, budget, alignmentTemperature)
 		callTokens := 0
 		if usage != nil {
 			callTokens = usage.TotalTokens
@@ -386,6 +383,7 @@ func (p *ConsolidationPhase) scoreAlignment(
 	synthesisID uuid.UUID,
 	prompt string,
 	budget *TokenBudget,
+	temperature float64,
 ) (float64, *provider.TokenUsage, error) {
 	resp, usage, err := WrapLLMCall(ctx, budget, OpAlignmentScore, llm.Name(),
 		synthesisID.String(),
@@ -396,7 +394,7 @@ func (p *ConsolidationPhase) scoreAlignment(
 					{Role: "user", Content: prompt},
 				},
 				MaxTokens:   budget.PerCallCap(),
-				Temperature: 0.1,
+				Temperature: temperature,
 				JSONMode:    true,
 			})
 			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseConsolidation), e
@@ -1099,7 +1097,8 @@ func (p *ConsolidationPhase) consolidate(
 	}
 
 	// Simple clustering: group by overlapping content (batches of related memories).
-	clusters := p.clusterMemories(candidates)
+	clusterOverlap := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamConsolidationClusterOverlapThreshold, "global")
+	clusters := p.clusterMemories(candidates, clusterOverlap)
 	stale, eligibleClusters := collectConsolidateStale(clusters)
 	stats["clusters_total"] = len(clusters)
 	stats["clusters_eligible"] = eligibleClusters
@@ -1110,10 +1109,8 @@ func (p *ConsolidationPhase) consolidate(
 		"clusters", len(clusters), "eligible_clusters", eligibleClusters,
 		"stale_clusters", len(stale), "budget_remaining", budget.Remaining())
 
-	initialConfidence, _ := p.settings.ResolveFloat(ctx, service.SettingDreamInitialConfidence, "global")
-	if initialConfidence == 0 {
-		initialConfidence = 0.3
-	}
+	initialConfidence := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamInitialConfidence, "global")
+	synthesisTemperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamSynthesisTemperature, "global")
 
 	synthesisPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamSynthesisPrompt, "global")
 	noveltyEnabled := p.settings.ResolveBool(ctx, service.SettingDreamNoveltyEnabled, "global")
@@ -1140,7 +1137,7 @@ func (p *ConsolidationPhase) consolidate(
 		}
 
 		synthStart := time.Now()
-		synthesisContent, usage, err := p.synthesize(ctx, llm, prompt, budget)
+		synthesisContent, usage, err := p.synthesize(ctx, llm, prompt, budget, synthesisTemperature)
 		synthTokens := 0
 		if usage != nil {
 			synthTokens = usage.TotalTokens
@@ -1287,6 +1284,7 @@ func (p *ConsolidationPhase) synthesize(
 	llm provider.LLMProvider,
 	prompt string,
 	budget *TokenBudget,
+	temperature float64,
 ) (string, *provider.TokenUsage, error) {
 	resp, usage, err := WrapLLMCall(ctx, budget, OpSynthesis, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
@@ -1296,7 +1294,7 @@ func (p *ConsolidationPhase) synthesize(
 					{Role: "user", Content: prompt},
 				},
 				MaxTokens:   budget.PerCallCap(),
-				Temperature: 0.3,
+				Temperature: temperature,
 			})
 			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseConsolidation), e
 		})
@@ -1335,17 +1333,14 @@ func (p *ConsolidationPhase) auditNovelty(
 		return false, "no_sources", nil, 0, nil
 	}
 
+	// embedHighOverride is the backfill-path's more aggressive threshold;
+	// when the caller leaves it 0 (synthesis-time path), fall back to the
+	// general novelty.embed_high_threshold setting via the registry default.
 	high := embedHighOverride
 	if high <= 0 {
-		high, _ = p.settings.ResolveFloat(ctx, service.SettingDreamNoveltyEmbedHighThreshold, "global")
+		high = p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamNoveltyEmbedHighThreshold, "global")
 	}
-	if high <= 0 {
-		high = 0.97
-	}
-	low, _ := p.settings.ResolveFloat(ctx, service.SettingDreamNoveltyEmbedLowThreshold, "global")
-	if low <= 0 {
-		low = 0.85
-	}
+	low := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamNoveltyEmbedLowThreshold, "global")
 
 	var embedder provider.EmbeddingProvider
 	if p.embedderProvider != nil {
@@ -1406,14 +1401,12 @@ func (p *ConsolidationPhase) auditNovelty(
 	}
 	prompt := fmt.Sprintf(promptTpl, candidate, strings.Join(sourceTexts, "\n---\n"))
 
-	maxTokens, _ := p.settings.ResolveInt(ctx, service.SettingDreamNoveltyJudgeMaxTokens, "global")
-	if maxTokens <= 0 {
-		maxTokens = 512
-	}
+	maxTokens := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamNoveltyJudgeMaxTokens, "global")
 
 	if llmOperation == "" {
 		llmOperation = provider.OperationDreamNoveltyAudit
 	}
+	noveltyTemperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamNoveltyJudgeTemperature, "global")
 	resp, judgeUsage, err := WrapLLMCall(ctx, budget, OpNoveltyAuditLLM, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			r, e := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{
@@ -1421,7 +1414,7 @@ func (p *ConsolidationPhase) auditNovelty(
 					{Role: "user", Content: prompt},
 				},
 				MaxTokens:   maxTokens,
-				Temperature: 0.1,
+				Temperature: noveltyTemperature,
 				JSONMode:    true,
 			})
 			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseConsolidation), e
@@ -1440,8 +1433,10 @@ func (p *ConsolidationPhase) auditNovelty(
 }
 
 // clusterMemories groups related memories using simple content overlap.
-// Each memory appears in at most one cluster.
-func (p *ConsolidationPhase) clusterMemories(memories []model.Memory) [][]model.Memory {
+// Each memory appears in at most one cluster. overlapThreshold is the
+// word-overlap fraction at or above which two memories are placed in the
+// same cluster.
+func (p *ConsolidationPhase) clusterMemories(memories []model.Memory, overlapThreshold float64) [][]model.Memory {
 	if len(memories) == 0 {
 		return nil
 	}
@@ -1473,7 +1468,7 @@ func (p *ConsolidationPhase) clusterMemories(memories []model.Memory) [][]model.
 
 			overlap := wordOverlap(anchorWords, wordSets[candidate.ID])
 
-			if overlap >= 0.3 {
+			if overlap >= overlapThreshold {
 				cluster = append(cluster, candidate)
 				assigned[candidate.ID] = true
 			}

@@ -357,6 +357,7 @@ func TestStoreHandler_NilMetadata_ReturnsEmptyObject(t *testing.T) {
 		&mockNamespaceRepo{},
 		&mockIngestionLogRepo{},
 		&mockEnrichmentQueueRepo{},
+		nil,
 	)
 
 	router := newTestRouter(NewStoreHandler(svc, nil))

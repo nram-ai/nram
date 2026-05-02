@@ -478,15 +478,6 @@ const SYSTEM_RANKING_WEIGHT_KEYS = {
   confidence: "ranking.weight.confidence",
 } as const;
 
-const SYSTEM_RANKING_WEIGHT_FALLBACK: SystemRankingWeights = {
-  similarity: 0.5,
-  recency: 0.15,
-  importance: 0.1,
-  frequency: 0.0,
-  graph_relevance: 0.2,
-  confidence: 0.05,
-};
-
 function coerceWeight(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   if (typeof raw === "string") {
@@ -496,18 +487,30 @@ function coerceWeight(raw: unknown): number | null {
   return null;
 }
 
+export interface SystemRankingWeightsResolution {
+  weights: SystemRankingWeights | null;
+  // missingKeys lists ranking.weight.* keys for which neither the operator
+  // value nor the schema default could be resolved. The hook surfaces this
+  // to its consumer so a schema/server mismatch becomes a visible error
+  // rather than silently substituting a stale built-in fallback.
+  missingKeys: string[];
+}
+
 // resolveSystemRankingWeights is the pure resolution logic. Exposed for
-// unit testing without spinning up React Query infrastructure.
+// unit testing without spinning up React Query infrastructure. Returns
+// null weights when any key is missing — the schema endpoint is the
+// authoritative source, no client-side fallback.
 export function resolveSystemRankingWeights(
   configured: Iterable<{ key: string; value: unknown }>,
   schema: Iterable<{ key: string; default_value: unknown }>,
-): SystemRankingWeights {
+): SystemRankingWeightsResolution {
   const settingByKey = new Map<string, unknown>();
   for (const s of configured) settingByKey.set(s.key, s.value);
   const defaultByKey = new Map<string, unknown>();
   for (const s of schema) defaultByKey.set(s.key, s.default_value);
 
-  const resolved = { ...SYSTEM_RANKING_WEIGHT_FALLBACK };
+  const resolved = {} as SystemRankingWeights;
+  const missing: string[] = [];
   for (const [field, key] of Object.entries(SYSTEM_RANKING_WEIGHT_KEYS) as [
     keyof SystemRankingWeights,
     string,
@@ -520,12 +523,54 @@ export function resolveSystemRankingWeights(
     const fromSchema = coerceWeight(defaultByKey.get(key));
     if (fromSchema !== null) {
       resolved[field] = fromSchema;
+      continue;
     }
+    missing.push(key);
   }
-  return resolved;
+  if (missing.length > 0) {
+    return { weights: null, missingKeys: missing };
+  }
+  return { weights: resolved, missingKeys: [] };
 }
 
-export function useSystemRankingWeights(): SystemRankingWeights {
+// SchemaRange is the operator-tunable range for a numeric setting,
+// resolved from the schema endpoint. Each field falls back to the
+// caller-supplied default when the schema hasn't loaded yet OR when
+// the entry has no constraint set. Spread directly onto a numeric
+// input: `<input type="number" {...range} />`.
+export interface SchemaRange {
+  min: number;
+  max: number;
+  step: number;
+}
+
+// useSchemaRange resolves the {min, max, step} for a numeric setting from
+// the schema endpoint. Falls back per-field when the schema is missing or
+// the entry has no constraint. Use the spread pattern in JSX:
+//   const range = useSchemaRange("ranking.weight.similarity", { min: 0, max: 1, step: 0.05 });
+//   return <input type="number" {...range} />;
+export function useSchemaRange(key: string, fallback: SchemaRange): SchemaRange {
+  const schemaQuery = useSettingsSchema();
+  return useMemo(() => {
+    const entries = schemaQuery.data?.data ?? [];
+    const entry = entries.find((e) => e.key === key);
+    if (!entry) return fallback;
+    return {
+      min: typeof entry.min === "number" && Number.isFinite(entry.min) ? entry.min : fallback.min,
+      max: typeof entry.max === "number" && Number.isFinite(entry.max) ? entry.max : fallback.max,
+      step:
+        typeof entry.step === "number" && Number.isFinite(entry.step) && entry.step > 0
+          ? entry.step
+          : fallback.step,
+    };
+  }, [schemaQuery.data, key, fallback.min, fallback.max, fallback.step]);
+}
+
+// useSystemRankingWeights returns null weights when any required schema key
+// is missing. Consumers MUST handle the null case (typically a red toast
+// banner) instead of silently rendering stale defaults — that's the
+// "AC6 contract" the contract test enforces.
+export function useSystemRankingWeights(): SystemRankingWeightsResolution {
   const settingsQuery = useSettings("global");
   const schemaQuery = useSettingsSchema();
   // useMemo gives the consumer (ProjectManagement edit panel) a stable

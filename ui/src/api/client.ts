@@ -668,6 +668,13 @@ export interface SettingSchema {
   // Recognized values: "sqlite", "postgres", "hnsw", "pgvector", "qdrant".
   // Empty / omitted means the setting applies regardless of backend.
   applies_to_backend?: string[];
+  // min/max/step describe the operator-tunable range for numeric settings.
+  // The UI binds input increments to step so editor controls stay
+  // schema-driven. Pointer-typed on the server (omitted vs. zero are
+  // distinguishable in JSON), so undefined here means "not constrained".
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
 export interface Webhook {

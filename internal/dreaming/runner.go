@@ -34,11 +34,11 @@ var phaseFractionKeys = map[string]string{
 	model.DreamPhaseWeightAdjust:      service.SettingDreamWeightAdjustFraction,
 }
 
-// heartbeatTickTimeout caps how long a single TickProgress write may block.
-// Losing the heartbeat is the failure mode that makes long phases look
-// frozen to the StuckCycleSweeper, so a stuck SQLite writer or transient
-// Postgres blip must deadline rather than stall the loop.
-const heartbeatTickTimeout = 10 * time.Second
+// Heartbeat tick timeout is resolved per-cycle from
+// service.SettingDreamHeartbeatTickTimeoutSeconds. Losing the heartbeat is
+// the failure mode that makes long phases look frozen to the
+// StuckCycleSweeper, so a stuck SQLite writer or transient Postgres blip
+// must deadline rather than stall the loop.
 
 // IdleChecker reports whether the enrichment worker pool is idle.
 type IdleChecker interface {
@@ -142,6 +142,15 @@ func NewRunner(
 // because its sub-phase fractions must be positive. The runner instead
 // treats 0.0 as a first-class "no slice, share root" signal for SQL-only
 // phases, so the two cannot be unified without regressing one caller.
+// resolveHeartbeatTickTimeout reads the per-cycle heartbeat tick timeout.
+// Falls back to the registered default when settings is nil (test path).
+func (r *Runner) resolveHeartbeatTickTimeout(ctx context.Context) time.Duration {
+	if r.settings == nil {
+		return time.Duration(service.GetDefaultInt(service.SettingDreamHeartbeatTickTimeoutSeconds)) * time.Second
+	}
+	return r.settings.ResolveDurationSecondsWithDefault(ctx, service.SettingDreamHeartbeatTickTimeoutSeconds, "global")
+}
+
 func (r *Runner) phaseFraction(ctx context.Context, phaseName string) float64 {
 	if r.settings == nil {
 		return 0
@@ -353,6 +362,7 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 //  3. Fallback EmitHeartbeat(budget.Used()) so SSE listeners stay alive
 //     when TickProgress transiently errors.
 func (r *Runner) heartbeat(ctx context.Context, cycleID uuid.UUID, tracker *CycleTracker, budget *TokenBudget) {
+	tickTimeout := r.resolveHeartbeatTickTimeout(ctx)
 	tick := func() {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -361,7 +371,7 @@ func (r *Runner) heartbeat(ctx context.Context, cycleID uuid.UUID, tracker *Cycl
 			}
 		}()
 
-		tickCtx, cancel := context.WithTimeout(ctx, heartbeatTickTimeout)
+		tickCtx, cancel := context.WithTimeout(ctx, tickTimeout)
 		defer cancel()
 
 		used, err := r.cycleRepo.TickProgress(tickCtx, cycleID)

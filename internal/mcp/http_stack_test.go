@@ -1496,6 +1496,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 	storeSvc := service.NewStoreService(
 		memRepo, projectLookup, nsLookup,
 		&mockIngestionLogRepo{}, &mockEnrichmentQueueRepo{},
+		nil,
 	)
 	batchStoreSvc := service.NewBatchStoreService(
 		memRepo, projectLookup, nsLookup,

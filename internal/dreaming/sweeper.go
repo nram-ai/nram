@@ -24,7 +24,7 @@ type CycleCanceller interface {
 // stuckCycleStore is the storage subset the sweeper relies on. Defined here
 // so tests can substitute a fake repo without standing up a full database.
 type stuckCycleStore interface {
-	ListStale(ctx context.Context, threshold time.Duration) ([]model.DreamCycle, error)
+	ListStale(ctx context.Context, threshold time.Duration, limit int) ([]model.DreamCycle, error)
 	Abandon(ctx context.Context, id uuid.UUID, reason string) (bool, error)
 }
 
@@ -119,7 +119,8 @@ func (s *StuckCycleSweeper) Sweep(ctx context.Context) error {
 	}
 	threshold := time.Duration(thresholdSecs) * time.Second
 
-	cycles, err := s.cycleRepo.ListStale(ctx, threshold)
+	scanLimit := s.settings.ResolveIntWithDefault(ctx, service.SettingDreamStuckScanLimit, "global")
+	cycles, err := s.cycleRepo.ListStale(ctx, threshold, scanLimit)
 	if err != nil {
 		return fmt.Errorf("list stale cycles: %w", err)
 	}

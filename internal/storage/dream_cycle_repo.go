@@ -266,15 +266,22 @@ func (r *DreamCycleRepo) Abandon(ctx context.Context, id uuid.UUID, reason strin
 	return rows > 0, nil
 }
 
-// stuckScanLimit caps a single ListStale / ListStaleClaimed call so a
-// deployment that crashes thousands of in-flight rows can't pull them all
-// into memory at once. Shared by the dream and enrichment sweepers.
+// stuckScanLimit is the default cap when a caller passes 0 or a negative
+// limit to ListStale / ListStaleClaimed. The cap exists so a deployment
+// that crashes thousands of in-flight rows can't pull them all into
+// memory at once. Sweepers override this at call time from
+// service.SettingDreamStuckScanLimit / SettingEnrichmentStuckScanLimit so
+// operators can tune it without redeploying.
 const stuckScanLimit = 1000
 
 // ListStale returns running cycles whose updated_at is older than the given
 // threshold. The stuck-cycle sweeper uses this to find cycles whose worker
-// is presumed gone (crash, OOM, deploy mid-cycle). Bounded by stuckScanLimit.
-func (r *DreamCycleRepo) ListStale(ctx context.Context, threshold time.Duration) ([]model.DreamCycle, error) {
+// is presumed gone (crash, OOM, deploy mid-cycle). limit caps the rows
+// returned; 0 or negative values fall through to stuckScanLimit.
+func (r *DreamCycleRepo) ListStale(ctx context.Context, threshold time.Duration, limit int) ([]model.DreamCycle, error) {
+	if limit <= 0 {
+		limit = stuckScanLimit
+	}
 	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
 
 	query := selectDreamCycleColumns + ` FROM dream_cycles WHERE status = 'running' AND updated_at < ? ORDER BY updated_at ASC LIMIT ?`
@@ -282,7 +289,7 @@ func (r *DreamCycleRepo) ListStale(ctx context.Context, threshold time.Duration)
 		query = selectDreamCycleColumns + ` FROM dream_cycles WHERE status = 'running' AND updated_at < $1 ORDER BY updated_at ASC LIMIT $2`
 	}
 
-	rows, err := r.db.Query(ctx, query, cutoff, stuckScanLimit)
+	rows, err := r.db.Query(ctx, query, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("dream cycle list stale: %w", err)
 	}

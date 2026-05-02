@@ -98,6 +98,20 @@ func (s *staticRelSettings) ResolveInt(_ context.Context, key, _ string) (int, e
 	return 0, errors.New("no value")
 }
 
+func (s *staticRelSettings) ResolveFloatWithDefault(ctx context.Context, key, scope string) float64 {
+	if v, err := s.ResolveFloat(ctx, key, scope); err == nil {
+		return v
+	}
+	return GetDefaultFloat(key)
+}
+
+func (s *staticRelSettings) ResolveIntWithDefault(ctx context.Context, key, scope string) int {
+	if v, err := s.ResolveInt(ctx, key, scope); err == nil {
+		return v
+	}
+	return GetDefaultInt(key)
+}
+
 func makeRefs(n int) []RelationshipRef {
 	refs := make([]RelationshipRef, n)
 	ns := uuid.New()

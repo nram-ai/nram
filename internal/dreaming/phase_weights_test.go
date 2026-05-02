@@ -198,7 +198,7 @@ func TestCalculateWeight_TwoConfidentDirectMemories_LiftsWeight(t *testing.T) {
 	// support = 1.0 (memA) + 1.0 (memB) = 2.0
 	// gain    = 1 + 0.05*(2.0 - 1) = 1.05
 	// new     = 0.5 * 1.05 = 0.525
-	w, t1, t2 := phase.calculateWeight(&rels[0], now, memMap, idx, 0.05)
+	w, t1, t2 := phase.calculateWeight(&rels[0], now, memMap, idx, phase.resolveWeightTuning(context.Background()))
 
 	if w <= 0.5 {
 		t.Errorf("expected weight to rise from 0.5 with 2 confident direct memories; got %f", w)
@@ -226,7 +226,7 @@ func TestCalculateWeight_SingleConfidentSource_NoLift(t *testing.T) {
 	memMap := map[uuid.UUID]*model.Memory{mem: &mems[0]}
 
 	phase := &WeightAdjustmentPhase{}
-	w, t1, _ := phase.calculateWeight(&rels[0], time.Now().UTC(), memMap, idx, 0.05)
+	w, t1, _ := phase.calculateWeight(&rels[0], time.Now().UTC(), memMap, idx, phase.resolveWeightTuning(context.Background()))
 
 	if w != 0.7 {
 		t.Errorf("single confident source should leave weight unchanged; want 0.7, got %f", w)
@@ -262,7 +262,7 @@ func TestCalculateWeight_CoMentionTier2_HalfWeightContribution(t *testing.T) {
 	phase := &WeightAdjustmentPhase{}
 	// support = 1.0 (Tier 1: memDirect) + 0.5*1.0 (Tier 2: memCo) = 1.5
 	// gain    = 1 + 0.05*(1.5-1) = 1.025
-	w, t1, t2 := phase.calculateWeight(&rels[0], time.Now().UTC(), memMap, idx, 0.05)
+	w, t1, t2 := phase.calculateWeight(&rels[0], time.Now().UTC(), memMap, idx, phase.resolveWeightTuning(context.Background()))
 
 	if w <= 0.5 {
 		t.Errorf("expected co-mention tier to push support over 1.0 and lift weight; got %f", w)
@@ -289,7 +289,7 @@ func TestCalculateWeight_DeletedSourceGuard(t *testing.T) {
 	memMap := map[uuid.UUID]*model.Memory{mem: &mems[0]}
 
 	phase := &WeightAdjustmentPhase{}
-	w, t1, t2 := phase.calculateWeight(&rels[0], time.Now().UTC(), memMap, idx, 0.05)
+	w, t1, t2 := phase.calculateWeight(&rels[0], time.Now().UTC(), memMap, idx, phase.resolveWeightTuning(context.Background()))
 
 	// support is 0 (deleted memory filtered out), guard fires: 0.6 * 0.5 = 0.3
 	if w >= 0.6 {
@@ -314,7 +314,7 @@ func TestCalculateWeight_OldRelationshipDecays(t *testing.T) {
 	memMap := map[uuid.UUID]*model.Memory{mem: &mems[0]}
 
 	phase := &WeightAdjustmentPhase{}
-	w, _, _ := phase.calculateWeight(&rels[0], time.Now().UTC(), memMap, idx, 0.05)
+	w, _, _ := phase.calculateWeight(&rels[0], time.Now().UTC(), memMap, idx, phase.resolveWeightTuning(context.Background()))
 
 	// 12 30-day periods, capped at 10: 0.95^10 ≈ 0.5987
 	if w >= 1.0 || w <= 0.4 {

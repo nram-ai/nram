@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,6 +41,13 @@ type SettingSchema struct {
 	// not in the list. Recognized values: "sqlite", "postgres", "hnsw",
 	// "pgvector", "qdrant".
 	AppliesToBackend []string `json:"applies_to_backend,omitempty"`
+	// Min and Max are enforced on PUT /admin/settings: values outside the
+	// range are rejected with 400 regardless of caller. Step is advisory
+	// only — operators may save values between steps. Pointer-typed so
+	// omitted (nil) is distinguishable from `Min: 0` in JSON.
+	Min  *float64 `json:"min,omitempty"`
+	Max  *float64 `json:"max,omitempty"`
+	Step *float64 `json:"step,omitempty"`
 }
 
 // settingUpdateRequest is the request body for PUT /settings.
@@ -158,12 +166,83 @@ func handleUpdateSetting(w http.ResponseWriter, r *http.Request, cfg SettingsAdm
 		updatedBy = &ac.UserID
 	}
 
+	if err := validateValueAgainstSchema(r.Context(), cfg.Store, body.Key, body.Value); err != nil {
+		WriteError(w, ErrBadRequest(err.Error()))
+		return
+	}
+
 	if err := cfg.Store.UpdateSetting(r.Context(), body.Key, body.Value, body.Scope, updatedBy); err != nil {
 		WriteError(w, mapSettingsError(err))
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// validateValueAgainstSchema enforces the schema's Min/Max range on PUT.
+// Numeric values outside [Min, Max] are rejected with a 400. The check
+// applies regardless of caller — UI, MCP tool, curl, or direct API.
+//
+// Validation is skipped when:
+//   - the key has no schema entry (forward-compat for runtime-only keys
+//     that haven't been registered yet);
+//   - the schema entry is non-numeric (string, secret, enum, prompt,
+//     boolean — those have their own well-formedness checks elsewhere);
+//   - neither Min nor Max is set on the schema (treat as unbounded).
+//
+// String-encoded numeric values (e.g. `"0.5"` instead of `0.5`) are
+// accepted and parsed — some HTTP clients round-trip JSON numbers as
+// strings, and the runtime resolver tolerates both shapes already.
+func validateValueAgainstSchema(ctx context.Context, store SettingsAdminStore, key string, value json.RawMessage) error {
+	schemas, err := store.GetSettingsSchema(ctx)
+	if err != nil {
+		// Schema lookup itself failed. The in-process schema slice cannot
+		// realistically error — but if a future store implementation can,
+		// fail closed: a write we cannot validate is a write we should not
+		// accept.
+		return fmt.Errorf("schema lookup failed: %w", err)
+	}
+	var entry *SettingSchema
+	for i := range schemas {
+		if schemas[i].Key == key {
+			entry = &schemas[i]
+			break
+		}
+	}
+	if entry == nil || entry.Type != "number" {
+		return nil
+	}
+	if entry.Min == nil && entry.Max == nil {
+		return nil
+	}
+	n, ok := decodeNumeric(value)
+	if !ok {
+		return fmt.Errorf("setting %q: value must be a number", key)
+	}
+	if entry.Min != nil && n < *entry.Min {
+		return fmt.Errorf("setting %q: value %v is below schema minimum %v", key, n, *entry.Min)
+	}
+	if entry.Max != nil && n > *entry.Max {
+		return fmt.Errorf("setting %q: value %v is above schema maximum %v", key, n, *entry.Max)
+	}
+	return nil
+}
+
+// decodeNumeric tolerates both bare JSON numbers (`0.5`) and JSON-encoded
+// numeric strings (`"0.5"`). Returns the parsed float and ok=true on
+// success; ok=false if the raw value is neither shape.
+func decodeNumeric(raw json.RawMessage) (float64, bool) {
+	var n float64
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n, true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if parsed, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 // mapSettingsError maps store errors to appropriate API errors.

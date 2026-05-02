@@ -102,13 +102,14 @@ func buildSupportIndex(rels []model.Relationship) (supportIndex, map[uuid.UUID]b
 
 // supportSums returns the contribution of supporting memories for one
 // relationship. Tier 1 (direct lineage) memories contribute mem.Confidence;
-// Tier 2 (co-mention only, not in Tier 1) contribute 0.5 * mem.Confidence.
-// Soft-deleted and zero-confidence memories are filtered out at sum time —
-// they contribute neither support nor a tier count.
+// Tier 2 (co-mention only, not in Tier 1) contribute tier2Multiplier *
+// mem.Confidence. Soft-deleted and zero-confidence memories are filtered
+// out at sum time — they contribute neither support nor a tier count.
 func supportSums(
 	rel *model.Relationship,
 	idx supportIndex,
 	sourceMemories map[uuid.UUID]*model.Memory,
+	tier2Multiplier float64,
 ) (support float64, tier1Count, tier2Count int) {
 	tier1 := idx.directByPair[orderedPairKey(rel.SourceID, rel.TargetID)]
 	for m := range tier1 {
@@ -137,7 +138,7 @@ func supportSums(
 		if !ok || mem == nil || mem.DeletedAt != nil || mem.Confidence <= 0 {
 			continue
 		}
-		support += 0.5 * mem.Confidence
+		support += tier2Multiplier * mem.Confidence
 		tier2Count++
 	}
 	return support, tier1Count, tier2Count
@@ -172,13 +173,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 		}
 	}
 
-	supportGain := 0.05
-	if p.settings != nil {
-		v, err := p.settings.ResolveFloat(ctx, service.SettingDreamingWeightSupportGain, "global")
-		if err == nil && v >= 0 {
-			supportGain = v
-		}
-	}
+	tuning := p.resolveWeightTuning(ctx)
 
 	var (
 		directionUp   int
@@ -203,7 +198,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 		}
 		visited++
 
-		newWeight, t1, t2 := p.calculateWeight(&rel, now, sourceMemories, idx, supportGain)
+		newWeight, t1, t2 := p.calculateWeight(&rel, now, sourceMemories, idx, tuning)
 		tier1Total += t1
 		tier2Total += t2
 
@@ -213,8 +208,9 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 		}
 
 		// Expire relationships that have decayed below the pruning threshold
-		// rather than keeping them alive at near-zero weight.
-		if newWeight < 0.05 {
+		// rather than keeping them alive at near-zero weight. Shares the
+		// pruning-phase threshold key so the two paths cannot drift.
+		if newWeight < tuning.expiryThreshold {
 			if err := p.relWriter.Expire(ctx, rel.ID, rel.NamespaceID); err != nil {
 				slog.Warn("dreaming: expire decayed relationship failed", "relationship", rel.ID, "err", err)
 				continue
@@ -272,7 +268,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 		"visited":          visited,
 		"tier1_supporters": tier1Total,
 		"tier2_supporters": tier2Total,
-		"support_gain":     supportGain,
+		"support_gain":     tuning.supportGain,
 	}, budget, tokensBefore)
 
 	// Weight adjustment scans every active relationship in one pass; no
@@ -282,52 +278,94 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 
 // calculateWeight returns the new weight for rel along with the Tier 1 /
 // Tier 2 counts so the phase summary can reveal whether multi-memory
-// support is reaching any rows. The 30-day decay loop runs unchanged; the
-// support multiplier lifts weight only when summed memory confidence
-// exceeds one unit; the empty-support guard biases dead-source rows toward
-// the pruning floor.
+// support is reaching any rows. The decay loop runs only on edges past the
+// configured age window; the support multiplier lifts weight only when
+// summed memory confidence exceeds one unit; the empty-support guard
+// biases dead-source rows toward the pruning floor.
 func (p *WeightAdjustmentPhase) calculateWeight(
 	rel *model.Relationship,
 	now time.Time,
 	sourceMemories map[uuid.UUID]*model.Memory,
 	idx supportIndex,
-	supportGain float64,
+	tuning weightTuning,
 ) (float64, int, int) {
 	weight := rel.Weight
 
 	age := now.Sub(rel.ValidFrom)
-	if age > 30*24*time.Hour {
-		decayFactor := 0.95
-		periods := age.Hours() / (30 * 24)
-		for i := 0; i < int(periods) && i < 10; i++ {
-			weight *= decayFactor
+	decayWindow := time.Duration(tuning.decayWindowDays) * 24 * time.Hour
+	if age > decayWindow {
+		periods := age.Hours() / (float64(tuning.decayWindowDays) * 24)
+		for i := 0; i < int(periods) && i < tuning.decayMaxPeriods; i++ {
+			weight *= tuning.decayFactor
 		}
 	}
 
-	support, t1, t2 := supportSums(rel, idx, sourceMemories)
+	support, t1, t2 := supportSums(rel, idx, sourceMemories, tuning.tier2Multiplier)
 	if support > 1.0 {
-		weight = weight * (1 + supportGain*(support-1))
+		weight = weight * (1 + tuning.supportGain*(support-1))
 	}
 
 	// Empty-support guard: when no live memory in this namespace attests
 	// the edge AND the row's recorded singular source is soft-deleted,
-	// halve the weight so dead-source rows fall through to the pruning
-	// floor faster. Missing-source rows (source row not loaded) get no
-	// extra penalty — decay alone removes them.
+	// scale the weight by deadSourceMultiplier (default 0.5) so dead-source
+	// rows fall through to the pruning floor faster. Missing-source rows
+	// (source row not loaded) get no extra penalty — decay alone removes
+	// them.
 	if support <= 0 && rel.SourceMemory != nil {
 		if mem, ok := sourceMemories[*rel.SourceMemory]; ok && mem != nil && mem.DeletedAt != nil {
-			weight *= 0.5
+			weight *= tuning.deadSourceMultiplier
 		}
 	}
 
 	if weight < 0 {
 		weight = 0
 	}
-	if weight > 2.0 {
-		weight = 2.0
+	if weight > tuning.ceiling {
+		weight = tuning.ceiling
 	}
 
 	return weight, t1, t2
+}
+
+// weightTuning bundles the per-cycle resolved values for every weight-
+// adjustment knob. Resolved once at phase entry so the per-relationship
+// hot loop reads from a fixed snapshot.
+type weightTuning struct {
+	supportGain          float64
+	tier2Multiplier      float64
+	decayWindowDays      int
+	decayFactor          float64
+	decayMaxPeriods      int
+	deadSourceMultiplier float64
+	ceiling              float64
+	expiryThreshold      float64
+}
+
+// resolveWeightTuning loads every knob through *WithDefault. nil settings
+// falls back to the registered defaults so test paths work without a stub.
+func (p *WeightAdjustmentPhase) resolveWeightTuning(ctx context.Context) weightTuning {
+	if p.settings == nil {
+		return weightTuning{
+			supportGain:          service.GetDefaultFloat(service.SettingDreamingWeightSupportGain),
+			tier2Multiplier:      service.GetDefaultFloat(service.SettingDreamWeightTier2Multiplier),
+			decayWindowDays:      service.GetDefaultInt(service.SettingDreamWeightDecayWindowDays),
+			decayFactor:          service.GetDefaultFloat(service.SettingDreamWeightDecayFactor),
+			decayMaxPeriods:      service.GetDefaultInt(service.SettingDreamWeightDecayMaxPeriods),
+			deadSourceMultiplier: service.GetDefaultFloat(service.SettingDreamWeightDeadSourceMultiplier),
+			ceiling:              service.GetDefaultFloat(service.SettingDreamWeightCeiling),
+			expiryThreshold:      service.GetDefaultFloat(service.SettingDreamPruningRelationshipWeightThreshold),
+		}
+	}
+	return weightTuning{
+		supportGain:          p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamingWeightSupportGain, "global"),
+		tier2Multiplier:      p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamWeightTier2Multiplier, "global"),
+		decayWindowDays:      p.settings.ResolveIntWithDefault(ctx, service.SettingDreamWeightDecayWindowDays, "global"),
+		decayFactor:          p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamWeightDecayFactor, "global"),
+		decayMaxPeriods:      p.settings.ResolveIntWithDefault(ctx, service.SettingDreamWeightDecayMaxPeriods, "global"),
+		deadSourceMultiplier: p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamWeightDeadSourceMultiplier, "global"),
+		ceiling:              p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamWeightCeiling, "global"),
+		expiryThreshold:      p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamPruningRelationshipWeightThreshold, "global"),
+	}
 }
 
 // writePhaseSummary emits a slog.Info line plus a DreamOpPhaseSummary

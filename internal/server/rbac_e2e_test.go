@@ -574,6 +574,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 	storeSvc := service.NewStoreService(
 		memRepo, projectLookup, namespaceLookup,
 		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
+		nil,
 	)
 
 	recallSvc := service.NewRecallService(
@@ -1516,6 +1517,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	storeSvc := service.NewStoreService(
 		memRepo, projectLookup, namespaceLookup,
 		&rbacIngestionLogRepo{}, &rbacEnrichmentQueueRepo{},
+		nil,
 	)
 
 	recallSvc := service.NewRecallService(
@@ -1546,6 +1548,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 
 	importSvc := service.NewImportService(
 		memRepo, projectLookup, namespaceLookup, &rbacIngestionLogRepo{},
+		nil,
 	)
 
 	enrichSvc := service.NewEnrichService(

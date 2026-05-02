@@ -94,6 +94,20 @@ func (s *staticSettings) ResolveInt(_ context.Context, key string, _ string) (in
 	return 0, errors.New("no value")
 }
 
+func (s *staticSettings) ResolveFloatWithDefault(ctx context.Context, key, scope string) float64 {
+	if v, err := s.ResolveFloat(ctx, key, scope); err == nil {
+		return v
+	}
+	return GetDefaultFloat(key)
+}
+
+func (s *staticSettings) ResolveIntWithDefault(ctx context.Context, key, scope string) int {
+	if v, err := s.ResolveInt(ctx, key, scope); err == nil {
+		return v
+	}
+	return GetDefaultInt(key)
+}
+
 // collectingBus buffers published events for assertion.
 type collectingBus struct {
 	mu     sync.Mutex

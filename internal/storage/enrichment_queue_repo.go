@@ -585,9 +585,12 @@ func (r *EnrichmentQueueRepo) TickHeartbeat(ctx context.Context, workerID string
 
 // ListStaleClaimed returns enrichment_queue rows in status='processing' whose
 // updated_at is older than the given threshold — jobs whose claiming worker
-// is presumed gone (crash, OOM, host reboot mid-batch). Bounded by
-// stuckScanLimit so a flood doesn't lock the writer.
-func (r *EnrichmentQueueRepo) ListStaleClaimed(ctx context.Context, threshold time.Duration) ([]*model.EnrichmentJob, error) {
+// is presumed gone (crash, OOM, host reboot mid-batch). limit caps the rows
+// returned; 0 or negative values fall through to stuckScanLimit.
+func (r *EnrichmentQueueRepo) ListStaleClaimed(ctx context.Context, threshold time.Duration, limit int) ([]*model.EnrichmentJob, error) {
+	if limit <= 0 {
+		limit = stuckScanLimit
+	}
 	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
 
 	query := selectEnrichmentQueueColumns + ` FROM enrichment_queue
@@ -599,7 +602,7 @@ func (r *EnrichmentQueueRepo) ListStaleClaimed(ctx context.Context, threshold ti
 			ORDER BY updated_at ASC LIMIT $2`
 	}
 
-	rows, err := r.db.Query(ctx, query, cutoff, stuckScanLimit)
+	rows, err := r.db.Query(ctx, query, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("enrichment queue list stale claimed: %w", err)
 	}

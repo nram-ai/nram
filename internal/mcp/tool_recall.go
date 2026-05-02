@@ -56,7 +56,9 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 	projectSlug, _ := args["project"].(string)
 	projectSlug = strings.TrimSpace(projectSlug)
 
-	limit := 10
+	// Leave limit and graphDepth zero when the caller omits them so the
+	// recall service applies recall.default_limit / recall.graph.default_depth.
+	var limit int
 	if v, ok := args["limit"].(float64); ok && v > 0 {
 		limit = int(v)
 	}
@@ -68,7 +70,7 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		includeGraph = v
 	}
 
-	graphDepth := 2
+	var graphDepth int
 	if v, ok := args["graph_depth"].(float64); ok && v > 0 {
 		graphDepth = int(v)
 	}

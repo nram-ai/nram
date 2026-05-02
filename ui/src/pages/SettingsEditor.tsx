@@ -481,6 +481,16 @@ function renderValueInput({
     );
   }
   if (schema.type === "int" || schema.type === "float" || schema.type === "number") {
+    // Schema-driven range. min/max/step on SettingSchema are pointer-typed
+    // on the server (omitted vs. zero distinguishable in JSON), so undefined
+    // here means "no constraint" — fall back to the legacy heuristic step.
+    const fallbackStep = schema.type === "float" ? 0.01 : 1;
+    const step =
+      typeof schema.step === "number" && Number.isFinite(schema.step) && schema.step > 0
+        ? schema.step
+        : fallbackStep;
+    const min = typeof schema.min === "number" && Number.isFinite(schema.min) ? schema.min : undefined;
+    const max = typeof schema.max === "number" && Number.isFinite(schema.max) ? schema.max : undefined;
     return (
       <input
         ref={inputRef as React.RefObject<HTMLInputElement>}
@@ -488,7 +498,9 @@ function renderValueInput({
         value={editValue}
         onChange={onChange}
         onKeyDown={onKeyDown}
-        step={schema.type === "float" ? "0.01" : "1"}
+        step={step}
+        min={min}
+        max={max}
         className={INPUT_CLASS}
       />
     );

@@ -358,6 +358,12 @@ func NewWorkerPool(
 	cascade *service.CascadeResolver,
 	bus events.EventBus,
 ) *WorkerPool {
+	if settings == nil {
+		// Many call sites depend on Resolve*WithDefault — passing nil settings
+		// would panic deep inside the pool's run loop. Fail at construction so
+		// the offender is obvious; tests use service.NewNoopSettingsService().
+		panic("enrichment: NewWorkerPool requires non-nil settings")
+	}
 	return &WorkerPool{
 		config:            config.withDefaults(context.Background(), settings),
 		memories:          memories,
@@ -385,8 +391,6 @@ func NewWorkerPool(
 // Losing the heartbeat is what makes a long batch look frozen to the
 // StuckJobSweeper, so a stuck writer must deadline rather than stall the loop.
 const heartbeatTickTimeout = 10 * time.Second
-
-const defaultHeartbeatInterval = 30 * time.Second
 
 // Start launches the configured number of worker goroutines. Each loops
 // until the pool is stopped: claim a job, process it, repeat (or sleep on
@@ -427,13 +431,13 @@ func (wp *WorkerPool) Start() {
 func (wp *WorkerPool) runHeartbeat(ctx context.Context, workerIDs []string) {
 	defer wp.wg.Done()
 
-	interval := defaultHeartbeatInterval
-	if wp.settings != nil {
-		resolved := wp.settings.ResolveDurationSecondsWithDefault(ctx,
-			service.SettingEnrichmentHeartbeatSeconds, "global")
-		if resolved >= time.Second {
-			interval = resolved
-		}
+	interval := wp.settings.ResolveDurationSecondsWithDefault(ctx,
+		service.SettingEnrichmentHeartbeatSeconds, "global")
+	if interval < time.Second {
+		// Defends against an operator setting 0 or a negative value that
+		// would tight-loop the heartbeat goroutine. Falls back to the
+		// registered default rather than the prior 30-second hardcode.
+		interval = time.Duration(service.GetDefaultInt(service.SettingEnrichmentHeartbeatSeconds)) * time.Second
 	}
 
 	tick := func() {

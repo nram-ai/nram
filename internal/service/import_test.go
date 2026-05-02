@@ -97,7 +97,7 @@ func newImportTestFixtures() (
 
 func TestImportNRAMJSON(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, namespaceID := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	ts := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	src := "test-source"
@@ -177,7 +177,7 @@ func TestImportNRAMJSON(t *testing.T) {
 
 func TestImportNRAMNDJSON(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	ts := time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC)
 	src := "ndjson-source"
@@ -223,7 +223,7 @@ func TestImportNRAMNDJSON(t *testing.T) {
 
 func TestImportMem0Format(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	ts := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	mem0Data := fmt.Sprintf(`{
@@ -277,7 +277,7 @@ func TestImportMem0Format(t *testing.T) {
 
 func TestImportZepFormat(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	ts := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	zepData := fmt.Sprintf(`{
@@ -329,7 +329,7 @@ func TestImportZepFormat(t *testing.T) {
 
 func TestImportProjectNotFound(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, _, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	_, err := svc.Import(context.Background(), &ImportRequest{
 		ProjectID: uuid.New(), // unknown project
@@ -347,7 +347,7 @@ func TestImportProjectNotFound(t *testing.T) {
 
 func TestImportInvalidFormat(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	_, err := svc.Import(context.Background(), &ImportRequest{
 		ProjectID: projectID,
@@ -365,7 +365,7 @@ func TestImportInvalidFormat(t *testing.T) {
 
 func TestImportMalformedJSON(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	_, err := svc.Import(context.Background(), &ImportRequest{
 		ProjectID: projectID,
@@ -383,7 +383,7 @@ func TestImportMalformedJSON(t *testing.T) {
 
 func TestImportPerItemErrors(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	// One valid, one empty content.
 	mem0Data := `{
@@ -441,7 +441,7 @@ func TestImportPerItemErrors(t *testing.T) {
 
 func TestImportIngestionLogCreated(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, namespaceID := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	mem0Data := `{
 		"results": [
@@ -484,7 +484,7 @@ func TestImportIngestionLogCreated(t *testing.T) {
 
 func TestImportLatencyTracked(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	data := `{"results": [{"id": "a", "memory": "test", "hash": "h", "metadata": {}}]}`
 
@@ -504,7 +504,7 @@ func TestImportLatencyTracked(t *testing.T) {
 
 func TestImportEmptyData(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	// Empty results array.
 	data := `{"results": []}`
@@ -531,7 +531,7 @@ func TestImportEmptyData(t *testing.T) {
 
 func TestImportPartialStatusInIngestionLog(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	// One valid, one empty -> partial status.
 	data := `{
@@ -570,7 +570,7 @@ func TestImportCreateError(t *testing.T) {
 		return nil
 	}
 
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
 
 	data := `{
 		"results": [

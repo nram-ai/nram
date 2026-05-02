@@ -112,15 +112,19 @@ type StoreService struct {
 	namespaces      NamespaceRepository
 	ingestionLogs   IngestionLogRepository
 	enrichmentQueue EnrichmentQueueRepository
+	settings        *SettingsService
 }
 
 // NewStoreService creates a new StoreService with the given dependencies.
+// settings may be nil; the importance/confidence defaults fall back to the
+// values registered in service.settingDefaults.
 func NewStoreService(
 	memories MemoryRepository,
 	projects ProjectRepository,
 	namespaces NamespaceRepository,
 	ingestionLogs IngestionLogRepository,
 	enrichmentQueue EnrichmentQueueRepository,
+	settings *SettingsService,
 ) *StoreService {
 	return &StoreService{
 		memories:        memories,
@@ -128,6 +132,7 @@ func NewStoreService(
 		namespaces:      namespaces,
 		ingestionLogs:   ingestionLogs,
 		enrichmentQueue: enrichmentQueue,
+		settings:        settings,
 	}
 }
 
@@ -208,7 +213,7 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 	if req.Source != "" {
 		source = &req.Source
 	}
-	importance := 0.5
+	importance := resolveDefaultImportance(ctx, s.settings)
 	if req.Importance != nil {
 		importance = *req.Importance
 	}
@@ -219,7 +224,7 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 		ContentHash: contentHash,
 		Source:      source,
 		Tags:        req.Tags,
-		Confidence:  1.0,
+		Confidence:  resolveDefaultConfidence(ctx, s.settings),
 		Importance:  importance,
 		Metadata:    req.Metadata,
 		CreatedAt:   now,

@@ -351,6 +351,100 @@ const (
 
 	// Export pagination size for memories. Hot-reloadable.
 	SettingExportPageSize = "export.page_size"
+
+	// Recall scoring and pagination. Hot-reloadable. Operators reach for
+	// these during incident response to retune the recency / over-fetch
+	// math without redeploying.
+	//
+	// recency_decay_per_hour drives the exp(-rate * hours_since_creation)
+	// term in computeScore: 0.01 → ~69h half-life, 0.02 → ~35h, 0.005 →
+	// ~138h. graph_hop_multiplier scales the per-hop relevance reduction
+	// applied to graph-traversal contributions. default_limit is the
+	// fallback when callers pass limit <= 0; default_depth is the same for
+	// graph_depth. overfetch_multiplier widens the candidate pool the
+	// score-and-rerank pass selects from (limit * mul); overfetch_min
+	// floors the result so small limits still get a workable pool.
+	SettingRankingRecencyDecayPerHour = "ranking.recency.decay_per_hour"
+	SettingRankingGraphHopMultiplier  = "ranking.graph.hop_multiplier"
+	SettingRecallDefaultLimit         = "recall.default_limit"
+	SettingRecallGraphDefaultDepth    = "recall.graph.default_depth"
+	SettingRecallOverfetchMultiplier  = "recall.overfetch_multiplier"
+	SettingRecallOverfetchMin         = "recall.overfetch_min"
+
+	// Pruning thresholds. relationship_weight_threshold gates the active
+	// relationship expiry pass AND the mid-cycle expiry inside the weight
+	// adjustment phase — both must read the same key so they cannot drift.
+	// effectively_zero is the upper bound for the zero-confidence prune
+	// branch (catches contradiction-haircut underflow that an exact `== 0`
+	// check would miss).
+	SettingDreamPruningRelationshipWeightThreshold = "dreaming.pruning.relationship_weight_threshold"
+	SettingDreamPruningEffectivelyZero             = "dreaming.pruning.effectively_zero"
+
+	// Transitive relationship discovery. min_weight is the minimum product
+	// weight (rel_ab.weight * rel_bc.weight) for a new transitive edge to
+	// be created. max_per_cycle caps creations per cycle; namespace_hard_cap
+	// halts creation entirely when the active relationship count exceeds it.
+	SettingDreamTransitiveMinWeight        = "dreaming.transitive.min_weight"
+	SettingDreamTransitiveMaxPerCycle      = "dreaming.transitive.max_per_cycle"
+	SettingDreamTransitiveNamespaceHardCap = "dreaming.transitive.namespace_hard_cap"
+
+	// Weight adjustment knobs. tier2_multiplier scales co-mention support
+	// (memory touches both endpoints but isn't direct lineage). decay_window_days
+	// is the age threshold past which 0.95-per-period decay applies; decay_factor
+	// is the per-period multiplier; decay_max_periods caps decay so a very old
+	// edge floors at decay_factor^max_periods (~0.60 with defaults).
+	// dead_source_multiplier is the halving applied when an edge's recorded
+	// singular source memory is soft-deleted AND no live memory still attests
+	// the edge. ceiling clamps recomputed weights — informational only for
+	// existing rows above the cap until they're naturally rewritten.
+	SettingDreamWeightTier2Multiplier      = "dreaming.weight.tier2_multiplier"
+	SettingDreamWeightDecayWindowDays      = "dreaming.weight.decay_window_days"
+	SettingDreamWeightDecayFactor          = "dreaming.weight.decay_factor"
+	SettingDreamWeightDecayMaxPeriods      = "dreaming.weight.decay_max_periods"
+	SettingDreamWeightDeadSourceMultiplier = "dreaming.weight.dead_source_multiplier"
+	SettingDreamWeightCeiling              = "dreaming.weight.ceiling"
+
+	// Consolidation phase clustering and sampling. alignment_sample_size
+	// is the count of user memories used to score alignment per cluster.
+	// cluster_overlap_threshold is the word-overlap fraction at which the
+	// heuristic clusterer treats two memories as belonging to the same
+	// cluster (drives which memories get bundled into a synthesis prompt).
+	SettingDreamConsolidationAlignmentSampleSize    = "dreaming.consolidation.alignment_sample_size"
+	SettingDreamConsolidationClusterOverlapThreshold = "dreaming.consolidation.cluster_overlap_threshold"
+
+	// LLM call temperatures. All four point at the OpenAI-compatible
+	// completion temperature parameter for their respective phases. Default
+	// 0.1 is conservative (more deterministic) which is appropriate for
+	// JSON-only outputs; alignment uses 0.3 to allow some judgment latitude
+	// when scoring evidence overlap.
+	SettingDreamSynthesisTemperature             = "dreaming.synthesis.temperature"
+	SettingDreamAlignmentTemperature             = "dreaming.alignment.temperature"
+	SettingDreamNoveltyJudgeTemperature          = "dreaming.novelty.judge.temperature"
+	SettingDreamContradictionTemperature         = "dreaming.contradiction.temperature"
+	SettingEnrichmentConflictTemperature         = "enrichment.conflict.temperature"
+	SettingEnrichmentIngestionDecisionTemperature = "enrichment.ingestion_decision.temperature"
+
+	// Heartbeat tick timeout for the dream runner. Caps how long a single
+	// TickHeartbeat write may block before being skipped. Larger values risk
+	// stalling the cycle on a slow DB; smaller values risk spurious "no
+	// recent activity" markers if the DB is briefly contended. Hot-reloadable.
+	SettingDreamHeartbeatTickTimeoutSeconds = "dreaming.heartbeat_tick_timeout_seconds"
+
+	// Stuck-scan caps. Bounds a single ListStale / ListStaleClaimed call so
+	// a flood doesn't lock the writer. Distinct keys for dreaming and
+	// enrichment so the two can be tuned independently — the workloads have
+	// different stuck-job cardinalities under load.
+	SettingDreamStuckScanLimit       = "dreaming.stuck_scan_limit"
+	SettingEnrichmentStuckScanLimit  = "enrichment.stuck_scan_limit"
+
+	// Default importance / confidence applied to newly-stored memories
+	// when the caller does not specify a value. Surfaces the four-way
+	// hardcoded duplication that import.go / extract.go / store.go /
+	// batch_store.go each carried as separate `0.5` / `1.0` literals.
+	// Operators tune these to bias new memories toward / away from the
+	// reinforcement floor at the cost of differential decay behavior.
+	SettingMemoryDefaultImportance = "memory.default_importance"
+	SettingMemoryDefaultConfidence = "memory.default_confidence"
 )
 
 // Reconsolidation mode values. Default is shadow so the first real deployment
@@ -653,16 +747,63 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 
 	SettingExportPageSize: "100",
 
+	// Recall scoring and pagination defaults. recency_decay_per_hour matches
+	// the historical hardcoded math.Exp(-0.01 * hours) in computeScore.
+	// graph_hop_multiplier mirrors the historical 1.0 / 2.0 product with the
+	// hop count approximated as 1. overfetch_multiplier=3.0 matches the
+	// previous topK := limit*3 literal; overfetch_min floors result for
+	// small limits. default_limit and default_depth match the previous
+	// caller-not-specified fallbacks.
+	SettingRankingRecencyDecayPerHour: "0.01",
+	SettingRankingGraphHopMultiplier:  "0.5",
+	SettingRecallDefaultLimit:         "10",
+	SettingRecallGraphDefaultDepth:    "2",
+	SettingRecallOverfetchMultiplier:  "3",
+	SettingRecallOverfetchMin:         "10",
+
+	SettingDreamPruningRelationshipWeightThreshold: "0.05",
+	SettingDreamPruningEffectivelyZero:             "0.001",
+
+	SettingDreamTransitiveMinWeight:        "0.1",
+	SettingDreamTransitiveMaxPerCycle:      "200",
+	SettingDreamTransitiveNamespaceHardCap: "5000",
+
+	SettingDreamWeightTier2Multiplier:      "0.5",
+	SettingDreamWeightDecayWindowDays:      "30",
+	SettingDreamWeightDecayFactor:          "0.95",
+	SettingDreamWeightDecayMaxPeriods:      "10",
+	SettingDreamWeightDeadSourceMultiplier: "0.5",
+	SettingDreamWeightCeiling:              "2",
+
+	SettingDreamConsolidationAlignmentSampleSize:    "5",
+	SettingDreamConsolidationClusterOverlapThreshold: "0.3",
+
+	SettingDreamSynthesisTemperature:             "0.3",
+	SettingDreamAlignmentTemperature:             "0.1",
+	SettingDreamNoveltyJudgeTemperature:          "0.1",
+	SettingDreamContradictionTemperature:         "0.1",
+	SettingEnrichmentConflictTemperature:         "0.1",
+	SettingEnrichmentIngestionDecisionTemperature: "0",
+
+	SettingDreamHeartbeatTickTimeoutSeconds: "10",
+
+	SettingDreamStuckScanLimit:      "1000",
+	SettingEnrichmentStuckScanLimit: "1000",
+
+	// memory.default_confidence is 1.0 to match how the import/extract/store
+	// write paths treat "no operator override". Operator-set values cascade
+	// through Resolve normally; this is only the registered default.
+	SettingMemoryDefaultImportance: "0.5",
+	SettingMemoryDefaultConfidence: "1",
+
 	// Display-only keys: registered in the admin schema for UI completeness
 	// but not yet wired to any consumer. Listed here so the init-time
 	// consistency check passes; remove once a consumer is added (and either
 	// promote to a Setting* constant or delete the schema entry).
-	"enrichment.batch_size":     "10",
-	"enrichment.auto_enrich":    "false",
-	"memory.default_confidence": "0.9",
-	"memory.default_importance": "0.5",
-	"api.rate_limit_rps":        "10",
-	"api.rate_limit_burst":      "20",
+	"enrichment.batch_size":  "10",
+	"enrichment.auto_enrich": "false",
+	"api.rate_limit_rps":     "10",
+	"api.rate_limit_burst":   "20",
 }
 
 // GetDefault returns the built-in default for the given setting key. The
@@ -672,6 +813,36 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 func GetDefault(key string) (string, bool) {
 	v, ok := settingDefaults[key]
 	return v, ok
+}
+
+// GetDefaultFloat returns the registered float default for key. Panics if
+// the key has no registered default or its default is not parseable as a
+// float — both are programmer errors, surfaced eagerly so a typo cannot
+// silently fall through to a zero value at runtime.
+func GetDefaultFloat(key string) float64 {
+	def, ok := settingDefaults[key]
+	if !ok {
+		panic("settings: GetDefaultFloat called for key with no registered default: " + key)
+	}
+	f, err := strconv.ParseFloat(def, 64)
+	if err != nil {
+		panic("settings: registered default for " + key + " is not a valid float: " + def)
+	}
+	return f
+}
+
+// GetDefaultInt returns the registered int default for key. Same panic
+// contract as GetDefaultFloat.
+func GetDefaultInt(key string) int {
+	def, ok := settingDefaults[key]
+	if !ok {
+		panic("settings: GetDefaultInt called for key with no registered default: " + key)
+	}
+	i, err := strconv.Atoi(def)
+	if err != nil {
+		panic("settings: registered default for " + key + " is not a valid int: " + def)
+	}
+	return i
 }
 
 // ResolveOrDefault returns the configured value for key, treating an empty
@@ -949,4 +1120,62 @@ func unmarshalJSONString(raw json.RawMessage) string {
 		return s
 	}
 	return string(raw)
+}
+
+// resolveDefaultImportance returns the registered default importance for
+// a newly-stored memory. Resolves through the settings service when wired,
+// falls back to the registered default in settingDefaults otherwise.
+// Shared by store, batch_store, extract, and import to keep the four
+// write paths in sync without re-coding the literal at each site.
+func resolveDefaultImportance(ctx context.Context, s *SettingsService) float64 {
+	if s == nil {
+		return GetDefaultFloat(SettingMemoryDefaultImportance)
+	}
+	return s.ResolveFloatWithDefault(ctx, SettingMemoryDefaultImportance, "global")
+}
+
+// resolveDefaultConfidence is the confidence companion to
+// resolveDefaultImportance.
+func resolveDefaultConfidence(ctx context.Context, s *SettingsService) float64 {
+	if s == nil {
+		return GetDefaultFloat(SettingMemoryDefaultConfidence)
+	}
+	return s.ResolveFloatWithDefault(ctx, SettingMemoryDefaultConfidence, "global")
+}
+
+// AllSettingKeys returns every key registered in the runtime defaults map.
+// Used by the cascade-completeness test (asserts every key has a schema row)
+// and by the bootstrap seeder (inserts a row for every key on first boot).
+// The returned slice is unsorted and freshly allocated; callers may sort or
+// filter without affecting subsequent calls.
+func AllSettingKeys() []string {
+	out := make([]string, 0, len(settingDefaults))
+	for k := range settingDefaults {
+		out = append(out, k)
+	}
+	return out
+}
+
+// noopSettingsRepo always reports "no row" so SettingsService.Resolve falls
+// through to the registered default. Used by tests and by code paths that
+// intentionally have no operator-tunable settings backend.
+type noopSettingsRepo struct{}
+
+func (noopSettingsRepo) Get(context.Context, string, string) (*model.Setting, error) {
+	return nil, sql.ErrNoRows
+}
+func (noopSettingsRepo) Set(context.Context, *model.Setting) error             { return nil }
+func (noopSettingsRepo) Delete(context.Context, string, string) error          { return nil }
+func (noopSettingsRepo) ListByScope(context.Context, string) ([]model.Setting, error) {
+	return nil, nil
+}
+
+// NewNoopSettingsService returns a SettingsService backed by a stub repo that
+// always reports "no row". Resolve / ResolveFloat / ResolveInt / ResolveBool
+// fall through to settingDefaults; Set / Delete / ListByScope are no-ops. Use
+// in tests and in any process slot that genuinely has no operator-tunable
+// settings backend wired (e.g. a CLI tool that only reads behaviour from
+// registered defaults).
+func NewNoopSettingsService() *SettingsService {
+	return NewSettingsService(noopSettingsRepo{})
 }

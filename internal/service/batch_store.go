@@ -138,6 +138,9 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 	// in the same batch so we do not race ourselves into duplicates.
 	seenHashes := make(map[string]uuid.UUID, len(req.Items))
 
+	defaultImportance := resolveDefaultImportance(ctx, s.settings)
+	defaultConfidence := resolveDefaultConfidence(ctx, s.settings)
+
 	for i, item := range req.Items {
 		hash := storage.HashContent(item.Content)
 
@@ -172,7 +175,7 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 		if item.Source != "" {
 			source = &item.Source
 		}
-		importance := 0.5
+		importance := defaultImportance
 		if item.Importance != nil {
 			importance = *item.Importance
 		}
@@ -183,7 +186,7 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 			ContentHash: hash,
 			Source:      source,
 			Tags:        item.Tags,
-			Confidence:  1.0,
+			Confidence:  defaultConfidence,
 			Importance:  importance,
 			Metadata:    item.Metadata,
 			CreatedAt:   now,

@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // TestShouldPrune_EffectivelyZeroConfidenceCohort exercises the A2 plan: the
@@ -29,7 +30,7 @@ func TestShouldPrune_EffectivelyZeroConfidenceCohort(t *testing.T) {
 	}
 
 	p := &PruningPhase{} // shouldPrune is pure, no deps required.
-	prune, reason := p.shouldPrune(mem, now)
+	prune, reason := p.shouldPrune(mem, now, service.GetDefaultFloat(service.SettingDreamPruningEffectivelyZero))
 	if !prune {
 		t.Fatalf("shouldPrune = false, want true for conf=0.0005 idle 10d")
 	}
@@ -48,7 +49,7 @@ func TestShouldPrune_FloorPinnedMemoryNotPruned(t *testing.T) {
 	mem := &model.Memory{
 		ID:           uuid.New(),
 		NamespaceID:  uuid.New(),
-		Confidence:   defaultConfidenceFloor, // 0.05
+		Confidence:   service.GetDefaultFloat(service.SettingConfidenceFloor), // 0.05
 		UpdatedAt:    now.Add(-30 * 24 * time.Hour),
 		CreatedAt:    now.Add(-30 * 24 * time.Hour),
 		SupersededBy: nil,
@@ -56,7 +57,7 @@ func TestShouldPrune_FloorPinnedMemoryNotPruned(t *testing.T) {
 	}
 
 	p := &PruningPhase{}
-	prune, reason := p.shouldPrune(mem, now)
+	prune, reason := p.shouldPrune(mem, now, service.GetDefaultFloat(service.SettingDreamPruningEffectivelyZero))
 	if prune {
 		t.Errorf("shouldPrune = true (reason=%q), want false for floor-pinned memory", reason)
 	}
@@ -80,7 +81,7 @@ func TestShouldPrune_RecentlyTouchedNotPruned(t *testing.T) {
 	}
 
 	p := &PruningPhase{}
-	prune, _ := p.shouldPrune(mem, now)
+	prune, _ := p.shouldPrune(mem, now, service.GetDefaultFloat(service.SettingDreamPruningEffectivelyZero))
 	if prune {
 		t.Error("shouldPrune = true, want false: memory was updated within 7d idle gate")
 	}

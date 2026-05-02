@@ -7,26 +7,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
-const (
-	// transitiveMinWeight is the minimum product-weight for a transitive
-	// relationship to be created. This prevents near-zero-weight noise edges
-	// from accumulating (e.g. 0.01 * 0.01 = 0.0001).
-	transitiveMinWeight = 0.1
-
-	// transitiveMaxPerCycle caps new relationships per dream cycle to prevent
-	// runaway graph growth in dense namespaces.
-	transitiveMaxPerCycle = 200
-
-	// transitiveHardCap is the absolute maximum number of active relationships
-	// in a namespace. Transitive creation stops entirely when this is exceeded.
-	transitiveHardCap = 5000
-
-	// transitivePropertySource is stored in the Properties JSON of transitive
-	// relationships so future cycles can identify and exclude them from input.
-	transitivePropertySource = "transitive"
-)
+// transitivePropertySource is stored in the Properties JSON of transitive
+// relationships so future cycles can identify and exclude them from input.
+const transitivePropertySource = "transitive"
 
 // TransitivePhase discovers implied relationships by traversing the knowledge
 // graph. If A→B and B→C exist but A→C does not, a transitive relationship
@@ -34,33 +20,43 @@ const (
 //
 // Guards against relationship explosion:
 //   - Excludes previously-inferred transitive edges from input (no chaining)
-//   - Requires product-weight >= transitiveMinWeight
-//   - Caps new relationships per cycle at transitiveMaxPerCycle
-//   - Stops entirely when namespace exceeds transitiveHardCap active relationships
+//   - Requires product-weight >= dreaming.transitive.min_weight
+//   - Caps new relationships per cycle at dreaming.transitive.max_per_cycle
+//   - Stops entirely when namespace exceeds
+//     dreaming.transitive.namespace_hard_cap active relationships
 //
 // This phase has zero token cost (pure graph traversal).
 type TransitivePhase struct {
 	entities      EntityReader
 	relationships RelationshipReader
 	relWriter     RelationshipWriter
+	settings      SettingsResolver
 }
 
 // NewTransitivePhase creates a new transitive relationship discovery phase.
+// settings may be nil; the three transitive thresholds fall back to the
+// values registered in service.settingDefaults.
 func NewTransitivePhase(
 	entities EntityReader,
 	relationships RelationshipReader,
 	relWriter RelationshipWriter,
+	settings SettingsResolver,
 ) *TransitivePhase {
 	return &TransitivePhase{
 		entities:      entities,
 		relationships: relationships,
 		relWriter:     relWriter,
+		settings:      settings,
 	}
 }
 
 func (p *TransitivePhase) Name() string { return model.DreamPhaseTransitive }
 
 func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+	minWeight := p.resolveFloat(ctx, service.SettingDreamTransitiveMinWeight)
+	maxPerCycle := p.resolveInt(ctx, service.SettingDreamTransitiveMaxPerCycle)
+	hardCap := p.resolveInt(ctx, service.SettingDreamTransitiveNamespaceHardCap)
+
 	entities, err := p.entities.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
 		return false, err
@@ -77,9 +73,9 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	if err != nil {
 		return false, err
 	}
-	if totalActive >= transitiveHardCap {
+	if totalActive >= hardCap {
 		slog.Info("dreaming: transitive phase skipped, namespace at hard cap",
-			"active", totalActive, "cap", transitiveHardCap, "cycle", cycle.ID)
+			"active", totalActive, "cap", hardCap, "cycle", cycle.ID)
 		return false, nil
 	}
 
@@ -116,9 +112,9 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	}
 
 	// Per-cycle cap.
-	maxNew := transitiveMaxPerCycle
+	maxNew := maxPerCycle
 	// Also respect hard cap headroom.
-	headroom := transitiveHardCap - totalActive
+	headroom := hardCap - totalActive
 	if headroom < maxNew {
 		maxNew = headroom
 	}
@@ -177,7 +173,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 
 				// Minimum weight threshold to avoid near-zero noise.
 				transitiveWeight := relAB.Weight * relBC.Weight
-				if transitiveWeight < transitiveMinWeight {
+				if transitiveWeight < minWeight {
 					continue
 				}
 
@@ -216,6 +212,24 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	}
 
 	return truncated, nil
+}
+
+// resolveFloat reads a float setting via the *WithDefault helper, falling
+// back to the registered default when settings is nil (test path).
+func (p *TransitivePhase) resolveFloat(ctx context.Context, key string) float64 {
+	if p.settings == nil {
+		return service.GetDefaultFloat(key)
+	}
+	return p.settings.ResolveFloatWithDefault(ctx, key, "global")
+}
+
+// resolveInt reads an int setting via the *WithDefault helper, falling back
+// to the registered default when settings is nil (test path).
+func (p *TransitivePhase) resolveInt(ctx context.Context, key string) int {
+	if p.settings == nil {
+		return service.GetDefaultInt(key)
+	}
+	return p.settings.ResolveIntWithDefault(ctx, key, "global")
 }
 
 // isTransitiveRelationship checks whether a relationship was created by the

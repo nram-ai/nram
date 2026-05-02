@@ -175,14 +175,16 @@ func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*Ex
 		source = &req.Source
 	}
 
+	defaultImportance := resolveDefaultImportance(ctx, s.settings)
+
 	rawMem := &model.Memory{
 		ID:          rawMemID,
 		NamespaceID: ns.ID,
 		Content:     req.Content,
 		Source:      source,
 		Tags:        req.Tags,
-		Confidence:  1.0,
-		Importance:  0.5,
+		Confidence:  resolveDefaultConfidence(ctx, s.settings),
+		Importance:  defaultImportance,
 		Metadata:    req.Metadata,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -242,7 +244,7 @@ func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*Ex
 				Source:      source,
 				Tags:        req.Tags,
 				Confidence:  fact.Confidence,
-				Importance:  0.5,
+				Importance:  defaultImportance,
 				Metadata:    req.Metadata,
 				CreatedAt:   childNow,
 				UpdatedAt:   childNow,

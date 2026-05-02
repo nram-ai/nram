@@ -178,7 +178,7 @@ func (r *CascadeResolver) ResolveDreamingEnabled(ctx context.Context, namespaceI
 // dedup_threshold key; per-namespace overrides (the dedup_threshold JSON
 // field) layer on top.
 func (r *CascadeResolver) ResolveDedupThreshold(ctx context.Context, namespaceID uuid.UUID) float64 {
-	base := 0.92
+	base := GetDefaultFloat(SettingIngestionDecisionThreshold)
 	if r.settings != nil {
 		if v, err := r.settings.ResolveFloat(ctx, SettingIngestionDecisionThreshold, "global"); err == nil && v > 0 && v <= 1 {
 			base = v

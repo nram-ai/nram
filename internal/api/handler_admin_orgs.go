@@ -194,6 +194,14 @@ func handleUpdateOrg(w http.ResponseWriter, r *http.Request, cfg OrgAdminConfig,
 		return
 	}
 
+	// org.Settings shares the project Settings shape (ranking_weights,
+	// dedup_threshold, *_enabled). The cascade does not read org scope
+	// today, but validating at write time prevents a latent bypass when
+	// org scope is wired into the cascade later.
+	if requireValidProjectSettings(w, body.Settings) {
+		return
+	}
+
 	org, err := cfg.Store.UpdateOrg(r.Context(), id, body.Name, body.Slug, body.Settings)
 	if err != nil {
 		if isOrgNotFound(err) {

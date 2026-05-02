@@ -5,6 +5,7 @@ import {
   useProject,
   useUpdateProject,
   useDeleteProject,
+  useSchemaRange,
   useSystemRankingWeights,
 } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
@@ -286,11 +287,13 @@ function SparseWeightInput({
   label,
   value,
   placeholder,
+  range,
   onChange,
 }: {
   label: string;
   value: number | undefined;
   placeholder: number;
+  range: { min: number; max: number; step: number };
   onChange: (next: number | undefined) => void;
 }) {
   return (
@@ -298,9 +301,9 @@ function SparseWeightInput({
       <label className="mb-1 block text-xs text-muted-foreground">{label}</label>
       <input
         type="number"
-        min={0}
-        max={1}
-        step={0.05}
+        min={range.min}
+        max={range.max}
+        step={range.step}
         className="w-full rounded-md border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         value={value ?? ""}
         placeholder={`system: ${placeholder.toFixed(2)}`}
@@ -335,7 +338,23 @@ function ProjectDetailPanel({
   const updateMut = useUpdateProject();
   const deleteMut = useDeleteProject();
 
-  const systemWeights = useSystemRankingWeights();
+  const weightsResolution = useSystemRankingWeights();
+  const systemWeights = weightsResolution.weights;
+  // The six ranking-weight inputs all share min/max/step; resolving once
+  // off the similarity key keeps the schema lookup cheap.
+  // The six ranking-weight inputs share min/max/step; resolving once off
+  // the similarity key keeps the schema lookup cheap and ensures the
+  // operator-tunable range stays in lockstep with the registry.
+  const weightRange = useSchemaRange("ranking.weight.similarity", {
+    min: 0,
+    max: 1,
+    step: 0.05,
+  });
+  const dedupRange = useSchemaRange("enrichment.dedup_threshold", {
+    min: 0,
+    max: 1,
+    step: 0.01,
+  });
 
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -388,23 +407,33 @@ function ProjectDetailPanel({
   }, [projectId]);
 
   // Effective merged weights = system baseline with any project override
-  // applied. Used for the read-only summary block and the sum warning.
-  const effectiveWeights: SystemRankingWeights = {
-    similarity: editSimilarity ?? systemWeights.similarity,
-    recency: editRecency ?? systemWeights.recency,
-    importance: editImportance ?? systemWeights.importance,
-    frequency: editFrequency ?? systemWeights.frequency,
-    graph_relevance: editGraphRelevance ?? systemWeights.graph_relevance,
-    confidence: editConfidence ?? systemWeights.confidence,
-  };
-  const weightSum =
-    effectiveWeights.similarity +
-    effectiveWeights.recency +
-    effectiveWeights.importance +
-    effectiveWeights.frequency +
-    effectiveWeights.graph_relevance +
-    effectiveWeights.confidence;
-  const weightWarning = Math.abs(weightSum - 1.0) > 0.001;
+  // applied. Null systemWeights means the schema endpoint is missing one
+  // or more ranking.weight.* keys; the panel surfaces this as a banner and
+  // hides the override editor (operators cannot meaningfully edit overrides
+  // until the schema baseline is observable).
+  const effectiveWeights: SystemRankingWeights | null = systemWeights
+    ? {
+        similarity: editSimilarity ?? systemWeights.similarity,
+        recency: editRecency ?? systemWeights.recency,
+        importance: editImportance ?? systemWeights.importance,
+        frequency: editFrequency ?? systemWeights.frequency,
+        graph_relevance: editGraphRelevance ?? systemWeights.graph_relevance,
+        confidence: editConfidence ?? systemWeights.confidence,
+      }
+    : null;
+  const weightSum = effectiveWeights
+    ? effectiveWeights.similarity +
+      effectiveWeights.recency +
+      effectiveWeights.importance +
+      effectiveWeights.frequency +
+      effectiveWeights.graph_relevance +
+      effectiveWeights.confidence
+    : 0;
+  // Tighter than the previous 0.001: floating-point sum-of-six can drift
+  // by a handful of ULPs but never by 1e-6 in practice. Operators saving
+  // weights that don't actually sum to 1 was a real bug; the looser bound
+  // hid it from view.
+  const weightWarning = effectiveWeights ? Math.abs(weightSum - 1.0) > 1e-6 : false;
 
   function handleSave() {
     if (!project) return;
@@ -595,9 +624,9 @@ function ProjectDetailPanel({
                 </label>
                 <input
                   type="number"
-                  min={0}
-                  max={1}
-                  step={0.01}
+                  min={dedupRange.min}
+                  max={dedupRange.max}
+                  step={dedupRange.step}
                   className="w-32 rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   value={editDedupThreshold ?? ""}
                   placeholder="system: 0.92"
@@ -642,74 +671,95 @@ function ProjectDetailPanel({
 
               {/* Ranking weights — six sparse inputs. Each placeholder shows
                * the effective system value so operators can see the
-               * baseline before deciding whether to override. */}
+               * baseline before deciding whether to override. When the
+               * schema endpoint is missing one or more ranking.weight.*
+               * keys, surface a red banner instead of silently rendering
+               * stale built-in defaults. */}
               <div>
                 <label className="mb-2 block text-xs font-medium text-muted-foreground">
                   Ranking Weights
                 </label>
-                <div className="grid grid-cols-3 gap-3">
-                  <SparseWeightInput
-                    label="Similarity"
-                    value={editSimilarity}
-                    placeholder={systemWeights.similarity}
-                    onChange={setEditSimilarity}
-                  />
-                  <SparseWeightInput
-                    label="Recency"
-                    value={editRecency}
-                    placeholder={systemWeights.recency}
-                    onChange={setEditRecency}
-                  />
-                  <SparseWeightInput
-                    label="Importance"
-                    value={editImportance}
-                    placeholder={systemWeights.importance}
-                    onChange={setEditImportance}
-                  />
-                  <SparseWeightInput
-                    label="Frequency"
-                    value={editFrequency}
-                    placeholder={systemWeights.frequency}
-                    onChange={setEditFrequency}
-                  />
-                  <SparseWeightInput
-                    label="Graph Relevance"
-                    value={editGraphRelevance}
-                    placeholder={systemWeights.graph_relevance}
-                    onChange={setEditGraphRelevance}
-                  />
-                  <SparseWeightInput
-                    label="Confidence"
-                    value={editConfidence}
-                    placeholder={systemWeights.confidence}
-                    onChange={setEditConfidence}
-                  />
-                </div>
+                {systemWeights && effectiveWeights ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-3">
+                      <SparseWeightInput
+                        label="Similarity"
+                        value={editSimilarity}
+                        placeholder={systemWeights.similarity}
+                        range={weightRange}
+                        onChange={setEditSimilarity}
+                      />
+                      <SparseWeightInput
+                        label="Recency"
+                        value={editRecency}
+                        placeholder={systemWeights.recency}
+                        range={weightRange}
+                        onChange={setEditRecency}
+                      />
+                      <SparseWeightInput
+                        label="Importance"
+                        value={editImportance}
+                        placeholder={systemWeights.importance}
+                        range={weightRange}
+                        onChange={setEditImportance}
+                      />
+                      <SparseWeightInput
+                        label="Frequency"
+                        value={editFrequency}
+                        placeholder={systemWeights.frequency}
+                        range={weightRange}
+                        onChange={setEditFrequency}
+                      />
+                      <SparseWeightInput
+                        label="Graph Relevance"
+                        value={editGraphRelevance}
+                        placeholder={systemWeights.graph_relevance}
+                        range={weightRange}
+                        onChange={setEditGraphRelevance}
+                      />
+                      <SparseWeightInput
+                        label="Confidence"
+                        value={editConfidence}
+                        placeholder={systemWeights.confidence}
+                        range={weightRange}
+                        onChange={setEditConfidence}
+                      />
+                    </div>
 
-                {/* Effective weights — read-only summary so operators see
-                 * exactly what recall will use after merging the override
-                 * with the system layer. */}
-                <div className="mt-3 rounded border bg-muted/30 p-3 text-xs">
-                  <div className="mb-1 font-medium text-muted-foreground">
-                    Effective weights (system + your overrides)
+                    {/* Effective weights — read-only summary so operators see
+                     * exactly what recall will use after merging the override
+                     * with the system layer. */}
+                    <div className="mt-3 rounded border bg-muted/30 p-3 text-xs">
+                      <div className="mb-1 font-medium text-muted-foreground">
+                        Effective weights (system + your overrides)
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 font-mono">
+                        <div>Similarity: {effectiveWeights.similarity.toFixed(2)}</div>
+                        <div>Recency: {effectiveWeights.recency.toFixed(2)}</div>
+                        <div>Importance: {effectiveWeights.importance.toFixed(2)}</div>
+                        <div>Frequency: {effectiveWeights.frequency.toFixed(2)}</div>
+                        <div>Graph: {effectiveWeights.graph_relevance.toFixed(2)}</div>
+                        <div>Confidence: {effectiveWeights.confidence.toFixed(2)}</div>
+                      </div>
+                      <div className="mt-2 text-muted-foreground">
+                        Sum: <span className="font-mono">{weightSum.toFixed(3)}</span>
+                      </div>
+                    </div>
+                    {weightWarning && (
+                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                        Effective weights do not sum to 1.0 (currently {weightSum.toFixed(3)}).
+                        Recall will still work, but the score scale shifts; review the override.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <div className="rounded border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+                    Ranking weight schema unavailable. The server did not return
+                    default values for {weightsResolution.missingKeys.join(", ") || "one or more keys"}.
+                    Ranking-weight overrides cannot be edited until the schema
+                    endpoint is reachable. (This usually means a rolling
+                    deploy is in progress; reload after it finishes.)
                   </div>
-                  <div className="grid grid-cols-3 gap-2 font-mono">
-                    <div>Similarity: {effectiveWeights.similarity.toFixed(2)}</div>
-                    <div>Recency: {effectiveWeights.recency.toFixed(2)}</div>
-                    <div>Importance: {effectiveWeights.importance.toFixed(2)}</div>
-                    <div>Frequency: {effectiveWeights.frequency.toFixed(2)}</div>
-                    <div>Graph: {effectiveWeights.graph_relevance.toFixed(2)}</div>
-                    <div>Confidence: {effectiveWeights.confidence.toFixed(2)}</div>
-                  </div>
-                  <div className="mt-2 text-muted-foreground">
-                    Sum: <span className="font-mono">{weightSum.toFixed(3)}</span>
-                  </div>
-                </div>
-                {weightWarning && (
-                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                    Effective weights do not sum to 1.0 (currently {weightSum.toFixed(3)}).
-                    Recall will still work, but the score scale shifts; review the override.
-                  </p>
                 )}
               </div>
             </div>

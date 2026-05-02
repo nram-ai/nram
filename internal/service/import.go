@@ -64,20 +64,25 @@ type ImportService struct {
 	projects      ProjectRepository
 	namespaces    NamespaceRepository
 	ingestionLogs IngestionLogRepository
+	settings      *SettingsService
 }
 
 // NewImportService creates a new ImportService with the given dependencies.
+// settings may be nil; the importance/confidence defaults fall back to the
+// values registered in service.settingDefaults.
 func NewImportService(
 	memories MemoryRepository,
 	projects ProjectRepository,
 	namespaces NamespaceRepository,
 	ingestionLogs IngestionLogRepository,
+	settings *SettingsService,
 ) *ImportService {
 	return &ImportService{
 		memories:      memories,
 		projects:      projects,
 		namespaces:    namespaces,
 		ingestionLogs: ingestionLogs,
+		settings:      settings,
 	}
 }
 
@@ -186,12 +191,12 @@ func (s *ImportService) Import(ctx context.Context, req *ImportRequest) (*Import
 
 		confidence := item.Confidence
 		if confidence <= 0 {
-			confidence = 1.0
+			confidence = resolveDefaultConfidence(ctx, s.settings)
 		}
 
 		importance := item.Importance
 		if importance <= 0 {
-			importance = 0.5
+			importance = resolveDefaultImportance(ctx, s.settings)
 		}
 		mem := &model.Memory{
 			ID:          memID,
@@ -363,14 +368,14 @@ func parseMem0Import(data []byte) ([]importItem, error) {
 	source := "mem0-import"
 	items := make([]importItem, 0, len(export.Results))
 	for _, m := range export.Results {
+		// Confidence/Importance left zero so the main import loop applies
+		// the registered defaults via resolveDefault{Confidence,Importance}.
 		items = append(items, importItem{
-			Content:    m.Memory,
-			Tags:       nil,
-			Source:     &source,
-			Metadata:   m.Metadata,
-			Confidence: 1.0,
-			Importance: 0.5,
-			CreatedAt:  m.CreatedAt,
+			Content:   m.Memory,
+			Tags:      nil,
+			Source:    &source,
+			Metadata:  m.Metadata,
+			CreatedAt: m.CreatedAt,
 		})
 	}
 
@@ -409,14 +414,14 @@ func parseZepImport(data []byte) ([]importItem, error) {
 		if m.Role != "" {
 			tags = []string{m.Role}
 		}
+		// Confidence/Importance left zero so the main import loop applies
+		// the registered defaults via resolveDefault{Confidence,Importance}.
 		items = append(items, importItem{
-			Content:    m.Content,
-			Tags:       tags,
-			Source:     &source,
-			Metadata:   m.Metadata,
-			Confidence: 1.0,
-			Importance: 0.5,
-			CreatedAt:  m.CreatedAt,
+			Content:   m.Content,
+			Tags:      tags,
+			Source:    &source,
+			Metadata:  m.Metadata,
+			CreatedAt: m.CreatedAt,
 		})
 	}
 

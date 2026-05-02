@@ -10,35 +10,6 @@ import (
 	"github.com/nram-ai/nram/internal/service"
 )
 
-const (
-	// pruneRelationshipWeightThreshold — active relationships with weight
-	// below this value are expired during pruning.
-	pruneRelationshipWeightThreshold = 0.05
-
-	// defaultConfidenceDecayThresholdDays is the fallback when the setting
-	// is missing or unparseable. Memories untouched longer than this many
-	// days are eligible for decay on each pruning cycle.
-	defaultConfidenceDecayThresholdDays = 14.0
-	// defaultConfidenceDecayRatePerCycle is the per-cycle multiplicative
-	// reduction applied to eligible memories (1 - rate multiplies confidence).
-	defaultConfidenceDecayRatePerCycle = 0.02
-	// defaultConfidenceFloor is the lower bound decay will not cross.
-	defaultConfidenceFloor = 0.05
-	// effectivelyZero is the upper bound for the zero-confidence prune branch.
-	// Contradiction haircuts are multiplicative (mem.Confidence *= factor) and
-	// only reach exact zero on float underflow, so an `== 0` check never fires.
-	// Anything at or below this came from contradiction compounding past the
-	// decay floor and is explicitly devalued.
-	effectivelyZero = 0.001
-
-	// defaultPruningBatchSize is the fallback streaming chunk when the
-	// dreaming.pruning.batch_size setting is missing or invalid. Pruning
-	// processes the namespace one batch at a time to keep working-set
-	// memory bounded; the value matches the historical hardcoded cap so
-	// per-batch transaction shape is unchanged on default config.
-	defaultPruningBatchSize = 1000
-)
-
 // Prune reasons emitted by shouldPrune. Logged and surfaced upstream; pin them
 // as constants so the strings stay refactor-safe.
 const (
@@ -128,14 +99,14 @@ func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, bud
 }
 
 // resolveBatchSize reads dreaming.pruning.batch_size, falling back to the
-// historical default when the setting is missing or invalid.
+// registered default when the setting is missing or invalid.
 func (p *PruningPhase) resolveBatchSize(ctx context.Context) int {
 	if p.settings == nil {
-		return defaultPruningBatchSize
+		return service.GetDefaultInt(service.SettingDreamPruningBatchSize)
 	}
-	v, err := p.settings.ResolveInt(ctx, service.SettingDreamPruningBatchSize, "global")
-	if err != nil || v <= 0 {
-		return defaultPruningBatchSize
+	v := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamPruningBatchSize, "global")
+	if v <= 0 {
+		return service.GetDefaultInt(service.SettingDreamPruningBatchSize)
 	}
 	return v
 }
@@ -149,17 +120,17 @@ func (p *PruningPhase) applyConfidenceDecay(ctx context.Context, cycle *model.Dr
 		return 0, nil
 	}
 
-	threshold, err := p.settings.ResolveFloat(ctx, service.SettingConfidenceDecayThresholdDays, "global")
-	if err != nil || threshold <= 0 {
-		threshold = defaultConfidenceDecayThresholdDays
+	threshold := p.settings.ResolveFloatWithDefault(ctx, service.SettingConfidenceDecayThresholdDays, "global")
+	if threshold <= 0 {
+		threshold = service.GetDefaultFloat(service.SettingConfidenceDecayThresholdDays)
 	}
-	rate, err := p.settings.ResolveFloat(ctx, service.SettingConfidenceDecayRatePerCycle, "global")
-	if err != nil || rate <= 0 || rate >= 1 {
-		rate = defaultConfidenceDecayRatePerCycle
+	rate := p.settings.ResolveFloatWithDefault(ctx, service.SettingConfidenceDecayRatePerCycle, "global")
+	if rate <= 0 || rate >= 1 {
+		rate = service.GetDefaultFloat(service.SettingConfidenceDecayRatePerCycle)
 	}
-	floor, err := p.settings.ResolveFloat(ctx, service.SettingConfidenceFloor, "global")
-	if err != nil || floor < 0 || floor > 1 {
-		floor = defaultConfidenceFloor
+	floor := p.settings.ResolveFloatWithDefault(ctx, service.SettingConfidenceFloor, "global")
+	if floor < 0 || floor > 1 {
+		floor = service.GetDefaultFloat(service.SettingConfidenceFloor)
 	}
 
 	now := time.Now().UTC()
@@ -216,6 +187,7 @@ func (p *PruningPhase) applyConfidenceDecay(ctx context.Context, cycle *model.Dr
 func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycle, memories []model.Memory, logger *DreamLogWriter) (int, error) {
 	pruned := 0
 	now := time.Now().UTC()
+	zeroFloor := p.resolveEffectivelyZero(ctx)
 
 	tracker := CycleTrackerFromContext(ctx)
 	progressStep := progressEmitStep(len(memories))
@@ -231,7 +203,7 @@ func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycl
 			continue
 		}
 
-		shouldPrune, reason := p.shouldPrune(&mem, now)
+		shouldPrune, reason := p.shouldPrune(&mem, now, zeroFloor)
 		if !shouldPrune {
 			continue
 		}
@@ -256,7 +228,8 @@ func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycl
 
 // pruneRelationships expires every relationship below the weight threshold and returns the count.
 func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.DreamCycle, logger *DreamLogWriter) (int64, error) {
-	expired, err := p.relWriter.ExpireLowWeight(ctx, cycle.NamespaceID, pruneRelationshipWeightThreshold)
+	threshold := p.resolveRelationshipWeightThreshold(ctx)
+	expired, err := p.relWriter.ExpireLowWeight(ctx, cycle.NamespaceID, threshold)
 	if err != nil {
 		return 0, err
 	}
@@ -266,13 +239,35 @@ func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.Drea
 			model.DreamOpRelationshipExpired, "namespace", cycle.NamespaceID,
 			nil, map[string]interface{}{
 				"expired_count": expired,
-				"threshold":     pruneRelationshipWeightThreshold,
+				"threshold":     threshold,
 			})
 		slog.Info("dreaming: pruned low-weight relationships",
-			"count", expired, "threshold", pruneRelationshipWeightThreshold, "cycle", cycle.ID)
+			"count", expired, "threshold", threshold, "cycle", cycle.ID)
 	}
 
 	return expired, nil
+}
+
+// resolveRelationshipWeightThreshold returns the threshold below which an
+// active relationship is expired. Shared with WeightAdjustmentPhase via the
+// SettingDreamPruningRelationshipWeightThreshold key — both paths must read
+// the same registry-backed value or they will drift.
+func (p *PruningPhase) resolveRelationshipWeightThreshold(ctx context.Context) float64 {
+	if p.settings == nil {
+		return service.GetDefaultFloat(service.SettingDreamPruningRelationshipWeightThreshold)
+	}
+	return p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamPruningRelationshipWeightThreshold, "global")
+}
+
+// resolveEffectivelyZero returns the upper bound of the zero-confidence
+// prune branch. See SettingDreamPruningEffectivelyZero for why an exact zero
+// check is insufficient (multiplicative haircuts only reach zero on float
+// underflow).
+func (p *PruningPhase) resolveEffectivelyZero(ctx context.Context) float64 {
+	if p.settings == nil {
+		return service.GetDefaultFloat(service.SettingDreamPruningEffectivelyZero)
+	}
+	return p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamPruningEffectivelyZero, "global")
 }
 
 func (p *PruningPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWriter, stats map[string]interface{}) {
@@ -280,7 +275,7 @@ func (p *PruningPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWr
 		model.DreamOpPhaseSummary, "phase", uuid.Nil, nil, stats)
 }
 
-func (p *PruningPhase) shouldPrune(mem *model.Memory, now time.Time) (bool, string) {
+func (p *PruningPhase) shouldPrune(mem *model.Memory, now time.Time, zeroFloor float64) (bool, string) {
 	// Superseded memories with zero access since they were superseded. The
 	// supersede clock reads SupersededAt so unrelated row touches that bump
 	// UpdatedAt do not reset the 7d countdown. UpdatedAt is the fallback for
@@ -296,8 +291,9 @@ func (p *PruningPhase) shouldPrune(mem *model.Memory, now time.Time) (bool, stri
 	}
 
 	// Effectively-zero confidence is the kill signal regardless of source.
-	// See effectivelyZero comment for why an exact-zero check never fires.
-	if mem.Confidence <= effectivelyZero && now.Sub(mem.UpdatedAt) > 7*24*time.Hour {
+	// See SettingDreamPruningEffectivelyZero for why an exact-zero check is
+	// insufficient (multiplicative haircuts only reach zero on underflow).
+	if mem.Confidence <= zeroFloor && now.Sub(mem.UpdatedAt) > 7*24*time.Hour {
 		return true, pruneReasonZeroConfidence
 	}
 

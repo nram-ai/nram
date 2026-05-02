@@ -69,7 +69,7 @@ func (p *EntityDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle,
 		byType[e.EntityType] = append(byType[e.EntityType], e)
 	}
 
-	threshold := 0.92
+	threshold := service.GetDefaultFloat(service.SettingDreamEntityMergeThreshold)
 	if p.settings != nil {
 		threshold = p.settings.ResolveFloatWithDefault(ctx,
 			service.SettingDreamEntityMergeThreshold, "global")

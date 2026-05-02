@@ -90,6 +90,47 @@ func (r *SettingsRepo) Set(ctx context.Context, setting *model.Setting) error {
 	return r.reload(ctx, setting)
 }
 
+// InsertManyIfMissing inserts (key, value, scope) rows for every (key, value)
+// pair, skipping any composite key that already exists. Used by the bootstrap
+// seeder to populate the registered defaults at server start without
+// overwriting operator-set values. Updated_by stays NULL so seeded rows are
+// distinguishable from operator-modified ones. Idempotent.
+//
+// All inserts run inside a single transaction so the commit cost amortizes
+// across the registry — important on SQLite, where every commit fsyncs.
+func (r *SettingsRepo) InsertManyIfMissing(ctx context.Context, scope string, kv map[string]string) error {
+	if len(kv) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("settings insert many if missing: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `INSERT INTO settings (key, value, scope, updated_by, updated_at)
+		VALUES (?, ?, ?, NULL, ?)
+		ON CONFLICT (key, scope) DO NOTHING`
+	if r.db.Backend() == BackendPostgres {
+		query = `INSERT INTO settings (key, value, scope, updated_by, updated_at)
+			VALUES ($1, $2, $3, NULL, $4)
+			ON CONFLICT (key, scope) DO NOTHING`
+	}
+
+	for key, value := range kv {
+		if _, err := tx.ExecContext(ctx, query, key, value, scope, now); err != nil {
+			return fmt.Errorf("settings insert if missing %q: %w", key, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("settings insert many if missing: commit: %w", err)
+	}
+	return nil
+}
+
 // Delete removes a setting by its composite key (key, scope).
 func (r *SettingsRepo) Delete(ctx context.Context, key string, scope string) error {
 	query := `DELETE FROM settings WHERE key = ? AND scope = ?`

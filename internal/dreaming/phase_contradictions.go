@@ -194,12 +194,13 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 	// Haircut settings are stable for the duration of the cycle; resolve once
 	// up front rather than re-resolving on every contradiction.
-	loserBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionLoserHaircut, 0.85)
-	winnerBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionWinnerHaircut, 0.97)
-	tieBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionTieHaircut, 0.92)
-	supersedeThreshold := resolveFraction(ctx, p.settings, service.SettingDreamSupersessionThreshold, 0.85)
+	loserBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionLoserHaircut)
+	winnerBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionWinnerHaircut)
+	tieBase := resolveFraction(ctx, p.settings, service.SettingDreamContradictionTieHaircut)
+	supersedeThreshold := resolveFraction(ctx, p.settings, service.SettingDreamSupersessionThreshold)
 	paraphraseEnabled := p.settings.ResolveBool(ctx, service.SettingDreamContradictionParaphraseEnabled, "global")
-	paraphraseThreshold := resolveFraction(ctx, p.settings, service.SettingDreamContradictionParaphraseThreshold, 0.97)
+	paraphraseThreshold := resolveFraction(ctx, p.settings, service.SettingDreamContradictionParaphraseThreshold)
+	temperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamContradictionTemperature, "global")
 
 	contradictions := 0
 	paraphrasesSuperseded := 0
@@ -238,7 +239,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		}
 
 		pairStart := time.Now()
-		found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget)
+		found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget, temperature)
 		pairDur := time.Since(pairStart)
 
 		callTokens := 0
@@ -855,6 +856,7 @@ func (p *ContradictionPhase) checkContradiction(
 	a, b *model.Memory,
 	prompt string,
 	budget *TokenBudget,
+	temperature float64,
 ) (bool, string, string, *provider.TokenUsage, error) {
 	resp, usage, err := WrapLLMCall(ctx, budget, OpContradictionJudge, llm.Name(),
 		a.ID.String()+","+b.ID.String(),
@@ -866,7 +868,7 @@ func (p *ContradictionPhase) checkContradiction(
 					{Role: "user", Content: prompt},
 				},
 				MaxTokens:   budget.PerCallCap(),
-				Temperature: 0.1,
+				Temperature: temperature,
 				JSONMode:    true,
 			})
 			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseContradictions), e

@@ -451,6 +451,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		namespaceLookup,
 		&e2eIngestionLogRepo{},
 		&e2eEnrichmentQueueRepo{},
+		nil,
 	)
 
 	recallSvc := service.NewRecallService(
@@ -1971,6 +1972,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 		namespaceLookup,
 		&e2eIngestionLogRepo{},
 		&e2eEnrichmentQueueRepo{},
+		nil,
 	)
 
 	recallSvc := service.NewRecallService(

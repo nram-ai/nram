@@ -16,7 +16,7 @@ import (
 // stuckJobStore is the storage subset the sweeper relies on. Defined here so
 // tests can substitute a fake repo without standing up a full database.
 type stuckJobStore interface {
-	ListStaleClaimed(ctx context.Context, threshold time.Duration) ([]*model.EnrichmentJob, error)
+	ListStaleClaimed(ctx context.Context, threshold time.Duration, limit int) ([]*model.EnrichmentJob, error)
 	RequeueStale(ctx context.Context, id uuid.UUID, reason string) (bool, error)
 }
 
@@ -25,6 +25,7 @@ type stuckJobStore interface {
 // shape so test fakes can be small.
 type sweeperSettingsResolver interface {
 	ResolveDurationSecondsWithDefault(ctx context.Context, key, scope string) time.Duration
+	ResolveIntWithDefault(ctx context.Context, key, scope string) int
 }
 
 // StuckJobSweeper periodically scans enrichment_queue for rows in
@@ -122,7 +123,8 @@ func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
 		threshold = 30 * time.Minute
 	}
 
-	jobs, err := s.queueRepo.ListStaleClaimed(ctx, threshold)
+	scanLimit := s.settings.ResolveIntWithDefault(ctx, service.SettingEnrichmentStuckScanLimit, "global")
+	jobs, err := s.queueRepo.ListStaleClaimed(ctx, threshold, scanLimit)
 	if err != nil {
 		return fmt.Errorf("list stale claimed: %w", err)
 	}

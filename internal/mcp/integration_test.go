@@ -171,6 +171,7 @@ func buildIntegStoreService(memRepo *mockMemoryRepoWithContent, project *model.P
 		&mockNamespaceLookup{ns: ns},
 		&mockIngestionLogRepo{},
 		&mockEnrichmentQueueRepo{},
+		nil,
 	)
 }
 
@@ -419,6 +420,7 @@ func TestMCP_StoreAutoCreatesProject(t *testing.T) {
 		&mockNamespaceLookup{ns: ns},
 		&mockIngestionLogRepo{},
 		&mockEnrichmentQueueRepo{},
+		nil,
 	)
 
 	deps := Dependencies{

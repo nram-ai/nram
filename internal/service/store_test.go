@@ -198,7 +198,7 @@ func newTestService(
 	ingestion := &mockIngestionLogRepo{}
 	enrichment := &mockEnrichmentQueueRepo{}
 
-	svc := NewStoreService(memories, projects, namespaces, ingestion, enrichment)
+	svc := NewStoreService(memories, projects, namespaces, ingestion, enrichment, nil)
 	return svc, memories, ingestion, enrichment
 }
 

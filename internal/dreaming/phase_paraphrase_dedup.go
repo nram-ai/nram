@@ -72,7 +72,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 		return false, nil
 	}
 
-	threshold := resolveFraction(ctx, p.settings, service.SettingDreamParaphraseThreshold, 0.97)
+	threshold := resolveFraction(ctx, p.settings, service.SettingDreamParaphraseThreshold)
 	cap, _ := p.settings.ResolveInt(ctx, service.SettingDreamParaphraseCapPerCycle, "global")
 	if cap <= 0 {
 		cap = 500

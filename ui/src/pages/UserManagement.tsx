@@ -15,6 +15,7 @@ import {
   useDeleteOrgUser,
   useGenerateOrgUserAPIKey,
   useRevokeOrgUserAPIKey,
+  useSchemaRange,
 } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
 import type {
@@ -697,6 +698,12 @@ function UserDetailPanel({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
+  const dedupRange = useSchemaRange("enrichment.dedup_threshold", {
+    min: 0,
+    max: 1,
+    step: 0.01,
+  });
+
   const user = detailQuery.data;
 
   useEffect(() => {
@@ -952,9 +959,9 @@ function UserDetailPanel({
                 </label>
                 <input
                   type="number"
-                  min={0}
-                  max={1}
-                  step={0.01}
+                  min={dedupRange.min}
+                  max={dedupRange.max}
+                  step={dedupRange.step}
                   className="w-32 rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   value={editDedupThreshold ?? ""}
                   placeholder="system: 0.92"

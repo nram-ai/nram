@@ -34,6 +34,10 @@ func (f *fakeSweeperSettings) ResolveDurationSecondsWithDefault(_ context.Contex
 	return 0
 }
 
+func (f *fakeSweeperSettings) ResolveIntWithDefault(_ context.Context, key, _ string) int {
+	return service.GetDefaultInt(key)
+}
+
 // fakeStuckJobStore captures sweep activity so tests can assert on it.
 type fakeStuckJobStore struct {
 	mu          sync.Mutex
@@ -44,7 +48,7 @@ type fakeStuckJobStore struct {
 	listErr     error
 }
 
-func (s *fakeStuckJobStore) ListStaleClaimed(_ context.Context, _ time.Duration) ([]*model.EnrichmentJob, error) {
+func (s *fakeStuckJobStore) ListStaleClaimed(_ context.Context, _ time.Duration, _ int) ([]*model.EnrichmentJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.listErr != nil {
