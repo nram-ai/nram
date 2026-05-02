@@ -99,35 +99,6 @@ func TestAggregates_RecallDistribution_OrgScoped(t *testing.T) {
 	}
 }
 
-func TestAggregates_ProjectBreakdown_OrgScoped(t *testing.T) {
-	db := setupAdminTestDB(t)
-	ctx := context.Background()
-	store := NewAggregatesStore(db)
-
-	orgID := seedOrgWithMemoryAndGraph(t, db, ctx)
-	// ProjectBreakdown joins projects → namespaces; insert a project row keyed
-	// on the project namespace so the breakdown has something to return.
-	projNsID := uuid.New()
-	if _, err := db.Exec(ctx,
-		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, (SELECT id FROM namespaces WHERE slug='test-org'))",
-		projNsID.String(), "p2", "p2", "project", "test-org/p2", 1); err != nil {
-		t.Fatalf("insert project ns: %v", err)
-	}
-	if _, err := db.Exec(ctx,
-		"INSERT INTO projects (id, name, slug, namespace_id, owner_namespace_id) VALUES (?, ?, ?, ?, ?)",
-		uuid.New().String(), "p2", "p2", projNsID.String(), projNsID.String()); err != nil {
-		t.Fatalf("insert project: %v", err)
-	}
-
-	rows, err := store.ProjectBreakdown(ctx, orgID)
-	if err != nil {
-		t.Fatalf("ProjectBreakdown: %v", err)
-	}
-	if len(rows) == 0 {
-		t.Errorf("expected at least one project row, got 0")
-	}
-}
-
 func TestAggregates_EntityTypeHistogram_OrgScoped(t *testing.T) {
 	db := setupAdminTestDB(t)
 	ctx := context.Background()

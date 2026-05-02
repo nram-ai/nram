@@ -610,7 +610,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 	mcpSrv := mcp.NewServer(mcpDeps)
 
 	// --- Auth middleware (real: JWT + API key validation) ---
-	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
+	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret, nil)
 
 	// --- Rate limiter ---
 	rl := auth.NewRateLimiter(10000, 20000, 0, 0)
@@ -1573,7 +1573,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	mcpSrv := mcp.NewServer(mcpDeps)
 
 	// --- Auth middleware ---
-	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
+	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret, nil)
 
 	// --- Rate limiter ---
 	rl := auth.NewRateLimiter(10000, 20000, 0, 0)

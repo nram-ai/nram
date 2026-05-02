@@ -399,7 +399,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	mcpSrv := mcp.NewServer(mcpDeps)
 
 	// --- Middleware ---
-	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret)
+	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret, nil)
 	rl := auth.NewRateLimiter(10000, 20000, 0, 0)
 	t.Cleanup(rl.Stop)
 	metrics := api.NewMetrics()

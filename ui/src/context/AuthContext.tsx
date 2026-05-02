@@ -56,7 +56,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 // JWT fallback decoder
 // ---------------------------------------------------------------------------
 
-function decodeUserFromJWT(token: string): UserInfo | null {
+export function decodeUserFromJWT(token: string): UserInfo | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;

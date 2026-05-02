@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
@@ -26,6 +25,7 @@ type SetupStore interface {
 type SetupConfig struct {
 	Store     SetupStore
 	JWTSecret []byte
+	Timings   auth.SessionTimings
 	// OnComplete is called after setup succeeds to flip the cached setup flag.
 	// May be nil.
 	OnComplete func()
@@ -115,7 +115,7 @@ func NewAdminSetupHandler(cfg SetupConfig) http.HandlerFunc {
 			return
 		}
 
-		token, err := auth.GenerateJWT(user.ID, user.OrgID, user.Role, cfg.JWTSecret, 24*time.Hour)
+		token, err := auth.GenerateJWT(user.ID, user.OrgID, user.Role, cfg.JWTSecret, auth.ResolveTokenTTL(ctx, cfg.Timings))
 		if err != nil {
 			WriteError(w, ErrInternal("failed to generate auth token"))
 			return

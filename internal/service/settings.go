@@ -332,6 +332,17 @@ const (
 	SettingAPIRateLimitCleanupSeconds = "api.rate_limit.cleanup_interval_seconds"
 	SettingAPIRateLimitStaleSeconds   = "api.rate_limit.stale_after_seconds"
 
+	// Dashboard session JWT timings. token_ttl is the lifetime applied to
+	// every session JWT issued by the SPA login flows (password, IdP,
+	// WebAuthn, setup). refresh_threshold is how stale an in-flight session
+	// JWT must be before the auth middleware silently reissues it via the
+	// X-Refreshed-Token response header. Both hot-reload via the settings
+	// cache. The threshold should be less than the TTL — otherwise refresh
+	// will never fire and the session collapses back to the fixed-TTL
+	// (force-relogin) behavior.
+	SettingAuthSessionTokenTTLSeconds         = "auth.session_token_ttl_seconds"
+	SettingAuthSessionRefreshThresholdSeconds = "auth.session_refresh_threshold_seconds"
+
 	// In-process event bus. subscriber_buffer_size is the per-subscriber
 	// channel buffer (drops events on full); replay_capacity is the ring
 	// buffer for SSE Last-Event-ID reconnection. Both read once at startup
@@ -736,6 +747,9 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 
 	SettingAPIRateLimitCleanupSeconds: "60",
 	SettingAPIRateLimitStaleSeconds:   "600",
+
+	SettingAuthSessionTokenTTLSeconds:         "86400",
+	SettingAuthSessionRefreshThresholdSeconds: "43200",
 
 	SettingEventsSubscriberBufferSize: "64",
 	SettingEventsReplayCapacity:       "256",

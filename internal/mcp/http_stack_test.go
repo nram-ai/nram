@@ -158,7 +158,7 @@ func newHTTPStackEnv(t *testing.T) *httpStackEnv {
 	}
 	mcpSrv := NewServer(deps)
 
-	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserIdentityLookup{}, httpStackTestSecret)
+	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserIdentityLookup{}, httpStackTestSecret, nil)
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
@@ -1537,7 +1537,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 	}
 	mcpSrv := NewServer(deps)
 
-	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserIdentityLookup{}, httpStackTestSecret)
+	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserIdentityLookup{}, httpStackTestSecret, nil)
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {

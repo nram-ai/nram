@@ -1,7 +1,22 @@
-import type { UserInfo } from "../context/AuthContext";
+import { decodeUserFromJWT, type UserInfo } from "../context/AuthContext";
 
 /** Base URL is auto-detected: same origin in production, proxied in dev. */
 const BASE_URL = "/v1";
+
+/**
+ * Header set by the auth middleware when it slides a session JWT forward.
+ * The fetch wrapper rotates localStorage transparently when this is present.
+ */
+const SESSION_REFRESH_HEADER = "X-Refreshed-Token";
+
+/** Apply a freshly-issued session JWT from the X-Refreshed-Token header. */
+function applyRefreshedToken(token: string): void {
+  localStorage.setItem("nram_token", token);
+  const user = decodeUserFromJWT(token);
+  if (user) {
+    localStorage.setItem("nram_user", JSON.stringify(user));
+  }
+}
 
 export class APIError extends Error {
   constructor(
@@ -38,6 +53,15 @@ async function request<T>(
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+
+  // Sliding-expiry refresh: when the auth middleware detects an aged session
+  // JWT, it mints a fresh one and emits it on this header. Capture before
+  // any branching on res.ok so refresh still applies to non-2xx responses
+  // (the middleware ran successfully if the response wasn't 401).
+  const refreshed = res.headers.get(SESSION_REFRESH_HEADER);
+  if (refreshed) {
+    applyRefreshedToken(refreshed);
+  }
 
   if (!res.ok) {
     // On 401, the token is invalid or expired — clear it and redirect to login.
@@ -736,17 +760,11 @@ export interface OrgAggregate {
   total_entities: number;
 }
 
-export interface ProjectAggregate {
-  project_id: string;
-  project_name: string;
-  total_memories: number;
-}
-
 export interface OrgAnalyticsData {
   memory_counts: AnalyticsData["memory_counts"];
   recall_distribution: HistogramBucket[];
   enrichment_stats: AnalyticsData["enrichment_stats"];
-  project_breakdown: ProjectAggregate[];
+  user_breakdown: UserAggregate[];
   entity_type_histogram: TypeBucket[];
   relationship_type_histogram: TypeBucket[];
 }

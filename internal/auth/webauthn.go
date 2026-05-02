@@ -19,7 +19,6 @@ import (
 const (
 	webauthnChallengeExpiry = 5 * time.Minute
 	webauthnMaxChallenges   = 10000
-	webauthnSessionExpiry   = 1 * time.Hour
 
 	challengePrefixReg    = "reg:"
 	challengePrefixLogin  = "login:"
@@ -148,6 +147,7 @@ type WebAuthnHandler struct {
 	credRepo       WebAuthnCredRepo
 	userRepo       WebAuthnUserRepo
 	jwtSecret      []byte
+	timings        SessionTimings
 	challengeStore *challengeStore
 }
 
@@ -155,6 +155,7 @@ type WebAuthnHandlerConfig struct {
 	CredRepo  WebAuthnCredRepo
 	UserRepo  WebAuthnUserRepo
 	JWTSecret []byte
+	Timings   SessionTimings
 }
 
 func NewWebAuthnHandler(cfg WebAuthnHandlerConfig) *WebAuthnHandler {
@@ -162,6 +163,7 @@ func NewWebAuthnHandler(cfg WebAuthnHandlerConfig) *WebAuthnHandler {
 		credRepo:       cfg.CredRepo,
 		userRepo:       cfg.UserRepo,
 		jwtSecret:      cfg.JWTSecret,
+		timings:        cfg.Timings,
 		challengeStore: newChallengeStore(),
 	}
 }
@@ -539,7 +541,7 @@ func (h *WebAuthnHandler) LoginFinishHandler() http.HandlerFunc {
 			_ = h.credRepo.UpdateSignCount(r.Context(), storedCred.ID, credential.Authenticator.SignCount)
 		}
 
-		token, err := GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, h.jwtSecret, webauthnSessionExpiry)
+		token, err := GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, h.jwtSecret, ResolveTokenTTL(r.Context(), h.timings))
 		if err != nil {
 			http.Error(w, "failed to create session", http.StatusInternalServerError)
 			return

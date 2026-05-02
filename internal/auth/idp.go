@@ -20,7 +20,6 @@ import (
 
 const (
 	idpStateExpiry   = 10 * time.Minute
-	idpSessionExpiry = 1 * time.Hour
 	idpCallbackPath  = "/auth/idp/callback"
 	idpMaxStates     = 10000
 	discoveryCacheTTL = 15 * time.Minute
@@ -132,6 +131,7 @@ type IdPHandler struct {
 	userRepo   IdPUserRepo
 	userCreate IdPUserCreator
 	jwtSecret  []byte
+	timings    SessionTimings
 	stateStore *idpStateStore
 	httpClient *http.Client
 
@@ -144,6 +144,7 @@ type IdPHandlerConfig struct {
 	UserRepo   IdPUserRepo
 	UserCreate IdPUserCreator
 	JWTSecret  []byte
+	Timings    SessionTimings
 }
 
 func NewIdPHandler(cfg IdPHandlerConfig) *IdPHandler {
@@ -152,6 +153,7 @@ func NewIdPHandler(cfg IdPHandlerConfig) *IdPHandler {
 		userRepo:   cfg.UserRepo,
 		userCreate: cfg.UserCreate,
 		jwtSecret:  cfg.JWTSecret,
+		timings:    cfg.Timings,
 		stateStore: newIdPStateStore(),
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 		discoCache: make(map[string]*cachedDiscovery),
@@ -311,7 +313,7 @@ func (h *IdPHandler) CallbackHandler() http.HandlerFunc {
 			return
 		}
 
-		sessionToken, err := GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, h.jwtSecret, idpSessionExpiry)
+		sessionToken, err := GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, h.jwtSecret, ResolveTokenTTL(r.Context(), h.timings))
 		if err != nil {
 			http.Error(w, "failed to create session", http.StatusInternalServerError)
 			return

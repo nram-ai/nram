@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
@@ -33,6 +32,7 @@ type AuthConfig struct {
 	IdPRepo     AuthIdPRepo
 	PasskeyRepo AuthPasskeyChecker
 	JWTSecret   []byte
+	Timings     auth.SessionTimings
 }
 
 type loginRequest struct {
@@ -134,7 +134,7 @@ func NewLoginHandler(cfg AuthConfig) http.HandlerFunc {
 			return
 		}
 
-		token, err := auth.GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, cfg.JWTSecret, 24*time.Hour)
+		token, err := auth.GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, cfg.JWTSecret, auth.ResolveTokenTTL(r.Context(), cfg.Timings))
 		if err != nil {
 			WriteError(w, ErrInternal("failed to generate token"))
 			return

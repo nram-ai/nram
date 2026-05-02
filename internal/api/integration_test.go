@@ -85,7 +85,7 @@ type integrationRouterConfig struct {
 func newIntegrationRouter(t *testing.T, cfg integrationRouterConfig) http.Handler {
 	t.Helper()
 
-	mw := auth.NewAuthMiddleware(&integrationAPIKeyValidator{}, &integrationUserIdentityLookup{}, integrationJWTSecret)
+	mw := auth.NewAuthMiddleware(&integrationAPIKeyValidator{}, &integrationUserIdentityLookup{}, integrationJWTSecret, nil)
 
 	r := chi.NewRouter()
 	r.Use(ErrorMiddleware)

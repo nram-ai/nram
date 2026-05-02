@@ -604,11 +604,18 @@ func main() {
 	// from the request Host header automatically — no configuration needed.
 	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret)
 
+	// Session-JWT TTL and refresh threshold are runtime-configurable via
+	// the settings registry (auth.session_token_ttl_seconds /
+	// auth.session_refresh_threshold_seconds). Single shared instance —
+	// every issuance and refresh path resolves through the same cache.
+	sessionTimings := service.NewSettingsBackedSessionTimings(settingsSvc)
+
 	authCfg := api.AuthConfig{
 		UserRepo:    userRepo,
 		IdPRepo:     oauthRepo,
 		PasskeyRepo: webauthnRepo,
 		JWTSecret:   jwtSecret,
+		Timings:     sessionTimings,
 	}
 
 	// Create WebAuthn handler for passkey registration and login.
@@ -616,6 +623,7 @@ func main() {
 		CredRepo:  webauthnRepo,
 		UserRepo:  userRepo,
 		JWTSecret: jwtSecret,
+		Timings:   sessionTimings,
 	})
 	defer webauthnHandler.Close()
 
@@ -625,6 +633,7 @@ func main() {
 		UserRepo:   userRepo,
 		UserCreate: userAdminStore,
 		JWTSecret:  jwtSecret,
+		Timings:    sessionTimings,
 	})
 
 	// Assemble handlers.
@@ -741,6 +750,7 @@ func main() {
 		AdminSetup: api.NewAdminSetupHandler(api.SetupConfig{
 			Store:      setupStore,
 			JWTSecret:  jwtSecret,
+			Timings:    sessionTimings,
 			OnComplete: setupChecker.MarkComplete,
 			Audit:      auditStore,
 		}),
@@ -796,7 +806,7 @@ func main() {
 		OrgAnalytics: api.NewOrgAnalyticsHandler(api.OrgAnalyticsConfig{
 			Store: aggregatesStore,
 		}),
-		OrgUsage: api.NewAdminUsageHandler(api.UsageConfig{Store: usageStore}),
+		OrgUsage: api.NewOrgUsageHandler(api.UsageConfig{Store: usageStore}),
 
 		// Tier-C (system-aggregate) handlers — RoleAdministrator only via
 		// the /v1/admin route group gate. System totals + per-org rows;
@@ -812,13 +822,13 @@ func main() {
 		SystemAnalytics: api.NewSystemAnalyticsHandler(api.SystemAnalyticsConfig{
 			Store: aggregatesStore,
 		}),
-		SystemUsage: api.NewAdminUsageHandler(api.UsageConfig{Store: usageStore}),
+		SystemUsage: api.NewSystemUsageHandler(api.UsageConfig{Store: usageStore}),
 	}
 
 	// Build router config with auth middleware and rate limiter. Cleanup
 	// and stale-after windows are read once from settings; runtime changes
 	// require server restart.
-	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, userRepo, jwtSecret)
+	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, userRepo, jwtSecret, sessionTimings)
 	rateLimiter := auth.NewRateLimiter(10, 20,
 		settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
 			service.SettingAPIRateLimitCleanupSeconds, "global"),

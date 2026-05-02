@@ -24,7 +24,7 @@ import {
   type HistogramBucket,
   type TypeBucket,
   type OrgAggregate,
-  type ProjectAggregate,
+  type UserAggregate,
 } from "../api/client";
 
 type AnalyticsTier = "self" | "org" | "system";
@@ -1036,14 +1036,14 @@ function AggregateAnalyticsPanel({
   entityHistogram,
   relationshipHistogram,
   orgBreakdown,
-  projectBreakdown,
+  userBreakdown,
   isLoading,
 }: {
   recallDistribution?: HistogramBucket[];
   entityHistogram?: TypeBucket[];
   relationshipHistogram?: TypeBucket[];
   orgBreakdown?: OrgAggregate[];
-  projectBreakdown?: ProjectAggregate[];
+  userBreakdown?: UserAggregate[];
   isLoading: boolean;
 }) {
   if (isLoading) {
@@ -1108,24 +1108,28 @@ function AggregateAnalyticsPanel({
           </div>
         </div>
       )}
-      {projectBreakdown && projectBreakdown.length > 0 && (
+      {userBreakdown && userBreakdown.length > 0 && (
         <div className="rounded-lg border border-border bg-card">
           <div className="border-b px-4 py-3">
-            <h3 className="text-sm font-semibold">Per-Project Breakdown</h3>
+            <h3 className="text-sm font-semibold">Per-User Breakdown</h3>
           </div>
           <div className="overflow-x-auto p-4">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
-                  <th className="pb-2 font-medium">Project</th>
+                  <th className="pb-2 font-medium">User</th>
                   <th className="pb-2 text-right font-medium">Memories</th>
+                  <th className="pb-2 text-right font-medium">Projects</th>
+                  <th className="pb-2 text-right font-medium">Entities</th>
                 </tr>
               </thead>
               <tbody>
-                {projectBreakdown.map((p) => (
-                  <tr key={p.project_id} className="border-b last:border-0">
-                    <td className="py-2">{p.project_name}</td>
-                    <td className="py-2 text-right font-mono">{p.total_memories.toLocaleString()}</td>
+                {userBreakdown.map((u) => (
+                  <tr key={u.user_id} className="border-b last:border-0">
+                    <td className="py-2">{u.email}</td>
+                    <td className="py-2 text-right font-mono">{u.total_memories.toLocaleString()}</td>
+                    <td className="py-2 text-right font-mono">{u.total_projects.toLocaleString()}</td>
+                    <td className="py-2 text-right font-mono">{u.total_entities.toLocaleString()}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1408,7 +1412,7 @@ function Analytics() {
                 : orgAnalyticsData?.relationship_type_histogram
             }
             orgBreakdown={tier === "system" ? systemAnalyticsData?.org_breakdown : undefined}
-            projectBreakdown={tier === "org" ? orgAnalyticsData?.project_breakdown : undefined}
+            userBreakdown={tier === "org" ? orgAnalyticsData?.user_breakdown : undefined}
             isLoading={analytics.isLoading}
           />
         )}

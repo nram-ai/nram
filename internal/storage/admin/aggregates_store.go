@@ -369,56 +369,6 @@ func (s *AggregatesStore) OrgEnrichmentQueueStats(ctx context.Context, orgID uui
 	return stats, nil
 }
 
-// ProjectBreakdown returns one ProjectAggregate row per project in the
-// given org. Used by tier-B (org-aggregate) handlers. No content fields
-// — only project metadata + memory counts.
-func (s *AggregatesStore) ProjectBreakdown(ctx context.Context, orgID uuid.UUID) ([]api.ProjectAggregate, error) {
-	ph := s.namespacePrefixSubquery("organizations", "o.id", "$1", "?")
-	var query string
-	if s.db.Backend() == storage.BackendPostgres {
-		query = `SELECT p.id, p.name, COUNT(m.id)
-			FROM projects p
-			JOIN namespaces pn ON p.namespace_id = pn.id
-			LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
-			WHERE pn.path LIKE ` + ph + `
-			GROUP BY p.id, p.name
-			ORDER BY COUNT(m.id) DESC`
-	} else {
-		query = `SELECT p.id, p.name, COUNT(m.id)
-			FROM projects p
-			JOIN namespaces pn ON p.namespace_id = pn.id
-			LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
-			WHERE pn.path LIKE ` + ph + `
-			GROUP BY p.id, p.name
-			ORDER BY COUNT(m.id) DESC`
-	}
-
-	rows, err := s.db.Query(ctx, query, orgID.String())
-	if err != nil {
-		return nil, fmt.Errorf("project breakdown: %w", err)
-	}
-	defer rows.Close()
-
-	out := []api.ProjectAggregate{}
-	for rows.Next() {
-		var idStr, name string
-		var count int
-		if err := rows.Scan(&idStr, &name, &count); err != nil {
-			return nil, fmt.Errorf("project breakdown scan: %w", err)
-		}
-		id, err := uuid.Parse(idStr)
-		if err != nil {
-			continue
-		}
-		out = append(out, api.ProjectAggregate{
-			ProjectID:     id,
-			ProjectName:   name,
-			TotalMemories: count,
-		})
-	}
-	return out, nil
-}
-
 // SystemMemoryCounts returns the total/active/deleted/enriched counts
 // across the entire system. Used by tier-C system dashboard.
 func (s *AggregatesStore) SystemMemoryCounts(ctx context.Context) (api.MemoryCountsData, error) {

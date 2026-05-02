@@ -14,7 +14,7 @@ import (
 type OrgAnalyticsAggregator interface {
 	OrgMemoryCounts(ctx context.Context, orgID uuid.UUID) (MemoryCountsData, error)
 	RecallDistribution(ctx context.Context, orgID *uuid.UUID) ([]HistogramBucket, error)
-	ProjectBreakdown(ctx context.Context, orgID uuid.UUID) ([]ProjectAggregate, error)
+	UserBreakdown(ctx context.Context, orgID uuid.UUID) ([]UserAggregate, error)
 	EntityTypeHistogram(ctx context.Context, orgID *uuid.UUID) ([]TypeBucket, error)
 	RelationshipTypeHistogram(ctx context.Context, orgID *uuid.UUID) ([]TypeBucket, error)
 }
@@ -26,8 +26,11 @@ type OrgAnalyticsConfig struct {
 
 // NewOrgAnalyticsHandler returns the tier-B analytics handler at
 // /v1/orgs/{org_id}/analytics. Returns aggregate counts, recall-distribution
-// histogram, per-project breakdown, and entity/relationship type histograms
-// for the org. No row-level memory data, no content fields.
+// histogram, per-user breakdown (memories/projects/entities per user), and
+// entity/relationship type histograms for the org. No row-level memory data,
+// no content fields. Per-project breakdown was deliberately removed: project
+// names in nram are user-owned, so a per-project view inside an org leaks
+// individual users' activity to every org_owner.
 //
 // Authorization: caller must be RoleOrgOwner of {org_id} or RoleAdministrator.
 // OrgAccessMiddleware admits members through, so this handler enforces the
@@ -67,10 +70,10 @@ func NewOrgAnalyticsHandler(cfg OrgAnalyticsConfig) http.HandlerFunc {
 			return
 		}
 
-		projects, err := cfg.Store.ProjectBreakdown(ctx, *orgID)
+		users, err := cfg.Store.UserBreakdown(ctx, *orgID)
 		if err != nil {
-			log.Printf("api: OrgAnalytics ProjectBreakdown: %v", err)
-			WriteError(w, ErrInternal("failed to retrieve project breakdown"))
+			log.Printf("api: OrgAnalytics UserBreakdown: %v", err)
+			WriteError(w, ErrInternal("failed to retrieve user breakdown"))
 			return
 		}
 
@@ -92,7 +95,7 @@ func NewOrgAnalyticsHandler(cfg OrgAnalyticsConfig) http.HandlerFunc {
 			MemoryCounts:              counts,
 			RecallDistribution:        dist,
 			EnrichmentStats:           EnrichmentStatsData{},
-			ProjectBreakdown:          projects,
+			UserBreakdown:             users,
 			EntityTypeHistogram:       entityHist,
 			RelationshipTypeHistogram: relHist,
 		})

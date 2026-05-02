@@ -42,16 +42,8 @@ type OrgAggregate struct {
 	TotalEntities  int       `json:"total_entities"`
 }
 
-// ProjectAggregate is one row of a per-project breakdown returned by tier-B
-// handlers (within a single org). No content, no per-user data.
-type ProjectAggregate struct {
-	ProjectID     uuid.UUID `json:"project_id"`
-	ProjectName   string    `json:"project_name"`
-	TotalMemories int       `json:"total_memories"`
-}
-
 // UserAggregate is one row of a per-user breakdown returned by tier-B
-// dashboard. Bucketed inside a single org so an org_owner sees how their
+// handlers. Bucketed inside a single org so an org_owner sees how their
 // org's storage is distributed across users without learning anything
 // project-shaped — projects in nram are typically user-owned, so a
 // per-project view inside an org is itself a per-user signal.
@@ -67,12 +59,14 @@ type UserAggregate struct {
 }
 
 // OrgAnalyticsData is the tier-B (org-aggregate) analytics response.
-// Returned by NewOrgAnalyticsHandler at /v1/orgs/{org_id}/analytics.
+// Returned by NewOrgAnalyticsHandler at /v1/orgs/{org_id}/analytics. The
+// breakdown is bucketed per-USER (not per-project) — see UserAggregate for
+// the rationale.
 type OrgAnalyticsData struct {
 	MemoryCounts              MemoryCountsData    `json:"memory_counts"`
 	RecallDistribution        []HistogramBucket   `json:"recall_distribution"`
 	EnrichmentStats           EnrichmentStatsData `json:"enrichment_stats"`
-	ProjectBreakdown          []ProjectAggregate  `json:"project_breakdown"`
+	UserBreakdown             []UserAggregate     `json:"user_breakdown"`
 	EntityTypeHistogram       []TypeBucket        `json:"entity_type_histogram"`
 	RelationshipTypeHistogram []TypeBucket        `json:"relationship_type_histogram"`
 }
