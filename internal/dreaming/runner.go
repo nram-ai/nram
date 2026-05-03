@@ -69,10 +69,14 @@ const (
 // PhaseResult captures the outcome of a single phase. ResidualDetail is
 // optional structured info (cap value, counts) attached to phase-supplied
 // reasons; the runner overrides ResidualReason on ErrBudgetExhausted.
+// SubPhases is optional: phases that further slice their budget internally
+// (currently only consolidation) may report a per-sub-phase rollup so the
+// admin UI can render a nested breakdown without a second fetch.
 type PhaseResult struct {
 	HasResidual    bool
 	ResidualReason string
 	ResidualDetail map[string]any
+	SubPhases      []SubPhaseSummary
 }
 
 // Phase defines the interface for each dream processing phase.
@@ -84,16 +88,27 @@ type Phase interface {
 // PhaseSummaryEntry captures per-phase statistics for the cycle record.
 // SliceCap is zero/omitted for SQL-only phases (frac=0) that share the root.
 type PhaseSummaryEntry struct {
-	Phase          string         `json:"phase"`
-	TokensUsed     int            `json:"tokens_used"`
-	Operations     int            `json:"operations"`
-	DurationMs     int64          `json:"duration_ms"`
-	SliceCap       int            `json:"slice_cap,omitempty"`
-	Error          string         `json:"error,omitempty"`
-	Skipped        bool           `json:"skipped,omitempty"`
-	HasResidual    bool           `json:"has_residual,omitempty"`
-	ResidualReason string         `json:"residual_reason,omitempty"`
-	ResidualDetail map[string]any `json:"residual_detail,omitempty"`
+	Phase          string            `json:"phase"`
+	TokensUsed     int               `json:"tokens_used"`
+	Operations     int               `json:"operations"`
+	DurationMs     int64             `json:"duration_ms"`
+	SliceCap       int               `json:"slice_cap,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	Skipped        bool              `json:"skipped,omitempty"`
+	HasResidual    bool              `json:"has_residual,omitempty"`
+	ResidualReason string            `json:"residual_reason,omitempty"`
+	ResidualDetail map[string]any    `json:"residual_detail,omitempty"`
+	SubPhases      []SubPhaseSummary `json:"sub_phases,omitempty"`
+}
+
+// SubPhaseSummary captures per-sub-phase statistics for phases that further
+// slice their budget internally. Currently emitted only by consolidation,
+// which splits its slice across backfill_audit / reinforce / consolidate.
+type SubPhaseSummary struct {
+	Name        string `json:"name"`
+	TokensUsed  int    `json:"tokens_used"`
+	SliceCap    int    `json:"slice_cap,omitempty"`
+	HasResidual bool   `json:"has_residual,omitempty"`
 }
 
 // cycleProgressRepo is the subset of *storage.DreamCycleRepo that Runner
@@ -318,6 +333,7 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 			HasResidual:    result.HasResidual,
 			ResidualReason: result.ResidualReason,
 			ResidualDetail: result.ResidualDetail,
+			SubPhases:      result.SubPhases,
 		}
 		if result.HasResidual {
 			hasResidual = true

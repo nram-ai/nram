@@ -37,6 +37,14 @@ const (
 	DreamPhaseWeightAdjust      = "weight_adjustment"
 )
 
+// DreamSubPhase constants name the consolidation sub-phases. Mirrors the
+// "sub_phase" stat values emitted by ConsolidationPhase.writePhaseSummary.
+const (
+	DreamSubPhaseBackfillAudit = "backfill_audit"
+	DreamSubPhaseReinforce     = "reinforce"
+	DreamSubPhaseConsolidate   = "consolidate"
+)
+
 // DreamSource is the memory source value for dream-created content.
 const DreamSource = "dream"
 

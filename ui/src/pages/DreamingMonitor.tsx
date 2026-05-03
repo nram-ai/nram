@@ -20,6 +20,8 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner } from "../lib/icons";
 import type { DreamCycle, DreamLog, DreamPhaseSummary } from "../api/client";
 import { formatNumber } from "../lib/formatters";
+import { PHASE_LABELS } from "../lib/dreaming";
+import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
 
 // Live SSE-driven state per running cycle. Populated from
 // dream.cycle.heartbeat, dream.call.started/completed, and
@@ -76,17 +78,6 @@ const STATUS_COLORS: Record<string, string> = {
   completed: "bg-success/10 text-success",
   failed: "bg-destructive/10 text-destructive",
   rolled_back: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300",
-};
-
-const PHASE_LABELS: Record<string, string> = {
-  entity_dedup: "Entity Dedup",
-  embedding_backfill: "Embedding Backfill",
-  paraphrase_dedup: "Paraphrase Dedup",
-  transitive_discovery: "Transitive Discovery",
-  contradiction_detection: "Contradiction Detection",
-  consolidation: "Consolidation",
-  pruning: "Pruning",
-  weight_adjustment: "Weight Adjustment",
 };
 
 // Codes mirror the residualReason* consts in internal/dreaming/runner.go.
@@ -171,9 +162,64 @@ function ResidualCell({ ps }: { ps: DreamPhaseSummary }) {
   const code = ps.residual_reason ?? "";
   const friendly = RESIDUAL_REASON_LABELS[code] ?? (code || "yes");
   return (
-    <span className="text-xs text-orange-600 dark:text-orange-400" title={code}>
+    <span className="text-xs text-warning" title={code}>
       yes <span className="text-muted-foreground">({friendly})</span>
     </span>
+  );
+}
+
+function PhaseSummaryRow({ ps }: { ps: DreamPhaseSummary }) {
+  const subSegments: PhaseBudgetSegment[] | null =
+    ps.sub_phases && ps.sub_phases.length > 0
+      ? ps.sub_phases.map((sp) => ({
+          key: sp.name,
+          value: sp.tokens_used,
+          cap: sp.slice_cap,
+          hasResidual: sp.has_residual,
+        }))
+      : null;
+  // Sub-phase total = parent slice cap when set; otherwise sum of children
+  // so the bar still spans full width when slice_cap is omitted.
+  const subTotal =
+    ps.slice_cap && ps.slice_cap > 0
+      ? ps.slice_cap
+      : (subSegments?.reduce((sum, s) => sum + Math.max(0, s.value), 0) ?? 0);
+  return (
+    <>
+      <tr className="border-b last:border-0">
+        <td className="px-3 py-2">{PHASE_LABELS[ps.phase] ?? ps.phase}</td>
+        <td className="px-3 py-2 font-mono text-xs">{formatTokensWithCap(ps)}</td>
+        <td className="px-3 py-2 font-mono text-xs">{ps.operations}</td>
+        <td className="px-3 py-2 text-muted-foreground">
+          {ps.duration_ms < 1000 ? `${ps.duration_ms}ms` : `${(ps.duration_ms / 1000).toFixed(1)}s`}
+        </td>
+        <td className="px-3 py-2">
+          <ResidualCell ps={ps} />
+        </td>
+        <td className="px-3 py-2">
+          {ps.skipped ? (
+            <span className="text-xs text-muted-foreground">skipped</span>
+          ) : ps.error ? (
+            <span className="text-xs text-destructive">{ps.error}</span>
+          ) : (
+            <span className="text-xs text-success">ok</span>
+          )}
+        </td>
+      </tr>
+      {subSegments && (
+        <tr className="border-b bg-muted/20 last:border-0">
+          <td colSpan={6} className="px-3 py-3 pl-8">
+            <PhaseBudgetBar
+              segments={subSegments}
+              total={subTotal}
+              format={formatNumber}
+              variant="sub_phase"
+              ariaLabel={`${PHASE_LABELS[ps.phase] ?? ps.phase} sub-phase breakdown`}
+            />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -787,6 +833,22 @@ function CycleDetail({
       {/* Phase Summary */}
       {phaseSummary.length > 0 && (
         <div>
+          <div className="mb-4">
+            <h4 className="mb-2 text-sm font-semibold text-muted-foreground">
+              Token Budget · {formatNumber(cycle.tokens_used)} of {formatNumber(cycle.token_budget)}
+            </h4>
+            <PhaseBudgetBar
+              segments={phaseSummary.map((ps) => ({
+                key: ps.phase,
+                value: ps.tokens_used,
+                cap: ps.slice_cap,
+                hasResidual: ps.has_residual,
+              }))}
+              total={cycle.token_budget}
+              format={formatNumber}
+              ariaLabel="Cycle token usage by phase"
+            />
+          </div>
           <h4 className="mb-2 text-sm font-semibold text-muted-foreground">Phase Summary</h4>
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full text-sm">
@@ -802,26 +864,7 @@ function CycleDetail({
               </thead>
               <tbody>
                 {phaseSummary.map((ps, i) => (
-                  <tr key={i} className="border-b last:border-0">
-                    <td className="px-3 py-2">{PHASE_LABELS[ps.phase] ?? ps.phase}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{formatTokensWithCap(ps)}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{ps.operations}</td>
-                    <td className="px-3 py-2 text-muted-foreground">
-                      {ps.duration_ms < 1000 ? `${ps.duration_ms}ms` : `${(ps.duration_ms / 1000).toFixed(1)}s`}
-                    </td>
-                    <td className="px-3 py-2">
-                      <ResidualCell ps={ps} />
-                    </td>
-                    <td className="px-3 py-2">
-                      {ps.skipped ? (
-                        <span className="text-xs text-muted-foreground">skipped</span>
-                      ) : ps.error ? (
-                        <span className="text-xs text-destructive">{ps.error}</span>
-                      ) : (
-                        <span className="text-xs text-success">ok</span>
-                      )}
-                    </td>
-                  </tr>
+                  <PhaseSummaryRow key={i} ps={ps} />
                 ))}
               </tbody>
             </table>

@@ -990,6 +990,15 @@ export interface MigrationAudit {
 
 // --- Dreaming Types ---
 
+// Mirrors SubPhaseSummary in internal/dreaming/runner.go. Currently emitted
+// only by the consolidation phase (backfill_audit / reinforce / consolidate).
+export interface DreamSubPhaseSummary {
+  name: string;
+  tokens_used: number;
+  slice_cap?: number;
+  has_residual?: boolean;
+}
+
 // Mirrors PhaseSummaryEntry in internal/dreaming/runner.go.
 export interface DreamPhaseSummary {
   phase: string;
@@ -1002,6 +1011,7 @@ export interface DreamPhaseSummary {
   has_residual?: boolean;
   residual_reason?: string;
   residual_detail?: Record<string, unknown>;
+  sub_phases?: DreamSubPhaseSummary[];
 }
 
 export interface DreamCycle {

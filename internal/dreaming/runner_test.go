@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -695,5 +696,90 @@ func TestRunner_RunnerLevelReasonOverridesPhaseSupplied(t *testing.T) {
 	}
 	if first0.Error != "budget exhausted" {
 		t.Errorf("first Error=%q, want %q", first0.Error, "budget exhausted")
+	}
+}
+
+// TestRunner_PropagatesSubPhasesToEntry pins the runner-level contract that
+// PhaseResult.SubPhases survives the JSON round-trip into the persisted
+// PhaseSummaryEntry. The UI relies on this — without it, the nested
+// sub-phase bar in the cycle report has nothing to render.
+func TestRunner_PropagatesSubPhasesToEntry(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.consolidation.budget_fraction": 0.40,
+	}}
+	consolidation := &recordingPhase{
+		name: model.DreamPhaseConsolidation,
+		result: PhaseResult{
+			SubPhases: []SubPhaseSummary{
+				{Name: model.DreamSubPhaseBackfillAudit, TokensUsed: 120, SliceCap: 350, HasResidual: false},
+				{Name: model.DreamSubPhaseReinforce, TokensUsed: 80, SliceCap: 350, HasResidual: true},
+				{Name: model.DreamSubPhaseConsolidate, TokensUsed: 200, SliceCap: 300, HasResidual: false},
+			},
+		},
+	}
+
+	repo := &fakeCycleRepo{}
+	r := newTestRunnerWithRepo(repo, settings, consolidation)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	entries := decodeSummary(t, repo.finalSummary())
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 phase summary entry, got %d", len(entries))
+	}
+	got := entries[0].SubPhases
+	if len(got) != 3 {
+		t.Fatalf("expected 3 sub-phase entries, got %d: %+v", len(got), got)
+	}
+	wantNames := []string{
+		model.DreamSubPhaseBackfillAudit,
+		model.DreamSubPhaseReinforce,
+		model.DreamSubPhaseConsolidate,
+	}
+	for i, w := range wantNames {
+		if got[i].Name != w {
+			t.Errorf("sub_phases[%d].Name=%q, want %q", i, got[i].Name, w)
+		}
+	}
+	if got[0].TokensUsed != 120 || got[0].SliceCap != 350 {
+		t.Errorf("backfill_audit TokensUsed=%d SliceCap=%d, want 120/350", got[0].TokensUsed, got[0].SliceCap)
+	}
+	if !got[1].HasResidual {
+		t.Error("reinforce HasResidual should round-trip true")
+	}
+	if got[2].TokensUsed != 200 || got[2].SliceCap != 300 {
+		t.Errorf("consolidate TokensUsed=%d SliceCap=%d, want 200/300", got[2].TokensUsed, got[2].SliceCap)
+	}
+}
+
+// TestPhaseSummaryEntry_SubPhasesOmitemptyForEmpty pins the JSON contract
+// the UI depends on: phases without sub-phase data must marshal without a
+// `sub_phases` field, not as an explicit empty array.
+func TestPhaseSummaryEntry_SubPhasesOmitemptyForEmpty(t *testing.T) {
+	entry := PhaseSummaryEntry{
+		Phase:      model.DreamPhaseContradictions,
+		TokensUsed: 100,
+		Operations: 5,
+		DurationMs: 250,
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got := string(raw); strings.Contains(got, "sub_phases") {
+		t.Errorf("expected sub_phases to be omitted from JSON for empty slice, got %s", got)
+	}
+
+	entry.SubPhases = []SubPhaseSummary{{Name: model.DreamSubPhaseBackfillAudit, TokensUsed: 1}}
+	raw2, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got := string(raw2); !strings.Contains(got, "sub_phases") {
+		t.Errorf("expected sub_phases to appear in JSON for populated slice, got %s", got)
 	}
 }

@@ -8,8 +8,72 @@ import {
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import type { Setting, SettingSchema } from "../api/client";
 import Switch from "../components/Switch";
+import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheck, faXmark, faCircleQuestion, faSpinner } from "../lib/icons";
+
+// Setting keys are not always literal phase names — e.g. `dreaming.transitive.*`
+// drives the `transitive_discovery` phase. The bar needs the phase key to
+// look up color and label.
+const SETTING_KEY_TO_PHASE: Record<string, string> = {
+  "dreaming.entity_dedup.budget_fraction": "entity_dedup",
+  "dreaming.embedding_backfill.budget_fraction": "embedding_backfill",
+  "dreaming.paraphrase_dedup.budget_fraction": "paraphrase_dedup",
+  "dreaming.transitive.budget_fraction": "transitive_discovery",
+  "dreaming.contradiction.budget_fraction": "contradiction_detection",
+  "dreaming.consolidation.budget_fraction": "consolidation",
+  "dreaming.pruning.budget_fraction": "pruning",
+  "dreaming.weight_adjustment.budget_fraction": "weight_adjustment",
+  "dreaming.consolidation.audit_budget_fraction": "backfill_audit",
+  "dreaming.consolidation.reinforce_budget_fraction": "reinforce",
+  "dreaming.consolidation.consolidate_budget_fraction": "consolidate",
+};
+
+const PHASE_BUDGET_ORDER = [
+  "dreaming.entity_dedup.budget_fraction",
+  "dreaming.embedding_backfill.budget_fraction",
+  "dreaming.paraphrase_dedup.budget_fraction",
+  "dreaming.transitive.budget_fraction",
+  "dreaming.contradiction.budget_fraction",
+  "dreaming.consolidation.budget_fraction",
+  "dreaming.pruning.budget_fraction",
+  "dreaming.weight_adjustment.budget_fraction",
+];
+
+const CONSOLIDATION_BUDGET_ORDER = [
+  "dreaming.consolidation.audit_budget_fraction",
+  "dreaming.consolidation.reinforce_budget_fraction",
+  "dreaming.consolidation.consolidate_budget_fraction",
+];
+
+const BUDGET_BAR_ORDERS: Record<string, string[]> = {
+  dreaming_phase_budget: PHASE_BUDGET_ORDER,
+  dreaming_consolidation: CONSOLIDATION_BUDGET_ORDER,
+};
+
+function fractionSegments(
+  items: SettingWithSchema[],
+  order: string[],
+): PhaseBudgetSegment[] {
+  const byKey = new Map<string, SettingWithSchema>(
+    items.map((it) => [it.schema.key, it]),
+  );
+  const segments: PhaseBudgetSegment[] = [];
+  for (const key of order) {
+    const item = byKey.get(key);
+    if (!item) continue;
+    const raw = item.setting?.value ?? item.schema.default_value;
+    const v = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(v) || v <= 0) continue;
+    segments.push({
+      key: SETTING_KEY_TO_PHASE[key] ?? key,
+      value: v,
+    });
+  }
+  return segments;
+}
+
+const formatFractionPct = (v: number) => `${(v * 100).toFixed(0)}%`;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -751,26 +815,42 @@ function ParentGroupCard({
         </div>
       ) : (
         <div className="divide-y divide-border">
-          {populated.map(({ sub, items }) => (
-            <section key={sub.category} className="px-5 py-4">
-              {sub.label && (
-                <h3 className="text-sm font-semibold text-foreground">{sub.label}</h3>
-              )}
-              {sub.description && (
-                <p className="mt-1 text-xs text-muted-foreground">{sub.description}</p>
-              )}
-              <div className="mt-2 divide-y divide-border">
-                {items.map((item) => (
-                  <InlineSettingEditor
-                    key={item.schema.key}
-                    item={item}
-                    onSave={onSave}
-                    saving={saving}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
+          {populated.map(({ sub, items }) => {
+            const order = BUDGET_BAR_ORDERS[sub.category];
+            const segments = order ? fractionSegments(items, order) : [];
+            const showBar = segments.length > 0;
+
+            return (
+              <section key={sub.category} className="px-5 py-4">
+                {sub.label && (
+                  <h3 className="text-sm font-semibold text-foreground">{sub.label}</h3>
+                )}
+                {sub.description && (
+                  <p className="mt-1 text-xs text-muted-foreground">{sub.description}</p>
+                )}
+                {showBar && (
+                  <div className="mt-3">
+                    <PhaseBudgetBar
+                      segments={segments}
+                      total={1}
+                      format={formatFractionPct}
+                      ariaLabel={`${sub.label ?? sub.category} allocation`}
+                    />
+                  </div>
+                )}
+                <div className="mt-2 divide-y divide-border">
+                  {items.map((item) => (
+                    <InlineSettingEditor
+                      key={item.schema.key}
+                      item={item}
+                      onSave={onSave}
+                      saving={saving}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
         </div>
       )}
     </div>

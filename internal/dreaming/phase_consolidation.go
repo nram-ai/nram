@@ -144,6 +144,7 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 	staleFetchCapHit := len(allMemories) >= staleFetchMax
 	var auditResid, reinforceResid, consolidateResid bool
+	subPhases := make([]SubPhaseSummary, 0, 3)
 
 	// Audit first so backlog drain cannot be starved by reinforce.
 	if !budget.Exhausted() {
@@ -154,6 +155,12 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		if aerr != nil {
 			slog.Warn("dreaming: backfill audit had errors", "err", aerr)
 		}
+		subPhases = append(subPhases, SubPhaseSummary{
+			Name:        model.DreamSubPhaseBackfillAudit,
+			TokensUsed:  auditBudget.Used(),
+			SliceCap:    auditBudget.Total(),
+			HasResidual: auditResid,
+		})
 		sumRemaining -= auditFrac
 	}
 
@@ -164,6 +171,12 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		if rerr != nil {
 			slog.Warn("dreaming: reinforcement sub-phase had errors", "err", rerr)
 		}
+		subPhases = append(subPhases, SubPhaseSummary{
+			Name:        model.DreamSubPhaseReinforce,
+			TokensUsed:  reinforceBudget.Used(),
+			SliceCap:    reinforceBudget.Total(),
+			HasResidual: reinforceResid,
+		})
 		sumRemaining -= reinforceFrac
 	}
 
@@ -171,10 +184,18 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		consolidateBudget := budget.SubSlice(budget.ProportionalSliceCap(consolidateFrac, sumRemaining))
 		var cerr error
 		consolidateResid, cerr = p.consolidate(ctx, cycle, consolidateBudget, logger, llm, allMemories)
+		subPhases = append(subPhases, SubPhaseSummary{
+			Name:        model.DreamSubPhaseConsolidate,
+			TokensUsed:  consolidateBudget.Used(),
+			SliceCap:    consolidateBudget.Total(),
+			HasResidual: consolidateResid,
+		})
 		if cerr != nil {
 			// Stamp before bailing out so partial progress survives.
 			p.stampConsolidateLoad(ctx, allMemories)
-			return p.buildResidualResult(staleFetchCapHit, auditResid, reinforceResid, consolidateResid, staleFetchMax, len(allMemories)), cerr
+			result := p.buildResidualResult(staleFetchCapHit, auditResid, reinforceResid, consolidateResid, staleFetchMax, len(allMemories))
+			result.SubPhases = subPhases
+			return result, cerr
 		}
 	}
 
@@ -185,7 +206,9 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	// across cycles.
 	p.stampConsolidateLoad(ctx, allMemories)
 
-	return p.buildResidualResult(staleFetchCapHit, auditResid, reinforceResid, consolidateResid, staleFetchMax, len(allMemories)), nil
+	result := p.buildResidualResult(staleFetchCapHit, auditResid, reinforceResid, consolidateResid, staleFetchMax, len(allMemories))
+	result.SubPhases = subPhases
+	return result, nil
 }
 
 // Dominance: stale_fetch_cap (bounds the working set) > consolidate (latest
