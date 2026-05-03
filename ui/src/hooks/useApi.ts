@@ -783,36 +783,69 @@ export function useMyDreamingAggregateStatus(
   });
 }
 
+// Org-tier dreaming hooks. Mirror the self/system pair but key the cache
+// by orgId so admins viewing different orgs don't collide.
+export function useOrgDreamingStatus(
+  orgId: string | undefined,
+  opts: { intervalMs?: number; enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["org", orgId, "dreaming"],
+    queryFn: () => orgAPI.getDreamingStatus(orgId!),
+    enabled: !!orgId && (opts.enabled ?? true),
+    refetchInterval: opts.intervalMs ?? 10_000,
+  });
+}
+
 // Dream cycles list. tier="system" hits /admin/dreaming/cycles;
-// tier="self" hits /me/dreaming/cycles. project_id is optional on both.
+// tier="org" hits /orgs/{orgId}/dreaming/cycles; tier="self" hits
+// /me/dreaming/cycles. project_id is optional and self/system only.
 export function useDreamingCycles(
   projectId?: string,
-  opts: { intervalMs?: number; tier?: "self" | "system"; enabled?: boolean } = {},
+  opts: {
+    intervalMs?: number;
+    tier?: "self" | "org" | "system";
+    enabled?: boolean;
+    orgId?: string;
+  } = {},
 ) {
   const tier = opts.tier ?? "system";
   return useQuery({
-    queryKey: [tier === "self" ? "me" : "admin", "dreaming", "cycles", projectId],
-    queryFn: () =>
-      tier === "self"
-        ? meAPI.getDreamingCycles(projectId)
-        : adminAPI.getDreamingCycles(projectId),
-    enabled: opts.enabled ?? true,
+    queryKey:
+      tier === "org"
+        ? ["org", opts.orgId, "dreaming", "cycles"]
+        : [tier === "self" ? "me" : "admin", "dreaming", "cycles", projectId],
+    queryFn: () => {
+      if (tier === "org") return orgAPI.getDreamingCycles(opts.orgId!);
+      if (tier === "self") return meAPI.getDreamingCycles(projectId);
+      return adminAPI.getDreamingCycles(projectId);
+    },
+    enabled: (opts.enabled ?? true) && (tier !== "org" || !!opts.orgId),
     refetchInterval: opts.intervalMs ?? 15_000,
   });
 }
 
 export function useDreamingCycleDetail(
   cycleId: string | null,
-  opts: { intervalMs?: number; tier?: "self" | "system" } = {},
+  opts: {
+    intervalMs?: number;
+    tier?: "self" | "org" | "system";
+    orgId?: string;
+  } = {},
 ) {
   const tier = opts.tier ?? "system";
   return useQuery({
-    queryKey: [tier === "self" ? "me" : "admin", "dreaming", "cycle", cycleId],
-    queryFn: () =>
-      tier === "self"
-        ? meAPI.getDreamingCycleDetail(cycleId!)
-        : adminAPI.getDreamingCycleDetail(cycleId!),
-    enabled: !!cycleId,
+    queryKey:
+      tier === "org"
+        ? ["org", opts.orgId, "dreaming", "cycle", cycleId]
+        : [tier === "self" ? "me" : "admin", "dreaming", "cycle", cycleId],
+    queryFn: () => {
+      if (tier === "org")
+        return orgAPI.getDreamingCycleDetail(opts.orgId!, cycleId!);
+      if (tier === "self") return meAPI.getDreamingCycleDetail(cycleId!);
+      return adminAPI.getDreamingCycleDetail(cycleId!);
+    },
+    enabled: !!cycleId && (tier !== "org" || !!opts.orgId),
     refetchInterval: opts.intervalMs,
   });
 }
@@ -830,47 +863,84 @@ export function useSetDreamingEnabled() {
   });
 }
 
-export function useRollbackDreamCycle() {
+type TierWithOrg = { tier: "self" | "org" | "system"; orgId?: string };
+
+function invalidateAllDreamingScopes(
+  qc: ReturnType<typeof useQueryClient>,
+  orgId?: string,
+) {
+  qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+  qc.invalidateQueries({ queryKey: ["me", "dreaming"] });
+  if (orgId) qc.invalidateQueries({ queryKey: ["org", orgId, "dreaming"] });
+}
+
+function invalidateAllEnrichmentScopes(
+  qc: ReturnType<typeof useQueryClient>,
+  orgId?: string,
+) {
+  qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+  qc.invalidateQueries({ queryKey: ["me", "enrichment"] });
+  if (orgId) qc.invalidateQueries({ queryKey: ["org", orgId, "enrichment"] });
+}
+
+export function useRollbackDreamCycle(scope: TierWithOrg = { tier: "system" }) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (cycleId: string) => adminAPI.rollbackDreamCycle(cycleId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+    mutationFn: (cycleId: string) => {
+      if (scope.tier === "org") return orgAPI.rollbackDreamCycle(scope.orgId!, cycleId);
+      if (scope.tier === "self") return meAPI.rollbackDreamCycle(cycleId);
+      return adminAPI.rollbackDreamCycle(cycleId);
     },
+    onSuccess: () => invalidateAllDreamingScopes(qc, scope.orgId),
   });
 }
 
-export function useAbandonDreamCycle() {
+export function useAbandonDreamCycle(scope: TierWithOrg = { tier: "system" }) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (cycleId: string) => adminAPI.abandonDreamCycle(cycleId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+    mutationFn: (cycleId: string) => {
+      if (scope.tier === "org") return orgAPI.abandonDreamCycle(scope.orgId!, cycleId);
+      if (scope.tier === "self") return meAPI.abandonDreamCycle(cycleId);
+      return adminAPI.abandonDreamCycle(cycleId);
     },
+    onSuccess: () => invalidateAllDreamingScopes(qc, scope.orgId),
   });
 }
 
 // --- Enrichment ---
 
 export function useEnrichmentStatus(
-  opts: { intervalMs?: number; tier?: "self" | "system" } = {},
+  opts: {
+    intervalMs?: number;
+    tier?: "self" | "org" | "system";
+    orgId?: string;
+  } = {},
 ) {
   const tier = opts.tier ?? "system";
   return useQuery({
-    queryKey: [tier === "self" ? "me" : "admin", "enrichment"],
-    queryFn:
-      tier === "self" ? meAPI.getEnrichmentStatus : adminAPI.getEnrichmentStatus,
+    queryKey:
+      tier === "org"
+        ? ["org", opts.orgId, "enrichment"]
+        : [tier === "self" ? "me" : "admin", "enrichment"],
+    queryFn: () => {
+      if (tier === "org") return orgAPI.getEnrichmentStatus(opts.orgId!);
+      if (tier === "self") return meAPI.getEnrichmentStatus();
+      return adminAPI.getEnrichmentStatus();
+    },
+    enabled: tier !== "org" || !!opts.orgId,
     refetchInterval: opts.intervalMs ?? 10_000,
   });
 }
 
-export function useRetryEnrichment() {
+export function useRetryEnrichment(scope: TierWithOrg = { tier: "system" }) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (ids?: string[]) => adminAPI.retryEnrichment(ids),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+    mutationFn: (ids?: string[]) => {
+      if (scope.tier === "org") return orgAPI.retryEnrichment(scope.orgId!, ids);
+      if (scope.tier === "self") return meAPI.retryEnrichment(ids);
+      return adminAPI.retryEnrichment(ids);
     },
+    onSuccess: () => invalidateAllEnrichmentScopes(qc, scope.orgId),
   });
 }
 

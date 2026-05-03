@@ -9,7 +9,8 @@ import {
   useOrgs,
   useOrgUsers,
 } from "../hooks/useApi";
-import { useAuth } from "../context/AuthContext";
+import { useAuth, type Tier } from "../context/AuthContext";
+import { TierTabs } from "../components/TierTabs";
 import {
   memoryRowLabel,
   type AnalyticsData,
@@ -27,7 +28,6 @@ import {
   type UserAggregate,
 } from "../api/client";
 
-type AnalyticsTier = "self" | "org" | "system";
 import {
   BarChart,
   Bar,
@@ -1190,15 +1190,7 @@ function AggregateBucketCard({
 function Analytics() {
   const auth = useAuth();
 
-  // Tier picker — admin gets all three, org_owner gets self+org, others
-  // get self only. The pre-fix `org` / `user` widening dropdowns are
-  // gone; tier selection drives which endpoint we hit.
-  const availableTiers: AnalyticsTier[] = auth.isAdmin
-    ? ["self", "org", "system"]
-    : auth.isOrgOwner
-      ? ["self", "org"]
-      : ["self"];
-  const [tier, setTier] = useState<AnalyticsTier>("self");
+  const [tier, setTier] = useState<Tier>("self");
   const myOrgId = auth.user?.org_id;
   const orgIdForFetch = tier === "org" ? myOrgId : undefined;
 
@@ -1321,30 +1313,7 @@ function Analytics() {
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
         </div>
-        {availableTiers.length > 1 && (
-          <div
-            className="inline-flex rounded-md border bg-card p-0.5"
-            role="tablist"
-            aria-label="Analytics scope"
-          >
-            {availableTiers.map((t) => (
-              <button
-                key={t}
-                type="button"
-                role="tab"
-                aria-selected={tier === t}
-                onClick={() => setTier(t)}
-                className={`rounded px-3 py-1 text-xs font-medium ${
-                  tier === t
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                {t === "self" ? "Mine" : t === "org" ? "Org" : "System"}
-              </button>
-            ))}
-          </div>
-        )}
+        <TierTabs current={tier} onChange={setTier} ariaLabel="Analytics scope" />
       </div>
 
       {hasError && <ErrorBanner message={errorMessage} onRetry={handleRetry} />}

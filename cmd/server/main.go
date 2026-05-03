@@ -590,7 +590,7 @@ func main() {
 
 	dreamAdminStore := adminstore.NewDreamAdminStore(
 		dreamCycleRepo, dreamLogRepo, dreamDirtyRepo, settingsRepo,
-		settingsSvc, dreamScheduler, projectRepo, cascadeResolver,
+		settingsSvc, dreamScheduler, projectRepo, cascadeResolver, db,
 	)
 
 	// Create auth config for login/lookup handlers.
@@ -684,10 +684,13 @@ func main() {
 			Projects:   projectRepo,
 			Namespaces: namespaceRepo,
 			Users:      userRepo,
+			Gate:       dreamAdminStore,
+			Rollback:   dreamRollback,
 		}),
 		MeEnrichment: api.NewSelfEnrichmentHandler(api.MeEnrichmentConfig{
-			Store: enrichmentAdminStore,
-			Users: userRepo,
+			Store:      enrichmentAdminStore,
+			Users:      userRepo,
+			Namespaces: namespaceRepo,
 		}),
 		MeCapabilities: api.NewMeCapabilitiesHandler(api.MeCapabilitiesConfig{
 			EnrichmentAvailable: enrichmentAvailable,
@@ -807,6 +810,13 @@ func main() {
 			Store: aggregatesStore,
 		}),
 		OrgUsage: api.NewOrgUsageHandler(api.UsageConfig{Store: usageStore}),
+		OrgDreaming: api.NewOrgDreamingHandler(api.OrgDreamingConfig{
+			Store:    dreamAdminStore,
+			Rollback: dreamRollback,
+		}),
+		OrgEnrichment: api.NewOrgEnrichmentHandler(api.OrgEnrichmentConfig{
+			Store: enrichmentAdminStore,
+		}),
 
 		// Tier-C (system-aggregate) handlers — RoleAdministrator only via
 		// the /v1/admin route group gate. System totals + per-org rows;

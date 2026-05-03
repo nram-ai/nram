@@ -12,7 +12,8 @@ import {
   useDreamingStatus,
 } from "../hooks/useApi";
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
-import { useAuth } from "../context/AuthContext";
+import { useAuth, type Tier } from "../context/AuthContext";
+import { TierTabs } from "../components/TierTabs";
 import {
   memoryRowLabel,
   type ProjectMemoryCount,
@@ -714,20 +715,10 @@ function ErrorBanner({
 // Main Dashboard
 // ---------------------------------------------------------------------------
 
-type DashboardTier = "self" | "org" | "system";
-
 function Dashboard() {
   const auth = useAuth();
 
-  // Tier picker — admin gets all three; org_owner gets self + org; everyone
-  // else only sees self. Default tier is self for everyone (post-2026-04-30
-  // leak fix: admin's "Mine" tab shows admin's OWN data, not system-wide).
-  const availableTiers: DashboardTier[] = auth.isAdmin
-    ? ["self", "org", "system"]
-    : auth.isOrgOwner
-      ? ["self", "org"]
-      : ["self"];
-  const [tier, setTier] = useState<DashboardTier>("self");
+  const [tier, setTier] = useState<Tier>("self");
   const myOrgId = auth.user?.org_id;
   const orgIdForFetch = tier === "org" ? myOrgId : undefined;
 
@@ -820,30 +811,7 @@ function Dashboard() {
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
         </div>
-        {availableTiers.length > 1 && (
-          <div
-            className="inline-flex rounded-md border bg-card p-0.5"
-            role="tablist"
-            aria-label="Dashboard scope"
-          >
-            {availableTiers.map((t) => (
-              <button
-                key={t}
-                type="button"
-                role="tab"
-                aria-selected={tier === t}
-                onClick={() => setTier(t)}
-                className={`rounded px-3 py-1 text-xs font-medium ${
-                  tier === t
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                {t === "self" ? "Mine" : t === "org" ? "Org" : "System"}
-              </button>
-            ))}
-          </div>
-        )}
+        <TierTabs current={tier} onChange={setTier} ariaLabel="Dashboard scope" />
       </div>
 
       {hasError && <ErrorBanner message={errorMessage} onRetry={handleRetry} />}

@@ -31,12 +31,22 @@ type MeDreamNamespaceLookup interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Namespace, error)
 }
 
+// MeDreamCycleGate is the org-scope guard the self-tier handler uses for
+// abandon/rollback. Implemented by storage/admin.DreamAdminStore.
+type MeDreamCycleGate interface {
+	CycleInNamespacePrefix(ctx context.Context, prefix string, cycleID uuid.UUID) (bool, error)
+}
+
 // MeDreamingConfig wires NewSelfDreamingHandler.
 type MeDreamingConfig struct {
 	Store      DreamAdminStore
 	Projects   MeDreamProjectAccess
 	Namespaces MeDreamNamespaceLookup
 	Users      UserGetter
+	// Gate is the cycle-in-namespace guard used by abandon/rollback. May
+	// be nil during tests; the handler then refuses write operations.
+	Gate     MeDreamCycleGate
+	Rollback DreamRollbacker
 }
 
 // NewSelfDreamingHandler returns the read-only self-tier dream handler at
@@ -49,11 +59,6 @@ type MeDreamingConfig struct {
 // exposed here — those remain on /v1/admin/dreaming.
 func NewSelfDreamingHandler(cfg MeDreamingConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			WriteError(w, ErrBadRequest("method not allowed"))
-			return
-		}
-
 		ac := auth.FromContext(r.Context())
 		if ac == nil {
 			WriteError(w, ErrUnauthorized("authentication required"))
@@ -79,6 +84,12 @@ func NewSelfDreamingHandler(cfg MeDreamingConfig) http.HandlerFunc {
 			handleMeDreamStatus(w, r, cfg, callerNS)
 		case sub == "cycles":
 			handleMeDreamCyclesList(w, r, cfg, callerNS)
+		case strings.HasPrefix(sub, "cycles/") && strings.HasSuffix(sub, "/abandon"):
+			cycleIDStr := strings.TrimSuffix(strings.TrimPrefix(sub, "cycles/"), "/abandon")
+			handleMeDreamAbandon(w, r, cfg, callerNS, cycleIDStr)
+		case strings.HasPrefix(sub, "cycles/") && strings.HasSuffix(sub, "/rollback"):
+			cycleIDStr := strings.TrimSuffix(strings.TrimPrefix(sub, "cycles/"), "/rollback")
+			handleMeDreamRollback(w, r, cfg, callerNS, cycleIDStr)
 		case strings.HasPrefix(sub, "cycles/"):
 			cycleIDStr := strings.TrimPrefix(sub, "cycles/")
 			handleMeDreamCycleDetail(w, r, cfg, callerNS, cycleIDStr)
@@ -86,6 +97,69 @@ func NewSelfDreamingHandler(cfg MeDreamingConfig) http.HandlerFunc {
 			WriteError(w, ErrBadRequest("unknown dreaming sub-path"))
 		}
 	}
+}
+
+func handleMeDreamAbandon(w http.ResponseWriter, r *http.Request, cfg MeDreamingConfig, callerNS *model.Namespace, cycleIDStr string) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	cycleID, err := uuid.Parse(cycleIDStr)
+	if err != nil {
+		WriteError(w, ErrBadRequest("invalid cycle_id"))
+		return
+	}
+	if cfg.Gate == nil {
+		WriteError(w, ErrInternal("ownership gate unavailable"))
+		return
+	}
+	in, err := cfg.Gate.CycleInNamespacePrefix(r.Context(), callerNS.Path, cycleID)
+	if err != nil || !in {
+		WriteError(w, ErrNotFound("dream cycle not found"))
+		return
+	}
+	abandoned, err := cfg.Store.AbandonCycle(r.Context(), cycleID, "abandoned by owner")
+	if err != nil {
+		WriteError(w, ErrInternal("abandon failed: "+err.Error()))
+		return
+	}
+	if !abandoned {
+		WriteError(w, ErrConflict("cycle is already in a terminal state"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":   "failed",
+		"cycle_id": cycleID.String(),
+	})
+}
+
+func handleMeDreamRollback(w http.ResponseWriter, r *http.Request, cfg MeDreamingConfig, callerNS *model.Namespace, cycleIDStr string) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	cycleID, err := uuid.Parse(cycleIDStr)
+	if err != nil {
+		WriteError(w, ErrBadRequest("invalid cycle_id"))
+		return
+	}
+	if cfg.Gate == nil || cfg.Rollback == nil {
+		WriteError(w, ErrInternal("rollback service not available"))
+		return
+	}
+	in, err := cfg.Gate.CycleInNamespacePrefix(r.Context(), callerNS.Path, cycleID)
+	if err != nil || !in {
+		WriteError(w, ErrNotFound("dream cycle not found"))
+		return
+	}
+	if err := cfg.Rollback.Rollback(r.Context(), cycleID); err != nil {
+		WriteError(w, ErrInternal("rollback failed: "+err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":   "rolled_back",
+		"cycle_id": cycleID.String(),
+	})
 }
 
 func extractMeDreamSubPath(path string) string {
@@ -113,6 +187,10 @@ func (c MeDreamingConfig) projectOwnedByCaller(ctx context.Context, projectID uu
 }
 
 func handleMeDreamStatus(w http.ResponseWriter, r *http.Request, cfg MeDreamingConfig, callerNS *model.Namespace) {
+	if r.Method != http.MethodGet {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
 	// project_id optional: when set, return per-project status; when omitted,
 	// return aggregate any-dirty + project count for the caller's projects.
 	pidStr := r.URL.Query().Get("project_id")
@@ -153,6 +231,10 @@ func handleMeDreamStatus(w http.ResponseWriter, r *http.Request, cfg MeDreamingC
 }
 
 func handleMeDreamCyclesList(w http.ResponseWriter, r *http.Request, cfg MeDreamingConfig, callerNS *model.Namespace) {
+	if r.Method != http.MethodGet {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
 	// project_id optional: when set, filter to that project; when omitted,
 	// list cycles across all of the caller's projects via namespace prefix.
 	// Either path returns model.DreamCycle with ProjectName populated.
@@ -196,6 +278,10 @@ func handleMeDreamCyclesList(w http.ResponseWriter, r *http.Request, cfg MeDream
 }
 
 func handleMeDreamCycleDetail(w http.ResponseWriter, r *http.Request, cfg MeDreamingConfig, callerNS *model.Namespace, cycleIDStr string) {
+	if r.Method != http.MethodGet {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
 	cycleID, err := uuid.Parse(cycleIDStr)
 	if err != nil {
 		WriteError(w, ErrBadRequest("invalid cycle_id"))

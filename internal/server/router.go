@@ -136,10 +136,12 @@ type Handlers struct {
 	// activity,analytics,usage}. Caller must be RoleOrgOwner+ of the org.
 	// Aggregate counts + distributions only; no row-level user/memory data,
 	// no content.
-	OrgDashboard http.HandlerFunc
-	OrgActivity  http.HandlerFunc
-	OrgAnalytics http.HandlerFunc
-	OrgUsage     http.HandlerFunc
+	OrgDashboard   http.HandlerFunc
+	OrgActivity    http.HandlerFunc
+	OrgAnalytics   http.HandlerFunc
+	OrgUsage       http.HandlerFunc
+	OrgDreaming    http.HandlerFunc
+	OrgEnrichment  http.HandlerFunc
 
 	// Tier-C (system-aggregate) handlers at /v1/admin/system/{dashboard,
 	// activity,analytics,usage}. RoleAdministrator only. System totals +
@@ -309,7 +311,8 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				}
 				r.HandleFunc("/dreaming", handler(handlers.MeDreaming))
 				r.HandleFunc("/dreaming/*", handler(handlers.MeDreaming))
-				r.Get("/enrichment", handler(handlers.MeEnrichment))
+				r.HandleFunc("/enrichment", handler(handlers.MeEnrichment))
+				r.HandleFunc("/enrichment/*", handler(handlers.MeEnrichment))
 			})
 
 			// Self-tier capability flags. Two booleans — no provider config,
@@ -344,6 +347,21 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Get("/activity", handler(handlers.OrgActivity))
 			r.Get("/analytics", handler(handlers.OrgAnalytics))
 			r.Get("/usage", handler(handlers.OrgUsage))
+
+			// Org-tier dream + enrichment surfaces. Org owners get
+			// retry/abandon/rollback within their org via these handlers;
+			// the global enable/disable + pause/resume controls remain
+			// admin-only on /v1/admin/*. Wrapped in EnrichmentGate so the
+			// routes return 503 until provider slots are configured.
+			r.Group(func(r chi.Router) {
+				if config.EnrichmentGate != nil {
+					r.Use(config.EnrichmentGate)
+				}
+				r.HandleFunc("/dreaming", handler(handlers.OrgDreaming))
+				r.HandleFunc("/dreaming/*", handler(handlers.OrgDreaming))
+				r.HandleFunc("/enrichment", handler(handlers.OrgEnrichment))
+				r.HandleFunc("/enrichment/*", handler(handlers.OrgEnrichment))
+			})
 
 			// Management (org_owner+).
 			r.Group(func(r chi.Router) {

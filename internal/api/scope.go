@@ -2,11 +2,24 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 )
+
+// extractSubPath returns the portion of the URL path after marker, with any
+// leading slash trimmed. Shared by the dispatch handlers that route
+// sub-paths under /v1/{me,admin,orgs/{org_id}}/{dreaming,enrichment} to
+// internal handlers based on the trailing path segment.
+func extractSubPath(path, marker string) string {
+	idx := strings.LastIndex(path, marker)
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimPrefix(path[idx+len(marker):], "/")
+}
 
 // Three explicit scope helpers, one per data-visibility tier. Each handler
 // reads exactly one of these at construction or invocation time. There is

@@ -5,23 +5,20 @@ import {
   useDreamingCycles,
   useDreamingCycleDetail,
   useMyDreamingAggregateStatus,
+  useOrgDreamingStatus,
   useSetDreamingEnabled,
   useRollbackDreamCycle,
   useAbandonDreamCycle,
 } from "../hooks/useApi";
 import { useEventStream } from "../hooks/useEventStream";
 import { useElapsedTicker, elapsedSeconds } from "../hooks/useElapsedTicker";
-import { useAuth } from "../context/AuthContext";
+import { useAuth, type Tier } from "../context/AuthContext";
+import { TierTabs } from "../components/TierTabs";
+import { ExtractionErrorView } from "../lib/extractionError";
 import Switch from "../components/Switch";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner } from "../lib/icons";
 import type { DreamCycle, DreamLog } from "../api/client";
-
-// Tier picker — administrators choose between their own per-project view
-// (the "Mine" tab, /v1/me/dreaming) and the cross-tenant pipeline view
-// (the "System" tab, /v1/admin/dreaming). Non-admin callers are pinned
-// to "self"; the only data they may see is their own projects' cycles.
-type DreamingTier = "self" | "system";
 
 // Live SSE-driven state per running cycle. Populated from
 // dream.cycle.heartbeat, dream.call.started/completed, and
@@ -137,9 +134,13 @@ function formatDuration(start: string | null | undefined, end: string | null | u
 // Live state via SSE
 // ---------------------------------------------------------------------------
 
-function useDreamingLiveState() {
+function useDreamingLiveState(orgId?: string) {
   const qc = useQueryClient();
   const [live, setLive] = useState<Record<string, LiveCycleState>>({});
+  const refreshAllTiers = (...keys: string[][]) => {
+    for (const k of keys) qc.invalidateQueries({ queryKey: k });
+    if (orgId) qc.invalidateQueries({ queryKey: ["org", orgId, "dreaming"] });
+  };
 
   const { connected } = useEventStream({
     scope: "",
@@ -251,11 +252,10 @@ function useDreamingLiveState() {
               },
             };
           });
-          // Authoritative refresh on phase boundaries (cheap, only every ~Ns).
-          // Invalidate both tiers — the active tier is unknown to the SSE
-          // hook, so refresh both admin-side and self-side caches.
-          qc.invalidateQueries({ queryKey: ["admin", "dreaming", "cycles"] });
-          qc.invalidateQueries({ queryKey: ["me", "dreaming", "cycles"] });
+          refreshAllTiers(
+            ["admin", "dreaming", "cycles"],
+            ["me", "dreaming", "cycles"],
+          );
           break;
         }
         case "dream.phase.progress": {
@@ -287,10 +287,12 @@ function useDreamingLiveState() {
             delete next[cycleId];
             return next;
           });
-          qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
-          qc.invalidateQueries({ queryKey: ["admin", "dreaming", "cycles"] });
-          qc.invalidateQueries({ queryKey: ["me", "dreaming", "project"] });
-          qc.invalidateQueries({ queryKey: ["me", "dreaming", "cycles"] });
+          refreshAllTiers(
+            ["admin", "dreaming"],
+            ["admin", "dreaming", "cycles"],
+            ["me", "dreaming", "project"],
+            ["me", "dreaming", "cycles"],
+          );
           break;
         }
         default:
@@ -611,6 +613,7 @@ function CycleDetail({
   live,
   detailIntervalMs,
   tier = "system",
+  orgId,
   showWriteActions = true,
 }: {
   cycleId: string;
@@ -621,12 +624,14 @@ function CycleDetail({
   isAbandoning: boolean;
   live: Record<string, LiveCycleState>;
   detailIntervalMs?: number;
-  tier?: DreamingTier;
+  tier?: Tier;
+  orgId?: string;
   showWriteActions?: boolean;
 }) {
   const { data, isLoading, isError } = useDreamingCycleDetail(cycleId, {
     intervalMs: detailIntervalMs,
     tier,
+    orgId,
   });
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
 
@@ -738,11 +743,7 @@ function CycleDetail({
         <LiveActivitySection state={live[cycleId]} />
       )}
 
-      {cycle.error && (
-        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          {cycle.error}
-        </div>
-      )}
+      {cycle.error && <ExtractionErrorView value={cycle.error} variant="block" />}
 
       {/* Phase Summary */}
       {phaseSummary.length > 0 && (
@@ -947,15 +948,15 @@ function LogEntry({
 // ---------------------------------------------------------------------------
 
 export default function DreamingMonitor() {
-  const { live, connected } = useDreamingLiveState();
+  const { isAdmin, isOrgOwner, user } = useAuth();
+  const orgId = user?.org_id;
+  const { live, connected } = useDreamingLiveState(orgId);
   const statusIntervalMs = connected ? 10_000 : 3_000;
   const cyclesIntervalMs = connected ? 15_000 : 5_000;
 
-  const { isAdmin } = useAuth();
-
-  // Default to self-tier for everyone — admin starts on "Mine" per the
-  // 2026-04-30 privacy plan and can switch to "System" via the tab picker.
-  const [tier, setTier] = useState<DreamingTier>("self");
+  // Default to self-tier for everyone. The TierTabs picker only renders
+  // additional tiers when the caller's role grants them.
+  const [tier, setTier] = useState<Tier>("self");
 
   // System-tier (admin only): live system status + system-wide cycles list.
   // Both queries are gated by `enabled` rather than just refetchInterval —
@@ -968,6 +969,18 @@ export default function DreamingMonitor() {
     intervalMs: cyclesIntervalMs,
     tier: "system",
     enabled: tier === "system",
+  });
+
+  // Org-tier (org_owner+admin): aggregate org-wide status + cycles.
+  const orgStatusQuery = useOrgDreamingStatus(orgId, {
+    intervalMs: statusIntervalMs,
+    enabled: tier === "org",
+  });
+  const orgCyclesQuery = useDreamingCycles(undefined, {
+    intervalMs: cyclesIntervalMs,
+    tier: "org",
+    orgId,
+    enabled: tier === "org",
   });
 
   // Self-tier: aggregate "any-of-mine-dirty" status + cycles across all of
@@ -985,8 +998,8 @@ export default function DreamingMonitor() {
   });
 
   const enableMutation = useSetDreamingEnabled();
-  const rollbackMutation = useRollbackDreamCycle();
-  const abandonMutation = useAbandonDreamCycle();
+  const rollbackMutation = useRollbackDreamCycle({ tier, orgId });
+  const abandonMutation = useAbandonDreamCycle({ tier, orgId });
 
   const [selectedCycleId, setSelectedCycleId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
@@ -1048,8 +1061,8 @@ export default function DreamingMonitor() {
 
   // Tier-normalized view: self has no dirty/stuck counters in its response
   // shape, so derive them from the aggregate dirty boolean and the cycles
-  // list. enabledFlag is system-only — self renders an aggregate dirty pill
-  // instead and reads selfStatusQuery directly.
+  // list. enabledFlag is system-only — self/org render an aggregate dirty
+  // pill instead and read their own status query directly.
   const view = (() => {
     if (tier === "system") {
       const s = systemStatusQuery.data;
@@ -1059,6 +1072,16 @@ export default function DreamingMonitor() {
         stuckCount: s?.stuck_count ?? 0,
         isLoading: systemStatusQuery.isLoading,
         isError: systemStatusQuery.isError,
+      };
+    }
+    if (tier === "org") {
+      const s = orgStatusQuery.data;
+      return {
+        cycles: orgCyclesQuery.data ?? [],
+        dirtyCount: s?.dirty_count ?? 0,
+        stuckCount: s?.stuck_count ?? 0,
+        isLoading: orgStatusQuery.isLoading,
+        isError: orgStatusQuery.isError,
       };
     }
     const s = selfStatusQuery.data;
@@ -1080,61 +1103,39 @@ export default function DreamingMonitor() {
     failedCount: cycles.filter((c) => c.status === "failed").length,
   }), [cycles]);
 
-  const showWriteActions = tier === "system" && isAdmin;
-  const dirtyLabel = tier === "system" ? "Dirty Projects" : "Dirty";
+  const showWriteActions =
+    (tier === "self") ||
+    (tier === "org" && isOrgOwner) ||
+    (tier === "system" && isAdmin);
+  const dirtyLabel = tier === "self" ? "Dirty" : "Dirty Projects";
+
+  const handleTierChange = useCallback((next: Tier) => {
+    setTier(next);
+    setSelectedCycleId(null);
+  }, []);
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">
-          {tier === "system" ? "Dreaming" : "My Dreaming"}
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {tier === "system"
-            ? "Background memory consolidation and knowledge graph improvement. Dreaming runs automatically when enrichment is idle and projects have new changes."
-            : "Read-only view of dream cycles for projects you own. Enable/disable controls are administrator-only."}
-        </p>
-      </div>
-
-      {/* Tier picker — admin only. Non-admin users are pinned to "self" */}
-      {/* with no UI affordance; their account simply has no system view. */}
-      {isAdmin && (
-        <div className="border-b">
-          <nav className="-mb-px flex gap-6" role="tablist" aria-label="Dreaming scope">
-            <button
-              role="tab"
-              aria-selected={tier === "self"}
-              onClick={() => {
-                setTier("self");
-                setSelectedCycleId(null);
-              }}
-              className={`border-b-2 px-1 py-3 text-sm font-medium ${
-                tier === "self"
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Mine
-            </button>
-            <button
-              role="tab"
-              aria-selected={tier === "system"}
-              onClick={() => {
-                setTier("system");
-                setSelectedCycleId(null);
-              }}
-              className={`border-b-2 px-1 py-3 text-sm font-medium ${
-                tier === "system"
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              System
-            </button>
-          </nav>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {tier === "system"
+              ? "Dreaming"
+              : tier === "org"
+                ? "Org Dreaming"
+                : "My Dreaming"}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {tier === "system"
+              ? "Background memory consolidation and knowledge graph improvement. Dreaming runs automatically when enrichment is idle and projects have new changes."
+              : tier === "org"
+                ? "Dream cycles for your organization's projects. Abandon/rollback within the org; the global enable/disable toggle is administrator-only."
+                : "Dream cycles for projects you own. Abandon/rollback your own cycles; the global enable/disable toggle is administrator-only."}
+          </p>
         </div>
-      )}
+        <TierTabs current={tier} onChange={handleTierChange} ariaLabel="Dreaming scope" />
+      </div>
 
       {/* Loading */}
       {isLoading && (
@@ -1176,18 +1177,20 @@ export default function DreamingMonitor() {
                 <>
                   <span
                     className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                      (selfStatusQuery.data?.dirty_count ?? 0) > 0
+                      dirtyCount > 0
                         ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
                         : "bg-success/10 text-success"
                     }`}
                   >
-                    {(selfStatusQuery.data?.dirty_count ?? 0) > 0 ? "Dirty" : "All quiet"}
+                    {dirtyCount > 0 ? "Dirty" : "All quiet"}
                   </span>
-                  <span className="text-sm text-muted-foreground">
-                    {selfStatusQuery.data?.project_count ?? 0}
-                    {" "}
-                    {selfStatusQuery.data?.project_count === 1 ? "project" : "projects"}
-                  </span>
+                  {tier === "self" && (
+                    <span className="text-sm text-muted-foreground">
+                      {selfStatusQuery.data?.project_count ?? 0}
+                      {" "}
+                      {selfStatusQuery.data?.project_count === 1 ? "project" : "projects"}
+                    </span>
+                  )}
                 </>
               )}
             </div>
@@ -1247,6 +1250,7 @@ export default function DreamingMonitor() {
               isAbandoning={abandonMutation.isPending}
               live={live}
               tier={tier}
+              orgId={orgId}
               showWriteActions={showWriteActions}
               detailIntervalMs={
                 cycles.find((c) => c.id === selectedCycleId)?.status === "running"
@@ -1265,7 +1269,7 @@ export default function DreamingMonitor() {
                 isAbandoning={abandonMutation.isPending}
                 live={live}
                 showWriteActions={showWriteActions}
-                showProjectName={tier === "self"}
+                showProjectName={tier !== "system"}
               />
             </div>
           )}

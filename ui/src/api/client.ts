@@ -1034,6 +1034,14 @@ export interface DreamStatusResponse {
   recent_cycles: DreamCycle[];
 }
 
+// Org-tier dream status. Same shape as DreamStatusResponse minus the
+// system-wide `enabled` flag (org tab does not surface global toggle).
+export interface OrgDreamStatusResponse {
+  dirty_count: number;
+  stuck_count: number;
+  recent_cycles: DreamCycle[];
+}
+
 // Per-project dream status, returned by /v1/me/dreaming?project_id=...
 // Distinct from system-wide DreamStatusResponse: self-tier callers see
 // only their own project's state, with last_dream + full cycle list.
@@ -1687,10 +1695,15 @@ export const meAPI = {
     request<DreamCycleDetail>("GET", `/me/dreaming/cycles/${cycleId}`),
 
   // Self-tier enrichment queue: caller's own queue items + caller-scoped
-  // counts. Write operations (retry, pause, test-prompt) remain admin-only
-  // at /admin/enrichment/*.
+  // counts. Pause/test-prompt remain admin-only at /admin/enrichment/*.
   getEnrichmentStatus: () =>
     request<EnrichmentQueueStatus>("GET", "/me/enrichment"),
+  retryEnrichment: (ids?: string[]) =>
+    request<EnrichmentRetryResponse>("POST", "/me/enrichment/retry", { ids: ids ?? [] }),
+  abandonDreamCycle: (cycleId: string) =>
+    request<DreamAbandonResponse>("POST", `/me/dreaming/cycles/${cycleId}/abandon`),
+  rollbackDreamCycle: (cycleId: string) =>
+    request<DreamRollbackResponse>("POST", `/me/dreaming/cycles/${cycleId}/rollback`),
 };
 
 // --- Org API (org-scoped endpoints) ---
@@ -1742,6 +1755,24 @@ export const orgAPI = {
     request<OrgDashboardData>("GET", `/orgs/${orgId}/dashboard`),
   getActivity: (orgId: string) =>
     request<OrgActivityResponse>("GET", `/orgs/${orgId}/activity`),
+
+  // Org-tier dreaming + enrichment. Org owners (and admins) get
+  // retry/abandon/rollback within their org; the global enable/disable +
+  // pause/resume controls remain admin-only on /admin/*.
+  getDreamingStatus: (orgId: string) =>
+    request<OrgDreamStatusResponse>("GET", `/orgs/${orgId}/dreaming`),
+  getDreamingCycles: (orgId: string) =>
+    request<DreamCycle[]>("GET", `/orgs/${orgId}/dreaming/cycles`),
+  getDreamingCycleDetail: (orgId: string, cycleId: string) =>
+    request<DreamCycleDetail>("GET", `/orgs/${orgId}/dreaming/cycles/${cycleId}`),
+  abandonDreamCycle: (orgId: string, cycleId: string) =>
+    request<DreamAbandonResponse>("POST", `/orgs/${orgId}/dreaming/cycles/${cycleId}/abandon`),
+  rollbackDreamCycle: (orgId: string, cycleId: string) =>
+    request<DreamRollbackResponse>("POST", `/orgs/${orgId}/dreaming/cycles/${cycleId}/rollback`),
+  getEnrichmentStatus: (orgId: string) =>
+    request<EnrichmentQueueStatus>("GET", `/orgs/${orgId}/enrichment`),
+  retryEnrichment: (orgId: string, ids?: string[]) =>
+    request<EnrichmentRetryResponse>("POST", `/orgs/${orgId}/enrichment/retry`, { ids: ids ?? [] }),
 
   listOrgIdPs: (orgId: string) =>
     request<IdPConfig[]>("GET", `/orgs/${orgId}/idp`),

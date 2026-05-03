@@ -308,6 +308,190 @@ func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context) (*api.Enrichment
 	}, nil
 }
 
+// orgNamespacePath returns the org's root namespace path. Used as the LIKE
+// prefix for org-scoped queue / cycle queries.
+func (s *EnrichmentAdminStore) orgNamespacePath(ctx context.Context, orgID uuid.UUID) (string, error) {
+	q := "SELECT n.path FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?"
+	if s.db.Backend() == storage.BackendPostgres {
+		q = "SELECT n.path FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1"
+	}
+	var p string
+	row := s.db.QueryRow(ctx, q, orgID.String())
+	if err := row.Scan(&p); err != nil {
+		return "", fmt.Errorf("org namespace path: %w", err)
+	}
+	return p, nil
+}
+
+// OrgQueueStatus returns the queue items whose memory.namespace_id is
+// descended from the given org's root namespace. Counts are scoped to the
+// same subtree. Used by /v1/orgs/{orgId}/enrichment.
+func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UUID) (*api.EnrichmentQueueStatus, error) {
+	orgPath, err := s.orgNamespacePath(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	prefixPattern := orgPath + "/%"
+	exactPath := orgPath
+
+	var counts api.EnrichmentQueueCounts
+	for _, st := range []struct {
+		status string
+		dest   *int
+	}{
+		{model.EnrichmentStatusPending, &counts.Pending},
+		{model.EnrichmentStatusProcessing, &counts.Processing},
+		{model.EnrichmentStatusCompleted, &counts.Completed},
+		{model.EnrichmentStatusFailed, &counts.Failed},
+	} {
+		var q string
+		if s.db.Backend() == storage.BackendPostgres {
+			q = `SELECT COUNT(*) FROM enrichment_queue eq
+				JOIN memories m ON eq.memory_id = m.id
+				JOIN namespaces n ON m.namespace_id = n.id
+				WHERE eq.status = $1 AND (n.path = $2 OR n.path LIKE $3)`
+		} else {
+			q = `SELECT COUNT(*) FROM enrichment_queue eq
+				JOIN memories m ON eq.memory_id = m.id
+				JOIN namespaces n ON m.namespace_id = n.id
+				WHERE eq.status = ? AND (n.path = ? OR n.path LIKE ?)`
+		}
+		row := s.db.QueryRow(ctx, q, st.status, exactPath, prefixPattern)
+		_ = row.Scan(st.dest)
+	}
+
+	cols := queueItemSelectColumns(true)
+	var itemsQ string
+	if s.db.Backend() == storage.BackendPostgres {
+		itemsQ = `SELECT ` + cols + `
+			FROM enrichment_queue eq
+			JOIN memories m ON eq.memory_id = m.id
+			JOIN namespaces n ON m.namespace_id = n.id
+			LEFT JOIN projects p ON p.namespace_id = m.namespace_id
+			WHERE n.path = $1 OR n.path LIKE $2
+			ORDER BY eq.created_at DESC LIMIT 50`
+	} else {
+		itemsQ = `SELECT ` + cols + `
+			FROM enrichment_queue eq
+			JOIN memories m ON eq.memory_id = m.id
+			JOIN namespaces n ON m.namespace_id = n.id
+			LEFT JOIN projects p ON p.namespace_id = m.namespace_id
+			WHERE n.path = ? OR n.path LIKE ?
+			ORDER BY eq.created_at DESC LIMIT 50`
+	}
+	rows, err := s.db.Query(ctx, itemsQ, exactPath, prefixPattern)
+	if err != nil {
+		return nil, fmt.Errorf("org queue items: %w", err)
+	}
+	defer rows.Close()
+
+	threshold := s.staleThresholdMs(ctx)
+	now := time.Now().UTC()
+	queueItems := []api.EnrichmentQueueItem{}
+	for rows.Next() {
+		item, err := s.scanQueueItem(rows, true, threshold, now)
+		if err != nil {
+			return nil, fmt.Errorf("org queue scan: %w", err)
+		}
+		queueItems = append(queueItems, item)
+	}
+
+	// Pause is a global flag. Surface it so the org tab can render the
+	// "workers paused" indicator, but the org-tier handler does not expose
+	// the pause/resume control.
+	paused, _ := s.IsPaused(ctx)
+
+	return &api.EnrichmentQueueStatus{
+		Counts: counts,
+		Items:  queueItems,
+		Paused: paused,
+	}, nil
+}
+
+// jobInNamespacePrefix returns true iff the queue job's memory namespace
+// matches or is descended from the given path.
+func (s *EnrichmentAdminStore) jobInNamespacePrefix(ctx context.Context, prefix string, jobID uuid.UUID) bool {
+	q := `SELECT 1 FROM enrichment_queue eq
+		JOIN memories m ON eq.memory_id = m.id
+		JOIN namespaces n ON m.namespace_id = n.id
+		WHERE eq.id = ? AND (n.path = ? OR n.path LIKE ?)`
+	if s.db.Backend() == storage.BackendPostgres {
+		q = `SELECT 1 FROM enrichment_queue eq
+			JOIN memories m ON eq.memory_id = m.id
+			JOIN namespaces n ON m.namespace_id = n.id
+			WHERE eq.id = $1 AND (n.path = $2 OR n.path LIKE $3)`
+	}
+	var one int
+	row := s.db.QueryRow(ctx, q, jobID.String(), prefix, prefix+"/%")
+	return row.Scan(&one) == nil
+}
+
+// retryFailedInNamespacePath retries failed enrichment jobs whose memory
+// namespace matches or is descended from prefix. Empty ids retries every
+// failed job in scope; non-empty ids are filtered against the prefix and
+// silently skipped if out-of-scope.
+func (s *EnrichmentAdminStore) retryFailedInNamespacePath(ctx context.Context, prefix string, ids []uuid.UUID) (int, error) {
+	if len(ids) == 0 {
+		q := `SELECT eq.id FROM enrichment_queue eq
+			JOIN memories m ON eq.memory_id = m.id
+			JOIN namespaces n ON m.namespace_id = n.id
+			WHERE eq.status = ? AND (n.path = ? OR n.path LIKE ?)`
+		if s.db.Backend() == storage.BackendPostgres {
+			q = `SELECT eq.id FROM enrichment_queue eq
+				JOIN memories m ON eq.memory_id = m.id
+				JOIN namespaces n ON m.namespace_id = n.id
+				WHERE eq.status = $1 AND (n.path = $2 OR n.path LIKE $3)`
+		}
+		rows, err := s.db.Query(ctx, q, model.EnrichmentStatusFailed, prefix, prefix+"/%")
+		if err != nil {
+			return 0, fmt.Errorf("retry list by namespace: %w", err)
+		}
+		defer rows.Close()
+		var scoped []uuid.UUID
+		for rows.Next() {
+			var idStr string
+			if err := rows.Scan(&idStr); err != nil {
+				return 0, err
+			}
+			if id, perr := uuid.Parse(idStr); perr == nil {
+				scoped = append(scoped, id)
+			}
+		}
+		ids = scoped
+	} else {
+		filtered := ids[:0:0]
+		for _, id := range ids {
+			if s.jobInNamespacePrefix(ctx, prefix, id) {
+				filtered = append(filtered, id)
+			}
+		}
+		ids = filtered
+	}
+
+	count := 0
+	for _, id := range ids {
+		if err := s.queueRepo.Retry(ctx, id); err == nil {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// OrgRetryFailed retries failed enrichment jobs scoped to the given org.
+func (s *EnrichmentAdminStore) OrgRetryFailed(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, error) {
+	orgPath, err := s.orgNamespacePath(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+	return s.retryFailedInNamespacePath(ctx, orgPath, ids)
+}
+
+// SelfRetryFailed retries failed jobs whose memory namespace is descended
+// from (or equal to) the caller's user namespace path.
+func (s *EnrichmentAdminStore) SelfRetryFailed(ctx context.Context, userNamespacePath string, ids []uuid.UUID) (int, error) {
+	return s.retryFailedInNamespacePath(ctx, userNamespacePath, ids)
+}
+
 func (s *EnrichmentAdminStore) RetryFailed(ctx context.Context, ids []uuid.UUID) (int, error) {
 	if len(ids) == 0 {
 		return s.queueRepo.RetryAllFailed(ctx)

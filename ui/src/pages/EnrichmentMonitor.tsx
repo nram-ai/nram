@@ -11,7 +11,9 @@ import {
   elapsedSeconds,
   formatElapsed,
 } from "../hooks/useElapsedTicker";
-import { useAuth } from "../context/AuthContext";
+import { useAuth, type Tier } from "../context/AuthContext";
+import { TierTabs } from "../components/TierTabs";
+import { ExtractionErrorView } from "../lib/extractionError";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faSpinner,
@@ -24,12 +26,6 @@ import {
   faXmark,
 } from "../lib/icons";
 import type { EnrichmentQueueItem } from "../api/client";
-
-// Tier picker — administrators can switch between their own queue items
-// (the "Mine" tab, /v1/me/enrichment) and the cross-tenant pipeline view
-// (the "System" tab, /v1/admin/enrichment). Non-admin callers see only
-// "Mine" with no UI affordance for system access.
-type EnrichmentTier = "self" | "system";
 
 // Live SSE state for the enrichment worker pool. liveJobs is keyed by
 // queue job id (the EnrichmentQueueItem.id, identical to the worker's
@@ -104,10 +100,15 @@ function Spinner({ className = "h-3.5 w-3.5" }: { className?: string }) {
 // Live SSE state
 // ---------------------------------------------------------------------------
 
-function useEnrichmentLiveState() {
+function useEnrichmentLiveState(orgId?: string) {
   const qc = useQueryClient();
   const [liveJobs, setLiveJobs] = useState<Record<string, LiveJob>>({});
   const [poolTick, setPoolTick] = useState<PoolTick | null>(null);
+  const refreshAllTiers = () => {
+    qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+    qc.invalidateQueries({ queryKey: ["me", "enrichment"] });
+    if (orgId) qc.invalidateQueries({ queryKey: ["org", orgId, "enrichment"] });
+  };
 
   const { connected } = useEventStream({
     scope: "",
@@ -133,13 +134,10 @@ function useEnrichmentLiveState() {
             delete next[data.job_id];
             return next;
           });
-          // Authoritative refresh — the row's status flipped to
-          // completed/failed, the queue endpoint will reflect it on the
-          // next poll, but we invalidate so the UI updates immediately.
-          // Refresh both tier caches; the SSE hook is shared between
-          // admin (system) and self viewers.
-          qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
-          qc.invalidateQueries({ queryKey: ["me", "enrichment"] });
+          // Status flipped to completed/failed — invalidate so the UI
+          // updates ahead of the next poll. The SSE hook is shared across
+          // every tier viewer (self/org/system).
+          refreshAllTiers();
           break;
         }
         case "enrichment.pool.tick": {
@@ -164,8 +162,7 @@ function useEnrichmentLiveState() {
               return next;
             });
           }
-          qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
-          qc.invalidateQueries({ queryKey: ["me", "enrichment"] });
+          refreshAllTiers();
           break;
         }
         default:
@@ -358,36 +355,14 @@ function StatCard({
 }
 
 // ---------------------------------------------------------------------------
-// Expandable Error Cell
+// Expandable Error Cell — delegates to the shared ExtractionErrorView so
+// failed-job and partial-recovery JSON envelopes render structured headlines
+// with click-to-expand diagnostics, while plain-string errors fall through
+// to a line-clamped destructive cell.
 // ---------------------------------------------------------------------------
 
 function ErrorCell({ error }: { error?: string }) {
-  const [expanded, setExpanded] = useState(false);
-
-  if (!error) {
-    return (
-      <span className="text-xs text-muted-foreground">&mdash;</span>
-    );
-  }
-
-  const isLong = error.length > 60;
-
-  return (
-    <div className="max-w-xs">
-      <p className={`text-xs text-destructive ${!expanded && isLong ? "line-clamp-2" : ""}`}>
-        {error}
-      </p>
-      {isLong && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="mt-0.5 text-xs font-medium text-primary hover:underline"
-        >
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      )}
-    </div>
-  );
+  return <ExtractionErrorView value={error} variant="cell" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -687,21 +662,27 @@ function QueueTable({
 // ---------------------------------------------------------------------------
 
 function EnrichmentMonitor() {
-  const { liveJobs, poolTick, connected } = useEnrichmentLiveState();
+  const { isAdmin, isOrgOwner, user } = useAuth();
+  const orgId = user?.org_id;
+  const { liveJobs, poolTick, connected } = useEnrichmentLiveState(orgId);
   const statusIntervalMs = connected ? 10_000 : 3_000;
-  const { isAdmin } = useAuth();
 
-  // Default to self-tier for everyone. Non-admin users have no system
-  // option; admin can switch via the tab picker.
-  const [tier, setTier] = useState<EnrichmentTier>("self");
+  // Default to self-tier for everyone. The TierTabs picker only renders
+  // additional tiers when the caller's role grants them; plain users see
+  // no picker at all.
+  const [tier, setTier] = useState<Tier>("self");
 
   const statusQuery = useEnrichmentStatus({
     intervalMs: statusIntervalMs,
     tier,
+    orgId,
   });
-  const retryMutation = useRetryEnrichment();
+  const retryMutation = useRetryEnrichment({ tier, orgId });
   const pauseMutation = usePauseEnrichment();
-  const showWriteActions = tier === "system" && isAdmin;
+  const showWriteActions =
+    (tier === "self") ||
+    (tier === "org" && isOrgOwner) ||
+    (tier === "system" && isAdmin);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -783,48 +764,25 @@ function EnrichmentMonitor() {
   return (
     <div>
       {/* Page header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {tier === "system" ? "Enrichment Queue" : "My Enrichment Queue"}
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {tier === "system"
-            ? "Monitor the enrichment processing queue and manage worker state."
-            : "Read-only view of your own enrichment queue items. Worker controls are administrator-only."}
-        </p>
-      </div>
-
-      {/* Tier picker — admin only. Non-admin users have no system view. */}
-      {isAdmin && (
-        <div className="mb-6 border-b">
-          <nav className="-mb-px flex gap-6" role="tablist" aria-label="Enrichment scope">
-            <button
-              role="tab"
-              aria-selected={tier === "self"}
-              onClick={() => setTier("self")}
-              className={`border-b-2 px-1 py-3 text-sm font-medium ${
-                tier === "self"
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Mine
-            </button>
-            <button
-              role="tab"
-              aria-selected={tier === "system"}
-              onClick={() => setTier("system")}
-              className={`border-b-2 px-1 py-3 text-sm font-medium ${
-                tier === "system"
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              System
-            </button>
-          </nav>
+      <div className="mb-6 flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {tier === "system"
+              ? "Enrichment Queue"
+              : tier === "org"
+                ? "Org Enrichment Queue"
+                : "My Enrichment Queue"}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {tier === "system"
+              ? "Monitor the enrichment processing queue and manage worker state."
+              : tier === "org"
+                ? "Read/write view of your organization's enrichment queue items. Worker pause/resume is administrator-only."
+                : "Your own enrichment queue items. Retry your failed jobs from this view; worker pause/resume is administrator-only."}
+          </p>
         </div>
-      )}
+        <TierTabs current={tier} onChange={setTier} ariaLabel="Enrichment scope" />
+      </div>{/* end header row */}
 
       {/* Loading state */}
       {statusQuery.isLoading && (
@@ -876,33 +834,47 @@ function EnrichmentMonitor() {
             />
           </div>
 
-          {/* Controls bar — write actions (pause/retry) only on the system */}
-          {/* tier for administrators. Self tier is strictly read-only. */}
+          {/* Controls bar — retry is enabled wherever showWriteActions
+              applies (self/org/system per role). Pause/Resume is system-tier
+              admin-only because the worker pool is global. */}
           {showWriteActions && (
           <div className="flex flex-wrap items-center gap-3">
-            {/* Pause/Resume button */}
-            <button
-              type="button"
-              onClick={handleTogglePause}
-              disabled={pauseMutation.isPending}
-              className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${
-                isPaused
-                  ? "bg-success text-white hover:bg-success"
-                  : "bg-yellow-600 text-white hover:bg-yellow-700"
-              }`}
-            >
-              {pauseMutation.isPending ? (
-                <Spinner />
-              ) : isPaused ? (
-                <FontAwesomeIcon icon={faCirclePlay} className="h-4 w-4" />
-              ) : (
-                <FontAwesomeIcon icon={faCirclePause} className="h-4 w-4" />
-              )}
-              {isPaused ? "Resume Workers" : "Pause Workers"}
-            </button>
+            {tier === "system" && isAdmin && (
+              <>
+                {/* Pause/Resume button */}
+                <button
+                  type="button"
+                  onClick={handleTogglePause}
+                  disabled={pauseMutation.isPending}
+                  className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isPaused
+                      ? "bg-success text-white hover:bg-success"
+                      : "bg-yellow-600 text-white hover:bg-yellow-700"
+                  }`}
+                >
+                  {pauseMutation.isPending ? (
+                    <Spinner />
+                  ) : isPaused ? (
+                    <FontAwesomeIcon icon={faCirclePlay} className="h-4 w-4" />
+                  ) : (
+                    <FontAwesomeIcon icon={faCirclePause} className="h-4 w-4" />
+                  )}
+                  {isPaused ? "Resume Workers" : "Pause Workers"}
+                </button>
 
-            {/* Paused indicator */}
-            {isPaused && (
+                {/* Paused indicator */}
+                {isPaused && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-yellow-100 px-3 py-1 text-xs font-medium text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300">
+                    <span className="h-2 w-2 rounded-full bg-yellow-500 animate-pulse" />
+                    Workers paused
+                  </span>
+                )}
+              </>
+            )}
+
+            {/* On non-system tiers the paused flag is informational only —
+                surface it without exposing the pause/resume control. */}
+            {tier !== "system" && isPaused && (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-yellow-100 px-3 py-1 text-xs font-medium text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300">
                 <span className="h-2 w-2 rounded-full bg-yellow-500 animate-pulse" />
                 Workers paused

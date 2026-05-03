@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +53,7 @@ type DreamAdminStore struct {
 	canceller    DreamCycleCanceller
 	projects     DreamProjectReader
 	cascade      DreamingResolver
+	db           storage.DB
 }
 
 // NewDreamAdminStore creates a new DreamAdminStore. canceller may be nil
@@ -68,6 +70,7 @@ func NewDreamAdminStore(
 	canceller DreamCycleCanceller,
 	projects DreamProjectReader,
 	cascade DreamingResolver,
+	db storage.DB,
 ) *DreamAdminStore {
 	return &DreamAdminStore{
 		cycleRepo:    cycleRepo,
@@ -78,6 +81,7 @@ func NewDreamAdminStore(
 		canceller:    canceller,
 		projects:     projects,
 		cascade:      cascade,
+		db:           db,
 	}
 }
 
@@ -280,6 +284,111 @@ func (s *DreamAdminStore) SetEnabled(ctx context.Context, enabled bool) error {
 		Value: json.RawMessage(value),
 		Scope: "global",
 	})
+}
+
+// orgNamespacePath returns the org's root namespace path.
+func (s *DreamAdminStore) orgNamespacePath(ctx context.Context, orgID uuid.UUID) (string, error) {
+	q := "SELECT n.path FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?"
+	if s.db.Backend() == storage.BackendPostgres {
+		q = "SELECT n.path FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1"
+	}
+	var p string
+	row := s.db.QueryRow(ctx, q, orgID.String())
+	if err := row.Scan(&p); err != nil {
+		return "", fmt.Errorf("org namespace path: %w", err)
+	}
+	return p, nil
+}
+
+// OrgListCycles returns dream cycles whose project namespace is descended
+// from (or equal to) the org's root namespace path.
+func (s *DreamAdminStore) OrgListCycles(ctx context.Context, orgID uuid.UUID, limit int) ([]model.DreamCycle, error) {
+	orgPath, err := s.orgNamespacePath(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	cycles, err := s.cycleRepo.ListByNamespacePathPrefix(ctx, orgPath, limit)
+	if err != nil {
+		return nil, err
+	}
+	s.decorateAll(ctx, cycles)
+	return cycles, nil
+}
+
+// OrgDirtyCount returns the number of org-owned projects with pending
+// user-originated changes.
+func (s *DreamAdminStore) OrgDirtyCount(ctx context.Context, orgID uuid.UUID) (int, error) {
+	orgPath, err := s.orgNamespacePath(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+	return s.dirtyRepo.CountDirtyByNamespacePathPrefix(ctx, orgPath)
+}
+
+// OrgStuckCount returns the number of running cycles in the org that have
+// crossed the stuck threshold.
+func (s *DreamAdminStore) OrgStuckCount(ctx context.Context, orgID uuid.UUID) (int, error) {
+	orgPath, err := s.orgNamespacePath(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+	t := s.resolveThresholds(ctx)
+	return s.cycleRepo.CountStaleByNamespacePathPrefix(ctx, orgPath, t.stuck)
+}
+
+// projectNamespacePath returns the namespace path for the given project id.
+func (s *DreamAdminStore) projectNamespacePath(ctx context.Context, projectID uuid.UUID) (string, error) {
+	q := `SELECT n.path FROM namespaces n JOIN projects p ON p.namespace_id = n.id WHERE p.id = ?`
+	if s.db.Backend() == storage.BackendPostgres {
+		q = `SELECT n.path FROM namespaces n JOIN projects p ON p.namespace_id = n.id WHERE p.id = $1`
+	}
+	var p string
+	row := s.db.QueryRow(ctx, q, projectID.String())
+	if err := row.Scan(&p); err != nil {
+		return "", fmt.Errorf("project namespace path: %w", err)
+	}
+	return p, nil
+}
+
+// CycleInOrg returns true iff the cycle's project namespace is in the org
+// subtree.
+func (s *DreamAdminStore) CycleInOrg(ctx context.Context, orgID uuid.UUID, cycleID uuid.UUID) (bool, error) {
+	cycle, err := s.cycleRepo.GetByID(ctx, cycleID)
+	if err != nil {
+		return false, nil
+	}
+	projPath, err := s.projectNamespacePath(ctx, cycle.ProjectID)
+	if err != nil {
+		return false, nil
+	}
+	orgPath, err := s.orgNamespacePath(ctx, orgID)
+	if err != nil {
+		return false, err
+	}
+	if projPath == orgPath {
+		return true, nil
+	}
+	prefix := orgPath + "/"
+	return len(projPath) > len(prefix) && projPath[:len(prefix)] == prefix, nil
+}
+
+// CycleInNamespacePrefix returns true iff the cycle's project namespace
+// path is equal to or descended from the given prefix. Used by self-tier
+// abandon/rollback to gate on caller ownership.
+func (s *DreamAdminStore) CycleInNamespacePrefix(ctx context.Context, prefix string, cycleID uuid.UUID) (bool, error) {
+	cycle, err := s.cycleRepo.GetByID(ctx, cycleID)
+	if err != nil {
+		return false, nil
+	}
+	projPath, err := s.projectNamespacePath(ctx, cycle.ProjectID)
+	if err != nil {
+		return false, nil
+	}
+	if projPath == prefix {
+		return true, nil
+	}
+	p := prefix + "/"
+	return len(projPath) > len(p) && projPath[:len(p)] == p, nil
 }
 
 func (s *DreamAdminStore) isEnabled(ctx context.Context) bool {

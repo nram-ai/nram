@@ -318,6 +318,35 @@ func (r *DreamCycleRepo) CountStale(ctx context.Context, threshold time.Duration
 	return n, nil
 }
 
+// CountStaleByNamespacePathPrefix returns the number of running cycles
+// whose project namespace path is equal to or descended from prefix and
+// whose updated_at is older than threshold. Mirrors CountStale but scoped
+// by namespace subtree — used by the org-tier dreaming status endpoint.
+func (r *DreamCycleRepo) CountStaleByNamespacePathPrefix(ctx context.Context, prefix string, threshold time.Duration) (int, error) {
+	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
+	likePattern := prefix + "/%"
+
+	query := `SELECT COUNT(*) FROM dream_cycles dc
+		JOIN projects p ON p.id = dc.project_id
+		JOIN namespaces n ON n.id = p.namespace_id
+		WHERE dc.status = 'running' AND dc.updated_at < ?
+			AND (n.path = ? OR n.path LIKE ?)`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM dream_cycles dc
+			JOIN projects p ON p.id = dc.project_id
+			JOIN namespaces n ON n.id = p.namespace_id
+			WHERE dc.status = 'running' AND dc.updated_at < $1
+				AND (n.path = $2 OR n.path LIKE $3)`
+	}
+
+	var n int
+	row := r.db.QueryRow(ctx, query, cutoff, prefix, likePattern)
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("dream cycle count stale by prefix: %w", err)
+	}
+	return n, nil
+}
+
 // MarkRolledBack sets a dream cycle status to rolled_back.
 func (r *DreamCycleRepo) MarkRolledBack(ctx context.Context, id uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)

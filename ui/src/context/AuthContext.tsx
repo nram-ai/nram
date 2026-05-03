@@ -181,3 +181,19 @@ export function useAuth(): AuthContextValue {
   }
   return ctx;
 }
+
+// ---------------------------------------------------------------------------
+// Tier access
+// ---------------------------------------------------------------------------
+
+export type Tier = "self" | "org" | "system";
+
+export function useTierAccess(): { availableTiers: Tier[] } {
+  const { isAdmin, isOrgOwner } = useAuth();
+  const availableTiers: Tier[] = isAdmin
+    ? ["self", "org", "system"]
+    : isOrgOwner
+      ? ["self", "org"]
+      : ["self"];
+  return { availableTiers };
+}

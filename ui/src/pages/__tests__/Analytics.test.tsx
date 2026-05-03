@@ -18,9 +18,21 @@ import { useAuth } from "../../context/AuthContext";
 // by the page; tests must mock all of them so the role-driven tier
 // rendering paths are reachable.
 
-vi.mock("../../context/AuthContext", () => ({
-  useAuth: vi.fn(),
-}));
+vi.mock("../../context/AuthContext", () => {
+  const useAuth = vi.fn();
+  return {
+    useAuth,
+    useTierAccess: () => {
+      const a = useAuth() as { isAdmin: boolean; isOrgOwner: boolean };
+      const availableTiers = a.isAdmin
+        ? ["self", "org", "system"]
+        : a.isOrgOwner
+          ? ["self", "org"]
+          : ["self"];
+      return { availableTiers };
+    },
+  };
+});
 
 vi.mock("../../hooks/useApi", () => ({
   useAnalytics: vi.fn(),
