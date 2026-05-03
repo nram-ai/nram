@@ -1,9 +1,38 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import ForceGraph3D, { ForceGraphMethods } from "react-force-graph-3d";
 import * as THREE from "three";
-import { useMeProjects, useGraph } from "../hooks/useApi";
+import {
+  useMeProjects,
+  useGraph,
+  useUpdateProject,
+  useSchemaRange,
+} from "../hooks/useApi";
+import { useDebounce } from "../hooks/useDebounce";
 import { useSelectedProject } from "../context/ProjectContext";
-import type { GraphEntity } from "../api/client";
+import type { GraphEntity, Project, ProjectSettings } from "../api/client";
+
+// Must stay in sync with the backend defaults registered in
+// internal/service/settings.go (graph.* keys); used when the schema endpoint
+// hasn't yet loaded.
+const GRAPH_DEFAULT_GRAVITY = 0.75;
+const GRAPH_DEFAULT_CHARGE = -15;
+const GRAPH_DEFAULT_LINK_DISTANCE = 15;
+
+// Debounce window for persisting slider changes; held longer (DIRTY_GUARD_MS)
+// after each drag so React Query refetches from our own writes don't clobber
+// in-flight values.
+const PERSIST_DEBOUNCE_MS = 300;
+const DIRTY_GUARD_MS = 1500;
+
+function resolveLayoutValue(
+  override: number | undefined,
+  schemaDefault: number,
+): { value: number; hasOverride: boolean } {
+  if (typeof override === "number" && Number.isFinite(override)) {
+    return { value: override, hasOverride: true };
+  }
+  return { value: schemaDefault, hasOverride: false };
+}
 
 // Color map for entity types — vibrant for dark/holographic background
 const ENTITY_TYPE_COLORS: Record<string, { color: string; emissive: string }> = {
@@ -212,6 +241,103 @@ function LegendPanel() {
   );
 }
 
+interface SliderSpec {
+  label: string;
+  description: string;
+  value: number;
+  range: { min: number; max: number; step: number };
+  onChange: (v: number) => void;
+  isOverride: boolean;
+}
+
+interface LayoutDrawerProps {
+  sliders: SliderSpec[];
+  onReset: () => void;
+  onClose: () => void;
+}
+
+function LayoutDrawer({ sliders, onReset, onClose }: LayoutDrawerProps) {
+  const anyOverride = sliders.some((s) => s.isOverride);
+
+  return (
+    <div className="absolute right-0 top-0 h-full w-full sm:w-80 bg-card border-l border-border shadow-lg z-40 overflow-y-auto">
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">Layout</h3>
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground transition-colors text-lg px-2"
+            aria-label="Close layout panel"
+          >
+            x
+          </button>
+        </div>
+
+        <p className="text-xs text-muted-foreground mb-4">
+          Per-project tuning of the d3-force layout. Drag to update live; values
+          save automatically.
+        </p>
+
+        <div className="space-y-5">
+          {sliders.map((s) => (
+            <SliderRow key={s.label} spec={s} />
+          ))}
+        </div>
+
+        <div className="mt-6 pt-4 border-t border-border">
+          <button
+            onClick={onReset}
+            disabled={!anyOverride}
+            className="w-full px-3 py-1.5 rounded-md text-sm border border-input bg-background hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Reset to system defaults
+          </button>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {anyOverride
+              ? "This project has its own layout overrides."
+              : "Using system defaults."}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SliderRow({ spec }: { spec: SliderSpec }) {
+  const { label, description, value, range, onChange, isOverride } = spec;
+  // Match readout precision to slider step so step=1 controls don't show
+  // floating-point noise.
+  const decimals = range.step >= 1 ? 0 : range.step >= 0.1 ? 1 : 2;
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1">
+        <label className="text-sm font-medium">
+          {label}
+          {isOverride && (
+            <span className="ml-2 text-[10px] uppercase tracking-wider text-blue-400">
+              custom
+            </span>
+          )}
+        </label>
+        <span className="text-xs font-mono text-muted-foreground">
+          {value.toFixed(decimals)}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={range.min}
+        max={range.max}
+        step={range.step}
+        value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="w-full accent-blue-500"
+      />
+      <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
 // Create a text sprite for node labels
 function createTextSprite(text: string, color: string): THREE.Sprite {
   const canvas = document.createElement("canvas");
@@ -250,8 +376,134 @@ function GraphVisualization() {
   const { selectedProjectId, setSelectedProjectId } = useSelectedProject();
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
   const [containerSize, setContainerSize] = useState<{ width: number; height: number } | null>(null);
+  const [layoutDrawerOpen, setLayoutDrawerOpen] = useState(false);
   const observerRef = useRef<ResizeObserver | null>(null);
   const graphRef = useRef<ForceGraphMethods | undefined>();
+
+  const gravityRange = useSchemaRange("graph.center_gravity", { min: 0, max: 3, step: 0.05 });
+  const chargeRange = useSchemaRange("graph.charge_strength", { min: -100, max: 0, step: 1 });
+  const linkDistanceRange = useSchemaRange("graph.link_distance", { min: 5, max: 100, step: 1 });
+  // Repulsion is the UI-positive presentation of charge; flip min/max signs.
+  const repulsionRange = useMemo(
+    () => ({
+      min: -chargeRange.max,
+      max: -chargeRange.min,
+      step: chargeRange.step,
+    }),
+    [chargeRange.min, chargeRange.max, chargeRange.step],
+  );
+
+  const currentProject: Project | undefined = useMemo(
+    () => projects?.find((p) => p.id === selectedProjectId),
+    [projects, selectedProjectId],
+  );
+  const projectSettings: ProjectSettings | undefined = currentProject?.settings;
+
+  const resolvedGravity = resolveLayoutValue(
+    projectSettings?.graph_center_gravity,
+    GRAPH_DEFAULT_GRAVITY,
+  );
+  const resolvedCharge = resolveLayoutValue(
+    projectSettings?.graph_charge_strength,
+    GRAPH_DEFAULT_CHARGE,
+  );
+  const resolvedLinkDistance = resolveLayoutValue(
+    projectSettings?.graph_link_distance,
+    GRAPH_DEFAULT_LINK_DISTANCE,
+  );
+
+  const [gravity, setGravity] = useState(resolvedGravity.value);
+  const [charge, setCharge] = useState(resolvedCharge.value);
+  const [linkDistance, setLinkDistance] = useState(resolvedLinkDistance.value);
+
+  // dirtyUntilRef holds off backend->local sync while the user is dragging,
+  // so React Query refetches from our own writes don't clobber in-flight
+  // values. Project switches always force-sync to avoid carrying the
+  // previous project's slider values into a different project's view.
+  const dirtyUntilRef = useRef<number>(0);
+  const lastSyncedProjectRef = useRef<string | null>(null);
+  useEffect(() => {
+    const projectChanged = lastSyncedProjectRef.current !== selectedProjectId;
+    if (!projectChanged && Date.now() < dirtyUntilRef.current) return;
+    if (projectChanged) {
+      dirtyUntilRef.current = 0;
+      lastSyncedProjectRef.current = selectedProjectId;
+    }
+    setGravity(resolvedGravity.value);
+    setCharge(resolvedCharge.value);
+    setLinkDistance(resolvedLinkDistance.value);
+  }, [
+    selectedProjectId,
+    resolvedGravity.value,
+    resolvedCharge.value,
+    resolvedLinkDistance.value,
+  ]);
+
+  const debouncedGravity = useDebounce(gravity, PERSIST_DEBOUNCE_MS);
+  const debouncedCharge = useDebounce(charge, PERSIST_DEBOUNCE_MS);
+  const debouncedLinkDistance = useDebounce(linkDistance, PERSIST_DEBOUNCE_MS);
+
+  const updateProjectMut = useUpdateProject();
+
+  // Persist when debounced values diverge from the cascade-resolved value
+  // (or when an override already exists). Sending undefined for a field
+  // drops the override and falls back to the system default.
+  useEffect(() => {
+    if (!currentProject) return;
+    const fields = [
+      { resolved: resolvedGravity, debounced: debouncedGravity, stored: projectSettings?.graph_center_gravity, key: "graph_center_gravity" as const },
+      { resolved: resolvedCharge, debounced: debouncedCharge, stored: projectSettings?.graph_charge_strength, key: "graph_charge_strength" as const },
+      { resolved: resolvedLinkDistance, debounced: debouncedLinkDistance, stored: projectSettings?.graph_link_distance, key: "graph_link_distance" as const },
+    ];
+
+    const targets: Partial<Record<typeof fields[number]["key"], number | undefined>> = {};
+    let changed = false;
+    for (const f of fields) {
+      const wants = Math.abs(f.debounced - f.resolved.value) > 1e-9 || f.resolved.hasOverride;
+      const target = wants ? f.debounced : undefined;
+      targets[f.key] = target;
+      if (f.stored !== target) changed = true;
+    }
+    if (!changed) return;
+
+    const nextSettings: ProjectSettings = { ...(projectSettings ?? {}) };
+    for (const f of fields) {
+      const target = targets[f.key];
+      if (target === undefined) {
+        delete nextSettings[f.key];
+      } else {
+        nextSettings[f.key] = target;
+      }
+    }
+
+    updateProjectMut.mutate({
+      id: currentProject.id,
+      data: { settings: nextSettings },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedGravity, debouncedCharge, debouncedLinkDistance, currentProject?.id]);
+
+  const markDirty = useCallback(() => {
+    dirtyUntilRef.current = Date.now() + DIRTY_GUARD_MS;
+  }, []);
+  const handleGravityChange = useCallback((v: number) => { markDirty(); setGravity(v); }, [markDirty]);
+  const handleRepulsionChange = useCallback((v: number) => { markDirty(); setCharge(-v); }, [markDirty]);
+  const handleLinkDistanceChange = useCallback((v: number) => { markDirty(); setLinkDistance(v); }, [markDirty]);
+  const handleResetLayout = useCallback(() => {
+    if (!currentProject) return;
+    dirtyUntilRef.current = 0;
+    const nextSettings: ProjectSettings = { ...(projectSettings ?? {}) };
+    delete nextSettings.graph_center_gravity;
+    delete nextSettings.graph_charge_strength;
+    delete nextSettings.graph_link_distance;
+    setGravity(GRAPH_DEFAULT_GRAVITY);
+    setCharge(GRAPH_DEFAULT_CHARGE);
+    setLinkDistance(GRAPH_DEFAULT_LINK_DISTANCE);
+    updateProjectMut.mutate({
+      id: currentProject.id,
+      data: { settings: nextSettings },
+    });
+  }, [currentProject, projectSettings, updateProjectMut]);
 
   // Callback ref — fires when the container div mounts/unmounts
   const containerRef = useCallback((el: HTMLDivElement | null) => {
@@ -401,29 +653,31 @@ function GraphVisualization() {
     [entityMap],
   );
 
-  // Configure forces after mount
+  // Apply forces after mount and on every layout-knob change. Reheat is
+  // rAF-coalesced so a slider drag (which fires onChange every pixel) only
+  // restarts the simulation alpha at most once per frame instead of per event.
+  const reheatPendingRef = useRef(false);
   useEffect(() => {
     if (!graphRef.current) return;
     const fg = graphRef.current;
 
-    // Light repulsion — just enough to prevent overlap within clusters
-    const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
-    if (charge?.strength) {
-      charge.strength(-15);
-    }
+    const chargeForce = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
+    chargeForce?.strength?.(charge);
 
-    // Short link distance for tight connected nodes
-    const link = fg.d3Force("link") as unknown as { distance?: (v: number) => void } | undefined;
-    if (link?.distance) {
-      link.distance(15);
-    }
+    const linkForce = fg.d3Force("link") as unknown as { distance?: (v: number) => void } | undefined;
+    linkForce?.distance?.(linkDistance);
 
-    // Stronger center gravity — pulls disconnected clusters closer together
-    const center = fg.d3Force("center") as unknown as { strength?: (v: number) => void } | undefined;
-    if (center?.strength) {
-      center.strength(1.5);
-    }
-  }, [graph3dData]);
+    const centerForce = fg.d3Force("center") as unknown as { strength?: (v: number) => void } | undefined;
+    centerForce?.strength?.(gravity);
+
+    if (reheatPendingRef.current) return;
+    reheatPendingRef.current = true;
+    requestAnimationFrame(() => {
+      reheatPendingRef.current = false;
+      const reheat = (fg as unknown as { d3ReheatSimulation?: () => void }).d3ReheatSimulation;
+      reheat?.call(fg);
+    });
+  }, [graph3dData, gravity, charge, linkDistance]);
 
   const isLoading = projectsLoading || (selectedProjectId && graphLoading);
 
@@ -454,6 +708,14 @@ function GraphVisualization() {
               </option>
             ))}
           </select>
+          <button
+            onClick={() => setLayoutDrawerOpen((v) => !v)}
+            disabled={!selectedProjectId}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Adjust graph layout forces"
+          >
+            Layout
+          </button>
         </div>
       </div>
 
@@ -550,6 +812,39 @@ function GraphVisualization() {
                 entity={selectedEntity}
                 connectedEntities={connectedEntities}
                 onClose={() => setSelectedEntity(null)}
+              />
+            )}
+
+            {layoutDrawerOpen && currentProject && (
+              <LayoutDrawer
+                sliders={[
+                  {
+                    label: "Gravity",
+                    description: "Pull toward the center. Higher = tighter clumps.",
+                    value: gravity,
+                    range: gravityRange,
+                    onChange: handleGravityChange,
+                    isOverride: resolvedGravity.hasOverride,
+                  },
+                  {
+                    label: "Repulsion",
+                    description: "Force pushing nodes apart. Higher = more spacing.",
+                    value: -charge,
+                    range: repulsionRange,
+                    onChange: handleRepulsionChange,
+                    isOverride: resolvedCharge.hasOverride,
+                  },
+                  {
+                    label: "Link distance",
+                    description: "Target edge length for connected nodes.",
+                    value: linkDistance,
+                    range: linkDistanceRange,
+                    onChange: handleLinkDistanceChange,
+                    isOverride: resolvedLinkDistance.hasOverride,
+                  },
+                ]}
+                onReset={handleResetLayout}
+                onClose={() => setLayoutDrawerOpen(false)}
               />
             )}
 

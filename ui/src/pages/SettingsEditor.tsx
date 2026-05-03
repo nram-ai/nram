@@ -241,6 +241,13 @@ const PARENT_GROUPS: ParentGroup[] = [
     ],
   },
   {
+    id: "graph_visualization",
+    label: "Graph Visualization",
+    description:
+      "System-default d3-force parameters for the 3D entity graph (gravity, repulsion, link distance). Each project can override these from the Layout panel on the graph page; values here apply when no override is stored.",
+    subSections: [{ category: "graph_visualization" }],
+  },
+  {
     id: "auth",
     label: "Auth",
     description: "Authentication and authorization.",

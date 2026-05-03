@@ -8,6 +8,7 @@ import {
   useSchemaRange,
   useSystemRankingWeights,
 } from "../hooks/useApi";
+import { useDebounce } from "../hooks/useDebounce";
 import { useAuth } from "../context/AuthContext";
 import type {
   Project,
@@ -38,15 +39,6 @@ function formatDate(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function useDebounce<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(id);
-  }, [value, delay]);
-  return debounced;
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +361,12 @@ function ProjectDetailPanel({
   const [editFrequency, setEditFrequency] = useState<number | undefined>(undefined);
   const [editGraphRelevance, setEditGraphRelevance] = useState<number | undefined>(undefined);
   const [editConfidence, setEditConfidence] = useState<number | undefined>(undefined);
+  // Round-tripped: edited live from the GraphVisualization page's layout
+  // drawer, preserved here so saving the project panel doesn't wipe them
+  // (the backend replaces project.settings wholesale on update).
+  const [editGraphGravity, setEditGraphGravity] = useState<number | undefined>(undefined);
+  const [editGraphCharge, setEditGraphCharge] = useState<number | undefined>(undefined);
+  const [editGraphLink, setEditGraphLink] = useState<number | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [initialized, setInitialized] = useState(false);
@@ -395,6 +393,9 @@ function ProjectDetailPanel({
       setEditFrequency(rw?.frequency);
       setEditGraphRelevance(rw?.graph_relevance);
       setEditConfidence(rw?.confidence);
+      setEditGraphGravity(settings?.graph_center_gravity);
+      setEditGraphCharge(settings?.graph_charge_strength);
+      setEditGraphLink(settings?.graph_link_distance);
       setInitialized(true);
     }
   }, [project, initialized]);
@@ -450,6 +451,9 @@ function ProjectDetailPanel({
       dedup_threshold: editDedupThreshold,
       enrichment_enabled: editEnrichmentEnabled,
       dreaming_enabled: editDreamingEnabled,
+      graph_center_gravity: editGraphGravity,
+      graph_charge_strength: editGraphCharge,
+      graph_link_distance: editGraphLink,
     });
     const data: ProjectUpdateRequest = {
       name: editName,

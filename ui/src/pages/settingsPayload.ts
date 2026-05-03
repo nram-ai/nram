@@ -31,6 +31,9 @@ export interface ProjectFormState {
   dedup_threshold: number | undefined;
   enrichment_enabled: boolean | undefined;
   dreaming_enabled: boolean | undefined;
+  graph_center_gravity: number | undefined;
+  graph_charge_strength: number | undefined;
+  graph_link_distance: number | undefined;
 }
 
 export interface UserFormState {
@@ -54,6 +57,9 @@ export function buildProjectSettingsPayload(state: ProjectFormState): ProjectSet
   if (state.dedup_threshold !== undefined) settings.dedup_threshold = state.dedup_threshold;
   if (state.enrichment_enabled !== undefined) settings.enrichment_enabled = state.enrichment_enabled;
   if (state.dreaming_enabled !== undefined) settings.dreaming_enabled = state.dreaming_enabled;
+  if (state.graph_center_gravity !== undefined) settings.graph_center_gravity = state.graph_center_gravity;
+  if (state.graph_charge_strength !== undefined) settings.graph_charge_strength = state.graph_charge_strength;
+  if (state.graph_link_distance !== undefined) settings.graph_link_distance = state.graph_link_distance;
   if (Object.keys(rankingOverride).length > 0) settings.ranking_weights = rankingOverride;
   return settings;
 }

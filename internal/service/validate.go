@@ -17,3 +17,16 @@ func ValidateUnitFloat(name string, v float64) error {
 	}
 	return nil
 }
+
+// ValidateFloatRange checks that v is finite and in [min, max]. Used by
+// per-project setting overrides whose admissible range is not the unit
+// interval (e.g. graph layout forces).
+func ValidateFloatRange(name string, v, min, max float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("%s: must be finite", name)
+	}
+	if v < min || v > max {
+		return fmt.Errorf("%s: must be in [%g, %g]", name, min, max)
+	}
+	return nil
+}

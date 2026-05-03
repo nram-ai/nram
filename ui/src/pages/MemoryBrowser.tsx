@@ -10,6 +10,7 @@ import {
   useEnrichMemories,
 } from "../hooks/useApi";
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
+import { useDebounce } from "../hooks/useDebounce";
 import { useAuth } from "../context/AuthContext";
 import { useSelectedProject } from "../context/ProjectContext";
 import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
@@ -117,15 +118,6 @@ function SkeletonCard() {
 // ---------------------------------------------------------------------------
 // useDebounce hook
 // ---------------------------------------------------------------------------
-
-function useDebounce<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(id);
-  }, [value, delay]);
-  return debounced;
-}
 
 // ---------------------------------------------------------------------------
 // Tag Chip (inline editable)

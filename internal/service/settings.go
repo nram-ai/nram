@@ -356,6 +356,18 @@ const (
 	// Admin graph visualization minimum edge weight. Hot-reloadable.
 	SettingGraphDefaultMinWeight = "graph.default_min_weight"
 
+	// Graph visualization d3-force parameters. System defaults are used when a
+	// project has not stored its own override. center_gravity is the centering
+	// force strength (forceCenter); charge_strength is the many-body repulsion
+	// (negative values repel — d3 convention; the UI exposes this as a positive
+	// "repulsion" knob and flips the sign at the boundary); link_distance is
+	// the target edge length passed to forceLink. Per-project overrides ship
+	// through the project settings JSON; per-cycle reads happen client-side, so
+	// changes hot-reload without server round-trips beyond the projects fetch.
+	SettingGraphCenterGravity  = "graph.center_gravity"
+	SettingGraphChargeStrength = "graph.charge_strength"
+	SettingGraphLinkDistance   = "graph.link_distance"
+
 	// Batch store request item cap. Raising this widens the per-request DoS
 	// surface; description warns and the value is bounded by an internal
 	// safety floor in BatchStore validation.
@@ -758,6 +770,9 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingEventsSSEKeepaliveSeconds:  "30",
 
 	SettingGraphDefaultMinWeight: "0.1",
+	SettingGraphCenterGravity:    "0.75",
+	SettingGraphChargeStrength:   "-15",
+	SettingGraphLinkDistance:     "15",
 
 	SettingAPIBatchStoreMaxItems: "100",
 

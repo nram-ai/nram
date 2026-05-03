@@ -64,6 +64,9 @@ func ValidateProjectSettingsJSON(raw json.RawMessage) error {
 	if _, err := service.ParseDreamingEnabledOverride(root.DreamingEnabled); err != nil {
 		return err
 	}
+	if _, err := service.ParseGraphLayoutOverride(raw); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -71,6 +74,11 @@ func ValidateProjectSettingsJSON(raw json.RawMessage) error {
 // payload includes ranking_weights. The cascade lands at project, not user;
 // allowing the field would be write-only data with no observable effect.
 var errUserRankingWeightsNotSupported = errors.New("ranking_weights: not supported at user scope (use project settings instead)")
+
+// errUserGraphLayoutNotSupported is returned when a user-scoped settings
+// payload includes graph_* layout fields. Layout knobs cascade at project
+// scope only.
+var errUserGraphLayoutNotSupported = errors.New("graph layout: not supported at user scope (use project settings instead)")
 
 // ValidateUserSettingsJSON validates user.settings. It rejects ranking_weights
 // presence entirely and applies the same dedup_threshold + enrichment_enabled
@@ -94,6 +102,13 @@ func ValidateUserSettingsJSON(raw json.RawMessage) error {
 	}
 	if _, err := service.ParseDreamingEnabledOverride(root.DreamingEnabled); err != nil {
 		return err
+	}
+	graphOv, err := service.ParseGraphLayoutOverride(raw)
+	if err != nil {
+		return err
+	}
+	if graphOv.CenterGravity != nil || graphOv.ChargeStrength != nil || graphOv.LinkDistance != nil {
+		return errUserGraphLayoutNotSupported
 	}
 	return nil
 }

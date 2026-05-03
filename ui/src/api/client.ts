@@ -521,6 +521,9 @@ export interface ProjectSettings {
   enrichment_enabled?: boolean;
   dreaming_enabled?: boolean;
   ranking_weights?: ProjectRankingWeights;
+  graph_center_gravity?: number;
+  graph_charge_strength?: number;
+  graph_link_distance?: number;
 }
 
 // UserSettings carries the per-user JSON overrides honored by the cascade

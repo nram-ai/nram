@@ -19,6 +19,9 @@ const emptyProjectState = {
   dedup_threshold: undefined,
   enrichment_enabled: undefined,
   dreaming_enabled: undefined,
+  graph_center_gravity: undefined,
+  graph_charge_strength: undefined,
+  graph_link_distance: undefined,
 };
 
 describe("buildProjectSettingsPayload", () => {
@@ -82,6 +85,9 @@ describe("buildProjectSettingsPayload", () => {
       dedup_threshold: 0.92,
       enrichment_enabled: true,
       dreaming_enabled: true,
+      graph_center_gravity: undefined,
+      graph_charge_strength: undefined,
+      graph_link_distance: undefined,
     });
     expect(payload).toEqual({
       ranking_weights: {
@@ -104,6 +110,28 @@ describe("buildProjectSettingsPayload", () => {
       dreaming_enabled: false,
     });
     expect(payload).toEqual({ dreaming_enabled: false });
+  });
+
+  it("emits graph layout fields when each is set", () => {
+    const payload = buildProjectSettingsPayload({
+      ...emptyProjectState,
+      graph_center_gravity: 0.5,
+      graph_charge_strength: -25,
+      graph_link_distance: 30,
+    });
+    expect(payload).toEqual({
+      graph_center_gravity: 0.5,
+      graph_charge_strength: -25,
+      graph_link_distance: 30,
+    });
+  });
+
+  it("preserves zero graph_center_gravity (0 is a valid override)", () => {
+    const payload = buildProjectSettingsPayload({
+      ...emptyProjectState,
+      graph_center_gravity: 0,
+    });
+    expect(payload).toEqual({ graph_center_gravity: 0 });
   });
 });
 

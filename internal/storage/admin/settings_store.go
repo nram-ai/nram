@@ -225,6 +225,14 @@ var settingsSchemas = []api.SettingSchema{
 	// Admin graph minimum edge weight.
 	{Key: service.SettingGraphDefaultMinWeight, Type: "number", DefaultValue: json.RawMessage(`0.1`), Description: "Default minimum edge weight applied when the graph visualization endpoint is called without an explicit min_weight query parameter (0.0-1.0).", Category: "api_performance", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.05)},
 
+	// Graph visualization d3-force defaults. Per-project overrides live in
+	// project.settings; these supply the cascade fallback when a project has
+	// not been tuned. The UI exposes charge as a positive "repulsion" knob and
+	// flips the sign at the boundary; the stored value is the raw d3 charge.
+	{Key: service.SettingGraphCenterGravity, Type: "number", DefaultValue: json.RawMessage(`0.75`), Description: "Default centering force (gravity) applied by the 3D graph visualization. Higher values pull disconnected clusters together more aggressively; lower values let relationship and access-count weighting do more of the layout work. Per-project override available on the graph page.", Category: "graph_visualization", Min: ptrF(0), Max: ptrF(3), Step: ptrF(0.05)},
+	{Key: service.SettingGraphChargeStrength, Type: "number", DefaultValue: json.RawMessage(`-15`), Description: "Default many-body charge strength for the 3D graph visualization. Negative values repel nodes (d3 convention); the UI presents this as a positive 'repulsion' knob from 0 to 100. Per-project override available on the graph page.", Category: "graph_visualization", Min: ptrF(-100), Max: ptrF(0), Step: ptrF(1)},
+	{Key: service.SettingGraphLinkDistance, Type: "number", DefaultValue: json.RawMessage(`15`), Description: "Default target link distance for the 3D graph visualization. Lower values pull connected nodes tighter; higher values spread the graph out. Per-project override available on the graph page.", Category: "graph_visualization", Min: ptrF(5), Max: ptrF(100), Step: ptrF(1)},
+
 	// Batch store request item cap.
 	{Key: service.SettingAPIBatchStoreMaxItems, Type: "number", DefaultValue: json.RawMessage(`100`), Description: "Maximum items allowed in a single batch store request. Advanced: raising this widens the per-request denial-of-service surface, so pair with reverse-proxy body-size limits.", Category: "api_performance", Min: ptrF(1), Max: ptrF(10000), Step: ptrF(10)},
 
