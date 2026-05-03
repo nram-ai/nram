@@ -1783,11 +1783,13 @@ export const orgAPI = {
 
   getAnalytics: (orgId: string) =>
     request<OrgAnalyticsData>("GET", `/orgs/${orgId}/analytics`),
-  getUsage: (orgId: string, params?: { from?: string; to?: string; group_by?: string }) => {
+  getUsage: (orgId: string, params?: { from?: string; to?: string; group_by?: string; user?: string; success_only?: boolean }) => {
     const sp = new URLSearchParams();
     if (params?.from) sp.set("from", params.from);
     if (params?.to) sp.set("to", params.to);
     if (params?.group_by) sp.set("group_by", params.group_by);
+    if (params?.user) sp.set("user", params.user);
+    if (params?.success_only !== undefined) sp.set("success_only", params.success_only ? "true" : "false");
     const qs = sp.toString();
     return request<UsageReport>("GET", `/orgs/${orgId}/usage${qs ? `?${qs}` : ""}`);
   },
@@ -1865,11 +1867,12 @@ export const systemAPI = {
     request<SystemActivityResponse>("GET", "/admin/system/activity"),
   getAnalytics: () =>
     request<SystemAnalyticsData>("GET", "/admin/system/analytics"),
-  getUsage: (params?: { from?: string; to?: string; group_by?: string }) => {
+  getUsage: (params?: { from?: string; to?: string; group_by?: string; success_only?: boolean }) => {
     const sp = new URLSearchParams();
     if (params?.from) sp.set("from", params.from);
     if (params?.to) sp.set("to", params.to);
     if (params?.group_by) sp.set("group_by", params.group_by);
+    if (params?.success_only !== undefined) sp.set("success_only", params.success_only ? "true" : "false");
     const qs = sp.toString();
     return request<UsageReport>("GET", `/admin/system/usage${qs ? `?${qs}` : ""}`);
   },

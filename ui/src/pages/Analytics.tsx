@@ -572,7 +572,7 @@ function UsageBarChart({
 // Usage Controls — group_by, success filter, date range
 // ---------------------------------------------------------------------------
 
-const GROUP_BY_OPTIONS: { value: UsageGroupBy; label: string }[] = [
+const ALL_GROUP_BY_OPTIONS: { value: UsageGroupBy; label: string }[] = [
   { value: "operation", label: "Operation" },
   { value: "model", label: "Model" },
   { value: "provider", label: "Provider" },
@@ -583,6 +583,25 @@ const GROUP_BY_OPTIONS: { value: UsageGroupBy; label: string }[] = [
   { value: "error_code", label: "Error Code" },
   { value: "request_id", label: "Request ID" },
 ];
+
+// Self-tier and org-tier endpoints pin the WHERE clause to the caller's own
+// scope, so grouping by those same dimensions collapses to a single bucket.
+// Filter the dropdown to only the dimensions that produce more than one row.
+function groupByOptionsForTier(
+  tier: Tier,
+  hasUserFilter: boolean,
+): { value: UsageGroupBy; label: string }[] {
+  return ALL_GROUP_BY_OPTIONS.filter((opt) => {
+    if (tier === "self") {
+      return opt.value !== "org" && opt.value !== "user" && opt.value !== "project";
+    }
+    if (tier === "org") {
+      if (opt.value === "org") return false;
+      if (opt.value === "user" && hasUserFilter) return false;
+    }
+    return true;
+  });
+}
 
 function parseSuccessFilter(raw: string): boolean | undefined {
   if (raw === "true") return true;
@@ -619,6 +638,7 @@ function rangePresetToFromTo(preset: string): { from: string; to: string } {
 function UsageControls({
   groupBy,
   setGroupBy,
+  groupByOptions,
   successFilter,
   setSuccessFilter,
   from,
@@ -636,6 +656,7 @@ function UsageControls({
 }: {
   groupBy: UsageGroupBy;
   setGroupBy: (v: UsageGroupBy) => void;
+  groupByOptions: { value: UsageGroupBy; label: string }[];
   successFilter: boolean | undefined;
   setSuccessFilter: (v: boolean | undefined) => void;
   from: string;
@@ -693,7 +714,7 @@ function UsageControls({
             onChange={(e) => setGroupBy(e.target.value as UsageGroupBy)}
             className="mt-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
           >
-            {GROUP_BY_OPTIONS.map((o) => (
+            {groupByOptions.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
@@ -1186,21 +1207,50 @@ function Analytics() {
 
   const [tier, setTier] = useState<Tier>("self");
   const myOrgId = auth.user?.org_id;
-  const orgIdForFetch = tier === "org" ? myOrgId : undefined;
 
   const [groupBy, setGroupBy] = useState<UsageGroupBy>("operation");
   const [successFilter, setSuccessFilter] = useState<boolean | undefined>(undefined);
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
-  // Legacy org/user state retained because handful of memo/computed values
-  // still reference them. Setting these has no network effect post-leak-fix.
+  // Org/User dropdowns drive tier navigation: selecting an org switches to
+  // org-tier for that org_id; user narrows within via ?user= on the
+  // /v1/orgs/{org_id}/usage endpoint.
   const [org, setOrgState] = useState<string | undefined>(undefined);
   const [user, setUser] = useState<string | undefined>(undefined);
+
+  let orgIdForFetch: string | undefined;
+  if (tier === "org") {
+    orgIdForFetch = auth.isAdmin ? org ?? myOrgId : myOrgId;
+  }
 
   const setOrg = useCallback((next: string | undefined) => {
     setOrgState(next);
     setUser(undefined);
+    if (next) setTier("org");
   }, []);
+
+  // Wrap setTier so leaving org-tier clears org/user atomically with the
+  // tier change. Doing this in an effect would let one render fire stale
+  // org-scoped queries (e.g. useOrgUsers) before the cleanup lands.
+  const handleTierChange = useCallback((next: Tier) => {
+    setTier(next);
+    if (next !== "org") {
+      setOrgState(undefined);
+      setUser(undefined);
+    }
+  }, []);
+
+  const groupByOptions = useMemo(
+    () => groupByOptionsForTier(tier, !!user),
+    [tier, user],
+  );
+
+  // Derived (not effect) so a tier flip doesn't fire a wasted query with the
+  // old group_by before an effect resets it. Underlying state is preserved
+  // so user choice survives a tier round-trip.
+  const effectiveGroupBy: UsageGroupBy = groupByOptions.some((o) => o.value === groupBy)
+    ? groupBy
+    : "operation";
 
   const orgsQuery = useOrgs(auth.isAdmin);
   const userOrgId = auth.isAdmin ? org : auth.user?.org_id;
@@ -1209,7 +1259,7 @@ function Analytics() {
   // Tier-A self analytics + usage (always fetched as the default).
   const selfAnalytics = useAnalytics();
   const selfUsage = useUsage({
-    group_by: groupBy,
+    group_by: effectiveGroupBy,
     success_only: successFilter,
     from: from || undefined,
     to: to || undefined,
@@ -1220,7 +1270,9 @@ function Analytics() {
   const orgUsage = useOrgUsage(orgIdForFetch, {
     from: from || undefined,
     to: to || undefined,
-    group_by: groupBy,
+    group_by: effectiveGroupBy,
+    user: user,
+    success_only: successFilter,
   });
 
   // Tier-C (system-aggregate). Gated on tier so the inactive tier doesn't
@@ -1230,7 +1282,8 @@ function Analytics() {
     {
       from: from || undefined,
       to: to || undefined,
-      group_by: groupBy,
+      group_by: effectiveGroupBy,
+      success_only: successFilter,
     },
     { enabled: tier === "system" },
   );
@@ -1309,7 +1362,7 @@ function Analytics() {
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
         </div>
-        <TierTabs current={tier} onChange={setTier} ariaLabel="Analytics scope" />
+        <TierTabs current={tier} onChange={handleTierChange} ariaLabel="Analytics scope" />
       </div>
 
       {hasError && <ErrorBanner message={errorMessage} onRetry={handleRetry} />}
@@ -1392,8 +1445,9 @@ function Analytics() {
 
         {/* Filters and grouping */}
         <UsageControls
-          groupBy={groupBy}
+          groupBy={effectiveGroupBy}
           setGroupBy={setGroupBy}
+          groupByOptions={groupByOptions}
           successFilter={successFilter}
           setSuccessFilter={setSuccessFilter}
           from={from}
@@ -1437,7 +1491,7 @@ function Analytics() {
         <UsageBreakdownTable
           groups={groups}
           costRates={costRates}
-          groupBy={groupBy}
+          groupBy={effectiveGroupBy}
           isLoading={usage.isLoading}
         />
       </div>

@@ -53,6 +53,12 @@ func parseUsageQueryParams(r *http.Request) (UsageFilter, *APIError) {
 		}
 	}
 
+	if raw := q.Get("user"); raw != "" {
+		if id, err := uuid.Parse(raw); err == nil {
+			filter.UserID = &id
+		}
+	}
+
 	if raw := q.Get("from"); raw != "" {
 		if t, err := time.Parse(time.RFC3339, raw); err == nil {
 			filter.From = &t

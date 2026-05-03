@@ -38,7 +38,9 @@ func NewOrgUsageHandler(cfg UsageConfig) http.HandlerFunc {
 			return
 		}
 		filter.OrgID = orgID
-		// UserID stays nil — the result aggregates across every user in the org.
+		// filter.UserID is set by parseUsageQueryParams from ?user=, narrowing
+		// within the org. The path-bound OrgID remains the security boundary;
+		// requireOrgOwner already authorized the caller for this org.
 
 		report, err := cfg.Store.QueryUsage(r.Context(), filter)
 		if err != nil {

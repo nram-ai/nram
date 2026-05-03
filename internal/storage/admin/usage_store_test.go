@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/model"
@@ -154,5 +155,80 @@ func TestUsageStoreGroupByErrorCode(t *testing.T) {
 	}
 	if g, ok := byKey["timeout"]; !ok || g.CallCount != 1 {
 		t.Errorf("timeout group = %+v, want call_count 1", g)
+	}
+}
+
+// TestUsageStoreFromToFilter verifies the From/To filter restricts the
+// aggregation by created_at. The schema defaults created_at to "now", so the
+// test rewrites the timestamp on each inserted row via a direct UPDATE before
+// querying. Catches regressions where the SQL builder drops the date
+// predicate or compares against the wrong column.
+func TestUsageStoreFromToFilter(t *testing.T) {
+	db := setupAdminTestDB(t)
+	ctx := context.Background()
+	nsID := insertTestNamespace(t, db, ctx)
+
+	repo := storage.NewTokenUsageRepo(db)
+	store := NewUsageStore(db)
+
+	rows := []model.TokenUsage{
+		{NamespaceID: nsID, Operation: "old", TokensInput: 100, Success: true},
+		{NamespaceID: nsID, Operation: "mid", TokensInput: 200, Success: true},
+		{NamespaceID: nsID, Operation: "new", TokensInput: 400, Success: true},
+	}
+	for i := range rows {
+		if err := repo.Record(ctx, &rows[i]); err != nil {
+			t.Fatalf("record row %d: %v", i, err)
+		}
+	}
+
+	stamps := []string{
+		"2025-01-01T00:00:00Z",
+		"2026-03-15T12:00:00Z",
+		"2026-05-01T08:00:00Z",
+	}
+	for i, ts := range stamps {
+		execSeed(t, db, ctx, "UPDATE token_usage SET created_at = ? WHERE id = ?", ts, rows[i].ID.String())
+	}
+
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+
+	report, err := store.QueryUsage(ctx, api.UsageFilter{
+		GroupBy: "operation",
+		From:    &from,
+		To:      &to,
+	})
+	if err != nil {
+		t.Fatalf("QueryUsage: %v", err)
+	}
+
+	if report.Totals.CallCount != 1 {
+		t.Errorf("filtered totals.call_count = %d, want 1 (only 'mid' row)", report.Totals.CallCount)
+	}
+	if report.Totals.TokensInput != 200 {
+		t.Errorf("filtered totals.tokens_input = %d, want 200", report.Totals.TokensInput)
+	}
+
+	byKey := map[string]api.UsageGroup{}
+	for _, g := range report.Groups {
+		byKey[g.Key] = g
+	}
+	if _, ok := byKey["mid"]; !ok {
+		t.Errorf("expected 'mid' group within range, got groups: %+v", report.Groups)
+	}
+	if _, ok := byKey["old"]; ok {
+		t.Errorf("did not expect 'old' (pre-from) in result")
+	}
+	if _, ok := byKey["new"]; ok {
+		t.Errorf("did not expect 'new' (post-to) in result")
+	}
+
+	unfiltered, err := store.QueryUsage(ctx, api.UsageFilter{GroupBy: "operation"})
+	if err != nil {
+		t.Fatalf("QueryUsage unfiltered: %v", err)
+	}
+	if unfiltered.Totals.CallCount != 3 {
+		t.Errorf("unfiltered totals.call_count = %d, want 3", unfiltered.Totals.CallCount)
 	}
 }
