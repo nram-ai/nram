@@ -201,8 +201,16 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 	completedPhases := 0
 	hasResidual := false
 
+	// Resolve every phase's fraction once at cycle start. The proportional-
+	// of-remaining math below sums fractions of later phases on each
+	// iteration, so caching avoids O(N²) settings lookups.
+	phaseFracs := make([]float64, len(r.phases))
+	for i, phase := range r.phases {
+		phaseFracs[i] = r.phaseFraction(phaseCtx, phase.Name())
+	}
+
 	var lastErr error
-	for _, phase := range r.phases {
+	for i, phase := range r.phases {
 		if r.idleCheck != nil && !r.idleCheck.IsIdle() {
 			slog.Info("dreaming: enrichment active, aborting before phase",
 				"phase", phase.Name(), "cycle", cycle.ID)
@@ -213,15 +221,20 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 			break
 		}
 
-		// Resolve the phase's budget fraction once per phase. frac>0 carves
-		// a SubSlice that caps how much of the cycle envelope the phase can
-		// consume; frac==0 (the SQL-only-phase default) passes the root
-		// through unchanged so the phase shares the cycle budget.
-		frac := r.phaseFraction(phaseCtx, phase.Name())
+		// frac==0 (SQL-only phases) passes the root budget through; frac>0
+		// carves a proportional-of-remaining SubSlice so under-spend from
+		// earlier LLM phases flows into later ones via Remaining().
+		frac := phaseFracs[i]
 		phaseBudget := budget
 		sliceCap := 0
 		if frac > 0 {
-			sliceCap = int(float64(budget.Total()) * frac)
+			sumRemaining := frac
+			for j := i + 1; j < len(r.phases); j++ {
+				if phaseFracs[j] > 0 {
+					sumRemaining += phaseFracs[j]
+				}
+			}
+			sliceCap = budget.ProportionalSliceCap(frac, sumRemaining)
 			phaseBudget = budget.SubSlice(sliceCap)
 		}
 

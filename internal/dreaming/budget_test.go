@@ -119,6 +119,41 @@ func TestTokenBudget_UnspentSubSliceReleasesAutomatically(t *testing.T) {
 	}
 }
 
+func TestTokenBudget_ProportionalSliceCap(t *testing.T) {
+	b := NewTokenBudget(1000, 100)
+
+	// Boundary: frac == sumRemaining → entire Remaining is allocated.
+	if got := b.ProportionalSliceCap(0.40, 0.40); got != 1000 {
+		t.Errorf("frac==sum on fresh budget: got %d, want 1000", got)
+	}
+	// Standard split: frac=0.40 of total weight 0.80 against Remaining=1000.
+	if got := b.ProportionalSliceCap(0.40, 0.80); got != 500 {
+		t.Errorf("frac=0.40 sum=0.80 Remaining=1000: got %d, want 500", got)
+	}
+	// Headroom absorption: frac=0.10 of weight sum=0.95 → 105, strictly > 100.
+	if got := b.ProportionalSliceCap(0.10, 0.95); got != 105 {
+		t.Errorf("frac=0.10 sum=0.95 Remaining=1000: got %d, want 105 (headroom absorbed)", got)
+	}
+	// Degenerate: frac<=0 or sum<=0 must return 0 without dividing.
+	if got := b.ProportionalSliceCap(0, 0.40); got != 0 {
+		t.Errorf("frac=0: got %d, want 0", got)
+	}
+	if got := b.ProportionalSliceCap(0.40, 0); got != 0 {
+		t.Errorf("sum=0: got %d, want 0", got)
+	}
+	if got := b.ProportionalSliceCap(-0.10, 0.40); got != 0 {
+		t.Errorf("frac<0: got %d, want 0", got)
+	}
+
+	// After spend, Remaining shrinks and the cap shrinks with it.
+	if err := b.Spend(400); err != nil {
+		t.Fatalf("Spend: %v", err)
+	}
+	if got := b.ProportionalSliceCap(0.40, 0.40); got != 600 {
+		t.Errorf("after Spend(400): got %d, want 600 (Remaining=600 * 0.40 / 0.40)", got)
+	}
+}
+
 func TestTokenBudget_MarkZeroUsageWarnedDelegatesToRoot(t *testing.T) {
 	parent := NewTokenBudget(1000, 100)
 	a := parent.SubSlice(300)

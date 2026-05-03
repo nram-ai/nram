@@ -174,3 +174,16 @@ func (b *TokenBudget) MarkZeroUsageWarned() bool {
 func EstimateTokens(text string) int {
 	return len(text) / 4
 }
+
+// ProportionalSliceCap returns the per-phase cap under the
+// proportional-of-remaining policy: Remaining * frac / sumRemainingFracs.
+// Returns 0 when frac <= 0 or sumRemainingFracs <= 0. Callers pass
+// sumRemainingFracs as the sum of fractions for this phase plus all
+// later phases that still have a positive fraction; under-spend from
+// earlier phases shows up automatically through Remaining().
+func (b *TokenBudget) ProportionalSliceCap(frac, sumRemainingFracs float64) int {
+	if frac <= 0 || sumRemainingFracs <= 0 {
+		return 0
+	}
+	return int(float64(b.Remaining()) * frac / sumRemainingFracs)
+}

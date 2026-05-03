@@ -140,18 +140,17 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	auditFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationAuditFraction)
 	reinforceFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationReinforceFraction)
 	consolidateFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationConsolidateFraction)
+	sumRemaining := auditFrac + reinforceFrac + consolidateFrac
 
 	// When the stale-row count saturates the fetch cap there are likely
 	// more stale rows than this cycle could load. Surface as residual so
 	// the scheduler keeps the project dirty and the next cycle drains.
 	residual := len(allMemories) >= staleFetchMax
 
-	// Audit first so backlog drain cannot be starved by reinforce. Each
-	// sub-slice cap is recomputed against current Remaining so unspent
-	// budget from an earlier sub-phase grows the next sub-phase's slice.
+	// Audit first so backlog drain cannot be starved by reinforce.
 	if !budget.Exhausted() {
 		perCycleCap, _ := p.settings.ResolveInt(ctx, service.SettingDreamNoveltyBackfillPerCycle, "global")
-		auditBudget := budget.SubSlice(int(float64(budget.Remaining()) * auditFrac))
+		auditBudget := budget.SubSlice(budget.ProportionalSliceCap(auditFrac, sumRemaining))
 		auditResid, aerr := p.AuditExistingDreams(ctx, cycle, auditBudget, logger, llm, allMemories, perCycleCap)
 		if aerr != nil {
 			slog.Warn("dreaming: backfill audit had errors", "err", aerr)
@@ -159,10 +158,11 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		if auditResid {
 			residual = true
 		}
+		sumRemaining -= auditFrac
 	}
 
 	if !budget.Exhausted() {
-		reinforceBudget := budget.SubSlice(int(float64(budget.Remaining()) * reinforceFrac))
+		reinforceBudget := budget.SubSlice(budget.ProportionalSliceCap(reinforceFrac, sumRemaining))
 		reinResid, rerr := p.reinforce(ctx, cycle, reinforceBudget, logger, llm, allMemories)
 		if rerr != nil {
 			slog.Warn("dreaming: reinforcement sub-phase had errors", "err", rerr)
@@ -170,10 +170,11 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		if reinResid {
 			residual = true
 		}
+		sumRemaining -= reinforceFrac
 	}
 
 	if !budget.Exhausted() {
-		consolidateBudget := budget.SubSlice(int(float64(budget.Remaining()) * consolidateFrac))
+		consolidateBudget := budget.SubSlice(budget.ProportionalSliceCap(consolidateFrac, sumRemaining))
 		consResid, cerr := p.consolidate(ctx, cycle, consolidateBudget, logger, llm, allMemories)
 		if cerr != nil {
 			// Stamp before bailing out so partial progress survives — the

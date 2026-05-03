@@ -271,7 +271,7 @@ func TestRunner_PerPhaseSliceLimitsLLMPhase(t *testing.T) {
 	}}
 	first := &recordingPhase{
 		name:  model.DreamPhaseContradictions,
-		spend: 500, // exceeds the 400 slice cap (40% of 1000)
+		spend: 600, // exceeds the 500 slice cap (1000 * 0.40 / 0.80)
 	}
 	second := &recordingPhase{name: model.DreamPhaseConsolidation}
 
@@ -290,19 +290,20 @@ func TestRunner_PerPhaseSliceLimitsLLMPhase(t *testing.T) {
 		t.Error("expected hasResidual=true because the slice was exhausted mid-phase")
 	}
 
-	if first.gotCap != 400 {
-		t.Errorf("first phase received slice cap=%d, want 400 (40%% of 1000)", first.gotCap)
+	// Proportional-of-remaining: first phase cap = Remaining(1000) * 0.40 / (0.40+0.40) = 500.
+	if first.gotCap != 500 {
+		t.Errorf("first phase received slice cap=%d, want 500 (1000 * 0.40 / 0.80)", first.gotCap)
 	}
 	if second.got == nil {
 		t.Fatal("second phase never ran — the runner broke the loop on slice exhaustion")
 	}
+	// Second phase: sum_remaining collapses to its own 0.40, so cap = Remaining * 0.40 / 0.40 = Remaining.
+	// Root used after first phase = 600, so Remaining = 400, cap = 400.
 	if second.gotCap != 400 {
-		t.Errorf("second phase received slice cap=%d, want 400 (its own fresh 40%% slice)", second.gotCap)
+		t.Errorf("second phase received slice cap=%d, want 400 (root_remaining 400 * 0.40 / 0.40)", second.gotCap)
 	}
-	// Root used should be 500 (first phase's spend cascaded). Second phase's
-	// effective Remaining at entry is min(slice_local=400, root_remaining=500) = 400.
-	if budget.Used() != 500 {
-		t.Errorf("root used=%d, want 500 (first phase's spend cascaded)", budget.Used())
+	if budget.Used() != 600 {
+		t.Errorf("root used=%d, want 600 (first phase's spend cascaded)", budget.Used())
 	}
 	if rem := second.got.Remaining(); rem != 400 {
 		t.Errorf("second phase slice Remaining=%d, want 400 (min of slice_cap and root_remaining)", rem)
@@ -339,16 +340,16 @@ func TestRunner_FractionZeroPassesRootThrough(t *testing.T) {
 }
 
 // TestRunner_LaterPhaseClampedByRootRemaining verifies that when an earlier
-// phase consumes more than its share, a later phase whose own slice cap
-// would allow more tokens than the root has left is correctly clamped by
-// the parent. SubSlice.Remaining()=min(local, parent) handles this with no
-// special-case logic in the runner.
+// phase consumes more than its share, a later phase's slice cap is
+// correctly bounded by what the root has left. Under proportional-of-
+// remaining the second phase's cap collapses naturally because its
+// denominator shrinks while its numerator (Remaining) shrinks faster.
 func TestRunner_LaterPhaseClampedByRootRemaining(t *testing.T) {
 	settings := fractionSettings{values: map[string]float64{
-		"dreaming.contradiction.budget_fraction": 0.40, // cap=400 of 1000
-		"dreaming.consolidation.budget_fraction": 0.40, // cap=400 of 1000
+		"dreaming.contradiction.budget_fraction": 0.40, // first cap = 1000 * 0.40 / 0.80 = 500
+		"dreaming.consolidation.budget_fraction": 0.40,
 	}}
-	// First phase overruns: spends 800 against a 400 slice → returns
+	// First phase overruns: spends 800 against a 500 slice → returns
 	// ErrBudgetExhausted; root.used=800; root.remaining=200.
 	first := &recordingPhase{name: model.DreamPhaseContradictions, spend: 800}
 	second := &recordingPhase{name: model.DreamPhaseConsolidation}
@@ -367,9 +368,123 @@ func TestRunner_LaterPhaseClampedByRootRemaining(t *testing.T) {
 	if second.got == nil {
 		t.Fatal("second phase never ran")
 	}
-	// Second phase's own slice cap is 400, but parent has only 200 left.
-	// Remaining must take the min.
+	// Second phase: sum_remaining = 0.40, cap = Remaining(200) * 0.40 / 0.40 = 200.
+	// SubSlice.Remaining() = min(local=200, parent=200) = 200.
 	if rem := second.got.Remaining(); rem != 200 {
-		t.Errorf("second phase Remaining=%d, want 200 (clamped by parent's remaining, not slice cap)", rem)
+		t.Errorf("second phase Remaining=%d, want 200 (proportional cap collapses to root remaining)", rem)
+	}
+}
+
+// TestRunner_UnusedSliceFlowsToNextLLMPhase is the central guarantee of the
+// proportional-of-remaining policy: when an earlier phase under-spends, the
+// later phase's slice grows accordingly. Under the previous fraction-of-
+// total policy the second phase would still see cap=400 even with the root
+// untouched; under the new policy sum_remaining collapses to its own frac
+// and the cap reaches root Remaining.
+func TestRunner_UnusedSliceFlowsToNextLLMPhase(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.contradiction.budget_fraction": 0.40,
+		"dreaming.consolidation.budget_fraction": 0.40,
+	}}
+	first := &recordingPhase{name: model.DreamPhaseContradictions} // spend = 0
+	second := &recordingPhase{name: model.DreamPhaseConsolidation}
+
+	r := newTestRunner(settings, first, second)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	if first.gotCap != 500 {
+		t.Errorf("first phase cap=%d, want 500 (1000 * 0.40 / 0.80)", first.gotCap)
+	}
+	// First spent 0 → root.used=0 → second's cap absorbs the unspent reservation.
+	if second.gotCap != 1000 {
+		t.Errorf("second phase cap=%d, want 1000 (rollover: Remaining(1000) * 0.40 / 0.40)", second.gotCap)
+	}
+}
+
+// TestRunner_HeadroomDistributedAcrossPhases verifies that the 0.05 default
+// headroom (fractions sum to 0.95) is absorbed into per-phase caps under
+// the new policy: each phase's cap is strictly greater than int(Total*frac)
+// because the proportional denominator is the sum of remaining fractions
+// (≤ 0.95), not 1.0.
+func TestRunner_HeadroomDistributedAcrossPhases(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.embedding_backfill.budget_fraction": 0.10,
+		"dreaming.paraphrase_dedup.budget_fraction":   0.05,
+		"dreaming.contradiction.budget_fraction":      0.40,
+		"dreaming.consolidation.budget_fraction":      0.40,
+	}}
+	embedding := &recordingPhase{name: model.DreamPhaseEmbeddingBackfill}
+	paraphrase := &recordingPhase{name: model.DreamPhaseParaphraseDedup}
+	contradiction := &recordingPhase{name: model.DreamPhaseContradictions}
+	consolidation := &recordingPhase{name: model.DreamPhaseConsolidation}
+
+	r := newTestRunner(settings, embedding, paraphrase, contradiction, consolidation)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		phase  *recordingPhase
+		want   int
+		oldCap int // strict-of-total baseline that the new cap must beat
+	}{
+		{"embedding", embedding, 105, 100},
+		{"paraphrase", paraphrase, 58, 50},
+		{"contradiction", contradiction, 500, 400},
+		{"consolidation", consolidation, 1000, 400},
+	}
+	for _, c := range cases {
+		if c.phase.gotCap != c.want {
+			t.Errorf("%s cap=%d, want %d", c.name, c.phase.gotCap, c.want)
+		}
+		if c.phase.gotCap <= c.oldCap {
+			t.Errorf("%s cap=%d should strictly exceed strict-of-total cap %d (headroom absorption)", c.name, c.phase.gotCap, c.oldCap)
+		}
+	}
+}
+
+// TestRunner_RolloverChainsAcrossThreePhases verifies the rollover chains
+// across more than two phases: each later phase's cap reflects the
+// cumulative under-spend of every prior phase, and when the last phase
+// runs alone its cap reaches the full root Remaining.
+func TestRunner_RolloverChainsAcrossThreePhases(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.embedding_backfill.budget_fraction": 0.30,
+		"dreaming.contradiction.budget_fraction":      0.30,
+		"dreaming.consolidation.budget_fraction":      0.40,
+	}}
+	first := &recordingPhase{name: model.DreamPhaseEmbeddingBackfill, spend: 50}
+	second := &recordingPhase{name: model.DreamPhaseContradictions, spend: 100}
+	third := &recordingPhase{name: model.DreamPhaseConsolidation}
+
+	r := newTestRunner(settings, first, second, third)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	// First: 1000 * 0.30 / 1.00 = 300
+	if first.gotCap != 300 {
+		t.Errorf("first cap=%d, want 300", first.gotCap)
+	}
+	// Second: (1000-50) * 0.30 / 0.70 = 950 * 0.30 / 0.70 = 407
+	if second.gotCap != 407 {
+		t.Errorf("second cap=%d, want 407 (Remaining(950) * 0.30 / 0.70 with rollover)", second.gotCap)
+	}
+	// Third: sum_remaining collapses to 0.40, so cap = Remaining * 0.40 / 0.40 = Remaining.
+	// Root used after first two phases = 150, Remaining = 850.
+	if third.gotCap != 850 {
+		t.Errorf("third cap=%d, want 850 (Remaining absorbs all prior under-spend)", third.gotCap)
 	}
 }
