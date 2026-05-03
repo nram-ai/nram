@@ -50,6 +50,9 @@ func (stubLineageWriter) Create(_ context.Context, _ *model.MemoryLineage) error
 func (stubLineageWriter) CountConflictsBetween(_ context.Context, _, _, _ uuid.UUID) (int, error) {
 	return 0, nil
 }
+func (stubLineageWriter) FindParentIDsByRelation(_ context.Context, _, _ uuid.UUID, _ string) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 // stubSettings is the default zero-config stub used by most tests. cap and
 // neighbors fall through to their package defaults (2000 and 4) — matching
@@ -868,6 +871,9 @@ func (c *countingLineageWriter) Create(_ context.Context, l *model.MemoryLineage
 }
 func (c *countingLineageWriter) CountConflictsBetween(_ context.Context, _, _, _ uuid.UUID) (int, error) {
 	return c.priorCount, nil
+}
+func (c *countingLineageWriter) FindParentIDsByRelation(_ context.Context, _, _ uuid.UUID, _ string) ([]uuid.UUID, error) {
+	return nil, nil
 }
 
 // haircutMemories returns N memories with starting confidence 1.0 and

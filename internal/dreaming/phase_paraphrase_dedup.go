@@ -3,7 +3,6 @@ package dreaming
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -141,12 +140,11 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 			stats["filtered_unembedded"] = stats["filtered_unembedded"].(int) + 1
 			continue
 		}
-		// Fast path: no stamp at all → eligible without JSON decode.
+		meta := decodeMetadata(m.Metadata)
 		if !bytes.Contains(m.Metadata, stampMarker) {
-			eligible = append(eligible, candidate{mem: m, meta: map[string]interface{}{}})
+			eligible = append(eligible, candidate{mem: m, meta: meta})
 			continue
 		}
-		meta := decodeMetadata(m.Metadata)
 		if isParaphraseStale(&m, meta) {
 			eligible = append(eligible, candidate{mem: m, meta: meta})
 		}
@@ -367,7 +365,7 @@ func (p *ParaphraseDedupPhase) stampParaphrase(ctx context.Context, mem *model.M
 		meta = map[string]interface{}{}
 	}
 	meta[ParaphraseCheckedStampKey] = mem.UpdatedAt.UTC().Format(time.RFC3339Nano)
-	encoded, err := json.Marshal(meta)
+	encoded, err := encodeStampWrite(mem.Metadata, meta)
 	if err != nil {
 		return fmt.Errorf("marshal paraphrase stamp: %w", err)
 	}

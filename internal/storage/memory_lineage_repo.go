@@ -209,6 +209,49 @@ func (r *MemoryLineageRepo) FindChildIDsByRelation(ctx context.Context, namespac
 	return ids, nil
 }
 
+// FindParentIDsByRelation returns the parent memory IDs of the given child
+// memory, restricted to a single lineage relation. Used by the consolidation
+// audit's lineage fallback (phase_consolidation.go) to recover the source
+// memory ids of a synthesis whose metadata.source_memory_ids field is
+// missing or empty — lineage rows are written transactionally with the
+// synthesis at create time, so an intact lineage table is the authoritative
+// source even when metadata has been clobbered by an out-of-merge writer.
+//
+// Returns parent_id values in the order the database produced them; callers
+// that need a stable order should sort. Excludes rows with NULL parent_id
+// (root entries that record an origin event without a parent).
+func (r *MemoryLineageRepo) FindParentIDsByRelation(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID, relation string) ([]uuid.UUID, error) {
+	query := `SELECT parent_id FROM memory_lineage
+		WHERE namespace_id = ? AND memory_id = ? AND relation = ? AND parent_id IS NOT NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT parent_id FROM memory_lineage
+			WHERE namespace_id = $1 AND memory_id = $2 AND relation = $3 AND parent_id IS NOT NULL`
+	}
+
+	rows, err := r.db.Query(ctx, query, namespaceID.String(), memoryID.String(), relation)
+	if err != nil {
+		return nil, fmt.Errorf("lineage find parent ids by relation: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, fmt.Errorf("lineage find parent ids by relation scan: %w", err)
+		}
+		id, perr := uuid.Parse(idStr)
+		if perr != nil {
+			return nil, fmt.Errorf("lineage find parent ids by relation parse: %w", perr)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("lineage find parent ids by relation iteration: %w", err)
+	}
+	return ids, nil
+}
+
 // FindParentIDs returns a map of memory_id → parent_id for all given memory IDs
 // that have a parent in the lineage table. Uses a single batch query.
 func (r *MemoryLineageRepo) FindParentIDs(ctx context.Context, namespaceID uuid.UUID, memoryIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {

@@ -479,7 +479,12 @@ func (p *ConsolidationPhase) supersedeOriginals(
 	synthesis *model.Memory,
 	logger *DreamLogWriter,
 ) {
-	for _, memID := range extractSourceMemoryIDs(decodeMetadata(synthesis.Metadata)) {
+	// Same lineage fallback as the audit path: prefer metadata, but
+	// recover from memory_lineage when source_memory_ids is missing.
+	// Without this, a clobbered synthesis cannot supersede its sources
+	// even after reaching the supersession confidence threshold.
+	meta := decodeMetadata(synthesis.Metadata)
+	for _, memID := range p.resolveSourceMemoryIDs(ctx, synthesis, meta) {
 		original, err := p.memories.GetByID(ctx, memID)
 		if err != nil || original.SupersededBy != nil {
 			continue
@@ -631,7 +636,13 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 		processed++
 		stats["audited"] = stats["audited"].(int) + 1
 
-		sourceIDs := extractSourceMemoryIDs(meta)
+		// resolveSourceMemoryIDs prefers metadata.source_memory_ids and
+		// falls back to memory_lineage when metadata is empty (catches
+		// historical damage from the metadata-clobbering bug fixed in
+		// the same change-set, plus any future regression of the same
+		// pattern). On lineage hit, the recovered IDs are written back
+		// into metadata in place so next cycle takes the fast path.
+		sourceIDs := p.resolveSourceMemoryIDs(ctx, &mem, meta)
 		if len(sourceIDs) == 0 {
 			// Orphan synthesis: no recoverable lineage to compare against.
 			p.demoteDream(ctx, logger, &mem, meta, "orphan_no_sources")
@@ -795,7 +806,7 @@ func (p *ConsolidationPhase) writeAuditDecision(
 		meta["low_novelty_reason"] = reason
 	}
 
-	encoded, err := json.Marshal(meta)
+	encoded, err := encodeStampWrite(mem.Metadata, meta)
 	if err != nil {
 		slog.Warn("dreaming: audit metadata marshal failed", "memory", mem.ID, "err", err)
 		return
@@ -841,18 +852,21 @@ type staleSynthesis struct {
 
 // collectReinforceStale returns the subset of syntheses whose
 // reinforce_checked_at stamp is missing or strictly before their UpdatedAt.
-// The byte-level marker check skips the JSON decode for any synthesis that
-// cannot possibly be fresh.
+// The byte-level marker check skips the in-memory staleness recheck for any
+// synthesis that cannot possibly be fresh; meta is always decoded from
+// mem.Metadata so the downstream stamp writer has the row's full field set
+// to merge over (UpdateMetadata is a full-column overwrite, not a JSONB
+// merge — passing a partial map drops any field not in it).
 func collectReinforceStale(syntheses []model.Memory) []staleSynthesis {
 	stampMarker := []byte(ReinforceCheckedStampKey)
 	stale := make([]staleSynthesis, 0, len(syntheses))
 	for i := range syntheses {
 		m := syntheses[i]
+		meta := decodeMetadata(m.Metadata)
 		if !bytes.Contains(m.Metadata, stampMarker) {
-			stale = append(stale, staleSynthesis{mem: m, meta: map[string]interface{}{}})
+			stale = append(stale, staleSynthesis{mem: m, meta: meta})
 			continue
 		}
-		meta := decodeMetadata(m.Metadata)
 		if isReinforceStale(&m, meta) {
 			stale = append(stale, staleSynthesis{mem: m, meta: meta})
 		}
@@ -901,6 +915,11 @@ func isReinforceStale(mem *model.Memory, meta map[string]interface{}) bool {
 // self-invalidate next cycle. Mirrors stampParaphrase and the non-demote
 // half of writeAuditDecision: persist failures are logged, never returned —
 // a failed stamp leaves the row stale so the next cycle retries.
+//
+// The merge through encodeStampWrite is the defensive backstop: even if a
+// caller passes a partial or empty meta map, fields already on the row
+// (notably source_memory_ids and dream_cycle_id on fresh syntheses) are
+// preserved through the write.
 func (p *ConsolidationPhase) stampReinforce(
 	ctx context.Context, mem *model.Memory, meta map[string]interface{},
 ) {
@@ -908,7 +927,7 @@ func (p *ConsolidationPhase) stampReinforce(
 		meta = map[string]interface{}{}
 	}
 	meta[ReinforceCheckedStampKey] = mem.UpdatedAt.UTC().Format(time.RFC3339Nano)
-	encoded, err := json.Marshal(meta)
+	encoded, err := encodeStampWrite(mem.Metadata, meta)
 	if err != nil {
 		slog.Warn("dreaming: reinforce stamp marshal failed", "memory", mem.ID, "err", err)
 		return
@@ -960,12 +979,11 @@ func collectConsolidateStale(clusters [][]model.Memory) (stale []staleCluster, e
 		clusterStale := false
 		for i := range cluster {
 			m := &cluster[i]
+			metas[i] = decodeMetadata(m.Metadata)
 			if !bytes.Contains(m.Metadata, stampMarker) {
-				metas[i] = map[string]interface{}{}
 				clusterStale = true
 				continue
 			}
-			metas[i] = decodeMetadata(m.Metadata)
 			if isClusterMemberStale(m, metas[i], fp) {
 				clusterStale = true
 			}
@@ -1009,7 +1027,7 @@ func (p *ConsolidationPhase) stampConsolidateCluster(
 		}
 		meta[ConsolidationClusterStampKey] = members[i].UpdatedAt.UTC().Format(time.RFC3339Nano)
 		meta[ConsolidationClusterFingerprintKey] = fingerprint
-		encoded, err := json.Marshal(meta)
+		encoded, err := encodeStampWrite(members[i].Metadata, meta)
 		if err != nil {
 			slog.Warn("dreaming: consolidate cluster stamp marshal failed",
 				"memory", members[i].ID, "err", err)
@@ -1065,6 +1083,84 @@ func decodeMetadata(raw json.RawMessage) map[string]interface{} {
 		return map[string]interface{}{}
 	}
 	return m
+}
+
+// encodeStampWrite returns the bytes of mem.Metadata with the caller's
+// updates merged on top. UpdateMetadata is a full-column overwrite (see
+// storage/memory_repo.go UpdateMetadata) — not a JSONB merge — so a stamp
+// writer that marshals only its own keys silently drops every other field
+// on the row. This helper makes the writer the safety net: even if the
+// caller's `updates` map is empty or partial, every on-disk field survives.
+//
+// Precedence: caller's `updates` keys win over on-disk keys (the caller is
+// the one mutating state). To delete a field, the caller must explicitly
+// set it to nil in `updates` — missing keys are preserved as-is.
+func encodeStampWrite(onDisk json.RawMessage, updates map[string]interface{}) ([]byte, error) {
+	merged := decodeMetadata(onDisk)
+	for k, v := range updates {
+		merged[k] = v
+	}
+	return json.Marshal(merged)
+}
+
+// resolveSourceMemoryIDs returns the source memory IDs for a synthesis,
+// preferring metadata.source_memory_ids and falling back to the
+// memory_lineage table (relation = synthesized_from) when metadata is
+// missing or empty. When the lineage fallback fires, the recovered IDs
+// are also merged back into the row's metadata so the next cycle takes
+// the fast path — this is the runtime self-heal that complements the
+// historical-damage migration.
+//
+// meta is mutated in place to mirror the metadata write so callers that
+// reuse the map further down the cycle see the recovered IDs without
+// re-decoding. Returns nil with nil error when neither source has any
+// parents (true orphan — caller should demote).
+func (p *ConsolidationPhase) resolveSourceMemoryIDs(
+	ctx context.Context,
+	mem *model.Memory,
+	meta map[string]interface{},
+) []uuid.UUID {
+	if ids := extractSourceMemoryIDs(meta); len(ids) > 0 {
+		return ids
+	}
+	if p.lineage == nil {
+		return nil
+	}
+	parents, err := p.lineage.FindParentIDsByRelation(ctx, mem.NamespaceID, mem.ID, model.LineageSynthesizedFrom)
+	if err != nil {
+		slog.Warn("dreaming: lineage parent lookup failed",
+			"memory", mem.ID, "err", err)
+		return nil
+	}
+	if len(parents) == 0 {
+		return nil
+	}
+
+	parentStrs := make([]string, len(parents))
+	for i, parent := range parents {
+		parentStrs[i] = parent.String()
+	}
+	updates := map[string]interface{}{
+		model.DreamMetaSourceMemoryIDs: parentStrs,
+	}
+	encoded, encErr := encodeStampWrite(mem.Metadata, updates)
+	if encErr != nil {
+		slog.Warn("dreaming: lineage source self-heal marshal failed",
+			"memory", mem.ID, "err", encErr)
+		return parents
+	}
+	if persistErr := p.memWriter.UpdateMetadata(ctx, mem.ID, mem.NamespaceID, encoded); persistErr != nil {
+		slog.Warn("dreaming: lineage source self-heal persist failed",
+			"memory", mem.ID, "err", persistErr)
+		return parents
+	}
+	mem.Metadata = encoded
+	for k, v := range updates {
+		meta[k] = v
+	}
+	slog.Info("dreaming: source_memory_ids recovered from lineage",
+		"memory", mem.ID, "parents", len(parents))
+	return parents
 }
 
 // extractSourceMemoryIDs pulls the source_memory_ids array out of a decoded

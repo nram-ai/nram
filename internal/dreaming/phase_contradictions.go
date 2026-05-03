@@ -452,11 +452,11 @@ func (p *ContradictionPhase) collectStale(memories []model.Memory) []staleMemory
 		if m.DeletedAt != nil {
 			continue
 		}
+		meta := decodeMetadata(m.Metadata)
 		if !bytes.Contains(m.Metadata, stampMarker) {
-			stale = append(stale, staleMemory{Mem: m, Meta: map[string]interface{}{}})
+			stale = append(stale, staleMemory{Mem: m, Meta: meta})
 			continue
 		}
-		meta := decodeMetadata(m.Metadata)
 		if isStale(&m, meta) {
 			stale = append(stale, staleMemory{Mem: m, Meta: meta})
 		}
@@ -866,7 +866,7 @@ func (p *ContradictionPhase) stampContradictionsChecked(ctx context.Context, mem
 	}
 	meta[ContradictionsCheckedStampKey] = mem.UpdatedAt.UTC().Format(time.RFC3339Nano)
 
-	encoded, err := json.Marshal(meta)
+	encoded, err := encodeStampWrite(mem.Metadata, meta)
 	if err != nil {
 		return fmt.Errorf("marshal contradiction stamp metadata: %w", err)
 	}

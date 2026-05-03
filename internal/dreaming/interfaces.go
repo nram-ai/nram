@@ -92,9 +92,15 @@ type RelationshipWriter interface {
 // contradiction phase needs both the read and the write to make a single
 // detection decision; splitting them across two interfaces would force
 // callers to wire in two dependencies for one operation.
+//
+// FindParentIDsByRelation has the same justification: the consolidation
+// audit's "metadata says orphan, but is the lineage table actually empty?"
+// check is a single decision that combines a read with the write paths
+// already on this interface (demoteDream / Create lineage rows).
 type LineageWriter interface {
 	Create(ctx context.Context, lineage *model.MemoryLineage) error
 	CountConflictsBetween(ctx context.Context, namespaceID, aID, bID uuid.UUID) (int, error)
+	FindParentIDsByRelation(ctx context.Context, namespaceID, memoryID uuid.UUID, relation string) ([]uuid.UUID, error)
 }
 
 // LineageReader reads memory lineage records.
