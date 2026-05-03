@@ -127,6 +127,7 @@ type Handlers struct {
 	AdminWebhooks    http.HandlerFunc
 	AdminAnalytics   http.HandlerFunc
 	AdminUsage       http.HandlerFunc
+	UsageCostRates   http.HandlerFunc
 	AdminNamespaces  http.HandlerFunc
 	AdminDatabase    http.HandlerFunc
 	AdminGraph       http.HandlerFunc
@@ -331,6 +332,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Get("/v1/activity", handler(handlers.AdminActivity))
 		r.Get("/v1/analytics", handler(handlers.AdminAnalytics))
 		r.Get("/v1/usage", handler(handlers.AdminUsage))
+		r.Get("/v1/usage/cost_rates", handler(handlers.UsageCostRates))
 		r.Get("/v1/graph", handler(handlers.AdminGraph))
 		r.Get("/v1/namespaces/tree", handler(handlers.AdminNamespaces))
 

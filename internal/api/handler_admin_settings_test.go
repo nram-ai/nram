@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -756,5 +757,187 @@ func TestAdminSettingsListSettingsExplicitLimitHonored(t *testing.T) {
 	}
 	if store.listLimit != 25 {
 		t.Fatalf("explicit ?limit=25 ignored: store received limit=%d", store.listLimit)
+	}
+}
+
+// costRateSchemas registers usage.cost_rates as Type: "json" so the
+// validator dispatches into validateCostRatesValue. Mirrors the layout
+// of rangeSchemas() above.
+func costRateSchemas() []SettingSchema {
+	return []SettingSchema{
+		{
+			Key:          "usage.cost_rates",
+			Type:         "json",
+			DefaultValue: json.RawMessage(`[]`),
+		},
+	}
+}
+
+func TestAdminSettingsUpdate_AcceptsValidCostRates(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: costRateSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"usage.cost_rates","value":[{"key":"gpt-4o","inputCostPer1k":0.005,"outputCostPer1k":0.015}],"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{
+		UserID: uuid.New(),
+		Role:   "admin",
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != "usage.cost_rates" {
+		t.Errorf("UpdateSetting was not called with cost-rates key; got %q", store.updatedKey)
+	}
+}
+
+func TestAdminSettingsUpdate_AcceptsEmptyCostRates(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: costRateSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"usage.cost_rates","value":[],"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{
+		UserID: uuid.New(),
+		Role:   "admin",
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminSettingsUpdate_RejectsCostRatesNonArray(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: costRateSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"usage.cost_rates","value":{"gpt-4o":{"in":0.005}},"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != "" {
+		t.Error("UpdateSetting should not be called for malformed cost-rates payload")
+	}
+}
+
+func TestAdminSettingsUpdate_RejectsCostRatesNegative(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: costRateSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"usage.cost_rates","value":[{"key":"gpt-4o","inputCostPer1k":-0.1,"outputCostPer1k":0.015}],"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "negative inputCostPer1k") {
+		t.Errorf("error should name the failing field; got %s", w.Body.String())
+	}
+}
+
+func TestAdminSettingsUpdate_RejectsCostRatesEmptyKey(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: costRateSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"usage.cost_rates","value":[{"key":"","inputCostPer1k":0.005,"outputCostPer1k":0.015}],"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- cost-rates GET handler ---
+
+type mockCostRatesStore struct {
+	value json.RawMessage
+	err   error
+}
+
+func (m *mockCostRatesStore) GetCostRates(_ context.Context) (json.RawMessage, error) {
+	return m.value, m.err
+}
+
+func TestUsageCostRates_ReturnsStoredBlob(t *testing.T) {
+	store := &mockCostRatesStore{value: json.RawMessage(`[{"key":"gpt-4o","inputCostPer1k":0.005,"outputCostPer1k":0.015}]`)}
+	h := NewUsageCostRatesHandler(CostRatesConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/usage/cost_rates", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "gpt-4o") {
+		t.Errorf("response should contain stored rate; got %s", w.Body.String())
+	}
+}
+
+func TestUsageCostRates_NoRowsReturnsEmpty(t *testing.T) {
+	store := &mockCostRatesStore{err: sql.ErrNoRows}
+	h := NewUsageCostRatesHandler(CostRatesConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/usage/cost_rates", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (empty fallback), got %d; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"data":[]`) {
+		t.Errorf("missing-row response should fall back to empty list; got %s", w.Body.String())
+	}
+}
+
+func TestUsageCostRates_StoreErrorReturns500(t *testing.T) {
+	store := &mockCostRatesStore{err: errors.New("db down")}
+	h := NewUsageCostRatesHandler(CostRatesConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/usage/cost_rates", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUsageCostRates_RejectsNonGet(t *testing.T) {
+	store := &mockCostRatesStore{}
+	h := NewUsageCostRatesHandler(CostRatesConfig{Store: store})
+	req := httptest.NewRequest(http.MethodPost, "/v1/usage/cost_rates", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAdminSettingsUpdate_RejectsCostRatesDuplicate(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: costRateSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"usage.cost_rates","value":[{"key":"gpt-4o","inputCostPer1k":0.005,"outputCostPer1k":0.015},{"key":"gpt-4o","inputCostPer1k":0.01,"outputCostPer1k":0.02}],"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "duplicate") {
+		t.Errorf("error should mention duplicate; got %s", w.Body.String())
 	}
 }

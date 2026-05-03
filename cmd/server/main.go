@@ -779,6 +779,7 @@ func main() {
 		AdminWebhooks:   api.NewAdminWebhooksHandler(api.WebhookAdminConfig{Store: webhookAdminStore}),
 		AdminAnalytics:  api.NewAdminAnalyticsHandler(api.AnalyticsConfig{Store: analyticsStore}),
 		AdminUsage:      api.NewAdminUsageHandler(api.UsageConfig{Store: usageStore}),
+		UsageCostRates:  api.NewUsageCostRatesHandler(api.CostRatesConfig{Store: settingsAdminStore}),
 		AdminNamespaces: api.NewAdminNamespacesHandler(api.NamespaceAdminConfig{Store: namespaceAdminStore}),
 		AdminDatabase:   api.NewAdminDatabaseHandler(api.DatabaseAdminConfig{Store: databaseAdminStore}),
 		AdminGraph: api.NewAdminGraphHandler(api.GraphAdminConfig{

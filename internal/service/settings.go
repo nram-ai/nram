@@ -48,6 +48,7 @@ const (
 	SettingRankWeightGraph   = "ranking.weight.graph_relevance"
 	SettingRankWeightConf    = "ranking.weight.confidence"
 	SettingTokenRetention    = "usage.token_retention_days"
+	SettingTokenCostRates    = "usage.cost_rates"
 
 	// Hybrid recall fusion. Off by default; flipping enabled turns on
 	// parallel vector + BM25/tsvector retrieval with RRF fusion. The two
@@ -483,6 +484,7 @@ var settingDefaults = map[string]string{
 	SettingRecallFusionVecW:           "0.70",
 	SettingRecallFusionLexW:           "0.30",
 	SettingTokenRetention:             "365",
+	SettingTokenCostRates:             "[]",
 	SettingDreamingEnabled:            "false",
 	SettingDreamMaxTokensPerCycle:     "1024000",
 	SettingDreamMaxTokensPerCall:      "2048",

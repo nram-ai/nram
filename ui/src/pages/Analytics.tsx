@@ -8,6 +8,8 @@ import {
   useSystemUsage,
   useOrgs,
   useOrgUsers,
+  useCostRates,
+  useUpdateSetting,
 } from "../hooks/useApi";
 import { useAuth, type Tier } from "../context/AuthContext";
 import { TierTabs } from "../components/TierTabs";
@@ -26,7 +28,21 @@ import {
   type TypeBucket,
   type OrgAggregate,
   type UserAggregate,
+  type CostRate,
 } from "../api/client";
+
+// One-shot eviction of the legacy per-browser cost-rates store now that
+// rates are an admin-set global. Without this, users carry stale figures
+// across the changeover.
+try {
+  localStorage.removeItem("nram_cost_rates");
+} catch {
+  // ignore
+}
+
+// Stable empty reference so useMemo/child memoization keys don't
+// invalidate while the cost-rates query is in flight.
+const EMPTY_COST_RATES: CostRate[] = [];
 
 import {
   BarChart,
@@ -52,31 +68,9 @@ const CHART_COLORS = [
   "#10b981",
 ];
 
-const COST_RATES_KEY = "nram_cost_rates";
-
-interface CostRate {
-  key: string;
-  inputCostPer1k: number;
-  outputCostPer1k: number;
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function loadCostRates(): CostRate[] {
-  try {
-    const raw = localStorage.getItem(COST_RATES_KEY);
-    if (raw) return JSON.parse(raw) as CostRate[];
-  } catch {
-    // ignore
-  }
-  return [];
-}
-
-function saveCostRates(rates: CostRate[]) {
-  localStorage.setItem(COST_RATES_KEY, JSON.stringify(rates));
-}
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -85,8 +79,13 @@ function formatNumber(n: number): string {
 }
 
 function formatCost(n: number): string {
-  if (n < 0.01 && n > 0) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(2)}`;
+  // Sub-cent values keep 4 fraction digits so a $0.0003 row doesn't
+  // round to $0.00; everything else gets the standard 2.
+  const fractionDigits = n > 0 && n < 0.01 ? 4 : 2;
+  return `$${n.toLocaleString(undefined, {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  })}`;
 }
 
 function formatPercent(n: number): string {
@@ -1246,12 +1245,14 @@ function Analytics() {
   const usage =
     tier === "system" ? systemUsage : tier === "org" ? orgUsage : selfUsage;
 
-  const [costRates, setCostRates] = useState<CostRate[]>(loadCostRates);
-
-  const handleCostRateUpdate = useCallback((rates: CostRate[]) => {
-    setCostRates(rates);
-    saveCostRates(rates);
-  }, []);
+  const costRates = useCostRates().data ?? EMPTY_COST_RATES;
+  const updateSetting = useUpdateSetting();
+  const handleCostRateUpdate = useCallback(
+    (rates: CostRate[]) => {
+      updateSetting.mutate({ key: "usage.cost_rates", value: rates, scope: "global" });
+    },
+    [updateSetting],
+  );
 
   // Self-tier analytics carry the legacy AnalyticsData shape (with ranked
   // memory lists). Org/system tiers carry aggregate shapes — different
@@ -1422,12 +1423,15 @@ function Analytics() {
           isLoading={usage.isLoading}
         />
 
-        {/* Cost rate config */}
-        <CostRateEditor
-          costRates={costRates}
-          groupKeys={groupKeys}
-          onUpdate={handleCostRateUpdate}
-        />
+        {/* Cost rate config — admin-only; the PUT is also gated
+            server-side by RequireRole(Administrator). */}
+        {auth.isAdmin && (
+          <CostRateEditor
+            costRates={costRates}
+            groupKeys={groupKeys}
+            onUpdate={handleCostRateUpdate}
+          />
+        )}
 
         {/* Usage chart */}
         <UsageBarChart

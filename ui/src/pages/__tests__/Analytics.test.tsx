@@ -43,6 +43,8 @@ vi.mock("../../hooks/useApi", () => ({
   useSystemUsage: vi.fn(),
   useOrgs: vi.fn(),
   useOrgUsers: vi.fn(),
+  useCostRates: vi.fn(),
+  useUpdateSetting: vi.fn(),
 }));
 
 const useAuthMock = vi.mocked(useAuth);
@@ -54,6 +56,8 @@ const useSystemAnalyticsMock = vi.mocked(useApi.useSystemAnalytics);
 const useSystemUsageMock = vi.mocked(useApi.useSystemUsage);
 const useOrgsMock = vi.mocked(useApi.useOrgs);
 const useOrgUsersMock = vi.mocked(useApi.useOrgUsers);
+const useCostRatesMock = vi.mocked(useApi.useCostRates);
+const useUpdateSettingMock = vi.mocked(useApi.useUpdateSetting);
 
 function authStub(role: "administrator" | "org_owner" | "member") {
   return {
@@ -106,6 +110,11 @@ beforeEach(() => {
     { id: "org-b", name: "Org Beta", slug: "beta", created_at: "", updated_at: "" },
   ]));
   useOrgUsersMock.mockReturnValue(emptyQuery([]));
+  useCostRatesMock.mockReturnValue(emptyQuery([]));
+  // The page only calls .mutate() on useUpdateSetting; a partial stub
+  // is enough for these render-only tests.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  useUpdateSettingMock.mockReturnValue({ mutate: vi.fn() } as any);
 });
 
 describe("Analytics page — role-aware tier picker", () => {

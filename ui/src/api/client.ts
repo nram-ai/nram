@@ -887,6 +887,14 @@ export interface UsageReport {
   };
 }
 
+// Persisted server-side under the `usage.cost_rates` settings key.
+// Applied client-side to UsageGroup token counts for breakdown columns.
+export interface CostRate {
+  key: string;
+  inputCostPer1k: number;
+  outputCostPer1k: number;
+}
+
 export interface SQLiteInfo {
   file_path: string;
   file_size_bytes: number;
@@ -1389,6 +1397,12 @@ export const adminAPI = {
     const qs = sp.toString();
     return request<UsageReport>("GET", `/usage${qs ? `?${qs}` : ""}`);
   },
+
+  // Writes go through updateSetting("usage.cost_rates", ...); this
+  // read is open to any authenticated role so non-admins can still see
+  // dollar columns in the breakdown.
+  getCostRates: () =>
+    request<{ data: CostRate[] }>("GET", "/usage/cost_rates").then(r => r.data ?? []),
 
   // Database
   getDatabaseInfo: () => request<DatabaseInfo>("GET", "/admin/database"),

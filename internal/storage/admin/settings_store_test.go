@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -204,6 +205,19 @@ func TestSettingsSchemaDefaultsMatchRuntime(t *testing.T) {
 			}
 			if uiVal != runtime {
 				t.Errorf("key %q: UI default %q != runtime default %q", entry.Key, uiVal, runtime)
+			}
+		case "json":
+			var uiVal, runtimeVal interface{}
+			if err := json.Unmarshal(entry.DefaultValue, &uiVal); err != nil {
+				t.Errorf("key %q: cannot decode UI default %s as JSON: %v", entry.Key, string(entry.DefaultValue), err)
+				continue
+			}
+			if err := json.Unmarshal([]byte(runtime), &runtimeVal); err != nil {
+				t.Errorf("key %q: cannot decode runtime default %q as JSON: %v", entry.Key, runtime, err)
+				continue
+			}
+			if !reflect.DeepEqual(uiVal, runtimeVal) {
+				t.Errorf("key %q: UI default %s != runtime default %q", entry.Key, string(entry.DefaultValue), runtime)
 			}
 		default:
 			t.Errorf("key %q: unhandled schema type %q in defaults consistency test", entry.Key, entry.Type)

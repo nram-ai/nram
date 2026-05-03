@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // settingsListMaxLimit is the default and maximum page size for
@@ -224,21 +225,69 @@ func validateValueAgainstSchema(ctx context.Context, store SettingsAdminStore, k
 			break
 		}
 	}
-	if entry == nil || entry.Type != "number" {
+	if entry == nil {
 		return nil
 	}
-	if entry.Min == nil && entry.Max == nil {
-		return nil
+	switch entry.Type {
+	case "json":
+		return validateJSONSettingValue(entry.Key, value)
+	case "number":
+		if entry.Min == nil && entry.Max == nil {
+			return nil
+		}
+		n, ok := decodeNumeric(value)
+		if !ok {
+			return fmt.Errorf("setting %q: value must be a number", key)
+		}
+		if entry.Min != nil && n < *entry.Min {
+			return fmt.Errorf("setting %q: value %v is below schema minimum %v", key, n, *entry.Min)
+		}
+		if entry.Max != nil && n > *entry.Max {
+			return fmt.Errorf("setting %q: value %v is above schema maximum %v", key, n, *entry.Max)
+		}
 	}
-	n, ok := decodeNumeric(value)
-	if !ok {
-		return fmt.Errorf("setting %q: value must be a number", key)
+	return nil
+}
+
+// validateJSONSettingValue dispatches per-key validation for Type:"json"
+// entries. Unknown json keys pass through so a new key can be registered
+// before its validator ships.
+func validateJSONSettingValue(key string, value json.RawMessage) error {
+	switch key {
+	case service.SettingTokenCostRates:
+		return validateCostRatesValue(value)
 	}
-	if entry.Min != nil && n < *entry.Min {
-		return fmt.Errorf("setting %q: value %v is below schema minimum %v", key, n, *entry.Min)
+	return nil
+}
+
+// costRateEntry mirrors the SPA-side CostRate type for shape validation
+// on PUT; runtime callers parse the raw blob themselves.
+type costRateEntry struct {
+	Key             string  `json:"key"`
+	InputCostPer1k  float64 `json:"inputCostPer1k"`
+	OutputCostPer1k float64 `json:"outputCostPer1k"`
+}
+
+func validateCostRatesValue(value json.RawMessage) error {
+	var rates []costRateEntry
+	if err := json.Unmarshal(value, &rates); err != nil {
+		return fmt.Errorf("setting %q: value must be a JSON array of {key, inputCostPer1k, outputCostPer1k} objects: %v", service.SettingTokenCostRates, err)
 	}
-	if entry.Max != nil && n > *entry.Max {
-		return fmt.Errorf("setting %q: value %v is above schema maximum %v", key, n, *entry.Max)
+	seen := make(map[string]struct{}, len(rates))
+	for i, r := range rates {
+		if strings.TrimSpace(r.Key) == "" {
+			return fmt.Errorf("setting %q: entry %d has empty key", service.SettingTokenCostRates, i)
+		}
+		if _, dup := seen[r.Key]; dup {
+			return fmt.Errorf("setting %q: duplicate entry for key %q", service.SettingTokenCostRates, r.Key)
+		}
+		seen[r.Key] = struct{}{}
+		if r.InputCostPer1k < 0 {
+			return fmt.Errorf("setting %q: entry %q has negative inputCostPer1k", service.SettingTokenCostRates, r.Key)
+		}
+		if r.OutputCostPer1k < 0 {
+			return fmt.Errorf("setting %q: entry %q has negative outputCostPer1k", service.SettingTokenCostRates, r.Key)
+		}
 	}
 	return nil
 }

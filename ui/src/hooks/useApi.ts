@@ -598,6 +598,7 @@ export function useUpdateSetting() {
       qc.invalidateQueries({ queryKey: ["admin", "settings"] });
       qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
       qc.invalidateQueries({ queryKey: ["me", "dreaming"] });
+      qc.invalidateQueries({ queryKey: ["cost-rates"] });
     },
   });
 }
@@ -668,6 +669,17 @@ export function useAnalytics(_params?: { org?: string; user?: string }) {
     queryKey: ["self", "analytics"],
     queryFn: () => adminAPI.getAnalytics(),
     staleTime: 30_000,
+  });
+}
+
+// Token cost-rate blob exposed at /v1/usage/cost_rates. Any
+// authenticated role can read; writes go through useUpdateSetting,
+// which is admin-only at the backend.
+export function useCostRates() {
+  return useQuery({
+    queryKey: ["cost-rates"],
+    queryFn: adminAPI.getCostRates,
+    staleTime: 60_000,
   });
 }
 

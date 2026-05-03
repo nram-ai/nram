@@ -37,6 +37,17 @@ func (s *SettingsAdminStore) ListSettings(ctx context.Context, scope string, lim
 	return s.settingsRepo.ListAllPaged(ctx, limit, offset)
 }
 
+// GetCostRates returns the global usage.cost_rates JSON blob raw, so
+// the GET handler can hand it to the SPA without re-encoding. Returns
+// sql.ErrNoRows pre-seeder; the handler maps that to an empty list.
+func (s *SettingsAdminStore) GetCostRates(ctx context.Context) (json.RawMessage, error) {
+	setting, err := s.settingsRepo.Get(ctx, service.SettingTokenCostRates, "global")
+	if err != nil {
+		return nil, err
+	}
+	return setting.Value, nil
+}
+
 func (s *SettingsAdminStore) UpdateSetting(ctx context.Context, key string, value json.RawMessage, scope string, updatedBy *uuid.UUID) error {
 	setting := &model.Setting{
 		Key:       key,
@@ -130,6 +141,7 @@ var settingsSchemas = []api.SettingSchema{
 	{Key: service.SettingIngestionDecisionThreshold, Type: "number", DefaultValue: json.RawMessage(`0.92`), Description: "Cosine similarity at or above which a candidate match is presented to the LLM judge (0.0-1.0). Below this, the new memory is treated as ADD without an LLM call.", Category: "enrichment_ingestion", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.01)},
 	{Key: service.SettingDedupThreshold, Type: "number", DefaultValue: json.RawMessage(`0.92`), Description: "Legacy enrichment-side dedup threshold. The cascade resolver prefers SettingIngestionDecisionThreshold; this key is the fallback when the ingestion-decision phase is disabled.", Category: "enrichment", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.01)},
 	{Key: service.SettingTokenRetention, Type: "number", DefaultValue: json.RawMessage(`365`), Description: "Days to retain rows in the token_usage table before the lifecycle sweep prunes them. Operators raise this for audit retention requirements; set to 0 to retain indefinitely.", Category: "usage", Min: ptrF(0), Max: ptrF(3650), Step: ptrF(1)},
+	{Key: service.SettingTokenCostRates, Type: "json", DefaultValue: json.RawMessage(`[]`), Description: "Per-group token cost rates used to compute dollar breakdowns in the analytics panel. JSON array of {key, inputCostPer1k, outputCostPer1k} objects keyed by the group dimension shown in usage reports (provider, model, etc.). Edited globally by administrators via PUT /admin/settings; surfaced read-only to all other users via GET /v1/usage/cost_rates.", Category: "usage"},
 	{Key: service.SettingIngestionDecisionTopK, Type: "number", DefaultValue: json.RawMessage(`5`), Description: "Maximum number of candidate matches presented to the LLM judge.", Category: "enrichment_ingestion", Min: ptrF(1), Max: ptrF(100), Step: ptrF(1)},
 	{Key: service.SettingIngestionDecisionModel, Type: "string", DefaultValue: json.RawMessage(`""`), Description: "LLM model name for the ingestion decision. Empty falls back to the fact-extraction provider's model (this is a categorization task, a small model is fine).", Category: "enrichment_ingestion"},
 	{Key: service.SettingRankWeightSim, Type: "number", DefaultValue: json.RawMessage(`0.50`), Description: "Weight on cosine similarity in the recall ranking formula (0.0-1.0). The dominant term: how strongly query-to-memory semantic match contributes to the score. Lower to give other signals more pull.", Category: "ranking", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.05)},
