@@ -380,11 +380,11 @@ func TestPruning_Execute_StreamsAllBatches(t *testing.T) {
 		NamespaceID: uuid.New(),
 	}
 
-	residual, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1<<20, 1024), logger)
+	result, err := phase.Execute(context.Background(), cycle, NewTokenBudget(1<<20, 1024), logger)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if residual {
+	if result.HasResidual {
 		t.Error("pruning must never report residual")
 	}
 

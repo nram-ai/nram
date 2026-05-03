@@ -304,11 +304,11 @@ func TestContradictionPhase_NoStaleReturnsResidualFalse(t *testing.T) {
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 
-	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	result, err := phase.Execute(context.Background(), cycle, budget, logger)
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	if residual {
+	if result.HasResidual {
 		t.Fatal("expected residual=false when no memories are stale")
 	}
 	if llm.calls.Load() != 0 {
@@ -344,11 +344,11 @@ func TestContradictionPhase_StampsDispatchedAndReportsResidualWhenCapHit(t *test
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 
-	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	result, err := phase.Execute(context.Background(), cycle, budget, logger)
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	if !residual {
+	if !result.HasResidual {
 		t.Fatal("expected residual=true when stale memories exceed cap")
 	}
 	if int(llm.calls.Load()) > 30 {
@@ -405,11 +405,11 @@ func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 
-	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	result, err := phase.Execute(context.Background(), cycle, budget, logger)
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	if residual {
+	if result.HasResidual {
 		t.Error("expected residual=false after draining the single stale memory")
 	}
 	// Stamps go through UpdateMetadata so updated_at stays intact;
@@ -452,12 +452,12 @@ func TestContradictionPhase_StampingIsIdempotent(t *testing.T) {
 	const maxDrainPasses = 8
 	var drainedAt int
 	for pass := 0; pass < maxDrainPasses; pass++ {
-		residual, err := phase.Execute(context.Background(), cycle,
+		result, err := phase.Execute(context.Background(), cycle,
 			NewTokenBudget(1_000_000, 2048), logger)
 		if err != nil {
 			t.Fatalf("drain pass %d: %v", pass, err)
 		}
-		if !residual {
+		if !result.HasResidual {
 			drainedAt = pass
 			break
 		}
@@ -476,12 +476,12 @@ func TestContradictionPhase_StampingIsIdempotent(t *testing.T) {
 	updatesAfterDrain := store.updateCount()
 
 	// Verify idempotency: another cycle on the drained state is a no-op.
-	residual, err := phase.Execute(context.Background(), cycle,
+	result, err := phase.Execute(context.Background(), cycle,
 		NewTokenBudget(1_000_000, 2048), logger)
 	if err != nil {
 		t.Fatalf("post-drain pass: %v", err)
 	}
-	if residual {
+	if result.HasResidual {
 		t.Error("post-drain pass expected residual=false")
 	}
 	if llm.calls.Load() != callsAfterDrain {
@@ -533,7 +533,7 @@ func TestContradictionPhase_TooFewMemoriesIsNoOp(t *testing.T) {
 		if n > 0 {
 			ns = mems[0].NamespaceID
 		}
-		residual, err := phase.Execute(
+		result, err := phase.Execute(
 			context.Background(),
 			&model.DreamCycle{ID: uuid.New(), NamespaceID: ns},
 			NewTokenBudget(10000, 2048),
@@ -542,7 +542,7 @@ func TestContradictionPhase_TooFewMemoriesIsNoOp(t *testing.T) {
 		if err != nil {
 			t.Fatalf("n=%d: %v", n, err)
 		}
-		if residual {
+		if result.HasResidual {
 			t.Errorf("n=%d: expected residual=false", n)
 		}
 		if llm.calls.Load() != 0 {
@@ -575,7 +575,7 @@ func TestContradictionPhase_EmbedderNilDegradesSafely(t *testing.T) {
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: mems[0].NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 
-	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	result, err := phase.Execute(context.Background(), cycle, budget, logger)
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestContradictionPhase_EmbedderNilDegradesSafely(t *testing.T) {
 	if len(writer.metadataUpdates) == 0 {
 		t.Fatal("expected degradation path to still stamp memories")
 	}
-	if residual && len(writer.metadataUpdates) == len(mems) {
+	if result.HasResidual && len(writer.metadataUpdates) == len(mems) {
 		t.Error("residual=true with every memory stamped is contradictory")
 	}
 	if llm.calls.Load() == 0 {

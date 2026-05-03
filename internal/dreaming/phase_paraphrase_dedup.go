@@ -64,12 +64,12 @@ func NewParaphraseDedupPhase(
 
 func (p *ParaphraseDedupPhase) Name() string { return model.DreamPhaseParaphraseDedup }
 
-func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (PhaseResult, error) {
 	if p.settings != nil && !p.settings.ResolveBool(ctx, service.SettingDreamParaphraseEnabled, "global") {
-		return false, nil
+		return PhaseResult{}, nil
 	}
 	if p.vectorStore == nil {
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	threshold := resolveFraction(ctx, p.settings, service.SettingDreamParaphraseThreshold)
@@ -91,7 +91,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 	// near-RFC3339 strings that fail Go's time.Parse).
 	memories, err := p.memories.ListByNamespaceStale(ctx, cycle.NamespaceID, ParaphraseCheckedStampKey, staleFetchMax)
 	if err != nil {
-		return false, fmt.Errorf("paraphrase dedup: list stale memories: %w", err)
+		return PhaseResult{}, fmt.Errorf("paraphrase dedup: list stale memories: %w", err)
 	}
 
 	stats := map[string]interface{}{
@@ -155,7 +155,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 
 	if len(eligible) == 0 {
 		p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	// Resolve dim from the first memory that has one stamped. Falls back
@@ -188,7 +188,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 		slog.Warn("dreaming: paraphrase dedup skipped; could not resolve embedder dim",
 			"cycle", cycle.ID, "namespace", cycle.NamespaceID)
 		p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	supersededInCycle := map[uuid.UUID]bool{}
@@ -204,7 +204,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 	if err != nil {
 		stats["vector_errors"] = 1
 		p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
-		return false, fmt.Errorf("paraphrase dedup: batch fetch vectors: %w", err)
+		return PhaseResult{}, fmt.Errorf("paraphrase dedup: batch fetch vectors: %w", err)
 	}
 
 	// Index the namespace snapshot so the inner result loop resolves
@@ -296,8 +296,18 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 
 	p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
 
-	residual := visited < len(eligible)
-	return residual, nil
+	if visited < len(eligible) {
+		return PhaseResult{
+			HasResidual:    true,
+			ResidualReason: ResidualReasonParaphraseUnvisited,
+			ResidualDetail: map[string]any{
+				"candidates":    len(eligible),
+				"visited":       visited,
+				"per_cycle_cap": cap,
+			},
+		}, nil
+	}
+	return PhaseResult{}, nil
 }
 
 // pickParaphraseWinner returns (winner, loser) for two paraphrases.

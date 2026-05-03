@@ -53,14 +53,14 @@ func NewEntityDedupPhase(
 
 func (p *EntityDedupPhase) Name() string { return model.DreamPhaseEntityDedup }
 
-func (p *EntityDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+func (p *EntityDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (PhaseResult, error) {
 	entities, err := p.entities.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
-		return false, err
+		return PhaseResult{}, err
 	}
 
 	if len(entities) < 2 {
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	// Group entities by type for more targeted dedup.
@@ -87,7 +87,7 @@ func (p *EntityDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle,
 		}
 	}
 
-	return false, nil
+	return PhaseResult{}, nil
 }
 
 func (p *EntityDedupPhase) findAndMergeDuplicates(

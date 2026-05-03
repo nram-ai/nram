@@ -18,7 +18,8 @@ import { ExtractionErrorView } from "../lib/extractionError";
 import Switch from "../components/Switch";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner } from "../lib/icons";
-import type { DreamCycle, DreamLog } from "../api/client";
+import type { DreamCycle, DreamLog, DreamPhaseSummary } from "../api/client";
+import { formatNumber } from "../lib/formatters";
 
 // Live SSE-driven state per running cycle. Populated from
 // dream.cycle.heartbeat, dream.call.started/completed, and
@@ -79,11 +80,31 @@ const STATUS_COLORS: Record<string, string> = {
 
 const PHASE_LABELS: Record<string, string> = {
   entity_dedup: "Entity Dedup",
+  embedding_backfill: "Embedding Backfill",
+  paraphrase_dedup: "Paraphrase Dedup",
   transitive_discovery: "Transitive Discovery",
   contradiction_detection: "Contradiction Detection",
   consolidation: "Consolidation",
   pruning: "Pruning",
   weight_adjustment: "Weight Adjustment",
+};
+
+// Codes mirror the residualReason* consts in internal/dreaming/runner.go.
+// Unknown codes fall through to the raw string at the call site.
+const RESIDUAL_REASON_LABELS: Record<string, string> = {
+  budget_exhausted_before_phase: "no budget left",
+  phase_slice_zero: "slice rounded to zero",
+  budget_exhausted_during_phase: "cycle budget drained",
+  phase_slice_exhausted: "slice cap hit",
+  more_candidates_than_batch: "more candidates than batch cap",
+  paraphrase_unvisited_candidates: "paraphrase batch cap hit",
+  transitive_per_cycle_cap: "transitive cap hit",
+  dispatch_cap_reached: "contradiction dispatch cap hit",
+  phase_budget_stopped: "phase budget exhausted",
+  audit_stale_remaining: "audit: stale remaining",
+  reinforce_cap_hit: "reinforce cap hit",
+  consolidate_clusters_remaining: "consolidate: clusters remaining",
+  stale_fetch_cap: "stale-row fetch cap",
 };
 
 const OP_COLORS: Record<string, string> = {
@@ -128,6 +149,32 @@ function formatDuration(start: string | null | undefined, end: string | null | u
   if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);
   return `${mins}m ${secs % 60}s`;
+}
+
+function formatTokensWithCap(ps: DreamPhaseSummary): string {
+  const used = ps.tokens_used.toLocaleString();
+  if (ps.slice_cap && ps.slice_cap > 0) {
+    return `${used} / ${formatNumber(ps.slice_cap)}`;
+  }
+  return used;
+}
+
+// "—" when has_residual is undefined: legacy rows can't claim no residual when
+// the field was never written.
+function ResidualCell({ ps }: { ps: DreamPhaseSummary }) {
+  if (ps.has_residual === undefined) {
+    return <span className="text-xs text-muted-foreground">—</span>;
+  }
+  if (!ps.has_residual) {
+    return <span className="text-xs text-muted-foreground">no</span>;
+  }
+  const code = ps.residual_reason ?? "";
+  const friendly = RESIDUAL_REASON_LABELS[code] ?? (code || "yes");
+  return (
+    <span className="text-xs text-orange-600 dark:text-orange-400" title={code}>
+      yes <span className="text-muted-foreground">({friendly})</span>
+    </span>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -657,18 +704,10 @@ function CycleDetail({
   const canRollback = cycle.status === "completed" || cycle.status === "failed";
   const canAbandon = cycle.is_abandonable;
 
-  // Parse phase summary if available.
-  let phaseSummary: Array<{
-    phase: string;
-    tokens_used: number;
-    operations: number;
-    duration_ms: number;
-    error?: string;
-    skipped?: boolean;
-  }> = [];
-  if (cycle.phase_summary && Array.isArray(cycle.phase_summary)) {
-    phaseSummary = cycle.phase_summary as typeof phaseSummary;
-  }
+  const phaseSummary: DreamPhaseSummary[] =
+    cycle.phase_summary && Array.isArray(cycle.phase_summary)
+      ? cycle.phase_summary
+      : [];
 
   return (
     <div className="space-y-4 rounded-lg border bg-card p-6">
@@ -757,6 +796,7 @@ function CycleDetail({
                   <th className="px-3 py-2 font-medium text-muted-foreground">Tokens</th>
                   <th className="px-3 py-2 font-medium text-muted-foreground">Ops</th>
                   <th className="px-3 py-2 font-medium text-muted-foreground">Time</th>
+                  <th className="px-3 py-2 font-medium text-muted-foreground">Residual</th>
                   <th className="px-3 py-2 font-medium text-muted-foreground">Status</th>
                 </tr>
               </thead>
@@ -764,10 +804,13 @@ function CycleDetail({
                 {phaseSummary.map((ps, i) => (
                   <tr key={i} className="border-b last:border-0">
                     <td className="px-3 py-2">{PHASE_LABELS[ps.phase] ?? ps.phase}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{ps.tokens_used.toLocaleString()}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{formatTokensWithCap(ps)}</td>
                     <td className="px-3 py-2 font-mono text-xs">{ps.operations}</td>
                     <td className="px-3 py-2 text-muted-foreground">
                       {ps.duration_ms < 1000 ? `${ps.duration_ms}ms` : `${(ps.duration_ms / 1000).toFixed(1)}s`}
+                    </td>
+                    <td className="px-3 py-2">
+                      <ResidualCell ps={ps} />
                     </td>
                     <td className="px-3 py-2">
                       {ps.skipped ? (

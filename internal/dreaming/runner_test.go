@@ -18,19 +18,47 @@ import (
 // the heartbeat goroutine can be exercised without a database. tickFn lets
 // individual tests inject errors, panics, or specific token counts per call.
 type fakeCycleRepo struct {
-	mu        sync.Mutex
-	tickCalls int
-	tickFn    func(call int) (int, error) // call is 1-indexed
+	mu               sync.Mutex
+	tickCalls        int
+	tickFn           func(call int) (int, error) // call is 1-indexed
+	partialSummaries []json.RawMessage           // captured by UpdatePhaseSummary
+	completed        json.RawMessage             // captured by Complete
 }
 
 func (f *fakeCycleRepo) Start(ctx context.Context, id uuid.UUID) error { return nil }
 func (f *fakeCycleRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status, phase string) error {
 	return nil
 }
+func (f *fakeCycleRepo) UpdatePhaseSummary(ctx context.Context, id uuid.UUID, summary json.RawMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := make(json.RawMessage, len(summary))
+	copy(cp, summary)
+	f.partialSummaries = append(f.partialSummaries, cp)
+	return nil
+}
 func (f *fakeCycleRepo) Complete(ctx context.Context, id uuid.UUID, summary json.RawMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.completed = make(json.RawMessage, len(summary))
+	copy(f.completed, summary)
 	return nil
 }
 func (f *fakeCycleRepo) Fail(ctx context.Context, id uuid.UUID, errMsg string) error { return nil }
+
+func (f *fakeCycleRepo) snapshotPartials() []json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]json.RawMessage, len(f.partialSummaries))
+	copy(out, f.partialSummaries)
+	return out
+}
+
+func (f *fakeCycleRepo) finalSummary() json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.completed
+}
 
 func (f *fakeCycleRepo) TickProgress(ctx context.Context, id uuid.UUID) (int, error) {
 	f.mu.Lock()
@@ -217,33 +245,35 @@ type recordingPhase struct {
 	name   string
 	spend  int
 	err    error
+	result PhaseResult // returned from Execute when no error
 	got    *TokenBudget
 	gotCap int
 }
 
 func (p *recordingPhase) Name() string { return p.name }
-func (p *recordingPhase) Execute(_ context.Context, _ *model.DreamCycle, b *TokenBudget, _ *DreamLogWriter) (bool, error) {
+func (p *recordingPhase) Execute(_ context.Context, _ *model.DreamCycle, b *TokenBudget, _ *DreamLogWriter) (PhaseResult, error) {
 	p.got = b
 	p.gotCap = b.Total()
 	if p.spend > 0 {
 		// Spend in one shot; ErrBudgetExhausted from over-spend is what we
 		// want phases to surface to the runner so the slice-cap path runs.
 		if err := b.Spend(p.spend); err != nil {
-			return false, err
+			return PhaseResult{}, err
 		}
 	}
-	return false, p.err
+	return p.result, p.err
 }
 
 // noopRepo is a cycleProgressRepo that does nothing — the runner's writes are
 // not the unit under test here.
 type noopRepo struct{}
 
-func (noopRepo) Start(context.Context, uuid.UUID) error                          { return nil }
-func (noopRepo) UpdateStatus(context.Context, uuid.UUID, string, string) error   { return nil }
-func (noopRepo) TickProgress(context.Context, uuid.UUID) (int, error)            { return 0, nil }
-func (noopRepo) Complete(context.Context, uuid.UUID, json.RawMessage) error      { return nil }
-func (noopRepo) Fail(context.Context, uuid.UUID, string) error                   { return nil }
+func (noopRepo) Start(context.Context, uuid.UUID) error                                  { return nil }
+func (noopRepo) UpdateStatus(context.Context, uuid.UUID, string, string) error           { return nil }
+func (noopRepo) UpdatePhaseSummary(context.Context, uuid.UUID, json.RawMessage) error    { return nil }
+func (noopRepo) TickProgress(context.Context, uuid.UUID) (int, error)                    { return 0, nil }
+func (noopRepo) Complete(context.Context, uuid.UUID, json.RawMessage) error              { return nil }
+func (noopRepo) Fail(context.Context, uuid.UUID, string) error                           { return nil }
 
 // newTestRunner builds a Runner directly so tests can stub the cycle repo,
 // settings, and phase list without going through the cmd/server wiring.
@@ -486,5 +516,184 @@ func TestRunner_RolloverChainsAcrossThreePhases(t *testing.T) {
 	// Root used after first two phases = 150, Remaining = 850.
 	if third.gotCap != 850 {
 		t.Errorf("third cap=%d, want 850 (Remaining absorbs all prior under-spend)", third.gotCap)
+	}
+}
+
+func newTestRunnerWithRepo(repo cycleProgressRepo, settings SettingsResolver, phases ...Phase) *Runner {
+	return &Runner{
+		cycleRepo:         repo,
+		heartbeatInterval: 5 * time.Second,
+		settings:          settings,
+		phases:            phases,
+	}
+}
+
+func decodeSummary(t *testing.T, raw json.RawMessage) []PhaseSummaryEntry {
+	t.Helper()
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []PhaseSummaryEntry
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decodeSummary: %v\nraw: %s", err, string(raw))
+	}
+	return out
+}
+
+func TestRunner_PhaseSummaryRecordsSliceCap(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.contradiction.budget_fraction": 0.40,
+		"dreaming.consolidation.budget_fraction": 0.40,
+		// pruning has no fraction registered → frac=0 (SQL-only).
+	}}
+	contradiction := &recordingPhase{name: model.DreamPhaseContradictions}
+	consolidation := &recordingPhase{name: model.DreamPhaseConsolidation}
+	pruning := &recordingPhase{name: model.DreamPhasePruning}
+
+	repo := &fakeCycleRepo{}
+	r := newTestRunnerWithRepo(repo, settings, contradiction, consolidation, pruning)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	entries := decodeSummary(t, repo.finalSummary())
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 phase summary entries, got %d: %s", len(entries), string(repo.finalSummary()))
+	}
+
+	wantCaps := map[string]int{
+		model.DreamPhaseContradictions: 500,  // 1000 * 0.40 / 0.80
+		model.DreamPhaseConsolidation:  1000, // Remaining(1000) * 0.40 / 0.40
+		model.DreamPhasePruning:        0,    // SQL-only, no slice
+	}
+	for _, e := range entries {
+		want, ok := wantCaps[e.Phase]
+		if !ok {
+			t.Errorf("unexpected phase in summary: %q", e.Phase)
+			continue
+		}
+		if e.SliceCap != want {
+			t.Errorf("phase %q SliceCap=%d, want %d", e.Phase, e.SliceCap, want)
+		}
+	}
+}
+
+func TestRunner_StreamsPartialSummaryPerPhase(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.contradiction.budget_fraction": 0.40,
+		"dreaming.consolidation.budget_fraction": 0.40,
+	}}
+	first := &recordingPhase{name: model.DreamPhaseContradictions}
+	second := &recordingPhase{name: model.DreamPhaseConsolidation}
+
+	repo := &fakeCycleRepo{}
+	r := newTestRunnerWithRepo(repo, settings, first, second)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	partials := repo.snapshotPartials()
+	if len(partials) != 2 {
+		t.Fatalf("expected 2 partial-summary writes (one per phase), got %d", len(partials))
+	}
+
+	first1 := decodeSummary(t, partials[0])
+	if len(first1) != 1 || first1[0].Phase != model.DreamPhaseContradictions {
+		t.Errorf("first partial summary should contain only contradiction; got %+v", first1)
+	}
+	first2 := decodeSummary(t, partials[1])
+	if len(first2) != 2 ||
+		first2[0].Phase != model.DreamPhaseContradictions ||
+		first2[1].Phase != model.DreamPhaseConsolidation {
+		t.Errorf("second partial summary should contain both phases in order; got %+v", first2)
+	}
+}
+
+func TestRunner_PhaseSuppliedResidualReasonRoundTrips(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.contradiction.budget_fraction": 0.40,
+	}}
+	phase := &recordingPhase{
+		name: model.DreamPhaseContradictions,
+		result: PhaseResult{
+			HasResidual:    true,
+			ResidualReason: ResidualReasonDispatchCapReached,
+			ResidualDetail: map[string]any{"cap": 100, "stale": 250},
+		},
+	}
+
+	repo := &fakeCycleRepo{}
+	r := newTestRunnerWithRepo(repo, settings, phase)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	entries := decodeSummary(t, repo.finalSummary())
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 summary entry, got %d", len(entries))
+	}
+	if !entries[0].HasResidual {
+		t.Error("HasResidual should be true")
+	}
+	if entries[0].ResidualReason != ResidualReasonDispatchCapReached {
+		t.Errorf("ResidualReason=%q, want %q", entries[0].ResidualReason, ResidualReasonDispatchCapReached)
+	}
+	if cap, _ := entries[0].ResidualDetail["cap"].(float64); int(cap) != 100 {
+		t.Errorf("ResidualDetail[cap]=%v, want 100", entries[0].ResidualDetail["cap"])
+	}
+}
+
+func TestRunner_RunnerLevelReasonOverridesPhaseSupplied(t *testing.T) {
+	settings := fractionSettings{values: map[string]float64{
+		"dreaming.contradiction.budget_fraction": 0.40,
+		"dreaming.consolidation.budget_fraction": 0.40,
+	}}
+	// Phase spends past its 500 cap → b.Spend returns ErrBudgetExhausted.
+	// recordingPhase returns (PhaseResult{}, err) on Spend error so any
+	// PhaseResult.ResidualReason a real phase tried to set is moot — the
+	// runner-level reason path takes over.
+	first := &recordingPhase{
+		name:  model.DreamPhaseContradictions,
+		spend: 600,
+		result: PhaseResult{
+			HasResidual:    true,
+			ResidualReason: "phase_supplied_should_be_overridden",
+		},
+	}
+	second := &recordingPhase{name: model.DreamPhaseConsolidation}
+
+	repo := &fakeCycleRepo{}
+	r := newTestRunnerWithRepo(repo, settings, first, second)
+	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New()}
+	budget := NewTokenBudget(1000, 100)
+
+	if _, _, err := r.Execute(context.Background(), cycle, budget); err != nil {
+		t.Fatalf("Execute returned err: %v", err)
+	}
+
+	entries := decodeSummary(t, repo.finalSummary())
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	first0 := entries[0]
+	if !first0.HasResidual {
+		t.Error("first phase HasResidual should be true on slice exhaustion")
+	}
+	// Root has 400 remaining when the slice (500) blew up, so root is NOT
+	// exhausted → reason is phase_slice_exhausted (not budget_exhausted_during_phase).
+	if first0.ResidualReason != ResidualReasonPhaseSliceExhausted {
+		t.Errorf("first ResidualReason=%q, want %q", first0.ResidualReason, ResidualReasonPhaseSliceExhausted)
+	}
+	if first0.Error != "budget exhausted" {
+		t.Errorf("first Error=%q, want %q", first0.Error, "budget exhausted")
 	}
 }

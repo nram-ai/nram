@@ -51,7 +51,7 @@ func NewPruningPhase(memories MemoryReader, memWriter MemoryWriter, relWriter Re
 
 func (p *PruningPhase) Name() string { return model.DreamPhasePruning }
 
-func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (PhaseResult, error) {
 	batchSize := p.resolveBatchSize(ctx)
 
 	visited := 0
@@ -95,7 +95,7 @@ func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, bud
 	// Pruning is deterministic per cycle: it streams every memory in the
 	// namespace through per-batch decay and prune ops, and expires every
 	// low-weight relationship in one pass. No residual.
-	return false, nil
+	return PhaseResult{}, nil
 }
 
 // resolveBatchSize reads dreaming.pruning.batch_size, falling back to the

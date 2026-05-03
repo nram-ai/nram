@@ -52,18 +52,18 @@ func NewTransitivePhase(
 
 func (p *TransitivePhase) Name() string { return model.DreamPhaseTransitive }
 
-func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (PhaseResult, error) {
 	minWeight := p.resolveFloat(ctx, service.SettingDreamTransitiveMinWeight)
 	maxPerCycle := p.resolveInt(ctx, service.SettingDreamTransitiveMaxPerCycle)
 	hardCap := p.resolveInt(ctx, service.SettingDreamTransitiveNamespaceHardCap)
 
 	entities, err := p.entities.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
-		return false, err
+		return PhaseResult{}, err
 	}
 
 	if len(entities) < 3 {
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	// Hard cap: if namespace already has too many relationships, skip entirely.
@@ -71,18 +71,18 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	// pruning the graph or raising the cap will unstick it.
 	totalActive, err := p.relationships.CountActiveByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
-		return false, err
+		return PhaseResult{}, err
 	}
 	if totalActive >= hardCap {
 		slog.Info("dreaming: transitive phase skipped, namespace at hard cap",
 			"active", totalActive, "cap", hardCap, "cycle", cycle.ID)
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	// Build adjacency map for quick lookup.
 	allRels, err := p.relationships.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
-		return false, err
+		return PhaseResult{}, err
 	}
 
 	// Build edge lookup: (sourceID, targetID, relation) → relationship.
@@ -119,7 +119,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		maxNew = headroom
 	}
 	if maxNew <= 0 {
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	transitiveProps := json.RawMessage(`{"source":"` + transitivePropertySource + `"}`)
@@ -211,7 +211,19 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 			"count", created, "cycle", cycle.ID, "truncated", truncated)
 	}
 
-	return truncated, nil
+	if truncated {
+		return PhaseResult{
+			HasResidual:    true,
+			ResidualReason: ResidualReasonTransitivePerCycleCap,
+			ResidualDetail: map[string]any{
+				"created":       created,
+				"per_cycle_cap": maxPerCycle,
+				"hard_cap":      hardCap,
+				"active":        totalActive,
+			},
+		}, nil
+	}
+	return PhaseResult{}, nil
 }
 
 // resolveFloat reads a float setting via the *WithDefault helper, falling

@@ -64,12 +64,12 @@ func (p *EmbeddingBackfillPhase) Name() string { return model.DreamPhaseEmbeddin
 // Execute scans every supported dim's missing-vector rows up to the
 // per-cycle cap, repairs or clears each, and reports residual when more
 // rows are pending than the cap allowed.
-func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (PhaseResult, error) {
 	if p.settings != nil && !p.settings.ResolveBool(ctx, service.SettingDreamEmbeddingBackfillEnabled, "global") {
-		return false, nil
+		return PhaseResult{}, nil
 	}
 	if p.repairer == nil || p.memWriter == nil || p.vectorStore == nil {
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	cap, _ := p.settings.ResolveInt(ctx, service.SettingDreamEmbeddingBackfillCapPerCycle, "global")
@@ -132,7 +132,18 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 	stats["visited"] = visited
 	p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
 
-	return foundTotal > visited, nil
+	if foundTotal > visited {
+		return PhaseResult{
+			HasResidual:    true,
+			ResidualReason: ResidualReasonMoreCandidatesThanBatch,
+			ResidualDetail: map[string]any{
+				"candidates":    foundTotal,
+				"visited":       visited,
+				"per_cycle_cap": cap,
+			},
+		}, nil
+	}
+	return PhaseResult{}, nil
 }
 
 // tryRepair re-embeds the memory and writes a fresh vector. Returns true

@@ -151,11 +151,11 @@ func TestEmbeddingBackfillPhase_RepairsMissingVectors(t *testing.T) {
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 	budget := NewTokenBudget(10000, 2048)
 
-	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	result, err := phase.Execute(context.Background(), cycle, budget, logger)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if residual {
+	if result.HasResidual {
 		t.Errorf("residual must be false when all rows fit under cap; got true")
 	}
 	if len(vs.upserts) != 1 {
@@ -279,11 +279,11 @@ func TestEmbeddingBackfillPhase_RespectsCap(t *testing.T) {
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
 	budget := NewTokenBudget(10000, 2048)
 
-	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	result, err := phase.Execute(context.Background(), cycle, budget, logger)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !residual {
+	if !result.HasResidual {
 		t.Errorf("expected residual=true when more rows than cap; got false")
 	}
 	if len(vs.upserts) != 2 {

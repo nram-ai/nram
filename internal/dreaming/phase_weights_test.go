@@ -350,11 +350,11 @@ func TestExecute_DirectionTriad_AppearsInOpCount(t *testing.T) {
 	budget := NewTokenBudget(1<<20, 1024)
 	cycle := weightTestCycle()
 
-	residual, err := phase.Execute(context.Background(), cycle, budget, logger)
+	result, err := phase.Execute(context.Background(), cycle, budget, logger)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if residual {
+	if result.HasResidual {
 		t.Error("weight_adjustment must never report residual")
 	}
 

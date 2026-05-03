@@ -127,7 +127,7 @@ func orderedPairKey(a, b uuid.UUID) pairKey {
 	return pairKey{low: b, high: a}
 }
 
-func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (PhaseResult, error) {
 	// Stamp namespace context once so every provider call emitted by this
 	// phase lands a token_usage row attributed to the right scope. The
 	// UsageRecordingProvider middleware reads namespace_id from ctx and,
@@ -137,7 +137,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	llm := p.llmProvider()
 	if llm == nil {
 		slog.Info("dreaming: no LLM provider for contradiction detection, skipping")
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	staleFetchMax := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamContradictionStaleFetchMax, "global")
@@ -150,11 +150,11 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	// historically expected.
 	memories, err := p.memories.ListByNamespaceStale(ctx, cycle.NamespaceID, ContradictionsCheckedStampKey, staleFetchMax)
 	if err != nil {
-		return false, err
+		return PhaseResult{}, err
 	}
 
 	if len(memories) < 2 {
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	cap := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamContradictionCap, "global")
@@ -168,7 +168,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 	stale := p.collectStale(memories)
 	if len(stale) == 0 {
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	slog.Info("dreaming: contradiction phase starting",
@@ -409,8 +409,35 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			"budget_stopped", budgetStopped)
 	}
 
-	residual := budgetStopped || len(stale) > len(fullyDispatched)
-	return residual, nil
+	// Phase swallows ErrBudgetExhausted (and pre-flight CanAfford rejections),
+	// so runner-level reason override does not fire — attribution is ours.
+	// Budget-stopped beats dispatch-cap when both apply: it is the actionable
+	// diagnostic.
+	switch {
+	case budgetStopped:
+		return PhaseResult{
+			HasResidual:    true,
+			ResidualReason: ResidualReasonPhaseBudgetStopped,
+			ResidualDetail: map[string]any{
+				"contradictions":         contradictions,
+				"paraphrases_superseded": paraphrasesSuperseded,
+				"stale":                  len(stale),
+				"stamped":                stamped,
+			},
+		}, nil
+	case len(stale) > len(fullyDispatched):
+		return PhaseResult{
+			HasResidual:    true,
+			ResidualReason: ResidualReasonDispatchCapReached,
+			ResidualDetail: map[string]any{
+				"stale":            len(stale),
+				"fully_dispatched": len(fullyDispatched),
+				"cap":              cap,
+				"neighbors":        neighbors,
+			},
+		}, nil
+	}
+	return PhaseResult{}, nil
 }
 
 // collectStale returns the subset of memories whose contradictions_checked_at

@@ -144,12 +144,12 @@ func supportSums(
 	return support, tier1Count, tier2Count
 }
 
-func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (PhaseResult, error) {
 	tokensBefore := budget.Used()
 
 	rels, err := p.relationships.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
-		return false, err
+		return PhaseResult{}, err
 	}
 
 	idx, allMemoryIDs := buildSupportIndex(rels)
@@ -273,7 +273,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 
 	// Weight adjustment scans every active relationship in one pass; no
 	// residual work can be left behind.
-	return false, nil
+	return PhaseResult{}, nil
 }
 
 // calculateWeight returns the new weight for rel along with the Tier 1 /

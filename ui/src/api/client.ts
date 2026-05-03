@@ -990,6 +990,20 @@ export interface MigrationAudit {
 
 // --- Dreaming Types ---
 
+// Mirrors PhaseSummaryEntry in internal/dreaming/runner.go.
+export interface DreamPhaseSummary {
+  phase: string;
+  tokens_used: number;
+  operations: number;
+  duration_ms: number;
+  slice_cap?: number;
+  error?: string;
+  skipped?: boolean;
+  has_residual?: boolean;
+  residual_reason?: string;
+  residual_detail?: Record<string, unknown>;
+}
+
 export interface DreamCycle {
   id: string;
   project_id: string;
@@ -998,7 +1012,7 @@ export interface DreamCycle {
   phase: string;
   tokens_used: number;
   token_budget: number;
-  phase_summary: unknown;
+  phase_summary: DreamPhaseSummary[] | null;
   error: string | null;
   started_at: string | null;
   completed_at: string | null;

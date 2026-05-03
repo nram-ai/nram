@@ -110,7 +110,7 @@ func NewConsolidationPhase(
 
 func (p *ConsolidationPhase) Name() string { return model.DreamPhaseConsolidation }
 
-func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error) {
+func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (PhaseResult, error) {
 	// Stamp namespace context once so every provider call emitted by this
 	// phase lands a token_usage row attributed to the right scope. The
 	// UsageRecordingProvider middleware reads namespace_id from ctx and,
@@ -121,7 +121,7 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	llm := p.llmProvider()
 	if llm == nil {
 		slog.Info("dreaming: no LLM provider for consolidation, skipping")
-		return false, nil
+		return PhaseResult{}, nil
 	}
 
 	// Load only memories whose consolidation-load stamp is missing or older
@@ -134,7 +134,7 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	staleFetchMax := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamConsolidationStaleFetchMax, "global")
 	allMemories, err := p.memories.ListByNamespaceStale(ctx, cycle.NamespaceID, ConsolidationLoadCheckedStampKey, staleFetchMax)
 	if err != nil {
-		return false, err
+		return PhaseResult{}, err
 	}
 
 	auditFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationAuditFraction)
@@ -142,49 +142,39 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	consolidateFrac := resolveFraction(ctx, p.settings, service.SettingDreamConsolidationConsolidateFraction)
 	sumRemaining := auditFrac + reinforceFrac + consolidateFrac
 
-	// When the stale-row count saturates the fetch cap there are likely
-	// more stale rows than this cycle could load. Surface as residual so
-	// the scheduler keeps the project dirty and the next cycle drains.
-	residual := len(allMemories) >= staleFetchMax
+	staleFetchCapHit := len(allMemories) >= staleFetchMax
+	var auditResid, reinforceResid, consolidateResid bool
 
 	// Audit first so backlog drain cannot be starved by reinforce.
 	if !budget.Exhausted() {
 		perCycleCap, _ := p.settings.ResolveInt(ctx, service.SettingDreamNoveltyBackfillPerCycle, "global")
 		auditBudget := budget.SubSlice(budget.ProportionalSliceCap(auditFrac, sumRemaining))
-		auditResid, aerr := p.AuditExistingDreams(ctx, cycle, auditBudget, logger, llm, allMemories, perCycleCap)
+		var aerr error
+		auditResid, aerr = p.AuditExistingDreams(ctx, cycle, auditBudget, logger, llm, allMemories, perCycleCap)
 		if aerr != nil {
 			slog.Warn("dreaming: backfill audit had errors", "err", aerr)
-		}
-		if auditResid {
-			residual = true
 		}
 		sumRemaining -= auditFrac
 	}
 
 	if !budget.Exhausted() {
 		reinforceBudget := budget.SubSlice(budget.ProportionalSliceCap(reinforceFrac, sumRemaining))
-		reinResid, rerr := p.reinforce(ctx, cycle, reinforceBudget, logger, llm, allMemories)
+		var rerr error
+		reinforceResid, rerr = p.reinforce(ctx, cycle, reinforceBudget, logger, llm, allMemories)
 		if rerr != nil {
 			slog.Warn("dreaming: reinforcement sub-phase had errors", "err", rerr)
-		}
-		if reinResid {
-			residual = true
 		}
 		sumRemaining -= reinforceFrac
 	}
 
 	if !budget.Exhausted() {
 		consolidateBudget := budget.SubSlice(budget.ProportionalSliceCap(consolidateFrac, sumRemaining))
-		consResid, cerr := p.consolidate(ctx, cycle, consolidateBudget, logger, llm, allMemories)
+		var cerr error
+		consolidateResid, cerr = p.consolidate(ctx, cycle, consolidateBudget, logger, llm, allMemories)
 		if cerr != nil {
-			// Stamp before bailing out so partial progress survives — the
-			// rows that did get processed do not re-enter the candidate
-			// pool next cycle for no reason.
+			// Stamp before bailing out so partial progress survives.
 			p.stampConsolidateLoad(ctx, allMemories)
-			return residual, cerr
-		}
-		if consResid {
-			residual = true
+			return p.buildResidualResult(staleFetchCapHit, auditResid, reinforceResid, consolidateResid, staleFetchMax, len(allMemories)), cerr
 		}
 	}
 
@@ -195,7 +185,42 @@ func (p *ConsolidationPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	// across cycles.
 	p.stampConsolidateLoad(ctx, allMemories)
 
-	return residual, nil
+	return p.buildResidualResult(staleFetchCapHit, auditResid, reinforceResid, consolidateResid, staleFetchMax, len(allMemories)), nil
+}
+
+// Dominance: stale_fetch_cap (bounds the working set) > consolidate (latest
+// sub-phase, survived audit + reinforce) > reinforce > audit.
+func (p *ConsolidationPhase) buildResidualResult(
+	staleFetchCap, audit, reinforce, consolidate bool,
+	staleFetchMax, loaded int,
+) PhaseResult {
+	if !staleFetchCap && !audit && !reinforce && !consolidate {
+		return PhaseResult{}
+	}
+	detail := map[string]any{
+		"stale_fetch_cap_hit":            staleFetchCap,
+		"audit_stale_remaining":          audit,
+		"reinforce_cap_hit":              reinforce,
+		"consolidate_clusters_remaining": consolidate,
+		"stale_fetch_max":                staleFetchMax,
+		"loaded":                         loaded,
+	}
+	var reason string
+	switch {
+	case staleFetchCap:
+		reason = ResidualReasonStaleFetchCap
+	case consolidate:
+		reason = ResidualReasonConsolidateClustersRemaining
+	case reinforce:
+		reason = ResidualReasonReinforceCapHit
+	default:
+		reason = ResidualReasonAuditStaleRemaining
+	}
+	return PhaseResult{
+		HasResidual:    true,
+		ResidualReason: reason,
+		ResidualDetail: detail,
+	}
 }
 
 // resolveFraction resolves a fractional setting, clamping to (0,1]. On error

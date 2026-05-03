@@ -45,32 +45,55 @@ type IdleChecker interface {
 	IsIdle() bool
 }
 
+// Stable codes emitted as PhaseSummaryEntry.ResidualReason. The first four are
+// owned by the runner and override any phase-supplied code on
+// ErrBudgetExhausted; the rest are owned by individual phases and name the
+// specific in-phase limit that fired. Keep RESIDUAL_REASON_LABELS in
+// ui/src/pages/DreamingMonitor.tsx in sync with this set.
+const (
+	ResidualReasonBudgetExhaustedBeforePhase  = "budget_exhausted_before_phase"
+	ResidualReasonPhaseSliceZero              = "phase_slice_zero"
+	ResidualReasonBudgetExhaustedDuringPhase  = "budget_exhausted_during_phase"
+	ResidualReasonPhaseSliceExhausted         = "phase_slice_exhausted"
+	ResidualReasonMoreCandidatesThanBatch     = "more_candidates_than_batch"
+	ResidualReasonParaphraseUnvisited         = "paraphrase_unvisited_candidates"
+	ResidualReasonTransitivePerCycleCap       = "transitive_per_cycle_cap"
+	ResidualReasonDispatchCapReached          = "dispatch_cap_reached"
+	ResidualReasonPhaseBudgetStopped          = "phase_budget_stopped"
+	ResidualReasonAuditStaleRemaining         = "audit_stale_remaining"
+	ResidualReasonReinforceCapHit             = "reinforce_cap_hit"
+	ResidualReasonConsolidateClustersRemaining = "consolidate_clusters_remaining"
+	ResidualReasonStaleFetchCap               = "stale_fetch_cap"
+)
+
+// PhaseResult captures the outcome of a single phase. ResidualDetail is
+// optional structured info (cap value, counts) attached to phase-supplied
+// reasons; the runner overrides ResidualReason on ErrBudgetExhausted.
+type PhaseResult struct {
+	HasResidual    bool
+	ResidualReason string
+	ResidualDetail map[string]any
+}
+
 // Phase defines the interface for each dream processing phase.
 type Phase interface {
-	// Name returns the phase identifier (e.g. "entity_dedup").
 	Name() string
-
-	// Execute runs the phase logic. It should respect the token budget
-	// and log all mutations via the DreamLogWriter.
-	//
-	// The first return value indicates whether the phase left residual
-	// work behind — for example, a bounded-batch phase that hit its
-	// per-cycle cap with more candidates pending. The scheduler uses
-	// this signal to decide whether to clear the project dirty flag:
-	// "all phases returned nil" is not the same as "all work is done."
-	Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (bool, error)
+	Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, logger *DreamLogWriter) (PhaseResult, error)
 }
 
 // PhaseSummaryEntry captures per-phase statistics for the cycle record.
+// SliceCap is zero/omitted for SQL-only phases (frac=0) that share the root.
 type PhaseSummaryEntry struct {
-	Phase          string `json:"phase"`
-	TokensUsed     int    `json:"tokens_used"`
-	Operations     int    `json:"operations"`
-	DurationMs     int64  `json:"duration_ms"`
-	Error          string `json:"error,omitempty"`
-	Skipped        bool   `json:"skipped,omitempty"`
-	HasResidual    bool   `json:"has_residual,omitempty"`
-	ResidualReason string `json:"residual_reason,omitempty"`
+	Phase          string         `json:"phase"`
+	TokensUsed     int            `json:"tokens_used"`
+	Operations     int            `json:"operations"`
+	DurationMs     int64          `json:"duration_ms"`
+	SliceCap       int            `json:"slice_cap,omitempty"`
+	Error          string         `json:"error,omitempty"`
+	Skipped        bool           `json:"skipped,omitempty"`
+	HasResidual    bool           `json:"has_residual,omitempty"`
+	ResidualReason string         `json:"residual_reason,omitempty"`
+	ResidualDetail map[string]any `json:"residual_detail,omitempty"`
 }
 
 // cycleProgressRepo is the subset of *storage.DreamCycleRepo that Runner
@@ -80,6 +103,7 @@ type PhaseSummaryEntry struct {
 type cycleProgressRepo interface {
 	Start(ctx context.Context, id uuid.UUID) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status, phase string) error
+	UpdatePhaseSummary(ctx context.Context, id uuid.UUID, summary json.RawMessage) error
 	TickProgress(ctx context.Context, id uuid.UUID) (int, error)
 	Complete(ctx context.Context, id uuid.UUID, summary json.RawMessage) error
 	Fail(ctx context.Context, id uuid.UUID, errMsg string) error
@@ -244,9 +268,9 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 			//   - sliceCap==0 (degenerate frac that rounded to zero).
 			// Both are operationally "no budget for this phase"; distinguish
 			// the slice-zero case in the residual reason for ops visibility.
-			reason := "budget_exhausted_before_phase"
+			reason := ResidualReasonBudgetExhaustedBeforePhase
 			if frac > 0 && sliceCap == 0 {
-				reason = "phase_slice_zero"
+				reason = ResidualReasonPhaseSliceZero
 			}
 			slog.Info("dreaming: phase skipped, budget exhausted",
 				"phase", phase.Name(), "cycle", cycle.ID,
@@ -255,10 +279,12 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 			hasResidual = true
 			summaries = append(summaries, PhaseSummaryEntry{
 				Phase:          phase.Name(),
+				SliceCap:       sliceCap,
 				Skipped:        true,
 				HasResidual:    true,
 				ResidualReason: reason,
 			})
+			r.persistPartialSummary(ctx, cycle.ID, summaries)
 			continue
 		}
 
@@ -278,20 +304,22 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		logger.ResetOpCount()
 		start := time.Now()
 
-		phaseResidual, err := phase.Execute(phaseCtx, cycle, phaseBudget, logger)
+		result, err := phase.Execute(phaseCtx, cycle, phaseBudget, logger)
 
 		elapsed := time.Since(start)
 		tokensConsumed := budget.Used() - tokensBefore
 
 		entry := PhaseSummaryEntry{
-			Phase:       phase.Name(),
-			TokensUsed:  tokensConsumed,
-			Operations:  logger.OpCount(),
-			DurationMs:  elapsed.Milliseconds(),
-			HasResidual: phaseResidual,
+			Phase:          phase.Name(),
+			TokensUsed:     tokensConsumed,
+			Operations:     logger.OpCount(),
+			DurationMs:     elapsed.Milliseconds(),
+			SliceCap:       sliceCap,
+			HasResidual:    result.HasResidual,
+			ResidualReason: result.ResidualReason,
+			ResidualDetail: result.ResidualDetail,
 		}
-		if phaseResidual {
-			entry.ResidualReason = "phase_reported_residual"
+		if result.HasResidual {
 			hasResidual = true
 		}
 
@@ -310,12 +338,13 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 				entry.Error = "budget exhausted"
 				entry.HasResidual = true
 				if rootExhausted {
-					entry.ResidualReason = "budget_exhausted_during_phase"
+					entry.ResidualReason = ResidualReasonBudgetExhaustedDuringPhase
 				} else {
-					entry.ResidualReason = "phase_slice_exhausted"
+					entry.ResidualReason = ResidualReasonPhaseSliceExhausted
 				}
 				hasResidual = true
 				summaries = append(summaries, entry)
+				r.persistPartialSummary(ctx, cycle.ID, summaries)
 				tracker.EmitPhaseCompleted(ctx, phase.Name(), tokensConsumed,
 					logger.OpCount(), elapsed.Milliseconds(), true, entry.Error)
 				if rootExhausted {
@@ -328,19 +357,21 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 				"phase", phase.Name(), "cycle", cycle.ID, "err", err)
 			entry.Error = err.Error()
 			summaries = append(summaries, entry)
+			r.persistPartialSummary(ctx, cycle.ID, summaries)
 			tracker.EmitPhaseCompleted(ctx, phase.Name(), tokensConsumed,
-				logger.OpCount(), elapsed.Milliseconds(), phaseResidual, entry.Error)
+				logger.OpCount(), elapsed.Milliseconds(), result.HasResidual, entry.Error)
 			lastErr = err
 			break
 		}
 
 		completedPhases++
 		summaries = append(summaries, entry)
+		r.persistPartialSummary(ctx, cycle.ID, summaries)
 		slog.Info("dreaming: phase completed", "phase", phase.Name(),
 			"cycle", cycle.ID, "tokens", tokensConsumed, "duration_ms", elapsed.Milliseconds(),
-			"has_residual", phaseResidual)
+			"has_residual", result.HasResidual, "residual_reason", result.ResidualReason)
 		tracker.EmitPhaseCompleted(ctx, phase.Name(), tokensConsumed,
-			logger.OpCount(), elapsed.Milliseconds(), phaseResidual, "")
+			logger.OpCount(), elapsed.Milliseconds(), result.HasResidual, "")
 	}
 
 	summaryJSON, err := json.Marshal(summaries)
@@ -363,6 +394,22 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 	}
 
 	return allCompleted, hasResidual, nil
+}
+
+// persistPartialSummary best-effort writes the running slice between phases so
+// the UI sees breakdowns mid-cycle. Marshal/write errors are swallowed —
+// stalling a cycle on a transient DB blip is worse than missing one tick.
+func (r *Runner) persistPartialSummary(ctx context.Context, cycleID uuid.UUID, summaries []PhaseSummaryEntry) {
+	partial, err := json.Marshal(summaries)
+	if err != nil {
+		slog.Warn("dreaming: failed to marshal partial phase summary",
+			"cycle", cycleID, "err", err)
+		return
+	}
+	if err := r.cycleRepo.UpdatePhaseSummary(ctx, cycleID, partial); err != nil {
+		slog.Warn("dreaming: failed to persist partial phase summary",
+			"cycle", cycleID, "err", err)
+	}
 }
 
 // heartbeat ticks dream_cycles.{heartbeat_at, updated_at, tokens_used} every

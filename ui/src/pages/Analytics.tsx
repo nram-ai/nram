@@ -13,6 +13,7 @@ import {
 } from "../hooks/useApi";
 import { useAuth, type Tier } from "../context/AuthContext";
 import { TierTabs } from "../components/TierTabs";
+import { formatNumber } from "../lib/formatters";
 import {
   memoryRowLabel,
   type AnalyticsData,
@@ -71,12 +72,6 @@ const CHART_COLORS = [
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toLocaleString();
-}
 
 function formatCost(n: number): string {
   // Sub-cent values keep 4 fraction digits so a $0.0003 row doesn't

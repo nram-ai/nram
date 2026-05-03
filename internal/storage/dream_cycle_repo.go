@@ -84,6 +84,24 @@ func (r *DreamCycleRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status,
 	return nil
 }
 
+// UpdatePhaseSummary overwrites phase_summary on a running cycle. The
+// status='running' guard drops late writes that lose to a concurrent
+// Abandon/Fail/Complete.
+func (r *DreamCycleRepo) UpdatePhaseSummary(ctx context.Context, id uuid.UUID, summary json.RawMessage) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	query := `UPDATE dream_cycles SET phase_summary = ?, updated_at = ? WHERE id = ? AND status = 'running'`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE dream_cycles SET phase_summary = $1, updated_at = $2 WHERE id = $3 AND status = 'running'`
+	}
+
+	_, err := r.db.Exec(ctx, query, string(summary), now, id.String())
+	if err != nil {
+		return fmt.Errorf("dream cycle update phase summary: %w", err)
+	}
+	return nil
+}
+
 // TickProgress writes heartbeat_at, updated_at, AND tokens_used in one
 // statement. tokens_used is recomputed live from
 // SUM(tokens_input+tokens_output) over token_usage rows attributed to this
