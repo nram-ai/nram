@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useDreamingStatus,
@@ -20,7 +20,17 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner } from "../lib/icons";
 import type { DreamCycle, DreamLog, DreamPhaseSummary } from "../api/client";
 import { formatNumber } from "../lib/formatters";
-import { PHASE_LABELS } from "../lib/dreaming";
+import {
+  PHASE_LABELS,
+  formatDreamLog,
+  formatFactValue,
+  shortId,
+  isZeroId,
+  memoryFocusHref,
+  type Fact,
+  type FormattedLog,
+} from "../lib/dreaming";
+import { Link } from "react-router-dom";
 import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
 
 // Live SSE-driven state per running cycle. Populated from
@@ -978,6 +988,92 @@ function LiveActivitySection({ state }: { state?: LiveCycleState }) {
   );
 }
 
+// Memory-typed Fact kinds get clickable router links into MemoryBrowser;
+// other ID kinds copy the full UUID to the clipboard on click. Plain values
+// run through formatFactValue.
+function FactChip({ projectId, fact: f }: { projectId: string; fact: Fact }) {
+  const [copied, setCopied] = useState(false);
+  const value = String(f.value ?? "");
+  if (!value) return <span className="text-muted-foreground">\u2014</span>;
+
+  if (f.kind === "memory_id") {
+    return (
+      <Link
+        to={memoryFocusHref(projectId, value)}
+        className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-info hover:bg-muted/80 hover:underline"
+        title={value}
+      >
+        {shortId(value)}
+      </Link>
+    );
+  }
+
+  if (
+    f.kind === "entity_id" ||
+    f.kind === "relationship_id" ||
+    f.kind === "namespace_id"
+  ) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          navigator.clipboard?.writeText(value);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        }}
+        className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-foreground hover:bg-muted/80"
+        title={copied ? "Copied!" : value}
+      >
+        {copied ? "copied" : shortId(value)}
+      </button>
+    );
+  }
+
+  if (f.kind === "text" && value.length > 80) {
+    return (
+      <span className="text-xs text-foreground" title={value}>
+        {value.slice(0, 80)}\u2026
+      </span>
+    );
+  }
+
+  return <span className="text-xs text-foreground">{formatFactValue(f)}</span>;
+}
+
+// renderNarrative substitutes {placeholder} tokens in the narrative string
+// with rendered Fact chips. Tokens with no matching fact are dropped (so
+// optional fields like {alignment} don't leave a literal "{alignment}"
+// when the data is absent).
+function renderNarrative(
+  narrative: string,
+  facts: Record<string, Fact>,
+  projectId: string,
+): ReactNode {
+  const parts: ReactNode[] = [];
+  const re = /\{(\w+)\}/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+  while ((match = re.exec(narrative)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(narrative.slice(lastIndex, match.index));
+    }
+    const f = facts[match[1]];
+    if (f !== undefined) {
+      parts.push(<FactChip key={key++} projectId={projectId} fact={f} />);
+    }
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < narrative.length) {
+    parts.push(narrative.slice(lastIndex));
+  }
+  // Collapse double spaces left by dropped placeholders.
+  return parts.map((p, i) =>
+    typeof p === "string" ? <span key={`s${i}`}>{p.replace(/\s{2,}/g, " ")}</span> : p,
+  );
+}
+
 function LogEntry({
   log,
   expanded,
@@ -987,42 +1083,130 @@ function LogEntry({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  return (
-    <div className="rounded-md border text-sm">
-      <button
-        onClick={onToggle}
-        className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/30"
-      >
-        <span className="text-xs text-muted-foreground">{PHASE_LABELS[log.phase] ?? log.phase}</span>
-        <span className={`font-medium ${OP_COLORS[log.operation] ?? "text-foreground"}`}>
-          {log.operation.replace(/_/g, " ")}
+  const [showRaw, setShowRaw] = useState(false);
+  const formatted: FormattedLog = useMemo(() => formatDreamLog(log), [log]);
+  const projectId = log.project_id;
+
+  // Facts referenced inline by the narrative don't need to repeat in the
+  // key-fact strip below.
+  const inlineKeys = useMemo(() => {
+    const keys = new Set<string>();
+    const re = /\{(\w+)\}/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(formatted.narrative)) !== null) keys.add(m[1]);
+    return keys;
+  }, [formatted.narrative]);
+
+  const tailFacts = Object.entries(formatted.facts).filter(
+    ([k]) => !inlineKeys.has(k),
+  );
+
+  const showTargetChip =
+    !formatted.isSummary &&
+    !isZeroId(log.target_id) &&
+    log.target_type !== "namespace";
+
+  const headerContent = (
+    <>
+      <span className="text-xs text-muted-foreground">
+        {PHASE_LABELS[log.phase] ?? log.phase}
+      </span>
+      <span className={`font-medium ${OP_COLORS[log.operation] ?? "text-foreground"}`}>
+        {log.operation.replace(/_/g, " ")}
+      </span>
+      {!formatted.isSummary && (
+        <span className="text-xs text-muted-foreground">{log.target_type}</span>
+      )}
+      {showTargetChip && (
+        <span
+          className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+          title={log.target_id}
+        >
+          {shortId(log.target_id)}
         </span>
-        <span className="text-xs text-muted-foreground">
-          {log.target_type}
+      )}
+      {formatted.isSummary && formatted.metrics && formatted.metrics.length > 0 && (
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          {formatted.metrics.map((m, i) => (
+            <span key={i}>
+              <span className="text-muted-foreground">{m.label.toLowerCase()}</span>{" "}
+              <span className="font-mono text-foreground">{formatFactValue(m)}</span>
+              {i < formatted.metrics!.length - 1 ? <span> \u00B7</span> : null}
+            </span>
+          ))}
         </span>
+      )}
+      {!formatted.isSummary && (
         <span className="ml-auto text-xs text-muted-foreground">
           {expanded ? "\u25B2" : "\u25BC"}
         </span>
-      </button>
-      {expanded && (
-        <div className="border-t px-3 py-2">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div>
-              <p className="mb-1 text-xs font-medium text-muted-foreground">Before</p>
-              <pre className="max-h-40 overflow-auto rounded bg-muted/50 p-2 font-mono text-xs">
-                {JSON.stringify(log.before_state, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <p className="mb-1 text-xs font-medium text-muted-foreground">After</p>
-              <pre className="max-h-40 overflow-auto rounded bg-muted/50 p-2 font-mono text-xs">
-                {JSON.stringify(log.after_state, null, 2)}
-              </pre>
-            </div>
-          </div>
-          <p className="mt-2 font-mono text-xs text-muted-foreground">
-            Target: {log.target_id}
+      )}
+    </>
+  );
+
+  const headerCls =
+    "flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-left";
+
+  return (
+    <div className="rounded-md border text-sm">
+      {formatted.isSummary ? (
+        <div className={headerCls}>{headerContent}</div>
+      ) : (
+        <button
+          type="button"
+          onClick={onToggle}
+          className={`${headerCls} hover:bg-muted/30`}
+        >
+          {headerContent}
+        </button>
+      )}
+      {expanded && !formatted.isSummary && (
+        <div className="space-y-2 border-t px-3 py-2">
+          <p className="text-sm leading-relaxed">
+            {formatted.unknown ? (
+              <span className="text-muted-foreground">
+                Unknown operation \u2014 see raw payload below.
+              </span>
+            ) : (
+              renderNarrative(formatted.narrative, formatted.facts, projectId)
+            )}
           </p>
+          {tailFacts.length > 0 && (
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+              {tailFacts.map(([k, f]) => (
+                <span key={k} className="flex items-center gap-1">
+                  <span className="text-muted-foreground">{f.label}:</span>
+                  <FactChip projectId={projectId} fact={f} />
+                </span>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowRaw((v) => !v);
+            }}
+            className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            {showRaw ? "Hide raw JSON" : "Show raw JSON"}
+          </button>
+          {showRaw && (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <p className="mb-1 text-xs font-medium text-muted-foreground">Before</p>
+                <pre className="max-h-40 overflow-auto rounded bg-muted/50 p-2 font-mono text-xs">
+                  {JSON.stringify(log.before_state, null, 2)}
+                </pre>
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-medium text-muted-foreground">After</p>
+                <pre className="max-h-40 overflow-auto rounded bg-muted/50 p-2 font-mono text-xs">
+                  {JSON.stringify(log.after_state, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

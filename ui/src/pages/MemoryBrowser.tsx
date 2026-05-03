@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   useMeProjects,
   useMemoryListInfinite,
@@ -864,6 +865,8 @@ function MemoryBrowser() {
     }
   }, [projects, selectedProjectId, setSelectedProjectId]);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // Search state
   const [searchMode, setSearchMode] = useState<"semantic" | "exact">(
     "exact",
@@ -926,6 +929,25 @@ function MemoryBrowser() {
   // "page" because the matching set has changed.
   const [selectionScope, setSelectionScope] = useState<"page" | "all-matching">("page");
   const [detailMemoryId, setDetailMemoryId] = useState<string | null>(null);
+
+  // Deep-link entry: /memories?project=<id>&focus=<memoryId> (e.g. from a
+  // dream-log narrative chip). Switches the active project if needed and
+  // opens the memory detail panel; the detail panel's useMemoryDetail hook
+  // fetches the row even when it isn't on the current browse page. Params
+  // are cleared after they're consumed so navigating back doesn't re-fire.
+  useEffect(() => {
+    const focusId = searchParams.get("focus");
+    const focusProject = searchParams.get("project");
+    if (!focusId) return;
+    if (focusProject && focusProject !== selectedProjectId) {
+      setSelectedProjectId(focusProject);
+    }
+    setDetailMemoryId(focusId);
+    const next = new URLSearchParams(searchParams);
+    next.delete("focus");
+    next.delete("project");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, selectedProjectId, setSelectedProjectId, setSearchParams]);
 
   // Queries
   const isSemanticSearch = searchMode === "semantic" && debouncedSearch.length > 0;
