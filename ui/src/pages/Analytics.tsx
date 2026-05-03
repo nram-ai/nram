@@ -1418,9 +1418,8 @@ function Analytics() {
           isLoading={usage.isLoading}
         />
 
-        {/* Cost rate config — admin-only; the PUT is also gated
-            server-side by RequireRole(Administrator). */}
-        {auth.isAdmin && (
+        {/* Cost rates are a single global setting, not per-user or per-org. */}
+        {auth.isAdmin && tier === "system" && (
           <CostRateEditor
             costRates={costRates}
             groupKeys={groupKeys}
