@@ -1,5 +1,6 @@
 # nram - Neural RAM
 
+[![SafeSkill 83/100](https://img.shields.io/badge/SafeSkill-83%2F100_Passes%20with%20Notes-yellow)](https://safeskill.dev/scan/nram-ai-nram)
 > **Work in Progress:** This project is under active development. Some features may be incomplete, unstable, or subject to change. Contributions and feedback are welcome, but expect rough edges as things continue to evolve.
 
 A self-hosted, long-term memory layer that any LLM-using tool can plug into. Store, recall, and enrich memories with vector embeddings, knowledge graphs, sleep-style consolidation, and a built-in admin UI.
