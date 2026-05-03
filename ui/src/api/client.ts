@@ -613,12 +613,22 @@ export interface ProviderSlot {
   model: string;
   dimensions?: number | null;
   /**
-   * Model context window in tokens. Populated only for providers that
-   * report it via API (Ollama via /api/show, OpenRouter via /models).
-   * Other providers (OpenAI, Anthropic, Gemini, Custom) leave this null
-   * and the UI shows a "see provider docs" placeholder.
+   * Effective context window in tokens — the actual budget the pipeline
+   * can spend. For Ollama slots this is min(model GGUF max, runtime
+   * num_ctx); for OpenRouter it equals the model's reported
+   * context_length. Populated only for providers that report it via API
+   * (Ollama via /api/show + /api/ps, OpenRouter via /models). Other
+   * providers (OpenAI, Anthropic, Gemini, Custom) leave this null and
+   * the UI shows a "see provider docs" placeholder.
    */
   context_window?: number | null;
+  /**
+   * Model's GGUF-declared maximum context, set only when it is strictly
+   * greater than context_window (i.e., an Ollama-side num_ctx is the
+   * binding constraint). When present, the UI surfaces it as a muted
+   * "(model max N)" suffix so users see the headroom story.
+   */
+  context_window_max?: number | null;
   timeout?: number | null;
   status?: string;
   latency_ms?: number | null;

@@ -54,8 +54,16 @@ type ProviderAdminStore struct {
 }
 
 type contextWindowCacheEntry struct {
-	value     int
-	storedAt  time.Time
+	// effective is the smaller of the model's GGUF ceiling and any
+	// Ollama-side num_ctx (Modelfile PARAMETER or runtime override). This
+	// is what gets propagated as slot.context_window — the actual budget
+	// the pipeline can spend. OpenRouter has no dual concept; effective
+	// equals modelMax there.
+	effective int
+	// modelMax is the model's GGUF-declared ceiling. Stored alongside
+	// effective so the UI can render "(model max N)" when it differs.
+	modelMax int
+	storedAt time.Time
 }
 
 const contextWindowCacheTTL = 60 * time.Second
@@ -128,44 +136,61 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 	// via API are queried; the rest get nil and the UI renders the muted
 	// "see provider docs" placeholder. Failures are swallowed — a flaky
 	// Ollama instance must not break the whole providers page.
-	var contextWindow *int
+	//
+	// effective is the actual ceiling the pipeline can spend (min of
+	// model max and any Ollama-side num_ctx); modelMax is the model's
+	// GGUF max, surfaced to the UI only when it exceeds the effective
+	// value so the user can see the headroom story.
+	var contextWindow, contextWindowMax *int
 	if alive {
-		if cw := s.detectContextWindow(ctx, persisted); cw > 0 {
-			contextWindow = &cw
+		eff, max := s.detectContextWindow(ctx, persisted)
+		if eff > 0 {
+			contextWindow = &eff
+		}
+		if max > 0 && max != eff {
+			contextWindowMax = &max
 		}
 	}
 
 	return api.ProviderSlotStatus{
-		Configured:    true,
-		Type:          persisted.Type,
-		URL:           persisted.URL,
-		Model:         persisted.Model,
-		Dimensions:    dimensions,
-		ContextWindow: contextWindow,
-		Timeout:       persisted.Timeout,
-		Status:        status,
+		Configured:       true,
+		Type:             persisted.Type,
+		URL:              persisted.URL,
+		Model:            persisted.Model,
+		Dimensions:       dimensions,
+		ContextWindow:    contextWindow,
+		ContextWindowMax: contextWindowMax,
+		Timeout:          persisted.Timeout,
+		Status:           status,
 	}
 }
 
-// detectContextWindow returns the configured model's max input length in
-// tokens for providers that report it via API. Returns 0 (no error) for
-// providers that don't, for unknown models, and on probe failures —
-// callers treat 0 as "unknown" and render the fallback.
+// detectContextWindow returns the effective and maximum context window
+// for the slot's configured model. effective is the actual budget the
+// pipeline can spend (min of the model's GGUF ceiling and any
+// Ollama-side num_ctx); modelMax is the model's GGUF ceiling. For
+// providers that don't expose either signal via API, returns (0, 0)
+// and the UI shows the muted fallback. Probe failures also collapse to
+// (0, 0).
 //
-// Results are cached for contextWindowCacheTTL to avoid hammering Ollama
-// or OpenRouter on every providers-page render. Cache keyed on the
-// (type, url, model) tuple so any slot edit naturally invalidates. The
-// nul-byte separator prevents collisions when a URL contains pipes or
-// other separator-like characters.
-func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.ProviderSlotConfig) int {
+// Results are cached for contextWindowCacheTTL to avoid hammering
+// Ollama or OpenRouter on every providers-page render. Cache keyed on
+// the (type, url, model) tuple so any slot edit naturally invalidates.
+// The nul-byte separator prevents collisions when a URL contains pipes
+// or other separator-like characters.
+//
+// OpenRouter's /models endpoint reports a single context_length per
+// model with no concept of a runtime override, so for OpenRouter slots
+// effective == modelMax and the UI suffix collapses.
+func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.ProviderSlotConfig) (effective, modelMax int) {
 	if slot == nil || slot.Model == "" {
-		return 0
+		return 0, 0
 	}
 	// Skip providers that don't expose context_length via API — avoids the
 	// per-render cache lookup and write for OpenAI / Anthropic / Gemini /
 	// Custom slots.
 	if slot.Type != provider.ProviderTypeOllama && slot.Type != provider.ProviderTypeOpenRouter {
-		return 0
+		return 0, 0
 	}
 
 	cacheKey := slot.Type + "\x00" + slot.URL + "\x00" + slot.Model
@@ -176,34 +201,34 @@ func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.
 	}
 	if entry, ok := s.contextWindowCache[cacheKey]; ok && time.Since(entry.storedAt) < contextWindowCacheTTL {
 		s.contextWindowMu.Unlock()
-		return entry.value
+		return entry.effective, entry.modelMax
 	}
 	s.contextWindowMu.Unlock()
 
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	value := 0
 	switch slot.Type {
 	case provider.ProviderTypeOllama:
 		client := provider.NewOllamaClient(provider.OllamaConfig{BaseURL: s.resolveOllamaURL(slot.URL)})
-		if cw, err := client.ContextLength(probeCtx, slot.Model); err == nil {
-			value = cw
+		if eff, max, err := client.ContextLength(probeCtx, slot.Model); err == nil {
+			effective, modelMax = eff, max
 		}
 	case provider.ProviderTypeOpenRouter:
 		if cw, err := provider.OpenRouterContextLength(probeCtx, slot.URL, slot.APIKey, slot.Model); err == nil {
-			value = cw
+			effective, modelMax = cw, cw
 		}
 	}
 
 	s.contextWindowMu.Lock()
 	s.contextWindowCache[cacheKey] = contextWindowCacheEntry{
-		value:    value,
-		storedAt: time.Now(),
+		effective: effective,
+		modelMax:  modelMax,
+		storedAt:  time.Now(),
 	}
 	s.contextWindowMu.Unlock()
 
-	return value
+	return effective, modelMax
 }
 
 func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderTestRequest) (*api.ProviderTestResult, error) {

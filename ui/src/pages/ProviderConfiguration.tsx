@@ -688,6 +688,11 @@ function ProviderSlotCard({
   const isEmbedding = slot.slot === "embedding";
   const badgeCls =
     PROVIDER_BADGE_COLORS[slot.type] || PROVIDER_BADGE_COLORS.custom;
+  const showModelMax =
+    slot.context_window != null &&
+    slot.context_window > 0 &&
+    slot.context_window_max != null &&
+    slot.context_window_max > slot.context_window;
 
   const handleTest = useCallback(() => {
     setTestResult(null);
@@ -925,9 +930,10 @@ function ProviderSlotCard({
                 <span
                   className="text-muted-foreground"
                   title={
-                    isEmbedding
+                    (isEmbedding
                       ? "Maximum input length the model can encode in a single request. Memory content longer than this is silently truncated by the provider — small windows (e.g. 2048) are a frequent cause of degraded recall on long memories."
-                      : "Maximum input + output tokens the model can process in a single request. Caps the prompt the enrichment pipeline can build (recall hits + memory content) plus the model's response."
+                      : "Maximum input + output tokens the model can process in a single request. Caps the prompt the enrichment pipeline can build (recall hits + memory content) plus the model's response.") +
+                    " For Ollama slots this is the lesser of the model's GGUF max and Ollama's configured num_ctx; the model max is shown beneath it when num_ctx is the binding constraint."
                   }
                 >
                   Context
@@ -946,6 +952,11 @@ function ProviderSlotCard({
                     </span>
                   )}
                 </p>
+                {showModelMax && (
+                  <p className="text-xs font-normal text-muted-foreground">
+                    model max {slot.context_window_max!.toLocaleString()}
+                  </p>
+                )}
               </div>
               <div>
                 <span className="text-muted-foreground">Status</span>

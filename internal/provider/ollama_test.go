@@ -374,12 +374,15 @@ func TestOllamaContextLength_ParsesQwen2Family(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
-	got, err := c.ContextLength(context.Background(), "qwen3:8b")
+	effective, modelMax, err := c.ContextLength(context.Background(), "qwen3:8b")
 	if err != nil {
 		t.Fatalf("ContextLength: %v", err)
 	}
-	if got != 40960 {
-		t.Errorf("got %d, want 40960", got)
+	if modelMax != 40960 {
+		t.Errorf("modelMax = %d, want 40960", modelMax)
+	}
+	if effective != 40960 {
+		t.Errorf("effective = %d, want 40960 (no num_ctx configured -> equal to max)", effective)
 	}
 }
 
@@ -388,10 +391,10 @@ func TestOllamaContextLength_ParsesAnyArchKey(t *testing.T) {
 	// detector must scan for any *.context_length key, not hard-code the
 	// list.
 	cases := map[string]int{
-		`{"model_info":{"llama.context_length":8192}}`:           8192,
-		`{"model_info":{"gemma.context_length":2048}}`:           2048,
-		`{"model_info":{"bert.context_length":512}}`:             512,
-		`{"model_info":{"unknown_arch.context_length":131072}}`:  131072,
+		`{"model_info":{"llama.context_length":8192}}`:          8192,
+		`{"model_info":{"gemma.context_length":2048}}`:          2048,
+		`{"model_info":{"bert.context_length":512}}`:            512,
+		`{"model_info":{"unknown_arch.context_length":131072}}`: 131072,
 	}
 	for body, want := range cases {
 		body, want := body, want
@@ -403,12 +406,15 @@ func TestOllamaContextLength_ParsesAnyArchKey(t *testing.T) {
 			})
 			defer srv.Close()
 			c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
-			got, err := c.ContextLength(context.Background(), "any:tag")
+			effective, modelMax, err := c.ContextLength(context.Background(), "any:tag")
 			if err != nil {
 				t.Fatalf("ContextLength: %v", err)
 			}
-			if got != want {
-				t.Errorf("got %d, want %d", got, want)
+			if modelMax != want {
+				t.Errorf("modelMax = %d, want %d", modelMax, want)
+			}
+			if effective != want {
+				t.Errorf("effective = %d, want %d", effective, want)
 			}
 		})
 	}
@@ -426,12 +432,15 @@ func TestOllamaContextLength_MissingFieldReturnsZero(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
-	got, err := c.ContextLength(context.Background(), "any:tag")
+	effective, modelMax, err := c.ContextLength(context.Background(), "any:tag")
 	if err != nil {
 		t.Fatalf("ContextLength: %v", err)
 	}
-	if got != 0 {
-		t.Errorf("got %d, want 0", got)
+	if modelMax != 0 {
+		t.Errorf("modelMax = %d, want 0", modelMax)
+	}
+	if effective != 0 {
+		t.Errorf("effective = %d, want 0", effective)
 	}
 }
 
@@ -444,11 +453,193 @@ func TestOllamaContextLength_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
-	_, err := c.ContextLength(context.Background(), "missing:tag")
+	_, _, err := c.ContextLength(context.Background(), "missing:tag")
 	if err == nil {
 		t.Fatal("expected error on 404, got nil")
 	}
 	if !contains(err.Error(), "status 404") {
 		t.Errorf("error = %q, want substring %q", err.Error(), "status 404")
+	}
+}
+
+// TestOllamaContextLength_PrefersPSOverShow verifies the priority chain:
+// when /api/ps reports a context for the loaded model, that wins over the
+// /api/show parameters num_ctx and over the model_info ceiling.
+func TestOllamaContextLength_PrefersPSOverShow(t *testing.T) {
+	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
+		"/api/show": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"model_info":{"qwen2.context_length":40960},
+				"parameters":"num_ctx                        16384\nstop                          \"<|im_start|>\""
+			}`))
+		},
+		"/api/ps": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				t.Errorf("expected GET on /api/ps, got %s", r.Method)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"models":[{"name":"qwen3:8b","model":"qwen3:8b","context_length":8192}]}`))
+		},
+	})
+	defer srv.Close()
+
+	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
+	effective, modelMax, err := c.ContextLength(context.Background(), "qwen3:8b")
+	if err != nil {
+		t.Fatalf("ContextLength: %v", err)
+	}
+	if modelMax != 40960 {
+		t.Errorf("modelMax = %d, want 40960", modelMax)
+	}
+	if effective != 8192 {
+		t.Errorf("effective = %d, want 8192 (loaded num_ctx wins over Modelfile param and model max)", effective)
+	}
+}
+
+// TestOllamaContextLength_FallsBackToParameters verifies that when /api/ps
+// has no entry for the model (model unloaded), the Modelfile PARAMETER
+// num_ctx is used.
+func TestOllamaContextLength_FallsBackToParameters(t *testing.T) {
+	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
+		"/api/show": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"model_info":{"qwen2.context_length":40960},
+				"parameters":"num_ctx 8192\nstop \"<|im_start|>\""
+			}`))
+		},
+		"/api/ps": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			// A different model is loaded; ours is not in the list.
+			w.Write([]byte(`{"models":[{"name":"llama3:latest","model":"llama3:latest","context_length":2048}]}`))
+		},
+	})
+	defer srv.Close()
+
+	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
+	effective, modelMax, err := c.ContextLength(context.Background(), "qwen3:8b")
+	if err != nil {
+		t.Fatalf("ContextLength: %v", err)
+	}
+	if modelMax != 40960 {
+		t.Errorf("modelMax = %d, want 40960", modelMax)
+	}
+	if effective != 8192 {
+		t.Errorf("effective = %d, want 8192 (Modelfile num_ctx falls in when /api/ps has no entry)", effective)
+	}
+}
+
+// TestOllamaContextLength_ParametersOnlyMatchesNumCtx verifies the
+// parameters scanner picks num_ctx and ignores other lines that have
+// numeric tokens in the same shape.
+func TestOllamaContextLength_ParametersOnlyMatchesNumCtx(t *testing.T) {
+	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
+		"/api/show": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			// Other parameter lines (stop strings, repeat_penalty, top_k)
+			// must not be misread as num_ctx.
+			w.Write([]byte(`{
+				"model_info":{"llama.context_length":8192},
+				"parameters":"stop \"<|im_start|>\"\nstop \"<|im_end|>\"\nrepeat_penalty 1.1\ntop_k 40\nnum_ctx 4096\n"
+			}`))
+		},
+	})
+	defer srv.Close()
+
+	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
+	effective, modelMax, err := c.ContextLength(context.Background(), "any:tag")
+	if err != nil {
+		t.Fatalf("ContextLength: %v", err)
+	}
+	if modelMax != 8192 {
+		t.Errorf("modelMax = %d, want 8192", modelMax)
+	}
+	if effective != 4096 {
+		t.Errorf("effective = %d, want 4096 (num_ctx must be picked from a mixed parameters block)", effective)
+	}
+}
+
+// TestOllamaContextLength_PSFailureIsNonFatal verifies that a /api/ps
+// error doesn't fail the whole call — we still report what /api/show
+// gave us.
+func TestOllamaContextLength_PSFailureIsNonFatal(t *testing.T) {
+	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
+		"/api/show": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"model_info":{"llama.context_length":8192}}`))
+		},
+		"/api/ps": func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+		},
+	})
+	defer srv.Close()
+
+	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
+	effective, modelMax, err := c.ContextLength(context.Background(), "any:tag")
+	if err != nil {
+		t.Fatalf("ContextLength returned error despite /api/ps failure: %v", err)
+	}
+	if modelMax != 8192 {
+		t.Errorf("modelMax = %d, want 8192", modelMax)
+	}
+	if effective != 8192 {
+		t.Errorf("effective = %d, want 8192 (no num_ctx -> equal to max)", effective)
+	}
+}
+
+// TestOllamaContextLength_ConfiguredAboveMaxIgnored verifies that a
+// configured num_ctx larger than the model's hard ceiling does not
+// inflate the effective value — the model's GGUF max is the final cap.
+func TestOllamaContextLength_ConfiguredAboveMaxIgnored(t *testing.T) {
+	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
+		"/api/show": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"model_info":{"llama.context_length":8192},
+				"parameters":"num_ctx 99999\n"
+			}`))
+		},
+	})
+	defer srv.Close()
+
+	c := NewOllamaClient(OllamaConfig{BaseURL: srv.URL})
+	effective, modelMax, err := c.ContextLength(context.Background(), "any:tag")
+	if err != nil {
+		t.Fatalf("ContextLength: %v", err)
+	}
+	if modelMax != 8192 {
+		t.Errorf("modelMax = %d, want 8192", modelMax)
+	}
+	if effective != 8192 {
+		t.Errorf("effective = %d, want 8192 (configured > max must clamp to max)", effective)
+	}
+}
+
+// TestParseNumCtxFromParameters_EdgeCases exercises the parser directly
+// for inputs the live tests don't naturally cover.
+func TestParseNumCtxFromParameters_EdgeCases(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"empty", "", 0},
+		{"absent", "stop \"<|im_start|>\"\nrepeat_penalty 1.1\n", 0},
+		{"trailing whitespace value", "num_ctx    8192   \n", 8192},
+		{"leading spaces tolerated", "  num_ctx 8192\n", 8192},
+		{"non-numeric value ignored", "num_ctx abc\n", 0},
+		{"zero ignored", "num_ctx 0\n", 0},
+		{"negative ignored", "num_ctx -1\n", 0},
+		{"first match wins", "num_ctx 1024\nnum_ctx 8192\n", 1024},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseNumCtxFromParameters(tc.in)
+			if got != tc.want {
+				t.Errorf("parseNumCtxFromParameters(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
 	}
 }

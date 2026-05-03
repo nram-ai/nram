@@ -54,21 +54,32 @@ type ProviderConfigResponse struct {
 }
 
 // ProviderSlotStatus describes the current state of a single provider
-// slot. Dimensions is the embedder's probed output dim (Registry.EmbeddingDim);
-// nil for non-embedding slots and on probe failure. ContextWindow is the
-// model's max input length in tokens, populated only for providers that
-// expose it via API (Ollama via /api/show, OpenRouter via /models). Other
-// providers leave it nil and the UI shows a "see provider docs" placeholder.
+// slot. Dimensions is the embedder's probed output dim
+// (Registry.EmbeddingDim); nil for non-embedding slots and on probe
+// failure.
+//
+// ContextWindow is the *effective* input length in tokens — for Ollama
+// slots that means min(model GGUF max, runtime num_ctx); for OpenRouter
+// it equals the model's reported context_length. Populated only for
+// providers that expose it via API (Ollama via /api/show + /api/ps,
+// OpenRouter via /models). Other providers leave it nil and the UI
+// shows a "see provider docs" placeholder.
+//
+// ContextWindowMax is the model's GGUF-declared maximum, set only when
+// it is strictly greater than ContextWindow (i.e., an Ollama-side
+// num_ctx is the binding constraint). When present, the UI surfaces it
+// as a muted "(model max N)" suffix so users see the headroom story.
 type ProviderSlotStatus struct {
-	Configured    bool   `json:"configured"`
-	Type          string `json:"type,omitempty"`
-	URL           string `json:"url,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Dimensions    *int   `json:"dimensions,omitempty"`
-	ContextWindow *int   `json:"context_window,omitempty"`
-	Timeout       *int   `json:"timeout,omitempty"`
-	Status        string `json:"status"`
-	LatencyMs     *int64 `json:"latency_ms,omitempty"`
+	Configured       bool   `json:"configured"`
+	Type             string `json:"type,omitempty"`
+	URL              string `json:"url,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Dimensions       *int   `json:"dimensions,omitempty"`
+	ContextWindow    *int   `json:"context_window,omitempty"`
+	ContextWindowMax *int   `json:"context_window_max,omitempty"`
+	Timeout          *int   `json:"timeout,omitempty"`
+	Status           string `json:"status"`
+	LatencyMs        *int64 `json:"latency_ms,omitempty"`
 }
 
 // ProviderTestRequest is the request body for POST /providers/test.
