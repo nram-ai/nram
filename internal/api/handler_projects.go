@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -419,6 +420,7 @@ func NewMeProjectDeleteHandler(deleteSvc ProjectDeleteServicer, projects Project
 				WriteError(w, ErrBadRequest(err.Error()))
 				return
 			}
+			log.Printf("api: MeProjectDelete: project=%s user=%s: %v", projectID, ac.UserID, err)
 			WriteError(w, ErrInternal("failed to delete project"))
 			return
 		}

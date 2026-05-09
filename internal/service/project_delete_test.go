@@ -49,16 +49,17 @@ func setupTestDB(t *testing.T) storage.DB {
 // fixtures bundles the dependencies the cascade needs and exposes the IDs of
 // the seeded project, its namespace, and the corresponding global project.
 type fixtures struct {
-	db          storage.DB
-	svc         *ProjectDeleteService
-	projectRepo *storage.ProjectRepo
-	memoryRepo  *storage.MemoryRepo
-	entityRepo  *storage.EntityRepo
-	relRepo     *storage.RelationshipRepo
-	nsRepo      *storage.NamespaceRepo
-	tokenRepo   *storage.TokenUsageRepo
-	target      *model.Project
-	global      *model.Project
+	db             storage.DB
+	svc            *ProjectDeleteService
+	projectRepo    *storage.ProjectRepo
+	memoryRepo     *storage.MemoryRepo
+	entityRepo     *storage.EntityRepo
+	relRepo        *storage.RelationshipRepo
+	nsRepo         *storage.NamespaceRepo
+	tokenRepo      *storage.TokenUsageRepo
+	dreamCycleRepo *storage.DreamCycleRepo
+	target         *model.Project
+	global         *model.Project
 }
 
 // seedProject creates the namespaces and projects needed for a cascade test
@@ -76,6 +77,7 @@ func seedProject(t *testing.T) *fixtures {
 	relRepo := storage.NewRelationshipRepo(db)
 	enrichRepo := storage.NewEnrichmentQueueRepo(db)
 	tokenRepo := storage.NewTokenUsageRepo(db)
+	dreamCycleRepo := storage.NewDreamCycleRepo(db)
 	ingestRepo := storage.NewIngestionLogRepo(db)
 	shareRepo := storage.NewMemoryShareRepo(db)
 
@@ -161,16 +163,17 @@ func seedProject(t *testing.T) *fixtures {
 	)
 
 	return &fixtures{
-		db:          db,
-		svc:         svc,
-		projectRepo: projectRepo,
-		memoryRepo:  memoryRepo,
-		entityRepo:  entityRepo,
-		relRepo:     relRepo,
-		nsRepo:      nsRepo,
-		tokenRepo:   tokenRepo,
-		target:      target,
-		global:      global,
+		db:             db,
+		svc:            svc,
+		projectRepo:    projectRepo,
+		memoryRepo:     memoryRepo,
+		entityRepo:     entityRepo,
+		relRepo:        relRepo,
+		nsRepo:         nsRepo,
+		tokenRepo:      tokenRepo,
+		dreamCycleRepo: dreamCycleRepo,
+		target:         target,
+		global:         global,
 	}
 }
 
@@ -308,6 +311,63 @@ func TestProjectDelete_TokenUsageReassigned(t *testing.T) {
 	}
 	if namespaceID != fx.global.NamespaceID.String() {
 		t.Errorf("expected token_usage.namespace_id = global ns %s, got %s", fx.global.NamespaceID, namespaceID)
+	}
+}
+
+// TestProjectDelete_CascadeWithDreamCycleTokenUsage — the project-delete
+// cascade drops the project row, which CASCADE-deletes any dream_cycles
+// rows. Without ON DELETE SET NULL on token_usage.cycle_id, that
+// CASCADE-delete fails when token_usage rows still reference the cycle,
+// rolling the whole delete back. The fix lives in postgres migration 000031
+// and sqlite migration 000034. This test seeds the exact shape that broke
+// the cascade and asserts the row survives with cycle_id cleared.
+func TestProjectDelete_CascadeWithDreamCycleTokenUsage(t *testing.T) {
+	ctx := context.Background()
+	fx := seedProject(t)
+
+	cycle := &model.DreamCycle{
+		ProjectID:   fx.target.ID,
+		NamespaceID: fx.target.NamespaceID,
+		Status:      model.DreamStatusCompleted,
+	}
+	if err := fx.dreamCycleRepo.Create(ctx, cycle); err != nil {
+		t.Fatalf("create dream_cycle: %v", err)
+	}
+
+	usageID := uuid.New()
+	if _, err := fx.db.Exec(ctx,
+		`INSERT INTO token_usage (id, project_id, namespace_id, operation, provider, model, cycle_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		usageID.String(), fx.target.ID.String(), fx.target.NamespaceID.String(),
+		"dream", "test", "test-model", cycle.ID.String(),
+	); err != nil {
+		t.Fatalf("insert token_usage: %v", err)
+	}
+
+	if _, err := fx.svc.Delete(ctx, &ProjectDeleteRequest{ProjectID: fx.target.ID}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	var projectID, namespaceID string
+	var cycleIDOut sql.NullString
+	if err := fx.db.QueryRow(ctx,
+		`SELECT project_id, namespace_id, cycle_id FROM token_usage WHERE id = ?`,
+		usageID.String(),
+	).Scan(&projectID, &namespaceID, &cycleIDOut); err != nil {
+		t.Fatalf("read token_usage: %v", err)
+	}
+	if projectID != fx.global.ID.String() {
+		t.Errorf("expected token_usage.project_id = global %s, got %s", fx.global.ID, projectID)
+	}
+	if namespaceID != fx.global.NamespaceID.String() {
+		t.Errorf("expected token_usage.namespace_id = global ns %s, got %s", fx.global.NamespaceID, namespaceID)
+	}
+	if cycleIDOut.Valid {
+		t.Errorf("expected token_usage.cycle_id NULL after dream_cycle CASCADE-delete, got %s", cycleIDOut.String)
+	}
+
+	if n := countRows(t, fx.db, "SELECT COUNT(*) FROM dream_cycles WHERE id = ?", cycle.ID.String()); n != 0 {
+		t.Errorf("expected dream_cycle gone, found %d rows", n)
 	}
 }
 
