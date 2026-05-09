@@ -308,6 +308,7 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		}
 
 		slog.Info("dreaming: starting phase", "phase", phase.Name(), "cycle", cycle.ID,
+			"phase_index", i+1, "of", len(r.phases),
 			"slice_cap", sliceCap,
 			"slice_remaining", phaseBudget.Remaining(),
 			"root_remaining", budget.Remaining())
@@ -384,7 +385,8 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		summaries = append(summaries, entry)
 		r.persistPartialSummary(ctx, cycle.ID, summaries)
 		slog.Info("dreaming: phase completed", "phase", phase.Name(),
-			"cycle", cycle.ID, "tokens", tokensConsumed, "duration_ms", elapsed.Milliseconds(),
+			"cycle", cycle.ID, "phase_index", i+1, "of", len(r.phases),
+			"tokens", tokensConsumed, "duration_ms", elapsed.Milliseconds(),
 			"has_residual", result.HasResidual, "residual_reason", result.ResidualReason)
 		tracker.EmitPhaseCompleted(ctx, phase.Name(), tokensConsumed,
 			logger.OpCount(), elapsed.Milliseconds(), result.HasResidual, "")

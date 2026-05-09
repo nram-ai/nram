@@ -108,8 +108,13 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 	progressLabel := "entities[" + entityType + "]"
 
 	for i := 0; i < len(entities); i++ {
-		if tracker != nil && shouldEmitProgress(i, len(entities), progressStep) {
-			tracker.EmitPhaseProgress(ctx, i+1, len(entities), progressLabel)
+		if shouldEmitProgress(i, len(entities), progressStep) {
+			if tracker != nil {
+				tracker.EmitPhaseProgress(ctx, i+1, len(entities), progressLabel)
+			}
+			slog.Info("dreaming: entity dedup progress",
+				"cycle", cycle.ID, "type", entityType,
+				"entity", i+1, "of", len(entities))
 		}
 		if consumed[entities[i].ID] {
 			continue

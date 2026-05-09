@@ -190,8 +190,13 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 	progressStep := progressEmitStep(len(rels))
 
 	for i, rel := range rels {
-		if tracker != nil && shouldEmitProgress(i, len(rels), progressStep) {
-			tracker.EmitPhaseProgress(ctx, i+1, len(rels), "relationships")
+		if shouldEmitProgress(i, len(rels), progressStep) {
+			if tracker != nil {
+				tracker.EmitPhaseProgress(ctx, i+1, len(rels), "relationships")
+			}
+			slog.Info("dreaming: weight adjust progress",
+				"cycle", cycle.ID,
+				"relationship", i+1, "of", len(rels))
 		}
 		if rel.ValidUntil != nil {
 			continue

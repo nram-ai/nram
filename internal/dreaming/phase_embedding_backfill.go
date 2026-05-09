@@ -95,6 +95,7 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 
 	foundTotal := 0
 	visited := 0
+	progressStep := progressEmitStep(cap)
 
 	// Iterate every supported memory dim in ascending order. The find
 	// query is per-dim because the LEFT JOIN targets a single
@@ -120,6 +121,11 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 		}
 		for i := range toProcess {
 			visited++
+			if shouldEmitProgress(visited-1, cap, progressStep) {
+				slog.Info("dreaming: embedding backfill progress",
+					"cycle", cycle.ID, "dim", dim,
+					"memory", visited, "of", cap)
+			}
 			mem := toProcess[i]
 			if p.tryRepair(ctx, &mem, dim, budget, stats) {
 				continue

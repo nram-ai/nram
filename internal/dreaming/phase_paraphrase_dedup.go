@@ -191,6 +191,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 
 	supersededInCycle := map[uuid.UUID]bool{}
 	visited := 0
+	progressStep := progressEmitStep(len(eligible))
 
 	// Batch-fetch every eligible anchor's vector in one round-trip rather
 	// than one GetByIDs per iteration.
@@ -225,6 +226,11 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 			continue
 		}
 		visited++
+		if shouldEmitProgress(visited-1, len(eligible), progressStep) {
+			slog.Info("dreaming: paraphrase dedup progress",
+				"cycle", cycle.ID,
+				"anchor", visited, "of", len(eligible))
+		}
 
 		anchorVec, ok := vectorsByID[anchor.ID]
 		if !ok || len(anchorVec) == 0 {

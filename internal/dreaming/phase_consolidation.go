@@ -340,7 +340,8 @@ func (p *ConsolidationPhase) reinforce(
 		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: alignment call skipped (estimated cost exceeds remaining budget)",
 				"cycle", cycle.ID, "synthesis", synthesis.ID,
-				"estimate", estCost, "remaining", budget.Remaining())
+				"alignment", visited, "of", len(stale),
+				"estimate", estCost, "budget_remaining", budget.Remaining())
 			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
 			break
 		}
@@ -355,12 +356,17 @@ func (p *ConsolidationPhase) reinforce(
 		stats["alignment_calls"] = stats["alignment_calls"].(int) + 1
 		slog.Info("dreaming: alignment call",
 			"cycle", cycle.ID, "synthesis", synthesis.ID,
+			"alignment", visited, "of", len(stale),
 			"latency_ms", time.Since(callStart).Milliseconds(),
-			"tokens", callTokens)
+			"tokens", callTokens,
+			"budget_remaining", budget.Remaining())
 
 		if errors.Is(err, ErrBudgetExhausted) {
 			slog.Info("dreaming: alignment loop stopped on budget exhaustion",
-				"cycle", cycle.ID, "synthesis", synthesis.ID, "tokens", callTokens)
+				"cycle", cycle.ID, "synthesis", synthesis.ID,
+				"alignment", visited, "of", len(stale),
+				"tokens", callTokens,
+				"budget_remaining", budget.Remaining())
 			break
 		}
 
@@ -649,8 +655,11 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			stats["orphans_demoted"] = stats["orphans_demoted"].(int) + 1
 			stats["demoted"] = stats["demoted"].(int) + 1
 			slog.Info("dreaming: backfill audit result",
-				"cycle", cycle.ID, "memory", mem.ID, "reason", "orphan_no_sources",
-				"passed", false, "embed_tokens", 0, "llm_tokens", 0)
+				"cycle", cycle.ID, "memory", mem.ID,
+				"audit", processed, "of", eligible,
+				"reason", "orphan_no_sources",
+				"passed", false, "embed_tokens", 0, "llm_tokens", 0,
+				"budget_remaining", budget.Remaining())
 			continue
 		}
 
@@ -672,8 +681,11 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			stats["orphans_demoted"] = stats["orphans_demoted"].(int) + 1
 			stats["demoted"] = stats["demoted"].(int) + 1
 			slog.Info("dreaming: backfill audit result",
-				"cycle", cycle.ID, "memory", mem.ID, "reason", "orphan_sources_missing",
-				"passed", false, "embed_tokens", 0, "llm_tokens", 0)
+				"cycle", cycle.ID, "memory", mem.ID,
+				"audit", processed, "of", eligible,
+				"reason", "orphan_sources_missing",
+				"passed", false, "embed_tokens", 0, "llm_tokens", 0,
+				"budget_remaining", budget.Remaining())
 			continue
 		}
 
@@ -690,13 +702,18 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
 		}
 		slog.Info("dreaming: backfill audit result",
-			"cycle", cycle.ID, "memory", mem.ID, "reason", reason,
+			"cycle", cycle.ID, "memory", mem.ID,
+			"audit", processed, "of", eligible,
+			"reason", reason,
 			"passed", passed, "latency_ms", time.Since(callStart).Milliseconds(),
-			"embed_tokens", embedTokens, "llm_tokens", llmTokens)
+			"embed_tokens", embedTokens, "llm_tokens", llmTokens,
+			"budget_remaining", budget.Remaining())
 
 		if errors.Is(auditErr, ErrBudgetExhausted) {
 			slog.Info("dreaming: backfill audit loop stopped on budget exhaustion",
-				"cycle", cycle.ID, "memory", mem.ID)
+				"cycle", cycle.ID, "memory", mem.ID,
+				"audit", processed, "of", eligible,
+				"budget_remaining", budget.Remaining())
 			break
 		}
 		if auditErr != nil {
@@ -1276,7 +1293,8 @@ func (p *ConsolidationPhase) consolidate(
 		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: synthesis call skipped (estimated cost exceeds remaining budget)",
 				"cycle", cycle.ID, "cluster_size", len(cluster),
-				"estimate", estCost, "remaining", budget.Remaining())
+				"cluster", clustersVisited, "of", len(stale),
+				"estimate", estCost, "budget_remaining", budget.Remaining())
 			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
 			break
 		}
@@ -1290,12 +1308,17 @@ func (p *ConsolidationPhase) consolidate(
 		stats["synthesis_calls"] = stats["synthesis_calls"].(int) + 1
 		slog.Info("dreaming: synthesis call",
 			"cycle", cycle.ID, "cluster_size", len(cluster),
+			"cluster", clustersVisited, "of", len(stale),
 			"latency_ms", time.Since(synthStart).Milliseconds(),
-			"tokens", synthTokens)
+			"tokens", synthTokens,
+			"budget_remaining", budget.Remaining())
 
 		if errors.Is(err, ErrBudgetExhausted) {
 			slog.Info("dreaming: synthesis loop stopped on budget exhaustion",
-				"cycle", cycle.ID, "cluster_size", len(cluster), "tokens", synthTokens)
+				"cycle", cycle.ID, "cluster_size", len(cluster),
+				"cluster", clustersVisited, "of", len(stale),
+				"tokens", synthTokens,
+				"budget_remaining", budget.Remaining())
 			break
 		}
 
@@ -1325,13 +1348,18 @@ func (p *ConsolidationPhase) consolidate(
 				stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
 			}
 			slog.Info("dreaming: synthesis novelty audit",
-				"cycle", cycle.ID, "reason", reason, "passed", passed,
+				"cycle", cycle.ID,
+				"cluster", clustersVisited, "of", len(stale),
+				"reason", reason, "passed", passed,
 				"latency_ms", time.Since(auditStart).Milliseconds(),
-				"embed_tokens", embedTokens, "llm_tokens", llmTokens)
+				"embed_tokens", embedTokens, "llm_tokens", llmTokens,
+				"budget_remaining", budget.Remaining())
 
 			if errors.Is(auditErr, ErrBudgetExhausted) {
 				slog.Info("dreaming: synthesis audit loop stopped on budget exhaustion",
-					"cycle", cycle.ID)
+					"cycle", cycle.ID,
+					"cluster", clustersVisited, "of", len(stale),
+					"budget_remaining", budget.Remaining())
 				break
 			}
 			if auditErr != nil {
@@ -1353,7 +1381,10 @@ func (p *ConsolidationPhase) consolidate(
 						"source_memory_ids": rejectedSources,
 					})
 				slog.Info("dreaming: synthesis rejected by novelty audit",
-					"reason", reason, "sources", len(cluster))
+					"cycle", cycle.ID,
+					"cluster", clustersVisited, "of", len(stale),
+					"reason", reason, "sources", len(cluster),
+					"budget_remaining", budget.Remaining())
 				stats["rejected"] = stats["rejected"].(int) + 1
 				p.stampConsolidateCluster(ctx, cluster, metas, fingerprint)
 				continue

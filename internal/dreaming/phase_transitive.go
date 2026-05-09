@@ -133,8 +133,13 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	tracker := CycleTrackerFromContext(ctx)
 	progressStep := progressEmitStep(len(entities))
 	for entityIdx, entityA := range entities {
-		if tracker != nil && shouldEmitProgress(entityIdx, len(entities), progressStep) {
-			tracker.EmitPhaseProgress(ctx, entityIdx+1, len(entities), "entities")
+		if shouldEmitProgress(entityIdx, len(entities), progressStep) {
+			if tracker != nil {
+				tracker.EmitPhaseProgress(ctx, entityIdx+1, len(entities), "entities")
+			}
+			slog.Info("dreaming: transitive progress",
+				"cycle", cycle.ID,
+				"entity", entityIdx+1, "of", len(entities))
 		}
 		if created >= maxNew {
 			truncated = true
