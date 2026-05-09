@@ -144,6 +144,14 @@ func main() {
 			log.Printf("reembed: enqueued %d memory re-embed jobs (force, every live memory)", n)
 			return
 		}
+		if arg == "--normalize-memory-tags" {
+			n, err := storage.NormalizeMemoryTags(context.Background(), db)
+			if err != nil {
+				log.Fatalf("normalize memory tags failed: %v", err)
+			}
+			log.Printf("normalize-memory-tags: rewrote tags on %d memory rows", n)
+			return
+		}
 	}
 
 	if os.Getenv("NRAM_ENABLE_ENRICHMENT_BACKFILL") == "1" {

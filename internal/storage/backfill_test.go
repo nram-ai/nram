@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -177,6 +178,107 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 		// softDeleted: no jobs at all.
 		if got := byMem[ids.softDeleted]; len(got) != 0 {
 			t.Errorf("softDeleted: expected 0 jobs, got %d (%v)", len(got), got)
+		}
+	})
+}
+
+// TestNormalizeMemoryTags exercises the one-shot tag-cleaning backfill.
+// Seeds rows with quoted tags via direct SQL (bypassing the repo, which
+// now normalizes on write), runs the backfill, and verifies the dirty
+// rows are cleaned, the already-clean rows are not rewritten, and a
+// second pass is a no-op.
+func TestNormalizeMemoryTags(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		nsID := createTestNamespace(t, ctx, db)
+		backend := db.Backend()
+
+		insertSQL := `INSERT INTO memories (id, namespace_id, content, tags, confidence, importance, metadata, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		if backend == BackendPostgres {
+			insertSQL = `INSERT INTO memories (id, namespace_id, content, tags, confidence, importance, metadata, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+		}
+
+		now := "2026-05-09T00:00:00Z"
+		dirtyID := uuid.New()
+		cleanID := uuid.New()
+		mixedID := uuid.New()
+
+		// Dirty: every tag wrapped in literal quote characters.
+		dirtyEncoded := encodeStringArray(backend, []string{
+			`"behavioral contract"`,
+			`"failure modes"`,
+		})
+		// Clean: already in normalized form.
+		cleanEncoded := encodeStringArray(backend, []string{"alpha", "beta"})
+		// Mixed: some clean, some dirty, plus a duplicate after normalization.
+		mixedEncoded := encodeStringArray(backend, []string{
+			"behavioral-contract",
+			`"behavioral contract"`,
+			"Claude",
+			`"Claude"`,
+		})
+
+		for _, row := range []struct {
+			id      uuid.UUID
+			tags    string
+			content string
+		}{
+			{dirtyID, dirtyEncoded, "dirty"},
+			{cleanID, cleanEncoded, "clean"},
+			{mixedID, mixedEncoded, "mixed"},
+		} {
+			if _, err := db.Exec(ctx, insertSQL,
+				row.id.String(), nsID.String(), row.content, row.tags,
+				1.0, 0.5, "{}", now, now,
+			); err != nil {
+				t.Fatalf("seed %s: %v", row.content, err)
+			}
+		}
+
+		updated, err := NormalizeMemoryTags(ctx, db)
+		if err != nil {
+			t.Fatalf("backfill: %v", err)
+		}
+		// dirty + mixed both change; clean does not.
+		if updated != 2 {
+			t.Fatalf("first pass: want 2 rows updated, got %d", updated)
+		}
+
+		// Second pass is a no-op.
+		updatedAgain, err := NormalizeMemoryTags(ctx, db)
+		if err != nil {
+			t.Fatalf("backfill (idempotent run): %v", err)
+		}
+		if updatedAgain != 0 {
+			t.Fatalf("second pass: want 0 rows updated (idempotent), got %d", updatedAgain)
+		}
+
+		// Verify each row's stored tags.
+		repo := NewMemoryRepo(db)
+		dirtyMem, err := repo.GetByID(ctx, dirtyID)
+		if err != nil {
+			t.Fatalf("reload dirty: %v", err)
+		}
+		if !reflect.DeepEqual(dirtyMem.Tags, []string{"behavioral contract", "failure modes"}) {
+			t.Errorf("dirty tags: got %v, want [behavioral contract, failure modes]", dirtyMem.Tags)
+		}
+
+		cleanMem, err := repo.GetByID(ctx, cleanID)
+		if err != nil {
+			t.Fatalf("reload clean: %v", err)
+		}
+		if !reflect.DeepEqual(cleanMem.Tags, []string{"alpha", "beta"}) {
+			t.Errorf("clean tags: got %v, want [alpha, beta]", cleanMem.Tags)
+		}
+
+		mixedMem, err := repo.GetByID(ctx, mixedID)
+		if err != nil {
+			t.Fatalf("reload mixed: %v", err)
+		}
+		if !reflect.DeepEqual(mixedMem.Tags, []string{"behavioral-contract", "behavioral contract", "Claude"}) {
+			t.Errorf("mixed tags: got %v, want [behavioral-contract, behavioral contract, Claude]", mixedMem.Tags)
 		}
 	})
 }

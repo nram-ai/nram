@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -118,6 +119,77 @@ func TestMemoryRepo_Create_WithExplicitID(t *testing.T) {
 		}
 		if mem.ID != explicitID {
 			t.Fatalf("expected ID %s, got %s", explicitID, mem.ID)
+		}
+	})
+}
+
+func TestMemoryRepo_Create_NormalizesQuotedTags(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		mem := &model.Memory{
+			NamespaceID: nsID,
+			Content:     "tag normalization on create",
+			Confidence:  1.0,
+			Importance:  0.5,
+			Tags: []string{
+				`"behavioral contract"`,
+				"clean-tag",
+				`"failure modes"`,
+				"clean-tag",
+				"  spacey  ",
+			},
+		}
+		if err := repo.Create(ctx, mem); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		want := []string{"behavioral contract", "clean-tag", "failure modes", "spacey"}
+		if !reflect.DeepEqual(mem.Tags, want) {
+			t.Fatalf("in-memory tags: got %v, want %v", mem.Tags, want)
+		}
+
+		reloaded, err := repo.GetByID(ctx, mem.ID)
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if !reflect.DeepEqual(reloaded.Tags, want) {
+			t.Fatalf("persisted tags: got %v, want %v", reloaded.Tags, want)
+		}
+	})
+}
+
+func TestMemoryRepo_Update_NormalizesQuotedTags(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		mem := &model.Memory{
+			NamespaceID: nsID,
+			Content:     "tag normalization on update",
+			Confidence:  1.0,
+			Importance:  0.5,
+			Tags:        []string{"original"},
+		}
+		if err := repo.Create(ctx, mem); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		mem.Tags = []string{`"updated tag"`, "plain", `"updated tag"`}
+		if err := repo.Update(ctx, mem); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+
+		want := []string{"updated tag", "plain"}
+		reloaded, err := repo.GetByID(ctx, mem.ID)
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if !reflect.DeepEqual(reloaded.Tags, want) {
+			t.Fatalf("persisted tags: got %v, want %v", reloaded.Tags, want)
 		}
 	})
 }

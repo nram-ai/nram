@@ -1069,7 +1069,9 @@ export function useUpdateMemory() {
       data: MemoryUpdateRequest;
     }) => memoryAPI.update(projectId, memoryId, data),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ["memories", "list", vars.projectId] });
+      qc.invalidateQueries({
+        queryKey: ["memories", "list-infinite", vars.projectId],
+      });
       qc.invalidateQueries({
         queryKey: ["memories", "detail", vars.projectId, vars.memoryId],
       });
@@ -1091,7 +1093,9 @@ export function useDeleteMemory() {
       memoryId: string;
     }) => memoryAPI.remove(projectId, memoryId),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ["memories", "list", vars.projectId] });
+      qc.invalidateQueries({
+        queryKey: ["memories", "list-infinite", vars.projectId],
+      });
       qc.invalidateQueries({
         queryKey: ["memories", "recall", vars.projectId],
       });
@@ -1110,7 +1114,9 @@ export function useForgetMemories() {
       body: ForgetRequest;
     }) => memoryAPI.forget(projectId, body),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ["memories", "list", vars.projectId] });
+      qc.invalidateQueries({
+        queryKey: ["memories", "list-infinite", vars.projectId],
+      });
       qc.invalidateQueries({
         queryKey: ["memories", "recall", vars.projectId],
       });
@@ -1129,7 +1135,9 @@ export function useEnrichMemories() {
       body: EnrichRequest;
     }) => memoryAPI.enrich(projectId, body),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ["memories", "list", vars.projectId] });
+      qc.invalidateQueries({
+        queryKey: ["memories", "list-infinite", vars.projectId],
+      });
     },
   });
 }

@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"fmt"
+
+	"github.com/nram-ai/nram/internal/tags"
 )
 
 // buildEnqueueLiveMemoriesQuery returns the SQL that inserts a priority-(-1)
@@ -86,6 +88,77 @@ func hasUncoveredMemory(ctx context.Context, db DB) (bool, error) {
 	}
 	defer rows.Close()
 	return rows.Next(), rows.Err()
+}
+
+// NormalizeMemoryTags rewrites the tags array on every live memory whose
+// stored tags differ from tags.Normalize(stored). Idempotent: a second
+// pass over a clean table reports zero rows changed. Safe to run
+// concurrently with writes — a writer that lands between the SELECT and
+// UPDATE wins, and writers already pass through tags.Normalize at the
+// repo boundary, so the result is still clean.
+func NormalizeMemoryTags(ctx context.Context, db DB) (int64, error) {
+	backend := db.Backend()
+
+	selectQuery := `SELECT id, tags FROM memories WHERE deleted_at IS NULL`
+	updateQuery := `UPDATE memories SET tags = ? WHERE id = ?`
+	if backend == BackendPostgres {
+		updateQuery = `UPDATE memories SET tags = $1 WHERE id = $2`
+	}
+
+	rows, err := db.Query(ctx, selectQuery)
+	if err != nil {
+		return 0, fmt.Errorf("normalize memory tags: select: %w", err)
+	}
+
+	type pending struct {
+		id      string
+		encoded string
+	}
+	var changes []pending
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("normalize memory tags: scan: %w", err)
+		}
+		decoded, decErr := decodeStringArray(backend, raw)
+		if decErr != nil {
+			// Skip rows with malformed tags; they're already broken.
+			continue
+		}
+		normalized := tags.Normalize(decoded)
+		if normalized == nil {
+			normalized = []string{}
+		}
+		encoded := encodeStringArray(backend, normalized)
+		if encoded == raw {
+			continue
+		}
+		changes = append(changes, pending{id: id, encoded: encoded})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("normalize memory tags: rows: %w", err)
+	}
+	rows.Close()
+
+	if len(changes) == 0 {
+		return 0, nil
+	}
+
+	var updated int64
+	for _, c := range changes {
+		result, err := db.Exec(ctx, updateQuery, c.encoded, c.id)
+		if err != nil {
+			return updated, fmt.Errorf("normalize memory tags: update %s: %w", c.id, err)
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return updated, fmt.Errorf("normalize memory tags: rows affected for %s: %w", c.id, err)
+		}
+		updated += n
+	}
+	return updated, nil
 }
 
 // EnqueueAllLiveMemories enqueues a priority-(-1) enrichment job for

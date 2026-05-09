@@ -11,6 +11,7 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/storage"
+	"github.com/nram-ai/nram/internal/tags"
 )
 
 // MemoryUpdater defines the memory persistence operations needed by the update service.
@@ -107,6 +108,14 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 		return nil, fmt.Errorf("at least one of content, tags, or metadata must be provided")
 	}
 
+	if req.Tags != nil {
+		normalized := tags.Normalize(*req.Tags)
+		if normalized == nil {
+			normalized = []string{}
+		}
+		req.Tags = &normalized
+	}
+
 	// Look up project.
 	project, err := s.projects.GetByID(ctx, req.ProjectID)
 	if err != nil {
@@ -166,16 +175,16 @@ func (s *UpdateService) updateInPlace(
 		return nil, fmt.Errorf("failed to update memory: %w", err)
 	}
 
-	tags := mem.Tags
-	if tags == nil {
-		tags = []string{}
+	memTags := mem.Tags
+	if memTags == nil {
+		memTags = []string{}
 	}
 	return &UpdateResponse{
 		ID:               mem.ID,
 		PreviousMemoryID: mem.ID,
 		ProjectID:        project.ID,
 		Content:          mem.Content,
-		Tags:             tags,
+		Tags:             memTags,
 		PreviousContent:  previousContent,
 		ReEmbedded:       false,
 		Superseded:       false,
@@ -324,16 +333,16 @@ func (s *UpdateService) updateSupersede(
 	}
 
 	latency := time.Since(start).Milliseconds()
-	tags := newMem.Tags
-	if tags == nil {
-		tags = []string{}
+	memTags := newMem.Tags
+	if memTags == nil {
+		memTags = []string{}
 	}
 	return &UpdateResponse{
 		ID:               newID,
 		PreviousMemoryID: mem.ID,
 		ProjectID:        project.ID,
 		Content:          newMem.Content,
-		Tags:             tags,
+		Tags:             memTags,
 		PreviousContent:  previousContent,
 		ReEmbedded:       reEmbedded,
 		Superseded:       true,

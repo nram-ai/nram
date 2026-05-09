@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/storage"
+	"github.com/nram-ai/nram/internal/tags"
 )
 
 // bestEmbeddingDimension forwards to storage.BestEmbeddingDimension so existing
@@ -151,6 +152,8 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 	if req.Options.Extract {
 		return nil, fmt.Errorf("extract support is not yet implemented")
 	}
+
+	req.Tags = tags.Normalize(req.Tags)
 
 	// Look up project.
 	project, err := s.projects.GetByID(ctx, req.ProjectID)

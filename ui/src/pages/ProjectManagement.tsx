@@ -64,6 +64,21 @@ function tagColor(tag: string): string {
   return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length];
 }
 
+// Affects display only; the raw stored value is kept for filter equality.
+function displayTag(tag: string): string {
+  let s = tag.trim();
+  while (s.length >= 2) {
+    const first = s[0];
+    const last = s[s.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      s = s.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return s;
+}
+
 // ---------------------------------------------------------------------------
 // Skeleton rows
 // ---------------------------------------------------------------------------
@@ -155,11 +170,12 @@ function TagChip({
   tag: string;
   onRemove?: () => void;
 }) {
+  const label = displayTag(tag);
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${tagColor(tag)}`}
     >
-      {tag}
+      {label}
       {onRemove && (
         <button
           type="button"
@@ -168,7 +184,7 @@ function TagChip({
             e.stopPropagation();
             onRemove();
           }}
-          title={`Remove tag "${tag}"`}
+          title={`Remove tag "${label}"`}
         >
           x
         </button>

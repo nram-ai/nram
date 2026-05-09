@@ -24,6 +24,7 @@ import (
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
+	"github.com/nram-ai/nram/internal/tags"
 )
 
 // Ingestion-decision operation codes. The LLM judge returns one of these as
@@ -1634,19 +1635,8 @@ func (wp *WorkerPool) extractEntities(
 }
 
 func mergeTags(parent, child []string) []string {
-	seen := make(map[string]bool, len(parent)+len(child))
-	result := make([]string, 0, len(parent)+len(child))
-	for _, t := range parent {
-		if !seen[t] {
-			seen[t] = true
-			result = append(result, t)
-		}
-	}
-	for _, t := range child {
-		if !seen[t] {
-			seen[t] = true
-			result = append(result, t)
-		}
-	}
-	return result
+	combined := make([]string, 0, len(parent)+len(child))
+	combined = append(combined, parent...)
+	combined = append(combined, child...)
+	return tags.Normalize(combined)
 }

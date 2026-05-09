@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/tags"
 )
 
 // HashContent returns the canonical sha256 hex digest used for exact-content
@@ -52,6 +53,7 @@ func (r *MemoryRepo) memoryInsertArgs(mem *model.Memory) (string, []interface{})
 	if mem.ID == uuid.Nil {
 		mem.ID = uuid.New()
 	}
+	mem.Tags = tags.Normalize(mem.Tags)
 	if mem.Tags == nil {
 		mem.Tags = []string{}
 	}
@@ -916,6 +918,7 @@ func (r *MemoryRepo) UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim i
 func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	mem.Tags = tags.Normalize(mem.Tags)
 	if mem.Tags == nil {
 		mem.Tags = []string{}
 	}
