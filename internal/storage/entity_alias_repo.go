@@ -98,6 +98,22 @@ func (r *EntityAliasRepo) ListByEntity(ctx context.Context, entityID uuid.UUID) 
 	return r.scanAliases(rows)
 }
 
+// DeleteByNamespaceTx deletes all entity_aliases rows for a namespace inside
+// the caller's transaction. Required because entity_aliases.namespace_id has
+// no ON DELETE action; explicit delete keeps the project-delete cascade safe
+// without depending on every row's namespace_id matching its parent entity's
+// namespace_id.
+func (r *EntityAliasRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
+	query := `DELETE FROM entity_aliases WHERE namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM entity_aliases WHERE namespace_id = $1`
+	}
+	if _, err := tx.ExecContext(ctx, query, namespaceID.String()); err != nil {
+		return fmt.Errorf("entity alias delete by namespace: %w", err)
+	}
+	return nil
+}
+
 const selectEntityAliasColumns = `SELECT ea.id, ea.namespace_id, ea.entity_id, ea.alias, ea.alias_type, ea.created_at`
 
 func (r *EntityAliasRepo) scanAliasFromRows(rows *sql.Rows) (*model.EntityAlias, error) {

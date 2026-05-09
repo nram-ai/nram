@@ -347,8 +347,8 @@ func main() {
 	}
 	projectDeleteSvc := service.NewProjectDeleteService(
 		db,
-		projectRepo, projectRepo, memoryRepo, memoryRepo,
-		vectorStore, entityRepo, relationshipRepo,
+		projectRepo, projectRepo, memoryRepo, lineageRepo, memoryRepo,
+		vectorStore, entityAliasRepo, entityRepo, relationshipRepo,
 		enrichmentQueueRepo, tokenUsageRepo,
 		ingestionLogRepo, shareRepo, hnswDeleter, namespaceRepo, eventBus,
 	)

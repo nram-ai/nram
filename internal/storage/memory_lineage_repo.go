@@ -314,6 +314,22 @@ func (r *MemoryLineageRepo) FindParentIDs(ctx context.Context, namespaceID uuid.
 	return result, nil
 }
 
+// DeleteByNamespaceTx deletes all memory_lineage rows for a namespace inside
+// the caller's transaction. Required because memory_lineage.namespace_id has
+// no ON DELETE action; explicit delete keeps the project-delete cascade safe
+// without depending on every row's namespace_id matching its parent memory's
+// namespace_id.
+func (r *MemoryLineageRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
+	query := `DELETE FROM memory_lineage WHERE namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM memory_lineage WHERE namespace_id = $1`
+	}
+	if _, err := tx.ExecContext(ctx, query, namespaceID.String()); err != nil {
+		return fmt.Errorf("memory lineage delete by namespace: %w", err)
+	}
+	return nil
+}
+
 // reload fetches the lineage by ID and populates the struct in place.
 func (r *MemoryLineageRepo) reload(ctx context.Context, lineage *model.MemoryLineage) error {
 	fetched, err := r.GetByID(ctx, lineage.ID)

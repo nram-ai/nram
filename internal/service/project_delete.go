@@ -54,9 +54,24 @@ type RelationshipBulkDeleter interface {
 	DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error
 }
 
-// TokenUsageReassigner reassigns token usage records from one project to another.
+// TokenUsageReassigner reassigns token usage records from one project to
+// another and from one namespace to another. Both methods preserve the
+// per-row audit history by repointing rather than deleting.
 type TokenUsageReassigner interface {
 	ReassignProjectTx(ctx context.Context, tx *sql.Tx, fromProjectID, toProjectID uuid.UUID, toNamespaceID uuid.UUID) error
+	ReassignNamespaceTx(ctx context.Context, tx *sql.Tx, fromNamespaceID, toProjectID, toNamespaceID uuid.UUID) error
+}
+
+// MemoryLineageDeleter deletes all memory_lineage rows for a namespace.
+// Required because memory_lineage.namespace_id has no ON DELETE action.
+type MemoryLineageDeleter interface {
+	DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error
+}
+
+// EntityAliasDeleter deletes all entity_aliases rows for a namespace.
+// Required because entity_aliases.namespace_id has no ON DELETE action.
+type EntityAliasDeleter interface {
+	DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error
 }
 
 // IngestionLogDeleter deletes all ingestion log entries for a namespace.
@@ -108,29 +123,32 @@ var ErrNoGlobalProject = errors.New("project delete: owner has no global project
 // owner can delete their own projects.
 //
 // The full DB cascade runs inside a single transaction, in FK-safe order:
-// memories first (memory_lineage / enrichment_queue cascade, relationships.source_memory
-// and token_usage.memory_id are SET NULL), then relationships (which reference
-// entities), then entities, then the namespace-scoped side tables, then HNSW
-// snapshots, then token_usage reassignment, then the project row, then the
-// namespace row. Either the whole cascade succeeds or the transaction rolls
-// back and the database is unchanged. Vector store cleanup (in-memory HNSW
-// graph nodes) and event emission run after commit.
+// memory_lineage, then memories (enrichment_queue cascades; relationships.source_memory
+// and token_usage.memory_id are SET NULL), then relationships, then entity_aliases,
+// then entities, then the namespace-scoped side tables (ingestion log, memory
+// shares, enrichment queue, HNSW snapshots), then token_usage reassignment by
+// project_id and by namespace_id, then the project row, then the namespace row.
+// Either the whole cascade succeeds or the transaction rolls back and the
+// database is unchanged. Vector store cleanup (in-memory HNSW graph nodes)
+// and event emission run after commit.
 type ProjectDeleteService struct {
-	txBeginner          TxBeginner
-	projectGetter       ProjectDeleteGetter
-	projectDeleter      ProjectDeleter
-	memoryIDLister      MemoryIDLister
-	memoryBulkDeleter   MemoryBulkDeleter
-	vectorStore         VectorDeleter
-	entityDeleter       EntityBulkDeleter
-	relationshipDeleter RelationshipBulkDeleter
-	enrichmentDeleter   EnrichmentBulkDeleter
-	tokenUsageReassign  TokenUsageReassigner
-	ingestionDeleter    IngestionLogDeleter
-	shareDeleter        MemoryShareDeleter
-	hnswDeleter         HNSWSnapshotDeleter
-	namespaceDeleter    NamespaceDeleter
-	eventBus            events.EventBus
+	txBeginner            TxBeginner
+	projectGetter         ProjectDeleteGetter
+	projectDeleter        ProjectDeleter
+	memoryIDLister        MemoryIDLister
+	memoryLineageDeleter  MemoryLineageDeleter
+	memoryBulkDeleter     MemoryBulkDeleter
+	vectorStore           VectorDeleter
+	entityAliasDeleter    EntityAliasDeleter
+	entityDeleter         EntityBulkDeleter
+	relationshipDeleter   RelationshipBulkDeleter
+	enrichmentDeleter     EnrichmentBulkDeleter
+	tokenUsageReassign    TokenUsageReassigner
+	ingestionDeleter      IngestionLogDeleter
+	shareDeleter          MemoryShareDeleter
+	hnswDeleter           HNSWSnapshotDeleter
+	namespaceDeleter      NamespaceDeleter
+	eventBus              events.EventBus
 }
 
 // NewProjectDeleteService creates a new ProjectDeleteService with the given dependencies.
@@ -139,8 +157,10 @@ func NewProjectDeleteService(
 	projectGetter ProjectDeleteGetter,
 	projectDeleter ProjectDeleter,
 	memoryIDLister MemoryIDLister,
+	memoryLineageDeleter MemoryLineageDeleter,
 	memoryBulkDeleter MemoryBulkDeleter,
 	vectorStore VectorDeleter,
+	entityAliasDeleter EntityAliasDeleter,
 	entityDeleter EntityBulkDeleter,
 	relationshipDeleter RelationshipBulkDeleter,
 	enrichmentDeleter EnrichmentBulkDeleter,
@@ -152,21 +172,23 @@ func NewProjectDeleteService(
 	eventBus events.EventBus,
 ) *ProjectDeleteService {
 	return &ProjectDeleteService{
-		txBeginner:          txBeginner,
-		projectGetter:       projectGetter,
-		projectDeleter:      projectDeleter,
-		memoryIDLister:      memoryIDLister,
-		memoryBulkDeleter:   memoryBulkDeleter,
-		vectorStore:         vectorStore,
-		entityDeleter:       entityDeleter,
-		relationshipDeleter: relationshipDeleter,
-		enrichmentDeleter:   enrichmentDeleter,
-		tokenUsageReassign:  tokenUsageReassign,
-		ingestionDeleter:    ingestionDeleter,
-		shareDeleter:        shareDeleter,
-		hnswDeleter:         hnswDeleter,
-		namespaceDeleter:    namespaceDeleter,
-		eventBus:            eventBus,
+		txBeginner:           txBeginner,
+		projectGetter:        projectGetter,
+		projectDeleter:       projectDeleter,
+		memoryIDLister:       memoryIDLister,
+		memoryLineageDeleter: memoryLineageDeleter,
+		memoryBulkDeleter:    memoryBulkDeleter,
+		vectorStore:          vectorStore,
+		entityAliasDeleter:   entityAliasDeleter,
+		entityDeleter:        entityDeleter,
+		relationshipDeleter:  relationshipDeleter,
+		enrichmentDeleter:    enrichmentDeleter,
+		tokenUsageReassign:   tokenUsageReassign,
+		ingestionDeleter:     ingestionDeleter,
+		shareDeleter:         shareDeleter,
+		hnswDeleter:          hnswDeleter,
+		namespaceDeleter:     namespaceDeleter,
+		eventBus:             eventBus,
 	}
 }
 
@@ -260,9 +282,16 @@ func (s *ProjectDeleteService) runCascadeTx(ctx context.Context, project, global
 		}
 	}()
 
-	// Memories first: their FK children (memory_lineage, enrichment_queue) are
-	// CASCADEd by the schema; relationships.source_memory and token_usage.memory_id
-	// are SET NULL.
+	// memory_lineage before memories. memory_lineage.namespace_id has no
+	// ON DELETE action and the row's namespace_id is not schema-guaranteed
+	// to match its parent memory's, so explicit per-namespace clearing is
+	// needed before the namespace row is deleted later in the cascade.
+	if err := s.memoryLineageDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
+		return nil, fmt.Errorf("project delete: memory lineage: %w", err)
+	}
+
+	// Memories next. enrichment_queue cascades by the schema;
+	// relationships.source_memory and token_usage.memory_id are SET NULL.
 	if err := s.memoryBulkDeleter.HardDeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
 		return nil, fmt.Errorf("project delete: memories: %w", err)
 	}
@@ -276,9 +305,16 @@ func (s *ProjectDeleteService) runCascadeTx(ctx context.Context, project, global
 		return nil, fmt.Errorf("project delete: relationships: %w", err)
 	}
 
-	// Entities. Aliases CASCADE on the entity row delete (000032 / 000035);
-	// entity_vectors_* (SQL-backed stores) also cascade. Returned IDs feed the
-	// Qdrant vector cleanup that runs after the tx commits.
+	// entity_aliases before entities. The entity_id FK cascades aliases when
+	// their parent entity is deleted, but entity_aliases.namespace_id has no
+	// ON DELETE action and is not schema-guaranteed to match its parent
+	// entity's namespace_id. Explicit per-namespace clearing closes the gap.
+	if err := s.entityAliasDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
+		return nil, fmt.Errorf("project delete: entity aliases: %w", err)
+	}
+
+	// Entities. entity_vectors_* (SQL-backed stores) cascade. Returned IDs
+	// feed the Qdrant vector cleanup that runs after the tx commits.
 	entityIDs, err := s.entityDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID)
 	if err != nil {
 		return nil, fmt.Errorf("project delete: entities: %w", err)
@@ -305,9 +341,18 @@ func (s *ProjectDeleteService) runCascadeTx(ctx context.Context, project, global
 	}
 
 	// Reassign token_usage to the global project. Must precede the project
-	// row delete since token_usage.project_id has no ON DELETE action.
+	// row delete since token_usage.project_id has no ON DELETE action. This
+	// covers rows whose project_id matches the deleted project.
 	if err := s.tokenUsageReassign.ReassignProjectTx(ctx, tx, project.ID, globalProject.ID, globalProject.NamespaceID); err != nil {
 		return nil, fmt.Errorf("project delete: token usage reassign: %w", err)
+	}
+
+	// Then catch any remaining rows still pointing at the deleted namespace
+	// via namespace_id (project_id NULL or pointing at a different project).
+	// token_usage.namespace_id is NOT NULL with no ON DELETE action, so the
+	// namespace row delete below would otherwise fail.
+	if err := s.tokenUsageReassign.ReassignNamespaceTx(ctx, tx, project.NamespaceID, globalProject.ID, globalProject.NamespaceID); err != nil {
+		return nil, fmt.Errorf("project delete: token usage reassign namespace: %w", err)
 	}
 
 	// Project row. Dream tables CASCADE on this delete.

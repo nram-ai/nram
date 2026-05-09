@@ -49,17 +49,19 @@ func setupTestDB(t *testing.T) storage.DB {
 // fixtures bundles the dependencies the cascade needs and exposes the IDs of
 // the seeded project, its namespace, and the corresponding global project.
 type fixtures struct {
-	db             storage.DB
-	svc            *ProjectDeleteService
-	projectRepo    *storage.ProjectRepo
-	memoryRepo     *storage.MemoryRepo
-	entityRepo     *storage.EntityRepo
-	relRepo        *storage.RelationshipRepo
-	nsRepo         *storage.NamespaceRepo
-	tokenRepo      *storage.TokenUsageRepo
-	dreamCycleRepo *storage.DreamCycleRepo
-	target         *model.Project
-	global         *model.Project
+	db              storage.DB
+	svc             *ProjectDeleteService
+	projectRepo     *storage.ProjectRepo
+	memoryRepo      *storage.MemoryRepo
+	lineageRepo     *storage.MemoryLineageRepo
+	entityRepo      *storage.EntityRepo
+	entityAliasRepo *storage.EntityAliasRepo
+	relRepo         *storage.RelationshipRepo
+	nsRepo          *storage.NamespaceRepo
+	tokenRepo       *storage.TokenUsageRepo
+	dreamCycleRepo  *storage.DreamCycleRepo
+	target          *model.Project
+	global          *model.Project
 }
 
 // seedProject creates the namespaces and projects needed for a cascade test
@@ -73,7 +75,9 @@ func seedProject(t *testing.T) *fixtures {
 	nsRepo := storage.NewNamespaceRepo(db)
 	projectRepo := storage.NewProjectRepo(db)
 	memoryRepo := storage.NewMemoryRepo(db)
+	lineageRepo := storage.NewMemoryLineageRepo(db)
 	entityRepo := storage.NewEntityRepo(db)
+	entityAliasRepo := storage.NewEntityAliasRepo(db)
 	relRepo := storage.NewRelationshipRepo(db)
 	enrichRepo := storage.NewEnrichmentQueueRepo(db)
 	tokenRepo := storage.NewTokenUsageRepo(db)
@@ -153,9 +157,9 @@ func seedProject(t *testing.T) *fixtures {
 	svc := NewProjectDeleteService(
 		db,
 		projectRepo, projectRepo,
-		memoryRepo, memoryRepo,
+		memoryRepo, lineageRepo, memoryRepo,
 		nil, // vector store is post-commit best-effort; not exercised here
-		entityRepo, relRepo, enrichRepo,
+		entityAliasRepo, entityRepo, relRepo, enrichRepo,
 		tokenRepo, ingestRepo, shareRepo,
 		nil, // hnsw deleter is exercised in a dedicated test
 		nsRepo,
@@ -163,17 +167,19 @@ func seedProject(t *testing.T) *fixtures {
 	)
 
 	return &fixtures{
-		db:             db,
-		svc:            svc,
-		projectRepo:    projectRepo,
-		memoryRepo:     memoryRepo,
-		entityRepo:     entityRepo,
-		relRepo:        relRepo,
-		nsRepo:         nsRepo,
-		tokenRepo:      tokenRepo,
-		dreamCycleRepo: dreamCycleRepo,
-		target:         target,
-		global:         global,
+		db:              db,
+		svc:             svc,
+		projectRepo:     projectRepo,
+		memoryRepo:      memoryRepo,
+		lineageRepo:     lineageRepo,
+		entityRepo:      entityRepo,
+		entityAliasRepo: entityAliasRepo,
+		relRepo:         relRepo,
+		nsRepo:          nsRepo,
+		tokenRepo:       tokenRepo,
+		dreamCycleRepo:  dreamCycleRepo,
+		target:          target,
+		global:          global,
 	}
 }
 
@@ -371,6 +377,148 @@ func TestProjectDelete_CascadeWithDreamCycleTokenUsage(t *testing.T) {
 	}
 }
 
+// TestProjectDelete_CascadeWithOrphanNamespaceTokenUsage reproduces the
+// production failure shape from 2026-05-09: a token_usage row whose
+// namespace_id points at the doomed namespace but whose project_id is NULL
+// or points at a different project. ReassignProjectTx (keyed on project_id)
+// did not catch these rows, and the namespace row delete then failed with
+// SQLSTATE 23503 on token_usage_namespace_id_fkey. ReassignNamespaceTx is
+// the second sweep that closes the gap.
+func TestProjectDelete_CascadeWithOrphanNamespaceTokenUsage(t *testing.T) {
+	ctx := context.Background()
+	fx := seedProject(t)
+
+	// Row A: project_id NULL, namespace_id matches the doomed namespace.
+	// Row B: project_id points at the global project (any non-target project),
+	// namespace_id still matches the doomed namespace. Both must survive the
+	// cascade with project_id and namespace_id rewritten to global.
+	usageA := uuid.New()
+	if _, err := fx.db.Exec(ctx,
+		`INSERT INTO token_usage (id, project_id, namespace_id, operation, provider, model)
+			VALUES (?, NULL, ?, ?, ?, ?)`,
+		usageA.String(), fx.target.NamespaceID.String(),
+		"recall", "test", "test-model",
+	); err != nil {
+		t.Fatalf("insert token_usage A: %v", err)
+	}
+
+	usageB := uuid.New()
+	if _, err := fx.db.Exec(ctx,
+		`INSERT INTO token_usage (id, project_id, namespace_id, operation, provider, model)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+		usageB.String(), fx.global.ID.String(), fx.target.NamespaceID.String(),
+		"recall", "test", "test-model",
+	); err != nil {
+		t.Fatalf("insert token_usage B: %v", err)
+	}
+
+	if _, err := fx.svc.Delete(ctx, &ProjectDeleteRequest{ProjectID: fx.target.ID}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	for _, id := range []uuid.UUID{usageA, usageB} {
+		var projectID, namespaceID string
+		if err := fx.db.QueryRow(ctx,
+			`SELECT project_id, namespace_id FROM token_usage WHERE id = ?`,
+			id.String(),
+		).Scan(&projectID, &namespaceID); err != nil {
+			t.Fatalf("read token_usage %s: %v", id, err)
+		}
+		if projectID != fx.global.ID.String() {
+			t.Errorf("row %s: expected project_id = global %s, got %s", id, fx.global.ID, projectID)
+		}
+		if namespaceID != fx.global.NamespaceID.String() {
+			t.Errorf("row %s: expected namespace_id = global ns %s, got %s", id, fx.global.NamespaceID, namespaceID)
+		}
+	}
+
+	if n := countRows(t, fx.db, "SELECT COUNT(*) FROM namespaces WHERE id = ?", fx.target.NamespaceID.String()); n != 0 {
+		t.Errorf("expected target namespace gone, found %d rows", n)
+	}
+}
+
+// TestProjectDelete_CascadeWithMemoryLineage seeds a memory_lineage row in
+// the doomed namespace and asserts the cascade clears it. Without the
+// explicit DeleteByNamespaceTx step, memory_lineage.namespace_id (FK to
+// namespaces with no ON DELETE action) would block the namespace row delete
+// for any row whose namespace_id is not schema-guaranteed to match its
+// parent memory's namespace_id.
+func TestProjectDelete_CascadeWithMemoryLineage(t *testing.T) {
+	ctx := context.Background()
+	fx := seedProject(t)
+
+	mem := &model.Memory{
+		ID:          uuid.New(),
+		NamespaceID: fx.target.NamespaceID,
+		Content:     "lineage parent",
+	}
+	if err := fx.memoryRepo.Create(ctx, mem); err != nil {
+		t.Fatalf("create memory: %v", err)
+	}
+
+	lineage := &model.MemoryLineage{
+		NamespaceID: fx.target.NamespaceID,
+		MemoryID:    mem.ID,
+		Relation:    model.LineageExtractedFact,
+	}
+	if err := fx.lineageRepo.Create(ctx, lineage); err != nil {
+		t.Fatalf("create lineage: %v", err)
+	}
+
+	if _, err := fx.svc.Delete(ctx, &ProjectDeleteRequest{ProjectID: fx.target.ID}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if n := countRows(t, fx.db, "SELECT COUNT(*) FROM memory_lineage WHERE namespace_id = ?", fx.target.NamespaceID.String()); n != 0 {
+		t.Errorf("expected 0 lineage rows left, got %d", n)
+	}
+	if n := countRows(t, fx.db, "SELECT COUNT(*) FROM namespaces WHERE id = ?", fx.target.NamespaceID.String()); n != 0 {
+		t.Errorf("expected target namespace gone, found %d rows", n)
+	}
+}
+
+// TestProjectDelete_CascadeWithEntityAliases seeds an entity_aliases row in
+// the doomed namespace and asserts the cascade clears it via the explicit
+// DeleteByNamespaceTx step. The entity_id FK CASCADE would handle aliases
+// whose namespace_id matches their parent entity's, but explicit clearing
+// covers the no-schema-guarantee case for entity_aliases.namespace_id.
+func TestProjectDelete_CascadeWithEntityAliases(t *testing.T) {
+	ctx := context.Background()
+	fx := seedProject(t)
+
+	ent := &model.Entity{
+		ID:          uuid.New(),
+		NamespaceID: fx.target.NamespaceID,
+		Name:        "Aliased",
+		Canonical:   "aliased",
+		EntityType:  "thing",
+	}
+	if err := fx.entityRepo.Create(ctx, ent); err != nil {
+		t.Fatalf("create entity: %v", err)
+	}
+
+	alias := &model.EntityAlias{
+		NamespaceID: fx.target.NamespaceID,
+		EntityID:    ent.ID,
+		Alias:       "ali",
+		AliasType:   "name",
+	}
+	if err := fx.entityAliasRepo.Create(ctx, alias); err != nil {
+		t.Fatalf("create alias: %v", err)
+	}
+
+	if _, err := fx.svc.Delete(ctx, &ProjectDeleteRequest{ProjectID: fx.target.ID}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if n := countRows(t, fx.db, "SELECT COUNT(*) FROM entity_aliases WHERE namespace_id = ?", fx.target.NamespaceID.String()); n != 0 {
+		t.Errorf("expected 0 alias rows left, got %d", n)
+	}
+	if n := countRows(t, fx.db, "SELECT COUNT(*) FROM namespaces WHERE id = ?", fx.target.NamespaceID.String()); n != 0 {
+		t.Errorf("expected target namespace gone, found %d rows", n)
+	}
+}
+
 // TestProjectDelete_RejectsGlobal — deleting the global project itself is
 // always refused, since the cascade redirects token_usage to global.
 func TestProjectDelete_RejectsGlobal(t *testing.T) {
@@ -471,9 +619,9 @@ func TestProjectDelete_TxRollsBackOnFailure(t *testing.T) {
 	svc := NewProjectDeleteService(
 		fx.db,
 		fx.projectRepo, failProjectDeleter,
-		fx.memoryRepo, fx.memoryRepo,
+		fx.memoryRepo, fx.lineageRepo, fx.memoryRepo,
 		nil,
-		fx.entityRepo, fx.relRepo, enrichRepo,
+		fx.entityAliasRepo, fx.entityRepo, fx.relRepo, enrichRepo,
 		fx.tokenRepo, ingestRepo, shareRepo,
 		nil, fx.nsRepo, nil,
 	)
@@ -572,9 +720,9 @@ func TestProjectDelete_EntityVectorsCleanedFromQdrant(t *testing.T) {
 	svc := NewProjectDeleteService(
 		fx.db,
 		fx.projectRepo, fx.projectRepo,
-		fx.memoryRepo, fx.memoryRepo,
+		fx.memoryRepo, fx.lineageRepo, fx.memoryRepo,
 		qstore,
-		fx.entityRepo, fx.relRepo, enrichRepo,
+		fx.entityAliasRepo, fx.entityRepo, fx.relRepo, enrichRepo,
 		fx.tokenRepo, ingestRepo, shareRepo,
 		nil, fx.nsRepo, nil,
 	)

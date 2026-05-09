@@ -79,6 +79,23 @@ func (r *TokenUsageRepo) ReassignProjectTx(ctx context.Context, tx *sql.Tx, from
 	return nil
 }
 
+// ReassignNamespaceTx updates all token_usage records still referencing a
+// namespace (regardless of their project_id) to point at a different project
+// and namespace. Catches rows that ReassignProjectTx misses: project_id NULL
+// or pointing at a different project but namespace_id still on the namespace
+// being deleted. Required because token_usage.namespace_id has no ON DELETE
+// action and is NOT NULL, so the namespace row delete fails otherwise.
+func (r *TokenUsageRepo) ReassignNamespaceTx(ctx context.Context, tx *sql.Tx, fromNamespaceID, toProjectID, toNamespaceID uuid.UUID) error {
+	query := `UPDATE token_usage SET project_id = ?, namespace_id = ? WHERE namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE token_usage SET project_id = $1, namespace_id = $2 WHERE namespace_id = $3`
+	}
+	if _, err := tx.ExecContext(ctx, query, toProjectID.String(), toNamespaceID.String(), fromNamespaceID.String()); err != nil {
+		return fmt.Errorf("token usage reassign namespace: %w", err)
+	}
+	return nil
+}
+
 // GetByID returns a token usage record by its UUID.
 func (r *TokenUsageRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.TokenUsage, error) {
 	query := selectTokenUsageColumns + ` FROM token_usage WHERE id = ?`
