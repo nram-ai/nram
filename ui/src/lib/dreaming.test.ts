@@ -185,7 +185,6 @@ describe("formatDreamLog: paraphrase_dedup", () => {
         before_state: {},
         after_state: {
           superseded_by: B,
-          winner: B,
           cosine: 0.94,
           reason: "high_cosine_paraphrase",
         },
@@ -198,10 +197,32 @@ describe("formatDreamLog: paraphrase_dedup", () => {
     expect(out.facts.winner).toEqual({ label: "Winner", value: B, kind: "memory_id" });
     expect(out.facts.cosine).toEqual({ label: "Cosine", value: 0.94, kind: "percent" });
   });
+
+  it("paraphrase_superseded ignores after.winner side enum and trusts superseded_by", () => {
+    // The contradictions phase also emits paraphrase_superseded and tacks
+    // on after.winner = "a"|"b"|"tie" for diagnostics. The UI must read
+    // the real UUID from after.superseded_by, not the side enum.
+    const out = formatDreamLog(
+      mkLog({
+        phase: "contradiction_detection",
+        operation: "paraphrase_superseded",
+        target_type: "memory",
+        target_id: A,
+        before_state: {},
+        after_state: {
+          superseded_by: B,
+          winner: "a",
+          cosine: 0.97,
+          reason: "high_cosine_paraphrase",
+        },
+      }),
+    );
+    expect(out.facts.winner).toEqual({ label: "Winner", value: B, kind: "memory_id" });
+  });
 });
 
 describe("formatDreamLog: contradiction_detection", () => {
-  it("contradiction_detected exposes both memories + winner + factors", () => {
+  it("contradiction_detected with winner='a' resolves to target_id", () => {
     const out = formatDreamLog(
       mkLog({
         phase: "contradiction_detection",
@@ -211,7 +232,7 @@ describe("formatDreamLog: contradiction_detection", () => {
         before_state: {},
         after_state: {
           conflicting_id: B,
-          winner: A,
+          winner: "a",
           winner_factor: 0.78,
           loser_factor: 0.22,
           detection_count: 1,
@@ -224,13 +245,49 @@ describe("formatDreamLog: contradiction_detection", () => {
     );
     expect(out.facts.a.value).toBe(A);
     expect(out.facts.b.value).toBe(B);
-    expect(out.facts.winner.value).toBe(A);
+    expect(out.facts.winner).toEqual({ label: "Kept", value: A, kind: "memory_id" });
     expect(out.facts.winnerFactor).toEqual({
       label: "Winner factor",
       value: 0.78,
       kind: "confidence",
     });
     expect(out.facts.explanation.value).toBe("A asserts X; B asserts not-X.");
+  });
+
+  it("contradiction_detected with winner='b' resolves to conflicting_id", () => {
+    const out = formatDreamLog(
+      mkLog({
+        phase: "contradiction_detection",
+        operation: "contradiction_detected",
+        target_type: "memory",
+        target_id: A,
+        before_state: {},
+        after_state: {
+          conflicting_id: B,
+          winner: "b",
+        },
+      }),
+    );
+    expect(out.facts.winner).toEqual({ label: "Kept", value: B, kind: "memory_id" });
+  });
+
+  it("contradiction_detected with winner='tie' renders as text, not a memory link", () => {
+    const out = formatDreamLog(
+      mkLog({
+        phase: "contradiction_detection",
+        operation: "contradiction_detected",
+        target_type: "memory",
+        target_id: A,
+        before_state: {},
+        after_state: {
+          conflicting_id: B,
+          winner: "tie",
+        },
+      }),
+    );
+    expect(out.narrative).toBe("Resolved contradiction between {a} and {b} — tie");
+    expect(out.facts.winner.kind).toBe("text");
+    expect(out.facts.winner.value).toBe("tie");
   });
 });
 

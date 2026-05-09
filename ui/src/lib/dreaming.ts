@@ -82,6 +82,13 @@ export interface FormattedLog {
 
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 
+// after_state.winner from the contradictions phase is a side enum, not a
+// memory UUID. Mirrors phase_contradictions.go:34-36.
+type WinnerSide = "a" | "b" | "tie";
+const WinnerSideA: WinnerSide = "a";
+const WinnerSideB: WinnerSide = "b";
+const WinnerTie: WinnerSide = "tie";
+
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -287,7 +294,9 @@ function formatEntityUpdated(log: DreamLog): FormattedLog {
 
 function formatParaphraseSuperseded(log: DreamLog): FormattedLog {
   const after = isObj(log.after_state) ? log.after_state : {};
-  const winner = pickString(after.winner) ?? pickString(after.superseded_by) ?? "";
+  // after.winner is a side enum tacked on when this op is emitted from
+  // the contradictions phase; the real winner UUID is in superseded_by.
+  const winner = pickString(after.superseded_by) ?? "";
   const cosine = pickNumber(after.cosine);
   const reason = pickString(after.reason);
   const facts: Record<string, Fact> = {
@@ -306,7 +315,15 @@ function formatParaphraseSuperseded(log: DreamLog): FormattedLog {
 function formatContradictionDetected(log: DreamLog): FormattedLog {
   const after = isObj(log.after_state) ? log.after_state : {};
   const conflictingId = pickString(after.conflicting_id) ?? "";
-  const winner = pickString(after.winner) ?? "";
+  const winnerSide = pickString(after.winner) ?? "";
+  // Resolve the side enum to the kept memory's UUID so the chip can deep-link.
+  // Ties have no kept memory and render as a non-clickable text chip.
+  const keptByWinner: Record<string, { value: string; kind: FactKind }> = {
+    [WinnerSideA]: { value: log.target_id, kind: "memory_id" },
+    [WinnerSideB]: { value: conflictingId, kind: "memory_id" },
+    [WinnerTie]: { value: "tie", kind: "text" },
+  };
+  const kept = keptByWinner[winnerSide] ?? { value: "", kind: "memory_id" };
   const winnerFactor = pickNumber(after.winner_factor);
   const loserFactor = pickNumber(after.loser_factor);
   const detectionCount = pickNumber(after.detection_count);
@@ -314,15 +331,15 @@ function formatContradictionDetected(log: DreamLog): FormattedLog {
   const facts: Record<string, Fact> = {
     a: fact("Memory A", log.target_id, "memory_id"),
     b: fact("Memory B", conflictingId, "memory_id"),
-    winner: fact("Kept", winner, "memory_id"),
+    winner: fact("Kept", kept.value, kept.kind),
   };
   if (winnerFactor !== undefined) facts.winnerFactor = fact("Winner factor", winnerFactor, "confidence");
   if (loserFactor !== undefined) facts.loserFactor = fact("Loser factor", loserFactor, "confidence");
   if (detectionCount !== undefined) facts.detectionCount = fact("Detections", detectionCount, "count");
   if (explanation) facts.explanation = fact("Explanation", explanation, "text");
+  const suffix = winnerSide === WinnerTie ? "tie" : "kept {winner}";
   return {
-    narrative:
-      "Resolved contradiction between {a} and {b} — kept {winner}",
+    narrative: `Resolved contradiction between {a} and {b} — ${suffix}`,
     facts,
   };
 }
