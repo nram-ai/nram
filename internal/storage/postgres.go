@@ -40,6 +40,10 @@ func (p *postgresDB) WriteQueryRow(ctx context.Context, query string, args ...an
 	return p.db.QueryRowContext(ctx, query, args...)
 }
 
+func (p *postgresDB) WriteQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return p.db.QueryContext(ctx, query, args...)
+}
+
 func (p *postgresDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return p.db.BeginTx(ctx, opts)
 }

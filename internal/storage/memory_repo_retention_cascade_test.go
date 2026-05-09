@@ -22,6 +22,9 @@ import (
 //	token_usage_memory_id_fkey ..."
 func TestMemoryRepo_HardDeleteSoftDeletedBefore_FKActions(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
+		// HardDeleteSoftDeletedBefore is a whole-DB DELETE; the shared
+		// Postgres schema retains soft-deleted memories from prior tests.
+		truncateAllForTest(t, db)
 		ctx := context.Background()
 		nsID := createTestNamespace(t, ctx, db)
 

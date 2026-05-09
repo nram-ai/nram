@@ -189,6 +189,10 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 // second pass is a no-op.
 func TestNormalizeMemoryTags(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
+		// NormalizeMemoryTags is a whole-DB scan with no namespace filter, so
+		// any rows other tests left behind in the shared Postgres schema
+		// would be counted alongside this test's own rows.
+		truncateAllForTest(t, db)
 		ctx := context.Background()
 		nsID := createTestNamespace(t, ctx, db)
 		backend := db.Backend()
@@ -292,6 +296,9 @@ func TestNormalizeMemoryTags(t *testing.T) {
 // duplicated.
 func TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
+		// EnqueueAllLiveMemories is a whole-DB scan; under the shared
+		// Postgres schema, prior tests' live memories would inflate the count.
+		truncateAllForTest(t, db)
 		ctx := context.Background()
 		memRepo := NewMemoryRepo(db)
 		queueRepo := NewEnrichmentQueueRepo(db)

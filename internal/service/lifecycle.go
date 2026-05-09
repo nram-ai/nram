@@ -24,15 +24,20 @@ type LifecycleStore interface {
 // written is otherwise leaked. The orphan filter is age-gated so in-flight
 // enrichment (which writes the entity row before its relationships) cannot
 // race the sweep — see EntityRepo.DeleteOrphaned.
+//
+// DeleteOrphanedEntities returns the IDs of deleted rows so the lifecycle
+// worker can clean up out-of-band vector storage (Qdrant) for them. The
+// SQL-backed entity_vectors_* tables already cascade on the entity delete,
+// so the per-ID cleanup is a no-op there; only Qdrant materially needs it.
 type GraphPruner interface {
 	DeleteDanglingRelationships(ctx context.Context) (int64, error)
-	DeleteOrphanedEntities(ctx context.Context, olderThan time.Time) (int64, error)
+	DeleteOrphanedEntities(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error)
 }
 
 // graphPrunerAdapter wraps entity and relationship repos into a GraphPruner.
 type graphPrunerAdapter struct {
-	entities      interface {
-		DeleteOrphaned(ctx context.Context, olderThan time.Time) (int64, error)
+	entities interface {
+		DeleteOrphaned(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error)
 	}
 	relationships interface{ DeleteDangling(ctx context.Context) (int64, error) }
 }
@@ -40,7 +45,7 @@ type graphPrunerAdapter struct {
 // NewGraphPruner creates a GraphPruner from entity and relationship repos.
 func NewGraphPruner(
 	entities interface {
-		DeleteOrphaned(ctx context.Context, olderThan time.Time) (int64, error)
+		DeleteOrphaned(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error)
 	},
 	relationships interface{ DeleteDangling(ctx context.Context) (int64, error) },
 ) GraphPruner {
@@ -51,7 +56,7 @@ func (a *graphPrunerAdapter) DeleteDanglingRelationships(ctx context.Context) (i
 	return a.relationships.DeleteDangling(ctx)
 }
 
-func (a *graphPrunerAdapter) DeleteOrphanedEntities(ctx context.Context, olderThan time.Time) (int64, error) {
+func (a *graphPrunerAdapter) DeleteOrphanedEntities(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error) {
 	return a.entities.DeleteOrphaned(ctx, olderThan)
 }
 
@@ -229,12 +234,20 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 		}
 
 		orphanCutoff := now.Add(-orphanGrace)
-		orphanedEntities, entErr := s.graphPruner.DeleteOrphanedEntities(ctx, orphanCutoff)
+		orphanedIDs, entErr := s.graphPruner.DeleteOrphanedEntities(ctx, orphanCutoff)
 		if entErr != nil {
 			log.Printf("lifecycle: failed to delete orphaned entities: %v", entErr)
-		} else if orphanedEntities > 0 {
+		} else if len(orphanedIDs) > 0 {
+			// Best-effort vector cleanup. SQL-backed stores cascade on the
+			// entity row delete (entity_vectors_* FK); only Qdrant needs the
+			// explicit per-ID delete to avoid leaking points.
+			if s.vectorStore != nil {
+				for _, id := range orphanedIDs {
+					_ = s.vectorStore.Delete(ctx, storage.VectorKindEntity, id)
+				}
+			}
 			log.Printf("lifecycle: deleted %d orphaned entities (older than %s)",
-				orphanedEntities, orphanGrace)
+				len(orphanedIDs), orphanGrace)
 		}
 	}
 

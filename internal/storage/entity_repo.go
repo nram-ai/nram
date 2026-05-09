@@ -14,12 +14,22 @@ import (
 
 // EntityRepo provides CRUD operations for the entities table.
 type EntityRepo struct {
-	db DB
+	db          DB
+	vectorStore VectorStore
 }
 
 // NewEntityRepo creates a new EntityRepo backed by the given DB.
 func NewEntityRepo(db DB) *EntityRepo {
 	return &EntityRepo{db: db}
+}
+
+// SetVectorStore wires an optional VectorStore for opportunistic vector
+// cleanup on internal entity deletes (currently: stub deletion inside
+// promoteStub). Bulk-delete paths return their deleted IDs to the caller and
+// do not depend on this field. Safe to call once at construction time before
+// the repo is shared across goroutines.
+func (r *EntityRepo) SetVectorStore(vs VectorStore) {
+	r.vectorStore = vs
 }
 
 // Create inserts a new entity. ID is generated if zero-valued.
@@ -204,6 +214,14 @@ func (r *EntityRepo) promoteStub(ctx context.Context, entity *model.Entity) erro
 	}
 	if _, err := r.db.Exec(ctx, delQuery, stubID); err != nil {
 		return fmt.Errorf("entity promote stub: delete stub: %w", err)
+	}
+
+	// Best-effort cleanup of the stub's vector. SQL-backed stores (pgvector,
+	// HNSW) cascade via entity_vectors; the call is a no-op there. Qdrant has
+	// no SQL FK to the entities table, so without this the stub's points are
+	// leaked indefinitely in the entity-vectors collections.
+	if r.vectorStore != nil {
+		_ = r.vectorStore.Delete(ctx, VectorKindEntity, stub.ID)
 	}
 
 	// Bump mention count on the real entity.
@@ -554,27 +572,46 @@ func (r *EntityRepo) ListAll(ctx context.Context, limit, offset int) ([]model.En
 	return r.scanEntities(rows)
 }
 
-// DeleteByNamespaceTx deletes all entities (and their aliases) in a namespace
-// inside the caller's transaction. Caller must have already deleted the
-// relationships referencing these entities, otherwise the FK constraint on
-// relationships.source_id / target_id will block this delete.
-func (r *EntityRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
-	aliasQuery := `DELETE FROM entity_aliases WHERE entity_id IN (SELECT id FROM entities WHERE namespace_id = ?)`
-	if r.db.Backend() == BackendPostgres {
-		aliasQuery = `DELETE FROM entity_aliases WHERE entity_id IN (SELECT id FROM entities WHERE namespace_id = $1)`
+// scanReturnedUUIDs drains a *sql.Rows whose only column is a UUID-shaped
+// TEXT/UUID value (the typical RETURNING id payload), parsing each into a
+// uuid.UUID. errPrefix is woven into wrapped errors so the caller's site
+// stays attributable.
+func scanReturnedUUIDs(rows *sql.Rows, errPrefix string) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, fmt.Errorf("%s scan: %w", errPrefix, err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("%s parse id: %w", errPrefix, err)
+		}
+		ids = append(ids, id)
 	}
-	if _, err := tx.ExecContext(ctx, aliasQuery, namespaceID.String()); err != nil {
-		return fmt.Errorf("entity delete aliases by namespace: %w", err)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s rows: %w", errPrefix, err)
 	}
+	return ids, nil
+}
 
-	query := `DELETE FROM entities WHERE namespace_id = ?`
+// DeleteByNamespaceTx deletes all entities (and their cascaded aliases /
+// relationships / entity_vectors) in a namespace inside the caller's
+// transaction. The schema (post-000032 / 000035) cascades aliases and the
+// relationships endpoints into entities; we no longer need to pre-delete
+// aliases here. Returns the IDs of deleted entities so the caller can clean
+// up out-of-band vector storage (Qdrant) after the transaction commits.
+func (r *EntityRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) ([]uuid.UUID, error) {
+	query := `DELETE FROM entities WHERE namespace_id = ? RETURNING id`
 	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM entities WHERE namespace_id = $1`
+		query = `DELETE FROM entities WHERE namespace_id = $1 RETURNING id`
 	}
-	if _, err := tx.ExecContext(ctx, query, namespaceID.String()); err != nil {
-		return fmt.Errorf("entity delete by namespace: %w", err)
+	rows, err := tx.QueryContext(ctx, query, namespaceID.String())
+	if err != nil {
+		return nil, fmt.Errorf("entity delete by namespace: %w", err)
 	}
-	return nil
+	defer rows.Close()
+	return scanReturnedUUIDs(rows, "entity delete by namespace")
 }
 
 // DeleteOrphaned removes entities that have no relationships (neither as
@@ -584,30 +621,29 @@ func (r *EntityRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namesp
 // vector) must not have its row pulled out from under it. Callers pick
 // olderThan = now - grace, where grace must exceed the longest plausible
 // gap between entity Upsert and vector UpsertBatch (LLM embed round-trip,
-// queue dispatch, etc.). Returns the number of entities deleted.
-func (r *EntityRepo) DeleteOrphaned(ctx context.Context, olderThan time.Time) (int64, error) {
+// queue dispatch, etc.). Returns the IDs of deleted entities so the caller
+// can clean up out-of-band vector storage (Qdrant) atomically with the SQL
+// delete - the slice is exactly what the DELETE acted on, no race window.
+func (r *EntityRepo) DeleteOrphaned(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error) {
 	cutoff := olderThan.UTC().Format(time.RFC3339)
 	query := `DELETE FROM entities WHERE created_at <= ? AND id NOT IN (
 		SELECT source_id FROM relationships
 		UNION
 		SELECT target_id FROM relationships
-	)`
+	) RETURNING id`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM entities WHERE created_at <= $1 AND id NOT IN (
 			SELECT source_id FROM relationships
 			UNION
 			SELECT target_id FROM relationships
-		)`
+		) RETURNING id`
 	}
-	result, err := r.db.Exec(ctx, query, cutoff)
+	rows, err := r.db.WriteQuery(ctx, query, cutoff)
 	if err != nil {
-		return 0, fmt.Errorf("entity delete orphaned: %w", err)
+		return nil, fmt.Errorf("entity delete orphaned: %w", err)
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("entity delete orphaned rows: %w", err)
-	}
-	return rows, nil
+	defer rows.Close()
+	return scanReturnedUUIDs(rows, "entity delete orphaned")
 }
 
 // reload fetches the entity by ID and populates the struct in place.

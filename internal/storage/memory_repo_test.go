@@ -1014,9 +1014,17 @@ func TestMemoryRepo_HardDelete(t *testing.T) {
 }
 
 // recordingVectorStore satisfies the VectorStore interface and records each
-// Delete call so tests can assert the purge hook fired.
+// Delete call so tests can assert the purge hook fired. Both the simple
+// `deletes` slice (ID-only, for memory tests) and `deleteCalls` slice
+// (with VectorKind, for entity tests) are populated on every Delete.
 type recordingVectorStore struct {
-	deletes []uuid.UUID
+	deletes     []uuid.UUID
+	deleteCalls []recordedVectorDelete
+}
+
+type recordedVectorDelete struct {
+	kind VectorKind
+	id   uuid.UUID
 }
 
 func (r *recordingVectorStore) Upsert(_ context.Context, _ VectorKind, _ uuid.UUID, _ uuid.UUID, _ []float32, _ int) error {
@@ -1031,12 +1039,13 @@ func (r *recordingVectorStore) Search(_ context.Context, _ VectorKind, _ []float
 func (r *recordingVectorStore) GetByIDs(_ context.Context, _ VectorKind, _ []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
 	return map[uuid.UUID][]float32{}, nil
 }
-func (r *recordingVectorStore) Delete(_ context.Context, _ VectorKind, id uuid.UUID) error {
+func (r *recordingVectorStore) Delete(_ context.Context, kind VectorKind, id uuid.UUID) error {
 	r.deletes = append(r.deletes, id)
+	r.deleteCalls = append(r.deleteCalls, recordedVectorDelete{kind: kind, id: id})
 	return nil
 }
 func (r *recordingVectorStore) TruncateAllVectors(_ context.Context) error { return nil }
-func (r *recordingVectorStore) Ping(_ context.Context) error                { return nil }
+func (r *recordingVectorStore) Ping(_ context.Context) error               { return nil }
 
 // TestMemoryRepo_SoftDelete_PurgesVector verifies that soft-delete asks
 // the attached vector store to drop the vector alongside the row-level
@@ -1311,6 +1320,10 @@ func TestMemoryRepo_ListPurgeable(t *testing.T) {
 // will not be re-enqueued by EnqueueAllLiveMemories anyway).
 func TestMemoryRepo_ClearAllEmbeddingDims(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
+		// ClearAllEmbeddingDims is a whole-DB UPDATE; the shared Postgres
+		// schema retains memories from prior tests with embedding_dim set,
+		// inflating the rows-affected count.
+		truncateAllForTest(t, db)
 		ctx := context.Background()
 		repo := NewMemoryRepo(db)
 		nsID := createTestMemoryNamespace(t, ctx, db)

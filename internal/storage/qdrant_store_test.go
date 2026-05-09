@@ -39,23 +39,25 @@ func setupQdrantTest(t *testing.T) *QdrantStore {
 	client := store.Client()
 
 	t.Cleanup(func() {
-		// Clean up all test data from all collections.
-		for _, collection := range qdrantMemoryCollections {
-			// Delete all points by using a filter that matches everything.
-			// Use scroll to get all point IDs, then delete them.
-			points, err := client.Scroll(ctx, &qdrant.ScrollPoints{
-				CollectionName: collection,
-				Limit:          qdrant.PtrOf(uint32(10000)),
-			})
-			if err == nil && len(points) > 0 {
-				ids := make([]*qdrant.PointId, len(points))
-				for i, p := range points {
-					ids[i] = p.GetId()
-				}
-				client.Delete(ctx, &qdrant.DeletePoints{ //nolint:errcheck
+		// Clean up all test data from all collections (both memory and entity
+		// families). Without entity-collection cleanup, entity-vector tests
+		// would leak points across runs against a shared dev Qdrant instance.
+		for _, family := range []map[int]string{qdrantMemoryCollections, qdrantEntityCollections} {
+			for _, collection := range family {
+				points, err := client.Scroll(ctx, &qdrant.ScrollPoints{
 					CollectionName: collection,
-					Points:         qdrant.NewPointsSelectorIDs(ids),
+					Limit:          qdrant.PtrOf(uint32(10000)),
 				})
+				if err == nil && len(points) > 0 {
+					ids := make([]*qdrant.PointId, len(points))
+					for i, p := range points {
+						ids[i] = p.GetId()
+					}
+					client.Delete(ctx, &qdrant.DeletePoints{ //nolint:errcheck
+						CollectionName: collection,
+						Points:         qdrant.NewPointsSelectorIDs(ids),
+					})
+				}
 			}
 		}
 		store.Close()
@@ -224,6 +226,45 @@ func TestQdrantStore_Delete(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("expected 0 results after delete, got %d", len(results))
+	}
+}
+
+// TestQdrantStore_DeleteEntityVector verifies the entity-collection cleanup
+// path used by the lifecycle orphan sweep, ProjectDeleteService, and the
+// Upsert promoteStub merge. Without this Delete call landing on the entity
+// family, those code paths would silently leak Qdrant points after the SQL
+// rows are gone (entity_vectors_* SQL CASCADE does not reach Qdrant).
+func TestQdrantStore_DeleteEntityVector(t *testing.T) {
+	store := setupQdrantTest(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	entityID := uuid.New()
+	dim := 384
+	emb := makeEmbedding(dim, 1.0)
+
+	if err := store.Upsert(ctx, VectorKindEntity, entityID, nsID, emb, dim); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	got, err := store.GetByIDs(ctx, VectorKindEntity, []uuid.UUID{entityID}, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs before delete: %v", err)
+	}
+	if _, present := got[entityID]; !present {
+		t.Fatalf("entity vector %s not present after Upsert", entityID)
+	}
+
+	if err := store.Delete(ctx, VectorKindEntity, entityID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	got, err = store.GetByIDs(ctx, VectorKindEntity, []uuid.UUID{entityID}, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs after delete: %v", err)
+	}
+	if _, present := got[entityID]; present {
+		t.Fatalf("entity vector %s still present after Delete (got=%v)", entityID, got)
 	}
 }
 

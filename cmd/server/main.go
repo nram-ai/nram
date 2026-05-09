@@ -288,6 +288,15 @@ func main() {
 			hnswCfg.M, hnswCfg.EfConstruction, hnswCfg.EfSearch, hnswCfg.MaxLoadedIndexes)
 	}
 
+	// Wire the vector store into the entity repo so promoteStub (called from
+	// EntityRepo.Upsert when a real-typed entity is upserted over an existing
+	// stub) can opportunistically clean up the stub's vector. SQL-backed
+	// stores cascade via entity_vectors_*; this is materially load-bearing
+	// only for Qdrant, which has no SQL FK to entities.
+	if vectorStore != nil {
+		entityRepo.SetVectorStore(vectorStore)
+	}
+
 	// Create event bus. Buffer and replay capacity are read once from
 	// settings; runtime changes require server restart.
 	eventBusBuf := settingsSvc.ResolveIntWithDefault(context.Background(),

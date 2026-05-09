@@ -39,6 +39,10 @@ type DB interface {
 	// INSERT … RETURNING. Routed to the write pool for SQLite.
 	WriteQueryRow(ctx context.Context, query string, args ...any) *sql.Row
 
+	// WriteQuery executes a write that returns multiple rows, e.g.
+	// DELETE … RETURNING. Routed to the write pool for SQLite.
+	WriteQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+
 	// BeginTx starts a write transaction (routed to write pool for SQLite).
 	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 

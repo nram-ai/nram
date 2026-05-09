@@ -178,6 +178,7 @@ func (s *QdrantStore) Upsert(ctx context.Context, kind VectorKind, id uuid.UUID,
 
 	_, err = s.client.Upsert(ctx, &qdrant.UpsertPoints{
 		CollectionName: collection,
+		Wait:           qdrant.PtrOf(true),
 		Points: []*qdrant.PointStruct{
 			{
 				Id:      qdrant.NewID(id.String()),
@@ -232,6 +233,7 @@ func (s *QdrantStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem)
 
 		_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
 			CollectionName: collection,
+			Wait:           qdrant.PtrOf(true),
 			Points:         points,
 		})
 		if err != nil {
@@ -312,7 +314,16 @@ func (s *QdrantStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.
 		if err != nil {
 			return nil, fmt.Errorf("qdrant: invalid point ID in get-by-ids result: %w", err)
 		}
-		vec := pt.GetVectors().GetVector().GetData()
+		// Qdrant 1.13+ returns dense vectors in the typed Dense subfield. The
+		// older flat Data field is only populated for the legacy single-vector
+		// shape and stays empty when the point was upserted via
+		// NewVectorsDense. Read Dense first; fall back to Data so older
+		// servers keep working.
+		v := pt.GetVectors().GetVector()
+		vec := v.GetDense().GetData()
+		if len(vec) == 0 {
+			vec = v.GetData()
+		}
 		if len(vec) == 0 {
 			// Sparse or named-vector points are not produced by this store;
 			// skip rather than return a zero-length slice that callers would

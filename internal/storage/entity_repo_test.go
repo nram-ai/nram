@@ -736,6 +736,10 @@ func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
 // the embedding-model switch cascade's entity re-embed loop.
 func TestEntityRepo_ListAll(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
+		// ListAll is a whole-DB scan; the shared Postgres schema retains
+		// rows from prior tests, so the row-count assertions below need a
+		// blank slate.
+		truncateAllForTest(t, db)
 		ctx := context.Background()
 		repo := NewEntityRepo(db)
 		ns1 := createTestNamespace(t, ctx, db)
@@ -799,6 +803,10 @@ func TestEntityRepo_ListAll(t *testing.T) {
 // the re-embed pipeline treats every entity as needing fresh vectors.
 func TestEntityRepo_ClearAllEmbeddingDims(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
+		// ClearAllEmbeddingDims is a whole-DB UPDATE; the shared Postgres
+		// schema retains entities from prior tests with embedding_dim set,
+		// inflating the rows-affected count.
+		truncateAllForTest(t, db)
 		ctx := context.Background()
 		repo := NewEntityRepo(db)
 		ns := createTestNamespace(t, ctx, db)
@@ -844,6 +852,240 @@ func TestEntityRepo_ClearAllEmbeddingDims(t *testing.T) {
 		}
 		if n2 != 0 {
 			t.Errorf("second clear should be a no-op, affected %d rows", n2)
+		}
+	})
+}
+
+// backdateEntityCreatedAt forces an entity's created_at to a specific past
+// instant. The DEFAULT clause sets created_at = now() at insert time, so
+// orphan-sweep tests need this hook to make rows eligible for the cutoff.
+func backdateEntityCreatedAt(t *testing.T, ctx context.Context, db DB, entityID uuid.UUID, when time.Time) {
+	t.Helper()
+	stamp := when.UTC().Format(time.RFC3339)
+	query := `UPDATE entities SET created_at = ? WHERE id = ?`
+	if db.Backend() == BackendPostgres {
+		query = `UPDATE entities SET created_at = $1 WHERE id = $2`
+	}
+	if _, err := db.Exec(ctx, query, stamp, entityID.String()); err != nil {
+		t.Fatalf("backdate entity created_at: %v", err)
+	}
+}
+
+// TestEntityRepo_DeleteOrphaned_ReturnsIDsAndCascadesAliases verifies that
+// the lifecycle orphan sweep can delete an entity that has an alias attached.
+// Pre-cascade migration 000032 / 000035, this raised SQLSTATE 23503 on
+// entity_aliases_entity_id_fkey and the sweep silently failed every tick.
+func TestEntityRepo_DeleteOrphaned_ReturnsIDsAndCascadesAliases(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		entityID := createTestEntity(t, ctx, db, nsID, "orphan_with_alias_"+uuid.NewString()[:8])
+		createTestEntityAlias(t, ctx, db, nsID, entityID, "OWA", "ticker")
+		backdateEntityCreatedAt(t, ctx, db, entityID, time.Now().Add(-2*time.Hour))
+
+		ids, err := repo.DeleteOrphaned(ctx, time.Now().Add(-time.Hour))
+		if err != nil {
+			t.Fatalf("DeleteOrphaned: %v", err)
+		}
+
+		found := false
+		for _, id := range ids {
+			if id == entityID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected returned IDs to include %s, got %v", entityID, ids)
+		}
+
+		if _, err := repo.GetByID(ctx, entityID); err == nil {
+			t.Errorf("entity %s still exists after orphan sweep", entityID)
+		}
+
+		var aliasCount int
+		aliasQuery := `SELECT COUNT(*) FROM entity_aliases WHERE entity_id = ?`
+		if db.Backend() == BackendPostgres {
+			aliasQuery = `SELECT COUNT(*) FROM entity_aliases WHERE entity_id = $1`
+		}
+		if err := db.QueryRow(ctx, aliasQuery, entityID.String()).Scan(&aliasCount); err != nil {
+			t.Fatalf("count aliases: %v", err)
+		}
+		if aliasCount != 0 {
+			t.Errorf("expected 0 aliases after cascade delete, got %d", aliasCount)
+		}
+	})
+}
+
+// TestEntityRepo_DeleteOrphaned_SkipsEntitiesWithRelationships verifies the
+// NOT IN filter: an entity referenced by any relationship endpoint stays put
+// even when its created_at predates the cutoff.
+func TestEntityRepo_DeleteOrphaned_SkipsEntitiesWithRelationships(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		relRepo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		suffix := uuid.NewString()[:8]
+		srcID := createTestEntity(t, ctx, db, nsID, "src_"+suffix)
+		tgtID := createTestEntity(t, ctx, db, nsID, "tgt_"+suffix)
+
+		if err := relRepo.Create(ctx, &model.Relationship{
+			NamespaceID: nsID, SourceID: srcID, TargetID: tgtID,
+			Relation: "knows", Weight: 1.0,
+		}); err != nil {
+			t.Fatalf("create relationship: %v", err)
+		}
+
+		backdateEntityCreatedAt(t, ctx, db, srcID, time.Now().Add(-2*time.Hour))
+		backdateEntityCreatedAt(t, ctx, db, tgtID, time.Now().Add(-2*time.Hour))
+
+		ids, err := repo.DeleteOrphaned(ctx, time.Now().Add(-time.Hour))
+		if err != nil {
+			t.Fatalf("DeleteOrphaned: %v", err)
+		}
+		for _, id := range ids {
+			if id == srcID || id == tgtID {
+				t.Errorf("DeleteOrphaned returned referenced entity %s", id)
+			}
+		}
+
+		if _, err := repo.GetByID(ctx, srcID); err != nil {
+			t.Errorf("source entity unexpectedly deleted: %v", err)
+		}
+		if _, err := repo.GetByID(ctx, tgtID); err != nil {
+			t.Errorf("target entity unexpectedly deleted: %v", err)
+		}
+	})
+}
+
+// TestEntityRepo_DeleteByNamespaceTx_ReturnsIDsAndCascadesChildren verifies
+// the bulk-namespace delete used by ProjectDeleteService. Aliases and
+// relationships referencing namespace entities must be cleared by the
+// schema cascade (no manual pre-delete step) and the returned IDs must
+// match the actual deleted entities for downstream Qdrant cleanup.
+func TestEntityRepo_DeleteByNamespaceTx_ReturnsIDsAndCascadesChildren(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		relRepo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		suffix := uuid.NewString()[:8]
+		e1 := createTestEntity(t, ctx, db, nsID, "ent1_"+suffix)
+		e2 := createTestEntity(t, ctx, db, nsID, "ent2_"+suffix)
+
+		createTestEntityAlias(t, ctx, db, nsID, e1, "E1", "ticker")
+		createTestEntityAlias(t, ctx, db, nsID, e2, "E2", "ticker")
+
+		if err := relRepo.Create(ctx, &model.Relationship{
+			NamespaceID: nsID, SourceID: e1, TargetID: e2,
+			Relation: "knows", Weight: 1.0,
+		}); err != nil {
+			t.Fatalf("create relationship: %v", err)
+		}
+
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		// Schema cascade deletes relationships when entities are deleted, so
+		// the per-namespace entity delete must succeed without a manual
+		// relationship pre-delete here.
+		ids, err := repo.DeleteByNamespaceTx(ctx, tx, nsID)
+		if err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("DeleteByNamespaceTx: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+
+		want := map[uuid.UUID]bool{e1: false, e2: false}
+		for _, id := range ids {
+			if _, ok := want[id]; ok {
+				want[id] = true
+			}
+		}
+		for id, seen := range want {
+			if !seen {
+				t.Errorf("expected returned IDs to include %s, got %v", id, ids)
+			}
+		}
+
+		var entCount, aliasCount, relCount int
+		entQuery := `SELECT COUNT(*) FROM entities WHERE namespace_id = ?`
+		aliasQuery := `SELECT COUNT(*) FROM entity_aliases WHERE namespace_id = ?`
+		relQuery := `SELECT COUNT(*) FROM relationships WHERE namespace_id = ?`
+		if db.Backend() == BackendPostgres {
+			entQuery = `SELECT COUNT(*) FROM entities WHERE namespace_id = $1`
+			aliasQuery = `SELECT COUNT(*) FROM entity_aliases WHERE namespace_id = $1`
+			relQuery = `SELECT COUNT(*) FROM relationships WHERE namespace_id = $1`
+		}
+		if err := db.QueryRow(ctx, entQuery, nsID.String()).Scan(&entCount); err != nil {
+			t.Fatalf("count entities: %v", err)
+		}
+		if err := db.QueryRow(ctx, aliasQuery, nsID.String()).Scan(&aliasCount); err != nil {
+			t.Fatalf("count aliases: %v", err)
+		}
+		if err := db.QueryRow(ctx, relQuery, nsID.String()).Scan(&relCount); err != nil {
+			t.Fatalf("count relationships: %v", err)
+		}
+		if entCount != 0 || aliasCount != 0 || relCount != 0 {
+			t.Errorf("expected 0 entities/aliases/relationships in namespace after delete, got %d/%d/%d",
+				entCount, aliasCount, relCount)
+		}
+	})
+}
+
+// TestEntityRepo_PromoteStub_DeletesStubVector verifies that when a stub
+// entity is merged into a real one inside Upsert, the stub's vector store
+// entry is also cleaned up. Without this, Qdrant accumulates dead points
+// keyed by the stub's UUID with no SQL row to ever reclaim them.
+func TestEntityRepo_PromoteStub_DeletesStubVector(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		vec := &recordingVectorStore{}
+		repo.SetVectorStore(vec)
+		nsID := createTestNamespace(t, ctx, db)
+
+		canonical := "promote_stub_vec_" + uuid.NewString()[:8]
+
+		stub := &model.Entity{
+			NamespaceID: nsID, Name: canonical, Canonical: canonical, EntityType: "unknown",
+		}
+		if err := repo.Create(ctx, stub); err != nil {
+			t.Fatalf("create stub: %v", err)
+		}
+		real := &model.Entity{
+			NamespaceID: nsID, Name: canonical, Canonical: canonical, EntityType: "person",
+		}
+		if err := repo.Create(ctx, real); err != nil {
+			t.Fatalf("create real: %v", err)
+		}
+
+		// Trigger promoteStub. The conflict path (both rows exist) is the one
+		// that deletes the stub row, which is the path that needs vector cleanup.
+		trigger := &model.Entity{
+			NamespaceID: nsID, Name: canonical, Canonical: canonical, EntityType: "person",
+		}
+		if err := repo.Upsert(ctx, trigger); err != nil {
+			t.Fatalf("upsert trigger: %v", err)
+		}
+
+		var stubDeletes int
+		for _, c := range vec.deleteCalls {
+			if c.kind == VectorKindEntity && c.id == stub.ID {
+				stubDeletes++
+			}
+		}
+		if stubDeletes != 1 {
+			t.Fatalf("expected exactly 1 vector delete for stub %s, got %d (deleteCalls=%v)",
+				stub.ID, stubDeletes, vec.deleteCalls)
 		}
 	})
 }

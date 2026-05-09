@@ -53,6 +53,12 @@ func (s *sqliteDB) WriteQueryRow(ctx context.Context, query string, args ...any)
 	return s.writeDB.QueryRowContext(ctx, query, args...)
 }
 
+// WriteQuery routes to the write pool for statements that mutate and return
+// multiple rows, like DELETE … RETURNING.
+func (s *sqliteDB) WriteQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return s.writeDB.QueryContext(ctx, query, args...)
+}
+
 // BeginTx routes to the write pool (single connection, serialized).
 func (s *sqliteDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return s.writeDB.BeginTx(ctx, opts)

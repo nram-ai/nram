@@ -506,3 +506,88 @@ type failingProjectDeleter struct {
 func (f *failingProjectDeleter) DeleteTx(_ context.Context, _ *sql.Tx, _ uuid.UUID) error {
 	return fmt.Errorf("synthetic failure")
 }
+
+// TestProjectDelete_EntityVectorsCleanedFromQdrant verifies that when a
+// project with embedded entities is deleted, the entity points are removed
+// from Qdrant. Pre-fix, ProjectDeleteService only iterated memory IDs after
+// commit; entity vectors stayed leaked indefinitely on Qdrant deployments.
+// SQLite is unaffected (entity_vectors_* SQL CASCADE handles it), so this
+// test specifically exercises the Qdrant code path.
+func TestProjectDelete_EntityVectorsCleanedFromQdrant(t *testing.T) {
+	addr := os.Getenv("QDRANT_TEST_ADDR")
+	if addr == "" {
+		t.Skip("set QDRANT_TEST_ADDR to run Qdrant project-delete integration test")
+	}
+
+	ctx := context.Background()
+	fx := seedProject(t)
+
+	qstore, err := storage.NewQdrantStore(storage.QdrantConfig{Addr: addr})
+	if err != nil {
+		t.Fatalf("NewQdrantStore: %v", err)
+	}
+	t.Cleanup(func() { qstore.Close() })
+	if err := qstore.EnsureCollections(ctx); err != nil {
+		t.Fatalf("EnsureCollections: %v", err)
+	}
+
+	// Two entities in the target namespace, both with vectors in Qdrant.
+	entA := &model.Entity{
+		ID: uuid.New(), NamespaceID: fx.target.NamespaceID,
+		Name: "A", Canonical: "qdrant_proj_a_" + uuid.NewString()[:8], EntityType: "thing",
+	}
+	entB := &model.Entity{
+		ID: uuid.New(), NamespaceID: fx.target.NamespaceID,
+		Name: "B", Canonical: "qdrant_proj_b_" + uuid.NewString()[:8], EntityType: "thing",
+	}
+	if err := fx.entityRepo.Create(ctx, entA); err != nil {
+		t.Fatalf("create entity A: %v", err)
+	}
+	if err := fx.entityRepo.Create(ctx, entB); err != nil {
+		t.Fatalf("create entity B: %v", err)
+	}
+
+	dim := 384
+	emb := make([]float32, dim)
+	emb[0] = 1.0
+	for i := 1; i < dim; i++ {
+		emb[i] = 0.01
+	}
+	for _, id := range []uuid.UUID{entA.ID, entB.ID} {
+		if err := qstore.Upsert(ctx, storage.VectorKindEntity, id, fx.target.NamespaceID, emb, dim); err != nil {
+			t.Fatalf("upsert vector %s: %v", id, err)
+		}
+	}
+	t.Cleanup(func() {
+		// Belt-and-suspenders if delete cascade doesn't reach this far.
+		_ = qstore.Delete(context.Background(), storage.VectorKindEntity, entA.ID)
+		_ = qstore.Delete(context.Background(), storage.VectorKindEntity, entB.ID)
+	})
+
+	// Rebuild ProjectDeleteService with the real Qdrant store wired in. The
+	// fixture's svc was built with vectorStore=nil for the SQL-only tests.
+	enrichRepo := storage.NewEnrichmentQueueRepo(fx.db)
+	ingestRepo := storage.NewIngestionLogRepo(fx.db)
+	shareRepo := storage.NewMemoryShareRepo(fx.db)
+	svc := NewProjectDeleteService(
+		fx.db,
+		fx.projectRepo, fx.projectRepo,
+		fx.memoryRepo, fx.memoryRepo,
+		qstore,
+		fx.entityRepo, fx.relRepo, enrichRepo,
+		fx.tokenRepo, ingestRepo, shareRepo,
+		nil, fx.nsRepo, nil,
+	)
+
+	if _, err := svc.Delete(ctx, &ProjectDeleteRequest{ProjectID: fx.target.ID}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	got, err := qstore.GetByIDs(ctx, storage.VectorKindEntity, []uuid.UUID{entA.ID, entB.ID}, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs post-delete: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 entity vectors in Qdrant after project delete, got %d (%v)", len(got), got)
+	}
+}

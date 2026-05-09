@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -121,4 +122,38 @@ func forEachDB(t *testing.T, fn func(t *testing.T, db DB)) {
 		}
 		fn(t, sharedPostgresDB)
 	})
+}
+
+// truncateAllForTest clears every test-relevant table so the next test sees a
+// blank slate. Required only for tests that exercise whole-DB scans
+// (NormalizeMemoryTags, EnqueueAllLiveMemories) or otherwise rely on row
+// counts: SQLite tests already get a fresh DB via testDBWithMigrations, but
+// the Postgres path shares one schema across tests and accumulates rows
+// across runs. Per-test schemas would be the more general fix; this is a
+// targeted truncate for the affected tests.
+//
+// CASCADE handles the FK chains (entity_aliases, relationships, memory_lineage,
+// enrichment_queue, etc.) added in 000007 / 000020 / 000023 / 000032 / 000035.
+func truncateAllForTest(t *testing.T, db DB) {
+	t.Helper()
+	if db.Backend() != BackendPostgres {
+		return
+	}
+	ctx := context.Background()
+	tables := []string{
+		"enrichment_queue",
+		"memory_lineage",
+		"memory_shares",
+		"ingestion_log",
+		"token_usage",
+		"relationships",
+		"entity_aliases",
+		"entities",
+		"memories",
+	}
+	for _, table := range tables {
+		if _, err := db.Exec(ctx, "TRUNCATE TABLE "+table+" CASCADE"); err != nil {
+			t.Fatalf("truncate %s: %v", table, err)
+		}
+	}
 }

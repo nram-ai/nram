@@ -42,9 +42,11 @@ type MemoryBulkDeleter interface {
 	HardDeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error
 }
 
-// EntityBulkDeleter deletes all entities (and aliases) in a namespace.
+// EntityBulkDeleter deletes all entities (and their cascaded aliases /
+// relationships / entity_vectors) in a namespace and returns the IDs of the
+// deleted rows. The IDs are used post-commit for Qdrant vector cleanup.
 type EntityBulkDeleter interface {
-	DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error
+	DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // RelationshipBulkDeleter deletes all relationships in a namespace.
@@ -202,16 +204,24 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 		}
 	}
 
-	if err := s.runCascadeTx(ctx, project, globalProject); err != nil {
+	entityIDs, err := s.runCascadeTx(ctx, project, globalProject)
+	if err != nil {
 		return nil, err
 	}
 
 	// Post-commit best-effort cleanup of in-process state. Persistence is
 	// already correct; failures here only delay reclaim of in-memory resources.
+	// SQL-backed vector stores cascade on the entity row delete; Qdrant does
+	// not, so the per-entity Delete keeps the vector collections in sync.
 	if s.vectorStore != nil {
 		for _, memID := range memoryIDs {
 			if err := s.vectorStore.Delete(ctx, storage.VectorKindMemory, memID); err != nil {
 				log.Printf("project delete: vector for memory %s: %v", memID, err)
+			}
+		}
+		for _, entID := range entityIDs {
+			if err := s.vectorStore.Delete(ctx, storage.VectorKindEntity, entID); err != nil {
+				log.Printf("project delete: vector for entity %s: %v", entID, err)
 			}
 		}
 	}
@@ -236,11 +246,12 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 
 // runCascadeTx executes the FK-ordered cascade inside a single transaction.
 // Any step's failure rolls the whole thing back so the project either deletes
-// fully or not at all.
-func (s *ProjectDeleteService) runCascadeTx(ctx context.Context, project, globalProject *model.Project) error {
+// fully or not at all. Returns the IDs of deleted entities for post-commit
+// vector cleanup.
+func (s *ProjectDeleteService) runCascadeTx(ctx context.Context, project, globalProject *model.Project) ([]uuid.UUID, error) {
 	tx, err := s.txBeginner.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("project delete: begin tx: %w", err)
+		return nil, fmt.Errorf("project delete: begin tx: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -253,61 +264,64 @@ func (s *ProjectDeleteService) runCascadeTx(ctx context.Context, project, global
 	// CASCADEd by the schema; relationships.source_memory and token_usage.memory_id
 	// are SET NULL.
 	if err := s.memoryBulkDeleter.HardDeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
-		return fmt.Errorf("project delete: memories: %w", err)
+		return nil, fmt.Errorf("project delete: memories: %w", err)
 	}
 
-	// Relationships before entities: relationships.source_id and target_id
-	// REFERENCE entities(id) with no ON DELETE action. Deleting entities first
-	// raises a FK violation (this was the bug that left "memories deleted but
-	// entities still there" after one click).
+	// Relationships before entities. Schema 000032 / 000035 added ON DELETE
+	// CASCADE to relationships.{source_id,target_id} → entities, so the order
+	// is no longer a correctness requirement, but explicit deletion keeps the
+	// per-step errors attributable and avoids a single multi-row cascade
+	// expanding under FK enforcement.
 	if err := s.relationshipDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
-		return fmt.Errorf("project delete: relationships: %w", err)
+		return nil, fmt.Errorf("project delete: relationships: %w", err)
 	}
 
-	// Entities (the repo deletes entity_aliases inside the same call;
-	// entity_vectors cascade on the entity row delete).
-	if err := s.entityDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
-		return fmt.Errorf("project delete: entities: %w", err)
+	// Entities. Aliases CASCADE on the entity row delete (000032 / 000035);
+	// entity_vectors_* (SQL-backed stores) also cascade. Returned IDs feed the
+	// Qdrant vector cleanup that runs after the tx commits.
+	entityIDs, err := s.entityDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID)
+	if err != nil {
+		return nil, fmt.Errorf("project delete: entities: %w", err)
 	}
 
 	if err := s.ingestionDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
-		return fmt.Errorf("project delete: ingestion log: %w", err)
+		return nil, fmt.Errorf("project delete: ingestion log: %w", err)
 	}
 
 	if err := s.shareDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
-		return fmt.Errorf("project delete: memory shares: %w", err)
+		return nil, fmt.Errorf("project delete: memory shares: %w", err)
 	}
 
 	if err := s.enrichmentDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
-		return fmt.Errorf("project delete: enrichment queue: %w", err)
+		return nil, fmt.Errorf("project delete: enrichment queue: %w", err)
 	}
 
 	// HNSW snapshots reference namespaces(id) with no ON DELETE action; clear
 	// them before the namespace row is deleted below.
 	if s.hnswDeleter != nil {
 		if err := s.hnswDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
-			return fmt.Errorf("project delete: hnsw snapshots: %w", err)
+			return nil, fmt.Errorf("project delete: hnsw snapshots: %w", err)
 		}
 	}
 
 	// Reassign token_usage to the global project. Must precede the project
 	// row delete since token_usage.project_id has no ON DELETE action.
 	if err := s.tokenUsageReassign.ReassignProjectTx(ctx, tx, project.ID, globalProject.ID, globalProject.NamespaceID); err != nil {
-		return fmt.Errorf("project delete: token usage reassign: %w", err)
+		return nil, fmt.Errorf("project delete: token usage reassign: %w", err)
 	}
 
 	// Project row. Dream tables CASCADE on this delete.
 	if err := s.projectDeleter.DeleteTx(ctx, tx, project.ID); err != nil {
-		return fmt.Errorf("project delete: project: %w", err)
+		return nil, fmt.Errorf("project delete: project: %w", err)
 	}
 
 	if err := s.namespaceDeleter.DeleteTx(ctx, tx, project.NamespaceID); err != nil {
-		return fmt.Errorf("project delete: namespace: %w", err)
+		return nil, fmt.Errorf("project delete: namespace: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("project delete: commit: %w", err)
+		return nil, fmt.Errorf("project delete: commit: %w", err)
 	}
 	committed = true
-	return nil
+	return entityIDs, nil
 }
