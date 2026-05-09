@@ -239,15 +239,13 @@ func (r *ProjectRepo) Update(ctx context.Context, project *model.Project) error 
 	return r.reload(ctx, project)
 }
 
-// Delete hard-deletes a project by ID.
-func (r *ProjectRepo) Delete(ctx context.Context, id uuid.UUID) error {
+// DeleteTx hard-deletes a project by ID inside the caller's transaction.
+func (r *ProjectRepo) DeleteTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) error {
 	query := `DELETE FROM projects WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM projects WHERE id = $1`
 	}
-
-	_, err := r.db.Exec(ctx, query, id.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, query, id.String()); err != nil {
 		return fmt.Errorf("project delete: %w", err)
 	}
 	return nil

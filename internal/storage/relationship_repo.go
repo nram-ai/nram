@@ -236,14 +236,15 @@ func (r *RelationshipRepo) ListByEntity(ctx context.Context, entityID uuid.UUID)
 	return r.scanRelationships(rows)
 }
 
-// DeleteByNamespace deletes all relationships in a namespace.
-func (r *RelationshipRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+// DeleteByNamespaceTx deletes all relationships in a namespace inside the
+// caller's transaction. Used by the project-delete cascade so the whole
+// teardown is atomic with the project row delete.
+func (r *RelationshipRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
 	query := `DELETE FROM relationships WHERE namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM relationships WHERE namespace_id = $1`
 	}
-	_, err := r.db.Exec(ctx, query, namespaceID.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, query, namespaceID.String()); err != nil {
 		return fmt.Errorf("relationship delete by namespace: %w", err)
 	}
 	return nil

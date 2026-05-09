@@ -63,15 +63,17 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 	return r.reload(ctx, usage)
 }
 
-// ReassignProject updates all token_usage records from one project to another,
-// including the namespace_id to avoid FK violations when the old namespace is deleted.
-func (r *TokenUsageRepo) ReassignProject(ctx context.Context, fromProjectID, toProjectID uuid.UUID, toNamespaceID uuid.UUID) error {
+// ReassignProjectTx updates all token_usage records from one project to another
+// inside the caller's transaction. Updates namespace_id alongside project_id
+// so we don't leave rows dangling on the old namespace once it is deleted.
+// Used by the project-delete cascade so the reassign and the project row
+// delete commit together.
+func (r *TokenUsageRepo) ReassignProjectTx(ctx context.Context, tx *sql.Tx, fromProjectID, toProjectID uuid.UUID, toNamespaceID uuid.UUID) error {
 	query := `UPDATE token_usage SET project_id = ?, namespace_id = ? WHERE project_id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `UPDATE token_usage SET project_id = $1, namespace_id = $2 WHERE project_id = $3`
 	}
-	_, err := r.db.Exec(ctx, query, toProjectID.String(), toNamespaceID.String(), fromProjectID.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, query, toProjectID.String(), toNamespaceID.String(), fromProjectID.String()); err != nil {
 		return fmt.Errorf("token usage reassign project: %w", err)
 	}
 	return nil

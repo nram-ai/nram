@@ -181,14 +181,13 @@ func (r *NamespaceRepo) CreateIfNotExists(ctx context.Context, ns *model.Namespa
 	return existing, false, nil
 }
 
-// Delete removes a namespace by ID.
-func (r *NamespaceRepo) Delete(ctx context.Context, id uuid.UUID) error {
+// DeleteTx removes a namespace by ID inside the caller's transaction.
+func (r *NamespaceRepo) DeleteTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) error {
 	query := `DELETE FROM namespaces WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM namespaces WHERE id = $1`
 	}
-	_, err := r.db.Exec(ctx, query, id.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, query, id.String()); err != nil {
 		return fmt.Errorf("namespace delete: %w", err)
 	}
 	return nil

@@ -1605,15 +1605,16 @@ func (r *MemoryRepo) ListIDsByNamespace(ctx context.Context, namespaceID uuid.UU
 	return ids, nil
 }
 
-// HardDeleteByNamespace permanently deletes all memories in a namespace.
-func (r *MemoryRepo) HardDeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+// HardDeleteByNamespaceTx permanently deletes all memories in a namespace
+// inside the caller's transaction. Schema-level ON DELETE actions reap the
+// memory's FK children (memory_lineage CASCADE, enrichment_queue CASCADE,
+// relationships.source_memory SET NULL, token_usage.memory_id SET NULL).
+func (r *MemoryRepo) HardDeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
 	query := `DELETE FROM memories WHERE namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM memories WHERE namespace_id = $1`
 	}
-
-	_, err := r.db.Exec(ctx, query, namespaceID.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, query, namespaceID.String()); err != nil {
 		return fmt.Errorf("memory hard delete by namespace: %w", err)
 	}
 	return nil

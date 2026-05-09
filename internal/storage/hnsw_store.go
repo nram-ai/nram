@@ -456,20 +456,19 @@ func (s *HNSWStore) Delete(ctx context.Context, kind VectorKind, id uuid.UUID) e
 	return nil
 }
 
-// DeleteByNamespace removes all HNSW snapshots for a given namespace
-// (across both memory and entity kinds) and evicts any cached in-memory
-// indexes so the background flush does not attempt to re-insert them after
-// the namespace is deleted.
-func (s *HNSWStore) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
-	// Evict from cache first so the background flush cannot re-insert.
+// DeleteByNamespaceTx removes all HNSW snapshots for a given namespace
+// (across both memory and entity kinds) inside the caller's transaction. The
+// cache is evicted first so the background flush cannot re-insert rows that
+// are about to be deleted; the snapshot row deletes run on the caller's tx
+// so they commit atomically with the namespace row delete.
+func (s *HNSWStore) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
 	s.cache.RemoveByNamespace(namespaceID)
 
 	for _, spec := range hnswSpecs {
-		_, err := s.writeDB.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			fmt.Sprintf("DELETE FROM %s WHERE namespace_id = ?", spec.snapshotTable),
 			namespaceID.String(),
-		)
-		if err != nil {
+		); err != nil {
 			return fmt.Errorf("hnsw: delete snapshots from %s by namespace: %w", spec.snapshotTable, err)
 		}
 	}

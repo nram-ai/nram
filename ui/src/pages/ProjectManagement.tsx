@@ -821,6 +821,12 @@ function ProjectDetailPanel({
                 </button>
               )}
             </div>
+
+            {deleteMut.isError && (
+              <div className="text-sm text-destructive">
+                Failed to delete: {deleteMut.error?.message}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1224,39 +1230,46 @@ function ProjectReadOnlyPanel({
             <MCPConfigSnippet slug={project.slug} />
 
             {canDelete && (
-              <div className="flex items-center gap-3 border-t pt-4">
-                <div className="flex-1" />
-                {confirmDelete ? (
-                  <>
-                    <span className="text-sm text-destructive">
-                      This will permanently delete all memories, vectors, entities, and relationships in this project. This action cannot be undone. Continue?
-                    </span>
+              <>
+                <div className="flex items-center gap-3 border-t pt-4">
+                  <div className="flex-1" />
+                  {confirmDelete ? (
+                    <>
+                      <span className="text-sm text-destructive">
+                        This will permanently delete all memories, vectors, entities, and relationships in this project. This action cannot be undone. Continue?
+                      </span>
+                      <button
+                        type="button"
+                        className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
+                        onClick={handleDelete}
+                        disabled={deleteMut.isPending}
+                      >
+                        {deleteMut.isPending ? "Deleting..." : "Yes, Delete"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
+                        onClick={() => setConfirmDelete(false)}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
                     <button
                       type="button"
-                      className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
-                      onClick={handleDelete}
-                      disabled={deleteMut.isPending}
+                      className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
+                      onClick={() => setConfirmDelete(true)}
                     >
-                      {deleteMut.isPending ? "Deleting..." : "Yes, Delete"}
+                      Delete Project
                     </button>
-                    <button
-                      type="button"
-                      className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
-                      onClick={() => setConfirmDelete(false)}
-                    >
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
-                    onClick={() => setConfirmDelete(true)}
-                  >
-                    Delete Project
-                  </button>
+                  )}
+                </div>
+                {deleteMut.isError && (
+                  <div className="text-sm text-destructive">
+                    Failed to delete: {deleteMut.error?.message}
+                  </div>
                 )}
-              </div>
+              </>
             )}
           </div>
         )}

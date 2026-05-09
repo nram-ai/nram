@@ -554,26 +554,24 @@ func (r *EntityRepo) ListAll(ctx context.Context, limit, offset int) ([]model.En
 	return r.scanEntities(rows)
 }
 
-// DeleteByNamespace deletes all entities in a namespace. Entity aliases are removed first
-// to satisfy foreign key constraints.
-func (r *EntityRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
-	// Delete entity_aliases for entities in this namespace.
+// DeleteByNamespaceTx deletes all entities (and their aliases) in a namespace
+// inside the caller's transaction. Caller must have already deleted the
+// relationships referencing these entities, otherwise the FK constraint on
+// relationships.source_id / target_id will block this delete.
+func (r *EntityRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
 	aliasQuery := `DELETE FROM entity_aliases WHERE entity_id IN (SELECT id FROM entities WHERE namespace_id = ?)`
 	if r.db.Backend() == BackendPostgres {
 		aliasQuery = `DELETE FROM entity_aliases WHERE entity_id IN (SELECT id FROM entities WHERE namespace_id = $1)`
 	}
-	_, err := r.db.Exec(ctx, aliasQuery, namespaceID.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, aliasQuery, namespaceID.String()); err != nil {
 		return fmt.Errorf("entity delete aliases by namespace: %w", err)
 	}
 
-	// Delete entities.
 	query := `DELETE FROM entities WHERE namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM entities WHERE namespace_id = $1`
 	}
-	_, err = r.db.Exec(ctx, query, namespaceID.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, query, namespaceID.String()); err != nil {
 		return fmt.Errorf("entity delete by namespace: %w", err)
 	}
 	return nil

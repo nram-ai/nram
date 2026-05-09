@@ -93,14 +93,14 @@ func (r *IngestionLogRepo) ListByNamespace(ctx context.Context, namespaceID uuid
 	return r.scanIngestionLogs(rows)
 }
 
-// DeleteByNamespace deletes all ingestion log entries for a namespace.
-func (r *IngestionLogRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+// DeleteByNamespaceTx deletes all ingestion log entries for a namespace
+// inside the caller's transaction.
+func (r *IngestionLogRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
 	query := `DELETE FROM ingestion_log WHERE namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM ingestion_log WHERE namespace_id = $1`
 	}
-	_, err := r.db.Exec(ctx, query, namespaceID.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, query, namespaceID.String()); err != nil {
 		return fmt.Errorf("ingestion_log delete by namespace: %w", err)
 	}
 	return nil

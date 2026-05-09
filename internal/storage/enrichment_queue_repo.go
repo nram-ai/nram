@@ -683,14 +683,15 @@ func (r *EnrichmentQueueRepo) RequeueStale(ctx context.Context, id uuid.UUID, re
 	return rows > 0, nil
 }
 
-// DeleteByNamespace deletes all enrichment queue entries for a namespace.
-func (r *EnrichmentQueueRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+// DeleteByNamespaceTx deletes all enrichment queue entries for a namespace
+// inside the caller's transaction. Most rows have already been removed by the
+// memory delete CASCADE; this catches any that referenced no memory.
+func (r *EnrichmentQueueRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
 	query := `DELETE FROM enrichment_queue WHERE namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM enrichment_queue WHERE namespace_id = $1`
 	}
-	_, err := r.db.Exec(ctx, query, namespaceID.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, query, namespaceID.String()); err != nil {
 		return fmt.Errorf("enrichment queue delete by namespace: %w", err)
 	}
 	return nil

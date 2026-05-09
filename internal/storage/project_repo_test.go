@@ -381,11 +381,19 @@ func TestProjectRepo_Delete(t *testing.T) {
 
 		project, _ := createTestProject(t, ctx, db, "delete-proj")
 
-		if err := repo.Delete(ctx, project.ID); err != nil {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		if err := repo.DeleteTx(ctx, tx, project.ID); err != nil {
+			tx.Rollback()
 			t.Fatalf("failed to delete: %v", err)
 		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
 
-		_, err := repo.GetByID(ctx, project.ID)
+		_, err = repo.GetByID(ctx, project.ID)
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows after delete, got %v", err)
 		}

@@ -113,14 +113,14 @@ func (r *MemoryShareRepo) ListSharedToNamespace(ctx context.Context, targetNames
 	return r.scanMemoryShares(rows)
 }
 
-// DeleteByNamespace deletes all memory shares where the namespace is source or target.
-func (r *MemoryShareRepo) DeleteByNamespace(ctx context.Context, namespaceID uuid.UUID) error {
+// DeleteByNamespaceTx deletes all memory shares where the namespace is source
+// or target, inside the caller's transaction.
+func (r *MemoryShareRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error {
 	query := `DELETE FROM memory_shares WHERE source_ns_id = ? OR target_ns_id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM memory_shares WHERE source_ns_id = $1 OR target_ns_id = $2`
 	}
-	_, err := r.db.Exec(ctx, query, namespaceID.String(), namespaceID.String())
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, query, namespaceID.String(), namespaceID.String()); err != nil {
 		return fmt.Errorf("memory share delete by namespace: %w", err)
 	}
 	return nil
