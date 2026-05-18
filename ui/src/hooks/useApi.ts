@@ -461,7 +461,7 @@ export function useSettingsSchema() {
   });
 }
 
-// useSystemRankingWeights resolves the six ranking.weight.* settings into a
+// useSystemRankingWeights resolves the seven ranking.weight.* settings into a
 // fully-populated baseline view. Used by the project edit panel to show
 // system defaults as input placeholders and to compute the effective merged
 // weights when a project sets sparse overrides.
@@ -477,6 +477,7 @@ const SYSTEM_RANKING_WEIGHT_KEYS = {
   frequency: "ranking.weight.frequency",
   graph_relevance: "ranking.weight.graph_relevance",
   confidence: "ranking.weight.confidence",
+  origin: "ranking.weight.origin",
 } as const;
 
 function coerceWeight(raw: unknown): number | null {

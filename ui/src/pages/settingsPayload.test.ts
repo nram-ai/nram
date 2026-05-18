@@ -16,6 +16,7 @@ const emptyProjectState = {
   frequency: undefined,
   graph_relevance: undefined,
   confidence: undefined,
+  origin: undefined,
   dedup_threshold: undefined,
   enrichment_enabled: undefined,
   dreaming_enabled: undefined,
@@ -74,7 +75,7 @@ describe("buildProjectSettingsPayload", () => {
     expect(payload).toEqual({ enrichment_enabled: false });
   });
 
-  it("emits all six weight fields when each is set", () => {
+  it("emits all seven weight fields when each is set", () => {
     const payload = buildProjectSettingsPayload({
       similarity: 0.5,
       recency: 0.15,
@@ -82,6 +83,7 @@ describe("buildProjectSettingsPayload", () => {
       frequency: 0.0,
       graph_relevance: 0.2,
       confidence: 0.05,
+      origin: 0.1,
       dedup_threshold: 0.92,
       enrichment_enabled: true,
       dreaming_enabled: true,
@@ -97,6 +99,7 @@ describe("buildProjectSettingsPayload", () => {
         frequency: 0.0,
         graph_relevance: 0.2,
         confidence: 0.05,
+        origin: 0.1,
       },
       dedup_threshold: 0.92,
       enrichment_enabled: true,

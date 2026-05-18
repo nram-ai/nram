@@ -940,6 +940,7 @@ func loadRankingWeights(ctx context.Context, s *service.SettingsService) service
 		Frequency:      s.ResolveFloatInRange(ctx, service.SettingRankWeightFreq, "global", 0, 1, d.Frequency),
 		GraphRelevance: s.ResolveFloatInRange(ctx, service.SettingRankWeightGraph, "global", 0, 1, d.GraphRelevance),
 		Confidence:     s.ResolveFloatInRange(ctx, service.SettingRankWeightConf, "global", 0, 1, d.Confidence),
+		Origin:         s.ResolveFloatInRange(ctx, service.SettingRankWeightOrigin, "global", 0, 1, d.Origin),
 	}
 }
 
@@ -959,5 +960,6 @@ func loadFusionConfig(ctx context.Context, settingsSvc *service.SettingsService)
 	if w, err := settingsSvc.ResolveFloat(ctx, service.SettingRecallFusionLexW, "global"); err == nil && w >= 0 {
 		cfg.LexicalWeight = w
 	}
+	cfg.NormalizePerChannel = settingsSvc.ResolveBool(ctx, service.SettingRecallFusionNormalizePerChan, "global")
 	return cfg
 }

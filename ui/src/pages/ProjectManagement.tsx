@@ -377,6 +377,7 @@ function ProjectDetailPanel({
   const [editFrequency, setEditFrequency] = useState<number | undefined>(undefined);
   const [editGraphRelevance, setEditGraphRelevance] = useState<number | undefined>(undefined);
   const [editConfidence, setEditConfidence] = useState<number | undefined>(undefined);
+  const [editOrigin, setEditOrigin] = useState<number | undefined>(undefined);
   // Round-tripped: edited live from the GraphVisualization page's layout
   // drawer, preserved here so saving the project panel doesn't wipe them
   // (the backend replaces project.settings wholesale on update).
@@ -409,6 +410,7 @@ function ProjectDetailPanel({
       setEditFrequency(rw?.frequency);
       setEditGraphRelevance(rw?.graph_relevance);
       setEditConfidence(rw?.confidence);
+      setEditOrigin(rw?.origin);
       setEditGraphGravity(settings?.graph_center_gravity);
       setEditGraphCharge(settings?.graph_charge_strength);
       setEditGraphLink(settings?.graph_link_distance);
@@ -436,8 +438,10 @@ function ProjectDetailPanel({
         frequency: editFrequency ?? systemWeights.frequency,
         graph_relevance: editGraphRelevance ?? systemWeights.graph_relevance,
         confidence: editConfidence ?? systemWeights.confidence,
+        origin: editOrigin ?? systemWeights.origin,
       }
     : null;
+  // Origin is excluded — additive offset, not a convex combination member.
   const weightSum = effectiveWeights
     ? effectiveWeights.similarity +
       effectiveWeights.recency +
@@ -464,6 +468,7 @@ function ProjectDetailPanel({
       frequency: editFrequency,
       graph_relevance: editGraphRelevance,
       confidence: editConfidence,
+      origin: editOrigin,
       dedup_threshold: editDedupThreshold,
       enrichment_enabled: editEnrichmentEnabled,
       dreaming_enabled: editDreamingEnabled,
@@ -689,12 +694,14 @@ function ProjectDetailPanel({
                 </select>
               </div>
 
-              {/* Ranking weights — six sparse inputs. Each placeholder shows
+              {/* Ranking weights — sparse inputs. Each placeholder shows
                * the effective system value so operators can see the
                * baseline before deciding whether to override. When the
                * schema endpoint is missing one or more ranking.weight.*
                * keys, surface a red banner instead of silently rendering
-               * stale built-in defaults. */}
+               * stale built-in defaults. Origin is excluded from the
+               * unit-sum invariant because it is an additive offset, not
+               * a convex combination member. */}
               <div>
                 <label className="mb-2 block text-xs font-medium text-muted-foreground">
                   Ranking Weights
@@ -744,6 +751,13 @@ function ProjectDetailPanel({
                         range={weightRange}
                         onChange={setEditConfidence}
                       />
+                      <SparseWeightInput
+                        label="Origin (project)"
+                        value={editOrigin}
+                        placeholder={systemWeights.origin}
+                        range={weightRange}
+                        onChange={setEditOrigin}
+                      />
                     </div>
 
                     {/* Effective weights — read-only summary so operators see
@@ -760,6 +774,7 @@ function ProjectDetailPanel({
                         <div>Frequency: {effectiveWeights.frequency.toFixed(2)}</div>
                         <div>Graph: {effectiveWeights.graph_relevance.toFixed(2)}</div>
                         <div>Confidence: {effectiveWeights.confidence.toFixed(2)}</div>
+                        <div>Origin: {effectiveWeights.origin.toFixed(2)}</div>
                       </div>
                       <div className="mt-2 text-muted-foreground">
                         Sum: <span className="font-mono">{weightSum.toFixed(3)}</span>

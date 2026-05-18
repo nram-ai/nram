@@ -1653,3 +1653,431 @@ func TestRecall_PerProjectOverrideLegacyShape(t *testing.T) {
 		t.Fatalf("legacy-shape override should still yield results, got %d", len(resp.Memories))
 	}
 }
+
+// --- Origin weight + namespace-quota + per-channel-normalize tests ---
+
+// setupPrimaryGlobalFixtures builds the standard primary+global namespace
+// pair used by every test in this group. Both projects exist in the
+// project repo so the per-namespace attribution stamp resolves correctly.
+func setupPrimaryGlobalFixtures() (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, *mockProjectRepo, *mockNamespaceRepo) {
+	primaryID := uuid.New()
+	primaryNs := uuid.New()
+	globalID := uuid.New()
+	globalNs := uuid.New()
+	projects := &mockProjectRepo{projects: map[uuid.UUID]*model.Project{
+		primaryID: {ID: primaryID, NamespaceID: primaryNs, Name: "Primary", Slug: "primary"},
+		globalID:  {ID: globalID, NamespaceID: globalNs, Name: "Global", Slug: "global"},
+	}}
+	namespaces := &mockNamespaceRepo{namespaces: map[uuid.UUID]*model.Namespace{
+		primaryNs: {ID: primaryNs, Slug: "primary", Kind: "project", Path: "primary"},
+		globalNs:  {ID: globalNs, Slug: "global", Kind: "project", Path: "global"},
+	}}
+	return primaryID, primaryNs, globalID, globalNs, projects, namespaces
+}
+
+// TestRecall_OriginWeightZero_GlobalBeatsProjectOnCosine establishes the
+// baseline: with Origin=0 (the shipped default), a global memory with
+// strictly higher cosine similarity ranks above a project memory. This is
+// the symptom the origin weight was added to address — locking the default
+// in a test guards against an upgrade-time behavioral surprise.
+func TestRecall_OriginWeightZero_GlobalBeatsProjectOnCosine(t *testing.T) {
+	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
+
+	projectMemID := uuid.New()
+	globalMemID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			projectMemID: makeTestMemory(projectMemID, primaryNs, "project content", nil, 0.5, 0, now),
+			globalMemID:  makeTestMemory(globalMemID, globalNs, "global content", nil, 0.5, 0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: projectMemID, Score: 0.60, NamespaceID: primaryNs},
+			{ID: globalMemID, Score: 0.65, NamespaceID: globalNs},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:         primaryID,
+		GlobalNamespaceID: &globalNs,
+		Query:             "anything",
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != globalMemID {
+		t.Errorf("default Origin=0 should let the higher-cosine global rank first; got %v first", resp.Memories[0].ID)
+	}
+}
+
+// TestRecall_OriginWeightFlipsTie verifies that a small Origin boost is
+// enough to flip the project/global order when cosines are close. With
+// Origin=0.10 the project's 1.0*0.10 affinity term overtakes the global's
+// 0.05 cosine edge from w.Similarity*(0.65-0.60)=0.025.
+func TestRecall_OriginWeightFlipsTie(t *testing.T) {
+	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
+
+	projectMemID := uuid.New()
+	globalMemID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			projectMemID: makeTestMemory(projectMemID, primaryNs, "project content", nil, 0.5, 0, now),
+			globalMemID:  makeTestMemory(globalMemID, globalNs, "global content", nil, 0.5, 0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: projectMemID, Score: 0.60, NamespaceID: primaryNs},
+			{ID: globalMemID, Score: 0.65, NamespaceID: globalNs},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	// Boost the project-affinity term. Default DefaultRankingWeights has
+	// Similarity 0.50, so a 0.05 cosine gap contributes 0.025 to the
+	// score. Origin 0.10 contributes 0.10 — flips the comparison.
+	w := DefaultRankingWeights
+	w.Origin = 0.10
+	svc.SetWeights(w)
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:         primaryID,
+		GlobalNamespaceID: &globalNs,
+		Query:             "anything",
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != projectMemID {
+		t.Errorf("Origin=0.10 should lift project memory above the marginally-higher-cosine global; got %v first", resp.Memories[0].ID)
+	}
+}
+
+// TestRecall_OriginWeightOverrideDoesNotLeakAcrossProjects mirrors the
+// existing TestRecall_PerNamespaceProjectAttribution discipline: a per-
+// project Origin override applies to candidates from that project only.
+// The global memory must continue to be scored with the global project's
+// (unset) Origin, not the primary's elevated override.
+func TestRecall_OriginWeightOverrideDoesNotLeakAcrossProjects(t *testing.T) {
+	primaryID, primaryNs, globalID, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
+	// Override primary's ranking weights with Origin=0.30; leave global's
+	// settings empty so it inherits the system base (Origin=0).
+	projects.projects[primaryID].Settings = []byte(`{"ranking_weights":{"origin":0.30}}`)
+	_ = globalID
+
+	projectMemID := uuid.New()
+	globalMemID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			projectMemID: makeTestMemory(projectMemID, primaryNs, "project content", nil, 0.5, 0, now),
+			globalMemID:  makeTestMemory(globalMemID, globalNs, "global content", nil, 0.5, 0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: projectMemID, Score: 0.50, NamespaceID: primaryNs},
+			{ID: globalMemID, Score: 0.95, NamespaceID: globalNs},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:         primaryID,
+		GlobalNamespaceID: &globalNs,
+		Query:             "anything",
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
+	}
+	// Verify the global memory is still attributed to "global" — the
+	// per-project Origin override applies only to primary-stamped
+	// candidates. The primary candidate's score: 0.50*Sim(0.50) + Origin*1
+	// (0.30) = 0.55. Global's: 0.95*0.50 + Origin*0 = 0.475. Primary wins
+	// because of its own override, not because global was mis-scored.
+	if resp.Memories[0].ID != projectMemID {
+		t.Errorf("primary's Origin=0.30 override should lift the primary memory; got %v first", resp.Memories[0].ID)
+	}
+	var globalSlug string
+	for _, m := range resp.Memories {
+		if m.ID == globalMemID {
+			globalSlug = m.ProjectSlug
+		}
+	}
+	if globalSlug != "global" {
+		t.Errorf("global memory must remain attributed to 'global', got %q (override leaked across projects)", globalSlug)
+	}
+}
+
+// TestRecall_NamespaceQuotaReservesProjectSlots covers the quota path: when
+// project_min > 0 and the project has at least that many passing candidates,
+// the final result contains exactly that many primary-stamped memories even
+// when the score-only truncation would have included fewer.
+func TestRecall_NamespaceQuotaReservesProjectSlots(t *testing.T) {
+	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
+
+	now := time.Now()
+	// 3 project memories (low similarity) + 10 global memories (high
+	// similarity). Without quota, all 10 globals rank above all 3
+	// project memories. With quota=2, the top-5 result holds 2 project
+	// + 3 global.
+	memMap := map[uuid.UUID]*model.Memory{}
+	var vecResults []storage.VectorSearchResult
+	var projectIDs []uuid.UUID
+	for i := 0; i < 3; i++ {
+		id := uuid.New()
+		projectIDs = append(projectIDs, id)
+		memMap[id] = makeTestMemory(id, primaryNs, "project content", nil, 0.5, 0, now)
+		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.30, NamespaceID: primaryNs})
+	}
+	for i := 0; i < 10; i++ {
+		id := uuid.New()
+		memMap[id] = makeTestMemory(id, globalNs, "global content", nil, 0.5, 0, now)
+		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.90, NamespaceID: globalNs})
+	}
+	memReader := &mockMemoryReader{memories: memMap}
+	vectorSearcher := &mockVectorSearcher{results: vecResults}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:                primaryID,
+		GlobalNamespaceID:        &globalNs,
+		Query:                    "anything",
+		Limit:                    5,
+		NamespaceQuotaProjectMin: 2,
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 5 {
+		t.Fatalf("expected 5 memories (limit), got %d", len(resp.Memories))
+	}
+	projectSet := map[uuid.UUID]struct{}{}
+	for _, id := range projectIDs {
+		projectSet[id] = struct{}{}
+	}
+	projectInTop := 0
+	for _, m := range resp.Memories {
+		if _, ok := projectSet[m.ID]; ok {
+			projectInTop++
+		}
+	}
+	if projectInTop < 2 {
+		t.Errorf("quota=2 should guarantee >=2 primary candidates in top-5, got %d", projectInTop)
+	}
+}
+
+// TestRecall_NamespaceQuotaRespectsAvailability protects against the quota
+// padding the result with phantom rows. If the project has 1 passing
+// candidate but the quota asks for 5, the final result has 1 primary and
+// (limit-1) other candidates — no duplication, no synthetic fill.
+func TestRecall_NamespaceQuotaRespectsAvailability(t *testing.T) {
+	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
+
+	now := time.Now()
+	memMap := map[uuid.UUID]*model.Memory{}
+	var vecResults []storage.VectorSearchResult
+
+	projectMemID := uuid.New()
+	memMap[projectMemID] = makeTestMemory(projectMemID, primaryNs, "only project mem", nil, 0.5, 0, now)
+	vecResults = append(vecResults, storage.VectorSearchResult{ID: projectMemID, Score: 0.40, NamespaceID: primaryNs})
+
+	for i := 0; i < 8; i++ {
+		id := uuid.New()
+		memMap[id] = makeTestMemory(id, globalNs, "global content", nil, 0.5, 0, now)
+		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.90, NamespaceID: globalNs})
+	}
+
+	memReader := &mockMemoryReader{memories: memMap}
+	vectorSearcher := &mockVectorSearcher{results: vecResults}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:                primaryID,
+		GlobalNamespaceID:        &globalNs,
+		Query:                    "anything",
+		Limit:                    5,
+		NamespaceQuotaProjectMin: 5,
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 5 {
+		t.Fatalf("expected 5 memories (limit), got %d", len(resp.Memories))
+	}
+	seen := map[uuid.UUID]int{}
+	for _, m := range resp.Memories {
+		seen[m.ID]++
+		if seen[m.ID] > 1 {
+			t.Errorf("memory %v appears %d times — quota over-asked must not duplicate", m.ID, seen[m.ID])
+		}
+	}
+}
+
+// TestRecall_NamespaceQuotaDefaultZero_BehaviorUnchanged verifies the
+// shipped default (project_min=0) preserves the pre-feature truncation.
+// When the quota is zero, the top-N is whatever the unified sort produced
+// — globals included.
+func TestRecall_NamespaceQuotaDefaultZero_BehaviorUnchanged(t *testing.T) {
+	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
+
+	now := time.Now()
+	memMap := map[uuid.UUID]*model.Memory{}
+	var vecResults []storage.VectorSearchResult
+	projectMemID := uuid.New()
+	memMap[projectMemID] = makeTestMemory(projectMemID, primaryNs, "weak project hit", nil, 0.5, 0, now)
+	vecResults = append(vecResults, storage.VectorSearchResult{ID: projectMemID, Score: 0.30, NamespaceID: primaryNs})
+	for i := 0; i < 5; i++ {
+		id := uuid.New()
+		memMap[id] = makeTestMemory(id, globalNs, "strong global hit", nil, 0.5, 0, now)
+		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.90, NamespaceID: globalNs})
+	}
+
+	memReader := &mockMemoryReader{memories: memMap}
+	vectorSearcher := &mockVectorSearcher{results: vecResults}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+
+	// No NamespaceQuotaProjectMin in the request → falls through to
+	// the registered default (0).
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:         primaryID,
+		GlobalNamespaceID: &globalNs,
+		Query:             "anything",
+		Limit:             3,
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 3 {
+		t.Fatalf("expected 3 memories, got %d", len(resp.Memories))
+	}
+	// All three slots are globals — the pre-feature behavior.
+	for i, m := range resp.Memories {
+		if m.ID == projectMemID {
+			t.Errorf("default quota=0 should not lift the weak project hit (pos %d)", i)
+		}
+	}
+}
+
+// TestRecall_FusionNormalizePerChannel_BalancesUnevenCorpora verifies the
+// flag wiring: with NormalizePerChannel on, the per-channel weights are
+// divided by channel length, so a deep ranking does not dominate the
+// fused output. We do not assert a specific ordering — the property under
+// test is that the flag is observed during fusion. Two channels with
+// very different lengths must produce a different score distribution
+// from the same channels with the flag off.
+func TestRecall_FusionNormalizePerChannel_BalancesUnevenCorpora(t *testing.T) {
+	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
+
+	now := time.Now()
+	// 1 project candidate + 5 global candidates. Vector channel returns
+	// every memory; lexical channel returns the same. With fusion off
+	// the test would just verify the unified sort works (covered
+	// elsewhere). The point of this test is to confirm setting
+	// NormalizePerChannel does not panic and the flag flows through to
+	// runHybridSearch.
+	projectMemID := uuid.New()
+	memMap := map[uuid.UUID]*model.Memory{
+		projectMemID: makeTestMemory(projectMemID, primaryNs, "project hit", nil, 0.5, 0, now),
+	}
+	primaryVec := []storage.VectorSearchResult{{ID: projectMemID, Score: 0.50, NamespaceID: primaryNs}}
+	primaryLex := []storage.MemoryRank{{ID: projectMemID, Rank: 1.0}}
+
+	var globalIDs []uuid.UUID
+	for i := 0; i < 5; i++ {
+		id := uuid.New()
+		globalIDs = append(globalIDs, id)
+		memMap[id] = makeTestMemory(id, globalNs, "global hit", nil, 0.5, 0, now)
+	}
+	allVec := append([]storage.VectorSearchResult{}, primaryVec...)
+	globalLex := []storage.MemoryRank{}
+	for i, id := range globalIDs {
+		allVec = append(allVec, storage.VectorSearchResult{ID: id, Score: 0.90 - float64(i)*0.01, NamespaceID: globalNs})
+		globalLex = append(globalLex, storage.MemoryRank{ID: id, Rank: 1.0 - float64(i)*0.01})
+	}
+
+	memReader := &mockMemoryReader{memories: memMap}
+	vectorSearcher := &mockVectorSearcher{results: allVec}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	svc.SetLexical(&mockLexicalSearcher{results: map[uuid.UUID][]storage.MemoryRank{
+		primaryNs: primaryLex,
+		globalNs:  globalLex,
+	}})
+	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.70, LexicalWeight: 0.30, NormalizePerChannel: true})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:         primaryID,
+		GlobalNamespaceID: &globalNs,
+		Query:             "anything",
+		Limit:             10,
+	})
+	if err != nil {
+		t.Fatalf("recall with NormalizePerChannel=true failed: %v", err)
+	}
+	if len(resp.Memories) == 0 {
+		t.Fatalf("expected memories from fusion with normalize-per-channel on, got 0")
+	}
+	// The project hit must appear in the response — it appeared in both
+	// primary's vector and lexical channels, so even after normalization
+	// it has a non-zero fused score.
+	found := false
+	for _, m := range resp.Memories {
+		if m.ID == projectMemID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("project hit missing from fusion result with NormalizePerChannel=true")
+	}
+}

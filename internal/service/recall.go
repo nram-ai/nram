@@ -77,6 +77,10 @@ type RecallRequest struct {
 	// prefix-matching tag are excluded from the diversified output. Vector
 	// search and graph traversal are unchanged — this is a pure rerank step.
 	DiversifyByTagPrefix string `json:"diversify_by_tag_prefix,omitempty"`
+	// NamespaceQuotaProjectMin reserves N slots for primary-project candidates.
+	// Zero inherits the configured default; mutually exclusive with
+	// DiversifyByTagPrefix (the latter already controls truncation).
+	NamespaceQuotaProjectMin int `json:"namespace_quota_project_min,omitempty"`
 	// Caller context
 	UserID   *uuid.UUID `json:"-"`
 	APIKeyID *uuid.UUID `json:"-"`
@@ -105,6 +109,10 @@ type RecallResult struct {
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+
+	// Unexported so JSON serialization drops it; threaded through to the
+	// post-sort namespace-quota truncation.
+	isPrimary bool
 }
 
 // RecallGraph holds the graph entities and relationships found during graph traversal.
@@ -160,6 +168,8 @@ type RecallRelationship struct {
 }
 
 // RankingWeights controls the relative importance of each scoring factor.
+// Origin is a project-affinity term that lifts candidates from the recall's
+// primary project above otherwise-equivalent globals.
 type RankingWeights struct {
 	Similarity     float64
 	Recency        float64
@@ -167,12 +177,13 @@ type RankingWeights struct {
 	Frequency      float64
 	GraphRelevance float64
 	Confidence     float64
+	Origin         float64
 }
 
 // DefaultRankingWeights provides sensible defaults for ranking. Frequency is
 // 0 because access_count already drives Confidence reinforcement; weighting
-// both double-counts the same signal. Operators can re-enable Frequency via
-// the ranking.weight.frequency setting.
+// both double-counts the same signal. Origin is 0 so upgrades preserve
+// pre-origin ranking output.
 var DefaultRankingWeights = RankingWeights{
 	Similarity:     0.50,
 	Recency:        0.15,
@@ -180,6 +191,7 @@ var DefaultRankingWeights = RankingWeights{
 	Frequency:      0.00,
 	GraphRelevance: 0.20,
 	Confidence:     0.05,
+	Origin:         0.00,
 }
 
 // FusionConfig governs candidate retrieval (parallel vector + lexical,
@@ -191,15 +203,19 @@ type FusionConfig struct {
 	RRFConstant   int     // RRF k; canonical default 60
 	VectorWeight  float64 // weight on each vector channel's RRF contribution
 	LexicalWeight float64 // weight on each lexical channel's RRF contribution
+	// When true, each channel's RRF weight is divided by its length so a
+	// deep corpus does not crowd out a sparse one in the fused output.
+	NormalizePerChannel bool
 }
 
 // DefaultFusionConfig ships with the feature dark — operators flip
 // recall.fusion.enabled in admin settings after migration + smoke test.
 var DefaultFusionConfig = FusionConfig{
-	Enabled:       false,
-	RRFConstant:   60,
-	VectorWeight:  0.70,
-	LexicalWeight: 0.30,
+	Enabled:             false,
+	RRFConstant:         60,
+	VectorWeight:        0.70,
+	LexicalWeight:       0.30,
+	NormalizePerChannel: false,
 }
 
 // RecallService orchestrates memory recall with vector search, tag filtering,
@@ -290,6 +306,7 @@ type scoredMemory struct {
 	projectSlug    string
 	namespacePath  string
 	sharedFromNs   *string // non-nil if surfaced via cross-namespace sharing (source namespace slug)
+	isPrimary      bool
 }
 
 // projectAttribution carries the owning project's ID and slug for a given
@@ -298,6 +315,7 @@ type scoredMemory struct {
 type projectAttribution struct {
 	ProjectID   uuid.UUID
 	ProjectSlug string
+	IsPrimary   bool
 }
 
 // Recall retrieves and ranks memories matching the given query.
@@ -365,7 +383,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// resolution below). Falls back to the primary stamp when a namespace has
 	// no owning project (e.g., org-level shares).
 	projectByNamespace := map[uuid.UUID]projectAttribution{
-		namespaceID: {ProjectID: projectID, ProjectSlug: projectSlug},
+		namespaceID: {ProjectID: projectID, ProjectSlug: projectSlug, IsPrimary: true},
 	}
 	if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
 		if gp, err := s.projects.GetByNamespaceID(ctx, *req.GlobalNamespaceID); err == nil && gp != nil {
@@ -376,6 +394,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		if attr, ok := projectByNamespace[memNs]; ok {
 			return attr
 		}
+		// Unknown namespaces (org-level shares without an owning project)
+		// fall back to the primary stamp WITHOUT IsPrimary, so quota and
+		// origin treat them as non-primary.
 		return projectAttribution{ProjectID: projectID, ProjectSlug: projectSlug}
 	}
 
@@ -474,6 +495,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 								projectID:     attr.ProjectID,
 								projectSlug:   attr.ProjectSlug,
 								namespacePath: namespacePath,
+								isPrimary:     attr.IsPrimary,
 							})
 						}
 					}
@@ -495,6 +517,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					projectID:     attr.ProjectID,
 					projectSlug:   attr.ProjectSlug,
 					namespacePath: namespacePath,
+					isPrimary:     attr.IsPrimary,
 				})
 			}
 		}
@@ -510,6 +533,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							projectID:     attr.ProjectID,
 							projectSlug:   attr.ProjectSlug,
 							namespacePath: namespacePath,
+							isPrimary:     attr.IsPrimary,
 						})
 					}
 				}
@@ -553,6 +577,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							projectSlug:   attr.ProjectSlug,
 							namespacePath: namespacePath,
 							sharedFromNs:  &slug,
+							isPrimary:     attr.IsPrimary,
 						})
 					}
 				}
@@ -796,7 +821,18 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			Metadata:    c.memory.Metadata,
 			CreatedAt:   c.memory.CreatedAt,
 			UpdatedAt:   c.memory.UpdatedAt,
+			isPrimary:   c.isPrimary,
 		})
+	}
+
+	// Caller override beats the registered default; clamp negatives so a
+	// misconfigured client can't disable the configured floor.
+	projectMin := req.NamespaceQuotaProjectMin
+	if projectMin <= 0 {
+		projectMin = s.recallNamespaceQuotaProjectMin(ctx)
+	}
+	if projectMin < 0 {
+		projectMin = 0
 	}
 
 	var results []RecallResult
@@ -806,6 +842,8 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		results = diversifyByTagPrefix(passing, req.DiversifyByTagPrefix, limit)
 		returnedGroups := prefixGroups(results, recallResultTags, req.DiversifyByTagPrefix)
 		coverageGaps = computeCoverageGaps(rawGroups, postTagGroups, passingGroups, returnedGroups)
+	} else if projectMin > 0 && len(passing) > limit {
+		results = applyNamespaceQuota(passing, limit, projectMin)
 	} else if len(passing) > limit {
 		results = passing[:limit]
 	} else {
@@ -917,8 +955,12 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	var vecCount, lexCount int
 	vecIDs := make(map[uuid.UUID]struct{})
 	for _, r := range vecRankings {
+		w := s.fusion.VectorWeight
+		if s.fusion.NormalizePerChannel && len(r) > 0 {
+			w = w / float64(len(r))
+		}
 		allRankings = append(allRankings, r)
-		allWeights = append(allWeights, s.fusion.VectorWeight)
+		allWeights = append(allWeights, w)
 		vecCount += len(r)
 		for _, m := range r {
 			vecIDs[m.ID] = struct{}{}
@@ -926,8 +968,12 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	}
 	overlap := 0
 	for _, r := range lexRankings {
+		w := s.fusion.LexicalWeight
+		if s.fusion.NormalizePerChannel && len(r) > 0 {
+			w = w / float64(len(r))
+		}
 		allRankings = append(allRankings, r)
-		allWeights = append(allWeights, s.fusion.LexicalWeight)
+		allWeights = append(allWeights, w)
 		lexCount += len(r)
 		for _, m := range r {
 			if _, ok := vecIDs[m.ID]; ok {
@@ -980,12 +1026,18 @@ func computeScore(c scoredMemory, w RankingWeights, now time.Time, maxAccess int
 		frequencyScore = math.Log(1+float64(c.memory.AccessCount)) / math.Log(1+float64(maxAccess))
 	}
 
+	var originScore float64
+	if c.isPrimary {
+		originScore = 1.0
+	}
+
 	return w.Similarity*clampScore(c.similarity) +
 		w.Recency*recencyScore +
 		w.Importance*c.memory.Importance +
 		w.Frequency*frequencyScore +
 		w.GraphRelevance*c.graphRelevance +
-		w.Confidence*clampScore(c.memory.Confidence)
+		w.Confidence*clampScore(c.memory.Confidence) +
+		w.Origin*originScore
 }
 
 // recallDefaultLimit returns the default page size when the caller passes
@@ -1022,6 +1074,14 @@ func (s *RecallService) recallGraphHopMultiplier(ctx context.Context) float64 {
 		return GetDefaultFloat(SettingRankingGraphHopMultiplier)
 	}
 	return s.settings.ResolveFloatWithDefault(ctx, SettingRankingGraphHopMultiplier, "global")
+}
+
+// recallNamespaceQuotaProjectMin resolves the configured project floor.
+func (s *RecallService) recallNamespaceQuotaProjectMin(ctx context.Context) int {
+	if s.settings == nil {
+		return GetDefaultInt(SettingRecallNamespaceQuotaProjectMin)
+	}
+	return s.settings.ResolveIntWithDefault(ctx, SettingRecallNamespaceQuotaProjectMin, "global")
 }
 
 // recallOverfetch sizes the candidate pool the score-and-rerank pass
@@ -1160,6 +1220,49 @@ func diversifyByTagPrefix(passing []RecallResult, prefix string, limit int) []Re
 		if !picked {
 			break
 		}
+	}
+	return out
+}
+
+// applyNamespaceQuota truncates passing to limit while reserving projectMin
+// slots for primary-project candidates. passing must be score-sorted; the
+// tail preserves the original rank order so globals that outscored the
+// quota still surface in their earned position.
+func applyNamespaceQuota(passing []RecallResult, limit, projectMin int) []RecallResult {
+	if limit <= 0 || len(passing) == 0 {
+		return []RecallResult{}
+	}
+	if projectMin <= 0 {
+		if len(passing) > limit {
+			return passing[:limit]
+		}
+		return passing
+	}
+
+	floor := projectMin
+	if floor > limit {
+		floor = limit
+	}
+	out := make([]RecallResult, 0, limit)
+	claimed := make(map[uuid.UUID]struct{}, limit)
+	for _, r := range passing {
+		if len(out) >= floor {
+			break
+		}
+		if r.isPrimary {
+			out = append(out, r)
+			claimed[r.ID] = struct{}{}
+		}
+	}
+	for _, r := range passing {
+		if len(out) >= limit {
+			break
+		}
+		if _, taken := claimed[r.ID]; taken {
+			continue
+		}
+		out = append(out, r)
+		claimed[r.ID] = struct{}{}
 	}
 	return out
 }

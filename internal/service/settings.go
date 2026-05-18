@@ -47,6 +47,7 @@ const (
 	SettingRankWeightFreq    = "ranking.weight.frequency"
 	SettingRankWeightGraph   = "ranking.weight.graph_relevance"
 	SettingRankWeightConf    = "ranking.weight.confidence"
+	SettingRankWeightOrigin  = "ranking.weight.origin"
 	SettingTokenRetention    = "usage.token_retention_days"
 	SettingTokenCostRates    = "usage.cost_rates"
 
@@ -58,7 +59,8 @@ const (
 	SettingRecallFusionEnabled = "recall.fusion.enabled"
 	SettingRecallFusionK       = "recall.fusion.rrf_k"
 	SettingRecallFusionVecW    = "recall.fusion.vector_weight"
-	SettingRecallFusionLexW    = "recall.fusion.lexical_weight"
+	SettingRecallFusionLexW             = "recall.fusion.lexical_weight"
+	SettingRecallFusionNormalizePerChan = "recall.fusion.normalize_per_channel"
 
 	// Dreaming system-level settings (global scope).
 	SettingDreamingEnabled            = "dreaming.enabled"
@@ -392,8 +394,9 @@ const (
 	SettingRankingGraphHopMultiplier  = "ranking.graph.hop_multiplier"
 	SettingRecallDefaultLimit         = "recall.default_limit"
 	SettingRecallGraphDefaultDepth    = "recall.graph.default_depth"
-	SettingRecallOverfetchMultiplier  = "recall.overfetch_multiplier"
-	SettingRecallOverfetchMin         = "recall.overfetch_min"
+	SettingRecallOverfetchMultiplier      = "recall.overfetch_multiplier"
+	SettingRecallOverfetchMin             = "recall.overfetch_min"
+	SettingRecallNamespaceQuotaProjectMin = "recall.namespace_quota.project_min"
 
 	// Pruning thresholds. relationship_weight_threshold gates the active
 	// relationship expiry pass AND the mid-cycle expiry inside the weight
@@ -485,16 +488,19 @@ const (
 var settingDefaults = map[string]string{
 	SettingEnrichmentEnabled:          "true",
 	SettingDedupThreshold:             "0.92",
-	SettingRankWeightSim:              "0.50",
-	SettingRankWeightRec:              "0.15",
-	SettingRankWeightImp:              "0.10",
-	SettingRankWeightFreq:             "0.00",
-	SettingRankWeightGraph:            "0.20",
-	SettingRankWeightConf:             "0.05",
-	SettingRecallFusionEnabled:        "false",
-	SettingRecallFusionK:              "60",
-	SettingRecallFusionVecW:           "0.70",
-	SettingRecallFusionLexW:           "0.30",
+	SettingRankWeightSim:                  "0.50",
+	SettingRankWeightRec:                  "0.15",
+	SettingRankWeightImp:                  "0.10",
+	SettingRankWeightFreq:                 "0.00",
+	SettingRankWeightGraph:                "0.20",
+	SettingRankWeightConf:                 "0.05",
+	SettingRankWeightOrigin:               "0.00",
+	SettingRecallFusionEnabled:            "false",
+	SettingRecallFusionK:                  "60",
+	SettingRecallFusionVecW:               "0.70",
+	SettingRecallFusionLexW:               "0.30",
+	SettingRecallFusionNormalizePerChan:   "false",
+	SettingRecallNamespaceQuotaProjectMin: "0",
 	SettingTokenRetention:             "365",
 	SettingTokenCostRates:             "[]",
 	SettingDreamingEnabled:            "false",

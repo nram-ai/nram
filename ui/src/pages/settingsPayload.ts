@@ -28,6 +28,7 @@ export interface ProjectFormState {
   frequency: number | undefined;
   graph_relevance: number | undefined;
   confidence: number | undefined;
+  origin: number | undefined;
   dedup_threshold: number | undefined;
   enrichment_enabled: boolean | undefined;
   dreaming_enabled: boolean | undefined;
@@ -52,6 +53,7 @@ export function buildProjectSettingsPayload(state: ProjectFormState): ProjectSet
   if (state.frequency !== undefined) rankingOverride.frequency = state.frequency;
   if (state.graph_relevance !== undefined) rankingOverride.graph_relevance = state.graph_relevance;
   if (state.confidence !== undefined) rankingOverride.confidence = state.confidence;
+  if (state.origin !== undefined) rankingOverride.origin = state.origin;
 
   const settings: ProjectSettings = {};
   if (state.dedup_threshold !== undefined) settings.dedup_threshold = state.dedup_threshold;

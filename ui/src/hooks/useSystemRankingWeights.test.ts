@@ -20,6 +20,7 @@ const REQUIRED_KEYS = [
   "ranking.weight.frequency",
   "ranking.weight.graph_relevance",
   "ranking.weight.confidence",
+  "ranking.weight.origin",
 ];
 
 function fullSchema() {
@@ -30,6 +31,7 @@ function fullSchema() {
     { key: "ranking.weight.frequency", default_value: 0.0 },
     { key: "ranking.weight.graph_relevance", default_value: 0.2 },
     { key: "ranking.weight.confidence", default_value: 0.05 },
+    { key: "ranking.weight.origin", default_value: 0.0 },
   ];
 }
 
@@ -60,6 +62,7 @@ describe("resolveSystemRankingWeights contract", () => {
       frequency: 0.0,
       graph_relevance: 0.2,
       confidence: 0.05,
+      origin: 0.0,
     });
     expect(got.missingKeys).toEqual([]);
   });
