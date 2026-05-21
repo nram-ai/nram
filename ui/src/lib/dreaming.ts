@@ -243,9 +243,31 @@ function formatRelationshipExpired(log: DreamLog): FormattedLog {
   const before = isObj(log.before_state) ? log.before_state : {};
   const after = isObj(log.after_state) ? log.after_state : {};
 
-  // pruning: target_type=namespace, after={expired_count, threshold}
+  // pruning: target_type=namespace, after={expired_count, threshold} for the
+  // weight-threshold pass, or after={expired_count, trigger:"transitive_pressure",
+  // total_before, hard_cap, high_water, low_water, drained_to} for the
+  // pressure-driven transitive prune.
   if (log.target_type === "namespace") {
     const expired = pickNumber(after.expired_count) ?? 0;
+    const trigger = pickString(after.trigger);
+    if (trigger === "transitive_pressure") {
+      const before = pickNumber(after.total_before);
+      const drainedTo = pickNumber(after.drained_to);
+      const hardCap = pickNumber(after.hard_cap);
+      const facts: Record<string, Fact> = {
+        expiredCount: fact("Expired", expired, "count"),
+      };
+      if (before !== undefined) facts.before = fact("Before", before, "count");
+      if (drainedTo !== undefined) facts.drainedTo = fact("After", drainedTo, "count");
+      if (hardCap !== undefined) facts.hardCap = fact("Hard cap", hardCap, "count");
+      return {
+        narrative:
+          before !== undefined && drainedTo !== undefined
+            ? "Pressure-pruned {expiredCount} transitive edges ({before} → {drainedTo}, hard cap {hardCap})"
+            : "Pressure-pruned {expiredCount} transitive edges",
+        facts,
+      };
+    }
     const threshold = pickNumber(after.threshold);
     const facts: Record<string, Fact> = {
       expiredCount: fact("Expired", expired, "count"),
@@ -482,7 +504,7 @@ const PHASE_SUMMARY_KEYS: Record<string, string[]> = {
     "supersessions",
     "skipped_budget",
   ],
-  pruning: ["pruned", "expired", "errors"],
+  pruning: ["pruned", "expired", "transitive_pressure_expired", "errors"],
   weight_adjustment: [
     "visited",
     "direction_up",

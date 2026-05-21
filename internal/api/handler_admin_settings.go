@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -27,6 +29,7 @@ const settingsListMaxLimit = 500
 type SettingsAdminStore interface {
 	CountSettings(ctx context.Context, scope string) (int, error)
 	ListSettings(ctx context.Context, scope string, limit, offset int) ([]model.Setting, error)
+	GetSetting(ctx context.Context, key, scope string) (*model.Setting, error)
 	UpdateSetting(ctx context.Context, key string, value json.RawMessage, scope string, updatedBy *uuid.UUID) error
 	GetSettingsSchema(ctx context.Context) ([]SettingSchema, error)
 }
@@ -232,21 +235,73 @@ func validateValueAgainstSchema(ctx context.Context, store SettingsAdminStore, k
 	case "json":
 		return validateJSONSettingValue(entry.Key, value)
 	case "number":
-		if entry.Min == nil && entry.Max == nil {
+		if entry.Min != nil || entry.Max != nil {
+			n, ok := decodeNumeric(value)
+			if !ok {
+				return fmt.Errorf("setting %q: value must be a number", key)
+			}
+			if entry.Min != nil && n < *entry.Min {
+				return fmt.Errorf("setting %q: value %v is below schema minimum %v", key, n, *entry.Min)
+			}
+			if entry.Max != nil && n > *entry.Max {
+				return fmt.Errorf("setting %q: value %v is above schema maximum %v", key, n, *entry.Max)
+			}
+		}
+		return validateNumericCrossKeyInvariants(ctx, store, key, value)
+	}
+	return nil
+}
+
+// validateNumericCrossKeyInvariants enforces invariants that span more than
+// one setting. Today this catches misconfigurations of the transitive
+// high_water / low_water pair: low_water must be strictly less than
+// high_water or the pressure-prune in phase_pruning misbehaves (it would
+// either never fire or never converge). The check fetches the paired key's
+// currently stored value; if absent, it falls back to the registered default.
+func validateNumericCrossKeyInvariants(ctx context.Context, store SettingsAdminStore, key string, value json.RawMessage) error {
+	switch key {
+	case service.SettingDreamTransitiveNamespaceHighWater,
+		service.SettingDreamTransitiveNamespaceLowWater:
+		incoming, ok := decodeNumeric(value)
+		if !ok {
 			return nil
 		}
-		n, ok := decodeNumeric(value)
-		if !ok {
-			return fmt.Errorf("setting %q: value must be a number", key)
+		paired := service.SettingDreamTransitiveNamespaceLowWater
+		if key == service.SettingDreamTransitiveNamespaceLowWater {
+			paired = service.SettingDreamTransitiveNamespaceHighWater
 		}
-		if entry.Min != nil && n < *entry.Min {
-			return fmt.Errorf("setting %q: value %v is below schema minimum %v", key, n, *entry.Min)
+		pairedVal, err := fetchNumericSetting(ctx, store, paired)
+		if err != nil {
+			return err
 		}
-		if entry.Max != nil && n > *entry.Max {
-			return fmt.Errorf("setting %q: value %v is above schema maximum %v", key, n, *entry.Max)
+		highWater, lowWater := incoming, pairedVal
+		if key == service.SettingDreamTransitiveNamespaceLowWater {
+			highWater, lowWater = pairedVal, incoming
+		}
+		if !(lowWater < highWater) {
+			return fmt.Errorf("setting %q: namespace_low_water (%v) must be strictly less than namespace_high_water (%v); the pressure-prune drain target must sit below the trigger", key, lowWater, highWater)
 		}
 	}
 	return nil
+}
+
+// fetchNumericSetting reads the global-scope value of a numeric setting,
+// falling back to the registered default when the row is absent. Used by
+// cross-key invariant checks where the incoming PUT must be validated
+// against the paired key's current effective value.
+func fetchNumericSetting(ctx context.Context, store SettingsAdminStore, key string) (float64, error) {
+	setting, err := store.GetSetting(ctx, key, "global")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return service.GetDefaultFloat(key), nil
+		}
+		return 0, fmt.Errorf("read paired setting %q: %w", key, err)
+	}
+	n, ok := decodeNumeric(setting.Value)
+	if !ok {
+		return 0, fmt.Errorf("paired setting %q: stored value is not numeric", key)
+	}
+	return n, nil
 }
 
 // validateJSONSettingValue dispatches per-key validation for Type:"json"

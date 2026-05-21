@@ -195,7 +195,7 @@ func decayPhase(enabled bool) (*PruningPhase, *recordingMemoryWriter) {
 			service.SettingConfidenceFloor:              0.05,
 		},
 	}
-	return NewPruningPhase(&fakeMemoryReader{}, writer, nil, settings), writer
+	return NewPruningPhase(&fakeMemoryReader{}, writer, nil, nil, settings), writer
 }
 
 func TestApplyConfidenceDecay_DisabledByDefault(t *testing.T) {
@@ -211,7 +211,7 @@ func TestApplyConfidenceDecay_DisabledByDefault(t *testing.T) {
 }
 
 func TestApplyConfidenceDecay_NilSettings_NoOp(t *testing.T) {
-	phase := NewPruningPhase(&fakeMemoryReader{}, &recordingMemoryWriter{}, nil, nil)
+	phase := NewPruningPhase(&fakeMemoryReader{}, &recordingMemoryWriter{}, nil, nil, nil)
 	if _, err := phase.applyConfidenceDecay(context.Background(), decayTestCycle(), nil); err != nil {
 		t.Fatalf("nil settings must not error: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestApplyConfidenceDecay_BadSettingsFallBackToDefaults(t *testing.T) {
 		values: map[string]string{service.SettingConfidenceDecayEnabled: "true"},
 		// floats unset → all fallback to defaults.
 	}
-	phase := NewPruningPhase(&fakeMemoryReader{}, writer, nil, settings)
+	phase := NewPruningPhase(&fakeMemoryReader{}, writer, nil, nil, settings)
 	old := time.Now().Add(-30 * 24 * time.Hour)
 	memories := []model.Memory{decayTestMemory(0.9, &old, time.Now().Add(-365*24*time.Hour))}
 
@@ -345,6 +345,9 @@ func (noopRelWriter) UpdateWeight(_ context.Context, _, _ uuid.UUID, _ float64) 
 func (noopRelWriter) ExpireLowWeight(_ context.Context, _ uuid.UUID, _ float64) (int64, error) {
 	return 0, nil
 }
+func (noopRelWriter) ExpireLowestNTransitive(_ context.Context, _ uuid.UUID, _ int) (int64, error) {
+	return 0, nil
+}
 
 // TestPruning_Execute_StreamsAllBatches confirms 2500 memories paginate
 // into three batches at offsets 0/1000/2000, the loop terminates on the
@@ -371,7 +374,7 @@ func TestPruning_Execute_StreamsAllBatches(t *testing.T) {
 		values: map[string]string{}, // decay disabled
 		ints:   map[string]int{service.SettingDreamPruningBatchSize: 1000},
 	}
-	phase := NewPruningPhase(reader, writer, noopRelWriter{}, settings)
+	phase := NewPruningPhase(reader, writer, nil, noopRelWriter{}, settings)
 	logger := NewDreamLogWriter(nil, uuid.New(), uuid.New())
 
 	cycle := &model.DreamCycle{
@@ -431,7 +434,7 @@ func TestPruning_Execute_BatchSizeFromSetting(t *testing.T) {
 	settings := &staticDreamSettings{
 		ints: map[string]int{service.SettingDreamPruningBatchSize: 250},
 	}
-	phase := NewPruningPhase(reader, &recordingMemoryWriter{}, noopRelWriter{}, settings)
+	phase := NewPruningPhase(reader, &recordingMemoryWriter{}, nil, noopRelWriter{}, settings)
 	logger := NewDreamLogWriter(nil, uuid.New(), uuid.New())
 
 	cycle := &model.DreamCycle{ID: uuid.New(), ProjectID: uuid.New(), NamespaceID: uuid.New()}

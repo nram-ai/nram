@@ -341,6 +341,54 @@ func (r *RelationshipRepo) ExpireLowWeight(ctx context.Context, namespaceID uuid
 	return rows, nil
 }
 
+// ExpireLowestNTransitive expires the N lowest-weight active transitive
+// (inferred) relationships in a namespace. Transitive rows are identified
+// by the properties.source = "transitive" marker that the transitive
+// discovery phase writes at creation time (source-of-truth constant:
+// dreaming.transitivePropertySource — kept in sync with the SQL literal
+// below). Ties broken by oldest first. User-asserted relationships are
+// never touched. Returns the count expired.
+func (r *RelationshipRepo) ExpireLowestNTransitive(ctx context.Context, namespaceID uuid.UUID, n int) (int64, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// SQLite stores properties as TEXT; reach in via json_extract. Postgres
+	// stores as jsonb; reach in via the ->> operator. Both dialects support
+	// UPDATE ... WHERE id IN (SELECT ... LIMIT N).
+	query := `UPDATE relationships SET valid_until = ?
+		WHERE id IN (
+			SELECT id FROM relationships
+			WHERE namespace_id = ?
+			  AND valid_until IS NULL
+			  AND json_extract(properties, '$.source') = 'transitive'
+			ORDER BY weight ASC, created_at ASC
+			LIMIT ?
+		)`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE relationships SET valid_until = $1
+			WHERE id IN (
+				SELECT id FROM relationships
+				WHERE namespace_id = $2
+				  AND valid_until IS NULL
+				  AND properties->>'source' = 'transitive'
+				ORDER BY weight ASC, created_at ASC
+				LIMIT $3
+			)`
+	}
+
+	result, err := r.db.Exec(ctx, query, now, namespaceID.String(), n)
+	if err != nil {
+		return 0, fmt.Errorf("relationship expire lowest n transitive: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("relationship expire lowest n transitive rows: %w", err)
+	}
+	return rows, nil
+}
+
 // DeleteByID removes a single relationship by its ID.
 func (r *RelationshipRepo) DeleteByID(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
 	query := `DELETE FROM relationships WHERE id = ? AND namespace_id = ?`

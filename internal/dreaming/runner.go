@@ -58,6 +58,12 @@ const (
 	ResidualReasonMoreCandidatesThanBatch     = "more_candidates_than_batch"
 	ResidualReasonParaphraseUnvisited         = "paraphrase_unvisited_candidates"
 	ResidualReasonTransitivePerCycleCap       = "transitive_per_cycle_cap"
+	ResidualReasonTransitiveHardCapApproach   = "transitive_hard_cap_approach"
+
+	// DreamPruningTriggerTransitivePressure tags the pruning phase's
+	// pressure-driven transitive expiry in dream_logs.after_state.trigger.
+	// Mirrored by ui/src/lib/dreaming.ts:formatRelationshipExpired.
+	DreamPruningTriggerTransitivePressure = "transitive_pressure"
 	ResidualReasonDispatchCapReached          = "dispatch_cap_reached"
 	ResidualReasonPhaseBudgetStopped          = "phase_budget_stopped"
 	ResidualReasonAuditStaleRemaining         = "audit_stale_remaining"

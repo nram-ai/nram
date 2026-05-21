@@ -80,6 +80,10 @@ func (r *recordingRelationshipWriter) ExpireLowWeight(_ context.Context, _ uuid.
 	return 0, nil
 }
 
+func (r *recordingRelationshipWriter) ExpireLowestNTransitive(_ context.Context, _ uuid.UUID, _ int) (int64, error) {
+	return 0, nil
+}
+
 func (r *recordingRelationshipWriter) weightOf(id uuid.UUID) (float64, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

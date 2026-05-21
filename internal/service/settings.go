@@ -411,9 +411,16 @@ const (
 	// weight (rel_ab.weight * rel_bc.weight) for a new transitive edge to
 	// be created. max_per_cycle caps creations per cycle; namespace_hard_cap
 	// halts creation entirely when the active relationship count exceeds it.
-	SettingDreamTransitiveMinWeight        = "dreaming.transitive.min_weight"
-	SettingDreamTransitiveMaxPerCycle      = "dreaming.transitive.max_per_cycle"
-	SettingDreamTransitiveNamespaceHardCap = "dreaming.transitive.namespace_hard_cap"
+	// namespace_high_water / namespace_low_water drive the pressure-based
+	// prune in the pruning phase: once active relationships exceed
+	// hard_cap * high_water, the lowest-weight transitive edges are expired
+	// down to hard_cap * low_water. low_water must be strictly less than
+	// high_water; the SettingsService validator rejects misconfigurations.
+	SettingDreamTransitiveMinWeight          = "dreaming.transitive.min_weight"
+	SettingDreamTransitiveMaxPerCycle        = "dreaming.transitive.max_per_cycle"
+	SettingDreamTransitiveNamespaceHardCap   = "dreaming.transitive.namespace_hard_cap"
+	SettingDreamTransitiveNamespaceHighWater = "dreaming.transitive.namespace_high_water"
+	SettingDreamTransitiveNamespaceLowWater  = "dreaming.transitive.namespace_low_water"
 
 	// Weight adjustment knobs. tier2_multiplier scales co-mention support
 	// (memory touches both endpoints but isn't direct lineage). decay_window_days
@@ -801,9 +808,11 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingDreamPruningRelationshipWeightThreshold: "0.05",
 	SettingDreamPruningEffectivelyZero:             "0.001",
 
-	SettingDreamTransitiveMinWeight:        "0.1",
-	SettingDreamTransitiveMaxPerCycle:      "200",
-	SettingDreamTransitiveNamespaceHardCap: "5000",
+	SettingDreamTransitiveMinWeight:          "0.1",
+	SettingDreamTransitiveMaxPerCycle:        "200",
+	SettingDreamTransitiveNamespaceHardCap:   "5000",
+	SettingDreamTransitiveNamespaceHighWater: "0.95",
+	SettingDreamTransitiveNamespaceLowWater:  "0.80",
 
 	SettingDreamWeightTier2Multiplier:      "0.5",
 	SettingDreamWeightDecayWindowDays:      "30",

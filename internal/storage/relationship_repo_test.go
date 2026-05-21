@@ -651,3 +651,127 @@ func TestRelationshipRepo_Create_ConcurrentWeightMerge(t *testing.T) {
 		}
 	})
 }
+
+// TestRelationshipRepo_ExpireLowestNTransitive proves the pressure-prune
+// query expires only transitive (properties.source = "transitive") edges,
+// targets the lowest-weight rows first with created_at ASC as the
+// tiebreaker, leaves user-asserted edges untouched even when their weight
+// is lower, and skips already-expired rows.
+func TestRelationshipRepo_ExpireLowestNTransitive(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		a := createTestEntity(t, ctx, db, nsID, "alice")
+		b := createTestEntity(t, ctx, db, nsID, "bob")
+		c := createTestEntity(t, ctx, db, nsID, "carol")
+		d := createTestEntity(t, ctx, db, nsID, "dave")
+		e := createTestEntity(t, ctx, db, nsID, "eve")
+
+		mkRel := func(src, tgt uuid.UUID, weight float64, transitive bool, suffix string) *model.Relationship {
+			props := json.RawMessage(`{}`)
+			if transitive {
+				props = json.RawMessage(`{"source":"transitive"}`)
+			}
+			return &model.Relationship{
+				NamespaceID: nsID,
+				SourceID:    src,
+				TargetID:    tgt,
+				Relation:    "knows-" + suffix,
+				Weight:      weight,
+				Properties:  props,
+			}
+		}
+
+		// Three transitive rows with distinct weights, two user-asserted rows
+		// (one with a lower weight than any transitive row, to prove the
+		// branch's "transitive only" filter is honored).
+		rels := []*model.Relationship{
+			mkRel(a, b, 0.25, true, "t1"),  // transitive, lowest
+			mkRel(a, c, 0.40, true, "t2"),  // transitive, middle
+			mkRel(b, c, 0.60, true, "t3"),  // transitive, highest
+			mkRel(a, d, 0.05, false, "u1"), // user-asserted, lower than any transitive
+			mkRel(b, e, 0.50, false, "u2"), // user-asserted, mid-band
+		}
+		for _, rel := range rels {
+			if err := repo.Create(ctx, rel); err != nil {
+				t.Fatalf("create rel: %v", err)
+			}
+		}
+
+		// Expire one already-expired row to confirm the filter skips it.
+		if err := repo.Expire(ctx, rels[0].ID, nsID); err != nil {
+			t.Fatalf("pre-expire: %v", err)
+		}
+
+		// Ask to expire 2 lowest-weight transitive rows. The pre-expired t1
+		// must be skipped; t2 (weight 0.40) and t3 (weight 0.60) should land.
+		// Importantly, u1 (weight 0.05) must NOT be touched even though it is
+		// the lowest weight overall — it is user-asserted, not transitive.
+		expired, err := repo.ExpireLowestNTransitive(ctx, nsID, 2)
+		if err != nil {
+			t.Fatalf("ExpireLowestNTransitive: %v", err)
+		}
+		if expired != 2 {
+			t.Fatalf("expired count = %d, want 2", expired)
+		}
+
+		// Verify t2 and t3 are now expired.
+		t2, err := repo.GetByID(ctx, rels[1].ID)
+		if err != nil {
+			t.Fatalf("get t2: %v", err)
+		}
+		if t2.ValidUntil == nil {
+			t.Errorf("t2 (transitive, mid weight) should be expired, valid_until is nil")
+		}
+		t3, err := repo.GetByID(ctx, rels[2].ID)
+		if err != nil {
+			t.Fatalf("get t3: %v", err)
+		}
+		if t3.ValidUntil == nil {
+			t.Errorf("t3 (transitive, high weight) should be expired, valid_until is nil")
+		}
+
+		// User-asserted rows MUST be untouched.
+		u1, err := repo.GetByID(ctx, rels[3].ID)
+		if err != nil {
+			t.Fatalf("get u1: %v", err)
+		}
+		if u1.ValidUntil != nil {
+			t.Errorf("u1 (user-asserted, lowest weight) must not be expired by transitive-only branch")
+		}
+		u2, err := repo.GetByID(ctx, rels[4].ID)
+		if err != nil {
+			t.Fatalf("get u2: %v", err)
+		}
+		if u2.ValidUntil != nil {
+			t.Errorf("u2 (user-asserted) must not be expired by transitive-only branch")
+		}
+	})
+}
+
+// TestRelationshipRepo_ExpireLowestNTransitive_ZeroNoOps proves the
+// fast-path that avoids a wasted UPDATE when N <= 0.
+func TestRelationshipRepo_ExpireLowestNTransitive_ZeroNoOps(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		expired, err := repo.ExpireLowestNTransitive(ctx, nsID, 0)
+		if err != nil {
+			t.Fatalf("ExpireLowestNTransitive(n=0): %v", err)
+		}
+		if expired != 0 {
+			t.Errorf("expired = %d, want 0", expired)
+		}
+
+		expired, err = repo.ExpireLowestNTransitive(ctx, nsID, -5)
+		if err != nil {
+			t.Fatalf("ExpireLowestNTransitive(n=-5): %v", err)
+		}
+		if expired != 0 {
+			t.Errorf("expired with negative n = %d, want 0", expired)
+		}
+	})
+}

@@ -23,6 +23,13 @@ const (
 // - Soft-deletes superseded memories with zero access since supersession
 // - Soft-deletes very low confidence dream-originated memories past a minimum age
 // - Expires low-weight relationships (below pruneRelationshipWeightThreshold)
+// - Pressure-prunes the lowest-weight transitive (inferred) relationships
+//   when the namespace exceeds hard_cap * namespace_high_water, draining
+//   down to hard_cap * namespace_low_water. User-asserted edges are never
+//   touched by this branch. This is the relief valve that lets the
+//   transitive phase keep producing new inferences once a namespace fills
+//   up; without it, a saturated namespace would either stall (hard cap)
+//   or loop on tiny per-cycle headroom.
 // - Leaves dangling relationships pointing to non-existent entities
 //
 // Decay is the sleep-side complement to the recall-side reinforcement
@@ -34,16 +41,21 @@ const (
 type PruningPhase struct {
 	memories  MemoryReader
 	memWriter MemoryWriter
+	relReader RelationshipReader
 	relWriter RelationshipWriter
 	settings  SettingsResolver
 }
 
 // NewPruningPhase creates a new pruning phase. settings may be nil, in which
 // case confidence decay is permanently disabled regardless of configuration.
-func NewPruningPhase(memories MemoryReader, memWriter MemoryWriter, relWriter RelationshipWriter, settings SettingsResolver) *PruningPhase {
+// relReader may be nil; the pressure-driven transitive prune is a no-op when
+// the reader is absent (test paths that do not exercise that branch can omit
+// it without wiring a relationship counter).
+func NewPruningPhase(memories MemoryReader, memWriter MemoryWriter, relReader RelationshipReader, relWriter RelationshipWriter, settings SettingsResolver) *PruningPhase {
 	return &PruningPhase{
 		memories:  memories,
 		memWriter: memWriter,
+		relReader: relReader,
 		relWriter: relWriter,
 		settings:  settings,
 	}
@@ -90,12 +102,18 @@ func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, bud
 		slog.Warn("dreaming: relationship pruning had errors", "err", err)
 	}
 
+	pressureExpired, err := p.pruneTransitiveUnderPressure(ctx, cycle, logger)
+	if err != nil {
+		slog.Warn("dreaming: pressure-driven transitive pruning had errors", "err", err)
+	}
+
 	p.writePhaseSummary(ctx, logger, map[string]interface{}{
-		"visited":               visited,
-		"decayed":               decayed,
-		"pruned":                pruned,
-		"relationships_expired": relationshipsExpired,
-		"batch_size":            batchSize,
+		"visited":                       visited,
+		"decayed":                       decayed,
+		"pruned":                        pruned,
+		"relationships_expired":         relationshipsExpired,
+		"transitive_pressure_expired":   pressureExpired,
+		"batch_size":                    batchSize,
 	})
 
 	// Pruning is deterministic per cycle: it streams every memory in the
@@ -263,6 +281,92 @@ func (p *PruningPhase) resolveRelationshipWeightThreshold(ctx context.Context) f
 		return service.GetDefaultFloat(service.SettingDreamPruningRelationshipWeightThreshold)
 	}
 	return p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamPruningRelationshipWeightThreshold, "global")
+}
+
+// pruneTransitiveUnderPressure expires the lowest-weight transitive
+// relationships in a namespace once the active relationship count exceeds
+// hard_cap * high_water, draining down to hard_cap * low_water. Only
+// transitive (properties.source = "transitive") edges are targeted;
+// user-asserted relationships are preserved unconditionally.
+//
+// This is the relief valve for the transitive phase: without it, a
+// namespace that reaches hard_cap traps the transitive phase into either
+// no-op'ing (>= hard_cap) or producing only headroom-clamped output that
+// other phases (entity_dedup merges, consolidation demotion cascades) chew
+// back away each cycle, keeping the project dirty in perpetuity.
+//
+// No-ops when relReader is nil (test paths), when totalActive is below
+// the high-water threshold, or when the drain target is misconfigured.
+func (p *PruningPhase) pruneTransitiveUnderPressure(ctx context.Context, cycle *model.DreamCycle, logger *DreamLogWriter) (int64, error) {
+	if p.relReader == nil {
+		return 0, nil
+	}
+
+	hardCap := p.resolveInt(ctx, service.SettingDreamTransitiveNamespaceHardCap)
+	if hardCap <= 0 {
+		return 0, nil
+	}
+	highWater := p.resolveFloat(ctx, service.SettingDreamTransitiveNamespaceHighWater)
+	lowWater := p.resolveFloat(ctx, service.SettingDreamTransitiveNamespaceLowWater)
+	// Defensive: a misconfigured pair (low_water >= high_water, or either
+	// outside [0, 1]) would either never fire or never converge. The API
+	// validator rejects this on PUT, but a manual DB edit can still land
+	// it; bail rather than thrash.
+	if highWater <= 0 || highWater > 1 || lowWater < 0 || lowWater >= highWater {
+		return 0, nil
+	}
+
+	totalActive, err := p.relReader.CountActiveByNamespace(ctx, cycle.NamespaceID)
+	if err != nil {
+		return 0, err
+	}
+
+	highThreshold := int(float64(hardCap) * highWater)
+	lowThreshold := int(float64(hardCap) * lowWater)
+	if totalActive < highThreshold {
+		return 0, nil
+	}
+	target := totalActive - lowThreshold
+	if target <= 0 {
+		return 0, nil
+	}
+
+	expired, err := p.relWriter.ExpireLowestNTransitive(ctx, cycle.NamespaceID, target)
+	if err != nil {
+		return 0, err
+	}
+	if expired > 0 {
+		_ = logger.LogOperation(ctx, model.DreamPhasePruning,
+			model.DreamOpRelationshipExpired, "namespace", cycle.NamespaceID,
+			nil, map[string]interface{}{
+				"expired_count": expired,
+				"trigger":       DreamPruningTriggerTransitivePressure,
+				"total_before":  totalActive,
+				"hard_cap":      hardCap,
+				"high_water":    highWater,
+				"low_water":     lowWater,
+				"drained_to":    totalActive - int(expired),
+			})
+		slog.Info("dreaming: pressure-pruned transitive relationships",
+			"count", expired, "namespace", cycle.NamespaceID,
+			"before", totalActive, "after", totalActive-int(expired),
+			"hard_cap", hardCap, "cycle", cycle.ID)
+	}
+	return expired, nil
+}
+
+func (p *PruningPhase) resolveInt(ctx context.Context, key string) int {
+	if p.settings == nil { // test path
+		return service.GetDefaultInt(key)
+	}
+	return p.settings.ResolveIntWithDefault(ctx, key, "global")
+}
+
+func (p *PruningPhase) resolveFloat(ctx context.Context, key string) float64 {
+	if p.settings == nil { // test path
+		return service.GetDefaultFloat(key)
+	}
+	return p.settings.ResolveFloatWithDefault(ctx, key, "global")
 }
 
 // resolveEffectivelyZero returns the upper bound of the zero-confidence

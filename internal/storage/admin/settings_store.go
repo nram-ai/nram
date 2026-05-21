@@ -37,6 +37,14 @@ func (s *SettingsAdminStore) ListSettings(ctx context.Context, scope string, lim
 	return s.settingsRepo.ListAllPaged(ctx, limit, offset)
 }
 
+// GetSetting returns the setting row stored at (key, scope), or nil if
+// absent. Wraps SettingsRepo.Get so the admin API can do indexed lookups
+// instead of scanning ListSettings — used by cross-key invariant validation
+// where the validator needs the paired setting's value.
+func (s *SettingsAdminStore) GetSetting(ctx context.Context, key, scope string) (*model.Setting, error) {
+	return s.settingsRepo.Get(ctx, key, scope)
+}
+
 // GetCostRates returns the global usage.cost_rates JSON blob raw, so
 // the GET handler can hand it to the SPA without re-encoding. Returns
 // sql.ErrNoRows pre-seeder; the handler maps that to an empty list.
@@ -259,8 +267,10 @@ var settingsSchemas = []api.SettingSchema{
 
 	// Transitive relationship discovery.
 	{Key: service.SettingDreamTransitiveMinWeight, Type: "number", DefaultValue: json.RawMessage(`0.1`), Description: "Minimum product weight (rel_ab.weight × rel_bc.weight) for a new transitive relationship to be created (0.0-1.0). Suppresses noise edges that would compound near-zero weights.", Category: "dreaming_performance", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.01)},
-	{Key: service.SettingDreamTransitiveMaxPerCycle, Type: "number", DefaultValue: json.RawMessage(`200`), Description: "Maximum transitive relationships created per dream cycle. Prevents runaway graph growth in dense namespaces; the residual signal carries unfinished work to the next cycle.", Category: "dreaming_performance", Min: ptrF(0), Max: ptrF(10000), Step: ptrF(10)},
-	{Key: service.SettingDreamTransitiveNamespaceHardCap, Type: "number", DefaultValue: json.RawMessage(`5000`), Description: "Active relationship count above which the transitive phase no-ops entirely. Add a pruning cycle or raise this cap to unstick a saturated namespace.", Category: "dreaming_performance", Min: ptrF(0), Max: ptrF(1000000), Step: ptrF(100)},
+	{Key: service.SettingDreamTransitiveMaxPerCycle, Type: "number", DefaultValue: json.RawMessage(`200`), Description: "Maximum transitive relationships created per dream cycle. Hard ceiling per cycle, independent of namespace_hard_cap. When the namespace is near namespace_hard_cap the effective per-cycle limit shrinks to the remaining headroom (hard_cap − active) and raising this knob has no effect — raise namespace_hard_cap or let the pressure-driven prune relieve saturation instead.", Category: "dreaming_performance", Min: ptrF(0), Max: ptrF(10000), Step: ptrF(10)},
+	{Key: service.SettingDreamTransitiveNamespaceHardCap, Type: "number", DefaultValue: json.RawMessage(`5000`), Description: "Maximum active relationship count for the transitive phase. The pruning phase begins expiring the lowest-weight transitive (inferred) edges once active count exceeds hard_cap × namespace_high_water, draining down to hard_cap × namespace_low_water. The transitive phase no-ops entirely at or above hard_cap. Raise to grow the graph; lower to keep namespaces lean.", Category: "dreaming_performance", Min: ptrF(0), Max: ptrF(1000000), Step: ptrF(100)},
+	{Key: service.SettingDreamTransitiveNamespaceHighWater, Type: "number", DefaultValue: json.RawMessage(`0.95`), Description: "Fraction of namespace_hard_cap at which the pruning phase begins expiring the lowest-weight transitive (inferred) relationships. 0.95 means start draining once active count reaches 95% of the hard cap. Must be greater than namespace_low_water.", Category: "dreaming_performance", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.01)},
+	{Key: service.SettingDreamTransitiveNamespaceLowWater, Type: "number", DefaultValue: json.RawMessage(`0.80`), Description: "Fraction of namespace_hard_cap that the pressure-driven prune drains down to. With high_water=0.95 and low_water=0.80 at hard_cap=10000, the prune fires at ≥9500 active and stops at 8000. Lower values create more headroom (longer between prune events) at the cost of dropping more inferred edges per pass. Must be strictly less than namespace_high_water.", Category: "dreaming_performance", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.01)},
 
 	// Weight-adjustment knobs. Each governs one term in the per-cycle
 	// recompute formula. Lower decay_factor / higher dead_source_multiplier

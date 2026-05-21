@@ -84,6 +84,7 @@ type RelationshipWriter interface {
 	DeleteByID(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	UpdateWeight(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, weight float64) error
 	ExpireLowWeight(ctx context.Context, namespaceID uuid.UUID, threshold float64) (int64, error)
+	ExpireLowestNTransitive(ctx context.Context, namespaceID uuid.UUID, n int) (int64, error)
 }
 
 // LineageWriter creates memory lineage records and answers questions a

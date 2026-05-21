@@ -25,6 +25,13 @@ const transitivePropertySource = "transitive"
 //   - Stops entirely when namespace exceeds
 //     dreaming.transitive.namespace_hard_cap active relationships
 //
+// When the per-cycle creation count is bounded by the hard-cap headroom
+// rather than by max_per_cycle, the phase emits an informational
+// ResidualReasonTransitiveHardCapApproach in the phase summary but does
+// not set HasResidual=true — the pruning phase's pressure-driven prune
+// is the right loop to make progress, and signalling residual would keep
+// the project dirty and trigger an unproductive re-cycle.
+//
 // This phase has zero token cost (pure graph traversal).
 type TransitivePhase struct {
 	entities      EntityReader
@@ -111,9 +118,10 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		outgoing[rel.SourceID] = append(outgoing[rel.SourceID], *rel)
 	}
 
-	// Per-cycle cap.
+	// Per-cycle cap, then clamp to remaining hard-cap headroom. After the
+	// clamp `maxNew == headroom` iff headroom was the binding constraint,
+	// which the residual branch below relies on to label the cause correctly.
 	maxNew := maxPerCycle
-	// Also respect hard cap headroom.
 	headroom := hardCap - totalActive
 	if headroom < maxNew {
 		maxNew = headroom
@@ -216,19 +224,32 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 			"count", created, "cycle", cycle.ID, "truncated", truncated)
 	}
 
-	if truncated {
+	if !truncated {
+		return PhaseResult{}, nil
+	}
+	detail := map[string]any{
+		"created":       created,
+		"per_cycle_cap": maxPerCycle,
+		"hard_cap":      hardCap,
+		"active":        totalActive,
+	}
+	if maxNew != headroom {
 		return PhaseResult{
 			HasResidual:    true,
 			ResidualReason: ResidualReasonTransitivePerCycleCap,
-			ResidualDetail: map[string]any{
-				"created":       created,
-				"per_cycle_cap": maxPerCycle,
-				"hard_cap":      hardCap,
-				"active":        totalActive,
-			},
+			ResidualDetail: detail,
 		}, nil
 	}
-	return PhaseResult{}, nil
+	// Headroom was the binding constraint. Re-running creates no new edges
+	// until the pruning phase's pressure branch drains room, so do not set
+	// HasResidual (which would keep the project dirty and re-cycle).
+	slog.Warn("dreaming: transitive headroom exhausted; namespace approaching hard cap",
+		"active", totalActive, "hard_cap", hardCap,
+		"created", created, "cycle", cycle.ID)
+	return PhaseResult{
+		ResidualReason: ResidualReasonTransitiveHardCapApproach,
+		ResidualDetail: detail,
+	}, nil
 }
 
 // resolveFloat reads a float setting via the *WithDefault helper, falling

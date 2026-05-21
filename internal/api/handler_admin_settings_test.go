@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // --- mock SettingsAdminStore ---
@@ -45,6 +46,18 @@ func (m *mockSettingsAdminStore) ListSettings(_ context.Context, scope string, l
 	m.listLimit = limit
 	m.listOffset = offset
 	return m.settings, m.listErr
+}
+
+func (m *mockSettingsAdminStore) GetSetting(_ context.Context, key, _ string) (*model.Setting, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	for i := range m.settings {
+		if m.settings[i].Key == key {
+			return &m.settings[i], nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (m *mockSettingsAdminStore) UpdateSetting(_ context.Context, key string, value json.RawMessage, scope string, updatedBy *uuid.UUID) error {
@@ -939,5 +952,96 @@ func TestAdminSettingsUpdate_RejectsCostRatesDuplicate(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "duplicate") {
 		t.Errorf("error should mention duplicate; got %s", w.Body.String())
+	}
+}
+
+// transitiveWaterSchemas is the in-process schema slice the cross-key
+// validator needs to find both transitive water-mark keys for type-checking.
+func transitiveWaterSchemas() []SettingSchema {
+	min0 := 0.0
+	max1 := 1.0
+	step := 0.01
+	return []SettingSchema{
+		{Key: service.SettingDreamTransitiveNamespaceHighWater, Type: "number", DefaultValue: json.RawMessage(`0.95`), Min: &min0, Max: &max1, Step: &step},
+		{Key: service.SettingDreamTransitiveNamespaceLowWater, Type: "number", DefaultValue: json.RawMessage(`0.80`), Min: &min0, Max: &max1, Step: &step},
+	}
+}
+
+// TestAdminSettingsUpdate_RejectsHighWaterAtOrBelowLowWater proves the
+// cross-key invariant: high_water must be strictly above low_water or the
+// pressure-driven transitive prune cannot converge.
+func TestAdminSettingsUpdate_RejectsHighWaterAtOrBelowLowWater(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: transitiveWaterSchemas(),
+		settings: []model.Setting{
+			{Key: service.SettingDreamTransitiveNamespaceLowWater, Value: json.RawMessage(`0.80`), Scope: "global"},
+		},
+	}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	// Try to set high_water to 0.75, which is below the stored low_water 0.80.
+	body := `{"key":"dreaming.transitive.namespace_high_water","value":0.75,"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != "" {
+		t.Error("UpdateSetting should not be called when cross-key invariant fails")
+	}
+	if !strings.Contains(w.Body.String(), "strictly less than") {
+		t.Errorf("error should explain the invariant; got %s", w.Body.String())
+	}
+}
+
+// TestAdminSettingsUpdate_RejectsLowWaterAtOrAboveHighWater is the mirror
+// of the above, asserted on the low_water side so a PUT on either key
+// catches misconfiguration.
+func TestAdminSettingsUpdate_RejectsLowWaterAtOrAboveHighWater(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: transitiveWaterSchemas(),
+		settings: []model.Setting{
+			{Key: service.SettingDreamTransitiveNamespaceHighWater, Value: json.RawMessage(`0.95`), Scope: "global"},
+		},
+	}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"dreaming.transitive.namespace_low_water","value":0.95,"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != "" {
+		t.Error("UpdateSetting should not be called when cross-key invariant fails")
+	}
+}
+
+// TestAdminSettingsUpdate_AcceptsValidWaterMarks confirms the happy path
+// still passes through to the store.
+func TestAdminSettingsUpdate_AcceptsValidWaterMarks(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: transitiveWaterSchemas(),
+		settings: []model.Setting{
+			{Key: service.SettingDreamTransitiveNamespaceLowWater, Value: json.RawMessage(`0.70`), Scope: "global"},
+		},
+	}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"dreaming.transitive.namespace_high_water","value":0.90,"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{UserID: uuid.New(), Role: "admin"}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != service.SettingDreamTransitiveNamespaceHighWater {
+		t.Errorf("UpdateSetting should fire on valid pair, key=%q", store.updatedKey)
 	}
 }
