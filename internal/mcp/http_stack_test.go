@@ -527,6 +527,21 @@ func TestHTTPStack_MCP_Initialize(t *testing.T) {
 		t.Errorf("expected serverInfo.name == 'nram', got %q", name)
 	}
 
+	icons, ok := serverInfo["icons"].([]interface{})
+	if !ok || len(icons) == 0 {
+		t.Fatalf("serverInfo missing icons (got %T)", serverInfo["icons"])
+	}
+	icon, ok := icons[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("icons[0] not an object: %T", icons[0])
+	}
+	if src, _ := icon["src"].(string); !strings.HasPrefix(src, "data:image/png;base64,") {
+		t.Errorf("icons[0].src missing data-URI prefix: %q", src)
+	}
+	if mt, _ := icon["mimeType"].(string); mt != "image/png" {
+		t.Errorf("icons[0].mimeType = %q, want image/png", mt)
+	}
+
 	sessionID := resp.Header.Get("Mcp-Session-Id")
 
 	// Send initialized notification.
