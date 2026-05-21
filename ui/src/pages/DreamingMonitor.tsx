@@ -1131,7 +1131,7 @@ function LogEntry({
             <span key={i}>
               <span className="text-muted-foreground">{m.label.toLowerCase()}</span>{" "}
               <span className="font-mono text-foreground">{formatFactValue(m)}</span>
-              {i < formatted.metrics!.length - 1 ? <span> \u00B7</span> : null}
+              {i < formatted.metrics!.length - 1 ? <span> ·</span> : null}
             </span>
           ))}
         </span>
