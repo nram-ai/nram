@@ -422,12 +422,19 @@ function GraphVisualization() {
   // previous project's slider values into a different project's view.
   const dirtyUntilRef = useRef<number>(0);
   const lastSyncedProjectRef = useRef<string | null>(null);
+  // userEditedRef latches true the first time the user touches a slider in
+  // the current project. The persist effect refuses to fire until this is
+  // true, so the stale useDebounce seed (which always starts at the cascade
+  // default before projects have loaded) cannot clobber a just-hydrated
+  // override with the default value.
+  const userEditedRef = useRef(false);
   useEffect(() => {
     const projectChanged = lastSyncedProjectRef.current !== selectedProjectId;
     if (!projectChanged && Date.now() < dirtyUntilRef.current) return;
     if (projectChanged) {
       dirtyUntilRef.current = 0;
       lastSyncedProjectRef.current = selectedProjectId;
+      userEditedRef.current = false;
     }
     setGravity(resolvedGravity.value);
     setCharge(resolvedCharge.value);
@@ -447,9 +454,13 @@ function GraphVisualization() {
 
   // Persist when debounced values diverge from the cascade-resolved value
   // (or when an override already exists). Sending undefined for a field
-  // drops the override and falls back to the system default.
+  // drops the override and falls back to the system default. Gated on
+  // userEditedRef so that a project hydration (which flips currentProject?.id
+  // from undefined to defined while debounced values still hold the useState
+  // seed) cannot trigger a write of the stale seed back to the backend.
   useEffect(() => {
     if (!currentProject) return;
+    if (!userEditedRef.current) return;
     const fields = [
       { resolved: resolvedGravity, debounced: debouncedGravity, stored: projectSettings?.graph_center_gravity, key: "graph_center_gravity" as const },
       { resolved: resolvedCharge, debounced: debouncedCharge, stored: projectSettings?.graph_charge_strength, key: "graph_charge_strength" as const },
@@ -485,6 +496,7 @@ function GraphVisualization() {
 
   const markDirty = useCallback(() => {
     dirtyUntilRef.current = Date.now() + DIRTY_GUARD_MS;
+    userEditedRef.current = true;
   }, []);
   const handleGravityChange = useCallback((v: number) => { markDirty(); setGravity(v); }, [markDirty]);
   const handleRepulsionChange = useCallback((v: number) => { markDirty(); setCharge(-v); }, [markDirty]);
@@ -492,6 +504,10 @@ function GraphVisualization() {
   const handleResetLayout = useCallback(() => {
     if (!currentProject) return;
     dirtyUntilRef.current = 0;
+    // Drop the edit latch so a still-in-flight debounce from the user's
+    // last drag cannot trail the direct reset mutation and resurrect an
+    // override at the default value before the refetch lands.
+    userEditedRef.current = false;
     const nextSettings: ProjectSettings = { ...(projectSettings ?? {}) };
     delete nextSettings.graph_center_gravity;
     delete nextSettings.graph_charge_strength;

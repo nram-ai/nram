@@ -11,7 +11,7 @@ export interface ProjectContextValue {
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
 
-const STORAGE_KEY = "nram_selected_project";
+export const STORAGE_KEY = "nram_selected_project";
 
 // ---------------------------------------------------------------------------
 // Provider
