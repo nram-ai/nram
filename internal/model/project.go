@@ -19,6 +19,7 @@ type Project struct {
 	Settings         json.RawMessage `json:"settings"`
 	MemoryCount      int             `json:"memory_count"`
 	EntityCount      int             `json:"entity_count"`
+	RelationshipCount int            `json:"relationship_count"`
 	Owner            *ProjectOwner   `json:"owner,omitempty"`
 	Organization     *ProjectOrg     `json:"organization,omitempty"`
 	CreatedAt        time.Time       `json:"created_at"`

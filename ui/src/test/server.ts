@@ -303,6 +303,7 @@ const handlers = [
           },
           memory_count: 42,
           entity_count: 10,
+          relationship_count: 18,
           owner: { id: "u1", email: "admin@test.com" },
           organization: { id: "org1", name: "Test Org" },
           created_at: "2026-01-01T00:00:00Z",

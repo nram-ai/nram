@@ -56,12 +56,13 @@ func (r *ProjectRepo) Create(ctx context.Context, project *model.Project) error 
 }
 
 // selectProjectColumns is the common SELECT clause for project queries including
-// namespace path, memory/entity counts, and owner/organization info.
+// namespace path, memory/entity/relationship counts, and owner/organization info.
 const selectProjectColumns = `SELECT p.id, p.namespace_id, p.owner_namespace_id, p.name, p.slug,
 	COALESCE(pn.path, '') AS path,
 	p.description, p.default_tags, p.settings,
 	COALESCE((SELECT COUNT(*) FROM memories m WHERE m.namespace_id = p.namespace_id AND m.deleted_at IS NULL), 0) AS memory_count,
 	COALESCE((SELECT COUNT(*) FROM entities e WHERE e.namespace_id = p.namespace_id), 0) AS entity_count,
+	COALESCE((SELECT COUNT(*) FROM relationships r WHERE r.namespace_id = p.namespace_id AND r.valid_until IS NULL), 0) AS relationship_count,
 	u.id AS owner_id, u.email AS owner_email,
 	o.id AS org_id, o.name AS org_name,
 	p.created_at, p.updated_at`
@@ -336,7 +337,7 @@ func (r *ProjectRepo) scanProject(row *sql.Row) (*model.Project, error) {
 		&project.Name, &project.Slug, &project.Path,
 		&project.Description,
 		&defaultTagsStr, &settingsStr,
-		&project.MemoryCount, &project.EntityCount,
+		&project.MemoryCount, &project.EntityCount, &project.RelationshipCount,
 		&ownerIDStr, &ownerEmail,
 		&orgIDStr, &orgName,
 		&createdAtStr, &updatedAtStr,
@@ -364,7 +365,7 @@ func (r *ProjectRepo) scanProjectFromRows(rows *sql.Rows) (*model.Project, error
 		&project.Name, &project.Slug, &project.Path,
 		&project.Description,
 		&defaultTagsStr, &settingsStr,
-		&project.MemoryCount, &project.EntityCount,
+		&project.MemoryCount, &project.EntityCount, &project.RelationshipCount,
 		&ownerIDStr, &ownerEmail,
 		&orgIDStr, &orgName,
 		&createdAtStr, &updatedAtStr,

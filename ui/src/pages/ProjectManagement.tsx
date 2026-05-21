@@ -90,6 +90,7 @@ function SkeletonRow() {
       <td className="px-4 py-3"><div className="h-4 w-48 rounded bg-muted" /></td>
       <td className="px-4 py-3"><div className="h-4 w-12 rounded bg-muted" /></td>
       <td className="px-4 py-3"><div className="h-4 w-12 rounded bg-muted" /></td>
+      <td className="px-4 py-3"><div className="h-4 w-12 rounded bg-muted" /></td>
       <td className="px-4 py-3"><div className="h-4 w-28 rounded bg-muted" /></td>
     </tr>
   );
@@ -99,7 +100,7 @@ function SkeletonRow() {
 // Sort helpers
 // ---------------------------------------------------------------------------
 
-type SortField = "name" | "path" | "memory_count" | "entity_count" | "created_at";
+type SortField = "name" | "path" | "memory_count" | "entity_count" | "relationship_count" | "created_at";
 type SortDir = "asc" | "desc";
 
 function compareProjects(a: Project, b: Project, field: SortField, dir: SortDir): number {
@@ -116,6 +117,9 @@ function compareProjects(a: Project, b: Project, field: SortField, dir: SortDir)
       break;
     case "entity_count":
       cmp = (a.entity_count ?? 0) - (b.entity_count ?? 0);
+      break;
+    case "relationship_count":
+      cmp = (a.relationship_count ?? 0) - (b.relationship_count ?? 0);
       break;
     case "created_at":
       cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
@@ -605,6 +609,10 @@ function ProjectDetailPanel({
                 <span className="font-semibold">{project.entity_count ?? 0}</span>
               </div>
               <div>
+                <span className="text-muted-foreground">Edges: </span>
+                <span className="font-semibold">{project.relationship_count ?? 0}</span>
+              </div>
+              <div>
                 <span className="text-muted-foreground">Created: </span>
                 <span>{formatDate(project.created_at)}</span>
               </div>
@@ -1079,6 +1087,13 @@ function ProjectManagement() {
                 onSort={handleSort}
               />
               <SortableHeader
+                label="Edges"
+                field="relationship_count"
+                currentField={sortField}
+                currentDir={sortDir}
+                onSort={handleSort}
+              />
+              <SortableHeader
                 label="Created"
                 field="created_at"
                 currentField={sortField}
@@ -1098,7 +1113,7 @@ function ProjectManagement() {
               </>
             ) : filteredProjects.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-12 text-center">
+                <td colSpan={6} className="px-4 py-12 text-center">
                   <p className="text-sm text-muted-foreground">
                     {debouncedSearch
                       ? "No projects match your search."
@@ -1129,6 +1144,9 @@ function ProjectManagement() {
                   </td>
                   <td className="px-4 py-3 text-sm font-semibold">
                     {p.entity_count ?? 0}
+                  </td>
+                  <td className="px-4 py-3 text-sm font-semibold">
+                    {p.relationship_count ?? 0}
                   </td>
                   <td className="px-4 py-3 text-xs text-muted-foreground">
                     {formatDate(p.created_at)}
@@ -1238,6 +1256,10 @@ function ProjectReadOnlyPanel({
               <div>
                 <span className="text-muted-foreground">Entities: </span>
                 <span className="font-semibold">{project.entity_count ?? 0}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Edges: </span>
+                <span className="font-semibold">{project.relationship_count ?? 0}</span>
               </div>
               <div>
                 <span className="text-muted-foreground">Created: </span>

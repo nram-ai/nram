@@ -560,6 +560,7 @@ export interface Project {
   description: string;
   memory_count?: number;
   entity_count?: number;
+  relationship_count?: number;
   default_tags: string[];
   settings: ProjectSettings;
   owner?: ProjectOwner;
