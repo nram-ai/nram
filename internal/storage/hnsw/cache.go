@@ -127,7 +127,7 @@ func (c *IndexCache) GetOrCreate(ctx context.Context, kind Kind, namespaceID uui
 	c.mu.Unlock()
 
 	// Slow path: load outside of lock.
-	graph, err := c.loadGraph(ctx, key)
+	graph, repair, err := c.loadGraph(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -147,9 +147,11 @@ func (c *IndexCache) GetOrCreate(ctx context.Context, kind Kind, namespaceID uui
 		c.evictLRU(ctx)
 	}
 
+	// Start dirty when the load had to repair a corrupted snapshot so the
+	// cleansed graph is re-persisted on the next flush.
 	entry := &indexEntry{
 		graph: graph,
-		dirty: false,
+		dirty: repair.AnyDropped(),
 		key:   key,
 	}
 	entry.element = c.lruOrder.PushFront(entry)
@@ -245,9 +247,12 @@ func (c *IndexCache) RemoveAll() {
 	}
 }
 
-// loadGraph loads a graph from snapshot or rebuilds from the kind's vector table.
+// loadGraph loads a graph from snapshot or rebuilds from the kind's vector
+// table. The returned RepairStats describes any invariant violations the
+// loader had to drop; callers should treat AnyDropped graphs as dirty so the
+// cleansed form is re-persisted.
 // Called without holding c.mu.
-func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, error) {
+func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, RepairStats, error) {
 	spec := specForKind(key.Kind)
 
 	// Try snapshot first.
@@ -258,9 +263,18 @@ func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, error
 	).Scan(&graphData)
 
 	if err == nil && len(graphData) > 0 {
-		g, importErr := Import(bytes.NewReader(graphData))
+		g, stats, importErr := ImportWithStats(bytes.NewReader(graphData))
 		if importErr == nil {
-			return g, nil
+			if stats.AnyDropped() {
+				log.Printf(
+					"hnsw: cache: repaired snapshot kind=%s ns=%s dim=%d nodes=%d edges=%d forward_dropped=%d self_loops=%d dupes=%d over_long=%d ep_fixed=%d",
+					key.Kind, key.NamespaceID, key.Dimension,
+					stats.NodesScanned, stats.EdgesScanned,
+					stats.ForwardDropped, stats.SelfLoopDropped, stats.DupDropped,
+					stats.OverLongFriends, stats.EpLevelFixed,
+				)
+			}
+			return g, stats, nil
 		}
 		// Snapshot corrupted; fall through to rebuild.
 		log.Printf("hnsw: cache: corrupted snapshot for kind=%s ns=%s dim=%d: %v", key.Kind, key.NamespaceID, key.Dimension, importErr)
@@ -272,7 +286,7 @@ func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, error
 		key.NamespaceID.String(), key.Dimension,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("hnsw: cache: query %s: %w", spec.vectorTable, err)
+		return nil, RepairStats{}, fmt.Errorf("hnsw: cache: query %s: %w", spec.vectorTable, err)
 	}
 	defer rows.Close()
 
@@ -281,25 +295,25 @@ func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, error
 		var rowIDStr string
 		var embBlob []byte
 		if err := rows.Scan(&rowIDStr, &embBlob); err != nil {
-			return nil, fmt.Errorf("hnsw: cache: scan %s row: %w", spec.vectorTable, err)
+			return nil, RepairStats{}, fmt.Errorf("hnsw: cache: scan %s row: %w", spec.vectorTable, err)
 		}
 		rowID, err := uuid.Parse(rowIDStr)
 		if err != nil {
-			return nil, fmt.Errorf("hnsw: cache: parse %s %q: %w", spec.idColumn, rowIDStr, err)
+			return nil, RepairStats{}, fmt.Errorf("hnsw: cache: parse %s %q: %w", spec.idColumn, rowIDStr, err)
 		}
 		vec, err := DecodeVector(embBlob)
 		if err != nil {
-			return nil, fmt.Errorf("hnsw: cache: decode vector for %s: %w", rowID, err)
+			return nil, RepairStats{}, fmt.Errorf("hnsw: cache: decode vector for %s: %w", rowID, err)
 		}
 		if err := g.Add(Node{ID: rowID, Vector: vec}); err != nil {
-			return nil, fmt.Errorf("hnsw: cache: add node %s: %w", rowID, err)
+			return nil, RepairStats{}, fmt.Errorf("hnsw: cache: add node %s: %w", rowID, err)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("hnsw: cache: iterate %s: %w", spec.vectorTable, err)
+		return nil, RepairStats{}, fmt.Errorf("hnsw: cache: iterate %s: %w", spec.vectorTable, err)
 	}
 
-	return g, nil
+	return g, RepairStats{}, nil
 }
 
 // saveSnapshot writes the serialized graph to the kind's snapshot table.

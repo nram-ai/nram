@@ -314,25 +314,34 @@ func (g *Graph) Delete(id uuid.UUID) bool {
 
 // removeLocked removes a node from the graph. Caller must hold write lock.
 func (g *Graph) removeLocked(gn *graphNode) {
-	// For each layer, repair neighbor connections.
+	// For each layer, repair neighbor connections. The bounds guards skip
+	// layers a corrupted-then-repaired graph may still have asymmetric edges
+	// on; the equivalent pattern is used in searchLayer and greedyClosest.
 	for lc := 0; lc <= gn.level; lc++ {
+		if lc >= len(gn.friends) {
+			continue
+		}
+
 		maxConn := g.m
 		if lc == 0 {
 			maxConn = g.mMax0
 		}
 
-		// Collect all neighbors of the deleted node at this layer.
 		neighbors := gn.friends[lc]
 
-		// Remove the deleted node from all neighbor friend lists.
 		for _, neighbor := range neighbors {
+			if lc >= len(neighbor.friends) {
+				continue
+			}
 			neighbor.friends[lc] = removeFromSlice(neighbor.friends[lc], gn)
 		}
 
 		// For each orphaned neighbor, try to reconnect through the deleted node's neighborhood.
 		for _, neighbor := range neighbors {
+			if lc >= len(neighbor.friends) {
+				continue
+			}
 			if len(neighbor.friends[lc]) < maxConn/2 {
-				// Find replacement connections from the deleted node's other neighbors.
 				for _, candidate := range neighbors {
 					if candidate == neighbor {
 						continue
@@ -363,6 +372,79 @@ func (g *Graph) removeLocked(gn *graphNode) {
 			}
 		}
 	}
+}
+
+// RepairStats summarizes invariant violations dropped by repairInvariants.
+// A zero-value RepairStats means the graph was already consistent.
+type RepairStats struct {
+	NodesScanned     int
+	EdgesScanned     int
+	ForwardDropped   int
+	SelfLoopDropped  int
+	DupDropped       int
+	OverLongFriends  int
+	EpLevelFixed     int
+}
+
+// AnyDropped reports whether the repair pass had to modify the graph.
+func (s RepairStats) AnyDropped() bool {
+	return s.ForwardDropped > 0 ||
+		s.SelfLoopDropped > 0 ||
+		s.DupDropped > 0 ||
+		s.OverLongFriends > 0 ||
+		s.EpLevelFixed > 0
+}
+
+// repairInvariants drops edges that violate the friends-layer invariant and
+// fixes derived state. Only drops; never synthesizes missing edges or grows
+// friends slices. The HNSW heuristic re-introduces useful connections through
+// subsequent Add operations.
+//
+// Caller must ensure exclusive access to g (write lock held, or graph not yet
+// shared between goroutines).
+func (g *Graph) repairInvariants() RepairStats {
+	var stats RepairStats
+
+	for _, gn := range g.nodes {
+		stats.NodesScanned++
+
+		if len(gn.friends) > gn.level+1 {
+			stats.OverLongFriends += len(gn.friends) - (gn.level + 1)
+			gn.friends = gn.friends[:gn.level+1]
+		}
+
+		for layer, friends := range gn.friends {
+			stats.EdgesScanned += len(friends)
+
+			// cleaned reuses the friends backing array (reslicing to length 0
+			// keeps the capacity); the loop variable holds the original header
+			// so iteration is unaffected by writes to cleaned.
+			cleaned := friends[:0]
+			for _, f := range friends {
+				if f == gn {
+					stats.SelfLoopDropped++
+					continue
+				}
+				if f.level < layer {
+					stats.ForwardDropped++
+					continue
+				}
+				if containsNode(cleaned, f) {
+					stats.DupDropped++
+					continue
+				}
+				cleaned = append(cleaned, f)
+			}
+			gn.friends[layer] = cleaned
+		}
+	}
+
+	if g.entryPoint != nil && g.maxLevel > g.entryPoint.level {
+		g.maxLevel = g.entryPoint.level
+		stats.EpLevelFixed++
+	}
+
+	return stats
 }
 
 // randomLevel generates a random level for a new node using the HNSW formula:
