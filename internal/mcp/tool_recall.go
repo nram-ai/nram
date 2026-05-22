@@ -91,8 +91,12 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 	if v, ok := args["similarity_threshold"].(float64); ok {
 		similarityThreshold = v
 	}
+	// Pass the raw string through. The service layer distinguishes "not
+	// provided" (empty) from "provided but blank" (whitespace-only) and
+	// rejects the latter as a caller error. Trimming here would collapse
+	// the whitespace-only case into the default-applied case and let MCP
+	// silently accept what REST rejects.
 	similarityThresholdMode, _ := args["similarity_threshold_mode"].(string)
-	similarityThresholdMode = strings.TrimSpace(similarityThresholdMode)
 
 	deps := s.Deps()
 	uid := ac.UserID

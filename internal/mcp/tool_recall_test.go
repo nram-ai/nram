@@ -556,6 +556,51 @@ func TestHandleMemoryRecall_NegativeThreshold_NotSilentlyZeroed(t *testing.T) {
 	assertToolError(t, result, "invalid similarity_threshold")
 }
 
+// TestHandleMemoryRecall_WhitespaceOnlyMode_ReachesService confirms the F2.1
+// transport-symmetry fix: a whitespace-only similarity_threshold_mode passed
+// through MCP must reach the service-layer rejection (with the padded raw
+// value visible in the error) rather than being trimmed to empty by the MCP
+// handler and silently defaulted to raw_cosine. A prior revision trimmed the
+// value at the MCP boundary, which collapsed the "provided but blank" case
+// into the "not provided" case and let MCP accept input REST rejected.
+func TestHandleMemoryRecall_WhitespaceOnlyMode_ReachesService(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	projectID := uuid.New()
+
+	user := &model.User{ID: userID, NamespaceID: nsID}
+	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "myproj"}
+
+	recallSvc := newMockRecallSvc()
+
+	deps := Dependencies{
+		Backend:       storage.BackendSQLite,
+		UserRepo:      &mockUserRepoStore{user: user},
+		ProjectRepo:   &mockProjectRepoStore{project: project},
+		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
+		Recall:        recallSvc,
+	}
+	srv := NewServer(deps)
+
+	callReq := mcp.CallToolRequest{}
+	callReq.Params.Name = "memory_recall"
+	callReq.Params.Arguments = map[string]interface{}{
+		"query":                     "anything",
+		"project":                   "myproj",
+		"similarity_threshold_mode": "   ",
+	}
+
+	ctx := buildAuthCtx(userID)
+	result, err := handleMemoryRecall(ctx, srv, callReq)
+	if err != nil {
+		t.Fatalf("unexpected handler error: %v", err)
+	}
+	// The %q-formatted raw value with its padding must appear in the error;
+	// that's the proof the MCP handler forwarded the value untrimmed and the
+	// service-layer rejection ran on the original padded string.
+	assertToolError(t, result, `invalid similarity_threshold_mode "   "`)
+}
+
 // --- handler tests ---
 
 func TestHandleMemoryRecall_NoHTTPRequest(t *testing.T) {
