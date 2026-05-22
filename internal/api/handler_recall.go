@@ -20,14 +20,16 @@ type UserReader interface {
 
 // recallRequestBody represents the JSON body for recall endpoints.
 type recallRequestBody struct {
-	Query                string   `json:"query"`
-	Limit                int      `json:"limit"`
-	Threshold            float64  `json:"threshold"`
-	Tags                 []string `json:"tags"`
-	IncludeGraph         bool     `json:"include_graph"`
-	GraphDepth           int      `json:"graph_depth"`
-	IncludeLowNovelty    bool     `json:"include_low_novelty"`
-	DiversifyByTagPrefix string   `json:"diversify_by_tag_prefix"`
+	Query                   string   `json:"query"`
+	Limit                   int      `json:"limit"`
+	Threshold               float64  `json:"threshold"`
+	SimilarityThreshold     float64  `json:"similarity_threshold"`
+	SimilarityThresholdMode string   `json:"similarity_threshold_mode"`
+	Tags                    []string `json:"tags"`
+	IncludeGraph            bool     `json:"include_graph"`
+	GraphDepth              int      `json:"graph_depth"`
+	IncludeLowNovelty       bool     `json:"include_low_novelty"`
+	DiversifyByTagPrefix    string   `json:"diversify_by_tag_prefix"`
 }
 
 // RecallServicer defines the interface for recall operations, allowing mocking in tests.
@@ -40,7 +42,10 @@ func mapRecallError(w http.ResponseWriter, err error) {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "query is required"),
-		strings.Contains(msg, "project_id is required"):
+		strings.Contains(msg, "project_id is required"),
+		strings.Contains(msg, "invalid similarity_threshold_mode"),
+		strings.Contains(msg, "invalid similarity_threshold "),
+		strings.Contains(msg, "requires recall.fusion.enabled"):
 		WriteError(w, ErrBadRequest(msg))
 	case strings.Contains(msg, "not found"):
 		WriteError(w, ErrNotFound(msg))
@@ -72,15 +77,17 @@ func NewRecallHandler(svc RecallServicer) http.HandlerFunc {
 		}
 
 		req := &service.RecallRequest{
-			ProjectID:            projectID,
-			Query:                body.Query,
-			Limit:                body.Limit,
-			Threshold:            body.Threshold,
-			Tags:                 body.Tags,
-			IncludeGraph:         body.IncludeGraph,
-			GraphDepth:           body.GraphDepth,
-			IncludeLowNovelty:    body.IncludeLowNovelty,
-			DiversifyByTagPrefix: body.DiversifyByTagPrefix,
+			ProjectID:               projectID,
+			Query:                   body.Query,
+			Limit:                   body.Limit,
+			Threshold:               body.Threshold,
+			SimilarityThreshold:     body.SimilarityThreshold,
+			SimilarityThresholdMode: body.SimilarityThresholdMode,
+			Tags:                    body.Tags,
+			IncludeGraph:            body.IncludeGraph,
+			GraphDepth:              body.GraphDepth,
+			IncludeLowNovelty:       body.IncludeLowNovelty,
+			DiversifyByTagPrefix:    body.DiversifyByTagPrefix,
 		}
 
 		if ac := auth.FromContext(r.Context()); ac != nil {
@@ -127,15 +134,17 @@ func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
 		}
 
 		req := &service.RecallRequest{
-			Query:                body.Query,
-			Limit:                body.Limit,
-			Threshold:            body.Threshold,
-			Tags:                 body.Tags,
-			IncludeGraph:         body.IncludeGraph,
-			GraphDepth:           body.GraphDepth,
-			IncludeLowNovelty:    body.IncludeLowNovelty,
-			DiversifyByTagPrefix: body.DiversifyByTagPrefix,
-			NamespaceID:          &user.NamespaceID,
+			Query:                   body.Query,
+			Limit:                   body.Limit,
+			Threshold:               body.Threshold,
+			SimilarityThreshold:     body.SimilarityThreshold,
+			SimilarityThresholdMode: body.SimilarityThresholdMode,
+			Tags:                    body.Tags,
+			IncludeGraph:            body.IncludeGraph,
+			GraphDepth:              body.GraphDepth,
+			IncludeLowNovelty:       body.IncludeLowNovelty,
+			DiversifyByTagPrefix:    body.DiversifyByTagPrefix,
+			NamespaceID:             &user.NamespaceID,
 		}
 
 		uid := ac.UserID
@@ -151,4 +160,3 @@ func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, resp)
 	}
 }
-

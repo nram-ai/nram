@@ -17,3 +17,8 @@ ui/coverage/
 # before the UI has been built.
 internal/ui/dist/*
 !internal/ui/dist/.gitkeep
+
+# Local-only recall contamination harness and fixtures: synthetic-trial
+# artifacts kept for our own re-runs but not part of the shipped repo.
+/internal/service/recall_contamination_test.go
+/internal/service/testdata/recall_contamination/

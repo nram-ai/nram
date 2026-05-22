@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -777,8 +778,8 @@ func main() {
 		}),
 		AdminDashboard: api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashboardStore}),
 		AdminActivity:  api.NewAdminActivityHandler(api.DashboardConfig{Store: dashboardStore}),
-		AdminOrgs:  api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore, Audit: auditStore}),
-		AdminUsers: api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore, Audit: auditStore}),
+		AdminOrgs:      api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore, Audit: auditStore}),
+		AdminUsers:     api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore, Audit: auditStore}),
 		AdminProjects:  api.NewAdminProjectsHandler(api.ProjectAdminConfig{Store: projectAdminStore}),
 		AdminProviders: api.NewAdminProvidersHandler(api.ProviderAdminConfig{Store: providerAdminStore}),
 		AdminSettings:  api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
@@ -947,7 +948,11 @@ func loadRankingWeights(ctx context.Context, s *service.SettingsService) service
 // loadFusionConfig pulls the recall.fusion.* settings into a FusionConfig.
 // Each lookup falls back to the registered default when the key is missing
 // or unparseable, so a misconfigured setting keeps fusion in a known state
-// rather than crashing startup.
+// rather than crashing startup. If the stored fusion weights differ from
+// the registered defaults, a one-time startup log surfaces the drift so
+// operators upgrading an existing deployment know their stored values
+// override the new defaults (settings are seeded insert-if-missing, never
+// overwritten on upgrade).
 func loadFusionConfig(ctx context.Context, settingsSvc *service.SettingsService) service.FusionConfig {
 	cfg := service.DefaultFusionConfig
 	cfg.Enabled = settingsSvc.ResolveBool(ctx, service.SettingRecallFusionEnabled, "global")
@@ -961,5 +966,39 @@ func loadFusionConfig(ctx context.Context, settingsSvc *service.SettingsService)
 		cfg.LexicalWeight = w
 	}
 	cfg.NormalizePerChannel = settingsSvc.ResolveBool(ctx, service.SettingRecallFusionNormalizePerChan, "global")
+
+	// Tolerance 1e-9 sits well below any plausible UI slider resolution
+	// (step:0.05 in the admin UI) and well above FP rounding noise from
+	// strconv.ParseFloat round-trips, so this only fires when an operator
+	// truly stored a different value.
+	weightsDifferFromDefault := !nearlyEqual(cfg.VectorWeight, service.DefaultFusionConfig.VectorWeight) ||
+		!nearlyEqual(cfg.LexicalWeight, service.DefaultFusionConfig.LexicalWeight)
+	if weightsDifferFromDefault {
+		slog.Info("recall.fusion weights differ from registered defaults",
+			"stored_vector_weight", cfg.VectorWeight,
+			"stored_lexical_weight", cfg.LexicalWeight,
+			"default_vector_weight", service.DefaultFusionConfig.VectorWeight,
+			"default_lexical_weight", service.DefaultFusionConfig.LexicalWeight,
+			"hint", "reset via /v1/admin/settings or the admin UI to adopt the new defaults",
+		)
+	}
+	// Degenerate-fusion sanity check: if the resolved weights sum to zero
+	// (or somehow go negative), every RRF score will collapse to zero,
+	// runHybridSearch will emit an empty simMap, and recalls will silently
+	// return zero candidates. Warn at boot so the operator sees the
+	// misconfig before traffic hits.
+	if cfg.VectorWeight+cfg.LexicalWeight <= 0 {
+		slog.Warn("recall.fusion weights sum to zero; fused recalls will return no candidates",
+			"stored_vector_weight", cfg.VectorWeight,
+			"stored_lexical_weight", cfg.LexicalWeight,
+			"hint", "set at least one of recall.fusion.vector_weight or recall.fusion.lexical_weight above zero",
+		)
+	}
 	return cfg
+}
+
+// nearlyEqual compares two floats with a tolerance well below any meaningful
+// admin-UI slider resolution (step:0.05) and well above FP rounding noise.
+func nearlyEqual(a, b float64) bool {
+	return math.Abs(a-b) < 1e-9
 }

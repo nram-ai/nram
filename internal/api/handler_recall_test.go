@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -419,6 +420,158 @@ func TestMeRecallHandler_NoAuth(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestRecallHandler_SimilarityThreshold_Forwarded confirms the new
+// similarity_threshold and similarity_threshold_mode fields round-trip from
+// REST body into RecallRequest. Invalid mode strings flow through to the
+// service, which returns 400 via mapRecallError.
+func TestRecallHandler_SimilarityThreshold_Forwarded(t *testing.T) {
+	projectID := uuid.New()
+
+	var captured *service.RecallRequest
+	svc := &mockRecallService{
+		recallFn: func(_ context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
+			captured = req
+			return &service.RecallResponse{Memories: []service.RecallResult{}, LatencyMs: 1}, nil
+		},
+	}
+	router := newRecallRouter(NewRecallHandler(svc))
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+
+	body := map[string]interface{}{
+		"query":                     "q",
+		"similarity_threshold":      0.75,
+		"similarity_threshold_mode": "fused_combined",
+	}
+
+	w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall", body, ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if captured == nil {
+		t.Fatal("service not called")
+	}
+	if captured.SimilarityThreshold != 0.75 {
+		t.Errorf("expected SimilarityThreshold=0.75, got %v", captured.SimilarityThreshold)
+	}
+	if captured.SimilarityThresholdMode != "fused_combined" {
+		t.Errorf("expected SimilarityThresholdMode=fused_combined, got %q", captured.SimilarityThresholdMode)
+	}
+}
+
+// TestRecallHandler_SimilarityThresholdMode_Invalid confirms the service's
+// "invalid similarity_threshold_mode" error is mapped to 400 BadRequest.
+func TestRecallHandler_SimilarityThresholdMode_Invalid(t *testing.T) {
+	projectID := uuid.New()
+	svc := &mockRecallService{
+		recallFn: func(_ context.Context, _ *service.RecallRequest) (*service.RecallResponse, error) {
+			return nil, fmt.Errorf("invalid similarity_threshold_mode %q (allowed: %q, %q)", "garbage", "raw_cosine", "fused_combined")
+		},
+	}
+	router := newRecallRouter(NewRecallHandler(svc))
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+
+	body := map[string]interface{}{
+		"query":                     "q",
+		"similarity_threshold":      0.5,
+		"similarity_threshold_mode": "garbage",
+	}
+
+	w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall", body, ac)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	var envelope errorEnvelope
+	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "bad_request" {
+		t.Errorf("expected bad_request envelope, got %+v", envelope.Error)
+	}
+}
+
+// TestMeRecallHandler_SimilarityThreshold_Forwarded mirrors the project-scoped
+// test for the /me handler; the new fields must plumb through both code paths.
+func TestMeRecallHandler_SimilarityThreshold_Forwarded(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	users := &mockUserReader{user: &model.User{ID: userID, NamespaceID: nsID}}
+
+	var captured *service.RecallRequest
+	svc := &mockRecallService{
+		recallFn: func(_ context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
+			captured = req
+			return &service.RecallResponse{Memories: []service.RecallResult{}, LatencyMs: 1}, nil
+		},
+	}
+	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
+	ac := &auth.AuthContext{UserID: userID, Role: "user"}
+
+	body := map[string]interface{}{
+		"query":                     "q",
+		"similarity_threshold":      0.6,
+		"similarity_threshold_mode": "raw_cosine",
+	}
+	w := doRecallRequest(router, "/v1/me/memories/recall", body, ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if captured == nil || captured.SimilarityThreshold != 0.6 || captured.SimilarityThresholdMode != "raw_cosine" {
+		t.Errorf("similarity threshold not forwarded from /me handler: %+v", captured)
+	}
+}
+
+// TestRecallHandler_FusedCombinedRequiresFusion_400 confirms the new
+// service-level error from F1.5 (fused_combined with non-zero threshold
+// while fusion is disabled) maps to 400 BadRequest, not 500.
+func TestRecallHandler_FusedCombinedRequiresFusion_400(t *testing.T) {
+	projectID := uuid.New()
+	svc := &mockRecallService{
+		recallFn: func(_ context.Context, _ *service.RecallRequest) (*service.RecallResponse, error) {
+			return nil, fmt.Errorf("similarity_threshold_mode=fused_combined requires recall.fusion.enabled=true")
+		},
+	}
+	router := newRecallRouter(NewRecallHandler(svc))
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+
+	body := map[string]interface{}{
+		"query":                     "q",
+		"similarity_threshold":      0.5,
+		"similarity_threshold_mode": "fused_combined",
+	}
+	w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall", body, ac)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestRecallHandler_SimilarityNullSerialization confirms F1.7: a nil
+// Similarity pointer must hit the wire as "similarity":null, not be
+// omitted. OpenAPI declares the field nullable: true, so consumers reading
+// `result.similarity is None` must work.
+func TestRecallHandler_SimilarityNullSerialization(t *testing.T) {
+	projectID := uuid.New()
+	svc := &mockRecallService{
+		recallFn: func(_ context.Context, _ *service.RecallRequest) (*service.RecallResponse, error) {
+			return &service.RecallResponse{
+				Memories: []service.RecallResult{
+					{ID: uuid.New(), Score: 0.5, Similarity: nil},
+				},
+				LatencyMs: 1,
+			}, nil
+		},
+	}
+	router := newRecallRouter(NewRecallHandler(svc))
+	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
+
+	w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall", map[string]interface{}{"query": "q"}, ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"similarity":null`) {
+		t.Errorf("expected response to contain \"similarity\":null; got %s", w.Body.String())
 	}
 }
 

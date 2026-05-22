@@ -56,9 +56,9 @@ const (
 	// weights govern each channel's RRF contribution; rrf_k is the
 	// canonical Cormack-Clarke-Buettcher constant (60 dampens deep-tail
 	// noise without flattening the head of either ranked list).
-	SettingRecallFusionEnabled = "recall.fusion.enabled"
-	SettingRecallFusionK       = "recall.fusion.rrf_k"
-	SettingRecallFusionVecW    = "recall.fusion.vector_weight"
+	SettingRecallFusionEnabled          = "recall.fusion.enabled"
+	SettingRecallFusionK                = "recall.fusion.rrf_k"
+	SettingRecallFusionVecW             = "recall.fusion.vector_weight"
 	SettingRecallFusionLexW             = "recall.fusion.lexical_weight"
 	SettingRecallFusionNormalizePerChan = "recall.fusion.normalize_per_channel"
 
@@ -257,21 +257,21 @@ const (
 	// Enrichment worker pool tuning. The pool claims jobs in batches and
 	// fans LLM calls out per-job before issuing one shared embed call;
 	// the knobs below cap each layer.
-	SettingEnrichmentWorkerBatchClaimSize             = "enrichment.worker.batch_claim_size"
-	SettingEnrichmentWorkerPreEmbedConcurrency        = "enrichment.worker.pre_embed_concurrency"
-	SettingEnrichmentWorkerEmbedTimeoutSeconds        = "enrichment.worker.embed_timeout_seconds"
-	SettingEnrichmentWorkerEmbedInputCap              = "enrichment.worker.embed_input_cap"
-	SettingEnrichmentWorkerBreakerEscalateSeconds     = "enrichment.worker.breaker_error_escalate_seconds"
-	SettingEnrichmentWorkerMaxBackoffSeconds          = "enrichment.worker.max_backoff_seconds"
-	SettingEnrichmentWorkerCountSQLite                = "enrichment.worker.count_sqlite"
-	SettingEnrichmentWorkerCountPostgres              = "enrichment.worker.count_postgres"
-	SettingEnrichmentWorkerPollIntervalSeconds        = "enrichment.worker.poll_interval_seconds"
+	SettingEnrichmentWorkerBatchClaimSize         = "enrichment.worker.batch_claim_size"
+	SettingEnrichmentWorkerPreEmbedConcurrency    = "enrichment.worker.pre_embed_concurrency"
+	SettingEnrichmentWorkerEmbedTimeoutSeconds    = "enrichment.worker.embed_timeout_seconds"
+	SettingEnrichmentWorkerEmbedInputCap          = "enrichment.worker.embed_input_cap"
+	SettingEnrichmentWorkerBreakerEscalateSeconds = "enrichment.worker.breaker_error_escalate_seconds"
+	SettingEnrichmentWorkerMaxBackoffSeconds      = "enrichment.worker.max_backoff_seconds"
+	SettingEnrichmentWorkerCountSQLite            = "enrichment.worker.count_sqlite"
+	SettingEnrichmentWorkerCountPostgres          = "enrichment.worker.count_postgres"
+	SettingEnrichmentWorkerPollIntervalSeconds    = "enrichment.worker.poll_interval_seconds"
 	// SettingEnrichmentPoolTickIntervalSeconds controls how often the worker
 	// pool publishes enrichment.pool.tick events for the admin UI's live
 	// banner. Cheap (one tick per pool, not per job), so a fast cadence is
 	// fine. Default 5s.
-	SettingEnrichmentPoolTickIntervalSeconds = "enrichment.pool_tick_interval_seconds"
-	SettingEnrichmentIngestionRationaleMaxLen         = "enrichment.ingestion.rationale_max_len"
+	SettingEnrichmentPoolTickIntervalSeconds  = "enrichment.pool_tick_interval_seconds"
+	SettingEnrichmentIngestionRationaleMaxLen = "enrichment.ingestion.rationale_max_len"
 
 	// Stuck-job detection and recovery for the enrichment worker pool.
 	// Mirror the dreaming.stuck_* / dreaming.heartbeat_interval_seconds
@@ -351,9 +351,9 @@ const (
 	// buffer for SSE Last-Event-ID reconnection. Both read once at startup
 	// — wrong values can stall subscribers or balloon memory, so both are
 	// restart-required and flagged as advanced in their descriptions.
-	SettingEventsSubscriberBufferSize  = "events.subscriber_buffer_size"
-	SettingEventsReplayCapacity        = "events.replay_capacity"
-	SettingEventsSSEKeepaliveSeconds   = "events.sse_keepalive_seconds"
+	SettingEventsSubscriberBufferSize = "events.subscriber_buffer_size"
+	SettingEventsReplayCapacity       = "events.replay_capacity"
+	SettingEventsSSEKeepaliveSeconds  = "events.sse_keepalive_seconds"
 
 	// Admin graph visualization minimum edge weight. Hot-reloadable.
 	SettingGraphDefaultMinWeight = "graph.default_min_weight"
@@ -390,10 +390,10 @@ const (
 	// graph_depth. overfetch_multiplier widens the candidate pool the
 	// score-and-rerank pass selects from (limit * mul); overfetch_min
 	// floors the result so small limits still get a workable pool.
-	SettingRankingRecencyDecayPerHour = "ranking.recency.decay_per_hour"
-	SettingRankingGraphHopMultiplier  = "ranking.graph.hop_multiplier"
-	SettingRecallDefaultLimit         = "recall.default_limit"
-	SettingRecallGraphDefaultDepth    = "recall.graph.default_depth"
+	SettingRankingRecencyDecayPerHour     = "ranking.recency.decay_per_hour"
+	SettingRankingGraphHopMultiplier      = "ranking.graph.hop_multiplier"
+	SettingRecallDefaultLimit             = "recall.default_limit"
+	SettingRecallGraphDefaultDepth        = "recall.graph.default_depth"
 	SettingRecallOverfetchMultiplier      = "recall.overfetch_multiplier"
 	SettingRecallOverfetchMin             = "recall.overfetch_min"
 	SettingRecallNamespaceQuotaProjectMin = "recall.namespace_quota.project_min"
@@ -443,7 +443,7 @@ const (
 	// cluster_overlap_threshold is the word-overlap fraction at which the
 	// heuristic clusterer treats two memories as belonging to the same
 	// cluster (drives which memories get bundled into a synthesis prompt).
-	SettingDreamConsolidationAlignmentSampleSize    = "dreaming.consolidation.alignment_sample_size"
+	SettingDreamConsolidationAlignmentSampleSize     = "dreaming.consolidation.alignment_sample_size"
 	SettingDreamConsolidationClusterOverlapThreshold = "dreaming.consolidation.cluster_overlap_threshold"
 
 	// LLM call temperatures. All four point at the OpenAI-compatible
@@ -451,11 +451,11 @@ const (
 	// 0.1 is conservative (more deterministic) which is appropriate for
 	// JSON-only outputs; alignment uses 0.3 to allow some judgment latitude
 	// when scoring evidence overlap.
-	SettingDreamSynthesisTemperature             = "dreaming.synthesis.temperature"
-	SettingDreamAlignmentTemperature             = "dreaming.alignment.temperature"
-	SettingDreamNoveltyJudgeTemperature          = "dreaming.novelty.judge.temperature"
-	SettingDreamContradictionTemperature         = "dreaming.contradiction.temperature"
-	SettingEnrichmentConflictTemperature         = "enrichment.conflict.temperature"
+	SettingDreamSynthesisTemperature              = "dreaming.synthesis.temperature"
+	SettingDreamAlignmentTemperature              = "dreaming.alignment.temperature"
+	SettingDreamNoveltyJudgeTemperature           = "dreaming.novelty.judge.temperature"
+	SettingDreamContradictionTemperature          = "dreaming.contradiction.temperature"
+	SettingEnrichmentConflictTemperature          = "enrichment.conflict.temperature"
 	SettingEnrichmentIngestionDecisionTemperature = "enrichment.ingestion_decision.temperature"
 
 	// Heartbeat tick timeout for the dream runner. Caps how long a single
@@ -468,8 +468,8 @@ const (
 	// a flood doesn't lock the writer. Distinct keys for dreaming and
 	// enrichment so the two can be tuned independently — the workloads have
 	// different stuck-job cardinalities under load.
-	SettingDreamStuckScanLimit       = "dreaming.stuck_scan_limit"
-	SettingEnrichmentStuckScanLimit  = "enrichment.stuck_scan_limit"
+	SettingDreamStuckScanLimit      = "dreaming.stuck_scan_limit"
+	SettingEnrichmentStuckScanLimit = "enrichment.stuck_scan_limit"
 
 	// Default importance / confidence applied to newly-stored memories
 	// when the caller does not specify a value. Surfaces the four-way
@@ -493,8 +493,8 @@ const (
 // settingDefaults provides built-in default values for well-known settings.
 // These are used when a setting is not found at any scope in the database.
 var settingDefaults = map[string]string{
-	SettingEnrichmentEnabled:          "true",
-	SettingDedupThreshold:             "0.92",
+	SettingEnrichmentEnabled:              "true",
+	SettingDedupThreshold:                 "0.92",
 	SettingRankWeightSim:                  "0.50",
 	SettingRankWeightRec:                  "0.15",
 	SettingRankWeightImp:                  "0.10",
@@ -504,20 +504,20 @@ var settingDefaults = map[string]string{
 	SettingRankWeightOrigin:               "0.00",
 	SettingRecallFusionEnabled:            "false",
 	SettingRecallFusionK:                  "60",
-	SettingRecallFusionVecW:               "0.70",
-	SettingRecallFusionLexW:               "0.30",
+	SettingRecallFusionVecW:               "0.60",
+	SettingRecallFusionLexW:               "0.40",
 	SettingRecallFusionNormalizePerChan:   "false",
 	SettingRecallNamespaceQuotaProjectMin: "0",
-	SettingTokenRetention:             "365",
-	SettingTokenCostRates:             "[]",
-	SettingDreamingEnabled:            "false",
-	SettingDreamMaxTokensPerCycle:     "1024000",
-	SettingDreamMaxTokensPerCall:      "2048",
-	SettingDreamCooldown:              "300",
-	SettingDreamMinInterval:           "3600",
-	SettingDreamInitialConfidence:     "0.3",
-	SettingDreamSupersessionThreshold: "0.85",
-	SettingDreamLogRetention:          "30",
+	SettingTokenRetention:                 "365",
+	SettingTokenCostRates:                 "[]",
+	SettingDreamingEnabled:                "false",
+	SettingDreamMaxTokensPerCycle:         "1024000",
+	SettingDreamMaxTokensPerCall:          "2048",
+	SettingDreamCooldown:                  "300",
+	SettingDreamMinInterval:               "3600",
+	SettingDreamInitialConfidence:         "0.3",
+	SettingDreamSupersessionThreshold:     "0.85",
+	SettingDreamLogRetention:              "30",
 	SettingDreamContradictionPrompt: `You are a contradiction detector. You do NOT converse. You output JSON only.
 
 Determine if the two statements below contradict each other.
@@ -821,14 +821,14 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingDreamWeightDeadSourceMultiplier: "0.5",
 	SettingDreamWeightCeiling:              "2",
 
-	SettingDreamConsolidationAlignmentSampleSize:    "5",
+	SettingDreamConsolidationAlignmentSampleSize:     "5",
 	SettingDreamConsolidationClusterOverlapThreshold: "0.3",
 
-	SettingDreamSynthesisTemperature:             "0.3",
-	SettingDreamAlignmentTemperature:             "0.1",
-	SettingDreamNoveltyJudgeTemperature:          "0.1",
-	SettingDreamContradictionTemperature:         "0.1",
-	SettingEnrichmentConflictTemperature:         "0.1",
+	SettingDreamSynthesisTemperature:              "0.3",
+	SettingDreamAlignmentTemperature:              "0.1",
+	SettingDreamNoveltyJudgeTemperature:           "0.1",
+	SettingDreamContradictionTemperature:          "0.1",
+	SettingEnrichmentConflictTemperature:          "0.1",
 	SettingEnrichmentIngestionDecisionTemperature: "0",
 
 	SettingDreamHeartbeatTickTimeoutSeconds: "10",
@@ -1210,8 +1210,8 @@ type noopSettingsRepo struct{}
 func (noopSettingsRepo) Get(context.Context, string, string) (*model.Setting, error) {
 	return nil, sql.ErrNoRows
 }
-func (noopSettingsRepo) Set(context.Context, *model.Setting) error             { return nil }
-func (noopSettingsRepo) Delete(context.Context, string, string) error          { return nil }
+func (noopSettingsRepo) Set(context.Context, *model.Setting) error    { return nil }
+func (noopSettingsRepo) Delete(context.Context, string, string) error { return nil }
 func (noopSettingsRepo) ListByScope(context.Context, string) ([]model.Setting, error) {
 	return nil, nil
 }

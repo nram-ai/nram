@@ -3179,6 +3179,45 @@ components:
         threshold:
           type: number
           format: double
+          description: >-
+            Composite ranking-score floor (not raw vector similarity). Filters
+            on the weighted sum of similarity, recency, importance, frequency,
+            graph relevance, confidence, and origin (frequency and origin are
+            zero-weighted by default; operators can re-weight them via the
+            ranking_weights settings). Use `similarity_threshold` to filter on
+            vector evidence directly.
+        similarity_threshold:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: >-
+            Vector-evidence cutoff (must be in [0, 1]; 0 disables,
+            out-of-range returns 400). Filters candidates by raw cosine
+            from the vector store (raw_cosine mode) or by post-RRF
+            max-normalized similarity (fused_combined mode). List-fallback
+            and shared-namespace candidates ALWAYS pass through
+            unfiltered regardless of mode.
+        similarity_threshold_mode:
+          type: string
+          enum: [raw_cosine, fused_combined]
+          default: raw_cosine
+          description: >-
+            Which similarity value `similarity_threshold` compares
+            against. `raw_cosine` (default) compares the raw cosine
+            returned by the vector store before RRF on an absolute
+            scale; only vector-channel rows are filtered, so
+            lexical-only hits and non-vector candidates pass through.
+            `fused_combined` compares the post-RRF max-normalized
+            similarity and filters every simMap entry (including
+            lexical-only entries whose normalized score reflects
+            combined evidence); list-fallback and shared-namespace
+            candidates still bypass. fused_combined is rank-relative:
+            post-RRF scores are normalized so the top result for a
+            given query is always 1.0, so the threshold's selectivity
+            floats with query difficulty. fused_combined requires
+            recall.fusion.enabled=true; combining it with a non-zero
+            threshold while fusion is disabled returns 400.
         tags:
           type: array
           items:

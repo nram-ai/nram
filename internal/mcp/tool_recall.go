@@ -26,6 +26,8 @@ func RegisterRecallTool(s *Server) {
 		mcp.WithBoolean("include_graph", mcp.Description("Include graph entities in results (default true)")),
 		mcp.WithNumber("graph_depth", mcp.Description("Graph traversal depth (default 2)")),
 		mcp.WithBoolean("include_low_novelty", mcp.Description("When true, surface dream-source memories the novelty audit demoted (low_novelty=true) and include the low_novelty / low_novelty_reason markers in their metadata so the caller sees why they were demoted. Default false hides them.")),
+		mcp.WithNumber("similarity_threshold", mcp.Description("Vector-evidence cutoff (must be in [0, 1]; 0 disables, out-of-range returns 400). Filters candidates by raw cosine from the vector store (raw_cosine mode) or by post-RRF max-normalized similarity (fused_combined mode). List-fallback and shared-namespace candidates ALWAYS pass through unfiltered regardless of mode. Distinct from `threshold`, which filters the composite ranking score (weighted sum of similarity, recency, importance, frequency, graph relevance, confidence, origin). Pass `similarity_threshold` for a vector-evidence cutoff; pass `threshold` for a composite floor; pass both to combine.")),
+		mcp.WithString("similarity_threshold_mode", mcp.Description("Which similarity value `similarity_threshold` compares against. `raw_cosine` (default) compares the raw cosine returned by the vector store before RRF on an absolute scale; only vector-channel rows are filtered, so lexical-only hits and non-vector candidates pass through. `fused_combined` compares the post-RRF max-normalized similarity and filters every simMap entry (including lexical-only entries whose normalized score reflects combined evidence); list-fallback and shared-namespace candidates still bypass. fused_combined is rank-relative: post-RRF scores are normalized so the top result for a given query is always 1.0, so the threshold's selectivity floats with query difficulty. fused_combined requires recall.fusion.enabled=true; combining it with a non-zero threshold while fusion is disabled returns 400.")),
 	)
 
 	tool := mcp.NewTool("memory_recall", opts...)
@@ -82,19 +84,31 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		includeLowNovelty = v
 	}
 
+	// Pass through whatever JSON gave us; the service layer applies the
+	// [0, 1] range check (and the NaN guard). Silently zeroing negatives
+	// here would make MCP and REST disagree for the same input.
+	var similarityThreshold float64
+	if v, ok := args["similarity_threshold"].(float64); ok {
+		similarityThreshold = v
+	}
+	similarityThresholdMode, _ := args["similarity_threshold_mode"].(string)
+	similarityThresholdMode = strings.TrimSpace(similarityThresholdMode)
+
 	deps := s.Deps()
 	uid := ac.UserID
 
 	req := &service.RecallRequest{
-		Query:                query,
-		Limit:                limit,
-		Tags:                 tags,
-		IncludeGraph:         includeGraph,
-		GraphDepth:           graphDepth,
-		IncludeLowNovelty:    includeLowNovelty,
-		DiversifyByTagPrefix: diversifyPrefix,
-		UserID:               &uid,
-		APIKeyID:             ac.APIKeyID,
+		Query:                   query,
+		Limit:                   limit,
+		SimilarityThreshold:     similarityThreshold,
+		SimilarityThresholdMode: similarityThresholdMode,
+		Tags:                    tags,
+		IncludeGraph:            includeGraph,
+		GraphDepth:              graphDepth,
+		IncludeLowNovelty:       includeLowNovelty,
+		DiversifyByTagPrefix:    diversifyPrefix,
+		UserID:                  &uid,
+		APIKeyID:                ac.APIKeyID,
 	}
 
 	// Resolve the user's global project namespace for inclusion in all recalls.

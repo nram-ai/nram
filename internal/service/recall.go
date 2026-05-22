@@ -60,13 +60,45 @@ type MemoryShareReader interface {
 
 // RecallRequest contains all parameters needed to recall memories.
 type RecallRequest struct {
-	ProjectID   uuid.UUID  `json:"project_id"`
-	Query       string     `json:"query"`
-	Limit       int        `json:"limit"`
-	Threshold   float64    `json:"threshold"`
-	Tags        []string   `json:"tags"`
-	IncludeGraph bool      `json:"include_graph"`
-	GraphDepth  int        `json:"graph_depth"`
+	ProjectID uuid.UUID `json:"project_id"`
+	Query     string    `json:"query"`
+	Limit     int       `json:"limit"`
+	// Threshold filters on the composite ranking score (the weighted sum
+	// of similarity, recency, importance, frequency, graph relevance,
+	// confidence, and origin; frequency and origin are zero-weighted by
+	// default but operator-settable). NOT a raw vector similarity floor.
+	// A composite score >= Threshold passes; rows below are dropped
+	// post-ranking. Use SimilarityThreshold to filter on vector evidence
+	// directly.
+	Threshold float64 `json:"threshold"`
+	// SimilarityThreshold is the vector-evidence cutoff (must be a finite
+	// value in [0, 1]; 0 disables the filter; NaN or out-of-range returns
+	// 400). SimilarityThresholdMode selects which similarity value is
+	// compared:
+	//
+	//   "raw_cosine" (default): the raw cosine returned by the vector
+	//   store before RRF. Absolute scale (compared against the embedder's
+	//   cosine output directly). Only vector-channel rows are filtered;
+	//   lexical-only hits, list-fallback, and shared-namespace candidates
+	//   bypass.
+	//
+	//   "fused_combined": the post-RRF max-normalized similarity. Filters
+	//   every simMap entry, including lexical-only entries that surfaced
+	//   via RRF on the lexical channel (their normalized score reflects
+	//   combined evidence). List-fallback and shared-namespace candidates
+	//   still bypass because they never enter simMap. Rank-relative: the
+	//   top result for a given query always normalizes to 1.0, so the
+	//   threshold's selectivity floats with query difficulty. Requires
+	//   recall.fusion.enabled=true; combining fused_combined with a
+	//   non-zero threshold while fusion is disabled returns 400.
+	//
+	// The mode is validated whenever set, regardless of whether
+	// SimilarityThreshold is zero.
+	SimilarityThreshold     float64  `json:"similarity_threshold,omitempty"`
+	SimilarityThresholdMode string   `json:"similarity_threshold_mode,omitempty"`
+	Tags                    []string `json:"tags"`
+	IncludeGraph            bool     `json:"include_graph"`
+	GraphDepth              int      `json:"graph_depth"`
 	// IncludeLowNovelty, when true, bypasses the dream-source low_novelty
 	// filter so demoted dream memories surface alongside the rest. Default
 	// false preserves the standard recall behavior.
@@ -101,7 +133,7 @@ type RecallResult struct {
 	Tags        []string        `json:"tags"`
 	Source      *string         `json:"source,omitempty"`
 	Score       float64         `json:"score"`
-	Similarity  *float64        `json:"similarity,omitempty"`
+	Similarity  *float64        `json:"similarity"`
 	Confidence  float64         `json:"confidence"`
 	SharedFrom  *string         `json:"shared_from"`
 	AccessCount int             `json:"access_count"`
@@ -117,7 +149,7 @@ type RecallResult struct {
 
 // RecallGraph holds the graph entities and relationships found during graph traversal.
 type RecallGraph struct {
-	Entities      []RecallEntity      `json:"entities"`
+	Entities      []RecallEntity       `json:"entities"`
 	Relationships []RecallRelationship `json:"relationships"`
 }
 
@@ -149,6 +181,20 @@ const (
 	CoverageCauseTagFilter = "tag_filter"
 	CoverageCauseThreshold = "threshold"
 	CoverageCauseLimit     = "limit"
+)
+
+// SimilarityThresholdMode* selects which similarity value the vector
+// filter compares against. raw_cosine drops rows whose vector-store
+// cosine is below the threshold before RRF, so lexical-only hits and
+// non-vector candidates are unaffected. fused_combined drops rows
+// whose post-RRF max-normalized similarity is below the threshold,
+// which intentionally includes lexical-only entries that surfaced via
+// RRF on the lexical channel (their normalized fused score reflects
+// combined evidence). List-fallback and shared-namespace candidates
+// still bypass under both modes because they never enter simMap.
+const (
+	SimilarityThresholdModeRawCosine     = "raw_cosine"
+	SimilarityThresholdModeFusedCombined = "fused_combined"
 )
 
 // RecallEntity represents an entity found during graph traversal.
@@ -210,11 +256,18 @@ type FusionConfig struct {
 
 // DefaultFusionConfig ships with the feature dark — operators flip
 // recall.fusion.enabled in admin settings after migration + smoke test.
+// VectorWeight/LexicalWeight default to 0.60/0.40 per a synthetic controlled
+// experiment (internal/service/testdata/recall_contamination/results.md,
+// 2026-05-22). 60/40 widened the canonical-vs-contaminant margin over the
+// prior 70/30 default without sacrificing canonical@1; 50/50 dropped
+// canonical@1 on lex-vulnerable queries (keyword-stuffed noise, typo
+// queries). The experiment uses simulated cosines/ranks, not a live-corpus
+// A/B; operators should re-validate before adopting in production.
 var DefaultFusionConfig = FusionConfig{
 	Enabled:             false,
 	RRFConstant:         60,
-	VectorWeight:        0.70,
-	LexicalWeight:       0.30,
+	VectorWeight:        0.60,
+	LexicalWeight:       0.40,
 	NormalizePerChannel: false,
 }
 
@@ -307,6 +360,15 @@ type scoredMemory struct {
 	namespacePath  string
 	sharedFromNs   *string // non-nil if surfaced via cross-namespace sharing (source namespace slug)
 	isPrimary      bool
+	// viaVector is true if this candidate's ID actually surfaced via the
+	// vector channel (non-fusion vector search, or hybrid search where the
+	// vector backend returned this ID). False for list-fallback and
+	// shared-namespace candidates that never entered simMap, AND false for
+	// lexical-only RRF hits that entered simMap via the lexical channel.
+	// Drives the RecallResult.Similarity pointer-vs-nil distinction so
+	// consumers can tell "vector said X" from "no vector evidence at all"
+	// (the latter serializes as null).
+	viaVector bool
 }
 
 // projectAttribution carries the owning project's ID and slug for a given
@@ -325,6 +387,42 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// Validate required fields.
 	if strings.TrimSpace(req.Query) == "" {
 		return nil, fmt.Errorf("query is required")
+	}
+
+	// Resolve similarity-threshold mode. An entirely missing field
+	// (rawMode == "") defaults to raw_cosine. A field provided but whose
+	// trimmed value is empty (e.g. "   ") is treated as a caller error,
+	// not as "no value"; the caller asked for a mode by sending a visible
+	// non-empty field. Trimming after the empty-vs-not check is what
+	// surfaces this distinction. The mode is validated whenever set,
+	// regardless of whether SimilarityThreshold is zero; an unknown mode
+	// is a caller bug worth surfacing.
+	rawMode := req.SimilarityThresholdMode
+	simMode := strings.TrimSpace(rawMode)
+	if rawMode == "" {
+		simMode = SimilarityThresholdModeRawCosine
+	}
+	switch simMode {
+	case SimilarityThresholdModeRawCosine, SimilarityThresholdModeFusedCombined:
+	default:
+		return nil, fmt.Errorf("invalid similarity_threshold_mode %q (allowed: %q, %q)",
+			rawMode,
+			SimilarityThresholdModeRawCosine,
+			SimilarityThresholdModeFusedCombined,
+		)
+	}
+	simThreshold := req.SimilarityThreshold
+	if math.IsNaN(simThreshold) || simThreshold < 0 || simThreshold > 1 {
+		return nil, fmt.Errorf("invalid similarity_threshold %v (must be a finite value in [0, 1])", simThreshold)
+	}
+	// fused_combined compares against post-RRF max-normalized similarity,
+	// which only exists when fusion is on. Without fusion the simMap holds
+	// raw cosines, and applying the fusedFloor to those values would
+	// silently collapse fused_combined semantics into raw_cosine. Surface
+	// the misalignment to the caller as a 400 instead of a quiet behavior
+	// drift.
+	if simMode == SimilarityThresholdModeFusedCombined && simThreshold > 0 && !s.fusion.Enabled {
+		return nil, fmt.Errorf("similarity_threshold_mode=fused_combined requires recall.fusion.enabled=true")
 	}
 
 	// Apply defaults from the registry (with in-code fallback when settings
@@ -447,21 +545,40 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					searchNamespaces = append(searchNamespaces, *req.GlobalNamespaceID)
 				}
 
+				// rawCosineFloor is the raw-cosine cutoff applied inside the
+				// vector channel before RRF / simMap insertion. Active only
+				// in raw_cosine mode; fused mode applies its filter later
+				// against the post-RRF simMap value.
+				rawCosineFloor := 0.0
+				if simMode == SimilarityThresholdModeRawCosine && simThreshold > 0 {
+					rawCosineFloor = simThreshold
+				}
+
 				simMap := make(map[uuid.UUID]float64)
+				// vecIDs tracks which simMap entries actually surfaced via
+				// the vector channel (as opposed to lexical-only RRF hits).
+				// In the non-fusion branch every entry came from
+				// vectorSearch.Search, so vecIDs == simMap keys. In the
+				// fusion branch runHybridSearch returns the channel-specific
+				// set. viaVector on each candidate is gated on membership so
+				// lexical-only fusion hits do not falsely advertise vector
+				// evidence.
+				vecIDs := make(map[uuid.UUID]struct{})
 				if s.fusion.Enabled && s.lexical != nil {
 					// Hybrid path: fan out vector + lexical per namespace,
 					// then fuse via RRF. The fused score (normalized to
 					// [0, 1] by max) replaces raw cosine similarity in the
-					// downstream computeScore — RankingWeights.Similarity
+					// downstream computeScore. RankingWeights.Similarity
 					// semantics are unchanged from the caller's view.
-					simMap = s.runHybridSearch(ctx, runHybridArgs{
-						Query:        req.Query,
-						Embedding:    resp.Embeddings[0],
-						Dim:          actualDim,
-						Namespaces:   searchNamespaces,
-						TopK:         topK,
-						PrimaryNS:    namespaceID,
-						PrimaryProj:  projectID,
+					simMap, vecIDs = s.runHybridSearch(ctx, runHybridArgs{
+						Query:          req.Query,
+						Embedding:      resp.Embeddings[0],
+						Dim:            actualDim,
+						Namespaces:     searchNamespaces,
+						TopK:           topK,
+						PrimaryNS:      namespaceID,
+						PrimaryProj:    projectID,
+						RawCosineFloor: rawCosineFloor,
 					})
 				} else {
 					for _, nsID := range searchNamespaces {
@@ -470,17 +587,47 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							continue
 						}
 						for _, r := range results {
+							// raw_cosine filter site: drop low-cosine rows
+							// before they enter simMap. No lexical channel
+							// in this branch, so a drop here is final. The
+							// !(>=) form (rather than <) drops NaN scores,
+							// which would otherwise propagate through
+							// clampScore and break sort.Slice ordering.
+							if rawCosineFloor > 0 && !(r.Score >= rawCosineFloor) {
+								continue
+							}
 							// Keep the best score if a memory appears in multiple searches.
 							if existing, ok := simMap[r.ID]; !ok || r.Score > existing {
 								simMap[r.ID] = r.Score
 							}
+							vecIDs[r.ID] = struct{}{}
 						}
 					}
 				}
 
-				// Fetch full memories.
+				// fusedFloor is the post-RRF cutoff applied to every simMap
+				// entry, including lexical-only entries that surfaced via
+				// RRF on the lexical channel: their normalized fused score
+				// reflects combined evidence and is in scope. Active only in
+				// fused_combined mode (which requires fusion.Enabled, per
+				// service validation); raw_cosine already filtered inside
+				// the channel above. List-fallback and shared-namespace
+				// candidates bypass this filter because they never enter
+				// simMap.
+				fusedFloor := 0.0
+				if simMode == SimilarityThresholdModeFusedCombined && simThreshold > 0 {
+					fusedFloor = simThreshold
+				}
+
+				// Fetch full memories. Pre-filter against fusedFloor so we
+				// don't pay a DB round-trip for rows we will immediately
+				// discard. The per-mem check below is retained as a
+				// belt-and-suspenders defense (cheap).
 				ids := make([]uuid.UUID, 0, len(simMap))
-				for id := range simMap {
+				for id, sim := range simMap {
+					if fusedFloor > 0 && sim < fusedFloor {
+						continue
+					}
 					ids = append(ids, id)
 				}
 				if len(ids) > 0 {
@@ -488,6 +635,10 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					if err == nil {
 						for _, mem := range memories {
 							sim := simMap[mem.ID]
+							if fusedFloor > 0 && sim < fusedFloor {
+								continue
+							}
+							_, viaVec := vecIDs[mem.ID]
 							attr := attribute(mem.NamespaceID)
 							candidates = append(candidates, scoredMemory{
 								memory:        mem,
@@ -496,6 +647,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 								projectSlug:   attr.ProjectSlug,
 								namespacePath: namespacePath,
 								isPrimary:     attr.IsPrimary,
+								viaVector:     viaVec,
 							})
 						}
 					}
@@ -506,6 +658,13 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 	// Fall back to listing by namespace if no embedding was used.
 	if !embeddingUsed {
+		if simThreshold > 0 {
+			slog.Debug("recall: similarity_threshold ignored (no embedder)",
+				"project_id", projectID,
+				"similarity_threshold", simThreshold,
+				"mode", simMode,
+			)
+		}
 		seenIDs := make(map[uuid.UUID]bool)
 		memories, err := s.memories.ListByNamespace(ctx, namespaceID, overfetchLimit, 0)
 		if err == nil {
@@ -542,6 +701,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	}
 
 	// Include memories from shared namespaces.
+	var sharedBypassLogged bool
 	if s.shares != nil && s.memories != nil {
 		sharedRecords, err := s.shares.ListSharedToNamespace(ctx, namespaceID)
 		if err == nil {
@@ -568,6 +728,14 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				// Fetch memories from the source namespace.
 				sharedMems, err := s.memories.ListByNamespace(ctx, share.SourceNsID, overfetchLimit, 0)
 				if err == nil {
+					if len(sharedMems) > 0 && simThreshold > 0 && !sharedBypassLogged {
+						slog.Debug("recall: similarity_threshold not applied to shared-namespace candidates",
+							"project_id", projectID,
+							"similarity_threshold", simThreshold,
+							"mode", simMode,
+						)
+						sharedBypassLogged = true
+					}
 					for _, mem := range sharedMems {
 						slug := sourceNsSlug
 						attr := attribute(mem.NamespaceID)
@@ -794,8 +962,14 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			continue
 		}
 
+		// Gate the Similarity pointer on the candidate's actual vector
+		// provenance (c.viaVector), not on the global embeddingUsed flag.
+		// A shared-namespace or list-fallback row appearing in the same
+		// recall as a vector-channel row would otherwise report
+		// similarity=0.0 and be indistinguishable from a vector row whose
+		// cosine genuinely was zero.
 		var sim *float64
-		if embeddingUsed {
+		if c.viaVector {
 			sv := c.similarity
 			sim = &sv
 		}
@@ -904,19 +1078,36 @@ type runHybridArgs struct {
 	TopK        int
 	PrimaryNS   uuid.UUID
 	PrimaryProj uuid.UUID
+	// RawCosineFloor, when > 0, drops vector-channel rows whose raw cosine
+	// is below the floor before they enter RRF. Lexical-channel rows are
+	// not touched. Zero disables the filter.
+	RawCosineFloor float64
 }
 
-// runHybridSearch returns a simMap normalized to [0, 1] so the caller can
-// drop it into scoredMemory.similarity unchanged.
+// runHybridSearch returns a simMap normalized to [0, 1] (so the caller can
+// drop it into scoredMemory.similarity unchanged) plus the set of IDs that
+// surfaced via the vector channel. The vecIDs set lets the caller tell true
+// vector-evidence rows from lexical-only RRF entries when populating
+// scoredMemory.viaVector.
 //
 // Both channels' errors are swallowed by design: a vector hiccup or
 // unparseable lexical query must not strand a recall that the other
 // channel can still serve.
-func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs) map[uuid.UUID]float64 {
+func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs) (map[uuid.UUID]float64, map[uuid.UUID]struct{}) {
+	// channelResult pairs the (possibly filtered) ranks with the channel's
+	// pre-filter length, so NormalizePerChannel can divide by the channel's
+	// natural depth rather than the post-RawCosineFloor survivor count.
+	// Without preLen the filter would shrink the divisor and inflate every
+	// surviving row's per-row weight.
+	type channelResult struct {
+		ranks  []storage.MemoryRank
+		preLen int
+	}
+
 	var (
 		mu          sync.Mutex
-		vecRankings [][]storage.MemoryRank
-		lexRankings [][]storage.MemoryRank
+		vecRankings []channelResult
+		lexRankings []channelResult
 	)
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -927,19 +1118,29 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 			if err != nil {
 				return nil
 			}
-			ranks := make([]storage.MemoryRank, 0, len(results))
+			preLen := len(results)
+			ranks := make([]storage.MemoryRank, 0, preLen)
 			for _, r := range results {
+				// raw_cosine filter site for the fusion path: drop rows
+				// below the floor before they enter RRF. A dropped row can
+				// still appear via the lexical channel; that's the whole
+				// point of filtering at this site rather than downstream.
+				// The !(>=) form drops NaN scores so they cannot propagate
+				// into RRF or sort.Slice.
+				if args.RawCosineFloor > 0 && !(r.Score >= args.RawCosineFloor) {
+					continue
+				}
 				ranks = append(ranks, storage.MemoryRank{ID: r.ID, Rank: r.Score})
 			}
 			mu.Lock()
-			vecRankings = append(vecRankings, ranks)
+			vecRankings = append(vecRankings, channelResult{ranks: ranks, preLen: preLen})
 			mu.Unlock()
 			return nil
 		})
 		g.Go(func() error {
 			ranks, _ := s.lexical.SearchByText(gctx, nsID, args.Query, args.TopK)
 			mu.Lock()
-			lexRankings = append(lexRankings, ranks)
+			lexRankings = append(lexRankings, channelResult{ranks: ranks, preLen: len(ranks)})
 			mu.Unlock()
 			return nil
 		})
@@ -947,35 +1148,35 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	_ = g.Wait()
 
 	// Compose the ranking list and per-list weights for RRF. Each
-	// per-namespace list contributes independently — if a memory shows up
+	// per-namespace list contributes independently: if a memory shows up
 	// in primary's vector list and global's lexical list, both
 	// contributions accumulate.
 	allRankings := make([][]storage.MemoryRank, 0, len(vecRankings)+len(lexRankings))
 	allWeights := make([]float64, 0, len(vecRankings)+len(lexRankings))
 	var vecCount, lexCount int
 	vecIDs := make(map[uuid.UUID]struct{})
-	for _, r := range vecRankings {
+	for _, cr := range vecRankings {
 		w := s.fusion.VectorWeight
-		if s.fusion.NormalizePerChannel && len(r) > 0 {
-			w = w / float64(len(r))
+		if s.fusion.NormalizePerChannel && cr.preLen > 0 {
+			w = w / float64(cr.preLen)
 		}
-		allRankings = append(allRankings, r)
+		allRankings = append(allRankings, cr.ranks)
 		allWeights = append(allWeights, w)
-		vecCount += len(r)
-		for _, m := range r {
+		vecCount += len(cr.ranks)
+		for _, m := range cr.ranks {
 			vecIDs[m.ID] = struct{}{}
 		}
 	}
 	overlap := 0
-	for _, r := range lexRankings {
+	for _, cr := range lexRankings {
 		w := s.fusion.LexicalWeight
-		if s.fusion.NormalizePerChannel && len(r) > 0 {
-			w = w / float64(len(r))
+		if s.fusion.NormalizePerChannel && cr.preLen > 0 {
+			w = w / float64(cr.preLen)
 		}
-		allRankings = append(allRankings, r)
+		allRankings = append(allRankings, cr.ranks)
 		allWeights = append(allWeights, w)
-		lexCount += len(r)
-		for _, m := range r {
+		lexCount += len(cr.ranks)
+		for _, m := range cr.ranks {
 			if _, ok := vecIDs[m.ID]; ok {
 				overlap++
 			}
@@ -1010,8 +1211,22 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 			"project_id", args.PrimaryProj,
 		)
 	}
+	// Loud failure path for misconfigured fusion: when fused has entries
+	// but maxScore is zero, every RRF score collapsed to zero (typically
+	// both weights are zero, or RRF degenerated). The simMap is empty,
+	// embeddingUsed is still true, so the caller would silently return zero
+	// candidates with no operator signal.
+	if len(fused) > 0 && maxScore <= 0 {
+		slog.Warn("recall: fusion produced zero max score; check fusion weights",
+			"fused_count", len(fused),
+			"vector_weight", s.fusion.VectorWeight,
+			"lexical_weight", s.fusion.LexicalWeight,
+			"namespace_id", args.PrimaryNS,
+			"project_id", args.PrimaryProj,
+		)
+	}
 
-	return simMap
+	return simMap, vecIDs
 }
 
 // computeScore calculates the composite ranking score for a candidate.
@@ -1100,8 +1315,13 @@ func (s *RecallService) recallOverfetch(ctx context.Context, limit int) int {
 	return out
 }
 
-// clampScore ensures a score is in the [0, 1] range.
+// clampScore ensures a score is in the [0, 1] range. NaN inputs collapse to
+// 0 so downstream sort.Slice and composite arithmetic stay well-defined even
+// if a future caller forgets to filter NaN at its source.
 func clampScore(v float64) float64 {
+	if math.IsNaN(v) {
+		return 0
+	}
 	if v < 0 {
 		return 0
 	}

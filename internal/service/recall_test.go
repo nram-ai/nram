@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -2079,5 +2081,613 @@ func TestRecall_FusionNormalizePerChannel_BalancesUnevenCorpora(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("project hit missing from fusion result with NormalizePerChannel=true")
+	}
+}
+
+// --- SimilarityThreshold (item 1.1) ---
+
+// TestRecall_SimilarityThreshold_RawCosine_FusionOff_DropsLowCosine verifies
+// the raw_cosine filter site in the non-fusion path: a vector hit whose raw
+// cosine sits below the threshold never reaches the candidate pool. This is
+// the primary contamination-suppression case for deployments that have not
+// enabled fusion yet.
+func TestRecall_SimilarityThreshold_RawCosine_FusionOff_DropsLowCosine(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	highID := uuid.New()
+	lowID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			highID: makeTestMemory(highID, nsID, "high cosine", nil, 0.5, 0, now),
+			lowID:  makeTestMemory(lowID, nsID, "low cosine", nil, 0.5, 0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: highID, Score: 0.85, NamespaceID: nsID},
+			{ID: lowID, Score: 0.40, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:               projectID,
+		Query:                   "anything",
+		Limit:                   10,
+		SimilarityThreshold:     0.70,
+		SimilarityThresholdMode: SimilarityThresholdModeRawCosine,
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 1 {
+		t.Fatalf("expected 1 memory above raw cosine floor, got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != highID {
+		t.Errorf("expected high-cosine memory %v, got %v", highID, resp.Memories[0].ID)
+	}
+}
+
+// TestRecall_SimilarityThreshold_RawCosine_FusionOn_PreservesLexicalOnly is
+// the headline raw_cosine semantic: a vector-only contaminant is dropped
+// before RRF, but a lexical-only hit (the canonical answer) survives. That
+// is the property the contamination probe set targets.
+func TestRecall_SimilarityThreshold_RawCosine_FusionOn_PreservesLexicalOnly(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	contaminantID := uuid.New() // vector-only, low cosine
+	lexHitID := uuid.New()      // lexical-only, no vector evidence
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			contaminantID: makeTestMemory(contaminantID, nsID, "looks similar in embedding space", nil, 0.5, 0, now),
+			lexHitID:      makeTestMemory(lexHitID, nsID, "canonical token match", nil, 0.5, 0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: contaminantID, Score: 0.45, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	svc.SetLexical(&mockLexicalSearcher{
+		results: map[uuid.UUID][]storage.MemoryRank{
+			nsID: {{ID: lexHitID, Rank: 1.0}},
+		},
+	})
+	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.7, LexicalWeight: 0.3})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:               projectID,
+		Query:                   "anything",
+		Limit:                   10,
+		SimilarityThreshold:     0.70,
+		SimilarityThresholdMode: SimilarityThresholdModeRawCosine,
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 1 {
+		t.Fatalf("expected 1 memory (lexical-only survivor), got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != lexHitID {
+		t.Errorf("expected lex-only hit %v to survive, got %v", lexHitID, resp.Memories[0].ID)
+	}
+}
+
+// TestRecall_SimilarityThreshold_Fused_FusionOn_DropsLowNormalized verifies
+// the fused filter site: filtering on post-RRF max-normalized similarity
+// drops candidates whose combined evidence is weak after both channels and
+// RRF have spoken. Top candidate (similarity=1.0 by normalization) passes,
+// a much-lower candidate fails.
+func TestRecall_SimilarityThreshold_Fused_FusionOn_DropsLowNormalized(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	topID := uuid.New()
+	weakID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			topID:  makeTestMemory(topID, nsID, "top", nil, 0.5, 0, now),
+			weakID: makeTestMemory(weakID, nsID, "weak", nil, 0.5, 0, now),
+		},
+	}
+	// topID ranks 1 in vector; weakID ranks much lower in vector and not at
+	// all in lexical. Post-RRF max-normalize, topID is similarity=1.0; weakID
+	// will be well below.
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: topID, Score: 0.95, NamespaceID: nsID},
+			{ID: weakID, Score: 0.60, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	svc.SetLexical(&mockLexicalSearcher{
+		results: map[uuid.UUID][]storage.MemoryRank{
+			nsID: {{ID: topID, Rank: 1.0}},
+		},
+	})
+	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.7, LexicalWeight: 0.3})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:               projectID,
+		Query:                   "anything",
+		Limit:                   10,
+		SimilarityThreshold:     0.75,
+		SimilarityThresholdMode: SimilarityThresholdModeFusedCombined,
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	if len(resp.Memories) != 1 {
+		t.Fatalf("expected 1 memory above fused similarity floor, got %d", len(resp.Memories))
+	}
+	if resp.Memories[0].ID != topID {
+		t.Errorf("expected top-fused memory %v, got %v", topID, resp.Memories[0].ID)
+	}
+}
+
+// TestRecall_SimilarityThreshold_InvalidMode_ReturnsError guards the typed
+// error path. A caller passing an unrecognized mode should get a clear error
+// rather than silently falling back to a default.
+func TestRecall_SimilarityThreshold_InvalidMode_ReturnsError(t *testing.T) {
+	projectID, _, projects, namespaces := setupTestFixtures()
+
+	svc, _ := newRecallService(&mockMemoryReader{memories: map[uuid.UUID]*model.Memory{}}, projects, namespaces, nil, nil, nil, nil)
+
+	_, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:               projectID,
+		Query:                   "anything",
+		SimilarityThreshold:     0.5,
+		SimilarityThresholdMode: "not_a_mode",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid mode, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid similarity_threshold_mode") {
+		t.Errorf("expected mode validation error, got %v", err)
+	}
+}
+
+// TestRecall_SimilarityThreshold_Superset is the in-process equivalent of
+// the plan's end-to-end smoke check: a recall with similarity_threshold > 0
+// must return a SUBSET of the rows returned with similarity_threshold = 0,
+// and every returned row in the filtered run must have Similarity >= the
+// threshold. Both raw_cosine and fused modes have to satisfy this.
+func TestRecall_SimilarityThreshold_Superset(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	// Five candidates spanning the cosine range. With threshold 0.65 in
+	// raw_cosine mode and no lexical channel, only the top three should
+	// survive. The fusion-enabled scenarios additionally wire a lexical
+	// searcher so the fused_combined mode actually exercises post-RRF
+	// max-normalization.
+	type cand struct {
+		id     uuid.UUID
+		cosine float64
+	}
+	cands := []cand{
+		{id: uuid.New(), cosine: 0.95},
+		{id: uuid.New(), cosine: 0.82},
+		{id: uuid.New(), cosine: 0.70},
+		{id: uuid.New(), cosine: 0.55},
+		{id: uuid.New(), cosine: 0.32},
+	}
+	memMap := make(map[uuid.UUID]*model.Memory, len(cands))
+	vecResults := make([]storage.VectorSearchResult, 0, len(cands))
+	now := time.Now()
+	for i, c := range cands {
+		memMap[c.id] = makeTestMemory(c.id, nsID, fmt.Sprintf("candidate %d", i), nil, 0.5, 0, now)
+		vecResults = append(vecResults, storage.VectorSearchResult{ID: c.id, Score: c.cosine, NamespaceID: nsID})
+	}
+	memReader := &mockMemoryReader{memories: memMap}
+	vectorSearcher := &mockVectorSearcher{results: vecResults}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	// Lexical fixture for the fusion-enabled scenarios: surface the top
+	// two cosine candidates also via the lexical channel so RRF actually
+	// has both channels feeding simMap. cand[0] and cand[1] both rank at
+	// the top of lexical, mirroring a "good two-channel match" case.
+	lexRanks := []storage.MemoryRank{
+		{ID: cands[0].id, Rank: 1.0},
+		{ID: cands[1].id, Rank: 1.0},
+	}
+
+	scenarios := []struct {
+		name      string
+		mode      string
+		withLex   bool
+		threshold float64
+		// reportMatchesFilter is true when the reported Similarity on each
+		// RecallResult uses the same metric the filter compared against.
+		// Examples: raw_cosine no-fusion (both raw cosine), fused_combined
+		// no-fusion (both raw cosine since fusion is off and simMap carries
+		// cosine), fused_combined fusion-on (both post-RRF normalized).
+		// The one asymmetric scenario is raw_cosine fusion-on: the filter
+		// compares raw cosine pre-RRF, but the reported Similarity is the
+		// post-RRF max-normalized value. Properties 2 and 3 only hold when
+		// filter-metric and report-metric are the same.
+		reportMatchesFilter bool
+	}{
+		{name: "raw_cosine no-fusion", mode: SimilarityThresholdModeRawCosine, withLex: false, threshold: 0.65, reportMatchesFilter: true},
+		// fused_combined requires fusion to be enabled. The
+		// "fused_combined no-fusion" scenario that used to live here is
+		// covered by TestRecall_FusedCombinedRequiresFusionEnabled, which
+		// asserts the typed error is returned.
+		{name: "raw_cosine fusion-on", mode: SimilarityThresholdModeRawCosine, withLex: true, threshold: 0.65, reportMatchesFilter: false},
+		{name: "fused_combined fusion-on", mode: SimilarityThresholdModeFusedCombined, withLex: true, threshold: 0.65, reportMatchesFilter: true},
+	}
+
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+			if sc.withLex {
+				svc.SetLexical(&mockLexicalSearcher{results: map[uuid.UUID][]storage.MemoryRank{nsID: lexRanks}})
+				svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.6, LexicalWeight: 0.4})
+			}
+
+			base, err := svc.Recall(context.Background(), &RecallRequest{
+				ProjectID: projectID, Query: "anything", Limit: 50,
+				SimilarityThreshold: 0, SimilarityThresholdMode: sc.mode,
+			})
+			if err != nil {
+				t.Fatalf("baseline recall failed: %v", err)
+			}
+			baseIDs := map[uuid.UUID]float64{}
+			for _, m := range base.Memories {
+				if m.Similarity != nil {
+					baseIDs[m.ID] = *m.Similarity
+				} else {
+					baseIDs[m.ID] = 0
+				}
+			}
+			if len(baseIDs) != len(cands) {
+				t.Fatalf("baseline expected %d rows, got %d", len(cands), len(baseIDs))
+			}
+
+			filtered, err := svc.Recall(context.Background(), &RecallRequest{
+				ProjectID: projectID, Query: "anything", Limit: 50,
+				SimilarityThreshold: sc.threshold, SimilarityThresholdMode: sc.mode,
+			})
+			if err != nil {
+				t.Fatalf("filtered recall failed: %v", err)
+			}
+
+			// Property 1 (always): filtered is a subset of base.
+			for _, m := range filtered.Memories {
+				if _, ok := baseIDs[m.ID]; !ok {
+					t.Errorf("filtered row %v not present in baseline (subset violated)", m.ID)
+				}
+			}
+
+			// Property 2 (only when report-metric == filter-metric): every
+			// filtered row has reported Similarity >= threshold.
+			if sc.reportMatchesFilter {
+				for _, m := range filtered.Memories {
+					if m.Similarity == nil {
+						t.Errorf("filtered row %v has nil Similarity", m.ID)
+						continue
+					}
+					if *m.Similarity < sc.threshold {
+						t.Errorf("filtered row %v has similarity %.3f, below threshold %.3f",
+							m.ID, *m.Similarity, sc.threshold)
+					}
+				}
+			}
+
+			// Property 3 (only when report-metric == filter-metric): the
+			// filtered count equals the count of base rows above the
+			// threshold. In the raw_cosine fusion-on case the baseline's
+			// reported Similarity is the post-RRF normalized score, not
+			// raw cosine, so this count cannot be derived from baseIDs.
+			if sc.reportMatchesFilter {
+				var expectFiltered int
+				for _, sim := range baseIDs {
+					if sim >= sc.threshold {
+						expectFiltered++
+					}
+				}
+				if len(filtered.Memories) != expectFiltered {
+					t.Errorf("filtered count %d, expected %d (rows with similarity >= %.3f)",
+						len(filtered.Memories), expectFiltered, sc.threshold)
+				}
+			}
+
+			// For the raw_cosine fusion-on case, verify that no candidate
+			// with raw cosine below the threshold survived (using the
+			// fixture's known raw cosines).
+			if !sc.reportMatchesFilter && sc.mode == SimilarityThresholdModeRawCosine {
+				cosineByID := map[uuid.UUID]float64{}
+				for _, c := range cands {
+					cosineByID[c.id] = c.cosine
+				}
+				for _, m := range filtered.Memories {
+					raw, ok := cosineByID[m.ID]
+					if !ok {
+						continue
+					}
+					if raw < sc.threshold {
+						t.Errorf("raw_cosine fusion-on: filtered row %v has raw cosine %.3f below threshold %.3f",
+							m.ID, raw, sc.threshold)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestRecall_SimilarityThreshold_ZeroIsNoOp confirms the default-no-op
+// contract: threshold=0 must not filter anything regardless of which mode
+// is set. This is the property every existing recall test implicitly
+// relies on, since the new fields default to inactive.
+func TestRecall_SimilarityThreshold_ZeroIsNoOp(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	highID := uuid.New()
+	lowID := uuid.New()
+	now := time.Now()
+
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			highID: makeTestMemory(highID, nsID, "high cosine", nil, 0.5, 0, now),
+			lowID:  makeTestMemory(lowID, nsID, "low cosine", nil, 0.5, 0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: highID, Score: 0.85, NamespaceID: nsID},
+			{ID: lowID, Score: 0.10, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	for _, mode := range []string{"", SimilarityThresholdModeRawCosine, SimilarityThresholdModeFusedCombined} {
+		svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+		resp, err := svc.Recall(context.Background(), &RecallRequest{
+			ProjectID:               projectID,
+			Query:                   "anything",
+			Limit:                   10,
+			SimilarityThreshold:     0,
+			SimilarityThresholdMode: mode,
+		})
+		if err != nil {
+			t.Fatalf("recall mode=%q failed: %v", mode, err)
+		}
+		if len(resp.Memories) != 2 {
+			t.Errorf("mode=%q with threshold=0: expected 2 memories (no-op filter), got %d", mode, len(resp.Memories))
+		}
+	}
+}
+
+// TestRecall_SimilarityThreshold_NaNRejected confirms NaN passes the
+// range check (which uses strict comparisons) only when math.IsNaN is part
+// of the guard. JSON callers are protected by encoding/json, but in-process
+// Go callers and any future internal API must hit this rejection.
+func TestRecall_SimilarityThreshold_NaNRejected(t *testing.T) {
+	projectID, _, projects, namespaces := setupTestFixtures()
+	svc, _ := newRecallService(nil, projects, namespaces, nil, nil, nil, nil)
+	_, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:           projectID,
+		Query:               "anything",
+		SimilarityThreshold: math.NaN(),
+	})
+	if err == nil {
+		t.Fatal("expected NaN similarity_threshold to be rejected; got nil error")
+	}
+	if !strings.Contains(err.Error(), "invalid similarity_threshold") {
+		t.Errorf("expected error to mention invalid similarity_threshold, got %q", err.Error())
+	}
+}
+
+// TestRecall_SimilarityThreshold_NegativeRejected confirms negative values
+// (which the MCP handler used to silently zero) reach the service-layer
+// rejection.
+func TestRecall_SimilarityThreshold_NegativeRejected(t *testing.T) {
+	projectID, _, projects, namespaces := setupTestFixtures()
+	svc, _ := newRecallService(nil, projects, namespaces, nil, nil, nil, nil)
+	_, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:           projectID,
+		Query:               "anything",
+		SimilarityThreshold: -0.5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid similarity_threshold") {
+		t.Fatalf("expected negative similarity_threshold to be rejected; got %v", err)
+	}
+}
+
+// TestRecall_WhitespaceOnlyMode_Rejected confirms a mode value that trims to
+// empty is treated as a caller error rather than a silent fallback to the
+// default. An entirely missing field still picks the default.
+func TestRecall_WhitespaceOnlyMode_Rejected(t *testing.T) {
+	projectID, _, projects, namespaces := setupTestFixtures()
+	svc, _ := newRecallService(nil, projects, namespaces, nil, nil, nil, nil)
+	_, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:               projectID,
+		Query:                   "anything",
+		SimilarityThresholdMode: "   ",
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid similarity_threshold_mode") {
+		t.Fatalf("expected whitespace-only mode to be rejected; got %v", err)
+	}
+}
+
+// TestRecall_FusedCombinedRequiresFusionEnabled confirms the new
+// cross-flag validation: fused_combined with a non-zero threshold while
+// fusion is disabled returns a typed error, not a silent semantic collapse
+// into raw_cosine.
+func TestRecall_FusedCombinedRequiresFusionEnabled(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{},
+	}
+	vectorSearcher := &mockVectorSearcher{}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	_ = nsID
+	_, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:               projectID,
+		Query:                   "anything",
+		SimilarityThreshold:     0.5,
+		SimilarityThresholdMode: SimilarityThresholdModeFusedCombined,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires recall.fusion.enabled") {
+		t.Fatalf("expected fused_combined-without-fusion to be rejected; got %v", err)
+	}
+}
+
+// TestRecall_NaNVectorScoreFiltered confirms a vector backend that returns
+// a NaN score does not propagate that NaN through the filter, simMap, and
+// sort comparator. With rawCosineFloor > 0 the !( >=) form drops NaN at
+// the filter site; with floor == 0 clampScore neutralizes NaN downstream.
+func TestRecall_NaNVectorScoreFiltered(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+	goodID := uuid.New()
+	nanID := uuid.New()
+	now := time.Now()
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			goodID: makeTestMemory(goodID, nsID, "good", nil, 0.5, 0, now),
+			nanID:  makeTestMemory(nanID, nsID, "nan", nil, 0.5, 0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: goodID, Score: 0.9, NamespaceID: nsID},
+			{ID: nanID, Score: math.NaN(), NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:           projectID,
+		Query:               "anything",
+		Limit:               10,
+		SimilarityThreshold: 0.3,
+		// raw_cosine mode: NaN should be dropped at the filter site.
+		SimilarityThresholdMode: SimilarityThresholdModeRawCosine,
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	for _, m := range resp.Memories {
+		if m.ID == nanID {
+			t.Errorf("NaN-scored row %v survived the rawCosineFloor filter", m.ID)
+		}
+	}
+}
+
+// TestRecall_LexicalOnlyFusionHit_NoVectorClaim confirms a memory that
+// enters simMap only via the lexical RRF channel reports Similarity == nil
+// (no vector evidence) even though its post-RRF score is non-zero. The
+// previous behavior set viaVector unconditionally for every simMap entry,
+// which misled consumers reading the field as "vector said X".
+func TestRecall_LexicalOnlyFusionHit_NoVectorClaim(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+	vecID := uuid.New()     // surfaces only via vector
+	lexOnlyID := uuid.New() // surfaces only via lexical
+	bothID := uuid.New()    // surfaces via both
+	now := time.Now()
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			vecID:     makeTestMemory(vecID, nsID, "vec", nil, 0.5, 0, now),
+			lexOnlyID: makeTestMemory(lexOnlyID, nsID, "lex", nil, 0.5, 0, now),
+			bothID:    makeTestMemory(bothID, nsID, "both", nil, 0.5, 0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: vecID, Score: 0.8, NamespaceID: nsID},
+			{ID: bothID, Score: 0.7, NamespaceID: nsID},
+		},
+	}
+	lexRanks := []storage.MemoryRank{
+		{ID: lexOnlyID, Rank: 1.0},
+		{ID: bothID, Rank: 2.0},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	svc.SetLexical(&mockLexicalSearcher{results: map[uuid.UUID][]storage.MemoryRank{nsID: lexRanks}})
+	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.6, LexicalWeight: 0.4})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID: projectID,
+		Query:     "anything",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	byID := map[uuid.UUID]*RecallResult{}
+	for i := range resp.Memories {
+		byID[resp.Memories[i].ID] = &resp.Memories[i]
+	}
+	if r, ok := byID[lexOnlyID]; !ok {
+		t.Fatalf("lex-only memory missing from results")
+	} else if r.Similarity != nil {
+		t.Errorf("lex-only memory should have nil Similarity (no vector evidence); got %v", *r.Similarity)
+	}
+	if r, ok := byID[vecID]; !ok {
+		t.Fatalf("vector-only memory missing from results")
+	} else if r.Similarity == nil {
+		t.Errorf("vector-only memory should have non-nil Similarity")
+	}
+	if r, ok := byID[bothID]; !ok {
+		t.Fatalf("two-channel memory missing from results")
+	} else if r.Similarity == nil {
+		t.Errorf("two-channel memory should have non-nil Similarity")
+	}
+}
+
+// TestRecallResult_SimilarityJSONIsNullWhenNil confirms the JSON wire
+// format change in F1.7: a nil Similarity pointer must serialize as
+// "similarity": null (matching OpenAPI nullable: true), not be omitted.
+func TestRecallResult_SimilarityJSONIsNullWhenNil(t *testing.T) {
+	r := RecallResult{ID: uuid.New(), Similarity: nil}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	if !strings.Contains(string(raw), `"similarity":null`) {
+		t.Errorf("expected nil Similarity to serialize as null; got %s", raw)
+	}
+	zero := 0.0
+	r.Similarity = &zero
+	raw, _ = json.Marshal(r)
+	if !strings.Contains(string(raw), `"similarity":0`) {
+		t.Errorf("expected zero Similarity to serialize as 0; got %s", raw)
 	}
 }
