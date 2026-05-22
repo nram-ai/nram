@@ -1,4 +1,4 @@
-# nram - Neural RAM
+# nram: Neural RAM
 
 > **Work in Progress:** This project is under active development. Some features may be incomplete, unstable, or subject to change. Contributions and feedback are welcome, but expect rough edges as things continue to evolve.
 
@@ -8,40 +8,42 @@ A self-hosted, long-term memory layer that any LLM-using tool can plug into. Sto
 
 nram is a long-term memory layer that any LLM-using tool can plug into. AI assistants and chat interfaces forget everything between conversations; reference libraries (PDFs, textbooks, research notes, project decisions) sit in folders nobody searches; the tools you use day to day (Claude, ChatGPT, Cursor, Obsidian, custom apps) each invent their own half-baked memory and none of them talk to each other. nram is the shared substrate underneath all of that. You run it on your own machine or server, and everything else connects in.
 
-People use it for four overlapping things:
+nram serves four overlapping memory shapes, each one a different use of the same store:
 
-- *"My AI assistant should remember things about me and my projects."* **Conversational memory** — connect Claude.ai / ChatGPT / Cursor / any MCP client to nram and instruct the assistant to read and write through it. nram makes the memory layer the same across sessions, tools, and vendors; getting any specific assistant to actually use it consistently is a prompt-side job (see *Procedural and behavioral memory* below).
-- *"I have a corpus of reference material — textbooks, PDFs, research notes, company docs — and I want to ask questions of it that actually find what I mean."* **Document-corpus memory** — store the corpus as memories and get semantic search, an entity-deduped knowledge graph, and consolidation over the whole pile. Same job as NotebookLM / AnythingLLM / Khoj, different shape: nram is the substrate, not a chat UI.
-- *"I want my AI to behave consistently — follow my rules, remember my preferences, avoid the same mistakes, apply the same conventions across every session and every tool."* **Procedural and behavioral memory** — store rules, conventions, dos and don'ts, named failure modes, standing protocols, and preferences as memories the assistant pulls at session start and treats as binding. nram ships the substrate for this, not the contract itself: the project's author keeps a project conventionally named `behavioral-contract` and instructs every assistant to recall it before the first response, so the same vendor-independent rules apply across Claude / ChatGPT / Cursor / Claude Code. Building your own is the work; nram's job is to make it the *same* memory wherever you use it.
-- *"I want my coding agent / research agent / custom agent to actually accumulate knowledge instead of starting from scratch every run."* **Agent memory** — what the original agent-memory projects (Mem0, Letta, Zep, Graphiti) target; nram serves the same role with sleep-style consolidation and a knowledge graph layered on top.
+| Use case | What nram provides | Comparable tools |
+|---|---|---|
+| Conversational memory | MCP backend that survives across sessions, tools, and vendors. The session-binding behavior is a prompt-side job (see procedural and behavioral memory below). | Claude Memory, ChatGPT Memory |
+| Document-corpus memory | Semantic search, entity-deduped knowledge graph, and consolidation over a stored corpus. Substrate, not a chat UI. | NotebookLM, AnythingLLM, Khoj |
+| Procedural and behavioral memory | Stored rules, conventions, named failure modes, and standing protocols that an assistant pulls at session start. nram ships the substrate; the contract content is the operator's work. Convention: keep it in a project named `behavioral-contract`. | (no direct equivalent) |
+| Agent memory | Persistent memory for coding, research, and custom agents, with sleep-style consolidation and a knowledge graph on top. | Mem0, Letta, Zep, Graphiti |
 
-What makes it more than a database with vector search: semantic recall (find by meaning, not by keyword) plus automatic fact and entity extraction (the system pulls structured information out of your free-text memories) plus a knowledge graph (entities and relationships built up over time). On top of all of that, a *dreaming* cycle runs in the background — it dedups near-duplicates, detects contradictions between memories, consolidates related memories into higher-level summaries, and prunes the stuff you never use. Think of it as a notebook that quietly reorganizes itself overnight.
+What makes it more than a database with vector search: semantic recall (find by meaning, not by keyword) plus automatic fact and entity extraction (the system pulls structured information out of your free-text memories) plus a knowledge graph (entities and relationships built up over time). On top of all of that, a *dreaming* cycle runs in the background. It dedups near-duplicates, detects contradictions between memories, consolidates related memories into higher-level summaries, and prunes the stuff you never use. Think of it as a notebook that quietly reorganizes itself overnight.
 
-How things connect: **MCP** is the standard way Claude / ChatGPT / Cursor / your custom agent plug in tools — works out of the box, OAuth auto-discovers, no API key juggling. The **REST API** lets any code that can speak HTTP store and recall memories. The **web UI** is the dashboard for managing organizations, projects, providers, the knowledge graph, and the dreaming cycle.
+How things connect: **MCP** is the standard way Claude, ChatGPT, Cursor, or a custom agent plugs in tools. Streamable HTTP transport at `/mcp`, OAuth discovery published at the well-known paths. The **REST API** lets any code that can speak HTTP store and recall memories. The **web UI** is the dashboard for managing organizations, projects, providers, the knowledge graph, and the dreaming cycle.
 
 ## Features
 
-- **Persistent Memory** - Store, retrieve, update, and soft-delete memories with tags, metadata, TTL, content-hash dedup-on-ingest, and supersession tracking. Superseded memories are hidden from list/recall/MCP results by default.
-- **Hybrid Recall** - Parallel vector + lexical retrieval (FTS5 on SQLite, `tsvector`/`ts_rank_cd` on Postgres) fused with Reciprocal Rank Fusion. Off by default; flip `recall.fusion.enabled` once embeddings are populated.
-- **Semantic Search** - Vector embedding support via pgvector (PostgreSQL), pure-Go HNSW (SQLite), or Qdrant. Embedding runs off the write path in the enrichment worker, so stores stay fast.
-- **Enrichment Pipeline** - Background workers extract facts, entities, and relationships using configurable LLM providers. The first phase is an optional context-aware ingestion judge that decides ADD / UPDATE / DELETE / NONE on near-duplicate matches before extraction runs (shadow mode by default).
-- **Knowledge Graph** - Automatically constructed from enriched entities and relationships with multi-hop traversal and entity-vector lookup
-- **Dreaming** - Offline background consolidation cycle with eight phases: entity dedup, embedding backfill (repairs rows whose `embedding_dim` is recorded but whose vector row is missing — re-embeds when the provider is healthy, clears `embedding_dim` otherwise), paraphrase dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation
-- **Novelty Audit** - LLM-judged audit on dream syntheses; low-novelty consolidations are demoted, vectors are purged, and surfacing in recall is suppressed unless explicitly opted in
-- **Adaptive Confidence** - Optional reconsolidation hook on recall nudges `access_count`, `last_accessed`, and `confidence` on surfaced memories; pruning applies a complementary confidence decay so unused memories fade over time. Shadow mode by default for observable-only rollout. `confidence` is one of six terms in the recall ranking score (similarity, recency, importance, frequency, graph relevance, confidence), each operator-tunable.
-- **Per-Project Tuning** - System-level ranking weights, `dedup_threshold`, and `enrichment_enabled` cascade through optional per-user and per-project JSON overrides. Recall scores each candidate under its owning project's effective weights, so cross-project results (globals, shared namespaces) honor each row's owner's tuning. Sparse: unset fields fall through to system defaults.
-- **Model Context Protocol (MCP)** - Full MCP server at `/mcp` (Streamable HTTP) with 13 tools covering store, recall (including tag-axis diversification), update, get, list, forget, enrich, graph traversal, project management, and export
-- **Authentication** - JWT (password login), per-user API keys, WebAuthn passkeys, and per-organization OIDC single sign-on
-- **OAuth 2.0** - Authorization Code + PKCE, dynamic client registration (RFC 7591), resource indicators (RFC 8707), discovery metadata (RFC 8414, RFC 9728)
-- **RBAC** - Five roles (administrator, org_owner, member, readonly, service) enforced across REST and MCP
-- **Multi-Tenancy** - Organizations, hierarchical namespaces, and projects for memory isolation
-- **Real-Time Events** - Server-Sent Events (SSE) with scope filtering and reconnection replay; webhook delivery with HMAC-SHA256 signatures
-- **Admin UI** - React-based dashboard for managing organizations, users, projects, providers, enrichment, dreaming, OAuth clients, webhooks, SSO, database, and analytics. Surfaces today's settings (fusion, ingestion-decision, novelty, reconsolidation) and per-provider token usage.
-- **Dual Database Support** - SQLite (zero-config default) or PostgreSQL (with pgvector and LISTEN/NOTIFY); both support enrichment, dreaming, knowledge graph, and hybrid recall
-- **Migration Tooling** - SQLite-to-Postgres migration with preflight checks (connectivity, pgvector, privileges, target row counts), orphan audit against foreign-key relationships, and gated reset (truncate or drop-schema)
-- **LLM Provider Agnostic** - OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint, with a centralized provider middleware that records token usage for every call
-- **Import/Export** - JSON and NDJSON formats for full project snapshots
-- **Prometheus Metrics** - `/metrics` endpoint for monitoring
+- **Persistent Memory**: store, retrieve, update, and soft-delete memories with tags, metadata, TTL, content-hash dedup-on-ingest, and supersession tracking. Superseded memories are hidden from list/recall/MCP results by default.
+- **Hybrid Recall**: parallel vector + lexical retrieval (FTS5 on SQLite, `tsvector`/`ts_rank_cd` on Postgres) fused with Reciprocal Rank Fusion. Off by default; flip `recall.fusion.enabled` once embeddings are populated.
+- **Semantic Search**: vector embedding support via pgvector (PostgreSQL), pure-Go HNSW (SQLite), or Qdrant. Embedding runs off the write path in the enrichment worker, so stores stay fast.
+- **Enrichment Pipeline**: background workers extract facts, entities, and relationships using configurable LLM providers. The first phase is an optional context-aware ingestion judge that decides ADD / UPDATE / DELETE / NONE on near-duplicate matches before extraction runs (shadow mode by default).
+- **Knowledge Graph**: automatically constructed from enriched entities and relationships with multi-hop traversal and entity-vector lookup.
+- **Dreaming**: offline background consolidation cycle with eight phases. Entity dedup, embedding backfill (repairs rows whose `embedding_dim` is recorded but whose vector row is missing; re-embeds when the provider is healthy, clears `embedding_dim` otherwise), paraphrase dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation.
+- **Novelty Audit**: LLM-judged audit on dream syntheses; low-novelty consolidations are demoted, vectors are purged, and surfacing in recall is suppressed unless explicitly opted in.
+- **Adaptive Confidence**: optional reconsolidation hook on recall nudges `access_count`, `last_accessed`, and `confidence` on surfaced memories; pruning applies a complementary confidence decay so unused memories fade over time. Shadow mode by default for observable-only rollout. `confidence` is one of six terms in the recall ranking score (similarity, recency, importance, frequency, graph relevance, confidence), each operator-tunable.
+- **Per-Project Tuning**: system-level ranking weights, `dedup_threshold`, and `enrichment_enabled` cascade through optional per-user and per-project JSON overrides. Recall scores each candidate under its owning project's effective weights, so cross-project results (globals, shared namespaces) honor each row's owner's tuning. Sparse: unset fields fall through to system defaults.
+- **Model Context Protocol (MCP)**: full MCP server at `/mcp` (Streamable HTTP) with 13 tools covering store, recall (including tag-axis diversification), update, get, list, forget, enrich, graph traversal, project management, and export.
+- **Authentication**: JWT (password login), per-user API keys, WebAuthn passkeys, and per-organization OIDC single sign-on.
+- **OAuth 2.0**: Authorization Code + PKCE, dynamic client registration (RFC 7591), resource indicators (RFC 8707), discovery metadata (RFC 8414, RFC 9728).
+- **RBAC**: five roles (administrator, org_owner, member, readonly, service) enforced across REST and MCP.
+- **Multi-Tenancy**: organizations, hierarchical namespaces, and projects for memory isolation.
+- **Real-Time Events**: Server-Sent Events (SSE) with scope filtering and reconnection replay; webhook delivery with HMAC-SHA256 signatures.
+- **Admin UI**: React-based dashboard for managing organizations, users, projects, providers, enrichment, dreaming, OAuth clients, webhooks, SSO, database, and analytics. Surfaces today's settings (fusion, ingestion-decision, novelty, reconsolidation) and per-provider token usage.
+- **Dual Database Support**: SQLite (zero-config default) or PostgreSQL (with pgvector and LISTEN/NOTIFY). Both support enrichment, dreaming, knowledge graph, and hybrid recall.
+- **Migration Tooling**: SQLite-to-Postgres migration with preflight checks (connectivity, pgvector, privileges, target row counts), orphan audit against foreign-key relationships, and gated reset (truncate or drop-schema).
+- **LLM Provider Agnostic**: OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint, with a centralized provider middleware that records token usage for every call.
+- **Import/Export**: JSON and NDJSON formats for full project snapshots.
+- **Prometheus Metrics**: `/metrics` endpoint for monitoring.
 
 ## Quick Start
 
@@ -60,7 +62,7 @@ How things connect: **MCP** is the standard way Claude / ChatGPT / Cursor / your
 >   that are silently truncated before embedding. See
 >   [Recommended Models](#recommended-models) below for alternatives.
 
-### Step 1 — Install prerequisites
+### Step 1: Install prerequisites
 
 Versions, with a one-liner check for each:
 
@@ -69,9 +71,9 @@ Versions, with a one-liner check for each:
 | Go | 1.26+ | `go version` |
 | Node.js | 18+ | `node --version` |
 | npm | any (build uses `npm ci`, **not** pnpm or yarn) | `npm --version` |
-| Ollama | optional, for local LLMs | `ollama --version` — skip if you're using OpenAI / Anthropic / Gemini / OpenRouter |
+| Ollama | optional, for local LLMs | `ollama --version`. Skip if you're using OpenAI / Anthropic / Gemini / OpenRouter |
 
-### Step 2 — Build
+### Step 2: Build
 
 ```bash
 git clone <repo-url> nram && cd nram
@@ -86,7 +88,7 @@ make build-ui       # Build React UI and embed into Go binary
 make build-server   # Compile Go server to ./nram
 ```
 
-### Step 3 — Run
+### Step 3: Run
 
 ```bash
 ./nram
@@ -99,30 +101,30 @@ To use Postgres, set `DATABASE_URL` and restart:
 DATABASE_URL=postgres://user:pass@localhost:5432/nram ./nram
 ```
 
-### Step 4 — Open the setup wizard
+### Step 4: Open the setup wizard
 
 Navigate to `http://localhost:8674`. Create the initial admin account. **Save the
-API key shown on the completion screen — it is not shown again.**
+API key shown on the completion screen. It is not shown again.**
 
-### Step 5 — Configure an LLM provider (required)
+### Step 5: Configure an LLM provider (required)
 
 Open **Settings → Providers** in the admin UI. Configure at minimum:
 
-- **Embedding** slot — for semantic search
-- **Fact Extraction** slot — for the knowledge graph and dreaming
-- **Entity Extraction** slot — for the knowledge graph and dreaming
+- **Embedding** slot: for semantic search
+- **Fact Extraction** slot: for the knowledge graph and dreaming
+- **Entity Extraction** slot: for the knowledge graph and dreaming
 
 See [Recommended Models](#recommended-models) below for what to put in each slot.
-Any of OpenAI, Anthropic (chat slots only — Anthropic does not offer embeddings),
+Any of OpenAI, Anthropic (chat slots only; Anthropic does not offer embeddings),
 Google Gemini, Ollama, OpenRouter, or any OpenAI-compatible endpoint works.
-Provider changes hot-reload — no restart needed.
+Provider changes hot-reload; no restart needed.
 
 Without configured providers, recall falls back to keyword-only matches, the
 knowledge graph stays empty, and enrichment jobs queue without running. No
-warning is raised — this is the intended behavior when providers are absent,
+warning is raised. This is the intended behavior when providers are absent,
 not a bug.
 
-### Step 6 — Verify
+### Step 6: Verify
 
 ```bash
 curl http://localhost:8674/v1/health
@@ -148,7 +150,7 @@ it before storing memories. Memories stored without working providers will not
 be embedded or enriched, and re-embedding via `--reembed-all-memories` will be
 required afterward.
 
-### Step 7 — Connect a client (MCP)
+### Step 7: Connect a client (MCP)
 
 For Claude Code:
 
@@ -157,8 +159,9 @@ claude mcp add --transport http nram http://localhost:8674/mcp
 ```
 
 For Claude Desktop, ChatGPT, Cursor, or any other MCP client: point the client at
-`http://localhost:8674/mcp`. OAuth auto-discovery handles the rest — no API key
-juggling needed.
+`http://localhost:8674/mcp`. OAuth discovery metadata is published at
+`/.well-known/oauth-authorization-server` and `/.well-known/oauth-protected-resource`;
+the client negotiates a token from there.
 
 For tools that don't support OAuth, use the API key from Step 4 as a Bearer token.
 
@@ -173,15 +176,15 @@ For tools that don't support OAuth, use the API key from Step 4 as a Bearer toke
 
 Setting `NRAM_ENABLE_ENRICHMENT_BACKFILL=1` runs the enrichment backfill at startup without forcing an exit.
 
-> **Renamed:** the previous `NRAM_ENABLE_EMBED_BACKFILL` env var and `--backfill-embeddings` flag are no longer honored — update your deployment env. The flag and var were renamed alongside a fix that makes backfill skip fact/entity extraction for memories whose lineage and relationship rows already exist, so re-runs cost only the embed call.
+> **Renamed:** the previous `NRAM_ENABLE_EMBED_BACKFILL` env var and `--backfill-embeddings` flag are no longer honored; update your deployment env. The flag and var were renamed alongside a fix that makes backfill skip fact/entity extraction for memories whose lineage and relationship rows already exist, so re-runs cost only the embed call.
 
 ### Troubleshooting
 
-**"I stored memories but recall returns nothing relevant — only literal keyword
+**"I stored memories but recall returns nothing relevant, only literal keyword
 matches."** No embedding provider configured, or the configured embedding provider
 is unhealthy. Check `curl /v1/health` → `providers.embedding.status` should be
 `ok`. Without a working embedding provider, recall falls back to lexical-only
-(BM25 / FTS5) — this is by design, but can be unexpected. Fix: configure an
+(BM25 / FTS5). This is by design, but can be unexpected. Fix: configure an
 embedding provider in Step 5, then run
 `./nram --backfill-enrichment` once to embed the memories you stored before
 configuring it.
@@ -189,19 +192,19 @@ configuring it.
 **"The Enrichment Queue page shows jobs, but the count never goes down."**
 Fact-extraction or entity-extraction provider not configured. The worker claims
 each job, sees the provider registry is incomplete, and silently re-releases the
-job — no failure row is recorded, and no error log appears unless logging is at
+job. No failure row is recorded, and no error log appears unless logging is at
 INFO or higher. Fix: configure both fact and entity slots in Step 5.
 
 **"I changed `embed.url` / `qdrant.addr` / `NRAM_FACT_*` / `NRAM_EMBED_*` in
 config.yaml or my env and the change didn't take."** Those keys were removed
 2026-04-30 and are silently ignored (with a WARN log only). All provider, vector,
 fact, and entity settings live in the database now and are managed at
-`/admin/providers` and `/admin/settings`. Provider changes hot-reload — no
+`/admin/providers` and `/admin/settings`. Provider changes hot-reload; no
 restart needed.
 
 **"My recall quality got worse after a long memory ingest."** Likely the
 `nomic-embed-text` 2048-token context limit. See
-[Recommended Models](#recommended-models) below — switch to
+[Recommended Models](#recommended-models) below. Switch to
 `qwen3-embedding:0.6b` (or another long-context embedding model) and run
 `./nram --reembed-all-memories` once to re-embed your existing memories with the
 new model.
@@ -209,9 +212,9 @@ new model.
 ## Recommended Models
 
 nram is provider-agnostic, but the choice of **embedding model** in particular has
-a big effect on recall quality. Three tiers below — pick one and move on.
+a big effect on recall quality. Three tiers below; pick one and move on.
 
-### Tier 1 — Lite (fits on a laptop, slow but works)
+### Tier 1: Lite (fits on a laptop, slow but works)
 
 | Slot | Model | Where | Notes |
 |---|---|---|---|
@@ -219,20 +222,20 @@ a big effect on recall quality. Three tiers below — pick one and move on.
 | Fact | `qwen3:4b` | Ollama | 4B params, ~2.5GB on disk, Q4_K_M |
 | Entity | `qwen3:4b` | Ollama | Same model is fine for both extraction slots |
 
-### Tier 2 — Recommended (proven; what nram's own author runs)
+### Tier 2: Recommended (the configuration nram's author runs)
 
 | Slot | Model | Where | Notes |
 |---|---|---|---|
 | Embedding | `qwen3-embedding:0.6b` (with bumped `num_ctx`) | Ollama | Trained at 32K context. Bump Ollama's default `num_ctx` of 2048 via a Modelfile (see below) to use the full trained context |
-| Fact | `qwen3:8b` | Ollama | 8.2B params, ~5.2GB on disk, Q4_K_M — strong extraction quality |
+| Fact | `qwen3:8b` | Ollama | 8.2B params, ~5.2GB on disk, Q4_K_M quantization |
 | Entity | `qwen3:8b` | Ollama | Same model |
 
-### Tier 3 — Cloud (best quality, no local GPU needed)
+### Tier 3: Cloud (no local GPU needed)
 
 | Slot | Model | Where | Notes |
 |---|---|---|---|
 | Embedding | `text-embedding-3-small` | OpenAI | 8K context, 1536 dims |
-| Fact | `gpt-4o-mini` *or* `claude-haiku-4-5-20251001` | OpenAI / Anthropic | Cheap, fast, good extraction quality |
+| Fact | `gpt-4o-mini` *or* `claude-haiku-4-5-20251001` | OpenAI / Anthropic | Hosted; charges per token |
 | Entity | `gpt-4o-mini` *or* `claude-haiku-4-5-20251001` | OpenAI / Anthropic | Same model |
 
 > Anthropic does **not** offer an embeddings API. If you want Claude for fact /
@@ -250,7 +253,7 @@ a limitation worth knowing about before choosing it:
   vector computed from the truncated prefix and nram stores it as if it
   represented the whole memory.
 - Result: long memories are embedded as if they were short. Recall quality
-  degrades silently — no error surfaces, but longer memories produce
+  degrades silently. No error surfaces, but longer memories produce
   progressively worse results.
 
 Using `qwen3-embedding:0.6b` (or any embedding model with a longer trained
@@ -287,10 +290,10 @@ displayed in the provider status read-back after the first successful call.
 nram has two configuration surfaces:
 
 - **Bootstrap config** (this file / env vars): the small set of values needed
-  before the database is open — listener, DSN, log level, and the optional
+  before the database is open. Listener, DSN, log level, and the optional
   headless admin credentials. Any change requires a restart.
-- **Runtime config** (admin UI / `/v1/admin/settings`): everything else —
-  providers, vector backends, dreaming, ranking, retention, prompts, etc.
+- **Runtime config** (admin UI / `/v1/admin/settings`): everything else.
+  Providers, vector backends, dreaming, ranking, retention, prompts.
   Stored in the `settings` table and (mostly) hot-reloadable.
 
 The loader reads (in order of precedence):
@@ -336,17 +339,17 @@ YAML values support environment variable interpolation: `${VAR_NAME:-default}`.
 
 Everything outside the bootstrap surface is managed through the admin UI:
 
-- **Providers** (embedding, fact extraction, entity extraction) — `/admin/providers`
-- **Vector backend** (Qdrant address/credentials, HNSW tuning) — `/admin/settings`
+- **Providers** (embedding, fact extraction, entity extraction): `/admin/providers`
+- **Vector backend** (Qdrant address/credentials, HNSW tuning): `/admin/settings`
 - **Dreaming**, **enrichment**, **ranking**, **recall fusion**, **reconsolidation**,
   **retention**, **rate limits**, **lifecycle sweep**, **events**, and prompt
-  templates — `/admin/settings`
+  templates: `/admin/settings`
 
 Per-project and per-user overrides for `ranking_weights`, `dedup_threshold`,
 and `enrichment_enabled` live on the project and user records as sparse JSON.
 The cascade is `system → user → project → effective`; unset fields fall
 through. Edit at `/v1/me/projects/{id}` (project) or `/v1/admin/users/{id}`
-(user). User-scope `ranking_weights` is rejected with a 400 — the cascade
+(user). User-scope `ranking_weights` is rejected with a 400; the cascade
 for weights lands at project, not user.
 
 ### Environment Variables
@@ -399,7 +402,7 @@ Migrations run automatically on startup when `migrate_on_start: true` (the defau
 
 ## API
 
-An OpenAPI 3.1.0 specification lives at [`docs/openapi.yaml`](docs/openapi.yaml). It may lag the code — the tables below reflect the current router source of truth.
+An OpenAPI 3.1.0 specification lives at [`docs/openapi.yaml`](docs/openapi.yaml). It may lag the code; the tables below reflect the current router source of truth.
 
 ### Authentication
 
@@ -468,7 +471,7 @@ All under `/v1/projects/{project_id}/memories`. Read operations are available to
 - **Tag-only or metadata-only updates** mutate the row in place. The response `id` matches the path id.
 - **Content updates** create a NEW memory row and mark the old row `superseded_by = new id`. The response `id` is the new (active) id; `previous_memory_id` echoes the path id. Recall, list, and graph reads filter superseded rows by default, so the new id is what surfaces; `include_superseded=true` is required to access prior versions. Old enrichment (entities, relationships, embedding, accumulated weights from recall reinforcement) stays attached to the old id, frozen with the old content. Dream pruning eventually sweeps superseded rows after a 7-day grace window.
 
-Forget on the active head walks `superseded_by` and soft-deletes the entire chain — forgetting one memory thread forgets it through all its prior versions. Pass `hard_delete=true` to bypass the soft delete; the chain walk runs in either mode.
+Forget on the active head walks `superseded_by` and soft-deletes the entire chain; forgetting one memory thread forgets it through all its prior versions. Pass `hard_delete=true` to bypass the soft delete; the chain walk runs in either mode.
 
 This is a breaking change from the prior in-place semantics: callers that hold the path id for follow-up reads must use `response.id` instead. Subscribers to `memory.updated` events should likewise read `memory_id` (active) and treat `previous_memory_id` as the correlation key.
 
@@ -536,7 +539,7 @@ The MCP server is available at `POST /mcp` using Streamable HTTP transport.
 
 | Tool | Description |
 |---|---|
-| `memory_store` | Store a single memory. Identical content within the same project is deduplicated on ingest — the existing memory's ID is returned and tags / metadata on the new request are ignored. |
+| `memory_store` | Store a single memory. Identical content within the same project is deduplicated on ingest; the existing memory's ID is returned and tags / metadata on the new request are ignored. |
 | `memory_store_batch` | Batch store memories (same dedup-on-ingest behavior) |
 | `memory_update` | Update a memory |
 | `memory_get` | Retrieve a memory by ID |
@@ -567,7 +570,7 @@ The embedded web UI is served at the root path (`/`). It provides:
 - Project management
 - LLM / embedding provider configuration with hot-reload
 - Settings editor (ranking weights, recall fusion weights, ingestion decision, novelty audit, reconsolidation mode and decay, dreaming budgets and retention, prompts)
-- Project edit panel with sparse per-project override editor (six ranking weights, dedup threshold, enrichment toggle) — empty fields inherit system defaults; effective merged weights and sum displayed inline
+- Project edit panel with sparse per-project override editor (six ranking weights, dedup threshold, enrichment toggle); empty fields inherit system defaults, effective merged weights and sum displayed inline
 - Memory detail panel surfaces `confidence`, `importance`, `access_count`, and `last_accessed` so operators can verify reinforcement and decay are moving the values
 - Enrichment queue monitoring and retry; ingestion-decision shadow vs persist toggle
 - Dreaming cycle inspection, log replay, manual triggers, and rollback
