@@ -105,7 +105,8 @@ type AuditStore interface {
 
 	// Query returns events matching scope, ordered by occurred_at DESC,
 	// limited to `limit` rows. Pass since=zero-time to disable the time
-	// filter. Pass limit<=0 to use a default of 100.
+	// filter. Pass limit<=0 to use a default of 100. Limits exceeding the
+	// store-defined maximum are silently clamped.
 	Query(ctx context.Context, scope AuditScope, since time.Time, limit int) ([]AuditEvent, error)
 }
 

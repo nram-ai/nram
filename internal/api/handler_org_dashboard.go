@@ -21,7 +21,11 @@ type OrgDashboardAggregator interface {
 
 // OrgDashboardAuditQuery wraps AuditStore.Query for the org-tier activity
 // feed. Separate interface so the handler can be unit-tested without the
-// full AuditStore.
+// full AuditStore. Implementations must honor the same semantics as
+// AuditStore.Query: a sensible default applies when limit<=0, oversized
+// limits are silently clamped at the store's defensive maximum, a
+// zero-value since disables the time filter, and results are ordered by
+// occurred_at DESC.
 type OrgDashboardAuditQuery interface {
 	Query(ctx context.Context, scope AuditScope, since time.Time, limit int) ([]AuditEvent, error)
 }

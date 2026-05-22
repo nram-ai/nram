@@ -13,6 +13,26 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
+// maxAuditQueryLimit is a defensive ceiling against pathological caller
+// values (e.g. limit=MaxInt). Legitimate paginated callers should still
+// apply their own, tighter cap before reaching the store.
+const maxAuditQueryLimit = 10000
+
+// defaultAuditQueryLimit is applied when callers pass limit<=0.
+const defaultAuditQueryLimit = 100
+
+// clampAuditQueryLimit applies the floor and ceiling that bound any LIMIT
+// the store will pass through to SQL. Pulled out for direct unit testing.
+func clampAuditQueryLimit(limit int) int {
+	if limit <= 0 {
+		return defaultAuditQueryLimit
+	}
+	if limit > maxAuditQueryLimit {
+		return maxAuditQueryLimit
+	}
+	return limit
+}
+
 // AuditStore implements api.AuditStore against the audit_events table.
 type AuditStore struct {
 	db storage.DB
@@ -80,9 +100,7 @@ func (s *AuditStore) Append(ctx context.Context, event api.AuditEvent) error {
 }
 
 func (s *AuditStore) Query(ctx context.Context, scope api.AuditScope, since time.Time, limit int) ([]api.AuditEvent, error) {
-	if limit <= 0 {
-		limit = 100
-	}
+	limit = clampAuditQueryLimit(limit)
 
 	conds := []string{}
 	args := []interface{}{}
