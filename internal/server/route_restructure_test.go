@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -39,11 +40,15 @@ func (s *rrDashboardStore) RecentActivity(_ context.Context, _ int, _, _ *uuid.U
 	return []api.ActivityEvent{}, nil
 }
 
+var _ api.DashboardStore = (*rrDashboardStore)(nil)
+
 type rrAnalyticsStore struct{}
 
 func (s *rrAnalyticsStore) GetAnalytics(_ context.Context, _ *uuid.UUID, _ *uuid.UUID) (*api.AnalyticsData, error) {
 	return &api.AnalyticsData{}, nil
 }
+
+var _ api.AnalyticsStore = (*rrAnalyticsStore)(nil)
 
 type rrUsageStore struct{}
 
@@ -54,11 +59,15 @@ func (s *rrUsageStore) QueryUsage(_ context.Context, _ api.UsageFilter) (*api.Us
 	}, nil
 }
 
+var _ api.UsageStore = (*rrUsageStore)(nil)
+
 type rrNamespaceStore struct{}
 
 func (s *rrNamespaceStore) GetNamespaceTree(_ context.Context, _ *uuid.UUID) ([]api.NamespaceNode, error) {
 	return []api.NamespaceNode{}, nil
 }
+
+var _ api.NamespaceStore = (*rrNamespaceStore)(nil)
 
 type rrEnrichmentStore struct{}
 
@@ -81,6 +90,8 @@ func (s *rrEnrichmentStore) IsPaused(_ context.Context) (bool, error) {
 	return false, nil
 }
 
+var _ api.EnrichmentAdminStore = (*rrEnrichmentStore)(nil)
+
 type rrOrgIdPStore struct{}
 
 func (s *rrOrgIdPStore) ListIdPsByOrg(_ context.Context, _ uuid.UUID) ([]model.OAuthIdPConfig, error) {
@@ -102,6 +113,8 @@ func (s *rrOrgIdPStore) GetIdPByID(_ context.Context, _ uuid.UUID) (*model.OAuth
 func (s *rrOrgIdPStore) DeleteIdPByOrg(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }
+
+var _ api.OrgIdPStore = (*rrOrgIdPStore)(nil)
 
 type rrOrgAdminStore struct {
 	db storage.DB
@@ -131,6 +144,8 @@ func (s *rrOrgAdminStore) DeleteOrg(_ context.Context, _ uuid.UUID) error {
 	return fmt.Errorf("not implemented in test")
 }
 
+var _ api.OrgStore = (*rrOrgAdminStore)(nil)
+
 type rrSettingsStore struct{}
 
 func (s *rrSettingsStore) CountSettings(_ context.Context, _ string) (int, error) {
@@ -145,9 +160,15 @@ func (s *rrSettingsStore) UpdateSetting(_ context.Context, _ string, _ json.RawM
 	return fmt.Errorf("not implemented in test")
 }
 
+func (s *rrSettingsStore) GetSetting(_ context.Context, _, _ string) (*model.Setting, error) {
+	return nil, sql.ErrNoRows
+}
+
 func (s *rrSettingsStore) GetSettingsSchema(_ context.Context) ([]api.SettingSchema, error) {
 	return []api.SettingSchema{}, nil
 }
+
+var _ api.SettingsAdminStore = (*rrSettingsStore)(nil)
 
 // rrGraphSettings is a stub GraphSettingsResolver. The graph handler reads
 // graph.default_min_weight via ResolveFloatWithDefault; production wires the
@@ -158,6 +179,8 @@ type rrGraphSettings struct{}
 func (rrGraphSettings) ResolveFloatWithDefault(_ context.Context, _ string, _ string) float64 {
 	return 0.1
 }
+
+var _ api.GraphSettingsResolver = rrGraphSettings{}
 
 type rrDatabaseStore struct{}
 
@@ -188,7 +211,7 @@ func (s *rrDatabaseStore) MigrationAudit(_ context.Context) (*api.MigrationAudit
 	return nil, fmt.Errorf("not implemented in test")
 }
 
-
+var _ api.DatabaseAdminStore = (*rrDatabaseStore)(nil)
 
 // ---------------------------------------------------------------------------
 // Route restructure test environment

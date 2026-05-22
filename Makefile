@@ -1,4 +1,4 @@
-.PHONY: build-server build-ui build dev fresh-start install-ui clean
+.PHONY: build-server build-ui build dev fresh-start install-ui clean check
 
 clean:
 	rm -f nram
@@ -26,3 +26,7 @@ fresh-start:
 
 dev:
 	cd ui && npm run dev
+
+check:
+	go vet ./...
+	go test -count=1 ./...
