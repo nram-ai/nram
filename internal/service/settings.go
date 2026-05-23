@@ -358,6 +358,17 @@ const (
 	// Admin graph visualization minimum edge weight. Hot-reloadable.
 	SettingGraphDefaultMinWeight = "graph.default_min_weight"
 
+	// Server-side ceiling on edges returned from the /v1/graph endpoint. When
+	// the active relationship count for a namespace exceeds this value, the
+	// handler returns the top-N edges by weight descending and sets
+	// truncated=true on the response with total_edges / returned_edges counts
+	// so the admin UI can surface the partial-view banner. Exists because the
+	// React force-graph renderer (react-force-graph-3d) constructs a THREE.js
+	// Group per node and stalls past low thousands of edges; the cap protects
+	// the browser, not the data layer. Operators with capable rendering
+	// environments can raise it through the normal settings cascade.
+	SettingGraphMaxEdges = "graph.max_edges"
+
 	// Graph visualization d3-force parameters. System defaults are used when a
 	// project has not stored its own override. center_gravity is the centering
 	// force strength (forceCenter); charge_strength is the many-body repulsion
@@ -514,7 +525,7 @@ var settingDefaults = map[string]string{
 	SettingDreamMaxTokensPerCycle:         "1024000",
 	SettingDreamMaxTokensPerCall:          "2048",
 	SettingDreamCooldown:                  "300",
-	SettingDreamMinInterval:               "3600",
+	SettingDreamMinInterval:               "600",
 	SettingDreamInitialConfidence:         "0.3",
 	SettingDreamSupersessionThreshold:     "0.85",
 	SettingDreamLogRetention:              "30",
@@ -596,17 +607,17 @@ alignment must be a float:
 	SettingDreamContradictionParaphraseThreshold: "0.97",
 
 	SettingDreamEmbeddingBackfillEnabled:     "true",
-	SettingDreamEmbeddingBackfillCapPerCycle: "200",
+	SettingDreamEmbeddingBackfillCapPerCycle: "1000",
 
 	SettingDreamParaphraseEnabled:     "true",
 	SettingDreamParaphraseThreshold:   "0.97",
-	SettingDreamParaphraseCapPerCycle: "500",
+	SettingDreamParaphraseCapPerCycle: "5000",
 	SettingDreamParaphraseTopK:        "1",
 
-	SettingDreamParaphraseStaleFetchMax:    "10000",
-	SettingDreamConsolidationStaleFetchMax: "10000",
-	SettingDreamContradictionStaleFetchMax: "10000",
-	SettingDreamPruningBatchSize:           "1000",
+	SettingDreamParaphraseStaleFetchMax:    "50000",
+	SettingDreamConsolidationStaleFetchMax: "50000",
+	SettingDreamContradictionStaleFetchMax: "50000",
+	SettingDreamPruningBatchSize:           "5000",
 
 	SettingMemorySoftDeleteRetentionDays: "30",
 
@@ -769,7 +780,7 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingDreamStuckSweep:             "300",
 
 	SettingLifecycleSweepIntervalSeconds: "300",
-	SettingLifecycleBatchSize:            "100",
+	SettingLifecycleBatchSize:            "1000",
 	SettingLifecycleOrphanGraceSeconds:   "3600",
 
 	SettingAPIRateLimitCleanupSeconds: "60",
@@ -783,11 +794,12 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingEventsSSEKeepaliveSeconds:  "30",
 
 	SettingGraphDefaultMinWeight: "0.1",
+	SettingGraphMaxEdges:         "2000",
 	SettingGraphCenterGravity:    "0.75",
 	SettingGraphChargeStrength:   "-15",
 	SettingGraphLinkDistance:     "15",
 
-	SettingAPIBatchStoreMaxItems: "100",
+	SettingAPIBatchStoreMaxItems: "1000",
 
 	SettingExportPageSize: "100",
 
@@ -809,8 +821,8 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingDreamPruningEffectivelyZero:             "0.001",
 
 	SettingDreamTransitiveMinWeight:          "0.1",
-	SettingDreamTransitiveMaxPerCycle:        "200",
-	SettingDreamTransitiveNamespaceHardCap:   "5000",
+	SettingDreamTransitiveMaxPerCycle:        "5000",
+	SettingDreamTransitiveNamespaceHardCap:   "1000000",
 	SettingDreamTransitiveNamespaceHighWater: "0.95",
 	SettingDreamTransitiveNamespaceLowWater:  "0.80",
 
@@ -833,8 +845,8 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 
 	SettingDreamHeartbeatTickTimeoutSeconds: "10",
 
-	SettingDreamStuckScanLimit:      "1000",
-	SettingEnrichmentStuckScanLimit: "1000",
+	SettingDreamStuckScanLimit:      "5000",
+	SettingEnrichmentStuckScanLimit: "5000",
 
 	// memory.default_confidence is 1.0 to match how the import/extract/store
 	// write paths treat "no operator override". Operator-set values cascade

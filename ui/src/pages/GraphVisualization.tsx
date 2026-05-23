@@ -92,10 +92,11 @@ interface GraphLink {
 interface DetailPanelProps {
   entity: GraphEntity;
   connectedEntities: { name: string; relation: string; direction: string }[];
+  truncated: boolean;
   onClose: () => void;
 }
 
-function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
+function DetailPanel({ entity, connectedEntities, truncated, onClose }: DetailPanelProps) {
   const colors = getTypeColor(entity.entity_type);
 
   return (
@@ -181,8 +182,13 @@ function DetailPanel({ entity, connectedEntities, onClose }: DetailPanelProps) {
           {connectedEntities.length > 0 && (
             <div>
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Connected Entities ({connectedEntities.length})
+                Connected Entities ({connectedEntities.length}){truncated && " - subset"}
               </label>
+              {truncated && (
+                <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+                  Graph is truncated; this entity may have additional connections not shown.
+                </p>
+              )}
               <div className="mt-1 space-y-1">
                 {connectedEntities.map((conn, i) => (
                   <div
@@ -735,6 +741,13 @@ function GraphVisualization() {
         </div>
       </div>
 
+      {selectedProjectId && !isLoading && !graphError && graphData?.truncated &&
+        graphData.returned_edges !== undefined && graphData.total_edges !== undefined && (
+          <div className="mb-2 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-300">
+            Showing the top {graphData.returned_edges.toLocaleString()} of {graphData.total_edges.toLocaleString()} edges by weight.
+          </div>
+        )}
+
       {!selectedProjectId && (
         <div className="flex flex-1 min-h-0 items-center justify-center rounded-lg border border-dashed border-border bg-accent/30">
           <div className="text-center">
@@ -827,6 +840,7 @@ function GraphVisualization() {
               <DetailPanel
                 entity={selectedEntity}
                 connectedEntities={connectedEntities}
+                truncated={graphData?.truncated === true}
                 onClose={() => setSelectedEntity(null)}
               />
             )}

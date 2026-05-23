@@ -193,7 +193,7 @@ func TestBatchStore_TooManyItems(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
 	svc, _, _, _ := newBatchTestService(projects, namespaces)
 
-	items := make([]BatchStoreItem, 101)
+	items := make([]BatchStoreItem, 1001)
 	for i := range items {
 		items[i] = BatchStoreItem{Content: fmt.Sprintf("item %d", i), Source: "test"}
 	}

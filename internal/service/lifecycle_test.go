@@ -253,8 +253,8 @@ func TestConfigDefaults(t *testing.T) {
 	// BatchSize, DefaultPurgeDelay, OrphanGrace are now resolved per-sweep.
 	// With config zero and settings nil, the resolver helpers fall through
 	// to settingDefaults.
-	if got := svc.resolveBatchSize(context.Background()); got != 100 {
-		t.Fatalf("expected resolveBatchSize 100, got %d", got)
+	if got := svc.resolveBatchSize(context.Background()); got != 1000 {
+		t.Fatalf("expected resolveBatchSize 1000, got %d", got)
 	}
 	if got := svc.resolvePurgeDelay(context.Background()); got != 30*24*time.Hour {
 		t.Fatalf("expected resolvePurgeDelay 30d, got %v", got)

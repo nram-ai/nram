@@ -64,6 +64,14 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	maxPerCycle := p.resolveInt(ctx, service.SettingDreamTransitiveMaxPerCycle)
 	hardCap := p.resolveInt(ctx, service.SettingDreamTransitiveNamespaceHardCap)
 
+	// Operator-quiesce / misconfig short-circuit: skip the expensive
+	// ListByNamespace + adjacency build entirely when this cycle cannot
+	// possibly create any new edges. Previously the work happened and was
+	// only discarded after the headroom clamp at the maxNew computation.
+	if maxPerCycle <= 0 {
+		return PhaseResult{}, nil
+	}
+
 	entities, err := p.entities.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
 		return PhaseResult{}, err
@@ -86,7 +94,13 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		return PhaseResult{}, nil
 	}
 
-	// Build adjacency map for quick lookup.
+	// Build adjacency map for quick lookup. Note: this loads every active
+	// relationship in the namespace into memory. At namespace_hard_cap=1M
+	// (current default) a saturated namespace produces a multi-hundred-MB
+	// allocation per cycle; the adjacency-build step has no streaming or
+	// sampling fallback. Tracked as a follow-up; the current short-circuits
+	// above cover the easy cases (quiesce, sparse namespaces, at-hard-cap),
+	// but a deeply populated namespace will still pay the full slice cost.
 	allRels, err := p.relationships.ListByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
 		return PhaseResult{}, err

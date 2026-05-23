@@ -3,12 +3,14 @@ package api
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // GraphSettingsResolver narrows the SettingsService surface to just the
@@ -16,6 +18,7 @@ import (
 // concrete service type.
 type GraphSettingsResolver interface {
 	ResolveFloatWithDefault(ctx context.Context, key, scope string) float64
+	ResolveIntWithDefault(ctx context.Context, key, scope string) int
 }
 
 // GraphEntity represents an entity node for graph visualization.
@@ -40,9 +43,17 @@ type GraphRelationship struct {
 }
 
 // GraphResponse is the response payload for the admin graph endpoint.
+// Truncated is set when the namespace's eligible edge count exceeds
+// graph.max_edges and the response carries the top-N edges by weight.
+// TotalEdges then reflects the pre-truncation count so the UI can
+// surface a partial-view banner; ReturnedEdges mirrors len(Relationships)
+// for convenience.
 type GraphResponse struct {
 	Entities      []GraphEntity       `json:"entities"`
 	Relationships []GraphRelationship `json:"relationships"`
+	Truncated     bool                `json:"truncated,omitempty"`
+	TotalEdges    int                 `json:"total_edges,omitempty"`
+	ReturnedEdges int                 `json:"returned_edges,omitempty"`
 }
 
 // GraphProjectStore retrieves a project by ID.
@@ -258,9 +269,54 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 			}
 		}
 
-		writeJSON(w, http.StatusOK, GraphResponse{
-			Entities:      graphEntities,
-			Relationships: graphRelationships,
-		})
+		maxEdges := cfg.Settings.ResolveIntWithDefault(r.Context(),
+			service.SettingGraphMaxEdges, "global")
+		writeJSON(w, http.StatusOK, applyEdgeCap(graphEntities, graphRelationships, maxEdges))
+	}
+}
+
+// applyEdgeCap enforces the graph.max_edges ceiling on a response payload.
+// When the eligible edge count exceeds maxEdges the function retains the
+// top-N edges by weight descending (with ID as tiebreaker so the selection
+// is stable across replicas and post-VACUUM row reorderings) and populates
+// the Truncated / TotalEdges / ReturnedEdges fields so the admin UI can
+// surface a partial-view banner. The cap exists because the THREE.js
+// force-graph renderer stalls past low thousands of edges; throttling the
+// data layer (the historical workaround was a low transitive
+// namespace_hard_cap) belongs on the rendering boundary, not on dream-cycle
+// work. maxEdges <= 0 disables the cap.
+//
+// Entities are returned unchanged regardless of whether truncation fires.
+// Filtering entities to only those touched by retained edges would silently
+// drop isolated nodes from large namespaces and change the response shape
+// at the cap boundary — operators investigating namespace inventory rely on
+// the entity set being a stable view of "what exists," independent of edge
+// rendering. The cap is an edge concern; entities pass through.
+//
+// The function does not mutate the input rels slice. The sort runs on a
+// copy so callers can safely retain the original ordering for telemetry,
+// audit, or any future side-channel use.
+func applyEdgeCap(entities []GraphEntity, rels []GraphRelationship, maxEdges int) GraphResponse {
+	total := len(rels)
+	if maxEdges <= 0 || total <= maxEdges {
+		return GraphResponse{Entities: entities, Relationships: rels}
+	}
+
+	sorted := make([]GraphRelationship, len(rels))
+	copy(sorted, rels)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Weight != sorted[j].Weight {
+			return sorted[i].Weight > sorted[j].Weight
+		}
+		return sorted[i].ID < sorted[j].ID
+	})
+	sorted = sorted[:maxEdges]
+
+	return GraphResponse{
+		Entities:      entities,
+		Relationships: sorted,
+		Truncated:     true,
+		TotalEdges:    total,
+		ReturnedEdges: len(sorted),
 	}
 }

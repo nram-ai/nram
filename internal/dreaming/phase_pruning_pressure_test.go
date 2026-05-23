@@ -88,7 +88,10 @@ func pressureSettings(hardCap int, highWater, lowWater float64) *staticDreamSett
 		},
 		ints: map[string]int{
 			service.SettingDreamTransitiveNamespaceHardCap: hardCap,
-			service.SettingDreamPruningBatchSize:           1000,
+			// Headroom above any drain target the suite computes so the
+			// per-cycle ceiling does not engage; tests that exercise the
+			// ceiling set their own batch_size below.
+			service.SettingDreamPruningBatchSize: 100000,
 		},
 	}
 }
@@ -181,6 +184,35 @@ func TestPruning_TransitivePressure_Misconfigured(t *testing.T) {
 	if len(writer.expireTransitiveN) != 0 {
 		t.Errorf("expected zero ExpireLowestNTransitive calls on misconfigured pair, got %v",
 			writer.expireTransitiveN)
+	}
+}
+
+// TestPruning_TransitivePressure_PerCycleCap proves the drain target is
+// clamped to dreaming.pruning.batch_size so a single cycle on a very large
+// namespace cannot issue an unbounded UPDATE. With hard_cap=1,000,000 and
+// the default high/low waters the raw drain would be 150,000 rows in one
+// call; this test pins the protective ceiling that splits the drain
+// across cycles.
+func TestPruning_TransitivePressure_PerCycleCap(t *testing.T) {
+	// 950000 active, hard_cap 1000000, high_water 0.95, low_water 0.80 →
+	// raw target = 950000 - 800000 = 150000. With per-cycle cap of 5000,
+	// the call should fire with target 5000.
+	reader := &pressureFakeRelationshipReader{active: 950000}
+	writer := &recordingRelWriter{}
+	settings := pressureSettings(1000000, 0.95, 0.80)
+	settings.ints[service.SettingDreamPruningBatchSize] = 5000
+	phase := NewPruningPhase(&fakeMemoryReader{}, &recordingMemoryWriter{}, reader, writer, settings)
+	logger := NewDreamLogWriter(nil, uuid.New(), uuid.New())
+
+	if _, err := phase.Execute(context.Background(), pressureCycle(), NewTokenBudget(1<<20, 1024), logger); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(writer.expireTransitiveN) != 1 {
+		t.Fatalf("expected exactly 1 ExpireLowestNTransitive call, got %d (%v)",
+			len(writer.expireTransitiveN), writer.expireTransitiveN)
+	}
+	if got, want := writer.expireTransitiveN[0], 5000; got != want {
+		t.Errorf("drain target = %d, want %d (capped by batch_size, not raw 150000)", got, want)
 	}
 }
 

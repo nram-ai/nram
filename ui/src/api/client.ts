@@ -1252,6 +1252,9 @@ export interface GraphRelationship {
 export interface GraphData {
   entities: GraphEntity[];
   relationships: GraphRelationship[];
+  truncated?: boolean;
+  total_edges?: number;
+  returned_edges?: number;
 }
 
 export interface PaginatedResponse<T> {

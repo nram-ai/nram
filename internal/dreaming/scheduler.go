@@ -225,18 +225,13 @@ func (s *Scheduler) poll(ctx context.Context) {
 		return
 	}
 
-	// Resolve timing constraints.
-	cooldownSecs, _ := s.settings.ResolveInt(ctx, service.SettingDreamCooldown, "global")
-	if cooldownSecs <= 0 {
-		cooldownSecs = 300
-	}
-	cooldown := time.Duration(cooldownSecs) * time.Second
-
-	minIntervalSecs, _ := s.settings.ResolveInt(ctx, service.SettingDreamMinInterval, "global")
-	if minIntervalSecs <= 0 {
-		minIntervalSecs = 3600
-	}
-	minInterval := time.Duration(minIntervalSecs) * time.Second
+	// Resolve timing constraints. Falling back to ResolveIntWithDefault keeps
+	// these in lockstep with settingDefaults — hardcoded literals here would
+	// drift the moment defaults change in service.settings, exactly the bug
+	// class the schema-vs-defaults init check protects against on the schema
+	// side.
+	cooldown := time.Duration(s.settings.ResolveIntWithDefault(ctx, service.SettingDreamCooldown, "global")) * time.Second
+	minInterval := time.Duration(s.settings.ResolveIntWithDefault(ctx, service.SettingDreamMinInterval, "global")) * time.Second
 
 	// Get dirty projects.
 	dirtyProjects, err := s.dirtyRepo.ListDirtyProjects(ctx)

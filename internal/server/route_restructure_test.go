@@ -171,13 +171,18 @@ func (s *rrSettingsStore) GetSettingsSchema(_ context.Context) ([]api.SettingSch
 var _ api.SettingsAdminStore = (*rrSettingsStore)(nil)
 
 // rrGraphSettings is a stub GraphSettingsResolver. The graph handler reads
-// graph.default_min_weight via ResolveFloatWithDefault; production wires the
-// real SettingsService, the test returns the same default the cascade
-// publishes (0.1) so the handler's filter behavior is identical.
+// graph.default_min_weight via ResolveFloatWithDefault and graph.max_edges
+// via ResolveIntWithDefault; production wires the real SettingsService, the
+// test returns the same defaults the cascade publishes (0.1 and 2000) so
+// the handler's filter / truncation behavior is identical.
 type rrGraphSettings struct{}
 
 func (rrGraphSettings) ResolveFloatWithDefault(_ context.Context, _ string, _ string) float64 {
 	return 0.1
+}
+
+func (rrGraphSettings) ResolveIntWithDefault(_ context.Context, _ string, _ string) int {
+	return 2000
 }
 
 var _ api.GraphSettingsResolver = rrGraphSettings{}

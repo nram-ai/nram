@@ -331,6 +331,16 @@ func (p *PruningPhase) pruneTransitiveUnderPressure(ctx context.Context, cycle *
 		return 0, nil
 	}
 
+	// Per-cycle drain ceiling: reuse the streaming pruning batch size so a
+	// single cycle cannot issue an unbounded UPDATE (at the 1M hard_cap
+	// default, raw target can be 150k). Pressure relief is incremental —
+	// successive cycles drain further toward low_water. The trigger fires
+	// every cycle until totalActive falls below high_water, so cap'd cycles
+	// just take more wall-clock to converge rather than dropping work.
+	if perCycle := p.resolveInt(ctx, service.SettingDreamPruningBatchSize); perCycle > 0 && target > perCycle {
+		target = perCycle
+	}
+
 	expired, err := p.relWriter.ExpireLowestNTransitive(ctx, cycle.NamespaceID, target)
 	if err != nil {
 		return 0, err

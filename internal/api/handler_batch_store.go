@@ -25,6 +25,14 @@ type batchStoreRequestBody struct {
 	Options storeBodyOpts            `json:"options"`
 }
 
+// batchStoreMaxBodyBytes bounds the per-request payload before any item-count
+// validation runs. Defensive ceiling against unbounded body reads: with the
+// api.batch_store.max_items default at 1000 this allows ~64 KB per item on
+// average, room for normal memory content but small enough that a single
+// request cannot exhaust process memory or pin a handler goroutine on body
+// decoding alone.
+const batchStoreMaxBodyBytes int64 = 64 * 1024 * 1024 // 64 MiB
+
 // NewBatchStoreHandler returns an http.HandlerFunc that accepts a POST request to
 // create multiple memories in batch within a project.
 func NewBatchStoreHandler(svc BatchStoreServicer, bus events.EventBus) http.HandlerFunc {
@@ -37,7 +45,9 @@ func NewBatchStoreHandler(svc BatchStoreServicer, bus events.EventBus) http.Hand
 			return
 		}
 
-		// Decode request body.
+		// Decode request body. MaxBytesReader trips a *http.MaxBytesError
+		// once the cap is exceeded; the decoder surfaces it through err.
+		r.Body = http.MaxBytesReader(w, r.Body, batchStoreMaxBodyBytes)
 		var body batchStoreRequestBody
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			WriteError(w, ErrBadRequest("invalid request body: "+err.Error()))

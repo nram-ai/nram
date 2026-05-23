@@ -636,7 +636,7 @@ make build
 
 **How do I clear my dreaming backlog quickly?**
 
-Three knobs do the heavy lifting. Raise `dreaming.max_tokens_per_cycle` (default `1024000`) by 2x to 3x so each cycle does more work end to end. Lower `dreaming.min_interval_seconds` (default `3600`) toward `600` so cycles fire more often per project. Lower `dreaming.cooldown_seconds` (default `300`) if you want the scheduler to start a cycle sooner after the last write. All three live at `/admin/settings` and hot-reload per cycle, no restart needed. Trade-off: sustained higher LLM token spend, and aggressive settings will hit provider rate limits faster, so raise gradually and watch token usage at `/admin/usage`.
+Three knobs do the heavy lifting. Raise `dreaming.max_tokens_per_cycle` (default `1024000`) by 2x to 3x so each cycle does more work end to end. Lower `dreaming.min_interval_seconds` (default `600`) toward `120` so cycles fire more often per project. Lower `dreaming.cooldown_seconds` (default `300`) if you want the scheduler to start a cycle sooner after the last write. All three live at `/admin/settings` and hot-reload per cycle, no restart needed. Trade-off: sustained higher LLM token spend, and aggressive settings will hit provider rate limits faster, so raise gradually and watch token usage at `/admin/usage`.
 
 **How do I drain the novelty-audit backlog without waiting on the scheduler?**
 
@@ -653,10 +653,10 @@ Flags: `--project=<slug>` (required), `--max=2000` (audit cap; raise for larger 
 
 Each LLM-spending phase has a per-cycle cap that operators can raise during a backlog drain, then restore once the residual clears:
 
-- `dreaming.paraphrase.cap_per_cycle` (default `500`) for the paraphrase-dedup sweep
+- `dreaming.paraphrase.cap_per_cycle` (default `5000`) for the paraphrase-dedup sweep
 - `dreaming.contradiction.cap_per_cycle` (default `2000`) for LLM pair-contradiction checks
-- `dreaming.embedding_backfill.cap_per_cycle` (default `200`) for repairing rows whose vector is missing
-- `dreaming.pruning.batch_size` (default `1000`) for the streaming prune sweep
+- `dreaming.embedding_backfill.cap_per_cycle` (default `1000`) for repairing rows whose vector is missing
+- `dreaming.pruning.batch_size` (default `5000`) for the streaming prune sweep
 
 If one phase is being starved of token budget by the others, the `dreaming.<phase>.budget_fraction` settings rebalance the cycle envelope. Default split: `dreaming.contradiction.budget_fraction = 0.40`, `dreaming.consolidation.budget_fraction = 0.40`, `dreaming.embedding_backfill.budget_fraction = 0.10`, `dreaming.paraphrase_dedup.budget_fraction = 0.05`. SQL-only phases (`entity_dedup`, `transitive`, `pruning`, `weight_adjustment`) default to `0.0` so they share the root budget without a per-phase slice.
 
