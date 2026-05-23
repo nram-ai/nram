@@ -225,13 +225,25 @@ func (s *Scheduler) poll(ctx context.Context) {
 		return
 	}
 
-	// Resolve timing constraints. Falling back to ResolveIntWithDefault keeps
-	// these in lockstep with settingDefaults — hardcoded literals here would
-	// drift the moment defaults change in service.settings, exactly the bug
-	// class the schema-vs-defaults init check protects against on the schema
-	// side.
-	cooldown := time.Duration(s.settings.ResolveIntWithDefault(ctx, service.SettingDreamCooldown, "global")) * time.Second
-	minInterval := time.Duration(s.settings.ResolveIntWithDefault(ctx, service.SettingDreamMinInterval, "global")) * time.Second
+	// Resolve timing constraints. ResolveIntWithDefault keeps the missing-key
+	// case in lockstep with settingDefaults — hardcoded literals here would
+	// drift the moment defaults change in service.settings. The explicit
+	// floor-on-zero preserves the pre-refactor behavior for deployments that
+	// have a stored value of 0 (the schema's Min=0 makes that a legal write):
+	// 0 was always treated as "use the registered default" so a stale or
+	// hand-edited row cannot disable the cooldown / min-interval and let a
+	// runaway scheduler dream on every poll. An operator who wants near-zero
+	// timing can still set 1.
+	cooldownSecs := s.settings.ResolveIntWithDefault(ctx, service.SettingDreamCooldown, "global")
+	if cooldownSecs <= 0 {
+		cooldownSecs = service.GetDefaultInt(service.SettingDreamCooldown)
+	}
+	minIntervalSecs := s.settings.ResolveIntWithDefault(ctx, service.SettingDreamMinInterval, "global")
+	if minIntervalSecs <= 0 {
+		minIntervalSecs = service.GetDefaultInt(service.SettingDreamMinInterval)
+	}
+	cooldown := time.Duration(cooldownSecs) * time.Second
+	minInterval := time.Duration(minIntervalSecs) * time.Second
 
 	// Get dirty projects.
 	dirtyProjects, err := s.dirtyRepo.ListDirtyProjects(ctx)

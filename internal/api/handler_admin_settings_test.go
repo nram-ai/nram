@@ -21,11 +21,12 @@ import (
 // --- mock SettingsAdminStore ---
 
 type mockSettingsAdminStore struct {
-	settings    []model.Setting
-	listErr     error
-	updateErr   error
-	schemas     []SettingSchema
-	schemaErr   error
+	settings  []model.Setting
+	listErr   error
+	updateErr error
+	schemas   []SettingSchema
+	schemaErr error
+	resetErr  error
 
 	// capture args
 	listScope    string
@@ -35,6 +36,13 @@ type mockSettingsAdminStore struct {
 	updatedValue json.RawMessage
 	updatedScope string
 	updatedBy    *uuid.UUID
+
+	resetKey      string
+	resetScope    string
+	resetBy       *uuid.UUID
+	resetAllScope string
+	resetAllBy    *uuid.UUID
+	resetAllCount int
 }
 
 func (m *mockSettingsAdminStore) CountSettings(_ context.Context, scope string) (int, error) {
@@ -70,6 +78,25 @@ func (m *mockSettingsAdminStore) UpdateSetting(_ context.Context, key string, va
 
 func (m *mockSettingsAdminStore) GetSettingsSchema(_ context.Context) ([]SettingSchema, error) {
 	return m.schemas, m.schemaErr
+}
+
+func (m *mockSettingsAdminStore) ResetSetting(_ context.Context, key, scope string, updatedBy *uuid.UUID) error {
+	m.resetKey = key
+	m.resetScope = scope
+	m.resetBy = updatedBy
+	return m.resetErr
+}
+
+func (m *mockSettingsAdminStore) ResetAllSettings(_ context.Context, scope string, updatedBy *uuid.UUID) (int, error) {
+	m.resetAllScope = scope
+	m.resetAllBy = updatedBy
+	if m.resetErr != nil {
+		return 0, m.resetErr
+	}
+	if m.resetAllCount > 0 {
+		return m.resetAllCount, nil
+	}
+	return len(m.schemas), nil
 }
 
 // --- tests ---
@@ -964,6 +991,253 @@ func transitiveWaterSchemas() []SettingSchema {
 	return []SettingSchema{
 		{Key: service.SettingDreamTransitiveNamespaceHighWater, Type: "number", DefaultValue: json.RawMessage(`0.95`), Min: &min0, Max: &max1, Step: &step},
 		{Key: service.SettingDreamTransitiveNamespaceLowWater, Type: "number", DefaultValue: json.RawMessage(`0.80`), Min: &min0, Max: &max1, Step: &step},
+	}
+}
+
+// --- reset endpoint ---
+
+func TestAdminSettingsResetSingleKey(t *testing.T) {
+	userID := uuid.New()
+	store := &mockSettingsAdminStore{
+		schemas: []SettingSchema{
+			{Key: "memory.max_facts", Type: "number", DefaultValue: json.RawMessage(`1000`)},
+		},
+	}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	body := `{"key":"memory.max_facts","scope":"global"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{UserID: userID, Role: "admin"}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.resetKey != "memory.max_facts" {
+		t.Errorf("expected resetKey memory.max_facts, got %q", store.resetKey)
+	}
+	if store.resetScope != "global" {
+		t.Errorf("expected scope global, got %q", store.resetScope)
+	}
+	if store.resetBy == nil || *store.resetBy != userID {
+		t.Errorf("expected resetBy %s, got %v", userID, store.resetBy)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("expected status ok, got %v", resp["status"])
+	}
+	if n, _ := resp["reset"].(float64); n != 1 {
+		t.Errorf("expected reset=1, got %v", resp["reset"])
+	}
+}
+
+func TestAdminSettingsResetAllEmptyBody(t *testing.T) {
+	userID := uuid.New()
+	store := &mockSettingsAdminStore{
+		schemas: []SettingSchema{
+			{Key: "memory.max_facts", Type: "number", DefaultValue: json.RawMessage(`1000`)},
+			{Key: "enrichment.enabled", Type: "boolean", DefaultValue: json.RawMessage(`true`)},
+		},
+	}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings/reset", nil)
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{UserID: userID, Role: "admin"}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.resetAllScope != "global" {
+		t.Errorf("expected scope global default, got %q", store.resetAllScope)
+	}
+	if store.resetKey != "" {
+		t.Errorf("expected ResetSetting not called, but resetKey=%q", store.resetKey)
+	}
+	if store.resetAllBy == nil || *store.resetAllBy != userID {
+		t.Errorf("expected resetAllBy %s, got %v", userID, store.resetAllBy)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if n, _ := resp["reset"].(float64); n != 2 {
+		t.Errorf("expected reset=2 (registry size), got %v", resp["reset"])
+	}
+}
+
+func TestAdminSettingsResetUnknownKey(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: []SettingSchema{
+			{Key: "memory.max_facts", Type: "number", DefaultValue: json.RawMessage(`1000`)},
+		},
+	}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	body := `{"key":"not.a.real.key","scope":"global"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.resetKey != "" {
+		t.Error("ResetSetting must not be called for unknown key")
+	}
+	if !strings.Contains(w.Body.String(), "not registered") {
+		t.Errorf("error should name the issue; got %s", w.Body.String())
+	}
+}
+
+func TestAdminSettingsResetDefaultsScopeToGlobal(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: []SettingSchema{
+			{Key: "memory.max_facts", Type: "number", DefaultValue: json.RawMessage(`1000`)},
+		},
+	}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	// Body omits scope; handler must default to "global" so a bare POST is
+	// the "reset everything to factory state" affordance.
+	body := `{"key":"memory.max_facts"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.resetScope != "global" {
+		t.Errorf("expected scope global, got %q", store.resetScope)
+	}
+}
+
+// TestAdminSettingsReset_RejectsDefaultThatBreaksCrossKeyInvariant pins the
+// fix for the cross-key invariant gap: resetting only one half of a
+// (high_water, low_water) pair must not write a default that violates
+// low_water < high_water. The PUT path enforces this; the reset path now
+// also routes through validateValueAgainstSchema.
+func TestAdminSettingsReset_RejectsDefaultThatBreaksCrossKeyInvariant(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: transitiveWaterSchemas(),
+		// Operator has overridden high_water to 0.50; resetting low_water
+		// to its default 0.80 would produce low_water (0.80) >= high_water (0.50).
+		settings: []model.Setting{
+			{Key: service.SettingDreamTransitiveNamespaceHighWater, Value: json.RawMessage(`0.50`), Scope: "global"},
+		},
+	}
+	// Override the default to a value that breaks the invariant.
+	for i := range store.schemas {
+		if store.schemas[i].Key == service.SettingDreamTransitiveNamespaceLowWater {
+			store.schemas[i].DefaultValue = json.RawMessage(`0.80`)
+		}
+	}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	body := `{"key":"dreaming.transitive.namespace_low_water","scope":"global"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.resetKey != "" {
+		t.Error("ResetSetting must not be called when default would break invariant")
+	}
+}
+
+// TestAdminSettingsReset_ChunkedEmptyBody pins the fix for the
+// ContentLength=-1 edge case: an empty body (chunked transfer or otherwise)
+// must be treated as "reset all at global", not 400.
+func TestAdminSettingsReset_ChunkedEmptyBody(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: []SettingSchema{
+			{Key: "memory.max_facts", Type: "number", DefaultValue: json.RawMessage(`1000`)},
+		},
+	}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings/reset", http.NoBody)
+	req.ContentLength = -1 // simulate chunked transfer
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.resetAllScope != "global" {
+		t.Errorf("expected fallback to global, got %q", store.resetAllScope)
+	}
+}
+
+// TestAdminSettingsReset_TrimsWhitespaceScope pins the fix for
+// whitespace-only scope: it must normalize to "global", not pass through as
+// a literal " " scope that silently no-ops.
+func TestAdminSettingsReset_TrimsWhitespaceScope(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: []SettingSchema{
+			{Key: "memory.max_facts", Type: "number", DefaultValue: json.RawMessage(`1000`)},
+		},
+	}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	body := `{"key":"memory.max_facts","scope":"   "}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.resetScope != "global" {
+		t.Errorf("expected scope global after trim, got %q", store.resetScope)
+	}
+}
+
+func TestAdminSettingsResetRejectsNonPost(t *testing.T) {
+	store := &mockSettingsAdminStore{}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/settings/reset", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAdminSettingsResetStoreError(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: []SettingSchema{
+			{Key: "memory.max_facts", Type: "number", DefaultValue: json.RawMessage(`1000`)},
+		},
+		resetErr: errors.New("database failure"),
+	}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	body := `{"key":"memory.max_facts","scope":"global"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
 	}
 }
 

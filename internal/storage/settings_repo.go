@@ -131,6 +131,54 @@ func (r *SettingsRepo) InsertManyIfMissing(ctx context.Context, scope string, kv
 	return nil
 }
 
+// SetMany upserts a batch of settings inside a single transaction so the
+// operation is atomic from the database's point of view. UpdatedAt is set to
+// the current time for every row. Each setting's UpdatedBy is honored
+// individually. Used by admin reset-all so the registry comes back to its
+// canonical defaults as one commit instead of N independent fsyncs.
+func (r *SettingsRepo) SetMany(ctx context.Context, settings []model.Setting) error {
+	if len(settings) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("settings set many: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `INSERT INTO settings (key, value, scope, updated_by, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (key, scope) DO UPDATE SET value = ?, updated_by = ?, updated_at = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `INSERT INTO settings (key, value, scope, updated_by, updated_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (key, scope) DO UPDATE SET value = $6, updated_by = $7, updated_at = $8`
+	}
+
+	for i := range settings {
+		s := &settings[i]
+		var updatedBy *string
+		if s.UpdatedBy != nil {
+			str := s.UpdatedBy.String()
+			updatedBy = &str
+		}
+		valueStr := string(s.Value)
+		if _, err := tx.ExecContext(ctx, query,
+			s.Key, valueStr, s.Scope, updatedBy, now,
+			valueStr, updatedBy, now,
+		); err != nil {
+			return fmt.Errorf("settings set many %q: %w", s.Key, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("settings set many: commit: %w", err)
+	}
+	return nil
+}
+
 // Delete removes a setting by its composite key (key, scope).
 func (r *SettingsRepo) Delete(ctx context.Context, key string, scope string) error {
 	query := `DELETE FROM settings WHERE key = ? AND scope = ?`

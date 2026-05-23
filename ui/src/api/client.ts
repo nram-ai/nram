@@ -1400,6 +1400,8 @@ export const adminAPI = {
     request<{ data: SettingSchema[] }>("GET", "/admin/settings?schema=true"),
   updateSetting: (key: string, value: unknown, scope: string) =>
     request<{ status: string }>("PUT", "/admin/settings", { key, value, scope }),
+  resetSettings: (body: { key?: string; scope?: string } = {}) =>
+    request<{ status: string; reset: number }>("POST", "/admin/settings/reset", body),
 
   // Webhooks
   listWebhooks: () => request<{ data: Webhook[] }>("GET", "/admin/webhooks").then(r => r.data),

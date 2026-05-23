@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,6 +34,16 @@ type SettingsAdminStore interface {
 	GetSetting(ctx context.Context, key, scope string) (*model.Setting, error)
 	UpdateSetting(ctx context.Context, key string, value json.RawMessage, scope string, updatedBy *uuid.UUID) error
 	GetSettingsSchema(ctx context.Context) ([]SettingSchema, error)
+
+	// ResetSetting reverts a single setting at (key, scope) to its registered
+	// default. At scope=="global", performs an upsert with the canonical default
+	// value. At any other scope, deletes the row so the cascade resolver falls
+	// back to the global default.
+	ResetSetting(ctx context.Context, key, scope string, updatedBy *uuid.UUID) error
+
+	// ResetAllSettings reverts every registered schema key at the given scope.
+	// Returns the count of keys reset. Atomic at the store boundary.
+	ResetAllSettings(ctx context.Context, scope string, updatedBy *uuid.UUID) (int, error)
 }
 
 // SettingsAdminConfig holds the dependencies for the settings admin handler.
@@ -61,6 +73,12 @@ type SettingSchema struct {
 	Min  *float64 `json:"min,omitempty"`
 	Max  *float64 `json:"max,omitempty"`
 	Step *float64 `json:"step,omitempty"`
+	// OmitFromResetAll excludes this entry from the bulk "reset all to
+	// defaults" path so credentials and connection strings (Qdrant address,
+	// API keys, provider URLs) are not wiped to their empty schema default
+	// when an operator clicks Reset all. Per-key reset still works — the
+	// operator has to explicitly target the key. The PUT path is unaffected.
+	OmitFromResetAll bool `json:"omit_from_reset_all,omitempty"`
 }
 
 // settingUpdateRequest is the request body for PUT /settings.
@@ -68,6 +86,14 @@ type settingUpdateRequest struct {
 	Key   string          `json:"key"`
 	Value json.RawMessage `json:"value"`
 	Scope string          `json:"scope"`
+}
+
+// settingResetRequest is the request body for POST /settings/reset. Both
+// fields are optional: omitting Key resets every registered key at Scope.
+// Omitting Scope defaults to "global".
+type settingResetRequest struct {
+	Key   string `json:"key,omitempty"`
+	Scope string `json:"scope,omitempty"`
 }
 
 // NewAdminSettingsHandler returns an http.HandlerFunc that dispatches settings
@@ -92,6 +118,97 @@ func NewAdminSettingsHandler(cfg SettingsAdminConfig) http.HandlerFunc {
 			WriteError(w, ErrBadRequest("method not allowed"))
 		}
 	}
+}
+
+// NewAdminSettingsResetHandler returns an http.HandlerFunc for
+// POST /settings/reset. The request body is settingResetRequest; an empty
+// body resets every registered key at scope "global". Returns 405-style
+// 400 ("method not allowed") for non-POST so the contract matches the
+// rest of the admin settings surface.
+func NewAdminSettingsResetHandler(cfg SettingsAdminConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			WriteError(w, ErrBadRequest("method not allowed"))
+			return
+		}
+		handleResetSetting(w, r, cfg)
+	}
+}
+
+// handleResetSetting handles POST /settings/reset. An empty key resets every
+// registered schema key at the given scope; a non-empty key resets only that
+// one. The runtime default comes from the schema registry (DefaultValue) so
+// resets stay aligned with the values the editor advertises as "default".
+func handleResetSetting(w http.ResponseWriter, r *http.Request, cfg SettingsAdminConfig) {
+	body := settingResetRequest{}
+	// Read the body once and decode only when there's payload. ContentLength
+	// is -1 for chunked / Transfer-Encoded requests, so a length check alone
+	// either drops a real chunked body or rejects an empty one with 400; reading
+	// the bytes first sidesteps both. Empty body is legal: "reset all at global".
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		WriteError(w, ErrBadRequest("could not read request body"))
+		return
+	}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			WriteError(w, ErrBadRequest("invalid JSON body"))
+			return
+		}
+	}
+
+	body.Key = strings.TrimSpace(body.Key)
+	body.Scope = strings.TrimSpace(body.Scope)
+	if body.Scope == "" {
+		body.Scope = "global"
+	}
+
+	var updatedBy *uuid.UUID
+	if ac := auth.FromContext(r.Context()); ac != nil {
+		updatedBy = &ac.UserID
+	}
+
+	if body.Key != "" {
+		// Look up the schema entry: we both validate registration AND use its
+		// DefaultValue to re-run the PUT-side validator (min/max bounds and
+		// cross-key invariants like high_water > low_water). Without this,
+		// resetting one half of an invariant pair while the other is overridden
+		// can leave a configuration that PUT would reject.
+		schemas, err := cfg.Store.GetSettingsSchema(r.Context())
+		if err != nil {
+			WriteError(w, mapSettingsError(err))
+			return
+		}
+		var entry *SettingSchema
+		for i := range schemas {
+			if schemas[i].Key == body.Key {
+				entry = &schemas[i]
+				break
+			}
+		}
+		if entry == nil {
+			WriteError(w, ErrBadRequest(fmt.Sprintf("setting %q is not registered", body.Key)))
+			return
+		}
+		if err := validateValueAgainstSchema(r.Context(), cfg.Store, body.Key, entry.DefaultValue); err != nil {
+			WriteError(w, ErrBadRequest(fmt.Sprintf("reset %q would violate an invariant: %v", body.Key, err)))
+			return
+		}
+
+		if err := cfg.Store.ResetSetting(r.Context(), body.Key, body.Scope, updatedBy); err != nil {
+			WriteError(w, mapSettingsError(err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "reset": 1})
+		return
+	}
+
+	count, err := cfg.Store.ResetAllSettings(r.Context(), body.Scope, updatedBy)
+	if err != nil {
+		WriteError(w, mapSettingsError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "reset": count})
 }
 
 // handleListSettings handles GET /settings — returns settings optionally filtered by scope.

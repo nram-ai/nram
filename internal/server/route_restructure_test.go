@@ -168,6 +168,14 @@ func (s *rrSettingsStore) GetSettingsSchema(_ context.Context) ([]api.SettingSch
 	return []api.SettingSchema{}, nil
 }
 
+func (s *rrSettingsStore) ResetSetting(_ context.Context, _, _ string, _ *uuid.UUID) error {
+	return fmt.Errorf("not implemented in test")
+}
+
+func (s *rrSettingsStore) ResetAllSettings(_ context.Context, _ string, _ *uuid.UUID) (int, error) {
+	return 0, fmt.Errorf("not implemented in test")
+}
+
 var _ api.SettingsAdminStore = (*rrSettingsStore)(nil)
 
 // rrGraphSettings is a stub GraphSettingsResolver. The graph handler reads

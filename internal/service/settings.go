@@ -1029,6 +1029,24 @@ func (s *SettingsService) invalidateCache(key, scope string) {
 	s.mu.Unlock()
 }
 
+// InvalidateCache is the exported counterpart for callers that write to the
+// settings repo through a different path (admin REST handler going via
+// SettingsAdminStore instead of SettingsService.Set / Delete). Without an
+// explicit invalidation those writes would not be visible to Resolve* readers
+// until the entry's cache TTL elapsed (default 30s).
+func (s *SettingsService) InvalidateCache(key, scope string) {
+	s.invalidateCache(key, scope)
+}
+
+// InvalidateAllCache drops every cached entry, used after bulk operations
+// (admin reset-all) where listing the affected keys to invalidate one-by-one
+// is wasted work compared to clearing the map.
+func (s *SettingsService) InvalidateAllCache() {
+	s.mu.Lock()
+	s.cache = make(map[string]settingsCacheEntry)
+	s.mu.Unlock()
+}
+
 // ResolveFloatInRange resolves a numeric setting and clamps it through a
 // range filter, returning fallback when the configured value is missing,
 // unparseable, or outside [min, max]. Used for boot-time hydration helpers

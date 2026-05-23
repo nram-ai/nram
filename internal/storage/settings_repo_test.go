@@ -493,3 +493,40 @@ func TestSettingsRepo_ListAll(t *testing.T) {
 		}
 	})
 }
+
+func TestSettingsRepo_SetMany_UpsertsAtomically(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewSettingsRepo(db)
+
+		if err := repo.Set(ctx, &model.Setting{
+			Key: "theme", Value: json.RawMessage(`"dark"`), Scope: "global",
+		}); err != nil {
+			t.Fatalf("seed Set: %v", err)
+		}
+
+		batch := []model.Setting{
+			{Key: "theme", Value: json.RawMessage(`"light"`), Scope: "global"},
+			{Key: "language", Value: json.RawMessage(`"en"`), Scope: "global"},
+		}
+		if err := repo.SetMany(ctx, batch); err != nil {
+			t.Fatalf("SetMany: %v", err)
+		}
+
+		got, err := repo.Get(ctx, "theme", "global")
+		if err != nil {
+			t.Fatalf("Get theme: %v", err)
+		}
+		if string(got.Value) != `"light"` {
+			t.Errorf("theme should be upserted to light, got %s", string(got.Value))
+		}
+		got, err = repo.Get(ctx, "language", "global")
+		if err != nil {
+			t.Fatalf("Get language: %v", err)
+		}
+		if string(got.Value) != `"en"` {
+			t.Errorf("language should be inserted, got %s", string(got.Value))
+		}
+	})
+}
+

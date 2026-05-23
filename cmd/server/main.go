@@ -456,7 +456,7 @@ func main() {
 	userAdminStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, namespaceRepo, orgRepo, projectRepo)
 	projectAdminStore := adminstore.NewProjectAdminStore(db, projectRepo, namespaceRepo)
 	webhookAdminStore := adminstore.NewWebhookAdminStore(webhookRepo)
-	settingsAdminStore := adminstore.NewSettingsAdminStore(settingsRepo)
+	settingsAdminStore := adminstore.NewSettingsAdminStore(settingsRepo, settingsSvc)
 	dashboardStore := adminstore.NewDashboardStore(db, enrichmentQueueRepo)
 	analyticsStore := adminstore.NewAnalyticsStore(db)
 	usageStore := adminstore.NewUsageStore(db)
@@ -781,8 +781,9 @@ func main() {
 		AdminOrgs:      api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore, Audit: auditStore}),
 		AdminUsers:     api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore, Audit: auditStore}),
 		AdminProjects:  api.NewAdminProjectsHandler(api.ProjectAdminConfig{Store: projectAdminStore}),
-		AdminProviders: api.NewAdminProvidersHandler(api.ProviderAdminConfig{Store: providerAdminStore}),
-		AdminSettings:  api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
+		AdminProviders:     api.NewAdminProvidersHandler(api.ProviderAdminConfig{Store: providerAdminStore}),
+		AdminSettings:      api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
+		AdminSettingsReset: api.NewAdminSettingsResetHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
 		AdminEnrichment: api.NewAdminEnrichmentHandler(api.EnrichmentAdminConfig{
 			Store:          enrichmentAdminStore,
 			FactProvider:   factProvider,

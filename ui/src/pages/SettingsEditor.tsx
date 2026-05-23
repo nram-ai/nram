@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
+  useResetSettings,
   useSettings,
   useSettingsSchema,
   useSetupStatus,
@@ -74,6 +75,22 @@ function fractionSegments(
 }
 
 const formatFractionPct = (v: number) => `${(v * 100).toFixed(0)}%`;
+
+// canonicalize returns a structurally-equivalent value with object keys sorted
+// recursively, so JSON.stringify produces a stable form regardless of insertion
+// order. Used for "is this value different from the schema default?" checks
+// where the same logical value may come back from the backend with different
+// key ordering than the operator originally typed.
+function canonicalize(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(canonicalize);
+  if (v !== null && typeof v === "object") {
+    const src = v as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const k of Object.keys(src).sort()) sorted[k] = canonicalize(src[k]);
+    return sorted;
+  }
+  return v;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -555,11 +572,15 @@ function renderValueInput({
 function InlineSettingEditor({
   item,
   onSave,
+  onReset,
   saving,
+  resetting,
 }: {
   item: SettingWithSchema;
   onSave: (key: string, value: unknown, scope: string) => void;
+  onReset: (key: string, scope: string) => void;
   saving: boolean;
+  resetting: boolean;
 }) {
   const { schema, setting } = item;
   const currentValue = setting?.value ?? schema.default_value;
@@ -570,7 +591,24 @@ function InlineSettingEditor({
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
   const [editScope, setEditScope] = useState(currentScope);
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
+
+  // Reset is only meaningful when the live value differs from the registered
+  // default. canonicalize() walks the value sorting object keys recursively
+  // so two semantically-equal JSON values compare equal regardless of the
+  // order their keys came back from the backend serializer. Arrays preserve
+  // their order (semantically significant for cost-rate lists, etc.).
+  const differsFromDefault = useMemo(() => {
+    try {
+      return (
+        JSON.stringify(canonicalize(currentValue)) !==
+        JSON.stringify(canonicalize(schema.default_value))
+      );
+    } catch {
+      return false;
+    }
+  }, [currentValue, schema.default_value]);
 
   const startEdit = useCallback(() => {
     setEditValue(formatValue(currentValue));
@@ -684,6 +722,43 @@ function InlineSettingEditor({
           >
             Edit
           </button>
+          {differsFromDefault && (
+            confirmingReset ? (
+              <span className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Reset the same row the user is looking at: a global row
+                    // resets the global value; a project/user/org row deletes
+                    // the override so the cascade falls back to global.
+                    onReset(schema.key, currentScope);
+                    setConfirmingReset(false);
+                  }}
+                  disabled={resetting}
+                  className="rounded-md bg-destructive px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-destructive/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingReset(false)}
+                  className="rounded-md border border-input px-2.5 py-1 text-xs font-medium text-foreground shadow-sm hover:bg-muted"
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingReset(true)}
+                disabled={resetting}
+                className="rounded-md border border-input px-2.5 py-1 text-xs font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Reset this setting to its registered default"
+              >
+                Reset
+              </button>
+            )
+          )}
         </div>
       </div>
     );
@@ -776,12 +851,16 @@ function ParentGroupCard({
   group,
   itemsByCategory,
   onSave,
+  onReset,
   saving,
+  resetting,
 }: {
   group: ParentGroup;
   itemsByCategory: Map<string, SettingWithSchema[]>;
   onSave: (key: string, value: unknown, scope: string) => void;
+  onReset: (key: string, scope: string) => void;
   saving: boolean;
+  resetting: boolean;
 }) {
   // Empty sub-sections are dropped silently so the card never shows a heading
   // with nothing under it.
@@ -816,7 +895,9 @@ function ParentGroupCard({
               key={item.schema.key}
               item={item}
               onSave={onSave}
+              onReset={onReset}
               saving={saving}
+              resetting={resetting}
             />
           ))}
         </div>
@@ -851,7 +932,9 @@ function ParentGroupCard({
                       key={item.schema.key}
                       item={item}
                       onSave={onSave}
+                      onReset={onReset}
                       saving={saving}
+                      resetting={resetting}
                     />
                   ))}
                 </div>
@@ -872,6 +955,7 @@ function SettingsEditor() {
   const settingsQuery = useSettings();
   const schemaQuery = useSettingsSchema();
   const updateMutation = useUpdateSetting();
+  const resetMutation = useResetSettings();
   const { available: enrichmentAvailable } = useEnrichmentAvailable();
 
   const [toast, setToast] = useState<{
@@ -879,6 +963,7 @@ function SettingsEditor() {
     type: "success" | "error";
   } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [confirmingResetAll, setConfirmingResetAll] = useState(false);
 
   const showToast = useCallback(
     (message: string, type: "success" | "error") => {
@@ -905,6 +990,36 @@ function SettingsEditor() {
     },
     [updateMutation, showToast],
   );
+
+  const handleReset = useCallback(
+    (key: string, scope: string) => {
+      resetMutation.mutate(
+        { key, scope },
+        {
+          onSuccess: () => showToast(`Reset "${key}" to default`, "success"),
+          onError: (err) =>
+            showToast(`Failed to reset "${key}": ${err.message}`, "error"),
+        },
+      );
+    },
+    [resetMutation, showToast],
+  );
+
+  const handleResetAll = useCallback(() => {
+    resetMutation.mutate(
+      { scope: "global" },
+      {
+        onSuccess: (resp) =>
+          showToast(
+            `Restored ${resp.reset} settings to defaults`,
+            "success",
+          ),
+        onError: (err) =>
+          showToast(`Failed to reset settings: ${err.message}`, "error"),
+      },
+    );
+    setConfirmingResetAll(false);
+  }, [resetMutation, showToast]);
 
   const isLoading = settingsQuery.isLoading || schemaQuery.isLoading;
   const isError = settingsQuery.isError || schemaQuery.isError;
@@ -960,11 +1075,46 @@ function SettingsEditor() {
   return (
     <div>
       {/* Page header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          System configuration. Changes take effect immediately unless a setting is flagged as requiring a server restart.
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            System configuration. Changes take effect immediately unless a setting is flagged as requiring a server restart.
+          </p>
+        </div>
+        <div className="flex-shrink-0">
+          {confirmingResetAll ? (
+            <span className="inline-flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                Restore every setting to its registered default?
+              </span>
+              <button
+                type="button"
+                onClick={handleResetAll}
+                disabled={resetMutation.isPending}
+                className="rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-destructive/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Confirm reset
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingResetAll(false)}
+                className="rounded-md border border-input px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted"
+              >
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingResetAll(true)}
+              disabled={resetMutation.isPending}
+              className="rounded-md border border-input px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Reset all to defaults
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Loading state */}
@@ -1003,7 +1153,9 @@ function SettingsEditor() {
               group={group}
               itemsByCategory={itemsByCategory}
               onSave={handleSave}
+              onReset={handleReset}
               saving={updateMutation.isPending}
+              resetting={resetMutation.isPending}
             />
           ))}
         </div>

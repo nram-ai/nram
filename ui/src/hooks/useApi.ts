@@ -605,6 +605,25 @@ export function useUpdateSetting() {
   });
 }
 
+// useResetSettings reverts one setting (when `key` is supplied) or every
+// registered setting (when omitted) to the registered default at the given
+// scope. Mirrors useUpdateSetting's cache invalidation so the SettingsEditor,
+// Dreaming admin panel, and cost-rates consumers all re-render against the
+// post-reset state on success.
+export function useResetSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { key?: string; scope?: string } = {}) =>
+      adminAPI.resetSettings(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "settings"] });
+      qc.invalidateQueries({ queryKey: ["admin", "dreaming"] });
+      qc.invalidateQueries({ queryKey: ["me", "dreaming"] });
+      qc.invalidateQueries({ queryKey: ["cost-rates"] });
+    },
+  });
+}
+
 // --- Webhooks ---
 
 export function useWebhooks() {

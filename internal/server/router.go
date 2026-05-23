@@ -122,6 +122,7 @@ type Handlers struct {
 	AdminProjects    http.HandlerFunc
 	AdminProviders   http.HandlerFunc
 	AdminSettings    http.HandlerFunc
+	AdminSettingsReset http.HandlerFunc
 	AdminEnrichment  http.HandlerFunc
 	AdminOAuth       http.HandlerFunc
 	AdminWebhooks    http.HandlerFunc
@@ -403,6 +404,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/providers", handler(handlers.AdminProviders))
 			r.HandleFunc("/providers/*", handler(handlers.AdminProviders))
 			r.HandleFunc("/settings", handler(handlers.AdminSettings))
+			r.HandleFunc("/settings/reset", handler(handlers.AdminSettingsReset))
 			r.HandleFunc("/oauth", handler(handlers.AdminOAuth))
 			r.HandleFunc("/oauth/*", handler(handlers.AdminOAuth))
 			r.HandleFunc("/webhooks", handler(handlers.AdminWebhooks))

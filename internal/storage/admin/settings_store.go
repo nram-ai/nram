@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -13,14 +14,27 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
+// SettingsCacheInvalidator optionally consumes (key, scope) changes so a
+// settings cache (SettingsService) can drop entries immediately after the
+// admin REST API writes. Without it, Resolve* readers see stale values for
+// up to settings.cache_ttl_seconds (default 30s) after every UpdateSetting,
+// ResetSetting, or ResetAllSettings.
+type SettingsCacheInvalidator interface {
+	InvalidateCache(key, scope string)
+	InvalidateAllCache()
+}
+
 // SettingsAdminStore implements api.SettingsAdminStore by wrapping SettingsRepo.
 type SettingsAdminStore struct {
 	settingsRepo *storage.SettingsRepo
+	invalidator  SettingsCacheInvalidator
 }
 
-// NewSettingsAdminStore creates a new SettingsAdminStore.
-func NewSettingsAdminStore(settingsRepo *storage.SettingsRepo) *SettingsAdminStore {
-	return &SettingsAdminStore{settingsRepo: settingsRepo}
+// NewSettingsAdminStore creates a new SettingsAdminStore. invalidator may be
+// nil in tests; production wires SettingsService so admin writes propagate
+// past the per-key TTL cache immediately.
+func NewSettingsAdminStore(settingsRepo *storage.SettingsRepo, invalidator SettingsCacheInvalidator) *SettingsAdminStore {
+	return &SettingsAdminStore{settingsRepo: settingsRepo, invalidator: invalidator}
 }
 
 func (s *SettingsAdminStore) CountSettings(ctx context.Context, scope string) (int, error) {
@@ -63,7 +77,110 @@ func (s *SettingsAdminStore) UpdateSetting(ctx context.Context, key string, valu
 		Scope:     scope,
 		UpdatedBy: updatedBy,
 	}
-	return s.settingsRepo.Set(ctx, setting)
+	if err := s.settingsRepo.Set(ctx, setting); err != nil {
+		return err
+	}
+	if s.invalidator != nil {
+		s.invalidator.InvalidateCache(key, scope)
+	}
+	return nil
+}
+
+// defaultValueForKey resolves the canonical JSON-encoded default for a setting
+// key. Non-prompt entries take their default from the schema registry, which
+// is the same value the UI advertises as "default". Prompt entries are large
+// multi-line strings stored only in service.settingDefaults; they share their
+// schema DefaultValue with the runtime map at package init (see settings_store
+// init), so a runtime lookup gives the same string content with proper JSON
+// encoding.
+func defaultValueForKey(key string) (json.RawMessage, bool) {
+	for i := range settingsSchemas {
+		if settingsSchemas[i].Key == key {
+			return settingsSchemas[i].DefaultValue, true
+		}
+	}
+	return nil, false
+}
+
+// ResetSetting reverts one setting at (key, scope) to its registered default.
+// At scope "global" the row is upserted with the canonical default value, so
+// the registry stays seeded and updated_by reflects the admin who reset it.
+// At any other scope the override is deleted so the cascade resolver falls
+// back to the global default; deleting a nonexistent row is a no-op.
+func (s *SettingsAdminStore) ResetSetting(ctx context.Context, key, scope string, updatedBy *uuid.UUID) error {
+	if scope != "global" {
+		if err := s.settingsRepo.Delete(ctx, key, scope); err != nil {
+			return err
+		}
+		if s.invalidator != nil {
+			s.invalidator.InvalidateCache(key, scope)
+		}
+		return nil
+	}
+	def, ok := defaultValueForKey(key)
+	if !ok {
+		return fmt.Errorf("settings reset: key %q is not registered", key)
+	}
+	setting := &model.Setting{
+		Key:       key,
+		Value:     def,
+		Scope:     "global",
+		UpdatedBy: updatedBy,
+	}
+	if err := s.settingsRepo.Set(ctx, setting); err != nil {
+		return err
+	}
+	if s.invalidator != nil {
+		s.invalidator.InvalidateCache(key, "global")
+	}
+	return nil
+}
+
+// ResetAllSettings reverts every registered schema key at the given scope,
+// honoring the per-schema OmitFromResetAll flag so credentials and connection
+// strings (qdrant.addr, qdrant.api_key, ingestion model) survive a bulk reset.
+// At scope "global" performs an atomic upsert across the eligible registry. At
+// any other scope deletes only those eligible overrides at the scope so each
+// key falls back to its global value. Returns the count of keys reset.
+func (s *SettingsAdminStore) ResetAllSettings(ctx context.Context, scope string, updatedBy *uuid.UUID) (int, error) {
+	if scope != "global" {
+		// Filter by registered keys so legacy/orphan overrides (keys removed
+		// from the schema) are preserved, and skip OmitFromResetAll entries
+		// so credentials at the scope are not wiped by a bulk reset.
+		count := 0
+		for i := range settingsSchemas {
+			if settingsSchemas[i].OmitFromResetAll {
+				continue
+			}
+			if err := s.settingsRepo.Delete(ctx, settingsSchemas[i].Key, scope); err != nil {
+				return count, err
+			}
+			count++
+		}
+		if s.invalidator != nil {
+			s.invalidator.InvalidateAllCache()
+		}
+		return count, nil
+	}
+	batch := make([]model.Setting, 0, len(settingsSchemas))
+	for i := range settingsSchemas {
+		if settingsSchemas[i].OmitFromResetAll {
+			continue
+		}
+		batch = append(batch, model.Setting{
+			Key:       settingsSchemas[i].Key,
+			Value:     settingsSchemas[i].DefaultValue,
+			Scope:     "global",
+			UpdatedBy: updatedBy,
+		})
+	}
+	if err := s.settingsRepo.SetMany(ctx, batch); err != nil {
+		return 0, err
+	}
+	if s.invalidator != nil {
+		s.invalidator.InvalidateAllCache()
+	}
+	return len(batch), nil
 }
 
 // settingsSchemas is the canonical registry of known settings. It is static
@@ -78,8 +195,8 @@ var settingsSchemas = []api.SettingSchema{
 	{Key: "memory.soft_delete_retention_days", Type: "number", DefaultValue: json.RawMessage(`30`), Description: "Days after soft-delete before a memory row is hard-purged (with its vectors)", Category: "memory", Min: ptrF(1), Max: ptrF(3650), Step: ptrF(1)},
 	{Key: "api.rate_limit_rps", Type: "number", DefaultValue: json.RawMessage(`10`), Description: "API rate limit (requests per second per user)", Category: "api", Min: ptrF(1), Max: ptrF(10000), Step: ptrF(1)},
 	{Key: "api.rate_limit_burst", Type: "number", DefaultValue: json.RawMessage(`20`), Description: "API rate limit burst size", Category: "api", Min: ptrF(1), Max: ptrF(10000), Step: ptrF(1)},
-	{Key: "qdrant.addr", Type: "string", DefaultValue: json.RawMessage(`""`), Description: "Qdrant gRPC address as host:port.", Category: "qdrant", RequiresRestart: true},
-	{Key: "qdrant.api_key", Type: "secret", DefaultValue: json.RawMessage(`""`), Description: "API key for Qdrant authentication.", Category: "qdrant", RequiresRestart: true},
+	{Key: "qdrant.addr", Type: "string", DefaultValue: json.RawMessage(`""`), Description: "Qdrant gRPC address as host:port.", Category: "qdrant", RequiresRestart: true, OmitFromResetAll: true},
+	{Key: "qdrant.api_key", Type: "secret", DefaultValue: json.RawMessage(`""`), Description: "API key for Qdrant authentication.", Category: "qdrant", RequiresRestart: true, OmitFromResetAll: true},
 	{Key: "qdrant.use_tls", Type: "boolean", DefaultValue: json.RawMessage(`false`), Description: "Enable TLS for the Qdrant gRPC connection.", Category: "qdrant", RequiresRestart: true},
 	{Key: "qdrant.pool_size", Type: "number", DefaultValue: json.RawMessage(`3`), Description: "Number of gRPC connections in the pool (1 = no pool).", Category: "qdrant", RequiresRestart: true, Min: ptrF(1), Max: ptrF(64), Step: ptrF(1)},
 	{Key: "qdrant.keepalive_time", Type: "number", DefaultValue: json.RawMessage(`10`), Description: "Seconds between keepalive pings (0 = 10s default, -1 = disabled).", Category: "qdrant", RequiresRestart: true, Min: ptrF(-1), Max: ptrF(3600), Step: ptrF(1)},
@@ -151,7 +268,7 @@ var settingsSchemas = []api.SettingSchema{
 	{Key: service.SettingTokenRetention, Type: "number", DefaultValue: json.RawMessage(`365`), Description: "Days to retain rows in the token_usage table before the lifecycle sweep prunes them. Operators raise this for audit retention requirements; set to 0 to retain indefinitely.", Category: "usage", Min: ptrF(0), Max: ptrF(3650), Step: ptrF(1)},
 	{Key: service.SettingTokenCostRates, Type: "json", DefaultValue: json.RawMessage(`[]`), Description: "Per-group token cost rates used to compute dollar breakdowns in the analytics panel. JSON array of {key, inputCostPer1k, outputCostPer1k} objects keyed by the group dimension shown in usage reports (provider, model, etc.). Edited globally by administrators via PUT /admin/settings; surfaced read-only to all other users via GET /v1/usage/cost_rates.", Category: "usage"},
 	{Key: service.SettingIngestionDecisionTopK, Type: "number", DefaultValue: json.RawMessage(`5`), Description: "Maximum number of candidate matches presented to the LLM judge.", Category: "enrichment_ingestion", Min: ptrF(1), Max: ptrF(100), Step: ptrF(1)},
-	{Key: service.SettingIngestionDecisionModel, Type: "string", DefaultValue: json.RawMessage(`""`), Description: "LLM model name for the ingestion decision. Empty falls back to the fact-extraction provider's model (this is a categorization task, a small model is fine).", Category: "enrichment_ingestion"},
+	{Key: service.SettingIngestionDecisionModel, Type: "string", DefaultValue: json.RawMessage(`""`), Description: "LLM model name for the ingestion decision. Empty falls back to the fact-extraction provider's model (this is a categorization task, a small model is fine).", Category: "enrichment_ingestion", OmitFromResetAll: true},
 	{Key: service.SettingRankWeightSim, Type: "number", DefaultValue: json.RawMessage(`0.50`), Description: "Weight on cosine similarity in the recall ranking formula (0.0-1.0). The dominant term: how strongly query-to-memory semantic match contributes to the score. Lower to give other signals more pull.", Category: "ranking", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.05)},
 	{Key: service.SettingRankWeightRec, Type: "number", DefaultValue: json.RawMessage(`0.15`), Description: "Weight on recency in the recall ranking formula (0.0-1.0). Recency decays as exp(-decay_per_hour * hours_since_creation), so this term favours fresh memories without sharply discarding older ones.", Category: "ranking", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.05)},
 	{Key: service.SettingRankWeightImp, Type: "number", DefaultValue: json.RawMessage(`0.10`), Description: "Weight on Memory.Importance in the recall ranking formula (0.0-1.0). Importance is operator-set per memory; bump this to honor manual curation more strongly.", Category: "ranking", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.05)},
