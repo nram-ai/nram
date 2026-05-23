@@ -215,9 +215,11 @@ type EntityUpserter interface {
 // RelationshipCreator persists a new relationship between entities, with
 // dedup support to avoid creating duplicate edges. HasBySourceMemory is the
 // probe runPreEmbed uses to detect that entity extraction has already
-// produced edges for a memory and skip the LLM step.
+// produced edges for a memory and skip the LLM step. BatchCreate persists
+// all extracted relationships for a single memory in one transaction.
 type RelationshipCreator interface {
 	Create(ctx context.Context, rel *model.Relationship) error
+	BatchCreate(ctx context.Context, rels []*model.Relationship) (model.BatchCreateResult, error)
 	FindActiveByTriple(ctx context.Context, namespaceID, sourceID, targetID uuid.UUID, relation string) (*model.Relationship, error)
 	UpdateWeight(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, weight float64) error
 	HasBySourceMemory(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) (bool, error)
@@ -1184,6 +1186,9 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 		addFact(modelEntity)
 	}
 
+	// Collect all extracted relationships for this memory; flush via
+	// one BatchCreate after the entity-resolution loop.
+	relCandidates := make([]*model.Relationship, 0, len(entResult.Relationships))
 	for _, rel := range entResult.Relationships {
 		srcID, srcOK := entityNameToID[rel.Source]
 		tgtID, tgtOK := entityNameToID[rel.Target]
@@ -1217,7 +1222,7 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 		}
 
 		memID := mem.ID
-		r := &model.Relationship{
+		relCandidates = append(relCandidates, &model.Relationship{
 			ID:           uuid.New(),
 			NamespaceID:  mem.NamespaceID,
 			SourceID:     srcID,
@@ -1227,9 +1232,12 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 			SourceMemory: &memID,
 			ValidFrom:    mem.CreatedAt,
 			CreatedAt:    time.Now().UTC(),
-		}
-		if err := wp.relationships.Create(ctx, r); err != nil {
-			slog.Error("enrichment: create relationship", "job", job.ID, "err", err)
+		})
+	}
+
+	if len(relCandidates) > 0 {
+		if _, err := wp.relationships.BatchCreate(ctx, relCandidates); err != nil {
+			slog.Error("enrichment: batch create relationships", "job", job.ID, "count", len(relCandidates), "err", err)
 		}
 	}
 

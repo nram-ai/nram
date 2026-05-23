@@ -52,9 +52,13 @@ func (f *transitiveFakeRelationshipReader) CountActiveByNamespace(_ context.Cont
 
 // transitiveFakeRelationshipWriter records every Create the transitive
 // phase issues so tests can assert which transitive edges were created.
+// perRowCreates tracks any per-row Create call (post-migration this
+// should stay zero); batchCalls counts how many times BatchCreate fired.
 type transitiveFakeRelationshipWriter struct {
-	mu      sync.Mutex
-	created []*model.Relationship
+	mu            sync.Mutex
+	created       []*model.Relationship
+	perRowCreates int
+	batchCalls    int
 }
 
 func (w *transitiveFakeRelationshipWriter) Create(_ context.Context, rel *model.Relationship) error {
@@ -62,6 +66,7 @@ func (w *transitiveFakeRelationshipWriter) Create(_ context.Context, rel *model.
 	defer w.mu.Unlock()
 	cp := *rel
 	w.created = append(w.created, &cp)
+	w.perRowCreates++
 	return nil
 }
 func (w *transitiveFakeRelationshipWriter) Reinforce(context.Context, uuid.UUID, uuid.UUID, float64) error {
@@ -80,6 +85,28 @@ func (w *transitiveFakeRelationshipWriter) ExpireLowWeight(context.Context, uuid
 	return 0, nil
 }
 func (w *transitiveFakeRelationshipWriter) ExpireLowestNTransitive(context.Context, uuid.UUID, int) (int64, error) {
+	return 0, nil
+}
+func (w *transitiveFakeRelationshipWriter) BatchCreate(_ context.Context, rels []*model.Relationship) (model.BatchCreateResult, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.batchCalls++
+	for _, rel := range rels {
+		cp := *rel
+		w.created = append(w.created, &cp)
+	}
+	return model.BatchCreateResult{Affected: int64(len(rels))}, nil
+}
+func (w *transitiveFakeRelationshipWriter) BatchExpire(context.Context, uuid.UUID, []uuid.UUID) (int64, error) {
+	return 0, nil
+}
+func (w *transitiveFakeRelationshipWriter) BatchReinforce(context.Context, uuid.UUID, []model.ReinforceItem) (int64, error) {
+	return 0, nil
+}
+func (w *transitiveFakeRelationshipWriter) BatchUpdateWeight(context.Context, uuid.UUID, []model.WeightUpdateItem) (int64, error) {
+	return 0, nil
+}
+func (w *transitiveFakeRelationshipWriter) BatchDeleteByID(context.Context, uuid.UUID, []uuid.UUID) (int64, error) {
 	return 0, nil
 }
 
@@ -219,5 +246,55 @@ func TestTransitive_HardCapAlreadyHit(t *testing.T) {
 	}
 	if len(writer.created) != 0 {
 		t.Errorf("created = %d, want 0 (phase must no-op at hard cap)", len(writer.created))
+	}
+}
+
+// TestTransitive_UsesBatchCreateNotPerRow pins the migration: the phase
+// must funnel every inferred edge through BatchCreate, with the per-row
+// Create method untouched. Regression guard against future code that
+// reintroduces per-row writes inside the triple loop.
+func TestTransitive_UsesBatchCreateNotPerRow(t *testing.T) {
+	entities, rels := transitiveTestFixture(0.9)
+	cycle := transitiveTestCycle()
+	settings := transitiveTestSettings(0.1, 1000, 1000)
+
+	reader := &transitiveFakeRelationshipReader{rels: rels, active: 10}
+	writer := &transitiveFakeRelationshipWriter{}
+	phase := NewTransitivePhase(&transitiveFakeEntityReader{entities: entities}, reader, writer, settings)
+
+	if _, err := phase.Execute(context.Background(), cycle, nil, NewDreamLogWriter(nil, cycle.ID, cycle.ProjectID)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if writer.perRowCreates != 0 {
+		t.Errorf("per-row Create called %d times; want 0 (BatchCreate is the only path)", writer.perRowCreates)
+	}
+	if writer.batchCalls != 1 {
+		t.Errorf("BatchCreate called %d times; want exactly 1 per phase invocation", writer.batchCalls)
+	}
+	if len(writer.created) == 0 {
+		t.Error("expected at least one transitive edge created via batch")
+	}
+}
+
+// TestTransitive_NoCandidatesNoBatchCall confirms BatchCreate is not
+// called when the triple loop produces zero candidates (e.g. all edges
+// already exist or fall below minWeight).
+func TestTransitive_NoCandidatesNoBatchCall(t *testing.T) {
+	entities, rels := transitiveTestFixture(0.01) // weights too low to produce A→C
+	cycle := transitiveTestCycle()
+	settings := transitiveTestSettings(0.1, 1000, 1000) // minWeight=0.1 filters all
+
+	reader := &transitiveFakeRelationshipReader{rels: rels, active: 10}
+	writer := &transitiveFakeRelationshipWriter{}
+	phase := NewTransitivePhase(&transitiveFakeEntityReader{entities: entities}, reader, writer, settings)
+
+	if _, err := phase.Execute(context.Background(), cycle, nil, NewDreamLogWriter(nil, cycle.ID, cycle.ProjectID)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if writer.batchCalls != 0 {
+		t.Errorf("BatchCreate called %d times; want 0 when no candidates exist", writer.batchCalls)
+	}
+	if writer.perRowCreates != 0 {
+		t.Errorf("per-row Create called %d times; want 0", writer.perRowCreates)
 	}
 }

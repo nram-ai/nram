@@ -189,6 +189,22 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 	tracker := CycleTrackerFromContext(ctx)
 	progressStep := progressEmitStep(len(rels))
 
+	// Collect-then-flush: per-row Expire and UpdateWeight calls inside
+	// this loop become one BatchExpire and one BatchUpdateWeight call
+	// after the loop. expireOps and weightOps carry the per-row log
+	// payload (old + new weight) that LogOperation replays after each
+	// batch returns.
+	type expireOp struct {
+		id                  uuid.UUID
+		oldWeight, newWeight float64
+	}
+	type weightOp struct {
+		id                  uuid.UUID
+		oldWeight, newWeight float64
+	}
+	var expireOps []expireOp
+	var weightOps []weightOp
+
 	for i, rel := range rels {
 		if shouldEmitProgress(i, len(rels), progressStep) {
 			if tracker != nil {
@@ -216,31 +232,11 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 		// rather than keeping them alive at near-zero weight. Shares the
 		// pruning-phase threshold key so the two paths cannot drift.
 		if newWeight < tuning.expiryThreshold {
-			if err := p.relWriter.Expire(ctx, rel.ID, rel.NamespaceID); err != nil {
-				slog.Warn("dreaming: expire decayed relationship failed", "relationship", rel.ID, "err", err)
-				continue
-			}
-			if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
-				model.DreamOpRelationshipExpired, "relationship", rel.ID,
-				map[string]interface{}{"weight": rel.Weight},
-				map[string]interface{}{"weight": newWeight, "reason": "decayed_below_threshold"}); err != nil {
-				slog.Warn("dreaming: log operation failed", "err", err)
-			}
-			expired++
+			expireOps = append(expireOps, expireOp{id: rel.ID, oldWeight: rel.Weight, newWeight: newWeight})
 			continue
 		}
 
-		if err := p.relWriter.UpdateWeight(ctx, rel.ID, rel.NamespaceID, newWeight); err != nil {
-			slog.Warn("dreaming: weight update failed", "relationship", rel.ID, "err", err)
-			continue
-		}
-
-		if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
-			model.DreamOpRelationshipUpdated, "relationship", rel.ID,
-			map[string]interface{}{"weight": rel.Weight},
-			map[string]interface{}{"weight": newWeight}); err != nil {
-			slog.Warn("dreaming: log operation failed", "err", err)
-		}
+		weightOps = append(weightOps, weightOp{id: rel.ID, oldWeight: rel.Weight, newWeight: newWeight})
 
 		switch {
 		case newWeight > rel.Weight:
@@ -249,6 +245,50 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 			directionDown++
 		default:
 			directionSame++
+		}
+	}
+
+	if len(expireOps) > 0 {
+		ids := make([]uuid.UUID, len(expireOps))
+		for i, op := range expireOps {
+			ids[i] = op.id
+		}
+		// Match the prior per-row tolerance: a batch-level failure here
+		// logs warn and is treated as "no expires committed this pass."
+		// Returning err would also discard the accumulated weightOps
+		// below, and the time-based decay formula would over-penalize
+		// the same edges on the next cycle's retry.
+		if _, err := p.relWriter.BatchExpire(ctx, cycle.NamespaceID, ids); err != nil {
+			slog.Warn("dreaming: batch expire decayed relationships failed", "cycle", cycle.ID, "err", err)
+		} else {
+			for _, op := range expireOps {
+				if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
+					model.DreamOpRelationshipExpired, "relationship", op.id,
+					map[string]interface{}{"weight": op.oldWeight},
+					map[string]interface{}{"weight": op.newWeight, "reason": "decayed_below_threshold"}); err != nil {
+					slog.Warn("dreaming: log operation failed", "err", err)
+				}
+				expired++
+			}
+		}
+	}
+
+	if len(weightOps) > 0 {
+		items := make([]model.WeightUpdateItem, len(weightOps))
+		for i, op := range weightOps {
+			items[i] = model.WeightUpdateItem{ID: op.id, Weight: op.newWeight}
+		}
+		if _, err := p.relWriter.BatchUpdateWeight(ctx, cycle.NamespaceID, items); err != nil {
+			slog.Warn("dreaming: batch update weight failed", "cycle", cycle.ID, "err", err)
+		} else {
+			for _, op := range weightOps {
+				if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
+					model.DreamOpRelationshipUpdated, "relationship", op.id,
+					map[string]interface{}{"weight": op.oldWeight},
+					map[string]interface{}{"weight": op.newWeight}); err != nil {
+					slog.Warn("dreaming: log operation failed", "err", err)
+				}
+			}
 		}
 	}
 

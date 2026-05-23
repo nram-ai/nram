@@ -16,18 +16,19 @@ import (
 // key constraint failure. Used by UpsertBatch to skip individual items whose
 // parent row was deleted concurrently (e.g., lifecycle orphan-cleanup racing
 // in-flight enrichment) instead of rolling the whole batch back and starving
-// good rows. Driver-agnostic: string-matches the message rather than depending
-// on a specific driver's typed error API (we ship modernc.org/sqlite for
-// SQLite and pgx for Postgres).
+// good rows. Driver-agnostic: string-matches the descriptive constraint
+// phrases that both modernc.org/sqlite and pgx emit. We deliberately do
+// not match the bare numeric code (e.g. "(787)") because that substring
+// could appear in unrelated wrapped error text (row ids, offsets, byte
+// counts) and false-positive into silent error absorption.
 func isForeignKeyViolation(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
 	// modernc.org/sqlite formats this as "constraint failed: FOREIGN KEY
-	// constraint failed (787)". SQLITE_CONSTRAINT_FOREIGNKEY = 787.
-	if strings.Contains(msg, "FOREIGN KEY constraint failed") ||
-		strings.Contains(msg, "(787)") {
+	// constraint failed".
+	if strings.Contains(msg, "FOREIGN KEY constraint failed") {
 		return true
 	}
 	// Postgres / pgx formats: "ERROR: ... violates foreign key constraint ..."
@@ -37,6 +38,35 @@ func isForeignKeyViolation(err error) bool {
 		return true
 	}
 	return false
+}
+
+// isUniqueViolation reports whether err is a SQLite or Postgres unique
+// constraint failure. Companion to isForeignKeyViolation for the
+// RelationshipRepo batch writers: a chunk-level violation triggers a
+// rollback-to-savepoint and per-row retry so other rows still commit.
+// As with isForeignKeyViolation, we match descriptive constraint phrases
+// rather than the bare numeric code so unrelated text containing the
+// number cannot false-positive.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "UNIQUE constraint failed") {
+		return true
+	}
+	if strings.Contains(msg, "duplicate key value violates unique constraint") ||
+		strings.Contains(msg, "SQLSTATE 23505") {
+		return true
+	}
+	return false
+}
+
+// isTolerableRowError classifies row-level constraint errors that batch
+// writers can absorb and continue past. Everything else (driver error,
+// network, tx state) propagates and aborts the outer transaction.
+func isTolerableRowError(err error) bool {
+	return isForeignKeyViolation(err) || isUniqueViolation(err)
 }
 
 // HNSWConfig holds configuration for the HNSW vector store.

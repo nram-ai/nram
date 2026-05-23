@@ -2,6 +2,7 @@ package dreaming
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -218,17 +219,63 @@ func (p *EntityDedupPhase) shouldMerge(a, b *model.Entity, vectorsByID map[uuid.
 	return float64(sim) >= threshold
 }
 
-// mergeEntities absorbs candidate into primary: creates alias, increments
-// mention count, and retargets candidate's relationships.
+// mergeEntities absorbs candidate into primary: retargets candidate's
+// relationships, then creates the alias and increments primary's mention
+// count. Order matters: relationship migration runs FIRST so a failure
+// there does not leave a half-applied merge (alias plus inflated mention
+// count without the rel work). EntityMerged is logged only after every
+// step succeeds, so rollback never sees a merge record for work that
+// did not actually commit.
 func (p *EntityDedupPhase) mergeEntities(
 	ctx context.Context,
 	cycle *model.DreamCycle,
 	primary, candidate *model.Entity,
 	logger *DreamLogWriter,
 ) error {
-	if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup, "",
-		model.DreamOpEntityMerged, "entity", candidate.ID, candidate, primary); err != nil {
+	rels, err := p.relationships.ListByEntity(ctx, candidate.ID)
+	if err != nil {
 		return err
+	}
+
+	// Group expires by their own NamespaceID. ListByEntity has no
+	// namespace filter, so a candidate referenced by a cross-namespace
+	// shared edge would otherwise have that edge silently survive the
+	// merge (BatchExpire filters by namespace_id and would not match).
+	// Retargeted rels keep their source rel's namespace_id, so
+	// BatchCreate's per-row namespace_id handles them without grouping.
+	expireByNS := map[uuid.UUID][]uuid.UUID{}
+	newRels := make([]*model.Relationship, 0, len(rels))
+	for _, rel := range rels {
+		newRel := rel
+		if rel.SourceID == candidate.ID {
+			newRel.SourceID = primary.ID
+		}
+		if rel.TargetID == candidate.ID {
+			newRel.TargetID = primary.ID
+		}
+
+		if newRel.SourceID == newRel.TargetID {
+			expireByNS[rel.NamespaceID] = append(expireByNS[rel.NamespaceID], rel.ID)
+			continue
+		}
+
+		expireByNS[rel.NamespaceID] = append(expireByNS[rel.NamespaceID], rel.ID)
+		newRel.ID = uuid.New()
+		newRels = append(newRels, &newRel)
+	}
+
+	for ns, ids := range expireByNS {
+		if _, err := p.relWriter.BatchExpire(ctx, ns, ids); err != nil {
+			slog.Warn("dreaming: batch expire relationships failed", "candidate", candidate.ID, "ns", ns, "err", err)
+			return fmt.Errorf("entity dedup batch expire: %w", err)
+		}
+	}
+
+	if len(newRels) > 0 {
+		if _, err := p.relWriter.BatchCreate(ctx, newRels); err != nil {
+			slog.Warn("dreaming: batch create retargeted relationships failed", "candidate", candidate.ID, "err", err)
+			return fmt.Errorf("entity dedup batch create: %w", err)
+		}
 	}
 
 	alias := &model.EntityAlias{
@@ -247,40 +294,21 @@ func (p *EntityDedupPhase) mergeEntities(
 		return err
 	}
 
-	rels, err := p.relationships.ListByEntity(ctx, candidate.ID)
-	if err != nil {
+	if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup, "",
+		model.DreamOpEntityMerged, "entity", candidate.ID, candidate, primary); err != nil {
 		return err
 	}
 
-	for _, rel := range rels {
-		newRel := rel
-		if rel.SourceID == candidate.ID {
-			newRel.SourceID = primary.ID
-		}
-		if rel.TargetID == candidate.ID {
-			newRel.TargetID = primary.ID
-		}
-
-		if newRel.SourceID == newRel.TargetID {
-			if err := p.relWriter.Expire(ctx, rel.ID, rel.NamespaceID); err != nil {
-				slog.Warn("dreaming: expire self-referential relationship failed", "err", err)
-			}
+	// LogOperation only for rels that actually persisted. BatchCreate
+	// sets rel.ID to uuid.Nil for rows it skipped via per-row constraint
+	// fallback, so checking the sentinel filters out phantom log entries
+	// rollback would otherwise chase via BatchDeleteByID.
+	for _, rel := range newRels {
+		if rel.ID == uuid.Nil {
 			continue
 		}
-
-		if err := p.relWriter.Expire(ctx, rel.ID, rel.NamespaceID); err != nil {
-			slog.Warn("dreaming: expire relationship failed", "rel", rel.ID, "err", err)
-			continue
-		}
-
-		newRel.ID = uuid.New()
-		if err := p.relWriter.Create(ctx, &newRel); err != nil {
-			slog.Warn("dreaming: create retargeted relationship failed", "err", err)
-			continue
-		}
-
 		if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup, "",
-			model.DreamOpRelationshipCreated, "relationship", newRel.ID, nil, &newRel); err != nil {
+			model.DreamOpRelationshipCreated, "relationship", rel.ID, nil, rel); err != nil {
 			slog.Warn("dreaming: log relationship retarget failed", "err", err)
 		}
 	}

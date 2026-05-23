@@ -348,6 +348,21 @@ func (noopRelWriter) ExpireLowWeight(_ context.Context, _ uuid.UUID, _ float64) 
 func (noopRelWriter) ExpireLowestNTransitive(_ context.Context, _ uuid.UUID, _ int) (int64, error) {
 	return 0, nil
 }
+func (noopRelWriter) BatchCreate(_ context.Context, rels []*model.Relationship) (model.BatchCreateResult, error) {
+	return model.BatchCreateResult{Affected: int64(len(rels))}, nil
+}
+func (noopRelWriter) BatchExpire(_ context.Context, _ uuid.UUID, ids []uuid.UUID) (int64, error) {
+	return int64(len(ids)), nil
+}
+func (noopRelWriter) BatchReinforce(_ context.Context, _ uuid.UUID, items []model.ReinforceItem) (int64, error) {
+	return int64(len(items)), nil
+}
+func (noopRelWriter) BatchUpdateWeight(_ context.Context, _ uuid.UUID, items []model.WeightUpdateItem) (int64, error) {
+	return int64(len(items)), nil
+}
+func (noopRelWriter) BatchDeleteByID(_ context.Context, _ uuid.UUID, ids []uuid.UUID) (int64, error) {
+	return int64(len(ids)), nil
+}
 
 // TestPruning_Execute_StreamsAllBatches confirms 2500 memories paginate
 // into three batches at offsets 0/1000/2000, the loop terminates on the

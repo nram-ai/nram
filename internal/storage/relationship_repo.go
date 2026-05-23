@@ -5,11 +5,21 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 )
+
+// relationshipBatchChunkSize bounds how many rows go into one multi-row
+// statement issued by the BatchCreate / BatchExpire / BatchReinforce /
+// BatchUpdateWeight / BatchDeleteByID methods. BatchCreate uses 11
+// placeholders per row, so a 500-row chunk emits 5500 placeholders well
+// under the SQLite default SQLITE_MAX_VARIABLE_NUMBER (32766) and Postgres
+// protocol limit (65535). The same constant covers the update/delete
+// methods, which use at most 3 placeholders per row.
+const relationshipBatchChunkSize = 500
 
 // RelationshipRepo provides CRUD operations for the relationships table.
 type RelationshipRepo struct {
@@ -417,6 +427,515 @@ func (r *RelationshipRepo) DeleteDangling(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("relationship delete dangling rows: %w", err)
 	}
 	return rows, nil
+}
+
+// BatchCreate inserts (or upserts) the given relationships in one
+// transaction with multi-row INSERTs chunked at relationshipBatchChunkSize.
+// Per-chunk savepoints absorb tolerable per-row constraint failures (FK
+// to a vanished entity, unique violation outside the upsert key): on
+// such an error the chunk is rolled back to its savepoint and retried
+// row-by-row inside per-row savepoints, with each failed row counted as
+// Skipped. Non-tolerable errors abort the outer transaction.
+//
+// Per-row defaults mirror Create: IDs default to uuid.New(), Properties
+// defaults to "{}", ValidFrom and CreatedAt default to now(). The ON
+// CONFLICT clause is the same MAX/GREATEST weight, last-writer-wins
+// properties pattern.
+//
+// Caller's rel.ID contract:
+//   - On a successful insert, rel.ID is the persisted id (matches the
+//     client-generated one).
+//   - On ON CONFLICT DO UPDATE, rel.ID is overwritten via RETURNING to
+//     the existing row's id so the caller can map back to the actual
+//     surviving row (important for dream-log target_id values).
+//   - On a per-row constraint-violation skip, rel.ID is set to uuid.Nil
+//     as a sentinel so callers can filter out non-persisted entries
+//     when iterating post-batch.
+func (r *RelationshipRepo) BatchCreate(ctx context.Context, rels []*model.Relationship) (model.BatchCreateResult, error) {
+	if len(rels) == 0 {
+		return model.BatchCreateResult{}, nil
+	}
+	now := time.Now().UTC()
+	for _, rel := range rels {
+		if rel.ID == uuid.Nil {
+			rel.ID = uuid.New()
+		}
+		if rel.Properties == nil {
+			rel.Properties = json.RawMessage(`{}`)
+		}
+		if rel.ValidFrom.IsZero() {
+			rel.ValidFrom = now
+		}
+		if rel.CreatedAt.IsZero() {
+			rel.CreatedAt = now
+		}
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.BatchCreateResult{}, fmt.Errorf("relationship batch create begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var result model.BatchCreateResult
+	for i := 0; i < len(rels); i += relationshipBatchChunkSize {
+		end := i + relationshipBatchChunkSize
+		if end > len(rels) {
+			end = len(rels)
+		}
+		chunk := rels[i:end]
+		chunkName := fmt.Sprintf("rel_batch_%d", i/relationshipBatchChunkSize)
+		outcome, err := withSavepoint(ctx, tx, chunkName, func() error {
+			return r.execBatchCreateChunk(ctx, tx, chunk)
+		})
+		if err != nil {
+			return model.BatchCreateResult{}, err
+		}
+		if outcome == savepointOK {
+			result.Affected += int64(len(chunk))
+			continue
+		}
+		affected, skipped, fbErr := r.fallbackPerRowCreate(ctx, tx, chunk, chunkName)
+		if fbErr != nil {
+			return model.BatchCreateResult{}, fbErr
+		}
+		result.Affected += affected
+		result.Skipped += skipped
+	}
+	if err := tx.Commit(); err != nil {
+		return model.BatchCreateResult{}, fmt.Errorf("relationship batch create commit: %w", err)
+	}
+	return result, nil
+}
+
+// execBatchCreateChunk emits one multi-VALUES INSERT for the given chunk
+// using the same ON CONFLICT semantics as the single-row Create. The
+// statement appends `RETURNING id` so each input rel can be re-bound to
+// the row that actually persists, including ON CONFLICT cases where the
+// surviving row keeps its existing id. The returned ids are scanned in
+// input order; Postgres and SQLite both preserve VALUES order in
+// RETURNING for INSERT ... ON CONFLICT DO UPDATE.
+func (r *RelationshipRepo) execBatchCreateChunk(ctx context.Context, tx *sql.Tx, chunk []*model.Relationship) error {
+	isPg := r.db.Backend() == BackendPostgres
+	var b strings.Builder
+	args := make([]any, 0, 11*len(chunk))
+	b.WriteString("INSERT INTO relationships (id, namespace_id, source_id, target_id, relation, weight, properties, valid_from, valid_until, source_memory, created_at) VALUES ")
+	for i, rel := range chunk {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		if isPg {
+			base := i*11 + 1
+			fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9, base+10)
+		} else {
+			b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		}
+		var validUntil any
+		if rel.ValidUntil != nil {
+			validUntil = rel.ValidUntil.UTC().Format(time.RFC3339)
+		}
+		var sourceMemory any
+		if rel.SourceMemory != nil {
+			sourceMemory = rel.SourceMemory.String()
+		}
+		args = append(args,
+			rel.ID.String(), rel.NamespaceID.String(), rel.SourceID.String(), rel.TargetID.String(),
+			rel.Relation, rel.Weight, string(rel.Properties),
+			rel.ValidFrom.UTC().Format(time.RFC3339), validUntil, sourceMemory,
+			rel.CreatedAt.UTC().Format(time.RFC3339),
+		)
+	}
+	if isPg {
+		b.WriteString(" ON CONFLICT(namespace_id, source_id, target_id, relation, valid_from) DO UPDATE SET weight = GREATEST(relationships.weight, EXCLUDED.weight), properties = EXCLUDED.properties RETURNING id")
+	} else {
+		b.WriteString(" ON CONFLICT(namespace_id, source_id, target_id, relation, valid_from) DO UPDATE SET weight = MAX(weight, excluded.weight), properties = excluded.properties RETURNING id")
+	}
+	rows, err := tx.QueryContext(ctx, b.String(), args...)
+	if err != nil {
+		return fmt.Errorf("batch create chunk exec: %w", err)
+	}
+	defer rows.Close()
+	i := 0
+	for rows.Next() {
+		if i >= len(chunk) {
+			return fmt.Errorf("batch create chunk: RETURNING produced more rows than input (%d)", len(chunk))
+		}
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return fmt.Errorf("batch create chunk scan id: %w", err)
+		}
+		id, parseErr := uuid.Parse(idStr)
+		if parseErr != nil {
+			return fmt.Errorf("batch create chunk parse id: %w", parseErr)
+		}
+		chunk[i].ID = id
+		i++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("batch create chunk iter: %w", err)
+	}
+	if i != len(chunk) {
+		return fmt.Errorf("batch create chunk: RETURNING produced %d rows, expected %d", i, len(chunk))
+	}
+	return nil
+}
+
+// fallbackPerRowCreate retries a chunk row-by-row after a tolerable
+// multi-row failure. Each row gets its own savepoint so a single bad
+// row does not poison the rest of the chunk. Successful rows have
+// rel.ID updated via the inner execBatchCreateChunk's RETURNING; skipped
+// rows have rel.ID set to uuid.Nil as a sentinel so the caller can
+// filter them out when iterating post-batch (e.g. when writing dream-log
+// entries that would otherwise reference non-existent rows).
+func (r *RelationshipRepo) fallbackPerRowCreate(ctx context.Context, tx *sql.Tx, chunk []*model.Relationship, parentName string) (affected, skipped int64, err error) {
+	for j, rel := range chunk {
+		rowName := fmt.Sprintf("%s_row_%d", parentName, j)
+		outcome, sErr := withSavepoint(ctx, tx, rowName, func() error {
+			return r.execBatchCreateChunk(ctx, tx, []*model.Relationship{rel})
+		})
+		if sErr != nil {
+			return affected, skipped, sErr
+		}
+		if outcome == savepointOK {
+			affected++
+		} else {
+			rel.ID = uuid.Nil
+			skipped++
+		}
+	}
+	return affected, skipped, nil
+}
+
+// BatchExpire sets valid_until = now() for every id in ids that lives in
+// namespaceID. Chunked at relationshipBatchChunkSize and wrapped in one
+// transaction so partial-state never leaks. ids not matched by a row
+// contribute zero to the returned count (matches Expire's sql.ErrNoRows
+// semantics that callers already swallow); they are not counted as a
+// distinct skipped class.
+func (r *RelationshipRepo) BatchExpire(ctx context.Context, namespaceID uuid.UUID, ids []uuid.UUID) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("relationship batch expire begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	isPg := r.db.Backend() == BackendPostgres
+	var total int64
+	for i := 0; i < len(ids); i += relationshipBatchChunkSize {
+		end := i + relationshipBatchChunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[i:end]
+		n, execErr := r.execBatchExpireChunk(ctx, tx, namespaceID, chunk, now, isPg)
+		if execErr != nil {
+			return 0, execErr
+		}
+		total += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("relationship batch expire commit: %w", err)
+	}
+	return total, nil
+}
+
+func (r *RelationshipRepo) execBatchExpireChunk(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID, chunk []uuid.UUID, nowStr string, isPg bool) (int64, error) {
+	var b strings.Builder
+	args := make([]any, 0, 2+len(chunk))
+	b.WriteString("UPDATE relationships SET valid_until = ")
+	if isPg {
+		b.WriteString("$1 WHERE namespace_id = $2 AND id IN (")
+	} else {
+		b.WriteString("? WHERE namespace_id = ? AND id IN (")
+	}
+	args = append(args, nowStr, namespaceID.String())
+	for j, id := range chunk {
+		if j > 0 {
+			b.WriteString(", ")
+		}
+		if isPg {
+			fmt.Fprintf(&b, "$%d", j+3)
+		} else {
+			b.WriteString("?")
+		}
+		args = append(args, id.String())
+	}
+	b.WriteString(")")
+	res, err := tx.ExecContext(ctx, b.String(), args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch expire chunk exec: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("batch expire chunk rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// BatchDeleteByID deletes every id in ids that lives in namespaceID.
+// Chunked and wrapped in one transaction.
+func (r *RelationshipRepo) BatchDeleteByID(ctx context.Context, namespaceID uuid.UUID, ids []uuid.UUID) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("relationship batch delete begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	isPg := r.db.Backend() == BackendPostgres
+	var total int64
+	for i := 0; i < len(ids); i += relationshipBatchChunkSize {
+		end := i + relationshipBatchChunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[i:end]
+		n, execErr := r.execBatchDeleteChunk(ctx, tx, namespaceID, chunk, isPg)
+		if execErr != nil {
+			return 0, execErr
+		}
+		total += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("relationship batch delete commit: %w", err)
+	}
+	return total, nil
+}
+
+func (r *RelationshipRepo) execBatchDeleteChunk(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID, chunk []uuid.UUID, isPg bool) (int64, error) {
+	var b strings.Builder
+	args := make([]any, 0, 1+len(chunk))
+	if isPg {
+		b.WriteString("DELETE FROM relationships WHERE namespace_id = $1 AND id IN (")
+	} else {
+		b.WriteString("DELETE FROM relationships WHERE namespace_id = ? AND id IN (")
+	}
+	args = append(args, namespaceID.String())
+	for j, id := range chunk {
+		if j > 0 {
+			b.WriteString(", ")
+		}
+		if isPg {
+			fmt.Fprintf(&b, "$%d", j+2)
+		} else {
+			b.WriteString("?")
+		}
+		args = append(args, id.String())
+	}
+	b.WriteString(")")
+	res, err := tx.ExecContext(ctx, b.String(), args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch delete chunk exec: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("batch delete chunk rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// BatchReinforce adds each item's Delta to its row's weight, clamped at
+// 2.0 to match the single-row Reinforce ceiling (and dreaming's
+// calculateWeight upper clamp). Chunked via UPDATE ... FROM (VALUES ...)
+// per chunk in one outer transaction. Returns the count of rows actually
+// updated; items naming a missing id contribute zero.
+//
+// Both dialects support UPDATE ... FROM (VALUES ...): Postgres natively,
+// SQLite since 3.33.0 (2020-08); the bundled modernc.org/sqlite driver
+// satisfies this floor.
+func (r *RelationshipRepo) BatchReinforce(ctx context.Context, namespaceID uuid.UUID, items []model.ReinforceItem) (int64, error) {
+	if len(items) == 0 {
+		return 0, nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("relationship batch reinforce begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	isPg := r.db.Backend() == BackendPostgres
+	var total int64
+	for i := 0; i < len(items); i += relationshipBatchChunkSize {
+		end := i + relationshipBatchChunkSize
+		if end > len(items) {
+			end = len(items)
+		}
+		chunk := items[i:end]
+		n, execErr := r.execBatchReinforceChunk(ctx, tx, namespaceID, chunk, isPg)
+		if execErr != nil {
+			return 0, execErr
+		}
+		total += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("relationship batch reinforce commit: %w", err)
+	}
+	return total, nil
+}
+
+func (r *RelationshipRepo) execBatchReinforceChunk(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID, chunk []model.ReinforceItem, isPg bool) (int64, error) {
+	var b strings.Builder
+	args := make([]any, 0, 1+2*len(chunk))
+	if isPg {
+		// VALUES with parenthesized alias is standard in Postgres. Cast
+		// the VALUES side to uuid (not relationships.id::text) so the
+		// PK btree on relationships(id) remains usable for the join;
+		// wrapping the indexed column in a cast would force a seq scan.
+		b.WriteString("UPDATE relationships SET weight = LEAST(relationships.weight + d.delta, 2.0) FROM (VALUES ")
+		for j, item := range chunk {
+			if j > 0 {
+				b.WriteString(", ")
+			}
+			base := j*2 + 1
+			fmt.Fprintf(&b, "($%d::uuid, $%d::float8)", base, base+1)
+			args = append(args, item.ID.String(), item.Delta)
+		}
+		fmt.Fprintf(&b, ") AS d(id, delta) WHERE relationships.id = d.id AND relationships.namespace_id = $%d", 2*len(chunk)+1)
+	} else {
+		// SQLite versions prior to 3.39 reject AS d(id, delta); use a
+		// SELECT ... UNION ALL subquery to name columns portably.
+		b.WriteString("UPDATE relationships SET weight = min(weight + d.delta, 2.0) FROM (")
+		for j, item := range chunk {
+			if j == 0 {
+				b.WriteString("SELECT ? AS id, ? AS delta")
+			} else {
+				b.WriteString(" UNION ALL SELECT ?, ?")
+			}
+			args = append(args, item.ID.String(), item.Delta)
+		}
+		b.WriteString(") AS d WHERE relationships.id = d.id AND relationships.namespace_id = ?")
+	}
+	args = append(args, namespaceID.String())
+	res, err := tx.ExecContext(ctx, b.String(), args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch reinforce chunk exec: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("batch reinforce chunk rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// BatchUpdateWeight sets each item's row to its absolute Weight value.
+// Same chunked UPDATE ... FROM (VALUES ...) envelope as BatchReinforce.
+// Returns the count of rows actually updated.
+func (r *RelationshipRepo) BatchUpdateWeight(ctx context.Context, namespaceID uuid.UUID, items []model.WeightUpdateItem) (int64, error) {
+	if len(items) == 0 {
+		return 0, nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("relationship batch update weight begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	isPg := r.db.Backend() == BackendPostgres
+	var total int64
+	for i := 0; i < len(items); i += relationshipBatchChunkSize {
+		end := i + relationshipBatchChunkSize
+		if end > len(items) {
+			end = len(items)
+		}
+		chunk := items[i:end]
+		n, execErr := r.execBatchUpdateWeightChunk(ctx, tx, namespaceID, chunk, isPg)
+		if execErr != nil {
+			return 0, execErr
+		}
+		total += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("relationship batch update weight commit: %w", err)
+	}
+	return total, nil
+}
+
+func (r *RelationshipRepo) execBatchUpdateWeightChunk(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID, chunk []model.WeightUpdateItem, isPg bool) (int64, error) {
+	var b strings.Builder
+	args := make([]any, 0, 1+2*len(chunk))
+	if isPg {
+		// Cast the VALUES side (not the PK column) so relationships(id)
+		// remains sargable. See execBatchReinforceChunk for the same
+		// reasoning.
+		b.WriteString("UPDATE relationships SET weight = d.weight FROM (VALUES ")
+		for j, item := range chunk {
+			if j > 0 {
+				b.WriteString(", ")
+			}
+			base := j*2 + 1
+			fmt.Fprintf(&b, "($%d::uuid, $%d::float8)", base, base+1)
+			args = append(args, item.ID.String(), item.Weight)
+		}
+		fmt.Fprintf(&b, ") AS d(id, weight) WHERE relationships.id = d.id AND relationships.namespace_id = $%d", 2*len(chunk)+1)
+	} else {
+		// SQLite portable form: SELECT ... UNION ALL to name columns
+		// without relying on AS d(col, col).
+		b.WriteString("UPDATE relationships SET weight = d.weight FROM (")
+		for j, item := range chunk {
+			if j == 0 {
+				b.WriteString("SELECT ? AS id, ? AS weight")
+			} else {
+				b.WriteString(" UNION ALL SELECT ?, ?")
+			}
+			args = append(args, item.ID.String(), item.Weight)
+		}
+		b.WriteString(") AS d WHERE relationships.id = d.id AND relationships.namespace_id = ?")
+	}
+	args = append(args, namespaceID.String())
+	res, err := tx.ExecContext(ctx, b.String(), args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch update weight chunk exec: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("batch update weight chunk rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// savepointOutcome distinguishes a clean exec from one that failed with
+// a tolerable per-row constraint error. Non-tolerable errors are
+// returned directly by withSavepoint.
+type savepointOutcome int
+
+const (
+	savepointOK savepointOutcome = iota
+	savepointTolerableErr
+)
+
+// withSavepoint wraps fn in a SAVEPOINT / RELEASE pair. On a tolerable
+// per-row constraint error (FK or unique), the savepoint is rolled back
+// and released and the helper reports savepointTolerableErr so the
+// caller can retry row-by-row. On any other error the helper returns
+// the error and the outer transaction's deferred Rollback cleans up.
+func withSavepoint(ctx context.Context, tx *sql.Tx, name string, fn func() error) (savepointOutcome, error) {
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT "+name); err != nil {
+		return 0, fmt.Errorf("savepoint %s: %w", name, err)
+	}
+	execErr := fn()
+	if execErr != nil {
+		if _, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+name); err != nil {
+			return 0, fmt.Errorf("rollback to savepoint %s after %v: %w", name, execErr, err)
+		}
+		if _, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT "+name); err != nil {
+			return 0, fmt.Errorf("release savepoint %s after rollback: %w", name, err)
+		}
+		if isTolerableRowError(execErr) {
+			return savepointTolerableErr, nil
+		}
+		return 0, execErr
+	}
+	if _, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT "+name); err != nil {
+		return 0, fmt.Errorf("release savepoint %s: %w", name, err)
+	}
+	return savepointOK, nil
 }
 
 // reload fetches the relationship by ID and populates the struct in place.

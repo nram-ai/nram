@@ -76,7 +76,11 @@ type RelationshipReader interface {
 	CountActiveByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
 }
 
-// RelationshipWriter creates and modifies relationships.
+// RelationshipWriter creates and modifies relationships. The Batch*
+// variants of the per-row write methods execute all writes in a single
+// transaction with multi-row statements chunked at a fixed size; callers
+// migrating loop-then-call-Per-Row to collect-then-Batch see one round
+// trip per chunk instead of per row.
 type RelationshipWriter interface {
 	Create(ctx context.Context, rel *model.Relationship) error
 	Reinforce(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, delta float64) error
@@ -85,6 +89,11 @@ type RelationshipWriter interface {
 	UpdateWeight(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, weight float64) error
 	ExpireLowWeight(ctx context.Context, namespaceID uuid.UUID, threshold float64) (int64, error)
 	ExpireLowestNTransitive(ctx context.Context, namespaceID uuid.UUID, n int) (int64, error)
+	BatchCreate(ctx context.Context, rels []*model.Relationship) (model.BatchCreateResult, error)
+	BatchExpire(ctx context.Context, namespaceID uuid.UUID, ids []uuid.UUID) (int64, error)
+	BatchReinforce(ctx context.Context, namespaceID uuid.UUID, items []model.ReinforceItem) (int64, error)
+	BatchUpdateWeight(ctx context.Context, namespaceID uuid.UUID, items []model.WeightUpdateItem) (int64, error)
+	BatchDeleteByID(ctx context.Context, namespaceID uuid.UUID, ids []uuid.UUID) (int64, error)
 }
 
 // LineageWriter creates memory lineage records and answers questions a

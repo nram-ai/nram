@@ -22,6 +22,7 @@ type EntityCreator interface {
 // RelationshipCreator defines the relationship persistence operations needed by the extraction service.
 type RelationshipCreator interface {
 	Create(ctx context.Context, rel *model.Relationship) error
+	BatchCreate(ctx context.Context, rels []*model.Relationship) (model.BatchCreateResult, error)
 }
 
 // ExtractedFact represents a single fact extracted by an LLM.
@@ -372,6 +373,7 @@ func (s *ExtractionService) extractEntities(
 		entitiesCreated++
 	}
 
+	relCandidates := make([]*model.Relationship, 0, len(result.Relationships))
 	for _, rel := range result.Relationships {
 		srcCanonical := strings.ToLower(strings.TrimSpace(rel.Source))
 		tgtCanonical := strings.ToLower(strings.TrimSpace(rel.Target))
@@ -399,11 +401,16 @@ func (s *ExtractionService) extractEntities(
 			relationship.Properties = propsBytes
 		}
 
-		if createErr := s.relationships.Create(ctx, relationship); createErr != nil {
-			continue
-		}
+		relCandidates = append(relCandidates, relationship)
+	}
 
-		relationshipsCreated++
+	if len(relCandidates) > 0 {
+		res, err := s.relationships.BatchCreate(ctx, relCandidates)
+		if err != nil {
+			slog.Error("extract: batch create relationships failed", "count", len(relCandidates), "err", err)
+		} else {
+			relationshipsCreated = int(res.Affected)
+		}
 	}
 
 	return entitiesCreated, relationshipsCreated

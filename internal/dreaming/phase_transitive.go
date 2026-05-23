@@ -146,7 +146,16 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 
 	transitiveProps := json.RawMessage(`{"source":"` + transitivePropertySource + `"}`)
 
-	created := 0
+	// Candidates accumulate inside the triple loop and flush via one
+	// BatchCreate after the loops. `attempts` counts iteration progress
+	// (caps via maxNew on attempts, not successes; the old per-row path
+	// could iterate past failures and accumulate up to maxNew successes,
+	// but with batching we cannot know success-vs-skip until after the
+	// batch fires, so the cap binds on attempts). The reported `created`
+	// at the end uses BatchCreate's Affected count, so accounting
+	// reflects actual persistence rather than attempts.
+	candidates := make([]*model.Relationship, 0, maxNew)
+	attempts := 0
 	// truncated tracks whether we stopped iterating because of the per-cycle
 	// cap with more potential inferences still available. When true, the
 	// phase reports residual so the next cycle picks up the rest.
@@ -163,7 +172,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 				"cycle", cycle.ID,
 				"entity", entityIdx+1, "of", len(entities))
 		}
-		if created >= maxNew {
+		if attempts >= maxNew {
 			truncated = true
 			break
 		}
@@ -171,7 +180,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		relsAB := outgoing[entityA.ID]
 
 		for _, relAB := range relsAB {
-			if created >= maxNew {
+			if attempts >= maxNew {
 				truncated = true
 				break
 			}
@@ -180,7 +189,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 			relsBC := outgoing[entityB]
 
 			for _, relBC := range relsBC {
-				if created >= maxNew {
+				if attempts >= maxNew {
 					truncated = true
 					break
 				}
@@ -217,25 +226,44 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 					ValidFrom:    relAB.ValidFrom,
 				}
 
-				if err := p.relWriter.Create(ctx, newRel); err != nil {
-					slog.Warn("dreaming: transitive relationship creation failed", "err", err)
-					continue
-				}
-
-				// Log the operation.
-				_ = logger.LogOperation(ctx, model.DreamPhaseTransitive, "",
-					model.DreamOpRelationshipCreated, "relationship", newRel.ID, nil, newRel)
+				candidates = append(candidates, newRel)
 
 				// Add to edge map to prevent duplicates within this cycle.
 				edges[key] = newRel
-				created++
+				attempts++
 			}
 		}
 	}
 
-	if created > 0 {
+	var batchRes model.BatchCreateResult
+	if len(candidates) > 0 {
+		res, err := p.relWriter.BatchCreate(ctx, candidates)
+		if err != nil {
+			// Match the prior per-row tolerance: log and proceed with
+			// an empty result rather than aborting the phase (and the
+			// dream cycle) on a transient batch-level error.
+			slog.Warn("dreaming: transitive batch create failed", "err", err, "cycle", cycle.ID)
+		} else {
+			batchRes = res
+			for _, rel := range candidates {
+				// Skipped rows have rel.ID = uuid.Nil; filter them out
+				// so dream_log does not record relationships that were
+				// never persisted (rollback would chase phantom ids).
+				if rel.ID == uuid.Nil {
+					continue
+				}
+				_ = logger.LogOperation(ctx, model.DreamPhaseTransitive, "",
+					model.DreamOpRelationshipCreated, "relationship", rel.ID, nil, rel)
+			}
+		}
+	}
+
+	// Report the actually-persisted count, not the attempt count.
+	created := int(batchRes.Affected)
+	if attempts > 0 {
 		slog.Info("dreaming: transitive discovery created relationships",
-			"count", created, "cycle", cycle.ID, "truncated", truncated)
+			"attempts", attempts, "created", created, "skipped", batchRes.Skipped,
+			"cycle", cycle.ID, "truncated", truncated)
 	}
 
 	if !truncated {

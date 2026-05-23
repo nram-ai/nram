@@ -2,13 +2,12 @@ package service
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/events"
+	"github.com/nram-ai/nram/internal/model"
 )
 
 // MemoryReinforcer is the narrow write-capability RecallService needs to
@@ -24,16 +23,17 @@ type MemoryReinforcer interface {
 // RelationshipReinforcer is the narrow write-capability RecallService needs to
 // reinforce graph edges after a recall surfaces them. The dream-side
 // weight_adjustment phase computes a multi-memory support multiplier; this
-// hook is its complement — it raises weight when the LLM actively touches an
+// hook is its complement: it raises weight when the LLM actively touches an
 // edge, so a heavily-used relationship cannot silently atrophy under decay.
 //
-// Per-id rather than batch because the call site loops over ≤ 50 edges and
-// the (id, namespace_id) tuple membership cannot be expressed portably in
-// one prepared statement across SQLite + Postgres without backend-specific
-// SQL. The clamp at 2.0 lives at the SQL layer in RelationshipRepo.Reinforce
-// so the cap cannot drift between the recall write and the dream-phase read.
+// Refs may span namespaces (primary plus cross-namespace shares and
+// global), so the caller groups by namespace and issues one
+// BatchReinforce per group. The clamp at 2.0 lives at the SQL layer in
+// RelationshipRepo so the cap cannot drift between the recall write and
+// the dream-phase read.
 type RelationshipReinforcer interface {
 	Reinforce(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, delta float64) error
+	BatchReinforce(ctx context.Context, namespaceID uuid.UUID, items []model.ReinforceItem) (int64, error)
 }
 
 // RelationshipRef pairs a relationship's id with its namespace so the recall
@@ -199,18 +199,25 @@ func (s *RecallService) reinforceRels(ctx context.Context, refs []RelationshipRe
 	start := time.Now()
 	var persisted int64
 	if mode == ReconsolidationModePersist && s.reinforcement.RelWriter != nil {
+		// Group refs by namespace so each BatchReinforce call can run
+		// inside a single tx. The traverser may surface edges across the
+		// primary namespace plus cross-namespace shares and global, so
+		// the bucket count is typically small but never assumed to be 1.
+		byNamespace := make(map[uuid.UUID][]model.ReinforceItem, 4)
 		for _, ref := range refs {
-			if werr := s.reinforcement.RelWriter.Reinforce(ctx, ref.ID, ref.NamespaceID, delta); werr != nil {
-				// sql.ErrNoRows just means the row was expired/deleted between
-				// the read and the write. The traverser already filters expired
-				// edges; the only path here is a deletion racing the recall.
-				if errors.Is(werr, sql.ErrNoRows) {
-					continue
-				}
-				slog.Warn("recall: relationship reinforcement write failed", "err", werr, "id", ref.ID)
+			byNamespace[ref.NamespaceID] = append(byNamespace[ref.NamespaceID],
+				model.ReinforceItem{ID: ref.ID, Delta: delta})
+		}
+		for nsID, items := range byNamespace {
+			// BatchReinforce returns RowsAffected; missing-id races
+			// surface as a smaller affected count, not as an error.
+			// Any error returned here is a genuine driver/SQL failure.
+			n, werr := s.reinforcement.RelWriter.BatchReinforce(ctx, nsID, items)
+			if werr != nil {
+				slog.Warn("recall: relationship batch reinforcement write failed", "err", werr, "ns", nsID, "count", len(items))
 				continue
 			}
-			persisted++
+			persisted += n
 		}
 	}
 

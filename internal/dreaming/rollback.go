@@ -68,11 +68,47 @@ func (s *RollbackService) Rollback(ctx context.Context, cycleID uuid.UUID) error
 		return s.cycleRepo.MarkRolledBack(ctx, cycleID)
 	}
 
-	var rollbackErrors []error
+	// Relationship deletes (DeleteByID for op=RelationshipCreated) and
+	// weight restores (UpdateWeight for op=RelationshipUpdated) batch as
+	// collect-then-flush at the end. Per-row memory and entity reversals
+	// still execute in reverse chronological order; the relationship
+	// batches flush after every other op has finished. The rollback's
+	// strict reverse-chronological semantics relax to "non-relationship
+	// ops in reverse order, then a single relationship flush"; no FK
+	// dependency is affected by the reorder.
+	var (
+		rollbackErrors []error
+		relDeletes     []uuid.UUID
+		weightOps      []model.WeightUpdateItem
+	)
 	for _, entry := range entries {
-		if err := s.reverseOperation(ctx, cycle.NamespaceID, &entry); err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf(
-				"op=%s target=%s: %w", entry.Operation, entry.TargetID, err))
+		switch entry.Operation {
+		case model.DreamOpRelationshipCreated:
+			relDeletes = append(relDeletes, entry.TargetID)
+		case model.DreamOpRelationshipUpdated:
+			weight, parseErr := parseRelationshipBeforeWeight(entry.BeforeState)
+			if parseErr != nil {
+				rollbackErrors = append(rollbackErrors, fmt.Errorf(
+					"op=%s target=%s: %w", entry.Operation, entry.TargetID, parseErr))
+				continue
+			}
+			weightOps = append(weightOps, model.WeightUpdateItem{ID: entry.TargetID, Weight: weight})
+		default:
+			if err := s.reverseOperation(ctx, cycle.NamespaceID, &entry); err != nil {
+				rollbackErrors = append(rollbackErrors, fmt.Errorf(
+					"op=%s target=%s: %w", entry.Operation, entry.TargetID, err))
+			}
+		}
+	}
+
+	if len(relDeletes) > 0 {
+		if _, err := s.relWriter.BatchDeleteByID(ctx, cycle.NamespaceID, relDeletes); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("batch delete relationships: %w", err))
+		}
+	}
+	if len(weightOps) > 0 {
+		if _, err := s.relWriter.BatchUpdateWeight(ctx, cycle.NamespaceID, weightOps); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("batch update relationship weights: %w", err))
 		}
 	}
 
@@ -105,12 +141,6 @@ func (s *RollbackService) reverseOperation(ctx context.Context, namespaceID uuid
 
 	case model.DreamOpEntityMerged:
 		return s.reverseEntityMerge(ctx, entry)
-
-	case model.DreamOpRelationshipCreated:
-		return s.relWriter.DeleteByID(ctx, entry.TargetID, namespaceID)
-
-	case model.DreamOpRelationshipUpdated:
-		return s.reverseRelationshipUpdate(ctx, namespaceID, entry)
 
 	case model.DreamOpEntityUpdated:
 		return s.reverseEntityUpdate(ctx, entry)
@@ -158,25 +188,23 @@ func (s *RollbackService) reverseEntityMerge(ctx context.Context, entry *model.D
 	return s.entityWriter.Upsert(ctx, currentPrimary)
 }
 
-// reverseRelationshipUpdate restores a relationship's weight from before_state.
-// before_state = {"weight": <old_weight>}
-func (s *RollbackService) reverseRelationshipUpdate(ctx context.Context, namespaceID uuid.UUID, entry *model.DreamLog) error {
+// parseRelationshipBeforeWeight extracts the pre-cycle weight from a
+// DreamOpRelationshipUpdated entry's before_state JSON payload, which is
+// shaped as {"weight": <old_weight>}.
+func parseRelationshipBeforeWeight(beforeState json.RawMessage) (float64, error) {
 	var fields map[string]interface{}
-	if err := json.Unmarshal(entry.BeforeState, &fields); err != nil {
-		return fmt.Errorf("unmarshal relationship before state: %w", err)
+	if err := json.Unmarshal(beforeState, &fields); err != nil {
+		return 0, fmt.Errorf("unmarshal relationship before state: %w", err)
 	}
-
 	weightRaw, ok := fields["weight"]
 	if !ok {
-		return fmt.Errorf("relationship before_state missing weight field")
+		return 0, fmt.Errorf("relationship before_state missing weight field")
 	}
-
 	weight, ok := weightRaw.(float64)
 	if !ok {
-		return fmt.Errorf("relationship weight is not a number")
+		return 0, fmt.Errorf("relationship weight is not a number")
 	}
-
-	return s.relWriter.UpdateWeight(ctx, entry.TargetID, namespaceID, weight)
+	return weight, nil
 }
 
 // reverseEntityUpdate restores an entity's mention count from before_state.

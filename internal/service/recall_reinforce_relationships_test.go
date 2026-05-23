@@ -41,6 +41,21 @@ func (r *recordingRelReinforcer) Reinforce(_ context.Context, id, namespaceID uu
 	return nil
 }
 
+func (r *recordingRelReinforcer) BatchReinforce(_ context.Context, namespaceID uuid.UUID, items []model.ReinforceItem) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Record attempts even when returning an error so tests can assert
+	// that the writer was reached for every item (the same intent the
+	// per-row callCount check had pre-migration).
+	for _, it := range items {
+		r.calls = append(r.calls, relReinforceCall{ID: it.ID, NamespaceID: namespaceID, Delta: it.Delta})
+	}
+	if r.returnError != nil {
+		return 0, r.returnError
+	}
+	return int64(len(items)), nil
+}
+
 func (r *recordingRelReinforcer) callCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -467,6 +482,11 @@ type panicRelWriter struct {
 }
 
 func (p panicRelWriter) Reinforce(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ float64) error {
+	atomic.StoreInt32(p.attempted, 1)
+	panic("simulated relationship reinforcement crash")
+}
+
+func (p panicRelWriter) BatchReinforce(_ context.Context, _ uuid.UUID, _ []model.ReinforceItem) (int64, error) {
 	atomic.StoreInt32(p.attempted, 1)
 	panic("simulated relationship reinforcement crash")
 }

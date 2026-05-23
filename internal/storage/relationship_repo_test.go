@@ -775,3 +775,486 @@ func TestRelationshipRepo_ExpireLowestNTransitive_ZeroNoOps(t *testing.T) {
 		}
 	})
 }
+
+// --- Batch method tests ------------------------------------------------
+
+func TestRelationshipRepo_BatchCreate_Empty(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		res, err := repo.BatchCreate(ctx, nil)
+		if err != nil {
+			t.Fatalf("BatchCreate(nil): %v", err)
+		}
+		if res.Affected != 0 || res.Skipped != 0 {
+			t.Fatalf("empty batch must return zeros, got %+v", res)
+		}
+		res, err = repo.BatchCreate(ctx, []*model.Relationship{})
+		if err != nil {
+			t.Fatalf("BatchCreate(empty slice): %v", err)
+		}
+		if res.Affected != 0 || res.Skipped != 0 {
+			t.Fatalf("empty batch must return zeros, got %+v", res)
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchCreate_HappyPath(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		tgtIDs := []uuid.UUID{
+			createTestEntity(t, ctx, db, nsID, "bob"),
+			createTestEntity(t, ctx, db, nsID, "carol"),
+			createTestEntity(t, ctx, db, nsID, "dave"),
+			createTestEntity(t, ctx, db, nsID, "erin"),
+			createTestEntity(t, ctx, db, nsID, "frank"),
+		}
+
+		rels := make([]*model.Relationship, len(tgtIDs))
+		for i, tgt := range tgtIDs {
+			rels[i] = &model.Relationship{
+				NamespaceID: nsID,
+				SourceID:    srcID,
+				TargetID:    tgt,
+				Relation:    "knows",
+				Weight:      0.5,
+			}
+		}
+		res, err := repo.BatchCreate(ctx, rels)
+		if err != nil {
+			t.Fatalf("BatchCreate: %v", err)
+		}
+		if res.Affected != int64(len(tgtIDs)) {
+			t.Fatalf("Affected = %d, want %d", res.Affected, len(tgtIDs))
+		}
+		if res.Skipped != 0 {
+			t.Fatalf("Skipped = %d, want 0", res.Skipped)
+		}
+		for i, rel := range rels {
+			if rel.ID == uuid.Nil {
+				t.Fatalf("row %d: ID not assigned", i)
+			}
+			fetched, err := repo.GetByID(ctx, rel.ID)
+			if err != nil {
+				t.Fatalf("row %d: GetByID: %v", i, err)
+			}
+			if fetched.TargetID != tgtIDs[i] {
+				t.Fatalf("row %d: target mismatch", i)
+			}
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchCreate_UpsertMaxWeight(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		tgtID := createTestEntity(t, ctx, db, nsID, "bob")
+
+		// Pre-seed at low weight.
+		seed := newTestRelationship(nsID, srcID, tgtID)
+		seed.Weight = 0.3
+		if err := repo.Create(ctx, seed); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		// Batch the same triple at higher weight (and a sibling).
+		tgt2 := createTestEntity(t, ctx, db, nsID, "carol")
+		conflict := &model.Relationship{
+			NamespaceID: nsID, SourceID: srcID, TargetID: tgtID,
+			Relation: "knows", Weight: 0.9, Properties: json.RawMessage(`{"k":"v"}`),
+			ValidFrom: seed.ValidFrom,
+		}
+		fresh := &model.Relationship{
+			NamespaceID: nsID, SourceID: srcID, TargetID: tgt2,
+			Relation: "knows", Weight: 0.5,
+		}
+		res, err := repo.BatchCreate(ctx, []*model.Relationship{conflict, fresh})
+		if err != nil {
+			t.Fatalf("BatchCreate: %v", err)
+		}
+		if res.Affected != 2 {
+			t.Fatalf("Affected = %d, want 2", res.Affected)
+		}
+
+		fetched, err := repo.GetByID(ctx, seed.ID)
+		if err != nil {
+			t.Fatalf("re-read conflict row: %v", err)
+		}
+		if fetched.Weight != 0.9 {
+			t.Errorf("conflict weight = %v, want 0.9 (max wins)", fetched.Weight)
+		}
+		if !jsonEqual(string(fetched.Properties), `{"k":"v"}`) {
+			t.Errorf("conflict properties = %q, want last-writer-wins payload", string(fetched.Properties))
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchCreate_FKViolationFallback(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		good1 := createTestEntity(t, ctx, db, nsID, "bob")
+		good2 := createTestEntity(t, ctx, db, nsID, "carol")
+
+		bogusEntity := uuid.New()
+		rels := []*model.Relationship{
+			{NamespaceID: nsID, SourceID: srcID, TargetID: good1, Relation: "knows", Weight: 0.5},
+			{NamespaceID: nsID, SourceID: srcID, TargetID: bogusEntity, Relation: "knows", Weight: 0.5},
+			{NamespaceID: nsID, SourceID: srcID, TargetID: good2, Relation: "knows", Weight: 0.5},
+		}
+		res, err := repo.BatchCreate(ctx, rels)
+		if err != nil {
+			t.Fatalf("BatchCreate: %v", err)
+		}
+		if res.Affected != 2 {
+			t.Errorf("Affected = %d, want 2", res.Affected)
+		}
+		if res.Skipped != 1 {
+			t.Errorf("Skipped = %d, want 1", res.Skipped)
+		}
+		if _, err := repo.GetByID(ctx, rels[0].ID); err != nil {
+			t.Errorf("row 0 should have committed: %v", err)
+		}
+		if _, err := repo.GetByID(ctx, rels[2].ID); err != nil {
+			t.Errorf("row 2 should have committed: %v", err)
+		}
+	})
+}
+
+// TestRelationshipRepo_BatchCreate_UpsertRefreshesID pins the contract
+// that BatchCreate overwrites rel.ID via RETURNING on ON CONFLICT DO
+// UPDATE, so callers can reliably map back to the persisted row id.
+// Without this, dream-log target_id values would point to never-inserted
+// client-generated uuids and rollback could not delete the surviving row.
+func TestRelationshipRepo_BatchCreate_UpsertRefreshesID(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		tgtID := createTestEntity(t, ctx, db, nsID, "bob")
+
+		seed := newTestRelationship(nsID, srcID, tgtID)
+		if err := repo.Create(ctx, seed); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		survivingID := seed.ID
+
+		clientID := uuid.New()
+		conflict := &model.Relationship{
+			ID:          clientID,
+			NamespaceID: nsID, SourceID: srcID, TargetID: tgtID,
+			Relation:  "knows",
+			Weight:    0.9,
+			ValidFrom: seed.ValidFrom,
+		}
+		if _, err := repo.BatchCreate(ctx, []*model.Relationship{conflict}); err != nil {
+			t.Fatalf("BatchCreate: %v", err)
+		}
+		if conflict.ID == clientID {
+			t.Errorf("rel.ID was not refreshed: still equals client-generated %s", clientID)
+		}
+		if conflict.ID != survivingID {
+			t.Errorf("rel.ID = %s, want surviving row id %s", conflict.ID, survivingID)
+		}
+	})
+}
+
+// TestRelationshipRepo_BatchCreate_SkippedSetsIDToNil pins the contract
+// that per-row constraint-violation skips leave rel.ID = uuid.Nil so
+// callers iterating post-batch can filter out non-persisted entries.
+func TestRelationshipRepo_BatchCreate_SkippedSetsIDToNil(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		good := createTestEntity(t, ctx, db, nsID, "bob")
+		bogus := uuid.New()
+
+		goodRel := &model.Relationship{
+			NamespaceID: nsID, SourceID: srcID, TargetID: good,
+			Relation: "knows", Weight: 0.5,
+		}
+		badRel := &model.Relationship{
+			NamespaceID: nsID, SourceID: srcID, TargetID: bogus,
+			Relation: "knows", Weight: 0.5,
+		}
+		if _, err := repo.BatchCreate(ctx, []*model.Relationship{goodRel, badRel}); err != nil {
+			t.Fatalf("BatchCreate: %v", err)
+		}
+		if goodRel.ID == uuid.Nil {
+			t.Error("good row's rel.ID should not be uuid.Nil after a successful insert")
+		}
+		if badRel.ID != uuid.Nil {
+			t.Errorf("skipped row's rel.ID should be uuid.Nil, got %s", badRel.ID)
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchCreate_LargeBatchChunks(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		// Two chunks of 500 worth: 1100 rows forces 3 chunks.
+		const total = 1100
+		tgtIDs := make([]uuid.UUID, total)
+		rels := make([]*model.Relationship, total)
+		for i := 0; i < total; i++ {
+			tgtIDs[i] = createTestEntity(t, ctx, db, nsID, "t-"+uuid.NewString())
+			rels[i] = &model.Relationship{
+				NamespaceID: nsID, SourceID: srcID, TargetID: tgtIDs[i],
+				Relation: "knows", Weight: 0.5,
+			}
+		}
+		res, err := repo.BatchCreate(ctx, rels)
+		if err != nil {
+			t.Fatalf("BatchCreate(%d): %v", total, err)
+		}
+		if res.Affected != int64(total) {
+			t.Fatalf("Affected = %d, want %d", res.Affected, total)
+		}
+		count, err := repo.CountActiveByNamespace(ctx, nsID)
+		if err != nil {
+			t.Fatalf("CountActiveByNamespace: %v", err)
+		}
+		if count != total {
+			t.Errorf("active count = %d, want %d", count, total)
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchExpire(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		seed := make([]uuid.UUID, 4)
+		ids := make([]uuid.UUID, 4)
+		for i := range seed {
+			tgt := createTestEntity(t, ctx, db, nsID, "t-"+uuid.NewString())
+			rel := newTestRelationship(nsID, srcID, tgt)
+			if err := repo.Create(ctx, rel); err != nil {
+				t.Fatalf("seed %d: %v", i, err)
+			}
+			ids[i] = rel.ID
+			seed[i] = tgt
+		}
+
+		// Expire three of four, plus one bogus id (no error, no count).
+		expire := []uuid.UUID{ids[0], ids[1], ids[2], uuid.New()}
+		n, err := repo.BatchExpire(ctx, nsID, expire)
+		if err != nil {
+			t.Fatalf("BatchExpire: %v", err)
+		}
+		if n != 3 {
+			t.Errorf("Affected = %d, want 3", n)
+		}
+		for i := 0; i < 3; i++ {
+			fetched, err := repo.GetByID(ctx, ids[i])
+			if err != nil {
+				t.Fatalf("re-read %d: %v", i, err)
+			}
+			if fetched.ValidUntil == nil {
+				t.Errorf("row %d: ValidUntil unset", i)
+			}
+		}
+		fetched, err := repo.GetByID(ctx, ids[3])
+		if err != nil {
+			t.Fatalf("re-read 3: %v", err)
+		}
+		if fetched.ValidUntil != nil {
+			t.Errorf("row 3: ValidUntil set unexpectedly")
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchExpire_Empty(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		n, err := repo.BatchExpire(ctx, nsID, nil)
+		if err != nil {
+			t.Fatalf("BatchExpire(nil): %v", err)
+		}
+		if n != 0 {
+			t.Errorf("want 0, got %d", n)
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchReinforce(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+
+		seeds := make([]*model.Relationship, 3)
+		startWeights := []float64{0.5, 1.9, 0.1}
+		for i := range seeds {
+			tgt := createTestEntity(t, ctx, db, nsID, "t-"+uuid.NewString())
+			rel := newTestRelationship(nsID, srcID, tgt)
+			rel.Weight = startWeights[i]
+			if err := repo.Create(ctx, rel); err != nil {
+				t.Fatalf("seed %d: %v", i, err)
+			}
+			seeds[i] = rel
+		}
+
+		// Mix of deltas; row 1 should clamp at 2.0.
+		items := []model.ReinforceItem{
+			{ID: seeds[0].ID, Delta: 0.1}, // 0.5 -> 0.6
+			{ID: seeds[1].ID, Delta: 0.5}, // 1.9 -> 2.0 (clamped)
+			{ID: seeds[2].ID, Delta: 0.2}, // 0.1 -> 0.3
+		}
+		n, err := repo.BatchReinforce(ctx, nsID, items)
+		if err != nil {
+			t.Fatalf("BatchReinforce: %v", err)
+		}
+		if n != 3 {
+			t.Errorf("Affected = %d, want 3", n)
+		}
+
+		want := []float64{0.6, 2.0, 0.3}
+		for i := range seeds {
+			fetched, err := repo.GetByID(ctx, seeds[i].ID)
+			if err != nil {
+				t.Fatalf("re-read %d: %v", i, err)
+			}
+			if absDiff(fetched.Weight, want[i]) > 1e-9 {
+				t.Errorf("row %d: weight = %v, want %v", i, fetched.Weight, want[i])
+			}
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchUpdateWeight(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+
+		seeds := make([]*model.Relationship, 3)
+		for i := range seeds {
+			tgt := createTestEntity(t, ctx, db, nsID, "t-"+uuid.NewString())
+			rel := newTestRelationship(nsID, srcID, tgt)
+			rel.Weight = 1.0
+			if err := repo.Create(ctx, rel); err != nil {
+				t.Fatalf("seed %d: %v", i, err)
+			}
+			seeds[i] = rel
+		}
+
+		items := []model.WeightUpdateItem{
+			{ID: seeds[0].ID, Weight: 0.25},
+			{ID: seeds[1].ID, Weight: 1.5},
+			{ID: seeds[2].ID, Weight: 0.75},
+			{ID: uuid.New(), Weight: 0.42}, // missing id, no error
+		}
+		n, err := repo.BatchUpdateWeight(ctx, nsID, items)
+		if err != nil {
+			t.Fatalf("BatchUpdateWeight: %v", err)
+		}
+		if n != 3 {
+			t.Errorf("Affected = %d, want 3", n)
+		}
+		want := []float64{0.25, 1.5, 0.75}
+		for i := range seeds {
+			fetched, err := repo.GetByID(ctx, seeds[i].ID)
+			if err != nil {
+				t.Fatalf("re-read %d: %v", i, err)
+			}
+			if absDiff(fetched.Weight, want[i]) > 1e-9 {
+				t.Errorf("row %d: weight = %v, want %v", i, fetched.Weight, want[i])
+			}
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchDeleteByID(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		ids := make([]uuid.UUID, 3)
+		for i := range ids {
+			tgt := createTestEntity(t, ctx, db, nsID, "t-"+uuid.NewString())
+			rel := newTestRelationship(nsID, srcID, tgt)
+			if err := repo.Create(ctx, rel); err != nil {
+				t.Fatalf("seed %d: %v", i, err)
+			}
+			ids[i] = rel.ID
+		}
+
+		toDelete := []uuid.UUID{ids[0], ids[2], uuid.New()}
+		n, err := repo.BatchDeleteByID(ctx, nsID, toDelete)
+		if err != nil {
+			t.Fatalf("BatchDeleteByID: %v", err)
+		}
+		if n != 2 {
+			t.Errorf("Affected = %d, want 2", n)
+		}
+		if _, err := repo.GetByID(ctx, ids[0]); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("row 0 should be deleted, got err=%v", err)
+		}
+		if _, err := repo.GetByID(ctx, ids[1]); err != nil {
+			t.Errorf("row 1 should remain: %v", err)
+		}
+		if _, err := repo.GetByID(ctx, ids[2]); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("row 2 should be deleted, got err=%v", err)
+		}
+	})
+}
+
+func TestRelationshipRepo_BatchCreate_CtxCancel(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx, cancel := context.WithCancel(context.Background())
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		srcID := createTestEntity(t, ctx, db, nsID, "alice")
+		tgtID := createTestEntity(t, ctx, db, nsID, "bob")
+
+		rels := []*model.Relationship{
+			{NamespaceID: nsID, SourceID: srcID, TargetID: tgtID, Relation: "knows", Weight: 0.5},
+		}
+		cancel()
+		_, err := repo.BatchCreate(ctx, rels)
+		if err == nil {
+			t.Fatal("expected error from cancelled context")
+		}
+		count, err := repo.CountActiveByNamespace(context.Background(), nsID)
+		if err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("rollback failed: active = %d, want 0", count)
+		}
+	})
+}
+
+func absDiff(a, b float64) float64 {
+	d := a - b
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+// avoid "imported and not used" warnings when only some tests reference these.
+var _ = sync.Mutex{}
+var _ = time.Now

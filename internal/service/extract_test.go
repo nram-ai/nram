@@ -60,6 +60,14 @@ func (m *mockRelationshipRepo) Create(_ context.Context, rel *model.Relationship
 	return nil
 }
 
+func (m *mockRelationshipRepo) BatchCreate(_ context.Context, rels []*model.Relationship) (model.BatchCreateResult, error) {
+	if m.err != nil {
+		return model.BatchCreateResult{}, m.err
+	}
+	m.relationships = append(m.relationships, rels...)
+	return model.BatchCreateResult{Affected: int64(len(rels))}, nil
+}
+
 type mockLineageRepo struct {
 	lineages []*model.MemoryLineage
 }

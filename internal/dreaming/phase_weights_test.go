@@ -37,12 +37,18 @@ func (f *fakeRelationshipReader) CountActiveByNamespace(_ context.Context, _ uui
 }
 
 // recordingRelationshipWriter captures UpdateWeight and Expire calls so tests
-// can assert direction (up/down/expired) per relationship.
+// can assert direction (up/down/expired) per relationship. batchExpireCalls
+// and batchUpdateWeightCalls count batch invocations so post-migration
+// tests can confirm the per-row paths are no longer used.
 type recordingRelationshipWriter struct {
-	mu       sync.Mutex
-	weights  map[uuid.UUID]float64
-	expired  map[uuid.UUID]struct{}
-	creates  []model.Relationship
+	mu                    sync.Mutex
+	weights               map[uuid.UUID]float64
+	expired               map[uuid.UUID]struct{}
+	creates               []model.Relationship
+	batchExpireCalls      int
+	batchUpdateCalls      int
+	perRowExpireCalls     int
+	perRowUpdateCalls     int
 }
 
 func newRecordingRelationshipWriter() *recordingRelationshipWriter {
@@ -65,6 +71,7 @@ func (r *recordingRelationshipWriter) Expire(_ context.Context, id, _ uuid.UUID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.expired[id] = struct{}{}
+	r.perRowExpireCalls++
 	return nil
 }
 func (r *recordingRelationshipWriter) DeleteByID(_ context.Context, _, _ uuid.UUID) error {
@@ -74,6 +81,7 @@ func (r *recordingRelationshipWriter) UpdateWeight(_ context.Context, id, _ uuid
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.weights[id] = w
+	r.perRowUpdateCalls++
 	return nil
 }
 func (r *recordingRelationshipWriter) ExpireLowWeight(_ context.Context, _ uuid.UUID, _ float64) (int64, error) {
@@ -81,6 +89,43 @@ func (r *recordingRelationshipWriter) ExpireLowWeight(_ context.Context, _ uuid.
 }
 
 func (r *recordingRelationshipWriter) ExpireLowestNTransitive(_ context.Context, _ uuid.UUID, _ int) (int64, error) {
+	return 0, nil
+}
+
+func (r *recordingRelationshipWriter) BatchCreate(_ context.Context, rels []*model.Relationship) (model.BatchCreateResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, rel := range rels {
+		r.creates = append(r.creates, *rel)
+	}
+	return model.BatchCreateResult{Affected: int64(len(rels))}, nil
+}
+
+func (r *recordingRelationshipWriter) BatchExpire(_ context.Context, _ uuid.UUID, ids []uuid.UUID) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.batchExpireCalls++
+	for _, id := range ids {
+		r.expired[id] = struct{}{}
+	}
+	return int64(len(ids)), nil
+}
+
+func (r *recordingRelationshipWriter) BatchReinforce(_ context.Context, _ uuid.UUID, _ []model.ReinforceItem) (int64, error) {
+	return 0, nil
+}
+
+func (r *recordingRelationshipWriter) BatchUpdateWeight(_ context.Context, _ uuid.UUID, items []model.WeightUpdateItem) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.batchUpdateCalls++
+	for _, it := range items {
+		r.weights[it.ID] = it.Weight
+	}
+	return int64(len(items)), nil
+}
+
+func (r *recordingRelationshipWriter) BatchDeleteByID(_ context.Context, _ uuid.UUID, _ []uuid.UUID) (int64, error) {
 	return 0, nil
 }
 
@@ -431,6 +476,47 @@ func TestExecute_DecaysToFloor_ExpiresRelationship(t *testing.T) {
 	}
 	if _, ok := relWriter.weightOf(rel.ID); ok {
 		t.Error("expiring path must not also write the near-zero weight")
+	}
+}
+
+// TestExecute_UsesBatchExpireAndBatchUpdate pins the migration: when the
+// phase touches multiple relationships, per-row Expire and UpdateWeight
+// are not called and the batch methods fire at most once each. Regression
+// guard against re-introducing per-row writes inside the loop.
+func TestExecute_UsesBatchExpireAndBatchUpdate(t *testing.T) {
+	src, tgtA := uuid.New(), uuid.New()
+	srcB, tgtB := uuid.New(), uuid.New()
+	memA, memB := uuid.New(), uuid.New()
+
+	// Two rels that will get UpdateWeight (rising) and one that will
+	// Expire (decayed below floor).
+	rising1 := mkRel(src, tgtA, "knows", 0.5, &memA)
+	rising2 := mkRel(src, tgtA, "knows", 0.5, &memB)
+	decayed := mkRel(srcB, tgtB, "knows", 0.06, &memA)
+	decayed.ValidFrom = time.Now().Add(-365 * 24 * time.Hour)
+
+	rels := []model.Relationship{rising1, rising2, decayed}
+	mems := []model.Memory{aliveMemory(memA, 1.0), aliveMemory(memB, 1.0)}
+
+	phase, relWriter := weightTestPhase(rels, mems, 0.05)
+	logger := NewDreamLogWriter(nil, uuid.New(), uuid.New())
+	budget := NewTokenBudget(1<<20, 1024)
+
+	if _, err := phase.Execute(context.Background(), weightTestCycle(), budget, logger); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if relWriter.perRowExpireCalls != 0 {
+		t.Errorf("per-row Expire called %d times; want 0", relWriter.perRowExpireCalls)
+	}
+	if relWriter.perRowUpdateCalls != 0 {
+		t.Errorf("per-row UpdateWeight called %d times; want 0", relWriter.perRowUpdateCalls)
+	}
+	if relWriter.batchExpireCalls > 1 {
+		t.Errorf("BatchExpire called %d times; want at most 1 per phase invocation", relWriter.batchExpireCalls)
+	}
+	if relWriter.batchUpdateCalls > 1 {
+		t.Errorf("BatchUpdateWeight called %d times; want at most 1 per phase invocation", relWriter.batchUpdateCalls)
 	}
 }
 

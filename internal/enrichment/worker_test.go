@@ -306,6 +306,19 @@ func (m *mockRelationshipCreator) Create(_ context.Context, rel *model.Relations
 	return nil
 }
 
+func (m *mockRelationshipCreator) BatchCreate(_ context.Context, rels []*model.Relationship) (model.BatchCreateResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return model.BatchCreateResult{}, m.err
+	}
+	for _, rel := range rels {
+		cp := *rel
+		m.created = append(m.created, &cp)
+	}
+	return model.BatchCreateResult{Affected: int64(len(rels))}, nil
+}
+
 func (m *mockRelationshipCreator) FindActiveByTriple(_ context.Context, _, _, _ uuid.UUID, _ string) (*model.Relationship, error) {
 	return nil, nil
 }

@@ -64,6 +64,21 @@ func (w *recordingRelWriter) ExpireLowWeight(_ context.Context, _ uuid.UUID, thr
 	w.expireLowWeightN = append(w.expireLowWeightN, int(threshold*100))
 	return 0, nil
 }
+func (w *recordingRelWriter) BatchCreate(_ context.Context, rels []*model.Relationship) (model.BatchCreateResult, error) {
+	return model.BatchCreateResult{Affected: int64(len(rels))}, nil
+}
+func (w *recordingRelWriter) BatchExpire(_ context.Context, _ uuid.UUID, ids []uuid.UUID) (int64, error) {
+	return int64(len(ids)), nil
+}
+func (w *recordingRelWriter) BatchReinforce(_ context.Context, _ uuid.UUID, items []model.ReinforceItem) (int64, error) {
+	return int64(len(items)), nil
+}
+func (w *recordingRelWriter) BatchUpdateWeight(_ context.Context, _ uuid.UUID, items []model.WeightUpdateItem) (int64, error) {
+	return int64(len(items)), nil
+}
+func (w *recordingRelWriter) BatchDeleteByID(_ context.Context, _ uuid.UUID, ids []uuid.UUID) (int64, error) {
+	return int64(len(ids)), nil
+}
 func (w *recordingRelWriter) ExpireLowestNTransitive(_ context.Context, _ uuid.UUID, n int) (int64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
