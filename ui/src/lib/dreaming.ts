@@ -621,3 +621,144 @@ export function memoryFocusHref(projectId: string, memoryId: string): string {
 export function isZeroId(id: string): boolean {
   return id === ZERO_UUID;
 }
+
+// ---------------------------------------------------------------------------
+// Phase / sub-phase log grouping (drives the accordion in DreamingMonitor)
+// ---------------------------------------------------------------------------
+
+export interface SubPhaseLogGroup {
+  subPhase: string;
+  logs: DreamLog[];
+}
+
+export interface PhaseLogGroup {
+  phase: string;
+  subGroups: SubPhaseLogGroup[];
+  logsFlat: DreamLog[];
+  hasSubPhases: boolean;
+}
+
+// Canonical sub-phase order for the consolidation phase. Mirrors the
+// execution order in internal/dreaming/phase_consolidation.go (Execute).
+const CONSOLIDATION_SUB_PHASE_ORDER = ["backfill_audit", "reinforce", "consolidate"];
+
+// PHASE_SUMMARY_OP identifies the operation type emitted by writePhaseSummary.
+// Filtered out of the accordion because the data is already surfaced in the
+// phase row (tokens / ops / residual).
+const PHASE_SUMMARY_OP = "phase_summary";
+
+// inferSubPhases walks a list of dream logs in created_at ASC order and
+// returns a parallel array of resolved sub_phase strings. For consolidation
+// rows whose sub_phase is already populated, returns it verbatim. For legacy
+// consolidation rows with empty sub_phase, looks forward to the next
+// phase_summary log in the same phase and inherits its after_state.sub_phase
+// (each writePhaseSummary call closes a sub-phase scope). For non-consolidation
+// rows returns empty string. Phase_summary rows themselves resolve to their
+// own embedded sub_phase value when present.
+//
+// pendingStart tracks the contiguous run of empty consolidation rows whose
+// sub_phase is still unknown. Any explicit value at row i — whether on a
+// regular op or a phase_summary — closes the pending range: the lookahead
+// only backfills rows whose true sub_phase is unambiguously the same as the
+// boundary marker (i.e., contiguous empty rows immediately before it). An
+// explicit row mid-stream signals a sub-phase boundary we cannot inherit
+// across, so we discard pendingStart instead of letting a later phase_summary
+// retroactively label rows from an earlier scope.
+function inferSubPhases(logs: DreamLog[]): string[] {
+  const result = new Array<string>(logs.length).fill("");
+  let pendingStart = -1;
+  const backfill = (endExclusive: number, sp: string) => {
+    if (pendingStart < 0 || sp === "") return;
+    for (let j = pendingStart; j < endExclusive; j++) {
+      if (logs[j].phase === "consolidation" && result[j] === "") {
+        result[j] = sp;
+      }
+    }
+  };
+  for (let i = 0; i < logs.length; i++) {
+    const log = logs[i];
+    if (log.phase !== "consolidation") {
+      result[i] = log.sub_phase ?? "";
+      continue;
+    }
+    const explicit = log.sub_phase ?? "";
+    if (explicit !== "") {
+      result[i] = explicit;
+      if (log.operation === PHASE_SUMMARY_OP) {
+        backfill(i, explicit);
+      }
+      // Any explicit assignment closes the pending range. A later
+      // phase_summary cannot reach across this boundary to mislabel earlier
+      // rows whose true sub_phase is unknowable.
+      pendingStart = -1;
+      continue;
+    }
+    if (log.operation === PHASE_SUMMARY_OP) {
+      const after = log.after_state as Record<string, unknown> | null | undefined;
+      const sp =
+        after && typeof after.sub_phase === "string" ? (after.sub_phase as string) : "";
+      result[i] = sp;
+      backfill(i, sp);
+      pendingStart = -1;
+      continue;
+    }
+    if (pendingStart < 0) pendingStart = i;
+  }
+  return result;
+}
+
+// groupLogsByPhase splits dream logs into per-phase groups, with consolidation
+// further split into sub-phases. phase_summary entries are filtered from the
+// returned groups (the parent phase row already surfaces that data).
+//
+// Insertion order of the returned Map follows the order of first appearance
+// in the logs array, which mirrors phase execution order.
+export function groupLogsByPhase(logs: DreamLog[]): Map<string, PhaseLogGroup> {
+  const resolved = inferSubPhases(logs);
+  const groups = new Map<string, PhaseLogGroup>();
+
+  for (let i = 0; i < logs.length; i++) {
+    const log = logs[i];
+    if (log.operation === PHASE_SUMMARY_OP) continue;
+
+    let g = groups.get(log.phase);
+    if (!g) {
+      g = {
+        phase: log.phase,
+        subGroups: [],
+        logsFlat: [],
+        hasSubPhases: log.phase === "consolidation",
+      };
+      groups.set(log.phase, g);
+    }
+
+    if (g.hasSubPhases) {
+      const sp = resolved[i] || "";
+      let sub = g.subGroups.find((s) => s.subPhase === sp);
+      if (!sub) {
+        sub = { subPhase: sp, logs: [] };
+        g.subGroups.push(sub);
+      }
+      sub.logs.push(log);
+    } else {
+      g.logsFlat.push(log);
+    }
+  }
+
+  // Sort consolidation sub-groups into canonical execution order so the UI
+  // renders Audit → Reinforce → Consolidate even if logs arrive interleaved.
+  const consolidation = groups.get("consolidation");
+  if (consolidation) {
+    consolidation.subGroups.sort((a, b) => {
+      const ai = CONSOLIDATION_SUB_PHASE_ORDER.indexOf(a.subPhase);
+      const bi = CONSOLIDATION_SUB_PHASE_ORDER.indexOf(b.subPhase);
+      // Unknown sub-phases (including "") sort to the end in lexical order.
+      if (ai === -1 && bi === -1) return a.subPhase.localeCompare(b.subPhase);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  }
+
+  return groups;
+}

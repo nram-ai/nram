@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import {
   formatDreamLog,
   formatFactValue,
+  groupLogsByPhase,
   shortId,
   formatPercent,
   formatAlignment,
@@ -28,6 +29,7 @@ function mkLog(partial: Partial<DreamLog>): DreamLog {
     cycle_id: CYCLE,
     project_id: PROJECT,
     phase: "consolidation",
+    sub_phase: "",
     operation: "memory_created",
     target_type: "memory",
     target_id: A,
@@ -561,5 +563,212 @@ describe("formatDreamLog: unknown operation", () => {
     expect(out.unknown).toBe(true);
     expect(out.narrative).toBe("spaceship launched");
     expect(out.facts).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// log grouping (drives the DreamingMonitor accordion)
+// ---------------------------------------------------------------------------
+
+describe("groupLogsByPhase", () => {
+  it("filters out phase_summary entries", () => {
+    const logs: DreamLog[] = [
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000001",
+        phase: "pruning",
+        sub_phase: "",
+        operation: "memory_deleted",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000002",
+        phase: "pruning",
+        sub_phase: "",
+        operation: "phase_summary",
+        after_state: { pruned: 1 },
+      }),
+    ];
+    const groups = groupLogsByPhase(logs);
+    const pruning = groups.get("pruning");
+    expect(pruning).toBeDefined();
+    expect(pruning!.hasSubPhases).toBe(false);
+    expect(pruning!.logsFlat.map((l) => l.operation)).toEqual(["memory_deleted"]);
+  });
+
+  it("groups consolidation logs by sub_phase column", () => {
+    const logs: DreamLog[] = [
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000010",
+        phase: "consolidation",
+        sub_phase: "backfill_audit",
+        operation: "memory_demoted",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000011",
+        phase: "consolidation",
+        sub_phase: "reinforce",
+        operation: "confidence_adjusted",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000012",
+        phase: "consolidation",
+        sub_phase: "consolidate",
+        operation: "memory_created",
+      }),
+    ];
+    const groups = groupLogsByPhase(logs);
+    const c = groups.get("consolidation");
+    expect(c).toBeDefined();
+    expect(c!.hasSubPhases).toBe(true);
+    expect(c!.subGroups.map((sg) => sg.subPhase)).toEqual([
+      "backfill_audit",
+      "reinforce",
+      "consolidate",
+    ]);
+    expect(c!.subGroups[0].logs[0].operation).toBe("memory_demoted");
+    expect(c!.subGroups[1].logs[0].operation).toBe("confidence_adjusted");
+    expect(c!.subGroups[2].logs[0].operation).toBe("memory_created");
+  });
+
+  it("infers sub_phase for legacy consolidation rows from the next phase_summary", () => {
+    // Pre-migration ordering: ops carry empty sub_phase, but each
+    // writePhaseSummary closes the sub-phase scope with the embedded value.
+    const logs: DreamLog[] = [
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000020",
+        phase: "consolidation",
+        sub_phase: "",
+        operation: "memory_demoted",
+        created_at: "2026-05-03T12:00:00Z",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000021",
+        phase: "consolidation",
+        sub_phase: "",
+        operation: "phase_summary",
+        after_state: { sub_phase: "backfill_audit", audited: 3 },
+        created_at: "2026-05-03T12:00:01Z",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000022",
+        phase: "consolidation",
+        sub_phase: "",
+        operation: "confidence_adjusted",
+        created_at: "2026-05-03T12:00:02Z",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000023",
+        phase: "consolidation",
+        sub_phase: "",
+        operation: "phase_summary",
+        after_state: { sub_phase: "reinforce", confidence_adjusted: 1 },
+        created_at: "2026-05-03T12:00:03Z",
+      }),
+    ];
+    const c = groupLogsByPhase(logs).get("consolidation");
+    expect(c).toBeDefined();
+    expect(c!.subGroups.map((sg) => sg.subPhase)).toEqual(["backfill_audit", "reinforce"]);
+    expect(c!.subGroups[0].logs[0].operation).toBe("memory_demoted");
+    expect(c!.subGroups[1].logs[0].operation).toBe("confidence_adjusted");
+  });
+
+  it("populates logsFlat for non-consolidation phases", () => {
+    const logs: DreamLog[] = [
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000030",
+        phase: "weight_adjustment",
+        sub_phase: "",
+        operation: "relationship_updated",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000031",
+        phase: "weight_adjustment",
+        sub_phase: "",
+        operation: "entity_updated",
+      }),
+    ];
+    const w = groupLogsByPhase(logs).get("weight_adjustment");
+    expect(w).toBeDefined();
+    expect(w!.hasSubPhases).toBe(false);
+    expect(w!.subGroups).toEqual([]);
+    expect(w!.logsFlat.map((l) => l.operation)).toEqual([
+      "relationship_updated",
+      "entity_updated",
+    ]);
+  });
+
+  it("does not let a later phase_summary reach across an explicit non-summary row", () => {
+    // Mixed-mode cycle (rare, but possible during the migration window): a
+    // post-migration confidence_adjusted row carrying explicit sub_phase
+    // appears between legacy empty-sub_phase rows. The trailing
+    // phase_summary must NOT backfill the legacy rows across the explicit
+    // boundary, because their true scope is unknowable.
+    const logs: DreamLog[] = [
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000050",
+        phase: "consolidation",
+        sub_phase: "", // legacy: pre-migration audit op
+        operation: "memory_demoted",
+        created_at: "2026-05-03T12:00:00Z",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000051",
+        phase: "consolidation",
+        sub_phase: "reinforce", // post-migration: scope changed to reinforce
+        operation: "confidence_adjusted",
+        created_at: "2026-05-03T12:00:01Z",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000052",
+        phase: "consolidation",
+        sub_phase: "",
+        operation: "phase_summary",
+        after_state: { sub_phase: "consolidate" },
+        created_at: "2026-05-03T12:00:02Z",
+      }),
+    ];
+    const c = groupLogsByPhase(logs).get("consolidation");
+    expect(c).toBeDefined();
+    // Legacy row 50 must NOT be labeled "consolidate" by the trailing
+    // phase_summary — that summary's scope started after row 51.
+    const reinforce = c!.subGroups.find((sg) => sg.subPhase === "reinforce");
+    const consolidate = c!.subGroups.find((sg) => sg.subPhase === "consolidate");
+    const unattributed = c!.subGroups.find((sg) => sg.subPhase === "");
+    expect(reinforce?.logs.map((l) => l.operation)).toEqual(["confidence_adjusted"]);
+    // The trailing phase_summary at row 52 carried sub_phase="consolidate",
+    // so its filtered-out summary closes the consolidate scope with no ops.
+    expect(consolidate?.logs ?? []).toEqual([]);
+    // Row 50 stays unattributed (sub_phase=""), not pulled into consolidate.
+    expect(unattributed?.logs.map((l) => l.operation)).toEqual(["memory_demoted"]);
+  });
+
+  it("preserves canonical sub-phase order even with interleaved input", () => {
+    // Build out-of-order to confirm the sort. Real cycles emit in order,
+    // but the sort defends against any future reordering at the API layer.
+    const logs: DreamLog[] = [
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000040",
+        phase: "consolidation",
+        sub_phase: "consolidate",
+        operation: "memory_created",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000041",
+        phase: "consolidation",
+        sub_phase: "backfill_audit",
+        operation: "memory_demoted",
+      }),
+      mkLog({
+        id: "00000000-0000-0000-0000-000000000042",
+        phase: "consolidation",
+        sub_phase: "reinforce",
+        operation: "confidence_adjusted",
+      }),
+    ];
+    const c = groupLogsByPhase(logs).get("consolidation");
+    expect(c!.subGroups.map((sg) => sg.subPhase)).toEqual([
+      "backfill_audit",
+      "reinforce",
+      "consolidate",
+    ]);
   });
 });

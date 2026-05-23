@@ -220,7 +220,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 				slog.Warn("dreaming: expire decayed relationship failed", "relationship", rel.ID, "err", err)
 				continue
 			}
-			if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust,
+			if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
 				model.DreamOpRelationshipExpired, "relationship", rel.ID,
 				map[string]interface{}{"weight": rel.Weight},
 				map[string]interface{}{"weight": newWeight, "reason": "decayed_below_threshold"}); err != nil {
@@ -235,7 +235,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 			continue
 		}
 
-		if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust,
+		if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
 			model.DreamOpRelationshipUpdated, "relationship", rel.ID,
 			map[string]interface{}{"weight": rel.Weight},
 			map[string]interface{}{"weight": newWeight}); err != nil {
@@ -396,7 +396,7 @@ func (p *WeightAdjustmentPhase) writePhaseSummary(
 	if logger == nil {
 		return
 	}
-	if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust,
+	if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
 		model.DreamOpPhaseSummary, "phase", uuid.Nil, nil, stats); err != nil {
 		slog.Warn("dreaming: log phase summary failed",
 			"phase", model.DreamPhaseWeightAdjust, "err", err)
@@ -444,7 +444,7 @@ func (p *WeightAdjustmentPhase) recalibrateMentionCounts(
 				continue
 			}
 
-			if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust,
+			if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
 				model.DreamOpEntityUpdated, "entity", entity.ID,
 				map[string]interface{}{"mention_count": entity.MentionCount},
 				map[string]interface{}{"mention_count": activeCount}); err != nil {

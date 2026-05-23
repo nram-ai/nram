@@ -33,16 +33,24 @@ func (r *DreamLogRepo) Create(ctx context.Context, entry *model.DreamLog) error 
 		entry.AfterState = json.RawMessage(`{}`)
 	}
 
-	query := `INSERT INTO dream_logs (id, cycle_id, project_id, phase, operation, target_type, target_id, before_state, after_state)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	// subPhase persists as NULL when empty so legacy rows and rows written
+	// from phases that don't subdivide stay distinguishable from rows that
+	// explicitly set a sub-phase.
+	var subPhase any
+	if entry.SubPhase != "" {
+		subPhase = entry.SubPhase
+	}
+
+	query := `INSERT INTO dream_logs (id, cycle_id, project_id, phase, sub_phase, operation, target_type, target_id, before_state, after_state)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO dream_logs (id, cycle_id, project_id, phase, operation, target_type, target_id, before_state, after_state)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+		query = `INSERT INTO dream_logs (id, cycle_id, project_id, phase, sub_phase, operation, target_type, target_id, before_state, after_state)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
 		entry.ID.String(), entry.CycleID.String(), entry.ProjectID.String(),
-		entry.Phase, entry.Operation, entry.TargetType, entry.TargetID.String(),
+		entry.Phase, subPhase, entry.Operation, entry.TargetType, entry.TargetID.String(),
 		string(entry.BeforeState), string(entry.AfterState),
 	)
 	if err != nil {
@@ -211,7 +219,7 @@ func (r *DreamLogRepo) CountByCycle(ctx context.Context, cycleID uuid.UUID) (int
 	return count, nil
 }
 
-const selectDreamLogColumns = `SELECT id, cycle_id, project_id, phase, operation,
+const selectDreamLogColumns = `SELECT id, cycle_id, project_id, phase, sub_phase, operation,
 	target_type, target_id, before_state, after_state, created_at`
 
 func (r *DreamLogRepo) scanRows(rows *sql.Rows) ([]model.DreamLog, error) {
@@ -220,9 +228,10 @@ func (r *DreamLogRepo) scanRows(rows *sql.Rows) ([]model.DreamLog, error) {
 		var entry model.DreamLog
 		var idStr, cycleIDStr, projectIDStr, targetIDStr string
 		var beforeStr, afterStr, createdAtStr string
+		var subPhase sql.NullString
 
 		if err := rows.Scan(
-			&idStr, &cycleIDStr, &projectIDStr, &entry.Phase, &entry.Operation,
+			&idStr, &cycleIDStr, &projectIDStr, &entry.Phase, &subPhase, &entry.Operation,
 			&entry.TargetType, &targetIDStr, &beforeStr, &afterStr, &createdAtStr,
 		); err != nil {
 			return nil, fmt.Errorf("dream log scan: %w", err)
@@ -232,6 +241,7 @@ func (r *DreamLogRepo) scanRows(rows *sql.Rows) ([]model.DreamLog, error) {
 		entry.CycleID, _ = uuid.Parse(cycleIDStr)
 		entry.ProjectID, _ = uuid.Parse(projectIDStr)
 		entry.TargetID, _ = uuid.Parse(targetIDStr)
+		entry.SubPhase = subPhase.String
 		entry.BeforeState = json.RawMessage(beforeStr)
 		entry.AfterState = json.RawMessage(afterStr)
 		entry.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)

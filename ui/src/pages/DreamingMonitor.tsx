@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useCallback, useMemo, Fragment, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useDreamingStatus,
@@ -22,13 +22,17 @@ import type { DreamCycle, DreamLog, DreamPhaseSummary } from "../api/client";
 import { formatNumber } from "../lib/formatters";
 import {
   PHASE_LABELS,
+  SUB_PHASE_LABELS,
   formatDreamLog,
   formatFactValue,
+  groupLogsByPhase,
   shortId,
   isZeroId,
   memoryFocusHref,
   type Fact,
   type FormattedLog,
+  type PhaseLogGroup,
+  type SubPhaseLogGroup,
 } from "../lib/dreaming";
 import { Link } from "react-router-dom";
 import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
@@ -179,36 +183,125 @@ function ResidualCell({ ps }: { ps: DreamPhaseSummary }) {
   );
 }
 
-function PhaseSummaryRow({ ps }: { ps: DreamPhaseSummary }) {
-  const subSegments: PhaseBudgetSegment[] | null =
-    ps.sub_phases && ps.sub_phases.length > 0
-      ? ps.sub_phases.map((sp) => ({
-          key: sp.name,
-          value: sp.tokens_used,
-          cap: sp.slice_cap,
-          hasResidual: sp.has_residual,
-        }))
-      : null;
-  // Sub-phase total = parent slice cap when set; otherwise sum of children
-  // so the bar still spans full width when slice_cap is omitted.
+// PhaseSummaryRowExpandable renders the phase summary row plus its nested
+// operations accordion. The phase row expands to reveal either the sub-phase
+// rows (for phases that subdivide, today only consolidation) or the flat
+// operation list (for everything else). All levels start collapsed; expand
+// state is owned by the parent so it survives react-query refetches.
+function PhaseSummaryRowExpandable({
+  ps,
+  group,
+  pending = false,
+  expandedPhases,
+  expandedSubPhases,
+  expandedLogs,
+  togglePhase,
+  toggleSubPhase,
+  toggleLog,
+}: {
+  ps: DreamPhaseSummary;
+  group?: PhaseLogGroup;
+  // pending=true for rows synthesized from logGroups for phases that haven't
+  // yet been written to cycle.phase_summary (in-flight or aborted cycles).
+  // The row collapses tokens/time/residual to "—" and labels status as
+  // "in flight" so the user can still drill into the ops.
+  pending?: boolean;
+  expandedPhases: Set<string>;
+  expandedSubPhases: Set<string>;
+  expandedLogs: Set<string>;
+  togglePhase: (key: string) => void;
+  toggleSubPhase: (key: string) => void;
+  toggleLog: (key: string) => void;
+}) {
+  const phaseExpanded = expandedPhases.has(ps.phase);
+  const hasSubPhaseData = !!(ps.sub_phases && ps.sub_phases.length > 0);
+  // Sub-phase budget bar (existing behavior, surfaced when the phase is
+  // expanded). Sub-phase total = parent slice cap when set; otherwise sum
+  // of children so the bar still spans full width when slice_cap is omitted.
+  const subSegments: PhaseBudgetSegment[] | null = hasSubPhaseData
+    ? ps.sub_phases!.map((sp) => ({
+        key: sp.name,
+        value: sp.tokens_used,
+        cap: sp.slice_cap,
+        hasResidual: sp.has_residual,
+      }))
+    : null;
   const subTotal =
     ps.slice_cap && ps.slice_cap > 0
       ? ps.slice_cap
       : (subSegments?.reduce((sum, s) => sum + Math.max(0, s.value), 0) ?? 0);
+
+  const flatLogs = group?.logsFlat ?? [];
+  // Render sub-phase rows for any phase that EITHER produced sub-phase-tagged
+  // logs OR carries a sub-phase breakdown in its phase summary (the latter
+  // covers cycles that completed with zero ops in every sub-phase — the
+  // accordion would otherwise collapse to a misleading "no operations" line
+  // while the budget bar advertises three sub-phases above it).
+  const hasSubPhases = !!group?.hasSubPhases || hasSubPhaseData;
+  const subGroups: SubPhaseLogGroup[] = useMemo(() => {
+    if (group?.hasSubPhases) {
+      const fromLogs = new Map(group.subGroups.map((sg) => [sg.subPhase, sg]));
+      // Sub-phases that appear in ps.sub_phases but had zero logs still get
+      // a row so the structure matches the budget bar above.
+      if (hasSubPhaseData) {
+        for (const sp of ps.sub_phases!) {
+          if (!fromLogs.has(sp.name)) fromLogs.set(sp.name, { subPhase: sp.name, logs: [] });
+        }
+        const ordered: SubPhaseLogGroup[] = [];
+        const seen = new Set<string>();
+        for (const sp of ps.sub_phases!) {
+          const sg = fromLogs.get(sp.name);
+          if (sg) {
+            ordered.push(sg);
+            seen.add(sp.name);
+          }
+        }
+        for (const sg of group.subGroups) {
+          if (!seen.has(sg.subPhase)) ordered.push(sg);
+        }
+        return ordered;
+      }
+      return group.subGroups;
+    }
+    if (hasSubPhaseData) {
+      return ps.sub_phases!.map((sp) => ({ subPhase: sp.name, logs: [] }));
+    }
+    return [];
+  }, [group, hasSubPhaseData, ps.sub_phases]);
+
   return (
     <>
       <tr className="border-b last:border-0">
-        <td className="px-3 py-2">{PHASE_LABELS[ps.phase] ?? ps.phase}</td>
-        <td className="px-3 py-2 font-mono text-xs">{formatTokensWithCap(ps)}</td>
+        <td className="px-3 py-2">
+          <button
+            type="button"
+            onClick={() => togglePhase(ps.phase)}
+            className="flex items-center gap-1.5 text-left hover:text-foreground"
+          >
+            <span className="w-3 text-xs text-muted-foreground">
+              {phaseExpanded ? "▾" : "▸"}
+            </span>
+            <span>{PHASE_LABELS[ps.phase] ?? ps.phase}</span>
+          </button>
+        </td>
+        <td className="px-3 py-2 font-mono text-xs">
+          {pending ? <span className="text-muted-foreground">—</span> : formatTokensWithCap(ps)}
+        </td>
         <td className="px-3 py-2 font-mono text-xs">{ps.operations}</td>
         <td className="px-3 py-2 text-muted-foreground">
-          {ps.duration_ms < 1000 ? `${ps.duration_ms}ms` : `${(ps.duration_ms / 1000).toFixed(1)}s`}
+          {pending
+            ? "—"
+            : ps.duration_ms < 1000
+              ? `${ps.duration_ms}ms`
+              : `${(ps.duration_ms / 1000).toFixed(1)}s`}
         </td>
         <td className="px-3 py-2">
-          <ResidualCell ps={ps} />
+          {pending ? <span className="text-xs text-muted-foreground">—</span> : <ResidualCell ps={ps} />}
         </td>
         <td className="px-3 py-2">
-          {ps.skipped ? (
+          {pending ? (
+            <span className="text-xs text-info">in flight</span>
+          ) : ps.skipped ? (
             <span className="text-xs text-muted-foreground">skipped</span>
           ) : ps.error ? (
             <span className="text-xs text-destructive">{ps.error}</span>
@@ -217,7 +310,7 @@ function PhaseSummaryRow({ ps }: { ps: DreamPhaseSummary }) {
           )}
         </td>
       </tr>
-      {subSegments && (
+      {phaseExpanded && subSegments && (
         <tr className="border-b bg-muted/20 last:border-0">
           <td colSpan={6} className="px-3 py-3 pl-8">
             <PhaseBudgetBar
@@ -227,6 +320,83 @@ function PhaseSummaryRow({ ps }: { ps: DreamPhaseSummary }) {
               variant="sub_phase"
               ariaLabel={`${PHASE_LABELS[ps.phase] ?? ps.phase} sub-phase breakdown`}
             />
+          </td>
+        </tr>
+      )}
+      {phaseExpanded && hasSubPhases &&
+        (subGroups.length === 0 ? (
+          <tr className="border-b last:border-0">
+            <td colSpan={6} className="px-3 py-2 pl-8 text-xs text-muted-foreground">
+              No operations recorded.
+            </td>
+          </tr>
+        ) : (
+          subGroups.map((sg) => {
+            const key = `${ps.phase}::${sg.subPhase}`;
+            const subExpanded = expandedSubPhases.has(key);
+            const subLabel = sg.subPhase
+              ? SUB_PHASE_LABELS[sg.subPhase] ?? sg.subPhase
+              : "Unattributed";
+            return (
+              <Fragment key={key}>
+                <tr className="border-b bg-muted/10 last:border-0">
+                  <td colSpan={6} className="px-3 py-2 pl-8">
+                    <button
+                      type="button"
+                      onClick={() => toggleSubPhase(key)}
+                      className="flex items-center gap-1.5 text-left text-sm hover:text-foreground"
+                    >
+                      <span className="w-3 text-xs text-muted-foreground">
+                        {subExpanded ? "▾" : "▸"}
+                      </span>
+                      <span className="font-medium">{subLabel}</span>
+                      <span className="text-xs text-muted-foreground">
+                        ({sg.logs.length} {sg.logs.length === 1 ? "operation" : "operations"})
+                      </span>
+                    </button>
+                  </td>
+                </tr>
+                {subExpanded && (
+                  <tr className="border-b last:border-0">
+                    <td colSpan={6} className="px-3 py-2 pl-12">
+                      {sg.logs.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No operations recorded.</p>
+                      ) : (
+                        <div className="max-h-96 space-y-1 overflow-y-auto">
+                          {sg.logs.map((log) => (
+                            <LogEntry
+                              key={log.id}
+                              log={log}
+                              expanded={expandedLogs.has(log.id)}
+                              onToggle={() => toggleLog(log.id)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })
+        ))}
+      {phaseExpanded && !hasSubPhases && (
+        <tr className="border-b last:border-0">
+          <td colSpan={6} className="px-3 py-2 pl-8">
+            {flatLogs.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No operations recorded.</p>
+            ) : (
+              <div className="max-h-96 space-y-1 overflow-y-auto">
+                {flatLogs.map((log) => (
+                  <LogEntry
+                    key={log.id}
+                    log={log}
+                    expanded={expandedLogs.has(log.id)}
+                    onToggle={() => toggleLog(log.id)}
+                  />
+                ))}
+              </div>
+            )}
           </td>
         </tr>
       )}
@@ -737,7 +907,34 @@ function CycleDetail({
     tier,
     orgId,
   });
-  const [expandedLog, setExpandedLog] = useState<string | null>(null);
+  const [expandedPhases, setExpandedPhases] = useState<Set<string>>(() => new Set());
+  const [expandedSubPhases, setExpandedSubPhases] = useState<Set<string>>(() => new Set());
+  const [expandedLogs, setExpandedLogs] = useState<Set<string>>(() => new Set());
+
+  const togglePhase = useCallback((key: string) => {
+    setExpandedPhases((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  const toggleSubPhase = useCallback((key: string) => {
+    setExpandedSubPhases((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  const toggleLog = useCallback((key: string) => {
+    setExpandedLogs((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   if (isLoading) {
     return (
@@ -765,6 +962,38 @@ function CycleDetail({
     cycle.phase_summary && Array.isArray(cycle.phase_summary)
       ? cycle.phase_summary
       : [];
+
+  // Group operation logs under their phase / sub-phase for the nested
+  // accordion in the Phase Summary table. Memoized on the logs array since
+  // each react-query refetch yields a new reference only when the contents
+  // change.
+  const logGroups = useMemo(() => groupLogsByPhase(logs), [logs]);
+
+  // Synthesize phase rows for any phase that produced logs but isn't yet in
+  // cycle.phase_summary (in-flight cycles, phases that aborted before the
+  // runner wrote a PhaseSummaryEntry). Without this the accordion silently
+  // drops those logs because the row-iterator is driven off phaseSummary.
+  const orphanPhaseRows: DreamPhaseSummary[] = useMemo(() => {
+    const knownPhases = new Set(phaseSummary.map((ps) => ps.phase));
+    const rows: DreamPhaseSummary[] = [];
+    for (const [phase, grp] of logGroups) {
+      if (knownPhases.has(phase)) continue;
+      const opCount =
+        grp.logsFlat.length +
+        grp.subGroups.reduce((sum, sg) => sum + sg.logs.length, 0);
+      rows.push({
+        phase,
+        tokens_used: 0,
+        operations: opCount,
+        duration_ms: 0,
+      });
+    }
+    return rows;
+  }, [phaseSummary, logGroups]);
+  const allPhaseRows = useMemo(
+    () => [...phaseSummary, ...orphanPhaseRows],
+    [phaseSummary, orphanPhaseRows],
+  );
 
   return (
     <div className="space-y-4 rounded-lg border bg-card p-6">
@@ -841,25 +1070,29 @@ function CycleDetail({
 
       {cycle.error && <ExtractionErrorView value={cycle.error} variant="block" />}
 
-      {/* Phase Summary */}
-      {phaseSummary.length > 0 && (
+      {/* Phase Summary — also surfaces orphan-phase rows for logs whose
+          phase hasn't been written to cycle.phase_summary yet (in-flight or
+          aborted cycles). */}
+      {allPhaseRows.length > 0 && (
         <div>
-          <div className="mb-4">
-            <h4 className="mb-2 text-sm font-semibold text-muted-foreground">
-              Token Budget · {formatNumber(cycle.tokens_used)} of {formatNumber(cycle.token_budget)}
-            </h4>
-            <PhaseBudgetBar
-              segments={phaseSummary.map((ps) => ({
-                key: ps.phase,
-                value: ps.tokens_used,
-                cap: ps.slice_cap,
-                hasResidual: ps.has_residual,
-              }))}
-              total={cycle.token_budget}
-              format={formatNumber}
-              ariaLabel="Cycle token usage by phase"
-            />
-          </div>
+          {phaseSummary.length > 0 && (
+            <div className="mb-4">
+              <h4 className="mb-2 text-sm font-semibold text-muted-foreground">
+                Token Budget · {formatNumber(cycle.tokens_used)} of {formatNumber(cycle.token_budget)}
+              </h4>
+              <PhaseBudgetBar
+                segments={phaseSummary.map((ps) => ({
+                  key: ps.phase,
+                  value: ps.tokens_used,
+                  cap: ps.slice_cap,
+                  hasResidual: ps.has_residual,
+                }))}
+                total={cycle.token_budget}
+                format={formatNumber}
+                ariaLabel="Cycle token usage by phase"
+              />
+            </div>
+          )}
           <h4 className="mb-2 text-sm font-semibold text-muted-foreground">Phase Summary</h4>
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full text-sm">
@@ -874,35 +1107,25 @@ function CycleDetail({
                 </tr>
               </thead>
               <tbody>
-                {phaseSummary.map((ps, i) => (
-                  <PhaseSummaryRow key={i} ps={ps} />
+                {allPhaseRows.map((ps, i) => (
+                  <PhaseSummaryRowExpandable
+                    key={ps.phase + ":" + i}
+                    ps={ps}
+                    group={logGroups.get(ps.phase)}
+                    pending={i >= phaseSummary.length}
+                    expandedPhases={expandedPhases}
+                    expandedSubPhases={expandedSubPhases}
+                    expandedLogs={expandedLogs}
+                    togglePhase={togglePhase}
+                    toggleSubPhase={toggleSubPhase}
+                    toggleLog={toggleLog}
+                  />
                 ))}
               </tbody>
             </table>
           </div>
         </div>
       )}
-
-      {/* Operation Log */}
-      <div>
-        <h4 className="mb-2 text-sm font-semibold text-muted-foreground">
-          Operations ({logs.length})
-        </h4>
-        {logs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No operations recorded.</p>
-        ) : (
-          <div className="max-h-96 space-y-1 overflow-y-auto">
-            {logs.map((log) => (
-              <LogEntry
-                key={log.id}
-                log={log}
-                expanded={expandedLog === log.id}
-                onToggle={() => setExpandedLog(expandedLog === log.id ? null : log.id)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

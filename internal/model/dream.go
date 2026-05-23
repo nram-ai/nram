@@ -105,11 +105,16 @@ type DreamCycle struct {
 
 // DreamLog records a single mutation performed during a dream cycle,
 // with before/after snapshots to support rollback.
+//
+// SubPhase is empty for phases that don't subdivide their work. Today only
+// the consolidation phase emits values here (DreamSubPhase* constants).
+// Legacy rows written before the column existed deserialize as empty.
 type DreamLog struct {
 	ID          uuid.UUID       `json:"id"`
 	CycleID     uuid.UUID       `json:"cycle_id"`
 	ProjectID   uuid.UUID       `json:"project_id"`
 	Phase       string          `json:"phase"`
+	SubPhase    string          `json:"sub_phase"`
 	Operation   string          `json:"operation"`
 	TargetType  string          `json:"target_type"`
 	TargetID    uuid.UUID       `json:"target_id"`

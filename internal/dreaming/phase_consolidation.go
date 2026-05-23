@@ -270,6 +270,7 @@ func (p *ConsolidationPhase) reinforce(
 	llm provider.LLMProvider,
 	allMemories []model.Memory,
 ) (bool, error) {
+	const subPhase = model.DreamSubPhaseReinforce
 	var syntheses []model.Memory
 	var userMemories []model.Memory
 	for _, m := range allMemories {
@@ -401,7 +402,7 @@ func (p *ConsolidationPhase) reinforce(
 		}
 
 		stats["confidence_adjusted"] = stats["confidence_adjusted"].(int) + 1
-		if err := logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+		if err := logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 			model.DreamOpConfidenceAdjusted, "memory", synthesis.ID,
 			map[string]interface{}{"confidence": oldConfidence},
 			map[string]interface{}{"confidence": newConfidence, "alignment": alignment}); err != nil {
@@ -478,13 +479,15 @@ func (p *ConsolidationPhase) scoreAlignment(
 }
 
 // supersedeOriginals marks the source memories of a synthesis as superseded
-// once the synthesis has reached sufficient confidence.
+// once the synthesis has reached sufficient confidence. Called only from the
+// reinforce sub-phase, so the log entry is attributed accordingly.
 func (p *ConsolidationPhase) supersedeOriginals(
 	ctx context.Context,
 	cycle *model.DreamCycle,
 	synthesis *model.Memory,
 	logger *DreamLogWriter,
 ) {
+	const subPhase = model.DreamSubPhaseReinforce
 	// Same lineage fallback as the audit path: prefer metadata, but
 	// recover from memory_lineage when source_memory_ids is missing.
 	// Without this, a clobbered synthesis cannot supersede its sources
@@ -510,7 +513,7 @@ func (p *ConsolidationPhase) supersedeOriginals(
 		// remains addressable by ID for lineage/rollback.
 		p.purgeVector(ctx, memID)
 
-		if err := logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+		if err := logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 			model.DreamOpMemorySuperseded, "memory", memID,
 			map[string]interface{}{"superseded_by": nil},
 			map[string]interface{}{"superseded_by": synthesis.ID.String()}); err != nil {
@@ -799,6 +802,9 @@ func (p *ConsolidationPhase) demoteDream(ctx context.Context, logger *DreamLogWr
 // demote=true takes the full Update path because Confidence/low_novelty/
 // EmbeddingDim are real state changes — a stale stamp on demote is harmless
 // since low_novelty filtering keeps the row out of future audit eligibility.
+//
+// All call sites originate in the backfill_audit sub-phase, so the log entry
+// is attributed accordingly when demote=true.
 func (p *ConsolidationPhase) writeAuditDecision(
 	ctx context.Context,
 	logger *DreamLogWriter,
@@ -807,6 +813,7 @@ func (p *ConsolidationPhase) writeAuditDecision(
 	reason string,
 	demote bool,
 ) {
+	const subPhase = model.DreamSubPhaseBackfillAudit
 	if meta == nil {
 		meta = map[string]interface{}{}
 	}
@@ -849,7 +856,7 @@ func (p *ConsolidationPhase) writeAuditDecision(
 	// the vector is dead weight in the index.
 	p.purgeVector(ctx, mem.ID)
 	if logger != nil {
-		_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+		_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 			model.DreamOpMemoryDemoted, "memory", mem.ID,
 			map[string]interface{}{"confidence": beforeConfidence},
 			map[string]interface{}{
@@ -1218,6 +1225,7 @@ func (p *ConsolidationPhase) consolidate(
 	llm provider.LLMProvider,
 	allMemories []model.Memory,
 ) (bool, error) {
+	const subPhase = model.DreamSubPhaseConsolidate
 	// Filter to non-deleted, non-dream, non-superseded memories.
 	var candidates []model.Memory
 	for _, m := range allMemories {
@@ -1373,7 +1381,7 @@ func (p *ConsolidationPhase) consolidate(
 				for i, m := range cluster {
 					rejectedSources[i] = m.ID.String()
 				}
-				_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+				_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 					model.DreamOpMemoryRejected, "memory", uuid.Nil,
 					nil,
 					map[string]interface{}{
@@ -1434,7 +1442,7 @@ func (p *ConsolidationPhase) consolidate(
 
 		stats["created"] = stats["created"].(int) + 1
 		// Log the operation.
-		_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+		_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 			model.DreamOpMemoryCreated, "memory", synthMemory.ID,
 			nil, synthMemory)
 		p.stampConsolidateCluster(ctx, cluster, metas, fingerprint)
@@ -1715,7 +1723,7 @@ func (p *ConsolidationPhase) writePhaseSummary(
 	if logger == nil {
 		return
 	}
-	if err := logger.LogOperation(ctx, model.DreamPhaseConsolidation,
+	if err := logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 		model.DreamOpPhaseSummary, "phase", uuid.Nil, nil, stats); err != nil {
 		slog.Warn("dreaming: log phase summary failed",
 			"sub_phase", subPhase, "err", err)

@@ -369,7 +369,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			continue
 		}
 
-		_ = logger.LogOperation(ctx, model.DreamPhaseContradictions,
+		_ = logger.LogOperation(ctx, model.DreamPhaseContradictions, "",
 			model.DreamOpContradictionDetected, "memory", pair[0].ID,
 			nil, map[string]interface{}{
 				"conflicting_id":  pair[1].ID.String(),
@@ -847,7 +847,7 @@ func (p *ContradictionPhase) paraphraseSupersede(
 		}
 	}
 
-	_ = logger.LogOperation(ctx, model.DreamPhaseContradictions,
+	_ = logger.LogOperation(ctx, model.DreamPhaseContradictions, "",
 		model.DreamOpParaphraseSuperseded, "memory", loser.ID,
 		nil, map[string]interface{}{
 			"superseded_by": winner.ID.String(),

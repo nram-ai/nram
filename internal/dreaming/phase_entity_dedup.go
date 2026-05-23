@@ -226,7 +226,7 @@ func (p *EntityDedupPhase) mergeEntities(
 	primary, candidate *model.Entity,
 	logger *DreamLogWriter,
 ) error {
-	if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup,
+	if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup, "",
 		model.DreamOpEntityMerged, "entity", candidate.ID, candidate, primary); err != nil {
 		return err
 	}
@@ -279,7 +279,7 @@ func (p *EntityDedupPhase) mergeEntities(
 			continue
 		}
 
-		if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup,
+		if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup, "",
 			model.DreamOpRelationshipCreated, "relationship", newRel.ID, nil, &newRel); err != nil {
 			slog.Warn("dreaming: log relationship retarget failed", "err", err)
 		}

@@ -232,7 +232,7 @@ func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycl
 			continue
 		}
 
-		_ = logger.LogOperation(ctx, model.DreamPhasePruning,
+		_ = logger.LogOperation(ctx, model.DreamPhasePruning, "",
 			model.DreamOpMemoryDeleted, "memory", mem.ID,
 			&mem, map[string]string{"reason": reason})
 		if err := p.memWriter.SoftDelete(ctx, mem.ID, cycle.NamespaceID); err != nil {
@@ -259,7 +259,7 @@ func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.Drea
 	}
 
 	if expired > 0 {
-		_ = logger.LogOperation(ctx, model.DreamPhasePruning,
+		_ = logger.LogOperation(ctx, model.DreamPhasePruning, "",
 			model.DreamOpRelationshipExpired, "namespace", cycle.NamespaceID,
 			nil, map[string]interface{}{
 				"expired_count": expired,
@@ -346,7 +346,7 @@ func (p *PruningPhase) pruneTransitiveUnderPressure(ctx context.Context, cycle *
 		return 0, err
 	}
 	if expired > 0 {
-		_ = logger.LogOperation(ctx, model.DreamPhasePruning,
+		_ = logger.LogOperation(ctx, model.DreamPhasePruning, "",
 			model.DreamOpRelationshipExpired, "namespace", cycle.NamespaceID,
 			nil, map[string]interface{}{
 				"expired_count": expired,
@@ -391,7 +391,7 @@ func (p *PruningPhase) resolveEffectivelyZero(ctx context.Context) float64 {
 }
 
 func (p *PruningPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWriter, stats map[string]interface{}) {
-	_ = logger.LogOperation(ctx, model.DreamPhasePruning,
+	_ = logger.LogOperation(ctx, model.DreamPhasePruning, "",
 		model.DreamOpPhaseSummary, "phase", uuid.Nil, nil, stats)
 }
 

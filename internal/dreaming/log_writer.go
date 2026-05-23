@@ -31,9 +31,12 @@ func NewDreamLogWriter(repo *storage.DreamLogRepo, cycleID, projectID uuid.UUID)
 // LogOperation records a single mutation performed during a dream phase.
 // before and after are marshaled to JSON for the snapshot fields. A nil repo
 // makes the call a counted no-op (tests construct writers with nil repos).
+//
+// subPhase is empty for phases that don't subdivide. Only consolidation
+// (backfill_audit, reinforce, consolidate) populates it today.
 func (w *DreamLogWriter) LogOperation(
 	ctx context.Context,
-	phase, operation, targetType string,
+	phase, subPhase, operation, targetType string,
 	targetID uuid.UUID,
 	before, after interface{},
 ) error {
@@ -57,6 +60,7 @@ func (w *DreamLogWriter) LogOperation(
 		CycleID:     w.cycleID,
 		ProjectID:   w.projectID,
 		Phase:       phase,
+		SubPhase:    subPhase,
 		Operation:   operation,
 		TargetType:  targetType,
 		TargetID:    targetID,

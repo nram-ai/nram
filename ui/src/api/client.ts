@@ -1059,6 +1059,9 @@ export interface DreamLog {
   cycle_id: string;
   project_id: string;
   phase: string;
+  // Empty for phases that don't subdivide. Today only the consolidation
+  // phase populates this (backfill_audit / reinforce / consolidate).
+  sub_phase: string;
   operation: string;
   target_type: string;
   target_id: string;

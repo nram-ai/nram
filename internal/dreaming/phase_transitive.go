@@ -223,7 +223,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 				}
 
 				// Log the operation.
-				_ = logger.LogOperation(ctx, model.DreamPhaseTransitive,
+				_ = logger.LogOperation(ctx, model.DreamPhaseTransitive, "",
 					model.DreamOpRelationshipCreated, "relationship", newRel.ID, nil, newRel)
 
 				// Add to edge map to prevent duplicates within this cycle.

@@ -236,6 +236,6 @@ func (p *EmbeddingBackfillPhase) writePhaseSummary(ctx context.Context, logger *
 		stats["tokens_spent"] = budget.Used() - tokensBefore
 		stats["budget_remaining"] = budget.Remaining()
 	}
-	_ = logger.LogOperation(ctx, model.DreamPhaseEmbeddingBackfill,
+	_ = logger.LogOperation(ctx, model.DreamPhaseEmbeddingBackfill, "",
 		model.DreamOpPhaseSummary, "phase", uuid.Nil, nil, stats)
 }

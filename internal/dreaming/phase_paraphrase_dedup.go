@@ -353,7 +353,7 @@ func (p *ParaphraseDedupPhase) applySupersede(
 				"memory", loser.ID, "err", err)
 		}
 	}
-	_ = logger.LogOperation(ctx, model.DreamPhaseParaphraseDedup,
+	_ = logger.LogOperation(ctx, model.DreamPhaseParaphraseDedup, "",
 		model.DreamOpParaphraseSuperseded, "memory", loser.ID,
 		nil, map[string]interface{}{
 			"superseded_by": winner.ID.String(),
@@ -420,6 +420,6 @@ func (p *ParaphraseDedupPhase) writePhaseSummary(ctx context.Context, logger *Dr
 		stats["tokens_spent"] = budget.Used() - tokensBefore
 		stats["budget_remaining"] = budget.Remaining()
 	}
-	_ = logger.LogOperation(ctx, model.DreamPhaseParaphraseDedup,
+	_ = logger.LogOperation(ctx, model.DreamPhaseParaphraseDedup, "",
 		model.DreamOpPhaseSummary, "phase", uuid.Nil, nil, stats)
 }

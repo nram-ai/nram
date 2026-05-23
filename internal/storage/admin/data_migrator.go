@@ -145,6 +145,35 @@ func (m *DataMigrator) sourceTableExists(ctx context.Context, name string) (bool
 	return got == name, nil
 }
 
+// sourceColumnExists returns true if the given column exists on the given
+// SQLite source table. Columns added in later migrations may be absent on a
+// stale source deployment; callers can substitute NULL in the SELECT shape
+// rather than abort when the source predates the migration.
+func (m *DataMigrator) sourceColumnExists(ctx context.Context, table, column string) (bool, error) {
+	rows, err := m.src.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			colType   string
+			notnull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notnull, &dfltValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 // skipOrphan records that one row was skipped because its FK parent is missing.
 // The key is "childTable.childColumn" — callers use the column that would have
 // produced the FK failure (e.g. "relationships.source_memory").
@@ -1979,11 +2008,27 @@ func (m *DataMigrator) migrateDreamLogs(ctx context.Context) error {
 	} else if !ok {
 		return nil
 	}
-	rows, err := m.src.QueryContext(ctx, `
-		SELECT id, cycle_id, project_id, phase, operation, target_type, target_id,
+	// sub_phase was added by migration 000037 (sqlite) / 000034 (postgres).
+	// Source DBs that predate it lack the column; COALESCE on a missing
+	// column would still error, so fall back to the legacy SELECT shape
+	// when the column is absent.
+	hasSubPhase, err := m.sourceColumnExists(ctx, "dream_logs", "sub_phase")
+	if err != nil {
+		return err
+	}
+	selectSQL := `
+		SELECT id, cycle_id, project_id, phase, sub_phase, operation, target_type, target_id,
 		       before_state, after_state, created_at
 		FROM dream_logs
-	`)
+	`
+	if !hasSubPhase {
+		selectSQL = `
+			SELECT id, cycle_id, project_id, phase, NULL AS sub_phase, operation, target_type, target_id,
+			       before_state, after_state, created_at
+			FROM dream_logs
+		`
+	}
+	rows, err := m.src.QueryContext(ctx, selectSQL)
 	if err != nil {
 		return err
 	}
@@ -1996,9 +2041,9 @@ func (m *DataMigrator) migrateDreamLogs(ctx context.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO dream_logs (id, cycle_id, project_id, phase, operation, target_type, target_id,
+		INSERT INTO dream_logs (id, cycle_id, project_id, phase, sub_phase, operation, target_type, target_id,
 		                        before_state, after_state, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT DO NOTHING
 	`)
 	if err != nil {
@@ -2009,10 +2054,11 @@ func (m *DataMigrator) migrateDreamLogs(ctx context.Context) error {
 	for rows.Next() {
 		var (
 			id, cycleID, projectID, phase, operation, targetType, targetID string
+			subPhase                                                       sql.NullString
 			beforeState, afterState                                        sql.NullString
 			createdAt                                                      sql.NullString
 		)
-		if err := rows.Scan(&id, &cycleID, &projectID, &phase, &operation, &targetType, &targetID,
+		if err := rows.Scan(&id, &cycleID, &projectID, &phase, &subPhase, &operation, &targetType, &targetID,
 			&beforeState, &afterState, &createdAt); err != nil {
 			return err
 		}
@@ -2025,7 +2071,8 @@ func (m *DataMigrator) migrateDreamLogs(ctx context.Context) error {
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx,
-			id, cycleID, projectID, phase, operation, targetType, targetID,
+			id, cycleID, projectID, phase, nullStringToInterface(subPhase),
+			operation, targetType, targetID,
 			sanitizeJSONB(beforeState.String, "{}"),
 			sanitizeJSONB(afterState.String, "{}"),
 			nullStringToInterface(createdAt),
