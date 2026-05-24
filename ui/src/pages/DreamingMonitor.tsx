@@ -17,7 +17,7 @@ import { TierTabs } from "../components/TierTabs";
 import { ExtractionErrorView } from "../lib/extractionError";
 import Switch from "../components/Switch";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faSpinner } from "../lib/icons";
+import { faSpinner, faChevronDown, faChevronRight } from "../lib/icons";
 import type { DreamCycle, DreamLog, DreamPhaseSummary } from "../api/client";
 import { formatNumber } from "../lib/formatters";
 import {
@@ -271,16 +271,19 @@ function PhaseSummaryRowExpandable({
 
   return (
     <>
-      <tr className="border-b last:border-0">
+      <tr className="border-b last:border-0 hover:bg-muted/30 cursor-pointer">
         <td className="px-3 py-2">
           <button
             type="button"
             onClick={() => togglePhase(ps.phase)}
+            aria-expanded={phaseExpanded}
             className="flex items-center gap-1.5 text-left hover:text-foreground"
           >
-            <span className="w-3 text-xs text-muted-foreground">
-              {phaseExpanded ? "▾" : "▸"}
-            </span>
+            <FontAwesomeIcon
+              icon={phaseExpanded ? faChevronDown : faChevronRight}
+              className="h-3.5 w-3.5 text-foreground transition-transform"
+              aria-hidden="true"
+            />
             <span>{PHASE_LABELS[ps.phase] ?? ps.phase}</span>
           </button>
         </td>
@@ -339,16 +342,19 @@ function PhaseSummaryRowExpandable({
               : "Unattributed";
             return (
               <Fragment key={key}>
-                <tr className="border-b bg-muted/10 last:border-0">
+                <tr className="border-b bg-muted/10 last:border-0 hover:bg-muted/30 cursor-pointer">
                   <td colSpan={6} className="px-3 py-2 pl-8">
                     <button
                       type="button"
                       onClick={() => toggleSubPhase(key)}
+                      aria-expanded={subExpanded}
                       className="flex items-center gap-1.5 text-left text-sm hover:text-foreground"
                     >
-                      <span className="w-3 text-xs text-muted-foreground">
-                        {subExpanded ? "▾" : "▸"}
-                      </span>
+                      <FontAwesomeIcon
+                        icon={subExpanded ? faChevronDown : faChevronRight}
+                        className="h-3.5 w-3.5 text-foreground transition-transform"
+                        aria-hidden="true"
+                      />
                       <span className="font-medium">{subLabel}</span>
                       <span className="text-xs text-muted-foreground">
                         ({sg.logs.length} {sg.logs.length === 1 ? "operation" : "operations"})
@@ -1365,9 +1371,11 @@ function LogEntry({
         </span>
       )}
       {!formatted.isSummary && (
-        <span className="ml-auto text-xs text-muted-foreground">
-          {expanded ? "\u25B2" : "\u25BC"}
-        </span>
+        <FontAwesomeIcon
+          icon={expanded ? faChevronDown : faChevronRight}
+          className="ml-auto h-3.5 w-3.5 text-foreground transition-transform"
+          aria-hidden="true"
+        />
       )}
     </>
   );
@@ -1383,6 +1391,7 @@ function LogEntry({
         <button
           type="button"
           onClick={onToggle}
+          aria-expanded={expanded}
           className={`${headerCls} hover:bg-muted/30`}
         >
           {headerContent}
