@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -447,15 +448,18 @@ func TestRelationshipRepo_TraverseFromEntity_SingleHop(t *testing.T) {
 		}
 
 		// Traverse 1 hop from alice — should only get r1
-		results, err := repo.TraverseFromEntity(ctx, alice, 1)
+		tr, err := repo.TraverseFromEntity(ctx, alice, 1, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse: %v", err)
 		}
-		if len(results) != 1 {
-			t.Fatalf("expected 1 relationship at 1 hop, got %d", len(results))
+		if len(tr.Relationships) != 1 {
+			t.Fatalf("expected 1 relationship at 1 hop, got %d", len(tr.Relationships))
 		}
-		if results[0].ID != r1.ID {
-			t.Fatalf("expected relationship %s, got %s", r1.ID, results[0].ID)
+		if tr.Relationships[0].ID != r1.ID {
+			t.Fatalf("expected relationship %s, got %s", r1.ID, tr.Relationships[0].ID)
+		}
+		if tr.Truncated {
+			t.Fatalf("expected untruncated for uncapped traversal")
 		}
 	})
 }
@@ -488,12 +492,15 @@ func TestRelationshipRepo_TraverseFromEntity_MultiHop(t *testing.T) {
 		}
 
 		// Traverse 2 hops from alice — should get r1 and r2
-		results, err := repo.TraverseFromEntity(ctx, alice, 2)
+		tr, err := repo.TraverseFromEntity(ctx, alice, 2, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse: %v", err)
 		}
-		if len(results) != 2 {
-			t.Fatalf("expected 2 relationships at 2 hops, got %d", len(results))
+		if len(tr.Relationships) != 2 {
+			t.Fatalf("expected 2 relationships at 2 hops, got %d", len(tr.Relationships))
+		}
+		if tr.Truncated {
+			t.Fatalf("expected untruncated for uncapped traversal")
 		}
 	})
 }
@@ -525,14 +532,17 @@ func TestRelationshipRepo_TraverseFromEntity_Cycle(t *testing.T) {
 		}
 
 		// Traverse many hops — should not loop infinitely
-		results, err := repo.TraverseFromEntity(ctx, alice, 10)
+		tr, err := repo.TraverseFromEntity(ctx, alice, 10, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse with cycle: %v", err)
 		}
 
 		// Should find both unique relationships but not revisit entities or duplicate relationships.
-		if len(results) != 2 {
-			t.Fatalf("expected exactly 2 unique relationships in cycle traversal, got %d", len(results))
+		if len(tr.Relationships) != 2 {
+			t.Fatalf("expected exactly 2 unique relationships in cycle traversal, got %d", len(tr.Relationships))
+		}
+		if tr.Truncated {
+			t.Fatalf("expected untruncated for uncapped traversal")
 		}
 	})
 }
@@ -542,12 +552,12 @@ func TestRelationshipRepo_TraverseFromEntity_ZeroHops(t *testing.T) {
 		ctx := context.Background()
 		repo := NewRelationshipRepo(db)
 
-		results, err := repo.TraverseFromEntity(ctx, uuid.New(), 0)
+		tr, err := repo.TraverseFromEntity(ctx, uuid.New(), 0, 0)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results for 0 hops, got %d", len(results))
+		if len(tr.Relationships) != 0 {
+			t.Fatalf("expected 0 results for 0 hops, got %d", len(tr.Relationships))
 		}
 	})
 }
@@ -559,12 +569,181 @@ func TestRelationshipRepo_TraverseFromEntity_NoRelationships(t *testing.T) {
 		nsID := createTestNamespace(t, ctx, db)
 		alice := createTestEntity(t, ctx, db, nsID, "alice")
 
-		results, err := repo.TraverseFromEntity(ctx, alice, 3)
+		tr, err := repo.TraverseFromEntity(ctx, alice, 3, 0)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results for isolated entity, got %d", len(results))
+		if len(tr.Relationships) != 0 {
+			t.Fatalf("expected 0 results for isolated entity, got %d", len(tr.Relationships))
+		}
+	})
+}
+
+// TestRelationshipRepo_TraverseFromEntity_EdgeCap_StopsAtCap pins the
+// short-circuit invariant for the BFS edge cap: when maxEdges is smaller
+// than the available unique relationships, traversal returns exactly
+// maxEdges relationships and reports Truncated=true. Without the cap the
+// MCP memory_graph path would marshal the full unbounded result before
+// the byte-budget reducer in result_limit.go ever ran.
+func TestRelationshipRepo_TraverseFromEntity_EdgeCap_StopsAtCap(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		alice := createTestEntity(t, ctx, db, nsID, "alice")
+
+		const totalNeighbors = 20
+		for i := 0; i < totalNeighbors; i++ {
+			neighbor := createTestEntity(t, ctx, db, nsID, fmt.Sprintf("neighbor-%d", i))
+			rel := &model.Relationship{
+				NamespaceID: nsID, SourceID: alice, TargetID: neighbor,
+				Relation: "knows", Weight: 1.0,
+			}
+			if err := repo.Create(ctx, rel); err != nil {
+				t.Fatalf("failed to create rel %d: %v", i, err)
+			}
+		}
+
+		const cap = totalNeighbors / 2
+		tr, err := repo.TraverseFromEntity(ctx, alice, 1, cap)
+		if err != nil {
+			t.Fatalf("failed to traverse with cap: %v", err)
+		}
+		if len(tr.Relationships) != cap {
+			t.Fatalf("expected exactly %d relationships at cap, got %d", cap, len(tr.Relationships))
+		}
+		if !tr.Truncated {
+			t.Fatalf("expected Truncated=true when cap fired")
+		}
+		if tr.Cap != cap {
+			t.Fatalf("expected Cap echoed as %d, got %d", cap, tr.Cap)
+		}
+	})
+}
+
+// TestRelationshipRepo_TraverseFromEntity_EdgeCap_PartialHop verifies the
+// cap can fire mid-hop on a multi-hop traversal: when the first hop alone
+// already exceeds the cap, the second hop is never entered.
+func TestRelationshipRepo_TraverseFromEntity_EdgeCap_PartialHop(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		alice := createTestEntity(t, ctx, db, nsID, "alice")
+		bob := createTestEntity(t, ctx, db, nsID, "bob")
+
+		// alice has 10 direct neighbors plus an alice->bob edge; bob in turn
+		// has a downstream neighbor only visible if the second hop runs.
+		const aliceNeighbors = 10
+		for i := 0; i < aliceNeighbors; i++ {
+			neighbor := createTestEntity(t, ctx, db, nsID, fmt.Sprintf("a-neighbor-%d", i))
+			rel := &model.Relationship{
+				NamespaceID: nsID, SourceID: alice, TargetID: neighbor,
+				Relation: "knows", Weight: 1.0,
+			}
+			if err := repo.Create(ctx, rel); err != nil {
+				t.Fatalf("failed to create alice rel %d: %v", i, err)
+			}
+		}
+		aliceBob := &model.Relationship{
+			NamespaceID: nsID, SourceID: alice, TargetID: bob,
+			Relation: "knows", Weight: 1.0,
+		}
+		if err := repo.Create(ctx, aliceBob); err != nil {
+			t.Fatalf("failed to create alice->bob: %v", err)
+		}
+		downstream := createTestEntity(t, ctx, db, nsID, "downstream")
+		bobDownstream := &model.Relationship{
+			NamespaceID: nsID, SourceID: bob, TargetID: downstream,
+			Relation: "knows", Weight: 1.0,
+		}
+		if err := repo.Create(ctx, bobDownstream); err != nil {
+			t.Fatalf("failed to create bob->downstream: %v", err)
+		}
+
+		const cap = 5
+		tr, err := repo.TraverseFromEntity(ctx, alice, 2, cap)
+		if err != nil {
+			t.Fatalf("failed to traverse: %v", err)
+		}
+		if len(tr.Relationships) != cap {
+			t.Fatalf("expected exactly %d relationships when cap fires mid-first-hop, got %d", cap, len(tr.Relationships))
+		}
+		if !tr.Truncated {
+			t.Fatalf("expected Truncated=true")
+		}
+		for _, rel := range tr.Relationships {
+			if rel.ID == bobDownstream.ID {
+				t.Fatalf("bob->downstream should not appear; second hop should be skipped after cap fires")
+			}
+		}
+	})
+}
+
+// TestRelationshipRepo_TraverseFromEntity_EdgeCap_NotReached pins the
+// invariant that the cap is silent when the actual edge count is smaller:
+// Truncated must remain false and all available edges must be returned.
+func TestRelationshipRepo_TraverseFromEntity_EdgeCap_NotReached(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		alice := createTestEntity(t, ctx, db, nsID, "alice")
+		bob := createTestEntity(t, ctx, db, nsID, "bob")
+
+		rel := &model.Relationship{
+			NamespaceID: nsID, SourceID: alice, TargetID: bob,
+			Relation: "knows", Weight: 1.0,
+		}
+		if err := repo.Create(ctx, rel); err != nil {
+			t.Fatalf("failed to create rel: %v", err)
+		}
+
+		tr, err := repo.TraverseFromEntity(ctx, alice, 1, 100)
+		if err != nil {
+			t.Fatalf("failed to traverse: %v", err)
+		}
+		if len(tr.Relationships) != 1 {
+			t.Fatalf("expected 1 relationship, got %d", len(tr.Relationships))
+		}
+		if tr.Truncated {
+			t.Fatalf("expected Truncated=false when actual count is below cap")
+		}
+	})
+}
+
+// TestRelationshipRepo_TraverseFromEntity_EdgeCap_Zero pins the invariant
+// that maxEdges <= 0 disables the short-circuit and behaves identically
+// to the pre-cap implementation — regression guard for the interface
+// migration so existing callers passing 0 keep their unbounded semantics.
+func TestRelationshipRepo_TraverseFromEntity_EdgeCap_Zero(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		alice := createTestEntity(t, ctx, db, nsID, "alice")
+
+		const totalNeighbors = 15
+		for i := 0; i < totalNeighbors; i++ {
+			neighbor := createTestEntity(t, ctx, db, nsID, fmt.Sprintf("zero-neighbor-%d", i))
+			rel := &model.Relationship{
+				NamespaceID: nsID, SourceID: alice, TargetID: neighbor,
+				Relation: "knows", Weight: 1.0,
+			}
+			if err := repo.Create(ctx, rel); err != nil {
+				t.Fatalf("failed to create rel %d: %v", i, err)
+			}
+		}
+
+		tr, err := repo.TraverseFromEntity(ctx, alice, 1, 0)
+		if err != nil {
+			t.Fatalf("failed to traverse: %v", err)
+		}
+		if len(tr.Relationships) != totalNeighbors {
+			t.Fatalf("expected %d relationships when cap is 0, got %d", totalNeighbors, len(tr.Relationships))
+		}
+		if tr.Truncated {
+			t.Fatalf("expected Truncated=false when cap is 0")
 		}
 	})
 }

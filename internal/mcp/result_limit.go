@@ -231,11 +231,17 @@ func newListReducer(orig listMemoryResponse) reducerFunc {
 
 // newGraphReducer builds a stateful reducer for memory_graph responses.
 // Each step halves the relationships first (the verbose tail), then
-// halves the entities.
+// halves the entities. When the upstream traversal already short-circuited
+// at graph.max_edges (orig.Truncated != nil with Reason "edge_cap"), the
+// reducer preserves that root-cause Reason and merges its byte-budget hint
+// into the emitted envelope so the client sees the actual remediation
+// (raise graph.max_edges) instead of being misdirected toward query-shape
+// adjustments that no longer help.
 func newGraphReducer(orig graphResponse) reducerFunc {
 	entities := append([]graphEntity(nil), orig.Entities...)
 	rels := append([]graphRelationship(nil), orig.Relationships...)
 	origE, origR := len(entities), len(rels)
+	origTrunc := orig.Truncated
 	return func() (any, bool) {
 		switch {
 		case len(rels) > 0:
@@ -246,15 +252,22 @@ func newGraphReducer(orig graphResponse) reducerFunc {
 			return nil, false
 		}
 		more := len(rels) > 0 || len(entities) > 1
+		info := truncationInfo{
+			Reason:        "response_too_large",
+			OriginalCount: origE + origR,
+			ReturnedCount: len(entities) + len(rels),
+			Hint:          "narrow the entity query, lower depth, or raise min_weight",
+		}
+		if origTrunc != nil && origTrunc.Reason != "" {
+			info.Reason = origTrunc.Reason + "+response_too_large"
+			if origTrunc.Hint != "" {
+				info.Hint = origTrunc.Hint + "; response further halved to fit MCP token budget"
+			}
+		}
 		return map[string]any{
 			"entities":      entities,
 			"relationships": rels,
-			"_truncated": truncationInfo{
-				Reason:        "response_too_large",
-				OriginalCount: origE + origR,
-				ReturnedCount: len(entities) + len(rels),
-				Hint:          "narrow the entity query, lower depth, or raise min_weight",
-			},
+			"_truncated":    info,
 		}, more
 	}
 }

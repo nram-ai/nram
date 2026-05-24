@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // --- Test doubles for the WeightAdjustmentPhase deps ---
@@ -26,8 +27,8 @@ func (f *fakeRelationshipReader) ListByNamespace(_ context.Context, _ uuid.UUID)
 func (f *fakeRelationshipReader) ListByEntity(_ context.Context, _ uuid.UUID) ([]model.Relationship, error) {
 	return nil, nil
 }
-func (f *fakeRelationshipReader) TraverseFromEntity(_ context.Context, _ uuid.UUID, _ int) ([]model.Relationship, error) {
-	return nil, nil
+func (f *fakeRelationshipReader) TraverseFromEntity(_ context.Context, _ uuid.UUID, _, _ int) (storage.TraversalResult, error) {
+	return storage.TraversalResult{}, nil
 }
 func (f *fakeRelationshipReader) FindActiveByTriple(_ context.Context, _, _, _ uuid.UUID, _ string) (*model.Relationship, error) {
 	return nil, nil

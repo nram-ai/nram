@@ -159,31 +159,51 @@ func (r *RelationshipRepo) Reinforce(ctx context.Context, id uuid.UUID, namespac
 	return nil
 }
 
+// TraversalResult carries the relationship slice and a truncation signal so
+// callers can attach a partial-result envelope without having to compare the
+// returned slice length against the cap they passed in. Cap echoes the limit
+// that was applied (0 when no cap was requested).
+type TraversalResult struct {
+	Relationships []model.Relationship
+	Truncated     bool
+	Cap           int
+}
+
 // TraverseFromEntity performs a BFS traversal from a starting entity, collecting
-// all relationships up to maxHops hops. It handles cycles by not revisiting entities.
-func (r *RelationshipRepo) TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops int) ([]model.Relationship, error) {
+// relationships up to maxHops hops. It handles cycles by not revisiting entities.
+// When maxEdges > 0 the traversal short-circuits once that many unique
+// relationships have been collected, sparing the unbounded ListByEntity loop
+// and the downstream marshal/filter work that follows on large neighborhoods.
+// maxEdges <= 0 disables the cap.
+func (r *RelationshipRepo) TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops, maxEdges int) (TraversalResult, error) {
 	if maxHops <= 0 {
-		return nil, nil
+		return TraversalResult{Cap: maxEdges}, nil
 	}
 
 	visitedEntities := map[uuid.UUID]bool{entityID: true}
 	visitedRels := map[uuid.UUID]bool{}
 	frontier := []uuid.UUID{entityID}
 	result := []model.Relationship{}
+	truncated := false
 
+hops:
 	for hop := 0; hop < maxHops && len(frontier) > 0; hop++ {
 		var nextFrontier []uuid.UUID
 
 		for _, eid := range frontier {
 			rels, err := r.ListByEntity(ctx, eid)
 			if err != nil {
-				return nil, fmt.Errorf("relationship traverse hop %d: %w", hop, err)
+				return TraversalResult{Cap: maxEdges}, fmt.Errorf("relationship traverse hop %d: %w", hop, err)
 			}
 
 			for _, rel := range rels {
 				if !visitedRels[rel.ID] {
 					visitedRels[rel.ID] = true
 					result = append(result, rel)
+					if maxEdges > 0 && len(result) >= maxEdges {
+						truncated = true
+						break hops
+					}
 				}
 
 				// Determine the neighbor entity (the other end of the relationship).
@@ -202,7 +222,7 @@ func (r *RelationshipRepo) TraverseFromEntity(ctx context.Context, entityID uuid
 		frontier = nextFrontier
 	}
 
-	return result, nil
+	return TraversalResult{Relationships: result, Truncated: truncated, Cap: maxEdges}, nil
 }
 
 // ListByNamespace returns all relationships for a namespace, ordered by created_at DESC.

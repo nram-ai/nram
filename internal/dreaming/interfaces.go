@@ -71,7 +71,7 @@ type EntityAliasWriter interface {
 type RelationshipReader interface {
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.Relationship, error)
 	ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.Relationship, error)
-	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops int) ([]model.Relationship, error)
+	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
 	FindActiveByTriple(ctx context.Context, namespaceID, sourceID, targetID uuid.UUID, relation string) (*model.Relationship, error)
 	CountActiveByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
 }

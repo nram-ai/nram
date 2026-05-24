@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // RegisterResources registers all MCP resources on the given server.
@@ -184,10 +185,14 @@ func registerProjectGraphResource(s *Server) {
 	})
 }
 
-// resourceGraph is the JSON envelope for the graph resource.
+// resourceGraph is the JSON envelope for the graph resource. Truncated
+// carries the edge_cap signal when traversal short-circuited at
+// graph.max_edges; consumers must inspect it to detect partial graphs
+// since the resource has no other mechanism to flag a partial result.
 type resourceGraph struct {
 	Entities      []graphEntity       `json:"entities"`
 	Relationships []graphRelationship `json:"relationships"`
+	Truncated     *truncationInfo     `json:"_truncated,omitempty"`
 }
 
 func handleProjectGraphResource(ctx context.Context, s *Server, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
@@ -223,11 +228,21 @@ func handleProjectGraphResource(ctx context.Context, s *Server, request mcp.Read
 		return nil, fmt.Errorf("failed to list entities: %w", err)
 	}
 
+	// Same edge cap as the memory_graph tool — this resource is the
+	// project-scoped quick-view backed by the same traverser, so it shares
+	// the graph.max_edges knob to short-circuit traversal on large
+	// namespaces. The cap is applied per-seed AND cumulatively across
+	// seeds so a project with many lightly-connected entities cannot
+	// silently produce an N×cap union. ResolveIntWithDefault is nil-safe.
+	maxEdges := deps.Settings.ResolveIntWithDefault(ctx, service.SettingGraphMaxEdges, "global")
+
 	seenEntities := make(map[uuid.UUID]struct{})
 	var graphEntities []graphEntity
 	var graphRels []graphRelationship
 	seenRels := make(map[uuid.UUID]struct{})
+	truncatedByCap := false
 
+seeds:
 	for _, ent := range entities {
 		if _, ok := seenEntities[ent.ID]; ok {
 			continue
@@ -240,11 +255,23 @@ func handleProjectGraphResource(ctx context.Context, s *Server, request mcp.Read
 			MentionCount: ent.MentionCount,
 		})
 
-		rels, tErr := deps.Traverser.TraverseFromEntity(ctx, ent.ID, 1)
+		seedCap := maxEdges
+		if maxEdges > 0 {
+			seedCap = maxEdges - len(graphRels)
+			if seedCap <= 0 {
+				truncatedByCap = true
+				break
+			}
+		}
+
+		tr, tErr := deps.Traverser.TraverseFromEntity(ctx, ent.ID, 1, seedCap)
 		if tErr != nil {
 			continue
 		}
-		for _, rel := range rels {
+		if tr.Truncated {
+			truncatedByCap = true
+		}
+		for _, rel := range tr.Relationships {
 			if _, ok := seenRels[rel.ID]; ok {
 				continue
 			}
@@ -256,6 +283,10 @@ func handleProjectGraphResource(ctx context.Context, s *Server, request mcp.Read
 				Weight:     rel.Weight,
 				ValidUntil: rel.ValidUntil,
 			})
+			if maxEdges > 0 && len(graphRels) >= maxEdges {
+				truncatedByCap = true
+				break seeds
+			}
 		}
 	}
 
@@ -269,6 +300,13 @@ func handleProjectGraphResource(ctx context.Context, s *Server, request mcp.Read
 	resp := resourceGraph{
 		Entities:      graphEntities,
 		Relationships: graphRels,
+	}
+	if truncatedByCap {
+		resp.Truncated = &truncationInfo{
+			Reason:        "edge_cap",
+			ReturnedCount: len(graphRels),
+			Hint:          fmt.Sprintf("traversal stopped at graph.max_edges=%d; raise the setting or fetch a narrower view", maxEdges),
+		}
 	}
 
 	out, err := json.Marshal(resp)

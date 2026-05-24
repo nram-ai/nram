@@ -16,10 +16,14 @@ import (
 
 // graphResponse is the JSON envelope returned by the memory_graph tool.
 // Argument echoes (query, depth, include_history) are deliberately omitted —
-// the caller already has them.
+// the caller already has them. Truncated carries an edge-cap signal when the
+// traverser short-circuited at graph.max_edges; the byte-budget reducer in
+// result_limit.go writes its own truncationInfo into a map payload when it
+// fires, replacing this field with its own envelope.
 type graphResponse struct {
 	Entities      []graphEntity       `json:"entities"`
 	Relationships []graphRelationship `json:"relationships"`
+	Truncated     *truncationInfo     `json:"_truncated,omitempty"`
 }
 
 // graphEntity is a minimal entity representation for graph results. canonical
@@ -175,6 +179,18 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		entities = append(entities, found...)
 	}
 
+	// Cap pre-filter relationships so the BFS short-circuits before it
+	// pulls (and the handler then marshals) edges the client cannot
+	// consume. ResolveIntWithDefault is nil-safe; if Settings was never
+	// wired, the registered default in settingDefaults applies. The cap
+	// is applied both per-seed (inside TraverseFromEntity) AND
+	// cumulatively across seeds in the loop below — without the
+	// cumulative check, N seeds each returning < cap edges to disjoint
+	// neighborhoods could still produce an N×cap deduped union and force
+	// the post-traversal filter / orphan-resolve / marshal pipeline to
+	// run on data the client cannot consume.
+	maxEdges := deps.Settings.ResolveIntWithDefault(ctx, service.SettingGraphMaxEdges, "global")
+
 	// Carry the model.Relationship slice (not the JSON projection) through
 	// the filter passes so the reinforcement hook at the bottom retains
 	// id and namespace without re-resolving them.
@@ -182,7 +198,9 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	var graphEntities []graphEntity
 	var rels []model.Relationship
 	seenRels := make(map[uuid.UUID]struct{})
+	truncatedByCap := false
 
+seeds:
 	for _, ent := range entities {
 		if _, ok := seenEntities[ent.ID]; ok {
 			continue
@@ -195,16 +213,36 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 			MentionCount: ent.MentionCount,
 		})
 
-		entRels, err := deps.Traverser.TraverseFromEntity(ctx, ent.ID, depth)
+		// Tighten the cap on each subsequent seed to whatever budget
+		// remains, so a single very large neighborhood cannot starve the
+		// later seeds and so the per-seed BFS short-circuits as soon as
+		// the cumulative budget is hit.
+		seedCap := maxEdges
+		if maxEdges > 0 {
+			seedCap = maxEdges - len(rels)
+			if seedCap <= 0 {
+				truncatedByCap = true
+				break
+			}
+		}
+
+		tr, err := deps.Traverser.TraverseFromEntity(ctx, ent.ID, depth, seedCap)
 		if err != nil {
 			continue
 		}
-		for _, rel := range entRels {
+		if tr.Truncated {
+			truncatedByCap = true
+		}
+		for _, rel := range tr.Relationships {
 			if _, ok := seenRels[rel.ID]; ok {
 				continue
 			}
 			seenRels[rel.ID] = struct{}{}
 			rels = append(rels, rel)
+			if maxEdges > 0 && len(rels) >= maxEdges {
+				truncatedByCap = true
+				break seeds
+			}
 		}
 	}
 
@@ -309,6 +347,13 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	resp := graphResponse{
 		Entities:      graphEntities,
 		Relationships: graphRels,
+	}
+	if truncatedByCap {
+		resp.Truncated = &truncationInfo{
+			Reason:        "edge_cap",
+			ReturnedCount: len(graphRels),
+			Hint:          fmt.Sprintf("traversal stopped at graph.max_edges=%d; raise the setting or narrow the entity query/depth", maxEdges),
+		}
 	}
 
 	return wrapToolResult(resp, newGraphReducer(resp))

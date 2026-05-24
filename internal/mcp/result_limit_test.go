@@ -225,6 +225,98 @@ func TestNewListReducerProducesValidPagination(t *testing.T) {
 	}
 }
 
+// TestGraphReducerPreservesEdgeCapReason pins that when a graphResponse
+// arrives already carrying an edge_cap truncation envelope (the traverser
+// short-circuited at graph.max_edges), the byte-budget reducer's emitted
+// _truncated envelope preserves the root cause in Reason instead of
+// silently overwriting it with response_too_large. Otherwise clients lose
+// the actionable remediation (raise graph.max_edges) and are misdirected
+// to query-shape tuning that does not fix the underlying issue.
+func TestGraphReducerPreservesEdgeCapReason(t *testing.T) {
+	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400") // 800 byte budget, forces reduction
+	// Stage enough relationships to overshoot the budget so the reducer fires.
+	rels := make([]graphRelationship, 200)
+	for i := range rels {
+		rels[i] = graphRelationship{
+			SourceID: uuid.New(),
+			TargetID: uuid.New(),
+			Relation: "knows",
+			Weight:   1.0,
+		}
+	}
+	orig := graphResponse{
+		Entities:      []graphEntity{{ID: uuid.New(), Name: "alice", Type: "person"}},
+		Relationships: rels,
+		Truncated: &truncationInfo{
+			Reason: "edge_cap",
+			Hint:   "traversal stopped at graph.max_edges=2000; raise the setting or narrow the entity query/depth",
+		},
+	}
+	res, err := wrapToolResult(orig, newGraphReducer(orig))
+	if err != nil {
+		t.Fatalf("wrapToolResult err = %v", err)
+	}
+	text := extractText(res)
+	if len(text) > maxResultBytes() {
+		t.Fatalf("reduced result %d bytes still exceeds budget %d", len(text), maxResultBytes())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+		t.Fatalf("reduced result is not valid JSON: %v\nbody: %s", err, text)
+	}
+	truncated, ok := decoded["_truncated"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected _truncated map in reduced response, got: %v", decoded)
+	}
+	reason, _ := truncated["reason"].(string)
+	if reason != "edge_cap+response_too_large" {
+		t.Errorf("expected reason=edge_cap+response_too_large preserving the root cause, got %q", reason)
+	}
+	hint, _ := truncated["hint"].(string)
+	if !strings.Contains(hint, "graph.max_edges") {
+		t.Errorf("expected reducer hint to retain the edge_cap remediation (raise graph.max_edges), got %q", hint)
+	}
+	if !strings.Contains(hint, "response further halved") {
+		t.Errorf("expected reducer hint to mention the byte-budget reduction, got %q", hint)
+	}
+}
+
+// TestGraphReducerWithoutEdgeCapUsesDefaultReason confirms the
+// preservation logic is gated on orig.Truncated being set — when the
+// traversal did not short-circuit, the reducer emits its standard
+// response_too_large envelope as before.
+func TestGraphReducerWithoutEdgeCapUsesDefaultReason(t *testing.T) {
+	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "400")
+	rels := make([]graphRelationship, 200)
+	for i := range rels {
+		rels[i] = graphRelationship{
+			SourceID: uuid.New(),
+			TargetID: uuid.New(),
+			Relation: "knows",
+			Weight:   1.0,
+		}
+	}
+	orig := graphResponse{
+		Entities:      []graphEntity{{ID: uuid.New(), Name: "alice", Type: "person"}},
+		Relationships: rels,
+	}
+	res, err := wrapToolResult(orig, newGraphReducer(orig))
+	if err != nil {
+		t.Fatalf("wrapToolResult err = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(extractText(res)), &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	truncated, ok := decoded["_truncated"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected _truncated map")
+	}
+	if reason, _ := truncated["reason"].(string); reason != "response_too_large" {
+		t.Errorf("expected reason=response_too_large for uncapped traversal, got %q", reason)
+	}
+}
+
 func TestWrapToolResultTextRespectsBudget(t *testing.T) {
 	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "100")
 	big := strings.Repeat("y", 5000)

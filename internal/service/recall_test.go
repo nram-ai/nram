@@ -94,13 +94,18 @@ func (m *mockEntityReader) FindByAlias(_ context.Context, _ uuid.UUID, _ string)
 type mockRelTraverser struct {
 	rels []model.Relationship
 	err  error
+	// maxEdgesByCall records the cap RecallService passed on each call so
+	// tests can assert that the graph.max_edges setting flows through and
+	// tightens across seeds via the cumulative-cap logic.
+	maxEdgesByCall []int
 }
 
-func (m *mockRelTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, _ int) ([]model.Relationship, error) {
+func (m *mockRelTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, _, maxEdges int) (storage.TraversalResult, error) {
+	m.maxEdgesByCall = append(m.maxEdgesByCall, maxEdges)
 	if m.err != nil {
-		return nil, m.err
+		return storage.TraversalResult{}, m.err
 	}
-	return m.rels, nil
+	return storage.TraversalResult{Relationships: m.rels}, nil
 }
 
 type mockMemoryShareReader struct {
@@ -499,6 +504,16 @@ func TestRecall_GraphTraversal(t *testing.T) {
 
 	if len(resp.Memories) != 1 {
 		t.Fatalf("expected 1 memory, got %d", len(resp.Memories))
+	}
+	// Confirm graph.max_edges flows through to the traverser. Without a
+	// wired SettingsService, ResolveIntWithDefault returns the registered
+	// default (2000). The fix in this change cuts the traverser short on
+	// the recall path's graph block too, matching memory_graph behavior.
+	if len(traverser.maxEdgesByCall) == 0 {
+		t.Fatalf("expected traverser to be called at least once, got 0")
+	}
+	if traverser.maxEdgesByCall[0] != 2000 {
+		t.Errorf("expected recall to pass graph.max_edges=2000 to traverser, got %d", traverser.maxEdgesByCall[0])
 	}
 }
 

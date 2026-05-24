@@ -48,9 +48,10 @@ type EntityReader interface {
 	FindByAlias(ctx context.Context, namespaceID uuid.UUID, alias string) ([]model.Entity, error)
 }
 
-// RelationshipTraverser provides graph traversal from entities.
+// RelationshipTraverser provides graph traversal from entities. maxEdges <= 0
+// disables the short-circuit cap.
 type RelationshipTraverser interface {
-	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops int) ([]model.Relationship, error)
+	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
 }
 
 // MemoryShareReader provides access to memory sharing records.
@@ -829,6 +830,16 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			// Dedup; also the per-recall throttle for relationship reinforcement.
 			seenRels := make(map[uuid.UUID]struct{})
 
+			// Bound the per-recall graph block by graph.max_edges so a
+			// hot anchor entity cannot pull the entire neighborhood into
+			// the response (the byte-budget reducer would later drop the
+			// whole graph block, but only after the BFS, dedup, and
+			// relevance work already ran). ResolveIntWithDefault is
+			// nil-safe; uncovered tests that leave s.settings unset fall
+			// through to the registered default.
+			maxGraphEdges := s.settings.ResolveIntWithDefault(ctx, SettingGraphMaxEdges, "global")
+
+		recallSeeds:
 			for _, ent := range foundEntities {
 				graphEntities = append(graphEntities, RecallEntity{
 					ID:         ent.ID,
@@ -836,9 +847,17 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					EntityType: ent.EntityType,
 				})
 
-				rels, err := s.traverser.TraverseFromEntity(ctx, ent.ID, graphDepth)
+				seedCap := maxGraphEdges
+				if maxGraphEdges > 0 {
+					seedCap = maxGraphEdges - len(graphRelationships)
+					if seedCap <= 0 {
+						break
+					}
+				}
+
+				tr, err := s.traverser.TraverseFromEntity(ctx, ent.ID, graphDepth, seedCap)
 				if err == nil {
-					for _, rel := range rels {
+					for _, rel := range tr.Relationships {
 						if _, seen := seenRels[rel.ID]; !seen {
 							seenRels[rel.ID] = struct{}{}
 							graphRelationships = append(graphRelationships, RecallRelationship{
@@ -862,6 +881,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							if existing, ok := graphMemoryRelevance[*rel.SourceMemory]; !ok || relevance > existing {
 								graphMemoryRelevance[*rel.SourceMemory] = relevance
 							}
+						}
+						if maxGraphEdges > 0 && len(graphRelationships) >= maxGraphEdges {
+							break recallSeeds
 						}
 					}
 				}

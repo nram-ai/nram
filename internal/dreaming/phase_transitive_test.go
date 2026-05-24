@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // transitiveFakeEntityReader returns a fixed entity list keyed by namespace
@@ -40,8 +41,8 @@ func (f *transitiveFakeRelationshipReader) ListByNamespace(_ context.Context, _ 
 func (f *transitiveFakeRelationshipReader) ListByEntity(context.Context, uuid.UUID) ([]model.Relationship, error) {
 	return nil, errors.New("not used by transitive phase")
 }
-func (f *transitiveFakeRelationshipReader) TraverseFromEntity(context.Context, uuid.UUID, int) ([]model.Relationship, error) {
-	return nil, errors.New("not used by transitive phase")
+func (f *transitiveFakeRelationshipReader) TraverseFromEntity(context.Context, uuid.UUID, int, int) (storage.TraversalResult, error) {
+	return storage.TraversalResult{}, errors.New("not used by transitive phase")
 }
 func (f *transitiveFakeRelationshipReader) FindActiveByTriple(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) (*model.Relationship, error) {
 	return nil, errors.New("not used by transitive phase")

@@ -52,8 +52,9 @@ type EntityReader interface {
 }
 
 // RelationshipTraverser provides graph traversal for MCP tool handlers.
+// maxEdges <= 0 disables the short-circuit cap.
 type RelationshipTraverser interface {
-	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops int) ([]model.Relationship, error)
+	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
 }
 
 // Dependencies holds all service and repository references that MCP tool handlers require.
@@ -75,6 +76,12 @@ type Dependencies struct {
 	MemoryLister  MemoryLister
 	EntityReader  EntityReader
 	Traverser     RelationshipTraverser
+	// Settings is optional. The memory_graph tool and project-graph resource
+	// read graph.max_edges from it to bound TraverseFromEntity. When nil
+	// (e.g. in tests that construct a stub MCP server), the resolver falls
+	// back to the registered default in settingDefaults, so callers do not
+	// have to special-case the unwired path.
+	Settings *service.SettingsService
 	EventBus events.EventBus
 	// ProviderStatus returns the current provider availability at call time.
 	// This is called per-connection to build dynamic MCP instructions.

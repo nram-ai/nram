@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -56,11 +57,38 @@ type mockTraverser struct {
 	// lastDepth records the depth argument from the most recent call so tests
 	// can verify the handler propagates default and explicit depths correctly.
 	lastDepth int
+	// lastMaxEdges records the cap argument from the most recent call so tests
+	// can verify the handler propagates the configured edge cap.
+	lastMaxEdges int
+	// maxEdgesByCall records the cap value the handler passed on each
+	// invocation, in order, so cumulative-cap tests can assert the cap
+	// shrinks across seeds.
+	maxEdgesByCall []int
+	// truncated lets a test simulate a short-circuit so the handler-side
+	// _truncated envelope path can be exercised.
+	truncated bool
+	// relsByCall, when non-nil, returns the per-call rel slice instead of
+	// the shared rels field. callCount indexes into it; calls past the
+	// slice length return an empty result. Lets cumulative-cap tests
+	// stage distinct rels per seed without sharing IDs that would dedup.
+	relsByCall [][]model.Relationship
+	callCount  int
 }
 
-func (m *mockTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, depth int) ([]model.Relationship, error) {
+func (m *mockTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, depth, maxEdges int) (storage.TraversalResult, error) {
 	m.lastDepth = depth
-	return m.rels, m.err
+	m.lastMaxEdges = maxEdges
+	m.maxEdgesByCall = append(m.maxEdgesByCall, maxEdges)
+	out := m.rels
+	if m.relsByCall != nil {
+		if m.callCount < len(m.relsByCall) {
+			out = m.relsByCall[m.callCount]
+		} else {
+			out = nil
+		}
+	}
+	m.callCount++
+	return storage.TraversalResult{Relationships: out, Truncated: m.truncated, Cap: maxEdges}, m.err
 }
 
 type mockExportMemoryReader struct {
@@ -345,6 +373,149 @@ func TestHandleMemoryGraph_DefaultDepth(t *testing.T) {
 	}
 	if traverser.lastDepth != 2 {
 		t.Errorf("expected default depth 2 propagated to traverser, got %d", traverser.lastDepth)
+	}
+}
+
+// TestHandleMemoryGraph_EdgeCapTruncated pins the wiring between the
+// traverser's Truncated signal and the handler-emitted _truncated envelope:
+// when the traverser short-circuits at graph.max_edges, the response carries
+// a top-level _truncated.reason == "edge_cap" so MCP clients can surface a
+// partial-result banner before the byte-budget reducer in result_limit.go
+// has any reason to fire. The default graph.max_edges (2000) flows through
+// ResolveIntWithDefault when Settings is unset.
+func TestHandleMemoryGraph_EdgeCapTruncated(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	entityID := uuid.New()
+	targetID := uuid.New()
+	user := &model.User{ID: userID, NamespaceID: nsID}
+	entities := []model.Entity{
+		{ID: entityID, NamespaceID: nsID, Name: "Alice", EntityType: "person", Canonical: "alice"},
+		{ID: targetID, NamespaceID: nsID, Name: "Bob", EntityType: "person", Canonical: "bob"},
+	}
+	rels := []model.Relationship{
+		{
+			ID:        uuid.New(),
+			SourceID:  entityID,
+			TargetID:  targetID,
+			Relation:  "knows",
+			Weight:    1.0,
+			ValidFrom: time.Now(),
+		},
+	}
+	traverser := &mockTraverser{rels: rels, truncated: true}
+	deps := Dependencies{
+		Backend:      storage.BackendPostgres,
+		UserRepo:     &mockUserRepoStore{user: user},
+		EntityReader: &mockEntityReader{entities: entities},
+		Traverser:    traverser,
+	}
+	srv := NewServer(deps)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"entity": "Alice"}
+	ctx := buildAuthCtx(userID)
+	result, err := handleMemoryGraph(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	// Default graph.max_edges is 2000 in the registered defaults; with a
+	// nil Settings this resolves through to ResolveIntWithDefault. The
+	// first seed always sees the full cap; later seeds see the cap
+	// tightened by the cumulative cap logic.
+	if len(traverser.maxEdgesByCall) == 0 {
+		t.Fatalf("expected at least one traverser call")
+	}
+	if traverser.maxEdgesByCall[0] != 2000 {
+		t.Errorf("expected default cap 2000 on the first seed, got %d", traverser.maxEdgesByCall[0])
+	}
+	text := extractText(result)
+	var resp graphResponse
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if resp.Truncated == nil {
+		t.Fatalf("expected _truncated envelope on capped response, got nil")
+	}
+	if resp.Truncated.Reason != "edge_cap" {
+		t.Errorf("expected _truncated.reason=edge_cap, got %q", resp.Truncated.Reason)
+	}
+	if resp.Truncated.ReturnedCount != len(resp.Relationships) {
+		t.Errorf("expected returned_count=%d, got %d", len(resp.Relationships), resp.Truncated.ReturnedCount)
+	}
+}
+
+// TestHandleMemoryGraph_CumulativeCapAcrossSeeds pins the per-handler
+// cumulative cap on the multi-seed case: N seed entities each contributing
+// disjoint rels below the per-seed cap must still trip the handler-level
+// cap once their deduped union reaches graph.max_edges. Without this guard,
+// FindBySimilarity returning many seeds would let the post-traversal
+// filters, orphan resolution, marshal, and (eventually) byte-budget reducer
+// all run on data the client cannot consume, and the truncatedByCap signal
+// would never fire.
+func TestHandleMemoryGraph_CumulativeCapAcrossSeeds(t *testing.T) {
+	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "1000000") // disable byte-budget reducer so we observe the cap signal directly
+	userID := uuid.New()
+	nsID := uuid.New()
+	user := &model.User{ID: userID, NamespaceID: nsID}
+
+	// Three seeds with distinct IDs so the dedup pass keeps them separate.
+	seedIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	entities := make([]model.Entity, len(seedIDs))
+	for i, id := range seedIDs {
+		entities[i] = model.Entity{ID: id, NamespaceID: nsID, Name: fmt.Sprintf("seed-%d", i), EntityType: "concept", Canonical: fmt.Sprintf("seed-%d", i)}
+	}
+	// Each seed traversal returns one fresh edge per call with distinct
+	// rel IDs so the handler-level dedup does not collapse them. The
+	// target IDs are the seed IDs themselves so resolveGraphOrphans keeps
+	// every edge (both endpoints exist in graphEntities).
+	relsByCall := [][]model.Relationship{
+		{{ID: uuid.New(), SourceID: seedIDs[0], TargetID: seedIDs[1], Relation: "knows", Weight: 1, ValidFrom: time.Now()}},
+		{{ID: uuid.New(), SourceID: seedIDs[1], TargetID: seedIDs[2], Relation: "knows", Weight: 1, ValidFrom: time.Now()}},
+		{{ID: uuid.New(), SourceID: seedIDs[2], TargetID: seedIDs[0], Relation: "knows", Weight: 1, ValidFrom: time.Now()}},
+	}
+	traverser := &mockTraverser{relsByCall: relsByCall}
+
+	// Use a tiny env-driven cap by wiring a stub Settings. Since we have
+	// no SettingsService stub, achieve the cap via NRAM env... actually
+	// the cap key resolves through SettingsService only. Easiest path:
+	// rely on the default 2000 cap and stage 2001 fake rels. That's a
+	// lot of allocations, so instead stage a tiny number of seeds and
+	// assert that the per-call lastMaxEdges shrinks across iterations
+	// (the cumulative-cap signal in maxEdgesByCall) rather than the
+	// terminal Truncated flag, which only fires past 2000.
+	deps := Dependencies{
+		Backend:      storage.BackendPostgres,
+		UserRepo:     &mockUserRepoStore{user: user},
+		EntityReader: &mockEntityReader{entities: entities},
+		Traverser:    traverser,
+	}
+	srv := NewServer(deps)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"entity": "seed"}
+	ctx := buildAuthCtx(userID)
+	if _, err := handleMemoryGraph(ctx, srv, req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 3 seeds * 1 rel each = 3 cumulative; default cap 2000.
+	// maxEdgesByCall should be [2000, 1999, 1998]: cap tightens by the
+	// accumulated rel count from prior seeds.
+	if len(traverser.maxEdgesByCall) != 3 {
+		t.Fatalf("expected 3 traverser calls, got %d", len(traverser.maxEdgesByCall))
+	}
+	if traverser.maxEdgesByCall[0] != 2000 {
+		t.Errorf("first seed cap should be the full 2000, got %d", traverser.maxEdgesByCall[0])
+	}
+	if traverser.maxEdgesByCall[1] != 1999 {
+		t.Errorf("second seed cap should reflect 1 rel already accumulated (1999), got %d", traverser.maxEdgesByCall[1])
+	}
+	if traverser.maxEdgesByCall[2] != 1998 {
+		t.Errorf("third seed cap should reflect 2 rels already accumulated (1998), got %d", traverser.maxEdgesByCall[2])
 	}
 }
 

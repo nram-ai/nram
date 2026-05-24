@@ -498,6 +498,66 @@ func TestProjectGraphResource_ProjectNotFound(t *testing.T) {
 	}
 }
 
+// TestProjectGraphResource_EdgeCapTruncated pins that the project-graph
+// resource surfaces a _truncated envelope on the resourceGraph response
+// shape when traversal short-circuits at graph.max_edges. Without this
+// signal the resource could return silently-incomplete graphs (the
+// resource has no separate token-budget reducer like the tool path does).
+func TestProjectGraphResource_EdgeCapTruncated(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	projectNsID := uuid.New()
+	user := &model.User{ID: userID, NamespaceID: nsID}
+	project := &model.Project{
+		ID:               uuid.New(),
+		NamespaceID:      projectNsID,
+		OwnerNamespaceID: nsID,
+		Slug:             "trunc-project",
+	}
+
+	entity1ID := uuid.New()
+	entity2ID := uuid.New()
+	entities := []model.Entity{
+		{ID: entity1ID, NamespaceID: projectNsID, Name: "Alice", EntityType: "person", Canonical: "alice"},
+		{ID: entity2ID, NamespaceID: projectNsID, Name: "Bob", EntityType: "person", Canonical: "bob"},
+	}
+	rels := []model.Relationship{{ID: uuid.New(), SourceID: entity1ID, TargetID: entity2ID, Relation: "knows", Weight: 1, ValidFrom: time.Now()}}
+
+	deps := Dependencies{
+		Backend:      storage.BackendSQLite,
+		UserRepo:     &mockUserRepoStore{user: user},
+		ProjectRepo:  &mockProjectRepoStore{project: project},
+		EntityReader: &mockEntityReader{entities: entities},
+		Traverser:    &mockTraverser{rels: rels, truncated: true},
+	}
+	srv := NewServer(deps)
+
+	req := mcp.ReadResourceRequest{}
+	req.Params.URI = "nram://projects/trunc-project/graph"
+	ctx := buildAuthCtx(userID)
+	contents, err := handleProjectGraphResource(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tc, ok := contents[0].(mcp.TextResourceContents)
+	if !ok {
+		t.Fatalf("expected TextResourceContents")
+	}
+	var graph resourceGraph
+	if err := json.Unmarshal([]byte(tc.Text), &graph); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if graph.Truncated == nil {
+		t.Fatalf("expected _truncated envelope on capped resource response, got nil")
+	}
+	if graph.Truncated.Reason != "edge_cap" {
+		t.Errorf("expected reason=edge_cap, got %q", graph.Truncated.Reason)
+	}
+	if graph.Truncated.ReturnedCount != len(graph.Relationships) {
+		t.Errorf("expected returned_count=%d, got %d", len(graph.Relationships), graph.Truncated.ReturnedCount)
+	}
+}
+
 // --- resource registration tests ---
 
 func TestResourcesRegistered_NoPanic(t *testing.T) {

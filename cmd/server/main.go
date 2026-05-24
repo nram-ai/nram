@@ -419,6 +419,7 @@ func main() {
 		MemoryLister:   memoryRepo,
 		EntityReader:   entityRepo,
 		Traverser:      relationshipRepo,
+		Settings:       settingsSvc,
 		EventBus:       eventBus,
 		ProviderStatus: func() (bool, bool) {
 			if registry == nil {

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // pressureFakeRelationshipReader exposes a fixed CountActiveByNamespace so
@@ -25,8 +26,8 @@ func (f *pressureFakeRelationshipReader) ListByNamespace(context.Context, uuid.U
 func (f *pressureFakeRelationshipReader) ListByEntity(context.Context, uuid.UUID) ([]model.Relationship, error) {
 	return nil, errors.New("not used by pressure prune")
 }
-func (f *pressureFakeRelationshipReader) TraverseFromEntity(context.Context, uuid.UUID, int) ([]model.Relationship, error) {
-	return nil, errors.New("not used by pressure prune")
+func (f *pressureFakeRelationshipReader) TraverseFromEntity(context.Context, uuid.UUID, int, int) (storage.TraversalResult, error) {
+	return storage.TraversalResult{}, errors.New("not used by pressure prune")
 }
 func (f *pressureFakeRelationshipReader) FindActiveByTriple(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) (*model.Relationship, error) {
 	return nil, errors.New("not used by pressure prune")
