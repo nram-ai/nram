@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +18,10 @@ type mockSettingsRepo struct {
 	getCalls int
 	setCalls int
 	delCalls int
+	// getErr, when set, is returned from every Get call instead of the
+	// underlying map lookup. Used to simulate a real DB error (something
+	// other than sql.ErrNoRows) for the stale-while-revalidate test.
+	getErr error
 }
 
 func newMockSettingsRepo() *mockSettingsRepo {
@@ -40,6 +45,9 @@ func (m *mockSettingsRepo) put(key, scope, value string) {
 
 func (m *mockSettingsRepo) Get(_ context.Context, key string, scope string) (*model.Setting, error) {
 	m.getCalls++
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
 	scopes, ok := m.settings[key]
 	if !ok {
 		return nil, sql.ErrNoRows
@@ -422,5 +430,56 @@ func TestDeleteInvalidatesCache(t *testing.T) {
 	v, _ = svc.Resolve(context.Background(), "delete.key", "global")
 	if v != "" {
 		t.Errorf("expected empty after Delete, got %q (cache not invalidated)", v)
+	}
+}
+
+// TestResolveServesStaleOnDBError covers the regression: a transient DB
+// error (anything other than sql.ErrNoRows) used to propagate to the
+// caller, where helpers like ResolveBool silently coerced it to false,
+// flipping behavior of consumers like recall.fusion.enabled. The fix is
+// stale-while-revalidate — if the cache still holds the prior value
+// (just expired), serve it instead of failing.
+func TestResolveServesStaleOnDBError(t *testing.T) {
+	repo := newMockSettingsRepo()
+	repo.put("flag.key", "global", "true")
+	svc := NewSettingsService(repo)
+	// Shrink the TTL so the cache entry expires inside the test.
+	svc.cacheTTL = 10 * time.Millisecond
+
+	// Prime the cache with the persisted value.
+	v, err := svc.Resolve(context.Background(), "flag.key", "global")
+	if err != nil {
+		t.Fatalf("initial resolve: %v", err)
+	}
+	if v != "true" {
+		t.Fatalf("initial resolve: expected 'true', got %q", v)
+	}
+
+	// Now arrange for the next DB read to fail with a non-sql.ErrNoRows
+	// error AND for the cache entry to be expired.
+	repo.getErr = fmt.Errorf("simulated pool exhaustion")
+	time.Sleep(20 * time.Millisecond)
+
+	v, err = svc.Resolve(context.Background(), "flag.key", "global")
+	if err != nil {
+		t.Fatalf("post-error resolve: expected stale fallback, got error: %v", err)
+	}
+	if v != "true" {
+		t.Errorf("post-error resolve: expected stale 'true', got %q", v)
+	}
+}
+
+// TestResolveReturnsErrorOnDBErrorWithNoCache covers the cold-start branch
+// of the stale-while-revalidate fix: if there is no cached entry at all
+// AND the DB is unreachable, the caller MUST see the error rather than a
+// silently-defaulted value. The next call will retry.
+func TestResolveReturnsErrorOnDBErrorWithNoCache(t *testing.T) {
+	repo := newMockSettingsRepo()
+	repo.getErr = fmt.Errorf("simulated pool exhaustion")
+	svc := NewSettingsService(repo)
+
+	_, err := svc.Resolve(context.Background(), "uncached.key", "global")
+	if err == nil {
+		t.Fatal("expected resolve error on cold-start DB outage, got nil")
 	}
 }

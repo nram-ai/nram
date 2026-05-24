@@ -44,6 +44,10 @@ describe("resolveSystemRankingWeights contract", () => {
     // Every required key surfaces as missing so the consumer can render
     // an actionable banner.
     expect(got.missingKeys.sort()).toEqual([...REQUIRED_KEYS].sort());
+    // The pure resolver never reports loading; the hook wrapper layers
+    // that signal on top from the underlying query states.
+    expect(got.isLoading).toBe(false);
+    expect(got.isError).toBe(false);
   });
 
   it("returns null weights when even one schema key is missing", () => {

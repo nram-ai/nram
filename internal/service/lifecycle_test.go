@@ -245,12 +245,13 @@ func TestConfigDefaults(t *testing.T) {
 	store := newMockLifecycleStore()
 	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{}, nil)
 
-	// SweepInterval is read once at construction from settings (or its default
-	// when settings is nil).
-	if svc.config.SweepInterval != 5*time.Minute {
-		t.Fatalf("expected default SweepInterval 5m, got %v", svc.config.SweepInterval)
+	// SweepInterval is resolved per loop iteration from the registry; with
+	// nil settings the SettingsService.ResolveDurationSecondsWithDefault
+	// helper falls back to the registered default (300s = 5m).
+	if got := svc.resolveSweepInterval(context.Background()); got != 5*time.Minute {
+		t.Fatalf("expected default resolveSweepInterval 5m, got %v", got)
 	}
-	// BatchSize, DefaultPurgeDelay, OrphanGrace are now resolved per-sweep.
+	// BatchSize, DefaultPurgeDelay, OrphanGrace are resolved per-sweep.
 	// With config zero and settings nil, the resolver helpers fall through
 	// to settingDefaults.
 	if got := svc.resolveBatchSize(context.Background()); got != 1000 {
@@ -269,15 +270,43 @@ func TestConfigCustom(t *testing.T) {
 		DefaultPurgeDelay: 7 * 24 * time.Hour,
 	}, nil)
 
-	if svc.config.SweepInterval != 10*time.Minute {
-		t.Fatalf("expected SweepInterval 10m, got %v", svc.config.SweepInterval)
+	// Operator-pinned values short-circuit the per-sweep resolver — same
+	// contract as BatchSize and DefaultPurgeDelay.
+	if got := svc.resolveSweepInterval(context.Background()); got != 10*time.Minute {
+		t.Fatalf("expected resolveSweepInterval 10m, got %v", got)
 	}
-	// Operator-pinned values short-circuit the per-sweep resolver.
 	if got := svc.resolveBatchSize(context.Background()); got != 50 {
 		t.Fatalf("expected resolveBatchSize 50, got %d", got)
 	}
 	if got := svc.resolvePurgeDelay(context.Background()); got != 7*24*time.Hour {
 		t.Fatalf("expected resolvePurgeDelay 7d, got %v", got)
+	}
+}
+
+// TestSweepInterval_LiveReload covers the regression: editing
+// lifecycle.sweep_interval_seconds via the settings service must change the
+// value returned by resolveSweepInterval on the very next call, without
+// reconstructing the service. The bug being prevented is the previous shape
+// where cfg.SweepInterval was pinned at construction and the loop ticker
+// used the cached duration forever.
+func TestSweepInterval_LiveReload(t *testing.T) {
+	store := newMockLifecycleStore()
+	repo := newMockSettingsRepo()
+	settings := NewSettingsService(repo)
+	// LifecycleConfig{} leaves SweepInterval at zero so the resolver reads
+	// from the registry rather than the pinned value.
+	svc := NewLifecycleService(store, nil, nil, LifecycleConfig{}, settings)
+
+	repo.put(SettingLifecycleSweepIntervalSeconds, "global", "60")
+	settings.InvalidateAllCache()
+	if got := svc.resolveSweepInterval(context.Background()); got != 60*time.Second {
+		t.Fatalf("phase 1: expected 60s after first registry write, got %v", got)
+	}
+
+	repo.put(SettingLifecycleSweepIntervalSeconds, "global", "30")
+	settings.InvalidateAllCache()
+	if got := svc.resolveSweepInterval(context.Background()); got != 30*time.Second {
+		t.Fatalf("phase 2: expected 30s after live registry edit, got %v", got)
 	}
 }
 

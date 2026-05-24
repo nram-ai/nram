@@ -807,6 +807,10 @@ function ProjectDetailPanel({
                       </p>
                     )}
                   </>
+                ) : weightsResolution.isLoading ? (
+                  <div className="rounded border bg-muted/20 p-3 text-xs text-muted-foreground">
+                    Loading ranking weight defaults...
+                  </div>
                 ) : (
                   <div className="rounded border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
                     Ranking weight schema unavailable. The server did not return

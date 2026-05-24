@@ -497,8 +497,22 @@ export interface SystemRankingWeightsResolution {
   // missingKeys lists ranking.weight.* keys for which neither the operator
   // value nor the schema default could be resolved. The hook surfaces this
   // to its consumer so a schema/server mismatch becomes a visible error
-  // rather than silently substituting a stale built-in fallback.
+  // rather than silently substituting a stale built-in fallback. Stays
+  // empty while isLoading is true; the "missing" verdict only stands once
+  // the schema query has resolved.
   missingKeys: string[];
+  // isLoading is true only while the SCHEMA query is still in flight.
+  // The settings (operator overrides) query is best-effort — a slow or
+  // failed settings load does not block rendering because the resolver
+  // can fall back to schema defaults per-key. Pivoting on schema alone
+  // prevents the regression where a transient settings 5xx hides the
+  // editor even when defaults are reachable.
+  isLoading: boolean;
+  // isError is true only when the SCHEMA query failed. Without schema
+  // defaults the editor cannot render any meaningful baseline; settings
+  // query failure is silently tolerated because schema defaults are
+  // sufficient to drive the form.
+  isError: boolean;
 }
 
 // resolveSystemRankingWeights is the pure resolution logic. Exposed for
@@ -533,9 +547,9 @@ export function resolveSystemRankingWeights(
     missing.push(key);
   }
   if (missing.length > 0) {
-    return { weights: null, missingKeys: missing };
+    return { weights: null, missingKeys: missing, isLoading: false, isError: false };
   }
-  return { weights: resolved, missingKeys: [] };
+  return { weights: resolved, missingKeys: [], isLoading: false, isError: false };
 }
 
 // SchemaRange is the operator-tunable range for a numeric setting,
@@ -572,23 +586,52 @@ export function useSchemaRange(key: string, fallback: SchemaRange): SchemaRange 
 }
 
 // useSystemRankingWeights returns null weights when any required schema key
-// is missing. Consumers MUST handle the null case (typically a red toast
-// banner) instead of silently rendering stale defaults — that's the
-// "AC6 contract" the contract test enforces.
+// is missing AFTER both underlying queries have resolved. While either query
+// is still in flight, isLoading is true and missingKeys is empty so the
+// consumer can render a loading state instead of the deploy-incident banner.
+// Consumers MUST handle the null case (typically a red banner) instead of
+// silently rendering stale defaults — that's the "AC6 contract" the contract
+// test enforces.
 export function useSystemRankingWeights(): SystemRankingWeightsResolution {
   const settingsQuery = useSettings("global");
   const schemaQuery = useSettingsSchema();
   // useMemo gives the consumer (ProjectManagement edit panel) a stable
   // reference between unrelated re-renders — without it every keystroke
   // in any form input rebuilds the resolution Maps.
-  return useMemo(
-    () =>
-      resolveSystemRankingWeights(
-        settingsQuery.data?.data ?? [],
-        schemaQuery.data?.data ?? [],
-      ),
-    [settingsQuery.data, schemaQuery.data],
-  );
+  return useMemo(() => {
+    // The schema query is the load-bearing dependency: without registered
+    // defaults the editor cannot render a baseline. The settings query
+    // (operator overrides) is best-effort — when it fails or is still in
+    // flight, resolveSystemRankingWeights falls back to schema defaults
+    // per-key, which is enough to drive the form. Two regressions this
+    // split prevents: (1) a settings-endpoint 5xx hiding the editor even
+    // though defaults are reachable, and (2) the "Loading..." panel
+    // staying up after one query has already errored.
+    const isLoading = schemaQuery.isPending;
+    const isError = schemaQuery.isError;
+    if (isLoading) {
+      // Defer the missing-keys verdict — the schema array is just not in
+      // memory yet, not actually missing keys.
+      return { weights: null, missingKeys: [], isLoading: true, isError: false };
+    }
+    if (isError) {
+      // Schema endpoint failure is its own diagnostic. Suppress the
+      // missing-keys list so the consumer renders a generic banner
+      // keyed on isError rather than a misleading list of every required
+      // key as if the server explicitly omitted them.
+      return { weights: null, missingKeys: [], isLoading: false, isError: true };
+    }
+    const resolution = resolveSystemRankingWeights(
+      settingsQuery.data?.data ?? [],
+      schemaQuery.data?.data ?? [],
+    );
+    return { ...resolution, isLoading: false, isError: false };
+  }, [
+    settingsQuery.data,
+    schemaQuery.data,
+    schemaQuery.isPending,
+    schemaQuery.isError,
+  ]);
 }
 
 export function useUpdateSetting() {

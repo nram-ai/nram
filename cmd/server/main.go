@@ -379,19 +379,26 @@ func main() {
 
 	// Hybrid recall fusion. The lexical channel is the same MemoryRepo
 	// (its SearchByText hits FTS5 on SQLite or the content_tsv generated
-	// column on Postgres). FusionConfig is loaded from /v1/admin/settings,
-	// off by default — flipping recall.fusion.enabled is the deployment
-	// switch after migrations have been applied.
+	// column on Postgres). FusionConfig and ranking weights are resolved
+	// live per recall via the wired SettingsService below, so admin-UI
+	// edits to recall.fusion.* and ranking.weight.* apply on the next call
+	// without a server restart.
 	recallSvc.SetLexical(memoryRepo)
-	recallSvc.SetFusion(loadFusionConfig(context.Background(), settingsSvc))
-	recallSvc.SetWeights(loadRankingWeights(context.Background(), settingsSvc))
 	recallSvc.SetSettings(settingsSvc)
 	recallSvc.SetVectorHydrator(vectorStore)
 
-	// Create lifecycle service for TTL expiry and purge sweeps. Sweep
-	// interval, batch size, and orphan-grace cutoff are all read live from
-	// the settings registry (lifecycle.* keys) so operators can tune them
-	// from the admin UI without restarting.
+	// One-shot startup audit of the recall-tuning surface. The values
+	// themselves are resolved per recall (see RecallService.resolveFusion);
+	// these logs surface only the deployment-time concerns: stored values
+	// drifting from registered defaults after an upgrade, and an outright
+	// misconfigured fusion that would silently produce zero candidates.
+	logFusionStartupAudit(context.Background(), settingsSvc)
+
+	// Create lifecycle service for TTL expiry and purge sweeps. All
+	// lifecycle.* knobs (sweep interval, batch size, orphan-grace cutoff,
+	// purge delay) are resolved live from the settings registry per sweep
+	// iteration, so operators can tune them from the admin UI without
+	// restarting.
 	graphPruner := service.NewGraphPruner(entityRepo, relationshipRepo)
 	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, service.LifecycleConfig{}, settingsSvc)
 	lifecycleSvc.Start()
@@ -952,57 +959,30 @@ func seedRegisteredSettings(ctx context.Context, repo *storage.SettingsRepo) err
 	return service.SeedSettingsDefaults(ctx, repo, defaults)
 }
 
-// loadRankingWeights pulls the ranking.weight.* settings into a RankingWeights.
-// Each lookup falls back to the corresponding DefaultRankingWeights field when
-// the key is missing, unparseable, or out of range, so a misconfigured setting
-// keeps ranking in a known state rather than crashing startup. Per-project
-// overrides resolve later at recall time.
-func loadRankingWeights(ctx context.Context, s *service.SettingsService) service.RankingWeights {
-	d := service.DefaultRankingWeights
-	return service.RankingWeights{
-		Similarity:     s.ResolveFloatInRange(ctx, service.SettingRankWeightSim, "global", 0, 1, d.Similarity),
-		Recency:        s.ResolveFloatInRange(ctx, service.SettingRankWeightRec, "global", 0, 1, d.Recency),
-		Importance:     s.ResolveFloatInRange(ctx, service.SettingRankWeightImp, "global", 0, 1, d.Importance),
-		Frequency:      s.ResolveFloatInRange(ctx, service.SettingRankWeightFreq, "global", 0, 1, d.Frequency),
-		GraphRelevance: s.ResolveFloatInRange(ctx, service.SettingRankWeightGraph, "global", 0, 1, d.GraphRelevance),
-		Confidence:     s.ResolveFloatInRange(ctx, service.SettingRankWeightConf, "global", 0, 1, d.Confidence),
-		Origin:         s.ResolveFloatInRange(ctx, service.SettingRankWeightOrigin, "global", 0, 1, d.Origin),
-		MmrLambda:      s.ResolveFloatInRange(ctx, service.SettingRankWeightMmr, "global", 0, 1, d.MmrLambda),
-	}
-}
-
-// loadFusionConfig pulls the recall.fusion.* settings into a FusionConfig.
-// Each lookup falls back to the registered default when the key is missing
-// or unparseable, so a misconfigured setting keeps fusion in a known state
-// rather than crashing startup. If the stored fusion weights differ from
-// the registered defaults, a one-time startup log surfaces the drift so
-// operators upgrading an existing deployment know their stored values
-// override the new defaults (settings are seeded insert-if-missing, never
-// overwritten on upgrade).
-func loadFusionConfig(ctx context.Context, settingsSvc *service.SettingsService) service.FusionConfig {
-	cfg := service.DefaultFusionConfig
-	cfg.Enabled = settingsSvc.ResolveBool(ctx, service.SettingRecallFusionEnabled, "global")
-	if k, err := settingsSvc.ResolveInt(ctx, service.SettingRecallFusionK, "global"); err == nil && k > 0 {
-		cfg.RRFConstant = k
-	}
+// logFusionStartupAudit emits one-shot deployment-time observations about
+// the recall.fusion.* settings. The values themselves are read live per
+// recall (see RecallService.resolveFusion); this helper only surfaces
+// drift after an upgrade and outright misconfiguration that would silently
+// produce zero candidates.
+func logFusionStartupAudit(ctx context.Context, settingsSvc *service.SettingsService) {
+	vec := service.DefaultFusionConfig.VectorWeight
+	lex := service.DefaultFusionConfig.LexicalWeight
 	if w, err := settingsSvc.ResolveFloat(ctx, service.SettingRecallFusionVecW, "global"); err == nil && w >= 0 {
-		cfg.VectorWeight = w
+		vec = w
 	}
 	if w, err := settingsSvc.ResolveFloat(ctx, service.SettingRecallFusionLexW, "global"); err == nil && w >= 0 {
-		cfg.LexicalWeight = w
+		lex = w
 	}
-	cfg.NormalizePerChannel = settingsSvc.ResolveBool(ctx, service.SettingRecallFusionNormalizePerChan, "global")
 
 	// Tolerance 1e-9 sits well below any plausible UI slider resolution
 	// (step:0.05 in the admin UI) and well above FP rounding noise from
 	// strconv.ParseFloat round-trips, so this only fires when an operator
 	// truly stored a different value.
-	weightsDifferFromDefault := !nearlyEqual(cfg.VectorWeight, service.DefaultFusionConfig.VectorWeight) ||
-		!nearlyEqual(cfg.LexicalWeight, service.DefaultFusionConfig.LexicalWeight)
-	if weightsDifferFromDefault {
+	if !nearlyEqual(vec, service.DefaultFusionConfig.VectorWeight) ||
+		!nearlyEqual(lex, service.DefaultFusionConfig.LexicalWeight) {
 		slog.Info("recall.fusion weights differ from registered defaults",
-			"stored_vector_weight", cfg.VectorWeight,
-			"stored_lexical_weight", cfg.LexicalWeight,
+			"stored_vector_weight", vec,
+			"stored_lexical_weight", lex,
 			"default_vector_weight", service.DefaultFusionConfig.VectorWeight,
 			"default_lexical_weight", service.DefaultFusionConfig.LexicalWeight,
 			"hint", "reset via /v1/admin/settings or the admin UI to adopt the new defaults",
@@ -1012,15 +992,16 @@ func loadFusionConfig(ctx context.Context, settingsSvc *service.SettingsService)
 	// (or somehow go negative), every RRF score will collapse to zero,
 	// runHybridSearch will emit an empty simMap, and recalls will silently
 	// return zero candidates. Warn at boot so the operator sees the
-	// misconfig before traffic hits.
-	if cfg.VectorWeight+cfg.LexicalWeight <= 0 {
+	// misconfig before traffic hits. Live edits via the admin UI no longer
+	// require a restart, but a deployment booting into this state still
+	// deserves a loud signal.
+	if vec+lex <= 0 {
 		slog.Warn("recall.fusion weights sum to zero; fused recalls will return no candidates",
-			"stored_vector_weight", cfg.VectorWeight,
-			"stored_lexical_weight", cfg.LexicalWeight,
+			"stored_vector_weight", vec,
+			"stored_lexical_weight", lex,
 			"hint", "set at least one of recall.fusion.vector_weight or recall.fusion.lexical_weight above zero",
 		)
 	}
-	return cfg
 }
 
 // nearlyEqual compares two floats with a tolerance well below any meaningful

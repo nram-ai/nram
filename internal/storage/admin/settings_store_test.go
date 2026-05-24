@@ -107,7 +107,9 @@ func TestSettingsSchemaRequiresRestart(t *testing.T) {
 		service.SettingDreamSchedulerPollSeconds:           {},
 		service.SettingDreamHeartbeatInterval:              {},
 		service.SettingDreamStuckSweep:                     {},
-		service.SettingLifecycleSweepIntervalSeconds:       {},
+		// SettingLifecycleSweepIntervalSeconds is hot-reloadable: the
+		// lifecycle loop re-reads it on every iteration (see
+		// internal/service/lifecycle.go resolveSweepInterval).
 		service.SettingCascadeCacheTTLSeconds:              {},
 		service.SettingSettingsCacheTTLSeconds:             {},
 		service.SettingAPIRateLimitCleanupSeconds:          {},

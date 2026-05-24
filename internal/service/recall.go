@@ -459,13 +459,23 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	if math.IsNaN(simThreshold) || simThreshold < 0 || simThreshold > 1 {
 		return nil, fmt.Errorf("invalid similarity_threshold %v (must be a finite value in [0, 1])", simThreshold)
 	}
+
+	// Resolve ranking weights and fusion config once at the top of the
+	// recall, so admin-UI edits to ranking.weight.* / recall.fusion.* take
+	// effect on the very next call without a server restart. Every read
+	// of these values downstream goes through these locals; the cached
+	// s.weights / s.fusion are the fallback for the test-only path where
+	// no settings service is wired.
+	effWeights := s.resolveWeights(ctx)
+	effFusion := s.resolveFusion(ctx)
+
 	// fused_combined compares against post-RRF max-normalized similarity,
 	// which only exists when fusion is on. Without fusion the simMap holds
 	// raw cosines, and applying the fusedFloor to those values would
 	// silently collapse fused_combined semantics into raw_cosine. Surface
 	// the misalignment to the caller as a 400 instead of a quiet behavior
 	// drift.
-	if simMode == SimilarityThresholdModeFusedCombined && simThreshold > 0 && !s.fusion.Enabled {
+	if simMode == SimilarityThresholdModeFusedCombined && simThreshold > 0 && !effFusion.Enabled {
 		return nil, fmt.Errorf("similarity_threshold_mode=fused_combined requires recall.fusion.enabled=true")
 	}
 
@@ -623,7 +633,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				// lexical-only fusion hits do not falsely advertise vector
 				// evidence.
 				vecIDs := make(map[uuid.UUID]struct{})
-				if s.fusion.Enabled && s.lexical != nil {
+				if effFusion.Enabled && s.lexical != nil {
 					// Hybrid path: fan out vector + lexical per namespace,
 					// then fuse via RRF. The fused score (normalized to
 					// [0, 1] by max) replaces raw cosine similarity in the
@@ -638,6 +648,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 						PrimaryNS:      namespaceID,
 						PrimaryProj:    projectID,
 						RawCosineFloor: rawCosineFloor,
+						Fusion:         effFusion,
 					})
 				} else {
 					for _, nsID := range searchNamespaces {
@@ -1018,15 +1029,17 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// Resolve effective weights per candidate based on its owning project.
 	// Each candidate carries c.projectID (stamped during candidate building),
 	// so cross-project recall — globals, shared namespaces — gets each row's
-	// owner's tuning rather than the requester's. Cache lifetime is one
-	// Recall call; operator changes to a project's overrides are picked up on
-	// the next call.
+	// owner's tuning rather than the requester's. The global baseline
+	// (effWeights) was resolved once at the top of Recall, so admin-UI
+	// changes to ranking.weight.* apply to this same call; project overrides
+	// continue to merge on top per the existing precedent. Cache lifetime is
+	// one Recall call.
 	weightsByProject := make(map[uuid.UUID]RankingWeights, 4)
-	resolveWeights := func(projID uuid.UUID) RankingWeights {
+	weightsForProject := func(projID uuid.UUID) RankingWeights {
 		if w, ok := weightsByProject[projID]; ok {
 			return w
 		}
-		merged := s.weights
+		merged := effWeights
 		if projID != uuid.Nil && s.projects != nil {
 			if proj, err := s.projects.GetByID(ctx, projID); err == nil && proj != nil {
 				var settings struct {
@@ -1036,7 +1049,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					_ = json.Unmarshal(proj.Settings, &settings)
 				}
 				if ov, perr := ParseRankingOverride(settings.RankingWeights); perr == nil {
-					merged = MergeWeights(s.weights, ov)
+					merged = MergeWeights(effWeights, ov)
 				}
 			}
 		}
@@ -1048,8 +1061,8 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// from the candidate's owning project, so a single sort can score
 	// candidates from different projects under different effective weights.
 	sort.Slice(candidates, func(i, j int) bool {
-		si := computeScore(candidates[i], resolveWeights(candidates[i].projectID), now, maxAccess, recencyDecayPerHour)
-		sj := computeScore(candidates[j], resolveWeights(candidates[j].projectID), now, maxAccess, recencyDecayPerHour)
+		si := computeScore(candidates[i], weightsForProject(candidates[i].projectID), now, maxAccess, recencyDecayPerHour)
+		sj := computeScore(candidates[j], weightsForProject(candidates[j].projectID), now, maxAccess, recencyDecayPerHour)
 		return si > sj
 	})
 
@@ -1078,7 +1091,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			}
 		}
 
-		score := computeScore(c, resolveWeights(c.projectID), now, maxAccess, recencyDecayPerHour)
+		score := computeScore(c, weightsForProject(c.projectID), now, maxAccess, recencyDecayPerHour)
 		if score < threshold {
 			continue
 		}
@@ -1147,7 +1160,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// primary project's effective ranking weights so cross-project recalls
 	// apply one trade-off across the whole result set rather than mixing
 	// per-candidate weights.
-	mmrLambda := resolveWeights(projectID).MmrLambda
+	mmrLambda := weightsForProject(projectID).MmrLambda
 	passing = mmrSelect(passing, queryEmbedding, mmrLambda, len(passing))
 
 	var results []RecallResult
@@ -1223,6 +1236,12 @@ type runHybridArgs struct {
 	// is below the floor before they enter RRF. Lexical-channel rows are
 	// not touched. Zero disables the filter.
 	RawCosineFloor float64
+	// Fusion carries the resolved FusionConfig for this recall — passed in
+	// rather than read from s.fusion inside runHybridSearch so the caller
+	// can resolve once per Recall and feed the same value into every
+	// downstream consumer. Live admin-UI edits to recall.fusion.* therefore
+	// take effect on the next recall without a server restart.
+	Fusion FusionConfig
 }
 
 // runHybridSearch returns a simMap normalized to [0, 1] (so the caller can
@@ -1297,8 +1316,8 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	var vecCount, lexCount int
 	vecIDs := make(map[uuid.UUID]struct{})
 	for _, cr := range vecRankings {
-		w := s.fusion.VectorWeight
-		if s.fusion.NormalizePerChannel && cr.preLen > 0 {
+		w := args.Fusion.VectorWeight
+		if args.Fusion.NormalizePerChannel && cr.preLen > 0 {
 			w = w / float64(cr.preLen)
 		}
 		allRankings = append(allRankings, cr.ranks)
@@ -1310,8 +1329,8 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	}
 	overlap := 0
 	for _, cr := range lexRankings {
-		w := s.fusion.LexicalWeight
-		if s.fusion.NormalizePerChannel && cr.preLen > 0 {
+		w := args.Fusion.LexicalWeight
+		if args.Fusion.NormalizePerChannel && cr.preLen > 0 {
 			w = w / float64(cr.preLen)
 		}
 		allRankings = append(allRankings, cr.ranks)
@@ -1324,7 +1343,7 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 		}
 	}
 
-	fused := ReciprocalRankFusion(allRankings, s.fusion.RRFConstant, allWeights)
+	fused := ReciprocalRankFusion(allRankings, args.Fusion.RRFConstant, allWeights)
 
 	// Normalize by max so the fused score lives in [0, 1] like the cosine
 	// it replaces. clampScore in computeScore expects this range, and
@@ -1360,8 +1379,8 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	if len(fused) > 0 && maxScore <= 0 {
 		slog.Warn("recall: fusion produced zero max score; check fusion weights",
 			"fused_count", len(fused),
-			"vector_weight", s.fusion.VectorWeight,
-			"lexical_weight", s.fusion.LexicalWeight,
+			"vector_weight", args.Fusion.VectorWeight,
+			"lexical_weight", args.Fusion.LexicalWeight,
 			"namespace_id", args.PrimaryNS,
 			"project_id", args.PrimaryProj,
 		)
@@ -1454,6 +1473,53 @@ func (s *RecallService) recallOverfetch(ctx context.Context, limit int) int {
 		out = floor
 	}
 	return out
+}
+
+// resolveWeights returns the global baseline RankingWeights, reading each
+// ranking.weight.* key live from the settings registry so admin-UI edits
+// take effect on the next recall. Falls back to s.weights (the pinned
+// default or test-supplied override) when the settings service is not
+// wired (test-only constructor path) or when a specific key is missing
+// or out of range.
+func (s *RecallService) resolveWeights(ctx context.Context) RankingWeights {
+	if s.settings == nil {
+		return s.weights
+	}
+	d := s.weights
+	return RankingWeights{
+		Similarity:     s.settings.ResolveFloatInRange(ctx, SettingRankWeightSim, "global", 0, 1, d.Similarity),
+		Recency:        s.settings.ResolveFloatInRange(ctx, SettingRankWeightRec, "global", 0, 1, d.Recency),
+		Importance:     s.settings.ResolveFloatInRange(ctx, SettingRankWeightImp, "global", 0, 1, d.Importance),
+		Frequency:      s.settings.ResolveFloatInRange(ctx, SettingRankWeightFreq, "global", 0, 1, d.Frequency),
+		GraphRelevance: s.settings.ResolveFloatInRange(ctx, SettingRankWeightGraph, "global", 0, 1, d.GraphRelevance),
+		Confidence:     s.settings.ResolveFloatInRange(ctx, SettingRankWeightConf, "global", 0, 1, d.Confidence),
+		Origin:         s.settings.ResolveFloatInRange(ctx, SettingRankWeightOrigin, "global", 0, 1, d.Origin),
+		MmrLambda:      s.settings.ResolveFloatInRange(ctx, SettingRankWeightMmr, "global", 0, 1, d.MmrLambda),
+	}
+}
+
+// resolveFusion returns the FusionConfig used by the current recall, reading
+// each recall.fusion.* key live from the settings registry. Falls back to
+// s.fusion (the pinned default or test-supplied override) when the settings
+// service is not wired. Mirrors loadFusionConfig's per-key guard rails:
+// negative weights and non-positive RRF constants are ignored.
+func (s *RecallService) resolveFusion(ctx context.Context) FusionConfig {
+	if s.settings == nil {
+		return s.fusion
+	}
+	cfg := s.fusion
+	cfg.Enabled = s.settings.ResolveBool(ctx, SettingRecallFusionEnabled, "global")
+	if k, err := s.settings.ResolveInt(ctx, SettingRecallFusionK, "global"); err == nil && k > 0 {
+		cfg.RRFConstant = k
+	}
+	if w, err := s.settings.ResolveFloat(ctx, SettingRecallFusionVecW, "global"); err == nil && w >= 0 {
+		cfg.VectorWeight = w
+	}
+	if w, err := s.settings.ResolveFloat(ctx, SettingRecallFusionLexW, "global"); err == nil && w >= 0 {
+		cfg.LexicalWeight = w
+	}
+	cfg.NormalizePerChannel = s.settings.ResolveBool(ctx, SettingRecallFusionNormalizePerChan, "global")
+	return cfg
 }
 
 // clampScore ensures a score is in the [0, 1] range. NaN inputs collapse to

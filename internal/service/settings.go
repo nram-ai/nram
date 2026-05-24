@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -1035,12 +1036,15 @@ func settingsCacheKey(key, scope string) string {
 func (s *SettingsService) Resolve(ctx context.Context, key string, scope string) (string, error) {
 	cacheKey := settingsCacheKey(key, scope)
 	now := time.Now()
+	// Grab whatever is in the cache up front so we can fall back to it
+	// on a real DB error below. A fresh entry short-circuits as before;
+	// a stale entry is kept around for the stale-while-revalidate path.
 	s.mu.RLock()
-	if entry, ok := s.cache[cacheKey]; ok && entry.expiresAt.After(now) {
-		s.mu.RUnlock()
-		return entry.value, nil
-	}
+	cached, hasCached := s.cache[cacheKey]
 	s.mu.RUnlock()
+	if hasCached && cached.expiresAt.After(now) {
+		return cached.value, nil
+	}
 
 	setting, err := s.repo.Get(ctx, key, scope)
 	var value string
@@ -1051,7 +1055,24 @@ func (s *SettingsService) Resolve(ctx context.Context, key string, scope string)
 			value = def
 		}
 	} else {
-		// Real DB errors do not cache — the caller may want to retry.
+		// Real DB errors degrade to stale-while-revalidate: if the cache
+		// still has a value (just expired), serve it. This avoids the
+		// failure mode where a transient pool exhaustion or connection
+		// reset between TTL boundaries silently flips a boolean setting
+		// to its registered default (e.g., recall.fusion.enabled going
+		// from operator-set true to false for one request) inside every
+		// downstream consumer that uses ResolveBool / ResolveFloatInRange.
+		// Only return an error when there is no cached value at all (cold
+		// start with the DB unreachable). The next call will retry the DB.
+		if hasCached {
+			slog.Warn("settings: serving stale cached value on resolve failure",
+				"key", key,
+				"scope", scope,
+				"error", err,
+				"stale_age", now.Sub(cached.expiresAt),
+			)
+			return cached.value, nil
+		}
 		return "", fmt.Errorf("resolve setting %q: %w", key, err)
 	}
 

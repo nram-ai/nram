@@ -91,16 +91,11 @@ type LifecycleService struct {
 // may be nil if no vector store is configured. The graphPruner parameter may be
 // nil if graph data is not available (e.g., SQLite backend). settings may be
 // nil; the per-sweep knobs fall through to settingDefaults. Zero-value config
-// fields are resolved from the SettingsService at construction (SweepInterval)
-// or per-sweep (everything else).
+// fields are resolved from the SettingsService per sweep iteration, so admin-UI
+// edits to lifecycle.* keys (including the sweep interval itself) take effect
+// without restarting the service. A non-zero cfg.SweepInterval supplied by the
+// caller (tests, primarily) pins the value and bypasses the live read.
 func NewLifecycleService(store LifecycleStore, vectorStore VectorDeleter, graphPruner GraphPruner, cfg LifecycleConfig, settings *SettingsService) *LifecycleService {
-	if cfg.SweepInterval <= 0 {
-		cfg.SweepInterval = settings.ResolveDurationSecondsWithDefault(context.Background(),
-			SettingLifecycleSweepIntervalSeconds, "global")
-		if cfg.SweepInterval < time.Second {
-			cfg.SweepInterval = time.Second
-		}
-	}
 	return &LifecycleService{
 		store:       store,
 		vectorStore: vectorStore,
@@ -144,6 +139,25 @@ func (s *LifecycleService) resolveOrphanGrace(ctx context.Context) time.Duration
 		SettingLifecycleOrphanGraceSeconds, "global")
 }
 
+// resolveSweepInterval returns the per-iteration sleep duration before the
+// next sweep fires. Pinned value (cfg.SweepInterval > 0 supplied at
+// construction by tests) bypasses the live read; otherwise the value is
+// re-resolved from SettingLifecycleSweepIntervalSeconds on every loop tick,
+// so admin-UI edits take effect on the next iteration. Sub-second values
+// from the registry are floored at one second to keep the sweep loop from
+// degrading into a busy spin if an operator stores a misconfigured value.
+func (s *LifecycleService) resolveSweepInterval(ctx context.Context) time.Duration {
+	if s.config.SweepInterval > 0 {
+		return s.config.SweepInterval
+	}
+	v := s.settings.ResolveDurationSecondsWithDefault(ctx,
+		SettingLifecycleSweepIntervalSeconds, "global")
+	if v < time.Second {
+		v = time.Second
+	}
+	return v
+}
+
 // Start launches the background sweep loop. It returns immediately.
 // Call Stop to shut down the loop cleanly.
 func (s *LifecycleService) Start() {
@@ -165,17 +179,27 @@ func (s *LifecycleService) Stop() {
 	s.wg.Wait()
 }
 
-// loop runs the periodic sweep until the context is cancelled.
+// loop runs the periodic sweep until the context is cancelled. A
+// time.Ticker preserves the configured period regardless of how long a
+// sweep takes, so the cadence stays at the operator-configured interval
+// instead of drifting longer by the sweep duration each iteration.
+// After every tick we re-resolve the interval and Reset the ticker if
+// the operator changed lifecycle.sweep_interval_seconds via the admin
+// UI, so live edits still take effect on the next tick.
 func (s *LifecycleService) loop(ctx context.Context) {
-	ticker := time.NewTicker(s.config.SweepInterval)
+	interval := s.resolveSweepInterval(ctx)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			_, _, _ = s.sweep(ctx)
+			if next := s.resolveSweepInterval(ctx); next != interval {
+				ticker.Reset(next)
+				interval = next
+			}
 		}
 	}
 }
