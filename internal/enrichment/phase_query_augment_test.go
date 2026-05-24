@@ -262,9 +262,12 @@ func TestQueryAugment_MarkerNotWrittenWhenIngestionDecisionReusedEmbed(t *testin
 		t.Fatalf("processJob: %v", err)
 	}
 
-	if len(h.updater.augmentedMarks) != 0 {
-		t.Fatalf("augmented marker MUST NOT be written when ingestion-decision pre-embed reused the parent slot; got %d marks: %+v",
-			len(h.updater.augmentedMarks), h.updater.augmentedMarks)
+	if len(h.updater.enrichedMarks) != 1 {
+		t.Fatalf("expected exactly one MarkEnriched call; got %d", len(h.updater.enrichedMarks))
+	}
+	if h.updater.enrichedMarks[0].augmentedQueries != nil || h.updater.enrichedMarks[0].augmentedEmbeddingAt != nil {
+		t.Fatalf("augmented marker MUST NOT be written when ingestion-decision pre-embed reused the parent slot; got queries=%v at=%v",
+			h.updater.enrichedMarks[0].augmentedQueries, h.updater.enrichedMarks[0].augmentedEmbeddingAt)
 	}
 }
 
@@ -299,14 +302,18 @@ func TestQueryAugment_MarkerWrittenWhenAugmentedEmbedActuallyLanded(t *testing.T
 		t.Fatalf("processJob: %v", err)
 	}
 
-	if len(h.updater.augmentedMarks) != 1 {
-		t.Fatalf("expected 1 augmented marker write on happy path; got %d", len(h.updater.augmentedMarks))
+	if len(h.updater.enrichedMarks) != 1 {
+		t.Fatalf("expected exactly one MarkEnriched call; got %d", len(h.updater.enrichedMarks))
 	}
-	if got := h.updater.augmentedMarks[0].queries; len(got) != 2 || got[0] != "q1" || got[1] != "q2" {
+	mark := h.updater.enrichedMarks[0]
+	if mark.augmentedEmbeddingAt == nil {
+		t.Fatalf("expected augmented_embedding_at to be set on happy path; got nil")
+	}
+	if got := mark.augmentedQueries; len(got) != 2 || got[0] != "q1" || got[1] != "q2" {
 		t.Fatalf("augmented marker queries = %v, want [q1 q2]", got)
 	}
-	if h.updater.augmentedMarks[0].id != mem.ID {
-		t.Fatalf("augmented marker target = %v, want %v", h.updater.augmentedMarks[0].id, mem.ID)
+	if mark.id != mem.ID {
+		t.Fatalf("augmented marker target = %v, want %v", mark.id, mem.ID)
 	}
 }
 

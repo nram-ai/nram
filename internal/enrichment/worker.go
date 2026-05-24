@@ -173,8 +173,7 @@ type MemoryReader interface {
 type MemoryUpdater interface {
 	Update(ctx context.Context, mem *model.Memory) error
 	UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error
-	UpdateAugmentedEmbedding(ctx context.Context, id uuid.UUID, queries []string, embeddedAt time.Time) error
-	MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage) error
+	MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage, augmentedQueries []string, augmentedEmbeddingAt *time.Time) error
 	MarkSupersededBy(ctx context.Context, oldID, namespaceID, newID uuid.UUID) error
 }
 
@@ -1584,35 +1583,44 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 
 	stampIngestionMetadata(p)
 
-	// Persist the augmentation marker BEFORE MarkEnriched. The two writes
-	// are not transactional, and writing them in this order means a
-	// transient failure on the marker leaves the row in (enriched=false,
-	// augmented_embedding_at=NULL) — which a worker retry treats as a
-	// clean redo. The reverse order (MarkEnriched first) leaves the row
-	// stuck as (enriched=true, augmented_embedding_at=NULL) which is
-	// exactly the state the backfill query targets, so every subsequent
-	// backfill cycle re-burns the LLM augmentation cost on this row
-	// forever. The marker is only written when embedUsedAugmented==true:
-	// if ingestion-decision's pre-embed won the parent slot, the stored
-	// vector is not augmented and we must not claim otherwise.
-	if p.embedUsedAugmented && p.mem.EmbeddingDim != nil {
-		if err := wp.memUpdater.UpdateAugmentedEmbedding(ctx, p.mem.ID, p.augmentedQueries, time.Now().UTC()); err != nil {
-			if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, fmt.Sprintf("update augmented_embedding: %v", err)); failErr != nil {
-				logClaimLostOr(failErr, "enrichment: fail-mark after augmented_embedding update", "job", p.job.ID, "worker", p.workerID)
-			}
-			return fmt.Errorf("update augmented_embedding: %w", err)
-		}
-	}
-
-	// Single partial UPDATE so a concurrent memory_update that
-	// supersedes this row keeps its supersede pointer.
+	// Single partial UPDATE so a concurrent memory_update that supersedes
+	// this row keeps its supersede pointer. The augmentation marker
+	// (augmented_queries, augmented_embedding_at) lands atomically with
+	// the enriched flag so a transient DB error cannot leave the row in
+	// (enriched=true, augmented_embedding_at=NULL), which is exactly the
+	// state the backfill query targets. The marker columns are only
+	// written when embedUsedAugmented==true AND p.augmentedQueries is
+	// populated: if ingestion-decision's pre-embed won the parent slot,
+	// the stored vector is not augmented and we must not claim otherwise.
+	// Coupling the two values guarantees we never write a timestamp
+	// without the matching queries, or vice versa.
+	//
+	// One `now` is computed up front and shared between augmented_embedding_at
+	// and the in-memory mem.UpdatedAt so they cannot drift across a
+	// second boundary. The persisted updated_at column is stamped inside
+	// MarkEnriched and may differ by one second under second-resolution
+	// RFC3339 formatting; that drift is bounded and harmless for
+	// auditing because updated_at >= augmented_embedding_at always holds
+	// to within sub-second clock skew.
+	//
+	// Soft-delete behavior: MarkEnriched's WHERE filters deleted_at IS
+	// NULL, so a row soft-deleted between embed and finalize will return
+	// sql.ErrNoRows here and the job is failed (bounded retries until
+	// MaxAttempts). The marker is intentionally NOT written on tombstones.
 	var stampedMetadata json.RawMessage
 	if p.ingestionDecision != "" {
 		stampedMetadata = p.mem.Metadata
 	}
+	now := time.Now().UTC()
+	var augmentedQueries []string
+	var augmentedEmbeddingAt *time.Time
+	if p.embedUsedAugmented && p.mem.EmbeddingDim != nil && len(p.augmentedQueries) > 0 {
+		augmentedQueries = p.augmentedQueries
+		augmentedEmbeddingAt = &now
+	}
 	p.mem.Enriched = true
-	p.mem.UpdatedAt = time.Now().UTC()
-	if err := wp.memUpdater.MarkEnriched(ctx, p.mem.ID, p.mem.NamespaceID, p.mem.EmbeddingDim, stampedMetadata); err != nil {
+	p.mem.UpdatedAt = now
+	if err := wp.memUpdater.MarkEnriched(ctx, p.mem.ID, p.mem.NamespaceID, p.mem.EmbeddingDim, stampedMetadata, augmentedQueries, augmentedEmbeddingAt); err != nil {
 		if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, fmt.Sprintf("update memory enriched: %v", err)); failErr != nil {
 			logClaimLostOr(failErr, "enrichment: fail-mark after memory update", "job", p.job.ID, "worker", p.workerID)
 		}

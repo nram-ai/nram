@@ -912,30 +912,6 @@ func (r *MemoryRepo) ClearAllEmbeddingDims(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// UpdateAugmentedEmbedding records the paraphrase queries the query-augmentation
-// enrichment phase fed into the embedder, alongside the timestamp of that embed.
-// queries == nil clears both columns (so a failed augmentation cycle does not
-// leave a stale marker that would hide the row from the backfill query).
-func (r *MemoryRepo) UpdateAugmentedEmbedding(ctx context.Context, id uuid.UUID, queries []string, embeddedAt time.Time) error {
-	var qVal, atVal interface{}
-	if queries != nil {
-		raw, err := json.Marshal(queries)
-		if err != nil {
-			return fmt.Errorf("memory marshal augmented_queries: %w", err)
-		}
-		qVal = string(raw)
-		atVal = embeddedAt.UTC().Format(time.RFC3339)
-	}
-	query := `UPDATE memories SET augmented_queries = ?, augmented_embedding_at = ? WHERE id = ?`
-	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE memories SET augmented_queries = $1, augmented_embedding_at = $2 WHERE id = $3`
-	}
-	if _, err := r.db.Exec(ctx, query, qVal, atVal, id.String()); err != nil {
-		return fmt.Errorf("memory update augmented embedding: %w", err)
-	}
-	return nil
-}
-
 // ListAugmentationBackfillCandidates returns memory IDs that still need an
 // augmented embedding (augmented_embedding_at IS NULL) within the given
 // namespace scope. namespaceIDs == nil scans the whole deployment. Soft-deleted
@@ -1230,12 +1206,39 @@ func (r *MemoryRepo) MarkSupersededBy(ctx context.Context, oldID, namespaceID, n
 }
 
 // MarkEnriched flips the enriched flag to true, optionally sets
-// embedding_dim and metadata, and bumps updated_at — all in one
-// statement. Other columns are not touched. The enrichment worker
-// uses this in finalize so a concurrent memory_update that supersedes
-// the row mid-flight cannot have its supersede pointer clobbered by a
-// stale full-row Update.
-func (r *MemoryRepo) MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage) error {
+// embedding_dim, metadata, augmented_queries, and augmented_embedding_at,
+// and bumps updated_at, all in one statement. Other columns are not
+// touched. The enrichment worker uses this in finalize so a concurrent
+// memory_update that supersedes the row mid-flight cannot have its
+// supersede pointer clobbered by a stale full-row Update. Folding the
+// augmentation marker into the same partial UPDATE makes the enriched
+// flag and the augmentation marker land atomically per row, so a
+// transient DB error cannot leave the row in the (enriched=true,
+// augmented_embedding_at=NULL) state the backfill query targets.
+//
+// nil augmentedQueries or nil augmentedEmbeddingAt mean leave that
+// column alone, matching how nil embeddingDim and empty metadata behave.
+// This method does NOT provide a way to NULL the augmented columns
+// once set; callers needing to reset a stale marker must add a
+// dedicated method or issue a targeted UPDATE. The two augmented
+// params are intended to be passed as a coupled pair (both nil or
+// both non-nil); callers that mix nil and non-nil will produce a row
+// with one column written and the other untouched.
+//
+// Soft-deleted rows (deleted_at IS NOT NULL) cannot be marked
+// enriched: the WHERE clause excludes tombstones, so MarkEnriched
+// returns sql.ErrNoRows for any row that was soft-deleted between
+// claim and finalize. This also means the augmented columns will not
+// be written on a tombstone, which differs from the prior dedicated
+// UpdateAugmentedEmbedding method (which had no soft-delete filter).
+func (r *MemoryRepo) MarkEnriched(
+	ctx context.Context,
+	id, namespaceID uuid.UUID,
+	embeddingDim *int,
+	metadata json.RawMessage,
+	augmentedQueries []string,
+	augmentedEmbeddingAt *time.Time,
+) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	pg := r.db.Backend() == BackendPostgres
 
@@ -1248,6 +1251,18 @@ func (r *MemoryRepo) MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID
 	if len(metadata) > 0 {
 		setClauses = append(setClauses, "metadata = ")
 		args = append(args, string(metadata))
+	}
+	if augmentedQueries != nil {
+		raw, err := json.Marshal(augmentedQueries)
+		if err != nil {
+			return fmt.Errorf("memory marshal augmented_queries: %w", err)
+		}
+		setClauses = append(setClauses, "augmented_queries = ")
+		args = append(args, string(raw))
+	}
+	if augmentedEmbeddingAt != nil {
+		setClauses = append(setClauses, "augmented_embedding_at = ")
+		args = append(args, augmentedEmbeddingAt.UTC().Format(time.RFC3339))
 	}
 	setClauses = append(setClauses, "updated_at = ")
 	args = append(args, now)

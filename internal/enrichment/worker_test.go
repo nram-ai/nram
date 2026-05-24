@@ -62,19 +62,12 @@ func (m *mockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model
 }
 
 type mockMemoryUpdater struct {
-	mu              sync.Mutex
-	updated         []*model.Memory
-	dimUpdates      []dimUpdate
-	augmentedMarks  []augmentedMark
-	enrichedMarks   []enrichedMark
-	supersedeMarks  []supersedeMark
-	err             error
-}
-
-type augmentedMark struct {
-	id         uuid.UUID
-	queries    []string
-	embeddedAt time.Time
+	mu             sync.Mutex
+	updated        []*model.Memory
+	dimUpdates     []dimUpdate
+	enrichedMarks  []enrichedMark
+	supersedeMarks []supersedeMark
+	err            error
 }
 
 type supersedeMark struct {
@@ -89,10 +82,12 @@ type dimUpdate struct {
 }
 
 type enrichedMark struct {
-	id           uuid.UUID
-	namespaceID  uuid.UUID
-	embeddingDim *int
-	metadata     json.RawMessage
+	id                   uuid.UUID
+	namespaceID          uuid.UUID
+	embeddingDim         *int
+	metadata             json.RawMessage
+	augmentedQueries     []string
+	augmentedEmbeddingAt *time.Time
 }
 
 func (m *mockMemoryUpdater) Update(_ context.Context, mem *model.Memory) error {
@@ -116,24 +111,33 @@ func (m *mockMemoryUpdater) UpdateEmbeddingDim(_ context.Context, id uuid.UUID, 
 	return nil
 }
 
-func (m *mockMemoryUpdater) UpdateAugmentedEmbedding(_ context.Context, id uuid.UUID, queries []string, embeddedAt time.Time) error {
+func (m *mockMemoryUpdater) MarkEnriched(_ context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage, augmentedQueries []string, augmentedEmbeddingAt *time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
 		return m.err
 	}
-	cp := append([]string(nil), queries...)
-	m.augmentedMarks = append(m.augmentedMarks, augmentedMark{id: id, queries: cp, embeddedAt: embeddedAt})
-	return nil
-}
-
-func (m *mockMemoryUpdater) MarkEnriched(_ context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.err != nil {
-		return m.err
+	var queriesCopy []string
+	if augmentedQueries != nil {
+		// Preserve the empty-vs-nil distinction the production code
+		// branches on. append([]string(nil), empty...) returns nil and
+		// would collapse []string{} back to nil here.
+		queriesCopy = make([]string, len(augmentedQueries))
+		copy(queriesCopy, augmentedQueries)
 	}
-	m.enrichedMarks = append(m.enrichedMarks, enrichedMark{id: id, namespaceID: namespaceID, embeddingDim: embeddingDim, metadata: metadata})
+	var atCopy *time.Time
+	if augmentedEmbeddingAt != nil {
+		t := *augmentedEmbeddingAt
+		atCopy = &t
+	}
+	m.enrichedMarks = append(m.enrichedMarks, enrichedMark{
+		id:                   id,
+		namespaceID:          namespaceID,
+		embeddingDim:         embeddingDim,
+		metadata:             metadata,
+		augmentedQueries:     queriesCopy,
+		augmentedEmbeddingAt: atCopy,
+	})
 	return nil
 }
 
