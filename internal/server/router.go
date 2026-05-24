@@ -70,6 +70,11 @@ type Handlers struct {
 	// Enrichment Queue / Dreaming entries without requiring non-admins to
 	// probe the admin-only /v1/admin/providers endpoint.
 	MeCapabilities http.HandlerFunc
+	// Self-tier read of the eight ranking.weight.* schema entries plus
+	// their effective global-scope values. Drives the Ranking Weights
+	// placeholders on the per-project edit panel for non-admin owners
+	// who cannot read /v1/admin/settings.
+	MeRankingWeightsDefaults http.HandlerFunc
 
 	// Org-scoped handlers
 	OrgUsers http.HandlerFunc
@@ -329,6 +334,13 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			// no slot details, no secrets. Sidebar nav reads this to decide
 			// whether to show Enrichment Queue / Dreaming entries.
 			r.Get("/capabilities", handler(handlers.MeCapabilities))
+
+			// Self-tier ranking-weight schema + effective global defaults.
+			// Returns only the eight ranking.weight.* keys consumed by the
+			// per-project Ranking Weights editor. Non-admins cannot read
+			// /v1/admin/settings; this is the narrow read surface that lets
+			// them populate placeholders without an admin gate.
+			r.Get("/ranking-weights/defaults", handler(handlers.MeRankingWeightsDefaults))
 		})
 
 		// Scoped data-viewing routes (all authenticated users — scope auto-applied).

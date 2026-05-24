@@ -732,6 +732,9 @@ func main() {
 			EnrichmentAvailable: enrichmentAvailable,
 			Settings:            settingsSvc,
 		}),
+		MeRankingWeightsDefaults: api.NewMeRankingWeightsDefaultsHandler(api.MeRankingWeightsDefaultsConfig{
+			Store: settingsAdminStore,
+		}),
 
 		// Passkey management handlers. Register-finish gets an
 		// audit-on-success wrapper because the upstream webauthn handler

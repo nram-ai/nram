@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { useAuth } from "../context/AuthContext";
 import {
   adminAPI,
   meAPI,
@@ -449,17 +450,30 @@ export function usePullOllamaModel() {
 
 // --- Settings ---
 
+// useSettings and useSettingsSchema hit /admin/settings*, which the server
+// gates on RoleAdministrator. Non-admin callers (the per-project edit panel
+// uses useSchemaRange under the hood) would otherwise rack up 403s in the
+// browser console for every page render. Gate the underlying React Query
+// fetch on isAdmin so the request never goes out for non-admin users; the
+// downstream useSchemaRange consumer already falls back to its caller-
+// supplied {min, max, step} default when no data is present. The admin
+// Settings, Provider Configuration, and Prompt Templates pages are admin-
+// gated UI surfaces; the gating here matches the server-side authorization.
 export function useSettings(scope?: string) {
+  const { isAdmin } = useAuth();
   return useQuery({
     queryKey: ["admin", "settings", scope],
     queryFn: () => adminAPI.getSettings(scope),
+    enabled: isAdmin,
   });
 }
 
 export function useSettingsSchema() {
+  const { isAdmin } = useAuth();
   return useQuery({
     queryKey: ["admin", "settings-schema"],
     queryFn: adminAPI.getSettingsSchema,
+    enabled: isAdmin,
   });
 }
 
@@ -585,53 +599,55 @@ export function useSchemaRange(key: string, fallback: SchemaRange): SchemaRange 
   }, [schemaQuery.data, key, fallback.min, fallback.max, fallback.step]);
 }
 
-// useSystemRankingWeights returns null weights when any required schema key
-// is missing AFTER both underlying queries have resolved. While either query
-// is still in flight, isLoading is true and missingKeys is empty so the
-// consumer can render a loading state instead of the deploy-incident banner.
-// Consumers MUST handle the null case (typically a red banner) instead of
-// silently rendering stale defaults — that's the "AC6 contract" the contract
-// test enforces.
+// useSystemRankingWeights returns the effective system ranking weights to
+// any authenticated caller via the self-tier /v1/me/ranking-weights/defaults
+// endpoint. Each response entry carries both `value` (operator override at
+// scope=global, falling back to the schema default) and `default_value` (the
+// registry default) so the precedence used by the legacy two-query resolver
+// is preserved. The endpoint is gated only on authentication, so non-admin
+// project owners (org_owner, member) can populate their per-project Ranking
+// Weights editor placeholders without 403-ing against /admin/settings.
+//
+// While the query is in flight isLoading is true and missingKeys is empty so
+// the consumer can render a loading state instead of the deploy-incident
+// banner. Consumers MUST handle the null case (typically a red banner)
+// instead of silently rendering stale defaults — that is the "AC6 contract"
+// the contract test enforces.
 export function useSystemRankingWeights(): SystemRankingWeightsResolution {
-  const settingsQuery = useSettings("global");
-  const schemaQuery = useSettingsSchema();
+  const query = useQuery({
+    queryKey: ["me", "ranking-weight-defaults"],
+    queryFn: meAPI.getRankingWeightDefaults,
+  });
   // useMemo gives the consumer (ProjectManagement edit panel) a stable
   // reference between unrelated re-renders — without it every keystroke
   // in any form input rebuilds the resolution Maps.
   return useMemo(() => {
-    // The schema query is the load-bearing dependency: without registered
-    // defaults the editor cannot render a baseline. The settings query
-    // (operator overrides) is best-effort — when it fails or is still in
-    // flight, resolveSystemRankingWeights falls back to schema defaults
-    // per-key, which is enough to drive the form. Two regressions this
-    // split prevents: (1) a settings-endpoint 5xx hiding the editor even
-    // though defaults are reachable, and (2) the "Loading..." panel
-    // staying up after one query has already errored.
-    const isLoading = schemaQuery.isPending;
-    const isError = schemaQuery.isError;
-    if (isLoading) {
-      // Defer the missing-keys verdict — the schema array is just not in
+    if (query.isPending) {
+      // Defer the missing-keys verdict — the response array is just not in
       // memory yet, not actually missing keys.
       return { weights: null, missingKeys: [], isLoading: true, isError: false };
     }
-    if (isError) {
-      // Schema endpoint failure is its own diagnostic. Suppress the
-      // missing-keys list so the consumer renders a generic banner
-      // keyed on isError rather than a misleading list of every required
-      // key as if the server explicitly omitted them.
+    if (query.isError) {
+      // Endpoint failure is its own diagnostic. Suppress the missing-keys
+      // list so the consumer renders a generic banner keyed on isError
+      // rather than a misleading list of every required key as if the
+      // server explicitly omitted them.
       return { weights: null, missingKeys: [], isLoading: false, isError: true };
     }
-    const resolution = resolveSystemRankingWeights(
-      settingsQuery.data?.data ?? [],
-      schemaQuery.data?.data ?? [],
-    );
+    // Reshape the unified payload back into the two-source contract the
+    // pure resolver expects. value is the operator-effective number;
+    // default_value is the registered default. Both feed in so the existing
+    // override-then-default precedence and the eight-key invariant stay
+    // exercised by the same unit tests.
+    const entries = query.data?.data ?? [];
+    const configured = entries.map((e) => ({ key: e.key, value: e.value }));
+    const schema = entries.map((e) => ({
+      key: e.key,
+      default_value: e.default_value,
+    }));
+    const resolution = resolveSystemRankingWeights(configured, schema);
     return { ...resolution, isLoading: false, isError: false };
-  }, [
-    settingsQuery.data,
-    schemaQuery.data,
-    schemaQuery.isPending,
-    schemaQuery.isError,
-  ]);
+  }, [query.data, query.isPending, query.isError]);
 }
 
 export function useUpdateSetting() {

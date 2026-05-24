@@ -1740,6 +1740,21 @@ export interface MeCapabilities {
   dreaming_enabled: boolean;
 }
 
+// MeRankingWeightDefault is one row in the response of
+// GET /v1/me/ranking-weights/defaults. `value` is the effective global-scope
+// value (operator override if set, schema default otherwise); the per-project
+// Ranking Weights editor uses it as the placeholder for each weight input.
+// `default_value` is the registered schema default, exposed separately so
+// the SPA can fall back to it if an override is unparseable.
+export interface MeRankingWeightDefault {
+  key: string;
+  value: number;
+  default_value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
 export type Theme = "light" | "dark";
 
 export interface MeProfilePatchRequest {
@@ -1757,6 +1772,13 @@ export const meAPI = {
   // Dreaming entries without paying the admin-only /admin/providers probe.
   getCapabilities: () =>
     request<MeCapabilities>("GET", "/me/capabilities"),
+
+  // Self-tier read of the eight ranking.weight.* schema entries with their
+  // effective global-scope values. Powers the placeholders on the per-project
+  // Ranking Weights editor for non-admin owners who cannot read
+  // /admin/settings. Authentication required, no role gate.
+  getRankingWeightDefaults: () =>
+    request<{ data: MeRankingWeightDefault[] }>("GET", "/me/ranking-weights/defaults"),
 
   listPasskeys: () =>
     request<{ data: Passkey[] }>("GET", "/me/passkeys").then((r) => r.data),

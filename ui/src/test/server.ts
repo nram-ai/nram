@@ -552,6 +552,26 @@ const handlers = [
     return HttpResponse.json({ status: "ok" });
   }),
 
+  // Self-tier ranking-weight schema + effective global defaults. Mirrors the
+  // production handler at internal/api/handler_me_ranking_weights.go; the
+  // payload covers every key listed in SYSTEM_RANKING_WEIGHT_KEYS so a test
+  // that renders the per-project Ranking Weights editor receives all eight
+  // entries instead of falling into the missing-keys banner branch.
+  http.get(`${BASE}/me/ranking-weights/defaults`, () => {
+    return HttpResponse.json({
+      data: [
+        { key: "ranking.weight.similarity", value: 0.5, default_value: 0.5, min: 0, max: 1, step: 0.05 },
+        { key: "ranking.weight.recency", value: 0.15, default_value: 0.15, min: 0, max: 1, step: 0.05 },
+        { key: "ranking.weight.importance", value: 0.1, default_value: 0.1, min: 0, max: 1, step: 0.05 },
+        { key: "ranking.weight.frequency", value: 0.0, default_value: 0.0, min: 0, max: 1, step: 0.05 },
+        { key: "ranking.weight.graph_relevance", value: 0.2, default_value: 0.2, min: 0, max: 1, step: 0.05 },
+        { key: "ranking.weight.confidence", value: 0.05, default_value: 0.05, min: 0, max: 1, step: 0.05 },
+        { key: "ranking.weight.origin", value: 0.0, default_value: 0.0, min: 0, max: 1, step: 0.05 },
+        { key: "ranking.weight.mmr_lambda", value: 0.75, default_value: 0.75, min: 0, max: 1, step: 0.05 },
+      ],
+    });
+  }),
+
   // --- Admin: Webhooks ---
   http.get(`${BASE}/admin/webhooks`, () => {
     return HttpResponse.json({
