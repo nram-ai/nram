@@ -331,6 +331,14 @@ type WorkerPool struct {
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// workerIDs holds the per-process ephemeral IDs minted at Start. Set
+	// once before the worker goroutines launch and only read after Start
+	// returns (or after a Stop()/Start() cycle finishes Start), so no
+	// synchronization is required for the production read/write pattern.
+	// Exposed via WorkerIDsSnapshot for tests that need to assert the
+	// minted IDs without racing the worker goroutines.
+	workerIDs []string
 }
 
 // NewWorkerPool creates a new enrichment worker pool. Provider functions may
@@ -398,14 +406,28 @@ const heartbeatTickTimeout = 10 * time.Second
 // Start launches the configured number of worker goroutines. Each loops
 // until the pool is stopped: claim a job, process it, repeat (or sleep on
 // empty queue).
+//
+// Worker IDs are namespaced with a per-process nonce minted at Start time
+// (e.g. "b3f1a2c8-worker-0"). The nonce is required for correctness, not
+// readability: heartbeats only refresh updated_at for rows whose claimed_by
+// matches a live worker, so a stable name like "worker-0" would let a new
+// process — or a horizontally-scaled sibling instance — refresh claims it
+// does not own, masking dead-worker recovery indefinitely.
 func (wp *WorkerPool) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	wp.cancel = cancel
 
+	// uuid.New().String() returns 36 chars; the first 8 are unique enough
+	// across any plausible cluster size and keep log lines short.
+	processNonce := uuid.New().String()[:8]
+
 	workerIDs := make([]string, wp.config.Workers)
 	for i := range wp.config.Workers {
-		workerID := fmt.Sprintf("worker-%d", i)
+		workerID := fmt.Sprintf("%s-worker-%d", processNonce, i)
 		workerIDs[i] = workerID
+	}
+	wp.workerIDs = workerIDs
+	for _, workerID := range workerIDs {
 		wp.wg.Add(1)
 		go wp.run(ctx, workerID)
 	}
@@ -431,6 +453,12 @@ func (wp *WorkerPool) Start() {
 // currently held by each worker in the pool. The loop must survive a single
 // bad tick (panic, DB lock, slow write); losing it is what makes long
 // batches look stalled to the sweeper.
+//
+// No initial tick: with per-process ephemeral worker IDs, no row in the DB
+// carries a claimed_by matching this pool's IDs at start time, so an
+// initial tick would always be a no-op. Refreshing rows owned by a prior
+// process (the prior "carry a fresh heartbeat_at" behavior) is exactly
+// what masked dead-worker recovery, so we never want that path back.
 func (wp *WorkerPool) runHeartbeat(ctx context.Context, workerIDs []string) {
 	defer wp.wg.Done()
 
@@ -443,36 +471,6 @@ func (wp *WorkerPool) runHeartbeat(ctx context.Context, workerIDs []string) {
 		interval = time.Duration(service.GetDefaultInt(service.SettingEnrichmentHeartbeatSeconds)) * time.Second
 	}
 
-	tick := func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				slog.Error("enrichment: heartbeat tick panic recovered",
-					"panic", rec, "stack", string(debug.Stack()))
-			}
-		}()
-
-		tickCtx, cancel := context.WithTimeout(ctx, heartbeatTickTimeout)
-		defer cancel()
-
-		for _, workerID := range workerIDs {
-			n, err := wp.queue.TickHeartbeat(tickCtx, workerID)
-			if err != nil && ctx.Err() == nil {
-				slog.Warn("enrichment: heartbeat tick failed",
-					"worker", workerID, "err", err)
-				continue
-			}
-			if n > 0 {
-				slog.Debug("enrichment: heartbeat tick",
-					"worker", workerID, "claimed_jobs", n)
-			}
-		}
-	}
-
-	// Initial tick on entry so any rows already claimed (e.g. after a crash
-	// recovery + immediate restart) carry a fresh heartbeat_at without
-	// waiting for the first interval to elapse.
-	tick()
-
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -481,7 +479,36 @@ func (wp *WorkerPool) runHeartbeat(ctx context.Context, workerIDs []string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			tick()
+			wp.tickHeartbeats(ctx, workerIDs)
+		}
+	}
+}
+
+// tickHeartbeats runs one heartbeat fan-out across the given worker IDs.
+// Extracted from runHeartbeat so tests can drive the tick directly without
+// waiting on the production timer; production code only calls it from the
+// ticker loop above.
+func (wp *WorkerPool) tickHeartbeats(ctx context.Context, workerIDs []string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("enrichment: heartbeat tick panic recovered",
+				"panic", rec, "stack", string(debug.Stack()))
+		}
+	}()
+
+	tickCtx, cancel := context.WithTimeout(ctx, heartbeatTickTimeout)
+	defer cancel()
+
+	for _, workerID := range workerIDs {
+		n, err := wp.queue.TickHeartbeat(tickCtx, workerID)
+		if err != nil && ctx.Err() == nil {
+			slog.Warn("enrichment: heartbeat tick failed",
+				"worker", workerID, "err", err)
+			continue
+		}
+		if n > 0 {
+			slog.Debug("enrichment: heartbeat tick",
+				"worker", workerID, "claimed_jobs", n)
 		}
 	}
 }
@@ -497,6 +524,16 @@ func (wp *WorkerPool) Stop() {
 // IsIdle returns true when all workers are sleeping (no jobs being processed).
 func (wp *WorkerPool) IsIdle() bool {
 	return wp.idleWorkers.Load() == int32(wp.config.Workers)
+}
+
+// WorkerIDsSnapshot returns a copy of the ephemeral worker IDs minted by
+// the most recent Start. Empty until Start runs; safe to call after Start
+// returns. Exposed for tests; production code has no reason to read this
+// (the IDs are an internal correctness mechanism, not an operator surface).
+func (wp *WorkerPool) WorkerIDsSnapshot() []string {
+	out := make([]string, len(wp.workerIDs))
+	copy(out, wp.workerIDs)
+	return out
 }
 
 func (wp *WorkerPool) run(ctx context.Context, workerID string) {

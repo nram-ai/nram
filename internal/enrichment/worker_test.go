@@ -635,37 +635,16 @@ func constEmbed(p provider.EmbeddingProvider) func() provider.EmbeddingProvider 
 	return func() provider.EmbeddingProvider { return p }
 }
 
-// TestWorkerPool_HeartbeatTicksClaimedJobs starts a pool, lets the initial
-// heartbeat tick fire, then asserts TickHeartbeat was called for every
-// worker ID. We can't easily fast-forward time in the production goroutine,
-// so we just verify the initial-on-entry tick lands.
+// TestWorkerPool_HeartbeatTicksClaimedJobs drives one heartbeat tick
+// directly via tickHeartbeats and asserts TickHeartbeat was called for
+// every worker ID. The production ticker loop is exercised in integration
+// tests; the unit-test surface is the fan-out logic itself.
 func TestWorkerPool_HeartbeatTicksClaimedJobs(t *testing.T) {
 	h := newTestHarness(nil, nil, nil)
-	// Override worker count to 3 so we can verify per-worker fan-out.
 	h.pool.config.Workers = 3
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	workerIDs := []string{"worker-0", "worker-1", "worker-2"}
-	done := make(chan struct{})
-	h.pool.wg.Add(1)
-	go func() {
-		// runHeartbeat does an initial tick on entry, then enters the
-		// ticker loop. We cancel immediately after the initial tick so
-		// the test doesn't have to wait a full interval.
-		h.pool.runHeartbeat(ctx, workerIDs)
-		close(done)
-	}()
-
-	// Wait briefly for the initial tick to land, then cancel.
-	time.Sleep(100 * time.Millisecond)
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("heartbeat goroutine did not exit after ctx cancel")
-	}
+	workerIDs := []string{"abc-worker-0", "abc-worker-1", "abc-worker-2"}
+	h.pool.tickHeartbeats(context.Background(), workerIDs)
 
 	h.queue.mu.Lock()
 	defer h.queue.mu.Unlock()
@@ -677,37 +656,92 @@ func TestWorkerPool_HeartbeatTicksClaimedJobs(t *testing.T) {
 }
 
 // TestWorkerPool_HeartbeatSurvivesPanic verifies the defer recover() in
-// runHeartbeat keeps the goroutine alive when TickHeartbeat panics on one
-// tick. The next tick should still fire.
+// tickHeartbeats keeps the goroutine alive when TickHeartbeat panics. The
+// next tick (driven manually here) should run normally.
 func TestWorkerPool_HeartbeatSurvivesPanic(t *testing.T) {
 	h := newTestHarness(nil, nil, nil)
 	h.pool.config.Workers = 1
 
-	// Swap in a queue that panics on the FIRST TickHeartbeat call only.
 	panicQueue := &panickingHeartbeatQueue{
 		mockQueueClaimer: h.queue,
 		panicOnce:        true,
 	}
 	h.pool.queue = panicQueue
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// First tick panics inside the per-worker loop; recover catches it so
+	// tickHeartbeats returns normally.
+	h.pool.tickHeartbeats(context.Background(), []string{"abc-worker-0"})
 
-	done := make(chan struct{})
-	h.pool.wg.Add(1)
-	go func() {
-		h.pool.runHeartbeat(ctx, []string{"worker-0"})
-		close(done)
-	}()
+	// Second tick must run without panicking.
+	h.pool.tickHeartbeats(context.Background(), []string{"abc-worker-0"})
 
-	// Initial tick panics (recovered). Cancel after a short delay so the
-	// loop exits cleanly without us having to wait a full interval.
-	time.Sleep(100 * time.Millisecond)
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("heartbeat goroutine did not exit after panic+recover")
+	h.queue.mu.Lock()
+	defer h.queue.mu.Unlock()
+	if h.queue.heartbeats["abc-worker-0"] < 1 {
+		t.Fatalf("expected at least one heartbeat after panic recovery, got %d", h.queue.heartbeats["abc-worker-0"])
+	}
+}
+
+// TestWorkerPool_EphemeralWorkerIDs asserts that two successive Start
+// invocations on independent pools produce non-overlapping worker IDs and
+// that each ID matches the "<nonce>-worker-N" format. This is the
+// load-bearing correctness property: a restart or sibling instance must
+// not be able to inherit another process's claims via heartbeat.
+//
+// IDs are read via WorkerIDsSnapshot, which Start writes synchronously
+// before launching any goroutine. The test does not depend on goroutine
+// scheduling and cannot be flaked by CI load.
+func TestWorkerPool_EphemeralWorkerIDs(t *testing.T) {
+	mint := func() []string {
+		h := newTestHarness(nil, nil, nil)
+		h.pool.config.Workers = 2
+		h.pool.Start()
+		defer h.pool.Stop()
+		return h.pool.WorkerIDsSnapshot()
+	}
+
+	idsA := mint()
+	idsB := mint()
+
+	if len(idsA) != 2 {
+		t.Fatalf("pool A: expected 2 worker IDs, got %d (%v)", len(idsA), idsA)
+	}
+	if len(idsB) != 2 {
+		t.Fatalf("pool B: expected 2 worker IDs, got %d (%v)", len(idsB), idsB)
+	}
+
+	// Format check: every ID must end in "-worker-N" with N in {0,1}.
+	checkFormat := func(t *testing.T, label string, ids []string) {
+		t.Helper()
+		seenSuffix := make(map[string]bool)
+		for _, id := range ids {
+			if !strings.Contains(id, "-worker-") {
+				t.Errorf("%s: id %q lacks -worker- separator (ephemeral prefix missing?)", label, id)
+				continue
+			}
+			parts := strings.Split(id, "-worker-")
+			if len(parts) != 2 || parts[0] == "" {
+				t.Errorf("%s: id %q does not match <nonce>-worker-N format", label, id)
+				continue
+			}
+			seenSuffix["-worker-"+parts[1]] = true
+		}
+		if !seenSuffix["-worker-0"] || !seenSuffix["-worker-1"] {
+			t.Errorf("%s: expected suffixes -worker-0 and -worker-1, got %v", label, seenSuffix)
+		}
+	}
+	checkFormat(t, "pool A", idsA)
+	checkFormat(t, "pool B", idsB)
+
+	// Disjoint check: no ID from pool A may equal any ID from pool B.
+	setA := map[string]struct{}{}
+	for _, id := range idsA {
+		setA[id] = struct{}{}
+	}
+	for _, id := range idsB {
+		if _, hit := setA[id]; hit {
+			t.Errorf("ephemeral worker IDs overlapped across pools: %q present in both A=%v and B=%v", id, idsA, idsB)
+		}
 	}
 }
 

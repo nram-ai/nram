@@ -16,7 +16,7 @@ import (
 // stuckJobStore is the storage subset the sweeper relies on. Defined here so
 // tests can substitute a fake repo without standing up a full database.
 type stuckJobStore interface {
-	ListStaleClaimed(ctx context.Context, threshold time.Duration, limit int) ([]*model.EnrichmentJob, error)
+	ListStaleClaimed(ctx context.Context, updatedThreshold, claimedAtMaxAge time.Duration, limit int) ([]*model.EnrichmentJob, error)
 	RequeueStale(ctx context.Context, id uuid.UUID, reason string) (bool, error)
 }
 
@@ -29,15 +29,23 @@ type sweeperSettingsResolver interface {
 }
 
 // StuckJobSweeper periodically scans enrichment_queue for rows in
-// status='processing' whose updated_at has gone past
-// enrichment.stuck_threshold_seconds and auto-requeues them via Retry
-// semantics (attempts++ so a genuine poison-pill memory still hits
-// max_attempts and stops looping).
+// status='processing' that match either of two stale-claim signals and
+// auto-requeues them via Retry semantics (attempts++ so a genuine
+// poison-pill memory still hits max_attempts and stops looping):
 //
-// The threshold must exceed the longest legitimate batch runtime so a slow
-// LLM call is not mistaken for a dead worker; the heartbeat goroutine in
-// WorkerPool advances updated_at every enrichment.worker.heartbeat_seconds
-// so a live worker holding a long batch does not look stale.
+//   - updated_at staleness past enrichment.stuck_threshold_seconds — the
+//     usual signal; a live worker advances updated_at every
+//     enrichment.worker.heartbeat_seconds so a slow LLM call is not
+//     mistaken for a dead worker.
+//   - claimed_at age past enrichment.claim_max_age_seconds — the backstop;
+//     fires regardless of updated_at to recover claims that have outlived
+//     every plausible batch runtime (a wedged provider call still ticking
+//     heartbeats, a sibling instance refreshing under a colliding
+//     claimed_by in pre-fix deployments, etc.).
+//
+// The updated_at threshold must exceed the longest legitimate batch runtime;
+// the claim_max_age cap must exceed it by a comfortable margin since it is
+// the hard wall when heartbeat-based detection fails.
 type StuckJobSweeper struct {
 	queueRepo stuckJobStore
 	settings  sweeperSettingsResolver
@@ -107,11 +115,12 @@ func (s *StuckJobSweeper) run(ctx context.Context) {
 	}
 }
 
-// Sweep finds enrichment_queue rows in status='processing' with updated_at
-// older than the configured stuck threshold and resets each back to pending
-// via RequeueStale. Idempotent under multi-instance sweep: RequeueStale's
-// `WHERE status='processing'` guard ensures a row already requeued by another
-// instance returns (false, nil) and is skipped here.
+// Sweep finds enrichment_queue rows in status='processing' that match
+// either the updated_at staleness threshold or the claimed_at hard cap and
+// resets each back to pending via RequeueStale. Idempotent under
+// multi-instance sweep: RequeueStale's `WHERE status='processing'` guard
+// ensures a row already requeued by another instance returns (false, nil)
+// and is skipped here.
 //
 // Failures on individual rows are logged and the loop continues — one bad
 // row should not block recovery of the rest of the batch. A failure to even
@@ -123,8 +132,19 @@ func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
 		threshold = 30 * time.Minute
 	}
 
+	// claimMaxAge is the backstop signal. An operator may explicitly set it
+	// to 0 (or below) to disable the cap and rely solely on updated_at
+	// staleness; ListStaleClaimed's predicate has `(? > 0 AND ...)` gating
+	// for exactly this case. Only normalize negatives to 0 — leave zero
+	// alone so it reaches the predicate as "disabled".
+	claimMaxAge := s.settings.ResolveDurationSecondsWithDefault(ctx,
+		service.SettingEnrichmentClaimMaxAge, "global")
+	if claimMaxAge < 0 {
+		claimMaxAge = 0
+	}
+
 	scanLimit := s.settings.ResolveIntWithDefault(ctx, service.SettingEnrichmentStuckScanLimit, "global")
-	jobs, err := s.queueRepo.ListStaleClaimed(ctx, threshold, scanLimit)
+	jobs, err := s.queueRepo.ListStaleClaimed(ctx, threshold, claimMaxAge, scanLimit)
 	if err != nil {
 		return fmt.Errorf("list stale claimed: %w", err)
 	}
@@ -139,8 +159,34 @@ func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
 		}
 
 		staleFor := now.Sub(job.UpdatedAt)
-		reason := fmt.Sprintf("stuck_sweeper: stale %s without progress; worker %s likely gone",
-			staleFor.Round(time.Second), claimedByOrUnknown(job.ClaimedBy))
+		claimAge := time.Duration(0)
+		if job.ClaimedAt != nil {
+			claimAge = now.Sub(*job.ClaimedAt)
+		}
+
+		// Distinguish which signal fired so operators reading
+		// last_requeue_reason can tell a "heartbeat stopped" recovery
+		// (the common case) from a "claim outlived the cap" recovery
+		// (the backstop, indicates a wedged worker whose heartbeat is
+		// still firing).
+		var (
+			reason       string
+			reasonCode   string
+			signalDetail string
+		)
+		switch {
+		case claimMaxAge > 0 && claimAge >= claimMaxAge:
+			reasonCode = "stuck_sweeper_claim_age"
+			signalDetail = fmt.Sprintf("claim age %s exceeded backstop cap %s",
+				claimAge.Round(time.Second), claimMaxAge.Round(time.Second))
+			reason = fmt.Sprintf("stuck_sweeper: %s; worker %s likely wedged",
+				signalDetail, claimedByOrUnknown(job.ClaimedBy))
+		default:
+			reasonCode = "stuck_sweeper"
+			signalDetail = fmt.Sprintf("stale %s without progress", staleFor.Round(time.Second))
+			reason = fmt.Sprintf("stuck_sweeper: %s; worker %s likely gone",
+				signalDetail, claimedByOrUnknown(job.ClaimedBy))
+		}
 
 		requeued, err := s.queueRepo.RequeueStale(ctx, job.ID, reason)
 		if err != nil {
@@ -161,6 +207,8 @@ func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
 			"memory", job.MemoryID,
 			"namespace", job.NamespaceID,
 			"stale_for", staleFor.Round(time.Second),
+			"claim_age", claimAge.Round(time.Second),
+			"reason_code", reasonCode,
 			"claimed_by", claimedByOrUnknown(job.ClaimedBy),
 			"attempts", job.Attempts+1,
 			"max_attempts", job.MaxAttempts)
@@ -169,14 +217,16 @@ func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
 			events.Emit(ctx, s.eventBus, events.EnrichmentJobRequeued,
 				"namespace:"+job.NamespaceID.String(),
 				map[string]any{
-					"job_id":       job.ID.String(),
-					"memory_id":    job.MemoryID.String(),
-					"namespace_id": job.NamespaceID.String(),
-					"claimed_by":   claimedByOrUnknown(job.ClaimedBy),
-					"stale_for_ms": staleFor.Milliseconds(),
-					"attempts":     job.Attempts + 1,
-					"max_attempts": job.MaxAttempts,
-					"reason":       "stuck_sweeper",
+					"job_id":        job.ID.String(),
+					"memory_id":     job.MemoryID.String(),
+					"namespace_id":  job.NamespaceID.String(),
+					"claimed_by":    claimedByOrUnknown(job.ClaimedBy),
+					"stale_for_ms":  staleFor.Milliseconds(),
+					"claim_age_ms":  claimAge.Milliseconds(),
+					"attempts":      job.Attempts + 1,
+					"max_attempts":  job.MaxAttempts,
+					"reason":        reasonCode,
+					"reason_detail": signalDetail,
 				})
 		}
 	}

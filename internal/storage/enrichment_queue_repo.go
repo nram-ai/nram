@@ -583,26 +583,53 @@ func (r *EnrichmentQueueRepo) TickHeartbeat(ctx context.Context, workerID string
 	return int(rows), nil
 }
 
-// ListStaleClaimed returns enrichment_queue rows in status='processing' whose
-// updated_at is older than the given threshold — jobs whose claiming worker
-// is presumed gone (crash, OOM, host reboot mid-batch). limit caps the rows
-// returned; 0 or negative values fall through to stuckScanLimit.
-func (r *EnrichmentQueueRepo) ListStaleClaimed(ctx context.Context, threshold time.Duration, limit int) ([]*model.EnrichmentJob, error) {
+// ListStaleClaimed returns enrichment_queue rows in status='processing'
+// matched by either of two stale-claim signals:
+//   - updatedThreshold: rows whose updated_at has fallen behind by more than
+//     this duration — the heartbeat goroutine is no longer ticking for the
+//     claimed_by worker, so the claiming process is presumed gone (crash,
+//     OOM, host reboot mid-batch).
+//   - claimedAtMaxAge: rows whose claimed_at exceeds this hard cap,
+//     regardless of updated_at — the heartbeat may still be ticking (e.g.
+//     same process is wedged in a long LLM call, or a sibling instance is
+//     refreshing under a colliding claimed_by) but the claim has lived past
+//     any plausible batch runtime and is treated as wedged.
+//
+// Either-or matching is intentional: the cap fires even when the updated_at
+// signal is suppressed by an active-but-unhelpful heartbeat. Pass 0 for
+// either duration to disable that signal. limit caps the rows returned;
+// 0 or negative values fall through to stuckScanLimit.
+func (r *EnrichmentQueueRepo) ListStaleClaimed(ctx context.Context, updatedThreshold, claimedAtMaxAge time.Duration, limit int) ([]*model.EnrichmentJob, error) {
 	if limit <= 0 {
 		limit = stuckScanLimit
 	}
-	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
+	now := time.Now().UTC()
+	updatedCutoff := now.Add(-updatedThreshold).Format(time.RFC3339)
+	claimedCutoff := now.Add(-claimedAtMaxAge).Format(time.RFC3339)
 
 	query := selectEnrichmentQueueColumns + ` FROM enrichment_queue
-		WHERE status = 'processing' AND updated_at < ?
+		WHERE status = 'processing'
+		  AND (
+		        (? > 0 AND updated_at < ?)
+		     OR (? > 0 AND claimed_at IS NOT NULL AND claimed_at < ?)
+		      )
 		ORDER BY updated_at ASC LIMIT ?`
+	args := []any{
+		int64(updatedThreshold), updatedCutoff,
+		int64(claimedAtMaxAge), claimedCutoff,
+		limit,
+	}
 	if r.db.Backend() == BackendPostgres {
 		query = selectEnrichmentQueueColumns + ` FROM enrichment_queue
-			WHERE status = 'processing' AND updated_at < $1
-			ORDER BY updated_at ASC LIMIT $2`
+			WHERE status = 'processing'
+			  AND (
+			        ($1 > 0 AND updated_at < $2)
+			     OR ($3 > 0 AND claimed_at IS NOT NULL AND claimed_at < $4)
+			      )
+			ORDER BY updated_at ASC LIMIT $5`
 	}
 
-	rows, err := r.db.Query(ctx, query, cutoff, limit)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("enrichment queue list stale claimed: %w", err)
 	}
@@ -622,19 +649,36 @@ func (r *EnrichmentQueueRepo) ListStaleClaimed(ctx context.Context, threshold ti
 	return result, nil
 }
 
-// CountStaleClaimed returns how many in-flight rows have updated_at older
-// than the threshold. Used by the admin status endpoint at every poll
-// without the slice allocation of ListStaleClaimed.
-func (r *EnrichmentQueueRepo) CountStaleClaimed(ctx context.Context, threshold time.Duration) (int, error) {
-	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
+// CountStaleClaimed returns how many in-flight rows match either the
+// updated_at staleness threshold OR the claimed_at hard cap. Used by the
+// admin status endpoint at every poll without the slice allocation of
+// ListStaleClaimed. Pass 0 for either duration to disable that signal.
+func (r *EnrichmentQueueRepo) CountStaleClaimed(ctx context.Context, updatedThreshold, claimedAtMaxAge time.Duration) (int, error) {
+	now := time.Now().UTC()
+	updatedCutoff := now.Add(-updatedThreshold).Format(time.RFC3339)
+	claimedCutoff := now.Add(-claimedAtMaxAge).Format(time.RFC3339)
 
-	query := `SELECT COUNT(*) FROM enrichment_queue WHERE status = 'processing' AND updated_at < ?`
+	query := `SELECT COUNT(*) FROM enrichment_queue
+		WHERE status = 'processing'
+		  AND (
+		        (? > 0 AND updated_at < ?)
+		     OR (? > 0 AND claimed_at IS NOT NULL AND claimed_at < ?)
+		      )`
+	args := []any{
+		int64(updatedThreshold), updatedCutoff,
+		int64(claimedAtMaxAge), claimedCutoff,
+	}
 	if r.db.Backend() == BackendPostgres {
-		query = `SELECT COUNT(*) FROM enrichment_queue WHERE status = 'processing' AND updated_at < $1`
+		query = `SELECT COUNT(*) FROM enrichment_queue
+			WHERE status = 'processing'
+			  AND (
+			        ($1 > 0 AND updated_at < $2)
+			     OR ($3 > 0 AND claimed_at IS NOT NULL AND claimed_at < $4)
+			      )`
 	}
 
 	var n int
-	row := r.db.QueryRow(ctx, query, cutoff)
+	row := r.db.QueryRow(ctx, query, args...)
 	if err := row.Scan(&n); err != nil {
 		return 0, fmt.Errorf("enrichment queue count stale claimed: %w", err)
 	}

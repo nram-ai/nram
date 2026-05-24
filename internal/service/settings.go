@@ -298,6 +298,16 @@ const (
 	SettingEnrichmentHeartbeatSeconds = "enrichment.worker.heartbeat_seconds"
 	SettingEnrichmentStuckThreshold   = "enrichment.stuck_threshold_seconds"
 	SettingEnrichmentStuckSweep       = "enrichment.stuck_sweep_seconds"
+	// Backstop: requeue any in-flight row whose claimed_at exceeds this
+	// duration, regardless of updated_at. The runtime sweeper's primary
+	// signal is updated_at staleness, which a still-ticking heartbeat
+	// (TickHeartbeat matches on DB-column claimed_by, not on what the
+	// worker is actively processing) can mask indefinitely. The cap is the
+	// hard wall: any claim that has lived longer than the maximum plausible
+	// batch runtime is considered wedged and gets requeued. Must exceed
+	// every legitimate single-job duration; default 7200s (2h) is well
+	// above any expected runtime.
+	SettingEnrichmentClaimMaxAge = "enrichment.claim_max_age_seconds"
 
 	// Fact and entity extraction LLM-call tunables. Resolved per call by both
 	// ExtractionService (sync HTTP path) and WorkerPool (async queue worker)
@@ -785,6 +795,7 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingEnrichmentHeartbeatSeconds:             "30",
 	SettingEnrichmentStuckThreshold:               "1800",
 	SettingEnrichmentStuckSweep:                   "300",
+	SettingEnrichmentClaimMaxAge:                  "7200",
 
 	SettingFactExtractionMaxTokens:          "4096",
 	SettingEntityExtractionMaxTokens:        "4096",
