@@ -56,18 +56,19 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projec
 		}
 	}
 	out := api.EnrichmentQueueItem{
-		ID:                item.ID,
-		MemoryID:          item.MemoryID,
-		ProjectID:         projectID,
-		ProjectName:       projectName,
-		Status:            item.Status,
-		Attempts:          item.Attempts,
-		MaxAttempts:       item.MaxAttempts,
-		LastError:         lastErr,
-		CreatedAt:         item.CreatedAt,
-		ClaimedBy:         item.ClaimedBy,
-		LastRequeueReason: item.LastRequeueReason,
-		StepsCompleted:    steps,
+		ID:                     item.ID,
+		MemoryID:               item.MemoryID,
+		ProjectID:              projectID,
+		ProjectName:            projectName,
+		Status:                 item.Status,
+		Attempts:               item.Attempts,
+		MaxAttempts:            item.MaxAttempts,
+		LastError:              lastErr,
+		CreatedAt:              item.CreatedAt,
+		ClaimedBy:              item.ClaimedBy,
+		LastRequeueReason:      item.LastRequeueReason,
+		StepsCompleted:         steps,
+		QueryAugmentSkipReason: item.QueryAugmentSkipReason,
 	}
 	if item.Status == model.EnrichmentStatusProcessing && item.ClaimedAt != nil {
 		out.ClaimedAt = item.ClaimedAt
@@ -105,7 +106,7 @@ func (s *EnrichmentAdminStore) staleThresholdMs(ctx context.Context) int64 {
 // it off and surface project_id only.
 func queueItemSelectColumns(withName bool) string {
 	cols := `eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
-		eq.claimed_by, eq.claimed_at, eq.last_requeue_reason, eq.steps_completed, p.id`
+		eq.claimed_by, eq.claimed_at, eq.last_requeue_reason, eq.steps_completed, eq.query_augment_skip_reason, p.id`
 	if withName {
 		cols += `, p.name`
 	}
@@ -121,11 +122,12 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 		attempts, maxAttempts                     int
 		lastErr, claimedBy, claimedAtStr, requeue *string
 		stepsCompletedStr                         string
+		queryAugmentSkipReason                    *string
 		projectIDStr                              *string
 		projectName                               *string
 	)
 	dest := []any{&idStr, &memIDStr, &status, &attempts, &maxAttempts, &lastErr, &createdAtStr,
-		&claimedBy, &claimedAtStr, &requeue, &stepsCompletedStr, &projectIDStr}
+		&claimedBy, &claimedAtStr, &requeue, &stepsCompletedStr, &queryAugmentSkipReason, &projectIDStr}
 	if withName {
 		dest = append(dest, &projectName)
 	}
@@ -161,17 +163,18 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 		stepsCompletedRaw = json.RawMessage(stepsCompletedStr)
 	}
 	return s.hydrateQueueItem(model.EnrichmentJob{
-		ID:                id,
-		MemoryID:          memID,
-		Status:            status,
-		Attempts:          attempts,
-		MaxAttempts:       maxAttempts,
-		LastError:         lastErrJSON,
-		CreatedAt:         ts,
-		ClaimedBy:         claimedBy,
-		ClaimedAt:         claimedAt,
-		LastRequeueReason: requeue,
-		StepsCompleted:    stepsCompletedRaw,
+		ID:                     id,
+		MemoryID:               memID,
+		Status:                 status,
+		Attempts:               attempts,
+		MaxAttempts:            maxAttempts,
+		LastError:              lastErrJSON,
+		CreatedAt:              ts,
+		ClaimedBy:              claimedBy,
+		ClaimedAt:              claimedAt,
+		LastRequeueReason:      requeue,
+		StepsCompleted:         stepsCompletedRaw,
+		QueryAugmentSkipReason: queryAugmentSkipReason,
 	}, pid, pname, threshold, now), nil
 }
 

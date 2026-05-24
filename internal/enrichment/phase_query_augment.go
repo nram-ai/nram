@@ -132,36 +132,35 @@ func BuildAugmentedInput(queries []string, content string, maxChars int) (string
 }
 
 // runQueryAugment is the enrichment phase that runs between runPreEmbed and
-// runEmbedBatch. Returns nil when the feature is off or the call fails (the
-// caller treats nil as "no augmentation, embed against raw content"). When
-// successful, the result carries the queries and the embed-ready augmented
-// content so the worker can both swap the parent embed input and persist the
-// marker columns.
+// runEmbedBatch. Returns (result, "") on success and (nil, skipReason) when
+// the phase did not produce augmented content. The caller persists skipReason
+// onto the queue row so EnrichmentMonitor can render "skipped (cause)" instead
+// of a bare "skipped" label.
 //
 // Fail-soft contract: settings missing, provider unavailable, LLM error, or
-// parse error all degrade to nil with a slog.Warn. Augmentation must never
-// block ingestion.
-func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.EnrichmentJob, mem *model.Memory) *queryAugmentResult {
+// parse error all degrade to a nil result with a documented reason and a
+// slog.Warn. Augmentation must never block ingestion.
+func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.EnrichmentJob, mem *model.Memory) (*queryAugmentResult, string) {
 	if wp.settings == nil {
-		return nil
+		return nil, model.QueryAugmentSkipDisabled
 	}
 	cfg := wp.resolveQueryAugmentSettings(ctx)
 	if !cfg.enabled {
-		return nil
+		return nil, model.QueryAugmentSkipDisabled
 	}
 	if strings.TrimSpace(mem.Content) == "" {
-		return nil
+		return nil, model.QueryAugmentSkipContentEmpty
 	}
 
 	llmFactory := wp.factProvider
 	if llmFactory == nil {
 		slog.Warn("enrichment: query_augment provider unavailable", "job", job.ID, "memory", mem.ID)
-		return nil
+		return nil, model.QueryAugmentSkipProviderUnavailable
 	}
 	llm := llmFactory()
 	if llm == nil {
 		slog.Warn("enrichment: query_augment provider nil", "job", job.ID, "memory", mem.ID)
-		return nil
+		return nil, model.QueryAugmentSkipProviderUnavailable
 	}
 
 	prompt := RenderQueryAugmentPrompt(cfg.prompt, mem.Content, cfg.count)
@@ -180,7 +179,7 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 		slog.Warn("enrichment: query_augment llm",
 			"job", job.ID, "memory", mem.ID,
 			"err", err, "llm_latency_ms", latency.Milliseconds())
-		return nil
+		return nil, model.QueryAugmentSkipLLMError
 	}
 
 	queries, perr := ParseQueryAugmentResponse(resp.Content)
@@ -189,7 +188,7 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 			"job", job.ID, "memory", mem.ID,
 			"err", perr, "raw_len", len(resp.Content),
 			"llm_latency_ms", latency.Milliseconds())
-		return nil
+		return nil, model.QueryAugmentSkipParseError
 	}
 
 	augmented, trimmed := BuildAugmentedInput(queries, mem.Content, cfg.maxInputChars)
@@ -217,10 +216,10 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 		augmentedContent: augmented,
 		usage:            &usage,
 		model:            resp.Model,
-		providerName:    llm.Name(),
+		providerName:     llm.Name(),
 		llmLatency:       latency,
 		truncatedBytes:   trimmed,
-	}
+	}, ""
 }
 
 // runQueryAugmentPreview runs the same phase the worker runs, but against
@@ -286,4 +285,3 @@ func (wp *WorkerPool) RunQueryAugmentPreview(ctx context.Context, content, promp
 		Truncated:        trimmed,
 	}, nil
 }
-

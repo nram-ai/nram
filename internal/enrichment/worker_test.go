@@ -23,9 +23,9 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockMemoryReader struct {
-	mu      sync.Mutex
-	byID    map[uuid.UUID]*model.Memory
-	err     error
+	mu   sync.Mutex
+	byID map[uuid.UUID]*model.Memory
+	err  error
 }
 
 func newMockMemoryReader() *mockMemoryReader {
@@ -169,20 +169,22 @@ func (m *mockMemoryCreator) Create(_ context.Context, mem *model.Memory) error {
 }
 
 type mockQueueClaimer struct {
-	mu             sync.Mutex
-	jobs           []*model.EnrichmentJob
-	completed      []uuid.UUID
-	failed         map[uuid.UUID]string
-	released       []uuid.UUID
-	stepsCompleted map[uuid.UUID][]string
-	heartbeats     map[string]int
-	claimErr       error
+	mu                sync.Mutex
+	jobs              []*model.EnrichmentJob
+	completed         []uuid.UUID
+	failed            map[uuid.UUID]string
+	released          []uuid.UUID
+	stepsCompleted    map[uuid.UUID][]string
+	queryAugmentSkips map[uuid.UUID]string
+	heartbeats        map[string]int
+	claimErr          error
 }
 
 func newMockQueueClaimer() *mockQueueClaimer {
 	return &mockQueueClaimer{
-		failed:         make(map[uuid.UUID]string),
-		stepsCompleted: make(map[uuid.UUID][]string),
+		failed:            make(map[uuid.UUID]string),
+		stepsCompleted:    make(map[uuid.UUID][]string),
+		queryAugmentSkips: make(map[uuid.UUID]string),
 	}
 }
 
@@ -271,6 +273,17 @@ func (m *mockQueueClaimer) MarkStepCompleted(_ context.Context, id uuid.UUID, st
 		}
 	}
 	m.stepsCompleted[id] = append(m.stepsCompleted[id], step)
+	return nil
+}
+
+func (m *mockQueueClaimer) SetQueryAugmentSkipReason(_ context.Context, id uuid.UUID, _ string, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if reason == "" {
+		delete(m.queryAugmentSkips, id)
+		return nil
+	}
+	m.queryAugmentSkips[id] = reason
 	return nil
 }
 
@@ -467,7 +480,7 @@ type mockEmbeddingProvider struct {
 func (m *mockEmbeddingProvider) Embed(_ context.Context, req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
 	return m.respond(req)
 }
-func (m *mockEmbeddingProvider) Name() string    { return m.name }
+func (m *mockEmbeddingProvider) Name() string      { return m.name }
 func (m *mockEmbeddingProvider) Dimensions() []int { return []int{3} }
 
 // ---------------------------------------------------------------------------
@@ -577,16 +590,16 @@ func entityJSON() string {
 }
 
 type testHarness struct {
-	pool   *WorkerPool
-	reader *mockMemoryReader
-	updater *mockMemoryUpdater
-	creator *mockMemoryCreator
-	queue  *mockQueueClaimer
+	pool     *WorkerPool
+	reader   *mockMemoryReader
+	updater  *mockMemoryUpdater
+	creator  *mockMemoryCreator
+	queue    *mockQueueClaimer
 	entities *mockEntityUpserter
-	rels   *mockRelationshipCreator
-	lineage *mockLineageCreator
-	tokens *mockTokenRecorder
-	vectors *mockVectorWriter
+	rels     *mockRelationshipCreator
+	lineage  *mockLineageCreator
+	tokens   *mockTokenRecorder
+	vectors  *mockVectorWriter
 }
 
 func newTestHarness(

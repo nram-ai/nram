@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"strings"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -199,6 +199,15 @@ type QueueClaimer interface {
 	Fail(ctx context.Context, id uuid.UUID, workerID string, payload any) error
 	Release(ctx context.Context, id uuid.UUID, workerID string) error
 	MarkStepCompleted(ctx context.Context, id uuid.UUID, step string) error
+	// SetQueryAugmentSkipReason records why the query-augmentation step did
+	// not land in the persisted vector. Written by finalizeJob on every job
+	// (no-op when the column already matches) so EnrichmentMonitor can
+	// render a specific cause (disabled, content_empty, provider_unavailable,
+	// llm_error, parse_error) next to the "skipped" row, and so a successful
+	// retry of a previously-skipped job clears the stale label. workerID
+	// guards against a stale worker overwriting a newer worker's write; pass
+	// "" for unguarded operator paths.
+	SetQueryAugmentSkipReason(ctx context.Context, id uuid.UUID, workerID string, reason string) error
 	TickHeartbeat(ctx context.Context, workerID string) (int, error)
 }
 
@@ -251,7 +260,6 @@ type VectorWriter interface {
 type MemorySoftDeleter interface {
 	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 }
-
 
 // ---------------------------------------------------------------------------
 // Parsed extraction types — aliased to the canonical service types so
@@ -761,6 +769,13 @@ type pendingJob struct {
 	augmentedProvName   string
 	augmentedTruncBytes int
 	embedUsedAugmented  bool
+
+	// queryAugmentSkipReason carries the structured cause when the phase did
+	// not produce augmented content (disabled flag, empty memory, provider
+	// unavailable, LLM error, parse error). Empty when the phase ran
+	// successfully. finalizeJob writes this onto enrichment_queue so the
+	// EnrichmentMonitor accordion can label a "skipped" row with a cause.
+	queryAugmentSkipReason string
 }
 
 func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *model.EnrichmentJob) error {
@@ -784,8 +799,9 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 // phase fails (fail-soft inside runQueryAugment). Lives here so processJob and
 // processBatch share one call site.
 func (wp *WorkerPool) applyQueryAugment(ctx context.Context, p *pendingJob) {
-	res := wp.runQueryAugment(ctx, p.job, p.mem)
+	res, skip := wp.runQueryAugment(ctx, p.job, p.mem)
 	if res == nil {
+		p.queryAugmentSkipReason = skip
 		return
 	}
 	p.augmentedQueries = res.queries
@@ -1362,17 +1378,23 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 			// for short-circuited jobs.
 			continue
 		}
+		// When the augmentation phase produced content, the parent vector
+		// must be rebuilt from the queries+separator+content blob. If the
+		// ingestion-decision phase pre-computed an embedding for the raw
+		// content, discard it here so the downstream branches take the
+		// fresh-embed path and the stored vector matches the augmented
+		// input the operator asked for. Costs one extra embed call per
+		// affected job; the augmented vector is the load-bearing signal.
+		if p.augmentedContent != "" && p.parentEmbedFromPhase() {
+			slog.Info("enrichment: query_augment superseded ingestion-decision pre-embed",
+				"job", p.job.ID, "memory", p.mem.ID, "queries", len(p.augmentedQueries))
+			p.parentEmbedding = nil
+		}
 		p.embedStart = len(inputs)
 		// Reuse the embedding the ingestion-decision phase already
-		// computed for this content. The vector is upserted in the
-		// upsert loop below; we just keep it out of the embed call.
-		// When the query-augmentation phase ran successfully, swap in
-		// the queries+separator+content blob so the parent's vector
-		// reflects the augmented input; ingestion-decision reuse takes
-		// precedence since that vector was already computed for the
-		// raw content the operator picked. Track whether the augmented
-		// input actually landed so finalizeJob does not record an
-		// augmentation marker on a vector built from raw content.
+		// computed for this content (only reachable when augmentation
+		// did not run). Otherwise embed against augmentedContent when
+		// present, falling back to raw mem.Content.
 		if !p.parentEmbedFromPhase() {
 			parentInput := p.mem.Content
 			if p.augmentedContent != "" {
@@ -1380,9 +1402,6 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 				p.embedUsedAugmented = true
 			}
 			inputs = append(inputs, parentInput)
-		} else if p.augmentedContent != "" {
-			slog.Info("enrichment: query_augment dropped — ingestion-decision pre-embed reused",
-				"job", p.job.ID, "memory", p.mem.ID, "queries", len(p.augmentedQueries))
 		}
 		for _, c := range p.children {
 			inputs = append(inputs, c.content)
@@ -1593,6 +1612,18 @@ func (wp *WorkerPool) embedChunked(ctx context.Context, ep provider.EmbeddingPro
 // is soft-deleted instead of marked enriched, and only the ingestion-decision
 // token usage is recorded.
 func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
+	// Stamp the augmentation skip reason FIRST so every downstream branch
+	// (vectorWriteFailed early-return, shortCircuitDelete, MarkEnriched
+	// failure, happy path) records the value the augmentation phase
+	// decided. The reason reflects augmentation-phase outcome and is
+	// independent of whether the surrounding job ends in success or
+	// failure. The repo's UPDATE predicate makes this a no-op when the
+	// column already matches, so a successful job whose column was already
+	// NULL pays no extra round-trip. workerID guards against a stale worker
+	// clobbering a newer one after a sweeper-requeue.
+	if err := wp.queue.SetQueryAugmentSkipReason(ctx, p.job.ID, p.workerID, p.queryAugmentSkipReason); err != nil {
+		slog.Warn("enrichment: set query_augment skip reason", "job", p.job.ID, "err", err)
+	}
 	if p.vectorWriteFailed {
 		// runEmbedBatch already marked the queue row failed; skipping
 		// the memory Update here is what stops embedding_dim from being
@@ -1706,7 +1737,9 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 	// actually built from augmented input. The marker condition mirrors the
 	// augmented_queries / augmented_embedding_at writes above so the queue
 	// row's step list and the memory row's marker columns agree: present
-	// here iff the timestamp is set on the memory.
+	// here iff the timestamp is set on the memory. The skip-reason column
+	// is written at the top of finalizeJob so it covers every early-return
+	// branch too.
 	if p.embedUsedAugmented && p.mem.EmbeddingDim != nil && len(p.augmentedQueries) > 0 {
 		if err := wp.queue.MarkStepCompleted(ctx, p.job.ID, model.StepQueryAugmentation); err != nil {
 			slog.Warn("enrichment: mark step completed (query_augmentation)", "job", p.job.ID, "err", err)

@@ -333,6 +333,7 @@ const PROMPT_KEYS = new Set([
 // the Settings page does not double-surface them.
 const MOVED_TO_PROVIDER_CONFIG = new Set([
   "enrichment.ingestion_decision.model",
+  "enrichment.query_augment.model",
 ]);
 
 // ---------------------------------------------------------------------------

@@ -442,7 +442,7 @@ func (m *DataMigrator) validateCounts(ctx context.Context) error {
 // storage.SupportedVectorDimensions so adding a new dimension in one place
 // automatically flows through migration, validation, and reset.
 var (
-	vectorDimensionTables    = buildVectorDimensionTables()
+	vectorDimensionTables     = buildVectorDimensionTables()
 	supportedVectorDimensions = buildSupportedVectorDimensions()
 )
 
@@ -602,11 +602,11 @@ func (m *DataMigrator) migrateUsers(ctx context.Context) error {
 
 	for rows.Next() {
 		var (
-			id, email, displayName    string
-			passwordHash              sql.NullString
-			orgID, nsID, role         string
+			id, email, displayName         string
+			passwordHash                   sql.NullString
+			orgID, nsID, role              string
 			settings, createdAt, updatedAt string
-			lastLogin, disabledAt     sql.NullString
+			lastLogin, disabledAt          sql.NullString
 		)
 		if err := rows.Scan(&id, &email, &displayName, &passwordHash, &orgID, &nsID, &role,
 			&settings, &createdAt, &updatedAt, &lastLogin, &disabledAt); err != nil {
@@ -662,7 +662,7 @@ func (m *DataMigrator) migrateAPIKeys(ctx context.Context) error {
 	for rows.Next() {
 		var (
 			id, userID, keyPrefix, keyHash, name string
-			scopesJSON                            string
+			scopesJSON                           string
 			lastUsed, expiresAt                  sql.NullString
 			createdAt                            string
 		)
@@ -1274,9 +1274,9 @@ func (m *DataMigrator) migrateMemoryLineage(ctx context.Context) error {
 	for rows.Next() {
 		var (
 			id, namespaceID, memoryID, relation string
-			parentID                             sql.NullString
-			context                              string
-			createdAt                            string
+			parentID                            sql.NullString
+			context                             string
+			createdAt                           string
 		)
 		if err := rows.Scan(&id, &namespaceID, &memoryID, &parentID, &relation, &context, &createdAt); err != nil {
 			return err
@@ -1334,14 +1334,14 @@ func (m *DataMigrator) migrateIngestionLog(ctx context.Context) error {
 
 	for rows.Next() {
 		var (
-			id, nsID, source  string
-			contentHash       sql.NullString
-			rawContent        string
-			memoryIDsJSON     string
-			status            string
-			errText           sql.NullString
-			metadata          string
-			createdAt         string
+			id, nsID, source string
+			contentHash      sql.NullString
+			rawContent       string
+			memoryIDsJSON    string
+			status           string
+			errText          sql.NullString
+			metadata         string
+			createdAt        string
 		)
 		if err := rows.Scan(&id, &nsID, &source, &contentHash, &rawContent, &memoryIDsJSON,
 			&status, &errText, &metadata, &createdAt); err != nil {
@@ -1375,8 +1375,8 @@ func (m *DataMigrator) migrateIngestionLog(ctx context.Context) error {
 func (m *DataMigrator) migrateEnrichmentQueue(ctx context.Context) error {
 	rows, err := m.src.QueryContext(ctx, `
 		SELECT id, memory_id, namespace_id, status, priority, claimed_at, claimed_by,
-		       attempts, max_attempts, last_error, steps_completed, completed_at,
-		       created_at, updated_at
+		       attempts, max_attempts, last_error, steps_completed,
+		       query_augment_skip_reason, completed_at, created_at, updated_at
 		FROM enrichment_queue
 	`)
 	if err != nil {
@@ -1393,8 +1393,9 @@ func (m *DataMigrator) migrateEnrichmentQueue(ctx context.Context) error {
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, claimed_at,
 		                              claimed_by, attempts, max_attempts, last_error,
-		                              steps_completed, completed_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		                              steps_completed, query_augment_skip_reason,
+		                              completed_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT DO NOTHING
 	`)
 	if err != nil {
@@ -1411,12 +1412,13 @@ func (m *DataMigrator) migrateEnrichmentQueue(ctx context.Context) error {
 			attempts, maxAttempts      int
 			lastError                  sql.NullString
 			stepsCompleted             string
+			queryAugmentSkipReason     sql.NullString
 			completedAt                sql.NullString
 			createdAt, updatedAt       string
 		)
 		if err := rows.Scan(&id, &memoryID, &nsID, &status, &priority, &claimedAt, &claimedBy,
-			&attempts, &maxAttempts, &lastError, &stepsCompleted, &completedAt,
-			&createdAt, &updatedAt); err != nil {
+			&attempts, &maxAttempts, &lastError, &stepsCompleted, &queryAugmentSkipReason,
+			&completedAt, &createdAt, &updatedAt); err != nil {
 			return err
 		}
 		pgLastError, err := textToJSONB(lastError)
@@ -1437,6 +1439,7 @@ func (m *DataMigrator) migrateEnrichmentQueue(ctx context.Context) error {
 			nullStringToInterface(claimedBy),
 			attempts, maxAttempts, pgLastError,
 			sanitizeJSONB(stepsCompleted, "[]"),
+			nullStringToInterface(queryAugmentSkipReason),
 			nullStringToInterface(completedAt),
 			createdAt, updatedAt,
 		); err != nil {
@@ -1477,14 +1480,14 @@ func (m *DataMigrator) migrateWebhooks(ctx context.Context) error {
 
 	for rows.Next() {
 		var (
-			id, url         string
-			secret          sql.NullString
-			eventsJSON      string
-			scope           string
-			active          int
-			lastFired       sql.NullString
-			lastStatus      sql.NullInt64
-			failureCount    int
+			id, url              string
+			secret               sql.NullString
+			eventsJSON           string
+			scope                string
+			active               int
+			lastFired            sql.NullString
+			lastStatus           sql.NullInt64
+			failureCount         int
 			createdAt, updatedAt string
 		)
 		if err := rows.Scan(&id, &url, &secret, &eventsJSON, &scope, &active, &lastFired,
@@ -1689,14 +1692,14 @@ func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 
 	for rows.Next() {
 		var (
-			id, clientID         string
-			clientSecret         sql.NullString
-			name                 string
-			redirectURIsJSON     string
-			grantTypesJSON       string
-			orgID                sql.NullString
-			autoRegistered       int
-			createdAt            string
+			id, clientID     string
+			clientSecret     sql.NullString
+			name             string
+			redirectURIsJSON string
+			grantTypesJSON   string
+			orgID            sql.NullString
+			autoRegistered   int
+			createdAt        string
 		)
 		if err := rows.Scan(&id, &clientID, &clientSecret, &name, &redirectURIsJSON,
 			&grantTypesJSON, &orgID, &autoRegistered, &createdAt); err != nil {
@@ -1882,15 +1885,15 @@ func (m *DataMigrator) migrateOAuthIDPConfigs(ctx context.Context) error {
 
 	for rows.Next() {
 		var (
-			id                string
-			orgID             sql.NullString
-			providerType      string
-			clientID          string
-			clientSecret      string
-			issuerURL         sql.NullString
-			allowedDomainsJSON string
-			autoProvision     int
-			defaultRole       string
+			id                   string
+			orgID                sql.NullString
+			providerType         string
+			clientID             string
+			clientSecret         string
+			issuerURL            sql.NullString
+			allowedDomainsJSON   string
+			autoProvision        int
+			defaultRole          string
 			createdAt, updatedAt string
 		)
 		if err := rows.Scan(&id, &orgID, &providerType, &clientID, &clientSecret, &issuerURL,
@@ -2179,8 +2182,8 @@ func (m *DataMigrator) migrateDreamProjectDirty(ctx context.Context) error {
 
 	for rows.Next() {
 		var (
-			projectID                string
-			dirtySince, lastDreamAt  sql.NullString
+			projectID               string
+			dirtySince, lastDreamAt sql.NullString
 		)
 		if err := rows.Scan(&projectID, &dirtySince, &lastDreamAt); err != nil {
 			return err

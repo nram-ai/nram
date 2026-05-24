@@ -90,6 +90,12 @@ type EnrichmentQueueItem struct {
 	// (subset of model.Step* constants). Always emitted as an array (never
 	// null) so UI consumers never need an undefined check.
 	StepsCompleted []string `json:"steps_completed"`
+	// QueryAugmentSkipReason carries the structured cause when the
+	// query_augmentation step is absent from StepsCompleted on a completed
+	// job. Values are drawn from model.QueryAugmentSkip* constants. nil =
+	// step ran successfully (look in StepsCompleted) or the row predates the
+	// column.
+	QueryAugmentSkipReason *string `json:"query_augment_skip_reason,omitempty"`
 }
 
 // enrichmentRetryRequest is the request body for POST /enrichment/retry.
@@ -218,18 +224,18 @@ func handleEnrichmentPause(w http.ResponseWriter, r *http.Request, cfg Enrichmen
 
 // enrichmentTestPromptRequest is the request body for POST /enrichment/test-prompt.
 type enrichmentTestPromptRequest struct {
-	Type        string `json:"type"`         // "fact", "entity", or "augment"
-	Prompt      string `json:"prompt"`       // custom prompt text (optional; uses default if empty)
-	SampleInput string `json:"sample_input"` // memory content to test against
+	Type        string `json:"type"`            // "fact", "entity", or "augment"
+	Prompt      string `json:"prompt"`          // custom prompt text (optional; uses default if empty)
+	SampleInput string `json:"sample_input"`    // memory content to test against
 	Count       int    `json:"count,omitempty"` // only used when type=="augment"; defaults to 4
 }
 
 // enrichmentTestPromptResponse is the response for POST /enrichment/test-prompt.
 type enrichmentTestPromptResponse struct {
-	Output   string `json:"output"`    // raw LLM output
-	Parsed   any    `json:"parsed"`    // parsed structured data (facts or entities)
-	Error    string `json:"error,omitempty"`
-	LatencyMs int64 `json:"latency_ms"`
+	Output    string `json:"output"` // raw LLM output
+	Parsed    any    `json:"parsed"` // parsed structured data (facts or entities)
+	Error     string `json:"error,omitempty"`
+	LatencyMs int64  `json:"latency_ms"`
 }
 
 // handleEnrichmentTestPrompt handles POST /enrichment/test-prompt.

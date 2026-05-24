@@ -415,6 +415,17 @@ const STEPS: Array<{ name: string; label: string }> = [
   { name: "embedding", label: "Embedding" },
 ];
 
+// Maps the structured query_augment_skip_reason values written by the worker
+// onto human-readable labels appended to "skipped" so the accordion row tells
+// the operator why augmentation did not land in the persisted vector.
+const QUERY_AUGMENT_SKIP_LABELS: Record<string, string> = {
+  disabled: "feature disabled",
+  content_empty: "empty content",
+  provider_unavailable: "fact provider unavailable",
+  llm_error: "LLM error",
+  parse_error: "LLM response unparseable",
+};
+
 function StepStatusIcon({
   ran,
   jobStatus,
@@ -464,6 +475,15 @@ function JobExpansion({ item }: { item: EnrichmentQueueItem }) {
               label = "did not run (job failed)";
             } else if (item.status === "completed") {
               label = "skipped";
+              if (
+                s.name === "query_augmentation" &&
+                item.query_augment_skip_reason
+              ) {
+                const detail =
+                  QUERY_AUGMENT_SKIP_LABELS[item.query_augment_skip_reason] ??
+                  item.query_augment_skip_reason;
+                label = `skipped (${detail})`;
+              }
             } else {
               label = "pending";
             }

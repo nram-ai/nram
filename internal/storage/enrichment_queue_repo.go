@@ -494,6 +494,55 @@ func (r *EnrichmentQueueRepo) MarkStepCompleted(ctx context.Context, id uuid.UUI
 	return nil
 }
 
+// SetQueryAugmentSkipReason stamps the structured cause when the
+// query-augmentation step did not land in the persisted vector. Written by
+// the worker's finalizeJob so the queue row captures why the step is absent
+// from steps_completed (disabled, content empty, provider unavailable, LLM
+// error, parse error). Empty reason clears the column for the case where a
+// retry later succeeds.
+//
+// workerID, when non-empty, adds a claim guard: the UPDATE is filtered by
+// claimed_by = workerID so a stale worker whose claim has been requeued by
+// the stuck-job sweeper cannot clobber a newer worker's write. Pass "" for
+// unguarded operator paths. The predicate `query_augment_skip_reason IS
+// DISTINCT FROM $arg` (postgres) / `IS NOT ?` (sqlite) skips the write when
+// the column already matches, avoiding a redundant updated_at bump on every
+// finalize. Best-effort semantics: zero rows affected (claim lost OR value
+// already matched) is not an error.
+func (r *EnrichmentQueueRepo) SetQueryAugmentSkipReason(ctx context.Context, id uuid.UUID, workerID string, reason string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	var arg any
+	if reason == "" {
+		arg = nil
+	} else {
+		arg = reason
+	}
+	if r.db.Backend() == BackendPostgres {
+		query := `UPDATE enrichment_queue SET query_augment_skip_reason = $1, updated_at = $2
+			WHERE id = $3 AND query_augment_skip_reason IS DISTINCT FROM $1`
+		args := []any{arg, now, id.String()}
+		if workerID != "" {
+			query += ` AND claimed_by = $4`
+			args = append(args, workerID)
+		}
+		if _, err := r.db.Exec(ctx, query, args...); err != nil {
+			return fmt.Errorf("enrichment queue set query_augment_skip_reason: %w", err)
+		}
+		return nil
+	}
+	query := `UPDATE enrichment_queue SET query_augment_skip_reason = ?, updated_at = ?
+		WHERE id = ? AND query_augment_skip_reason IS NOT ?`
+	args := []any{arg, now, id.String(), arg}
+	if workerID != "" {
+		query += ` AND claimed_by = ?`
+		args = append(args, workerID)
+	}
+	if _, err := r.db.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("enrichment queue set query_augment_skip_reason: %w", err)
+	}
+	return nil
+}
+
 // Release resets a claimed enrichment queue item back to "pending" without
 // bumping the attempts counter. Used when the worker defers a job (e.g. the
 // enrichment-available gate flipped closed mid-batch) rather than fails it.
@@ -787,7 +836,7 @@ func (r *EnrichmentQueueRepo) reload(ctx context.Context, item *model.Enrichment
 
 const selectEnrichmentQueueColumns = `SELECT id, memory_id, namespace_id, status, priority,
 	claimed_at, claimed_by, heartbeat_at, attempts, max_attempts, last_error, last_requeue_reason,
-	steps_completed, completed_at, created_at, updated_at`
+	steps_completed, query_augment_skip_reason, completed_at, created_at, updated_at`
 
 func (r *EnrichmentQueueRepo) scanItem(row *sql.Row) (*model.EnrichmentJob, error) {
 	var item model.EnrichmentJob
@@ -795,12 +844,13 @@ func (r *EnrichmentQueueRepo) scanItem(row *sql.Row) (*model.EnrichmentJob, erro
 	var claimedAtStr, claimedBy, heartbeatAtStr, lastRequeueReason sql.NullString
 	var lastErrorStr, completedAtStr sql.NullString
 	var stepsCompletedStr string
+	var queryAugmentSkipReason sql.NullString
 	var createdAtStr, updatedAtStr string
 
 	err := row.Scan(
 		&idStr, &memoryIDStr, &namespaceIDStr, &item.Status, &item.Priority,
 		&claimedAtStr, &claimedBy, &heartbeatAtStr, &item.Attempts, &item.MaxAttempts,
-		&lastErrorStr, &lastRequeueReason, &stepsCompletedStr,
+		&lastErrorStr, &lastRequeueReason, &stepsCompletedStr, &queryAugmentSkipReason,
 		&completedAtStr, &createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
@@ -809,7 +859,7 @@ func (r *EnrichmentQueueRepo) scanItem(row *sql.Row) (*model.EnrichmentJob, erro
 
 	return r.populateItem(&item, idStr, memoryIDStr, namespaceIDStr,
 		claimedAtStr, claimedBy, heartbeatAtStr, lastErrorStr, lastRequeueReason,
-		stepsCompletedStr, completedAtStr, createdAtStr, updatedAtStr)
+		stepsCompletedStr, queryAugmentSkipReason, completedAtStr, createdAtStr, updatedAtStr)
 }
 
 func (r *EnrichmentQueueRepo) populateItem(
@@ -818,6 +868,7 @@ func (r *EnrichmentQueueRepo) populateItem(
 	claimedAtStr, claimedBy, heartbeatAtStr sql.NullString,
 	lastErrorStr, lastRequeueReason sql.NullString,
 	stepsCompletedStr string,
+	queryAugmentSkipReason sql.NullString,
 	completedAtStr sql.NullString,
 	createdAtStr, updatedAtStr string,
 ) (*model.EnrichmentJob, error) {
@@ -872,6 +923,11 @@ func (r *EnrichmentQueueRepo) populateItem(
 	}
 
 	item.StepsCompleted = json.RawMessage(stepsCompletedStr)
+
+	if queryAugmentSkipReason.Valid {
+		s := queryAugmentSkipReason.String
+		item.QueryAugmentSkipReason = &s
+	}
 
 	if completedAtStr.Valid {
 		t, err := time.Parse(time.RFC3339, completedAtStr.String)
@@ -930,12 +986,13 @@ func (r *EnrichmentQueueRepo) scanItemFromRows(rows *sql.Rows) (*model.Enrichmen
 	var claimedAtStr, claimedBy, heartbeatAtStr, lastRequeueReason sql.NullString
 	var lastErrorStr, completedAtStr sql.NullString
 	var stepsCompletedStr string
+	var queryAugmentSkipReason sql.NullString
 	var createdAtStr, updatedAtStr string
 
 	err := rows.Scan(
 		&idStr, &memoryIDStr, &namespaceIDStr, &item.Status, &item.Priority,
 		&claimedAtStr, &claimedBy, &heartbeatAtStr, &item.Attempts, &item.MaxAttempts,
-		&lastErrorStr, &lastRequeueReason, &stepsCompletedStr,
+		&lastErrorStr, &lastRequeueReason, &stepsCompletedStr, &queryAugmentSkipReason,
 		&completedAtStr, &createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
@@ -944,7 +1001,7 @@ func (r *EnrichmentQueueRepo) scanItemFromRows(rows *sql.Rows) (*model.Enrichmen
 
 	return r.populateItem(&item, idStr, memoryIDStr, namespaceIDStr,
 		claimedAtStr, claimedBy, heartbeatAtStr, lastErrorStr, lastRequeueReason,
-		stepsCompletedStr, completedAtStr, createdAtStr, updatedAtStr)
+		stepsCompletedStr, queryAugmentSkipReason, completedAtStr, createdAtStr, updatedAtStr)
 }
 
 // ListRecent returns the most recent enrichment queue items, ordered by created_at DESC.

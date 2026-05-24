@@ -1166,6 +1166,12 @@ export interface EnrichmentQueueItem {
   //   "fact_extraction", "entity_extraction", "query_augmentation", "embedding"
   // Always emitted by the server as an array (never null/undefined).
   steps_completed: string[];
+  // Why the query-augmentation step is absent from steps_completed on a
+  // completed job. One of: "disabled", "content_empty",
+  // "provider_unavailable", "llm_error", "parse_error". Omitted when the
+  // step ran successfully (look in steps_completed) or the row predates the
+  // column.
+  query_augment_skip_reason?: string;
 }
 
 export interface EnrichmentQueueStatus {

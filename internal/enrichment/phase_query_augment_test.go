@@ -2,6 +2,7 @@ package enrichment
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -130,11 +131,14 @@ func TestRunQueryAugment_DisabledIsNoOp(t *testing.T) {
 		constStringLLM("ingestion", `{"operation":"ADD","target_id":null,"rationale":"new"}`),
 		constEmbedder(),
 	)
-	res := h.pool.runQueryAugment(context.Background(),
+	res, skip := h.pool.runQueryAugment(context.Background(),
 		&model.EnrichmentJob{ID: uuid.New()},
 		&model.Memory{ID: uuid.New(), Content: "hello"})
 	if res != nil {
 		t.Fatalf("expected nil result when disabled; got %#v", res)
+	}
+	if skip != model.QueryAugmentSkipDisabled {
+		t.Fatalf("expected disabled skip reason, got %q", skip)
 	}
 }
 
@@ -147,11 +151,14 @@ func TestRunQueryAugment_EmptyContentIsNoOp(t *testing.T) {
 		constStringLLM("ingestion", `{"operation":"ADD","target_id":null,"rationale":"new"}`),
 		constEmbedder(),
 	)
-	res := h.pool.runQueryAugment(context.Background(),
+	res, skip := h.pool.runQueryAugment(context.Background(),
 		&model.EnrichmentJob{ID: uuid.New()},
 		&model.Memory{ID: uuid.New(), Content: "   \n  "})
 	if res != nil {
 		t.Fatalf("expected nil result for whitespace-only content; got %#v", res)
+	}
+	if skip != model.QueryAugmentSkipContentEmpty {
+		t.Fatalf("expected content_empty skip reason, got %q", skip)
 	}
 }
 
@@ -176,11 +183,14 @@ func TestRunQueryAugment_HappyPath(t *testing.T) {
 		constStringLLM("ingestion", `{"operation":"ADD","target_id":null,"rationale":"new"}`),
 		constEmbedder(),
 	)
-	res := h.pool.runQueryAugment(context.Background(),
+	res, skip := h.pool.runQueryAugment(context.Background(),
 		&model.EnrichmentJob{ID: uuid.New()},
 		&model.Memory{ID: uuid.New(), Content: "the memory text"})
 	if res == nil {
 		t.Fatalf("expected non-nil result")
+	}
+	if skip != "" {
+		t.Fatalf("expected empty skip reason on success, got %q", skip)
 	}
 	if len(res.queries) != 3 {
 		t.Fatalf("queries = %v", res.queries)
@@ -193,15 +203,13 @@ func TestRunQueryAugment_HappyPath(t *testing.T) {
 	}
 }
 
-// REGRESSION: when the ingestion-decision phase pre-computed parentEmbedding,
-// runEmbedBatch skips the parent input slot entirely and the stored vector is
-// the raw-content embed, NOT the augmented one. finalizeJob must NOT record
-// augmented_embedding_at in that case — recording it would permanently hide
-// the row from the backfill query whose entire purpose is to find rows that
-// still need augmented embeddings. The embedUsedAugmented flag on pendingJob
-// is the load-bearing guard. If a future refactor moves the marker write or
-// removes the flag check, this test fails.
-func TestQueryAugment_MarkerNotWrittenWhenIngestionDecisionReusedEmbed(t *testing.T) {
+// Precedence: when query-augmentation produced content AND the
+// ingestion-decision phase also pre-computed parentEmbedding for the raw
+// content, augmentation wins. runEmbedBatch discards the pre-embed, re-embeds
+// against the augmented blob, and finalizeJob records the augmented marker on
+// the memory row. Without this precedence the operator's enable-flag would
+// silently no-op whenever ingestion-decision is also on.
+func TestQueryAugment_PrecedenceOverridesIngestionDecisionPreEmbed(t *testing.T) {
 	// LLM that routes by prompt content: augment requests get a JSON array,
 	// ingestion-decision requests get an ADD decision, anything else gets the
 	// minimal fact-extraction payload (so runPreEmbed completes cleanly).
@@ -265,9 +273,16 @@ func TestQueryAugment_MarkerNotWrittenWhenIngestionDecisionReusedEmbed(t *testin
 	if len(h.updater.enrichedMarks) != 1 {
 		t.Fatalf("expected exactly one MarkEnriched call; got %d", len(h.updater.enrichedMarks))
 	}
-	if h.updater.enrichedMarks[0].augmentedQueries != nil || h.updater.enrichedMarks[0].augmentedEmbeddingAt != nil {
-		t.Fatalf("augmented marker MUST NOT be written when ingestion-decision pre-embed reused the parent slot; got queries=%v at=%v",
-			h.updater.enrichedMarks[0].augmentedQueries, h.updater.enrichedMarks[0].augmentedEmbeddingAt)
+	mark := h.updater.enrichedMarks[0]
+	if mark.augmentedQueries == nil || mark.augmentedEmbeddingAt == nil {
+		t.Fatalf("augmented marker MUST be written when augmentation produced queries — ingestion-decision pre-embed must not suppress it; got queries=%v at=%v",
+			mark.augmentedQueries, mark.augmentedEmbeddingAt)
+	}
+	if want := []string{"q1", "q2", "q3"}; !reflect.DeepEqual(mark.augmentedQueries, want) {
+		t.Fatalf("augmented queries mismatch: got %v want %v", mark.augmentedQueries, want)
+	}
+	if got := h.queue.queryAugmentSkips[job.ID]; got != "" {
+		t.Fatalf("query_augment_skip_reason MUST be empty when augmentation succeeded; got %q", got)
 	}
 }
 
@@ -315,6 +330,33 @@ func TestQueryAugment_MarkerWrittenWhenAugmentedEmbedActuallyLanded(t *testing.T
 	if mark.id != mem.ID {
 		t.Fatalf("augmented marker target = %v, want %v", mark.id, mem.ID)
 	}
+	if got := h.queue.queryAugmentSkips[job.ID]; got != "" {
+		t.Fatalf("query_augment_skip_reason MUST be empty when augmentation succeeded; got %q", got)
+	}
+}
+
+// Skip-reason persistence: with the augmentation flag off, finalizeJob must
+// stamp QueryAugmentSkipDisabled on the queue row so EnrichmentMonitor renders
+// "skipped (feature disabled)" instead of bare "skipped".
+func TestQueryAugment_SkipReasonPersistedWhenDisabled(t *testing.T) {
+	h := newIngestionHarness(
+		map[string]string{service.SettingQueryAugmentEnabled: "false"},
+		nil,
+		minimalFactLLM(),
+		minimalEntityLLM(),
+		constStringLLM("ingest", `{"operation":"ADD","target_id":null,"rationale":""}`),
+		constEmbedder(),
+	)
+	mem := testMemory()
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+	if got := h.queue.queryAugmentSkips[job.ID]; got != model.QueryAugmentSkipDisabled {
+		t.Fatalf("query_augment_skip_reason = %q, want %q", got, model.QueryAugmentSkipDisabled)
+	}
 }
 
 func TestRunQueryAugment_MalformedJSONFailSoft(t *testing.T) {
@@ -335,10 +377,13 @@ func TestRunQueryAugment_MalformedJSONFailSoft(t *testing.T) {
 		constStringLLM("ingestion", `{"operation":"ADD","target_id":null,"rationale":"new"}`),
 		constEmbedder(),
 	)
-	res := h.pool.runQueryAugment(context.Background(),
+	res, skip := h.pool.runQueryAugment(context.Background(),
 		&model.EnrichmentJob{ID: uuid.New()},
 		&model.Memory{ID: uuid.New(), Content: "anything"})
 	if res != nil {
 		t.Fatalf("expected fail-soft nil on malformed JSON; got %#v", res)
+	}
+	if skip != model.QueryAugmentSkipParseError {
+		t.Fatalf("expected parse_error skip reason, got %q", skip)
 	}
 }
