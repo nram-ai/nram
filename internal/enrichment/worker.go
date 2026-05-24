@@ -173,6 +173,7 @@ type MemoryReader interface {
 type MemoryUpdater interface {
 	Update(ctx context.Context, mem *model.Memory) error
 	UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error
+	UpdateAugmentedEmbedding(ctx context.Context, id uuid.UUID, queries []string, embeddedAt time.Time) error
 	MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage) error
 	MarkSupersededBy(ctx context.Context, oldID, namespaceID, newID uuid.UUID) error
 }
@@ -705,6 +706,25 @@ type pendingJob struct {
 	// extraction legs returned a longest-valid-prefix recovery (truncation
 	// or degenerate-loop). nil = clean parse, finalize via Complete.
 	partialRecoveryWarning any
+
+	// Query-augmentation phase output. Populated only when runQueryAugment
+	// returns a non-nil result. augmentedQueries are persisted onto the
+	// memory row in finalizeJob; augmentedContent (when non-empty) replaces
+	// mem.Content in the parent slot of runEmbedBatch's input slice.
+	//
+	// embedUsedAugmented is the load-bearing flag: true only when the parent
+	// embed slot actually consumed augmentedContent. When ingestion-decision
+	// pre-computed parentEmbedding and that reuse path wins, augmentation is
+	// dropped at the embed boundary; recording the marker in that case would
+	// claim the vector is augmented when it is not, permanently hiding the
+	// row from the backfill query that targets augmented_embedding_at IS NULL.
+	augmentedQueries    []string
+	augmentedContent    string
+	augmentedUsage      *provider.TokenUsage
+	augmentedModel      string
+	augmentedProvName   string
+	augmentedTruncBytes int
+	embedUsedAugmented  bool
 }
 
 func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *model.EnrichmentJob) error {
@@ -718,8 +738,26 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 	if p == nil {
 		return nil
 	}
+	wp.applyQueryAugment(ctx, p)
 	wp.runEmbedBatch(ctx, []*pendingJob{p})
 	return wp.finalizeJob(ctx, p)
+}
+
+// applyQueryAugment runs the augmentation phase for a single pending job and
+// stamps its output onto the struct. No-op when the feature flag is off or the
+// phase fails (fail-soft inside runQueryAugment). Lives here so processJob and
+// processBatch share one call site.
+func (wp *WorkerPool) applyQueryAugment(ctx context.Context, p *pendingJob) {
+	res := wp.runQueryAugment(ctx, p.job, p.mem)
+	if res == nil {
+		return
+	}
+	p.augmentedQueries = res.queries
+	p.augmentedContent = res.augmentedContent
+	p.augmentedUsage = res.usage
+	p.augmentedModel = res.model
+	p.augmentedProvName = res.providerName
+	p.augmentedTruncBytes = res.truncatedBytes
 }
 
 // processBatch runs pre-embed in parallel across claimed jobs (bounded by
@@ -792,6 +830,24 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 	)
 	if len(pendings) == 0 {
 		return cooldown
+	}
+	// Augmentation issues one LLM call per pending job. Reuse the
+	// pre-embed fan-out setting so a batch of N jobs does not serialize
+	// N synchronous LLM calls before the shared embed even starts.
+	if len(pendings) > 1 {
+		augSem := make(chan struct{}, preEmbedFanOut)
+		var augWG sync.WaitGroup
+		for _, p := range pendings {
+			augWG.Add(1)
+			augSem <- struct{}{}
+			go func(p *pendingJob) {
+				defer func() { <-augSem; augWG.Done() }()
+				wp.applyQueryAugment(ctx, p)
+			}(p)
+		}
+		augWG.Wait()
+	} else {
+		wp.applyQueryAugment(ctx, pendings[0])
 	}
 	wp.runEmbedBatch(ctx, pendings)
 	// Map from job.ID back to its index in jobs so we can recover the
@@ -1274,8 +1330,23 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		// Reuse the embedding the ingestion-decision phase already
 		// computed for this content. The vector is upserted in the
 		// upsert loop below; we just keep it out of the embed call.
+		// When the query-augmentation phase ran successfully, swap in
+		// the queries+separator+content blob so the parent's vector
+		// reflects the augmented input; ingestion-decision reuse takes
+		// precedence since that vector was already computed for the
+		// raw content the operator picked. Track whether the augmented
+		// input actually landed so finalizeJob does not record an
+		// augmentation marker on a vector built from raw content.
 		if !p.parentEmbedFromPhase() {
-			inputs = append(inputs, p.mem.Content)
+			parentInput := p.mem.Content
+			if p.augmentedContent != "" {
+				parentInput = p.augmentedContent
+				p.embedUsedAugmented = true
+			}
+			inputs = append(inputs, parentInput)
+		} else if p.augmentedContent != "" {
+			slog.Info("enrichment: query_augment dropped — ingestion-decision pre-embed reused",
+				"job", p.job.ID, "memory", p.mem.ID, "queries", len(p.augmentedQueries))
 		}
 		for _, c := range p.children {
 			inputs = append(inputs, c.content)
@@ -1512,6 +1583,26 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 	}
 
 	stampIngestionMetadata(p)
+
+	// Persist the augmentation marker BEFORE MarkEnriched. The two writes
+	// are not transactional, and writing them in this order means a
+	// transient failure on the marker leaves the row in (enriched=false,
+	// augmented_embedding_at=NULL) — which a worker retry treats as a
+	// clean redo. The reverse order (MarkEnriched first) leaves the row
+	// stuck as (enriched=true, augmented_embedding_at=NULL) which is
+	// exactly the state the backfill query targets, so every subsequent
+	// backfill cycle re-burns the LLM augmentation cost on this row
+	// forever. The marker is only written when embedUsedAugmented==true:
+	// if ingestion-decision's pre-embed won the parent slot, the stored
+	// vector is not augmented and we must not claim otherwise.
+	if p.embedUsedAugmented && p.mem.EmbeddingDim != nil {
+		if err := wp.memUpdater.UpdateAugmentedEmbedding(ctx, p.mem.ID, p.augmentedQueries, time.Now().UTC()); err != nil {
+			if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, fmt.Sprintf("update augmented_embedding: %v", err)); failErr != nil {
+				logClaimLostOr(failErr, "enrichment: fail-mark after augmented_embedding update", "job", p.job.ID, "worker", p.workerID)
+			}
+			return fmt.Errorf("update augmented_embedding: %w", err)
+		}
+	}
 
 	// Single partial UPDATE so a concurrent memory_update that
 	// supersedes this row keeps its supersede pointer.

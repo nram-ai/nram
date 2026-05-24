@@ -23,6 +23,7 @@ const (
 	OperationConsolidationAudit     Operation = "consolidation_audit"
 	OperationContradictionCheck     Operation = "contradiction_check"
 	OperationIngestionDecision      Operation = "ingestion_decision"
+	OperationQueryAugment           Operation = "query_augment"
 	OperationProbe                  Operation = "system_probe"
 	OperationUnknown                Operation = "unknown"
 

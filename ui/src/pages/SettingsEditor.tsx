@@ -10,6 +10,7 @@ import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import type { Setting, SettingSchema } from "../api/client";
 import Switch from "../components/Switch";
 import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
+import { QueryAugmentBackfillBlock } from "../components/QueryAugmentBackfillBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheck, faXmark, faCircleQuestion, faSpinner } from "../lib/icons";
 
@@ -156,6 +157,12 @@ const PARENT_GROUPS: ParentGroup[] = [
         label: "Worker Performance",
         description:
           "Throughput and concurrency for the enrichment worker pool, plus the model parameters used for fact and entity extraction. Also covers gone-worker recovery: heartbeat interval, stuck-job sweep cadence, and the staleness threshold past which an in-flight job is auto-requeued. Most fields hot-reload; the worker count, poll interval, heartbeat interval, and sweep interval need a restart.",
+      },
+      {
+        category: "enrichment_query_augment",
+        label: "Query Augmentation",
+        description:
+          "Off by default. When enabled, the enrichment worker asks the LLM for N paraphrased queries per memory and prepends them to the content before embedding so a single vector captures both the fact and the ways someone would ask about it. After flipping the switch, use the Backfill Augmentation button to re-embed memories whose vector pre-dates the flag.",
       },
     ],
   },
@@ -315,6 +322,7 @@ const PROMPT_KEYS = new Set([
   "enrichment.fact_prompt",
   "enrichment.entity_prompt",
   "enrichment.ingestion_decision.prompt",
+  "enrichment.query_augment.prompt",
   "dreaming.contradiction_prompt",
   "dreaming.synthesis_prompt",
   "dreaming.alignment_prompt",
@@ -938,6 +946,9 @@ function ParentGroupCard({
                     />
                   ))}
                 </div>
+                {sub.category === "enrichment_query_augment" && (
+                  <QueryAugmentBackfillBlock />
+                )}
               </section>
             );
           })}

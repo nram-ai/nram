@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/config"
@@ -354,6 +355,7 @@ func main() {
 		ingestionLogRepo, shareRepo, hnswDeleter, namespaceRepo, eventBus,
 	)
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)
+	enrichSvc.AttachAugmentationLister(memoryRepo)
 	exportSvc := service.NewExportService(
 		memoryRepo, entityRepo, relationshipRepo, lineageRepo, projectRepo,
 		settingsSvc,
@@ -681,6 +683,12 @@ func main() {
 		Enrich:     api.NewEnrichHandler(enrichSvc, eventBus),
 		Export:     api.NewExportHandler(exportSvc),
 		Import:     api.NewImportHandler(importSvc),
+		PreviewAugment: api.NewMemoryPreviewAugmentHandler(api.MemoryPreviewAugmentConfig{
+			Memories:     memoryRepo,
+			Projects:     projectRepo,
+			FactProvider: factProvider,
+			Settings:     settingsSvc,
+		}),
 
 		// User-scoped handlers
 		MeRecall:            api.NewMeRecallHandler(recallSvc, userRepo),
@@ -794,6 +802,20 @@ func main() {
 			},
 			EntityPromptDefault: func(ctx context.Context) string {
 				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingEntityPrompt, "global")
+			},
+			QueryAugmentPromptDef: func(ctx context.Context) string {
+				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingQueryAugmentPrompt, "global")
+			},
+			BackfillAugmentation: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
+				resp, err := enrichSvc.BackfillAugmentation(ctx, &service.BackfillAugmentationRequest{
+					ProjectID: projectID,
+					DryRun:    dryRun,
+					Limit:     limit,
+				})
+				if err != nil {
+					return 0, 0, err
+				}
+				return resp.CandidateCount, resp.Enqueued, nil
 			},
 		}),
 		AdminOAuth:      api.NewAdminOAuthHandler(api.OAuthAdminConfig{Store: oauthAdminStore}),

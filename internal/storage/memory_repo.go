@@ -72,6 +72,7 @@ func (r *MemoryRepo) memoryInsertArgs(mem *model.Memory) (string, []interface{})
 	}
 
 	var source, embeddingDim, lastAccessed, expiresAt, supersededBy, supersededAt, purgeAfter interface{}
+	var augmentedQueries, augmentedEmbeddingAt interface{}
 	if mem.Source != nil {
 		source = *mem.Source
 	}
@@ -93,16 +94,23 @@ func (r *MemoryRepo) memoryInsertArgs(mem *model.Memory) (string, []interface{})
 	if mem.PurgeAfter != nil {
 		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
 	}
+	if len(mem.AugmentedQueries) > 0 {
+		raw, _ := json.Marshal(mem.AugmentedQueries)
+		augmentedQueries = string(raw)
+	}
+	if mem.AugmentedEmbeddingAt != nil {
+		augmentedEmbeddingAt = mem.AugmentedEmbeddingAt.UTC().Format(time.RFC3339)
+	}
 
 	query := `INSERT INTO memories (id, namespace_id, content, content_hash, embedding_dim, source, tags,
 		confidence, importance, access_count, last_accessed, expires_at, superseded_by, superseded_at,
-		enriched, metadata, purge_after, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		enriched, metadata, purge_after, created_at, updated_at, augmented_queries, augmented_embedding_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
 		query = `INSERT INTO memories (id, namespace_id, content, content_hash, embedding_dim, source, tags,
 			confidence, importance, access_count, last_accessed, expires_at, superseded_by, superseded_at,
-			enriched, metadata, purge_after, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`
+			enriched, metadata, purge_after, created_at, updated_at, augmented_queries, augmented_embedding_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`
 	}
 
 	return query, []interface{}{
@@ -112,6 +120,7 @@ func (r *MemoryRepo) memoryInsertArgs(mem *model.Memory) (string, []interface{})
 		lastAccessed, expiresAt, supersededBy, supersededAt,
 		EncodeBool(r.db.Backend(), mem.Enriched), string(mem.Metadata), purgeAfter,
 		mem.CreatedAt.UTC().Format(time.RFC3339), mem.UpdatedAt.UTC().Format(time.RFC3339),
+		augmentedQueries, augmentedEmbeddingAt,
 	}
 }
 
@@ -662,6 +671,7 @@ func memoryColumnsAliased(alias string) string {
 		"confidence", "importance", "access_count", "last_accessed", "expires_at",
 		"superseded_by", "superseded_at", "enriched", "metadata", "content_hash",
 		"created_at", "updated_at", "deleted_at", "purge_after",
+		"augmented_queries", "augmented_embedding_at",
 	}
 	parts := make([]string, len(cols))
 	for i, c := range cols {
@@ -830,6 +840,7 @@ func (r *MemoryRepo) FindChildrenByParents(ctx context.Context, namespaceID uuid
 		var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
 		var supersededByStr, supersededAtStr, contentHashStr sql.NullString
 		var enrichedBool bool
+		var augmentedQueriesStr, augmentedEmbeddingAtStr sql.NullString
 		var parentIDStr string
 
 		err := rows.Scan(
@@ -837,6 +848,7 @@ func (r *MemoryRepo) FindChildrenByParents(ctx context.Context, namespaceID uuid
 			&mem.Confidence, &mem.Importance, &mem.AccessCount, &lastAccessedStr,
 			&expiresAtStr, &supersededByStr, &supersededAtStr, &enrichedBool, &metadataStr,
 			&contentHashStr, &createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
+			&augmentedQueriesStr, &augmentedEmbeddingAtStr,
 			&parentIDStr,
 		)
 		if err != nil {
@@ -846,7 +858,8 @@ func (r *MemoryRepo) FindChildrenByParents(ctx context.Context, namespaceID uuid
 		populated, err := r.populateMemory(&mem, idStr, namespaceIDStr, tagsStr, metadataStr,
 			createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
 			expiresAtStr, supersededByStr, supersededAtStr, contentHashStr,
-			enrichedBool, deletedAtStr, purgeAfterStr)
+			enrichedBool, deletedAtStr, purgeAfterStr,
+			augmentedQueriesStr, augmentedEmbeddingAtStr)
 		if err != nil {
 			return nil, err
 		}
@@ -897,6 +910,89 @@ func (r *MemoryRepo) ClearAllEmbeddingDims(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("memory clear all embedding_dim: rows affected: %w", err)
 	}
 	return n, nil
+}
+
+// UpdateAugmentedEmbedding records the paraphrase queries the query-augmentation
+// enrichment phase fed into the embedder, alongside the timestamp of that embed.
+// queries == nil clears both columns (so a failed augmentation cycle does not
+// leave a stale marker that would hide the row from the backfill query).
+func (r *MemoryRepo) UpdateAugmentedEmbedding(ctx context.Context, id uuid.UUID, queries []string, embeddedAt time.Time) error {
+	var qVal, atVal interface{}
+	if queries != nil {
+		raw, err := json.Marshal(queries)
+		if err != nil {
+			return fmt.Errorf("memory marshal augmented_queries: %w", err)
+		}
+		qVal = string(raw)
+		atVal = embeddedAt.UTC().Format(time.RFC3339)
+	}
+	query := `UPDATE memories SET augmented_queries = ?, augmented_embedding_at = ? WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories SET augmented_queries = $1, augmented_embedding_at = $2 WHERE id = $3`
+	}
+	if _, err := r.db.Exec(ctx, query, qVal, atVal, id.String()); err != nil {
+		return fmt.Errorf("memory update augmented embedding: %w", err)
+	}
+	return nil
+}
+
+// ListAugmentationBackfillCandidates returns memory IDs that still need an
+// augmented embedding (augmented_embedding_at IS NULL) within the given
+// namespace scope. namespaceIDs == nil scans the whole deployment. Soft-deleted
+// and superseded rows are excluded so the backfill never re-embeds rows the
+// runtime ignores anyway. limit == 0 returns all matches.
+func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error) {
+	pg := r.db.Backend() == BackendPostgres
+	args := []interface{}{}
+	where := []string{
+		"augmented_embedding_at IS NULL",
+		"deleted_at IS NULL",
+		"superseded_by IS NULL",
+	}
+	if len(namespaceIDs) > 0 {
+		placeholders := make([]string, len(namespaceIDs))
+		for i, ns := range namespaceIDs {
+			if pg {
+				placeholders[i] = fmt.Sprintf("$%d", len(args)+1)
+			} else {
+				placeholders[i] = "?"
+			}
+			args = append(args, ns.String())
+		}
+		where = append(where, "namespace_id IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	query := "SELECT id FROM memories WHERE " + strings.Join(where, " AND ") + " ORDER BY created_at ASC"
+	if limit > 0 {
+		if pg {
+			query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		} else {
+			query += " LIMIT ?"
+		}
+		args = append(args, limit)
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list augmentation backfill candidates: %w", err)
+	}
+	defer rows.Close()
+
+	out := []uuid.UUID{}
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, fmt.Errorf("scan candidate id: %w", err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("parse candidate id %s: %w", idStr, err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iter backfill candidates: %w", err)
+	}
+	return out, nil
 }
 
 // UpdateEmbeddingDim sets a memory's embedding_dim without rewriting every
@@ -966,26 +1062,35 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
 	}
 
+	var augmentedQueries, augmentedEmbeddingAt interface{}
+	if len(mem.AugmentedQueries) > 0 {
+		raw, _ := json.Marshal(mem.AugmentedQueries)
+		augmentedQueries = string(raw)
+	}
+	if mem.AugmentedEmbeddingAt != nil {
+		augmentedEmbeddingAt = mem.AugmentedEmbeddingAt.UTC().Format(time.RFC3339)
+	}
+
 	enrichedVal := EncodeBool(r.db.Backend(), mem.Enriched)
 
 	query := `UPDATE memories SET content = ?, content_hash = ?, embedding_dim = ?, source = ?, tags = ?,
 		confidence = ?, importance = ?, access_count = ?, last_accessed = ?,
 		expires_at = ?, superseded_by = ?, superseded_at = ?, enriched = ?, metadata = ?,
-		purge_after = ?, updated_at = ?
+		purge_after = ?, augmented_queries = ?, augmented_embedding_at = ?, updated_at = ?
 		WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
 	if r.db.Backend() == BackendPostgres {
 		query = `UPDATE memories SET content = $1, content_hash = $2, embedding_dim = $3, source = $4, tags = $5,
 			confidence = $6, importance = $7, access_count = $8, last_accessed = $9,
 			expires_at = $10, superseded_by = $11, superseded_at = $12, enriched = $13, metadata = $14,
-			purge_after = $15, updated_at = $16
-			WHERE id = $17 AND namespace_id = $18 AND deleted_at IS NULL`
+			purge_after = $15, augmented_queries = $16, augmented_embedding_at = $17, updated_at = $18
+			WHERE id = $19 AND namespace_id = $20 AND deleted_at IS NULL`
 	}
 
 	result, err := r.db.Exec(ctx, query,
 		mem.Content, mem.ContentHash, embeddingDim, source, tagsVal,
 		mem.Confidence, mem.Importance, mem.AccessCount, lastAccessed,
 		expiresAt, supersededBy, supersededAt, enrichedVal, string(mem.Metadata),
-		purgeAfter, now, mem.ID.String(), mem.NamespaceID.String(),
+		purgeAfter, augmentedQueries, augmentedEmbeddingAt, now, mem.ID.String(), mem.NamespaceID.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("memory update: %w", err)
@@ -1789,7 +1894,8 @@ func (r *MemoryRepo) reload(ctx context.Context, mem *model.Memory) error {
 
 const selectMemoryColumns = `SELECT id, namespace_id, content, embedding_dim, source, tags,
 	confidence, importance, access_count, last_accessed, expires_at, superseded_by,
-	superseded_at, enriched, metadata, content_hash, created_at, updated_at, deleted_at, purge_after`
+	superseded_at, enriched, metadata, content_hash, created_at, updated_at, deleted_at, purge_after,
+	augmented_queries, augmented_embedding_at`
 
 func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 	var mem model.Memory
@@ -1801,12 +1907,14 @@ func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 	var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
 	var supersededByStr, supersededAtStr, contentHashStr sql.NullString
 	var enrichedBool bool
+	var augmentedQueriesStr, augmentedEmbeddingAtStr sql.NullString
 
 	err := row.Scan(
 		&idStr, &namespaceIDStr, &mem.Content, &embeddingDim, &source, &tagsStr,
 		&mem.Confidence, &mem.Importance, &mem.AccessCount, &lastAccessedStr,
 		&expiresAtStr, &supersededByStr, &supersededAtStr, &enrichedBool, &metadataStr,
 		&contentHashStr, &createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
+		&augmentedQueriesStr, &augmentedEmbeddingAtStr,
 	)
 	if err != nil {
 		return nil, err
@@ -1815,7 +1923,8 @@ func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 	return r.populateMemory(&mem, idStr, namespaceIDStr, tagsStr, metadataStr,
 		createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
 		expiresAtStr, supersededByStr, supersededAtStr, contentHashStr,
-		enrichedBool, deletedAtStr, purgeAfterStr)
+		enrichedBool, deletedAtStr, purgeAfterStr,
+		augmentedQueriesStr, augmentedEmbeddingAtStr)
 }
 
 func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
@@ -1828,12 +1937,14 @@ func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
 	var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
 	var supersededByStr, supersededAtStr, contentHashStr sql.NullString
 	var enrichedBool bool
+	var augmentedQueriesStr, augmentedEmbeddingAtStr sql.NullString
 
 	err := rows.Scan(
 		&idStr, &namespaceIDStr, &mem.Content, &embeddingDim, &source, &tagsStr,
 		&mem.Confidence, &mem.Importance, &mem.AccessCount, &lastAccessedStr,
 		&expiresAtStr, &supersededByStr, &supersededAtStr, &enrichedBool, &metadataStr,
 		&contentHashStr, &createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
+		&augmentedQueriesStr, &augmentedEmbeddingAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("memory scan rows: %w", err)
@@ -1842,7 +1953,8 @@ func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
 	return r.populateMemory(&mem, idStr, namespaceIDStr, tagsStr, metadataStr,
 		createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
 		expiresAtStr, supersededByStr, supersededAtStr, contentHashStr,
-		enrichedBool, deletedAtStr, purgeAfterStr)
+		enrichedBool, deletedAtStr, purgeAfterStr,
+		augmentedQueriesStr, augmentedEmbeddingAtStr)
 }
 
 func (r *MemoryRepo) populateMemory(
@@ -1852,6 +1964,7 @@ func (r *MemoryRepo) populateMemory(
 	source, lastAccessedStr, expiresAtStr, supersededByStr, supersededAtStr, contentHashStr sql.NullString,
 	enrichedBool bool,
 	deletedAtStr, purgeAfterStr sql.NullString,
+	augmentedQueriesStr, augmentedEmbeddingAtStr sql.NullString,
 ) (*model.Memory, error) {
 	id, err := uuid.Parse(idStr)
 	if err != nil {
@@ -1948,6 +2061,22 @@ func (r *MemoryRepo) populateMemory(
 			return nil, fmt.Errorf("memory parse purge_after: %w", err)
 		}
 		mem.PurgeAfter = &t
+	}
+
+	if augmentedQueriesStr.Valid && augmentedQueriesStr.String != "" && augmentedQueriesStr.String != "null" {
+		var qs []string
+		if err := json.Unmarshal([]byte(augmentedQueriesStr.String), &qs); err != nil {
+			return nil, fmt.Errorf("memory parse augmented_queries: %w", err)
+		}
+		mem.AugmentedQueries = qs
+	}
+
+	if augmentedEmbeddingAtStr.Valid {
+		t, err := time.Parse(time.RFC3339, augmentedEmbeddingAtStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("memory parse augmented_embedding_at: %w", err)
+		}
+		mem.AugmentedEmbeddingAt = &t
 	}
 
 	return mem, nil

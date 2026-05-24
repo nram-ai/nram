@@ -218,6 +218,13 @@ export interface Memory {
   purge_after?: string | null;
   parent_id?: string | null;
   /**
+   * Populated when query augmentation was enabled at the time this memory's
+   * vector was written. Null when the row was embedded against raw content;
+   * the backfill query keys off augmented_embedding_at IS NULL.
+   */
+  augmented_queries?: string[] | null;
+  augmented_embedding_at?: string | null;
+  /**
    * Populated only when the list endpoint was called with
    * group_by_parent=true. Carries enrichment-derived child memories so a
    * parent and its extracted facts always render together.
@@ -1171,6 +1178,29 @@ export interface ExtractionTestResult {
   latency_ms: number;
 }
 
+// Response for POST /admin/enrichment/backfill-augmentation. enqueued is 0
+// when dry_run was true; otherwise it counts the jobs newly inserted into the
+// enrichment queue.
+export interface AugmentationBackfillResponse {
+  candidate_count: number;
+  enqueued: number;
+  dry_run: boolean;
+}
+
+// Response for POST /v1/projects/{id}/memories/{id}/preview-augmentation.
+// Mirrors the server's MemoryPreviewAugmentResponse: queries and the rendered
+// embed-ready content the augmentation phase would have produced, without
+// touching the DB.
+export interface MemoryAugmentPreviewResponse {
+  queries: string[];
+  augmented_content: string;
+  rendered_prompt: string;
+  model: string;
+  latency_ms: number;
+  truncated_bytes: number;
+  error?: string;
+}
+
 export interface OAuthClient {
   id: string;
   name: string;
@@ -1486,15 +1516,39 @@ export const adminAPI = {
   pauseEnrichment: (paused: boolean) =>
     request<EnrichmentPauseResponse>("POST", "/admin/enrichment/pause", { paused }),
   testExtractionPrompt: (
-    type: "fact" | "entity",
+    type: "fact" | "entity" | "augment",
     prompt: string,
     sampleInput: string,
+    count?: number,
   ) =>
     request<ExtractionTestResult>("POST", "/admin/enrichment/test-prompt", {
       type,
       prompt,
       sample_input: sampleInput,
+      ...(typeof count === "number" ? { count } : {}),
     }),
+
+  // Query augmentation backfill. dry_run=true returns candidate_count without
+  // enqueueing. project_id omitted scans the whole deployment. limit caps how
+  // many candidates land in the queue this call.
+  backfillAugmentation: (req: {
+    project_id?: string;
+    dry_run?: boolean;
+    limit?: number;
+  }) =>
+    request<AugmentationBackfillResponse>(
+      "POST",
+      "/admin/enrichment/backfill-augmentation",
+      req,
+    ),
+
+  // Per-memory preview of the augmentation phase. Project-scoped, does not
+  // persist; used by the MemoryDetailPanel Preview button.
+  previewMemoryAugmentation: (projectId: string, memoryId: string) =>
+    request<MemoryAugmentPreviewResponse>(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/memories/${encodeURIComponent(memoryId)}/preview-augmentation`,
+    ),
 
   // Graph
   getGraph: (projectId: string) =>

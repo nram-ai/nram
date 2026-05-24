@@ -18,6 +18,7 @@ import { faCheck, faXmark, faSpinner } from "../lib/icons";
 // default value straight from useSettingsSchema, so no UI fallback is needed.
 const FACT_PROMPT_KEY = "enrichment.fact_prompt";
 const ENTITY_PROMPT_KEY = "enrichment.entity_prompt";
+const AUGMENT_PROMPT_KEY = "enrichment.query_augment.prompt";
 
 interface SimplePromptSpec {
   key: string;
@@ -585,6 +586,7 @@ export default function PromptTemplates() {
 
   const [factSampleInput, setFactSampleInput] = useState("");
   const [entitySampleInput, setEntitySampleInput] = useState("");
+  const [augmentSampleInput, setAugmentSampleInput] = useState("");
   const [factTestResult, setFactTestResult] = useState<{
     output: string;
     parsed: unknown;
@@ -597,12 +599,20 @@ export default function PromptTemplates() {
     error?: string;
     latency_ms: number;
   } | null>(null);
+  const [augmentTestResult, setAugmentTestResult] = useState<{
+    output: string;
+    parsed: unknown;
+    error?: string;
+    latency_ms: number;
+  } | null>(null);
   const [testingFact, setTestingFact] = useState(false);
   const [testingEntity, setTestingEntity] = useState(false);
+  const [testingAugment, setTestingAugment] = useState(false);
 
   // Track the current prompt values for testing (updated when textarea changes).
   const factPromptRef = useRef("");
   const entityPromptRef = useRef("");
+  const augmentPromptRef = useRef("");
 
   const showToast = useCallback(
     (message: string, type: "success" | "error") => {
@@ -650,6 +660,12 @@ export default function PromptTemplates() {
     settingsMap,
     "",
   );
+  const augmentPromptData = resolvePromptData(
+    [AUGMENT_PROMPT_KEY],
+    schemas,
+    settingsMap,
+    "",
+  );
 
   const enrichmentPrompts = ENRICHMENT_PROMPTS.map((spec) => ({
     spec,
@@ -667,6 +683,9 @@ export default function PromptTemplates() {
   }
   if (entityPromptData) {
     entityPromptRef.current = entityPromptData.currentValue;
+  }
+  if (augmentPromptData) {
+    augmentPromptRef.current = augmentPromptData.currentValue;
   }
 
   const handleTestFact = useCallback(() => {
@@ -696,6 +715,37 @@ export default function PromptTemplates() {
       },
     );
   }, [factSampleInput, testMutation]);
+
+  const handleTestAugment = useCallback(() => {
+    if (!augmentSampleInput.trim()) return;
+    setTestingAugment(true);
+    setAugmentTestResult(null);
+    testMutation.mutate(
+      {
+        type: "augment",
+        prompt: augmentPromptRef.current,
+        sampleInput: augmentSampleInput,
+        // Server defaults to 4 when count is omitted, matching
+        // SettingQueryAugmentCount's runtime default. Operators tuning the
+        // count separately do so through the Settings page.
+      },
+      {
+        onSuccess: (data) => {
+          setAugmentTestResult(data);
+          setTestingAugment(false);
+        },
+        onError: (err) => {
+          setAugmentTestResult({
+            output: "",
+            parsed: null,
+            error: err.message,
+            latency_ms: 0,
+          });
+          setTestingAugment(false);
+        },
+      },
+    );
+  }, [augmentSampleInput, testMutation]);
 
   const handleTestEntity = useCallback(() => {
     if (!entitySampleInput.trim()) return;
@@ -788,6 +838,24 @@ export default function PromptTemplates() {
               testResult={entityTestResult}
               sampleInput={entitySampleInput}
               onSampleInputChange={setEntitySampleInput}
+            />
+          )}
+
+          {/* Query Augmentation Prompt. Template uses named placeholders
+              {content} and {N}, not %s, so operators can safely include
+              literal '%' in the body. */}
+          {augmentPromptData && (
+            <PromptEditorCard
+              title="Query Augmentation Prompt"
+              description="Generates short paraphrased queries the augmentation phase prepends to memory content before embedding, so a single vector captures the fact and the ways someone would ask about it. Off by default; enable in Settings then use Backfill to re-embed pre-flag memories."
+              promptData={augmentPromptData}
+              onSave={handleSave}
+              saving={updateMutation.isPending}
+              onTest={handleTestAugment}
+              testing={testingAugment}
+              testResult={augmentTestResult}
+              sampleInput={augmentSampleInput}
+              onSampleInputChange={setAugmentSampleInput}
             />
           )}
 

@@ -1,0 +1,337 @@
+package enrichment
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
+)
+
+func TestRenderQueryAugmentPrompt_SubstitutesPlaceholders(t *testing.T) {
+	tpl := "Generate {N} queries for: {content}. End."
+	out := RenderQueryAugmentPrompt(tpl, "a memory", 7)
+	if !strings.Contains(out, "Generate 7 queries") {
+		t.Fatalf("N placeholder not substituted: %q", out)
+	}
+	if !strings.Contains(out, "for: a memory.") {
+		t.Fatalf("content placeholder not substituted: %q", out)
+	}
+}
+
+func TestRenderQueryAugmentPrompt_NoPanicOnLiteralPercent(t *testing.T) {
+	// strings.Replace not fmt.Sprintf, so a literal % anywhere must round-trip.
+	tpl := "Coverage target: 90% recall. Memory: {content}. N={N}."
+	out := RenderQueryAugmentPrompt(tpl, "x", 3)
+	if !strings.Contains(out, "90% recall") {
+		t.Fatalf("literal %% mangled: %q", out)
+	}
+}
+
+func TestParseQueryAugmentResponse_PlainArray(t *testing.T) {
+	queries, err := ParseQueryAugmentResponse(`["q one","q two","q three"]`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queries) != 3 || queries[0] != "q one" {
+		t.Fatalf("queries = %v", queries)
+	}
+}
+
+func TestParseQueryAugmentResponse_FencedJSON(t *testing.T) {
+	body := "Sure, here you go:\n```json\n[\"alpha\", \"beta\"]\n```\nDone."
+	queries, err := ParseQueryAugmentResponse(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queries) != 2 || queries[1] != "beta" {
+		t.Fatalf("queries = %v", queries)
+	}
+}
+
+func TestParseQueryAugmentResponse_DropsEmpties(t *testing.T) {
+	queries, err := ParseQueryAugmentResponse(`["one","","   ","two"]`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queries) != 2 || queries[0] != "one" || queries[1] != "two" {
+		t.Fatalf("expected only non-empty queries; got %v", queries)
+	}
+}
+
+func TestParseQueryAugmentResponse_MalformedReturnsError(t *testing.T) {
+	if _, err := ParseQueryAugmentResponse(`{"not": "an array"}`); err == nil {
+		t.Fatalf("expected error on object payload")
+	}
+	if _, err := ParseQueryAugmentResponse(`not json at all`); err == nil {
+		t.Fatalf("expected error on garbage")
+	}
+	if _, err := ParseQueryAugmentResponse(`[]`); err == nil {
+		t.Fatalf("expected error on empty array (no useful augmentation)")
+	}
+}
+
+func TestBuildAugmentedInput_NoCap(t *testing.T) {
+	got, trimmed := BuildAugmentedInput([]string{"q1", "q2"}, "the memory content", 0)
+	want := "q1\nq2" + QueryAugmentSeparator + "the memory content"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if trimmed != 0 {
+		t.Fatalf("expected trimmed=0, got %d", trimmed)
+	}
+}
+
+func TestBuildAugmentedInput_CapTruncatesContentTail(t *testing.T) {
+	queries := []string{"first query", "second query"}
+	content := strings.Repeat("X", 200)
+	cap := 80
+	got, trimmed := BuildAugmentedInput(queries, content, cap)
+	if len(got) > cap {
+		t.Fatalf("output length %d exceeds cap %d", len(got), cap)
+	}
+	// Queries + separator must always be present in full.
+	prefix := strings.Join(queries, "\n") + QueryAugmentSeparator
+	if !strings.HasPrefix(got, prefix) {
+		t.Fatalf("expected output to start with queries+separator; got %q", got)
+	}
+	if trimmed != len(content)-(cap-len(prefix)) {
+		t.Fatalf("trimmed bytes mismatch: got %d, content=%d cap=%d prefix=%d", trimmed, len(content), cap, len(prefix))
+	}
+}
+
+func TestBuildAugmentedInput_CapTooSmallForQueriesKeepsQueriesOnly(t *testing.T) {
+	queries := []string{"qqqq"}
+	content := "memory content body"
+	// Cap that doesn't even fit the prefix.
+	got, trimmed := BuildAugmentedInput(queries, content, 4)
+	prefix := strings.Join(queries, "\n") + QueryAugmentSeparator
+	if got != prefix {
+		t.Fatalf("expected prefix-only fallback %q, got %q", prefix, got)
+	}
+	if trimmed != len(content) {
+		t.Fatalf("expected entire content trimmed; got %d (content was %d)", trimmed, len(content))
+	}
+}
+
+// runQueryAugment fail-soft contract: any failure path returns nil so
+// ingestion never gets blocked. Pure unit tests on the helpers cover the
+// success path's data shape; this test exercises the orchestration.
+func TestRunQueryAugment_DisabledIsNoOp(t *testing.T) {
+	h := newIngestionHarness(
+		map[string]string{service.SettingQueryAugmentEnabled: "false"},
+		nil,
+		minimalFactLLM(),
+		minimalEntityLLM(),
+		constStringLLM("ingestion", `{"operation":"ADD","target_id":null,"rationale":"new"}`),
+		constEmbedder(),
+	)
+	res := h.pool.runQueryAugment(context.Background(),
+		&model.EnrichmentJob{ID: uuid.New()},
+		&model.Memory{ID: uuid.New(), Content: "hello"})
+	if res != nil {
+		t.Fatalf("expected nil result when disabled; got %#v", res)
+	}
+}
+
+func TestRunQueryAugment_EmptyContentIsNoOp(t *testing.T) {
+	h := newIngestionHarness(
+		map[string]string{service.SettingQueryAugmentEnabled: "true"},
+		nil,
+		minimalFactLLM(),
+		minimalEntityLLM(),
+		constStringLLM("ingestion", `{"operation":"ADD","target_id":null,"rationale":"new"}`),
+		constEmbedder(),
+	)
+	res := h.pool.runQueryAugment(context.Background(),
+		&model.EnrichmentJob{ID: uuid.New()},
+		&model.Memory{ID: uuid.New(), Content: "   \n  "})
+	if res != nil {
+		t.Fatalf("expected nil result for whitespace-only content; got %#v", res)
+	}
+}
+
+func TestRunQueryAugment_HappyPath(t *testing.T) {
+	// The augmentation phase uses the fact provider by default, so swap that
+	// stub for one that returns a JSON array.
+	factAugmentLLM := &mockLLMProvider{
+		name: "augment-fact",
+		respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+			return &provider.CompletionResponse{
+				Content: `["alt 1","alt 2","alt 3"]`,
+				Model:   "augment-model",
+				Usage:   provider.TokenUsage{PromptTokens: 12, CompletionTokens: 6, TotalTokens: 18},
+			}, nil
+		},
+	}
+	h := newIngestionHarness(
+		map[string]string{service.SettingQueryAugmentEnabled: "true"},
+		nil,
+		factAugmentLLM,
+		minimalEntityLLM(),
+		constStringLLM("ingestion", `{"operation":"ADD","target_id":null,"rationale":"new"}`),
+		constEmbedder(),
+	)
+	res := h.pool.runQueryAugment(context.Background(),
+		&model.EnrichmentJob{ID: uuid.New()},
+		&model.Memory{ID: uuid.New(), Content: "the memory text"})
+	if res == nil {
+		t.Fatalf("expected non-nil result")
+	}
+	if len(res.queries) != 3 {
+		t.Fatalf("queries = %v", res.queries)
+	}
+	if !strings.HasPrefix(res.augmentedContent, "alt 1\nalt 2\nalt 3"+QueryAugmentSeparator) {
+		t.Fatalf("augmented content missing prefix: %q", res.augmentedContent)
+	}
+	if !strings.HasSuffix(res.augmentedContent, "the memory text") {
+		t.Fatalf("augmented content missing original tail: %q", res.augmentedContent)
+	}
+}
+
+// REGRESSION: when the ingestion-decision phase pre-computed parentEmbedding,
+// runEmbedBatch skips the parent input slot entirely and the stored vector is
+// the raw-content embed, NOT the augmented one. finalizeJob must NOT record
+// augmented_embedding_at in that case — recording it would permanently hide
+// the row from the backfill query whose entire purpose is to find rows that
+// still need augmented embeddings. The embedUsedAugmented flag on pendingJob
+// is the load-bearing guard. If a future refactor moves the marker write or
+// removes the flag check, this test fails.
+func TestQueryAugment_MarkerNotWrittenWhenIngestionDecisionReusedEmbed(t *testing.T) {
+	// LLM that routes by prompt content: augment requests get a JSON array,
+	// ingestion-decision requests get an ADD decision, anything else gets the
+	// minimal fact-extraction payload (so runPreEmbed completes cleanly).
+	routedLLM := &mockLLMProvider{
+		name: "routed",
+		respond: func(req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+			prompt := req.Messages[0].Content
+			switch {
+			case strings.Contains(prompt, "query augmentation"):
+				return &provider.CompletionResponse{
+					Content: `["q1","q2","q3"]`,
+					Model:   "augment-model",
+					Usage:   provider.TokenUsage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10},
+				}, nil
+			case strings.Contains(prompt, "ingestion decision"):
+				return &provider.CompletionResponse{
+					Content: `{"operation":"ADD","target_id":null,"rationale":""}`,
+					Model:   "ingest-model",
+				}, nil
+			default:
+				return &provider.CompletionResponse{Content: `[]`, Model: "fact-model"}, nil
+			}
+		},
+	}
+
+	// Near-match seeds the dedup vector store so the ingestion-decision phase
+	// runs an embed call against raw content and stamps parentEmbedding onto
+	// the pendingJob — the exact precondition that makes runEmbedBatch skip
+	// the parent slot below.
+	target := testMemory()
+	target.Content = "existing fact"
+	d := 384
+	target.EmbeddingDim = &d
+	dedupResults := []storage.VectorSearchResult{
+		{ID: target.ID, Score: 0.96, NamespaceID: target.NamespaceID},
+	}
+
+	h := newIngestionHarness(
+		map[string]string{
+			service.SettingIngestionDecisionEnabled: "true",
+			service.SettingIngestionDecisionShadow:  "false",
+			service.SettingQueryAugmentEnabled:      "true",
+		},
+		dedupResults,
+		routedLLM,
+		minimalEntityLLM(),
+		routedLLM,
+		constEmbedder(),
+	)
+
+	newMem := testMemory()
+	newMem.NamespaceID = target.NamespaceID
+	h.reader.byID[newMem.ID] = newMem
+	h.reader.byID[target.ID] = target
+	job := testJob(newMem.ID, newMem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+
+	if len(h.updater.augmentedMarks) != 0 {
+		t.Fatalf("augmented marker MUST NOT be written when ingestion-decision pre-embed reused the parent slot; got %d marks: %+v",
+			len(h.updater.augmentedMarks), h.updater.augmentedMarks)
+	}
+}
+
+// Complement to the regression above: with ingestion-decision OFF and only
+// query-augment ON, the marker MUST be written — confirms the gate is not
+// over-restrictive and that the happy path still records augmentation.
+func TestQueryAugment_MarkerWrittenWhenAugmentedEmbedActuallyLanded(t *testing.T) {
+	augLLM := &mockLLMProvider{
+		name: "augment",
+		respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+			return &provider.CompletionResponse{
+				Content: `["q1","q2"]`,
+				Model:   "augment-model",
+				Usage:   provider.TokenUsage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10},
+			}, nil
+		},
+	}
+	h := newIngestionHarness(
+		map[string]string{service.SettingQueryAugmentEnabled: "true"},
+		nil,
+		augLLM,
+		minimalEntityLLM(),
+		constStringLLM("ingest", `{"operation":"ADD","target_id":null,"rationale":""}`),
+		constEmbedder(),
+	)
+
+	mem := testMemory()
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+
+	if len(h.updater.augmentedMarks) != 1 {
+		t.Fatalf("expected 1 augmented marker write on happy path; got %d", len(h.updater.augmentedMarks))
+	}
+	if got := h.updater.augmentedMarks[0].queries; len(got) != 2 || got[0] != "q1" || got[1] != "q2" {
+		t.Fatalf("augmented marker queries = %v, want [q1 q2]", got)
+	}
+	if h.updater.augmentedMarks[0].id != mem.ID {
+		t.Fatalf("augmented marker target = %v, want %v", h.updater.augmentedMarks[0].id, mem.ID)
+	}
+}
+
+func TestRunQueryAugment_MalformedJSONFailSoft(t *testing.T) {
+	badLLM := &mockLLMProvider{
+		name: "augment-bad",
+		respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+			return &provider.CompletionResponse{
+				Content: "I am not JSON, I am free.",
+				Model:   "augment-model",
+			}, nil
+		},
+	}
+	h := newIngestionHarness(
+		map[string]string{service.SettingQueryAugmentEnabled: "true"},
+		nil,
+		badLLM,
+		minimalEntityLLM(),
+		constStringLLM("ingestion", `{"operation":"ADD","target_id":null,"rationale":"new"}`),
+		constEmbedder(),
+	)
+	res := h.pool.runQueryAugment(context.Background(),
+		&model.EnrichmentJob{ID: uuid.New()},
+		&model.Memory{ID: uuid.New(), Content: "anything"})
+	if res != nil {
+		t.Fatalf("expected fail-soft nil on malformed JSON; got %#v", res)
+	}
+}

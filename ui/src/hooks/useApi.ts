@@ -35,6 +35,8 @@ import {
   type UpdateProviderSlotRequest,
   type TestProviderResult,
   type ExtractionTestResult,
+  type AugmentationBackfillResponse,
+  type MemoryAugmentPreviewResponse,
   type OAuthClientCreated,
   type CreateOAuthClientRequest,
   type IdPConfig,
@@ -991,10 +993,45 @@ export function useTestExtractionPrompt() {
   return useMutation<
     ExtractionTestResult,
     Error,
-    { type: "fact" | "entity"; prompt: string; sampleInput: string }
+    {
+      type: "fact" | "entity" | "augment";
+      prompt: string;
+      sampleInput: string;
+      count?: number;
+    }
   >({
-    mutationFn: ({ type, prompt, sampleInput }) =>
-      adminAPI.testExtractionPrompt(type, prompt, sampleInput),
+    mutationFn: ({ type, prompt, sampleInput, count }) =>
+      adminAPI.testExtractionPrompt(type, prompt, sampleInput, count),
+  });
+}
+
+export function useBackfillAugmentation() {
+  const qc = useQueryClient();
+  return useMutation<
+    AugmentationBackfillResponse,
+    Error,
+    { project_id?: string; dry_run?: boolean; limit?: number }
+  >({
+    mutationFn: (req) => adminAPI.backfillAugmentation(req),
+    onSuccess: (_, variables) => {
+      // Only invalidate the queue view when we actually enqueued; a dry-run
+      // does not change queue state and forcing a refetch would just be
+      // wasted bandwidth.
+      if (!variables.dry_run) {
+        qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+      }
+    },
+  });
+}
+
+export function usePreviewMemoryAugmentation() {
+  return useMutation<
+    MemoryAugmentPreviewResponse,
+    Error,
+    { projectId: string; memoryId: string }
+  >({
+    mutationFn: ({ projectId, memoryId }) =>
+      adminAPI.previewMemoryAugmentation(projectId, memoryId),
   });
 }
 

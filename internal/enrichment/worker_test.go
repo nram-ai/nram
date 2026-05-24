@@ -65,9 +65,16 @@ type mockMemoryUpdater struct {
 	mu              sync.Mutex
 	updated         []*model.Memory
 	dimUpdates      []dimUpdate
+	augmentedMarks  []augmentedMark
 	enrichedMarks   []enrichedMark
 	supersedeMarks  []supersedeMark
 	err             error
+}
+
+type augmentedMark struct {
+	id         uuid.UUID
+	queries    []string
+	embeddedAt time.Time
 }
 
 type supersedeMark struct {
@@ -106,6 +113,17 @@ func (m *mockMemoryUpdater) UpdateEmbeddingDim(_ context.Context, id uuid.UUID, 
 		return m.err
 	}
 	m.dimUpdates = append(m.dimUpdates, dimUpdate{id: id, dim: dim})
+	return nil
+}
+
+func (m *mockMemoryUpdater) UpdateAugmentedEmbedding(_ context.Context, id uuid.UUID, queries []string, embeddedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	cp := append([]string(nil), queries...)
+	m.augmentedMarks = append(m.augmentedMarks, augmentedMark{id: id, queries: cp, embeddedAt: embeddedAt})
 	return nil
 }
 

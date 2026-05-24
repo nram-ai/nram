@@ -15,6 +15,7 @@ import { useDebounce } from "../hooks/useDebounce";
 import { useAuth } from "../context/AuthContext";
 import { useSelectedProject } from "../context/ProjectContext";
 import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
+import { MemoryAugmentPreviewBlock } from "../components/MemoryAugmentPreviewBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheck } from "../lib/icons";
 
@@ -635,6 +636,16 @@ function MemoryDetailPanel({
                 {JSON.stringify(memory.metadata, null, 2)}
               </pre>
             </div>
+
+            {/* Augmented queries (persisted) + on-demand preview. Lives next
+                to Metadata so debugging recall failures has both the vector-
+                input audit trail and the live regeneration in one place. */}
+            <MemoryAugmentPreviewBlock
+              projectId={projectId}
+              memoryId={memoryId}
+              persistedQueries={memory.augmented_queries}
+              persistedAt={memory.augmented_embedding_at}
+            />
 
             {/* Info row — Confidence, Importance, AccessCount, and
              * LastAccessed are surfaced so operators can verify recall-time

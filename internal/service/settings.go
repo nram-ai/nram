@@ -203,6 +203,20 @@ const (
 	SettingIngestionDecisionModel     = "enrichment.ingestion_decision.model"
 	SettingIngestionDecisionPrompt    = "enrichment.ingestion_decision.prompt"
 
+	// Query augmentation. When enabled, the enrichment worker generates N
+	// paraphrased query forms per memory at ingest time and prepends them to
+	// the memory content before embedding, so a single vector captures both
+	// the fact and the ways someone might phrase a query for it. Off by
+	// default; flip only after the canned recall regression set shows no
+	// contamination-probe regressions plus measurable improvement on 3 or
+	// more of 7 stress angles. Empty model falls back to the fact-extraction
+	// provider. Prompt accepts {content} and {N} as named placeholders.
+	SettingQueryAugmentEnabled       = "enrichment.query_augment.enabled"
+	SettingQueryAugmentCount         = "enrichment.query_augment.count"
+	SettingQueryAugmentModel         = "enrichment.query_augment.model"
+	SettingQueryAugmentPrompt        = "enrichment.query_augment.prompt"
+	SettingQueryAugmentMaxInputChars = "enrichment.query_augment.max_input_chars"
+
 	SettingQdrantAddr             = "qdrant.addr"
 	SettingQdrantAPIKey           = "qdrant.api_key"
 	SettingQdrantUseTLS           = "qdrant.use_tls"
@@ -687,6 +701,20 @@ or
 {"operation": "DELETE", "target_id": "candidate-uuid", "rationale": "..."}
 or
 {"operation": "NONE", "target_id": null, "rationale": "..."}`,
+
+	SettingQueryAugmentEnabled:       "false",
+	SettingQueryAugmentCount:         "4",
+	SettingQueryAugmentModel:         "",
+	SettingQueryAugmentMaxInputChars: "0",
+	SettingQueryAugmentPrompt: `You are a query augmentation engine. You do NOT converse. You output JSON only.
+
+Given the memory content below, generate {N} short, distinct natural-language questions or phrases a user might use to retrieve this memory. Vary the phrasings: cover synonyms, partial-fact lookups, and the most likely way the information would be asked about. Keep each query under 120 characters and avoid restating the memory verbatim.
+
+Output ONLY a JSON array of strings, no prose, no markdown fences. Example: ["what time does X start", "X start time", "schedule for X"].
+
+<memory>
+{content}
+</memory>`,
 	SettingDreamNoveltyJudgePrompt: `You are a novelty auditor. You do NOT converse. You output JSON only.
 
 Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.

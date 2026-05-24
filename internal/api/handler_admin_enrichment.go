@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/enrichment"
 	"github.com/nram-ai/nram/internal/provider"
 )
 
@@ -29,11 +30,18 @@ type EnrichmentAdminStore interface {
 
 // EnrichmentAdminConfig holds the dependencies for the enrichment admin handler.
 type EnrichmentAdminConfig struct {
-	Store               EnrichmentAdminStore
-	FactProvider        func() provider.LLMProvider
-	EntityProvider      func() provider.LLMProvider
-	FactPromptDefault   func(ctx context.Context) string
-	EntityPromptDefault func(ctx context.Context) string
+	Store                 EnrichmentAdminStore
+	FactProvider          func() provider.LLMProvider
+	EntityProvider        func() provider.LLMProvider
+	FactPromptDefault     func(ctx context.Context) string
+	EntityPromptDefault   func(ctx context.Context) string
+	QueryAugmentPromptDef func(ctx context.Context) string
+
+	// BackfillAugmentation runs the query-augmentation backfill against memories
+	// whose vector pre-dates the feature flip. Nil disables the backfill
+	// endpoint with a 503 response so the UI button can render "not available"
+	// rather than 404ing in deployments without the service wired.
+	BackfillAugmentation func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (candidateCount, enqueued int, err error)
 }
 
 // EnrichmentQueueStatus is the response for GET /enrichment/queue.
@@ -103,7 +111,7 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 		sub := extractEnrichmentSubPath(r.URL.Path)
 
 		// Write operations require administrator role.
-		if sub == "retry" || sub == "pause" || sub == "test-prompt" {
+		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" {
 			ac := auth.FromContext(r.Context())
 			if ac == nil || ac.Role != auth.RoleAdministrator {
 				http.Error(w, "forbidden: administrator required", http.StatusForbidden)
@@ -120,6 +128,8 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 			handleEnrichmentPause(w, r, cfg)
 		case "test-prompt":
 			handleEnrichmentTestPrompt(w, r, cfg)
+		case "backfill-augmentation":
+			handleEnrichmentBackfillAugmentation(w, r, cfg)
 		default:
 			WriteError(w, ErrBadRequest("unknown enrichment sub-path"))
 		}
@@ -204,9 +214,10 @@ func handleEnrichmentPause(w http.ResponseWriter, r *http.Request, cfg Enrichmen
 
 // enrichmentTestPromptRequest is the request body for POST /enrichment/test-prompt.
 type enrichmentTestPromptRequest struct {
-	Type        string `json:"type"`         // "fact" or "entity"
+	Type        string `json:"type"`         // "fact", "entity", or "augment"
 	Prompt      string `json:"prompt"`       // custom prompt text (optional; uses default if empty)
 	SampleInput string `json:"sample_input"` // memory content to test against
+	Count       int    `json:"count,omitempty"` // only used when type=="augment"; defaults to 4
 }
 
 // enrichmentTestPromptResponse is the response for POST /enrichment/test-prompt.
@@ -232,8 +243,8 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		return
 	}
 
-	if body.Type != "fact" && body.Type != "entity" {
-		WriteError(w, ErrBadRequest("type must be 'fact' or 'entity'"))
+	if body.Type != "fact" && body.Type != "entity" && body.Type != "augment" {
+		WriteError(w, ErrBadRequest("type must be 'fact', 'entity', or 'augment'"))
 		return
 	}
 
@@ -276,6 +287,24 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		} else if cfg.EntityPromptDefault != nil {
 			promptTemplate = cfg.EntityPromptDefault(r.Context())
 		}
+	case "augment":
+		// Augmentation reuses the fact-extraction provider by default; the
+		// runtime phase does the same. A future operator setting may override
+		// the model, but the provider plumbing is shared.
+		if cfg.FactProvider == nil {
+			WriteError(w, ErrBadRequest("no fact extraction provider configured"))
+			return
+		}
+		llmProvider = cfg.FactProvider()
+		if llmProvider == nil {
+			WriteError(w, ErrBadRequest("fact extraction provider is not available"))
+			return
+		}
+		if strings.TrimSpace(body.Prompt) != "" {
+			promptTemplate = body.Prompt
+		} else if cfg.QueryAugmentPromptDef != nil {
+			promptTemplate = cfg.QueryAugmentPromptDef(r.Context())
+		}
 	}
 
 	if promptTemplate == "" {
@@ -283,14 +312,30 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		return
 	}
 
+	count := body.Count
+	if count <= 0 {
+		count = 4
+	}
+
 	start := time.Now()
+
+	rendered := fmt.Sprintf(promptTemplate, body.SampleInput)
+	if body.Type == "augment" {
+		rendered = enrichment.RenderQueryAugmentPrompt(promptTemplate, body.SampleInput, count)
+	}
 
 	completionReq := &provider.CompletionRequest{
 		Messages: []provider.Message{
-			{Role: "user", Content: fmt.Sprintf(promptTemplate, body.SampleInput)},
+			{Role: "user", Content: rendered},
 		},
 		MaxTokens:   2048,
 		Temperature: 0.1,
+		// Augmentation expects a JSON-array response. The runtime phase and
+		// the per-memory preview endpoint both set JSONMode; without it
+		// here, the Test button can fail to parse on providers that emit
+		// prose without an explicit JSON-mode signal even when the prompt
+		// requests JSON, masking a working production prompt as broken.
+		JSONMode: body.Type == "augment",
 	}
 
 	resp, err := llmProvider.Complete(r.Context(), completionReq)
@@ -323,6 +368,13 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			parseErr = err.Error()
 		} else {
 			parsed = result
+		}
+	case "augment":
+		queries, err := enrichment.ParseQueryAugmentResponse(rawOutput)
+		if err != nil {
+			parseErr = err.Error()
+		} else {
+			parsed = queries
 		}
 	}
 
@@ -391,6 +443,53 @@ func parseTestEntityResponse(raw string) (any, error) {
 	}
 
 	return nil, fmt.Errorf("could not parse response as JSON entity object")
+}
+
+// enrichmentBackfillAugmentRequest is the body for
+// POST /enrichment/backfill-augmentation. ProjectID is optional; omit to scan
+// the entire deployment. DryRun returns the candidate count without
+// enqueueing. Limit caps how many candidates land in the queue this call.
+type enrichmentBackfillAugmentRequest struct {
+	ProjectID *uuid.UUID `json:"project_id,omitempty"`
+	DryRun    bool       `json:"dry_run,omitempty"`
+	Limit     int        `json:"limit,omitempty"`
+}
+
+type enrichmentBackfillAugmentResponse struct {
+	CandidateCount int  `json:"candidate_count"`
+	Enqueued       int  `json:"enqueued"`
+	DryRun         bool `json:"dry_run"`
+}
+
+// handleEnrichmentBackfillAugmentation handles POST /enrichment/backfill-augmentation.
+func handleEnrichmentBackfillAugmentation(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.BackfillAugmentation == nil {
+		http.Error(w, "backfill-augmentation not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentBackfillAugmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	var projectID uuid.UUID
+	if body.ProjectID != nil {
+		projectID = *body.ProjectID
+	}
+	count, enq, err := cfg.BackfillAugmentation(r.Context(), projectID, body.DryRun, body.Limit)
+	if err != nil {
+		WriteError(w, ErrInternal("backfill augmentation: "+err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, enrichmentBackfillAugmentResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
+		DryRun:         body.DryRun,
+	})
 }
 
 // stripTestMarkdownFences removes markdown code fence wrappers.

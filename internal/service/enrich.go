@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,12 +40,21 @@ type LineageQuerier interface {
 	FindChildIDsByRelation(ctx context.Context, namespaceID uuid.UUID, parentID uuid.UUID, relations []string) ([]uuid.UUID, error)
 }
 
+// AugmentationCandidateLister returns the IDs of memories whose stored vector
+// pre-dates the query-augmentation flag flip (augmented_embedding_at IS NULL).
+// Kept as a tiny interface so the backfill code path can be wired without
+// touching the broad MemoryReader interface, which has many implementors.
+type AugmentationCandidateLister interface {
+	ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error)
+}
+
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.
 type EnrichService struct {
 	memories        MemoryReader
 	projects        ProjectRepository
 	enrichmentQueue EnrichmentQueueRepository
 	lineage         LineageQuerier
+	augLister       AugmentationCandidateLister
 }
 
 // NewEnrichService creates a new EnrichService with the given dependencies.
@@ -60,6 +70,112 @@ func NewEnrichService(
 		enrichmentQueue: enrichmentQueue,
 		lineage:         lineage,
 	}
+}
+
+// AttachAugmentationLister wires the candidate lister used by
+// BackfillAugmentation. Optional: when nil, BackfillAugmentation returns an
+// explanatory error rather than silently no-oping.
+func (s *EnrichService) AttachAugmentationLister(lister AugmentationCandidateLister) {
+	s.augLister = lister
+}
+
+// BackfillAugmentationRequest scopes a query-augmentation backfill. ProjectID
+// == uuid.Nil scans the entire deployment (admin-only path).
+type BackfillAugmentationRequest struct {
+	ProjectID uuid.UUID `json:"project_id,omitempty"`
+	DryRun    bool      `json:"dry_run,omitempty"`
+	// Limit caps the number of candidates enqueued in one call. 0 = no cap.
+	// Useful when the operator wants to feed the queue gradually rather than
+	// flooding it with millions of jobs at once.
+	Limit int `json:"limit,omitempty"`
+}
+
+// BackfillAugmentationResponse reports the outcome of one backfill call.
+// CandidateCount is the size of the candidate set the lister returned;
+// Enqueued is the number of jobs actually inserted into the queue (0 when
+// DryRun=true).
+type BackfillAugmentationResponse struct {
+	CandidateCount int   `json:"candidate_count"`
+	Enqueued       int   `json:"enqueued"`
+	DryRun         bool  `json:"dry_run"`
+	LatencyMs      int64 `json:"latency_ms"`
+}
+
+// BackfillAugmentation enqueues enrichment jobs for memories whose vector was
+// written before the query-augmentation feature was enabled. Distinct from
+// Enrich: this path INCLUDES already-enriched rows because re-embedding with
+// augmentation is exactly the point. The worker's per-step idempotency means
+// fact and entity extraction are skipped automatically for already-enriched
+// rows, so the cost is one extra LLM augmentation call plus one embed call
+// per memory.
+func (s *EnrichService) BackfillAugmentation(ctx context.Context, req *BackfillAugmentationRequest) (*BackfillAugmentationResponse, error) {
+	start := time.Now()
+	if s.augLister == nil {
+		return nil, fmt.Errorf("augmentation candidate lister not configured (call AttachAugmentationLister)")
+	}
+
+	var namespaceIDs []uuid.UUID
+	if req.ProjectID != uuid.Nil {
+		project, err := s.projects.GetByID(ctx, req.ProjectID)
+		if err != nil {
+			return nil, fmt.Errorf("project not found: %w", err)
+		}
+		namespaceIDs = []uuid.UUID{project.NamespaceID}
+	}
+
+	candidates, err := s.augLister.ListAugmentationBackfillCandidates(ctx, namespaceIDs, req.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("list backfill candidates: %w", err)
+	}
+
+	resp := &BackfillAugmentationResponse{
+		CandidateCount: len(candidates),
+		DryRun:         req.DryRun,
+	}
+	if req.DryRun || len(candidates) == 0 {
+		resp.LatencyMs = time.Since(start).Milliseconds()
+		return resp, nil
+	}
+
+	// Pull each candidate to learn its namespace; the lister already filters
+	// to live, non-superseded rows, so any GetByID miss here is an unexpected
+	// race and we log+skip rather than fail the whole batch. The skip is
+	// surfaced via slog.Warn so an operator who sees CandidateCount > Enqueued
+	// can find the dropped IDs in the worker log instead of guessing.
+	now := time.Now()
+	skipped := 0
+	for _, id := range candidates {
+		mem, err := s.memories.GetByID(ctx, id)
+		if err != nil {
+			slog.Warn("backfill: candidate skipped",
+				"memory", id, "err", err)
+			skipped++
+			continue
+		}
+		job := &model.EnrichmentJob{
+			ID:          uuid.New(),
+			MemoryID:    mem.ID,
+			NamespaceID: mem.NamespaceID,
+			Status:      "pending",
+			Priority:    0,
+			Attempts:    0,
+			MaxAttempts: 3,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := s.enrichmentQueue.Enqueue(ctx, job); err != nil {
+			return nil, fmt.Errorf("enqueue augmentation backfill for memory %s: %w", mem.ID, err)
+		}
+		resp.Enqueued++
+	}
+	if skipped > 0 {
+		slog.Warn("backfill: completed with skipped candidates",
+			"candidate_count", resp.CandidateCount,
+			"enqueued", resp.Enqueued,
+			"skipped", skipped)
+	}
+	resp.LatencyMs = time.Since(start).Milliseconds()
+	return resp, nil
 }
 
 // Enrich enqueues enrichment jobs for the specified memories or all un-enriched

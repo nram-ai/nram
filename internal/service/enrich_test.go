@@ -465,3 +465,83 @@ func TestEnrich_All_SkipsSupersededByDefault(t *testing.T) {
 		t.Fatalf("expected both rows queued with IncludeSuperseded; got %d", respIncl.Queued)
 	}
 }
+
+// stubAugLister returns a fixed list of candidate IDs to exercise both
+// dry-run (no enqueue) and the real backfill path without touching SQL.
+type stubAugLister struct {
+	ids []uuid.UUID
+}
+
+func (s *stubAugLister) ListAugmentationBackfillCandidates(_ context.Context, _ []uuid.UUID, _ int) ([]uuid.UUID, error) {
+	return s.ids, nil
+}
+
+func TestBackfillAugmentation_DryRunDoesNotEnqueue(t *testing.T) {
+	_, nsID, projects := setupEnrichFixtures()
+	id1, id2 := uuid.New(), uuid.New()
+	reader := &enrichMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			id1: makeEnrichMemory(id1, nsID, true),
+			id2: makeEnrichMemory(id2, nsID, true),
+		},
+	}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+	svc.AttachAugmentationLister(&stubAugLister{ids: []uuid.UUID{id1, id2}})
+
+	resp, err := svc.BackfillAugmentation(context.Background(), &BackfillAugmentationRequest{DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if resp.CandidateCount != 2 || resp.Enqueued != 0 {
+		t.Fatalf("dry run expected 2 candidates / 0 enqueued; got %d/%d", resp.CandidateCount, resp.Enqueued)
+	}
+	if len(queue.jobs) != 0 {
+		t.Fatalf("dry run enqueued %d jobs; expected 0", len(queue.jobs))
+	}
+}
+
+func TestBackfillAugmentation_EnqueuesEvenWhenEnriched(t *testing.T) {
+	_, nsID, projects := setupEnrichFixtures()
+	// Both memories are already enriched. The point of the backfill is to
+	// re-embed them with augmentation; per-step idempotency in the worker
+	// will skip fact/entity extraction but still re-run embedding.
+	id1, id2 := uuid.New(), uuid.New()
+	reader := &enrichMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			id1: makeEnrichMemory(id1, nsID, true),
+			id2: makeEnrichMemory(id2, nsID, true),
+		},
+	}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+	svc.AttachAugmentationLister(&stubAugLister{ids: []uuid.UUID{id1, id2}})
+
+	resp, err := svc.BackfillAugmentation(context.Background(), &BackfillAugmentationRequest{})
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if resp.Enqueued != 2 {
+		t.Fatalf("expected 2 enqueued; got %d", resp.Enqueued)
+	}
+	if len(queue.jobs) != 2 {
+		t.Fatalf("expected 2 jobs in queue; got %d", len(queue.jobs))
+	}
+	// Spot-check the enqueued job points at one of the candidate memories.
+	gotIDs := map[uuid.UUID]bool{queue.jobs[0].MemoryID: true, queue.jobs[1].MemoryID: true}
+	if !gotIDs[id1] || !gotIDs[id2] {
+		t.Fatalf("enqueued job memory IDs %v don't cover both candidates", gotIDs)
+	}
+}
+
+func TestBackfillAugmentation_NoListerReturnsError(t *testing.T) {
+	_, _, projects := setupEnrichFixtures()
+	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{}}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+
+	_, err := svc.BackfillAugmentation(context.Background(), &BackfillAugmentationRequest{})
+	if err == nil {
+		t.Fatalf("expected error when lister is unwired; backfill silently no-oping would mask deployment bugs")
+	}
+}

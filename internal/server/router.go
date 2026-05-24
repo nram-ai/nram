@@ -44,6 +44,9 @@ type Handlers struct {
 	Enrich     http.HandlerFunc
 	Export     http.HandlerFunc
 	Import     http.HandlerFunc
+	// PreviewAugment runs the query-augmentation phase against a single memory
+	// without persisting; used by the memory-detail Preview button.
+	PreviewAugment http.HandlerFunc
 
 	// User-scoped handlers
 	MeRecall            http.HandlerFunc
@@ -273,6 +276,11 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				r.Post("/batch", handler(handlers.BatchStore))
 				r.Post("/forget", handler(handlers.BulkForget))
 				r.Post("/import", handler(handlers.Import))
+				// Preview-augmentation runs an LLM call — cost-incurring, so
+				// gated to write-tier users even though it does not persist.
+				// Otherwise any readonly API key could rack up an LLM bill by
+				// spamming the preview surface.
+				r.Post("/{id}/preview-augmentation", handler(handlers.PreviewAugment))
 
 				// /enrich is gated behind the enrichment-available signal —
 				// returns 503 unless all three provider slots are configured.
