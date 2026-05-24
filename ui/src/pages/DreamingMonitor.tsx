@@ -936,6 +936,42 @@ function CycleDetail({
     });
   }, []);
 
+  // Memoized derivations live above the loading/error guards so the hook
+  // count is constant across renders. The first render lands while the
+  // detail query is still loading; without hoisting these, the second
+  // render (data arrived) would call more hooks than the first and trip
+  // React #310.
+  const logGroups = useMemo(
+    () => groupLogsByPhase(data?.logs ?? []),
+    [data?.logs],
+  );
+  const orphanPhaseRows: DreamPhaseSummary[] = useMemo(() => {
+    const summary = Array.isArray(data?.cycle.phase_summary)
+      ? data!.cycle.phase_summary!
+      : [];
+    const knownPhases = new Set(summary.map((ps) => ps.phase));
+    const rows: DreamPhaseSummary[] = [];
+    for (const [phase, grp] of logGroups) {
+      if (knownPhases.has(phase)) continue;
+      const opCount =
+        grp.logsFlat.length +
+        grp.subGroups.reduce((sum, sg) => sum + sg.logs.length, 0);
+      rows.push({
+        phase,
+        tokens_used: 0,
+        operations: opCount,
+        duration_ms: 0,
+      });
+    }
+    return rows;
+  }, [data?.cycle.phase_summary, logGroups]);
+  const allPhaseRows = useMemo(() => {
+    const summary = Array.isArray(data?.cycle.phase_summary)
+      ? data!.cycle.phase_summary!
+      : [];
+    return [...summary, ...orphanPhaseRows];
+  }, [data?.cycle.phase_summary, orphanPhaseRows]);
+
   if (isLoading) {
     return (
       <div className="rounded-lg border bg-card p-6">
@@ -954,7 +990,7 @@ function CycleDetail({
     );
   }
 
-  const { cycle, logs } = data;
+  const { cycle } = data;
   const canRollback = cycle.status === "completed" || cycle.status === "failed";
   const canAbandon = cycle.is_abandonable;
 
@@ -962,38 +998,6 @@ function CycleDetail({
     cycle.phase_summary && Array.isArray(cycle.phase_summary)
       ? cycle.phase_summary
       : [];
-
-  // Group operation logs under their phase / sub-phase for the nested
-  // accordion in the Phase Summary table. Memoized on the logs array since
-  // each react-query refetch yields a new reference only when the contents
-  // change.
-  const logGroups = useMemo(() => groupLogsByPhase(logs), [logs]);
-
-  // Synthesize phase rows for any phase that produced logs but isn't yet in
-  // cycle.phase_summary (in-flight cycles, phases that aborted before the
-  // runner wrote a PhaseSummaryEntry). Without this the accordion silently
-  // drops those logs because the row-iterator is driven off phaseSummary.
-  const orphanPhaseRows: DreamPhaseSummary[] = useMemo(() => {
-    const knownPhases = new Set(phaseSummary.map((ps) => ps.phase));
-    const rows: DreamPhaseSummary[] = [];
-    for (const [phase, grp] of logGroups) {
-      if (knownPhases.has(phase)) continue;
-      const opCount =
-        grp.logsFlat.length +
-        grp.subGroups.reduce((sum, sg) => sum + sg.logs.length, 0);
-      rows.push({
-        phase,
-        tokens_used: 0,
-        operations: opCount,
-        duration_ms: 0,
-      });
-    }
-    return rows;
-  }, [phaseSummary, logGroups]);
-  const allPhaseRows = useMemo(
-    () => [...phaseSummary, ...orphanPhaseRows],
-    [phaseSummary, orphanPhaseRows],
-  );
 
   return (
     <div className="space-y-4 rounded-lg border bg-card p-6">
