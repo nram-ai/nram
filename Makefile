@@ -1,4 +1,4 @@
-.PHONY: build-server build-ui build dev fresh-start install-ui clean check
+.PHONY: build-server build-ui build dev fresh-start install-ui clean check test-recall-regression
 
 clean:
 	rm -f nram
@@ -30,3 +30,6 @@ dev:
 check:
 	go vet ./...
 	go test -count=1 ./...
+
+test-recall-regression:
+	go test -count=1 -run TestRecallRegression ./internal/service/...

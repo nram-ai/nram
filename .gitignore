@@ -22,3 +22,9 @@ internal/ui/dist/*
 # artifacts kept for our own re-runs but not part of the shipped repo.
 /internal/service/recall_contamination_test.go
 /internal/service/testdata/recall_contamination/
+
+# Local-only recall regression harness and fixtures: stress-test
+# artifacts kept for our own re-runs but not part of the shipped repo.
+/internal/service/recall_regression_test.go
+/internal/service/recall_regression_helpers_test.go
+/internal/service/testdata/recall_regression/
