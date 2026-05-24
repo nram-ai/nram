@@ -614,9 +614,22 @@ func (r *EnrichmentQueueRepo) ListStaleClaimed(ctx context.Context, updatedThres
 		     OR (? > 0 AND claimed_at IS NOT NULL AND claimed_at < ?)
 		      )
 		ORDER BY updated_at ASC LIMIT ?`
+	// Bind a 0/1 flag for each signal rather than the duration itself. The
+	// predicate only uses the parameter as an enable gate; the actual cutoff
+	// is the timestamp parameter computed above. Binding int64(time.Duration)
+	// passes nanoseconds (1.8e12 for 30m) and Postgres infers the parameter
+	// type as int4 from the `> 0` comparison, which then overflows.
+	updatedEnabled := 0
+	if updatedThreshold > 0 {
+		updatedEnabled = 1
+	}
+	claimedEnabled := 0
+	if claimedAtMaxAge > 0 {
+		claimedEnabled = 1
+	}
 	args := []any{
-		int64(updatedThreshold), updatedCutoff,
-		int64(claimedAtMaxAge), claimedCutoff,
+		updatedEnabled, updatedCutoff,
+		claimedEnabled, claimedCutoff,
 		limit,
 	}
 	if r.db.Backend() == BackendPostgres {
@@ -664,9 +677,19 @@ func (r *EnrichmentQueueRepo) CountStaleClaimed(ctx context.Context, updatedThre
 		        (? > 0 AND updated_at < ?)
 		     OR (? > 0 AND claimed_at IS NOT NULL AND claimed_at < ?)
 		      )`
+	// See ListStaleClaimed for the rationale on binding 0/1 instead of the
+	// raw duration; same Postgres int4 inference trap applies here.
+	updatedEnabled := 0
+	if updatedThreshold > 0 {
+		updatedEnabled = 1
+	}
+	claimedEnabled := 0
+	if claimedAtMaxAge > 0 {
+		claimedEnabled = 1
+	}
 	args := []any{
-		int64(updatedThreshold), updatedCutoff,
-		int64(claimedAtMaxAge), claimedCutoff,
+		updatedEnabled, updatedCutoff,
+		claimedEnabled, claimedCutoff,
 	}
 	if r.db.Backend() == BackendPostgres {
 		query = `SELECT COUNT(*) FROM enrichment_queue

@@ -1037,3 +1037,150 @@ func TestEnrichmentQueueRepo_TickHeartbeatAdvancesUpdatedAt(t *testing.T) {
 		t.Fatalf("heartbeat did not advance updated_at after multiple ticks")
 	})
 }
+
+// backdateClaimedRow forces updated_at and claimed_at on a 'processing' row
+// to specific times so stale-sweep predicates can be exercised without
+// real-time waits.
+func backdateClaimedRow(t *testing.T, ctx context.Context, db DB, id uuid.UUID, updatedAt, claimedAt time.Time) {
+	t.Helper()
+	query := `UPDATE enrichment_queue SET updated_at = ?, claimed_at = ? WHERE id = ?`
+	if db.Backend() == BackendPostgres {
+		query = `UPDATE enrichment_queue SET updated_at = $1, claimed_at = $2 WHERE id = $3`
+	}
+	if _, err := db.Exec(ctx, query,
+		updatedAt.UTC().Format(time.RFC3339),
+		claimedAt.UTC().Format(time.RFC3339),
+		id.String(),
+	); err != nil {
+		t.Fatalf("backdate row %s: %v", id, err)
+	}
+}
+
+// claimSpecific drives ClaimNext until the row with id `target` is claimed,
+// matching the loop pattern used elsewhere in this file for shared-DB
+// resilience (other tests' pending rows may interleave).
+func claimSpecific(t *testing.T, ctx context.Context, repo *EnrichmentQueueRepo, target uuid.UUID, workerID string) {
+	t.Helper()
+	for i := 0; i < 64; i++ {
+		c, err := repo.ClaimNext(ctx, workerID)
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if c == nil {
+			t.Fatalf("ran out of claims before reaching %s", target)
+		}
+		if c.ID == target {
+			return
+		}
+	}
+	t.Fatalf("did not reach target %s within bound", target)
+}
+
+// TestEnrichmentQueueRepo_ListStaleClaimed seeds three processing rows with
+// controlled (updated_at, claimed_at) pairs and verifies the OR'd predicate
+// returns exactly the two that satisfy either staleness signal. Regression
+// fence for the Postgres pgx int4 encode bug: binding the duration directly
+// caused 'failed to encode 1800000000000 into binary format for int4' on
+// every sweep against Postgres. Runs against both backends via forEachDB.
+func TestEnrichmentQueueRepo_ListStaleClaimed(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+
+		items := make([]*model.EnrichmentJob, 3)
+		for i := range items {
+			nsID, memID := createTestMemoryForQueue(t, ctx, db)
+			items[i] = newTestEnrichmentItem(nsID, memID)
+			if err := repo.Enqueue(ctx, items[i]); err != nil {
+				t.Fatalf("enqueue %d: %v", i, err)
+			}
+			claimSpecific(t, ctx, repo, items[i].ID, "worker-stale-test")
+		}
+
+		now := time.Now().UTC()
+		// items[0]: old updated_at, recent claimed_at  -> matches updated_at signal.
+		backdateClaimedRow(t, ctx, db, items[0].ID, now.Add(-1*time.Hour), now.Add(-5*time.Minute))
+		// items[1]: recent updated_at, old claimed_at  -> matches claimed-age signal.
+		backdateClaimedRow(t, ctx, db, items[1].ID, now.Add(-30*time.Second), now.Add(-2*time.Hour))
+		// items[2]: recent both                        -> matches neither.
+		backdateClaimedRow(t, ctx, db, items[2].ID, now.Add(-30*time.Second), now.Add(-5*time.Minute))
+
+		got, err := repo.ListStaleClaimed(ctx, 5*time.Minute, 1*time.Hour, 100)
+		if err != nil {
+			t.Fatalf("ListStaleClaimed: %v", err)
+		}
+		seen := map[uuid.UUID]bool{}
+		for _, row := range got {
+			seen[row.ID] = true
+		}
+		if !seen[items[0].ID] {
+			t.Errorf("expected items[0] (stale updated_at) in result, missing")
+		}
+		if !seen[items[1].ID] {
+			t.Errorf("expected items[1] (stale claimed_at) in result, missing")
+		}
+		if seen[items[2].ID] {
+			t.Errorf("did not expect items[2] (recent both) in result, present")
+		}
+
+		// Zero on one threshold disables that signal. With claimedAtMaxAge=0
+		// only items[0] should match; items[1] (only stale by claim age) drops.
+		gotUpdatedOnly, err := repo.ListStaleClaimed(ctx, 5*time.Minute, 0, 100)
+		if err != nil {
+			t.Fatalf("ListStaleClaimed updated-only: %v", err)
+		}
+		seenU := map[uuid.UUID]bool{}
+		for _, row := range gotUpdatedOnly {
+			seenU[row.ID] = true
+		}
+		if !seenU[items[0].ID] {
+			t.Errorf("updated-only: expected items[0], missing")
+		}
+		if seenU[items[1].ID] {
+			t.Errorf("updated-only: did not expect items[1] (claim-age only), present")
+		}
+		if seenU[items[2].ID] {
+			t.Errorf("updated-only: did not expect items[2], present")
+		}
+	})
+}
+
+// TestEnrichmentQueueRepo_CountStaleClaimed seeds two stale rows and one
+// fresh row, then asserts the count delta is +2. Uses a delta rather than
+// an absolute count because Postgres tests share a database with other test
+// rows; the delta is unaffected by ambient noise. Same regression fence as
+// the List test: would have caught the pgx int4 encode bug.
+func TestEnrichmentQueueRepo_CountStaleClaimed(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+
+		baseline, err := repo.CountStaleClaimed(ctx, 5*time.Minute, 1*time.Hour)
+		if err != nil {
+			t.Fatalf("baseline CountStaleClaimed: %v", err)
+		}
+
+		items := make([]*model.EnrichmentJob, 3)
+		for i := range items {
+			nsID, memID := createTestMemoryForQueue(t, ctx, db)
+			items[i] = newTestEnrichmentItem(nsID, memID)
+			if err := repo.Enqueue(ctx, items[i]); err != nil {
+				t.Fatalf("enqueue %d: %v", i, err)
+			}
+			claimSpecific(t, ctx, repo, items[i].ID, "worker-count-test")
+		}
+
+		now := time.Now().UTC()
+		backdateClaimedRow(t, ctx, db, items[0].ID, now.Add(-1*time.Hour), now.Add(-5*time.Minute))
+		backdateClaimedRow(t, ctx, db, items[1].ID, now.Add(-30*time.Second), now.Add(-2*time.Hour))
+		backdateClaimedRow(t, ctx, db, items[2].ID, now.Add(-30*time.Second), now.Add(-5*time.Minute))
+
+		got, err := repo.CountStaleClaimed(ctx, 5*time.Minute, 1*time.Hour)
+		if err != nil {
+			t.Fatalf("CountStaleClaimed: %v", err)
+		}
+		if delta := got - baseline; delta != 2 {
+			t.Errorf("expected count delta=2, got delta=%d (baseline=%d, got=%d)", delta, baseline, got)
+		}
+	})
+}
