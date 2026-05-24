@@ -1702,6 +1702,17 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 		}
 	}
 
+	// Stamp the query_augmentation step only when the persisted vector was
+	// actually built from augmented input. The marker condition mirrors the
+	// augmented_queries / augmented_embedding_at writes above so the queue
+	// row's step list and the memory row's marker columns agree: present
+	// here iff the timestamp is set on the memory.
+	if p.embedUsedAugmented && p.mem.EmbeddingDim != nil && len(p.augmentedQueries) > 0 {
+		if err := wp.queue.MarkStepCompleted(ctx, p.job.ID, model.StepQueryAugmentation); err != nil {
+			slog.Warn("enrichment: mark step completed (query_augmentation)", "job", p.job.ID, "err", err)
+		}
+	}
+
 	if p.partialRecoveryWarning != nil {
 		if err := wp.queue.CompleteWithWarning(ctx, p.job.ID, p.workerID, p.partialRecoveryWarning); err != nil {
 			if errors.Is(err, storage.ErrClaimLost) {

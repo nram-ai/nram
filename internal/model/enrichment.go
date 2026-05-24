@@ -11,9 +11,10 @@ import (
 // worker as it finishes each phase. Read by runPreEmbed to short-circuit
 // retries of jobs that already advanced past a phase before failing.
 const (
-	StepFactExtraction   = "fact_extraction"
-	StepEntityExtraction = "entity_extraction"
-	StepEmbedding        = "embedding"
+	StepFactExtraction    = "fact_extraction"
+	StepEntityExtraction  = "entity_extraction"
+	StepQueryAugmentation = "query_augmentation"
+	StepEmbedding         = "embedding"
 )
 
 // EnrichmentJob.Status values. Mirrors the schema's set; using these

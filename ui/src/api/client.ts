@@ -1155,6 +1155,10 @@ export interface EnrichmentQueueItem {
   claimed_at_age_ms?: number;
   is_stale_diagnostic: boolean;
   last_requeue_reason?: string;
+  // Enrichment phases that finished for this job. Subset of:
+  //   "fact_extraction", "entity_extraction", "query_augmentation", "embedding"
+  // Always emitted by the server as an array (never null/undefined).
+  steps_completed: string[];
 }
 
 export interface EnrichmentQueueStatus {

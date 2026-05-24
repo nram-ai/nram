@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { Fragment, useState, useCallback, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useEnrichmentStatus,
@@ -14,11 +14,13 @@ import {
 import { useAuth, type Tier } from "../context/AuthContext";
 import { TierTabs } from "../components/TierTabs";
 import { ExtractionErrorView } from "../lib/extractionError";
+import { MemoryAugmentPreviewBlock } from "../components/MemoryAugmentPreviewBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faSpinner,
   faChevronUp,
   faChevronDown,
+  faChevronRight,
   faFolderOpen,
   faCirclePlay,
   faCirclePause,
@@ -399,6 +401,133 @@ function SortHeader({
 }
 
 // ---------------------------------------------------------------------------
+// Job expansion (accordion content)
+// ---------------------------------------------------------------------------
+
+// STEPS lists the enrichment phases the worker records in steps_completed,
+// in the order the pipeline runs them. Keep aligned with model.Step*
+// constants on the server (fact_extraction, entity_extraction,
+// query_augmentation, embedding).
+const STEPS: Array<{ name: string; label: string }> = [
+  { name: "fact_extraction", label: "Fact extraction" },
+  { name: "entity_extraction", label: "Entity extraction" },
+  { name: "query_augmentation", label: "Query augmentation" },
+  { name: "embedding", label: "Embedding" },
+];
+
+function StepStatusIcon({
+  ran,
+  jobStatus,
+}: {
+  ran: boolean;
+  jobStatus: string;
+}) {
+  if (ran) {
+    return (
+      <FontAwesomeIcon
+        icon={faCheck}
+        className="h-3.5 w-3.5 text-success"
+        aria-hidden="true"
+      />
+    );
+  }
+  if (jobStatus === "failed") {
+    return (
+      <FontAwesomeIcon
+        icon={faXmark}
+        className="h-3.5 w-3.5 text-destructive"
+        aria-hidden="true"
+      />
+    );
+  }
+  return (
+    <span
+      className="inline-block h-3.5 w-3.5 rounded-full border border-muted-foreground/30"
+      aria-hidden="true"
+    />
+  );
+}
+
+function JobExpansion({ item }: { item: EnrichmentQueueItem }) {
+  const done = new Set(item.steps_completed);
+  return (
+    <div className="space-y-3 text-xs">
+      <div>
+        <h4 className="mb-1.5 font-medium text-muted-foreground">Steps</h4>
+        <ul className="space-y-1">
+          {STEPS.map((s) => {
+            const ran = done.has(s.name);
+            let label: string;
+            if (ran) {
+              label = "ran";
+            } else if (item.status === "failed") {
+              label = "did not run (job failed)";
+            } else if (item.status === "completed") {
+              label = "skipped";
+            } else {
+              label = "pending";
+            }
+            return (
+              <li key={s.name} className="flex items-center gap-2">
+                <StepStatusIcon ran={ran} jobStatus={item.status} />
+                <span className="font-medium text-foreground">{s.label}</span>
+                <span className="text-muted-foreground">{label}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      {(item.claimed_by || item.claimed_at || item.last_requeue_reason) && (
+        <div className="grid grid-cols-1 gap-x-6 gap-y-1 text-muted-foreground md:grid-cols-3">
+          {item.claimed_by && (
+            <div>
+              <span className="font-medium text-foreground">Worker:</span>{" "}
+              <span className="font-mono">{item.claimed_by}</span>
+            </div>
+          )}
+          {item.claimed_at && (
+            <div>
+              <span className="font-medium text-foreground">Claimed:</span>{" "}
+              {new Date(item.claimed_at).toLocaleString()}
+            </div>
+          )}
+          {item.last_requeue_reason && (
+            <div className="md:col-span-3">
+              <span className="font-medium text-foreground">
+                Last requeue:
+              </span>{" "}
+              {item.last_requeue_reason}
+            </div>
+          )}
+        </div>
+      )}
+
+      {item.last_error && (
+        <div>
+          <h4 className="mb-1.5 font-medium text-muted-foreground">
+            Last error
+          </h4>
+          <ExtractionErrorView value={item.last_error} variant="block" />
+        </div>
+      )}
+
+      {item.project_id && (
+        <div>
+          <h4 className="mb-1.5 font-medium text-muted-foreground">
+            Augmentation
+          </h4>
+          <MemoryAugmentPreviewBlock
+            projectId={item.project_id}
+            memoryId={item.memory_id}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Queue Table
 // ---------------------------------------------------------------------------
 
@@ -426,6 +555,24 @@ function QueueTable({
   useElapsedTicker(hasProcessing);
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // expandedJobs holds the queue-job ids whose per-pass detail accordion is
+  // open. Held inside QueueTable (not above) so it resets only when the
+  // table unmounts, surviving live SSE-driven row updates that re-key the
+  // same item.id.
+  const [expandedJobs, setExpandedJobs] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const toggleJob = useCallback((id: string) => {
+    setExpandedJobs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
 
   const handleSort = useCallback(
     (field: SortField) => {
@@ -489,6 +636,7 @@ function QueueTable({
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border bg-muted/50">
+            <th className="w-8 px-3 py-2.5" aria-label="Expand row" />
             {showWriteActions && (
               <th className="px-3 py-2.5 text-left">
                 <input
@@ -549,14 +697,42 @@ function QueueTable({
               STATUS_BADGES[item.status] || STATUS_BADGES.pending;
             const alert = rowAlert(item);
             const rowTint = alert ? ROW_TINTS[alert.kind] : "";
+            const expanded = expandedJobs.has(item.id);
+            // Total column count for the expansion row's colSpan. Header
+            // always renders: chevron, [checkbox if showWriteActions],
+            // memory_id, project, status, attempts, last_error, queued,
+            // actions. That's 9 with checkbox, 8 without.
+            const totalCols = showWriteActions ? 9 : 8;
 
             return (
+              <Fragment key={item.id}>
               <tr
-                key={item.id}
-                className={`hover:bg-muted/30 transition-colors ${rowTint}`}
+                className={`cursor-pointer hover:bg-muted/30 transition-colors ${rowTint}`}
+                onClick={() => toggleJob(item.id)}
               >
+                <td className="px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleJob(item.id);
+                    }}
+                    aria-expanded={expanded}
+                    aria-label={expanded ? "Collapse row" : "Expand row"}
+                    className="inline-flex h-5 w-5 items-center justify-center text-muted-foreground hover:text-foreground"
+                  >
+                    <FontAwesomeIcon
+                      icon={expanded ? faChevronDown : faChevronRight}
+                      className="h-3.5 w-3.5"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </td>
                 {showWriteActions && (
-                  <td className="px-3 py-2.5">
+                  <td
+                    className="px-3 py-2.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <input
                       type="checkbox"
                       checked={selectedIds.has(item.id)}
@@ -635,7 +811,10 @@ function QueueTable({
                   </span>
                 </td>
                 {showWriteActions && (
-                  <td className="px-3 py-2.5">
+                  <td
+                    className="px-3 py-2.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {isFailed && (
                       <button
                         type="button"
@@ -649,6 +828,18 @@ function QueueTable({
                   </td>
                 )}
               </tr>
+              {expanded && (
+                <tr className="border-b border-border bg-muted/10">
+                  <td
+                    colSpan={totalCols}
+                    className="px-6 py-3"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <JobExpansion item={item} />
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             );
           })}
         </tbody>

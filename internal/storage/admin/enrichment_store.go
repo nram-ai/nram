@@ -48,6 +48,13 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projec
 	if item.LastError != nil {
 		lastErr = string(item.LastError)
 	}
+	steps := []string{}
+	if len(item.StepsCompleted) > 0 {
+		var parsed []string
+		if err := json.Unmarshal(item.StepsCompleted, &parsed); err == nil && parsed != nil {
+			steps = parsed
+		}
+	}
 	out := api.EnrichmentQueueItem{
 		ID:                item.ID,
 		MemoryID:          item.MemoryID,
@@ -60,6 +67,7 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projec
 		CreatedAt:         item.CreatedAt,
 		ClaimedBy:         item.ClaimedBy,
 		LastRequeueReason: item.LastRequeueReason,
+		StepsCompleted:    steps,
 	}
 	if item.Status == model.EnrichmentStatusProcessing && item.ClaimedAt != nil {
 		out.ClaimedAt = item.ClaimedAt
@@ -97,7 +105,7 @@ func (s *EnrichmentAdminStore) staleThresholdMs(ctx context.Context) int64 {
 // it off and surface project_id only.
 func queueItemSelectColumns(withName bool) string {
 	cols := `eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
-		eq.claimed_by, eq.claimed_at, eq.last_requeue_reason, p.id`
+		eq.claimed_by, eq.claimed_at, eq.last_requeue_reason, eq.steps_completed, p.id`
 	if withName {
 		cols += `, p.name`
 	}
@@ -112,11 +120,12 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 		idStr, memIDStr, status, createdAtStr     string
 		attempts, maxAttempts                     int
 		lastErr, claimedBy, claimedAtStr, requeue *string
+		stepsCompletedStr                         string
 		projectIDStr                              *string
 		projectName                               *string
 	)
 	dest := []any{&idStr, &memIDStr, &status, &attempts, &maxAttempts, &lastErr, &createdAtStr,
-		&claimedBy, &claimedAtStr, &requeue, &projectIDStr}
+		&claimedBy, &claimedAtStr, &requeue, &stepsCompletedStr, &projectIDStr}
 	if withName {
 		dest = append(dest, &projectName)
 	}
@@ -147,6 +156,10 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 	if projectName != nil {
 		pname = *projectName
 	}
+	var stepsCompletedRaw json.RawMessage
+	if stepsCompletedStr != "" {
+		stepsCompletedRaw = json.RawMessage(stepsCompletedStr)
+	}
 	return s.hydrateQueueItem(model.EnrichmentJob{
 		ID:                id,
 		MemoryID:          memID,
@@ -158,6 +171,7 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 		ClaimedBy:         claimedBy,
 		ClaimedAt:         claimedAt,
 		LastRequeueReason: requeue,
+		StepsCompleted:    stepsCompletedRaw,
 	}, pid, pname, threshold, now), nil
 }
 

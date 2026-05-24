@@ -86,6 +86,10 @@ type EnrichmentQueueItem struct {
 	ClaimedAtAgeMs    *int64     `json:"claimed_at_age_ms,omitempty"`
 	IsStaleDiagnostic bool       `json:"is_stale_diagnostic"`
 	LastRequeueReason *string    `json:"last_requeue_reason,omitempty"`
+	// StepsCompleted lists the enrichment phases that finished for this job
+	// (subset of model.Step* constants). Always emitted as an array (never
+	// null) so UI consumers never need an undefined check.
+	StepsCompleted []string `json:"steps_completed"`
 }
 
 // enrichmentRetryRequest is the request body for POST /enrichment/retry.

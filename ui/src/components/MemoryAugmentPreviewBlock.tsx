@@ -1,19 +1,27 @@
 import { useState } from "react";
-import { usePreviewMemoryAugmentation } from "../hooks/useApi";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck } from "../lib/icons";
+import {
+  useMemoryDetail,
+  usePreviewMemoryAugmentation,
+} from "../hooks/useApi";
 import type { MemoryAugmentPreviewResponse } from "../api/client";
 
-// MemoryAugmentPreviewBlock surfaces the per-memory preview of the
-// query-augmentation phase. Two pieces:
+// MemoryAugmentPreviewBlock surfaces the per-memory state of the
+// query-augmentation phase. Three pieces:
 //
-// 1. If the memory was already embedded with augmentation, the persisted
-//    augmented_queries are shown so operators can verify what the embedder
-//    actually saw.
-// 2. A "Preview" button that runs the phase against this memory's current
+// 1. A binary status pill at the top: green "Augmented" when persisted
+//    queries exist, neutral "Raw embed" when they do not. This is the
+//    at-a-glance signal callers were missing.
+// 2. The persisted augmented_queries list when augmentation has run.
+// 3. A "Preview" button that runs the phase against this memory's current
 //    content using current settings, without persisting. Useful for tuning
 //    the prompt against real corpus content instead of synthetic samples.
 //
-// Both rendering paths are decorative — the embedded vector is the source of
-// truth; this block is for debugging and prompt tuning.
+// When persistedQueries / persistedAt are not supplied as props the block
+// self-fetches the memory record via useMemoryDetail so it can be embedded
+// in surfaces (e.g. the EnrichmentMonitor accordion) that do not already
+// have the memory loaded. Existing callers continue to pass both props.
 export function MemoryAugmentPreviewBlock({
   projectId,
   memoryId,
@@ -25,6 +33,20 @@ export function MemoryAugmentPreviewBlock({
   persistedQueries?: string[] | null;
   persistedAt?: string | null;
 }) {
+  const propsProvided =
+    persistedQueries !== undefined || persistedAt !== undefined;
+  const detail = useMemoryDetail(
+    propsProvided ? "" : projectId,
+    propsProvided ? "" : memoryId,
+  );
+
+  const queries: string[] | null = propsProvided
+    ? persistedQueries ?? null
+    : detail.data?.augmented_queries ?? null;
+  const at: string | null = propsProvided
+    ? persistedAt ?? null
+    : detail.data?.augmented_embedding_at ?? null;
+
   const preview = usePreviewMemoryAugmentation();
   const [result, setResult] = useState<MemoryAugmentPreviewResponse | null>(
     null,
@@ -47,34 +69,51 @@ export function MemoryAugmentPreviewBlock({
     );
   }
 
-  const hasPersisted = persistedQueries && persistedQueries.length > 0;
+  const hasPersisted = !!queries && queries.length > 0;
+  const queryCount = hasPersisted ? queries!.length : 0;
 
   return (
     <div>
-      <h3 className="mb-2 text-sm font-medium text-muted-foreground">
-        Augmented Queries
-      </h3>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-medium text-muted-foreground">
+          Augmentation
+        </h3>
+        {hasPersisted ? (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+            <FontAwesomeIcon
+              icon={faCheck}
+              className="h-3 w-3"
+              aria-hidden="true"
+            />
+            Augmented · {queryCount} {queryCount === 1 ? "query" : "queries"}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+            Raw embed · not augmented
+          </span>
+        )}
+        {hasPersisted && at && (
+          <span className="text-xs text-muted-foreground">
+            on {new Date(at).toLocaleString()}
+          </span>
+        )}
+      </div>
 
       {hasPersisted ? (
         <div className="rounded border bg-muted/50 p-3 text-sm">
           <ul className="list-disc space-y-1 pl-5">
-            {persistedQueries.map((q, i) => (
+            {queries!.map((q, i) => (
               <li key={i} className="text-foreground">
                 {q}
               </li>
             ))}
           </ul>
-          {persistedAt && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              Embedded with augmentation on {new Date(persistedAt).toLocaleString()}
-            </p>
-          )}
         </div>
       ) : (
         <p className="text-xs text-muted-foreground">
-          This memory was embedded against raw content. Run a preview to see
-          what the augmentation phase would generate against the current
-          content using current settings; no persistence.
+          This memory&apos;s vector was built from raw content. Run a preview
+          to see what augmentation would generate against the current content
+          using current settings; no persistence.
         </p>
       )}
 
@@ -83,7 +122,7 @@ export function MemoryAugmentPreviewBlock({
           type="button"
           onClick={handleRun}
           disabled={preview.isPending}
-          className="rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+          className="rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
         >
           {preview.isPending ? "Generating…" : "Preview augmentation"}
         </button>
