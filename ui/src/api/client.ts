@@ -490,12 +490,17 @@ export interface GenerateAPIKeyResponse {
   created_at: string;
 }
 
-// SystemRankingWeights is the fully-resolved view of the seven ranking weight
+// SystemRankingWeights is the fully-resolved view of the ranking weight
 // settings, used as the placeholder/effective baseline in the project edit
 // panel. All fields are required because the system layer always has a
 // value (operator override or built-in default). `origin` is the
 // project-affinity term: it lifts candidates whose home namespace is the
 // recall's primary project; default 0 leaves ranking math unchanged.
+// `mmr_lambda` is the MMR redundancy-aware rerank trade-off: not a linear
+// combination weight, but it shares the cascade and override surface
+// because operators tune it through the same per-project ranking_weights
+// JSON. 1.0 disables MMR (pure relevance order); 0.7-0.8 is the standard
+// mild-nudge range.
 export interface SystemRankingWeights {
   similarity: number;
   recency: number;
@@ -504,16 +509,17 @@ export interface SystemRankingWeights {
   graph_relevance: number;
   confidence: number;
   origin: number;
+  mmr_lambda: number;
 }
 
-// ProjectRankingWeights mirrors the canonical seven-field sparse override
-// shape parsed by service.ParseRankingOverride. Every field is optional so
-// the editor can persist partial overrides; unset fields fall through to
-// the system-level ranking.weight.* setting at recall time. The legacy
-// `relevance` field has been migrated in-place by 000025/000022; readers
-// that need to defend against pre-migration cached data should use a
-// type-narrowing cast at the use site rather than carrying a deprecated
-// alias on the canonical interface.
+// ProjectRankingWeights mirrors the canonical sparse override shape parsed
+// by service.ParseRankingOverride. Every field is optional so the editor
+// can persist partial overrides; unset fields fall through to the system-
+// level ranking.weight.* setting at recall time. The legacy `relevance`
+// field has been migrated in-place by 000025/000022; readers that need to
+// defend against pre-migration cached data should use a type-narrowing
+// cast at the use site rather than carrying a deprecated alias on the
+// canonical interface.
 export interface ProjectRankingWeights {
   similarity?: number;
   recency?: number;
@@ -522,6 +528,7 @@ export interface ProjectRankingWeights {
   graph_relevance?: number;
   confidence?: number;
   origin?: number;
+  mmr_lambda?: number;
 }
 
 // ProjectSettings is the full per-project override blob. All fields are

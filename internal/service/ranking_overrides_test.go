@@ -140,3 +140,59 @@ func TestMergeWeights_AllFields(t *testing.T) {
 		t.Errorf("all-fields override should zero everything, got %+v", merged)
 	}
 }
+
+func TestParseRankingOverride_MmrLambda(t *testing.T) {
+	ov, err := ParseRankingOverride(json.RawMessage(`{"mmr_lambda":0.5}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ov.MmrLambda == nil || *ov.MmrLambda != 0.5 {
+		t.Errorf("MmrLambda not set to 0.5, got %v", ov.MmrLambda)
+	}
+	if ov.Similarity != nil || ov.Recency != nil || ov.Importance != nil ||
+		ov.Frequency != nil || ov.GraphRelevance != nil || ov.Confidence != nil ||
+		ov.Origin != nil {
+		t.Error("non-mmr fields should remain nil")
+	}
+}
+
+func TestParseRankingOverride_MmrLambda_OutOfRange(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"too high", `{"mmr_lambda":1.5}`},
+		{"negative", `{"mmr_lambda":-0.1}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseRankingOverride(json.RawMessage(tc.raw))
+			if err == nil {
+				t.Errorf("expected error for %s, got nil", tc.raw)
+			}
+		})
+	}
+}
+
+func TestMergeWeights_MmrLambdaOverride(t *testing.T) {
+	base := DefaultRankingWeights
+	v := 0.30
+	merged := MergeWeights(base, ProjectRankingOverride{MmrLambda: &v})
+	if merged.MmrLambda != 0.30 {
+		t.Errorf("MmrLambda should be replaced with 0.30, got %v", merged.MmrLambda)
+	}
+	if merged.Similarity != base.Similarity || merged.Recency != base.Recency ||
+		merged.Importance != base.Importance || merged.Frequency != base.Frequency ||
+		merged.GraphRelevance != base.GraphRelevance || merged.Confidence != base.Confidence ||
+		merged.Origin != base.Origin {
+		t.Error("non-MmrLambda fields should retain base values")
+	}
+}
+
+func TestMergeWeights_MmrLambdaPreservedOnNilOverride(t *testing.T) {
+	base := DefaultRankingWeights
+	merged := MergeWeights(base, ProjectRankingOverride{})
+	if merged.MmrLambda != base.MmrLambda {
+		t.Errorf("nil override should preserve base.MmrLambda (%v), got %v", base.MmrLambda, merged.MmrLambda)
+	}
+}

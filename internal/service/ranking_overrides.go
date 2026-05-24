@@ -18,6 +18,7 @@ type ProjectRankingOverride struct {
 	GraphRelevance *float64
 	Confidence     *float64
 	Origin         *float64
+	MmrLambda      *float64
 }
 
 // rankingOverrideKey maps incoming JSON keys to the override field they
@@ -31,6 +32,7 @@ var rankingOverrideKey = map[string]string{
 	"graph_relevance": "GraphRelevance",
 	"confidence":      "Confidence",
 	"origin":          "Origin",
+	"mmr_lambda":      "MmrLambda",
 	"relevance":       "Similarity",
 }
 
@@ -87,6 +89,8 @@ func ParseRankingOverride(raw json.RawMessage) (ProjectRankingOverride, error) {
 			ov.Confidence = ptrTo(f)
 		case "Origin":
 			ov.Origin = ptrTo(f)
+		case "MmrLambda":
+			ov.MmrLambda = ptrTo(f)
 		}
 	}
 
@@ -124,6 +128,9 @@ func MergeWeights(base RankingWeights, ov ProjectRankingOverride) RankingWeights
 	}
 	if ov.Origin != nil {
 		out.Origin = *ov.Origin
+	}
+	if ov.MmrLambda != nil {
+		out.MmrLambda = *ov.MmrLambda
 	}
 	return out
 }

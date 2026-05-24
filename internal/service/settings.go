@@ -48,6 +48,7 @@ const (
 	SettingRankWeightGraph   = "ranking.weight.graph_relevance"
 	SettingRankWeightConf    = "ranking.weight.confidence"
 	SettingRankWeightOrigin  = "ranking.weight.origin"
+	SettingRankWeightMmr     = "ranking.weight.mmr_lambda"
 	SettingTokenRetention    = "usage.token_retention_days"
 	SettingTokenCostRates    = "usage.cost_rates"
 
@@ -537,6 +538,7 @@ var settingDefaults = map[string]string{
 	SettingRankWeightGraph:                "0.20",
 	SettingRankWeightConf:                 "0.05",
 	SettingRankWeightOrigin:               "0.00",
+	SettingRankWeightMmr:                  "0.75",
 	SettingRecallFusionEnabled:            "false",
 	SettingRecallFusionK:                  "60",
 	SettingRecallFusionVecW:               "0.60",

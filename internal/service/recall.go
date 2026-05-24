@@ -42,6 +42,17 @@ type VectorSearcher interface {
 	Search(ctx context.Context, kind storage.VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error)
 }
 
+// VectorHydrator fetches stored embeddings by ID for the recall pipeline's
+// candidate-build hydration step. Lifted as a narrow interface (separate from
+// VectorSearcher) so downstream consumers that only do search (the enrichment
+// dedup path, for instance) are not forced to implement GetByIDs on every
+// mock. In production the same concrete vector store implements both. When
+// nil on a RecallService, hydration is skipped and MMR rerank falls through
+// to the no-MMR pass.
+type VectorHydrator interface {
+	GetByIDs(ctx context.Context, kind storage.VectorKind, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error)
+}
+
 // EntityReader provides entity lookup operations.
 type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
@@ -146,6 +157,13 @@ type RecallResult struct {
 	// Unexported so JSON serialization drops it; threaded through to the
 	// post-sort namespace-quota truncation.
 	isPrimary bool
+	// embedding carries the candidate's hydrated embedding through to the
+	// MMR rerank stage. Unexported so JSON serialization drops it. Nil for
+	// candidates whose embedding was absent at hydration (e.g. backfill not
+	// yet run, or recall ran without a wired VectorHydrator); MMR treats
+	// these as missing-embedding and pads them after the embedded-subset
+	// rerank rather than demoting them on a similarity it cannot compute.
+	embedding []float32
 }
 
 // RecallGraph holds the graph entities and relationships found during graph traversal.
@@ -216,7 +234,10 @@ type RecallRelationship struct {
 
 // RankingWeights controls the relative importance of each scoring factor.
 // Origin is a project-affinity term that lifts candidates from the recall's
-// primary project above otherwise-equivalent globals.
+// primary project above otherwise-equivalent globals. MmrLambda is the
+// redundancy-aware rerank trade-off (see mmrSelect): not a linear-combination
+// weight, but it shares the cascade and override surface because operators
+// tune it through the same per-project ranking_weights JSON.
 type RankingWeights struct {
 	Similarity     float64
 	Recency        float64
@@ -225,12 +246,15 @@ type RankingWeights struct {
 	GraphRelevance float64
 	Confidence     float64
 	Origin         float64
+	MmrLambda      float64
 }
 
 // DefaultRankingWeights provides sensible defaults for ranking. Frequency is
 // 0 because access_count already drives Confidence reinforcement; weighting
 // both double-counts the same signal. Origin is 0 so upgrades preserve
-// pre-origin ranking output.
+// pre-origin ranking output. MmrLambda 0.75 is the conservative mild-nudge
+// value (literature standard 0.7-0.8): demotes near-identical siblings without
+// regressing single-fact lookups where there is no sibling to demote against.
 var DefaultRankingWeights = RankingWeights{
 	Similarity:     0.50,
 	Recency:        0.15,
@@ -239,6 +263,7 @@ var DefaultRankingWeights = RankingWeights{
 	GraphRelevance: 0.20,
 	Confidence:     0.05,
 	Origin:         0.00,
+	MmrLambda:      0.75,
 }
 
 // FusionConfig governs candidate retrieval (parallel vector + lexical,
@@ -279,6 +304,7 @@ type RecallService struct {
 	projects      ProjectRepository
 	namespaces    NamespaceRepository
 	vectorSearch  VectorSearcher
+	vectors       VectorHydrator
 	lexical       LexicalSearcher
 	entityReader  EntityReader
 	traverser     RelationshipTraverser
@@ -344,6 +370,15 @@ func (s *RecallService) SetLexical(l LexicalSearcher) {
 	s.lexical = l
 }
 
+// SetVectorHydrator wires the embedding-fetch capability used by the
+// candidate-build hydration step. When nil (the default), hydration is
+// skipped, candidate.embedding stays nil for every row, and MMR rerank
+// falls through to the no-MMR pass (every candidate looks missing-embedding).
+// Production wires the same concrete vector store that backs vectorSearch.
+func (s *RecallService) SetVectorHydrator(h VectorHydrator) {
+	s.vectors = h
+}
+
 // SetFusion overrides the fusion configuration. Off by default; flip via
 // /v1/admin/settings (key recall.fusion.enabled) after migrations have been
 // applied and the lexical searcher is wired.
@@ -370,6 +405,14 @@ type scoredMemory struct {
 	// consumers can tell "vector said X" from "no vector evidence at all"
 	// (the latter serializes as null).
 	viaVector bool
+	// embedding holds the candidate's embedding vector after the candidate-build
+	// phase finishes. Hydrated in one batch GetByIDs call after the tag filter
+	// (recall.go: between tag filter and graph block). Nil means the embedding
+	// row was absent at hydration time (e.g. the dream embedding_backfill phase
+	// has not yet run on a freshly-stored memory, or the row's stored dimension
+	// does not match the active embedder). Downstream stages that need an
+	// embedding (e.g. mmrSelect) must handle nil gracefully.
+	embedding []float32
 }
 
 // projectAttribution carries the owning project's ID and slug for a given
@@ -501,6 +544,19 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 	candidates := []scoredMemory{}
 
+	// queryEmbeddingDim is the actual embedding dimension produced for the
+	// query, lifted out of the vector-search block so the post-tag-filter
+	// hydration step can fetch candidate embeddings at the same dim. Stays 0
+	// when the embedding path did not run (no provider, no embedding produced,
+	// or list-fallback path); in that case hydration is skipped.
+	var queryEmbeddingDim int
+	// queryEmbedding mirrors queryEmbeddingDim's lift: mmrSelect uses it for
+	// on-the-fly relevance computation when a candidate has a hydrated
+	// embedding but no Similarity pointer (lexical-only fusion hits, shared-
+	// namespace passthroughs), keeping every embedded candidate on the same
+	// cosine scale. Stays nil when the embedding path did not run.
+	var queryEmbedding []float32
+
 	// Try vector search if embedding provider is available.
 	var embeddingUsed bool
 	if s.embedProvider != nil {
@@ -531,9 +587,11 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				embeddingUsed = true
 
 				// Use the actual returned embedding dimension for search,
-				// not the requested one — some providers (e.g., Ollama)
+				// not the requested one. Some providers (e.g., Ollama)
 				// ignore the dimension parameter and return their native size.
 				actualDim := len(resp.Embeddings[0])
+				queryEmbeddingDim = actualDim
+				queryEmbedding = resp.Embeddings[0]
 
 				// Over-fetch for re-ranking. Pool size is overfetchLimit
 				// resolved once at Recall entry from the registry knobs.
@@ -782,6 +840,47 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		postTagGroups = prefixGroups(candidates, scoredMemoryTags, req.DiversifyByTagPrefix)
 	}
 
+	// Hydrate candidate embeddings in one batch. Runs after the tag filter so
+	// we never pay a fetch for a candidate the filter will discard. Each
+	// candidate gets its stored embedding stamped onto scoredMemory.embedding;
+	// downstream redundancy-aware stages (mmrSelect today, future reranks)
+	// rely on this single hydration pass rather than re-fetching per stage.
+	// Guarded on the active embedding dim and the wired hydrator: a list-
+	// fallback recall, a recall with no embedding provider, or a service
+	// constructed without SetVectorHydrator all skip hydration entirely and
+	// MMR falls through to the no-MMR pass. A candidate whose row is absent
+	// from the returned map (no embedding stored, or stored at a different
+	// dim) keeps its zero-value embedding slice.
+	if queryEmbeddingDim > 0 && s.vectors != nil && len(candidates) > 0 {
+		ids := make([]uuid.UUID, len(candidates))
+		for i, c := range candidates {
+			ids[i] = c.memory.ID
+		}
+		got, err := s.vectors.GetByIDs(ctx, storage.VectorKindMemory, ids, queryEmbeddingDim)
+		if err != nil {
+			// Hydration failure is not fatal: candidate.embedding stays nil
+			// for every row, mmrSelect's len(embedded) < 2 fast path engages,
+			// and the recall returns composite-only ranking. Log so a backend
+			// outage that silently disables MMR rerank is observable rather
+			// than hidden inside a vector-store-error log under a different
+			// subsystem. Matches the slog.Debug bypass pattern used earlier
+			// in this function for the list-fallback similarity_threshold
+			// bypass.
+			slog.Warn("recall: embedding hydration failed; MMR rerank will bypass",
+				"project_id", projectID,
+				"candidates", len(candidates),
+				"dim", queryEmbeddingDim,
+				"err", err,
+			)
+		} else {
+			for i := range candidates {
+				if vec, ok := got[candidates[i].memory.ID]; ok {
+					candidates[i].embedding = vec
+				}
+			}
+		}
+	}
+
 	// Graph traversal if requested.
 	graphEntities := []RecallEntity{}
 	graphRelationships := []RecallRelationship{}
@@ -1018,6 +1117,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			CreatedAt:   c.memory.CreatedAt,
 			UpdatedAt:   c.memory.UpdatedAt,
 			isPrimary:   c.isPrimary,
+			embedding:   c.embedding,
 		})
 	}
 
@@ -1030,6 +1130,25 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	if projectMin < 0 {
 		projectMin = 0
 	}
+
+	// MMR redundancy-aware rerank between threshold filtering and final-select.
+	// Reorders passing without truncating: final-select (tag-prefix round-
+	// robin, namespace-quota, or plain slice) is the truncation stage and
+	// needs every candidate available for its own logic (e.g. namespace-quota
+	// scans passing for primary-stamped rows; truncating before quota would
+	// hide primaries that should have been reserved). Missing-embedding rows
+	// stay anchored to their composite-rank position inside mmrSelect, so a
+	// high-composite lexical-only or unbackfilled hit is not demoted; only
+	// the embedded subset gets reordered. Because no candidate is dropped,
+	// the set of tag-prefix groups is preserved across this stage — no
+	// post-MMR coverage_gaps attribution is required. Fast paths bypass when
+	// lambda is at the disabling edges (>= 1.0 or <= 0.0) or fewer than two
+	// embedded candidates exist; see mmrSelect. Lambda is taken from the
+	// primary project's effective ranking weights so cross-project recalls
+	// apply one trade-off across the whole result set rather than mixing
+	// per-candidate weights.
+	mmrLambda := resolveWeights(projectID).MmrLambda
+	passing = mmrSelect(passing, queryEmbedding, mmrLambda, len(passing))
 
 	var results []RecallResult
 	var coverageGaps []CoverageGap
@@ -1467,9 +1586,13 @@ func diversifyByTagPrefix(passing []RecallResult, prefix string, limit int) []Re
 }
 
 // applyNamespaceQuota truncates passing to limit while reserving projectMin
-// slots for primary-project candidates. passing must be score-sorted; the
-// tail preserves the original rank order so globals that outscored the
-// quota still surface in their earned position.
+// slots for primary-project candidates. passing is expected in the order the
+// upstream pipeline produced: composite-rank for missing-embedding rows,
+// MMR-rank for the embedded subset (interleaved at the embedded slots'
+// composite positions; see mmrSelect). The fill loop walks this order
+// directly, so globals that earned a high slot under composite ranking still
+// surface near the top of the non-primary tail except where MMR demoted them
+// for redundancy with an earlier primary.
 func applyNamespaceQuota(passing []RecallResult, limit, projectMin int) []RecallResult {
 	if limit <= 0 || len(passing) == 0 {
 		return []RecallResult{}
@@ -1511,7 +1634,12 @@ func applyNamespaceQuota(passing []RecallResult, limit, projectMin int) []Recall
 
 // computeCoverageGaps produces the coverage-gap list for a diversified recall,
 // attributing each observed-but-absent group key to the pipeline stage where
-// its last surviving candidate was dropped. Output is sorted by group key for
+// its last surviving candidate was dropped. Stages, in pipeline order: tag
+// filter, threshold filter, final-limit truncation. A group present in `raw`
+// but missing from `returned` is attributed to the earliest stage that drops
+// it. MMR is not represented because it reorders without dropping; groups
+// surviving the threshold stage and missing from `returned` are bucketed
+// under the final-limit truncation. Output is sorted by group key for
 // deterministic responses.
 func computeCoverageGaps(raw, postTag, postThreshold, returned map[string]struct{}) []CoverageGap {
 	if len(raw) == 0 {

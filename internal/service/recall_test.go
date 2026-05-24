@@ -2706,3 +2706,191 @@ func TestRecallResult_SimilarityJSONIsNullWhenNil(t *testing.T) {
 		t.Errorf("expected zero Similarity to serialize as 0; got %s", raw)
 	}
 }
+
+// mockVectorHydrator returns pre-configured embeddings keyed by ID. Missing
+// IDs are simply absent from the returned map (the same contract as the
+// production VectorStore.GetByIDs implementations).
+type mockVectorHydrator struct {
+	embeddings map[uuid.UUID][]float32
+	err        error
+}
+
+func (m *mockVectorHydrator) GetByIDs(_ context.Context, _ storage.VectorKind, ids []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	out := make(map[uuid.UUID][]float32, len(ids))
+	for _, id := range ids {
+		if v, ok := m.embeddings[id]; ok {
+			out[id] = v
+		}
+	}
+	return out, nil
+}
+
+// TestRecall_MmrDemotesParaphraseCluster verifies that MMR diversifies a tight
+// semantic cluster: five near-identical embeddings (cosine 0.99+ to each
+// other) sharing the top of the composite-score ranking, plus three unrelated
+// embeddings further down. At limit=5 and default lambda 0.75, the result
+// should surface one cluster representative plus the three unrelated memories
+// plus one cluster runner-up (since the 2x-limit MMR window holds 10 items
+// but only 8 candidates exist, then final-slice cuts to 5).
+func TestRecall_MmrDemotesParaphraseCluster(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	now := time.Now()
+	clusterIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	unrelatedIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+
+	memories := map[uuid.UUID]*model.Memory{}
+	for i, id := range clusterIDs {
+		memories[id] = makeTestMemory(id, nsID, fmt.Sprintf("cluster_%d", i), nil, 0.5, 0, now.Add(time.Duration(-i)*time.Hour))
+	}
+	for i, id := range unrelatedIDs {
+		memories[id] = makeTestMemory(id, nsID, fmt.Sprintf("unrelated_%d", i), nil, 0.5, 0, now.Add(time.Duration(-i)*time.Hour))
+	}
+
+	// Vector search returns all 8, cluster scoring higher than unrelated.
+	vecResults := make([]storage.VectorSearchResult, 0, 8)
+	for i, id := range clusterIDs {
+		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.85 - float64(i)*0.01, NamespaceID: nsID})
+	}
+	for i, id := range unrelatedIDs {
+		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.65 - float64(i)*0.01, NamespaceID: nsID})
+	}
+
+	// Embeddings: cluster shares a dominant direction (cosine 0.99+ between
+	// cluster pairs); the three unrelated candidates each live in their own
+	// orthogonal dimension so MMR sees no redundancy between any
+	// unrelated/unrelated pair or any unrelated/cluster pair.
+	embs := map[uuid.UUID][]float32{
+		clusterIDs[0]:   {1.0, 0.10, 0, 0, 0},
+		clusterIDs[1]:   {1.0, 0.12, 0, 0, 0},
+		clusterIDs[2]:   {1.0, 0.11, 0, 0, 0},
+		clusterIDs[3]:   {1.0, 0.13, 0, 0, 0},
+		clusterIDs[4]:   {1.0, 0.09, 0, 0, 0},
+		unrelatedIDs[0]: {0, 0, 1, 0, 0},
+		unrelatedIDs[1]: {0, 0, 0, 1, 0},
+		unrelatedIDs[2]: {0, 0, 0, 0, 1},
+	}
+
+	memReader := &mockMemoryReader{memories: memories}
+	vectorSearcher := &mockVectorSearcher{results: vecResults}
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-embed",
+		dimensions: []int{384},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 384)},
+			Model:      "test-model",
+			Usage:      provider.TokenUsage{PromptTokens: 5, TotalTokens: 5},
+		},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider {
+		return embProvider
+	})
+	svc.SetVectorHydrator(&mockVectorHydrator{embeddings: embs})
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID: projectID,
+		Query:     "anything",
+		Limit:     5,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Memories) != 5 {
+		t.Fatalf("expected 5 results, got %d", len(resp.Memories))
+	}
+
+	clusterSet := map[uuid.UUID]bool{}
+	for _, id := range clusterIDs {
+		clusterSet[id] = true
+	}
+	unrelatedSet := map[uuid.UUID]bool{}
+	for _, id := range unrelatedIDs {
+		unrelatedSet[id] = true
+	}
+	clusterCount, unrelatedCount := 0, 0
+	for _, m := range resp.Memories {
+		if clusterSet[m.ID] {
+			clusterCount++
+		}
+		if unrelatedSet[m.ID] {
+			unrelatedCount++
+		}
+	}
+	// Without MMR, the result would be the top-5 by composite, which is all
+	// five cluster members (clusterCount=5, unrelatedCount=0). With MMR at
+	// lambda 0.75, the cluster gets aggressively penalized after the first
+	// pick, so the unrelated memories outrank the redundant cluster siblings.
+	// The 2x window holds 8 (all candidates); final slice cuts to 5, which
+	// gives: 1 cluster seed + 3 unrelated + 1 cluster runner-up.
+	if unrelatedCount != 3 {
+		t.Errorf("expected all 3 unrelated memories to surface after MMR demotion of cluster; got %d unrelated, %d cluster", unrelatedCount, clusterCount)
+	}
+	if clusterCount != 2 {
+		t.Errorf("expected 2 cluster members to survive (seed + runner-up after unrelated padded); got %d", clusterCount)
+	}
+	// First result should still be the composite winner (cluster_0). MMR
+	// seeds with the highest-composite embedded candidate.
+	if resp.Memories[0].ID != clusterIDs[0] {
+		t.Errorf("first result should be the composite winner cluster_0; got %q", resp.Memories[0].Content)
+	}
+}
+
+// TestRecall_HydrationSkipsMissingEmbeddings verifies that candidates without
+// hydrated embeddings still surface in the result set rather than being
+// dropped. MMR cannot rank them against siblings, so they pad the tail of
+// the MMR window in composite-score order.
+func TestRecall_HydrationSkipsMissingEmbeddings(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	now := time.Now()
+	embeddedID := uuid.New()
+	missingID := uuid.New()
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			embeddedID: makeTestMemory(embeddedID, nsID, "with embedding", nil, 0.5, 0, now),
+			missingID:  makeTestMemory(missingID, nsID, "without embedding", nil, 0.5, 0, now),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: embeddedID, Score: 0.85, NamespaceID: nsID},
+			{ID: missingID, Score: 0.70, NamespaceID: nsID},
+		},
+	}
+	// Hydrator returns an embedding ONLY for embeddedID. missingID is absent.
+	hydrator := &mockVectorHydrator{embeddings: map[uuid.UUID][]float32{
+		embeddedID: {1, 0, 0},
+	}}
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-embed",
+		dimensions: []int{384},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 384)},
+			Model:      "test-model",
+			Usage:      provider.TokenUsage{PromptTokens: 5, TotalTokens: 5},
+		},
+	}
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider {
+		return embProvider
+	})
+	svc.SetVectorHydrator(hydrator)
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID: projectID,
+		Query:     "anything",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Memories) != 2 {
+		t.Fatalf("expected both memories to surface, got %d", len(resp.Memories))
+	}
+	gotIDs := map[uuid.UUID]bool{resp.Memories[0].ID: true, resp.Memories[1].ID: true}
+	if !gotIDs[embeddedID] || !gotIDs[missingID] {
+		t.Errorf("missing-embedding candidate should still surface; got %v", gotIDs)
+	}
+}

@@ -145,6 +145,31 @@ func TestResolveFloatWithDefault(t *testing.T) {
 	}
 }
 
+func TestResolveFloat_MmrLambdaDefault(t *testing.T) {
+	repo := newMockSettingsRepo()
+	svc := NewSettingsService(repo)
+	f, err := svc.ResolveFloat(context.Background(), SettingRankWeightMmr, "global")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f != 0.75 {
+		t.Fatalf("expected MmrLambda default 0.75, got %f", f)
+	}
+}
+
+func TestResolveFloat_MmrLambdaOverride(t *testing.T) {
+	repo := newMockSettingsRepo()
+	repo.put(SettingRankWeightMmr, "global", "0.40")
+	svc := NewSettingsService(repo)
+	f, err := svc.ResolveFloat(context.Background(), SettingRankWeightMmr, "global")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f != 0.40 {
+		t.Fatalf("expected operator override 0.40, got %f", f)
+	}
+}
+
 func TestResolveIntSuccess(t *testing.T) {
 	repo := newMockSettingsRepo()
 	repo.put(SettingTokenRetention, "org:123", "90")

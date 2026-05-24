@@ -17,6 +17,7 @@ const emptyProjectState = {
   graph_relevance: undefined,
   confidence: undefined,
   origin: undefined,
+  mmr_lambda: undefined,
   dedup_threshold: undefined,
   enrichment_enabled: undefined,
   dreaming_enabled: undefined,
@@ -75,7 +76,7 @@ describe("buildProjectSettingsPayload", () => {
     expect(payload).toEqual({ enrichment_enabled: false });
   });
 
-  it("emits all seven weight fields when each is set", () => {
+  it("emits all weight fields when each is set", () => {
     const payload = buildProjectSettingsPayload({
       similarity: 0.5,
       recency: 0.15,
@@ -84,6 +85,7 @@ describe("buildProjectSettingsPayload", () => {
       graph_relevance: 0.2,
       confidence: 0.05,
       origin: 0.1,
+      mmr_lambda: 0.6,
       dedup_threshold: 0.92,
       enrichment_enabled: true,
       dreaming_enabled: true,
@@ -100,11 +102,36 @@ describe("buildProjectSettingsPayload", () => {
         graph_relevance: 0.2,
         confidence: 0.05,
         origin: 0.1,
+        mmr_lambda: 0.6,
       },
       dedup_threshold: 0.92,
       enrichment_enabled: true,
       dreaming_enabled: true,
     });
+  });
+
+  it("emits mmr_lambda override standalone", () => {
+    const payload = buildProjectSettingsPayload({
+      ...emptyProjectState,
+      mmr_lambda: 0.5,
+    });
+    expect(payload).toEqual({ ranking_weights: { mmr_lambda: 0.5 } });
+  });
+
+  it("preserves mmr_lambda = 1.0 override (disables MMR explicitly)", () => {
+    // Operators can set mmr_lambda to 1.0 to opt this project out of MMR.
+    // 1.0 must travel as a real override rather than being treated as a
+    // sentinel for "no override".
+    const payload = buildProjectSettingsPayload({
+      ...emptyProjectState,
+      mmr_lambda: 1.0,
+    });
+    expect(payload).toEqual({ ranking_weights: { mmr_lambda: 1.0 } });
+  });
+
+  it("drops mmr_lambda when undefined (inherit system default)", () => {
+    const payload = buildProjectSettingsPayload(emptyProjectState);
+    expect(payload).not.toHaveProperty("ranking_weights");
   });
 
   it("preserves false dreaming_enabled (false is a valid override)", () => {

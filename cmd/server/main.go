@@ -386,6 +386,7 @@ func main() {
 	recallSvc.SetFusion(loadFusionConfig(context.Background(), settingsSvc))
 	recallSvc.SetWeights(loadRankingWeights(context.Background(), settingsSvc))
 	recallSvc.SetSettings(settingsSvc)
+	recallSvc.SetVectorHydrator(vectorStore)
 
 	// Create lifecycle service for TTL expiry and purge sweeps. Sweep
 	// interval, batch size, and orphan-grace cutoff are all read live from
@@ -966,6 +967,7 @@ func loadRankingWeights(ctx context.Context, s *service.SettingsService) service
 		GraphRelevance: s.ResolveFloatInRange(ctx, service.SettingRankWeightGraph, "global", 0, 1, d.GraphRelevance),
 		Confidence:     s.ResolveFloatInRange(ctx, service.SettingRankWeightConf, "global", 0, 1, d.Confidence),
 		Origin:         s.ResolveFloatInRange(ctx, service.SettingRankWeightOrigin, "global", 0, 1, d.Origin),
+		MmrLambda:      s.ResolveFloatInRange(ctx, service.SettingRankWeightMmr, "global", 0, 1, d.MmrLambda),
 	}
 }
 

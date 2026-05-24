@@ -21,6 +21,7 @@ const REQUIRED_KEYS = [
   "ranking.weight.graph_relevance",
   "ranking.weight.confidence",
   "ranking.weight.origin",
+  "ranking.weight.mmr_lambda",
 ];
 
 function fullSchema() {
@@ -32,6 +33,7 @@ function fullSchema() {
     { key: "ranking.weight.graph_relevance", default_value: 0.2 },
     { key: "ranking.weight.confidence", default_value: 0.05 },
     { key: "ranking.weight.origin", default_value: 0.0 },
+    { key: "ranking.weight.mmr_lambda", default_value: 0.75 },
   ];
 }
 
@@ -63,8 +65,18 @@ describe("resolveSystemRankingWeights contract", () => {
       graph_relevance: 0.2,
       confidence: 0.05,
       origin: 0.0,
+      mmr_lambda: 0.75,
     });
     expect(got.missingKeys).toEqual([]);
+  });
+
+  it("operator override on mmr_lambda beats schema default", () => {
+    const got = resolveSystemRankingWeights(
+      [{ key: "ranking.weight.mmr_lambda", value: 0.5 }],
+      fullSchema(),
+    );
+    expect(got.weights?.mmr_lambda).toBe(0.5);
+    expect(got.weights?.similarity).toBe(0.5);
   });
 
   it("operator override beats schema default", () => {

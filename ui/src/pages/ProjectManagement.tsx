@@ -382,6 +382,7 @@ function ProjectDetailPanel({
   const [editGraphRelevance, setEditGraphRelevance] = useState<number | undefined>(undefined);
   const [editConfidence, setEditConfidence] = useState<number | undefined>(undefined);
   const [editOrigin, setEditOrigin] = useState<number | undefined>(undefined);
+  const [editMmrLambda, setEditMmrLambda] = useState<number | undefined>(undefined);
   // Round-tripped: edited live from the GraphVisualization page's layout
   // drawer, preserved here so saving the project panel doesn't wipe them
   // (the backend replaces project.settings wholesale on update).
@@ -415,6 +416,7 @@ function ProjectDetailPanel({
       setEditGraphRelevance(rw?.graph_relevance);
       setEditConfidence(rw?.confidence);
       setEditOrigin(rw?.origin);
+      setEditMmrLambda(rw?.mmr_lambda);
       setEditGraphGravity(settings?.graph_center_gravity);
       setEditGraphCharge(settings?.graph_charge_strength);
       setEditGraphLink(settings?.graph_link_distance);
@@ -443,6 +445,7 @@ function ProjectDetailPanel({
         graph_relevance: editGraphRelevance ?? systemWeights.graph_relevance,
         confidence: editConfidence ?? systemWeights.confidence,
         origin: editOrigin ?? systemWeights.origin,
+        mmr_lambda: editMmrLambda ?? systemWeights.mmr_lambda,
       }
     : null;
   // Origin is excluded — additive offset, not a convex combination member.
@@ -473,6 +476,7 @@ function ProjectDetailPanel({
       graph_relevance: editGraphRelevance,
       confidence: editConfidence,
       origin: editOrigin,
+      mmr_lambda: editMmrLambda,
       dedup_threshold: editDedupThreshold,
       enrichment_enabled: editEnrichmentEnabled,
       dreaming_enabled: editDreamingEnabled,
@@ -766,6 +770,13 @@ function ProjectDetailPanel({
                         range={weightRange}
                         onChange={setEditOrigin}
                       />
+                      <SparseWeightInput
+                        label="MMR Lambda"
+                        value={editMmrLambda}
+                        placeholder={systemWeights.mmr_lambda}
+                        range={weightRange}
+                        onChange={setEditMmrLambda}
+                      />
                     </div>
 
                     {/* Effective weights — read-only summary so operators see
@@ -783,6 +794,7 @@ function ProjectDetailPanel({
                         <div>Graph: {effectiveWeights.graph_relevance.toFixed(2)}</div>
                         <div>Confidence: {effectiveWeights.confidence.toFixed(2)}</div>
                         <div>Origin: {effectiveWeights.origin.toFixed(2)}</div>
+                        <div>MMR λ: {effectiveWeights.mmr_lambda.toFixed(2)}</div>
                       </div>
                       <div className="mt-2 text-muted-foreground">
                         Sum: <span className="font-mono">{weightSum.toFixed(3)}</span>
