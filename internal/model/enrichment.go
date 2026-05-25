@@ -11,11 +11,21 @@ import (
 // worker as it finishes each phase. Read by runPreEmbed to short-circuit
 // retries of jobs that already advanced past a phase before failing.
 const (
-	StepFactExtraction    = "fact_extraction"
-	StepEntityExtraction  = "entity_extraction"
-	StepQueryAugmentation = "query_augmentation"
-	StepEmbedding         = "embedding"
+	StepFactExtraction               = "fact_extraction"
+	StepEntityExtraction             = "entity_extraction"
+	StepQueryAugmentation            = "query_augmentation"
+	StepEmbedding                    = "embedding"
+	StepExtractedFactParaphraseGuard = "extracted_fact_paraphrase_guard"
 )
+
+// JobMarkerOnlyParaphraseGuard is a sentinel value placed in
+// EnrichmentJob.StepsCompleted by the BackfillExtractedFactParaphrase
+// service method when it enqueues a per-parent sweep job. The worker
+// recognizes the sentinel and routes only to the paraphrase-guard sweep
+// handler, skipping fact/entity extraction, augmentation, and embed steps.
+// Storing the marker in StepsCompleted avoids a schema change while
+// preserving the existing per-step idempotency contract.
+const JobMarkerOnlyParaphraseGuard = "__only_paraphrase_guard__"
 
 // Reasons the query-augmentation phase did not land in the persisted vector.
 // Written into enrichment_queue.query_augment_skip_reason when the step is

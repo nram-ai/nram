@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -15,8 +16,8 @@ import (
 type EnrichRequest struct {
 	ProjectID uuid.UUID   `json:"project_id"`
 	MemoryIDs []uuid.UUID `json:"memory_ids,omitempty"` // specific IDs
-	All       bool        `json:"all,omitempty"`         // enrich all un-enriched
-	Priority  int         `json:"priority,omitempty"`    // default 0
+	All       bool        `json:"all,omitempty"`        // enrich all un-enriched
+	Priority  int         `json:"priority,omitempty"`   // default 0
 	// IncludeSuperseded enrolls superseded losers in the enrichment pass.
 	// Default false skips them so the queue doesn't burn tokens on rows
 	// already slated for prune.
@@ -26,7 +27,7 @@ type EnrichRequest struct {
 // EnrichResponse contains the result of an enrich operation.
 type EnrichResponse struct {
 	Queued    int   `json:"queued"`
-	Skipped   int   `json:"skipped"`    // already enriched
+	Skipped   int   `json:"skipped"` // already enriched
 	LatencyMs int64 `json:"latency_ms"`
 }
 
@@ -48,13 +49,23 @@ type AugmentationCandidateLister interface {
 	ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error)
 }
 
+// ParaphraseCandidateLister returns the IDs of enriched parent memories with
+// at least one live extracted-fact lineage child. Used by
+// BackfillExtractedFactParaphrase to enumerate parents whose existing
+// children should be swept for paraphrase suppression. Same tiny-interface
+// pattern as AugmentationCandidateLister.
+type ParaphraseCandidateLister interface {
+	ListEnrichedParentsWithExtractedChildren(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error)
+}
+
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.
 type EnrichService struct {
-	memories        MemoryReader
-	projects        ProjectRepository
-	enrichmentQueue EnrichmentQueueRepository
-	lineage         LineageQuerier
-	augLister       AugmentationCandidateLister
+	memories         MemoryReader
+	projects         ProjectRepository
+	enrichmentQueue  EnrichmentQueueRepository
+	lineage          LineageQuerier
+	augLister        AugmentationCandidateLister
+	paraphraseLister ParaphraseCandidateLister
 }
 
 // NewEnrichService creates a new EnrichService with the given dependencies.
@@ -77,6 +88,110 @@ func NewEnrichService(
 // explanatory error rather than silently no-oping.
 func (s *EnrichService) AttachAugmentationLister(lister AugmentationCandidateLister) {
 	s.augLister = lister
+}
+
+// AttachParaphraseCandidateLister wires the candidate lister used by
+// BackfillExtractedFactParaphrase.
+func (s *EnrichService) AttachParaphraseCandidateLister(lister ParaphraseCandidateLister) {
+	s.paraphraseLister = lister
+}
+
+// BackfillExtractedFactParaphraseRequest scopes a paraphrase-guard backfill
+// to a project (or the whole deployment if ProjectID is zero). DryRun returns
+// the candidate parent count without enqueueing any jobs.
+type BackfillExtractedFactParaphraseRequest struct {
+	ProjectID uuid.UUID `json:"project_id,omitempty"`
+	DryRun    bool      `json:"dry_run,omitempty"`
+	// Limit caps the number of candidate parents enqueued in one call (0 =
+	// no cap). Operators with large namespaces (>5k memories) typically
+	// invoke this in pages of SettingExtractedFactBackfillBatchSize and
+	// re-run until CandidateCount returns 0.
+	Limit int `json:"limit,omitempty"`
+}
+
+// BackfillExtractedFactParaphraseResponse reports the outcome of one call.
+type BackfillExtractedFactParaphraseResponse struct {
+	CandidateCount int   `json:"candidate_count"`
+	Enqueued       int   `json:"enqueued"`
+	DryRun         bool  `json:"dry_run"`
+	LatencyMs      int64 `json:"latency_ms"`
+}
+
+// BackfillExtractedFactParaphrase enumerates parents with extracted-fact
+// children and enqueues one paraphrase-guard sweep job per parent onto the
+// shared enrichment_queue. Each job carries the JobMarkerOnlyParaphraseGuard
+// sentinel in StepsCompleted; the worker routes ONLY to the sweep handler
+// for these jobs, skipping fact/entity extraction, augmentation, and embed.
+// Progress is observable through the standard queue-admin endpoints.
+func (s *EnrichService) BackfillExtractedFactParaphrase(ctx context.Context, req *BackfillExtractedFactParaphraseRequest) (*BackfillExtractedFactParaphraseResponse, error) {
+	start := time.Now()
+	if s.paraphraseLister == nil {
+		return nil, fmt.Errorf("paraphrase candidate lister not configured (call AttachParaphraseCandidateLister)")
+	}
+
+	var namespaceIDs []uuid.UUID
+	if req.ProjectID != uuid.Nil {
+		project, err := s.projects.GetByID(ctx, req.ProjectID)
+		if err != nil {
+			return nil, fmt.Errorf("project not found: %w", err)
+		}
+		namespaceIDs = []uuid.UUID{project.NamespaceID}
+	}
+
+	candidates, err := s.paraphraseLister.ListEnrichedParentsWithExtractedChildren(ctx, namespaceIDs, req.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("list paraphrase backfill candidates: %w", err)
+	}
+
+	resp := &BackfillExtractedFactParaphraseResponse{
+		CandidateCount: len(candidates),
+		DryRun:         req.DryRun,
+	}
+	if req.DryRun || len(candidates) == 0 {
+		resp.LatencyMs = time.Since(start).Milliseconds()
+		return resp, nil
+	}
+
+	markerBytes, err := json.Marshal([]string{model.JobMarkerOnlyParaphraseGuard})
+	if err != nil {
+		return nil, fmt.Errorf("marshal job marker: %w", err)
+	}
+
+	now := time.Now()
+	skipped := 0
+	for _, id := range candidates {
+		mem, err := s.memories.GetByID(ctx, id)
+		if err != nil {
+			slog.Warn("paraphrase backfill: candidate skipped",
+				"memory", id, "err", err)
+			skipped++
+			continue
+		}
+		job := &model.EnrichmentJob{
+			ID:             uuid.New(),
+			MemoryID:       mem.ID,
+			NamespaceID:    mem.NamespaceID,
+			Status:         model.EnrichmentStatusPending,
+			Priority:       0,
+			Attempts:       0,
+			MaxAttempts:    3,
+			StepsCompleted: markerBytes,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+		if err := s.enrichmentQueue.Enqueue(ctx, job); err != nil {
+			return nil, fmt.Errorf("enqueue paraphrase backfill for memory %s: %w", mem.ID, err)
+		}
+		resp.Enqueued++
+	}
+	if skipped > 0 {
+		slog.Warn("paraphrase backfill: completed with skipped candidates",
+			"candidate_count", resp.CandidateCount,
+			"enqueued", resp.Enqueued,
+			"skipped", skipped)
+	}
+	resp.LatencyMs = time.Since(start).Milliseconds()
+	return resp, nil
 }
 
 // BackfillAugmentationRequest scopes a query-augmentation backfill. ProjectID

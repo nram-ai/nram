@@ -24,6 +24,7 @@ import (
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
+	"github.com/nram-ai/nram/internal/storage/hnsw"
 	"github.com/nram-ai/nram/internal/tags"
 )
 
@@ -237,10 +238,12 @@ type RelationshipCreator interface {
 // LineageCreator records parent-child lineage between memories.
 // HasExtractedFactChildren is the probe runPreEmbed uses to detect that
 // fact extraction has already produced children for a memory and skip the
-// LLM step.
+// LLM step. FindChildIDsByRelation is used by the paraphrase-guard backfill
+// sweep to enumerate a parent's extracted-fact children.
 type LineageCreator interface {
 	Create(ctx context.Context, lineage *model.MemoryLineage) error
 	HasExtractedFactChildren(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) (bool, error)
+	FindChildIDsByRelation(ctx context.Context, namespaceID uuid.UUID, parentID uuid.UUID, relations []string) ([]uuid.UUID, error)
 }
 
 // VectorWriter upserts embedding vectors for memories and entities. Kind
@@ -248,10 +251,14 @@ type LineageCreator interface {
 // reads Kind from each item. Delete drops a single vector by parent ID and
 // is invoked when ingestion-decision supersedes a target memory so the
 // stored vector does not outlive the row's superseded state.
+// GetByIDs is read-side, used by the paraphrase-guard backfill sweep
+// to compare a parent's embedding against its existing extracted-fact
+// children without re-embedding through the LLM provider.
 type VectorWriter interface {
 	Upsert(ctx context.Context, kind storage.VectorKind, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
 	UpsertBatch(ctx context.Context, items []storage.VectorUpsertItem) error
 	Delete(ctx context.Context, kind storage.VectorKind, id uuid.UUID) error
+	GetByIDs(ctx context.Context, kind storage.VectorKind, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error)
 }
 
 // MemorySoftDeleter soft-deletes a memory row and purges its vector. Used
@@ -347,6 +354,17 @@ type WorkerPool struct {
 	// Exposed via WorkerIDsSnapshot for tests that need to assert the
 	// minted IDs without racing the worker goroutines.
 	workerIDs []string
+
+	// parentMergeLocks serializes mergeTagsIntoParent calls against the
+	// same parent memory inside this process. Two enrichment jobs that
+	// both want to merge tags onto the same parent (e.g. pre-insert
+	// guard from one job racing the backfill sweep on another) would
+	// otherwise race on read-modify-write of the parent's Tags and
+	// Metadata columns, with last-write-wins losing the absorbed tag set
+	// from one of them. This map is in-process only: cross-process races
+	// (multiple server replicas pointed at the same DB) still exist and
+	// would need optimistic-concurrency or row locks at the repo layer.
+	parentMergeLocks sync.Map // map[uuid.UUID]*sync.Mutex
 }
 
 // NewWorkerPool creates a new enrichment worker pool. Provider functions may
@@ -961,6 +979,32 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		return nil, fmt.Errorf("memory lookup: %w", err)
 	}
 
+	// Paraphrase-guard backfill jobs carry a sentinel marker in
+	// StepsCompleted. Detect it BEFORE the per-namespace cascade gate so an
+	// admin-initiated sweep runs regardless of whether the namespace has
+	// enrichment_enabled=false (the operator may have opted the namespace
+	// out of automatic enrichment while still wanting to clean up legacy
+	// near-duplicate children). The sweep does not call LLM providers, so
+	// running it past the cascade gate cannot leak unwanted LLM spend.
+	// Already-completed sweeps (StepExtractedFactParaphraseGuard present)
+	// short-circuit to Complete so a retry is a no-op.
+	earlySteps := stepDoneSet(job.StepsCompleted)
+	if earlySteps[model.JobMarkerOnlyParaphraseGuard] {
+		if !earlySteps[model.StepExtractedFactParaphraseGuard] {
+			if err := wp.runExtractedFactParaphraseGuardSweep(ctx, workerID, job, mem); err != nil {
+				wp.requeueOrFail(ctx, workerID, job.ID, err, fmt.Sprintf("paraphrase guard backfill: %v", err))
+				return nil, fmt.Errorf("paraphrase guard backfill: %w", err)
+			}
+			if err := wp.queue.MarkStepCompleted(ctx, job.ID, model.StepExtractedFactParaphraseGuard); err != nil {
+				slog.Warn("enrichment: mark step completed (paraphrase guard)", "job", job.ID, "err", err)
+			}
+		}
+		if err := wp.queue.Complete(ctx, job.ID, workerID); err != nil {
+			logClaimLostOr(err, "enrichment: complete paraphrase-guard backfill", "job", job.ID, "worker", workerID)
+		}
+		return nil, nil
+	}
+
 	// Per-namespace enrichment_enabled cascade. A project or user may opt
 	// their namespace out of enrichment even while the system-level toggle
 	// is on. Mark the job complete (not failed) so the queue does not
@@ -1096,8 +1140,86 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	// entities. (Both-failed and fact-only branches above already handle the
 	// hard cases.)
 
+	// Pre-insert paraphrase guard. Each extracted fact is compared by cosine
+	// similarity to the parent memory and to previously-accepted siblings in
+	// this job. When max similarity is at or above threshold, the child is
+	// suppressed and its tags are merged into the parent via a
+	// LineageExtractedFactSuppressed audit row. Fail-open on embed errors:
+	// it is better to leak a paraphrase than to silently drop a fact.
+	guardEnabled := wp.settings.ResolveBool(ctx, service.SettingExtractedFactGuardEnabled, "global")
+	threshold := wp.settings.ResolveFloatWithDefault(ctx, service.SettingExtractedFactParaphraseThreshold, "global")
+	if threshold <= 0 || threshold > 1 {
+		threshold = 0.92
+	}
+	var parentEmbed []float32
+	if ingestion != nil {
+		parentEmbed = ingestion.parentEmbedding
+	}
+	parentEmbedTried := false
+
 	children := make([]childFact, 0, len(facts))
+	acceptedSiblingEmbeds := make([][]float32, 0, len(facts))
+
 	for _, fact := range facts {
+		if guardEnabled && fact.Content != "" {
+			ep := wp.embedProvider()
+			var candEmbed []float32
+			if ep != nil {
+				er, embedErr := ep.Embed(provider.WithOperation(ctx, provider.OperationEmbedding), &provider.EmbeddingRequest{Input: []string{fact.Content}})
+				switch {
+				case embedErr != nil:
+					slog.Warn("enrichment: extracted-fact guard candidate embed",
+						"job", job.ID, "memory", mem.ID, "reason", "embed_error", "err", embedErr)
+				case er == nil || len(er.Embeddings) == 0:
+					slog.Warn("enrichment: extracted-fact guard candidate embed",
+						"job", job.ID, "memory", mem.ID, "reason", "empty_response")
+				default:
+					candEmbed = er.Embeddings[0]
+				}
+				if candEmbed != nil && len(parentEmbed) == 0 && !parentEmbedTried {
+					parentEmbedTried = true
+					pe, perr := ep.Embed(provider.WithOperation(ctx, provider.OperationEmbedding), &provider.EmbeddingRequest{Input: []string{mem.Content}})
+					switch {
+					case perr != nil:
+						slog.Warn("enrichment: extracted-fact guard parent embed",
+							"job", job.ID, "memory", mem.ID, "reason", "embed_error", "err", perr)
+					case pe == nil || len(pe.Embeddings) == 0:
+						slog.Warn("enrichment: extracted-fact guard parent embed",
+							"job", job.ID, "memory", mem.ID, "reason", "empty_response")
+					default:
+						parentEmbed = pe.Embeddings[0]
+					}
+				}
+			}
+			if candEmbed != nil {
+				var maxSim float64
+				against := ""
+				if len(parentEmbed) > 0 {
+					if s := hnsw.CosineSimilarity(candEmbed, parentEmbed); s > maxSim {
+						maxSim = s
+						against = "parent"
+					}
+				}
+				for i, sib := range acceptedSiblingEmbeds {
+					if s := hnsw.CosineSimilarity(candEmbed, sib); s > maxSim {
+						maxSim = s
+						against = fmt.Sprintf("sibling:%d", i)
+					}
+				}
+				if maxSim >= threshold {
+					if mErr := wp.mergeTagsIntoParent(ctx, mem, nil, fact.Tags, fact.Content, maxSim, against, "fact_extraction_guard"); mErr != nil {
+						slog.Warn("enrichment: merge suppressed-fact tags",
+							"job", job.ID, "memory", mem.ID, "err", mErr)
+					} else {
+						slog.Info("enrichment: extracted-fact guard suppressed",
+							"job", job.ID, "memory", mem.ID, "cosine", maxSim, "against", against, "tags", fact.Tags)
+					}
+					continue
+				}
+				acceptedSiblingEmbeds = append(acceptedSiblingEmbeds, candEmbed)
+			}
+		}
+
 		childID := uuid.New()
 		child := &model.Memory{
 			ID:          childID,
@@ -1827,4 +1949,331 @@ func mergeTags(parent, child []string) []string {
 	combined = append(combined, parent...)
 	combined = append(combined, child...)
 	return tags.Normalize(combined)
+}
+
+// lockParent returns a release closure for the given parent's per-process
+// mutex. The mutex is lazy-created on first call for a given ID and reused
+// thereafter; entries are intentionally NOT removed when the lock count
+// drops to zero (the lookup map is bounded by namespace cardinality, and
+// removal would require reference-counting under another lock). Callers
+// MUST invoke the release closure exactly once, typically via defer.
+func (wp *WorkerPool) lockParent(id uuid.UUID) func() {
+	mxAny, _ := wp.parentMergeLocks.LoadOrStore(id, &sync.Mutex{})
+	mx := mxAny.(*sync.Mutex)
+	mx.Lock()
+	return mx.Unlock
+}
+
+// mergeTagsIntoParent absorbs a suppressed extracted-fact's tags into its
+// parent memory and writes a LineageExtractedFactSuppressed audit row. Used by
+// both the pre-insert paraphrase guard in runPreEmbed and the backfill step
+// handler. The parent is re-read inside this function (instead of trusting the
+// stale row passed in) to narrow the lost-update window between concurrent
+// enrichment jobs touching the same parent's tags; the residual race is
+// noted in the plan as a follow-up.
+// mergeTagsIntoParent absorbs a suppressed extracted-fact's tags into the
+// parent memory and writes a LineageExtractedFactSuppressed audit row.
+// The inMemoryParent argument is the live in-memory parent struct the
+// caller holds; on a real tag delta this function mutates it in place
+// (Tags + Metadata) so that downstream code paths in the same job —
+// notably finalizeJob's MarkEnriched(stampedMetadata) at worker.go ~1794,
+// which is a partial-column write of metadata — do not clobber the
+// freshly-written suppression stamp with a stale snapshot. childMemoryID
+// is non-nil only on the backfill sweep path (a real child memory exists
+// to reference in the audit JSON); the pre-insert guard passes nil because
+// the suppressed fact never became a memory row.
+func (wp *WorkerPool) mergeTagsIntoParent(
+	ctx context.Context,
+	inMemoryParent *model.Memory,
+	childMemoryID *uuid.UUID,
+	newTags []string,
+	suppressedContent string,
+	score float64,
+	against string,
+	source string,
+) error {
+	// Serialize concurrent guard merges against the same parent within
+	// this process. Without this, two enrichment jobs racing on the same
+	// parent both read the parent, both compute a tag union, and both
+	// write — the second write clobbers the first, losing one set of
+	// absorbed tags. Cross-process races (multiple replicas) still exist
+	// and would need optimistic-concurrency at the repo layer.
+	release := wp.lockParent(inMemoryParent.ID)
+	defer release()
+
+	fresh, err := wp.memories.GetByID(ctx, inMemoryParent.ID)
+	if err != nil {
+		return fmt.Errorf("re-read parent: %w", err)
+	}
+	merged := mergeTags(fresh.Tags, newTags)
+	delta := tagDelta(fresh.Tags, merged)
+
+	now := time.Now().UTC()
+	if len(delta) > 0 {
+		fresh.Tags = merged
+		fresh.UpdatedAt = now
+		stampSuppressedFactMetadata(fresh, score)
+		if err := wp.memUpdater.Update(ctx, fresh); err != nil {
+			return fmt.Errorf("update parent tags: %w", err)
+		}
+		// Propagate the freshly-persisted state back into the caller's
+		// in-memory copy so a subsequent MarkEnriched / Update in the
+		// same job does not overwrite the stamp.
+		inMemoryParent.Tags = merged
+		inMemoryParent.Metadata = fresh.Metadata
+		inMemoryParent.UpdatedAt = now
+	}
+
+	if wp.lineage == nil {
+		return nil
+	}
+	auditCtx := map[string]interface{}{
+		"source":             source,
+		"suppressed_content": suppressedContent,
+		"suppressed_tags":    newTags,
+		"merged_tags_delta":  delta,
+		"cosine_score":       score,
+		"against":            against,
+	}
+	if childMemoryID != nil {
+		auditCtx["child_id"] = childMemoryID.String()
+	}
+	ctxBytes, _ := json.Marshal(auditCtx)
+	parentRef := inMemoryParent.ID
+	lin := &model.MemoryLineage{
+		ID:          uuid.New(),
+		NamespaceID: inMemoryParent.NamespaceID,
+		MemoryID:    inMemoryParent.ID,
+		ParentID:    &parentRef,
+		Relation:    model.LineageExtractedFactSuppressed,
+		Context:     ctxBytes,
+		CreatedAt:   now,
+	}
+	if err := wp.lineage.Create(ctx, lin); err != nil {
+		return fmt.Errorf("create suppression lineage: %w", err)
+	}
+	return nil
+}
+
+// sweepHeartbeatEvery bounds how many children the paraphrase-guard backfill
+// sweep processes before ticking the worker heartbeat. The stuck-claim sweeper
+// reaps claims older than enrichment.stuck_threshold_seconds (default ~60s), so
+// for parents with many children the sweep must heartbeat or the claim is
+// silently reassigned mid-run.
+const sweepHeartbeatEvery = 50
+
+// runExtractedFactParaphraseGuardSweep is the worker-side handler for a
+// paraphrase-guard backfill job. It enumerates the parent's extracted-fact
+// children (restricted to storage.FactExtractionRelations so synthesis /
+// non-fact children are never touched), fetches their stored embeddings,
+// compares cosine similarity to the parent's stored embedding, and for
+// each child at or above threshold supersedes the child first (the
+// load-bearing dedup write), then merges its tags into the parent, then
+// purges its vector. Operations are idempotent on retry: already-superseded
+// children short-circuit at the top of the loop so a re-claim after a
+// partial failure does not re-stamp the parent or duplicate lineage rows.
+// Returns nil when no children exist or the sweep ran to completion.
+// Returns a wrapped error only on repo-level failures so the queue's
+// retry/fail path applies.
+func (wp *WorkerPool) runExtractedFactParaphraseGuardSweep(ctx context.Context, workerID string, job *model.EnrichmentJob, parent *model.Memory) error {
+	if wp.lineage == nil || wp.memories == nil || wp.memUpdater == nil || wp.vectorStore == nil {
+		return fmt.Errorf("paraphrase guard backfill: missing repos")
+	}
+
+	threshold := wp.resolveParaphraseGuardThreshold(ctx)
+
+	childIDs, err := wp.lineage.FindChildIDsByRelation(ctx, parent.NamespaceID, parent.ID, storage.FactExtractionRelations)
+	if err != nil {
+		return fmt.Errorf("find children: %w", err)
+	}
+	if len(childIDs) == 0 {
+		slog.Info("enrichment: paraphrase backfill no children",
+			"job", job.ID, "parent", parent.ID)
+		return nil
+	}
+
+	parentVec, err := wp.fetchSingleVector(ctx, parent.ID, parent.EmbeddingDim)
+	if err != nil {
+		return fmt.Errorf("fetch parent embedding: %w", err)
+	}
+	if len(parentVec) == 0 {
+		slog.Warn("enrichment: paraphrase backfill parent has no embedding",
+			"job", job.ID, "parent", parent.ID)
+		return nil
+	}
+
+	suppressed := 0
+	checked := 0
+	skippedDead := 0
+	processedSinceHeartbeat := 0
+	for _, cid := range childIDs {
+		processedSinceHeartbeat++
+		if processedSinceHeartbeat >= sweepHeartbeatEvery {
+			processedSinceHeartbeat = 0
+			if _, hErr := wp.queue.TickHeartbeat(ctx, workerID); hErr != nil {
+				slog.Warn("enrichment: paraphrase backfill heartbeat",
+					"job", job.ID, "err", hErr)
+			}
+		}
+
+		child, err := wp.memories.GetByID(ctx, cid)
+		if err != nil {
+			slog.Warn("enrichment: paraphrase backfill child lookup",
+				"job", job.ID, "child", cid, "err", err)
+			continue
+		}
+		// Skip children that became dead between candidate enumeration
+		// (in ListEnrichedParentsWithExtractedChildren / FindChildIDsByRelation)
+		// and the worker claim. Also short-circuits retries against children
+		// already superseded by an earlier sweep attempt, which is what
+		// makes the loop idempotent: mergeTagsIntoParent + lineage write
+		// never fire twice for the same (parent, child) pair.
+		if child.DeletedAt != nil || child.SupersededBy != nil {
+			skippedDead++
+			continue
+		}
+
+		childVec, err := wp.fetchSingleVector(ctx, cid, child.EmbeddingDim)
+		if err != nil {
+			slog.Warn("enrichment: paraphrase backfill child embed fetch",
+				"job", job.ID, "child", cid, "err", err)
+			continue
+		}
+		if len(childVec) == 0 {
+			continue
+		}
+		checked++
+		sim := hnsw.CosineSimilarity(childVec, parentVec)
+		if sim < threshold {
+			continue
+		}
+
+		// Supersede first: this is the load-bearing write that flips the
+		// child to dead. If it fails (e.g. ErrConcurrentSupersede because
+		// another path already superseded the child), bail out for this
+		// iteration WITHOUT merging tags or writing the lineage row so a
+		// retry does not double-count.
+		if err := wp.memUpdater.MarkSupersededBy(ctx, cid, parent.NamespaceID, parent.ID); err != nil {
+			slog.Warn("enrichment: paraphrase backfill supersede child",
+				"job", job.ID, "child", cid, "err", err)
+			continue
+		}
+		cidCopy := cid
+		if mErr := wp.mergeTagsIntoParent(ctx, parent, &cidCopy, child.Tags, child.Content, sim, "backfill", "fact_extraction_backfill"); mErr != nil {
+			slog.Warn("enrichment: paraphrase backfill merge tags",
+				"job", job.ID, "parent", parent.ID, "child", cid, "err", mErr)
+			// Child is already superseded so it will not resurface in
+			// recall; the missing tag-merge is a soft loss but does not
+			// produce duplicate audit rows on retry (next claim sees
+			// child.SupersededBy != nil and short-circuits above).
+			continue
+		}
+		if err := wp.vectorStore.Delete(ctx, storage.VectorKindMemory, cid); err != nil {
+			slog.Warn("enrichment: paraphrase backfill vector purge",
+				"job", job.ID, "child", cid, "err", err)
+		}
+		suppressed++
+	}
+
+	slog.Info("enrichment: paraphrase backfill complete",
+		"job", job.ID, "parent", parent.ID,
+		"children", len(childIDs), "checked", checked,
+		"suppressed", suppressed, "skipped_dead", skippedDead,
+		"threshold", threshold)
+	return nil
+}
+
+// resolveParaphraseGuardThreshold returns the effective cosine threshold for
+// the paraphrase-guard suppression decision. Resolution order matches the
+// contract documented on SettingExtractedFactParaphraseThreshold:
+//  1. The new key when an operator has set it.
+//  2. SettingDedupThreshold (ingestion-decision's threshold) so operators
+//     who already tuned that knob get the inherited value.
+//  3. 0.92 as a final hardcoded floor.
+func (wp *WorkerPool) resolveParaphraseGuardThreshold(ctx context.Context) float64 {
+	if v, err := wp.settings.ResolveFloat(ctx, service.SettingExtractedFactParaphraseThreshold, "global"); err == nil && v > 0 && v <= 1 {
+		return v
+	}
+	if v, err := wp.settings.ResolveFloat(ctx, service.SettingDedupThreshold, "global"); err == nil && v > 0 && v <= 1 {
+		return v
+	}
+	return 0.92
+}
+
+// fetchSingleVector retrieves one stored embedding by ID, using the row's
+// own EmbeddingDim if available. Production vector stores key on (kind, id,
+// dim) so passing the parent's dim for a child embedded at a different dim
+// silently returns nothing; resolving per-row prevents that miss.
+//
+// When the row's EmbeddingDim is nil or non-positive (legacy rows whose dim
+// was never recorded, or rows whose embedding write failed), the call
+// returns (nil, nil) instead of forwarding dim=0 to GetByIDs. Every
+// production store (pgvector, qdrant, hnsw) rejects dim=0 with a hard
+// error, which would kill the entire sweep over an otherwise-healthy
+// parent. Empty-vector return matches the sweep's existing "no embedding
+// available, skip" handling, so a parent or child with an unknown dim is
+// quietly skipped instead of crashing the job.
+func (wp *WorkerPool) fetchSingleVector(ctx context.Context, id uuid.UUID, dim *int) ([]float32, error) {
+	if dim == nil || *dim <= 0 {
+		return nil, nil
+	}
+	out, err := wp.vectorStore.GetByIDs(ctx, storage.VectorKindMemory, []uuid.UUID{id}, *dim)
+	if err != nil {
+		return nil, err
+	}
+	return out[id], nil
+}
+
+// tagDelta returns the tags present in merged that were not present in
+// original. Both inputs are assumed already normalized.
+func tagDelta(original, merged []string) []string {
+	if len(merged) == len(original) {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(original))
+	for _, t := range original {
+		seen[t] = struct{}{}
+	}
+	delta := make([]string, 0, len(merged)-len(original))
+	for _, t := range merged {
+		if _, ok := seen[t]; !ok {
+			delta = append(delta, t)
+		}
+	}
+	return delta
+}
+
+// stampSuppressedFactMetadata accumulates suppressed-fact audit data onto
+// the parent memory's metadata JSON. Tracks count and the largest cosine
+// observed so an operator can spot a parent that is absorbing many
+// near-duplicate facts.
+func stampSuppressedFactMetadata(mem *model.Memory, score float64) {
+	meta := map[string]interface{}{}
+	if len(mem.Metadata) > 0 {
+		_ = json.Unmarshal(mem.Metadata, &meta)
+		if meta == nil {
+			meta = map[string]interface{}{}
+		}
+	}
+	prev, _ := meta["tags_merged_from_suppressed_fact"].(map[string]interface{})
+	if prev == nil {
+		prev = map[string]interface{}{}
+	}
+	count := 1
+	if c, ok := prev["count"].(float64); ok {
+		count = int(c) + 1
+	}
+	cosMax := score
+	if cm, ok := prev["cosine_max"].(float64); ok && cm > cosMax {
+		cosMax = cm
+	}
+	prev["count"] = count
+	prev["last_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	prev["cosine_max"] = cosMax
+	meta["tags_merged_from_suppressed_fact"] = prev
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		return
+	}
+	mem.Metadata = encoded
 }

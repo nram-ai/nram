@@ -9,11 +9,12 @@ import (
 
 // Lineage relation constants.
 const (
-	LineageConflictsWith   = "conflicts_with"
-	LineageSynthesizedFrom = "synthesized_from"
-	LineageExtractedFrom   = "extracted_from"
-	LineageExtractedFact   = "extracted_fact"
-	LineageSupersedes      = "supersedes"
+	LineageConflictsWith           = "conflicts_with"
+	LineageSynthesizedFrom         = "synthesized_from"
+	LineageExtractedFrom           = "extracted_from"
+	LineageExtractedFact           = "extracted_fact"
+	LineageExtractedFactSuppressed = "extracted_fact_suppressed"
+	LineageSupersedes              = "supersedes"
 )
 
 type MemoryLineage struct {

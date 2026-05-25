@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -543,5 +544,95 @@ func TestBackfillAugmentation_NoListerReturnsError(t *testing.T) {
 	_, err := svc.BackfillAugmentation(context.Background(), &BackfillAugmentationRequest{})
 	if err == nil {
 		t.Fatalf("expected error when lister is unwired; backfill silently no-oping would mask deployment bugs")
+	}
+}
+
+// stubParaphraseLister returns a fixed list of candidate parent IDs.
+type stubParaphraseLister struct {
+	ids []uuid.UUID
+}
+
+func (s *stubParaphraseLister) ListEnrichedParentsWithExtractedChildren(_ context.Context, _ []uuid.UUID, _ int) ([]uuid.UUID, error) {
+	return s.ids, nil
+}
+
+func TestBackfillExtractedFactParaphrase_DryRunDoesNotEnqueue(t *testing.T) {
+	_, nsID, projects := setupEnrichFixtures()
+	id1, id2 := uuid.New(), uuid.New()
+	reader := &enrichMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			id1: makeEnrichMemory(id1, nsID, true),
+			id2: makeEnrichMemory(id2, nsID, true),
+		},
+	}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+	svc.AttachParaphraseCandidateLister(&stubParaphraseLister{ids: []uuid.UUID{id1, id2}})
+
+	resp, err := svc.BackfillExtractedFactParaphrase(context.Background(), &BackfillExtractedFactParaphraseRequest{DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if resp.CandidateCount != 2 || resp.Enqueued != 0 {
+		t.Fatalf("dry run expected 2 candidates / 0 enqueued; got %d/%d", resp.CandidateCount, resp.Enqueued)
+	}
+	if len(queue.jobs) != 0 {
+		t.Fatalf("dry run enqueued %d jobs; expected 0", len(queue.jobs))
+	}
+}
+
+func TestBackfillExtractedFactParaphrase_EnqueuesMarkerOnly(t *testing.T) {
+	_, nsID, projects := setupEnrichFixtures()
+	id1, id2 := uuid.New(), uuid.New()
+	reader := &enrichMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			id1: makeEnrichMemory(id1, nsID, true),
+			id2: makeEnrichMemory(id2, nsID, true),
+		},
+	}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+	svc.AttachParaphraseCandidateLister(&stubParaphraseLister{ids: []uuid.UUID{id1, id2}})
+
+	resp, err := svc.BackfillExtractedFactParaphrase(context.Background(), &BackfillExtractedFactParaphraseRequest{})
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if resp.Enqueued != 2 {
+		t.Fatalf("expected 2 enqueued; got %d", resp.Enqueued)
+	}
+	if len(queue.jobs) != 2 {
+		t.Fatalf("expected 2 jobs in queue; got %d", len(queue.jobs))
+	}
+
+	// Each enqueued job must carry the paraphrase-guard sentinel in
+	// StepsCompleted so the worker routes ONLY to the sweep handler.
+	for i, job := range queue.jobs {
+		var steps []string
+		if err := json.Unmarshal(job.StepsCompleted, &steps); err != nil {
+			t.Fatalf("job[%d] StepsCompleted is not a JSON array: %v (%s)", i, err, string(job.StepsCompleted))
+		}
+		found := false
+		for _, s := range steps {
+			if s == model.JobMarkerOnlyParaphraseGuard {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("job[%d] missing sentinel %q in steps_completed %v",
+				i, model.JobMarkerOnlyParaphraseGuard, steps)
+		}
+	}
+}
+
+func TestBackfillExtractedFactParaphrase_NoListerReturnsError(t *testing.T) {
+	_, _, projects := setupEnrichFixtures()
+	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{}}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+
+	_, err := svc.BackfillExtractedFactParaphrase(context.Background(), &BackfillExtractedFactParaphraseRequest{})
+	if err == nil {
+		t.Fatalf("expected error when paraphrase lister is unwired")
 	}
 }

@@ -600,6 +600,17 @@ var ExtractedChildRelations = []string{
 	model.LineageExtractedFrom,
 }
 
+// FactExtractionRelations is the strict subset of ExtractedChildRelations
+// that the paraphrase-guard backfill sweep is allowed to act on. Excludes
+// LineageSynthesizedFrom (dreaming-consolidation outputs whose embedding
+// naturally tracks their source) and LineageExtractedFrom (older
+// extraction paths) so a backfill cannot destroy synthesized or
+// non-fact-extraction child memories whose high cosine to the parent is
+// expected and intentional.
+var FactExtractionRelations = []string{
+	model.LineageExtractedFact,
+}
+
 // bindOnly claims a placeholder against the builder and binds the value,
 // returning the placeholder string. Unlike add(), it does not append to
 // clauses — the caller is responsible for placing the placeholder inside a
@@ -967,6 +978,90 @@ func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, nam
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iter backfill candidates: %w", err)
+	}
+	return out, nil
+}
+
+// ListEnrichedParentsWithExtractedChildren returns the IDs of enriched,
+// non-deleted, non-superseded parent memories that have at least one live
+// extracted-fact lineage child. Used by the BackfillExtractedFactParaphrase
+// service method to enumerate candidate parents whose children should be
+// swept by the paraphrase-guard backfill job. Children are filtered by the
+// ExtractedChildRelations set and exclude soft-deleted and superseded rows
+// so the candidate count matches what the worker can actually act on.
+func (r *MemoryRepo) ListEnrichedParentsWithExtractedChildren(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error) {
+	pg := r.db.Backend() == BackendPostgres
+	args := []interface{}{}
+	args = append(args, EncodeBool(r.db.Backend(), true))
+	enrichedPH := "?"
+	if pg {
+		enrichedPH = "$1"
+	}
+
+	relPHs := make([]string, len(ExtractedChildRelations))
+	for i, rel := range ExtractedChildRelations {
+		if pg {
+			relPHs[i] = fmt.Sprintf("$%d", len(args)+1)
+		} else {
+			relPHs[i] = "?"
+		}
+		args = append(args, rel)
+	}
+
+	nsClause := ""
+	if len(namespaceIDs) > 0 {
+		placeholders := make([]string, len(namespaceIDs))
+		for i, ns := range namespaceIDs {
+			if pg {
+				placeholders[i] = fmt.Sprintf("$%d", len(args)+1)
+			} else {
+				placeholders[i] = "?"
+			}
+			args = append(args, ns.String())
+		}
+		nsClause = " AND m.namespace_id IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+
+	query := `SELECT DISTINCT m.id
+FROM memories m
+JOIN memory_lineage l ON l.parent_id = m.id AND l.namespace_id = m.namespace_id
+JOIN memories c ON c.id = l.memory_id
+WHERE m.enriched = ` + enrichedPH + `
+  AND m.deleted_at IS NULL
+  AND m.superseded_by IS NULL
+  AND c.deleted_at IS NULL
+  AND c.superseded_by IS NULL
+  AND l.relation IN (` + strings.Join(relPHs, ", ") + `)` + nsClause + `
+ORDER BY m.id ASC`
+	if limit > 0 {
+		if pg {
+			query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		} else {
+			query += " LIMIT ?"
+		}
+		args = append(args, limit)
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list paraphrase backfill candidates: %w", err)
+	}
+	defer rows.Close()
+
+	out := []uuid.UUID{}
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, fmt.Errorf("scan paraphrase candidate id: %w", err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("parse paraphrase candidate id %s: %w", idStr, err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iter paraphrase candidates: %w", err)
 	}
 	return out, nil
 }

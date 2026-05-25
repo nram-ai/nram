@@ -54,7 +54,15 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projec
 	if len(item.StepsCompleted) > 0 {
 		var parsed []string
 		if err := json.Unmarshal(item.StepsCompleted, &parsed); err == nil && parsed != nil {
-			steps = parsed
+			// Filter internal sentinels (e.g. paraphrase-guard backfill
+			// marker) so the UI shows only real model.Step* constants.
+			steps = make([]string, 0, len(parsed))
+			for _, s := range parsed {
+				if s == model.JobMarkerOnlyParaphraseGuard {
+					continue
+				}
+				steps = append(steps, s)
+			}
 		}
 	}
 	out := api.EnrichmentQueueItem{

@@ -252,6 +252,7 @@ func NewServer(deps Dependencies) *Server {
 	RegisterGraphProjectsExportTools(s)
 	RegisterProjectDeleteTool(s)
 	RegisterProjectUpdateTool(s)
+	RegisterAdminBackfillParaphraseTool(s)
 	RegisterResources(s)
 
 	return s

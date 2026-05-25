@@ -42,6 +42,12 @@ type EnrichmentAdminConfig struct {
 	// endpoint with a 503 response so the UI button can render "not available"
 	// rather than 404ing in deployments without the service wired.
 	BackfillAugmentation func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (candidateCount, enqueued int, err error)
+
+	// BackfillExtractedFactParaphrase enqueues paraphrase-guard sweep jobs for
+	// enriched parents that have extracted-fact children. Nil disables the
+	// endpoint with a 503 response in deployments where the service is not
+	// wired.
+	BackfillExtractedFactParaphrase func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (candidateCount, enqueued int, err error)
 }
 
 // EnrichmentQueueStatus is the response for GET /enrichment/queue.
@@ -130,7 +136,7 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 		sub := extractEnrichmentSubPath(r.URL.Path)
 
 		// Write operations require administrator role.
-		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" {
+		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" || sub == "backfill-extracted-fact-paraphrase" {
 			ac := auth.FromContext(r.Context())
 			if ac == nil || ac.Role != auth.RoleAdministrator {
 				http.Error(w, "forbidden: administrator required", http.StatusForbidden)
@@ -149,6 +155,8 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 			handleEnrichmentTestPrompt(w, r, cfg)
 		case "backfill-augmentation":
 			handleEnrichmentBackfillAugmentation(w, r, cfg)
+		case "backfill-extracted-fact-paraphrase":
+			handleEnrichmentBackfillExtractedFactParaphrase(w, r, cfg)
 		default:
 			WriteError(w, ErrBadRequest("unknown enrichment sub-path"))
 		}
@@ -502,6 +510,40 @@ func handleEnrichmentBackfillAugmentation(w http.ResponseWriter, r *http.Request
 	count, enq, err := cfg.BackfillAugmentation(r.Context(), projectID, body.DryRun, body.Limit)
 	if err != nil {
 		WriteError(w, ErrInternal("backfill augmentation: "+err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, enrichmentBackfillAugmentResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
+		DryRun:         body.DryRun,
+	})
+}
+
+// handleEnrichmentBackfillExtractedFactParaphrase handles
+// POST /enrichment/backfill-extracted-fact-paraphrase. ProjectID is optional;
+// omit to scan the whole deployment. DryRun returns the candidate count
+// without enqueueing. Limit caps how many parents this call enqueues.
+func handleEnrichmentBackfillExtractedFactParaphrase(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.BackfillExtractedFactParaphrase == nil {
+		http.Error(w, "backfill-extracted-fact-paraphrase not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentBackfillAugmentRequest // identical wire shape
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	var projectID uuid.UUID
+	if body.ProjectID != nil {
+		projectID = *body.ProjectID
+	}
+	count, enq, err := cfg.BackfillExtractedFactParaphrase(r.Context(), projectID, body.DryRun, body.Limit)
+	if err != nil {
+		WriteError(w, ErrInternal("backfill extracted-fact paraphrase: "+err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, enrichmentBackfillAugmentResponse{

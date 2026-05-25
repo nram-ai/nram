@@ -356,6 +356,7 @@ func main() {
 	)
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)
 	enrichSvc.AttachAugmentationLister(memoryRepo)
+	enrichSvc.AttachParaphraseCandidateLister(memoryRepo)
 	exportSvc := service.NewExportService(
 		memoryRepo, entityRepo, relationshipRepo, lineageRepo, projectRepo,
 		settingsSvc,
@@ -819,6 +820,17 @@ func main() {
 			},
 			BackfillAugmentation: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
 				resp, err := enrichSvc.BackfillAugmentation(ctx, &service.BackfillAugmentationRequest{
+					ProjectID: projectID,
+					DryRun:    dryRun,
+					Limit:     limit,
+				})
+				if err != nil {
+					return 0, 0, err
+				}
+				return resp.CandidateCount, resp.Enqueued, nil
+			},
+			BackfillExtractedFactParaphrase: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
+				resp, err := enrichSvc.BackfillExtractedFactParaphrase(ctx, &service.BackfillExtractedFactParaphraseRequest{
 					ProjectID: projectID,
 					DryRun:    dryRun,
 					Limit:     limit,

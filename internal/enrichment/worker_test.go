@@ -377,6 +377,7 @@ type mockLineageCreator struct {
 	err                      error
 	hasExtractedFactChildren bool
 	hasExtractedFactErr      error
+	childIDsByParent         map[uuid.UUID][]uuid.UUID
 }
 
 func (m *mockLineageCreator) Create(_ context.Context, lin *model.MemoryLineage) error {
@@ -397,6 +398,18 @@ func (m *mockLineageCreator) HasExtractedFactChildren(_ context.Context, _, _ uu
 		return false, m.hasExtractedFactErr
 	}
 	return m.hasExtractedFactChildren, nil
+}
+
+func (m *mockLineageCreator) FindChildIDsByRelation(_ context.Context, _ uuid.UUID, parentID uuid.UUID, _ []string) ([]uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.childIDsByParent == nil {
+		return nil, nil
+	}
+	return append([]uuid.UUID(nil), m.childIDsByParent[parentID]...), nil
 }
 
 type mockTokenRecorder struct {
@@ -457,6 +470,26 @@ func (m *mockVectorWriter) Delete(_ context.Context, _ storage.VectorKind, id uu
 	defer m.mu.Unlock()
 	m.deleted = append(m.deleted, id)
 	return nil
+}
+
+func (m *mockVectorWriter) GetByIDs(_ context.Context, _ storage.VectorKind, ids []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return nil, m.err
+	}
+	out := make(map[uuid.UUID][]float32, len(ids))
+	want := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	// Return the most recently upserted embedding per id when present.
+	for _, v := range m.vectors {
+		if _, ok := want[v.ID]; ok {
+			out[v.ID] = v.Embedding
+		}
+	}
+	return out, nil
 }
 
 // mockLLMProvider simulates an LLM provider.
@@ -600,6 +633,7 @@ type testHarness struct {
 	lineage  *mockLineageCreator
 	tokens   *mockTokenRecorder
 	vectors  *mockVectorWriter
+	settings *service.SettingsService
 }
 
 func newTestHarness(
@@ -626,14 +660,74 @@ func newTestHarness(
 	entityFn := provider.WrapLLMForTest(constLLM(entityLLM), h.tokens)
 	embedFn := provider.WrapEmbeddingForTest(constEmbed(embedProv), h.tokens)
 
+	// Use an in-memory settings repo so SettingsService.Set actually
+	// persists overrides. Settings default to production values; tests that
+	// rely on fixed-vector embedders (which would otherwise trip the
+	// paraphrase guard on every extracted fact) must opt out explicitly
+	// via disableParaphraseGuard(h).
+	settingsRepo := newTestSettingsRepo()
+	settingsSvc := service.NewSettingsService(settingsRepo)
+	h.settings = settingsSvc
+
 	h.pool = NewWorkerPool(
 		WorkerConfig{Workers: 1, PollInterval: 10 * time.Millisecond},
 		h.reader, h.updater, h.creator, nil, h.queue,
 		h.entities, h.rels, h.lineage, h.vectors,
 		factFn, entityFn, embedFn,
-		nil, nil, service.NewNoopSettingsService(), nil, nil,
+		nil, nil, settingsSvc, nil, nil,
 	)
 	return h
+}
+
+// testSettingsRepo is a tiny in-memory SettingsRepository used by
+// newTestHarness so SettingsService.Set actually persists values into a
+// readable store. Required for any test that needs to override built-in
+// defaults (e.g., toggling the extracted-fact paraphrase guard).
+type testSettingsRepo struct {
+	mu   sync.Mutex
+	data map[string]*model.Setting
+}
+
+func newTestSettingsRepo() *testSettingsRepo {
+	return &testSettingsRepo{data: make(map[string]*model.Setting)}
+}
+
+func testSettingsKey(key, scope string) string { return scope + "::" + key }
+
+func (r *testSettingsRepo) Get(_ context.Context, key, scope string) (*model.Setting, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.data[testSettingsKey(key, scope)]; ok {
+		return s, nil
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (r *testSettingsRepo) Set(_ context.Context, s *model.Setting) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := *s
+	r.data[testSettingsKey(s.Key, s.Scope)] = &cp
+	return nil
+}
+
+func (r *testSettingsRepo) Delete(_ context.Context, key, scope string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.data, testSettingsKey(key, scope))
+	return nil
+}
+
+func (r *testSettingsRepo) ListByScope(_ context.Context, scope string) ([]model.Setting, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]model.Setting, 0)
+	for _, v := range r.data {
+		if v.Scope == scope {
+			out = append(out, *v)
+		}
+	}
+	return out, nil
 }
 
 // constLLM returns a closure that always yields p (which may be nil).
@@ -810,6 +904,10 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 	}}
 
 	h := newTestHarness(factLLM, entityLLM, embedProv)
+	// Fixed-vector embedder would cosine-match every fact to the parent
+	// and trigger the paraphrase guard; this test is about the full
+	// extraction pipeline, not the guard.
+	disableParaphraseGuard(t, h)
 	mem := testMemory()
 	h.reader.byID[mem.ID] = mem
 	job := testJob(mem.ID, mem.NamespaceID)
@@ -1051,6 +1149,10 @@ func TestProcessJob_BackfillSkipsEntitiesWhenRelationshipsPresent(t *testing.T) 
 	factLLM, entityLLM, embedProv, factCalls, entityCalls, embedCalls := backfillProbeProviders()
 
 	h := newTestHarness(factLLM, entityLLM, embedProv)
+	// backfillProbeProviders uses fixed embeddings; suppress the
+	// paraphrase guard so this test exercises the relationship-probe
+	// short-circuit, not the guard.
+	disableParaphraseGuard(t, h)
 	h.rels.hasBySourceMemory = true
 	mem := testMemory()
 	mem.Enriched = false
@@ -1079,6 +1181,10 @@ func TestProcessJob_BackfillRunsBothWhenNothingPresent(t *testing.T) {
 	factLLM, entityLLM, embedProv, factCalls, entityCalls, embedCalls := backfillProbeProviders()
 
 	h := newTestHarness(factLLM, entityLLM, embedProv)
+	// backfillProbeProviders uses fixed embeddings; suppress the
+	// paraphrase guard so this test exercises the absence-probe path
+	// and not the guard.
+	disableParaphraseGuard(t, h)
 	mem := testMemory()
 	mem.Enriched = false
 	h.reader.byID[mem.ID] = mem
@@ -1219,6 +1325,568 @@ func TestProcessJob_FactExtractionOnly(t *testing.T) {
 	}
 	if len(h.entities.upserted) != 0 {
 		t.Error("no entities should be upserted when entity stub returns empty payload")
+	}
+}
+
+// guardedTestHarness is now a no-op alias for newTestHarness — the default
+// harness already inherits the production-on default for the paraphrase
+// guard. Kept for callers that want the explicit, self-documenting name
+// when their test exercises the guard. Removing the explicit Set call also
+// avoids hiding regressions where a future change accidentally disables
+// the guard at the settings layer.
+func guardedTestHarness(
+	t *testing.T,
+	factLLM, entityLLM provider.LLMProvider,
+	embedProv provider.EmbeddingProvider,
+) *testHarness {
+	t.Helper()
+	return newTestHarness(factLLM, entityLLM, embedProv)
+}
+
+// disableParaphraseGuard turns the extracted-fact paraphrase guard OFF on
+// an existing harness. Required for tests that use fixed-vector embedders
+// (e.g., the same [0.1, 0.2, 0.3] vector for every input) where every
+// extracted fact would otherwise be cosine=1 to the parent and suppressed.
+// The opt-out is explicit so a future test author cannot accidentally
+// silence the guard.
+func disableParaphraseGuard(t *testing.T, h *testHarness) {
+	t.Helper()
+	if err := h.settings.Set(context.Background(), service.SettingExtractedFactGuardEnabled, "false", "global", nil); err != nil {
+		t.Fatalf("disable guard: %v", err)
+	}
+}
+
+// keyedEmbedder responds with different fixed vectors depending on which
+// input string is being embedded. Inputs not in the map fall back to a zero
+// vector (cosine 0 against everything).
+func keyedEmbedder(name string, byContent map[string][]float32) *mockEmbeddingProvider {
+	return &mockEmbeddingProvider{
+		name: name,
+		respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+			out := make([][]float32, len(req.Input))
+			for i, in := range req.Input {
+				if v, ok := byContent[in]; ok {
+					out[i] = v
+				} else {
+					out[i] = []float32{0, 0, 0}
+				}
+			}
+			return &provider.EmbeddingResponse{Embeddings: out, Model: name + "-model"}, nil
+		},
+	}
+}
+
+func TestProcessJob_FactGuard_SuppressesHighCosineFact(t *testing.T) {
+	// LLM emits a single fact whose content is treated as a near-paraphrase
+	// of the parent (identical embedding vector). The guard must skip the
+	// memCreator.Create and instead absorb the fact's tags into the parent
+	// with a LineageExtractedFactSuppressed audit row.
+	factBody := `[{"content":"Alice works at Acme","confidence":0.9,"tags":["employment"]}]`
+	factLLM := constStringLLM("fact", factBody)
+
+	mem := testMemory()
+	embedProv := keyedEmbedder("embed", map[string][]float32{
+		mem.Content:           {1, 0, 0},
+		"Alice works at Acme": {1, 0, 0},
+	})
+
+	h := guardedTestHarness(t, factLLM, noopEntityLLM(), embedProv)
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+
+	if got := len(h.creator.created); got != 0 {
+		t.Errorf("expected no child memory created (suppressed), got %d", got)
+	}
+
+	// Parent must be updated with the suppressed fact's tag merged in.
+	if len(h.updater.updated) == 0 {
+		t.Fatalf("expected parent memUpdater.Update call to merge tags")
+	}
+	last := h.updater.updated[len(h.updater.updated)-1]
+	foundEmployment := false
+	for _, tg := range last.Tags {
+		if tg == "employment" {
+			foundEmployment = true
+		}
+	}
+	if !foundEmployment {
+		t.Errorf("parent tags after merge missing 'employment': %v", last.Tags)
+	}
+
+	// Lineage row with the new relation must be written, with memory_id ==
+	// parent_id == parent.ID (memory_lineage.memory_id is NOT NULL with FK
+	// to memories.id, so the suppression row references the parent on
+	// both sides).
+	var foundLin *model.MemoryLineage
+	for _, lin := range h.lineage.created {
+		if lin.Relation == model.LineageExtractedFactSuppressed {
+			foundLin = lin
+			break
+		}
+	}
+	if foundLin == nil {
+		t.Fatalf("expected lineage row with relation %q; got %+v",
+			model.LineageExtractedFactSuppressed, h.lineage.created)
+	}
+	if foundLin.MemoryID != mem.ID {
+		t.Errorf("lineage.MemoryID = %s, want parent.ID %s", foundLin.MemoryID, mem.ID)
+	}
+	if foundLin.ParentID == nil || *foundLin.ParentID != mem.ID {
+		t.Errorf("lineage.ParentID should reference parent; got %v", foundLin.ParentID)
+	}
+}
+
+func TestProcessJob_FactGuard_PassesThroughLowCosineFact(t *testing.T) {
+	// LLM emits a fact whose embedding is orthogonal to the parent. The
+	// guard must NOT suppress; the child memory is created normally with
+	// a LineageExtractedFact row (not the suppression relation).
+	factBody := `[{"content":"Acme is headquartered in Cleveland","confidence":0.9,"tags":["location"]}]`
+	factLLM := constStringLLM("fact", factBody)
+
+	mem := testMemory()
+	embedProv := keyedEmbedder("embed", map[string][]float32{
+		mem.Content:                          {1, 0, 0},
+		"Acme is headquartered in Cleveland": {0, 1, 0},
+	})
+
+	h := guardedTestHarness(t, factLLM, noopEntityLLM(), embedProv)
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+
+	if got := len(h.creator.created); got != 1 {
+		t.Errorf("expected 1 child memory created, got %d", got)
+	}
+	for _, lin := range h.lineage.created {
+		if lin.Relation == model.LineageExtractedFactSuppressed {
+			t.Errorf("unexpected suppression lineage row for low-cosine fact: %+v", lin)
+		}
+	}
+}
+
+func TestProcessJob_FactGuard_LazyEmbedsMissingParent(t *testing.T) {
+	// Ingestion-decision is disabled in the harness, so the guard runs
+	// without a pre-computed parent embedding. The guard must lazy-embed
+	// the parent on the first candidate and reuse the cached value for
+	// subsequent candidates in the same job.
+	factBody := `[
+		{"content":"Alice works at Acme","confidence":0.9,"tags":["employment"]},
+		{"content":"Alice works at Acme","confidence":0.9,"tags":["employer"]}
+	]`
+	factLLM := constStringLLM("fact", factBody)
+
+	mem := testMemory()
+	embedProv := keyedEmbedder("embed", map[string][]float32{
+		mem.Content:           {1, 0, 0},
+		"Alice works at Acme": {1, 0, 0},
+	})
+
+	h := guardedTestHarness(t, factLLM, noopEntityLLM(), embedProv)
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+
+	// Both facts paraphrase the parent → both suppressed → no children.
+	if got := len(h.creator.created); got != 0 {
+		t.Errorf("expected no children (both suppressed), got %d", got)
+	}
+	// Two suppression lineage rows expected: one per suppressed fact.
+	suppressed := 0
+	for _, lin := range h.lineage.created {
+		if lin.Relation == model.LineageExtractedFactSuppressed {
+			suppressed++
+		}
+	}
+	if suppressed != 2 {
+		t.Errorf("expected 2 suppression lineage rows, got %d", suppressed)
+	}
+	// Parent must have been re-read at least twice (once per merge call).
+	// The mock reader's call count is the easiest probe; just ensure the
+	// memUpdater.Update count covers both merges (with the no-delta skip
+	// guard absorbing duplicate-tag-set writes).
+	if len(h.updater.updated) < 1 {
+		t.Errorf("expected parent updates from tag merges; got %d", len(h.updater.updated))
+	}
+}
+
+func TestProcessJob_FactGuard_FailsOpenOnEmptyEmbedResponse(t *testing.T) {
+	// Some providers return a non-error EmbeddingResponse with an empty
+	// Embeddings slice on rate-limit fallback or partial failure. The guard
+	// must treat that the same as an error: fall through and let the child
+	// be created. Otherwise extracted facts vanish silently with no log
+	// distinguishing 'paraphrase guard suppressed' from 'guard could not run'.
+	factBody := `[{"content":"Alice works at Acme","confidence":0.9,"tags":["employment"]}]`
+	factLLM := constStringLLM("fact", factBody)
+
+	mem := testMemory()
+	embedProv := &mockEmbeddingProvider{
+		name: "embed-empty",
+		respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+			return &provider.EmbeddingResponse{Embeddings: nil, Model: "empty"}, nil
+		},
+	}
+
+	h := guardedTestHarness(t, factLLM, noopEntityLLM(), embedProv)
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Logf("processJob surfaced error (expected; downstream embed batch hits the same empty response): %v", err)
+	}
+	if got := len(h.creator.created); got != 1 {
+		t.Errorf("fail-open on empty-embed-response: expected child memory created, got %d", got)
+	}
+	for _, lin := range h.lineage.created {
+		if lin.Relation == model.LineageExtractedFactSuppressed {
+			t.Errorf("unexpected suppression lineage row with no candidate embedding: %+v", lin)
+		}
+	}
+}
+
+func TestProcessJob_FactGuard_FailsOpenOnEmbedError(t *testing.T) {
+	// Embedder returns an error for the candidate fact's content. The
+	// guard must fall through and let the child memory be created so the
+	// extracted fact is not silently lost.
+	factBody := `[{"content":"Alice works at Acme","confidence":0.9,"tags":["employment"]}]`
+	factLLM := constStringLLM("fact", factBody)
+
+	mem := testMemory()
+	embedProv := &mockEmbeddingProvider{
+		name: "embed-err",
+		respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+			return nil, fmt.Errorf("embed offline")
+		},
+	}
+
+	h := guardedTestHarness(t, factLLM, noopEntityLLM(), embedProv)
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		// processJob may still surface the downstream embed batch error
+		// (vectors fail to write). The point of THIS test is that
+		// child memory creation was attempted despite the embed error
+		// in the guard.
+		t.Logf("processJob surfaced error (expected): %v", err)
+	}
+	if got := len(h.creator.created); got != 1 {
+		t.Errorf("fail-open: expected child memory created despite embed error, got %d", got)
+	}
+}
+
+// statefulMemoryStore is a tiny shared-state mock that implements BOTH
+// MemoryReader and MemoryUpdater against one map under one mutex, so an
+// Update is visible to subsequent GetByID calls. Required for tests that
+// exercise the read-modify-write cycle of mergeTagsIntoParent; the
+// default mockMemoryReader returns a detached copy from GetByID and so
+// would hide lost-update bugs by always serving the original state.
+type statefulMemoryStore struct {
+	mu     sync.Mutex
+	byID   map[uuid.UUID]*model.Memory
+	writes int
+}
+
+func newStatefulMemoryStore() *statefulMemoryStore {
+	return &statefulMemoryStore{byID: make(map[uuid.UUID]*model.Memory)}
+}
+
+func (s *statefulMemoryStore) put(mem *model.Memory) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *mem
+	s.byID[mem.ID] = &cp
+}
+
+func (s *statefulMemoryStore) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mem, ok := s.byID[id]
+	if !ok {
+		return nil, fmt.Errorf("memory %s not found", id)
+	}
+	cp := *mem
+	cp.Tags = append([]string(nil), mem.Tags...)
+	cp.Metadata = append(json.RawMessage(nil), mem.Metadata...)
+	return &cp, nil
+}
+
+func (s *statefulMemoryStore) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.Memory, 0, len(ids))
+	for _, id := range ids {
+		if mem, ok := s.byID[id]; ok {
+			out = append(out, *mem)
+		}
+	}
+	return out, nil
+}
+
+func (s *statefulMemoryStore) Update(_ context.Context, mem *model.Memory) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *mem
+	cp.Tags = append([]string(nil), mem.Tags...)
+	cp.Metadata = append(json.RawMessage(nil), mem.Metadata...)
+	s.byID[mem.ID] = &cp
+	s.writes++
+	return nil
+}
+
+func (s *statefulMemoryStore) UpdateEmbeddingDim(_ context.Context, _ uuid.UUID, _ int) error {
+	return nil
+}
+
+func (s *statefulMemoryStore) MarkEnriched(_ context.Context, _, _ uuid.UUID, _ *int, _ json.RawMessage, _ []string, _ *time.Time) error {
+	return nil
+}
+
+func (s *statefulMemoryStore) MarkSupersededBy(_ context.Context, _, _, _ uuid.UUID) error {
+	return nil
+}
+
+func TestMergeTagsIntoParent_ConcurrentMergesAreSerialized(t *testing.T) {
+	// Two goroutines call mergeTagsIntoParent on the same parent with
+	// disjoint tag sets. With the per-parent lock the resulting parent
+	// tags must contain BOTH sets (no lost write); without the lock the
+	// last write would clobber the first because Update is a full-row
+	// write of the metadata + tags columns.
+	store := newStatefulMemoryStore()
+	parent := testMemory()
+	parent.Tags = []string{"original"}
+	parent.Metadata = nil
+	store.put(parent)
+
+	// Wire a minimal pool: only the helper's dependencies need real
+	// implementations. memCreator, factProvider, etc. stay nil because
+	// mergeTagsIntoParent does not reach them.
+	lineage := &mockLineageCreator{}
+	pool := NewWorkerPool(
+		WorkerConfig{Workers: 1, PollInterval: 10 * time.Millisecond},
+		store, store, &mockMemoryCreator{}, nil, newMockQueueClaimer(),
+		&mockEntityUpserter{}, &mockRelationshipCreator{}, lineage,
+		&mockVectorWriter{},
+		provider.WrapLLMForTest(constLLM(nil), &mockTokenRecorder{}),
+		provider.WrapLLMForTest(constLLM(nil), &mockTokenRecorder{}),
+		provider.WrapEmbeddingForTest(constEmbed(nil), &mockTokenRecorder{}),
+		nil, nil, service.NewNoopSettingsService(), nil, nil,
+	)
+
+	const goroutines = 8
+	tagsPerGoroutine := []string{
+		"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
+	}
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		tag := tagsPerGoroutine[i]
+		go func() {
+			defer wg.Done()
+			if err := pool.mergeTagsIntoParent(
+				context.Background(),
+				parent, nil,
+				[]string{tag}, "suppressed-"+tag, 0.99, "parent", "test",
+			); err != nil {
+				t.Errorf("merge for tag %q failed: %v", tag, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	got, err := store.GetByID(context.Background(), parent.ID)
+	if err != nil {
+		t.Fatalf("final read: %v", err)
+	}
+	tagSet := map[string]struct{}{}
+	for _, tg := range got.Tags {
+		tagSet[tg] = struct{}{}
+	}
+	if _, ok := tagSet["original"]; !ok {
+		t.Errorf("original tag lost from parent: %v", got.Tags)
+	}
+	for _, want := range tagsPerGoroutine {
+		if _, ok := tagSet[want]; !ok {
+			t.Errorf("lost-update: tag %q missing from final parent tags %v", want, got.Tags)
+		}
+	}
+	if store.writes < goroutines {
+		t.Errorf("expected at least %d Update calls (one per goroutine), got %d",
+			goroutines, store.writes)
+	}
+	suppressionRows := 0
+	for _, lin := range lineage.created {
+		if lin.Relation == model.LineageExtractedFactSuppressed {
+			suppressionRows++
+		}
+	}
+	if suppressionRows != goroutines {
+		t.Errorf("expected %d suppression lineage rows (one per goroutine), got %d",
+			goroutines, suppressionRows)
+	}
+}
+
+func TestProcessJob_ParaphraseBackfill_SuppressesHighCosineChild(t *testing.T) {
+	// A backfill job is enqueued with the JobMarkerOnlyParaphraseGuard
+	// sentinel pre-populated in StepsCompleted. The worker must route ONLY
+	// to the sweep handler (skip fact/entity/embed), iterate the parent's
+	// extracted-fact children, suppress those whose stored embedding is
+	// at-or-above threshold to the parent's, and leave the rest untouched.
+	h := guardedTestHarness(t, noopFactLLM(), noopEntityLLM(), noopEmbed())
+
+	parent := testMemory()
+	dim := 3
+	parent.EmbeddingDim = &dim
+	parent.Enriched = true
+	h.reader.byID[parent.ID] = parent
+
+	highChild := *parent
+	highChild.ID = uuid.New()
+	highChild.Content = "Alice works at Acme"
+	highChild.Tags = []string{"employment"}
+	hc := highChild
+	h.reader.byID[hc.ID] = &hc
+
+	lowChild := *parent
+	lowChild.ID = uuid.New()
+	lowChild.Content = "Acme is in Cleveland"
+	lowChild.Tags = []string{"location"}
+	lc := lowChild
+	h.reader.byID[lc.ID] = &lc
+
+	h.lineage.childIDsByParent = map[uuid.UUID][]uuid.UUID{
+		parent.ID: {hc.ID, lc.ID},
+	}
+
+	// Seed embeddings via the vector writer's existing Upsert pathway so
+	// GetByIDs returns them.
+	ctx := context.Background()
+	if err := h.vectors.Upsert(ctx, storage.VectorKindMemory, parent.ID, parent.NamespaceID, []float32{1, 0, 0}, 3); err != nil {
+		t.Fatalf("seed parent embed: %v", err)
+	}
+	if err := h.vectors.Upsert(ctx, storage.VectorKindMemory, hc.ID, parent.NamespaceID, []float32{1, 0, 0}, 3); err != nil {
+		t.Fatalf("seed high embed: %v", err)
+	}
+	if err := h.vectors.Upsert(ctx, storage.VectorKindMemory, lc.ID, parent.NamespaceID, []float32{0, 1, 0}, 3); err != nil {
+		t.Fatalf("seed low embed: %v", err)
+	}
+
+	marker, _ := json.Marshal([]string{model.JobMarkerOnlyParaphraseGuard})
+	job := testJob(parent.ID, parent.NamespaceID)
+	job.StepsCompleted = marker
+
+	if err := h.pool.processJob(ctx, "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+
+	// Backfill jobs must NOT create new child memories or run extraction.
+	if len(h.creator.created) != 0 {
+		t.Errorf("backfill should not create children; got %d", len(h.creator.created))
+	}
+	// The high-cosine child must be superseded by the parent.
+	supersededHigh := false
+	for _, m := range h.updater.supersedeMarks {
+		if m.oldID == hc.ID && m.newID == parent.ID {
+			supersededHigh = true
+		}
+		if m.oldID == lc.ID {
+			t.Errorf("low-cosine child %s was unexpectedly superseded", lc.ID)
+		}
+	}
+	if !supersededHigh {
+		t.Errorf("high-cosine child %s was not superseded", hc.ID)
+	}
+	// The high-cosine child's vector must be purged.
+	purgedHigh := false
+	for _, id := range h.vectors.deleted {
+		if id == hc.ID {
+			purgedHigh = true
+		}
+		if id == lc.ID {
+			t.Errorf("low-cosine child's vector was unexpectedly purged")
+		}
+	}
+	if !purgedHigh {
+		t.Errorf("high-cosine child's vector was not purged")
+	}
+	// One LineageExtractedFactSuppressed row must be written.
+	suppCount := 0
+	for _, lin := range h.lineage.created {
+		if lin.Relation == model.LineageExtractedFactSuppressed {
+			suppCount++
+		}
+	}
+	if suppCount != 1 {
+		t.Errorf("expected 1 suppression lineage row, got %d", suppCount)
+	}
+	// The parent must have been updated with the suppressed child's tags.
+	if len(h.updater.updated) == 0 {
+		t.Fatalf("expected parent update from tag merge")
+	}
+	parentUpdate := h.updater.updated[len(h.updater.updated)-1]
+	gotEmployment := false
+	for _, tg := range parentUpdate.Tags {
+		if tg == "employment" {
+			gotEmployment = true
+		}
+	}
+	if !gotEmployment {
+		t.Errorf("parent tags after backfill missing 'employment': %v", parentUpdate.Tags)
+	}
+	// Job must be marked complete.
+	if len(h.queue.completed) != 1 || h.queue.completed[0] != job.ID {
+		t.Errorf("expected job marked complete, got %v", h.queue.completed)
+	}
+}
+
+func TestProcessJob_ParaphraseBackfill_SkipsParentWithUnknownDim(t *testing.T) {
+	// A parent whose EmbeddingDim was never recorded (legacy row, or a row
+	// whose embedding write failed) must NOT cause the sweep to error out.
+	// Production vector stores reject dim=0 with a hard error; fetchSingleVector
+	// short-circuits to (nil, nil) so the sweep treats the parent as "no
+	// embedding available, skip" and the job completes cleanly.
+	h := guardedTestHarness(t, noopFactLLM(), noopEntityLLM(), noopEmbed())
+
+	parent := testMemory()
+	parent.EmbeddingDim = nil // legacy: dim never recorded
+	parent.Enriched = true
+	h.reader.byID[parent.ID] = parent
+
+	child := *parent
+	child.ID = uuid.New()
+	child.Content = "child fact"
+	ch := child
+	h.reader.byID[ch.ID] = &ch
+	h.lineage.childIDsByParent = map[uuid.UUID][]uuid.UUID{
+		parent.ID: {ch.ID},
+	}
+
+	marker, _ := json.Marshal([]string{model.JobMarkerOnlyParaphraseGuard})
+	job := testJob(parent.ID, parent.NamespaceID)
+	job.StepsCompleted = marker
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob with nil-dim parent must not error: %v", err)
+	}
+	if len(h.updater.supersedeMarks) != 0 {
+		t.Errorf("expected no supersedes when parent has no embedding, got %v", h.updater.supersedeMarks)
+	}
+	for _, lin := range h.lineage.created {
+		if lin.Relation == model.LineageExtractedFactSuppressed {
+			t.Errorf("unexpected suppression lineage row when parent has no embedding: %+v", lin)
+		}
+	}
+	if len(h.queue.completed) != 1 || h.queue.completed[0] != job.ID {
+		t.Errorf("expected job marked complete, got %v", h.queue.completed)
 	}
 }
 

@@ -64,6 +64,10 @@ func (m *conflictMockLineageCreator) HasExtractedFactChildren(_ context.Context,
 	return false, nil
 }
 
+func (m *conflictMockLineageCreator) FindChildIDsByRelation(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ []string) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
 // conflictMockLLM returns pre-configured completion responses.
 type conflictMockLLM struct {
 	responses []string // rotated through on successive calls
@@ -83,8 +87,8 @@ func (m *conflictMockLLM) Complete(_ context.Context, _ *provider.CompletionRequ
 	}, nil
 }
 
-func (m *conflictMockLLM) Name() string      { return "mock-llm" }
-func (m *conflictMockLLM) Models() []string   { return []string{"mock-llm"} }
+func (m *conflictMockLLM) Name() string     { return "mock-llm" }
+func (m *conflictMockLLM) Models() []string { return []string{"mock-llm"} }
 
 // conflictMockEmbedder returns deterministic embeddings.
 type conflictMockEmbedder struct {
@@ -112,8 +116,8 @@ func (m *conflictMockEmbedder) Embed(_ context.Context, req *provider.EmbeddingR
 	}, nil
 }
 
-func (m *conflictMockEmbedder) Name() string       { return "mock-embed" }
-func (m *conflictMockEmbedder) Dimensions() []int   { return []int{3} }
+func (m *conflictMockEmbedder) Name() string      { return "mock-embed" }
+func (m *conflictMockEmbedder) Dimensions() []int { return []int{3} }
 
 // ---------------------------------------------------------------------------
 // Helper: build a ConflictDetector with mocks

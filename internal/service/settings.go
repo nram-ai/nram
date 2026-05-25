@@ -42,16 +42,26 @@ const (
 	SettingDedupThreshold    = "enrichment.dedup_threshold"
 	SettingFactPrompt        = "enrichment.fact_prompt"
 	SettingEntityPrompt      = "enrichment.entity_prompt"
-	SettingRankWeightSim     = "ranking.weight.similarity"
-	SettingRankWeightRec     = "ranking.weight.recency"
-	SettingRankWeightImp     = "ranking.weight.importance"
-	SettingRankWeightFreq    = "ranking.weight.frequency"
-	SettingRankWeightGraph   = "ranking.weight.graph_relevance"
-	SettingRankWeightConf    = "ranking.weight.confidence"
-	SettingRankWeightOrigin  = "ranking.weight.origin"
-	SettingRankWeightMmr     = "ranking.weight.mmr_lambda"
-	SettingTokenRetention    = "usage.token_retention_days"
-	SettingTokenCostRates    = "usage.cost_rates"
+
+	// Pre-insert paraphrase guard run on each extracted-fact child during
+	// enrichment. When a fact's cosine to its parent (or a previously-accepted
+	// sibling in the same job) is at or above the threshold, the child is not
+	// inserted; its tags are merged into the parent and a lineage row with
+	// relation extracted_fact_suppressed is written. Fall back to
+	// SettingDedupThreshold when the threshold key is unset.
+	SettingExtractedFactGuardEnabled        = "enrichment.extracted_fact_guard_enabled"
+	SettingExtractedFactParaphraseThreshold = "enrichment.extracted_fact_paraphrase_threshold"
+	SettingExtractedFactBackfillBatchSize   = "enrichment.extracted_fact_backfill_batch_size"
+	SettingRankWeightSim                    = "ranking.weight.similarity"
+	SettingRankWeightRec                    = "ranking.weight.recency"
+	SettingRankWeightImp                    = "ranking.weight.importance"
+	SettingRankWeightFreq                   = "ranking.weight.frequency"
+	SettingRankWeightGraph                  = "ranking.weight.graph_relevance"
+	SettingRankWeightConf                   = "ranking.weight.confidence"
+	SettingRankWeightOrigin                 = "ranking.weight.origin"
+	SettingRankWeightMmr                    = "ranking.weight.mmr_lambda"
+	SettingTokenRetention                   = "usage.token_retention_days"
+	SettingTokenCostRates                   = "usage.cost_rates"
 
 	// Hybrid recall fusion. Off by default; flipping enabled turns on
 	// parallel vector + BM25/tsvector retrieval with RRF fusion. The two
@@ -531,32 +541,35 @@ const (
 // settingDefaults provides built-in default values for well-known settings.
 // These are used when a setting is not found at any scope in the database.
 var settingDefaults = map[string]string{
-	SettingEnrichmentEnabled:              "true",
-	SettingDedupThreshold:                 "0.92",
-	SettingRankWeightSim:                  "0.50",
-	SettingRankWeightRec:                  "0.15",
-	SettingRankWeightImp:                  "0.10",
-	SettingRankWeightFreq:                 "0.00",
-	SettingRankWeightGraph:                "0.20",
-	SettingRankWeightConf:                 "0.05",
-	SettingRankWeightOrigin:               "0.00",
-	SettingRankWeightMmr:                  "0.75",
-	SettingRecallFusionEnabled:            "false",
-	SettingRecallFusionK:                  "60",
-	SettingRecallFusionVecW:               "0.60",
-	SettingRecallFusionLexW:               "0.40",
-	SettingRecallFusionNormalizePerChan:   "false",
-	SettingRecallNamespaceQuotaProjectMin: "0",
-	SettingTokenRetention:                 "365",
-	SettingTokenCostRates:                 "[]",
-	SettingDreamingEnabled:                "false",
-	SettingDreamMaxTokensPerCycle:         "1024000",
-	SettingDreamMaxTokensPerCall:          "2048",
-	SettingDreamCooldown:                  "300",
-	SettingDreamMinInterval:               "600",
-	SettingDreamInitialConfidence:         "0.3",
-	SettingDreamSupersessionThreshold:     "0.85",
-	SettingDreamLogRetention:              "30",
+	SettingEnrichmentEnabled:                "true",
+	SettingDedupThreshold:                   "0.92",
+	SettingExtractedFactGuardEnabled:        "true",
+	SettingExtractedFactParaphraseThreshold: "0.92",
+	SettingExtractedFactBackfillBatchSize:   "100",
+	SettingRankWeightSim:                    "0.50",
+	SettingRankWeightRec:                    "0.15",
+	SettingRankWeightImp:                    "0.10",
+	SettingRankWeightFreq:                   "0.00",
+	SettingRankWeightGraph:                  "0.20",
+	SettingRankWeightConf:                   "0.05",
+	SettingRankWeightOrigin:                 "0.00",
+	SettingRankWeightMmr:                    "0.75",
+	SettingRecallFusionEnabled:              "false",
+	SettingRecallFusionK:                    "60",
+	SettingRecallFusionVecW:                 "0.60",
+	SettingRecallFusionLexW:                 "0.40",
+	SettingRecallFusionNormalizePerChan:     "false",
+	SettingRecallNamespaceQuotaProjectMin:   "0",
+	SettingTokenRetention:                   "365",
+	SettingTokenCostRates:                   "[]",
+	SettingDreamingEnabled:                  "false",
+	SettingDreamMaxTokensPerCycle:           "1024000",
+	SettingDreamMaxTokensPerCall:            "2048",
+	SettingDreamCooldown:                    "300",
+	SettingDreamMinInterval:                 "600",
+	SettingDreamInitialConfidence:           "0.3",
+	SettingDreamSupersessionThreshold:       "0.85",
+	SettingDreamLogRetention:                "30",
 	SettingDreamContradictionPrompt: `You are a contradiction detector. You do NOT converse. You output JSON only.
 
 Determine if the two statements below contradict each other.
@@ -653,6 +666,12 @@ alignment must be a float:
 - "content": the fact statement (string)
 - "confidence": how confident you are in this fact, 0.0 to 1.0 (number)
 - "tags": relevant tags for categorization (array of strings)
+
+Hard rules:
+- Do NOT emit a fact whose content merely restates the input. If the input is already a single atomic fact, return an empty array [].
+- Do NOT emit a fact that differs from the input only by punctuation, capitalization, or whitespace.
+- Tag-only deltas are NOT a reason to emit a fact. If the only thing you would add is a new tag on otherwise-identical content, return an empty array; the calling system merges tags from suppressed facts into the parent automatically.
+- Only emit facts that introduce a new entity, relationship, quantity, date, cause, consequence, or other proposition not already explicit in the input.
 
 Return ONLY valid JSON. Do not include markdown fences or explanation.
 

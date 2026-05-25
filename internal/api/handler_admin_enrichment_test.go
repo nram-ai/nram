@@ -284,6 +284,196 @@ func TestEnrichmentUnknownSubPath(t *testing.T) {
 	}
 }
 
+// --- backfill-extracted-fact-paraphrase ---
+
+func TestEnrichmentBackfillExtractedFactParaphrase_NotWired_503(t *testing.T) {
+	// Deployments that do not wire the service expose a 503 so the UI button
+	// can render "not available" without a 404.
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store: &mockEnrichmentAdminStore{},
+	})
+
+	req := enrichmentAdminRequest(http.MethodPost,
+		"/v1/admin/enrichment/backfill-extracted-fact-paraphrase",
+		bytes.NewBufferString(`{}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when backfill not wired, got %d", w.Code)
+	}
+}
+
+func TestEnrichmentBackfillExtractedFactParaphrase_NonAdmin_403(t *testing.T) {
+	// Admin gate must reject non-administrator callers, matching the
+	// retry/pause/backfill-augmentation paths.
+	called := false
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store: &mockEnrichmentAdminStore{},
+		BackfillExtractedFactParaphrase: func(_ context.Context, _ uuid.UUID, _ bool, _ int) (int, int, error) {
+			called = true
+			return 0, 0, nil
+		},
+	})
+
+	// Plain request with no admin auth context.
+	req := httptest.NewRequest(http.MethodPost,
+		"/v1/admin/enrichment/backfill-extracted-fact-paraphrase",
+		bytes.NewBufferString(`{}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin, got %d", w.Code)
+	}
+	if called {
+		t.Error("backfill function must not be invoked when admin gate rejects")
+	}
+}
+
+func TestEnrichmentBackfillExtractedFactParaphrase_MethodNotPost_400(t *testing.T) {
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store: &mockEnrichmentAdminStore{},
+		BackfillExtractedFactParaphrase: func(_ context.Context, _ uuid.UUID, _ bool, _ int) (int, int, error) {
+			return 0, 0, nil
+		},
+	})
+
+	req := enrichmentAdminRequest(http.MethodGet,
+		"/v1/admin/enrichment/backfill-extracted-fact-paraphrase", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for non-POST, got %d", w.Code)
+	}
+}
+
+func TestEnrichmentBackfillExtractedFactParaphrase_BadJSON_400(t *testing.T) {
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store: &mockEnrichmentAdminStore{},
+		BackfillExtractedFactParaphrase: func(_ context.Context, _ uuid.UUID, _ bool, _ int) (int, int, error) {
+			return 0, 0, nil
+		},
+	})
+
+	req := enrichmentAdminRequest(http.MethodPost,
+		"/v1/admin/enrichment/backfill-extracted-fact-paraphrase",
+		bytes.NewBufferString(`not json`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for malformed JSON, got %d", w.Code)
+	}
+}
+
+func TestEnrichmentBackfillExtractedFactParaphrase_DryRun_200(t *testing.T) {
+	// Dry-run reports the candidate count without enqueueing.
+	var capturedDry bool
+	var capturedProj uuid.UUID
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store: &mockEnrichmentAdminStore{},
+		BackfillExtractedFactParaphrase: func(_ context.Context, projectID uuid.UUID, dryRun bool, _ int) (int, int, error) {
+			capturedDry = dryRun
+			capturedProj = projectID
+			return 42, 0, nil
+		},
+	})
+
+	body := `{"dry_run": true}`
+	req := enrichmentAdminRequest(http.MethodPost,
+		"/v1/admin/enrichment/backfill-extracted-fact-paraphrase",
+		bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	if !capturedDry {
+		t.Error("dry_run flag not forwarded to backfill closure")
+	}
+	if capturedProj != uuid.Nil {
+		t.Errorf("expected zero ProjectID when omitted, got %s", capturedProj)
+	}
+
+	var resp enrichmentBackfillAugmentResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.CandidateCount != 42 {
+		t.Errorf("CandidateCount = %d, want 42", resp.CandidateCount)
+	}
+	if resp.Enqueued != 0 {
+		t.Errorf("dry_run should not enqueue; got %d", resp.Enqueued)
+	}
+	if !resp.DryRun {
+		t.Error("DryRun flag not echoed in response")
+	}
+}
+
+func TestEnrichmentBackfillExtractedFactParaphrase_Execute_200(t *testing.T) {
+	projID := uuid.New()
+	var capturedProj uuid.UUID
+	var capturedLimit int
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store: &mockEnrichmentAdminStore{},
+		BackfillExtractedFactParaphrase: func(_ context.Context, projectID uuid.UUID, _ bool, limit int) (int, int, error) {
+			capturedProj = projectID
+			capturedLimit = limit
+			return 10, 10, nil
+		},
+	})
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"project_id": projID.String(),
+		"limit":      50,
+	})
+	req := enrichmentAdminRequest(http.MethodPost,
+		"/v1/admin/enrichment/backfill-extracted-fact-paraphrase",
+		bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	if capturedProj != projID {
+		t.Errorf("ProjectID forwarding broken: got %s, want %s", capturedProj, projID)
+	}
+	if capturedLimit != 50 {
+		t.Errorf("Limit forwarding broken: got %d, want 50", capturedLimit)
+	}
+
+	var resp enrichmentBackfillAugmentResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.CandidateCount != 10 || resp.Enqueued != 10 {
+		t.Errorf("counts wrong: candidates=%d enqueued=%d", resp.CandidateCount, resp.Enqueued)
+	}
+}
+
+func TestEnrichmentBackfillExtractedFactParaphrase_ServiceError_500(t *testing.T) {
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store: &mockEnrichmentAdminStore{},
+		BackfillExtractedFactParaphrase: func(_ context.Context, _ uuid.UUID, _ bool, _ int) (int, int, error) {
+			return 0, 0, errors.New("downstream blew up")
+		},
+	})
+
+	req := enrichmentAdminRequest(http.MethodPost,
+		"/v1/admin/enrichment/backfill-extracted-fact-paraphrase",
+		bytes.NewBufferString(`{}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on service error, got %d", w.Code)
+	}
+}
+
 func TestEnrichmentRootReturnsQueueStatus(t *testing.T) {
 	store := &mockEnrichmentAdminStore{
 		queueStatus: &EnrichmentQueueStatus{

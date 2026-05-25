@@ -43,7 +43,7 @@ func (m *mockSettingsRepo) Get(_ context.Context, key, scope string) (*model.Set
 	return &model.Setting{Key: key, Value: b, Scope: scope}, nil
 }
 
-func (m *mockSettingsRepo) Set(_ context.Context, _ *model.Setting) error    { return nil }
+func (m *mockSettingsRepo) Set(_ context.Context, _ *model.Setting) error      { return nil }
 func (m *mockSettingsRepo) Delete(_ context.Context, _ string, _ string) error { return nil }
 func (m *mockSettingsRepo) ListByScope(_ context.Context, _ string) ([]model.Setting, error) {
 	return nil, nil
@@ -70,19 +70,19 @@ func (m *mockSoftDeleter) SoftDelete(_ context.Context, id uuid.UUID, _ uuid.UUI
 // ---------------------------------------------------------------------------
 
 type ingestionHarness struct {
-	pool      *WorkerPool
-	reader    *mockMemoryReader
-	updater   *mockMemoryUpdater
-	creator   *mockMemoryCreator
-	queue     *mockQueueClaimer
-	entities  *mockEntityUpserter
-	rels      *mockRelationshipCreator
-	lineage   *mockLineageCreator
-	tokens    *mockTokenRecorder
-	vectors   *mockVectorWriter
-	deleter   *mockSoftDeleter
-	dedupVS   *mockVectorSearcher
-	settings  *service.SettingsService
+	pool     *WorkerPool
+	reader   *mockMemoryReader
+	updater  *mockMemoryUpdater
+	creator  *mockMemoryCreator
+	queue    *mockQueueClaimer
+	entities *mockEntityUpserter
+	rels     *mockRelationshipCreator
+	lineage  *mockLineageCreator
+	tokens   *mockTokenRecorder
+	vectors  *mockVectorWriter
+	deleter  *mockSoftDeleter
+	dedupVS  *mockVectorSearcher
+	settings *service.SettingsService
 }
 
 func newIngestionHarness(
@@ -190,7 +190,7 @@ func TestIngestion_Disabled_PhaseSkipped(t *testing.T) {
 	h := newIngestionHarness(nil, nil,
 		minimalFactLLM(),
 		minimalEntityLLM(),
-		constStringLLM("ingest",`{"operation":"ADD","target_id":null,"rationale":""}`),
+		constStringLLM("ingest", `{"operation":"ADD","target_id":null,"rationale":""}`),
 		constEmbedder(),
 	)
 
@@ -217,11 +217,16 @@ func TestIngestion_NoMatches_AddDecisionStampsMetadata(t *testing.T) {
 		map[string]string{
 			service.SettingIngestionDecisionEnabled: "true",
 			service.SettingIngestionDecisionShadow:  "false",
+			// constEmbedder returns the same fixed vector for every input,
+			// which would make every extracted fact cosine=1.0 to the
+			// parent and trigger the paraphrase guard. This test exercises
+			// the ingestion-decision metadata stamp, not the guard.
+			service.SettingExtractedFactGuardEnabled: "false",
 		},
 		nil, // no near matches
 		minimalFactLLM(),
 		minimalEntityLLM(),
-		constStringLLM("ingest",`{"operation":"ADD","target_id":null,"rationale":""}`),
+		constStringLLM("ingest", `{"operation":"ADD","target_id":null,"rationale":""}`),
 		constEmbedder(),
 	)
 
@@ -275,7 +280,7 @@ func TestIngestion_Update_WritesLineageAndSupersedesTarget(t *testing.T) {
 		dedupResults,
 		minimalFactLLM(),
 		minimalEntityLLM(),
-		constStringLLM("ingest",updateBody),
+		constStringLLM("ingest", updateBody),
 		constEmbedder(),
 	)
 
@@ -486,7 +491,7 @@ func TestIngestion_ShadowMode_LogsButDoesNotApply(t *testing.T) {
 		dedupResults,
 		minimalFactLLM(),
 		minimalEntityLLM(),
-		constStringLLM("ingest",updateBody),
+		constStringLLM("ingest", updateBody),
 		constEmbedder(),
 	)
 
