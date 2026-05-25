@@ -85,21 +85,35 @@ func RenderQueryAugmentPrompt(template, content string, n int) string {
 }
 
 // ParseQueryAugmentResponse extracts a JSON array of strings from the LLM
-// response. Tolerates a markdown fence and leading/trailing prose so a
-// slightly chatty model does not push the phase into fail-soft.
+// response. Tolerates three documented small-model failure modes before
+// declaring parse failure, in order of preference:
+//
+//  1. Bare JSON array of strings (the contract). Strips markdown fences and
+//     leading/trailing prose by clipping to the first '[' and last ']'.
+//  2. JSON object wrapping the array under any single key
+//     ({"queries": [...]}, {"questions": [...]}, etc). Used when the model
+//     ignores "no envelope" prompt language. No key name is hardcoded.
+//  3. Bare JSON array with mixed element types ([123, "x", true]); each
+//     element is stringified and treated as a candidate query. Catches the
+//     case where the model interpolates a number or boolean into one slot.
+//
+// Empties and whitespace-only entries are dropped at the end regardless of
+// which path succeeded.
 func ParseQueryAugmentResponse(raw string) ([]string, error) {
 	body := strings.TrimSpace(raw)
 	if start, end := strings.Index(body, "["), strings.LastIndex(body, "]"); start >= 0 && end > start {
 		body = body[start : end+1]
+	} else if start, end := strings.Index(body, "{"), strings.LastIndex(body, "}"); start >= 0 && end > start {
+		body = body[start : end+1]
 	}
-	var out []string
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
+
+	candidates, err := decodeQueryCandidates([]byte(body))
+	if err != nil {
 		return nil, fmt.Errorf("query_augment parse: %w", err)
 	}
-	// Drop empties and normalize whitespace; an LLM that emits a blank entry
-	// would otherwise inflate the prepended block with a stray newline.
-	cleaned := make([]string, 0, len(out))
-	for _, q := range out {
+
+	cleaned := make([]string, 0, len(candidates))
+	for _, q := range candidates {
 		q = strings.TrimSpace(q)
 		if q == "" {
 			continue
@@ -110,6 +124,75 @@ func ParseQueryAugmentResponse(raw string) ([]string, error) {
 		return nil, fmt.Errorf("query_augment parse: empty array")
 	}
 	return cleaned, nil
+}
+
+// decodeQueryCandidates runs the three tolerant decode passes described on
+// ParseQueryAugmentResponse and returns the raw candidate slice with no
+// post-cleaning. Split out so the cleaning loop stays a single site.
+func decodeQueryCandidates(body []byte) ([]string, error) {
+	// Pass 1: bare []string. The contract path.
+	var arr []string
+	if err := json.Unmarshal(body, &arr); err == nil {
+		return arr, nil
+	}
+
+	// Pass 2: object envelope. Pick the first value (any key) that decodes
+	// as either []string or []any with all-string-coercible elements.
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(body, &obj); err == nil {
+		// Map iteration is non-deterministic; in the common case the object
+		// has exactly one key so this is fine. If it has multiple keys, the
+		// first one that matches wins, which is acceptable for fail-soft.
+		for _, v := range obj {
+			var inner []string
+			if err := json.Unmarshal(v, &inner); err == nil {
+				return inner, nil
+			}
+			var innerAny []any
+			if err := json.Unmarshal(v, &innerAny); err == nil {
+				if out, ok := stringifyAnySlice(innerAny); ok {
+					return out, nil
+				}
+			}
+		}
+	}
+
+	// Pass 3: bare []any with mixed element types. Stringify each.
+	var mixed []any
+	if err := json.Unmarshal(body, &mixed); err == nil {
+		if out, ok := stringifyAnySlice(mixed); ok {
+			return out, nil
+		}
+	}
+
+	// All passes failed; re-run the strict path to return its native error
+	// for logging fidelity.
+	return nil, json.Unmarshal(body, &arr)
+}
+
+// stringifyAnySlice coerces each element of a []any to its string form,
+// rejecting nested objects/arrays (which would round-trip to "map[...]" or
+// "[...]" noise and never make a useful query). Returns (slice, true) when
+// every element coerced; (nil, false) otherwise so the caller can fall
+// through to the next pass.
+func stringifyAnySlice(in []any) ([]string, bool) {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		switch t := v.(type) {
+		case string:
+			out = append(out, t)
+		case float64, bool:
+			out = append(out, fmt.Sprintf("%v", t))
+		case json.Number:
+			out = append(out, t.String())
+		case nil:
+			// Skip; the cleaning pass would drop an empty string anyway.
+			continue
+		default:
+			return nil, false
+		}
+	}
+	return out, true
 }
 
 // BuildAugmentedInput concatenates queries + separator + content with the

@@ -42,8 +42,10 @@ func NewEnrichmentAdminStore(
 
 // hydrateQueueItem builds the api-layer EnrichmentQueueItem from a queue
 // row. projectName is empty on admin-tier callers; the UI falls through
-// to project_id.
-func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projectID *uuid.UUID, projectName string, staleThresholdMs int64, now time.Time) api.EnrichmentQueueItem {
+// to project_id. augmentedQueries / augmentedEmbeddingAt are joined from
+// the memories row so the enrichment-monitor "Augmentation" panel renders
+// the persisted state without a second fetch.
+func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projectID *uuid.UUID, projectName string, augmentedQueries []string, augmentedEmbeddingAt *time.Time, staleThresholdMs int64, now time.Time) api.EnrichmentQueueItem {
 	lastErr := ""
 	if item.LastError != nil {
 		lastErr = string(item.LastError)
@@ -69,6 +71,8 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projec
 		LastRequeueReason:      item.LastRequeueReason,
 		StepsCompleted:         steps,
 		QueryAugmentSkipReason: item.QueryAugmentSkipReason,
+		AugmentedQueries:       augmentedQueries,
+		AugmentedEmbeddingAt:   augmentedEmbeddingAt,
 	}
 	if item.Status == model.EnrichmentStatusProcessing && item.ClaimedAt != nil {
 		out.ClaimedAt = item.ClaimedAt
@@ -103,19 +107,27 @@ func (s *EnrichmentAdminStore) staleThresholdMs(ctx context.Context) int64 {
 // queueItemSelectColumns is the projection shared between SelfQueueStatus
 // (with p.name) and QueueStatus (without). When withName is true the SELECT
 // adds `p.name` so self-tier callers see project names; admin paths leave
-// it off and surface project_id only.
+// it off and surface project_id only. The trailing m.augmented_queries and
+// m.augmented_embedding_at columns are always included so the
+// enrichment-monitor "Augmentation" panel can render the persisted badge
+// straight from the queue payload.
 func queueItemSelectColumns(withName bool) string {
 	cols := `eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
 		eq.claimed_by, eq.claimed_at, eq.last_requeue_reason, eq.steps_completed, eq.query_augment_skip_reason, p.id`
 	if withName {
 		cols += `, p.name`
 	}
+	cols += `, m.augmented_queries, m.augmented_embedding_at`
 	return cols
 }
 
 // scanQueueItem reads one row and builds an EnrichmentQueueItem. When
-// withName is true the scan reads p.name from the trailing column; otherwise
-// the row stops at p.id.
+// withName is true the scan reads p.name before the trailing memory
+// augmentation columns; otherwise the row's project section stops at p.id.
+// augmented_queries is stored on memories as a JSON-encoded array string
+// (see internal/storage/memory_repo.go); we tolerate "null" / empty by
+// emitting a nil slice so the UI's truthy check renders the not-augmented
+// state. augmented_embedding_at is RFC3339 in both backends.
 func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, threshold int64, now time.Time) (api.EnrichmentQueueItem, error) {
 	var (
 		idStr, memIDStr, status, createdAtStr     string
@@ -125,12 +137,15 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 		queryAugmentSkipReason                    *string
 		projectIDStr                              *string
 		projectName                               *string
+		augmentedQueriesStr                       sql.NullString
+		augmentedEmbeddingAtStr                   sql.NullString
 	)
 	dest := []any{&idStr, &memIDStr, &status, &attempts, &maxAttempts, &lastErr, &createdAtStr,
 		&claimedBy, &claimedAtStr, &requeue, &stepsCompletedStr, &queryAugmentSkipReason, &projectIDStr}
 	if withName {
 		dest = append(dest, &projectName)
 	}
+	dest = append(dest, &augmentedQueriesStr, &augmentedEmbeddingAtStr)
 	if err := rows.Scan(dest...); err != nil {
 		return api.EnrichmentQueueItem{}, err
 	}
@@ -162,6 +177,22 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 	if stepsCompletedStr != "" {
 		stepsCompletedRaw = json.RawMessage(stepsCompletedStr)
 	}
+
+	var augmentedQueries []string
+	if augmentedQueriesStr.Valid && augmentedQueriesStr.String != "" && augmentedQueriesStr.String != "null" {
+		// Parse failures are non-fatal: the runtime contract that wrote the
+		// column already validated it; if a future drift produces unparsable
+		// JSON here, returning nil is the correct fail-soft (UI shows
+		// "Raw embed" instead of crashing the entire queue payload).
+		_ = json.Unmarshal([]byte(augmentedQueriesStr.String), &augmentedQueries)
+	}
+	var augmentedEmbeddingAt *time.Time
+	if augmentedEmbeddingAtStr.Valid && augmentedEmbeddingAtStr.String != "" {
+		if t, perr := time.Parse(time.RFC3339, augmentedEmbeddingAtStr.String); perr == nil {
+			augmentedEmbeddingAt = &t
+		}
+	}
+
 	return s.hydrateQueueItem(model.EnrichmentJob{
 		ID:                     id,
 		MemoryID:               memID,
@@ -175,7 +206,7 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 		LastRequeueReason:      requeue,
 		StepsCompleted:         stepsCompletedRaw,
 		QueryAugmentSkipReason: queryAugmentSkipReason,
-	}, pid, pname, threshold, now), nil
+	}, pid, pname, augmentedQueries, augmentedEmbeddingAt, threshold, now), nil
 }
 
 // SelfQueueStatus returns the queue items whose memory.namespace_id is

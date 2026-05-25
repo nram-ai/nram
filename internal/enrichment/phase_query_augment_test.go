@@ -76,6 +76,57 @@ func TestParseQueryAugmentResponse_MalformedReturnsError(t *testing.T) {
 	}
 }
 
+// Small models (qwen3:8b-extract in particular) periodically wrap the array
+// in a single-key object even when prompted otherwise. The parser must accept
+// any envelope key so we don't ship spurious failures to operators.
+func TestParseQueryAugmentResponse_ObjectEnvelope(t *testing.T) {
+	cases := map[string]string{
+		"queries key":   `{"queries": ["one", "two", "three"]}`,
+		"questions key": `{"questions": ["alpha", "beta"]}`,
+		"arbitrary key": `{"output": ["only", "this"]}`,
+		"with prose":    "Here you go:\n```json\n{\"queries\": [\"x\", \"y\"]}\n```",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			queries, err := ParseQueryAugmentResponse(body)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(queries) == 0 {
+				t.Fatalf("expected queries; got empty")
+			}
+		})
+	}
+}
+
+// Bare array with mixed element types should stringify each rather than
+// blowing up the entire parse. The model occasionally interpolates a number
+// when the prompt asks for a count-related phrasing.
+func TestParseQueryAugmentResponse_MixedElementTypes(t *testing.T) {
+	queries, err := ParseQueryAugmentResponse(`["how many", 42, "or about so", true]`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queries) != 4 {
+		t.Fatalf("expected 4 stringified queries; got %v", queries)
+	}
+	if queries[1] != "42" {
+		t.Fatalf("expected numeric element coerced to \"42\"; got %q", queries[1])
+	}
+	if queries[3] != "true" {
+		t.Fatalf("expected bool element coerced to \"true\"; got %q", queries[3])
+	}
+}
+
+// Object containing a nested object (not an array) under its single key is
+// irrecoverable; verify it still surfaces an error rather than silently
+// collapsing into garbage strings.
+func TestParseQueryAugmentResponse_NestedObjectStillFails(t *testing.T) {
+	if _, err := ParseQueryAugmentResponse(`{"queries": {"a": "b"}}`); err == nil {
+		t.Fatalf("expected error on object-of-object payload")
+	}
+}
+
 func TestBuildAugmentedInput_NoCap(t *testing.T) {
 	got, trimmed := BuildAugmentedInput([]string{"q1", "q2"}, "the memory content", 0)
 	want := "q1\nq2" + QueryAugmentSeparator + "the memory content"

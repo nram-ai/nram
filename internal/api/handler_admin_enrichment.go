@@ -96,6 +96,15 @@ type EnrichmentQueueItem struct {
 	// step ran successfully (look in StepsCompleted) or the row predates the
 	// column.
 	QueryAugmentSkipReason *string `json:"query_augment_skip_reason,omitempty"`
+	// AugmentedQueries / AugmentedEmbeddingAt mirror the same-named columns
+	// on the joined memory row so the enrichment-monitor "Augmentation"
+	// accordion can render the persisted badge ("✓ Augmented · N queries")
+	// without a second roundtrip per expanded row. Empty/nil means the
+	// memory's vector was built from raw content (the badge falls back to
+	// "Raw embed · not augmented"). Joined via LEFT JOIN so a row whose
+	// memory has been soft-deleted still hydrates with both fields nil.
+	AugmentedQueries     []string   `json:"augmented_queries,omitempty"`
+	AugmentedEmbeddingAt *time.Time `json:"augmented_embedding_at,omitempty"`
 }
 
 // enrichmentRetryRequest is the request body for POST /enrichment/retry.

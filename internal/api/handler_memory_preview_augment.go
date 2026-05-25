@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,6 +16,17 @@ import (
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 )
+
+// previewAugmentParseErrorMessage is the user-facing string surfaced when
+// ParseQueryAugmentResponse refuses the model output. Kept fixed so internal
+// Go type names (e.g. "[]string") never reach the operator. The underlying
+// error is logged server-side for diagnostics.
+const previewAugmentParseErrorMessage = "The model returned malformed output that could not be parsed as a query list. Re-run the preview, or adjust the prompt template if the failure is persistent."
+
+// previewAugmentLLMErrorMessage mirrors the parse-error message for the
+// upstream LLM-call path. The raw error often contains transport details
+// (endpoint URLs, timeouts) that don't belong in the preview surface.
+const previewAugmentLLMErrorMessage = "The model did not respond. Check the configured provider and try again."
 
 // QueryAugmentPromptResolver returns the operator-edited prompt template (or
 // the registered default if no override is set). Factored out so the handler
@@ -141,20 +153,32 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		})
 		latency := time.Since(start).Milliseconds()
 		if err != nil {
+			slog.Warn("preview_augment: llm call failed",
+				"project", projectID,
+				"memory", memoryID,
+				"err", err,
+				"llm_latency_ms", latency)
 			writeJSON(w, http.StatusOK, MemoryPreviewAugmentResponse{
 				RenderedPrompt: rendered,
 				LatencyMs:      latency,
-				Error:          "llm call failed: " + err.Error(),
+				Error:          previewAugmentLLMErrorMessage,
 			})
 			return
 		}
 		queries, perr := enrichment.ParseQueryAugmentResponse(resp.Content)
 		if perr != nil {
+			slog.Warn("preview_augment: parse failed",
+				"project", projectID,
+				"memory", memoryID,
+				"err", perr,
+				"raw_len", len(resp.Content),
+				"model", resp.Model,
+				"llm_latency_ms", latency)
 			writeJSON(w, http.StatusOK, MemoryPreviewAugmentResponse{
 				RenderedPrompt: rendered,
 				Model:          resp.Model,
 				LatencyMs:      latency,
-				Error:          "parse failed: " + perr.Error(),
+				Error:          previewAugmentParseErrorMessage,
 			})
 			return
 		}

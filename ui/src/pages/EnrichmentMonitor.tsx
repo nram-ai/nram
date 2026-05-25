@@ -540,6 +540,8 @@ function JobExpansion({ item }: { item: EnrichmentQueueItem }) {
           <MemoryAugmentPreviewBlock
             projectId={item.project_id}
             memoryId={item.memory_id}
+            persistedQueries={item.augmented_queries ?? null}
+            persistedAt={item.augmented_embedding_at ?? null}
           />
         </div>
       )}

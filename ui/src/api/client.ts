@@ -1172,6 +1172,13 @@ export interface EnrichmentQueueItem {
   // step ran successfully (look in steps_completed) or the row predates the
   // column.
   query_augment_skip_reason?: string;
+  // Mirror of the joined memory row so EnrichmentMonitor's "Augmentation"
+  // accordion can render the persisted badge ("✓ Augmented · N queries")
+  // without a second roundtrip per expanded row. Omitted when the memory's
+  // vector was built from raw content (the badge falls back to "Raw embed ·
+  // not augmented") or when the memory has been deleted.
+  augmented_queries?: string[];
+  augmented_embedding_at?: string;
 }
 
 export interface EnrichmentQueueStatus {
