@@ -1,6 +1,7 @@
 package enrichment
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,7 +29,14 @@ type queryAugmentSettings struct {
 	model         string
 	prompt        string
 	maxInputChars int
+	maxTokens     int
 }
+
+// QueryAugmentDefaultMaxTokens is the fallback completion-token cap used when
+// enrichment.query_augment.max_tokens is unset or non-positive. Mirrors the
+// default registered in internal/storage/admin/settings_store.go so changes
+// to one site cannot silently drift from the other.
+const QueryAugmentDefaultMaxTokens = 2048
 
 // queryAugmentResult is the in-memory product of one query-augmentation phase
 // invocation. The worker stamps Queries and AugmentedContent onto the
@@ -55,7 +63,7 @@ type queryAugmentResult struct {
 const QueryAugmentMaxCount = 10
 
 func (wp *WorkerPool) resolveQueryAugmentSettings(ctx context.Context) queryAugmentSettings {
-	cfg := queryAugmentSettings{count: 4}
+	cfg := queryAugmentSettings{count: 4, maxTokens: QueryAugmentDefaultMaxTokens}
 	cfg.enabled = wp.settings.ResolveBool(ctx, service.SettingQueryAugmentEnabled, "global")
 	if v, err := wp.settings.ResolveInt(ctx, service.SettingQueryAugmentCount, "global"); err == nil && v > 0 {
 		if v > QueryAugmentMaxCount {
@@ -71,6 +79,9 @@ func (wp *WorkerPool) resolveQueryAugmentSettings(ctx context.Context) queryAugm
 	if v, err := wp.settings.ResolveInt(ctx, service.SettingQueryAugmentMaxInputChars, "global"); err == nil && v >= 0 {
 		cfg.maxInputChars = v
 	}
+	if v, err := wp.settings.ResolveInt(ctx, service.SettingQueryAugmentMaxTokens, "global"); err == nil && v > 0 {
+		cfg.maxTokens = v
+	}
 	return cfg
 }
 
@@ -85,7 +96,7 @@ func RenderQueryAugmentPrompt(template, content string, n int) string {
 }
 
 // ParseQueryAugmentResponse extracts a JSON array of strings from the LLM
-// response. Tolerates four documented small-model failure modes before
+// response. Tolerates five documented small-model failure modes before
 // declaring parse failure, in order of preference:
 //
 //  1. Bare JSON array of strings (the contract). Strips markdown fences and
@@ -101,6 +112,12 @@ func RenderQueryAugmentPrompt(template, content string, n int) string {
 //     model emits the brackets but drops the per-element double quotes.
 //     Split on commas (preferred) or newlines (fallback), strip stray quote
 //     chars per token, drop empties.
+//  5. Truncation-prefix recovery via json.Decoder.Token streaming. Catches
+//     the case where the model emitted a well-formed prefix of a JSON array
+//     of strings but ran out of tokens (or otherwise stopped) before the
+//     closing ']'. Recovers every cleanly-decoded string element up to the
+//     first decode error. Mirrors the longest-valid-prefix recovery in
+//     internal/service/extraction_llm.go used by fact extraction.
 //
 // Empties and whitespace-only entries are dropped at the end regardless of
 // which path succeeded.
@@ -176,9 +193,58 @@ func decodeQueryCandidates(body []byte) ([]string, error) {
 		return out, nil
 	}
 
+	// Pass 5: truncation-prefix recovery. The strict passes fail with
+	// "unexpected end of JSON input" when the model emits the opening '['
+	// plus some valid string elements but never writes the closing ']'
+	// (token-budget exhaustion is the dominant cause; qwen3:8b in reasoning
+	// mode is the canonical offender). Stream string tokens with json.Decoder
+	// until the first decode error and return whatever cleanly decoded.
+	if out, ok := recoverStringArrayPrefix(body); ok {
+		return out, nil
+	}
+
 	// All passes failed; re-run the strict path to return its native error
 	// for logging fidelity.
 	return nil, json.Unmarshal(body, &arr)
+}
+
+// recoverStringArrayPrefix walks the body with a json.Decoder seeded at the
+// first '[', returning every successfully-decoded string element before the
+// first error. The decoder is lenient about trailing content past the last
+// decoded token, so a truncated array (no closing ']') still yields its
+// well-formed prefix. Returns (nil, false) when no '[' is present or zero
+// string elements survive so the caller can preserve the strict-pass error
+// for logs.
+func recoverStringArrayPrefix(body []byte) ([]string, bool) {
+	lb := bytes.IndexByte(body, '[')
+	if lb < 0 {
+		return nil, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(body[lb:]))
+
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, false
+	}
+	d, ok := tok.(json.Delim)
+	if !ok || d != '[' {
+		return nil, false
+	}
+
+	var out []string
+	for dec.More() {
+		var s string
+		if err := dec.Decode(&s); err != nil {
+			// Non-string element or truncation. Stop on first error and
+			// return whatever survived.
+			break
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
 }
 
 // lenientSplitArray rescues a bracketed list whose elements are not
@@ -297,7 +363,7 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	req := &provider.CompletionRequest{
 		Messages:  []provider.Message{{Role: "user", Content: prompt}},
 		Model:     cfg.model,
-		MaxTokens: 512,
+		MaxTokens: cfg.maxTokens,
 		JSONMode:  true,
 	}
 
@@ -314,9 +380,16 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 
 	queries, perr := ParseQueryAugmentResponse(resp.Content)
 	if perr != nil {
+		// Dump the raw LLM body alongside finish_reason so an operator can
+		// diagnose without re-running the call. finish_reason="length" plus
+		// "unexpected end of JSON input" is the canonical truncation signal
+		// and tells the operator to raise enrichment.query_augment.max_tokens.
 		slog.Warn("enrichment: query_augment parse",
 			"job", job.ID, "memory", mem.ID,
 			"err", perr, "raw_len", len(resp.Content),
+			"finish_reason", resp.FinishReason,
+			"model", resp.Model,
+			"raw", resp.Content,
 			"llm_latency_ms", latency.Milliseconds())
 		return nil, model.QueryAugmentSkipParseError
 	}
@@ -392,7 +465,7 @@ func (wp *WorkerPool) RunQueryAugmentPreview(ctx context.Context, content, promp
 	req := &provider.CompletionRequest{
 		Messages:  []provider.Message{{Role: "user", Content: prompt}},
 		Model:     cfg.model,
-		MaxTokens: 512,
+		MaxTokens: cfg.maxTokens,
 		JSONMode:  true,
 	}
 	start := time.Now()
@@ -403,6 +476,16 @@ func (wp *WorkerPool) RunQueryAugmentPreview(ctx context.Context, content, promp
 	}
 	queries, perr := ParseQueryAugmentResponse(resp.Content)
 	if perr != nil {
+		// Mirror the worker phase's diagnostic log; same finish_reason +
+		// raw-body shape so operators triage live and preview parse failures
+		// from a single grep target.
+		slog.Warn("enrichment: query_augment preview parse",
+			"err", perr,
+			"raw_len", len(resp.Content),
+			"finish_reason", resp.FinishReason,
+			"model", resp.Model,
+			"raw", resp.Content,
+			"llm_latency_ms", latency.Milliseconds())
 		return nil, perr
 	}
 	augmented, trimmed := BuildAugmentedInput(queries, content, cfg.maxInputChars)

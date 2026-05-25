@@ -218,6 +218,7 @@ const (
 	SettingQueryAugmentModel         = "enrichment.query_augment.model"
 	SettingQueryAugmentPrompt        = "enrichment.query_augment.prompt"
 	SettingQueryAugmentMaxInputChars = "enrichment.query_augment.max_input_chars"
+	SettingQueryAugmentMaxTokens     = "enrichment.query_augment.max_tokens"
 
 	SettingQdrantAddr             = "qdrant.addr"
 	SettingQdrantAPIKey           = "qdrant.api_key"
@@ -719,6 +720,7 @@ or
 	SettingQueryAugmentCount:         "4",
 	SettingQueryAugmentModel:         "",
 	SettingQueryAugmentMaxInputChars: "0",
+	SettingQueryAugmentMaxTokens:     "2048",
 	SettingQueryAugmentPrompt: `You are a query augmentation engine. You do NOT converse. You output JSON only.
 
 Given the memory content below, generate {N} short, distinct natural-language questions or phrases a user might use to retrieve this memory. Vary the phrasings: cover synonyms, partial-fact lookups, and the most likely way the information would be asked about. Keep each query under 120 characters and avoid restating the memory verbatim.

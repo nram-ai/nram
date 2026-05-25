@@ -137,6 +137,17 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		// model the fact provider was registered with.
 		modelOverride, _ := cfg.Settings.Resolve(r.Context(), service.SettingQueryAugmentModel, "global")
 
+		// Resolve the completion-token cap from the same settings key the
+		// worker phase reads, so the preview matches what the live ingestion
+		// path would observe. Soft-parse: garbage in the stored value falls
+		// back to the registered default rather than 503-ing the request.
+		maxTokens := enrichment.QueryAugmentDefaultMaxTokens
+		if v, err := cfg.Settings.Resolve(r.Context(), service.SettingQueryAugmentMaxTokens, "global"); err == nil && v != "" {
+			if parsed, perr := strconv.Atoi(v); perr == nil && parsed > 0 {
+				maxTokens = parsed
+			}
+		}
+
 		llm := cfg.FactProvider()
 		if llm == nil {
 			http.Error(w, "fact provider not available", http.StatusServiceUnavailable)
@@ -148,7 +159,7 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		resp, err := llm.Complete(provider.WithOperation(r.Context(), provider.OperationQueryAugment), &provider.CompletionRequest{
 			Messages:  []provider.Message{{Role: "user", Content: rendered}},
 			Model:     modelOverride,
-			MaxTokens: 512,
+			MaxTokens: maxTokens,
 			JSONMode:  true,
 		})
 		latency := time.Since(start).Milliseconds()
@@ -167,12 +178,18 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		}
 		queries, perr := enrichment.ParseQueryAugmentResponse(resp.Content)
 		if perr != nil {
+			// Surface the raw LLM body and finish_reason so an operator can
+			// diagnose without re-running the preview. finish_reason="length"
+			// alongside "unexpected end of JSON input" is the canonical
+			// truncation signal and points at enrichment.query_augment.max_tokens.
 			slog.Warn("preview_augment: parse failed",
 				"project", projectID,
 				"memory", memoryID,
 				"err", perr,
 				"raw_len", len(resp.Content),
+				"finish_reason", resp.FinishReason,
 				"model", resp.Model,
+				"raw", resp.Content,
 				"llm_latency_ms", latency)
 			writeJSON(w, http.StatusOK, MemoryPreviewAugmentResponse{
 				RenderedPrompt: rendered,
