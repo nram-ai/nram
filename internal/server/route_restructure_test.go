@@ -26,7 +26,7 @@ import (
 
 type rrDashboardStore struct{}
 
-func (s *rrDashboardStore) DashboardStats(_ context.Context, _ *uuid.UUID) (*api.DashboardStatsData, error) {
+func (s *rrDashboardStore) DashboardStats(_ context.Context, _, _ *uuid.UUID) (*api.DashboardStatsData, error) {
 	return &api.DashboardStatsData{
 		TotalMemories: 10,
 		TotalProjects: 1,

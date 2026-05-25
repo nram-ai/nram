@@ -113,12 +113,14 @@ func (s *EnrichmentAdminStore) staleThresholdMs(ctx context.Context) int64 {
 }
 
 // queueItemSelectColumns is the projection shared between SelfQueueStatus
-// (with p.name) and QueueStatus (without). When withName is true the SELECT
-// adds `p.name` so self-tier callers see project names; admin paths leave
-// it off and surface project_id only. The trailing m.augmented_queries and
-// m.augmented_embedding_at columns are always included so the
-// enrichment-monitor "Augmentation" panel can render the persisted badge
-// straight from the queue payload.
+// (with p.name), OrgQueueStatus (without), and QueueStatus (without). When
+// withName is true the SELECT adds `p.name` so self-tier callers see
+// project names; org and system paths leave it off and surface project_id
+// only — org-tier views must not leak other users' project names to an
+// org_owner, matching the system-tier privacy posture. The trailing
+// m.augmented_queries and m.augmented_embedding_at columns are always
+// included so the enrichment-monitor "Augmentation" panel can render the
+// persisted badge straight from the queue payload.
 func queueItemSelectColumns(withName bool) string {
 	cols := `eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
 		eq.claimed_by, eq.claimed_at, eq.last_requeue_reason, eq.steps_completed, eq.query_augment_skip_reason, p.id`
@@ -381,7 +383,10 @@ func (s *EnrichmentAdminStore) orgNamespacePath(ctx context.Context, orgID uuid.
 
 // OrgQueueStatus returns the queue items whose memory.namespace_id is
 // descended from the given org's root namespace. Counts are scoped to the
-// same subtree. Used by /v1/orgs/{orgId}/enrichment.
+// same subtree. Items carry project_id (no project_name) so an org_owner
+// sees UUIDs only for projects owned by other users in the org — matching
+// the privacy posture for system-tier views. Used by
+// /v1/orgs/{orgId}/enrichment.
 func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UUID) (*api.EnrichmentQueueStatus, error) {
 	orgPath, err := s.orgNamespacePath(ctx, orgID)
 	if err != nil {
@@ -416,7 +421,7 @@ func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UU
 		_ = row.Scan(st.dest)
 	}
 
-	cols := queueItemSelectColumns(true)
+	cols := queueItemSelectColumns(false)
 	var itemsQ string
 	if s.db.Backend() == storage.BackendPostgres {
 		itemsQ = `SELECT ` + cols + `
@@ -445,7 +450,7 @@ func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UU
 	now := time.Now().UTC()
 	queueItems := []api.EnrichmentQueueItem{}
 	for rows.Next() {
-		item, err := s.scanQueueItem(rows, true, threshold, now)
+		item, err := s.scanQueueItem(rows, false, threshold, now)
 		if err != nil {
 			return nil, fmt.Errorf("org queue scan: %w", err)
 		}

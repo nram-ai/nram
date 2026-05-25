@@ -418,15 +418,17 @@ func TestDreamCycleRepo_ListByNamespacePathPrefix(t *testing.T) {
 		mineCycle := createRunningCycle(t, ctx, repo, mine.ID, mine.NamespaceID, 0)
 		_ = createRunningCycle(t, ctx, repo, theirs.ID, theirs.NamespaceID, 0)
 
-		got, err := repo.ListByNamespacePathPrefix(ctx, callerPath, 50)
+		got, err := repo.ListByNamespacePathPrefix(ctx, callerPath, 50, true)
 		if err != nil {
-			t.Fatalf("ListByNamespacePathPrefix: %v", err)
+			t.Fatalf("ListByNamespacePathPrefix(withProjectName=true): %v", err)
 		}
 
 		var sawMine, sawTheirs bool
+		var mineRowName string
 		for _, c := range got {
 			if c.ID == mineCycle.ID {
 				sawMine = true
+				mineRowName = c.ProjectName
 			}
 			if c.ProjectID == theirs.ID {
 				sawTheirs = true
@@ -437,6 +439,38 @@ func TestDreamCycleRepo_ListByNamespacePathPrefix(t *testing.T) {
 		}
 		if sawTheirs {
 			t.Errorf("sibling user's cycle leaked across the prefix filter")
+		}
+		if mineRowName == "" {
+			t.Errorf("withProjectName=true: caller's cycle has empty ProjectName, want populated")
+		}
+
+		// withProjectName=false: same rows must come back (the JOIN/WHERE
+		// scoping is unchanged), but ProjectName must be empty so the org
+		// and system tiers surface project_id only. Re-checking the
+		// sibling-isolation invariant here guards against a regression
+		// that drops the projects JOIN entirely on the masked path
+		// (which would also drop the namespace filter that hangs off it).
+		gotMasked, err := repo.ListByNamespacePathPrefix(ctx, callerPath, 50, false)
+		if err != nil {
+			t.Fatalf("ListByNamespacePathPrefix(withProjectName=false): %v", err)
+		}
+		var sawMineMasked, sawTheirsMasked bool
+		for _, c := range gotMasked {
+			if c.ProjectName != "" {
+				t.Errorf("withProjectName=false: cycle %s carries ProjectName=%q, want empty", c.ID, c.ProjectName)
+			}
+			if c.ID == mineCycle.ID {
+				sawMineMasked = true
+			}
+			if c.ProjectID == theirs.ID {
+				sawTheirsMasked = true
+			}
+		}
+		if !sawMineMasked {
+			t.Errorf("withProjectName=false: caller's cycle missing from prefix-filtered result")
+		}
+		if sawTheirsMasked {
+			t.Errorf("withProjectName=false: sibling user's cycle leaked across the prefix filter")
 		}
 	})
 }

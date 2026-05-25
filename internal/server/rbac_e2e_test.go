@@ -347,7 +347,7 @@ func (m *rbacLineageCreator) Create(_ context.Context, _ *model.MemoryLineage) e
 // rbacDashboardStore implements api.DashboardStore for admin dashboard tests.
 type rbacDashboardStore struct{}
 
-func (s *rbacDashboardStore) DashboardStats(_ context.Context, _ *uuid.UUID) (*api.DashboardStatsData, error) {
+func (s *rbacDashboardStore) DashboardStats(_ context.Context, _, _ *uuid.UUID) (*api.DashboardStatsData, error) {
 	return &api.DashboardStatsData{
 		TotalMemories: 42,
 		TotalProjects: 2,

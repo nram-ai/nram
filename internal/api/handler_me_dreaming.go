@@ -171,19 +171,29 @@ func extractMeDreamSubPath(path string) string {
 	return path[idx+len(marker):]
 }
 
-// projectOwnedByCaller returns true iff the project's namespace_id resolves
-// to a path descended from callerNS.Path (or equal to it).
-func (c MeDreamingConfig) projectOwnedByCaller(ctx context.Context, projectID uuid.UUID, callerNS *model.Namespace) bool {
+// resolveOwnedProjectNS resolves the project's namespace if and only if its
+// path is descended from callerNS.Path (or equal to it). Returns nil when
+// the project doesn't exist, its namespace can't be resolved, or it is not
+// owned by the caller — callers treat nil as a uniform "deny" without
+// distinguishing the three cases (matching the pre-existing security
+// posture of the bool-returning projectOwnedByCaller helper this replaces).
+// Returning the namespace lets the cycles-list path reuse it as the JOIN
+// prefix for ListSelfCycles, avoiding a second Projects.GetByID round-trip
+// after the ownership check.
+func (c MeDreamingConfig) resolveOwnedProjectNS(ctx context.Context, projectID uuid.UUID, callerNS *model.Namespace) *model.Namespace {
 	proj, err := c.Projects.GetByID(ctx, projectID)
 	if err != nil {
-		return false
+		return nil
 	}
 	projNS, err := c.Namespaces.GetByID(ctx, proj.NamespaceID)
 	if err != nil {
-		return false
+		return nil
 	}
 	prefix := callerNS.Path + "/"
-	return projNS.Path == callerNS.Path || strings.HasPrefix(projNS.Path, prefix)
+	if projNS.Path == callerNS.Path || strings.HasPrefix(projNS.Path, prefix) {
+		return projNS
+	}
+	return nil
 }
 
 func handleMeDreamStatus(w http.ResponseWriter, r *http.Request, cfg MeDreamingConfig, callerNS *model.Namespace) {
@@ -217,7 +227,7 @@ func handleMeDreamStatus(w http.ResponseWriter, r *http.Request, cfg MeDreamingC
 		WriteError(w, ErrBadRequest("invalid project_id"))
 		return
 	}
-	if !cfg.projectOwnedByCaller(r.Context(), pid, callerNS) {
+	if cfg.resolveOwnedProjectNS(r.Context(), pid, callerNS) == nil {
 		WriteError(w, ErrForbidden("project is not owned by caller"))
 		return
 	}
@@ -249,22 +259,22 @@ func handleMeDreamCyclesList(w http.ResponseWriter, r *http.Request, cfg MeDream
 			WriteError(w, ErrBadRequest("invalid project_id"))
 			return
 		}
-		if !cfg.projectOwnedByCaller(r.Context(), pid, callerNS) {
+		projNS := cfg.resolveOwnedProjectNS(r.Context(), pid, callerNS)
+		if projNS == nil {
 			WriteError(w, ErrForbidden("project is not owned by caller"))
 			return
 		}
-		cycles, err = cfg.Store.ListCycles(r.Context(), &pid, 50)
-		if err == nil && len(cycles) > 0 {
-			// Single-project branch: one project, one name lookup.
-			if proj, perr := cfg.Projects.GetByID(r.Context(), pid); perr == nil && proj != nil {
-				for i := range cycles {
-					cycles[i].ProjectName = proj.Name
-				}
-			}
-		}
+		// Route the single-project branch through ListSelfCycles scoped to
+		// the project's namespace (a strict subtree of callerNS). This
+		// shares the JOIN-based ProjectName population with the
+		// multi-project branch below — there is no separate
+		// Projects.GetByID lookup whose failure could silently emit empty
+		// names, and the privacy contract (self tier → ProjectName
+		// populated) is enforced by a single code path.
+		cycles, err = cfg.Store.ListSelfCycles(r.Context(), projNS, 50)
 	} else {
-		// Multi-project branch: ListSelfCycles already populates ProjectName
-		// via the JOIN in DreamCycleRepo.ListByNamespacePathPrefix.
+		// Multi-project branch: ListSelfCycles populates ProjectName via
+		// the JOIN in DreamCycleRepo.ListByNamespacePathPrefix.
 		cycles, err = cfg.Store.ListSelfCycles(r.Context(), callerNS, 50)
 	}
 	if err != nil {
@@ -293,7 +303,7 @@ func handleMeDreamCycleDetail(w http.ResponseWriter, r *http.Request, cfg MeDrea
 		WriteError(w, ErrNotFound("dream cycle not found"))
 		return
 	}
-	if !cfg.projectOwnedByCaller(r.Context(), cycle.ProjectID, callerNS) {
+	if cfg.resolveOwnedProjectNS(r.Context(), cycle.ProjectID, callerNS) == nil {
 		// 404 not 403, so caller can't probe for cycles in other projects.
 		WriteError(w, ErrNotFound("dream cycle not found"))
 		return

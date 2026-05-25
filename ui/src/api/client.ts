@@ -1057,8 +1057,11 @@ export interface DreamCycle {
   // threshold; only these are eligible for the Abandon action.
   is_stale_diagnostic: boolean;
   is_abandonable: boolean;
-  // Populated only by /v1/me/dreaming/cycles. Admin /v1/admin/dreaming/cycles
-  // intentionally leaves this empty so the UI falls through to project_id.
+  // Populated only by /v1/me/dreaming/cycles. The org-tier
+  // /v1/orgs/{orgId}/dreaming/cycles and admin /v1/admin/dreaming/cycles
+  // intentionally leave this empty so cross-tenant viewers (org_owner,
+  // admin) never learn the names of other users' projects and the UI falls
+  // through to project_id.
   project_name?: string;
 }
 
@@ -1141,8 +1144,9 @@ export interface EnrichmentQueueItem {
   id: string;
   memory_id: string;
   // Populated whenever the memory's project is resolvable. project_name is
-  // populated only on self/org-tier responses; the admin/system tier leaves
-  // it empty so the UI falls through to the UUID.
+  // populated only on self-tier responses; the org and system tiers leave
+  // it empty so cross-tenant viewers (org_owner, admin) never learn the
+  // names of other users' projects and the UI falls through to the UUID.
   project_id?: string;
   project_name?: string;
   status: string;

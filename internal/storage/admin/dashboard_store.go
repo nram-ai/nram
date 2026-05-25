@@ -22,7 +22,7 @@ func NewDashboardStore(db storage.DB, enrichmentQueueRepo *storage.EnrichmentQue
 	return &DashboardStore{db: db, enrichmentQueueRepo: enrichmentQueueRepo}
 }
 
-func (s *DashboardStore) DashboardStats(ctx context.Context, orgID *uuid.UUID) (*api.DashboardStatsData, error) {
+func (s *DashboardStore) DashboardStats(ctx context.Context, orgID, userID *uuid.UUID) (*api.DashboardStatsData, error) {
 	stats := &api.DashboardStatsData{
 		MemoriesByProject: []api.ProjectMemoryCount{},
 	}
@@ -78,19 +78,38 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID *uuid.UUID) (
 		stats.TotalOrgs = 1
 	}
 
-	// Memories by project.
+	// Memories by project. Three shapes:
+	//
+	//   userID != nil: per-project breakdown for projects owned by the
+	//     caller. Names are populated (the caller owns every returned
+	//     project, so the name is theirs to see). This is what powers the
+	//     self-tier /v1/dashboard chart.
+	//
+	//   userID == nil && orgID != nil: org-wide breakdown WITHOUT names —
+	//     project_id only. An org_owner or admin browsing an org-aggregate
+	//     view must not learn the names of projects owned by other users.
+	//     This matches the privacy posture for org-tier dreaming and
+	//     enrichment.
+	//
+	//   userID == nil && orgID == nil: global breakdown WITHOUT names. Same
+	//     reason as the org case, applied system-wide.
 	var memoriesByProjectQuery string
 	var memoriesByProjectArgs []interface{}
-	if orgID == nil {
-		memoriesByProjectQuery = `SELECT p.id, p.name, COUNT(m.id) as count
+	withName := userID != nil
+	switch {
+	case userID != nil:
+		memoriesByProjectQuery = s.userMemoriesByProjectQuery()
+		memoriesByProjectArgs = []interface{}{userID.String()}
+	case orgID != nil:
+		memoriesByProjectQuery = s.orgMemoriesByProjectQueryNoName()
+		memoriesByProjectArgs = []interface{}{orgID.String()}
+	default:
+		memoriesByProjectQuery = `SELECT p.id, COUNT(m.id) as count
 			FROM projects p
 			LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
-			GROUP BY p.id, p.name
+			GROUP BY p.id
 			ORDER BY count DESC
 			LIMIT 10`
-	} else {
-		memoriesByProjectQuery = s.orgMemoriesByProjectQuery()
-		memoriesByProjectArgs = []interface{}{orgID.String()}
 	}
 
 	rows, err := s.db.Query(ctx, memoriesByProjectQuery, memoriesByProjectArgs...)
@@ -102,8 +121,14 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID *uuid.UUID) (
 	for rows.Next() {
 		var idStr string
 		var item api.ProjectMemoryCount
-		if err := rows.Scan(&idStr, &item.ProjectName, &item.Count); err != nil {
-			return nil, fmt.Errorf("dashboard scan project memory count: %w", err)
+		if withName {
+			if err := rows.Scan(&idStr, &item.ProjectName, &item.Count); err != nil {
+				return nil, fmt.Errorf("dashboard scan project memory count: %w", err)
+			}
+		} else {
+			if err := rows.Scan(&idStr, &item.Count); err != nil {
+				return nil, fmt.Errorf("dashboard scan project memory count: %w", err)
+			}
 		}
 		projectID, err := uuid.Parse(idStr)
 		if err != nil {
@@ -256,22 +281,56 @@ func (s *DashboardStore) orgEntityCountQuery() string {
 		WHERE en.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)`
 }
 
-func (s *DashboardStore) orgMemoriesByProjectQuery() string {
+// orgMemoriesByProjectQueryNoName returns the per-project breakdown for
+// every project in the given org's subtree, with project_id but NOT
+// project_name. Used when the caller is not a single user (no userID) but
+// is scoped to an org — i.e. a future tier-B/system-tier consumer that
+// needs the chart shape but must not learn cross-user project names. The
+// previous version of this method (orgMemoriesByProjectQuery) selected
+// p.name and was the source of the cross-user name leak on /v1/dashboard
+// fixed alongside the org-tier dreaming/enrichment posture on 2026-05-25.
+func (s *DashboardStore) orgMemoriesByProjectQueryNoName() string {
 	if s.db.Backend() == storage.BackendPostgres {
-		return `SELECT p.id, p.name, COUNT(m.id) as count
+		return `SELECT p.id, COUNT(m.id) as count
 			FROM projects p
 			JOIN namespaces pn ON p.namespace_id = pn.id
 			LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
 			WHERE pn.path LIKE (SELECT n.path || '/' || '%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = $1)
+			GROUP BY p.id
+			ORDER BY count DESC
+			LIMIT 10`
+	}
+	return `SELECT p.id, COUNT(m.id) as count
+		FROM projects p
+		JOIN namespaces pn ON p.namespace_id = pn.id
+		LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
+		WHERE pn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
+		GROUP BY p.id
+		ORDER BY count DESC
+		LIMIT 10`
+}
+
+// userMemoriesByProjectQuery returns the per-project breakdown for
+// projects owned by the given user, with project_id AND project_name.
+// Self-tier only — the caller owns every returned project, so the name is
+// theirs to see. The filter is on projects.owner_namespace_id, joined to
+// users.namespace_id via the subquery, so the path is independent of any
+// namespace-path scoping (a user could in principle own projects under
+// any namespace; ownership is the authoritative signal).
+func (s *DashboardStore) userMemoriesByProjectQuery() string {
+	if s.db.Backend() == storage.BackendPostgres {
+		return `SELECT p.id, p.name, COUNT(m.id) as count
+			FROM projects p
+			LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
+			WHERE p.owner_namespace_id = (SELECT namespace_id FROM users WHERE id = $1)
 			GROUP BY p.id, p.name
 			ORDER BY count DESC
 			LIMIT 10`
 	}
 	return `SELECT p.id, p.name, COUNT(m.id) as count
 		FROM projects p
-		JOIN namespaces pn ON p.namespace_id = pn.id
 		LEFT JOIN memories m ON m.namespace_id = p.namespace_id AND m.deleted_at IS NULL
-		WHERE pn.path LIKE (SELECT n.path || '/%' FROM namespaces n JOIN organizations o ON o.namespace_id = n.id WHERE o.id = ?)
+		WHERE p.owner_namespace_id = (SELECT namespace_id FROM users WHERE id = ?)
 		GROUP BY p.id, p.name
 		ORDER BY count DESC
 		LIMIT 10`

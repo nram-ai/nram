@@ -80,8 +80,10 @@ func MemorySource(m *Memory) string {
 // of phase-boundary writes that touch UpdatedAt). IsStaleDiagnostic,
 // IsAbandonable, and ProjectName are NOT persisted — they're computed at
 // read time and remain zero/empty on direct repo scans. ProjectName is
-// populated only by self/org-tier read paths that JOIN projects; admin
-// paths leave it empty so cross-tenant views show project_id only.
+// populated only by self-tier read paths that JOIN projects (the caller
+// owns every returned project, so the name is theirs to see); org and
+// system paths leave it empty so cross-tenant views show project_id only
+// and an org_owner never learns the names of other users' projects.
 type DreamCycle struct {
 	ID           uuid.UUID       `json:"id"`
 	ProjectID    uuid.UUID       `json:"project_id"`

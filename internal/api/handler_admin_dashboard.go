@@ -13,13 +13,20 @@ import (
 
 // DashboardStore abstracts storage operations for dashboard/activity.
 // When orgID is non-nil, results are scoped to that organization. When
-// userID is also non-nil, results are further scoped to memories owned by
-// that user (via the user's namespace path) and a short content preview is
-// included on each event so the caller's own dashboard can render its own
-// memories. Org/system tiers (userID == nil) remain content-free.
+// userID is also non-nil, the per-project breakdown is further scoped to
+// projects owned by that user (so an org_owner does not learn the names
+// of other users' projects in their org) and the activity feed attaches a
+// short content preview so the caller's own dashboard can render its own
+// memories. Org/system tiers (userID == nil) remain content-free and
+// project-name-free.
 type DashboardStore interface {
-	// DashboardStats returns aggregate stats for the dashboard.
-	DashboardStats(ctx context.Context, orgID *uuid.UUID) (*DashboardStatsData, error)
+	// DashboardStats returns aggregate stats for the dashboard. The
+	// per-project breakdown (DashboardStatsData.MemoriesByProject) is
+	// scoped to projects owned by userID when non-nil; with userID == nil
+	// the breakdown falls back to org-wide aggregate (project names are
+	// then omitted by the store to avoid the cross-tenant name leak that
+	// motivated the 2026-05-25 self-tier scoping fix).
+	DashboardStats(ctx context.Context, orgID, userID *uuid.UUID) (*DashboardStatsData, error)
 	// RecentActivity returns the most recent activity events, up to limit.
 	RecentActivity(ctx context.Context, limit int, orgID, userID *uuid.UUID) ([]ActivityEvent, error)
 }
@@ -78,9 +85,14 @@ func NewAdminDashboardHandler(cfg DashboardConfig) http.HandlerFunc {
 		// Self-tier: caller's own dashboard. Admin viewing /v1/dashboard sees
 		// admin's own data, not the system-wide view. Cross-tenant dashboards
 		// move to /v1/admin/system/dashboard and /v1/orgs/{org_id}/dashboard.
-		orgID, _ := SelfScope(auth.FromContext(r.Context()))
+		// userID is passed through so the per-project breakdown can scope to
+		// the caller's own projects — without it, MemoriesByProject would
+		// emit every project name in the org (including other users'), which
+		// is the cross-tenant name leak the org-tier dreaming/enrichment fix
+		// closed at the same time.
+		orgID, userID := SelfScope(auth.FromContext(r.Context()))
 
-		stats, err := cfg.Store.DashboardStats(r.Context(), orgID)
+		stats, err := cfg.Store.DashboardStats(r.Context(), orgID, userID)
 		if err != nil {
 			log.Printf("api: AdminDashboard: %v", err)
 			WriteError(w, ErrInternal("failed to retrieve dashboard stats"))

@@ -19,7 +19,7 @@ import Switch from "../components/Switch";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner, faChevronDown, faChevronRight } from "../lib/icons";
 import type { DreamCycle, DreamLog, DreamPhaseSummary } from "../api/client";
-import { formatNumber } from "../lib/formatters";
+import { formatNumber, truncateId } from "../lib/formatters";
 import {
   PHASE_LABELS,
   SUB_PHASE_LABELS,
@@ -774,8 +774,9 @@ function CycleTable({
   live: Record<string, LiveCycleState>;
   showWriteActions?: boolean;
   // showProjectName toggles the rendering of project_name vs project_id in
-  // the Project column. Self/org-tier responses populate project_name; the
-  // system tier intentionally leaves it empty so admins see UUIDs only.
+  // the Project column. Only the self tier populates project_name; org and
+  // system tiers leave it empty so callers see project_id only and never
+  // learn the names of other users' projects.
   showProjectName?: boolean;
 }) {
   if (cycles.length === 0) {
@@ -835,9 +836,9 @@ function CycleTable({
                   </div>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground" title={cycle.project_id}>
-                  {showProjectName
-                    ? (cycle.project_name ?? cycle.project_id)
-                    : cycle.project_id}
+                  {showProjectName && cycle.project_name
+                    ? cycle.project_name
+                    : truncateId(cycle.project_id)}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {(() => {
@@ -1776,7 +1777,7 @@ export default function DreamingMonitor() {
                 isAbandoning={abandonMutation.isPending}
                 live={live}
                 showWriteActions={showWriteActions}
-                showProjectName={tier !== "system"}
+                showProjectName={tier === "self"}
               />
             </div>
           )}

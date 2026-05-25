@@ -221,12 +221,13 @@ func (s *DreamAdminStore) ListCycles(ctx context.Context, projectID *uuid.UUID, 
 
 // ListSelfCycles returns cycles whose project namespace is equal to or
 // descended from callerNS.Path. Each row's ProjectName is populated by the
-// underlying repo via the projects JOIN.
+// underlying repo via the projects JOIN; self-tier callers own every
+// returned project so the name is theirs to see.
 func (s *DreamAdminStore) ListSelfCycles(ctx context.Context, callerNS *model.Namespace, limit int) ([]model.DreamCycle, error) {
 	if callerNS == nil {
 		return []model.DreamCycle{}, nil
 	}
-	cycles, err := s.cycleRepo.ListByNamespacePathPrefix(ctx, callerNS.Path, limit)
+	cycles, err := s.cycleRepo.ListByNamespacePathPrefix(ctx, callerNS.Path, limit, true)
 	if err != nil {
 		return nil, err
 	}
@@ -301,13 +302,16 @@ func (s *DreamAdminStore) orgNamespacePath(ctx context.Context, orgID uuid.UUID)
 }
 
 // OrgListCycles returns dream cycles whose project namespace is descended
-// from (or equal to) the org's root namespace path.
+// from (or equal to) the org's root namespace path. ProjectName is left
+// empty on each row so an org_owner sees project_id only for projects
+// owned by other users in the org, matching the system-tier privacy
+// posture and the rule documented on model.DreamCycle.
 func (s *DreamAdminStore) OrgListCycles(ctx context.Context, orgID uuid.UUID, limit int) ([]model.DreamCycle, error) {
 	orgPath, err := s.orgNamespacePath(ctx, orgID)
 	if err != nil {
 		return nil, err
 	}
-	cycles, err := s.cycleRepo.ListByNamespacePathPrefix(ctx, orgPath, limit)
+	cycles, err := s.cycleRepo.ListByNamespacePathPrefix(ctx, orgPath, limit, false)
 	if err != nil {
 		return nil, err
 	}

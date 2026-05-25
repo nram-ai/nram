@@ -48,6 +48,136 @@ func insertMemoryRaw(t *testing.T, db storage.DB, ctx context.Context, nsID uuid
 	return memID
 }
 
+// seedSecondUserWithProject seeds a second user (bob) under the same org
+// with their own project namespace. Returns bob's user ID, project
+// namespace ID, and project ID so dashboard tests can verify that bob's
+// project names do NOT leak into alice's self-tier per-project breakdown.
+func seedSecondUserWithProject(t *testing.T, db storage.DB, ctx context.Context, orgID uuid.UUID) (bobID, bobProjNsID, bobProjID uuid.UUID) {
+	t.Helper()
+	var orgNsID string
+	row := db.QueryRow(ctx, "SELECT namespace_id FROM organizations WHERE id = ?", orgID.String())
+	if db.Backend() == storage.BackendPostgres {
+		row = db.QueryRow(ctx, "SELECT namespace_id FROM organizations WHERE id = $1", orgID.String())
+	}
+	if err := row.Scan(&orgNsID); err != nil {
+		t.Fatalf("look up org namespace: %v", err)
+	}
+
+	bobNsID := uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		bobNsID.String(), "bob", "bob", "user", "test-org/bob", 1, orgNsID)
+
+	bobID = uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO users (id, email, org_id, namespace_id) VALUES (?, ?, ?, ?)",
+		bobID.String(), "bob@test", orgID.String(), bobNsID.String())
+
+	bobProjNsID = uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		bobProjNsID.String(), "bob-secret-project", "bob-secret-project", "project", "test-org/bob/bob-secret-project", 2, bobNsID.String())
+
+	bobProjID = uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO projects (id, name, slug, namespace_id, owner_namespace_id) VALUES (?, ?, ?, ?, ?)",
+		bobProjID.String(), "bob-secret-project", "bob-secret-project", bobProjNsID.String(), bobNsID.String())
+	return
+}
+
+// TestDashboardStoreStats_PerProjectScopedToCaller asserts the self-tier
+// dashboard's per-project breakdown returns only the caller's own
+// projects, with names populated. A second user in the same org has a
+// distinctively-named project that must NOT appear in the caller's
+// response — the regression this test guards against is the 2026-05-25
+// cross-user project-name leak that prompted the dashboard fix.
+//
+// When orgID is set but userID is nil (the legacy call shape), names
+// must be omitted from the response so an org-aggregate consumer does
+// not learn cross-user names. The third case (both nil — global) is
+// covered implicitly by the existing global counts path; not re-tested
+// here because the production handler always passes orgID for an
+// authenticated caller.
+func TestDashboardStoreStats_PerProjectScopedToCaller(t *testing.T) {
+	for _, bk := range adminTestBackends {
+		t.Run(bk.name, func(t *testing.T) {
+			db := bk.setup(t)
+			queueRepo := storage.NewEnrichmentQueueRepo(db)
+			store := NewDashboardStore(db, queueRepo)
+			ctx := context.Background()
+
+			orgID, aliceID, aliceProjNsID := seedAliceUserUnderOrg(t, db, ctx)
+			// Insert the projects row for alice's project (the seed
+			// helper above only creates the namespace).
+			aliceProjID := uuid.New()
+			execSeed(t, db, ctx,
+				"INSERT INTO projects (id, name, slug, namespace_id, owner_namespace_id) VALUES (?, ?, ?, ?, ?)",
+				aliceProjID.String(), "alice-proj", "alice-proj", aliceProjNsID.String(),
+				// owner_namespace_id is the user namespace; look it up via the project ns parent.
+				lookupParentNamespaceID(t, db, ctx, aliceProjNsID).String())
+			insertMemoryRaw(t, db, ctx, aliceProjNsID, []byte("alice memory"), 1)
+
+			_, bobProjNsID, bobProjID := seedSecondUserWithProject(t, db, ctx, orgID)
+			insertMemoryRaw(t, db, ctx, bobProjNsID, []byte("bob memory"), 1)
+
+			// Self-tier (orgID + userID): only alice's project, with name.
+			stats, err := store.DashboardStats(ctx, &orgID, &aliceID)
+			if err != nil {
+				t.Fatalf("DashboardStats(self-tier): %v", err)
+			}
+			if len(stats.MemoriesByProject) != 1 {
+				t.Fatalf("self-tier: expected 1 project, got %d (%+v)", len(stats.MemoriesByProject), stats.MemoriesByProject)
+			}
+			row := stats.MemoriesByProject[0]
+			if row.ProjectID != aliceProjID {
+				if row.ProjectID == bobProjID {
+					t.Errorf("self-tier leaked bob's project %s", bobProjID)
+				} else {
+					t.Errorf("self-tier ProjectID: got %s want %s", row.ProjectID, aliceProjID)
+				}
+			}
+			if row.ProjectName != "alice-proj" {
+				t.Errorf("self-tier ProjectName: got %q want %q", row.ProjectName, "alice-proj")
+			}
+
+			// Org-aggregate (orgID set, userID nil): both projects, but
+			// names omitted to prevent the cross-user leak.
+			statsOrg, err := store.DashboardStats(ctx, &orgID, nil)
+			if err != nil {
+				t.Fatalf("DashboardStats(org-aggregate): %v", err)
+			}
+			if len(statsOrg.MemoriesByProject) != 2 {
+				t.Fatalf("org-aggregate: expected 2 projects, got %d (%+v)", len(statsOrg.MemoriesByProject), statsOrg.MemoriesByProject)
+			}
+			for i, r := range statsOrg.MemoriesByProject {
+				if r.ProjectName != "" {
+					t.Errorf("org-aggregate row[%d].ProjectName: got %q, want empty (org tier emits UUID only)", i, r.ProjectName)
+				}
+			}
+		})
+	}
+}
+
+// lookupParentNamespaceID resolves the parent_id of a namespace by ID,
+// returning it as a uuid.UUID. Used by tests that need the user
+// namespace owning a project, given only the project namespace ID.
+func lookupParentNamespaceID(t *testing.T, db storage.DB, ctx context.Context, nsID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var parentStr string
+	row := db.QueryRow(ctx, "SELECT parent_id FROM namespaces WHERE id = ?", nsID.String())
+	if db.Backend() == storage.BackendPostgres {
+		row = db.QueryRow(ctx, "SELECT parent_id FROM namespaces WHERE id = $1", nsID.String())
+	}
+	if err := row.Scan(&parentStr); err != nil {
+		t.Fatalf("look up parent namespace: %v", err)
+	}
+	parent, err := uuid.Parse(parentStr)
+	if err != nil {
+		t.Fatalf("parse parent namespace id: %v", err)
+	}
+	return parent
+}
+
 // TestDashboardStoreRecentActivity_UserScoped exercises the self-tier path
 // with the production-shape call (both orgID and userID non-nil), which is
 // what SelfScope produces for any authenticated caller. Runs on both

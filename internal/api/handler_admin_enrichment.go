@@ -74,9 +74,9 @@ type EnrichmentQueueCounts struct {
 // without paying for the cumulative wait since job creation.
 //
 // ProjectID is populated whenever the memory's project is resolvable.
-// ProjectName is populated only on self/org tier responses; the system tier
-// intentionally leaves it empty so admins see UUIDs and the UI falls
-// through.
+// ProjectName is populated only on self-tier responses; org and system
+// tiers intentionally leave it empty so an org_owner or admin sees UUIDs
+// only for projects owned by other users and the UI falls through.
 type EnrichmentQueueItem struct {
 	ID                uuid.UUID  `json:"id"`
 	MemoryID          uuid.UUID  `json:"memory_id"`

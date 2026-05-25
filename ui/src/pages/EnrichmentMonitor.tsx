@@ -28,6 +28,7 @@ import {
   faXmark,
 } from "../lib/icons";
 import type { EnrichmentQueueItem } from "../api/client";
+import { truncateId } from "../lib/formatters";
 
 // Live SSE state for the enrichment worker pool. liveJobs is keyed by
 // queue job id (the EnrichmentQueueItem.id, identical to the worker's
@@ -83,11 +84,6 @@ function relativeTime(timestamp: string): string {
   if (diffDay === 1) return "yesterday";
   if (diffDay < 30) return `${diffDay}d ago`;
   return new Date(timestamp).toLocaleDateString();
-}
-
-function truncateId(id: string): string {
-  if (id.length <= 12) return id;
-  return id.slice(0, 8) + "...";
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +558,7 @@ function QueueTable({
   retrying,
   liveJobs,
   showWriteActions = true,
+  showProjectName = false,
 }: {
   items: EnrichmentQueueItem[];
   selectedIds: Set<string>;
@@ -571,6 +568,11 @@ function QueueTable({
   retrying: boolean;
   liveJobs: Record<string, LiveJob>;
   showWriteActions?: boolean;
+  // showProjectName toggles the rendering of project_name vs project_id in
+  // the Project column. Only the self tier populates project_name; org and
+  // system tiers leave it empty so callers see project_id only and never
+  // learn the names of other users' projects.
+  showProjectName?: boolean;
 }) {
   // Re-render every second so processing-row Elapsed counters tick.
   const hasProcessing = items.some((i) => i.status === "processing");
@@ -776,7 +778,7 @@ function QueueTable({
                   className="px-3 py-2.5 text-xs text-muted-foreground"
                   title={item.project_id ?? ""}
                 >
-                  {item.project_name
+                  {showProjectName && item.project_name
                     ? item.project_name
                     : item.project_id
                       ? truncateId(item.project_id)
@@ -1160,6 +1162,7 @@ function EnrichmentMonitor() {
               retrying={retryMutation.isPending}
               liveJobs={liveJobs}
               showWriteActions={showWriteActions}
+              showProjectName={tier === "self"}
             />
           </div>
 

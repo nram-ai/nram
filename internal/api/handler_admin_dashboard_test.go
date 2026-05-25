@@ -26,8 +26,9 @@ type mockDashboardStore struct {
 	lastUserID  *uuid.UUID
 }
 
-func (m *mockDashboardStore) DashboardStats(_ context.Context, orgID *uuid.UUID) (*DashboardStatsData, error) {
+func (m *mockDashboardStore) DashboardStats(_ context.Context, orgID, userID *uuid.UUID) (*DashboardStatsData, error) {
 	m.lastOrgID = orgID
+	m.lastUserID = userID
 	return m.stats, m.statsErr
 }
 

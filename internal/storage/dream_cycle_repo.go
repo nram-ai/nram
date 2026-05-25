@@ -398,14 +398,19 @@ func (r *DreamCycleRepo) ListByProject(ctx context.Context, projectID uuid.UUID,
 }
 
 // ListByNamespacePathPrefix returns cycles whose project's namespace path is
-// equal to or descended from prefix, with each row's ProjectName populated
-// from the joined project. The handler doesn't need a separate name lookup.
-func (r *DreamCycleRepo) ListByNamespacePathPrefix(ctx context.Context, prefix string, limit int) ([]model.DreamCycle, error) {
+// equal to or descended from prefix. When withProjectName is true each row's
+// ProjectName is populated from the joined project (self-tier path); when
+// false the column is omitted from the SELECT and ProjectName stays empty
+// so org and system tiers surface project_id only. The projects JOIN is
+// kept either way because it carries the namespace filter.
+func (r *DreamCycleRepo) ListByNamespacePathPrefix(ctx context.Context, prefix string, limit int, withProjectName bool) ([]model.DreamCycle, error) {
 	likePattern := prefix + "/%"
-	const dcCols = `SELECT dc.id, dc.project_id, dc.namespace_id, dc.status, dc.phase,
+	dcCols := `SELECT dc.id, dc.project_id, dc.namespace_id, dc.status, dc.phase,
 		dc.tokens_used, dc.token_budget, dc.phase_summary, dc.error,
-		dc.started_at, dc.completed_at, dc.heartbeat_at, dc.created_at, dc.updated_at,
-		p.name`
+		dc.started_at, dc.completed_at, dc.heartbeat_at, dc.created_at, dc.updated_at`
+	if withProjectName {
+		dcCols += `, p.name`
+	}
 
 	var query string
 	if r.db.Backend() == BackendPostgres {
@@ -437,12 +442,15 @@ func (r *DreamCycleRepo) ListByNamespacePathPrefix(ctx context.Context, prefix s
 		var createdAtStr, updatedAtStr string
 		var projectName string
 
-		if err := rows.Scan(
+		dest := []any{
 			&idStr, &projectIDStr, &namespaceIDStr, &c.Status, &c.Phase,
 			&c.TokensUsed, &c.TokenBudget, &phaseSummaryStr, &errorStr,
 			&startedAtStr, &completedAtStr, &heartbeatAtStr, &createdAtStr, &updatedAtStr,
-			&projectName,
-		); err != nil {
+		}
+		if withProjectName {
+			dest = append(dest, &projectName)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("dream cycle scan rows: %w", err)
 		}
 		populated, err := r.populate(&c, idStr, projectIDStr, namespaceIDStr, phaseSummaryStr,
@@ -450,7 +458,9 @@ func (r *DreamCycleRepo) ListByNamespacePathPrefix(ctx context.Context, prefix s
 		if err != nil {
 			return nil, err
 		}
-		populated.ProjectName = projectName
+		if withProjectName {
+			populated.ProjectName = projectName
+		}
 		result = append(result, *populated)
 	}
 	if err := rows.Err(); err != nil {
