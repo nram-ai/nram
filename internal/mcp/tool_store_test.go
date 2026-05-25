@@ -90,37 +90,42 @@ func buildNoAuthCtx() context.Context {
 
 // --- schema tests ---
 
-func TestMemoryStore_Schema_Postgres_HasEnrich(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	st, ok := tools["memory_store"]
-	if !ok {
-		t.Fatal("memory_store tool not registered")
-	}
-
-	raw, _ := json.Marshal(st.Tool.InputSchema)
-	schema := string(raw)
-	if !containsField(schema, "enrich") {
-		t.Error("expected enrich param to be present on Postgres backend")
+// TestMemoryStore_Schema_LacksEnrich confirms the per-call enrich flag has
+// been stripped from the MCP schema. Enrichment is fully server-managed via
+// the enrichment.enabled setting; no client opt-in is exposed.
+func TestMemoryStore_Schema_LacksEnrich(t *testing.T) {
+	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
+		deps := Dependencies{Backend: backend}
+		srv := NewServer(deps)
+		tools := srv.MCPServer().ListTools()
+		st, ok := tools["store"]
+		if !ok {
+			t.Fatalf("backend %s: store tool not registered", backend)
+		}
+		raw, _ := json.Marshal(st.Tool.InputSchema)
+		schema := string(raw)
+		if containsField(schema, "enrich") {
+			t.Errorf("backend %s: enrich was removed from MCP; should not appear in schema: %s", backend, schema)
+		}
 	}
 }
 
-func TestMemoryStoreBatch_Schema_Postgres_HasEnrich(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	st, ok := tools["memory_store_batch"]
-	if !ok {
-		t.Fatal("memory_store_batch tool not registered")
-	}
-
-	raw, _ := json.Marshal(st.Tool.InputSchema)
-	schema := string(raw)
-	if !containsField(schema, "enrich") {
-		t.Error("expected enrich param to be present on Postgres backend")
+// TestMemoryStoreBatch_Schema_LacksEnrich mirrors the store check for the
+// batch tool.
+func TestMemoryStoreBatch_Schema_LacksEnrich(t *testing.T) {
+	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
+		deps := Dependencies{Backend: backend}
+		srv := NewServer(deps)
+		tools := srv.MCPServer().ListTools()
+		st, ok := tools["store_batch"]
+		if !ok {
+			t.Fatalf("backend %s: store_batch tool not registered", backend)
+		}
+		raw, _ := json.Marshal(st.Tool.InputSchema)
+		schema := string(raw)
+		if containsField(schema, "enrich") {
+			t.Errorf("backend %s: enrich was removed from MCP; should not appear in schema: %s", backend, schema)
+		}
 	}
 }
 
@@ -131,7 +136,7 @@ func TestHandleMemoryStore_NoHTTPRequest(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store"
+	req.Params.Name = "store"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 		"content": "hello",
@@ -149,7 +154,7 @@ func TestHandleMemoryStore_NoAuth(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store"
+	req.Params.Name = "store"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 		"content": "hello",
@@ -168,7 +173,7 @@ func TestHandleMemoryStore_MissingContent(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store"
+	req.Params.Name = "store"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 	}
@@ -191,7 +196,7 @@ func TestHandleMemoryStore_UserNotFound(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store"
+	req.Params.Name = "store"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 		"content": "hello",
@@ -226,7 +231,7 @@ func TestHandleMemoryStore_ExistingProject(t *testing.T) {
 	srv := NewServer(deps)
 
 	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_store"
+	callReq.Params.Name = "store"
 	callReq.Params.Arguments = map[string]interface{}{
 		"project":  "test",
 		"content":  "hello world",
@@ -281,7 +286,7 @@ func TestHandleMemoryStore_AutoCreateProject(t *testing.T) {
 	srv := NewServer(deps)
 
 	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_store"
+	callReq.Params.Name = "store"
 	callReq.Params.Arguments = map[string]interface{}{
 		"project": "new-project",
 		"content": "hello",
@@ -312,7 +317,7 @@ func TestHandleMemoryStoreBatch_NoHTTPRequest(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store_batch"
+	req.Params.Name = "store_batch"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 		"items":   []interface{}{map[string]interface{}{"content": "a"}},
@@ -330,7 +335,7 @@ func TestHandleMemoryStoreBatch_NoAuth(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store_batch"
+	req.Params.Name = "store_batch"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 		"items":   []interface{}{map[string]interface{}{"content": "a"}},
@@ -349,7 +354,7 @@ func TestHandleMemoryStoreBatch_EmptyItems(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store_batch"
+	req.Params.Name = "store_batch"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 		"items":   []interface{}{},
@@ -378,7 +383,7 @@ func TestHandleMemoryStoreBatch_ItemMissingContent(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store_batch"
+	req.Params.Name = "store_batch"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 		"items":   []interface{}{map[string]interface{}{"source": "no-content"}},
@@ -412,7 +417,7 @@ func TestHandleMemoryStoreBatch_Success(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store_batch"
+	req.Params.Name = "store_batch"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 		"items": []interface{}{

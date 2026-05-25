@@ -114,7 +114,7 @@ func TestMemoryList_Registered_SQLite(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_list"]; !ok {
+	if _, ok := tools["list"]; !ok {
 		t.Error("expected memory_list to be registered on SQLite")
 	}
 }
@@ -124,7 +124,7 @@ func TestMemoryList_Registered_Postgres(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_list"]; !ok {
+	if _, ok := tools["list"]; !ok {
 		t.Error("expected memory_list to be registered on Postgres")
 	}
 }
@@ -134,7 +134,7 @@ func TestMemoryList_Schema_HasExpectedFields(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	st, ok := tools["memory_list"]
+	st, ok := tools["list"]
 	if !ok {
 		t.Fatal("memory_list not registered")
 	}
@@ -720,7 +720,11 @@ func TestHandleMemoryList_NoGlobalProjectGraceful(t *testing.T) {
 	}
 }
 
-func TestHandleMemoryList_HidesSupersededByDefault(t *testing.T) {
+// TestHandleMemoryList_AlwaysHidesSuperseded confirms the MCP list path
+// unconditionally filters superseded rows even when the caller (now
+// erroneously) passes include_superseded=true. The flag was removed from
+// MCP and stripped from the handler; only REST honors it.
+func TestHandleMemoryList_AlwaysHidesSuperseded(t *testing.T) {
 	userID := uuid.New()
 	nsID := uuid.New()
 	projNsID := uuid.New()
@@ -744,52 +748,30 @@ func TestHandleMemoryList_HidesSupersededByDefault(t *testing.T) {
 	}
 	srv := NewServer(deps)
 
-	// Default — supersede hidden.
+	// Pass include_superseded=true; the MCP handler ignores it (the flag was
+	// stripped from the schema) and unconditionally sets HideSuperseded=true
+	// before calling the store. Result: only the winner surfaces.
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{"project": "myproj"}
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryList(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("default list: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("default list errored: %v", result.Content)
-	}
-	var resp listMemoryResponse
-	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
-		t.Fatalf("decode default: %v", err)
-	}
-	if len(resp.Data) != 1 {
-		t.Fatalf("expected 1 (winner only); got %d", len(resp.Data))
-	}
-	if resp.Data[0].ID != winnerID {
-		t.Errorf("expected winner; got %s", resp.Data[0].ID)
-	}
-	if resp.Pagination.Total != 1 {
-		t.Errorf("expected pagination.total=1; got %d", resp.Pagination.Total)
-	}
-
-	// include_superseded=true — both surface, total matches row count.
-	reqIncl := mcp.CallToolRequest{}
-	reqIncl.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]interface{}{
 		"project":            "myproj",
 		"include_superseded": true,
 	}
-	resultIncl, err := handleMemoryList(ctx, srv, reqIncl)
+	ctx := buildAuthCtx(userID)
+	result, err := handleMemoryList(ctx, srv, req)
 	if err != nil {
-		t.Fatalf("include list: %v", err)
+		t.Fatalf("list: %v", err)
 	}
-	if resultIncl.IsError {
-		t.Fatalf("include list errored: %v", resultIncl.Content)
+	if result.IsError {
+		t.Fatalf("list errored: %v", result.Content)
 	}
-	var respIncl listMemoryResponse
-	if err := json.Unmarshal([]byte(extractText(resultIncl)), &respIncl); err != nil {
-		t.Fatalf("decode include: %v", err)
+	var resp listMemoryResponse
+	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	if len(respIncl.Data) != 2 {
-		t.Fatalf("include_superseded should return both rows; got %d", len(respIncl.Data))
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 row (include_superseded is stripped from MCP); got %d", len(resp.Data))
 	}
-	if respIncl.Pagination.Total != 2 {
-		t.Errorf("expected pagination.total=2 with include; got %d", respIncl.Pagination.Total)
+	if resp.Data[0].ID != winnerID {
+		t.Errorf("expected winner; got %s", resp.Data[0].ID)
 	}
 }

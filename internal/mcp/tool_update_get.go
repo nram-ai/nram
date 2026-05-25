@@ -13,7 +13,7 @@ import (
 	"github.com/nram-ai/nram/internal/service"
 )
 
-// RegisterUpdateGetTools registers the memory_update and memory_get MCP tools
+// RegisterUpdateGetTools registers the update and get MCP tools
 // on the given server.
 func RegisterUpdateGetTools(s *Server) {
 	registerMemoryUpdate(s)
@@ -21,7 +21,7 @@ func RegisterUpdateGetTools(s *Server) {
 }
 
 func registerMemoryUpdate(s *Server) {
-	tool := mcp.NewTool("memory_update",
+	tool := mcp.NewTool("update",
 		mcp.WithDescription("Update an existing memory by ID. Use when information has changed or needs correction rather than storing a duplicate. Project must already exist."),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Memory ID to update")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
@@ -36,12 +36,10 @@ func registerMemoryUpdate(s *Server) {
 }
 
 func registerMemoryGet(s *Server) {
-	tool := mcp.NewTool("memory_get",
+	tool := mcp.NewTool("get",
 		mcp.WithDescription("Retrieve specific memories by ID when you need the full content from a previous recall result. Project must already exist."),
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to retrieve")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
-		mcp.WithBoolean(includeSupersededArg, mcp.Description(includeSupersededDesc)),
-		mcp.WithBoolean(includeAuditArg, mcp.Description(includeAuditDesc)),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -196,9 +194,8 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 	}
 
 	req := &service.BatchGetRequest{
-		ProjectID:         project.ID,
-		IDs:               ids,
-		IncludeSuperseded: argBool(args, includeSupersededArg, false),
+		ProjectID: project.ID,
+		IDs:       ids,
 	}
 
 	resp, err := deps.BatchGet.BatchGet(ctx, req)
@@ -206,5 +203,5 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 		return mcp.NewToolResultError(fmt.Sprintf("batch get failed: %v", err)), nil
 	}
 
-	return wrapToolResult(buildMCPBatchGetResponse(resp, project.Slug, projectionOpts{IncludeAudit: argBool(args, includeAuditArg, false)}), nil)
+	return wrapToolResult(buildMCPBatchGetResponse(resp, project.Slug, projectionOpts{}), nil)
 }

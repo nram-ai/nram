@@ -30,7 +30,6 @@ type storeRequestBody struct {
 }
 
 type storeBodyOpts struct {
-	Enrich  bool   `json:"enrich"`
 	Extract bool   `json:"extract"`
 	TTL     string `json:"ttl"`
 }
@@ -75,7 +74,6 @@ func NewStoreHandler(svc *service.StoreService, bus events.EventBus) http.Handle
 			Importance: body.Importance,
 			Metadata:   body.Metadata,
 			Options: service.StoreOptions{
-				Enrich:  body.Options.Enrich,
 				Extract: body.Options.Extract,
 				TTL:     body.Options.TTL,
 			},

@@ -206,17 +206,17 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			mustContain: []string{
 				"STORAGE",
 				"RETRIEVAL",
-				"memory_graph",
+				"graph",
 				"ALWAYS query first",
-				"memory_recall",
-				"memory_list",
-				"memory_enrich",
-				"enrich: true",
+				"recall",
+				"list",
+				"Enrichment is fully server-managed",
 			},
 			mustNotContain: []string{
 				"No embedding provider",
 				"no embedding provider",
 				"specific tags",
+				"enrich: true",
 			},
 		},
 		{
@@ -226,13 +226,12 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			mustContain: []string{
 				"STORAGE",
 				"RETRIEVAL",
-				"memory_recall",
-				"memory_list",
+				"recall",
+				"list",
 				"semantic search",
 			},
 			mustNotContain: []string{
-				"memory_graph",
-				"memory_enrich",
+				"graph",
 				"enrich: true",
 			},
 		},
@@ -243,10 +242,10 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			mustContain: []string{
 				"STORAGE",
 				"RETRIEVAL",
-				"memory_graph",
+				"graph",
 				"ALWAYS query first",
-				"memory_recall",
-				"memory_enrich",
+				"recall",
+				"Enrichment is fully server-managed",
 				"specific tags",
 			},
 			mustNotContain: []string{
@@ -260,13 +259,12 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			mustContain: []string{
 				"STORAGE",
 				"RETRIEVAL",
-				"memory_recall",
-				"memory_list",
+				"recall",
+				"list",
 				"specific tags",
 			},
 			mustNotContain: []string{
-				"memory_graph",
-				"memory_enrich",
+				"graph",
 				"enrich: true",
 				"semantic search",
 			},
@@ -293,18 +291,18 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 func TestBuildInstructions_RetrievalPrecedence(t *testing.T) {
 	// With enrichment: graph must come before recall, recall before list.
 	full := buildInstructions(true, true)
-	graphIdx := strings.Index(full, "memory_graph")
-	recallIdx := strings.Index(full, "memory_recall")
-	listIdx := strings.Index(full, "memory_list")
+	graphIdx := strings.Index(full, "graph")
+	recallIdx := strings.Index(full, "recall")
+	listIdx := strings.Index(full, "list")
 
 	if graphIdx < 0 || recallIdx < 0 || listIdx < 0 {
 		t.Fatal("expected all three retrieval tools to be mentioned")
 	}
 	if graphIdx >= recallIdx {
-		t.Error("memory_graph must appear before memory_recall in retrieval order")
+		t.Error("graph must appear before recall in retrieval order")
 	}
 	if recallIdx >= listIdx {
-		t.Error("memory_recall must appear before memory_list in retrieval order")
+		t.Error("recall must appear before list in retrieval order")
 	}
 }
 

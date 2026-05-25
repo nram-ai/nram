@@ -14,7 +14,7 @@ import (
 	"github.com/nram-ai/nram/internal/service"
 )
 
-// RegisterStoreTools registers the memory_store and memory_store_batch MCP tools
+// RegisterStoreTools registers the store and store_batch MCP tools
 // on the given server.
 func RegisterStoreTools(s *Server) {
 	registerMemoryStore(s)
@@ -22,19 +22,16 @@ func RegisterStoreTools(s *Server) {
 }
 
 func registerMemoryStore(s *Server) {
-	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store important context to persistent memory. Use proactively: store preferences, decisions, corrections, architecture choices, bugs, workarounds, and task summaries without being asked. ALWAYS call memory_projects first and use an existing project — only auto-create when no existing project fits. Tag consistently for easy recall. Identical content in the same project returns the existing memory's ID without creating a duplicate; tags and metadata on the new request are ignored on a dedup hit."),
-		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). Prefer an existing project — call memory_projects first. Auto-creates if missing, but treat this as a last resort.")),
-		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
+	tool := mcp.NewTool("store",
+		mcp.WithDescription("Store important context to persistent memory. Use proactively: store preferences, decisions, corrections, architecture choices, bugs, workarounds, and task summaries without being asked. ALWAYS call list_projects first and use an existing project. Tag consistently for easy recall. Identical content in the same project returns the existing memory's ID without creating a duplicate; tags and metadata on the new request are ignored on a dedup hit. Enrichment, when enabled server-side, runs automatically on every new memory; there is no per-call opt-in."),
+		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). An unknown slug auto-creates a new project, so prefer calling list_projects first to avoid typo-driven project creation.")),
+		mcp.WithString("project_description", mcp.Description("Description applied when this call auto-creates the project, or when the existing project has no description yet.")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to store")),
 		mcp.WithString("source", mcp.Description("Origin identifier")),
 		mcp.WithArray("tags", mcp.Description("Labels for filtering")),
 		mcp.WithObject("metadata", mcp.Description("Arbitrary key-value metadata")),
-		mcp.WithString("ttl", mcp.Description("Time-to-live duration (e.g. '24h', '7d', '30m'). Memory expires after this duration.")),
-	}
-	opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue async enrichment (default false)")))
-
-	tool := mcp.NewTool("memory_store", opts...)
+		mcp.WithString("ttl", mcp.Description("Time until soft-delete by the lifecycle sweeper (e.g. '24h', '7d', '30m'); later hard-purged per the purge_after policy. Omit for permanent memories.")),
+	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return handleMemoryStore(ctx, s, request)
@@ -42,16 +39,13 @@ func registerMemoryStore(s *Server) {
 }
 
 func registerMemoryStoreBatch(s *Server) {
-	opts := []mcp.ToolOption{
-		mcp.WithDescription("Store multiple memories at once. Use when you have several related facts, decisions, or observations to persist. Each item needs its own content; they share the same project and TTL. ALWAYS call memory_projects first and use an existing project — only auto-create when no existing project fits. Items whose content matches an existing memory in the same project return that memory's ID instead of creating a duplicate."),
-		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). Prefer an existing project — call memory_projects first. Auto-creates if missing, but treat this as a last resort.")),
-		mcp.WithString("project_description", mcp.Description("Description for the project (sets on create, or updates if currently empty)")),
+	tool := mcp.NewTool("store_batch",
+		mcp.WithDescription("Store multiple memories at once. Use when you have several related facts, decisions, or observations to persist. Each item needs its own content; they share the same project and TTL. ALWAYS call list_projects first and use an existing project. Items whose content matches an existing memory in the same project return that memory's ID instead of creating a duplicate. Enrichment, when enabled server-side, runs automatically on every new memory."),
+		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). An unknown slug auto-creates a new project, so prefer calling list_projects first to avoid typo-driven project creation.")),
+		mcp.WithString("project_description", mcp.Description("Description applied when this call auto-creates the project, or when the existing project has no description yet.")),
 		mcp.WithArray("items", mcp.Required(), mcp.Description("Array of objects with content (required), source, tags, metadata")),
-		mcp.WithString("ttl", mcp.Description("Time-to-live duration (e.g. '24h', '7d', '30m'). All items expire after this duration.")),
-	}
-	opts = append(opts, mcp.WithBoolean("enrich", mcp.Description("Queue enrichment for all items (default false)")))
-
-	tool := mcp.NewTool("memory_store_batch", opts...)
+		mcp.WithString("ttl", mcp.Description("Time until soft-delete by the lifecycle sweeper, applied to all items (e.g. '24h', '7d', '30m'); later hard-purged per the purge_after policy. Omit for permanent memories.")),
+	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return handleMemoryStoreBatch(ctx, s, request)
@@ -91,16 +85,6 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 	tags := extractStringSlice(args["tags"])
 	metadata := extractRawJSON(args["metadata"])
 
-	var enrich bool
-	if v, ok := args["enrich"].(bool); ok {
-		enrich = v
-	}
-	if enrich {
-		if gate := s.enrichmentGateError(); gate != nil {
-			return gate, nil
-		}
-	}
-
 	ttl, _ := args["ttl"].(string)
 
 	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
@@ -116,8 +100,7 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 		Tags:      tags,
 		Metadata:  metadata,
 		Options: service.StoreOptions{
-			Enrich: enrich,
-			TTL:    ttl,
+			TTL: ttl,
 		},
 		UserID:   &uid,
 		APIKeyID: ac.APIKeyID,
@@ -174,16 +157,6 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		return mcp.NewToolResultError(fmt.Sprintf("invalid items: %v", err)), nil
 	}
 
-	var enrich bool
-	if v, ok := args["enrich"].(bool); ok {
-		enrich = v
-	}
-	if enrich {
-		if gate := s.enrichmentGateError(); gate != nil {
-			return gate, nil
-		}
-	}
-
 	ttl, _ := args["ttl"].(string)
 
 	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
@@ -196,8 +169,7 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		ProjectID: project.ID,
 		Items:     items,
 		Options: service.StoreOptions{
-			Enrich: enrich,
-			TTL:    ttl,
+			TTL: ttl,
 		},
 		UserID:   &uid,
 		APIKeyID: ac.APIKeyID,

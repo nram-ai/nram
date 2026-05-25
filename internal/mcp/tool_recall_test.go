@@ -416,24 +416,28 @@ func TestBuildMCPRecallResponse_FixtureShape_PrunedFallback(t *testing.T) {
 	}
 }
 
-func TestMemoryRecall_Schema_Postgres_HasGraphParams(t *testing.T) {
+// TestMemoryRecall_Schema_Postgres_GraphParams confirms graph_depth remains
+// available (now capped server-side) and include_graph has been stripped from
+// the MCP schema (the server always includes graph when the traverser is
+// wired; clients no longer have a meaningless toggle to flip).
+func TestMemoryRecall_Schema_Postgres_GraphParams(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	st, ok := tools["memory_recall"]
+	st, ok := tools["recall"]
 	if !ok {
-		t.Fatal("memory_recall tool not registered")
+		t.Fatal("recall tool not registered")
 	}
 
 	raw, _ := json.Marshal(st.Tool.InputSchema)
 	schema := string(raw)
 
-	if !containsField(schema, "include_graph") {
-		t.Error("expected include_graph param to be present on Postgres backend")
-	}
 	if !containsField(schema, "graph_depth") {
 		t.Error("expected graph_depth param to be present on Postgres backend")
+	}
+	if containsField(schema, "include_graph") {
+		t.Error("include_graph was removed from MCP; should not appear in schema")
 	}
 }
 
@@ -442,7 +446,7 @@ func TestMemoryRecall_Schema_HasDiversifyByTagPrefix(t *testing.T) {
 		deps := Dependencies{Backend: backend}
 		srv := NewServer(deps)
 		tools := srv.MCPServer().ListTools()
-		st, ok := tools["memory_recall"]
+		st, ok := tools["recall"]
 		if !ok {
 			t.Fatalf("backend %s: memory_recall tool not registered", backend)
 		}
@@ -453,152 +457,28 @@ func TestMemoryRecall_Schema_HasDiversifyByTagPrefix(t *testing.T) {
 	}
 }
 
-// TestMemoryRecall_Schema_HasSimilarityThresholdFields confirms the item-1.1
-// recall fields are exposed through the MCP tool's input schema on both
-// backends. Schema-level verification: callers checking the tool description
-// must see both knobs.
-func TestMemoryRecall_Schema_HasSimilarityThresholdFields(t *testing.T) {
+// TestMemoryRecall_Schema_LacksSimilarityThresholdFields confirms the
+// similarity_threshold and similarity_threshold_mode knobs have been stripped
+// from the MCP schema. They remain available on REST for tuning/debugging,
+// but the LLM tool surface no longer exposes researcher's knobs.
+func TestMemoryRecall_Schema_LacksSimilarityThresholdFields(t *testing.T) {
 	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
 		deps := Dependencies{Backend: backend}
 		srv := NewServer(deps)
 		tools := srv.MCPServer().ListTools()
-		st, ok := tools["memory_recall"]
+		st, ok := tools["recall"]
 		if !ok {
-			t.Fatalf("backend %s: memory_recall tool not registered", backend)
+			t.Fatalf("backend %s: recall tool not registered", backend)
 		}
 		raw, _ := json.Marshal(st.Tool.InputSchema)
 		schema := string(raw)
-		if !containsField(schema, "similarity_threshold") {
-			t.Errorf("backend %s: expected similarity_threshold param in schema, got %s", backend, schema)
+		if containsField(schema, "similarity_threshold") {
+			t.Errorf("backend %s: similarity_threshold was removed from MCP; should not appear in schema: %s", backend, schema)
 		}
-		if !containsField(schema, "similarity_threshold_mode") {
-			t.Errorf("backend %s: expected similarity_threshold_mode param in schema, got %s", backend, schema)
+		if containsField(schema, "similarity_threshold_mode") {
+			t.Errorf("backend %s: similarity_threshold_mode was removed from MCP; should not appear in schema: %s", backend, schema)
 		}
 	}
-}
-
-// TestHandleMemoryRecall_SimilarityThresholdMode_Invalid confirms that an
-// invalid mode string travels through the MCP handler, hits the real service's
-// mode-validation guard, and returns a tool-error result. This is the
-// end-to-end check that the args are extracted and propagated.
-func TestHandleMemoryRecall_SimilarityThresholdMode_Invalid(t *testing.T) {
-	userID := uuid.New()
-	nsID := uuid.New()
-	projectID := uuid.New()
-
-	user := &model.User{ID: userID, NamespaceID: nsID}
-	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "myproj"}
-
-	recallSvc := newMockRecallSvc()
-
-	deps := Dependencies{
-		Backend:       storage.BackendSQLite,
-		UserRepo:      &mockUserRepoStore{user: user},
-		ProjectRepo:   &mockProjectRepoStore{project: project},
-		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
-		Recall:        recallSvc,
-	}
-	srv := NewServer(deps)
-
-	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
-	callReq.Params.Arguments = map[string]interface{}{
-		"query":                     "anything",
-		"project":                   "myproj",
-		"similarity_threshold":      float64(0.5),
-		"similarity_threshold_mode": "garbage",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryRecall(ctx, srv, callReq)
-	if err != nil {
-		t.Fatalf("unexpected handler error: %v", err)
-	}
-	assertToolError(t, result, "invalid similarity_threshold_mode")
-}
-
-// TestHandleMemoryRecall_NegativeThreshold_NotSilentlyZeroed confirms F1.1:
-// a negative similarity_threshold reaches the service-layer range check
-// (rather than being silently zeroed by the MCP handler) so MCP and REST
-// surfaces agree on input validation.
-func TestHandleMemoryRecall_NegativeThreshold_NotSilentlyZeroed(t *testing.T) {
-	userID := uuid.New()
-	nsID := uuid.New()
-	projectID := uuid.New()
-
-	user := &model.User{ID: userID, NamespaceID: nsID}
-	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "myproj"}
-
-	recallSvc := newMockRecallSvc()
-
-	deps := Dependencies{
-		Backend:       storage.BackendSQLite,
-		UserRepo:      &mockUserRepoStore{user: user},
-		ProjectRepo:   &mockProjectRepoStore{project: project},
-		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
-		Recall:        recallSvc,
-	}
-	srv := NewServer(deps)
-
-	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
-	callReq.Params.Arguments = map[string]interface{}{
-		"query":                "anything",
-		"project":              "myproj",
-		"similarity_threshold": float64(-0.5),
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryRecall(ctx, srv, callReq)
-	if err != nil {
-		t.Fatalf("unexpected handler error: %v", err)
-	}
-	assertToolError(t, result, "invalid similarity_threshold")
-}
-
-// TestHandleMemoryRecall_WhitespaceOnlyMode_ReachesService confirms the F2.1
-// transport-symmetry fix: a whitespace-only similarity_threshold_mode passed
-// through MCP must reach the service-layer rejection (with the padded raw
-// value visible in the error) rather than being trimmed to empty by the MCP
-// handler and silently defaulted to raw_cosine. A prior revision trimmed the
-// value at the MCP boundary, which collapsed the "provided but blank" case
-// into the "not provided" case and let MCP accept input REST rejected.
-func TestHandleMemoryRecall_WhitespaceOnlyMode_ReachesService(t *testing.T) {
-	userID := uuid.New()
-	nsID := uuid.New()
-	projectID := uuid.New()
-
-	user := &model.User{ID: userID, NamespaceID: nsID}
-	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "myproj"}
-
-	recallSvc := newMockRecallSvc()
-
-	deps := Dependencies{
-		Backend:       storage.BackendSQLite,
-		UserRepo:      &mockUserRepoStore{user: user},
-		ProjectRepo:   &mockProjectRepoStore{project: project},
-		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
-		Recall:        recallSvc,
-	}
-	srv := NewServer(deps)
-
-	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
-	callReq.Params.Arguments = map[string]interface{}{
-		"query":                     "anything",
-		"project":                   "myproj",
-		"similarity_threshold_mode": "   ",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryRecall(ctx, srv, callReq)
-	if err != nil {
-		t.Fatalf("unexpected handler error: %v", err)
-	}
-	// The %q-formatted raw value with its padding must appear in the error;
-	// that's the proof the MCP handler forwarded the value untrimmed and the
-	// service-layer rejection ran on the original padded string.
-	assertToolError(t, result, `invalid similarity_threshold_mode "   "`)
 }
 
 // --- handler tests ---
@@ -608,7 +488,7 @@ func TestHandleMemoryRecall_NoHTTPRequest(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_recall"
+	req.Params.Name = "recall"
 	req.Params.Arguments = map[string]interface{}{
 		"query": "test query",
 	}
@@ -625,7 +505,7 @@ func TestHandleMemoryRecall_NoAuth(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_recall"
+	req.Params.Name = "recall"
 	req.Params.Arguments = map[string]interface{}{
 		"query": "test query",
 	}
@@ -643,7 +523,7 @@ func TestHandleMemoryRecall_MissingQuery(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_recall"
+	req.Params.Name = "recall"
 	req.Params.Arguments = map[string]interface{}{}
 
 	ctx := buildAuthCtx(uuid.New())
@@ -674,7 +554,7 @@ func TestHandleMemoryRecall_ProjectScoped(t *testing.T) {
 	srv := NewServer(deps)
 
 	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
+	callReq.Params.Name = "recall"
 	callReq.Params.Arguments = map[string]interface{}{
 		"query":   "find something",
 		"project": "myproj",
@@ -719,7 +599,7 @@ func TestHandleMemoryRecall_UserScoped(t *testing.T) {
 	srv := NewServer(deps)
 
 	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
+	callReq.Params.Name = "recall"
 	callReq.Params.Arguments = map[string]interface{}{
 		"query": "search everything",
 	}
@@ -756,7 +636,7 @@ func TestHandleMemoryRecall_ProjectNotFound(t *testing.T) {
 	srv := NewServer(deps)
 
 	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
+	callReq.Params.Name = "recall"
 	callReq.Params.Arguments = map[string]interface{}{
 		"query":   "search",
 		"project": "nonexistent",

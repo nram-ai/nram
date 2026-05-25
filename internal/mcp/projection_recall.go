@@ -45,19 +45,22 @@ var alwaysStrippedKeys = map[string]struct{}{
 	model.DreamMetaSourceMemoryIDs: {},
 }
 
-// lowNoveltyKeys are surfaced when include_low_novelty=true on memory_recall
-// (and when include_audit=true on memory_get). They are the *reason* a dream
-// was demoted, paired with the demoted memory itself.
+// lowNoveltyKeys are surfaced when include_low_novelty=true on the REST recall
+// path (and when include_audit=true on the REST get path). They are the
+// *reason* a dream was demoted, paired with the demoted memory itself. The MCP
+// recall and get tools no longer expose these flags; the projection on those
+// paths always strips these keys.
 var lowNoveltyKeys = map[string]struct{}{
 	"low_novelty":        {},
 	"low_novelty_reason": {},
 }
 
-// auditStampKeys are surfaced when include_audit=true on memory_get. These are
-// per-phase bookkeeping timestamps and reasons; they don't add value to recall
-// callers but are useful for inspecting a specific memory's audit history.
-// include_low_novelty does NOT un-strip these — it only un-strips the demotion
-// markers themselves.
+// auditStampKeys are surfaced when include_audit=true on the REST get path.
+// These are per-phase bookkeeping timestamps and reasons; they don't add value
+// to recall callers but are useful for inspecting a specific memory's audit
+// history. include_low_novelty does NOT un-strip these — it only un-strips
+// the demotion markers themselves. The MCP get tool no longer exposes the
+// include_audit flag; on that path the projection always strips these keys.
 //
 // Stamp-key constants live with their writers in internal/dreaming so a rename
 // fails to compile here. novelty_audit_reason has no constant on the writer

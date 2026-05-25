@@ -441,7 +441,9 @@ const (
 	SettingRankingRecencyDecayPerHour     = "ranking.recency.decay_per_hour"
 	SettingRankingGraphHopMultiplier      = "ranking.graph.hop_multiplier"
 	SettingRecallDefaultLimit             = "recall.default_limit"
+	SettingRecallMaxLimit                 = "recall.max_limit"
 	SettingRecallGraphDefaultDepth        = "recall.graph.default_depth"
+	SettingRecallGraphMaxDepth            = "recall.graph.max_depth"
 	SettingRecallOverfetchMultiplier      = "recall.overfetch_multiplier"
 	SettingRecallOverfetchMin             = "recall.overfetch_min"
 	SettingRecallNamespaceQuotaProjectMin = "recall.namespace_quota.project_min"
@@ -885,7 +887,9 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingRankingRecencyDecayPerHour: "0.01",
 	SettingRankingGraphHopMultiplier:  "0.5",
 	SettingRecallDefaultLimit:         "10",
+	SettingRecallMaxLimit:             "50",
 	SettingRecallGraphDefaultDepth:    "2",
+	SettingRecallGraphMaxDepth:        "5",
 	SettingRecallOverfetchMultiplier:  "3",
 	SettingRecallOverfetchMin:         "10",
 
@@ -930,10 +934,9 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	// but not yet wired to any consumer. Listed here so the init-time
 	// consistency check passes; remove once a consumer is added (and either
 	// promote to a Setting* constant or delete the schema entry).
-	"enrichment.batch_size":  "10",
-	"enrichment.auto_enrich": "false",
-	"api.rate_limit_rps":     "10",
-	"api.rate_limit_burst":   "20",
+	"enrichment.batch_size": "10",
+	"api.rate_limit_rps":    "10",
+	"api.rate_limit_burst":  "20",
 }
 
 // GetDefault returns the built-in default for the given setting key. The

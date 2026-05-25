@@ -62,9 +62,10 @@ type VectorStoreWriter interface {
 	Upsert(ctx context.Context, kind storage.VectorKind, id uuid.UUID, namespaceID uuid.UUID, embedding []float32, dimension int) error
 }
 
-// StoreOptions controls optional behavior during memory storage.
+// StoreOptions controls optional behavior during memory storage. Enrichment
+// is fully server-managed and unconditional when enrichment.enabled is true;
+// there is no per-call opt-in. The remaining fields are caller-controllable.
 type StoreOptions struct {
-	Enrich  bool   `json:"enrich"`
 	Extract bool   `json:"extract"`
 	TTL     string `json:"ttl"` // e.g., "30d", "7d", "24h"
 }

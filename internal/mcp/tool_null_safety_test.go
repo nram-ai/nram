@@ -32,7 +32,7 @@ func TestMemoryRecallTool_EmptyResults_NoNull(t *testing.T) {
 	srv := NewServer(deps)
 
 	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_recall"
+	callReq.Params.Name = "recall"
 	callReq.Params.Arguments = map[string]interface{}{
 		"query": "nonexistent topic that matches nothing",
 	}
@@ -100,7 +100,7 @@ func TestMemoryStoreTool_NilTags_NoTagsField(t *testing.T) {
 	srv := NewServer(deps)
 
 	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = "memory_store"
+	callReq.Params.Name = "store"
 	// Intentionally omit "tags" to exercise the nil tags path.
 	callReq.Params.Arguments = map[string]interface{}{
 		"project": "test",

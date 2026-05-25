@@ -17,9 +17,9 @@ type ProjectUpdater interface {
 	Update(ctx context.Context, project *model.Project) error
 }
 
-// RegisterProjectUpdateTool registers the memory_update_project MCP tool.
+// RegisterProjectUpdateTool registers the update_project MCP tool.
 func RegisterProjectUpdateTool(s *Server) {
-	tool := mcp.NewTool("memory_update_project",
+	tool := mcp.NewTool("update_project",
 		mcp.WithDescription("Update a project's name, description, or default tags. Only works on projects you own."),
 		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug to update")),
 		mcp.WithString("name", mcp.Description("New project name")),

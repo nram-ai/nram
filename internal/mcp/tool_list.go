@@ -41,14 +41,13 @@ type listMemoryResponse struct {
 	Pagination model.Pagination `json:"pagination"`
 }
 
-// RegisterListTool registers the memory_list MCP tool on the given server.
+// RegisterListTool registers the list MCP tool on the given server.
 func RegisterListTool(s *Server) {
-	tool := mcp.NewTool("memory_list",
+	tool := mcp.NewTool("list",
 		mcp.WithDescription("List memories in a project with pagination. Use to browse stored memories when you need an overview rather than a semantic search. Returns memories ordered by most recently created."),
 		mcp.WithString("project", mcp.Description("Project slug. Lists this project + global. Omit to list only the global project")),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of memories to return (default 50, max 200)")),
 		mcp.WithNumber("offset", mcp.Description("Number of memories to skip for pagination (default 0)")),
-		mcp.WithBoolean(includeSupersededArg, mcp.Description(includeSupersededDesc)),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -87,7 +86,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		offset = int(v)
 	}
 
-	filters := storage.MemoryListFilters{HideSuperseded: !argBool(args, includeSupersededArg, false)}
+	filters := storage.MemoryListFilters{HideSuperseded: true}
 
 	deps := s.Deps()
 

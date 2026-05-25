@@ -837,7 +837,7 @@ func rbacMCPStore(t *testing.T, baseURL, token, sessionID, projectSlug, content 
 		ID:      2,
 		Method:  "tools/call",
 		Params: map[string]interface{}{
-			"name": "memory_store",
+			"name": "store",
 			"arguments": map[string]interface{}{
 				"project": projectSlug,
 				"content": content,
@@ -1565,7 +1565,6 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		BatchGet:      batchGetSvc,
 		BatchStore:    batchStoreSvc,
 		Export:        exportSvc,
-		Enrich:        enrichSvc,
 		ProjectRepo:   projectLookup,
 		UserRepo:      userLookup,
 		NamespaceRepo: namespaceLookup,
@@ -2240,7 +2239,7 @@ type rbacMCPRoleCase struct {
 // the project under the calling user's namespace.
 func rbacMCPStoreAndGetID(t *testing.T, baseURL, token, sessionID, project string) string {
 	t.Helper()
-	rpc := rbacMCPCallTool(t, baseURL, token, sessionID, "memory_store", map[string]interface{}{
+	rpc := rbacMCPCallTool(t, baseURL, token, sessionID, "store", map[string]interface{}{
 		"project": project,
 		"content": "mcp seed " + uuid.New().String()[:8],
 	})
@@ -2360,7 +2359,7 @@ func TestRBAC_MCP_AllRoles_BatchStore(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_store_batch", map[string]interface{}{
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "store_batch", map[string]interface{}{
 				"project": tt.project,
 				"items": []interface{}{
 					map[string]interface{}{"content": "mcp batch " + tt.name},
@@ -2390,7 +2389,7 @@ func TestRBAC_MCP_AllRoles_Update(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
 			memID := memIDs[tt.token]
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_update", map[string]interface{}{
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "update", map[string]interface{}{
 				"id":      memID,
 				"project": tt.project,
 				"content": "updated via mcp " + tt.name,
@@ -2421,7 +2420,7 @@ func TestRBAC_MCP_AllRoles_Forget(t *testing.T) {
 			if !tt.wantError {
 				// Store a memory first (creates project if needed).
 				memID := rbacMCPStoreAndGetID(t, env.Server.URL, tt.token, sessionID, tt.project)
-				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_forget", map[string]interface{}{
+				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "forget", map[string]interface{}{
 					"project": tt.project,
 					"ids":     []interface{}{memID},
 				})
@@ -2431,7 +2430,7 @@ func TestRBAC_MCP_AllRoles_Forget(t *testing.T) {
 				}
 			} else {
 				// Cross-org: slug doesn't exist under this user, so forget fails with "project not found".
-				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_forget", map[string]interface{}{
+				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "forget", map[string]interface{}{
 					"project": tt.project,
 					"ids":     []interface{}{uuid.New().String()},
 				})
@@ -2460,7 +2459,7 @@ func TestRBAC_MCP_AllRoles_Get(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
 			memID := memIDs[tt.token]
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_get", map[string]interface{}{
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "get", map[string]interface{}{
 				"project": tt.project,
 				"ids":     []interface{}{memID},
 			})
@@ -2487,7 +2486,7 @@ func TestRBAC_MCP_AllRoles_Export(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_export", map[string]interface{}{
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "export", map[string]interface{}{
 				"project": tt.project,
 			})
 			gotError := rbacMCPIsError(rpc)
@@ -2521,7 +2520,7 @@ func TestRBAC_MCP_AllRoles_Projects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "memory_projects", map[string]interface{}{})
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "list_projects", map[string]interface{}{})
 			gotError := rbacMCPIsError(rpc)
 			if gotError != tt.wantError {
 				t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))

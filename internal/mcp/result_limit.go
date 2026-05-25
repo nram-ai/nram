@@ -24,7 +24,7 @@ const (
 	defaultMaxResultTokens = 22000
 	charsPerTokenEstimate  = 2
 	maxReducerIterations   = 32
-	truncationSuffix       = "... [TRUNCATED: response exceeded MCP token budget; narrow the query, lower the limit, or paginate via memory_list]"
+	truncationSuffix       = "... [TRUNCATED: response exceeded MCP token budget; narrow the query, lower the limit, or paginate via list]"
 )
 
 // maxResultBytes returns the byte budget for a tool result, honoring the
@@ -125,7 +125,7 @@ func wrapToolResult(payload any, reducer reducerFunc) (*mcp.CallToolResult, erro
 	return mcp.NewToolResultText(string(out[:keep]) + truncationSuffix), nil
 }
 
-// newRecallReducer builds a stateful reducer for memory_recall responses.
+// newRecallReducer builds a stateful reducer for recall responses.
 // Stages, in order:
 //  1. Drop the entire graph (entities + relationships).
 //  2. Truncate every memory.content to 800 chars.
@@ -174,7 +174,7 @@ func buildRecallPayload(orig *mcpRecallResponse, memories []mcpRecallMemory, dro
 		Reason:        "response_too_large",
 		OriginalCount: originalMemories,
 		ReturnedCount: len(memories),
-		Hint:          "narrow your query, lower the limit, filter by tags/project, or shrink the graph block via include_graph=false or a lower graph_depth",
+		Hint:          "narrow your query, lower the limit, filter by tags/project, or pass a lower graph_depth",
 	}
 	graph := orig.Graph
 	if dropGraph {
@@ -200,7 +200,7 @@ func buildRecallPayload(orig *mcpRecallResponse, memories []mcpRecallMemory, dro
 	return payload
 }
 
-// newListReducer builds a stateful reducer for memory_list responses.
+// newListReducer builds a stateful reducer for list responses.
 // Each step halves the returned items so the agent can resume from the
 // truncated offset on its next call.
 func newListReducer(orig listMemoryResponse) reducerFunc {
@@ -223,13 +223,13 @@ func newListReducer(orig listMemoryResponse) reducerFunc {
 				Reason:        "response_too_large",
 				OriginalCount: originalItems,
 				ReturnedCount: len(items),
-				Hint:          fmt.Sprintf("call memory_list again with offset=%d to fetch the rest", nextOffset),
+				Hint:          fmt.Sprintf("call list again with offset=%d to fetch the rest", nextOffset),
 			},
 		}, len(items) > 1
 	}
 }
 
-// newGraphReducer builds a stateful reducer for memory_graph responses.
+// newGraphReducer builds a stateful reducer for graph responses.
 // Each step halves the relationships first (the verbose tail), then
 // halves the entities. When the upstream traversal already short-circuited
 // at graph.max_edges (orig.Truncated != nil with Reason "edge_cap"), the
@@ -272,7 +272,7 @@ func newGraphReducer(orig graphResponse) reducerFunc {
 	}
 }
 
-// newExportReducer builds a stateful reducer for memory_export responses.
+// newExportReducer builds a stateful reducer for export responses.
 // Halves memories, entities, and relationships in lockstep on each call.
 func newExportReducer(orig *service.ExportData) reducerFunc {
 	memories := append([]service.ExportMemory(nil), orig.Memories...)
@@ -305,7 +305,7 @@ func newExportReducer(orig *service.ExportData) reducerFunc {
 				Reason:        "response_too_large",
 				OriginalCount: origM,
 				ReturnedCount: len(memories),
-				Hint:          "export exceeded MCP token budget; result is partial — narrow the project scope or paginate memories via memory_list",
+				Hint:          "export exceeded MCP token budget; result is partial — narrow the project scope or paginate memories via list",
 			},
 		}, more
 	}

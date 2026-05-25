@@ -59,39 +59,33 @@ type RelationshipTraverser interface {
 
 // Dependencies holds all service and repository references that MCP tool handlers require.
 type Dependencies struct {
-	Backend       string
-	Store         *service.StoreService
-	Recall        *service.RecallService
-	Forget        *service.ForgetService
-	Update        *service.UpdateService
-	BatchGet      *service.BatchGetService
-	BatchStore    *service.BatchStoreService
-	Enrich        *service.EnrichService
-	Export        *service.ExportService
+	Backend        string
+	Store          *service.StoreService
+	Recall         *service.RecallService
+	Forget         *service.ForgetService
+	Update         *service.UpdateService
+	BatchGet       *service.BatchGetService
+	BatchStore     *service.BatchStoreService
+	Export         *service.ExportService
 	ProjectDelete  *service.ProjectDeleteService
 	ProjectUpdater ProjectUpdater
 	ProjectRepo    ProjectRepo
-	UserRepo      UserRepo
-	NamespaceRepo NamespaceRepo
-	MemoryLister  MemoryLister
-	EntityReader  EntityReader
-	Traverser     RelationshipTraverser
-	// Settings is optional. The memory_graph tool and project-graph resource
-	// read graph.max_edges from it to bound TraverseFromEntity. When nil
-	// (e.g. in tests that construct a stub MCP server), the resolver falls
-	// back to the registered default in settingDefaults, so callers do not
-	// have to special-case the unwired path.
+	UserRepo       UserRepo
+	NamespaceRepo  NamespaceRepo
+	MemoryLister   MemoryLister
+	EntityReader   EntityReader
+	Traverser      RelationshipTraverser
+	// Settings is optional. The graph tool, recall tool, and project-graph
+	// resource read recall.max_limit / recall.graph.max_depth /
+	// graph.max_edges from it to bound traversal and clamp client-supplied
+	// limits. When nil (e.g. in tests that construct a stub MCP server),
+	// the resolver falls back to the registered default in settingDefaults,
+	// so callers do not have to special-case the unwired path.
 	Settings *service.SettingsService
 	EventBus events.EventBus
 	// ProviderStatus returns the current provider availability at call time.
 	// This is called per-connection to build dynamic MCP instructions.
 	ProviderStatus func() (hasEmbedding, hasEnrichment bool)
-	// EnrichmentAvailable returns true iff embedding, fact, and entity
-	// providers are all configured. This is the per-call gate for
-	// enrichment-touching MCP tools (memory_enrich and the enrich: true
-	// path on memory_store / memory_store_batch). Read live each call so a
-	// provider reload opens or closes the gate without restart.
-	EnrichmentAvailable func() bool
 }
 
 // Server wraps an MCP server with its Streamable HTTP transport and dependency context.
@@ -113,21 +107,11 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 	return r
 }
 
-// enrichmentGateError returns the standard tool error a handler should
-// emit when EnrichmentAvailable is configured and reports the gate closed.
-// Returns nil when the gate is open (or undefined, treated as open).
-func (s *Server) enrichmentGateError() *mcp.CallToolResult {
-	avail := s.deps.EnrichmentAvailable
-	if avail == nil || avail() {
-		return nil
-	}
-	return mcp.NewToolResultError("enrichment_unavailable: configure embedding, fact, and entity providers")
-}
-
 // buildInstructions returns the MCP server instructions string, conditioned on
-// which providers are configured. Without an embedding provider, semantic search
-// is unavailable; without enrichment providers, memory_enrich and memory_graph
-// are non-functional.
+// which providers are configured. Without an embedding provider, semantic
+// search is unavailable; without enrichment providers, the graph tool returns
+// empty results and stored memories sit in the enrichment queue until the
+// admin configures the missing providers.
 func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 	var b strings.Builder
 
@@ -137,49 +121,42 @@ RETRIEVAL — follow this order at each task start:
 `)
 
 	if hasEnrichment && hasEmbedding {
-		b.WriteString(`1. memory_graph — ALWAYS query first to discover entities and relationships. This surfaces connections that semantic search cannot.
-2. memory_recall — then search for detailed memories with natural language.
-3. memory_list — browse/paginate when you need a full overview, not a query.
+		b.WriteString(`1. graph — ALWAYS query first to discover entities and relationships. This surfaces connections that semantic search cannot.
+2. recall — then search for detailed memories with natural language.
+3. list — browse/paginate when you need a full overview, not a query.
 `)
 	} else if hasEnrichment {
-		b.WriteString(`1. memory_graph — ALWAYS query first to discover entities and relationships. This surfaces connections that tag-based search cannot.
-2. memory_recall — then search using specific tags (no embedding provider).
-3. memory_list — browse/paginate when you need a full overview, not a query.
+		b.WriteString(`1. graph — ALWAYS query first to discover entities and relationships. This surfaces connections that tag-based search cannot.
+2. recall — then search using specific tags (no embedding provider).
+3. list — browse/paginate when you need a full overview, not a query.
 `)
 	} else if hasEmbedding {
-		b.WriteString(`1. memory_recall — search with natural language (semantic search is active).
-2. memory_list — browse/paginate when you need a full overview, not a query.
+		b.WriteString(`1. recall — search with natural language (semantic search is active).
+2. list — browse/paginate when you need a full overview, not a query.
 `)
 	} else {
-		b.WriteString(`1. memory_recall — search using specific tags (no embedding provider).
-2. memory_list — browse/paginate when you need a full overview, not a query.
+		b.WriteString(`1. recall — search using specific tags (no embedding provider).
+2. list — browse/paginate when you need a full overview, not a query.
 `)
 	}
 
 	b.WriteString(`Recall before assuming preferences, before storing (to avoid duplicates), and whenever you lack context.
 
-STORAGE (memory_store / memory_store_batch):
+STORAGE (store / store_batch):
 - Preferences, conventions, decisions → store immediately
 - Bugs, workarounds, non-obvious behavior → store
 - User corrections, architecture decisions → store with rationale
 - Project config, setup, environment → store
 - End of complex task → store summary of what and why
-`)
 
-	if hasEnrichment {
-		b.WriteString(`- Set enrich: true for people, projects, tech, or architecture decisions
-- Skip enrich for ephemeral memories, raw data, or simple preferences
-- Use memory_enrich to batch-process after importing data
-`)
-	}
+Enrichment is fully server-managed. Every memory you store is enqueued for entity/relationship extraction unconditionally. The worker drains the queue when enrichment.enabled is true and the embedding/fact/entity providers are configured; otherwise jobs accumulate until both conditions are met. There is no per-call opt-in or opt-out.
 
-	b.WriteString(`
 KEY RULES:
-- ALWAYS call memory_projects first to discover existing projects before storing
-- Use EXISTING projects — do NOT create one per task/feature/topic
-- Projects = major boundaries (per repo, product, or domain). Omit for "global"
-- Use tags/metadata for sub-categorization, not new projects
-- Tag consistently: decision, preference, architecture, config, bug, workaround`)
+- ALWAYS call list_projects first to discover existing projects before storing.
+- Use EXISTING projects — do NOT create one per task/feature/topic. An unknown slug on store auto-creates a new project, which is rarely what you want.
+- Projects = major boundaries (per repo, product, or domain). Omit for "global".
+- Use tags/metadata for sub-categorization, not new projects.
+- Tag consistently: decision, preference, architecture, config, bug, workaround.`)
 
 	return b.String()
 }
@@ -248,11 +225,10 @@ func NewServer(deps Dependencies) *Server {
 	RegisterUpdateGetTools(s)
 	RegisterRecallTool(s)
 	RegisterListTool(s)
-	RegisterForgetEnrichTools(s)
+	RegisterForgetTool(s)
 	RegisterGraphProjectsExportTools(s)
 	RegisterProjectDeleteTool(s)
 	RegisterProjectUpdateTool(s)
-	RegisterAdminBackfillParaphraseTool(s)
 	RegisterResources(s)
 
 	return s

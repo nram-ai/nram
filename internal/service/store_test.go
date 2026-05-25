@@ -321,23 +321,22 @@ func TestStore_ImportanceDefault(t *testing.T) {
 	}
 }
 
-func TestStore_EnqueuesRegardlessOfEnrichFlag(t *testing.T) {
+func TestStore_UnconditionallyEnqueuesEnrichment(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
 
-	// Enrich=false should still produce a job — the flag is on a deprecation
-	// path and must not gate the async embedding/enrichment work.
+	// Enrichment is fully server-managed; every store enqueues exactly one
+	// job for the worker to pick up. There is no per-call opt-in or opt-out.
 	svc, _, _, enrichment := newTestService(projects, namespaces)
 	_, err := svc.Store(context.Background(), &StoreRequest{
 		ProjectID: projectID,
-		Content:   "no-flag",
+		Content:   "auto-enrich",
 		Source:    "test",
-		Options:   StoreOptions{Enrich: false},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(enrichment.jobs) != 1 {
-		t.Fatalf("expected 1 job even when Enrich=false, got %d", len(enrichment.jobs))
+		t.Fatalf("expected 1 job, got %d", len(enrichment.jobs))
 	}
 }
 

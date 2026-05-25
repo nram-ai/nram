@@ -468,7 +468,7 @@ All under `/v1/projects/{project_id}/memories`. Read operations are available to
 
 #### Update semantics: in-place vs. supersede chain
 
-`PUT /{id}` and the MCP `memory_update` tool branch on whether the request changes content:
+`PUT /{id}` and the MCP `update` tool branch on whether the request changes content:
 
 - **Tag-only or metadata-only updates** mutate the row in place. The response `id` matches the path id.
 - **Content updates** create a NEW memory row and mark the old row `superseded_by = new id`. The response `id` is the new (active) id; `previous_memory_id` echoes the path id. Recall, list, and graph reads filter superseded rows by default, so the new id is what surfaces; `include_superseded=true` is required to access prior versions. Old enrichment (entities, relationships, embedding, accumulated weights from recall reinforcement) stays attached to the old id, frozen with the old content. Dream pruning eventually sweeps superseded rows after a 7-day grace window.
@@ -541,19 +541,20 @@ The MCP server is available at `POST /mcp` using Streamable HTTP transport.
 
 | Tool | Description |
 |---|---|
-| `memory_store` | Store a single memory. Identical content within the same project is deduplicated on ingest; the existing memory's ID is returned and tags / metadata on the new request are ignored. |
-| `memory_store_batch` | Batch store memories (same dedup-on-ingest behavior) |
-| `memory_update` | Update a memory |
-| `memory_get` | Retrieve a memory by ID |
-| `memory_list` | List memories with filtering. Superseded rows are hidden by default. |
-| `memory_recall` | Hybrid (vector + lexical) recall with optional `diversify_by_tag_prefix` for round-robin coverage across a tag axis |
-| `memory_forget` | Soft-delete a memory; cascades restricted to extraction lineage |
-| `memory_enrich` | Trigger enrichment |
-| `memory_graph` | Knowledge graph traversal |
-| `memory_projects` | List projects |
-| `memory_update_project` | Update a project |
-| `memory_delete_project` | Delete a project |
-| `memory_export` | Export project data |
+| `store` | Store a single memory. Identical content within the same project is deduplicated on ingest; the existing memory's ID is returned and tags / metadata on the new request are ignored. Every store unconditionally enqueues an enrichment job; the worker drains it when `enrichment.enabled` is true and providers are configured. No per-call opt-in. |
+| `store_batch` | Batch store memories (same dedup-on-ingest behavior, same automatic enrichment) |
+| `update` | Update a memory |
+| `get` | Retrieve a memory by ID |
+| `list` | List memories with pagination. Superseded rows are always hidden on the MCP path; use the REST endpoint with `include_superseded=true` for a diagnostic view. |
+| `recall` | Hybrid (vector + lexical) recall. Graph entities and relationships are always included when the knowledge graph is populated. `limit` is server-capped at `recall.max_limit` (default 50); `graph_depth` is server-capped at `recall.graph.max_depth` (default 5). Optional `diversify_by_tag_prefix` for round-robin coverage across a tag axis. Similarity-threshold tuning knobs live on the REST endpoint only. |
+| `forget` | Soft-delete a memory; cascades restricted to extraction lineage. Set `hard: true` for an unrecoverable hard delete. |
+| `graph` | Knowledge graph traversal. `depth` is server-capped at `recall.graph.max_depth` (default 5). |
+| `list_projects` | List projects |
+| `update_project` | Update a project |
+| `delete_project` | Delete a project |
+| `export` | Export project data |
+
+Admin-only operations (paraphrase backfill, settings cascade, provider health, etc.) are exposed via the REST admin API, not through MCP. Diagnostic flags such as `include_superseded`, `include_audit`, and `include_low_novelty` are likewise REST-only. Enrichment is fully server-managed: every store auto-enqueues, every content-changing update re-enqueues, and operators trigger backfills via REST `POST /v1/projects/{id}/memories/enrich`. The MCP tool surface is intentionally narrow.
 
 **Resources:**
 

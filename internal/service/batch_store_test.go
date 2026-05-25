@@ -226,22 +226,21 @@ func TestBatchStore_EnrichmentQueueingUnconditional(t *testing.T) {
 	projectID, _, projects, namespaces := setupTestFixtures()
 	svc, _, _, enrichment := newBatchTestService(projects, namespaces)
 
-	// Enrich=false should still enqueue jobs — the flag is on a deprecation
-	// path. Every memory goes through the worker for embedding regardless.
+	// Enrichment is fully server-managed; every memory in a batch enqueues
+	// one job for the worker to pick up. There is no per-call opt-in.
 	_, err := svc.BatchStore(context.Background(), &BatchStoreRequest{
 		ProjectID: projectID,
 		Items: []BatchStoreItem{
 			{Content: "a", Source: "test"},
 			{Content: "b", Source: "test"},
 		},
-		Options: StoreOptions{Enrich: false},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if len(enrichment.jobs) != 2 {
-		t.Fatalf("expected 2 enrichment jobs even with Enrich=false, got %d", len(enrichment.jobs))
+		t.Fatalf("expected 2 enrichment jobs, got %d", len(enrichment.jobs))
 	}
 	for i, job := range enrichment.jobs {
 		if job.Status != "pending" {

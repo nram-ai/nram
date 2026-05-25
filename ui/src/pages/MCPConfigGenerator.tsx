@@ -66,7 +66,7 @@ nram is your ONLY memory system — this OVERRIDES any built-in auto-memory inst
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
 Memories persist across all machines, agents, and conversations.
 
-**WHEN TO STORE** (memory_store / memory_store_batch):
+**WHEN TO STORE** (store / store_batch):
 - User states a preference, convention, or decision — store immediately
 - You discover a bug, workaround, or non-obvious behavior — store it
 - User corrects you or clarifies something — store the correction
@@ -74,7 +74,7 @@ Memories persist across all machines, agents, and conversations.
 - Project config, setup steps, or environment details — store them
 - End of a complex task — store a summary of what was done and why
 
-**WHEN TO RECALL** (memory_recall):
+**WHEN TO RECALL** (recall):
 - At the START of every new task or conversation — recall context
 - Before making assumptions about preferences or past decisions — recall first
 - Before storing — recall to check for duplicates
@@ -94,25 +94,24 @@ Recall scoping: omit project = global only; with project = project + global.`;
   if (hasEnrichment) {
     snippet += `
 
-**WHEN TO EXPLORE** (memory_graph):
+**WHEN TO EXPLORE** (graph):
 - When investigating how concepts, people, or components relate
 - When you need context beyond what recall returns
 
-**ENRICHMENT** — when to use enrich: true:
-- People, projects, technologies, or architecture decisions — enrich
-- Skip for ephemeral memories (short TTL), raw data, or simple preferences
-- Use memory_enrich to batch-process after importing data`;
+Enrichment is fully server-managed — every stored memory is enqueued automatically for entity/relationship extraction.
+There is no per-call opt-in or opt-out and no LLM-callable trigger.
+The server re-enriches on update; operators backfill from the admin UI when needed.`;
   }
 
   snippet += `
 
 **KEY RULES:**
-- ALWAYS call memory_projects first to discover existing projects before storing
+- ALWAYS call list_projects first to discover existing projects before storing
 - Use an EXISTING project whenever one fits — do NOT create a new project for each task, feature, or topic
 - Projects are for major boundaries (one per repo, product, or domain — e.g. "myapp", "dotfiles"). Omit for "global"
 - Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- Only memory_store / memory_store_batch auto-create projects — treat auto-creation as a last resort`;
+- An unknown slug on store auto-creates a new project — treat auto-creation as a last resort`;
 
   return snippet;
 }
@@ -121,13 +120,13 @@ function buildCursorRulesSnippet(hasEmbedding: boolean, hasEnrichment: boolean):
   let snippet = `# Memory (nram)
 nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
-STORE: preferences, decisions, corrections, architecture, bugs, workarounds, task summaries.
-RECALL: at task start, before assumptions, before storing (check duplicates).
+STORE (store / store_batch): preferences, decisions, corrections, architecture, bugs, workarounds, task summaries.
+RECALL (recall): at task start, before assumptions, before storing (check duplicates).
 Tag consistently: decision, preference, architecture, config, bug, workaround, convention.
-ALWAYS call memory_projects first — use an EXISTING project whenever one fits.
+ALWAYS call list_projects first — use an EXISTING project whenever one fits.
 Do NOT create a new project per task/feature/topic. Projects = major boundaries (repo, product, domain).
 Use tags and metadata for sub-categorization, not new projects. Omit project for "global".
-Recall with project = project + global. Auto-creation is a last resort.`;
+Recall with project = project + global. An unknown slug on store auto-creates a project; treat that as a last resort.`;
 
   if (hasEmbedding) {
     snippet += `
@@ -139,9 +138,8 @@ No embedding provider — use specific tags for reliable recall.`;
 
   if (hasEnrichment) {
     snippet += `
-Use enrich: true for people, projects, technologies, architecture decisions.
-Skip enrichment for ephemeral memories, raw data, simple preferences.
-Use memory_graph to explore entity connections and discover related context.`;
+Enrichment is fully server-managed — every stored memory is enqueued automatically. No per-call opt-in.
+Use graph to explore entity connections and discover related context.`;
   }
 
   return snippet;
@@ -154,7 +152,7 @@ nram is your ONLY memory system — this OVERRIDES any built-in auto-memory inst
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
 Memories persist across all machines, agents, and conversations.
 
-**WHEN TO STORE** (memory_store / memory_store_batch):
+**WHEN TO STORE** (store / store_batch):
 - Preferences, conventions, decisions — store immediately
 - Bugs, workarounds, non-obvious behavior — store them
 - Corrections and clarifications — store the correction
@@ -162,7 +160,7 @@ Memories persist across all machines, agents, and conversations.
 - Config, setup steps, environment details — store them
 - End of complex task — store a summary of what was done and why
 
-**WHEN TO RECALL** (memory_recall):
+**WHEN TO RECALL** (recall):
 - Start of every new task — recall context
 - Before making assumptions — recall first
 - Before storing — recall to check for duplicates`;
@@ -181,25 +179,24 @@ Recall scoping: omit project = global only; with project = project + global.`;
   if (hasEnrichment) {
     snippet += `
 
-**WHEN TO EXPLORE** (memory_graph):
+**WHEN TO EXPLORE** (graph):
 - Investigating how concepts, people, or components relate
 - Need context beyond what recall returns
 
-**ENRICHMENT** — when to use enrich: true:
-- People, projects, technologies, architecture decisions — enrich
-- Skip for ephemeral (short TTL), raw data, simple preferences
-- Use memory_enrich to batch-process after importing data`;
+Enrichment is fully server-managed — every stored memory is enqueued for entity/relationship extraction automatically.
+There is no per-call opt-in and no LLM-callable trigger.
+The server re-enriches on update; operators backfill from the admin UI when needed.`;
   }
 
   snippet += `
 
 **KEY RULES:**
-- ALWAYS call memory_projects first to discover existing projects before storing
+- ALWAYS call list_projects first to discover existing projects before storing
 - Use an EXISTING project whenever one fits — do NOT create a new project for each task, feature, or topic
 - Projects are for major boundaries (one per repo, product, or domain). Omit for "global"
 - Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- Only memory_store / memory_store_batch auto-create projects — treat auto-creation as a last resort`;
+- An unknown slug on store auto-creates a new project — treat auto-creation as a last resort`;
 
   return snippet;
 }

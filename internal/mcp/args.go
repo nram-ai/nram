@@ -1,24 +1,23 @@
 package mcp
 
+import (
+	"context"
+	"strconv"
+
+	"github.com/nram-ai/nram/internal/service"
+)
+
 // includeSupersededArg is the optional bool argument that controls whether
-// MCP read tools surface rows that paraphrase or contradiction dedup has
-// marked as losers.
+// the export MCP tool surfaces rows that paraphrase or contradiction dedup
+// has marked as losers. The other read-side MCP tools have this flag
+// stripped (the diagnostic surface is REST/admin-only); export retains it
+// because exports are an intentional backup/migration surface where seeing
+// the full lineage often matters.
 const includeSupersededArg = "include_superseded"
 
-// includeSupersededDesc is the standard tool-arg description used by every
-// MCP read tool that hides superseded rows by default. memory_graph keeps
-// its own description because the filter there acts on relationships, not
-// memory rows.
+// includeSupersededDesc is the standard tool-arg description for export's
+// include_superseded flag.
 const includeSupersededDesc = "Include rows that were superseded by paraphrase or contradiction dedup. Default false hides them."
-
-// includeAuditArg is the optional bool argument that controls whether
-// memory_get surfaces the per-memory novelty/bookkeeping audit-stamp keys
-// that the projector strips by default.
-const includeAuditArg = "include_audit"
-
-// includeAuditDesc is the standard tool-arg description for include_audit on
-// memory_get.
-const includeAuditDesc = "Include the per-memory novelty/bookkeeping audit-stamp keys (novelty_audited_at, novelty_audit_reason, contradictions_checked_at, paraphrase_checked_at, low_novelty, low_novelty_reason) in the response metadata. Default false strips them."
 
 // argBool extracts a boolean tool argument by key, returning defaultVal
 // when the key is absent or not a bool.
@@ -27,4 +26,26 @@ func argBool(args map[string]interface{}, key string, defaultVal bool) bool {
 		return v
 	}
 	return defaultVal
+}
+
+// resolvePositiveCapInt resolves an integer cap setting and returns a value
+// guaranteed to be > 0. If the resolved value is ≤0 — which the admin
+// settings schema rejects at write time but a stale row or hand-edited
+// override can still produce — it falls back to the registered default in
+// settingDefaults rather than silently disabling the cap. Callers use this
+// for MCP-side limits (recall.max_limit, recall.graph.max_depth) where a
+// zero is never the intended "no cap" knob.
+func resolvePositiveCapInt(ctx context.Context, settings *service.SettingsService, key string) int {
+	if v := settings.ResolveIntWithDefault(ctx, key, "global"); v > 0 {
+		return v
+	}
+	def, ok := service.GetDefault(key)
+	if !ok {
+		return 1
+	}
+	parsed, err := strconv.Atoi(def)
+	if err != nil || parsed <= 0 {
+		return 1
+	}
+	return parsed
 }

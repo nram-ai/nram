@@ -420,7 +420,6 @@ func main() {
 		Update:         updateSvc,
 		BatchGet:       batchGetSvc,
 		BatchStore:     batchStoreSvc,
-		Enrich:         enrichSvc,
 		Export:         exportSvc,
 		ProjectDelete:  projectDeleteSvc,
 		ProjectUpdater: projectRepo,
@@ -440,7 +439,6 @@ func main() {
 			hasEnrich := registry.GetFact() != nil && registry.GetEntity() != nil
 			return hasEmbed, hasEnrich
 		},
-		EnrichmentAvailable: enrichmentAvailable,
 	})
 
 	// Create metrics.

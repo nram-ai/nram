@@ -61,7 +61,7 @@ type projectItem struct {
 	Description string    `json:"description"`
 }
 
-// RegisterGraphProjectsExportTools registers memory_graph, memory_projects, and memory_export.
+// RegisterGraphProjectsExportTools registers graph, list_projects, and export.
 func RegisterGraphProjectsExportTools(s *Server) {
 	registerMemoryGraph(s)
 	registerMemoryProjects(s)
@@ -69,14 +69,12 @@ func RegisterGraphProjectsExportTools(s *Server) {
 }
 
 func registerMemoryGraph(s *Server) {
-	tool := mcp.NewTool("memory_graph",
+	tool := mcp.NewTool("graph",
 		mcp.WithDescription("Explore entity relationships in the knowledge graph. Use to discover how people, technologies, and concepts connect — especially when recall alone does not surface enough context."),
 		mcp.WithString("entity", mcp.Required(), mcp.Description("Entity name or search query")),
 		mcp.WithString("project", mcp.Description("Project slug to scope the search")),
-		mcp.WithNumber("depth", mcp.Description("Graph traversal depth (default 2)")),
+		mcp.WithNumber("depth", mcp.Description("Graph traversal depth (default recall.graph.default_depth=2, server-capped at recall.graph.max_depth, default 5).")),
 		mcp.WithNumber("min_weight", mcp.Description("Minimum relationship weight to include (default 0.1). Set to 0 to include all.")),
-		mcp.WithBoolean("include_history", mcp.Description("Include expired/past relationships (default false)")),
-		mcp.WithBoolean(includeSupersededArg, mcp.Description("Include relationships extracted from a memory that was later superseded by paraphrase or contradiction dedup. Default false drops them.")),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -85,8 +83,8 @@ func registerMemoryGraph(s *Server) {
 }
 
 func registerMemoryProjects(s *Server) {
-	tool := mcp.NewTool("memory_projects",
-		mcp.WithDescription("List all available projects with slugs and descriptions. ALWAYS call this before memory_store to check for an existing project — do not create new projects unnecessarily."),
+	tool := mcp.NewTool("list_projects",
+		mcp.WithDescription("List all available projects with slugs and descriptions. ALWAYS call this before store to check for an existing project — an unknown slug on store auto-creates a new project."),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -95,7 +93,7 @@ func registerMemoryProjects(s *Server) {
 }
 
 func registerMemoryExport(s *Server) {
-	tool := mcp.NewTool("memory_export",
+	tool := mcp.NewTool("export",
 		mcp.WithDescription("Export all memories from a project for backup, migration, or analysis. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug to export (default: 'global')")),
 		mcp.WithString("format", mcp.Description("Export format: \"json\" or \"ndjson\" (default \"json\")")),
@@ -124,9 +122,15 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		return mcp.NewToolResultError("entity is required"), nil
 	}
 
+	deps := s.Deps()
+
 	depth := 2
 	if v, ok := args["depth"].(float64); ok && v > 0 {
 		depth = int(v)
+		maxDepth := resolvePositiveCapInt(ctx, deps.Settings, service.SettingRecallGraphMaxDepth)
+		if depth > maxDepth {
+			depth = maxDepth
+		}
 	}
 
 	minWeight := 0.1
@@ -135,13 +139,7 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	}
 
 	includeHistory := false
-	if v, ok := args["include_history"].(bool); ok {
-		includeHistory = v
-	}
-
-	includeSuperseded := argBool(args, includeSupersededArg, false)
-
-	deps := s.Deps()
+	includeSuperseded := false
 
 	// Resolve namespace: project-scoped or user-scoped.
 	user, err := deps.UserRepo.GetByID(ctx, ac.UserID)

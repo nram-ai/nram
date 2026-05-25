@@ -76,7 +76,6 @@ func NewBatchStoreHandler(svc BatchStoreServicer, bus events.EventBus) http.Hand
 			ProjectID: projectID,
 			Items:     body.Items,
 			Options: service.StoreOptions{
-				Enrich:  body.Options.Enrich,
 				Extract: body.Options.Extract,
 				TTL:     body.Options.TTL,
 			},

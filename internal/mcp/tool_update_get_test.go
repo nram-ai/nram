@@ -126,7 +126,7 @@ func TestHandleMemoryUpdate_NoHTTPRequest(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"id":      uuid.New().String(),
 		"project": "test",
@@ -145,7 +145,7 @@ func TestHandleMemoryUpdate_NoAuth(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"id":      uuid.New().String(),
 		"project": "test",
@@ -165,7 +165,7 @@ func TestHandleMemoryUpdate_MissingID(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 		"content": "new content",
@@ -184,7 +184,7 @@ func TestHandleMemoryUpdate_InvalidID(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"id":      "not-a-uuid",
 		"project": "test",
@@ -205,7 +205,7 @@ func TestHandleMemoryUpdate_NoFieldsProvided(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"id":      uuid.New().String(),
 		"project": "test",
@@ -232,7 +232,7 @@ func TestHandleMemoryUpdate_ProjectNotFound(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"id":      uuid.New().String(),
 		"project": "nonexistent",
@@ -277,7 +277,7 @@ func TestHandleMemoryUpdate_Success(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"id":       memoryID.String(),
 		"project":  "test",
@@ -343,7 +343,7 @@ func TestHandleMemoryUpdate_ReEmbedIndicator(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"id":      memoryID.String(),
 		"project": "test",
@@ -377,7 +377,7 @@ func TestHandleMemoryGet_NoHTTPRequest(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_get"
+	req.Params.Name = "get"
 	req.Params.Arguments = map[string]interface{}{
 		"ids":     []interface{}{uuid.New().String()},
 		"project": "test",
@@ -395,7 +395,7 @@ func TestHandleMemoryGet_NoAuth(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_get"
+	req.Params.Name = "get"
 	req.Params.Arguments = map[string]interface{}{
 		"ids":     []interface{}{uuid.New().String()},
 		"project": "test",
@@ -414,7 +414,7 @@ func TestHandleMemoryGet_MissingIDs(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_get"
+	req.Params.Name = "get"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test",
 	}
@@ -432,7 +432,7 @@ func TestHandleMemoryGet_EmptyIDs(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_get"
+	req.Params.Name = "get"
 	req.Params.Arguments = map[string]interface{}{
 		"ids":     []interface{}{},
 		"project": "test",
@@ -451,7 +451,7 @@ func TestHandleMemoryGet_InvalidUUID(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_get"
+	req.Params.Name = "get"
 	req.Params.Arguments = map[string]interface{}{
 		"ids":     []interface{}{"not-a-uuid"},
 		"project": "test",
@@ -479,7 +479,7 @@ func TestHandleMemoryGet_ProjectNotFound(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_get"
+	req.Params.Name = "get"
 	req.Params.Arguments = map[string]interface{}{
 		"ids":     []interface{}{uuid.New().String()},
 		"project": "nonexistent",
@@ -527,7 +527,7 @@ func TestHandleMemoryGet_SuccessWithFoundAndNotFound(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_get"
+	req.Params.Name = "get"
 	req.Params.Arguments = map[string]interface{}{
 		"ids":     []interface{}{memID1.String(), memID2.String()},
 		"project": "test",
@@ -571,7 +571,7 @@ func TestMemoryUpdate_SchemaRegistered(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_update"]; !ok {
+	if _, ok := tools["update"]; !ok {
 		t.Fatal("memory_update tool not registered")
 	}
 }
@@ -581,7 +581,7 @@ func TestMemoryGet_SchemaRegistered(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_get"]; !ok {
+	if _, ok := tools["get"]; !ok {
 		t.Fatal("memory_get tool not registered")
 	}
 }

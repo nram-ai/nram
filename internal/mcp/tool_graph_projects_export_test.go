@@ -173,7 +173,7 @@ func TestMemoryGraph_Registered_Postgres(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_graph"]; !ok {
+	if _, ok := tools["graph"]; !ok {
 		t.Error("expected memory_graph to be registered on Postgres")
 	}
 }
@@ -185,7 +185,7 @@ func TestMemoryProjects_Registered_SQLite(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_projects"]; !ok {
+	if _, ok := tools["list_projects"]; !ok {
 		t.Error("expected memory_projects to be registered on SQLite")
 	}
 }
@@ -195,7 +195,7 @@ func TestMemoryProjects_Registered_Postgres(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_projects"]; !ok {
+	if _, ok := tools["list_projects"]; !ok {
 		t.Error("expected memory_projects to be registered on Postgres")
 	}
 }
@@ -207,7 +207,7 @@ func TestMemoryExport_Registered_SQLite(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_export"]; !ok {
+	if _, ok := tools["export"]; !ok {
 		t.Error("expected memory_export to be registered on SQLite")
 	}
 }
@@ -217,7 +217,7 @@ func TestMemoryExport_Registered_Postgres(t *testing.T) {
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_export"]; !ok {
+	if _, ok := tools["export"]; !ok {
 		t.Error("expected memory_export to be registered on Postgres")
 	}
 }
@@ -820,15 +820,16 @@ func TestHandleMemoryExport_ProjectNotFound(t *testing.T) {
 	assertToolError(t, result, "project not found")
 }
 
-func TestHandleMemoryGraph_FiltersSupersededSourceMemory(t *testing.T) {
+// TestHandleMemoryGraph_AlwaysFiltersSupersededSourceMemory confirms the MCP
+// graph handler unconditionally drops relationships whose source memory was
+// superseded, even when a caller passes include_superseded=true. The flag
+// was stripped from MCP; only REST honors it.
+func TestHandleMemoryGraph_AlwaysFiltersSupersededSourceMemory(t *testing.T) {
 	userID := uuid.New()
 	nsID := uuid.New()
 	user := &model.User{ID: userID, NamespaceID: nsID}
 	project := &model.Project{ID: uuid.New(), NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "test"}
 
-	// Two memories — one alive, one superseded — used as source memories for
-	// two relationships. The superseded one's relationship is dropped by
-	// default but reappears with include_superseded=true.
 	winnerID := uuid.New()
 	loserID := uuid.New()
 	winnerMemSrc := winnerID
@@ -848,8 +849,6 @@ func TestHandleMemoryGraph_FiltersSupersededSourceMemory(t *testing.T) {
 	relSupersededID := uuid.New()
 	entities := []model.Entity{
 		{ID: entityID, NamespaceID: nsID, Name: "Alice", EntityType: "person", Canonical: "alice"},
-		// Target entities live in the same namespace so orphan resolution can
-		// fold them into entities[] instead of pruning the relationships.
 		{ID: aliveTargetID, NamespaceID: nsID, Name: "Bob", EntityType: "person", Canonical: "bob"},
 		{ID: supersededTargetID, NamespaceID: nsID, Name: "Carol", EntityType: "person", Canonical: "carol"},
 	}
@@ -868,50 +867,32 @@ func TestHandleMemoryGraph_FiltersSupersededSourceMemory(t *testing.T) {
 	}
 	srv := NewServer(deps)
 
-	// Default: superseded relationship dropped.
+	// Even with include_superseded=true on the request (now ignored on MCP),
+	// only the live relationship surfaces.
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{"entity": "Alice"}
+	req.Params.Arguments = map[string]interface{}{
+		"entity":             "Alice",
+		"include_superseded": true,
+	}
 	ctx := buildAuthCtx(userID)
 	result, err := handleMemoryGraph(ctx, srv, req)
 	if err != nil {
-		t.Fatalf("default graph: %v", err)
+		t.Fatalf("graph: %v", err)
 	}
 	if result.IsError {
-		t.Fatalf("default graph errored: %v", result.Content)
+		t.Fatalf("graph errored: %v", result.Content)
 	}
 	var resp graphResponse
 	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
-		t.Fatalf("decode default: %v", err)
+		t.Fatalf("decode: %v", err)
 	}
 	if len(resp.Relationships) != 1 {
-		t.Fatalf("expected only the live relationship; got %d", len(resp.Relationships))
+		t.Fatalf("expected only the live relationship (include_superseded is stripped from MCP); got %d", len(resp.Relationships))
 	}
-	// Identity comes from source_memory now that per-edge IDs are dropped.
 	if resp.Relationships[0].SourceMemory == nil || *resp.Relationships[0].SourceMemory != winnerID {
 		t.Errorf("expected source_memory=%s on surviving rel; got %+v", winnerID, resp.Relationships[0].SourceMemory)
 	}
 	assertNoOrphanRelationships(t, resp)
-
-	// include_superseded=true: both relationships present.
-	reqIncl := mcp.CallToolRequest{}
-	reqIncl.Params.Arguments = map[string]interface{}{
-		"entity":             "Alice",
-		"include_superseded": true,
-	}
-	resultIncl, err := handleMemoryGraph(ctx, srv, reqIncl)
-	if err != nil {
-		t.Fatalf("include graph: %v", err)
-	}
-	if resultIncl.IsError {
-		t.Fatalf("include graph errored: %v", resultIncl.Content)
-	}
-	var respIncl graphResponse
-	if err := json.Unmarshal([]byte(extractText(resultIncl)), &respIncl); err != nil {
-		t.Fatalf("decode include: %v", err)
-	}
-	if len(respIncl.Relationships) != 2 {
-		t.Fatalf("expected both relationships with include_superseded; got %d", len(respIncl.Relationships))
-	}
 }
 
 func TestHandleMemoryExport_HidesSupersededByDefault(t *testing.T) {

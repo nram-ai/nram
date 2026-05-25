@@ -319,7 +319,7 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 
 	// Store a memory.
 	storeReq := mcp.CallToolRequest{}
-	storeReq.Params.Name = "memory_store"
+	storeReq.Params.Name = "store"
 	storeReq.Params.Arguments = map[string]interface{}{
 		"project": "test-project",
 		"content": "The quick brown fox jumps over the lazy dog",
@@ -368,7 +368,7 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 	srv2 := NewServer(deps)
 
 	recallReq := mcp.CallToolRequest{}
-	recallReq.Params.Name = "memory_recall"
+	recallReq.Params.Name = "recall"
 	recallReq.Params.Arguments = map[string]interface{}{
 		"query":   "quick brown fox",
 		"project": "test-project",
@@ -433,7 +433,7 @@ func TestMCP_StoreAutoCreatesProject(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store"
+	req.Params.Name = "store"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "brand-new-project",
 		"content": "something worth remembering",
@@ -476,7 +476,7 @@ func TestMCP_StoreBatch_AllSucceed(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store_batch"
+	req.Params.Name = "store_batch"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test-project",
 		"items": []interface{}{
@@ -537,7 +537,7 @@ func TestMCP_StoreBatch_PartialFailure(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store_batch"
+	req.Params.Name = "store_batch"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test-project",
 		"items": []interface{}{
@@ -605,7 +605,7 @@ func TestMCP_UpdateMemory(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"id":      memoryID.String(),
 		"project": "test-project",
@@ -683,7 +683,7 @@ func TestMCP_GetMemory_FoundAndNotFound(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_get"
+	req.Params.Name = "get"
 	req.Params.Arguments = map[string]interface{}{
 		"ids":     []interface{}{memID1.String(), memID2.String(), fakeID.String()},
 		"project": "test-project",
@@ -753,7 +753,7 @@ func TestMCP_ForgetMemory_Soft(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_forget"
+	req.Params.Name = "forget"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test-project",
 		"ids":     []interface{}{memoryID.String()},
@@ -815,7 +815,7 @@ func TestMCP_ForgetMemory_Hard(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_forget"
+	req.Params.Name = "forget"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test-project",
 		"ids":     []interface{}{memoryID.String()},
@@ -980,7 +980,7 @@ func TestMCP_ProjectsList(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_projects"
+	req.Params.Name = "list_projects"
 
 	ctx := buildAuthCtx(userID)
 	result, err := handleMemoryProjects(ctx, srv, req)
@@ -1041,7 +1041,7 @@ func TestMCP_ExportProject(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_export"
+	req.Params.Name = "export"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test-project",
 		"format":  "json",
@@ -1106,7 +1106,7 @@ func TestMCP_StoreEmitsEvent(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_store"
+	req.Params.Name = "store"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test-project",
 		"content": "event emission test",
@@ -1188,7 +1188,7 @@ func TestMCP_ForgetEmitsEvent(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_forget"
+	req.Params.Name = "forget"
 	req.Params.Arguments = map[string]interface{}{
 		"project": "test-project",
 		"ids":     []interface{}{memoryID.String()},
@@ -1264,7 +1264,7 @@ func TestMCP_UpdateEmitsEvent(t *testing.T) {
 	srv := NewServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "memory_update"
+	req.Params.Name = "update"
 	req.Params.Arguments = map[string]interface{}{
 		"id":      memoryID.String(),
 		"project": "test-project",
@@ -1312,26 +1312,31 @@ func TestMCP_UpdateEmitsEvent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 21. TestMCP_PostgresIncludesEnrichTool
+// 21. TestMCP_PostgresIncludesGraphTool
 // ---------------------------------------------------------------------------
-
-func TestMCP_PostgresIncludesEnrichTool(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_enrich"]; !ok {
-		t.Error("memory_enrich tool must be registered on Postgres backend")
-	}
-}
 
 func TestMCP_PostgresIncludesGraphTool(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
 	srv := NewServer(deps)
 
 	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["memory_graph"]; !ok {
-		t.Error("memory_graph tool must be registered on Postgres backend")
+	if _, ok := tools["graph"]; !ok {
+		t.Error("graph tool must be registered on Postgres backend")
+	}
+}
+
+// TestMCP_EnrichToolRemoved confirms the per-call `enrich` MCP tool has been
+// stripped. Enrichment is fully server-managed: stores auto-enqueue and
+// updates re-enqueue, so there is no LLM-callable surface for triggering
+// re-enrichment. Operators backfill via REST.
+func TestMCP_EnrichToolRemoved(t *testing.T) {
+	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
+		deps := Dependencies{Backend: backend}
+		srv := NewServer(deps)
+		tools := srv.MCPServer().ListTools()
+		if _, ok := tools["enrich"]; ok {
+			t.Errorf("backend %s: enrich tool should not be registered on MCP; backfill belongs on the REST admin path", backend)
+		}
 	}
 }
 
@@ -1525,14 +1530,14 @@ func TestMCP_ResourceProjects_NoAuth(t *testing.T) {
 
 func TestMCP_CoreToolsRegistered_SQLite(t *testing.T) {
 	required := []string{
-		"memory_store",
-		"memory_store_batch",
-		"memory_recall",
-		"memory_update",
-		"memory_get",
-		"memory_forget",
-		"memory_projects",
-		"memory_export",
+		"store",
+		"store_batch",
+		"recall",
+		"update",
+		"get",
+		"forget",
+		"list_projects",
+		"export",
 	}
 
 	deps := Dependencies{Backend: storage.BackendSQLite}
@@ -1548,16 +1553,15 @@ func TestMCP_CoreToolsRegistered_SQLite(t *testing.T) {
 
 func TestMCP_CoreToolsRegistered_Postgres(t *testing.T) {
 	required := []string{
-		"memory_store",
-		"memory_store_batch",
-		"memory_recall",
-		"memory_update",
-		"memory_get",
-		"memory_forget",
-		"memory_projects",
-		"memory_export",
-		"memory_enrich",
-		"memory_graph",
+		"store",
+		"store_batch",
+		"recall",
+		"update",
+		"get",
+		"forget",
+		"list_projects",
+		"export",
+		"graph",
 	}
 
 	deps := Dependencies{Backend: storage.BackendPostgres}

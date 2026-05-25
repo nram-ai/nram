@@ -1058,7 +1058,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 
 	foundMemoryStore := false
 	for _, tool := range toolsList.Tools {
-		if tool.Name == "memory_store" {
+		if tool.Name == "store" {
 			foundMemoryStore = true
 			break
 		}
@@ -1080,7 +1080,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		ID:      3,
 		Method:  "tools/call",
 		Params: map[string]interface{}{
-			"name": "memory_store",
+			"name": "store",
 			"arguments": map[string]interface{}{
 				"project": "claude-test",
 				"content": "The auth service uses JWT with 1h expiry",
@@ -1122,7 +1122,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		ID:      4,
 		Method:  "tools/call",
 		Params: map[string]interface{}{
-			"name": "memory_recall",
+			"name": "recall",
 			"arguments": map[string]interface{}{
 				"query":   "auth JWT expiry",
 				"project": "claude-test",
@@ -1225,7 +1225,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		ID:      5,
 		Method:  "tools/call",
 		Params: map[string]interface{}{
-			"name": "memory_recall",
+			"name": "recall",
 			"arguments": map[string]interface{}{
 				"query":   "auth JWT expiry",
 				"project": "claude-test",
@@ -1462,7 +1462,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 
 	found := false
 	for _, tool := range toolsList.Tools {
-		if tool.Name == "memory_store" {
+		if tool.Name == "store" {
 			found = true
 			break
 		}
@@ -1477,7 +1477,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		ID:      3,
 		Method:  "tools/call",
 		Params: map[string]interface{}{
-			"name": "memory_store",
+			"name": "store",
 			"arguments": map[string]interface{}{
 				"project": "claude-test",
 				"content": "Claude Desktop stores architecture decisions",
@@ -1574,7 +1574,7 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 		ID:      2,
 		Method:  "tools/call",
 		Params: map[string]interface{}{
-			"name": "memory_store",
+			"name": "store",
 			"arguments": map[string]interface{}{
 				"project": "claude-test",
 				"content": "API key direct access works perfectly",
@@ -1610,7 +1610,7 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 		ID:      3,
 		Method:  "tools/call",
 		Params: map[string]interface{}{
-			"name": "memory_recall",
+			"name": "recall",
 			"arguments": map[string]interface{}{
 				"query":   "API key direct access",
 				"project": "claude-test",
