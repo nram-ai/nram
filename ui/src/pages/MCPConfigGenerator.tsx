@@ -1,6 +1,4 @@
 import { useState, useCallback, useMemo } from "react";
-import { useProviderSlots } from "../hooks/useApi";
-import type { ProviderSlot } from "../api/client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,8 +57,14 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 // Constants
 // ---------------------------------------------------------------------------
 
-function buildClaudeMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
-  let snippet = `## Memory (nram)
+// These snippets are STATIC text the user pastes into CLAUDE.md / .cursor/rules
+// / AGENTS.md. They get baked in once and never update, so they must not
+// reference live server state (configured providers, enabled features). The
+// MCP server's per-connection buildInstructions block delivers any
+// provider-conditional guidance dynamically at tools/list time.
+
+function buildClaudeMdSnippet(): string {
+  return `## Memory (nram)
 
 nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
@@ -78,32 +82,12 @@ Memories persist across all machines, agents, and conversations.
 - At the START of every new task or conversation — recall context
 - Before making assumptions about preferences or past decisions — recall first
 - Before storing — recall to check for duplicates
-- When you need context you lack — recall before asking the user`;
-
-  if (hasEmbedding) {
-    snippet += `
-Semantic search is active — describe what you need in natural language.`;
-  } else {
-    snippet += `
-No embedding provider configured — use specific tags for reliable recall.`;
-  }
-
-  snippet += `
-Recall scoping: omit project = global only; with project = project + global.`;
-
-  if (hasEnrichment) {
-    snippet += `
+- When you need context you lack — recall before asking the user
+Recall scoping: omit project = global only; with project = project + global.
 
 **WHEN TO EXPLORE** (graph):
 - When investigating how concepts, people, or components relate
 - When you need context beyond what recall returns
-
-Enrichment is fully server-managed — every stored memory is enqueued automatically for entity/relationship extraction.
-There is no per-call opt-in or opt-out and no LLM-callable trigger.
-The server re-enriches on update; operators backfill from the admin UI when needed.`;
-  }
-
-  snippet += `
 
 **KEY RULES:**
 - ALWAYS call list_projects first to discover existing projects before storing
@@ -112,41 +96,24 @@ The server re-enriches on update; operators backfill from the admin UI when need
 - Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
 - An unknown slug on store auto-creates a new project — treat auto-creation as a last resort`;
-
-  return snippet;
 }
 
-function buildCursorRulesSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
-  let snippet = `# Memory (nram)
+function buildCursorRulesSnippet(): string {
+  return `# Memory (nram)
 nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
 STORE (store / store_batch): preferences, decisions, corrections, architecture, bugs, workarounds, task summaries.
 RECALL (recall): at task start, before assumptions, before storing (check duplicates).
+EXPLORE (graph): investigate how entities relate when recall alone is not enough.
 Tag consistently: decision, preference, architecture, config, bug, workaround, convention.
 ALWAYS call list_projects first — use an EXISTING project whenever one fits.
 Do NOT create a new project per task/feature/topic. Projects = major boundaries (repo, product, domain).
 Use tags and metadata for sub-categorization, not new projects. Omit project for "global".
 Recall with project = project + global. An unknown slug on store auto-creates a project; treat that as a last resort.`;
-
-  if (hasEmbedding) {
-    snippet += `
-Semantic search active — describe what you need in natural language.`;
-  } else {
-    snippet += `
-No embedding provider — use specific tags for reliable recall.`;
-  }
-
-  if (hasEnrichment) {
-    snippet += `
-Enrichment is fully server-managed — every stored memory is enqueued automatically. No per-call opt-in.
-Use graph to explore entity connections and discover related context.`;
-  }
-
-  return snippet;
 }
 
-function buildAgentsMdSnippet(hasEmbedding: boolean, hasEnrichment: boolean): string {
-  let snippet = `## Memory (nram)
+function buildAgentsMdSnippet(): string {
+  return `## Memory (nram)
 
 nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
@@ -163,32 +130,12 @@ Memories persist across all machines, agents, and conversations.
 **WHEN TO RECALL** (recall):
 - Start of every new task — recall context
 - Before making assumptions — recall first
-- Before storing — recall to check for duplicates`;
-
-  if (hasEmbedding) {
-    snippet += `
-Semantic search is active — describe what you need in natural language.`;
-  } else {
-    snippet += `
-No embedding provider — use specific tags for reliable recall.`;
-  }
-
-  snippet += `
-Recall scoping: omit project = global only; with project = project + global.`;
-
-  if (hasEnrichment) {
-    snippet += `
+- Before storing — recall to check for duplicates
+Recall scoping: omit project = global only; with project = project + global.
 
 **WHEN TO EXPLORE** (graph):
 - Investigating how concepts, people, or components relate
 - Need context beyond what recall returns
-
-Enrichment is fully server-managed — every stored memory is enqueued for entity/relationship extraction automatically.
-There is no per-call opt-in and no LLM-callable trigger.
-The server re-enriches on update; operators backfill from the admin UI when needed.`;
-  }
-
-  snippet += `
 
 **KEY RULES:**
 - ALWAYS call list_projects first to discover existing projects before storing
@@ -197,8 +144,6 @@ The server re-enriches on update; operators backfill from the admin UI when need
 - Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
 - An unknown slug on store auto-creates a new project — treat auto-creation as a last resort`;
-
-  return snippet;
 }
 
 // ---------------------------------------------------------------------------
@@ -480,31 +425,13 @@ function MCPConfigGenerator() {
   const [serverUrl, setServerUrl] = useState(() => window.location.origin + "/mcp");
   const [apiKey, setApiKey] = useState("");
   const [activeTab, setActiveTab] = useState<ToolTab>("claude-code");
-  const slotsQuery = useProviderSlots();
 
-  const { hasEmbedding, hasEnrichment } = useMemo(() => {
-    const slots: ProviderSlot[] = Array.isArray(slotsQuery.data) ? slotsQuery.data : [];
-    const slotMap = new Map(slots.map((s) => [s.slot, s]));
-    return {
-      hasEmbedding: slotMap.get("embedding")?.configured ?? false,
-      hasEnrichment:
-        (slotMap.get("fact")?.configured ?? false) &&
-        (slotMap.get("entity")?.configured ?? false),
-    };
-  }, [slotsQuery.data]);
-
-  const claudeMdSnippet = useMemo(
-    () => buildClaudeMdSnippet(hasEmbedding, hasEnrichment),
-    [hasEmbedding, hasEnrichment],
-  );
-  const cursorRulesSnippet = useMemo(
-    () => buildCursorRulesSnippet(hasEmbedding, hasEnrichment),
-    [hasEmbedding, hasEnrichment],
-  );
-  const agentsMdSnippet = useMemo(
-    () => buildAgentsMdSnippet(hasEmbedding, hasEnrichment),
-    [hasEmbedding, hasEnrichment],
-  );
+  // Snippets are static text the user pastes into client-side prompt files;
+  // they don't condition on live server state (provider configuration ships
+  // to the LLM dynamically via the MCP server's connection-time instructions).
+  const claudeMdSnippet = useMemo(buildClaudeMdSnippet, []);
+  const cursorRulesSnippet = useMemo(buildCursorRulesSnippet, []);
+  const agentsMdSnippet = useMemo(buildAgentsMdSnippet, []);
 
   const tabs: { key: ToolTab; label: string }[] = [
     { key: "claude-code", label: "Claude Code" },

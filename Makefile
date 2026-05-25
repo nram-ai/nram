@@ -17,6 +17,7 @@ build-ui: ui/node_modules
 	cd ui && npm run build
 	rm -rf internal/ui/dist
 	cp -r ui/dist internal/ui/dist
+	@touch internal/ui/dist/.gitkeep
 
 build: build-ui build-server
 
