@@ -723,7 +723,16 @@ or
 
 Given the memory content below, generate {N} short, distinct natural-language questions or phrases a user might use to retrieve this memory. Vary the phrasings: cover synonyms, partial-fact lookups, and the most likely way the information would be asked about. Keep each query under 120 characters and avoid restating the memory verbatim.
 
-Output ONLY a JSON array of strings, no prose, no markdown fences. Example: ["what time does X start", "X start time", "schedule for X"].
+OUTPUT FORMAT — read carefully:
+- Output ONLY a JSON array of strings.
+- EVERY element MUST be wrapped in DOUBLE QUOTES ("..."). Not single quotes. Not backticks. Not bare words.
+- No prose before or after the array. No markdown fences (no ` + "```" + `). No trailing commas. No comments.
+- Use \" to escape a literal double quote inside an element.
+
+CORRECT:   ["what time does X start", "X start time", "schedule for X"]
+WRONG (missing quotes):   [what time does X start, X start time, schedule for X]
+WRONG (single quotes):    ['what time does X start', 'X start time']
+WRONG (fenced / prose):   Here you go: ` + "```json" + ` [...] ` + "```" + `
 
 <memory>
 {content}

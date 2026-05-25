@@ -85,7 +85,7 @@ func RenderQueryAugmentPrompt(template, content string, n int) string {
 }
 
 // ParseQueryAugmentResponse extracts a JSON array of strings from the LLM
-// response. Tolerates three documented small-model failure modes before
+// response. Tolerates four documented small-model failure modes before
 // declaring parse failure, in order of preference:
 //
 //  1. Bare JSON array of strings (the contract). Strips markdown fences and
@@ -96,6 +96,11 @@ func RenderQueryAugmentPrompt(template, content string, n int) string {
 //  3. Bare JSON array with mixed element types ([123, "x", true]); each
 //     element is stringified and treated as a candidate query. Catches the
 //     case where the model interpolates a number or boolean into one slot.
+//  4. Bracketed list with missing or mixed quoting ([foo, bar, baz] or
+//     ["foo", bar, 'baz']). Observed on qwen3:8b at higher temperatures: the
+//     model emits the brackets but drops the per-element double quotes.
+//     Split on commas (preferred) or newlines (fallback), strip stray quote
+//     chars per token, drop empties.
 //
 // Empties and whitespace-only entries are dropped at the end regardless of
 // which path succeeded.
@@ -126,7 +131,7 @@ func ParseQueryAugmentResponse(raw string) ([]string, error) {
 	return cleaned, nil
 }
 
-// decodeQueryCandidates runs the three tolerant decode passes described on
+// decodeQueryCandidates runs the four tolerant decode passes described on
 // ParseQueryAugmentResponse and returns the raw candidate slice with no
 // post-cleaning. Split out so the cleaning loop stays a single site.
 func decodeQueryCandidates(body []byte) ([]string, error) {
@@ -165,9 +170,51 @@ func decodeQueryCandidates(body []byte) ([]string, error) {
 		}
 	}
 
+	// Pass 4: lenient — bracketed list with missing or mixed quoting. See
+	// ParseQueryAugmentResponse docstring for the failure mode this rescues.
+	if out, ok := lenientSplitArray(body); ok {
+		return out, nil
+	}
+
 	// All passes failed; re-run the strict path to return its native error
 	// for logging fidelity.
 	return nil, json.Unmarshal(body, &arr)
+}
+
+// lenientSplitArray rescues a bracketed list whose elements are not
+// (consistently) double-quoted JSON strings. Requires brackets — without them
+// there is no list structure to extract. Splits the interior on commas
+// (preferred) or newlines (fallback when no comma is present), trims
+// whitespace, and strips a single layer of wrapping ASCII single, double, or
+// backtick quote characters per token. Returns ok=false when no non-empty
+// token survives so the caller can preserve the strict-pass error for logs.
+func lenientSplitArray(body []byte) ([]string, bool) {
+	s := strings.TrimSpace(string(body))
+	l, r := strings.Index(s, "["), strings.LastIndex(s, "]")
+	if l < 0 || r <= l {
+		return nil, false
+	}
+	interior := s[l+1 : r]
+	var raw []string
+	if strings.Contains(interior, ",") {
+		raw = strings.Split(interior, ",")
+	} else {
+		raw = strings.Split(interior, "\n")
+	}
+	out := make([]string, 0, len(raw))
+	for _, tok := range raw {
+		tok = strings.TrimSpace(tok)
+		tok = strings.Trim(tok, "\"'`")
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		out = append(out, tok)
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
 }
 
 // stringifyAnySlice coerces each element of a []any to its string form,

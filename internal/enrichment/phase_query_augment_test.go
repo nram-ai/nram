@@ -127,6 +127,74 @@ func TestParseQueryAugmentResponse_NestedObjectStillFails(t *testing.T) {
 	}
 }
 
+// Lenient pass: small models (qwen3:8b observed) periodically emit the array
+// brackets but drop the per-element double quotes, even when the prompt
+// explicitly says QUOTED. The parser must recover rather than fail-soft to
+// zero queries — otherwise the operator's enable-flag silently no-ops.
+func TestParseQueryAugmentResponse_LenientUnquotedElements(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		want []string
+	}{
+		"bare unquoted comma list": {
+			body: `[who is Emma's husband, Brandon's spouse name, Emma's marital status, wife of Brandon]`,
+			want: []string{"who is Emma's husband", "Brandon's spouse name", "Emma's marital status", "wife of Brandon"},
+		},
+		"single-quoted elements": {
+			body: `['who is Emma married to', 'Brandon spouse', 'Emma husband']`,
+			want: []string{"who is Emma married to", "Brandon spouse", "Emma husband"},
+		},
+		"mixed quoting": {
+			body: `["who is Emma married to", Brandon spouse, 'Emma husband']`,
+			want: []string{"who is Emma married to", "Brandon spouse", "Emma husband"},
+		},
+		"backtick wrap": {
+			body: "[`alpha`, `beta`, `gamma`]",
+			want: []string{"alpha", "beta", "gamma"},
+		},
+		"newline delimited inside brackets": {
+			body: "[\n  alpha\n  beta\n  gamma\n]",
+			want: []string{"alpha", "beta", "gamma"},
+		},
+		"unquoted with prose envelope": {
+			body: "Here you go: [alpha query, beta query, gamma query]. Done.",
+			want: []string{"alpha query", "beta query", "gamma query"},
+		},
+		"unquoted inside object envelope": {
+			body: `{"queries": [alpha, beta, gamma]}`,
+			want: []string{"alpha", "beta", "gamma"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := ParseQueryAugmentResponse(tc.body)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Lenient pass must not paper over genuinely empty or non-array payloads.
+// These three cases existed before the lenient pass landed and continue to
+// produce parse errors because either the brackets are absent or the bracket
+// interior holds no extractable tokens.
+func TestParseQueryAugmentResponse_LenientStillRejectsTrueGarbage(t *testing.T) {
+	for _, body := range []string{
+		`not json at all`,
+		`{"not": "an array"}`,
+		`[]`,
+		`[ , , ]`,
+	} {
+		if _, err := ParseQueryAugmentResponse(body); err == nil {
+			t.Fatalf("expected error on %q; lenient pass overshot", body)
+		}
+	}
+}
+
 func TestBuildAugmentedInput_NoCap(t *testing.T) {
 	got, trimmed := BuildAugmentedInput([]string{"q1", "q2"}, "the memory content", 0)
 	want := "q1\nq2" + QueryAugmentSeparator + "the memory content"
