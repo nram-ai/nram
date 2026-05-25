@@ -802,6 +802,7 @@ function GraphVisualization() {
         graphData.entities.length > 0 && (
           <div ref={containerRef} className="relative flex-1 min-h-0 rounded-lg border border-border overflow-hidden">
             {containerSize && <ForceGraph3D
+              key={selectedProjectId}
               ref={graphRef}
               width={containerSize.width}
               height={containerSize.height}
