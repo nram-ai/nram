@@ -360,11 +360,17 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	}
 
 	prompt := RenderQueryAugmentPrompt(cfg.prompt, mem.Content, cfg.count)
+	// Deliberately NOT setting JSONMode. response_format=json_object on
+	// OpenAI-compatible providers (including Ollama's compat shim) forces
+	// the model to emit an object, not an array. qwen3:8b-extract observed
+	// satisfying that constraint by emitting {"query 1":"", "query 2":"", ...}
+	// — keys-as-queries — and degenerating into a loop until max_tokens
+	// truncates. The prompt itself is already strict about array output;
+	// ParseQueryAugmentResponse strips prose preambles via brackets.
 	req := &provider.CompletionRequest{
 		Messages:  []provider.Message{{Role: "user", Content: prompt}},
 		Model:     cfg.model,
 		MaxTokens: cfg.maxTokens,
-		JSONMode:  true,
 	}
 
 	start := time.Now()
@@ -462,11 +468,12 @@ func (wp *WorkerPool) RunQueryAugmentPreview(ctx context.Context, content, promp
 		return nil, fmt.Errorf("fact provider returned nil")
 	}
 	prompt := RenderQueryAugmentPrompt(cfg.prompt, content, cfg.count)
+	// JSONMode deliberately omitted; see runQueryAugment comment for why
+	// response_format=json_object is harmful for the array-output contract.
 	req := &provider.CompletionRequest{
 		Messages:  []provider.Message{{Role: "user", Content: prompt}},
 		Model:     cfg.model,
 		MaxTokens: cfg.maxTokens,
-		JSONMode:  true,
 	}
 	start := time.Now()
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationQueryAugment), req)

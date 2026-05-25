@@ -156,11 +156,15 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 
 		rendered := enrichment.RenderQueryAugmentPrompt(prompt, mem.Content, count)
 		start := time.Now()
+		// JSONMode deliberately omitted; response_format=json_object on the
+		// OpenAI-compat shim forces an object response, which contradicts the
+		// array-output prompt and pushes small models (qwen3:8b-extract observed)
+		// into a degenerate keys-as-queries loop until max_tokens truncates.
+		// See enrichment.runQueryAugment for the full diagnosis.
 		resp, err := llm.Complete(provider.WithOperation(r.Context(), provider.OperationQueryAugment), &provider.CompletionRequest{
 			Messages:  []provider.Message{{Role: "user", Content: rendered}},
 			Model:     modelOverride,
 			MaxTokens: maxTokens,
-			JSONMode:  true,
 		})
 		latency := time.Since(start).Milliseconds()
 		if err != nil {
