@@ -20,6 +20,12 @@ func RegisterProjectDeleteTool(s *Server) {
 
 func registerProjectDelete(s *Server) {
 	tool := mcp.NewTool("delete_project",
+		mcp.WithTitleAnnotation("Delete Project"),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Permanently delete a project and all its memories, entities, and relationships. Only works on projects you own. The 'global' project cannot be deleted."),
 		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug to delete")),
 	)

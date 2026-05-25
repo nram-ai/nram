@@ -44,6 +44,10 @@ type listMemoryResponse struct {
 // RegisterListTool registers the list MCP tool on the given server.
 func RegisterListTool(s *Server) {
 	tool := mcp.NewTool("list",
+		mcp.WithTitleAnnotation("List Memories"),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("List memories in a project with pagination. Use to browse stored memories when you need an overview rather than a semantic search. Returns memories ordered by most recently created."),
 		mcp.WithString("project", mcp.Description("Project slug. Lists this project + global. Omit to list only the global project")),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of memories to return (default 50, max 200)")),

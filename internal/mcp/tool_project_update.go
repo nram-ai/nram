@@ -20,6 +20,12 @@ type ProjectUpdater interface {
 // RegisterProjectUpdateTool registers the update_project MCP tool.
 func RegisterProjectUpdateTool(s *Server) {
 	tool := mcp.NewTool("update_project",
+		mcp.WithTitleAnnotation("Update Project"),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Update a project's name, description, or default tags. Only works on projects you own."),
 		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug to update")),
 		mcp.WithString("name", mcp.Description("New project name")),

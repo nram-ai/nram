@@ -22,6 +22,12 @@ func RegisterUpdateGetTools(s *Server) {
 
 func registerMemoryUpdate(s *Server) {
 	tool := mcp.NewTool("update",
+		mcp.WithTitleAnnotation("Update Memory"),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Update an existing memory by ID. Use when information has changed or needs correction rather than storing a duplicate. Project must already exist."),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Memory ID to update")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
@@ -37,6 +43,10 @@ func registerMemoryUpdate(s *Server) {
 
 func registerMemoryGet(s *Server) {
 	tool := mcp.NewTool("get",
+		mcp.WithTitleAnnotation("Get Memories by ID"),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Retrieve specific memories by ID when you need the full content from a previous recall result. Project must already exist."),
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to retrieve")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),

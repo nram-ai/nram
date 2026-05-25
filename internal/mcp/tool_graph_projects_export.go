@@ -70,6 +70,10 @@ func RegisterGraphProjectsExportTools(s *Server) {
 
 func registerMemoryGraph(s *Server) {
 	tool := mcp.NewTool("graph",
+		mcp.WithTitleAnnotation("Explore Knowledge Graph"),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Explore entity relationships in the knowledge graph. Use to discover how people, technologies, and concepts connect — especially when recall alone does not surface enough context."),
 		mcp.WithString("entity", mcp.Required(), mcp.Description("Entity name or search query")),
 		mcp.WithString("project", mcp.Description("Project slug to scope the search")),
@@ -84,6 +88,10 @@ func registerMemoryGraph(s *Server) {
 
 func registerMemoryProjects(s *Server) {
 	tool := mcp.NewTool("list_projects",
+		mcp.WithTitleAnnotation("List Projects"),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("List all available projects with slugs and descriptions. ALWAYS call this before store to check for an existing project — an unknown slug on store auto-creates a new project."),
 	)
 
@@ -94,6 +102,10 @@ func registerMemoryProjects(s *Server) {
 
 func registerMemoryExport(s *Server) {
 	tool := mcp.NewTool("export",
+		mcp.WithTitleAnnotation("Export Project"),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Export all memories from a project for backup, migration, or analysis. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug to export (default: 'global')")),
 		mcp.WithString("format", mcp.Description("Export format: \"json\" or \"ndjson\" (default \"json\")")),

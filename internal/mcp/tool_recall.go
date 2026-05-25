@@ -15,6 +15,10 @@ import (
 // RegisterRecallTool registers the recall MCP tool on the given server.
 func RegisterRecallTool(s *Server) {
 	tool := mcp.NewTool("recall",
+		mcp.WithTitleAnnotation("Recall Memories"),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Search persistent memory. ALWAYS recall at the start of a new task to load context. Recall before making assumptions and before storing to avoid duplicates. Use natural language queries. Specifying a project searches that project plus global; omitting searches global only. Graph entities and relationships are always included when the knowledge graph is populated."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Natural language query")),
 		mcp.WithString("project", mcp.Description("Project slug. Searches this project + global. Omit to search only the global project")),

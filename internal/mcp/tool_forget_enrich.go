@@ -15,6 +15,12 @@ import (
 // RegisterForgetTool registers the forget MCP tool on the given server.
 func RegisterForgetTool(s *Server) {
 	tool := mcp.NewTool("forget",
+		mcp.WithTitleAnnotation("Forget Memories"),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Delete memories that are outdated, incorrect, or superseded. Soft-deletes by default. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to forget")),

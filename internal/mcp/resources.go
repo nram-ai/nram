@@ -35,6 +35,7 @@ func registerProjectsResource(s *Server) {
 		"My Projects",
 		mcp.WithResourceDescription("List all projects for the authenticated user"),
 		mcp.WithMIMEType("application/json"),
+		mcp.WithResourceIcons(iconAnnotation()),
 	)
 
 	s.MCPServer().AddResource(resource, func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
@@ -95,6 +96,7 @@ func registerProjectEntitiesResource(s *Server) {
 		"Project Entities",
 		mcp.WithTemplateDescription("All entities in a given project"),
 		mcp.WithTemplateMIMEType("application/json"),
+		mcp.WithTemplateIcons(iconAnnotation()),
 	)
 
 	s.MCPServer().AddResourceTemplate(template, func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
@@ -178,6 +180,7 @@ func registerProjectGraphResource(s *Server) {
 		"Project Graph",
 		mcp.WithTemplateDescription("Entity relationship graph for a project"),
 		mcp.WithTemplateMIMEType("application/json"),
+		mcp.WithTemplateIcons(iconAnnotation()),
 	)
 
 	s.MCPServer().AddResourceTemplate(template, func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {

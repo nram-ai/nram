@@ -23,6 +23,12 @@ func RegisterStoreTools(s *Server) {
 
 func registerMemoryStore(s *Server) {
 	tool := mcp.NewTool("store",
+		mcp.WithTitleAnnotation("Store Memory"),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Store important context to persistent memory. Use proactively: store preferences, decisions, corrections, architecture choices, bugs, workarounds, and task summaries without being asked. ALWAYS call list_projects first and use an existing project. Tag consistently for easy recall. Identical content in the same project returns the existing memory's ID without creating a duplicate; tags and metadata on the new request are ignored on a dedup hit. Enrichment, when enabled server-side, runs automatically on every new memory; there is no per-call opt-in."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). An unknown slug auto-creates a new project, so prefer calling list_projects first to avoid typo-driven project creation.")),
 		mcp.WithString("project_description", mcp.Description("Description applied when this call auto-creates the project, or when the existing project has no description yet.")),
@@ -40,6 +46,12 @@ func registerMemoryStore(s *Server) {
 
 func registerMemoryStoreBatch(s *Server) {
 	tool := mcp.NewTool("store_batch",
+		mcp.WithTitleAnnotation("Store Memories (Batch)"),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithDescription("Store multiple memories at once. Use when you have several related facts, decisions, or observations to persist. Each item needs its own content; they share the same project and TTL. ALWAYS call list_projects first and use an existing project. Items whose content matches an existing memory in the same project return that memory's ID instead of creating a duplicate. Enrichment, when enabled server-side, runs automatically on every new memory."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global'). An unknown slug auto-creates a new project, so prefer calling list_projects first to avoid typo-driven project creation.")),
 		mcp.WithString("project_description", mcp.Description("Description applied when this call auto-creates the project, or when the existing project has no description yet.")),
