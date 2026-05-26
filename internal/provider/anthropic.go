@@ -22,7 +22,7 @@ type AnthropicConfig struct {
 	// BaseURL is the base URL of the Anthropic API. Defaults to "https://api.anthropic.com".
 	BaseURL string
 
-	// Timeout is the HTTP client timeout. Defaults to 120s if zero.
+	// Timeout is the HTTP client timeout. Defaults to 300s if zero.
 	Timeout time.Duration
 }
 
@@ -44,7 +44,7 @@ var (
 func NewAnthropicProvider(config AnthropicConfig) *AnthropicProvider {
 	timeout := config.Timeout
 	if timeout == 0 {
-		timeout = 120 * time.Second
+		timeout = 300 * time.Second
 	}
 
 	if config.BaseURL == "" {

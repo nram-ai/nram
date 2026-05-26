@@ -280,6 +280,32 @@ Then point nram's embedding slot at `qwen3-embedding-8k` instead of the base
 `qwen3-embedding:0.6b` tag. 8K is a reasonable default; raise it further if your
 memories are long-form documents and you have the VRAM.
 
+### Keeping Ollama models loaded (`OLLAMA_KEEP_ALIVE`)
+
+Ollama evicts an idle model from memory after 5 minutes by default. On slow CPUs
+or weak GPUs the first call after eviction pays the full cold-load cost — often
+several minutes for a multi-GB quantized model — which looks like a hang or a
+timeout to whatever client is calling.
+
+Pin loaded models for a week by setting `OLLAMA_KEEP_ALIVE=168h` (or `-1` for
+indefinite) in the Ollama server's environment and restarting the service:
+
+- **Linux (systemd):** `sudo systemctl edit ollama.service`, add
+  `Environment="OLLAMA_KEEP_ALIVE=168h"` under `[Service]`, then
+  `sudo systemctl daemon-reload && sudo systemctl restart ollama`.
+- **macOS:** `launchctl setenv OLLAMA_KEEP_ALIVE 168h`, then quit and relaunch
+  the Ollama app.
+- **Windows:** add `OLLAMA_KEEP_ALIVE=168h` to user environment variables, then
+  quit Ollama from the tray and reopen it.
+
+Verify with `curl -s http://<ollama-host>:11434/api/ps` after a chat call — the
+loaded model's `expires_at` should be ~168h in the future.
+
+This has to live on the Ollama server because nram inferences run through
+Ollama's OpenAI-compatibility endpoint (`/v1/chat/completions`,
+`/v1/embeddings`), and that path drops `keep_alive` from request bodies — only
+the server-side env var controls eviction for `/v1/*` traffic.
+
 ### Embedding dimensions
 
 You do **not** need to enter the embedding model's dimension count. nram

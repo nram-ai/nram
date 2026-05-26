@@ -97,7 +97,7 @@ type ProviderSlotConfig struct {
 	URL     string `json:"url"`
 	APIKey  string `json:"api_key,omitempty"`
 	Model   string `json:"model"`
-	Timeout *int   `json:"timeout,omitempty"` // seconds, 0 = default (120s)
+	Timeout *int   `json:"timeout,omitempty"` // seconds, 0 = default (300s)
 }
 
 // ProviderTestResult is the response body for POST /providers/test.

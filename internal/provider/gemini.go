@@ -25,7 +25,7 @@ type GeminiConfig struct {
 	// BaseURL is the base URL of the Gemini API. Defaults to "https://generativelanguage.googleapis.com".
 	BaseURL string
 
-	// Timeout is the HTTP client timeout. Defaults to 120s if zero.
+	// Timeout is the HTTP client timeout. Defaults to 300s if zero.
 	Timeout time.Duration
 }
 
@@ -48,7 +48,7 @@ var (
 func NewGeminiProvider(config GeminiConfig) *GeminiProvider {
 	timeout := config.Timeout
 	if timeout == 0 {
-		timeout = 120 * time.Second
+		timeout = 300 * time.Second
 	}
 
 	if config.BaseURL == "" {

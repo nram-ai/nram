@@ -492,13 +492,18 @@ function ProviderSlotEditForm({
           onChange={(e) =>
             setForm((p) => ({ ...p, timeout: e.target.value }))
           }
-          placeholder="120"
+          placeholder="300"
           min={5}
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
         />
         <p className="mt-1 text-xs text-muted-foreground">
-          HTTP request timeout for LLM calls. Increase for local models (Ollama) or large prompts. Default: 120 seconds.
+          HTTP request timeout for LLM calls. Increase for local models (Ollama) or large prompts. Default: 300 seconds.
         </p>
+        {form.type === "ollama" && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Slow hardware tip: set <code className="rounded bg-muted px-1 py-0.5">OLLAMA_KEEP_ALIVE=168h</code> in the Ollama server's environment to keep loaded models pinned for a week. nram cannot set this per-call because Ollama's OpenAI-compatible endpoint ignores <code className="rounded bg-muted px-1 py-0.5">keep_alive</code>.
+          </p>
+        )}
       </div>
 
       {/* Actions */}

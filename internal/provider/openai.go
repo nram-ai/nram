@@ -28,7 +28,7 @@ type OpenAIConfig struct {
 	// Organization is an optional organization identifier sent via the OpenAI-Organization header.
 	Organization string
 
-	// Timeout is the HTTP client timeout. Defaults to 120s if zero.
+	// Timeout is the HTTP client timeout. Defaults to 300s if zero.
 	Timeout time.Duration
 
 	// ProviderType is the canonical type from registry.go ("openai", "ollama",
@@ -58,7 +58,7 @@ var (
 func NewOpenAIProvider(config OpenAIConfig) *OpenAIProvider {
 	timeout := config.Timeout
 	if timeout == 0 {
-		timeout = 120 * time.Second
+		timeout = 300 * time.Second
 	}
 
 	// Normalize BaseURL: strip trailing slash.
