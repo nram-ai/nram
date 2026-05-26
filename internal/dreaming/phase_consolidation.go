@@ -714,9 +714,15 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			"budget_remaining", budget.Remaining())
 
 		if errors.Is(auditErr, ErrBudgetExhausted) {
+			// Pre-flight skips bump skipped_budget so the phase summary
+			// reflects them the same way other gate sites do.
+			if reason == "skipped_budget" {
+				stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
+			}
 			slog.Info("dreaming: backfill audit loop stopped on budget exhaustion",
 				"cycle", cycle.ID, "memory", mem.ID,
 				"audit", processed, "of", eligible,
+				"reason", reason,
 				"budget_remaining", budget.Remaining())
 			break
 		}
@@ -1361,9 +1367,17 @@ func (p *ConsolidationPhase) consolidate(
 				"budget_remaining", budget.Remaining())
 
 			if errors.Is(auditErr, ErrBudgetExhausted) {
+				// Pre-flight skips bump skipped_budget so the phase summary
+				// reflects them the same way the synthesis-gate and
+				// alignment-gate skips do. Mid-call Spend failures keep
+				// the original semantics (just break, no counter bump).
+				if reason == "skipped_budget" {
+					stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
+				}
 				slog.Info("dreaming: synthesis audit loop stopped on budget exhaustion",
 					"cycle", cycle.ID,
 					"cluster", clustersVisited, "of", len(stale),
+					"reason", reason,
 					"budget_remaining", budget.Remaining())
 				break
 			}
@@ -1588,6 +1602,22 @@ func (p *ConsolidationPhase) auditNovelty(
 		llmOperation = provider.OperationDreamNoveltyAudit
 	}
 	noveltyTemperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamNoveltyJudgeTemperature, "global")
+
+	// Pre-flight budget check using the same prompt and max-tokens the
+	// judge will actually send. The novelty judge has its own max-tokens
+	// setting (SettingDreamNoveltyJudgeMaxTokens) that can differ from
+	// budget.PerCallCap(), so the gate uses maxTokens to stay symmetric
+	// with the real call below. budget may be nil (unit tests, embedder
+	// probes outside a cycle) per WrapLLMCall's contract.
+	if budget != nil {
+		estCost := EstimateTokens(prompt) + maxTokens
+		if !budget.CanAfford(estCost) {
+			slog.Info("dreaming: novelty audit call skipped (estimated cost exceeds remaining budget)",
+				"estimate", estCost, "budget_remaining", budget.Remaining())
+			return false, "skipped_budget", nil, embedTokens, ErrBudgetExhausted
+		}
+	}
+
 	resp, judgeUsage, err := WrapLLMCall(ctx, budget, OpNoveltyAuditLLM, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			r, e := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{

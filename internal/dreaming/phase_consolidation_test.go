@@ -449,6 +449,49 @@ func TestAuditNovelty_JudgeParseError_FailClosed(t *testing.T) {
 	}
 }
 
+func TestAuditNovelty_BudgetSkipsJudge(t *testing.T) {
+	// Borderline cosine forces fall-through to the LLM judge so the
+	// pre-flight gate is the only thing preventing the call.
+	emb := &staticEmbedder{vectors: [][]float32{{1, 0}, {0.95, 0.31}}}
+	llm := &scriptedJudgeLLM{
+		content: `{"novel_facts": ["should not be called"]}`,
+		usage:   provider.TokenUsage{PromptTokens: 50, CompletionTokens: 10, TotalTokens: 60},
+	}
+	settings := noveltySettings(true)
+	settings.ints[service.SettingDreamNoveltyJudgeMaxTokens] = 256
+	phase := newAuditPhase(emb, llm, settings, &updatingMemoryWriter{}, &fakeMemoryReader{})
+
+	// Budget sized so the embed pre-filter spend fits but the judge
+	// prompt + per-call cap does not. EstimateTokens uses len/4.
+	budget := NewTokenBudget(10, 5)
+
+	src := model.Memory{ID: uuid.New(), Content: "source"}
+	passed, reason, usage, embedTokens, err := phase.auditNovelty(
+		context.Background(), llm, budget, "candidate", []model.Memory{src}, 0, "")
+
+	if !errors.Is(err, ErrBudgetExhausted) {
+		t.Fatalf("expected ErrBudgetExhausted, got %v", err)
+	}
+	if passed {
+		t.Fatalf("expected passed=false on budget skip, got true")
+	}
+	if reason != "skipped_budget" {
+		t.Fatalf("expected reason=skipped_budget, got %q", reason)
+	}
+	if usage != nil {
+		t.Fatalf("expected nil judge usage when call is skipped, got %+v", usage)
+	}
+	if llm.calls.Load() != 0 {
+		t.Fatalf("LLM judge must not run under budget pressure, got %d calls", llm.calls.Load())
+	}
+	if embedTokens == 0 {
+		t.Fatalf("expected embed tokens to be preserved on budget-skip path")
+	}
+	if budget.Remaining() == 0 {
+		t.Fatalf("budget should retain headroom on a pre-flight skip; remaining=%d total=%d used=%d", budget.Remaining(), budget.Total(), budget.Used())
+	}
+}
+
 func TestAuditNovelty_NoSources_Rejected(t *testing.T) {
 	phase := newAuditPhase(nil, &scriptedJudgeLLM{}, noveltySettings(true), &updatingMemoryWriter{}, &fakeMemoryReader{})
 	passed, reason, _, _, _ := phase.auditNovelty(context.Background(), &scriptedJudgeLLM{}, nil, "candidate", nil, 0, "")
