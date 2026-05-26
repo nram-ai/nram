@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -75,7 +76,21 @@ func handleProjectsResource(ctx context.Context, s *Server, _ mcp.ReadResourceRe
 		})
 	}
 
-	out, err := json.Marshal(items)
+	// Wire shape matches the list_projects tool's outputSchema-conforming
+	// envelope so the resource and the tool serialize the same data the same
+	// way. The resource is unpaginated, so populate Pagination honestly:
+	// Total/Limit equal the full item count and Offset is 0 — a client that
+	// reads pagination.total to render "showing X of Y" sees an accurate
+	// "showing N of N" rather than the misleading "showing N of 0" the
+	// zero-value Pagination would produce.
+	out, err := json.Marshal(&listProjectsResponse{
+		Projects: items,
+		Pagination: model.Pagination{
+			Total:  len(items),
+			Limit:  len(items),
+			Offset: 0,
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
 	}

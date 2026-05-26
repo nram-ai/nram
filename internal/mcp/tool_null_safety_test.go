@@ -29,7 +29,7 @@ func TestMemoryRecallTool_EmptyResults_NoNull(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
 		Recall:        recallSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "recall"
@@ -97,7 +97,7 @@ func TestMemoryStoreTool_NilTags_NoTagsField(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
 		Store:         storeSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "store"
@@ -150,7 +150,7 @@ func TestMemoryProjectsTool_EmptyList_ReturnsEmptyArray(t *testing.T) {
 			listResult: []model.Project{},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	ctx := buildAuthCtx(userID)
@@ -164,25 +164,24 @@ func TestMemoryProjectsTool_EmptyList_ReturnsEmptyArray(t *testing.T) {
 
 	text := extractText(result)
 
-	// The response should be "[]" not "null".
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "null" {
-		t.Error("raw JSON is \"null\"; expected \"[]\"")
-	}
-	if trimmed != "[]" {
-		t.Errorf("expected \"[]\", got %q", trimmed)
+	// Pin the canonical empty form including pagination metadata. Any extra
+	// field or null-valued optional shifts the exact match and fails the
+	// check immediately.
+	want := `{"projects":[],"pagination":{"total":0,"limit":50,"offset":0}}`
+	if strings.TrimSpace(text) != want {
+		t.Errorf("expected exact %q, got %q", want, text)
 	}
 
 	// Structural check.
-	var items []projectItem
-	if err := json.Unmarshal([]byte(text), &items); err != nil {
+	var resp listProjectsResponse
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if items == nil {
-		t.Error("expected non-nil slice after unmarshal, got nil")
+	if resp.Projects == nil {
+		t.Error("expected non-nil Projects slice after unmarshal, got nil")
 	}
-	if len(items) != 0 {
-		t.Errorf("expected 0 projects, got %d", len(items))
+	if len(resp.Projects) != 0 {
+		t.Errorf("expected 0 projects, got %d", len(resp.Projects))
 	}
 }
 
@@ -201,7 +200,7 @@ func TestMemoryProjectsTool_NilListResult_ReturnsEmptyArray(t *testing.T) {
 			listResult: nil, // explicitly nil
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	ctx := buildAuthCtx(userID)
@@ -215,18 +214,18 @@ func TestMemoryProjectsTool_NilListResult_ReturnsEmptyArray(t *testing.T) {
 
 	text := extractText(result)
 
-	// The response should be "[]" not "null".
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "null" {
-		t.Error("raw JSON is \"null\"; expected \"[]\"")
+	// The Projects field must be a non-null array even when the underlying repo
+	// returned nil.
+	if strings.Contains(text, `"projects":null`) {
+		t.Errorf("projects field is null; expected []")
 	}
 
-	var items []projectItem
-	if err := json.Unmarshal([]byte(text), &items); err != nil {
+	var resp listProjectsResponse
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if items == nil {
-		t.Error("expected non-nil slice after unmarshal, got nil")
+	if resp.Projects == nil {
+		t.Error("expected non-nil Projects slice after unmarshal, got nil")
 	}
 }
 
@@ -255,7 +254,7 @@ func TestMemoryExportTool_EmptyExport_NoNull(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Export:      exportSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -346,7 +345,7 @@ func TestMemoryExportTool_NilRepoResults_NoNull(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Export:      exportSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

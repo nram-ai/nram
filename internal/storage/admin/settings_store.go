@@ -378,6 +378,13 @@ var settingsSchemas = []api.SettingSchema{
 	// Export pagination size.
 	{Key: service.SettingExportPageSize, Type: "number", DefaultValue: json.RawMessage(`100`), Description: "Memories fetched per page when collecting an export. Hot-reloads on the next export.", Category: "performance", Min: ptrF(1), Max: ptrF(10000), Step: ptrF(10)},
 
+	// MCP CallToolResult byte budget in tokens (~2 bytes/token at the
+	// charsPerTokenEstimate ratio). Bounds each tool response so a single
+	// call cannot consume the whole client context. Min=100 because the
+	// truncation sentinel suffix is ~108 bytes; below that the wire cannot
+	// signal Tier-3 truncation honestly. Hot-reloadable via the 30s cache.
+	{Key: service.SettingMCPMaxResultTokens, Type: "number", DefaultValue: json.RawMessage(`22000`), Description: "Per-tool MCP CallToolResult budget in tokens. Tool responses above this are reduced (Tier 2) or hard-truncated with a sentinel suffix (Tier 3). Min 100; below this the sentinel cannot fit.", Category: "mcp", Min: ptrF(100), Max: ptrF(1000000), Step: ptrF(100)},
+
 	// Recall scoring and pagination. Hot-reloadable. Operators retune
 	// recency / over-fetch shape during incident response without redeploy.
 	{Key: service.SettingRankingRecencyDecayPerHour, Type: "number", DefaultValue: json.RawMessage(`0.01`), Description: "Decay rate per hour in the recency term: exp(-rate * hours_since_creation). 0.01 ≈ 69h half-life; 0.02 ≈ 35h; 0.005 ≈ 138h. Lower values flatten the curve so older memories rank closer to fresh ones.", Category: "ranking", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.001)},

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"math"
 	"strconv"
 
 	"github.com/nram-ai/nram/internal/service"
@@ -26,6 +27,45 @@ func argBool(args map[string]interface{}, key string, defaultVal bool) bool {
 		return v
 	}
 	return defaultVal
+}
+
+// parseIntArg extracts an integer tool argument from a JSON-decoded args map.
+// JSON unmarshal hands numerics back as float64, so this helper:
+//
+//  1. Returns defaultVal when the key is absent or not numeric.
+//  2. Rejects NaN, +Inf, -Inf, and values below minVal — these are treated
+//     as "missing/invalid" and yield defaultVal rather than poisoning the
+//     downstream slice math with a negative or impossibly-large int.
+//  3. Clamps to math.MaxInt32 BEFORE the int() cast on 64-bit platforms,
+//     because int(1e30) is implementation-defined and frequently yields
+//     MinInt64 on amd64 — a value that passes "> 0" / ">= 0" checks
+//     downstream and then underflows in slice expressions to panic.
+//  4. Clamps the resulting int to [minVal, maxVal].
+//
+// Use minVal=0 (and check separately) for "must be > 0" semantics — callers
+// that need a strict positive can pass minVal=1 directly.
+func parseIntArg(args map[string]interface{}, key string, defaultVal, minVal, maxVal int) int {
+	raw, ok := args[key].(float64)
+	if !ok {
+		return defaultVal
+	}
+	if math.IsNaN(raw) || math.IsInf(raw, 0) {
+		return defaultVal
+	}
+	if raw < float64(minVal) {
+		return defaultVal
+	}
+	if raw > float64(math.MaxInt32) {
+		raw = float64(math.MaxInt32)
+	}
+	v := int(raw)
+	if v < minVal {
+		return defaultVal
+	}
+	if v > maxVal {
+		v = maxVal
+	}
+	return v
 }
 
 // resolvePositiveCapInt resolves an integer cap setting and returns a value

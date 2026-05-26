@@ -26,6 +26,22 @@ type Metrics struct {
 	HTTPRequestDuration  *prometheus.HistogramVec
 	HTTPRequestsInFlight prometheus.Gauge
 
+	// MCPToolResultTruncations counts how often a tool response did not
+	// arrive naturally at Tier 1. Tier values:
+	//   "tier1_reduced"  — fit the structured budget but only after the
+	//                      reducer discarded data. Structurally Tier 1,
+	//                      but the caller received less than they asked
+	//                      for. Operators watch this to spot tools whose
+	//                      callers consistently exceed budget.
+	//   "text_only"      — fit the full text budget but not the halved
+	//                      structured budget. Data is complete; only the
+	//                      structured wire copy was dropped.
+	//   "hard_truncate"  — even the reduced text exceeded budget; body
+	//                      byte-cut with a sentinel suffix. Alert on this.
+	// Natural Tier 1 (no reducer iteration) is the no-truncation baseline
+	// and does not increment the counter.
+	MCPToolResultTruncations *prometheus.CounterVec
+
 	// Business metrics
 	MemoriesTotal        prometheus.Counter
 	MemoriesRecalled     prometheus.Counter
@@ -111,6 +127,11 @@ func New() *Metrics {
 			Buckets: prometheus.DefBuckets,
 		}),
 
+		MCPToolResultTruncations: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "nram_mcp_tool_result_truncation_total",
+			Help: "MCP tool responses that did not arrive at natural Tier 1. tier=tier1_reduced|text_only|hard_truncate. tier1_reduced: the reducer ran at least one iteration and the result still fit the structured tier. text_only: result fits the text budget but not the halved structured budget — the response body MAY carry a populated `_truncated` envelope (i.e. the reducer also dropped data); inspect the response to distinguish 'fit naturally as text' from 'fit only after reducer'. hard_truncate: even the reduced payload exceeded the text budget and was byte-cut with the sentinel suffix. Operators alert on hard_truncate; tier1_reduced is the early signal that a tool's callers exceed budget.",
+		}, []string{"tool", "tier"}),
+
 		memoriesRecalledLegacy: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "nram_memories_recalled",
 			Help: "DEPRECATED: use nram_memories_recalled_total. Kept for one release to avoid breaking existing scrapers and dashboards.",
@@ -133,6 +154,7 @@ func New() *Metrics {
 		m.EmbeddingDuration,
 		m.TokensUsedTotal,
 		m.VectorSearchDuration,
+		m.MCPToolResultTruncations,
 		m.memoriesRecalledLegacy,
 		m.memoriesForgottenLegacy,
 	)
@@ -158,6 +180,18 @@ func (m *Metrics) AddMemoriesForgotten(n float64) {
 	}
 	m.MemoriesForgotten.Add(n)
 	m.memoriesForgottenLegacy.Add(n)
+}
+
+// RecordMCPToolResultTier increments the MCP tool-result truncation
+// counter. tool is the wire-level tool name ("list", "recall", etc.);
+// tier is "text_only" (Tier 2) or "hard_truncate" (Tier 3). Tier 1
+// (schema-conforming) responses do not increment — only degradations
+// are counted. Nil-safe for tests that wire a zero-value Metrics.
+func (m *Metrics) RecordMCPToolResultTier(tool, tier string) {
+	if m == nil || m.MCPToolResultTruncations == nil {
+		return
+	}
+	m.MCPToolResultTruncations.WithLabelValues(tool, tier).Inc()
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.

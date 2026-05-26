@@ -29,11 +29,26 @@ type mcpRecallMemory struct {
 
 // mcpRecallResponse passes service.CoverageGap through verbatim because the
 // diversify_by_tag_prefix wire contract is shared with REST clients.
+//
+// CoverageGaps participates in the reducer's stage 4+ lockstep halving with
+// memories — when coverage_gaps alone would dominate the budget on a
+// diversified query, the reducer trims the tail and records a frame-
+// independent kept/original ratio in Truncated.Dropped (e.g.
+// "coverage_gaps_kept:5/20" meaning 5 of the original 20 gaps remain on
+// the wire).
+//
+// Truncated is RESERVED for newRecallReducer's buildReducedRecallResponse
+// (result_limit.go) and MUST NOT be set by recall handler code. The field's
+// semantics are "this response was shrunk to fit the MCP token budget";
+// setting it on an unreduced response misleads clients into treating a
+// complete result as partial. The field is exported only because
+// encoding/json requires it; treat it as package-private to result_limit.go.
 type mcpRecallResponse struct {
 	Memories     []mcpRecallMemory     `json:"memories"`
 	Graph        graphResponse         `json:"graph"`
 	LatencyMs    int64                 `json:"latency_ms"`
 	CoverageGaps []service.CoverageGap `json:"coverage_gaps,omitempty"`
+	Truncated    *truncationInfo       `json:"_truncated,omitempty"`
 }
 
 // alwaysStrippedKeys are removed from emitted metadata regardless of caller

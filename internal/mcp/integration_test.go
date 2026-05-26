@@ -314,7 +314,7 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: ns},
 		Store:         storeSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	ctx := buildAuthCtx(userID)
 
 	// Store a memory.
@@ -365,7 +365,7 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 		nil, nil, nil, nil, nil,
 	)
 	deps.Recall = recallSvc
-	srv2 := NewServer(deps)
+	srv2 := newTestServer(deps)
 
 	recallReq := mcp.CallToolRequest{}
 	recallReq.Params.Name = "recall"
@@ -430,7 +430,7 @@ func TestMCP_StoreAutoCreatesProject(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: ns},
 		Store:         storeSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
@@ -473,7 +473,7 @@ func TestMCP_StoreBatch_AllSucceed(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: ns},
 		BatchStore:    batchSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
@@ -534,7 +534,7 @@ func TestMCP_StoreBatch_PartialFailure(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: ns},
 		BatchStore:    batchSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
@@ -602,7 +602,7 @@ func TestMCP_UpdateMemory(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Update:      updateSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -680,7 +680,7 @@ func TestMCP_GetMemory_FoundAndNotFound(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		BatchGet:    batchGetSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
@@ -750,7 +750,7 @@ func TestMCP_ForgetMemory_Soft(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Forget:      forgetSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -812,7 +812,7 @@ func TestMCP_ForgetMemory_Hard(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Forget:      forgetSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -900,7 +900,7 @@ func TestMCP_NoAuth_RequiresAuthentication(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deps := Dependencies{Backend: storage.BackendSQLite}
-			srv := NewServer(deps)
+			srv := newTestServer(deps)
 
 			req := mcp.CallToolRequest{}
 			req.Params.Arguments = tt.args
@@ -921,7 +921,7 @@ func TestMCP_NoAuth_RequiresAuthentication(t *testing.T) {
 
 func TestMCP_StoreEmptyContent(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -943,7 +943,7 @@ func TestMCP_StoreEmptyContent(t *testing.T) {
 
 func TestMCP_RecallEmptyQuery(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -977,7 +977,7 @@ func TestMCP_ProjectsList(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{listResult: projects},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "list_projects"
@@ -991,16 +991,16 @@ func TestMCP_ProjectsList(t *testing.T) {
 		t.Fatalf("unexpected tool error: %s", extractText(result))
 	}
 
-	var items []projectItem
-	if err := json.Unmarshal([]byte(extractText(result)), &items); err != nil {
+	var resp listProjectsResponse
+	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 projects, got %d", len(items))
+	if len(resp.Projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(resp.Projects))
 	}
 
 	slugs := make(map[string]bool)
-	for _, item := range items {
+	for _, item := range resp.Projects {
 		slugs[item.Slug] = true
 	}
 	if !slugs["alpha"] {
@@ -1038,7 +1038,7 @@ func TestMCP_ExportProject(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Export:      exportSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "export"
@@ -1103,7 +1103,7 @@ func TestMCP_StoreEmitsEvent(t *testing.T) {
 		Store:         storeSvc,
 		EventBus:      bus,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
@@ -1185,7 +1185,7 @@ func TestMCP_ForgetEmitsEvent(t *testing.T) {
 		Forget:      forgetSvc,
 		EventBus:    bus,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -1261,7 +1261,7 @@ func TestMCP_UpdateEmitsEvent(t *testing.T) {
 		Update:      updateSvc,
 		EventBus:    bus,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -1317,7 +1317,7 @@ func TestMCP_UpdateEmitsEvent(t *testing.T) {
 
 func TestMCP_PostgresIncludesGraphTool(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["graph"]; !ok {
@@ -1332,7 +1332,7 @@ func TestMCP_PostgresIncludesGraphTool(t *testing.T) {
 func TestMCP_EnrichToolRemoved(t *testing.T) {
 	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
 		deps := Dependencies{Backend: backend}
-		srv := NewServer(deps)
+		srv := newTestServer(deps)
 		tools := srv.MCPServer().ListTools()
 		if _, ok := tools["enrich"]; ok {
 			t.Errorf("backend %s: enrich tool should not be registered on MCP; backfill belongs on the REST admin path", backend)
@@ -1359,7 +1359,7 @@ func TestMCP_ResourceProjects(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{listResult: projects},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	resReq := mcp.ReadResourceRequest{}
 	resReq.Params.URI = "nram://projects"
@@ -1384,15 +1384,15 @@ func TestMCP_ResourceProjects(t *testing.T) {
 		t.Errorf("expected MIME type %q, got %q", "application/json", tc.MIMEType)
 	}
 
-	var items []projectItem
-	if err := json.Unmarshal([]byte(tc.Text), &items); err != nil {
+	var resp listProjectsResponse
+	if err := json.Unmarshal([]byte(tc.Text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal resource text: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 projects in resource, got %d", len(items))
+	if len(resp.Projects) != 2 {
+		t.Fatalf("expected 2 projects in resource, got %d", len(resp.Projects))
 	}
 	slugs := make(map[string]bool)
-	for _, item := range items {
+	for _, item := range resp.Projects {
 		slugs[item.Slug] = true
 	}
 	if !slugs["gamma"] {
@@ -1438,7 +1438,7 @@ func TestMCP_ResourceEntities(t *testing.T) {
 		ProjectRepo:  &mockProjectRepoStore{project: project},
 		EntityReader: entityReader,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	resReq := mcp.ReadResourceRequest{}
 	resReq.Params.URI = "nram://projects/test-project/entities"
@@ -1492,7 +1492,7 @@ func TestMCP_ResourceEntities(t *testing.T) {
 
 func TestMCP_ResourceEntities_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	resReq := mcp.ReadResourceRequest{}
 	resReq.Params.URI = "nram://projects/test-project/entities"
@@ -1509,7 +1509,7 @@ func TestMCP_ResourceEntities_NoAuth(t *testing.T) {
 
 func TestMCP_ResourceProjects_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	resReq := mcp.ReadResourceRequest{}
 	resReq.Params.URI = "nram://projects"
@@ -1541,7 +1541,7 @@ func TestMCP_CoreToolsRegistered_SQLite(t *testing.T) {
 	}
 
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	tools := srv.MCPServer().ListTools()
 
 	for _, name := range required {
@@ -1565,7 +1565,7 @@ func TestMCP_CoreToolsRegistered_Postgres(t *testing.T) {
 	}
 
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	tools := srv.MCPServer().ListTools()
 
 	for _, name := range required {

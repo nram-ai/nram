@@ -48,7 +48,7 @@ func TestExtractSlugFromURI_NoPrefix(t *testing.T) {
 
 func TestProjectsResource_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	_ = srv // resources registered
 
 	req := mcp.ReadResourceRequest{}
@@ -63,7 +63,7 @@ func TestProjectsResource_NoHTTPRequest(t *testing.T) {
 
 func TestProjectsResource_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	ctx := buildNoAuthCtx()
@@ -95,7 +95,7 @@ func TestProjectsResource_ListSuccess(t *testing.T) {
 			listResult: projects,
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	ctx := buildAuthCtx(userID)
@@ -118,15 +118,28 @@ func TestProjectsResource_ListSuccess(t *testing.T) {
 		t.Errorf("expected MIME type %q, got %q", "application/json", tc.MIMEType)
 	}
 
-	var items []projectItem
-	if err := json.Unmarshal([]byte(tc.Text), &items); err != nil {
+	var resp listProjectsResponse
+	if err := json.Unmarshal([]byte(tc.Text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 projects, got %d", len(items))
+	if len(resp.Projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(resp.Projects))
 	}
-	if items[0].Slug != "project-one" {
-		t.Errorf("expected slug %q, got %q", "project-one", items[0].Slug)
+	if resp.Projects[0].Slug != "project-one" {
+		t.Errorf("expected slug %q, got %q", "project-one", resp.Projects[0].Slug)
+	}
+	// Pagination must be populated honestly. The resource is unpaginated,
+	// so Total/Limit equal the full count and Offset is 0. A zero-value
+	// Pagination here would mislead clients reading pagination.total into
+	// "showing N of 0" — that was the pre-pass-4 bug.
+	if resp.Pagination.Total != 2 {
+		t.Errorf("Pagination.Total=%d, want 2 (regression: zero-value bug)", resp.Pagination.Total)
+	}
+	if resp.Pagination.Limit != 2 {
+		t.Errorf("Pagination.Limit=%d, want 2", resp.Pagination.Limit)
+	}
+	if resp.Pagination.Offset != 0 {
+		t.Errorf("Pagination.Offset=%d, want 0", resp.Pagination.Offset)
 	}
 }
 
@@ -142,7 +155,7 @@ func TestProjectsResource_EmptyList(t *testing.T) {
 			listResult: []model.Project{},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	ctx := buildAuthCtx(userID)
@@ -152,12 +165,12 @@ func TestProjectsResource_EmptyList(t *testing.T) {
 	}
 
 	tc := contents[0].(mcp.TextResourceContents)
-	var items []projectItem
-	if err := json.Unmarshal([]byte(tc.Text), &items); err != nil {
+	var resp listProjectsResponse
+	if err := json.Unmarshal([]byte(tc.Text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	if len(items) != 0 {
-		t.Errorf("expected 0 projects, got %d", len(items))
+	if len(resp.Projects) != 0 {
+		t.Errorf("expected 0 projects, got %d", len(resp.Projects))
 	}
 }
 
@@ -165,7 +178,7 @@ func TestProjectsResource_EmptyList(t *testing.T) {
 
 func TestProjectEntitiesResource_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/test/entities"
@@ -180,7 +193,7 @@ func TestProjectEntitiesResource_NoHTTPRequest(t *testing.T) {
 
 func TestProjectEntitiesResource_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/test/entities"
@@ -224,7 +237,7 @@ func TestProjectEntitiesResource_ListSuccess(t *testing.T) {
 		ProjectRepo:  &mockProjectRepoStore{project: project},
 		EntityReader: &mockEntityReader{entities: entities},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/test-project/entities"
@@ -281,7 +294,7 @@ func TestProjectEntitiesResource_EmptyEntities(t *testing.T) {
 		ProjectRepo:  &mockProjectRepoStore{project: project},
 		EntityReader: &mockEntityReader{entities: []model.Entity{}},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/empty-project/entities"
@@ -311,7 +324,7 @@ func TestProjectEntitiesResource_ProjectNotFound(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{getErr: fmt.Errorf("not found")},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/nonexistent/entities"
@@ -329,7 +342,7 @@ func TestProjectEntitiesResource_ProjectNotFound(t *testing.T) {
 
 func TestProjectGraphResource_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/test/graph"
@@ -344,7 +357,7 @@ func TestProjectGraphResource_NoHTTPRequest(t *testing.T) {
 
 func TestProjectGraphResource_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/test/graph"
@@ -396,7 +409,7 @@ func TestProjectGraphResource_WithEntitiesAndRelationships(t *testing.T) {
 		EntityReader: &mockEntityReader{entities: entities},
 		Traverser:    &mockTraverser{rels: rels},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/test-project/graph"
@@ -451,7 +464,7 @@ func TestProjectGraphResource_EmptyGraph(t *testing.T) {
 		EntityReader: &mockEntityReader{entities: []model.Entity{}},
 		Traverser:    &mockTraverser{},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/empty-project/graph"
@@ -484,7 +497,7 @@ func TestProjectGraphResource_ProjectNotFound(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{getErr: fmt.Errorf("not found")},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/nonexistent/graph"
@@ -530,7 +543,7 @@ func TestProjectGraphResource_EdgeCapTruncated(t *testing.T) {
 		EntityReader: &mockEntityReader{entities: entities},
 		Traverser:    &mockTraverser{rels: rels, truncated: true},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = "nram://projects/trunc-project/graph"
@@ -563,7 +576,7 @@ func TestProjectGraphResource_EdgeCapTruncated(t *testing.T) {
 func TestResourcesRegistered_NoPanic(t *testing.T) {
 	// Verify that NewServer registers resources without panicking.
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	if srv == nil {
 		t.Fatal("expected non-nil server")
 	}
@@ -571,7 +584,7 @@ func TestResourcesRegistered_NoPanic(t *testing.T) {
 
 func TestResourcesRegistered_Postgres_NoPanic(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	if srv == nil {
 		t.Fatal("expected non-nil server")
 	}

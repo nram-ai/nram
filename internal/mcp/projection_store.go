@@ -83,9 +83,16 @@ func buildMCPMemoryDetail(d service.MemoryDetail, projectSlug string, opts proje
 	}
 }
 
+// mcpBatchGetResponse is the typed response for the get MCP tool.
+//
+// Truncated is RESERVED for newBatchGetReducer (result_limit.go) and MUST
+// NOT be set by handler code. It indicates "this response was shrunk to fit
+// the MCP token budget"; handlers that set it would mislead clients into
+// treating a complete result as partial.
 type mcpBatchGetResponse struct {
-	Found    []mcpMemoryDetail `json:"found"`
-	NotFound []uuid.UUID       `json:"not_found"`
+	Found     []mcpMemoryDetail `json:"found"`
+	NotFound  []uuid.UUID       `json:"not_found"`
+	Truncated *truncationInfo   `json:"_truncated,omitempty"`
 }
 
 // buildMCPBatchGetResponse stamps every result with projectSlug because

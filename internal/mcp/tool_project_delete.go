@@ -26,6 +26,7 @@ func registerProjectDelete(s *Server) {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
+		mcp.WithRawOutputSchema(schemaFor[service.ProjectDeleteResponse]()),
 		mcp.WithDescription("Permanently delete a project and all its memories, entities, and relationships. Only works on projects you own. The 'global' project cannot be deleted."),
 		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug to delete")),
 	)
@@ -83,5 +84,5 @@ func handleProjectDelete(ctx context.Context, s *Server, request mcp.CallToolReq
 		return mcp.NewToolResultError(fmt.Sprintf("delete failed: %v", err)), nil
 	}
 
-	return wrapToolResult(resp, nil)
+	return wrapToolResult(s.deps.Metrics, "delete_project", mcpBudgetBytes(ctx, s.deps.Settings), resp, nil)
 }

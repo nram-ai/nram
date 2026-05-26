@@ -17,6 +17,19 @@ type ProjectUpdater interface {
 	Update(ctx context.Context, project *model.Project) error
 }
 
+// updateProjectResponse is the typed response returned by the update_project
+// MCP tool. default_tags is echoed (with omitempty) so callers can verify
+// the new tag set after an update — the input surface accepts default_tags
+// but the historical inline map did not echo them back, breaking the
+// write-then-verify pattern. Keep the json tags in lockstep with the
+// handler so the outputSchema and the wire stay aligned.
+type updateProjectResponse struct {
+	ProjectSlug string   `json:"project"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	DefaultTags []string `json:"default_tags,omitempty"`
+}
+
 // RegisterProjectUpdateTool registers the update_project MCP tool.
 func RegisterProjectUpdateTool(s *Server) {
 	tool := mcp.NewTool("update_project",
@@ -26,6 +39,7 @@ func RegisterProjectUpdateTool(s *Server) {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
+		mcp.WithRawOutputSchema(schemaFor[updateProjectResponse]()),
 		mcp.WithDescription("Update a project's name, description, or default tags. Only works on projects you own."),
 		mcp.WithString("project", mcp.Required(), mcp.Description("Project slug to update")),
 		mcp.WithString("name", mcp.Description("New project name")),
@@ -103,9 +117,10 @@ func handleProjectUpdate(ctx context.Context, s *Server, request mcp.CallToolReq
 		return mcp.NewToolResultError(fmt.Sprintf("update failed: %v", err)), nil
 	}
 
-	return wrapToolResult(map[string]interface{}{
-		"project":     project.Slug,
-		"name":        project.Name,
-		"description": project.Description,
+	return wrapToolResult(s.deps.Metrics, "update_project", mcpBudgetBytes(ctx, s.deps.Settings), &updateProjectResponse{
+		ProjectSlug: project.Slug,
+		Name:        project.Name,
+		Description: project.Description,
+		DefaultTags: project.DefaultTags,
 	}, nil)
 }

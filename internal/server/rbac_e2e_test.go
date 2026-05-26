@@ -607,6 +607,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      userLookup,
 		NamespaceRepo: namespaceLookup,
+		Metrics:       metrics.New(),
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 
@@ -1569,6 +1570,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      userLookup,
 		NamespaceRepo: namespaceLookup,
+		Metrics:       metrics.New(),
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 

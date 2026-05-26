@@ -34,6 +34,7 @@ var deprecatedEnvVars = []string{
 	"NRAM_FACT_PROVIDER", "NRAM_FACT_URL", "NRAM_FACT_KEY", "NRAM_FACT_MODEL",
 	"NRAM_ENTITY_PROVIDER", "NRAM_ENTITY_URL", "NRAM_ENTITY_KEY", "NRAM_ENTITY_MODEL",
 	"NRAM_ENRICHMENT_ORPHAN_GRACE_SECONDS",
+	"NRAM_MCP_MAX_RESULT_TOKENS",
 }
 
 // Load reads configuration from a YAML file (optional), overlays environment

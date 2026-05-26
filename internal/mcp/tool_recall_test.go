@@ -422,7 +422,7 @@ func TestBuildMCPRecallResponse_FixtureShape_PrunedFallback(t *testing.T) {
 // wired; clients no longer have a meaningless toggle to flip).
 func TestMemoryRecall_Schema_Postgres_GraphParams(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	st, ok := tools["recall"]
@@ -444,7 +444,7 @@ func TestMemoryRecall_Schema_Postgres_GraphParams(t *testing.T) {
 func TestMemoryRecall_Schema_HasDiversifyByTagPrefix(t *testing.T) {
 	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
 		deps := Dependencies{Backend: backend}
-		srv := NewServer(deps)
+		srv := newTestServer(deps)
 		tools := srv.MCPServer().ListTools()
 		st, ok := tools["recall"]
 		if !ok {
@@ -464,7 +464,7 @@ func TestMemoryRecall_Schema_HasDiversifyByTagPrefix(t *testing.T) {
 func TestMemoryRecall_Schema_LacksSimilarityThresholdFields(t *testing.T) {
 	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
 		deps := Dependencies{Backend: backend}
-		srv := NewServer(deps)
+		srv := newTestServer(deps)
 		tools := srv.MCPServer().ListTools()
 		st, ok := tools["recall"]
 		if !ok {
@@ -485,7 +485,7 @@ func TestMemoryRecall_Schema_LacksSimilarityThresholdFields(t *testing.T) {
 
 func TestHandleMemoryRecall_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "recall"
@@ -502,7 +502,7 @@ func TestHandleMemoryRecall_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryRecall_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "recall"
@@ -520,7 +520,7 @@ func TestHandleMemoryRecall_NoAuth(t *testing.T) {
 
 func TestHandleMemoryRecall_MissingQuery(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "recall"
@@ -551,7 +551,7 @@ func TestHandleMemoryRecall_ProjectScoped(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
 		Recall:        recallSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "recall"
@@ -596,7 +596,7 @@ func TestHandleMemoryRecall_UserScoped(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
 		Recall:        recallSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "recall"
@@ -633,7 +633,7 @@ func TestHandleMemoryRecall_ProjectNotFound(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
 		Recall:        newMockRecallSvc(),
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "recall"

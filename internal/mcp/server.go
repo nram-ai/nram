@@ -43,6 +43,14 @@ type MemoryLister interface {
 	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
 }
 
+// MetricsRecorder is the subset of *metrics.Metrics that wrapToolResult uses.
+// Defined here as an interface so result_limit.go does not import the metrics
+// package directly, and so tests can inject a stub. *metrics.Metrics
+// satisfies this contract by exposing RecordMCPToolResultTier.
+type MetricsRecorder interface {
+	RecordMCPToolResultTier(tool, tier string)
+}
+
 // EntityReader provides entity lookup operations for MCP tool handlers.
 type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
@@ -83,6 +91,12 @@ type Dependencies struct {
 	// so callers do not have to special-case the unwired path.
 	Settings *service.SettingsService
 	EventBus events.EventBus
+	// Metrics is required. wrapToolResult uses it to record per-tool
+	// truncation events (tier1_reduced, text_only, hard_truncate).
+	// NewServer panics if this is nil so production wiring drift fails at
+	// startup smoke tests rather than silently shipping a dead counter.
+	// Tests pass a stub (see stubMetrics in tool_null_safety_test.go).
+	Metrics MetricsRecorder
 	// ProviderStatus returns the current provider availability at call time.
 	// This is called per-connection to build dynamic MCP instructions.
 	ProviderStatus func() (hasEmbedding, hasEnrichment bool)
@@ -164,7 +178,17 @@ KEY RULES:
 // NewServer creates the MCP server foundation with Streamable HTTP transport.
 // Tool registration is deferred to later initialization steps; this function
 // only sets up the server skeleton and HTTP handler.
+//
+// Panics if Dependencies.Metrics is nil. The MCP wrappers record per-tool
+// truncation telemetry through this recorder; a nil value silently disables
+// the entire observability surface, which is a class of wiring drift that
+// pass-4 review caught in production. Failing fast at construction makes
+// the same class of bug a startup-time error instead of an invisible one.
 func NewServer(deps Dependencies) *Server {
+	if deps.Metrics == nil {
+		panic("mcp.NewServer: Dependencies.Metrics is required (truncation telemetry depends on it)")
+	}
+
 	// Build initial instructions from current provider state.
 	hasEmbed, hasEnrich := false, false
 	if deps.ProviderStatus != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -36,9 +37,17 @@ type listMemoryItem struct {
 }
 
 // listMemoryResponse is the paginated response envelope for memory_list.
+//
+// Truncated is RESERVED for newListReducer (result_limit.go) and MUST NOT be
+// set by list handler code. The field's semantics are "this response was
+// shrunk to fit the MCP token budget"; setting it on an unreduced response
+// misleads clients into treating a complete result as partial. The field is
+// exported only because encoding/json requires it; treat it as
+// package-private to result_limit.go.
 type listMemoryResponse struct {
 	Data       []listMemoryItem `json:"data"`
 	Pagination model.Pagination `json:"pagination"`
+	Truncated  *truncationInfo  `json:"_truncated,omitempty"`
 }
 
 // RegisterListTool registers the list MCP tool on the given server.
@@ -48,6 +57,7 @@ func RegisterListTool(s *Server) {
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
+		mcp.WithRawOutputSchema(schemaFor[listMemoryResponse]()),
 		mcp.WithDescription("List memories in a project with pagination. Use to browse stored memories when you need an overview rather than a semantic search. Returns memories ordered by most recently created."),
 		mcp.WithString("project", mcp.Description("Project slug. Lists this project + global. Omit to list only the global project")),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of memories to return (default 50, max 200)")),
@@ -77,18 +87,8 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		projectSlug = "global"
 	}
 
-	limit := listDefaultLimit
-	if v, ok := args["limit"].(float64); ok && v > 0 {
-		limit = int(v)
-	}
-	if limit > listMaxLimit {
-		limit = listMaxLimit
-	}
-
-	offset := 0
-	if v, ok := args["offset"].(float64); ok && v >= 0 {
-		offset = int(v)
-	}
+	limit := parseIntArg(args, "limit", listDefaultLimit, 1, listMaxLimit)
+	offset := parseIntArg(args, "offset", 0, 0, math.MaxInt32)
 
 	filters := storage.MemoryListFilters{HideSuperseded: true}
 
@@ -165,7 +165,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		})
 	}
 
-	resp := listMemoryResponse{
+	resp := &listMemoryResponse{
 		Data: items,
 		Pagination: model.Pagination{
 			Total:  total,
@@ -174,5 +174,5 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		},
 	}
 
-	return wrapToolResult(resp, newListReducer(resp))
+	return wrapToolResult(s.deps.Metrics, "list", mcpBudgetBytes(ctx, s.deps.Settings), resp, newListReducer(resp))
 }

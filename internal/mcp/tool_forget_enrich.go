@@ -21,6 +21,7 @@ func RegisterForgetTool(s *Server) {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
+		mcp.WithRawOutputSchema(schemaFor[service.ForgetResponse]()),
 		mcp.WithDescription("Delete memories that are outdated, incorrect, or superseded. Soft-deletes by default. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to forget")),
@@ -106,5 +107,5 @@ func handleMemoryForget(ctx context.Context, s *Server, request mcp.CallToolRequ
 		"deleted":    fmt.Sprintf("%d", resp.Deleted),
 	})
 
-	return wrapToolResult(resp, nil)
+	return wrapToolResult(s.deps.Metrics, "forget", mcpBudgetBytes(ctx, s.deps.Settings), resp, nil)
 }

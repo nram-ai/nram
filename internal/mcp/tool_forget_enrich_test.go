@@ -64,7 +64,7 @@ func newMockForgetService(nsID uuid.UUID, memories map[uuid.UUID]*model.Memory) 
 
 func TestMemoryForget_SchemaRegistered_SQLite(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["forget"]; !ok {
@@ -74,7 +74,7 @@ func TestMemoryForget_SchemaRegistered_SQLite(t *testing.T) {
 
 func TestMemoryForget_SchemaRegistered_Postgres(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["forget"]; !ok {
@@ -86,7 +86,7 @@ func TestMemoryForget_SchemaRegistered_Postgres(t *testing.T) {
 
 func TestHandleMemoryForget_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -104,7 +104,7 @@ func TestHandleMemoryForget_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryForget_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -123,7 +123,7 @@ func TestHandleMemoryForget_NoAuth(t *testing.T) {
 
 func TestHandleMemoryForget_MissingIDs(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -141,7 +141,7 @@ func TestHandleMemoryForget_MissingIDs(t *testing.T) {
 
 func TestHandleMemoryForget_EmptyIDs(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -160,7 +160,7 @@ func TestHandleMemoryForget_EmptyIDs(t *testing.T) {
 
 func TestHandleMemoryForget_InvalidUUID(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -187,7 +187,7 @@ func TestHandleMemoryForget_ProjectNotFound(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{getErr: errNotFound},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -231,7 +231,7 @@ func TestHandleMemoryForget_Success_SoftDelete(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Forget:      forgetSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
@@ -286,7 +286,7 @@ func TestHandleMemoryForget_Success_HardDelete(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Forget:      forgetSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"

@@ -421,6 +421,12 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		nil,
 	)
 
+	// --- Middleware ---
+	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret, nil)
+	rl := auth.NewRateLimiter(10000, 20000, 0, 0)
+	t.Cleanup(rl.Stop)
+	promMetrics := metrics.New()
+
 	// --- MCP server ---
 	mcpDeps := mcp.Dependencies{
 		Backend:       storage.BackendSQLite,
@@ -432,14 +438,9 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      userLookup,
 		NamespaceRepo: namespaceLookup,
+		Metrics:       promMetrics,
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
-
-	// --- Middleware ---
-	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret, nil)
-	rl := auth.NewRateLimiter(10000, 20000, 0, 0)
-	t.Cleanup(rl.Stop)
-	promMetrics := metrics.New()
 	projectAccessMw := api.ProjectAccessMiddleware(api.ProjectAccessConfig{
 		Projects:   projectLookup,
 		Namespaces: namespaceLookup,

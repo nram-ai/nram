@@ -123,7 +123,7 @@ func newMockBatchGetService(nsID uuid.UUID, memories []model.Memory) *service.Ba
 
 func TestHandleMemoryUpdate_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -142,7 +142,7 @@ func TestHandleMemoryUpdate_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryUpdate_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -162,7 +162,7 @@ func TestHandleMemoryUpdate_NoAuth(t *testing.T) {
 
 func TestHandleMemoryUpdate_MissingID(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -181,7 +181,7 @@ func TestHandleMemoryUpdate_MissingID(t *testing.T) {
 
 func TestHandleMemoryUpdate_InvalidID(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -202,7 +202,7 @@ func TestHandleMemoryUpdate_InvalidID(t *testing.T) {
 
 func TestHandleMemoryUpdate_NoFieldsProvided(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -229,7 +229,7 @@ func TestHandleMemoryUpdate_ProjectNotFound(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{getErr: errNotFound},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -274,7 +274,7 @@ func TestHandleMemoryUpdate_Success(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Update:      updateSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -340,7 +340,7 @@ func TestHandleMemoryUpdate_ReEmbedIndicator(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Update:      updateSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
@@ -374,7 +374,7 @@ func TestHandleMemoryUpdate_ReEmbedIndicator(t *testing.T) {
 
 func TestHandleMemoryGet_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
@@ -392,7 +392,7 @@ func TestHandleMemoryGet_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryGet_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
@@ -411,7 +411,7 @@ func TestHandleMemoryGet_NoAuth(t *testing.T) {
 
 func TestHandleMemoryGet_MissingIDs(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
@@ -429,7 +429,7 @@ func TestHandleMemoryGet_MissingIDs(t *testing.T) {
 
 func TestHandleMemoryGet_EmptyIDs(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
@@ -448,7 +448,7 @@ func TestHandleMemoryGet_EmptyIDs(t *testing.T) {
 
 func TestHandleMemoryGet_InvalidUUID(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
@@ -476,7 +476,7 @@ func TestHandleMemoryGet_ProjectNotFound(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{getErr: errNotFound},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
@@ -524,7 +524,7 @@ func TestHandleMemoryGet_SuccessWithFoundAndNotFound(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		BatchGet:    batchGetSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
@@ -568,7 +568,7 @@ func TestHandleMemoryGet_SuccessWithFoundAndNotFound(t *testing.T) {
 
 func TestMemoryUpdate_SchemaRegistered(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["update"]; !ok {
@@ -578,7 +578,7 @@ func TestMemoryUpdate_SchemaRegistered(t *testing.T) {
 
 func TestMemoryGet_SchemaRegistered(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["get"]; !ok {

@@ -170,7 +170,7 @@ func (m *mockExportProjectRepo) GetByNamespaceID(_ context.Context, namespaceID 
 
 func TestMemoryGraph_Registered_Postgres(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["graph"]; !ok {
@@ -182,7 +182,7 @@ func TestMemoryGraph_Registered_Postgres(t *testing.T) {
 
 func TestMemoryProjects_Registered_SQLite(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["list_projects"]; !ok {
@@ -192,7 +192,7 @@ func TestMemoryProjects_Registered_SQLite(t *testing.T) {
 
 func TestMemoryProjects_Registered_Postgres(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["list_projects"]; !ok {
@@ -204,7 +204,7 @@ func TestMemoryProjects_Registered_Postgres(t *testing.T) {
 
 func TestMemoryExport_Registered_SQLite(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["export"]; !ok {
@@ -214,7 +214,7 @@ func TestMemoryExport_Registered_SQLite(t *testing.T) {
 
 func TestMemoryExport_Registered_Postgres(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["export"]; !ok {
@@ -226,7 +226,7 @@ func TestMemoryExport_Registered_Postgres(t *testing.T) {
 
 func TestHandleMemoryGraph_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"entity": "test"}
@@ -240,7 +240,7 @@ func TestHandleMemoryGraph_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryGraph_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"entity": "test"}
@@ -255,7 +255,7 @@ func TestHandleMemoryGraph_NoAuth(t *testing.T) {
 
 func TestHandleMemoryGraph_MissingEntity(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
@@ -301,7 +301,7 @@ func TestHandleMemoryGraph_EntitySearch(t *testing.T) {
 		EntityReader: &mockEntityReader{entities: entities},
 		Traverser:    traverser,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -356,7 +356,7 @@ func TestHandleMemoryGraph_DefaultDepth(t *testing.T) {
 		EntityReader: &mockEntityReader{entities: entities},
 		Traverser:    traverser,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -410,7 +410,7 @@ func TestHandleMemoryGraph_EdgeCapTruncated(t *testing.T) {
 		EntityReader: &mockEntityReader{entities: entities},
 		Traverser:    traverser,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"entity": "Alice"}
@@ -457,7 +457,12 @@ func TestHandleMemoryGraph_EdgeCapTruncated(t *testing.T) {
 // all run on data the client cannot consume, and the truncatedByCap signal
 // would never fire.
 func TestHandleMemoryGraph_CumulativeCapAcrossSeeds(t *testing.T) {
-	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "1000000") // disable byte-budget reducer so we observe the cap signal directly
+	// Stub a SettingsService that resolves mcp.max_result_tokens to a
+	// generous value so the byte-budget reducer cannot fire — that lets us
+	// observe the cumulative edge-cap signal directly. The previous
+	// NRAM_MCP_MAX_RESULT_TOKENS env override was removed in the
+	// SettingsService cascade migration.
+	settingsSvc := newSettingsServiceWithMCPBudget(1000000)
 	userID := uuid.New()
 	nsID := uuid.New()
 	user := &model.User{ID: userID, NamespaceID: nsID}
@@ -492,8 +497,9 @@ func TestHandleMemoryGraph_CumulativeCapAcrossSeeds(t *testing.T) {
 		UserRepo:     &mockUserRepoStore{user: user},
 		EntityReader: &mockEntityReader{entities: entities},
 		Traverser:    traverser,
+		Settings:     settingsSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"entity": "seed"}
@@ -523,7 +529,7 @@ func TestHandleMemoryGraph_CumulativeCapAcrossSeeds(t *testing.T) {
 
 func TestHandleMemoryProjects_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	result, err := handleMemoryProjects(context.Background(), srv, req)
@@ -535,7 +541,7 @@ func TestHandleMemoryProjects_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryProjects_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	ctx := buildNoAuthCtx()
@@ -565,7 +571,7 @@ func TestHandleMemoryProjects_ListSuccess(t *testing.T) {
 			listResult: projects,
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	ctx := buildAuthCtx(userID)
@@ -578,18 +584,18 @@ func TestHandleMemoryProjects_ListSuccess(t *testing.T) {
 	}
 
 	text := extractText(result)
-	var items []projectItem
-	if err := json.Unmarshal([]byte(text), &items); err != nil {
+	var resp listProjectsResponse
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 projects, got %d", len(items))
+	if len(resp.Projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(resp.Projects))
 	}
-	if items[0].Slug != "project-one" {
-		t.Errorf("expected slug %q, got %q", "project-one", items[0].Slug)
+	if resp.Projects[0].Slug != "project-one" {
+		t.Errorf("expected slug %q, got %q", "project-one", resp.Projects[0].Slug)
 	}
-	if items[1].Description != "Second project" {
-		t.Errorf("expected description %q, got %q", "Second project", items[1].Description)
+	if resp.Projects[1].Description != "Second project" {
+		t.Errorf("expected description %q, got %q", "Second project", resp.Projects[1].Description)
 	}
 }
 
@@ -605,7 +611,7 @@ func TestHandleMemoryProjects_EmptyList(t *testing.T) {
 			listResult: []model.Project{},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	ctx := buildAuthCtx(userID)
@@ -618,12 +624,12 @@ func TestHandleMemoryProjects_EmptyList(t *testing.T) {
 	}
 
 	text := extractText(result)
-	var items []projectItem
-	if err := json.Unmarshal([]byte(text), &items); err != nil {
+	var resp listProjectsResponse
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	if len(items) != 0 {
-		t.Errorf("expected 0 projects, got %d", len(items))
+	if len(resp.Projects) != 0 {
+		t.Errorf("expected 0 projects, got %d", len(resp.Projects))
 	}
 }
 
@@ -631,7 +637,7 @@ func TestHandleMemoryProjects_EmptyList(t *testing.T) {
 
 func TestHandleMemoryExport_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"project": "test"}
@@ -645,7 +651,7 @@ func TestHandleMemoryExport_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryExport_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"project": "test"}
@@ -669,7 +675,7 @@ func TestHandleMemoryExport_InvalidFormat(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{project: project},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -707,7 +713,7 @@ func TestHandleMemoryExport_JSONSuccess(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Export:      exportSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -758,7 +764,7 @@ func TestHandleMemoryExport_NDJSONSuccess(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Export:      exportSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -805,7 +811,7 @@ func TestHandleMemoryExport_ProjectNotFound(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{getErr: io.ErrUnexpectedEOF},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -865,7 +871,7 @@ func TestHandleMemoryGraph_AlwaysFiltersSupersededSourceMemory(t *testing.T) {
 		Traverser:    &mockTraverser{rels: rels},
 		MemoryLister: &mockMemoryListerByNs{memoriesByNs: memories},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	// Even with include_superseded=true on the request (now ignored on MCP),
 	// only the live relationship surfaces.
@@ -925,7 +931,7 @@ func TestHandleMemoryExport_HidesSupersededByDefault(t *testing.T) {
 		ProjectRepo: &mockProjectRepoStore{project: project},
 		Export:      exportSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"project": "test"}

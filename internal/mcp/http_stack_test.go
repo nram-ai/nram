@@ -156,7 +156,7 @@ func newHTTPStackEnv(t *testing.T) *httpStackEnv {
 		UserRepo:      &mockUserRepoStore{user: user},
 		NamespaceRepo: &mockNamespaceRepoStore{ns: ns},
 	}
-	mcpSrv := NewServer(deps)
+	mcpSrv := newTestServer(deps)
 
 	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserIdentityLookup{}, httpStackTestSecret, nil)
 
@@ -1549,8 +1549,12 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 		ProjectRepo:   projectRepo,
 		UserRepo:      userRepo,
 		NamespaceRepo: nsRepo,
+		// Generous MCP budget so the HTTP stack tests can round-trip large
+		// payloads (e.g. TestHTTPStack_MCP_LargeContent's 50KB content).
+		// Other tests don't care about budget; they all use tiny payloads.
+		Settings: newSettingsServiceWithMCPBudget(100000),
 	}
-	mcpSrv := NewServer(deps)
+	mcpSrv := newTestServer(deps)
 
 	authMw := auth.NewAuthMiddleware(&testAPIKeyValidator{}, &testUserIdentityLookup{}, httpStackTestSecret, nil)
 
@@ -1775,15 +1779,15 @@ func TestHTTPStack_MCP_TwoUsers_SeparateProjects(t *testing.T) {
 		t.Fatalf("User A list projects failed")
 	}
 	projText := extractToolResultText(t, projRPC)
-	var projectsA []projectItem
+	var projectsA listProjectsResponse
 	if err := json.Unmarshal([]byte(projText), &projectsA); err != nil {
 		t.Fatalf("unmarshal projects: %v", err)
 	}
-	if len(projectsA) != 1 {
-		t.Fatalf("User A: expected 1 project, got %d", len(projectsA))
+	if len(projectsA.Projects) != 1 {
+		t.Fatalf("User A: expected 1 project, got %d", len(projectsA.Projects))
 	}
-	if projectsA[0].Slug != "alpha" {
-		t.Errorf("User A: expected project slug 'alpha', got %q", projectsA[0].Slug)
+	if projectsA.Projects[0].Slug != "alpha" {
+		t.Errorf("User A: expected project slug 'alpha', got %q", projectsA.Projects[0].Slug)
 	}
 
 	// User B lists projects — should only see "beta".
@@ -1795,15 +1799,15 @@ func TestHTTPStack_MCP_TwoUsers_SeparateProjects(t *testing.T) {
 		t.Fatalf("User B list projects failed")
 	}
 	projText = extractToolResultText(t, projRPC)
-	var projectsB []projectItem
+	var projectsB listProjectsResponse
 	if err := json.Unmarshal([]byte(projText), &projectsB); err != nil {
 		t.Fatalf("unmarshal projects: %v", err)
 	}
-	if len(projectsB) != 1 {
-		t.Fatalf("User B: expected 1 project, got %d", len(projectsB))
+	if len(projectsB.Projects) != 1 {
+		t.Fatalf("User B: expected 1 project, got %d", len(projectsB.Projects))
 	}
-	if projectsB[0].Slug != "beta" {
-		t.Errorf("User B: expected project slug 'beta', got %q", projectsB[0].Slug)
+	if projectsB.Projects[0].Slug != "beta" {
+		t.Errorf("User B: expected project slug 'beta', got %q", projectsB.Projects[0].Slug)
 	}
 }
 
@@ -2187,19 +2191,19 @@ func TestHTTPStack_MCP_ProjectAutoCreate(t *testing.T) {
 		t.Fatalf("list projects failed")
 	}
 	projText := extractToolResultText(t, projRPC)
-	var projects []projectItem
+	var projects listProjectsResponse
 	if err := json.Unmarshal([]byte(projText), &projects); err != nil {
 		t.Fatalf("unmarshal projects: %v", err)
 	}
 	found := false
-	for _, p := range projects {
+	for _, p := range projects.Projects {
 		if p.Slug == "brand-new" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("auto-created project 'brand-new' not found in project list: %v", projects)
+		t.Errorf("auto-created project 'brand-new' not found in project list: %v", projects.Projects)
 	}
 }
 
@@ -3136,10 +3140,11 @@ func TestHTTPStack_MCP_ConcurrentStoresFromDifferentUsers(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHTTPStack_MCP_LargeContent(t *testing.T) {
-	// Raise the MCP result budget so that the 50KB content round-trips
-	// without triggering the server-side truncation.
-	t.Setenv("NRAM_MCP_MAX_RESULT_TOKENS", "50000")
-
+	// newMultiUserHTTPStackEnv wires a SettingsService with a generous MCP
+	// budget (100000 tokens) by default, sized to round-trip large payloads
+	// like the 50KB content this test exercises. The previous
+	// NRAM_MCP_MAX_RESULT_TOKENS env override was removed in the
+	// SettingsService cascade migration.
 	userA := uuid.New()
 	nsA := uuid.New()
 	projA := uuid.New()

@@ -2,25 +2,49 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
 func TestNewServer_NonNil(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	if srv == nil {
 		t.Fatal("expected non-nil server")
 	}
 }
 
+// TestNewServerPanicsOnNilMetrics pins the construction-time enforcement.
+// Production wiring drift (e.g. cmd/server/main.go forgetting to populate
+// Dependencies.Metrics) must fail at startup, not silently in production.
+// The MCP wrappers depend on a non-nil recorder; recordTier has no nil-guard
+// since the panic invariant makes it unreachable.
+func TestNewServerPanicsOnNilMetrics(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on nil Metrics; got none")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value is %T, want string", r)
+		}
+		if !strings.Contains(msg, "Dependencies.Metrics is required") {
+			t.Errorf("panic message %q must name the required field", msg)
+		}
+	}()
+	_ = NewServer(Dependencies{Metrics: nil})
+}
+
 func TestHandler_NonNil(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	h := srv.Handler()
 	if h == nil {
 		t.Fatal("expected non-nil handler")
@@ -29,7 +53,7 @@ func TestHandler_NonNil(t *testing.T) {
 
 func TestBackend_SQLite(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	if got := srv.Backend(); got != storage.BackendSQLite {
 		t.Fatalf("expected backend %q, got %q", storage.BackendSQLite, got)
 	}
@@ -37,7 +61,7 @@ func TestBackend_SQLite(t *testing.T) {
 
 func TestBackend_Postgres(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	if got := srv.Backend(); got != storage.BackendPostgres {
 		t.Fatalf("expected backend %q, got %q", storage.BackendPostgres, got)
 	}
@@ -45,7 +69,7 @@ func TestBackend_Postgres(t *testing.T) {
 
 func TestMCPServer_NonNil(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	if srv.MCPServer() == nil {
 		t.Fatal("expected non-nil MCPServer")
 	}
@@ -53,7 +77,7 @@ func TestMCPServer_NonNil(t *testing.T) {
 
 func TestDeps_ReturnsSameBackend(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 	if got := srv.Deps().Backend; got != storage.BackendPostgres {
 		t.Fatalf("expected deps backend %q, got %q", storage.BackendPostgres, got)
 	}
@@ -78,7 +102,7 @@ func TestHTTPRequestFromContext_Absent(t *testing.T) {
 // --- Origin validation tests (MCP spec security requirement) ---
 
 func TestOriginValidation_NoOrigin_Allowed(t *testing.T) {
-	srv := NewServer(Dependencies{Backend: storage.BackendSQLite})
+	srv := newTestServer(Dependencies{Backend: storage.BackendSQLite})
 	h := srv.Handler()
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
@@ -94,7 +118,7 @@ func TestOriginValidation_NoOrigin_Allowed(t *testing.T) {
 }
 
 func TestOriginValidation_MatchingOrigin_Allowed(t *testing.T) {
-	srv := NewServer(Dependencies{Backend: storage.BackendSQLite})
+	srv := newTestServer(Dependencies{Backend: storage.BackendSQLite})
 	h := srv.Handler()
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
@@ -109,7 +133,7 @@ func TestOriginValidation_MatchingOrigin_Allowed(t *testing.T) {
 }
 
 func TestOriginValidation_MismatchedOrigin_Rejected(t *testing.T) {
-	srv := NewServer(Dependencies{Backend: storage.BackendSQLite})
+	srv := newTestServer(Dependencies{Backend: storage.BackendSQLite})
 	h := srv.Handler()
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
@@ -124,7 +148,7 @@ func TestOriginValidation_MismatchedOrigin_Rejected(t *testing.T) {
 }
 
 func TestOriginValidation_HTTPSOrigin_Matches(t *testing.T) {
-	srv := NewServer(Dependencies{Backend: storage.BackendSQLite})
+	srv := newTestServer(Dependencies{Backend: storage.BackendSQLite})
 	h := srv.Handler()
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
@@ -178,7 +202,7 @@ func TestToolDescriptions_UnderSizeLimit(t *testing.T) {
 
 	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
 		deps := Dependencies{Backend: backend}
-		srv := NewServer(deps)
+		srv := newTestServer(deps)
 		tools := srv.MCPServer().ListTools()
 
 		for name, st := range tools {
@@ -186,6 +210,87 @@ func TestToolDescriptions_UnderSizeLimit(t *testing.T) {
 			if len(desc) > maxDescBytes {
 				t.Errorf("[%s] tool %q description is %d bytes, must be under %d",
 					backend, name, len(desc), maxDescBytes)
+			}
+		}
+	}
+}
+
+// TestEveryToolHasOutputSchema pins the wire contract that every MCP tool
+// nram exposes advertises an outputSchema with type=object. Clients (Claude,
+// Cursor, MCP Inspector) key off outputSchema to reason about tool results
+// without parsing opaque JSON text. Per the MCP spec
+// (modelcontextprotocol.io/specification/2025-06-18/server/tools), the
+// top-level type MUST be "object".
+//
+// `export` is exempt because it has two output shapes (json structured,
+// ndjson text) that a single schema cannot honestly describe; the tool
+// advertises no outputSchema and consumers branch on the requested format.
+//
+// The expected tool-name set is pinned explicitly so a future registration
+// regression (e.g. a Register* call removed, or a tool gated on a non-nil
+// dep that this test does not provide) fails loudly instead of silently
+// shrinking coverage.
+func TestEveryToolHasOutputSchema(t *testing.T) {
+	expected := []string{
+		"list", "store", "store_batch", "recall", "forget",
+		"update", "get", "graph", "list_projects", "export",
+		"delete_project", "update_project",
+	}
+	exempt := map[string]bool{"export": true}
+
+	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
+		// delete_project is gated on a non-nil ProjectDelete service
+		// (RegisterProjectDeleteTool early-returns otherwise). Inject a
+		// non-nil sentinel so the test exercises the fully-configured
+		// surface — the handler is never invoked in this test.
+		deps := Dependencies{
+			Backend:       backend,
+			ProjectDelete: &service.ProjectDeleteService{},
+		}
+		srv := newTestServer(deps)
+		tools := srv.MCPServer().ListTools()
+
+		// Pin the exact registered set so a silent drop or rename surfaces.
+		for _, name := range expected {
+			if _, ok := tools[name]; !ok {
+				t.Errorf("[%s] expected tool %q to be registered", backend, name)
+			}
+		}
+		if len(tools) != len(expected) {
+			got := make([]string, 0, len(tools))
+			for n := range tools {
+				got = append(got, n)
+			}
+			t.Errorf("[%s] tool-name set drifted: want %v, got %v", backend, expected, got)
+		}
+
+		for name, st := range tools {
+			if exempt[name] {
+				continue
+			}
+			schema := st.Tool.OutputSchema
+			rawSchemaPresent := len(st.Tool.RawOutputSchema) > 0
+			if !rawSchemaPresent && schema.Type == "" && schema.Properties == nil {
+				t.Errorf("[%s] tool %q has no outputSchema", backend, name)
+				continue
+			}
+			if rawSchemaPresent {
+				var parsed struct {
+					Type string `json:"type"`
+				}
+				if err := json.Unmarshal(st.Tool.RawOutputSchema, &parsed); err != nil {
+					t.Errorf("[%s] tool %q outputSchema is not valid JSON: %v", backend, name, err)
+					continue
+				}
+				if parsed.Type != "object" {
+					t.Errorf("[%s] tool %q outputSchema.type = %q, want \"object\"",
+						backend, name, parsed.Type)
+				}
+				continue
+			}
+			if schema.Type != "object" {
+				t.Errorf("[%s] tool %q outputSchema.type = %q, want \"object\"",
+					backend, name, schema.Type)
 			}
 		}
 	}

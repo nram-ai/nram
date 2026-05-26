@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -61,6 +62,26 @@ type projectItem struct {
 	Description string    `json:"description"`
 }
 
+// listProjectsResponse wraps the projectItem slice with pagination metadata
+// (mirrors listMemoryResponse). The object root is required because mcp-go's
+// outputSchema must declare type=object; a bare slice would mis-advertise.
+//
+// Truncated is RESERVED for newListProjectsReducer (result_limit.go) — same
+// invariant as listMemoryResponse.Truncated; handlers MUST NOT set it.
+type listProjectsResponse struct {
+	Projects   []projectItem    `json:"projects"`
+	Pagination model.Pagination `json:"pagination"`
+	Truncated  *truncationInfo  `json:"_truncated,omitempty"`
+}
+
+// mcpExportResponse wraps service.ExportData with the byte-budget reducer
+// envelope. The service type stays untouched so REST consumers don't see the
+// MCP-specific Truncated field.
+type mcpExportResponse struct {
+	service.ExportData
+	Truncated *truncationInfo `json:"_truncated,omitempty"`
+}
+
 // RegisterGraphProjectsExportTools registers graph, list_projects, and export.
 func RegisterGraphProjectsExportTools(s *Server) {
 	registerMemoryGraph(s)
@@ -74,6 +95,7 @@ func registerMemoryGraph(s *Server) {
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
+		mcp.WithRawOutputSchema(schemaFor[graphResponse]()),
 		mcp.WithDescription("Explore entity relationships in the knowledge graph. Use to discover how people, technologies, and concepts connect — especially when recall alone does not surface enough context."),
 		mcp.WithString("entity", mcp.Required(), mcp.Description("Entity name or search query")),
 		mcp.WithString("project", mcp.Description("Project slug to scope the search")),
@@ -92,7 +114,10 @@ func registerMemoryProjects(s *Server) {
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
-		mcp.WithDescription("List all available projects with slugs and descriptions. ALWAYS call this before store to check for an existing project — an unknown slug on store auto-creates a new project."),
+		mcp.WithRawOutputSchema(schemaFor[listProjectsResponse]()),
+		mcp.WithDescription("List all available projects with slugs and descriptions, paginated (default limit 50, max 200). ALWAYS call this before store to check for an existing project — an unknown slug on store auto-creates a new project."),
+		mcp.WithNumber("limit", mcp.Description("Maximum number of projects to return (default 50, max 200)")),
+		mcp.WithNumber("offset", mcp.Description("Number of projects to skip for pagination (default 0)")),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -106,6 +131,10 @@ func registerMemoryExport(s *Server) {
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
+		// No outputSchema: the tool has two output shapes — format=json
+		// returns a structured mcpExportResponse, format=ndjson returns
+		// a line-delimited text body. A single JSON Schema cannot honestly
+		// describe both, so the tool advertises none.
 		mcp.WithDescription("Export all memories from a project for backup, migration, or analysis. Project must already exist."),
 		mcp.WithString("project", mcp.Description("Project slug to export (default: 'global')")),
 		mcp.WithString("format", mcp.Description("Export format: \"json\" or \"ndjson\" (default \"json\")")),
@@ -354,7 +383,7 @@ seeds:
 		graphRels = []graphRelationship{}
 	}
 
-	resp := graphResponse{
+	resp := &graphResponse{
 		Entities:      graphEntities,
 		Relationships: graphRels,
 	}
@@ -366,7 +395,7 @@ seeds:
 		}
 	}
 
-	return wrapToolResult(resp, newGraphReducer(resp))
+	return wrapToolResult(s.deps.Metrics, "graph", mcpBudgetBytes(ctx, s.deps.Settings), resp, newGraphReducer(resp))
 }
 
 // graphEdgeKey identifies a graph edge by its endpoints and relation type.
@@ -444,7 +473,7 @@ func resolveGraphOrphans(
 	return entities, pruned
 }
 
-func handleMemoryProjects(ctx context.Context, s *Server, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleMemoryProjects(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	r := HTTPRequestFromContext(ctx)
 	if r == nil {
 		return mcp.NewToolResultError("no HTTP request in context"), nil
@@ -453,6 +482,11 @@ func handleMemoryProjects(ctx context.Context, s *Server, _ mcp.CallToolRequest)
 	if ac == nil {
 		return mcp.NewToolResultError("authentication required"), nil
 	}
+
+	args := request.GetArguments()
+
+	limit := parseIntArg(args, "limit", listDefaultLimit, 1, listMaxLimit)
+	offset := parseIntArg(args, "offset", 0, 0, math.MaxInt32)
 
 	deps := s.Deps()
 
@@ -466,8 +500,22 @@ func handleMemoryProjects(ctx context.Context, s *Server, _ mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list projects: %v", err)), nil
 	}
 
-	items := make([]projectItem, 0, len(projects))
-	for _, p := range projects {
+	total := len(projects)
+
+	// Apply offset + limit slice. Bounds-safe: offset >= total returns empty;
+	// offset+limit > total clamps to total.
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := projects[start:end]
+
+	items := make([]projectItem, 0, len(page))
+	for _, p := range page {
 		items = append(items, projectItem{
 			ID:          p.ID,
 			Name:        p.Name,
@@ -476,7 +524,15 @@ func handleMemoryProjects(ctx context.Context, s *Server, _ mcp.CallToolRequest)
 		})
 	}
 
-	return wrapToolResult(items, nil)
+	resp := &listProjectsResponse{
+		Projects: items,
+		Pagination: model.Pagination{
+			Total:  total,
+			Limit:  limit,
+			Offset: offset,
+		},
+	}
+	return wrapToolResult(s.deps.Metrics, "list_projects", mcpBudgetBytes(ctx, s.deps.Settings), resp, newListProjectsReducer(resp))
 }
 
 func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -531,7 +587,7 @@ func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequ
 		if err := exportSvc.ExportNDJSON(ctx, req, &buf); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("export failed: %v", err)), nil
 		}
-		return wrapToolResultText(buf.String())
+		return wrapToolResultText(s.deps.Metrics, "export", mcpBudgetBytes(ctx, s.deps.Settings), buf.String())
 	}
 
 	req := &service.ExportRequest{
@@ -544,5 +600,11 @@ func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError(fmt.Sprintf("export failed: %v", err)), nil
 	}
 
-	return wrapToolResult(data, newExportReducer(data))
+	// Export is exempt from outputSchema (the tool has two output shapes —
+	// json structured and ndjson text — that a single schema cannot honestly
+	// describe). Without a declared schema, structuredContent is half-honored
+	// per the MCP spec (clients MAY ignore it), so emit text only and use
+	// the full byte budget rather than the halved structured budget.
+	resp := &mcpExportResponse{ExportData: *data}
+	return wrapToolResultJSONText(s.deps.Metrics, "export", mcpBudgetBytes(ctx, s.deps.Settings), resp, newExportReducer(resp))
 }

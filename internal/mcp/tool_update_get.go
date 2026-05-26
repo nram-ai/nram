@@ -28,6 +28,7 @@ func registerMemoryUpdate(s *Server) {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
+		mcp.WithRawOutputSchema(schemaFor[mcpUpdateResponse]()),
 		mcp.WithDescription("Update an existing memory by ID. Use when information has changed or needs correction rather than storing a duplicate. Project must already exist."),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Memory ID to update")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
@@ -47,6 +48,7 @@ func registerMemoryGet(s *Server) {
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
+		mcp.WithRawOutputSchema(schemaFor[mcpBatchGetResponse]()),
 		mcp.WithDescription("Retrieve specific memories by ID when you need the full content from a previous recall result. Project must already exist."),
 		mcp.WithArray("ids", mcp.Required(), mcp.Description("Memory IDs to retrieve")),
 		mcp.WithString("project", mcp.Description("Project slug (default: 'global')")),
@@ -152,7 +154,7 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		"project_id":         project.ID.String(),
 	})
 
-	return wrapToolResult(buildMCPUpdateResponse(resp), nil)
+	return wrapToolResult(s.deps.Metrics, "update", mcpBudgetBytes(ctx, s.deps.Settings), buildMCPUpdateResponse(resp), nil)
 }
 
 func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -213,5 +215,6 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 		return mcp.NewToolResultError(fmt.Sprintf("batch get failed: %v", err)), nil
 	}
 
-	return wrapToolResult(buildMCPBatchGetResponse(resp, project.Slug, projectionOpts{}), nil)
+	out := buildMCPBatchGetResponse(resp, project.Slug, projectionOpts{})
+	return wrapToolResult(s.deps.Metrics, "get", mcpBudgetBytes(ctx, s.deps.Settings), out, newBatchGetReducer(out))
 }

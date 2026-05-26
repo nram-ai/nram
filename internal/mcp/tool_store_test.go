@@ -96,7 +96,7 @@ func buildNoAuthCtx() context.Context {
 func TestMemoryStore_Schema_LacksEnrich(t *testing.T) {
 	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
 		deps := Dependencies{Backend: backend}
-		srv := NewServer(deps)
+		srv := newTestServer(deps)
 		tools := srv.MCPServer().ListTools()
 		st, ok := tools["store"]
 		if !ok {
@@ -115,7 +115,7 @@ func TestMemoryStore_Schema_LacksEnrich(t *testing.T) {
 func TestMemoryStoreBatch_Schema_LacksEnrich(t *testing.T) {
 	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
 		deps := Dependencies{Backend: backend}
-		srv := NewServer(deps)
+		srv := newTestServer(deps)
 		tools := srv.MCPServer().ListTools()
 		st, ok := tools["store_batch"]
 		if !ok {
@@ -133,7 +133,7 @@ func TestMemoryStoreBatch_Schema_LacksEnrich(t *testing.T) {
 
 func TestHandleMemoryStore_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
@@ -151,7 +151,7 @@ func TestHandleMemoryStore_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryStore_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
@@ -170,7 +170,7 @@ func TestHandleMemoryStore_NoAuth(t *testing.T) {
 
 func TestHandleMemoryStore_MissingContent(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
@@ -193,7 +193,7 @@ func TestHandleMemoryStore_UserNotFound(t *testing.T) {
 		Backend:  storage.BackendSQLite,
 		UserRepo: &mockUserRepoStore{err: errors.New("user not found")},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
@@ -228,7 +228,7 @@ func TestHandleMemoryStore_ExistingProject(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
 		Store:         storeSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "store"
@@ -283,7 +283,7 @@ func TestHandleMemoryStore_AutoCreateProject(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: ns},
 		Store:         storeSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "store"
@@ -314,7 +314,7 @@ func TestHandleMemoryStore_AutoCreateProject(t *testing.T) {
 
 func TestHandleMemoryStoreBatch_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
@@ -332,7 +332,7 @@ func TestHandleMemoryStoreBatch_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryStoreBatch_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
@@ -351,7 +351,7 @@ func TestHandleMemoryStoreBatch_NoAuth(t *testing.T) {
 
 func TestHandleMemoryStoreBatch_EmptyItems(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
@@ -380,7 +380,7 @@ func TestHandleMemoryStoreBatch_ItemMissingContent(t *testing.T) {
 		ProjectRepo:   &mockProjectRepoStore{project: project},
 		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
@@ -414,7 +414,7 @@ func TestHandleMemoryStoreBatch_Success(t *testing.T) {
 		NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
 		BatchStore:    batchSvc,
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"

@@ -529,6 +529,14 @@ const (
 	// reinforcement floor at the cost of differential decay behavior.
 	SettingMemoryDefaultImportance = "memory.default_importance"
 	SettingMemoryDefaultConfidence = "memory.default_confidence"
+
+	// MCP CallToolResult per-tool byte budget, expressed in tokens (multiplied
+	// by charsPerTokenEstimate at the MCP layer). Bounds the structured +
+	// text wire so a single tool response cannot blow the model's effective
+	// context. Hot-reloadable. The admin schema enforces Min=100; below that,
+	// the truncation sentinel suffix (~108 bytes) cannot fit, which would
+	// silently strip the wire signal for clients detecting Tier-3 truncation.
+	SettingMCPMaxResultTokens = "mcp.max_result_tokens"
 )
 
 // Reconsolidation mode values. Default is shadow so the first real deployment
@@ -929,6 +937,12 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	// through Resolve normally; this is only the registered default.
 	SettingMemoryDefaultImportance: "0.5",
 	SettingMemoryDefaultConfidence: "1",
+
+	// MCP CallToolResult per-tool budget in tokens. 22000 matches the prior
+	// hardcoded default (44000 bytes at ~2 chars/token) and leaves headroom
+	// against typical 200k-context clients without burning the whole window
+	// on a single tool call. Operators tune via /admin/settings.
+	SettingMCPMaxResultTokens: "22000",
 
 	// Display-only keys: registered in the admin schema for UI completeness
 	// but not yet wired to any consumer. Listed here so the init-time

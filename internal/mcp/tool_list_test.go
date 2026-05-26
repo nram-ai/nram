@@ -111,7 +111,7 @@ func (m *slugProjectRepo) UpdateDescription(_ context.Context, _ uuid.UUID, _ st
 
 func TestMemoryList_Registered_SQLite(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["list"]; !ok {
@@ -121,7 +121,7 @@ func TestMemoryList_Registered_SQLite(t *testing.T) {
 
 func TestMemoryList_Registered_Postgres(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	if _, ok := tools["list"]; !ok {
@@ -131,7 +131,7 @@ func TestMemoryList_Registered_Postgres(t *testing.T) {
 
 func TestMemoryList_Schema_HasExpectedFields(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	tools := srv.MCPServer().ListTools()
 	st, ok := tools["list"]
@@ -156,7 +156,7 @@ func TestMemoryList_Schema_HasExpectedFields(t *testing.T) {
 
 func TestHandleMemoryList_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	result, err := handleMemoryList(context.Background(), srv, req)
@@ -168,7 +168,7 @@ func TestHandleMemoryList_NoHTTPRequest(t *testing.T) {
 
 func TestHandleMemoryList_NoAuth(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	ctx := buildNoAuthCtx()
@@ -189,7 +189,7 @@ func TestHandleMemoryList_ProjectNotFound(t *testing.T) {
 		UserRepo:    &mockUserRepoStore{user: user},
 		ProjectRepo: &mockProjectRepoStore{getErr: io.ErrUnexpectedEOF},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -222,7 +222,7 @@ func TestHandleMemoryList_DefaultsToGlobal(t *testing.T) {
 			countByNs:    map[uuid.UUID]int{globalNsID: 0},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
@@ -287,7 +287,7 @@ func TestHandleMemoryList_NonGlobalIncludesGlobal(t *testing.T) {
 			},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -345,7 +345,7 @@ func TestHandleMemoryList_GlobalProjectDoesNotDoubleInclude(t *testing.T) {
 			countByNs:    map[uuid.UUID]int{globalNsID: 1},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	// Explicitly request "global" — should NOT double-include global.
 	req := mcp.CallToolRequest{}
@@ -413,7 +413,7 @@ func TestHandleMemoryList_WithMemories(t *testing.T) {
 			},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -473,7 +473,7 @@ func TestHandleMemoryList_LimitClamped(t *testing.T) {
 			countByNs:    map[uuid.UUID]int{globalNsID: 0},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -515,7 +515,7 @@ func TestHandleMemoryList_CountError(t *testing.T) {
 			countErr: fmt.Errorf("db error"),
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
@@ -545,7 +545,7 @@ func TestHandleMemoryList_ListError(t *testing.T) {
 			listErr:   fmt.Errorf("db error"),
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
@@ -575,7 +575,7 @@ func TestHandleMemoryList_EmptyList(t *testing.T) {
 			countByNs:    map[uuid.UUID]int{globalNsID: 0},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
@@ -633,7 +633,7 @@ func TestHandleMemoryList_Pagination(t *testing.T) {
 			},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -691,7 +691,7 @@ func TestHandleMemoryList_NoGlobalProjectGraceful(t *testing.T) {
 			countByNs:    map[uuid.UUID]int{projectNsID: 1},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -746,7 +746,7 @@ func TestHandleMemoryList_AlwaysHidesSuperseded(t *testing.T) {
 			countByNs:    map[uuid.UUID]int{projNsID: 2},
 		},
 	}
-	srv := NewServer(deps)
+	srv := newTestServer(deps)
 
 	// Pass include_superseded=true; the MCP handler ignores it (the flag was
 	// stripped from the schema) and unconditionally sets HideSuperseded=true

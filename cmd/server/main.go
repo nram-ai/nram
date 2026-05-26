@@ -468,6 +468,7 @@ func main() {
 		Traverser:      relationshipRepo,
 		Settings:       settingsSvc,
 		EventBus:       eventBus,
+		Metrics:        promMetrics,
 		ProviderStatus: func() (bool, bool) {
 			if registry == nil {
 				return false, false

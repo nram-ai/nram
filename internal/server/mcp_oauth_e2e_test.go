@@ -494,6 +494,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      &e2eUserRepoMCP{user: user},
 		NamespaceRepo: namespaceLookup,
+		Metrics:       metrics.New(),
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 
@@ -2015,6 +2016,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 		ProjectRepo:   projectLookup,
 		UserRepo:      &e2eUserRepoMCP{user: user},
 		NamespaceRepo: namespaceLookup,
+		Metrics:       metrics.New(),
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 
