@@ -66,11 +66,6 @@ type RelationshipTraverser interface {
 	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
 }
 
-// MemoryShareReader provides access to memory sharing records.
-type MemoryShareReader interface {
-	ListSharedToNamespace(ctx context.Context, targetNamespaceID uuid.UUID) ([]model.MemoryShare, error)
-}
-
 // RecallRequest contains all parameters needed to recall memories.
 type RecallRequest struct {
 	ProjectID uuid.UUID `json:"project_id"`
@@ -92,14 +87,13 @@ type RecallRequest struct {
 	//   "raw_cosine" (default): the raw cosine returned by the vector
 	//   store before RRF. Absolute scale (compared against the embedder's
 	//   cosine output directly). Only vector-channel rows are filtered;
-	//   lexical-only hits, list-fallback, and shared-namespace candidates
-	//   bypass.
+	//   lexical-only hits and list-fallback candidates bypass.
 	//
 	//   "fused_combined": the post-RRF max-normalized similarity. Filters
 	//   every simMap entry, including lexical-only entries that surfaced
 	//   via RRF on the lexical channel (their normalized score reflects
-	//   combined evidence). List-fallback and shared-namespace candidates
-	//   still bypass because they never enter simMap. Rank-relative: the
+	//   combined evidence). List-fallback candidates still bypass because
+	//   they never enter simMap. Rank-relative: the
 	//   top result for a given query always normalizes to 1.0, so the
 	//   threshold's selectivity floats with query difficulty. Requires
 	//   recall.fusion.enabled=true; combining fused_combined with a
@@ -148,7 +142,6 @@ type RecallResult struct {
 	Score       float64         `json:"score"`
 	Similarity  *float64        `json:"similarity"`
 	Confidence  float64         `json:"confidence"`
-	SharedFrom  *string         `json:"shared_from"`
 	AccessCount int             `json:"access_count"`
 	Enriched    bool            `json:"enriched"`
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
@@ -210,8 +203,8 @@ const (
 // whose post-RRF max-normalized similarity is below the threshold,
 // which intentionally includes lexical-only entries that surfaced via
 // RRF on the lexical channel (their normalized fused score reflects
-// combined evidence). List-fallback and shared-namespace candidates
-// still bypass under both modes because they never enter simMap.
+// combined evidence). List-fallback candidates still bypass under both
+// modes because they never enter simMap.
 const (
 	SimilarityThresholdModeRawCosine     = "raw_cosine"
 	SimilarityThresholdModeFusedCombined = "fused_combined"
@@ -309,7 +302,6 @@ type RecallService struct {
 	lexical       LexicalSearcher
 	entityReader  EntityReader
 	traverser     RelationshipTraverser
-	shares        MemoryShareReader
 	embedProvider func() provider.EmbeddingProvider
 	weights       RankingWeights
 	fusion        FusionConfig
@@ -345,7 +337,6 @@ func NewRecallService(
 	vectorSearch VectorSearcher,
 	entityReader EntityReader,
 	traverser RelationshipTraverser,
-	shares MemoryShareReader,
 	embedProvider func() provider.EmbeddingProvider,
 ) *RecallService {
 	return &RecallService{
@@ -355,7 +346,6 @@ func NewRecallService(
 		vectorSearch:  vectorSearch,
 		entityReader:  entityReader,
 		traverser:     traverser,
-		shares:        shares,
 		embedProvider: embedProvider,
 		weights:       DefaultRankingWeights,
 		fusion:        DefaultFusionConfig,
@@ -405,16 +395,15 @@ type scoredMemory struct {
 	projectID      uuid.UUID
 	projectSlug    string
 	namespacePath  string
-	sharedFromNs   *string // non-nil if surfaced via cross-namespace sharing (source namespace slug)
 	isPrimary      bool
 	// viaVector is true if this candidate's ID actually surfaced via the
 	// vector channel (non-fusion vector search, or hybrid search where the
-	// vector backend returned this ID). False for list-fallback and
-	// shared-namespace candidates that never entered simMap, AND false for
-	// lexical-only RRF hits that entered simMap via the lexical channel.
-	// Drives the RecallResult.Similarity pointer-vs-nil distinction so
-	// consumers can tell "vector said X" from "no vector evidence at all"
-	// (the latter serializes as null).
+	// vector backend returned this ID). False for list-fallback candidates
+	// that never entered simMap, AND false for lexical-only RRF hits that
+	// entered simMap via the lexical channel. Drives the
+	// RecallResult.Similarity pointer-vs-nil distinction so consumers can
+	// tell "vector said X" from "no vector evidence at all" (the latter
+	// serializes as null).
 	viaVector bool
 	// embedding holds the candidate's embedding vector after the candidate-build
 	// phase finishes. Hydrated in one batch GetByIDs call after the tag filter
@@ -541,10 +530,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// projectByNamespace maps each namespace this recall touches to the project
 	// that owns it. Without this, every candidate gets stamped with the primary
 	// project's slug — globals fetched alongside primary results would be
-	// mis-attributed to the search-target project. The map covers primary,
-	// global, and shared-source namespaces (seeded lazily during shared
-	// resolution below). Falls back to the primary stamp when a namespace has
-	// no owning project (e.g., org-level shares).
+	// mis-attributed to the search-target project. The map covers primary and
+	// global namespaces. Falls back to the primary stamp when a namespace has
+	// no owning project.
 	projectByNamespace := map[uuid.UUID]projectAttribution{
 		namespaceID: {ProjectID: projectID, ProjectSlug: projectSlug, IsPrimary: true},
 	}
@@ -557,9 +545,12 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		if attr, ok := projectByNamespace[memNs]; ok {
 			return attr
 		}
-		// Unknown namespaces (org-level shares without an owning project)
-		// fall back to the primary stamp WITHOUT IsPrimary, so quota and
-		// origin treat them as non-primary.
+		// Defensive fallback for any candidate whose namespace was not
+		// seeded above (primary + global). All known candidate-builder
+		// paths stay within that set, so this branch should not fire;
+		// stamping such a row with the primary project's slug but
+		// IsPrimary=false keeps quota and origin treating it as non-primary
+		// rather than corrupting the primary count.
 		return projectAttribution{ProjectID: projectID, ProjectSlug: projectSlug}
 	}
 
@@ -573,9 +564,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	var queryEmbeddingDim int
 	// queryEmbedding mirrors queryEmbeddingDim's lift: mmrSelect uses it for
 	// on-the-fly relevance computation when a candidate has a hydrated
-	// embedding but no Similarity pointer (lexical-only fusion hits, shared-
-	// namespace passthroughs), keeping every embedded candidate on the same
-	// cosine scale. Stays nil when the embedding path did not run.
+	// embedding but no Similarity pointer (lexical-only fusion hits),
+	// keeping every embedded candidate on the same cosine scale. Stays nil
+	// when the embedding path did not run.
 	var queryEmbedding []float32
 
 	// Try vector search if embedding provider is available.
@@ -692,9 +683,8 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				// reflects combined evidence and is in scope. Active only in
 				// fused_combined mode (which requires fusion.Enabled, per
 				// service validation); raw_cosine already filtered inside
-				// the channel above. List-fallback and shared-namespace
-				// candidates bypass this filter because they never enter
-				// simMap.
+				// the channel above. List-fallback candidates bypass this
+				// filter because they never enter simMap.
 				fusedFloor := 0.0
 				if simMode == SimilarityThresholdModeFusedCombined && simThreshold > 0 {
 					fusedFloor = simThreshold
@@ -773,59 +763,6 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							projectID:     attr.ProjectID,
 							projectSlug:   attr.ProjectSlug,
 							namespacePath: namespacePath,
-							isPrimary:     attr.IsPrimary,
-						})
-					}
-				}
-			}
-		}
-	}
-
-	// Include memories from shared namespaces.
-	var sharedBypassLogged bool
-	if s.shares != nil && s.memories != nil {
-		sharedRecords, err := s.shares.ListSharedToNamespace(ctx, namespaceID)
-		if err == nil {
-			for _, share := range sharedRecords {
-				// Skip revoked shares.
-				if share.RevokedAt != nil {
-					continue
-				}
-				// Resolve the source namespace slug for the shared_from field.
-				var sourceNsSlug string
-				if s.namespaces != nil {
-					if sourceNs, err := s.namespaces.GetByID(ctx, share.SourceNsID); err == nil {
-						sourceNsSlug = sourceNs.Slug
-					}
-				}
-				if sourceNsSlug == "" {
-					sourceNsSlug = share.SourceNsID.String()
-				}
-				if _, ok := projectByNamespace[share.SourceNsID]; !ok {
-					if sp, err := s.projects.GetByNamespaceID(ctx, share.SourceNsID); err == nil && sp != nil {
-						projectByNamespace[share.SourceNsID] = projectAttribution{ProjectID: sp.ID, ProjectSlug: sp.Slug}
-					}
-				}
-				// Fetch memories from the source namespace.
-				sharedMems, err := s.memories.ListByNamespace(ctx, share.SourceNsID, overfetchLimit, 0)
-				if err == nil {
-					if len(sharedMems) > 0 && simThreshold > 0 && !sharedBypassLogged {
-						slog.Debug("recall: similarity_threshold not applied to shared-namespace candidates",
-							"project_id", projectID,
-							"similarity_threshold", simThreshold,
-							"mode", simMode,
-						)
-						sharedBypassLogged = true
-					}
-					for _, mem := range sharedMems {
-						slug := sourceNsSlug
-						attr := attribute(mem.NamespaceID)
-						candidates = append(candidates, scoredMemory{
-							memory:        mem,
-							projectID:     attr.ProjectID,
-							projectSlug:   attr.ProjectSlug,
-							namespacePath: namespacePath,
-							sharedFromNs:  &slug,
 							isPrimary:     attr.IsPrimary,
 						})
 					}
@@ -1039,8 +976,8 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 	// Resolve effective weights per candidate based on its owning project.
 	// Each candidate carries c.projectID (stamped during candidate building),
-	// so cross-project recall — globals, shared namespaces — gets each row's
-	// owner's tuning rather than the requester's. The global baseline
+	// so cross-project recall (globals) gets each row's owner's tuning rather
+	// than the requester's. The global baseline
 	// (effWeights) was resolved once at the top of Recall, so admin-UI
 	// changes to ranking.weight.* apply to this same call; project overrides
 	// continue to merge on top per the existing precedent. Cache lifetime is
@@ -1109,10 +1046,10 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 		// Gate the Similarity pointer on the candidate's actual vector
 		// provenance (c.viaVector), not on the global embeddingUsed flag.
-		// A shared-namespace or list-fallback row appearing in the same
-		// recall as a vector-channel row would otherwise report
-		// similarity=0.0 and be indistinguishable from a vector row whose
-		// cosine genuinely was zero.
+		// A list-fallback row appearing in the same recall as a
+		// vector-channel row would otherwise report similarity=0.0 and be
+		// indistinguishable from a vector row whose cosine genuinely was
+		// zero.
 		var sim *float64
 		if c.viaVector {
 			sv := c.similarity
@@ -1134,7 +1071,6 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			Score:       score,
 			Similarity:  sim,
 			Confidence:  c.memory.Confidence,
-			SharedFrom:  c.sharedFromNs,
 			AccessCount: c.memory.AccessCount,
 			Enriched:    c.memory.Enriched,
 			Metadata:    c.memory.Metadata,

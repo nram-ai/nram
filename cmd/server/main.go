@@ -211,7 +211,6 @@ func main() {
 	entityAliasRepo := storage.NewEntityAliasRepo(db)
 	relationshipRepo := storage.NewRelationshipRepo(db)
 	lineageRepo := storage.NewMemoryLineageRepo(db)
-	shareRepo := storage.NewMemoryShareRepo(db)
 	webhookRepo := storage.NewWebhookRepo(db)
 	ingestionLogRepo := storage.NewIngestionLogRepo(db)
 	tokenUsageRepo := storage.NewTokenUsageRepo(db)
@@ -364,7 +363,7 @@ func main() {
 	recallSvc := service.NewRecallService(
 		memoryRepo, projectRepo, namespaceRepo,
 		vectorStore, entityRepo,
-		relationshipRepo, shareRepo, embedProvider,
+		relationshipRepo, embedProvider,
 	).WithMetrics(promMetrics)
 	updateSvc := service.NewUpdateService(
 		memoryRepo, projectRepo,
@@ -389,7 +388,7 @@ func main() {
 		projectRepo, projectRepo, memoryRepo, lineageRepo, memoryRepo,
 		vectorStore, entityAliasRepo, entityRepo, relationshipRepo,
 		enrichmentQueueRepo, tokenUsageRepo,
-		ingestionLogRepo, shareRepo, hnswDeleter, namespaceRepo, eventBus,
+		ingestionLogRepo, hnswDeleter, namespaceRepo, eventBus,
 	)
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)
 	enrichSvc.AttachAugmentationLister(memoryRepo)

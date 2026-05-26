@@ -243,7 +243,6 @@ export interface RecallResult {
   score: number;
   similarity?: number | null;
   confidence?: number;
-  shared_from?: string | null;
   access_count?: number;
   enriched?: boolean;
   metadata: Record<string, unknown>;

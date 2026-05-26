@@ -79,11 +79,6 @@ type IngestionLogDeleter interface {
 	DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error
 }
 
-// MemoryShareDeleter deletes all memory shares involving a namespace.
-type MemoryShareDeleter interface {
-	DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error
-}
-
 // EnrichmentBulkDeleter deletes enrichment queue entries by namespace.
 type EnrichmentBulkDeleter interface {
 	DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namespaceID uuid.UUID) error
@@ -125,8 +120,8 @@ var ErrNoGlobalProject = errors.New("project delete: owner has no global project
 // The full DB cascade runs inside a single transaction, in FK-safe order:
 // memory_lineage, then memories (enrichment_queue cascades; relationships.source_memory
 // and token_usage.memory_id are SET NULL), then relationships, then entity_aliases,
-// then entities, then the namespace-scoped side tables (ingestion log, memory
-// shares, enrichment queue, HNSW snapshots), then token_usage reassignment by
+// then entities, then the namespace-scoped side tables (ingestion log,
+// enrichment queue, HNSW snapshots), then token_usage reassignment by
 // project_id and by namespace_id, then the project row, then the namespace row.
 // Either the whole cascade succeeds or the transaction rolls back and the
 // database is unchanged. Vector store cleanup (in-memory HNSW graph nodes)
@@ -145,7 +140,6 @@ type ProjectDeleteService struct {
 	enrichmentDeleter     EnrichmentBulkDeleter
 	tokenUsageReassign    TokenUsageReassigner
 	ingestionDeleter      IngestionLogDeleter
-	shareDeleter          MemoryShareDeleter
 	hnswDeleter           HNSWSnapshotDeleter
 	namespaceDeleter      NamespaceDeleter
 	eventBus              events.EventBus
@@ -166,7 +160,6 @@ func NewProjectDeleteService(
 	enrichmentDeleter EnrichmentBulkDeleter,
 	tokenUsageReassign TokenUsageReassigner,
 	ingestionDeleter IngestionLogDeleter,
-	shareDeleter MemoryShareDeleter,
 	hnswDeleter HNSWSnapshotDeleter,
 	namespaceDeleter NamespaceDeleter,
 	eventBus events.EventBus,
@@ -185,7 +178,6 @@ func NewProjectDeleteService(
 		enrichmentDeleter:    enrichmentDeleter,
 		tokenUsageReassign:   tokenUsageReassign,
 		ingestionDeleter:     ingestionDeleter,
-		shareDeleter:         shareDeleter,
 		hnswDeleter:          hnswDeleter,
 		namespaceDeleter:     namespaceDeleter,
 		eventBus:             eventBus,
@@ -322,10 +314,6 @@ func (s *ProjectDeleteService) runCascadeTx(ctx context.Context, project, global
 
 	if err := s.ingestionDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
 		return nil, fmt.Errorf("project delete: ingestion log: %w", err)
-	}
-
-	if err := s.shareDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {
-		return nil, fmt.Errorf("project delete: memory shares: %w", err)
 	}
 
 	if err := s.enrichmentDeleter.DeleteByNamespaceTx(ctx, tx, project.NamespaceID); err != nil {

@@ -3302,9 +3302,6 @@ components:
         confidence:
           type: number
           format: double
-        shared_from:
-          type: string
-          nullable: true
         access_count:
           type: integer
         enriched:

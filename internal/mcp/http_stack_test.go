@@ -128,7 +128,7 @@ func newHTTPStackEnv(t *testing.T) *httpStackEnv {
 		recallReader,
 		&mockProjectLookup{project: project},
 		&mockNamespaceLookup{ns: ns},
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil,
 	)
 
 	// Forget service backed by a tracking deleter that shares the memRepo map.
@@ -1520,7 +1520,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 	)
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, nsLookup,
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil,
 	)
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 	updateSvc := service.NewUpdateService(

@@ -362,7 +362,7 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 		&mockListByNsReader{memories: []model.Memory{storedMemory}},
 		&mockProjectLookup{project: project},
 		&mockNamespaceLookup{ns: ns},
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil,
 	)
 	deps.Recall = recallSvc
 	srv2 := newTestServer(deps)

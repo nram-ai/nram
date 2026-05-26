@@ -143,7 +143,6 @@ func truncateAllForTest(t *testing.T, db DB) {
 	tables := []string{
 		"enrichment_queue",
 		"memory_lineage",
-		"memory_shares",
 		"ingestion_log",
 		"token_usage",
 		"relationships",

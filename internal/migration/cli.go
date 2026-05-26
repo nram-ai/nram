@@ -30,7 +30,6 @@ var migrationTables = []string{
 	"ingestion_log",
 	"enrichment_queue",
 	"webhooks",
-	"memory_shares",
 	"oauth_clients",
 	"oauth_authorization_codes",
 	"oauth_refresh_tokens",

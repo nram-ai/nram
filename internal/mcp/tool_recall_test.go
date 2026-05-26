@@ -39,7 +39,6 @@ func newMockRecallSvc() *service.RecallService {
 		nil, // no vector search
 		nil, // no entity reader
 		nil, // no traverser
-		nil, // no shares
 		nil, // no embed provider
 	)
 }
@@ -350,7 +349,7 @@ func TestBuildMCPRecallResponse_FixtureShape(t *testing.T) {
 	// bookkeepingMetaKeys, and this list is the drift catcher.
 	bannedKeys := []string{
 		`"path"`, `"project_id"`, `"similarity"`, `"confidence"`, `"access_count"`,
-		`"enriched"`, `"shared_from"`, `"total_searched"`,
+		`"enriched"`, `"total_searched"`,
 		`"dream_cycle_id"`, `"source_memory_ids"`,
 		`"contradictions_checked_at"`, `"novelty_audited_at"`, `"novelty_audit_reason"`,
 		`"low_novelty"`, `"low_novelty_reason"`, `"paraphrase_checked_at"`,

@@ -46,7 +46,6 @@ var preflightTables = []string{
 	"oauth_clients",
 	"token_usage",
 	"webhooks",
-	"memory_shares",
 	"api_keys",
 	"audit_events",
 	"settings",

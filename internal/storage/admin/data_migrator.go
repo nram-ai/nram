@@ -296,7 +296,6 @@ var migratedTables = []string{
 	"ingestion_log",
 	"enrichment_queue",
 	"webhooks",
-	"memory_shares",
 	"token_usage",
 	"oauth_clients",
 	"oauth_authorization_codes",
@@ -333,7 +332,6 @@ func (m *DataMigrator) Run(ctx context.Context) error {
 		{"ingestion_log", m.migrateIngestionLog},
 		{"enrichment_queue", m.migrateEnrichmentQueue},
 		{"webhooks", m.migrateWebhooks},
-		{"memory_shares", m.migrateMemoryShares},
 		{"token_usage", m.migrateTokenUsage},
 		{"oauth_clients", m.migrateOAuthClients},
 		{"oauth_authorization_codes", m.migrateOAuthAuthorizationCodes},
@@ -1510,69 +1508,6 @@ func (m *DataMigrator) migrateWebhooks(ctx context.Context) error {
 			return fmt.Errorf("insert webhook %s: %w", id, err)
 		}
 		m.markInserted("webhooks", id)
-	}
-	return tx.Commit()
-}
-
-func (m *DataMigrator) migrateMemoryShares(ctx context.Context) error {
-	rows, err := m.src.QueryContext(ctx, `
-		SELECT id, source_ns_id, target_ns_id, permission, created_by, expires_at, revoked_at, created_at
-		FROM memory_shares
-	`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	tx, err := m.dst.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO memory_shares (id, source_ns_id, target_ns_id, permission, created_by,
-		                           expires_at, revoked_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT DO NOTHING
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for rows.Next() {
-		var (
-			id, srcNsID, tgtNsID, permission string
-			createdBy, expiresAt, revokedAt  sql.NullString
-			createdAt                        string
-		)
-		if err := rows.Scan(&id, &srcNsID, &tgtNsID, &permission, &createdBy,
-			&expiresAt, &revokedAt, &createdAt); err != nil {
-			return err
-		}
-		if !m.hasInserted("namespaces", srcNsID) {
-			m.skipOrphan("memory_shares", "source_ns_id")
-			continue
-		}
-		if !m.hasInserted("namespaces", tgtNsID) {
-			m.skipOrphan("memory_shares", "target_ns_id")
-			continue
-		}
-		if createdBy.Valid && !m.hasInserted("users", createdBy.String) {
-			m.skipOrphan("memory_shares", "created_by")
-			continue
-		}
-		if _, err := stmt.ExecContext(ctx,
-			id, srcNsID, tgtNsID, permission,
-			nullStringToInterface(createdBy),
-			nullStringToInterface(expiresAt),
-			nullStringToInterface(revokedAt),
-			createdAt,
-		); err != nil {
-			return fmt.Errorf("insert memory_share %s: %w", id, err)
-		}
-		m.markInserted("memory_shares", id)
 	}
 	return tx.Commit()
 }

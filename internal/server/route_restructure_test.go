@@ -408,8 +408,8 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	)
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, namespaceLookup,
-		nil, nil, nil, nil, nil,
-		)
+		nil, nil, nil, nil,
+	)
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 	updateSvc := service.NewUpdateService(
 		memRepo, projectLookup,

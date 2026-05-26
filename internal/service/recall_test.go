@@ -108,14 +108,6 @@ func (m *mockRelTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, _,
 	return storage.TraversalResult{Relationships: m.rels}, nil
 }
 
-type mockMemoryShareReader struct {
-	shares []model.MemoryShare
-}
-
-func (m *mockMemoryShareReader) ListSharedToNamespace(_ context.Context, _ uuid.UUID) ([]model.MemoryShare, error) {
-	return m.shares, nil
-}
-
 // --- Recall test helpers ---
 
 func makeTestMemory(id uuid.UUID, nsID uuid.UUID, content string, tags []string, importance float64, accessCount int, createdAt time.Time) *model.Memory {
@@ -145,7 +137,7 @@ func newRecallService(
 	// Wrap embedFn so the middleware writes token_usage rows on every
 	// Embed call — matches production wiring.
 	wrapped := provider.WrapEmbeddingForTest(embedFn, tokenUsage)
-	svc := NewRecallService(memories, projects, namespaces, vectorSearch, entityReader, traverser, &mockMemoryShareReader{}, wrapped)
+	svc := NewRecallService(memories, projects, namespaces, vectorSearch, entityReader, traverser, wrapped)
 	return svc, tokenUsage
 }
 

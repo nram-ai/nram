@@ -580,8 +580,8 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, namespaceLookup,
-		nil, nil, nil, nil, nil,
-		)
+		nil, nil, nil, nil,
+	)
 
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 
@@ -1524,8 +1524,8 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 
 	recallSvc := service.NewRecallService(
 		memRepo, projectLookup, namespaceLookup,
-		nil, nil, nil, nil, nil,
-		)
+		nil, nil, nil, nil,
+	)
 
 	forgetSvc := service.NewForgetService(memRepo, projectLookup, nil, nil)
 

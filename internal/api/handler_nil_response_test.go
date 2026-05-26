@@ -33,7 +33,6 @@ func assertNoNullCollections(t *testing.T, body string) {
 	allowed := map[string]bool{
 		"source":        true,
 		"similarity":    true,
-		"shared_from":   true, // nullable: only set when surfaced via cross-namespace sharing
 		"last_accessed": true,
 		"expires_at":    true,
 		"superseded_by": true,

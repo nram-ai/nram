@@ -372,25 +372,6 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 		        '["memory.updated"]', 'ns:aaaaaaaa-0000-0000-0000-000000000002', 0,
 		        '2025-02-01T10:30:00Z', '2025-02-01T10:30:00Z')`)
 
-	// ── memory_shares ──────────────────────────────────────────────────────
-	// Share 1: all nullable fields set
-	mustExec(`INSERT INTO memory_shares (id, source_ns_id, target_ns_id, permission, created_by,
-	                                     expires_at, revoked_at, created_at)
-		VALUES ('88888888-0000-0000-0000-000000000001',
-		        'aaaaaaaa-0000-0000-0000-000000000002',
-		        'aaaaaaaa-0000-0000-0000-000000000001',
-		        'recall', 'cccccccc-0000-0000-0000-000000000001',
-		        '2026-12-31T23:59:59Z', '2025-08-01T00:00:00Z',
-		        '2025-01-15T10:30:00Z')`)
-
-	// Share 2: all nullable fields NULL
-	mustExec(`INSERT INTO memory_shares (id, source_ns_id, target_ns_id, permission, created_at)
-		VALUES ('88888888-0000-0000-0000-000000000002',
-		        'aaaaaaaa-0000-0000-0000-000000000001',
-		        'aaaaaaaa-0000-0000-0000-000000000002',
-		        'read',
-		        '2025-02-01T10:30:00Z')`)
-
 	// ── token_usage ────────────────────────────────────────────────────────
 	// Token usage 1: all nullable FKs set
 	mustExec(`INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id, operation,
@@ -525,7 +506,6 @@ func cleanPostgres(t *testing.T, db *sql.DB) {
 		"oauth_authorization_codes",
 		"oauth_clients",
 		"token_usage",
-		"memory_shares",
 		"webhooks",
 		"enrichment_queue",
 		"ingestion_log",
@@ -1237,29 +1217,6 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"last_status":   nil,
 				"failure_count": int(0),
 				"created_at":    "2025-02-01T10:30:00Z", "updated_at": "2025-02-01T10:30:00Z",
-			},
-		})
-	})
-
-	t.Run("memory_shares", func(t *testing.T) {
-		verifyRows(t, pgConn, "memory_shares", []map[string]interface{}{
-			{
-				"id": "88888888-0000-0000-0000-000000000001",
-				"source_ns_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"target_ns_id": "aaaaaaaa-0000-0000-0000-000000000001",
-				"permission": "recall",
-				"created_by": "cccccccc-0000-0000-0000-000000000001",
-				"expires_at": "2026-12-31T23:59:59Z",
-				"revoked_at": "2025-08-01T00:00:00Z",
-				"created_at": "2025-01-15T10:30:00Z",
-			},
-			{
-				"id": "88888888-0000-0000-0000-000000000002",
-				"source_ns_id": "aaaaaaaa-0000-0000-0000-000000000001",
-				"target_ns_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"permission": "read",
-				"created_by": nil, "expires_at": nil, "revoked_at": nil,
-				"created_at": "2025-02-01T10:30:00Z",
 			},
 		})
 	})

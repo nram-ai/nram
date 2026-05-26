@@ -83,7 +83,6 @@ func seedProject(t *testing.T) *fixtures {
 	tokenRepo := storage.NewTokenUsageRepo(db)
 	dreamCycleRepo := storage.NewDreamCycleRepo(db)
 	ingestRepo := storage.NewIngestionLogRepo(db)
-	shareRepo := storage.NewMemoryShareRepo(db)
 
 	// Owner namespace (kind=user); target and global project namespaces hang
 	// off it. Migrations seed the root (zero-UUID) namespace, so the org slot
@@ -160,7 +159,7 @@ func seedProject(t *testing.T) *fixtures {
 		memoryRepo, lineageRepo, memoryRepo,
 		nil, // vector store is post-commit best-effort; not exercised here
 		entityAliasRepo, entityRepo, relRepo, enrichRepo,
-		tokenRepo, ingestRepo, shareRepo,
+		tokenRepo, ingestRepo,
 		nil, // hnsw deleter is exercised in a dedicated test
 		nsRepo,
 		nil,
@@ -615,14 +614,13 @@ func TestProjectDelete_TxRollsBackOnFailure(t *testing.T) {
 
 	enrichRepo := storage.NewEnrichmentQueueRepo(fx.db)
 	ingestRepo := storage.NewIngestionLogRepo(fx.db)
-	shareRepo := storage.NewMemoryShareRepo(fx.db)
 	svc := NewProjectDeleteService(
 		fx.db,
 		fx.projectRepo, failProjectDeleter,
 		fx.memoryRepo, fx.lineageRepo, fx.memoryRepo,
 		nil,
 		fx.entityAliasRepo, fx.entityRepo, fx.relRepo, enrichRepo,
-		fx.tokenRepo, ingestRepo, shareRepo,
+		fx.tokenRepo, ingestRepo,
 		nil, fx.nsRepo, nil,
 	)
 
@@ -716,14 +714,13 @@ func TestProjectDelete_EntityVectorsCleanedFromQdrant(t *testing.T) {
 	// fixture's svc was built with vectorStore=nil for the SQL-only tests.
 	enrichRepo := storage.NewEnrichmentQueueRepo(fx.db)
 	ingestRepo := storage.NewIngestionLogRepo(fx.db)
-	shareRepo := storage.NewMemoryShareRepo(fx.db)
 	svc := NewProjectDeleteService(
 		fx.db,
 		fx.projectRepo, fx.projectRepo,
 		fx.memoryRepo, fx.lineageRepo, fx.memoryRepo,
 		qstore,
 		fx.entityAliasRepo, fx.entityRepo, fx.relRepo, enrichRepo,
-		fx.tokenRepo, ingestRepo, shareRepo,
+		fx.tokenRepo, ingestRepo,
 		nil, fx.nsRepo, nil,
 	)
 
