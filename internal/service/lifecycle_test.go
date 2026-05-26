@@ -383,7 +383,7 @@ func TestSweep_HardDeleteErrorSkipsMemory(t *testing.T) {
 func TestSweep_BatchSizeRespected(t *testing.T) {
 	store := newMockLifecycleStore()
 	// Add 5 expired memories but set batch size to 3.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		store.expired = append(store.expired, makeExpiredMemory(uuid.New()))
 	}
 

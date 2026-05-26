@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,9 +19,9 @@ import (
 
 // mockWebhookStore implements WebhookStore for testing.
 type mockWebhookStore struct {
-	mu       sync.Mutex
-	webhooks []model.Webhook
-	failures map[uuid.UUID]int
+	mu        sync.Mutex
+	webhooks  []model.Webhook
+	failures  map[uuid.UUID]int
 	successes map[uuid.UUID]int
 }
 
@@ -42,11 +43,8 @@ func (m *mockWebhookStore) ListActiveForEvent(_ context.Context, namespaceID uui
 		if !wh.Active || wh.Scope != scope {
 			continue
 		}
-		for _, e := range wh.Events {
-			if e == event {
-				result = append(result, wh)
-				break
-			}
+		if slices.Contains(wh.Events, event) {
+			result = append(result, wh)
 		}
 	}
 	return result, nil
@@ -136,8 +134,7 @@ func TestWebhookDelivery_Success(t *testing.T) {
 		WithTimeout(5*time.Second),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
@@ -229,8 +226,7 @@ func TestWebhookDelivery_RetryThenSuccess(t *testing.T) {
 		WithTimeout(5*time.Second),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
@@ -286,8 +282,7 @@ func TestWebhookDelivery_MaxRetriesExceeded(t *testing.T) {
 		WithTimeout(5*time.Second),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
@@ -351,8 +346,7 @@ func TestWebhookDelivery_NoSecret(t *testing.T) {
 		WithHTTPClient(srv.Client()),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
@@ -439,8 +433,7 @@ func TestWebhookDelivery_NoMatchingScope(t *testing.T) {
 		WithHTTPClient(srv.Client()),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)

@@ -172,8 +172,7 @@ func buildExtractionFailure(phase, reason, detail string, resp *provider.Complet
 
 // AsExtractionFailure unwraps err to *ExtractionFailure if present.
 func AsExtractionFailure(err error) (*ExtractionFailure, bool) {
-	var fail *ExtractionFailure
-	if errors.As(err, &fail) {
+	if fail, ok := errors.AsType[*ExtractionFailure](err); ok {
 		return fail, true
 	}
 	return nil, false

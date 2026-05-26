@@ -488,7 +488,7 @@ func TestHandleMemoryRecall_NoHTTPRequest(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "recall"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"query": "test query",
 	}
 
@@ -505,7 +505,7 @@ func TestHandleMemoryRecall_NoAuth(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "recall"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"query": "test query",
 	}
 
@@ -523,7 +523,7 @@ func TestHandleMemoryRecall_MissingQuery(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "recall"
-	req.Params.Arguments = map[string]interface{}{}
+	req.Params.Arguments = map[string]any{}
 
 	ctx := buildAuthCtx(uuid.New())
 	result, err := handleMemoryRecall(ctx, srv, req)
@@ -554,11 +554,11 @@ func TestHandleMemoryRecall_ProjectScoped(t *testing.T) {
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "recall"
-	callReq.Params.Arguments = map[string]interface{}{
+	callReq.Params.Arguments = map[string]any{
 		"query":   "find something",
 		"project": "myproj",
 		"limit":   float64(5),
-		"tags":    []interface{}{"important"},
+		"tags":    []any{"important"},
 	}
 
 	ctx := buildAuthCtx(userID)
@@ -599,7 +599,7 @@ func TestHandleMemoryRecall_UserScoped(t *testing.T) {
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "recall"
-	callReq.Params.Arguments = map[string]interface{}{
+	callReq.Params.Arguments = map[string]any{
 		"query": "search everything",
 	}
 
@@ -636,7 +636,7 @@ func TestHandleMemoryRecall_ProjectNotFound(t *testing.T) {
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "recall"
-	callReq.Params.Arguments = map[string]interface{}{
+	callReq.Params.Arguments = map[string]any{
 		"query":   "search",
 		"project": "nonexistent",
 	}

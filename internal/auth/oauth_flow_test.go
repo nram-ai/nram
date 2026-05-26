@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1455,7 +1456,7 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 
 	// Parse JWT and verify audience claim contains the resource indicator
 	claims := &Claims{}
-	parsed, err := jwt.ParseWithClaims(tok.AccessToken, claims, func(t *jwt.Token) (interface{}, error) {
+	parsed, err := jwt.ParseWithClaims(tok.AccessToken, claims, func(t *jwt.Token) (any, error) {
 		return secret, nil
 	})
 	if err != nil {
@@ -1469,13 +1470,7 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 	if err != nil || len(aud) == 0 {
 		t.Fatalf("expected audience claim in JWT, got: %v (err=%v)", aud, err)
 	}
-	found := false
-	for _, a := range aud {
-		if a == targetResource {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(aud, targetResource)
 	if !found {
 		t.Fatalf("expected audience to contain %q, got %v", targetResource, aud)
 	}
@@ -1600,7 +1595,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 
 	// Parse JWT and verify audience
 	claims := &Claims{}
-	parsed, err := jwt.ParseWithClaims(tokenResp.AccessToken, claims, func(t *jwt.Token) (interface{}, error) {
+	parsed, err := jwt.ParseWithClaims(tokenResp.AccessToken, claims, func(t *jwt.Token) (any, error) {
 		return secret, nil
 	})
 	if err != nil {
@@ -1614,13 +1609,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 	if err != nil || len(aud) == 0 {
 		t.Fatalf("expected audience claim, got: %v (err=%v)", aud, err)
 	}
-	found := false
-	for _, a := range aud {
-		if a == resourceIndicator {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(aud, resourceIndicator)
 	if !found {
 		t.Fatalf("JWT audience should contain %q, got %v", resourceIndicator, aud)
 	}

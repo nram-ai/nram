@@ -108,8 +108,8 @@ func (dt *DirtyTracker) handleEvent(ctx context.Context, event events.Event) {
 }
 
 func parseProjectIDFromScope(scope string) string {
-	if strings.HasPrefix(scope, "project:") {
-		return strings.TrimPrefix(scope, "project:")
+	if after, ok := strings.CutPrefix(scope, "project:"); ok {
+		return after
 	}
 	return ""
 }

@@ -87,7 +87,7 @@ func (m *mockNamespaceCreator) GetByID(ctx context.Context, id uuid.UUID) (*mode
 
 // --- helpers ---
 
-func doProjectsRequest(handler http.HandlerFunc, method string, body interface{}, ac *auth.AuthContext, query string) *httptest.ResponseRecorder {
+func doProjectsRequest(handler http.HandlerFunc, method string, body any, ac *auth.AuthContext, query string) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	if body != nil {
 		json.NewEncoder(&buf).Encode(body)
@@ -171,10 +171,10 @@ func TestMeProjects_CreateSuccess(t *testing.T) {
 	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{})
 	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
 
-	body := map[string]interface{}{
-		"name":        "Project Mayhem",
-		"slug":        "project-mayhem",
-		"description": "Distributed systems redesign",
+	body := map[string]any{
+		"name":         "Project Mayhem",
+		"slug":         "project-mayhem",
+		"description":  "Distributed systems redesign",
 		"default_tags": []string{"architecture"},
 	}
 
@@ -207,7 +207,7 @@ func TestMeProjects_CreateMissingName(t *testing.T) {
 	handler := NewMeProjectsHandler(&mockProjectLister{}, &mockUserGetter{}, &mockNamespaceCreator{})
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"description": "no name provided",
 	}
 
@@ -239,7 +239,7 @@ func TestMeProjects_CreateSlugConflict(t *testing.T) {
 	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{})
 	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"name": "Duplicate",
 		"slug": "existing-slug",
 	}
@@ -275,7 +275,7 @@ func TestMeProjects_CreateAutoSlug(t *testing.T) {
 	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{})
 	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"name": "My Cool Project!",
 	}
 

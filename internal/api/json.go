@@ -18,7 +18,7 @@ func isValidEmail(email string) bool {
 }
 
 // writeJSON encodes v as JSON and writes it to w with the given HTTP status code.
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	sanitized := sanitizeNils(v)
@@ -28,12 +28,12 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 // jsonMarshalerType is the reflect.Type for json.Marshaler interface.
-var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+var jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
 
 // sanitizeNils recursively walks a value and replaces nil slices with empty
 // slices and nil maps with empty maps so that JSON encoding produces [] and {}
 // instead of null.
-func sanitizeNils(v interface{}) interface{} {
+func sanitizeNils(v any) any {
 	if v == nil {
 		return v
 	}
@@ -42,7 +42,7 @@ func sanitizeNils(v interface{}) interface{} {
 
 func sanitizeValue(v reflect.Value) reflect.Value {
 	// Special-case json.RawMessage: if nil, default to "{}".
-	if v.Type() == reflect.TypeOf(json.RawMessage{}) {
+	if v.Type() == reflect.TypeFor[json.RawMessage]() {
 		if v.IsNil() || v.Len() == 0 {
 			return reflect.ValueOf(json.RawMessage("{}"))
 		}
@@ -65,7 +65,7 @@ func sanitizeValue(v reflect.Value) reflect.Value {
 		}
 		n := v.Len()
 		out := reflect.MakeSlice(v.Type(), n, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			out.Index(i).Set(sanitizeValue(v.Index(i)))
 		}
 		return out
@@ -93,7 +93,7 @@ func sanitizeValue(v reflect.Value) reflect.Value {
 		}
 		return out
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if v.IsNil() {
 			return v
 		}

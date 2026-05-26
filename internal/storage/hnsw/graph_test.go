@@ -257,7 +257,7 @@ func TestConcurrent(t *testing.T) {
 	rng := rand.New(rand.NewSource(99))
 
 	// Pre-populate with some data.
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		v := make([]float32, 16)
 		for j := range v {
 			v[j] = rng.Float32()
@@ -269,12 +269,12 @@ func TestConcurrent(t *testing.T) {
 	errs := make(chan error, 200)
 
 	// Concurrent writers.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(seed int64) {
 			defer wg.Done()
 			r := rand.New(rand.NewSource(seed))
-			for j := 0; j < 10; j++ {
+			for range 10 {
 				v := make([]float32, 16)
 				for k := range v {
 					v[k] = r.Float32()
@@ -287,12 +287,12 @@ func TestConcurrent(t *testing.T) {
 	}
 
 	// Concurrent readers.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(seed int64) {
 			defer wg.Done()
 			r := rand.New(rand.NewSource(seed))
-			for j := 0; j < 10; j++ {
+			for range 10 {
 				q := make([]float32, 16)
 				for k := range q {
 					q[k] = r.Float32()
@@ -315,9 +315,9 @@ func TestConcurrent(t *testing.T) {
 
 func TestRecall(t *testing.T) {
 	const (
-		n         = 1000
-		dim       = 128
-		k         = 10
+		n          = 1000
+		dim        = 128
+		k          = 10
 		numQueries = 20
 	)
 
@@ -327,7 +327,7 @@ func TestRecall(t *testing.T) {
 	// Generate random vectors.
 	vectors := make([][]float32, n)
 	ids := make([]uuid.UUID, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		v := make([]float32, dim)
 		for j := range v {
 			v[j] = rng.Float32()*2 - 1
@@ -337,7 +337,7 @@ func TestRecall(t *testing.T) {
 	}
 
 	// Insert all vectors.
-	for i := 0; i < n; i++ {
+	for i := range n {
 		err := g.Add(Node{ID: ids[i], Vector: vectors[i]})
 		if err != nil {
 			t.Fatalf("Add() error at %d: %v", i, err)
@@ -346,7 +346,7 @@ func TestRecall(t *testing.T) {
 
 	// For several query vectors, compute brute-force top-k and compare with HNSW results.
 	totalRecall := 0.0
-	for q := 0; q < numQueries; q++ {
+	for range numQueries {
 		query := make([]float32, dim)
 		for j := range query {
 			query[j] = rng.Float32()*2 - 1
@@ -358,14 +358,14 @@ func TestRecall(t *testing.T) {
 			score float64
 		}
 		brute := make([]bruteResult, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			brute[i] = bruteResult{
 				id:    ids[i],
 				score: CosineSimilarity(query, vectors[i]),
 			}
 		}
 		// Sort descending.
-		for i := 0; i < len(brute); i++ {
+		for i := range brute {
 			for j := i + 1; j < len(brute); j++ {
 				if brute[j].score > brute[i].score {
 					brute[i], brute[j] = brute[j], brute[i]
@@ -373,7 +373,7 @@ func TestRecall(t *testing.T) {
 			}
 		}
 		trueTopK := make(map[uuid.UUID]bool, k)
-		for i := 0; i < k; i++ {
+		for i := range k {
 			trueTopK[brute[i].id] = true
 		}
 
@@ -487,13 +487,13 @@ func TestSnapshotRoundTripThenPerCallAdd(t *testing.T) {
 		newCount = 75
 	)
 
-	for trial := 0; trial < 40; trial++ {
+	for trial := range 40 {
 		seed := int64(20260430 + trial)
 		t.Run("seed="+strconv.FormatInt(seed, 10), func(t *testing.T) {
 			g := NewGraph(dim, WithSeed(seed), WithEfConstruction(200), WithEfSearch(50))
 			rng := rand.New(rand.NewSource(seed + 1))
 
-			for i := 0; i < preCount; i++ {
+			for i := range preCount {
 				v := make([]float32, dim)
 				for j := range v {
 					v[j] = rng.Float32()*2 - 1
@@ -514,7 +514,7 @@ func TestSnapshotRoundTripThenPerCallAdd(t *testing.T) {
 			}
 			assertFriendsInvariant(t, imported)
 
-			for i := 0; i < newCount; i++ {
+			for i := range newCount {
 				v := make([]float32, dim)
 				for j := range v {
 					v[j] = rng.Float32()*2 - 1

@@ -94,15 +94,15 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID, userID *uuid
 	//   userID == nil && orgID == nil: global breakdown WITHOUT names. Same
 	//     reason as the org case, applied system-wide.
 	var memoriesByProjectQuery string
-	var memoriesByProjectArgs []interface{}
+	var memoriesByProjectArgs []any
 	withName := userID != nil
 	switch {
 	case userID != nil:
 		memoriesByProjectQuery = s.userMemoriesByProjectQuery()
-		memoriesByProjectArgs = []interface{}{userID.String()}
+		memoriesByProjectArgs = []any{userID.String()}
 	case orgID != nil:
 		memoriesByProjectQuery = s.orgMemoriesByProjectQueryNoName()
-		memoriesByProjectArgs = []interface{}{orgID.String()}
+		memoriesByProjectArgs = []any{orgID.String()}
 	default:
 		memoriesByProjectQuery = `SELECT p.id, COUNT(m.id) as count
 			FROM projects p
@@ -161,16 +161,16 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID, u
 	// Org-scoped (orgID set, userID nil) and global (both nil) keep the
 	// length-only shape so cross-tenant feeds never carry content.
 	var query string
-	var args []interface{}
+	var args []any
 	wantPreview := userID != nil
 
 	switch {
 	case userID != nil:
 		query = s.userRecentActivityQuery()
-		args = []interface{}{userID.String(), limit}
+		args = []any{userID.String(), limit}
 	case orgID != nil:
 		query = s.orgRecentActivityQuery()
-		args = []interface{}{orgID.String(), limit}
+		args = []any{orgID.String(), limit}
 	default:
 		query = `SELECT id, LENGTH(content), created_at FROM memories
 			WHERE deleted_at IS NULL
@@ -180,7 +180,7 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID, u
 				WHERE deleted_at IS NULL
 				ORDER BY created_at DESC LIMIT $1`
 		}
-		args = []interface{}{limit}
+		args = []any{limit}
 	}
 
 	rows, err := s.db.Query(ctx, query, args...)

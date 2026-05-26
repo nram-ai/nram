@@ -52,7 +52,7 @@ func (s *AggregatesStore) RecallDistribution(ctx context.Context, orgID *uuid.UU
 	END`
 
 	var query string
-	var args []interface{}
+	var args []any
 	if orgID == nil {
 		query = "SELECT " + bucketCase + " AS bucket, COUNT(*) FROM memories m " +
 			"WHERE m.deleted_at IS NULL GROUP BY bucket"
@@ -66,7 +66,7 @@ func (s *AggregatesStore) RecallDistribution(ctx context.Context, orgID *uuid.UU
 			"WHERE mn.path LIKE (SELECT n.path || '/%' FROM namespaces n " +
 			"JOIN organizations o ON o.namespace_id = n.id WHERE o.id = " + ph + ") " +
 			"AND m.deleted_at IS NULL GROUP BY bucket"
-		args = []interface{}{orgID.String()}
+		args = []any{orgID.String()}
 	}
 
 	rows, err := s.db.Query(ctx, query, args...)
@@ -108,9 +108,9 @@ func (s *AggregatesStore) OrgBreakdown(ctx context.Context) ([]api.OrgAggregate,
 	}
 
 	type orgRow struct {
-		ID    uuid.UUID
-		Name  string
-		NsID  uuid.UUID
+		ID   uuid.UUID
+		Name string
+		NsID uuid.UUID
 	}
 	var orgs []orgRow
 	for rows.Next() {
@@ -209,7 +209,7 @@ func namespacePrefixSubquery(backend, parentTable, idCol, pgPlace, sqlitePlace s
 // the same convention as RecallDistribution.
 func (s *AggregatesStore) EntityTypeHistogram(ctx context.Context, orgID *uuid.UUID) ([]api.TypeBucket, error) {
 	var query string
-	var args []interface{}
+	var args []any
 
 	if orgID == nil {
 		query = `SELECT entity_type, COUNT(*) FROM entities GROUP BY entity_type ORDER BY COUNT(*) DESC`
@@ -219,7 +219,7 @@ func (s *AggregatesStore) EntityTypeHistogram(ctx context.Context, orgID *uuid.U
 			JOIN namespaces en ON e.namespace_id = en.id
 			WHERE en.path LIKE ` + ph + `
 			GROUP BY e.entity_type ORDER BY COUNT(*) DESC`
-		args = []interface{}{orgID.String()}
+		args = []any{orgID.String()}
 	}
 
 	rows, err := s.db.Query(ctx, query, args...)
@@ -243,7 +243,7 @@ func (s *AggregatesStore) EntityTypeHistogram(ctx context.Context, orgID *uuid.U
 // RelationshipTypeHistogram returns counts grouped by relation label.
 func (s *AggregatesStore) RelationshipTypeHistogram(ctx context.Context, orgID *uuid.UUID) ([]api.TypeBucket, error) {
 	var query string
-	var args []interface{}
+	var args []any
 
 	if orgID == nil {
 		query = `SELECT relation, COUNT(*) FROM relationships
@@ -255,7 +255,7 @@ func (s *AggregatesStore) RelationshipTypeHistogram(ctx context.Context, orgID *
 			JOIN namespaces rn ON r.namespace_id = rn.id
 			WHERE rn.path LIKE ` + ph + ` AND r.valid_until IS NULL
 			GROUP BY r.relation ORDER BY COUNT(*) DESC`
-		args = []interface{}{orgID.String()}
+		args = []any{orgID.String()}
 	}
 
 	rows, err := s.db.Query(ctx, query, args...)
@@ -489,7 +489,7 @@ func (s *AggregatesStore) ActivityHistogram(ctx context.Context, orgID *uuid.UUI
 	sinceStr := since.Format("2006-01-02T15:04:05Z")
 
 	var query string
-	var args []interface{}
+	var args []any
 
 	if orgID == nil {
 		if s.db.Backend() == storage.BackendPostgres {
@@ -501,7 +501,7 @@ func (s *AggregatesStore) ActivityHistogram(ctx context.Context, orgID *uuid.UUI
 				FROM memories WHERE created_at >= ? AND deleted_at IS NULL
 				GROUP BY substr(created_at, 1, 10) ORDER BY substr(created_at, 1, 10)`
 		}
-		args = []interface{}{sinceStr}
+		args = []any{sinceStr}
 	} else {
 		ph := s.namespacePrefixSubquery("organizations", "o.id", "$2", "?")
 		if s.db.Backend() == storage.BackendPostgres {
@@ -519,7 +519,7 @@ func (s *AggregatesStore) ActivityHistogram(ctx context.Context, orgID *uuid.UUI
 				AND mn.path LIKE ` + ph + `
 				GROUP BY substr(m.created_at, 1, 10) ORDER BY substr(m.created_at, 1, 10)`
 		}
-		args = []interface{}{sinceStr, orgID.String()}
+		args = []any{sinceStr, orgID.String()}
 	}
 
 	rows, err := s.db.Query(ctx, query, args...)

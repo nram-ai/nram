@@ -44,7 +44,7 @@ func (r *APIKeyRepo) Create(ctx context.Context, key *model.APIKey) (string, err
 
 	scopesVal := encodeUUIDArray(r.db.Backend(), key.Scopes)
 
-	var expiresAt interface{}
+	var expiresAt any
 	if key.ExpiresAt != nil {
 		expiresAt = key.ExpiresAt.UTC().Format(time.RFC3339)
 	}

@@ -21,7 +21,7 @@ func NewNamespaceAdminStore(db storage.DB) *NamespaceAdminStore {
 
 func (s *NamespaceAdminStore) GetNamespaceTree(ctx context.Context, orgID *uuid.UUID) ([]api.NamespaceNode, error) {
 	var query string
-	var args []interface{}
+	var args []any
 
 	if orgID == nil {
 		query = `SELECT id, name, slug, kind, parent_id, path, depth
@@ -42,9 +42,9 @@ func (s *NamespaceAdminStore) GetNamespaceTree(ctx context.Context, orgID *uuid.
 				ORDER BY depth ASC, slug ASC`
 		}
 		if s.db.Backend() == storage.BackendPostgres {
-			args = []interface{}{orgID.String()}
+			args = []any{orgID.String()}
 		} else {
-			args = []interface{}{orgID.String(), orgID.String()}
+			args = []any{orgID.String(), orgID.String()}
 		}
 	}
 

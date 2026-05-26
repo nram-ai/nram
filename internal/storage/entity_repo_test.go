@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -747,14 +748,14 @@ func TestEntityRepo_ListAll(t *testing.T) {
 
 		// Seed 5 entities across two namespaces.
 		want := 5
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			e := newTestEntity(ns1)
 			e.Canonical = fmt.Sprintf("ns1_e%d", i)
 			if err := repo.Create(ctx, e); err != nil {
 				t.Fatalf("create ns1 entity: %v", err)
 			}
 		}
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			e := newTestEntity(ns2)
 			e.Canonical = fmt.Sprintf("ns2_e%d", i)
 			if err := repo.Create(ctx, e); err != nil {
@@ -814,7 +815,7 @@ func TestEntityRepo_ClearAllEmbeddingDims(t *testing.T) {
 		// 3 entities with embedding_dim set, 1 with NULL.
 		dim := 768
 		var ids []uuid.UUID
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			e := newTestEntity(ns)
 			e.Canonical = fmt.Sprintf("e%d", i)
 			e.EmbeddingDim = &dim
@@ -890,13 +891,7 @@ func TestEntityRepo_DeleteOrphaned_ReturnsIDsAndCascadesAliases(t *testing.T) {
 			t.Fatalf("DeleteOrphaned: %v", err)
 		}
 
-		found := false
-		for _, id := range ids {
-			if id == entityID {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(ids, entityID)
 		if !found {
 			t.Fatalf("expected returned IDs to include %s, got %v", entityID, ids)
 		}

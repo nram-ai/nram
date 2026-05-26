@@ -43,7 +43,7 @@ func newDeleteRouter(handler http.HandlerFunc) *chi.Mux {
 	return r
 }
 
-func doBulkForgetRequest(router http.Handler, path string, body interface{}, ac *auth.AuthContext) *httptest.ResponseRecorder {
+func doBulkForgetRequest(router http.Handler, path string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(body)
 
@@ -97,7 +97,7 @@ func TestBulkForgetHandler_Success(t *testing.T) {
 	userID := uuid.New()
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids":  []string{id1.String(), id2.String()},
 		"hard": true,
 	}
@@ -126,7 +126,7 @@ func TestBulkForgetHandler_MissingFilters(t *testing.T) {
 	projectID := uuid.New()
 
 	// Body with no ids and no tags.
-	body := map[string]interface{}{
+	body := map[string]any{
 		"hard": false,
 	}
 
@@ -149,7 +149,7 @@ func TestBulkForgetHandler_InvalidProjectID(t *testing.T) {
 	svc := &mockForgetService{}
 	router := newBulkForgetRouter(NewBulkForgetHandler(svc, nil))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{uuid.New().String()},
 	}
 
@@ -269,7 +269,7 @@ func TestForgetHandler_ServiceErrorMapping(t *testing.T) {
 
 			router := newBulkForgetRouter(NewBulkForgetHandler(svc, nil))
 			projectID := uuid.New()
-			body := map[string]interface{}{
+			body := map[string]any{
 				"ids": []string{uuid.New().String()},
 			}
 
@@ -307,7 +307,7 @@ func TestBulkForgetHandler_TagsOnly(t *testing.T) {
 
 	router := newBulkForgetRouter(NewBulkForgetHandler(svc, nil))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"tags": []string{"obsolete", "temp"},
 	}
 
@@ -380,7 +380,7 @@ func TestBulkForgetHandler_EmitsMemoryDeletedEvents(t *testing.T) {
 
 	router := newBulkForgetRouter(NewBulkForgetHandler(svc, bus))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{id1.String(), id2.String()},
 	}
 
@@ -389,7 +389,7 @@ func TestBulkForgetHandler_EmitsMemoryDeletedEvents(t *testing.T) {
 		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		select {
 		case ev := <-ch:
 			if ev.Type != events.MemoryDeleted {

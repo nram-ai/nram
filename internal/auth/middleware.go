@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -235,7 +236,7 @@ func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*Au
 
 func (m *AuthMiddleware) validateJWT(r *http.Request, tokenStr string) (*AuthContext, string, error) {
 	claims := &Claims{}
-	tok, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+	tok, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
@@ -327,12 +328,7 @@ func (m *AuthMiddleware) maybeRefreshSessionJWT(ctx context.Context, claims *Cla
 
 // containsAudience checks if an audience list contains the expected value.
 func containsAudience(aud jwt.ClaimStrings, expected string) bool {
-	for _, a := range aud {
-		if a == expected {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(aud, expected)
 }
 
 // GenerateJWT creates a signed JWT for the given user without an audience claim.

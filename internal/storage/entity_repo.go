@@ -45,7 +45,7 @@ func (r *EntityRepo) Create(ctx context.Context, entity *model.Entity) error {
 		entity.Metadata = json.RawMessage(`{}`)
 	}
 
-	var embeddingDim interface{}
+	var embeddingDim any
 	if entity.EmbeddingDim != nil {
 		embeddingDim = *entity.EmbeddingDim
 	}
@@ -104,7 +104,7 @@ func (r *EntityRepo) Upsert(ctx context.Context, entity *model.Entity) error {
 		}
 	}
 
-	var embeddingDim interface{}
+	var embeddingDim any
 	if entity.EmbeddingDim != nil {
 		embeddingDim = *entity.EmbeddingDim
 	}
@@ -248,7 +248,7 @@ func (r *EntityRepo) UpdateEmbeddingDimBatch(ctx context.Context, ids []uuid.UUI
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	args := make([]interface{}, 0, len(ids)+2)
+	args := make([]any, 0, len(ids)+2)
 	args = append(args, dim, now)
 	placeholders := make([]string, len(ids))
 	if r.db.Backend() == BackendPostgres {

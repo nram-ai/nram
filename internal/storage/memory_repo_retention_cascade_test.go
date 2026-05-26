@@ -101,7 +101,7 @@ func TestMemoryRepo_HardDeleteSoftDeletedBefore_FKActions(t *testing.T) {
 	})
 }
 
-func assertCount(t *testing.T, ctx context.Context, db DB, want int, sqliteQ, postgresQ string, args ...interface{}) {
+func assertCount(t *testing.T, ctx context.Context, db DB, want int, sqliteQ, postgresQ string, args ...any) {
 	t.Helper()
 	q := sqliteQ
 	if db.Backend() == BackendPostgres {

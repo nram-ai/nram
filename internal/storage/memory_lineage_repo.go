@@ -32,7 +32,7 @@ func (r *MemoryLineageRepo) Create(ctx context.Context, lineage *model.MemoryLin
 		lineage.Context = json.RawMessage(`{}`)
 	}
 
-	var parentID interface{}
+	var parentID any
 	if lineage.ParentID != nil {
 		parentID = lineage.ParentID.String()
 	}

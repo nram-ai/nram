@@ -81,10 +81,11 @@ func parseUsageQueryParams(r *http.Request) (UsageFilter, *APIError) {
 	filter.GroupBy = groupBy
 
 	if raw := q.Get("success_only"); raw != "" {
-		if raw == "true" || raw == "1" {
+		switch raw {
+		case "true", "1":
 			v := true
 			filter.SuccessOnly = &v
-		} else if raw == "false" || raw == "0" {
+		case "false", "0":
 			v := false
 			filter.SuccessOnly = &v
 		}

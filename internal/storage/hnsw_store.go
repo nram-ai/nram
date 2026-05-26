@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -430,9 +431,7 @@ func (s *HNSWStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.UU
 			want[i] = r.id
 		}
 		got := graph.GetVectors(want)
-		for k, v := range got {
-			out[k] = v
-		}
+		maps.Copy(out, got)
 	}
 	return out, nil
 }

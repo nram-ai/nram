@@ -128,7 +128,7 @@ func newTestRouter(handler http.HandlerFunc) *chi.Mux {
 	return r
 }
 
-func doStoreRequest(router http.Handler, projectID string, body interface{}, ac *auth.AuthContext) *httptest.ResponseRecorder {
+func doStoreRequest(router http.Handler, projectID string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(body)
 
@@ -154,7 +154,7 @@ func TestStoreHandler_Success(t *testing.T) {
 	userID := uuid.New()
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "Remember that the user prefers dark mode.",
 		"source":  "conversation",
 		"tags":    []string{"preference", "ui"},
@@ -187,7 +187,7 @@ func TestStoreHandler_MissingContent(t *testing.T) {
 	router := newTestRouter(NewStoreHandler(svc, nil))
 
 	projectID := uuid.New()
-	body := map[string]interface{}{
+	body := map[string]any{
 		"source": "test",
 	}
 
@@ -210,7 +210,7 @@ func TestStoreHandler_InvalidProjectID(t *testing.T) {
 	svc := newTestStoreService(&mockProjectRepo{})
 	router := newTestRouter(NewStoreHandler(svc, nil))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "test content",
 	}
 
@@ -237,7 +237,7 @@ func TestStoreHandler_ServiceError_ProjectNotFound(t *testing.T) {
 	router := newTestRouter(NewStoreHandler(svc, nil))
 
 	projectID := uuid.New()
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "test content",
 	}
 
@@ -273,7 +273,7 @@ func TestStoreHandler_ServiceError_Internal(t *testing.T) {
 	router := newTestRouter(NewStoreHandler(svc, nil))
 
 	projectID := uuid.New()
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "test content",
 	}
 
@@ -326,7 +326,7 @@ func TestStoreHandler_EmitsMemoryCreatedEvent(t *testing.T) {
 	userID := uuid.New()
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "test event emission",
 	}
 

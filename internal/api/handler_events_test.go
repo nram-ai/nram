@@ -227,6 +227,10 @@ func TestEventsHandler_Keepalive(t *testing.T) {
 		}
 	}
 
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scanner error reading SSE stream: %v", err)
+	}
+
 	if !found {
 		t.Error("expected keepalive comment in SSE stream")
 	}

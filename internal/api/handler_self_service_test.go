@@ -57,10 +57,10 @@ func (m *mockAPIKeyManager) GetByID(ctx context.Context, id uuid.UUID) (*model.A
 }
 
 type mockOAuthClientManager struct {
-	createClientFn     func(ctx context.Context, client *model.OAuthClient) error
+	createClientFn      func(ctx context.Context, client *model.OAuthClient) error
 	listClientsByUserFn func(ctx context.Context, userID uuid.UUID) ([]model.OAuthClient, error)
-	deleteClientFn     func(ctx context.Context, clientID string) error
-	getClientByIDFn    func(ctx context.Context, clientID string) (*model.OAuthClient, error)
+	deleteClientFn      func(ctx context.Context, clientID string) error
+	getClientByIDFn     func(ctx context.Context, clientID string) (*model.OAuthClient, error)
 }
 
 func (m *mockOAuthClientManager) CreateClient(ctx context.Context, client *model.OAuthClient) error {
@@ -99,7 +99,7 @@ func (m *mockOAuthClientManager) RevokeTokensForUserClient(_ context.Context, _ 
 
 // --- helpers ---
 
-func doSelfServiceRequest(handler http.HandlerFunc, method, target string, body interface{}, ac *auth.AuthContext) *httptest.ResponseRecorder {
+func doSelfServiceRequest(handler http.HandlerFunc, method, target string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	if body != nil {
 		json.NewEncoder(&buf).Encode(body)
@@ -117,7 +117,7 @@ func doSelfServiceRequest(handler http.HandlerFunc, method, target string, body 
 	return w
 }
 
-func doChiRequest(handler http.HandlerFunc, method, path, pattern string, params map[string]string, body interface{}, ac *auth.AuthContext) *httptest.ResponseRecorder {
+func doChiRequest(handler http.HandlerFunc, method, path string, params map[string]string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	if body != nil {
 		json.NewEncoder(&buf).Encode(body)
@@ -211,7 +211,7 @@ func TestMeAPIKeys_CreateSuccess(t *testing.T) {
 	handler := NewMeAPIKeysHandler(keys)
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"name":   "My API Key",
 		"scopes": []string{},
 	}
@@ -239,7 +239,7 @@ func TestMeAPIKeys_CreateMissingName(t *testing.T) {
 	handler := NewMeAPIKeysHandler(&mockAPIKeyManager{})
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"scopes": []string{},
 	}
 
@@ -286,7 +286,7 @@ func TestMeAPIKeys_RevokeSuccess(t *testing.T) {
 	handler := NewMeAPIKeyRevokeHandler(keys)
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	w := doChiRequest(handler, http.MethodDelete, "/v1/me/api-keys/"+keyID.String(), "/v1/me/api-keys/{id}", map[string]string{"id": keyID.String()}, nil, ac)
+	w := doChiRequest(handler, http.MethodDelete, "/v1/me/api-keys/"+keyID.String(), map[string]string{"id": keyID.String()}, nil, ac)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -322,7 +322,7 @@ func TestMeAPIKeys_RevokeWrongUser(t *testing.T) {
 	handler := NewMeAPIKeyRevokeHandler(keys)
 	ac := &auth.AuthContext{UserID: attackerID, Role: "user"}
 
-	w := doChiRequest(handler, http.MethodDelete, "/v1/me/api-keys/"+keyID.String(), "/v1/me/api-keys/{id}", map[string]string{"id": keyID.String()}, nil, ac)
+	w := doChiRequest(handler, http.MethodDelete, "/v1/me/api-keys/"+keyID.String(), map[string]string{"id": keyID.String()}, nil, ac)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
@@ -407,7 +407,7 @@ func TestMeOAuthClients_CreateSuccess(t *testing.T) {
 	handler := NewMeOAuthClientsHandler(clients)
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"name":          "My App",
 		"redirect_uris": []string{"http://localhost:3000/callback"},
 		"grant_types":   []string{"authorization_code"},
@@ -464,7 +464,7 @@ func TestMeOAuthClients_DeleteSuccess(t *testing.T) {
 	handler := NewMeOAuthClientRevokeHandler(clients)
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	w := doChiRequest(handler, http.MethodDelete, "/v1/me/oauth-clients/"+clientUUID.String(), "/v1/me/oauth-clients/{id}", map[string]string{"id": clientUUID.String()}, nil, ac)
+	w := doChiRequest(handler, http.MethodDelete, "/v1/me/oauth-clients/"+clientUUID.String(), map[string]string{"id": clientUUID.String()}, nil, ac)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())

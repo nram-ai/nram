@@ -12,7 +12,7 @@ import (
 // Emit publishes an event to the given EventBus. If bus is nil the call is a
 // no-op, making event emission fully optional. Errors are logged but never
 // propagated because events are best-effort.
-func Emit(ctx context.Context, bus EventBus, eventType, scope string, data interface{}) {
+func Emit(ctx context.Context, bus EventBus, eventType, scope string, data any) {
 	if bus == nil {
 		return
 	}

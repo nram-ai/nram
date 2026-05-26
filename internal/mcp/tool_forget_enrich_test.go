@@ -90,9 +90,9 @@ func TestHandleMemoryForget_NoHTTPRequest(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"ids":     []interface{}{uuid.New().String()},
+		"ids":     []any{uuid.New().String()},
 	}
 
 	result, err := handleMemoryForget(context.Background(), srv, req)
@@ -108,9 +108,9 @@ func TestHandleMemoryForget_NoAuth(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"ids":     []interface{}{uuid.New().String()},
+		"ids":     []any{uuid.New().String()},
 	}
 
 	ctx := buildNoAuthCtx()
@@ -127,7 +127,7 @@ func TestHandleMemoryForget_MissingIDs(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 	}
 
@@ -145,9 +145,9 @@ func TestHandleMemoryForget_EmptyIDs(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"ids":     []interface{}{},
+		"ids":     []any{},
 	}
 
 	ctx := buildAuthCtx(uuid.New())
@@ -164,9 +164,9 @@ func TestHandleMemoryForget_InvalidUUID(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"ids":     []interface{}{"not-a-uuid"},
+		"ids":     []any{"not-a-uuid"},
 	}
 
 	ctx := buildAuthCtx(uuid.New())
@@ -191,9 +191,9 @@ func TestHandleMemoryForget_ProjectNotFound(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "nonexistent",
-		"ids":     []interface{}{uuid.New().String()},
+		"ids":     []any{uuid.New().String()},
 	}
 
 	ctx := buildAuthCtx(userID)
@@ -235,9 +235,9 @@ func TestHandleMemoryForget_Success_SoftDelete(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"ids":     []interface{}{memID.String()},
+		"ids":     []any{memID.String()},
 	}
 
 	ctx := buildAuthCtx(userID)
@@ -290,9 +290,9 @@ func TestHandleMemoryForget_Success_HardDelete(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"ids":     []interface{}{memID.String()},
+		"ids":     []any{memID.String()},
 		"hard":    true,
 	}
 

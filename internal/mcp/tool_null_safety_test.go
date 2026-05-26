@@ -33,7 +33,7 @@ func TestMemoryRecallTool_EmptyResults_NoNull(t *testing.T) {
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "recall"
-	callReq.Params.Arguments = map[string]interface{}{
+	callReq.Params.Arguments = map[string]any{
 		"query": "nonexistent topic that matches nothing",
 	}
 
@@ -102,7 +102,7 @@ func TestMemoryStoreTool_NilTags_NoTagsField(t *testing.T) {
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "store"
 	// Intentionally omit "tags" to exercise the nil tags path.
-	callReq.Params.Arguments = map[string]interface{}{
+	callReq.Params.Arguments = map[string]any{
 		"project": "test",
 		"content": "hello world with no tags",
 	}
@@ -257,7 +257,7 @@ func TestMemoryExportTool_EmptyExport_NoNull(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "empty",
 	}
 
@@ -348,7 +348,7 @@ func TestMemoryExportTool_NilRepoResults_NoNull(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "nildata",
 	}
 

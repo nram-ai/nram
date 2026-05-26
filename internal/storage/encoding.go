@@ -120,7 +120,7 @@ func parsePostgresArray(s string) ([]string, error) {
 
 // EncodeBool returns the appropriate value for a BOOLEAN column.
 // Postgres: native bool. SQLite: INTEGER 0/1.
-func EncodeBool(backend string, val bool) interface{} {
+func EncodeBool(backend string, val bool) any {
 	if backend == BackendPostgres {
 		return val
 	}
@@ -164,7 +164,7 @@ func stringsToUUIDs(ss []string) ([]uuid.UUID, error) {
 
 // decodeBoolVal converts a scanned interface{} (bool or int64) to a Go bool.
 // Postgres returns native bool; SQLite returns int64 (0/1).
-func decodeBoolVal(v interface{}) bool {
+func decodeBoolVal(v any) bool {
 	switch b := v.(type) {
 	case bool:
 		return b

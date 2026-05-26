@@ -62,7 +62,7 @@ func assertNoNullCollections(t *testing.T, body string) {
 // given top-level field is a JSON array ([]interface{}) rather than nil.
 func assertFieldIsArray(t *testing.T, body string, field string) {
 	t.Helper()
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
@@ -74,7 +74,7 @@ func assertFieldIsArray(t *testing.T, body string, field string) {
 		t.Errorf("field %q is null, expected empty array []", field)
 		return
 	}
-	if _, ok := val.([]interface{}); !ok {
+	if _, ok := val.([]any); !ok {
 		t.Errorf("field %q is type %T, expected []interface{} (JSON array)", field, val)
 	}
 }
@@ -97,7 +97,7 @@ func TestRecallHandler_EmptyResults_NoNull(t *testing.T) {
 	router := newRecallRouter(NewRecallHandler(svc))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"query": "nonexistent topic",
 	}
 
@@ -116,22 +116,22 @@ func TestRecallHandler_EmptyResults_NoNull(t *testing.T) {
 	assertFieldIsArray(t, body, "memories")
 
 	// Verify graph sub-fields are arrays (entities/relationships moved under graph).
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	graphObj, ok := raw["graph"].(map[string]interface{})
+	graphObj, ok := raw["graph"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected graph object in response, got %T", raw["graph"])
 	}
 	if ents := graphObj["entities"]; ents == nil {
 		t.Error("graph.entities is null, expected empty array []")
-	} else if _, ok := ents.([]interface{}); !ok {
+	} else if _, ok := ents.([]any); !ok {
 		t.Errorf("graph.entities is type %T, expected []interface{}", ents)
 	}
 	if rels := graphObj["relationships"]; rels == nil {
 		t.Error("graph.relationships is null, expected empty array []")
-	} else if _, ok := rels.([]interface{}); !ok {
+	} else if _, ok := rels.([]any); !ok {
 		t.Errorf("graph.relationships is type %T, expected []interface{}", rels)
 	}
 
@@ -151,7 +151,7 @@ func TestStoreHandler_NilTags_ReturnsEmptyArray(t *testing.T) {
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
 	// Deliberately omit tags from the request body.
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"content": "A memory with no tags at all.",
 		"source":  "test",
 	}
@@ -198,7 +198,7 @@ func TestUpdateHandler_NilTags_ReturnsEmptyArray(t *testing.T) {
 	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"content": "updated content",
 	}
 
@@ -234,7 +234,7 @@ func TestBatchGetHandler_NoMatches_ReturnsEmptyArrays(t *testing.T) {
 	router := newBatchGetRouter(NewBatchGetHandler(svc))
 	projectID := uuid.New()
 
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"ids": []string{requestedID.String()},
 	}
 
@@ -298,7 +298,7 @@ func TestErrorResponse_NoNullDetails(t *testing.T) {
 	svc := &mockRecallService{}
 	router := newRecallRouter(NewRecallHandler(svc))
 
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"query": "test",
 	}
 
@@ -317,12 +317,12 @@ func TestErrorResponse_NoNullDetails(t *testing.T) {
 	}
 
 	// Decode and verify structure.
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatalf("failed to unmarshal error response: %v", err)
 	}
 
-	errObj, ok := raw["error"].(map[string]interface{})
+	errObj, ok := raw["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected error object in response, got %T", raw["error"])
 	}
@@ -363,7 +363,7 @@ func TestStoreHandler_NilMetadata_ReturnsEmptyObject(t *testing.T) {
 	projectID := uuid.New()
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"content": "A memory with no metadata.",
 	}
 
@@ -408,7 +408,7 @@ func TestRecallHandler_NilTagsInResult_ReturnsEmptyArray(t *testing.T) {
 	router := newRecallRouter(NewRecallHandler(svc))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"query": "test query",
 	}
 
@@ -422,15 +422,15 @@ func TestRecallHandler_NilTagsInResult_ReturnsEmptyArray(t *testing.T) {
 	assertNoNullCollections(t, body)
 
 	// Parse and check the tags field inside the first memory.
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	memories, ok := raw["memories"].([]interface{})
+	memories, ok := raw["memories"].([]any)
 	if !ok || len(memories) == 0 {
 		t.Fatalf("expected non-empty memories array")
 	}
-	firstMem, ok := memories[0].(map[string]interface{})
+	firstMem, ok := memories[0].(map[string]any)
 	if !ok {
 		t.Fatalf("expected memory object, got %T", memories[0])
 	}
@@ -438,7 +438,7 @@ func TestRecallHandler_NilTagsInResult_ReturnsEmptyArray(t *testing.T) {
 	if tags == nil {
 		t.Error("tags in recalled memory is null, expected empty array []")
 	}
-	if arr, ok := tags.([]interface{}); ok {
+	if arr, ok := tags.([]any); ok {
 		if arr == nil {
 			t.Error("tags array is nil, expected []")
 		}
@@ -469,7 +469,7 @@ func TestBatchGetHandler_NilTagsInFound_ReturnsEmptyArray(t *testing.T) {
 	router := newBatchGetRouter(NewBatchGetHandler(svc))
 	projectID := uuid.New()
 
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"ids": []string{foundID.String()},
 	}
 
@@ -483,15 +483,15 @@ func TestBatchGetHandler_NilTagsInFound_ReturnsEmptyArray(t *testing.T) {
 	assertNoNullCollections(t, body)
 
 	// Parse and check the tags field inside the found memory.
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	found, ok := raw["found"].([]interface{})
+	found, ok := raw["found"].([]any)
 	if !ok || len(found) == 0 {
 		t.Fatalf("expected non-empty found array")
 	}
-	firstMem, ok := found[0].(map[string]interface{})
+	firstMem, ok := found[0].(map[string]any)
 	if !ok {
 		t.Fatalf("expected memory object, got %T", found[0])
 	}
@@ -544,15 +544,15 @@ func TestListHandler_MemoryWithNilTags_ReturnsEmptyArray(t *testing.T) {
 	assertNoNullCollections(t, body)
 
 	// Parse and check the tags field inside the memory.
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	data, ok := raw["data"].([]interface{})
+	data, ok := raw["data"].([]any)
 	if !ok || len(data) == 0 {
 		t.Fatalf("expected non-empty data array")
 	}
-	firstMem, ok := data[0].(map[string]interface{})
+	firstMem, ok := data[0].(map[string]any)
 	if !ok {
 		t.Fatalf("expected memory object, got %T", data[0])
 	}
@@ -577,7 +577,7 @@ func TestErrorResponses_NoNullFields(t *testing.T) {
 				svc := &mockRecallService{}
 				router := newRecallRouter(NewRecallHandler(svc))
 				return doRecallRequest(router, "/v1/projects/bad-id/memories/recall",
-					map[string]interface{}{"query": "test"}, nil)
+					map[string]any{"query": "test"}, nil)
 			},
 			wantCode: http.StatusBadRequest,
 		},
@@ -588,7 +588,7 @@ func TestErrorResponses_NoNullFields(t *testing.T) {
 				router := newRecallRouter(NewRecallHandler(svc))
 				projectID := uuid.New()
 				return doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall",
-					map[string]interface{}{"limit": 10}, nil)
+					map[string]any{"limit": 10}, nil)
 			},
 			wantCode: http.StatusBadRequest,
 		},
@@ -600,7 +600,7 @@ func TestErrorResponses_NoNullFields(t *testing.T) {
 				r.Post("/v1/projects/{project_id}/memories", NewStoreHandler(svc, nil))
 				projectID := uuid.New()
 				return doStoreRequest(r, projectID.String(),
-					map[string]interface{}{"source": "test"}, nil)
+					map[string]any{"source": "test"}, nil)
 			},
 			wantCode: http.StatusBadRequest,
 		},
@@ -611,7 +611,7 @@ func TestErrorResponses_NoNullFields(t *testing.T) {
 				router := newBatchGetRouter(NewBatchGetHandler(svc))
 				projectID := uuid.New()
 				return doBatchGetRequest(router, projectID.String(),
-					map[string]interface{}{"ids": []string{}})
+					map[string]any{"ids": []string{}})
 			},
 			wantCode: http.StatusBadRequest,
 		},
@@ -653,12 +653,12 @@ func TestErrorResponses_NoNullFields(t *testing.T) {
 			}
 
 			// Verify the error envelope structure is valid.
-			var raw map[string]interface{}
+			var raw map[string]any
 			if err := json.Unmarshal([]byte(body), &raw); err != nil {
 				t.Fatalf("failed to unmarshal error body: %v", err)
 			}
 
-			errObj, ok := raw["error"].(map[string]interface{})
+			errObj, ok := raw["error"].(map[string]any)
 			if !ok {
 				t.Fatalf("expected error object, got %T", raw["error"])
 			}

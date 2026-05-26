@@ -19,18 +19,18 @@ const (
 )
 
 // PruningPhase removes low-value content from the knowledge graph:
-// - Decays confidence of memories untouched beyond a threshold (if enabled)
-// - Soft-deletes superseded memories with zero access since supersession
-// - Soft-deletes very low confidence dream-originated memories past a minimum age
-// - Expires low-weight relationships (below pruneRelationshipWeightThreshold)
-// - Pressure-prunes the lowest-weight transitive (inferred) relationships
-//   when the namespace exceeds hard_cap * namespace_high_water, draining
-//   down to hard_cap * namespace_low_water. User-asserted edges are never
-//   touched by this branch. This is the relief valve that lets the
-//   transitive phase keep producing new inferences once a namespace fills
-//   up; without it, a saturated namespace would either stall (hard cap)
-//   or loop on tiny per-cycle headroom.
-// - Leaves dangling relationships pointing to non-existent entities
+//   - Decays confidence of memories untouched beyond a threshold (if enabled)
+//   - Soft-deletes superseded memories with zero access since supersession
+//   - Soft-deletes very low confidence dream-originated memories past a minimum age
+//   - Expires low-weight relationships (below pruneRelationshipWeightThreshold)
+//   - Pressure-prunes the lowest-weight transitive (inferred) relationships
+//     when the namespace exceeds hard_cap * namespace_high_water, draining
+//     down to hard_cap * namespace_low_water. User-asserted edges are never
+//     touched by this branch. This is the relief valve that lets the
+//     transitive phase keep producing new inferences once a namespace fills
+//     up; without it, a saturated namespace would either stall (hard cap)
+//     or loop on tiny per-cycle headroom.
+//   - Leaves dangling relationships pointing to non-existent entities
 //
 // Decay is the sleep-side complement to the recall-side reinforcement
 // performed by the service layer's BumpReinforcement: both work together so
@@ -107,13 +107,13 @@ func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, bud
 		slog.Warn("dreaming: pressure-driven transitive pruning had errors", "err", err)
 	}
 
-	p.writePhaseSummary(ctx, logger, map[string]interface{}{
-		"visited":                       visited,
-		"decayed":                       decayed,
-		"pruned":                        pruned,
-		"relationships_expired":         relationshipsExpired,
-		"transitive_pressure_expired":   pressureExpired,
-		"batch_size":                    batchSize,
+	p.writePhaseSummary(ctx, logger, map[string]any{
+		"visited":                     visited,
+		"decayed":                     decayed,
+		"pruned":                      pruned,
+		"relationships_expired":       relationshipsExpired,
+		"transitive_pressure_expired": pressureExpired,
+		"batch_size":                  batchSize,
 	})
 
 	// Pruning is deterministic per cycle: it streams every memory in the
@@ -261,7 +261,7 @@ func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.Drea
 	if expired > 0 {
 		_ = logger.LogOperation(ctx, model.DreamPhasePruning, "",
 			model.DreamOpRelationshipExpired, "namespace", cycle.NamespaceID,
-			nil, map[string]interface{}{
+			nil, map[string]any{
 				"expired_count": expired,
 				"threshold":     threshold,
 			})
@@ -348,7 +348,7 @@ func (p *PruningPhase) pruneTransitiveUnderPressure(ctx context.Context, cycle *
 	if expired > 0 {
 		_ = logger.LogOperation(ctx, model.DreamPhasePruning, "",
 			model.DreamOpRelationshipExpired, "namespace", cycle.NamespaceID,
-			nil, map[string]interface{}{
+			nil, map[string]any{
 				"expired_count": expired,
 				"trigger":       DreamPruningTriggerTransitivePressure,
 				"total_before":  totalActive,
@@ -390,7 +390,7 @@ func (p *PruningPhase) resolveEffectivelyZero(ctx context.Context) float64 {
 	return p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamPruningEffectivelyZero, "global")
 }
 
-func (p *PruningPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWriter, stats map[string]interface{}) {
+func (p *PruningPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWriter, stats map[string]any) {
 	_ = logger.LogOperation(ctx, model.DreamPhasePruning, "",
 		model.DreamOpPhaseSummary, "phase", uuid.Nil, nil, stats)
 }

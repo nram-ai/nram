@@ -192,7 +192,7 @@ func (s *RollbackService) reverseEntityMerge(ctx context.Context, entry *model.D
 // DreamOpRelationshipUpdated entry's before_state JSON payload, which is
 // shaped as {"weight": <old_weight>}.
 func parseRelationshipBeforeWeight(beforeState json.RawMessage) (float64, error) {
-	var fields map[string]interface{}
+	var fields map[string]any
 	if err := json.Unmarshal(beforeState, &fields); err != nil {
 		return 0, fmt.Errorf("unmarshal relationship before state: %w", err)
 	}
@@ -210,7 +210,7 @@ func parseRelationshipBeforeWeight(beforeState json.RawMessage) (float64, error)
 // reverseEntityUpdate restores an entity's mention count from before_state.
 // before_state = {"mention_count": <old_count>}
 func (s *RollbackService) reverseEntityUpdate(ctx context.Context, entry *model.DreamLog) error {
-	var fields map[string]interface{}
+	var fields map[string]any
 	if err := json.Unmarshal(entry.BeforeState, &fields); err != nil {
 		return fmt.Errorf("unmarshal entity before state: %w", err)
 	}
@@ -253,7 +253,7 @@ func (s *RollbackService) restoreMemoryFields(ctx context.Context, memID uuid.UU
 		return fmt.Errorf("get memory for restore: %w", err)
 	}
 
-	var fields map[string]interface{}
+	var fields map[string]any
 	if err := json.Unmarshal(beforeState, &fields); err != nil {
 		return fmt.Errorf("unmarshal before state: %w", err)
 	}

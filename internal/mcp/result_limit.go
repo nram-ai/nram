@@ -51,10 +51,7 @@ func mcpBudgetBytes(ctx context.Context, s *service.SettingsService) int {
 	} else {
 		tokens = s.ResolveIntWithDefault(ctx, service.SettingMCPMaxResultTokens, "global")
 	}
-	bytes := tokens * charsPerTokenEstimate
-	if bytes < len(truncationSuffix) {
-		bytes = len(truncationSuffix)
-	}
+	bytes := max(tokens*charsPerTokenEstimate, len(truncationSuffix))
 	return bytes
 }
 
@@ -132,7 +129,7 @@ func wrapToolResultJSONText(rec MetricsRecorder, toolName string, budget int, pa
 	}
 
 	if reducer != nil {
-		for i := 0; i < maxReducerIterations; i++ {
+		for range maxReducerIterations {
 			smaller, more := reducer()
 			if smaller == nil {
 				break
@@ -193,10 +190,7 @@ func wrapToolResultJSONText(rec MetricsRecorder, toolName string, budget int, pa
 // and any post-call mutation would silently diverge the structured response
 // from the text response.
 func wrapToolResult(rec MetricsRecorder, toolName string, budget int, payload any, reducer reducerFunc) (*mcp.CallToolResult, error) {
-	structuredBudget := budget / 2
-	if structuredBudget < 1 {
-		structuredBudget = 1
-	}
+	structuredBudget := max(budget/2, 1)
 
 	out, err := json.Marshal(payload)
 	if err != nil {
@@ -219,7 +213,7 @@ func wrapToolResult(rec MetricsRecorder, toolName string, budget int, payload an
 	}
 
 	if reducer != nil {
-		for i := 0; i < maxReducerIterations; i++ {
+		for range maxReducerIterations {
 			smaller, more := reducer()
 			if smaller == nil {
 				break
@@ -287,13 +281,7 @@ func hardTruncate(out []byte, budget int) string {
 	if budget <= 0 {
 		return ""
 	}
-	keep := budget - len(truncationSuffix)
-	if keep < 0 {
-		keep = 0
-	}
-	if keep > len(out) {
-		keep = len(out)
-	}
+	keep := min(max(budget-len(truncationSuffix), 0), len(out))
 	return string(out[:keep]) + truncationSuffix
 }
 
@@ -343,13 +331,13 @@ func (r recallReductions) hint() string {
 
 // newRecallReducer builds a stateful reducer for recall responses. Stages:
 //
-//	1. Drop the entire graph (only if non-empty).
-//	2. Truncate every memory.content > 800 chars to 800.
-//	3. Truncate every memory.content > 200 chars to 200.
-//	4+. Halve the memories slice AND coverage_gaps in lockstep. Halving
-//	    bounds the reducer at O(log N) iterations; coverage_gaps trim is
-//	    in lockstep because gaps can dominate the budget on diversified
-//	    queries (see the comment on mcpRecallResponse.CoverageGaps).
+//  1. Drop the entire graph (only if non-empty).
+//  2. Truncate every memory.content > 800 chars to 800.
+//  3. Truncate every memory.content > 200 chars to 200.
+//     4+. Halve the memories slice AND coverage_gaps in lockstep. Halving
+//     bounds the reducer at O(log N) iterations; coverage_gaps trim is
+//     in lockstep because gaps can dominate the budget on diversified
+//     queries (see the comment on mcpRecallResponse.CoverageGaps).
 //
 // The reducer returns *mcpRecallResponse with Truncated populated by the
 // recallReductions flags (composed hint, Dropped list, counts).

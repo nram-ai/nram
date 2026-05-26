@@ -1025,7 +1025,7 @@ func TestAdminSettingsResetSingleKey(t *testing.T) {
 		t.Errorf("expected resetBy %s, got %v", userID, store.resetBy)
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -1065,7 +1065,7 @@ func TestAdminSettingsResetAllEmptyBody(t *testing.T) {
 		t.Errorf("expected resetAllBy %s, got %v", userID, store.resetAllBy)
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

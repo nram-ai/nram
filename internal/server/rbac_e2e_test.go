@@ -43,12 +43,12 @@ type rbacTestEnv struct {
 	OrgANS *model.Namespace // org A namespace
 	OrgBNS *model.Namespace // org B namespace
 
-	Admin      rbacUser // administrator, in Org A
-	OrgAOwner  rbacUser // org_owner, in Org A
-	OrgAMember rbacUser // member, in Org A
+	Admin        rbacUser // administrator, in Org A
+	OrgAOwner    rbacUser // org_owner, in Org A
+	OrgAMember   rbacUser // member, in Org A
 	OrgAReadonly rbacUser // readonly, in Org A
-	OrgAService rbacUser // service, in Org A
-	OrgBMember rbacUser // member, in Org B
+	OrgAService  rbacUser // service, in Org A
+	OrgBMember   rbacUser // member, in Org B
 
 	ProjectA *model.Project // project in Org A
 	ProjectB *model.Project // project in Org B
@@ -646,9 +646,9 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 		BatchStore: api.NewBatchStoreHandler(batchStoreSvc, nil),
 
 		// User-scoped handlers
-		MeRecall:   api.NewMeRecallHandler(recallSvc, userLookup),
-		MeProjects: api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
-		MeAPIKeys:  api.NewMeAPIKeysHandler(apiKeyRepo),
+		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup),
+		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
+		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
 
 		// Admin
@@ -704,7 +704,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-func rbacDoRequest(t *testing.T, method, url, token string, body interface{}) *http.Response {
+func rbacDoRequest(t *testing.T, method, url, token string, body any) *http.Response {
 	t.Helper()
 	var reqBody io.Reader
 	if body != nil {
@@ -766,7 +766,7 @@ func rbacUpdateURL(baseURL string, projectID, memoryID uuid.UUID) string {
 
 func rbacStoreMemory(t *testing.T, baseURL string, token string, projectID uuid.UUID) string {
 	t.Helper()
-	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(baseURL, projectID), token, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(baseURL, projectID), token, map[string]any{
 		"content": "test memory " + uuid.New().String()[:8],
 		"source":  "rbac-test",
 	})
@@ -815,10 +815,10 @@ func rbacMCPInitialize(t *testing.T, baseURL, token string) string {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "RBAC Test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "RBAC Test", "version": "1.0"},
 		},
 	}, "")
 
@@ -838,9 +838,9 @@ func rbacMCPStore(t *testing.T, baseURL, token, sessionID, projectSlug, content 
 		JSONRPC: "2.0",
 		ID:      2,
 		Method:  "tools/call",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"name": "store",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"project": projectSlug,
 				"content": content,
 			},
@@ -902,7 +902,7 @@ func TestRBAC_OrgOwner_CanAccessOwnOrgProjects(t *testing.T) {
 
 func TestRBAC_OrgOwner_CannotAccessOtherOrgProjects(t *testing.T) {
 	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectB.ID), env.OrgAOwner.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectB.ID), env.OrgAOwner.JWT, map[string]any{
 		"content": "should fail",
 		"source":  "rbac-test",
 	})
@@ -931,7 +931,7 @@ func TestRBAC_Member_CanStoreToOwnOrgProject(t *testing.T) {
 
 func TestRBAC_Member_CannotStoreToOtherOrgProject(t *testing.T) {
 	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectB.ID), env.OrgAMember.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectB.ID), env.OrgAMember.JWT, map[string]any{
 		"content": "should fail",
 		"source":  "rbac-test",
 	})
@@ -940,7 +940,7 @@ func TestRBAC_Member_CannotStoreToOtherOrgProject(t *testing.T) {
 
 func TestRBAC_Member_CanRecallFromOwnOrgProject(t *testing.T) {
 	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.JWT, map[string]any{
 		"query": "test",
 	})
 	rbacExpectStatus(t, resp, http.StatusOK)
@@ -948,7 +948,7 @@ func TestRBAC_Member_CanRecallFromOwnOrgProject(t *testing.T) {
 
 func TestRBAC_Member_CannotRecallFromOtherOrgProject(t *testing.T) {
 	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectB.ID), env.OrgAMember.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectB.ID), env.OrgAMember.JWT, map[string]any{
 		"query": "test",
 	})
 	rbacExpectStatus(t, resp, http.StatusForbidden)
@@ -968,7 +968,7 @@ func TestRBAC_Member_CanManageOwnAPIKeys(t *testing.T) {
 	rbacExpectStatus(t, resp, http.StatusOK)
 
 	// POST /v1/me/api-keys
-	resp = rbacDoRequest(t, http.MethodPost, env.Server.URL+"/v1/me/api-keys", env.OrgAMember.JWT, map[string]interface{}{
+	resp = rbacDoRequest(t, http.MethodPost, env.Server.URL+"/v1/me/api-keys", env.OrgAMember.JWT, map[string]any{
 		"name": "test-key",
 	})
 	body := rbacExpectStatus(t, resp, http.StatusCreated)
@@ -990,7 +990,7 @@ func TestRBAC_Member_CanAccessViaAPIKey(t *testing.T) {
 	// Store via API key
 	rbacStoreMemory(t, env.Server.URL, env.OrgAMember.APIKey, env.ProjectA.ID)
 	// Recall via API key
-	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.APIKey, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.APIKey, map[string]any{
 		"query": "test",
 	})
 	rbacExpectStatus(t, resp, http.StatusOK)
@@ -1008,7 +1008,7 @@ func TestRBAC_Readonly_CannotAccessAdminRoutes(t *testing.T) {
 
 func TestRBAC_Readonly_CanRecallFromOwnOrgProject(t *testing.T) {
 	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAReadonly.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAReadonly.JWT, map[string]any{
 		"query": "test",
 	})
 	rbacExpectStatus(t, resp, http.StatusOK)
@@ -1016,7 +1016,7 @@ func TestRBAC_Readonly_CanRecallFromOwnOrgProject(t *testing.T) {
 
 func TestRBAC_Readonly_CannotStoreToProject(t *testing.T) {
 	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectA.ID), env.OrgAReadonly.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectA.ID), env.OrgAReadonly.JWT, map[string]any{
 		"content": "should fail",
 		"source":  "rbac-test",
 	})
@@ -1025,7 +1025,7 @@ func TestRBAC_Readonly_CannotStoreToProject(t *testing.T) {
 
 func TestRBAC_Readonly_CannotForgetMemory(t *testing.T) {
 	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacForgetURL(env.Server.URL, env.ProjectA.ID), env.OrgAReadonly.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacForgetURL(env.Server.URL, env.ProjectA.ID), env.OrgAReadonly.JWT, map[string]any{
 		"ids": []string{uuid.New().String()},
 	})
 	rbacExpectStatus(t, resp, http.StatusForbidden)
@@ -1038,7 +1038,7 @@ func TestRBAC_Readonly_CannotUpdateMemory(t *testing.T) {
 	memID, _ := uuid.Parse(memIDStr)
 
 	content := "updated content"
-	resp := rbacDoRequest(t, http.MethodPut, rbacUpdateURL(env.Server.URL, env.ProjectA.ID, memID), env.OrgAReadonly.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPut, rbacUpdateURL(env.Server.URL, env.ProjectA.ID, memID), env.OrgAReadonly.JWT, map[string]any{
 		"content": &content,
 	})
 	rbacExpectStatus(t, resp, http.StatusForbidden)
@@ -1053,7 +1053,7 @@ func TestRBAC_Service_CanStoreAndRecall(t *testing.T) {
 	// Store
 	rbacStoreMemory(t, env.Server.URL, env.OrgAService.JWT, env.ProjectA.ID)
 	// Recall
-	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAService.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAService.JWT, map[string]any{
 		"query": "test",
 	})
 	rbacExpectStatus(t, resp, http.StatusOK)
@@ -1070,7 +1070,7 @@ func TestRBAC_Service_WorksViaAPIKeyOnly(t *testing.T) {
 	// Store via API key
 	rbacStoreMemory(t, env.Server.URL, env.OrgAService.APIKey, env.ProjectA.ID)
 	// Recall via API key
-	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAService.APIKey, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAService.APIKey, map[string]any{
 		"query": "test",
 	})
 	rbacExpectStatus(t, resp, http.StatusOK)
@@ -1085,7 +1085,7 @@ func TestRBAC_CrossOrg_MemberCannotSeeOtherOrgMemories(t *testing.T) {
 	// Org A member stores
 	rbacStoreMemory(t, env.Server.URL, env.OrgAMember.JWT, env.ProjectA.ID)
 	// Org B member tries to recall from Org A's project — should be forbidden
-	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgBMember.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgBMember.JWT, map[string]any{
 		"query": "test",
 	})
 	rbacExpectStatus(t, resp, http.StatusForbidden)
@@ -1093,7 +1093,7 @@ func TestRBAC_CrossOrg_MemberCannotSeeOtherOrgMemories(t *testing.T) {
 
 func TestRBAC_CrossOrg_OrgOwnerCannotManageOtherOrg(t *testing.T) {
 	env := newRBACTestEnv(t)
-	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectB.ID), env.OrgAOwner.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectB.ID), env.OrgAOwner.JWT, map[string]any{
 		"content": "should fail",
 		"source":  "rbac-test",
 	})
@@ -1195,7 +1195,7 @@ func TestRBAC_DisabledUser_JWT_Rejected(t *testing.T) {
 	// This is a known limitation: JWT tokens remain valid until expiry even for disabled users.
 	// Document this finding: the JWT middleware does NOT call GetIdentityByID for JWT tokens,
 	// only for API keys.
-	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.JWT, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.JWT, map[string]any{
 		"query": "test",
 	})
 	// JWT still works because the middleware trusts the JWT claims without re-checking the DB.
@@ -1218,7 +1218,7 @@ func TestRBAC_DisabledUser_APIKey_Rejected(t *testing.T) {
 	}
 
 	// API key validation calls GetIdentityByID which filters disabled_at IS NULL.
-	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.APIKey, map[string]interface{}{
+	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgAMember.APIKey, map[string]any{
 		"query": "test",
 	})
 	rbacExpectStatus(t, resp, http.StatusUnauthorized)
@@ -1263,7 +1263,7 @@ func TestRBAC_NoAuth_ProtectedRoutes(t *testing.T) {
 	rbacExpectStatus(t, resp, http.StatusUnauthorized)
 
 	// /v1/projects/*/memories — requires auth
-	resp = rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectA.ID), "", map[string]interface{}{
+	resp = rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectA.ID), "", map[string]any{
 		"content": "no auth",
 	})
 	rbacExpectStatus(t, resp, http.StatusUnauthorized)
@@ -1664,21 +1664,21 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	t.Cleanup(ts.Close)
 
 	return &rbacTestEnv{
-		Server:      ts,
-		DB:          db,
-		OrgA:        orgA,
-		OrgB:        orgB,
-		OrgANS:      orgANS,
-		OrgBNS:      orgBNS,
-		Admin:       admin,
-		OrgAOwner:   orgAOwner,
-		OrgAMember:  orgAMember,
+		Server:       ts,
+		DB:           db,
+		OrgA:         orgA,
+		OrgB:         orgB,
+		OrgANS:       orgANS,
+		OrgBNS:       orgBNS,
+		Admin:        admin,
+		OrgAOwner:    orgAOwner,
+		OrgAMember:   orgAMember,
 		OrgAReadonly: orgAReadonly,
-		OrgAService: orgAService,
-		OrgBMember:  orgBMember,
-		ProjectA:    projectA,
-		ProjectB:    projectB,
-		MemRepo:     memRepo,
+		OrgAService:  orgAService,
+		OrgBMember:   orgBMember,
+		ProjectA:     projectA,
+		ProjectB:     projectB,
+		MemRepo:      memRepo,
 	}
 }
 
@@ -1785,8 +1785,8 @@ func TestRBAC_AllRoles_BatchStore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body := map[string]interface{}{
-				"items": []map[string]interface{}{
+			body := map[string]any{
+				"items": []map[string]any{
 					{"content": "batch item 1 " + tt.name, "source": "rbac-test"},
 					{"content": "batch item 2 " + tt.name, "source": "rbac-test"},
 				},
@@ -1816,7 +1816,7 @@ func TestRBAC_AllRoles_BatchGet(t *testing.T) {
 			if tt.projectID == env.ProjectB.ID {
 				memID = memB
 			}
-			body := map[string]interface{}{
+			body := map[string]any{
 				"ids": []string{memID.String()},
 			}
 			resp := rbacDoRequest(t, http.MethodPost, rbacBatchGetURL(env.Server.URL, tt.projectID), tt.token, body)
@@ -1841,7 +1841,7 @@ func TestRBAC_AllRoles_Update(t *testing.T) {
 			// one memory across subtests would fail every call after
 			// the first successful one with "memory X is superseded".
 			memID := rbacStoreMemoryFull(t, env, tt.projectID)
-			body := map[string]interface{}{
+			body := map[string]any{
 				"content": "updated content " + tt.name,
 			}
 			resp := rbacDoRequest(t, http.MethodPut, rbacUpdateURL(env.Server.URL, tt.projectID, memID), tt.token, body)
@@ -1889,7 +1889,7 @@ func TestRBAC_AllRoles_BulkForget(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Store a fresh memory for each subtest.
 			memID := rbacStoreMemoryFull(t, env, tt.projectID)
-			body := map[string]interface{}{
+			body := map[string]any{
 				"ids": []string{memID.String()},
 			}
 			resp := rbacDoRequest(t, http.MethodPost, rbacForgetURL(env.Server.URL, tt.projectID), tt.token, body)
@@ -1969,9 +1969,9 @@ func TestRBAC_AllRoles_Import(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Minimal valid nram import payload.
-			body := map[string]interface{}{
+			body := map[string]any{
 				"version": "1.0",
-				"memories": []map[string]interface{}{
+				"memories": []map[string]any{
 					{"content": "imported memory " + tt.name, "source": "rbac-import-test"},
 				},
 			}
@@ -2000,7 +2000,7 @@ func TestRBAC_AllRoles_Enrich(t *testing.T) {
 			if tt.projectID == env.ProjectB.ID {
 				memID = memB
 			}
-			body := map[string]interface{}{
+			body := map[string]any{
 				"ids": []string{memID.String()},
 			}
 			resp := rbacDoRequest(t, http.MethodPost, rbacEnrichURL(env.Server.URL, tt.projectID), tt.token, body)
@@ -2030,7 +2030,7 @@ func TestRBAC_AllRoles_MeRecall(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body := map[string]interface{}{
+			body := map[string]any{
 				"query": "test recall",
 			}
 			resp := rbacDoRequest(t, http.MethodPost, env.Server.URL+"/v1/me/memories/recall", tt.token, body)
@@ -2164,7 +2164,7 @@ func TestRBAC_AllRoles_AdminEndpoints(t *testing.T) {
 		token      string
 		wantStatus int // expected status for admin endpoints
 	}{
-		{"admin", env.Admin.JWT, -1},     // -1 means "not 403" (could be 200 or 501)
+		{"admin", env.Admin.JWT, -1}, // -1 means "not 403" (could be 200 or 501)
 		{"org_owner", env.OrgAOwner.JWT, http.StatusForbidden},
 		{"member", env.OrgAMember.JWT, http.StatusForbidden},
 		{"readonly", env.OrgAReadonly.JWT, http.StatusForbidden},
@@ -2198,13 +2198,13 @@ func TestRBAC_AllRoles_AdminEndpoints(t *testing.T) {
 // ===========================================================================
 
 // rbacMCPCallTool calls a named MCP tool and returns the parsed response.
-func rbacMCPCallTool(t *testing.T, baseURL, token, sessionID, toolName string, args map[string]interface{}) *e2eJSONRPCResponse {
+func rbacMCPCallTool(t *testing.T, baseURL, token, sessionID, toolName string, args map[string]any) *e2eJSONRPCResponse {
 	t.Helper()
 	resp := rbacMCPPost(t, baseURL, token, e2eJSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      2,
 		Method:  "tools/call",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"name":      toolName,
 			"arguments": args,
 		},
@@ -2242,7 +2242,7 @@ type rbacMCPRoleCase struct {
 // the project under the calling user's namespace.
 func rbacMCPStoreAndGetID(t *testing.T, baseURL, token, sessionID, project string) string {
 	t.Helper()
-	rpc := rbacMCPCallTool(t, baseURL, token, sessionID, "store", map[string]interface{}{
+	rpc := rbacMCPCallTool(t, baseURL, token, sessionID, "store", map[string]any{
 		"project": project,
 		"content": "mcp seed " + uuid.New().String()[:8],
 	})
@@ -2287,7 +2287,7 @@ func rbacMCPWriteCases(env *rbacTestEnv) []rbacMCPRoleCase {
 		{"org_owner_cross_org", env.OrgAOwner.JWT, "foreign-proj", true},
 		{"member_own_org", env.OrgAMember.JWT, "rbac-proj", false},
 		{"member_cross_org", env.OrgAMember.JWT, "foreign-proj", true},
-		{"readonly_own_org", env.OrgAReadonly.JWT, "rbac-proj", true},  // readonly blocked
+		{"readonly_own_org", env.OrgAReadonly.JWT, "rbac-proj", true}, // readonly blocked
 		{"readonly_cross_org", env.OrgAReadonly.JWT, "foreign-proj", true},
 		{"service_own_org", env.OrgAService.JWT, "rbac-proj", false},
 		{"service_cross_org", env.OrgAService.JWT, "foreign-proj", true},
@@ -2305,7 +2305,7 @@ func rbacMCPReadCases(env *rbacTestEnv) []rbacMCPRoleCase {
 		{"org_owner_cross_org", env.OrgAOwner.JWT, "foreign-proj", true},
 		{"member_own_org", env.OrgAMember.JWT, "rbac-proj", false},
 		{"member_cross_org", env.OrgAMember.JWT, "foreign-proj", true},
-		{"readonly_own_org", env.OrgAReadonly.JWT, "rbac-proj", true},  // no project seeded (can't write)
+		{"readonly_own_org", env.OrgAReadonly.JWT, "rbac-proj", true}, // no project seeded (can't write)
 		{"readonly_cross_org", env.OrgAReadonly.JWT, "foreign-proj", true},
 		{"service_own_org", env.OrgAService.JWT, "rbac-proj", false},
 		{"service_cross_org", env.OrgAService.JWT, "foreign-proj", true},
@@ -2353,7 +2353,7 @@ func TestRBAC_MCP_AllRoles_BatchStore(t *testing.T) {
 		{"org_owner_cross_org", env.OrgAOwner.JWT, "batch-foreign", false},
 		{"member_own_org", env.OrgAMember.JWT, "batch-proj", false},
 		{"member_cross_org", env.OrgAMember.JWT, "batch-foreign", false},
-		{"readonly_own_org", env.OrgAReadonly.JWT, "batch-proj", true},     // readonly blocked
+		{"readonly_own_org", env.OrgAReadonly.JWT, "batch-proj", true}, // readonly blocked
 		{"readonly_cross_org", env.OrgAReadonly.JWT, "batch-foreign", true},
 		{"service_own_org", env.OrgAService.JWT, "batch-proj", false},
 		{"service_cross_org", env.OrgAService.JWT, "batch-foreign", false},
@@ -2362,10 +2362,10 @@ func TestRBAC_MCP_AllRoles_BatchStore(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "store_batch", map[string]interface{}{
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "store_batch", map[string]any{
 				"project": tt.project,
-				"items": []interface{}{
-					map[string]interface{}{"content": "mcp batch " + tt.name},
+				"items": []any{
+					map[string]any{"content": "mcp batch " + tt.name},
 				},
 			})
 			gotError := rbacMCPIsError(rpc)
@@ -2392,7 +2392,7 @@ func TestRBAC_MCP_AllRoles_Update(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
 			memID := memIDs[tt.token]
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "update", map[string]interface{}{
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "update", map[string]any{
 				"id":      memID,
 				"project": tt.project,
 				"content": "updated via mcp " + tt.name,
@@ -2423,9 +2423,9 @@ func TestRBAC_MCP_AllRoles_Forget(t *testing.T) {
 			if !tt.wantError {
 				// Store a memory first (creates project if needed).
 				memID := rbacMCPStoreAndGetID(t, env.Server.URL, tt.token, sessionID, tt.project)
-				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "forget", map[string]interface{}{
+				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "forget", map[string]any{
 					"project": tt.project,
-					"ids":     []interface{}{memID},
+					"ids":     []any{memID},
 				})
 				gotError := rbacMCPIsError(rpc)
 				if gotError != tt.wantError {
@@ -2433,9 +2433,9 @@ func TestRBAC_MCP_AllRoles_Forget(t *testing.T) {
 				}
 			} else {
 				// Cross-org: slug doesn't exist under this user, so forget fails with "project not found".
-				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "forget", map[string]interface{}{
+				rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "forget", map[string]any{
 					"project": tt.project,
-					"ids":     []interface{}{uuid.New().String()},
+					"ids":     []any{uuid.New().String()},
 				})
 				gotError := rbacMCPIsError(rpc)
 				if gotError != tt.wantError {
@@ -2462,9 +2462,9 @@ func TestRBAC_MCP_AllRoles_Get(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
 			memID := memIDs[tt.token]
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "get", map[string]interface{}{
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "get", map[string]any{
 				"project": tt.project,
-				"ids":     []interface{}{memID},
+				"ids":     []any{memID},
 			})
 			gotError := rbacMCPIsError(rpc)
 			if gotError != tt.wantError {
@@ -2489,7 +2489,7 @@ func TestRBAC_MCP_AllRoles_Export(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "export", map[string]interface{}{
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "export", map[string]any{
 				"project": tt.project,
 			})
 			gotError := rbacMCPIsError(rpc)
@@ -2523,7 +2523,7 @@ func TestRBAC_MCP_AllRoles_Projects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "list_projects", map[string]interface{}{})
+			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "list_projects", map[string]any{})
 			gotError := rbacMCPIsError(rpc)
 			if gotError != tt.wantError {
 				t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))

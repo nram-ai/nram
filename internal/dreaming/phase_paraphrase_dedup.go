@@ -93,7 +93,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 		return PhaseResult{}, fmt.Errorf("paraphrase dedup: list stale memories: %w", err)
 	}
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"sub_phase":             model.DreamPhaseParaphraseDedup,
 		"candidates":            0,
 		"visited":               0,
@@ -119,7 +119,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 	stampMarker := []byte(ParaphraseCheckedStampKey)
 	type candidate struct {
 		mem  model.Memory
-		meta map[string]interface{}
+		meta map[string]any
 	}
 	eligible := make([]candidate, 0, len(memories))
 	for i := range memories {
@@ -332,7 +332,7 @@ func pickParaphraseWinner(a, b *model.Memory) (*model.Memory, *model.Memory) {
 
 func (p *ParaphraseDedupPhase) applySupersede(
 	ctx context.Context,
-	cycle *model.DreamCycle,
+	_ *model.DreamCycle,
 	logger *DreamLogWriter,
 	loser, winner *model.Memory,
 	cosine float64,
@@ -355,7 +355,7 @@ func (p *ParaphraseDedupPhase) applySupersede(
 	}
 	_ = logger.LogOperation(ctx, model.DreamPhaseParaphraseDedup, "",
 		model.DreamOpParaphraseSuperseded, "memory", loser.ID,
-		nil, map[string]interface{}{
+		nil, map[string]any{
 			"superseded_by": winner.ID.String(),
 			"cosine":        cosine,
 			"reason":        "paraphrase_dedup_sweep",
@@ -366,9 +366,9 @@ func (p *ParaphraseDedupPhase) applySupersede(
 // stampParaphrase records the visit stamp anchored to mem.UpdatedAt
 // via UpdateMetadata so the staleness check (stamp < UpdatedAt) does
 // not self-invalidate next cycle.
-func (p *ParaphraseDedupPhase) stampParaphrase(ctx context.Context, mem *model.Memory, meta map[string]interface{}) error {
+func (p *ParaphraseDedupPhase) stampParaphrase(ctx context.Context, mem *model.Memory, meta map[string]any) error {
 	if meta == nil {
-		meta = map[string]interface{}{}
+		meta = map[string]any{}
 	}
 	meta[ParaphraseCheckedStampKey] = mem.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	encoded, err := encodeStampWrite(mem.Metadata, meta)
@@ -386,7 +386,7 @@ func (p *ParaphraseDedupPhase) stampParaphrase(ctx context.Context, mem *model.M
 // low_novelty marker set by the consolidation novelty audit on demote.
 // Used by the no_vector categorical breakdown to classify a missing
 // vector as "expected absence" vs. "unexplained drift."
-func isMetaLowNovelty(meta map[string]interface{}) bool {
+func isMetaLowNovelty(meta map[string]any) bool {
 	if meta == nil {
 		return false
 	}
@@ -396,7 +396,7 @@ func isMetaLowNovelty(meta map[string]interface{}) bool {
 
 // isParaphraseStale mirrors isStale (contradiction phase): no stamp,
 // malformed stamp, or stamp strictly before UpdatedAt → eligible.
-func isParaphraseStale(mem *model.Memory, meta map[string]interface{}) bool {
+func isParaphraseStale(mem *model.Memory, meta map[string]any) bool {
 	raw, ok := meta[ParaphraseCheckedStampKey]
 	if !ok {
 		return true
@@ -415,7 +415,7 @@ func isParaphraseStale(mem *model.Memory, meta map[string]interface{}) bool {
 	return t.Before(mem.UpdatedAt)
 }
 
-func (p *ParaphraseDedupPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWriter, stats map[string]interface{}, budget *TokenBudget, tokensBefore int) {
+func (p *ParaphraseDedupPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWriter, stats map[string]any, budget *TokenBudget, tokensBefore int) {
 	if budget != nil {
 		stats["tokens_spent"] = budget.Used() - tokensBefore
 		stats["budget_remaining"] = budget.Remaining()

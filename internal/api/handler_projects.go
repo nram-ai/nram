@@ -109,14 +109,8 @@ func handleListProjects(w http.ResponseWriter, r *http.Request, projects Project
 	total := len(all)
 
 	// Apply offset/limit in handler since the repo doesn't support them.
-	start := offset
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
+	start := min(offset, total)
+	end := min(start+limit, total)
 	page := all[start:end]
 
 	resp := model.PaginatedResponse[model.Project]{

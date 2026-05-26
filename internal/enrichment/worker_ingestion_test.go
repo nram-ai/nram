@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -323,13 +324,7 @@ func TestIngestion_Update_WritesLineageAndSupersedesTarget(t *testing.T) {
 	if targetMark.newID != newMem.ID {
 		t.Errorf("target MarkSupersededBy newID = %s, want %s", targetMark.newID, newMem.ID)
 	}
-	purged := false
-	for _, id := range h.vectors.deleted {
-		if id == target.ID {
-			purged = true
-			break
-		}
-	}
+	purged := slices.Contains(h.vectors.deleted, target.ID)
 	if !purged {
 		t.Errorf("expected vector purge on superseded target %s; deleted=%v", target.ID, h.vectors.deleted)
 	}
@@ -531,25 +526,16 @@ func TestIngestion_ShadowMode_LogsButDoesNotApply(t *testing.T) {
 // helpers
 // ---------------------------------------------------------------------------
 
-func decodeMetadata(t *testing.T, raw json.RawMessage) map[string]interface{} {
+func decodeMetadata(t *testing.T, raw json.RawMessage) map[string]any {
 	t.Helper()
 	if len(raw) == 0 {
-		return map[string]interface{}{}
+		return map[string]any{}
 	}
-	out := map[string]interface{}{}
+	out := map[string]any{}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("decode metadata %q: %v", string(raw), err)
 	}
 	return out
-}
-
-func findUpdate(updates []*model.Memory, id uuid.UUID) *model.Memory {
-	for _, u := range updates {
-		if u.ID == id {
-			return u
-		}
-	}
-	return nil
 }
 
 func findEnrichedMark(marks []enrichedMark, id uuid.UUID) *enrichedMark {

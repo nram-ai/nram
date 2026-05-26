@@ -42,9 +42,9 @@ func (m *mockExportService) ExportNDJSON(ctx context.Context, req *service.Expor
 	if m.exportNDJSON != nil {
 		return m.exportNDJSON(ctx, req, w)
 	}
-	rec := map[string]interface{}{
+	rec := map[string]any{
 		"type": "project",
-		"data": map[string]interface{}{"id": req.ProjectID.String(), "name": "test", "slug": "test"},
+		"data": map[string]any{"id": req.ProjectID.String(), "name": "test", "slug": "test"},
 	}
 	return json.NewEncoder(w).Encode(rec)
 }

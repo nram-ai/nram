@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -42,16 +43,16 @@ var e2eJWTSecret = []byte("e2e-test-secret-32-bytes-long!!!")
 // ---------------------------------------------------------------------------
 
 type e2eJSONRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id,omitempty"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
+	JSONRPC string `json:"jsonrpc"`
+	ID      any    `json:"id,omitempty"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
 }
 
 type e2eJSONRPCResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      interface{}     `json:"id"`
-	Result  json.RawMessage `json:"result,omitempty"`
+	JSONRPC string           `json:"jsonrpc"`
+	ID      any              `json:"id"`
+	Result  json.RawMessage  `json:"result,omitempty"`
 	Error   *e2eJSONRPCError `json:"error,omitempty"`
 }
 
@@ -602,8 +603,8 @@ func e2eParseJSONRPC(t *testing.T, resp *http.Response) *e2eJSONRPCResponse {
 		scanner := bufio.NewScanner(bytes.NewReader(bodyBytes))
 		for scanner.Scan() {
 			line := scanner.Text()
-			if strings.HasPrefix(line, "data: ") {
-				data := strings.TrimPrefix(line, "data: ")
+			if after, ok := strings.CutPrefix(line, "data: "); ok {
+				data := after
 				var rpc e2eJSONRPCResponse
 				if err := json.Unmarshal([]byte(data), &rpc); err != nil {
 					continue
@@ -697,10 +698,10 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Claude Code", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Claude Code", "version": "1.0"},
 		},
 	})
 	req, _ := http.NewRequest(http.MethodPost, baseURL+"/mcp", bytes.NewReader(initBody))
@@ -798,13 +799,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("step 3: expected registration_endpoint=%s/register, got %s", baseURL, authServerMeta.RegistrationEndpoint)
 	}
 
-	foundS256 := false
-	for _, m := range authServerMeta.CodeChallengeMethodsSupported {
-		if m == "S256" {
-			foundS256 = true
-			break
-		}
-	}
+	foundS256 := slices.Contains(authServerMeta.CodeChallengeMethodsSupported, "S256")
 	if !foundS256 {
 		t.Fatalf("step 3: S256 not in code_challenge_methods_supported: %v", authServerMeta.CodeChallengeMethodsSupported)
 	}
@@ -813,7 +808,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	// Step 4: POST /register (dynamic client registration)
 	// -----------------------------------------------------------------------
 	t.Log("Step 4: POST /register")
-	regBody, _ := json.Marshal(map[string]interface{}{
+	regBody, _ := json.Marshal(map[string]any{
 		"client_name":   "Claude Code",
 		"redirect_uris": []string{"http://localhost:3000/callback"},
 		"grant_types":   []string{"authorization_code", "refresh_token"},
@@ -946,7 +941,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 
 	// Verify the access_token is a valid JWT with the correct audience
 	claims := &auth.Claims{}
-	tok, err := jwt.ParseWithClaims(tokenResp.AccessToken, claims, func(t *jwt.Token) (interface{}, error) {
+	tok, err := jwt.ParseWithClaims(tokenResp.AccessToken, claims, func(t *jwt.Token) (any, error) {
 		return e2eJWTSecret, nil
 	})
 	if err != nil {
@@ -956,13 +951,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatal("step 7: access_token JWT invalid")
 	}
 	aud, _ := claims.GetAudience()
-	foundAud := false
-	for _, a := range aud {
-		if a == resource {
-			foundAud = true
-			break
-		}
-	}
+	foundAud := slices.Contains(aud, resource)
 	if !foundAud {
 		t.Fatalf("step 7: JWT audience %v does not contain %s", aud, resource)
 	}
@@ -979,10 +968,10 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Claude Code", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Claude Code", "version": "1.0"},
 		},
 	}, "")
 
@@ -997,11 +986,11 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("step 8: JSON-RPC error: code=%d msg=%s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 
-	var initResult map[string]interface{}
+	var initResult map[string]any
 	if err := json.Unmarshal(rpcResp.Result, &initResult); err != nil {
 		t.Fatalf("step 8: unmarshal result: %v", err)
 	}
-	serverInfo, ok := initResult["serverInfo"].(map[string]interface{})
+	serverInfo, ok := initResult["serverInfo"].(map[string]any)
 	if !ok {
 		t.Fatal("step 8: missing serverInfo in result")
 	}
@@ -1080,9 +1069,9 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      3,
 		Method:  "tools/call",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"name": "store",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"project": "claude-test",
 				"content": "The auth service uses JWT with 1h expiry",
 				"tags":    []string{"architecture", "auth"},
@@ -1122,9 +1111,9 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      4,
 		Method:  "tools/call",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"name": "recall",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"query":   "auth JWT expiry",
 				"project": "claude-test",
 			},
@@ -1225,9 +1214,9 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      5,
 		Method:  "tools/call",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"name": "recall",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"query":   "auth JWT expiry",
 				"project": "claude-test",
 			},
@@ -1270,10 +1259,10 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Claude Desktop", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Claude Desktop", "version": "1.0"},
 		},
 	})
 	req, _ := http.NewRequest(http.MethodPost, baseURL+"/mcp", bytes.NewReader(initBody))
@@ -1304,7 +1293,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 	json.Unmarshal(body, &meta)
 
 	// Step 4: Register with Claude Desktop redirect URI
-	regBody, _ := json.Marshal(map[string]interface{}{
+	regBody, _ := json.Marshal(map[string]any{
 		"client_name":   "Claude Desktop",
 		"redirect_uris": []string{"https://claude.ai/api/mcp/auth_callback"},
 		"grant_types":   []string{"authorization_code", "refresh_token"},
@@ -1401,10 +1390,10 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Claude Desktop", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Claude Desktop", "version": "1.0"},
 		},
 	}, "")
 
@@ -1419,9 +1408,9 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("initialize: JSON-RPC error: %s", rpcResp.Error.Message)
 	}
 
-	var initResult map[string]interface{}
+	var initResult map[string]any
 	json.Unmarshal(rpcResp.Result, &initResult)
-	si, _ := initResult["serverInfo"].(map[string]interface{})
+	si, _ := initResult["serverInfo"].(map[string]any)
 	if name, _ := si["name"].(string); name != "nram" {
 		t.Fatalf("initialize: expected serverInfo.name=nram, got %q", name)
 	}
@@ -1477,9 +1466,9 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      3,
 		Method:  "tools/call",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"name": "store",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"project": "claude-test",
 				"content": "Claude Desktop stores architecture decisions",
 				"tags":    []string{"desktop", "test"},
@@ -1533,10 +1522,10 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "API Key Client", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "API Key Client", "version": "1.0"},
 		},
 	}, "")
 
@@ -1551,9 +1540,9 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 		t.Fatalf("initialize: JSON-RPC error: code=%d msg=%s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 
-	var initResult map[string]interface{}
+	var initResult map[string]any
 	json.Unmarshal(rpcResp.Result, &initResult)
-	si, _ := initResult["serverInfo"].(map[string]interface{})
+	si, _ := initResult["serverInfo"].(map[string]any)
 	if name, _ := si["name"].(string); name != "nram" {
 		t.Fatalf("initialize: expected serverInfo.name=nram, got %q", name)
 	}
@@ -1574,9 +1563,9 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      2,
 		Method:  "tools/call",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"name": "store",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"project": "claude-test",
 				"content": "API key direct access works perfectly",
 				"tags":    []string{"api-key", "test"},
@@ -1610,9 +1599,9 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      3,
 		Method:  "tools/call",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"name": "recall",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"query":   "API key direct access",
 				"project": "claude-test",
 			},
@@ -1658,13 +1647,13 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type e2eOAuthResult struct {
-	AccessToken  string
-	RefreshToken string
-	ClientID     string
-	SessionID    string // MCP session ID from initialize
+	AccessToken   string
+	RefreshToken  string
+	ClientID      string
+	SessionID     string // MCP session ID from initialize
 	TokenEndpoint string
-	Resource     string
-	RedirectURI  string
+	Resource      string
+	RedirectURI   string
 }
 
 // e2eFullOAuthFlow registers a client, completes the OAuth authorization code
@@ -1693,7 +1682,7 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 	json.Unmarshal(body, &meta)
 
 	// Register client
-	regBody, _ := json.Marshal(map[string]interface{}{
+	regBody, _ := json.Marshal(map[string]any{
 		"client_name":   clientName,
 		"redirect_uris": []string{redirectURI},
 		"grant_types":   []string{"authorization_code", "refresh_token"},
@@ -1796,41 +1785,6 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 	}
 }
 
-// e2eInitializeMCP sends the initialize + notifications/initialized handshake
-// and returns the MCP session ID.
-func e2eInitializeMCP(t *testing.T, baseURL, token string) string {
-	t.Helper()
-	resp := e2eMCPPost(t, baseURL, token, e2eJSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "initialize",
-		Params: map[string]interface{}{
-			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "E2E Test Client", "version": "1.0"},
-		},
-	}, "")
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		t.Fatalf("initialize: expected 200, got %d; body: %s", resp.StatusCode, string(bodyBytes))
-	}
-	rpc := e2eParseJSONRPC(t, resp)
-	if rpc.Error != nil {
-		t.Fatalf("initialize: JSON-RPC error: %s", rpc.Error.Message)
-	}
-	sessionID := resp.Header.Get("Mcp-Session-Id")
-
-	notifResp := e2eMCPPost(t, baseURL, token, e2eJSONRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "notifications/initialized",
-	}, sessionID)
-	io.ReadAll(notifResp.Body)
-	notifResp.Body.Close()
-
-	return sessionID
-}
-
 // e2eGetAuthCodeParts returns the parts needed for auth code exchange without
 // actually exchanging. Useful for testing error paths.
 type e2eAuthCodeParts struct {
@@ -1862,7 +1816,7 @@ func e2eGetAuthCode(t *testing.T, env *e2eEnv, clientName, redirectURI string) *
 	json.Unmarshal(body, &meta)
 
 	// Register client
-	regBody, _ := json.Marshal(map[string]interface{}{
+	regBody, _ := json.Marshal(map[string]any{
 		"client_name":   clientName,
 		"redirect_uris": []string{redirectURI},
 		"grant_types":   []string{"authorization_code", "refresh_token"},
@@ -2093,10 +2047,10 @@ func TestE2E_ExpiredToken_MCPReturns401_ThenRefresh(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Expired Token Test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Expired Token Test", "version": "1.0"},
 		},
 	}, "")
 	if resp.StatusCode != http.StatusOK {
@@ -2131,10 +2085,10 @@ func TestE2E_ExpiredToken_MCPReturns401_ThenRefresh(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      2,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Expired Token Test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Expired Token Test", "version": "1.0"},
 		},
 	}, "")
 	io.ReadAll(expiredResp.Body)
@@ -2184,10 +2138,10 @@ func TestE2E_ExpiredToken_MCPReturns401_ThenRefresh(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      3,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Expired Token Test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Expired Token Test", "version": "1.0"},
 		},
 	}, "")
 	if newResp.StatusCode != http.StatusOK {
@@ -2217,10 +2171,10 @@ func TestE2E_WrongAudience_MCPRejects(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Wrong Aud Test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Wrong Aud Test", "version": "1.0"},
 		},
 	}, "")
 	if resp.StatusCode != http.StatusOK {
@@ -2255,10 +2209,10 @@ func TestE2E_WrongAudience_MCPRejects(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      2,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Wrong Aud Test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Wrong Aud Test", "version": "1.0"},
 		},
 	}, "")
 	io.ReadAll(wrongResp.Body)
@@ -2407,7 +2361,7 @@ func TestE2E_OAuth_WrongRedirectURI(t *testing.T) {
 	json.Unmarshal(body, &meta)
 
 	// Register client with redirect_uri A
-	regBody, _ := json.Marshal(map[string]interface{}{
+	regBody, _ := json.Marshal(map[string]any{
 		"client_name":   "Wrong Redirect Test",
 		"redirect_uris": []string{"http://localhost:3000/callback-a"},
 		"grant_types":   []string{"authorization_code", "refresh_token"},
@@ -2451,7 +2405,8 @@ func TestE2E_OAuth_WrongRedirectURI(t *testing.T) {
 	resp.Body.Close()
 
 	// Should be rejected — either as a 400 error or a redirect with error param
-	if resp.StatusCode == http.StatusFound {
+	switch resp.StatusCode {
+	case http.StatusFound:
 		location := resp.Header.Get("Location")
 		parsedLoc, _ := url.Parse(location)
 		errorParam := parsedLoc.Query().Get("error")
@@ -2459,9 +2414,9 @@ func TestE2E_OAuth_WrongRedirectURI(t *testing.T) {
 			t.Fatalf("wrong redirect URI: got redirect without error: %s", location)
 		}
 		t.Logf("wrong redirect URI rejected via redirect with error=%s", errorParam)
-	} else if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusForbidden {
+	case http.StatusBadRequest, http.StatusForbidden:
 		t.Logf("wrong redirect URI rejected with status %d", resp.StatusCode)
-	} else {
+	default:
 		t.Fatalf("wrong redirect URI: expected error response, got %d; body: %s", resp.StatusCode, body)
 	}
 
@@ -2625,7 +2580,8 @@ func TestE2E_OAuth_UnregisteredClientID(t *testing.T) {
 	resp.Body.Close()
 
 	// Should get an error — either 400 directly or a redirect with error
-	if resp.StatusCode == http.StatusFound {
+	switch resp.StatusCode {
+	case http.StatusFound:
 		location := resp.Header.Get("Location")
 		parsedLoc, _ := url.Parse(location)
 		errorParam := parsedLoc.Query().Get("error")
@@ -2634,9 +2590,9 @@ func TestE2E_OAuth_UnregisteredClientID(t *testing.T) {
 		} else {
 			t.Fatalf("unregistered client got redirect without error: %s", location)
 		}
-	} else if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
+	case http.StatusBadRequest, http.StatusUnauthorized:
 		t.Logf("unregistered client rejected with status %d", resp.StatusCode)
-	} else {
+	default:
 		t.Fatalf("unregistered client: expected error, got %d; body: %s", resp.StatusCode, body)
 	}
 
@@ -2666,7 +2622,7 @@ func TestE2E_OAuth_MissingPKCE(t *testing.T) {
 	json.Unmarshal(body, &meta)
 
 	// Register a client
-	regBody, _ := json.Marshal(map[string]interface{}{
+	regBody, _ := json.Marshal(map[string]any{
 		"client_name":   "Missing PKCE Test",
 		"redirect_uris": []string{"http://localhost:3000/callback"},
 		"grant_types":   []string{"authorization_code", "refresh_token"},
@@ -2706,7 +2662,8 @@ func TestE2E_OAuth_MissingPKCE(t *testing.T) {
 	resp.Body.Close()
 
 	// Should be rejected — PKCE is required per MCP spec
-	if resp.StatusCode == http.StatusFound {
+	switch resp.StatusCode {
+	case http.StatusFound:
 		location := resp.Header.Get("Location")
 		parsedLoc, _ := url.Parse(location)
 		errorParam := parsedLoc.Query().Get("error")
@@ -2715,9 +2672,9 @@ func TestE2E_OAuth_MissingPKCE(t *testing.T) {
 		} else {
 			t.Fatalf("missing PKCE: got redirect without error (should require PKCE): %s", location)
 		}
-	} else if resp.StatusCode == http.StatusBadRequest {
+	case http.StatusBadRequest:
 		t.Logf("missing PKCE rejected with status 400")
-	} else {
+	default:
 		t.Fatalf("missing PKCE: expected error, got %d; body: %s", resp.StatusCode, body)
 	}
 
@@ -2760,10 +2717,10 @@ func TestE2E_TwoClients_SeparateTokens(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Client A", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Client A", "version": "1.0"},
 		},
 	}, "")
 	if respA.StatusCode != http.StatusOK {
@@ -2779,10 +2736,10 @@ func TestE2E_TwoClients_SeparateTokens(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Client B", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Client B", "version": "1.0"},
 		},
 	}, "")
 	if respB.StatusCode != http.StatusOK {
@@ -2863,10 +2820,10 @@ func TestE2E_ChatGPT_OAuthFlow(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "ChatGPT Plugin", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "ChatGPT Plugin", "version": "1.0"},
 		},
 	}, "")
 	if resp.StatusCode != http.StatusOK {
@@ -2880,9 +2837,9 @@ func TestE2E_ChatGPT_OAuthFlow(t *testing.T) {
 		t.Fatalf("ChatGPT MCP: JSON-RPC error: %s", rpc.Error.Message)
 	}
 
-	var initResult map[string]interface{}
+	var initResult map[string]any
 	json.Unmarshal(rpc.Result, &initResult)
-	si, _ := initResult["serverInfo"].(map[string]interface{})
+	si, _ := initResult["serverInfo"].(map[string]any)
 	if name, _ := si["name"].(string); name != "nram" {
 		t.Fatalf("ChatGPT MCP: expected serverInfo.name=nram, got %q", name)
 	}
@@ -3027,10 +2984,10 @@ func TestE2E_OAuth_OriginValidation(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Origin Test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Origin Test", "version": "1.0"},
 		},
 	})
 
@@ -3059,10 +3016,10 @@ func TestE2E_OAuth_OriginValidation(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      2,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
-			"clientInfo":     map[string]interface{}{"name": "Origin Test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "Origin Test", "version": "1.0"},
 		},
 	}, "")
 	if goodResp.StatusCode != http.StatusOK {

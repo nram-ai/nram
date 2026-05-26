@@ -593,7 +593,7 @@ func TestRelationshipRepo_TraverseFromEntity_EdgeCap_StopsAtCap(t *testing.T) {
 		alice := createTestEntity(t, ctx, db, nsID, "alice")
 
 		const totalNeighbors = 20
-		for i := 0; i < totalNeighbors; i++ {
+		for i := range totalNeighbors {
 			neighbor := createTestEntity(t, ctx, db, nsID, fmt.Sprintf("neighbor-%d", i))
 			rel := &model.Relationship{
 				NamespaceID: nsID, SourceID: alice, TargetID: neighbor,
@@ -635,7 +635,7 @@ func TestRelationshipRepo_TraverseFromEntity_EdgeCap_PartialHop(t *testing.T) {
 		// alice has 10 direct neighbors plus an alice->bob edge; bob in turn
 		// has a downstream neighbor only visible if the second hop runs.
 		const aliceNeighbors = 10
-		for i := 0; i < aliceNeighbors; i++ {
+		for i := range aliceNeighbors {
 			neighbor := createTestEntity(t, ctx, db, nsID, fmt.Sprintf("a-neighbor-%d", i))
 			rel := &model.Relationship{
 				NamespaceID: nsID, SourceID: alice, TargetID: neighbor,
@@ -724,7 +724,7 @@ func TestRelationshipRepo_TraverseFromEntity_EdgeCap_Zero(t *testing.T) {
 		alice := createTestEntity(t, ctx, db, nsID, "alice")
 
 		const totalNeighbors = 15
-		for i := 0; i < totalNeighbors; i++ {
+		for i := range totalNeighbors {
 			neighbor := createTestEntity(t, ctx, db, nsID, fmt.Sprintf("zero-neighbor-%d", i))
 			rel := &model.Relationship{
 				NamespaceID: nsID, SourceID: alice, TargetID: neighbor,
@@ -1189,7 +1189,7 @@ func TestRelationshipRepo_BatchCreate_LargeBatchChunks(t *testing.T) {
 		const total = 1100
 		tgtIDs := make([]uuid.UUID, total)
 		rels := make([]*model.Relationship, total)
-		for i := 0; i < total; i++ {
+		for i := range total {
 			tgtIDs[i] = createTestEntity(t, ctx, db, nsID, "t-"+uuid.NewString())
 			rels[i] = &model.Relationship{
 				NamespaceID: nsID, SourceID: srcID, TargetID: tgtIDs[i],
@@ -1240,7 +1240,7 @@ func TestRelationshipRepo_BatchExpire(t *testing.T) {
 		if n != 3 {
 			t.Errorf("Affected = %d, want 3", n)
 		}
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			fetched, err := repo.GetByID(ctx, ids[i])
 			if err != nil {
 				t.Fatalf("re-read %d: %v", i, err)

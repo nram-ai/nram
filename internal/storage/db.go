@@ -61,7 +61,7 @@ func Open(cfg config.DatabaseConfig) (DB, error) {
 	if cfg.URL != "" {
 		return openPostgres(cfg)
 	}
-	return openSQLite(cfg)
+	return openSQLite()
 }
 
 // sqlitePragmas are applied to every SQLite connection (both read and write pools).
@@ -87,7 +87,7 @@ func applySQLitePragmas(db *sql.DB) error {
 // pools. The write pool is limited to a single connection to serialize all
 // writes and eliminate SQLITE_BUSY contention. The read pool allows multiple
 // concurrent readers via WAL mode.
-func openSQLite(cfg config.DatabaseConfig) (DB, error) {
+func openSQLite() (DB, error) {
 	// Write pool: single connection, all writes serialized.
 	writeDB, err := sql.Open("sqlite", "nram.db")
 	if err != nil {

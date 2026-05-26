@@ -68,8 +68,8 @@ func schemaFor[T any]() json.RawMessage {
 }
 
 var (
-	uuidType       = reflect.TypeOf(uuid.UUID{})
-	rawMessageType = reflect.TypeOf(json.RawMessage{})
+	uuidType       = reflect.TypeFor[uuid.UUID]()
+	rawMessageType = reflect.TypeFor[json.RawMessage]()
 )
 
 func outputSchemaMapper(t reflect.Type) *jsonschema.Schema {

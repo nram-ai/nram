@@ -75,22 +75,30 @@ func ParseRankingOverride(raw json.RawMessage) (ProjectRankingOverride, error) {
 				legacyRelevance = f
 			} else {
 				hasCanonicalSimilarity = true
-				ov.Similarity = ptrTo(f)
+				v := f
+				ov.Similarity = &v
 			}
 		case "Recency":
-			ov.Recency = ptrTo(f)
+			v := f
+			ov.Recency = &v
 		case "Importance":
-			ov.Importance = ptrTo(f)
+			v := f
+			ov.Importance = &v
 		case "Frequency":
-			ov.Frequency = ptrTo(f)
+			v := f
+			ov.Frequency = &v
 		case "GraphRelevance":
-			ov.GraphRelevance = ptrTo(f)
+			v := f
+			ov.GraphRelevance = &v
 		case "Confidence":
-			ov.Confidence = ptrTo(f)
+			v := f
+			ov.Confidence = &v
 		case "Origin":
-			ov.Origin = ptrTo(f)
+			v := f
+			ov.Origin = &v
 		case "MmrLambda":
-			ov.MmrLambda = ptrTo(f)
+			v := f
+			ov.MmrLambda = &v
 		}
 	}
 
@@ -135,6 +143,3 @@ func MergeWeights(base RankingWeights, ov ProjectRankingOverride) RankingWeights
 	return out
 }
 
-func ptrTo[T any](v T) *T {
-	return &v
-}

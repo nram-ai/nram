@@ -244,13 +244,13 @@ type rrTestEnv struct {
 	ProjectA   *model.Project   // project under Org A's namespace
 	ProjectANS *model.Namespace // project namespace (child of OrgANS)
 
-	Admin       rbacUser // administrator, in Org A
-	OrgAOwner   rbacUser // org_owner, in Org A
-	OrgAMember  rbacUser // member, in Org A
+	Admin        rbacUser // administrator, in Org A
+	OrgAOwner    rbacUser // org_owner, in Org A
+	OrgAMember   rbacUser // member, in Org A
 	OrgAReadonly rbacUser // readonly, in Org A
-	OrgAService rbacUser // service, in Org A
-	OrgBOwner   rbacUser // org_owner, in Org B (cross-org)
-	OrgBMember  rbacUser // member, in Org B (cross-org)
+	OrgAService  rbacUser // service, in Org A
+	OrgBOwner    rbacUser // org_owner, in Org B (cross-org)
+	OrgBMember   rbacUser // member, in Org B (cross-org)
 }
 
 // rrEmptyOK is a stub handler used to populate Handlers fields whose
@@ -455,7 +455,6 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	// Real stores backed by test DB for round-trip operations
 	orgUserStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, nsRepo, orgRepo, projRepo)
 
-
 	handlers := Handlers{
 		MCP: mcpSrv.Handler(),
 
@@ -466,9 +465,9 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		BulkForget: api.NewBulkForgetHandler(forgetSvc, nil),
 		BatchStore: api.NewBatchStoreHandler(batchStoreSvc, nil),
 
-		MeRecall:   api.NewMeRecallHandler(recallSvc, userLookup),
-		MeProjects: api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
-		MeAPIKeys:  api.NewMeAPIKeysHandler(apiKeyRepo),
+		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup),
+		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
+		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
 
 		OrgUsers: api.NewOrgUsersHandler(api.OrgUserConfig{Store: orgUserStore}),
@@ -482,10 +481,10 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		// Tier-B (org-aggregate) and tier-C (system-aggregate) stub
 		// handlers for test purposes — return empty 200. Real wiring is
 		// in cmd/server/main.go.
-		OrgDashboard:  rrEmptyOK,
-		OrgActivity:   rrEmptyOK,
-		OrgAnalytics:  rrEmptyOK,
-		OrgUsage:      rrEmptyOK,
+		OrgDashboard:    rrEmptyOK,
+		OrgActivity:     rrEmptyOK,
+		OrgAnalytics:    rrEmptyOK,
+		OrgUsage:        rrEmptyOK,
 		SystemDashboard: rrEmptyOK,
 		SystemActivity:  rrEmptyOK,
 		SystemAnalytics: rrEmptyOK,
@@ -495,10 +494,10 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		AdminNamespaces: api.NewAdminNamespacesHandler(api.NamespaceAdminConfig{Store: &rrNamespaceStore{}}),
 		AdminEnrichment: api.NewAdminEnrichmentHandler(api.EnrichmentAdminConfig{Store: &rrEnrichmentStore{}}),
 		AdminDreaming:   rrEmptyOK,
-		AdminOrgs:      api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: &rrOrgAdminStore{db: db}}),
-		AdminUsers:     api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore}),
-		AdminSettings:  api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: &rrSettingsStore{}}),
-		AdminDatabase:  api.NewAdminDatabaseHandler(api.DatabaseAdminConfig{Store: &rrDatabaseStore{}}),
+		AdminOrgs:       api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: &rrOrgAdminStore{db: db}}),
+		AdminUsers:      api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore}),
+		AdminSettings:   api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: &rrSettingsStore{}}),
+		AdminDatabase:   api.NewAdminDatabaseHandler(api.DatabaseAdminConfig{Store: &rrDatabaseStore{}}),
 		AdminGraph: api.NewAdminGraphHandler(api.GraphAdminConfig{
 			Projects:      projRepo,
 			Entities:      entityRepo,
@@ -532,21 +531,21 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	t.Cleanup(ts.Close)
 
 	return &rrTestEnv{
-		Server:      ts,
-		DB:          db,
-		OrgA:        orgA,
-		OrgB:        orgB,
-		OrgANS:      orgANS,
-		OrgBNS:      orgBNS,
-		ProjectA:    projectA,
-		ProjectANS:  projANS,
-		Admin:       admin,
-		OrgAOwner:   orgAOwner,
-		OrgAMember:  orgAMember,
+		Server:       ts,
+		DB:           db,
+		OrgA:         orgA,
+		OrgB:         orgB,
+		OrgANS:       orgANS,
+		OrgBNS:       orgBNS,
+		ProjectA:     projectA,
+		ProjectANS:   projANS,
+		Admin:        admin,
+		OrgAOwner:    orgAOwner,
+		OrgAMember:   orgAMember,
 		OrgAReadonly: orgAReadonly,
-		OrgAService: orgAService,
-		OrgBOwner:   orgBOwner,
-		OrgBMember:  orgBMember,
+		OrgAService:  orgAService,
+		OrgBOwner:    orgBOwner,
+		OrgBMember:   orgBMember,
 	}
 }
 
@@ -667,7 +666,7 @@ func TestRouteRestructure_Tier3_Enrichment(t *testing.T) {
 	t.Run("POST_enrichment_retry", func(t *testing.T) {
 		for _, u := range users {
 			t.Run(u.name, func(t *testing.T) {
-				body := map[string]interface{}{"ids": []string{}}
+				body := map[string]any{"ids": []string{}}
 				resp := rbacDoRequest(t, "POST", env.Server.URL+"/v1/admin/enrichment/retry", u.token, body)
 				if u.role == auth.RoleAdministrator {
 					rbacExpectStatus(t, resp, http.StatusOK)
@@ -682,7 +681,7 @@ func TestRouteRestructure_Tier3_Enrichment(t *testing.T) {
 	t.Run("POST_enrichment_pause", func(t *testing.T) {
 		for _, u := range users {
 			t.Run(u.name, func(t *testing.T) {
-				body := map[string]interface{}{"paused": true}
+				body := map[string]any{"paused": true}
 				resp := rbacDoRequest(t, "POST", env.Server.URL+"/v1/admin/enrichment/pause", u.token, body)
 				if u.role == auth.RoleAdministrator {
 					rbacExpectStatus(t, resp, http.StatusOK)
@@ -756,7 +755,7 @@ func TestRouteRestructure_Tier4_OrgManagement(t *testing.T) {
 		for i, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				url := fmt.Sprintf("%s/v1/orgs/%s/users", env.Server.URL, orgAID)
-				body := map[string]interface{}{
+				body := map[string]any{
 					"email":        fmt.Sprintf("newuser-%d@acme.test", i),
 					"display_name": fmt.Sprintf("New User %d", i),
 					"password":     "securepassword123",
@@ -834,7 +833,7 @@ func TestRouteRestructure_Tier6_RoleEscalation(t *testing.T) {
 	// org_owner tries to create a user with administrator role — should be 403
 	t.Run("org_owner_cannot_create_administrator", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users", env.Server.URL, orgAID)
-		body := map[string]interface{}{
+		body := map[string]any{
 			"email":        "escalated@acme.test",
 			"display_name": "Escalated User",
 			"password":     "securepassword123",
@@ -847,7 +846,7 @@ func TestRouteRestructure_Tier6_RoleEscalation(t *testing.T) {
 	// administrator CAN create a user with administrator role — should be 201
 	t.Run("admin_can_create_administrator", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users", env.Server.URL, orgAID)
-		body := map[string]interface{}{
+		body := map[string]any{
 			"email":        "new-admin@acme.test",
 			"display_name": "New Admin",
 			"password":     "securepassword123",
@@ -871,7 +870,7 @@ func TestRouteRestructure_Tier6b_UpdateRoleEscalation(t *testing.T) {
 	// org_owner tries to UPDATE a user's role to administrator — should be 403
 	t.Run("org_owner_cannot_update_to_administrator", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, targetUserID)
-		body := map[string]interface{}{
+		body := map[string]any{
 			"role": "administrator",
 		}
 		resp := rbacDoRequest(t, "PUT", url, env.OrgAOwner.JWT, body)
@@ -881,7 +880,7 @@ func TestRouteRestructure_Tier6b_UpdateRoleEscalation(t *testing.T) {
 	// org_owner CAN update a user's role to org_owner (not blocked by escalation check)
 	t.Run("org_owner_can_update_to_org_owner", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, targetUserID)
-		body := map[string]interface{}{
+		body := map[string]any{
 			"role": "org_owner",
 		}
 		resp := rbacDoRequest(t, "PUT", url, env.OrgAOwner.JWT, body)
@@ -926,7 +925,7 @@ func TestRouteRestructure_Tier6c_OrgUserOperations(t *testing.T) {
 	t.Run("org_owner_delete_own_org_user", func(t *testing.T) {
 		// First, create a user to delete via the API
 		createURL := fmt.Sprintf("%s/v1/orgs/%s/users", env.Server.URL, orgAID)
-		createBody := map[string]interface{}{
+		createBody := map[string]any{
 			"email":        "deleteme@acme.test",
 			"display_name": "Delete Me",
 			"password":     "securepassword123",
@@ -1029,13 +1028,13 @@ func TestRouteRestructure_Tier9_APIKeyAuth(t *testing.T) {
 
 	// Enrichment write via API key — admin only
 	t.Run("api_key_enrichment_write_admin", func(t *testing.T) {
-		body := map[string]interface{}{"ids": []string{}}
+		body := map[string]any{"ids": []string{}}
 		resp := rbacDoRequest(t, "POST", env.Server.URL+"/v1/admin/enrichment/retry", env.Admin.APIKey, body)
 		rbacExpectStatus(t, resp, http.StatusOK)
 	})
 
 	t.Run("api_key_enrichment_write_member", func(t *testing.T) {
-		body := map[string]interface{}{"ids": []string{}}
+		body := map[string]any{"ids": []string{}}
 		resp := rbacDoRequest(t, "POST", env.Server.URL+"/v1/admin/enrichment/retry", env.OrgAMember.APIKey, body)
 		rbacExpectStatus(t, resp, http.StatusForbidden)
 	})
@@ -1082,7 +1081,7 @@ func TestRouteRestructure_OrgUsers_UpdateUser(t *testing.T) {
 	// Update user display_name as org_owner
 	t.Run("update_display_name", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, env.OrgAMember.User.ID)
-		body := map[string]interface{}{
+		body := map[string]any{
 			"display_name": "Updated Display Name",
 		}
 		resp := rbacDoRequest(t, "PUT", url, env.OrgAOwner.JWT, body)
@@ -1092,7 +1091,7 @@ func TestRouteRestructure_OrgUsers_UpdateUser(t *testing.T) {
 	// Update user of different org returns 404
 	t.Run("update_cross_org_user_returns_404", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, env.OrgBOwner.User.ID)
-		body := map[string]interface{}{
+		body := map[string]any{
 			"display_name": "Should Fail",
 		}
 		resp := rbacDoRequest(t, "PUT", url, env.OrgAOwner.JWT, body)
@@ -1118,7 +1117,7 @@ func TestRouteRestructure_OrgUsers_Validation(t *testing.T) {
 
 	// Empty email
 	t.Run("create_empty_email", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"email":        "",
 			"display_name": "No Email",
 			"password":     "securepassword123",
@@ -1130,7 +1129,7 @@ func TestRouteRestructure_OrgUsers_Validation(t *testing.T) {
 
 	// Short password
 	t.Run("create_short_password", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"email":        "shortpw@acme.test",
 			"display_name": "Short Password",
 			"password":     "short",
@@ -1142,7 +1141,7 @@ func TestRouteRestructure_OrgUsers_Validation(t *testing.T) {
 
 	// Invalid role
 	t.Run("create_invalid_role", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"email":        "badrole@acme.test",
 			"display_name": "Bad Role",
 			"password":     "securepassword123",
@@ -1154,7 +1153,7 @@ func TestRouteRestructure_OrgUsers_Validation(t *testing.T) {
 
 	// Empty body
 	t.Run("create_empty_body", func(t *testing.T) {
-		body := map[string]interface{}{}
+		body := map[string]any{}
 		resp := rbacDoRequest(t, "POST", createURL, env.Admin.JWT, body)
 		rbacExpectStatus(t, resp, http.StatusBadRequest)
 	})
@@ -1162,7 +1161,7 @@ func TestRouteRestructure_OrgUsers_Validation(t *testing.T) {
 	// Update with invalid role
 	t.Run("update_invalid_role", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, env.OrgAMember.User.ID)
-		body := map[string]interface{}{
+		body := map[string]any{
 			"role": "superadmin",
 		}
 		resp := rbacDoRequest(t, "PUT", url, env.Admin.JWT, body)
@@ -1190,7 +1189,7 @@ func TestRouteRestructure_OrgUsers_APIKeys(t *testing.T) {
 	var generatedKeyID string
 	t.Run("generate_api_key", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s/api-keys", env.Server.URL, orgAID, targetUserID)
-		body := map[string]interface{}{
+		body := map[string]any{
 			"label": "test-key-label",
 		}
 		resp := rbacDoRequest(t, "POST", url, env.OrgAOwner.JWT, body)
@@ -1208,7 +1207,7 @@ func TestRouteRestructure_OrgUsers_APIKeys(t *testing.T) {
 	// Generate API key with empty label returns 400
 	t.Run("generate_api_key_empty_label", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s/api-keys", env.Server.URL, orgAID, targetUserID)
-		body := map[string]interface{}{
+		body := map[string]any{
 			"label": "",
 		}
 		resp := rbacDoRequest(t, "POST", url, env.OrgAOwner.JWT, body)
@@ -1315,7 +1314,7 @@ func TestRouteRestructure_LastAdminProtection(t *testing.T) {
 
 	// First, create a second admin via the API.
 	createURL := fmt.Sprintf("%s/v1/orgs/%s/users", env.Server.URL, orgAID)
-	createBody := map[string]interface{}{
+	createBody := map[string]any{
 		"email":        "second-admin@acme.test",
 		"display_name": "Second Admin",
 		"password":     "securepassword123",
@@ -1479,7 +1478,7 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 		for _, u := range nonAdmins {
 			t.Run(u.name, func(t *testing.T) {
-				body := map[string]interface{}{
+				body := map[string]any{
 					"type":         "fact",
 					"sample_input": "Some test content",
 				}
@@ -1491,7 +1490,7 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 	// Admin with type "fact" -> 400 (no fact provider configured)
 	t.Run("admin_fact_no_provider", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"type":         "fact",
 			"sample_input": "Some test content about Brandon who lives in Denver.",
 		}
@@ -1501,7 +1500,7 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 	// Admin with type "entity" -> 400 (no entity provider configured)
 	t.Run("admin_entity_no_provider", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"type":         "entity",
 			"sample_input": "Some test content about Brandon who lives in Denver.",
 		}
@@ -1511,7 +1510,7 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 	// Admin with invalid type -> 400
 	t.Run("admin_invalid_type", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"type":         "invalid",
 			"sample_input": "Some test content",
 		}
@@ -1521,7 +1520,7 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 	// Admin with missing sample_input -> 400
 	t.Run("admin_missing_sample_input", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"type": "fact",
 		}
 		resp := rbacDoRequest(t, "POST", env.Server.URL+"/v1/admin/enrichment/test-prompt", env.Admin.JWT, body)
@@ -1530,7 +1529,7 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 	// Admin with empty sample_input -> 400
 	t.Run("admin_empty_sample_input", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"type":         "fact",
 			"sample_input": "   ",
 		}
@@ -1540,7 +1539,7 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 	// Non-admin with invalid type still gets 403 (admin guard fires first)
 	t.Run("non_admin_invalid_type_still_403", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"type":         "invalid",
 			"sample_input": "Some test content",
 		}
@@ -1550,14 +1549,14 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 	// Non-admin with missing body still gets 403
 	t.Run("non_admin_empty_body_still_403", func(t *testing.T) {
-		body := map[string]interface{}{}
+		body := map[string]any{}
 		resp := rbacDoRequest(t, "POST", env.Server.URL+"/v1/admin/enrichment/test-prompt", env.OrgAMember.JWT, body)
 		rbacExpectStatus(t, resp, http.StatusForbidden)
 	})
 
 	// Unauthenticated -> 401
 	t.Run("unauthenticated", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"type":         "fact",
 			"sample_input": "Some test content",
 		}
@@ -1567,7 +1566,7 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 	// API key auth: admin API key with fact type -> 400 (no provider)
 	t.Run("api_key_admin_fact_no_provider", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"type":         "fact",
 			"sample_input": "Some test content",
 		}
@@ -1577,7 +1576,7 @@ func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
 
 	// API key auth: non-admin API key -> 403
 	t.Run("api_key_member_forbidden", func(t *testing.T) {
-		body := map[string]interface{}{
+		body := map[string]any{
 			"type":         "fact",
 			"sample_input": "Some test content",
 		}

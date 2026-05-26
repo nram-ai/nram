@@ -49,8 +49,7 @@ const (
 // (returns nil, false if absent) so callers can pull provider name and timing
 // out of breaker-open errors for structured logging and worker cooldown.
 func asCircuitOpen(err error) (*provider.CircuitOpenError, bool) {
-	var coe *provider.CircuitOpenError
-	if errors.As(err, &coe) {
+	if coe, ok := errors.AsType[*provider.CircuitOpenError](err); ok {
 		return coe, true
 	}
 	return nil, false
@@ -69,10 +68,7 @@ func (wp *WorkerPool) logBreakerOrError(ctx context.Context, msg string, err err
 		if time.Since(coe.OpenSince) >= escalateAfter {
 			level = slog.LevelError
 		}
-		retryIn := time.Until(coe.RetryAt).Round(time.Second)
-		if retryIn < 0 {
-			retryIn = 0
-		}
+		retryIn := max(time.Until(coe.RetryAt).Round(time.Second), 0)
 		extra := append([]any{}, attrs...)
 		extra = append(extra,
 			"provider", coe.Provider,
@@ -116,8 +112,7 @@ func isTransientLLMErr(err error) bool {
 // last_error envelope), and falls back to err.Error() otherwise. Used at
 // the boundary between LLM-call helpers and the queue-fail path.
 func extractionFailPayload(err error) any {
-	var fail *service.ExtractionFailure
-	if errors.As(err, &fail) {
+	if fail, ok := errors.AsType[*service.ExtractionFailure](err); ok {
 		return fail
 	}
 	if err == nil {
@@ -304,17 +299,11 @@ func (c WorkerConfig) withDefaults(ctx context.Context, settings *service.Settin
 		if c.Backend == "sqlite" {
 			key = service.SettingEnrichmentWorkerCountSQLite
 		}
-		c.Workers = settings.ResolveIntWithDefault(ctx, key, "global")
-		if c.Workers < 1 {
-			c.Workers = 1
-		}
+		c.Workers = max(settings.ResolveIntWithDefault(ctx, key, "global"), 1)
 	}
 	if c.PollInterval <= 0 {
-		c.PollInterval = settings.ResolveDurationSecondsWithDefault(ctx,
-			service.SettingEnrichmentWorkerPollIntervalSeconds, "global")
-		if c.PollInterval < time.Second {
-			c.PollInterval = time.Second
-		}
+		c.PollInterval = max(settings.ResolveDurationSecondsWithDefault(ctx,
+			service.SettingEnrichmentWorkerPollIntervalSeconds, "global"), time.Second)
 	}
 	return c
 }
@@ -471,11 +460,9 @@ func (wp *WorkerPool) Start() {
 	// in-flight count, oldest-claim age, and stage breakdown so the admin
 	// banner stays live without per-job heartbeats.
 	if wp.progress != nil {
-		wp.wg.Add(1)
-		go func() {
-			defer wp.wg.Done()
+		wp.wg.Go(func() {
 			wp.progress.runTickLoop(ctx)
-		}()
+		})
 	}
 
 	// Per-worker heartbeat so the StuckJobSweeper can distinguish a long
@@ -662,10 +649,7 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 // jitter prevents two workers from waking simultaneously after a shared
 // breaker trip.
 func (wp *WorkerPool) sleepUntil(ctx context.Context, deadline time.Time) {
-	wait := time.Until(deadline)
-	if wait < 500*time.Millisecond {
-		wait = 500 * time.Millisecond
-	}
+	wait := max(time.Until(deadline), 500*time.Millisecond)
 	jitter := time.Duration(rand.Int63n(int64(time.Second)))
 	wait += jitter
 
@@ -696,10 +680,7 @@ func (wp *WorkerPool) sleepWithBackoff(ctx context.Context, emptyPolls, maxBacko
 
 	// Add jitter: ±25% to prevent synchronized polling.
 	jitter := time.Duration(rand.Int63n(int64(backoff/2))) - backoff/4
-	wait := backoff + jitter
-	if wait < time.Second {
-		wait = time.Second
-	}
+	wait := max(backoff+jitter, time.Second)
 
 	t := time.NewTimer(wait)
 	defer t.Stop()
@@ -873,11 +854,8 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 	started := time.Now()
 	slog.Info("enrichment: batch claimed", "worker", workerID, "jobs", len(jobs))
 
-	preEmbedFanOut := wp.settings.ResolveIntWithDefault(ctx,
-		service.SettingEnrichmentWorkerPreEmbedConcurrency, "global")
-	if preEmbedFanOut < 1 {
-		preEmbedFanOut = 1
-	}
+	preEmbedFanOut := max(wp.settings.ResolveIntWithDefault(ctx,
+		service.SettingEnrichmentWorkerPreEmbedConcurrency, "global"), 1)
 
 	results := make([]*pendingJob, len(jobs))
 	preEmbedErrs := make([]error, len(jobs))
@@ -1076,14 +1054,10 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		return p, nil
 	}
 
-	hasFact := wp.factProvider() != nil
-	hasEntity := wp.entityProvider() != nil
-	hasEmbed := wp.embedProvider() != nil
-
 	// Race window: a slot can be removed via /admin/providers after the
 	// batch is claimed. Release (no attempts bump) so the backlog drains
 	// automatically when the admin restores the slot.
-	if !(hasFact && hasEntity && hasEmbed) {
+	if wp.factProvider() == nil || wp.entityProvider() == nil || wp.embedProvider() == nil {
 		if relErr := wp.queue.Release(ctx, job.ID, workerID); relErr != nil {
 			logClaimLostOr(relErr, "enrichment: release on closed gate", "job", job.ID, "worker", workerID)
 		}
@@ -1103,14 +1077,14 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	skipFact := mem.Enriched || stepDone[model.StepFactExtraction]
 	skipEntity := mem.Enriched || stepDone[model.StepEntityExtraction]
 
-	if hasFact && !skipFact {
+	if !skipFact {
 		if has, probeErr := wp.lineage.HasExtractedFactChildren(ctx, mem.NamespaceID, mem.ID); probeErr != nil {
 			slog.Warn("enrichment: probe extracted-fact lineage", "job", job.ID, "memory", mem.ID, "err", probeErr)
 		} else if has {
 			skipFact = true
 		}
 	}
-	if hasEntity && !skipEntity {
+	if !skipEntity {
 		if has, probeErr := wp.relationships.HasBySourceMemory(ctx, mem.NamespaceID, mem.ID); probeErr != nil {
 			slog.Warn("enrichment: probe source-memory relationships", "job", job.ID, "memory", mem.ID, "err", probeErr)
 		} else if has {
@@ -1125,10 +1099,10 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		entityErr error
 	)
 
-	if hasFact && !skipFact {
+	if !skipFact {
 		factEnv, factErr = wp.extractFacts(ctx, wp.factProvider(), mem.Content)
 	}
-	if hasEntity && !skipEntity {
+	if !skipEntity {
 		entEnv, entityErr = wp.extractEntities(ctx, wp.entityProvider(), mem.Content)
 	}
 
@@ -1157,7 +1131,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		entityProv = entEnv.ProviderName
 	}
 
-	if (hasFact && factErr != nil) && (hasEntity && entityErr != nil) {
+	if factErr != nil && entityErr != nil {
 		joined := errors.Join(factErr, entityErr)
 		// Treat as transient only when *both* legs are: if one leg is a real
 		// fault, burning a queue attempt is the right policy.
@@ -1168,7 +1142,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		}
 		return nil, fmt.Errorf("extraction failed: %w", joined)
 	}
-	if hasFact && factErr != nil {
+	if factErr != nil {
 		wp.requeueOrFail(ctx, workerID, job.ID, factErr, extractionFailPayload(factErr))
 		return nil, fmt.Errorf("fact extraction: %w", factErr)
 	}
@@ -1294,7 +1268,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	// even if 0 facts came back. The signal is "the step ran", not "the
 	// step produced output", so a legitimate 0-fact memory does not
 	// re-extract on the next claim.
-	if hasFact && !skipFact && factErr == nil {
+	if !skipFact {
 		if err := wp.queue.MarkStepCompleted(ctx, job.ID, model.StepFactExtraction); err != nil {
 			slog.Warn("enrichment: mark step completed (fact)", "job", job.ID, "err", err)
 		}
@@ -1302,7 +1276,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 
 	entities := wp.upsertEntitiesAndRelationships(ctx, job, mem, entResult)
 
-	if hasEntity && !skipEntity && entityErr == nil {
+	if !skipEntity && entityErr == nil {
 		if err := wp.queue.MarkStepCompleted(ctx, job.ID, model.StepEntityExtraction); err != nil {
 			slog.Warn("enrichment: mark step completed (entity)", "job", job.ID, "err", err)
 		}
@@ -1732,18 +1706,12 @@ func (wp *WorkerPool) embedChunked(ctx context.Context, ep provider.EmbeddingPro
 		usage provider.TokenUsage
 		model string
 	)
-	cap := wp.settings.ResolveIntWithDefault(ctx,
-		service.SettingEnrichmentWorkerEmbedInputCap, "global")
-	if cap < 1 {
-		cap = 1
-	}
+	cap := max(wp.settings.ResolveIntWithDefault(ctx,
+		service.SettingEnrichmentWorkerEmbedInputCap, "global"), 1)
 	timeout := wp.settings.ResolveDurationSecondsWithDefault(ctx,
 		service.SettingEnrichmentWorkerEmbedTimeoutSeconds, "global")
 	for start := 0; start < len(inputs); start += cap {
-		end := start + cap
-		if end > len(inputs) {
-			end = len(inputs)
-		}
+		end := min(start+cap, len(inputs))
 		embedCtx, cancel := context.WithTimeout(ctx, timeout)
 		embedCtx = provider.WithOperation(embedCtx, provider.OperationEmbedding)
 		resp, err := ep.Embed(embedCtx, &provider.EmbeddingRequest{
@@ -2064,7 +2032,7 @@ func (wp *WorkerPool) mergeTagsIntoParent(
 	if wp.lineage == nil {
 		return nil
 	}
-	auditCtx := map[string]interface{}{
+	auditCtx := map[string]any{
 		"source":             source,
 		"suppressed_content": suppressedContent,
 		"suppressed_tags":    newTags,
@@ -2285,16 +2253,16 @@ func tagDelta(original, merged []string) []string {
 // observed so an operator can spot a parent that is absorbing many
 // near-duplicate facts.
 func stampSuppressedFactMetadata(mem *model.Memory, score float64) {
-	meta := map[string]interface{}{}
+	meta := map[string]any{}
 	if len(mem.Metadata) > 0 {
 		_ = json.Unmarshal(mem.Metadata, &meta)
 		if meta == nil {
-			meta = map[string]interface{}{}
+			meta = map[string]any{}
 		}
 	}
-	prev, _ := meta["tags_merged_from_suppressed_fact"].(map[string]interface{})
+	prev, _ := meta["tags_merged_from_suppressed_fact"].(map[string]any)
 	if prev == nil {
-		prev = map[string]interface{}{}
+		prev = map[string]any{}
 	}
 	count := 1
 	if c, ok := prev["count"].(float64); ok {

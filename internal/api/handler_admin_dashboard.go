@@ -146,7 +146,7 @@ func NewAdminActivityHandler(cfg DashboardConfig) http.HandlerFunc {
 			events = []ActivityEvent{}
 		}
 
-		writeJSON(w, http.StatusOK, map[string]interface{}{
+		writeJSON(w, http.StatusOK, map[string]any{
 			"events": events,
 		})
 	}

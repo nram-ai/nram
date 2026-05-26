@@ -156,7 +156,7 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 	// a 100-char preview. Org-scoped and global queries keep the length-only
 	// shape so cross-tenant ranked lists stay content-free.
 	var query string
-	var args []interface{}
+	var args []any
 	wantPreview := userID != nil
 
 	switch {
@@ -178,7 +178,7 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 			WHERE m.deleted_at IS NULL
 			AND mn.path LIKE %s
 			%s LIMIT %d`, lengthExpr, prefix, orderClause, limit)
-		args = []interface{}{userID.String()}
+		args = []any{userID.String()}
 
 	case orgID != nil:
 		prefix := namespacePrefixSubquery(s.db.Backend(), "organizations", "o.id", "$1", "?")
@@ -188,7 +188,7 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 			WHERE m.deleted_at IS NULL
 			AND mn.path LIKE %s
 			%s LIMIT %d`, prefix, orderClause, limit)
-		args = []interface{}{orgID.String()}
+		args = []any{orgID.String()}
 
 	default:
 		query = fmt.Sprintf(`SELECT m.id, LENGTH(m.content), m.access_count, m.created_at

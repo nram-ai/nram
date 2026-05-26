@@ -127,7 +127,7 @@ func TestHandleMemoryUpdate_NoHTTPRequest(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"id":      uuid.New().String(),
 		"project": "test",
 		"content": "new content",
@@ -146,7 +146,7 @@ func TestHandleMemoryUpdate_NoAuth(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"id":      uuid.New().String(),
 		"project": "test",
 		"content": "new content",
@@ -166,7 +166,7 @@ func TestHandleMemoryUpdate_MissingID(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 		"content": "new content",
 	}
@@ -185,7 +185,7 @@ func TestHandleMemoryUpdate_InvalidID(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"id":      "not-a-uuid",
 		"project": "test",
 		"content": "new content",
@@ -199,14 +199,13 @@ func TestHandleMemoryUpdate_InvalidID(t *testing.T) {
 	assertToolError(t, result, "invalid memory id")
 }
 
-
 func TestHandleMemoryUpdate_NoFieldsProvided(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"id":      uuid.New().String(),
 		"project": "test",
 	}
@@ -233,7 +232,7 @@ func TestHandleMemoryUpdate_ProjectNotFound(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"id":      uuid.New().String(),
 		"project": "nonexistent",
 		"content": "new content",
@@ -278,12 +277,12 @@ func TestHandleMemoryUpdate_Success(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"id":       memoryID.String(),
 		"project":  "test",
 		"content":  "new content",
-		"tags":     []interface{}{"new-tag"},
-		"metadata": map[string]interface{}{"key": "value"},
+		"tags":     []any{"new-tag"},
+		"metadata": map[string]any{"key": "value"},
 	}
 
 	ctx := buildAuthCtx(userID)
@@ -344,7 +343,7 @@ func TestHandleMemoryUpdate_ReEmbedIndicator(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"id":      memoryID.String(),
 		"project": "test",
 		"content": "changed content",
@@ -378,8 +377,8 @@ func TestHandleMemoryGet_NoHTTPRequest(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
-	req.Params.Arguments = map[string]interface{}{
-		"ids":     []interface{}{uuid.New().String()},
+	req.Params.Arguments = map[string]any{
+		"ids":     []any{uuid.New().String()},
 		"project": "test",
 	}
 
@@ -396,8 +395,8 @@ func TestHandleMemoryGet_NoAuth(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
-	req.Params.Arguments = map[string]interface{}{
-		"ids":     []interface{}{uuid.New().String()},
+	req.Params.Arguments = map[string]any{
+		"ids":     []any{uuid.New().String()},
 		"project": "test",
 	}
 
@@ -415,7 +414,7 @@ func TestHandleMemoryGet_MissingIDs(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 	}
 
@@ -433,8 +432,8 @@ func TestHandleMemoryGet_EmptyIDs(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
-	req.Params.Arguments = map[string]interface{}{
-		"ids":     []interface{}{},
+	req.Params.Arguments = map[string]any{
+		"ids":     []any{},
 		"project": "test",
 	}
 
@@ -452,8 +451,8 @@ func TestHandleMemoryGet_InvalidUUID(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
-	req.Params.Arguments = map[string]interface{}{
-		"ids":     []interface{}{"not-a-uuid"},
+	req.Params.Arguments = map[string]any{
+		"ids":     []any{"not-a-uuid"},
 		"project": "test",
 	}
 
@@ -464,7 +463,6 @@ func TestHandleMemoryGet_InvalidUUID(t *testing.T) {
 	}
 	assertToolError(t, result, "not a valid UUID")
 }
-
 
 func TestHandleMemoryGet_ProjectNotFound(t *testing.T) {
 	userID := uuid.New()
@@ -480,8 +478,8 @@ func TestHandleMemoryGet_ProjectNotFound(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
-	req.Params.Arguments = map[string]interface{}{
-		"ids":     []interface{}{uuid.New().String()},
+	req.Params.Arguments = map[string]any{
+		"ids":     []any{uuid.New().String()},
 		"project": "nonexistent",
 	}
 
@@ -528,8 +526,8 @@ func TestHandleMemoryGet_SuccessWithFoundAndNotFound(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
-	req.Params.Arguments = map[string]interface{}{
-		"ids":     []interface{}{memID1.String(), memID2.String()},
+	req.Params.Arguments = map[string]any{
+		"ids":     []any{memID1.String(), memID2.String()},
 		"project": "test",
 	}
 

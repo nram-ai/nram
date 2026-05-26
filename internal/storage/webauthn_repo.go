@@ -168,7 +168,7 @@ func (r *WebAuthnRepo) HasCredentials(ctx context.Context, userID uuid.UUID) (bo
 		query = `SELECT EXISTS(SELECT 1 FROM webauthn_credentials WHERE user_id = $1)`
 	}
 
-	var raw interface{}
+	var raw any
 	row := r.db.QueryRow(ctx, query, userID.String())
 	if err := row.Scan(&raw); err != nil {
 		return false, fmt.Errorf("webauthn credential has credentials: %w", err)
@@ -186,13 +186,13 @@ func (r *WebAuthnRepo) reload(ctx context.Context, cred *model.WebAuthnCredentia
 }
 
 type webauthnScanner interface {
-	Scan(dest ...interface{}) error
+	Scan(dest ...any) error
 }
 
 type webauthnScanResult struct {
 	idStr, userIDStr, transportsStr, createdAtStr string
-	lastUsedAtStr                                  sql.NullString
-	userVerified, backupEligible, backupState       interface{}
+	lastUsedAtStr                                 sql.NullString
+	userVerified, backupEligible, backupState     any
 }
 
 func (r *WebAuthnRepo) scanFromRow(row *sql.Row) (*model.WebAuthnCredential, error) {
@@ -269,4 +269,3 @@ func (r *WebAuthnRepo) populate(cred *model.WebAuthnCredential, sr *webauthnScan
 
 	return cred, nil
 }
-

@@ -132,10 +132,7 @@ func main() {
 	logger := dreaming.NewDreamLogWriter(dreamLogRepo, cycle.ID, cycle.ProjectID)
 	budget := dreaming.NewTokenBudget(tokenBudget, perCallCap)
 
-	runCap := maxAudits
-	if runCap > eligible {
-		runCap = eligible
-	}
+	runCap := min(maxAudits, eligible)
 	log.Printf("starting audit: cap=%d budget=%d per_call=%d", runCap, tokenBudget, perCallCap)
 
 	start := time.Now()

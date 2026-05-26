@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,7 +79,7 @@ func (r *EnrichmentQueueRepo) Enqueue(ctx context.Context, item *model.Enrichmen
 		item.UpdatedAt = now
 	}
 
-	var lastError interface{}
+	var lastError any
 	if item.LastError != nil && string(item.LastError) != "null" {
 		lastError = string(item.LastError)
 	}
@@ -155,7 +156,7 @@ func (r *EnrichmentQueueRepo) ClaimNext(ctx context.Context, workerID string) (*
 	// may not be sufficient under heavy enrichment worker contention.
 	var result sql.Result
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		result, err = r.db.Exec(ctx,
 			`UPDATE enrichment_queue SET status = 'processing', claimed_by = ?, claimed_at = ?, updated_at = ?
 				WHERE id = (
@@ -240,7 +241,7 @@ func (r *EnrichmentQueueRepo) ClaimNextBatch(ctx context.Context, workerID strin
 
 		// Build the UPDATE with a placeholder list of ids.
 		placeholders := make([]string, len(ids))
-		args := make([]interface{}, 0, len(ids)+3)
+		args := make([]any, 0, len(ids)+3)
 		args = append(args, workerID, now, now)
 		for i, id := range ids {
 			placeholders[i] = fmt.Sprintf("$%d", i+4)
@@ -274,7 +275,7 @@ func (r *EnrichmentQueueRepo) ClaimNextBatch(ctx context.Context, workerID strin
 	}
 
 	items := make([]*model.EnrichmentJob, 0, max)
-	for i := 0; i < max; i++ {
+	for range max {
 		item, err := r.ClaimNext(ctx, workerID)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -474,10 +475,8 @@ func (r *EnrichmentQueueRepo) MarkStepCompleted(ctx context.Context, id uuid.UUI
 	if raw.Valid && raw.String != "" {
 		_ = json.Unmarshal([]byte(raw.String), &steps) // tolerate malformed → reset
 	}
-	for _, existing := range steps {
-		if existing == step {
-			return nil
-		}
+	if slices.Contains(steps, step) {
+		return nil
 	}
 	steps = append(steps, step)
 	encoded, err := json.Marshal(steps)
@@ -822,16 +821,6 @@ func (r *EnrichmentQueueRepo) GetByID(ctx context.Context, id uuid.UUID) (*model
 
 	row := r.db.QueryRow(ctx, query, id.String())
 	return r.scanItem(row)
-}
-
-// reload fetches the item by ID and populates the struct in place.
-func (r *EnrichmentQueueRepo) reload(ctx context.Context, item *model.EnrichmentJob) error {
-	fetched, err := r.GetByID(ctx, item.ID)
-	if err != nil {
-		return fmt.Errorf("enrichment queue reload: %w", err)
-	}
-	*item = *fetched
-	return nil
 }
 
 const selectEnrichmentQueueColumns = `SELECT id, memory_id, namespace_id, status, priority,

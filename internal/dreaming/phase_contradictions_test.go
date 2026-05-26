@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -109,7 +110,7 @@ func (s stubSettingsWithCap) ResolveIntWithDefault(ctx context.Context, key, sco
 func makeMemories(n int) []model.Memory {
 	out := make([]model.Memory, n)
 	nsID := uuid.New()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out[i] = model.Memory{
 			ID:          uuid.New(),
 			NamespaceID: nsID,
@@ -122,7 +123,7 @@ func makeMemories(n int) []model.Memory {
 func stampedMemories(n int, stamp, updatedAt time.Time) []model.Memory {
 	mems := makeMemories(n)
 	for i := range mems {
-		meta := map[string]interface{}{
+		meta := map[string]any{
 			ContradictionsCheckedStampKey: stamp.Format(time.RFC3339Nano),
 		}
 		raw, _ := json.Marshal(meta)
@@ -364,7 +365,7 @@ func TestContradictionPhase_StampsDispatchedAndReportsResidualWhenCapHit(t *test
 		t.Errorf("expected fewer stamps than total memories; got %d of %d", len(writer.updates), len(mems))
 	}
 	for _, u := range writer.updates {
-		meta := map[string]interface{}{}
+		meta := map[string]any{}
 		if err := json.Unmarshal(u.Metadata, &meta); err != nil {
 			t.Fatalf("stamped memory has unparseable metadata: %v", err)
 		}
@@ -384,7 +385,7 @@ func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
 	// One memory has an older stamp than its UpdatedAt.
 	staleStamp := now.Add(-2 * time.Hour)
 	freshUpdated := now.Add(-time.Minute)
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		ContradictionsCheckedStampKey: staleStamp.Format(time.RFC3339Nano),
 	}
 	raw, _ := json.Marshal(meta)
@@ -454,7 +455,7 @@ func TestContradictionPhase_StampingIsIdempotent(t *testing.T) {
 	// Drain to stability. Must terminate within a bounded number of passes.
 	const maxDrainPasses = 8
 	var drainedAt int
-	for pass := 0; pass < maxDrainPasses; pass++ {
+	for pass := range maxDrainPasses {
 		result, err := phase.Execute(context.Background(), cycle,
 			NewTokenBudget(1_000_000, 2048), logger)
 		if err != nil {
@@ -504,7 +505,7 @@ func TestContradictionPhase_StampingIsIdempotent(t *testing.T) {
 // on the next cycle, or stamping becomes self-defeating.
 func TestIsStale_StampEqualsUpdatedAt_NotStale(t *testing.T) {
 	now := time.Now().UTC()
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		ContradictionsCheckedStampKey: now.Format(time.RFC3339Nano),
 	}
 	mem := model.Memory{UpdatedAt: now}
@@ -607,8 +608,8 @@ func (e *erroringEmbedder) Embed(_ context.Context, _ *provider.EmbeddingRequest
 	e.calls.Add(1)
 	return nil, errors.New("embedder offline")
 }
-func (e *erroringEmbedder) Name() string       { return "erroring" }
-func (e *erroringEmbedder) Dimensions() []int  { return []int{64} }
+func (e *erroringEmbedder) Name() string      { return "erroring" }
+func (e *erroringEmbedder) Dimensions() []int { return []int{64} }
 
 // TestContradictionPhase_EmbedderErrorDegradesSafely confirms that an
 // embedder error falls back to the deterministic walk rather than aborting
@@ -698,7 +699,7 @@ func (m *mutableMemoryStore) ListByNamespaceStale(_ context.Context, _ uuid.UUID
 			out = append(out, mem)
 			continue
 		}
-		var meta map[string]interface{}
+		var meta map[string]any
 		if err := json.Unmarshal(mem.Metadata, &meta); err != nil {
 			out = append(out, mem)
 			continue
@@ -1056,13 +1057,7 @@ func TestContradictionPhase_HighConfidenceWinnerSupersedes(t *testing.T) {
 	if vs.deleteCalls == 0 {
 		t.Errorf("expected vector purge on loser when haircut superseded fired; got %d Delete calls", vs.deleteCalls)
 	} else {
-		found := false
-		for _, id := range vs.deleted {
-			if id == mems[1].ID {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(vs.deleted, mems[1].ID)
 		if !found {
 			t.Errorf("expected Delete on loser %s; deleted=%v", mems[1].ID, vs.deleted)
 		}
@@ -1151,7 +1146,7 @@ func (f *fakeContradictionVectorStore) Delete(_ context.Context, _ storage.Vecto
 	return nil
 }
 func (f *fakeContradictionVectorStore) TruncateAllVectors(_ context.Context) error { return nil }
-func (f *fakeContradictionVectorStore) Ping(_ context.Context) error                { return nil }
+func (f *fakeContradictionVectorStore) Ping(_ context.Context) error               { return nil }
 
 // paraphraseSettings returns a settings stub that turns paraphrase fast-path
 // on at the configured threshold and supplies the contradiction prompt
@@ -1228,7 +1223,7 @@ func TestContradictionPhase_VectorStoreMissesTriggerEmbed(t *testing.T) {
 	dim := 4
 	vs := &fakeContradictionVectorStore{vectorsByID: map[uuid.UUID][]float32{}}
 	// Half the memories are stored, half are misses.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		vs.vectorsByID[mems[i].ID] = vectorOffsetAt(dim, i)
 	}
 	emb := &staticEmbedder{vectors: [][]float32{

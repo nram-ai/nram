@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -219,7 +220,7 @@ func newAuditPhase(emb provider.EmbeddingProvider, llm provider.LLMProvider, set
 
 func dreamMemory(content string, sourceIDs []uuid.UUID) model.Memory {
 	src := model.DreamSource
-	meta := map[string]interface{}{}
+	meta := map[string]any{}
 	if len(sourceIDs) > 0 {
 		ids := make([]string, len(sourceIDs))
 		for i, id := range sourceIDs {
@@ -547,7 +548,7 @@ func TestAuditExistingDreams_DemotesDuplicateAndStampsNovel(t *testing.T) {
 func TestAuditExistingDreams_RespectsPerCycleCap(t *testing.T) {
 	src := model.Memory{ID: uuid.New(), Content: "shared source"}
 	memories := []model.Memory{src}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		memories = append(memories, dreamMemory("dream "+string(rune('A'+i)), []uuid.UUID{src.ID}))
 	}
 
@@ -580,8 +581,8 @@ func TestAuditExistingDreams_SkipsAlreadyStamped(t *testing.T) {
 	dream := dreamMemory("already audited", []uuid.UUID{src.ID})
 
 	// Pre-stamp the audit marker.
-	meta := map[string]interface{}{
-		"source_memory_ids":  []interface{}{src.ID.String()},
+	meta := map[string]any{
+		"source_memory_ids":  []any{src.ID.String()},
 		"novelty_audited_at": "2026-04-01T00:00:00Z",
 	}
 	raw, _ := json.Marshal(meta)
@@ -664,14 +665,14 @@ func TestAuditExistingDreams_OrphanGetsDemoted(t *testing.T) {
 // --- helpers used only by tests ---
 
 func isLowNoveltyJSON(raw json.RawMessage) bool {
-	var m map[string]interface{}
+	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
 	v, ok := m["low_novelty"].(bool)
 	return ok && v
 }
 
 func hasAuditMarker(raw json.RawMessage) bool {
-	var m map[string]interface{}
+	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
 	_, ok := m["novelty_audited_at"]
 	return ok
@@ -689,12 +690,7 @@ func (p *recordingVectorPurger) Delete(_ context.Context, _ storage.VectorKind, 
 }
 
 func containsUUID(ids []uuid.UUID, target uuid.UUID) bool {
-	for _, id := range ids {
-		if id == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ids, target)
 }
 
 // TestAuditExistingDreams_DemotePurgesVector asserts that demoting a dream
@@ -787,7 +783,7 @@ func TestSupersedeOriginals_PurgesOriginalVectors(t *testing.T) {
 
 	// Build a synthesis whose metadata lists srcA and srcB as source memories.
 	src := model.DreamSource
-	meta, _ := json.Marshal(map[string]interface{}{
+	meta, _ := json.Marshal(map[string]any{
 		"source_memory_ids": []string{srcA.ID.String(), srcB.ID.String()},
 	})
 	synthesis := &model.Memory{
@@ -841,18 +837,6 @@ func TestSupersedeOriginals_PurgesOriginalVectors(t *testing.T) {
 	}
 }
 
-// findMemoryUpdate returns the most recent Update record for the given
-// memory ID, or nil if none.
-func findMemoryUpdate(updates []model.Memory, id uuid.UUID) *model.Memory {
-	for i := len(updates) - 1; i >= 0; i-- {
-		if updates[i].ID == id {
-			cp := updates[i]
-			return &cp
-		}
-	}
-	return nil
-}
-
 // scriptedEmbedder lets tests provide a per-call embedding response so the
 // backfill suite can drive distinct similarity outcomes for sequential audits.
 type scriptedEmbedder struct {
@@ -869,7 +853,7 @@ func (s *scriptedEmbedder) Name() string      { return "scripted" }
 func (s *scriptedEmbedder) Dimensions() []int { return []int{s.dim} }
 
 func auditReasonFromMeta(raw json.RawMessage) string {
-	var m map[string]interface{}
+	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
 	r, _ := m["novelty_audit_reason"].(string)
 	return r
@@ -1100,7 +1084,7 @@ func TestReinforce_StampsOnNoChange(t *testing.T) {
 	if stamp.ID != synth.ID {
 		t.Errorf("wrong row stamped: got %s, want %s", stamp.ID, synth.ID)
 	}
-	var meta map[string]interface{}
+	var meta map[string]any
 	if err := json.Unmarshal(stamp.Metadata, &meta); err != nil {
 		t.Fatalf("stamp metadata not valid JSON: %v", err)
 	}
@@ -1122,7 +1106,7 @@ func TestReinforce_FreshStampSkipsSynthesis(t *testing.T) {
 	now := time.Now().UTC()
 	synth := synthesisForReinforce("already checked", ns, now)
 
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		ReinforceCheckedStampKey: now.Format(time.RFC3339Nano),
 	}
 	raw, _ := json.Marshal(meta)
@@ -1160,7 +1144,7 @@ func TestReinforce_StaleStampReEvaluated(t *testing.T) {
 	now := time.Now().UTC()
 	synth := synthesisForReinforce("changed since last check", ns, now)
 
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		ReinforceCheckedStampKey: now.Add(-time.Hour).Format(time.RFC3339Nano),
 	}
 	raw, _ := json.Marshal(meta)
@@ -1317,7 +1301,7 @@ func TestCollectReinforceStale_PredicateCases(t *testing.T) {
 	ns := uuid.New()
 	now := time.Now().UTC()
 
-	mkSynth := func(meta map[string]interface{}) model.Memory {
+	mkSynth := func(meta map[string]any) model.Memory {
 		s := synthesisForReinforce("c", ns, now)
 		if meta != nil {
 			raw, _ := json.Marshal(meta)
@@ -1338,32 +1322,32 @@ func TestCollectReinforceStale_PredicateCases(t *testing.T) {
 		},
 		{
 			name:      "no_stamp_key",
-			mem:       mkSynth(map[string]interface{}{"other": "value"}),
+			mem:       mkSynth(map[string]any{"other": "value"}),
 			wantStale: true,
 		},
 		{
 			name:      "malformed_stamp_value",
-			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: "not-a-timestamp"}),
+			mem:       mkSynth(map[string]any{ReinforceCheckedStampKey: "not-a-timestamp"}),
 			wantStale: true,
 		},
 		{
 			name:      "non_string_stamp_value",
-			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: 12345}),
+			mem:       mkSynth(map[string]any{ReinforceCheckedStampKey: 12345}),
 			wantStale: true,
 		},
 		{
 			name:      "stamp_before_updated_at",
-			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: now.Add(-time.Hour).Format(time.RFC3339Nano)}),
+			mem:       mkSynth(map[string]any{ReinforceCheckedStampKey: now.Add(-time.Hour).Format(time.RFC3339Nano)}),
 			wantStale: true,
 		},
 		{
 			name:      "stamp_equal_updated_at",
-			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: now.Format(time.RFC3339Nano)}),
+			mem:       mkSynth(map[string]any{ReinforceCheckedStampKey: now.Format(time.RFC3339Nano)}),
 			wantStale: false,
 		},
 		{
 			name:      "stamp_after_updated_at",
-			mem:       mkSynth(map[string]interface{}{ReinforceCheckedStampKey: now.Add(time.Hour).Format(time.RFC3339Nano)}),
+			mem:       mkSynth(map[string]any{ReinforceCheckedStampKey: now.Add(time.Hour).Format(time.RFC3339Nano)}),
 			wantStale: false,
 		},
 	}
@@ -1386,7 +1370,7 @@ func TestCollectReinforceStale_PredicateCases(t *testing.T) {
 	t.Run("rfc3339_fallback_second_aligned", func(t *testing.T) {
 		secondAligned := now.Truncate(time.Second)
 		mem := synthesisForReinforce("c", ns, secondAligned)
-		stamp := map[string]interface{}{
+		stamp := map[string]any{
 			ReinforceCheckedStampKey: secondAligned.Format(time.RFC3339),
 		}
 		raw, _ := json.Marshal(stamp)
@@ -1404,10 +1388,10 @@ func TestCollectReinforceStale_PartitionsMixedSet(t *testing.T) {
 	ns := uuid.New()
 	now := time.Now().UTC()
 
-	freshMeta, _ := json.Marshal(map[string]interface{}{
+	freshMeta, _ := json.Marshal(map[string]any{
 		ReinforceCheckedStampKey: now.Format(time.RFC3339Nano),
 	})
-	staleMeta, _ := json.Marshal(map[string]interface{}{
+	staleMeta, _ := json.Marshal(map[string]any{
 		ReinforceCheckedStampKey: now.Add(-time.Hour).Format(time.RFC3339Nano),
 	})
 
@@ -1513,7 +1497,7 @@ func triClusterCandidates(ns uuid.UUID, t time.Time) (a, b, c model.Memory) {
 func stampClusterFresh(t *testing.T, cluster []*model.Memory, fingerprint string) {
 	t.Helper()
 	for _, m := range cluster {
-		raw, err := json.Marshal(map[string]interface{}{
+		raw, err := json.Marshal(map[string]any{
 			ConsolidationClusterStampKey:       m.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			ConsolidationClusterFingerprintKey: fingerprint,
 		})
@@ -1565,7 +1549,7 @@ func TestConsolidate_StampsOnAuditRejection(t *testing.T) {
 	expectedFP := clusterFingerprint([]model.Memory{a, b, c})
 	stamped := map[uuid.UUID]bool{}
 	for _, u := range writer.metadataUpdates {
-		var meta map[string]interface{}
+		var meta map[string]any
 		if err := json.Unmarshal(u.Metadata, &meta); err != nil {
 			t.Fatalf("stamp metadata not valid JSON: %v", err)
 		}
@@ -1617,7 +1601,7 @@ func TestConsolidate_StampsOnSuccessfulCreate(t *testing.T) {
 
 	expectedFP := clusterFingerprint([]model.Memory{a, b, c})
 	for _, u := range writer.metadataUpdates {
-		var meta map[string]interface{}
+		var meta map[string]any
 		_ = json.Unmarshal(u.Metadata, &meta)
 		if fp, _ := meta[ConsolidationClusterFingerprintKey].(string); fp != expectedFP {
 			t.Errorf("stamp fingerprint mismatch on member %s: got %q want %q", u.ID, fp, expectedFP)
@@ -1672,7 +1656,7 @@ func TestConsolidate_StaleStampReEvaluated(t *testing.T) {
 	fp := clusterFingerprint([]model.Memory{a, b, c})
 	// a and b stamp-fresh; c stamped before its UpdatedAt → stale.
 	stampClusterFresh(t, []*model.Memory{&a, &b}, fp)
-	rawStaleC, _ := json.Marshal(map[string]interface{}{
+	rawStaleC, _ := json.Marshal(map[string]any{
 		ConsolidationClusterStampKey:       now.Add(-time.Hour).Format(time.RFC3339Nano),
 		ConsolidationClusterFingerprintKey: fp,
 	})
@@ -1742,7 +1726,7 @@ func TestConsolidate_ClusterReshape_StalesSurvivors(t *testing.T) {
 		t.Errorf("reshape-detected cluster should re-stamp every member; got %d", len(writer.metadataUpdates))
 	}
 	for _, u := range writer.metadataUpdates {
-		var meta map[string]interface{}
+		var meta map[string]any
 		_ = json.Unmarshal(u.Metadata, &meta)
 		fp, _ := meta[ConsolidationClusterFingerprintKey].(string)
 		if fp != currentFP {
@@ -1900,7 +1884,7 @@ func TestCollectConsolidateStale_AnyMemberStaleStalesCluster(t *testing.T) {
 	}
 
 	// One-stale case: rewrite c's stamp to a stale time.
-	staleMeta, _ := json.Marshal(map[string]interface{}{
+	staleMeta, _ := json.Marshal(map[string]any{
 		ConsolidationClusterStampKey:       now.Add(-time.Hour).Format(time.RFC3339Nano),
 		ConsolidationClusterFingerprintKey: fp,
 	})
@@ -2012,7 +1996,7 @@ func TestStampConsolidateLoad_WritesStampPerMember(t *testing.T) {
 	//   * preserve any pre-existing metadata fields
 	for i, rec := range writer.metadataUpdates {
 		idx := i // first two members; deleted member is skipped
-		var meta map[string]interface{}
+		var meta map[string]any
 		if err := json.Unmarshal(rec.Metadata, &meta); err != nil {
 			t.Fatalf("write %d: unmarshal: %v", i, err)
 		}
@@ -2033,7 +2017,7 @@ func TestStampConsolidateLoad_WritesStampPerMember(t *testing.T) {
 	}
 
 	// The 'b' member's existing key must survive the stamp write.
-	var bMeta map[string]interface{}
+	var bMeta map[string]any
 	if err := json.Unmarshal(writer.metadataUpdates[1].Metadata, &bMeta); err != nil {
 		t.Fatalf("unmarshal b: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -211,10 +212,7 @@ func (m *mockQueueClaimer) ClaimNextBatch(_ context.Context, _ string, max int) 
 	if len(m.jobs) == 0 {
 		return nil, sql.ErrNoRows
 	}
-	n := max
-	if n > len(m.jobs) {
-		n = len(m.jobs)
-	}
+	n := min(max, len(m.jobs))
 	batch := make([]*model.EnrichmentJob, n)
 	copy(batch, m.jobs[:n])
 	m.jobs = m.jobs[n:]
@@ -267,10 +265,8 @@ func (m *mockQueueClaimer) Release(_ context.Context, id uuid.UUID, _ string) er
 func (m *mockQueueClaimer) MarkStepCompleted(_ context.Context, id uuid.UUID, step string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, existing := range m.stepsCompleted[id] {
-		if existing == step {
-			return nil
-		}
+	if slices.Contains(m.stepsCompleted[id], step) {
+		return nil
 	}
 	m.stepsCompleted[id] = append(m.stepsCompleted[id], step)
 	return nil
@@ -611,7 +607,7 @@ func noopEmbed() *mockEmbeddingProvider {
 func entityJSON() string {
 	result := entityExtractionResult{
 		Entities: []extractedEntity{
-			{Name: "Alice", Type: "person", Properties: map[string]interface{}{"age": 30}},
+			{Name: "Alice", Type: "person", Properties: map[string]any{"age": 30}},
 			{Name: "Acme Corp", Type: "organization", Properties: nil},
 		},
 		Relationships: []extractedRelationship{
@@ -950,13 +946,7 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 			t.Errorf("child %d: expected source 'test-source', got %v", i, child.Source)
 		}
 		// Must contain parent tags
-		hasParentTag := false
-		for _, tag := range child.Tags {
-			if tag == "parent-tag" {
-				hasParentTag = true
-				break
-			}
-		}
+		hasParentTag := slices.Contains(child.Tags, "parent-tag")
 		if !hasParentTag {
 			t.Errorf("child %d: expected parent tag 'parent-tag' in tags %v", i, child.Tags)
 		}
@@ -1688,7 +1678,7 @@ func TestMergeTagsIntoParent_ConcurrentMergesAreSerialized(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		tag := tagsPerGoroutine[i]
 		go func() {
 			defer wg.Done()
@@ -2226,7 +2216,7 @@ func TestProcessBatch_SingleSharedEmbed(t *testing.T) {
 
 	jobs := make([]*model.EnrichmentJob, 0, 3)
 	wantParentIDs := make(map[uuid.UUID]bool, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		mem := testMemory()
 		mem.ID = uuid.New()
 		mem.Content = fmt.Sprintf("memory-content-%d", i)
@@ -2302,7 +2292,7 @@ func TestProcessBatch_VectorUpsertFailure_FailsJobs(t *testing.T) {
 
 	jobs := make([]*model.EnrichmentJob, 0, 2)
 	memIDs := make([]uuid.UUID, 0, 2)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		mem := testMemory()
 		mem.ID = uuid.New()
 		mem.Content = fmt.Sprintf("memory-content-%d", i)

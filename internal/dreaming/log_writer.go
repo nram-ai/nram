@@ -38,7 +38,7 @@ func (w *DreamLogWriter) LogOperation(
 	ctx context.Context,
 	phase, subPhase, operation, targetType string,
 	targetID uuid.UUID,
-	before, after interface{},
+	before, after any,
 ) error {
 	if w.repo == nil {
 		w.opCount++
@@ -85,7 +85,7 @@ func (w *DreamLogWriter) ResetOpCount() {
 	w.opCount = 0
 }
 
-func marshalState(v interface{}) (json.RawMessage, error) {
+func marshalState(v any) (json.RawMessage, error) {
 	if v == nil {
 		return json.RawMessage(`{}`), nil
 	}

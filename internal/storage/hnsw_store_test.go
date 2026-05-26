@@ -103,7 +103,7 @@ func TestHNSWStoreUpsertAndSearch(t *testing.T) {
 	// Upsert 10 vectors.
 	vectors := make([][]float32, 10)
 	ids := make([]uuid.UUID, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		ids[i] = uuid.New()
 		vectors[i] = normalizeVector(randomVector(dim, int64(i+1)))
 		err := store.Upsert(ctx, storage.VectorKindMemory, ids[i], nsID, vectors[i], dim)
@@ -483,7 +483,7 @@ func TestHNSWStoreSnapshotPersistence(t *testing.T) {
 
 	ids := make([]uuid.UUID, 10)
 	vecs := make([][]float32, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		ids[i] = uuid.New()
 		vecs[i] = normalizeVector(randomVector(dim, int64(i+1)))
 		if err := store1.Upsert(ctx, storage.VectorKindMemory, ids[i], nsID, vecs[i], dim); err != nil {
@@ -560,7 +560,7 @@ func TestHNSWStoreLRUEviction(t *testing.T) {
 	for ni, ns := range namespaces {
 		data[ni].ids = make([]uuid.UUID, 5)
 		data[ni].vecs = make([][]float32, 5)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			data[ni].ids[i] = uuid.New()
 			data[ni].vecs[i] = normalizeVector(randomVector(dim, int64(ni*1000+i+1)))
 			if err := store.Upsert(ctx, storage.VectorKindMemory, data[ni].ids[i], ns, data[ni].vecs[i], dim); err != nil {
@@ -604,7 +604,7 @@ func TestHNSWStoreConcurrentReadWrite(t *testing.T) {
 	dim := 384
 
 	// Seed some initial vectors so searches have data.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		vec := normalizeVector(randomVector(dim, int64(i+1000)))
 		if err := store.Upsert(ctx, storage.VectorKindMemory, uuid.New(), nsID, vec, dim); err != nil {
 			t.Fatalf("seed upsert %d: %v", i, err)
@@ -615,7 +615,7 @@ func TestHNSWStoreConcurrentReadWrite(t *testing.T) {
 	errCh := make(chan error, 20)
 
 	// 10 writer goroutines.
-	for w := 0; w < 10; w++ {
+	for w := range 10 {
 		wg.Add(1)
 		go func(seed int) {
 			defer wg.Done()
@@ -627,7 +627,7 @@ func TestHNSWStoreConcurrentReadWrite(t *testing.T) {
 	}
 
 	// 10 reader goroutines.
-	for r := 0; r < 10; r++ {
+	for r := range 10 {
 		wg.Add(1)
 		go func(seed int) {
 			defer wg.Done()
@@ -663,7 +663,7 @@ func TestHNSWStoreDeleteAndSearchConsistency(t *testing.T) {
 	query := normalizeVector(queryBase)
 
 	ids := make([]uuid.UUID, 20)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		ids[i] = uuid.New()
 		// Create vectors very close to query but with slight offsets.
 		v := make([]float32, dim)
@@ -745,7 +745,7 @@ func TestHNSWStoreBatchUpsertMultiNamespace(t *testing.T) {
 	var items []storage.VectorUpsertItem
 
 	// ns1, dim=384: 5 vectors
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := uuid.New()
 		vec := normalizeVector(randomVector(dim384, int64(i+100)))
 		items = append(items, storage.VectorUpsertItem{
@@ -755,7 +755,7 @@ func TestHNSWStoreBatchUpsertMultiNamespace(t *testing.T) {
 	}
 
 	// ns2, dim=384: 5 vectors
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := uuid.New()
 		vec := normalizeVector(randomVector(dim384, int64(i+200)))
 		items = append(items, storage.VectorUpsertItem{
@@ -765,7 +765,7 @@ func TestHNSWStoreBatchUpsertMultiNamespace(t *testing.T) {
 	}
 
 	// ns3, dim=768: 5 vectors
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := uuid.New()
 		vec := normalizeVector(randomVector(dim768, int64(i+300)))
 		items = append(items, storage.VectorUpsertItem{
@@ -850,7 +850,7 @@ func TestHNSWStoreRebuildFromVectors(t *testing.T) {
 
 	ids := make([]uuid.UUID, 10)
 	vecs := make([][]float32, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		ids[i] = uuid.New()
 		vecs[i] = normalizeVector(randomVector(dim, int64(i+500)))
 		if err := store1.Upsert(ctx, storage.VectorKindMemory, ids[i], nsID, vecs[i], dim); err != nil {
@@ -1189,4 +1189,3 @@ func TestHNSWStoreGetByIDs_WrongDimension(t *testing.T) {
 		t.Errorf("expected 0 hits at wrong dim, got %d", len(got))
 	}
 }
-

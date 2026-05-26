@@ -79,10 +79,7 @@ func TestWrapToolResultHardTruncationWhenNoReducer(t *testing.T) {
 	}
 	text := extractText(res)
 	if !strings.HasSuffix(text, truncationSuffix) {
-		tail := len(text)
-		if tail > 120 {
-			tail = 120
-		}
+		tail := min(len(text), 120)
 		t.Fatalf("expected truncation suffix, got tail %q", text[len(text)-tail:])
 	}
 	if len(text) > budget {
@@ -873,10 +870,7 @@ type fuzzPayload struct {
 func newFuzzPayload(targetBytes int) *fuzzPayload {
 	// JSON envelope is ~12 bytes ({"blob":""}); pad the rest with data.
 	const envelope = 12
-	n := targetBytes - envelope
-	if n < 0 {
-		n = 0
-	}
+	n := max(targetBytes-envelope, 0)
 	return &fuzzPayload{Blob: strings.Repeat("x", n)}
 }
 
@@ -938,7 +932,7 @@ func TestWrapToolResultThreeTierContractProperty(t *testing.T) {
 	}
 
 	const iterations = 200
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		budgetTokens := budgets[r.Intn(len(budgets))]
 		budget := budgetTokens * charsPerTokenEstimate
 
@@ -1042,7 +1036,7 @@ func TestWrapToolResultTextContractProperty(t *testing.T) {
 	budgets := []int{200, 500, 1000, 4000, 22000}
 
 	const iterations = 120
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		budget := budgets[r.Intn(len(budgets))]
 		mult := []float64{0, 0.5, 1.0, 2.0, 10.0}[r.Intn(5)]
 		text := strings.Repeat("x", int(float64(budget)*mult))
@@ -1106,7 +1100,7 @@ func TestWrapToolResultJSONTextContractProperty(t *testing.T) {
 	}
 
 	const iterations = 120
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		budget := budgets[r.Intn(len(budgets))]
 		mult := []float64{0, 0.5, 1.0, 2.0, 10.0}[r.Intn(5)]
 		payloadSize := int(float64(budget) * mult)
@@ -1161,7 +1155,7 @@ func TestRecallReducerFlagToHintFaithfulness(t *testing.T) {
 	r := rand.New(rand.NewSource(42))
 	const iterations = 60
 
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		// Build a random fixture.
 		memCount := r.Intn(20)
 		mems := make([]mcpRecallMemory, memCount)
@@ -1205,7 +1199,7 @@ func TestRecallReducerFlagToHintFaithfulness(t *testing.T) {
 		// Drive the reducer to exhaustion.
 		reducer := newRecallReducer(orig)
 		var last *mcpRecallResponse
-		for k := 0; k < maxReducerIterations; k++ {
+		for range maxReducerIterations {
 			smaller, more := reducer()
 			if smaller == nil {
 				break
@@ -1552,7 +1546,7 @@ func TestRecallReducerPreservesSingleMemoryAtStage4(t *testing.T) {
 	// must NOT have memoriesHalved set; ReturnedCount must equal 1 if a
 	// Truncated envelope is emitted at all.
 	var last *mcpRecallResponse
-	for k := 0; k < maxReducerIterations; k++ {
+	for range maxReducerIterations {
 		smaller, more := reducer()
 		if smaller == nil {
 			break
@@ -1598,4 +1592,3 @@ func TestMCPBudgetBytesFloorsAtSentinelSize(t *testing.T) {
 		t.Fatalf("hardTruncate at floor must still emit sentinel; tail=%q", text[max(0, len(text)-30):])
 	}
 }
-

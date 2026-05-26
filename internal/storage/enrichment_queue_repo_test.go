@@ -493,11 +493,11 @@ func TestEnrichmentQueueRepo_CompleteWithWarning(t *testing.T) {
 
 		warning := map[string]any{
 			"warnings": []map[string]any{{
-				"phase":            "fact_extraction",
-				"reason":           "partial_recovery",
-				"finish_reason":    "length",
-				"facts_recovered":  10,
-				"model":            "qwen3:8b-extract",
+				"phase":           "fact_extraction",
+				"reason":          "partial_recovery",
+				"finish_reason":   "length",
+				"facts_recovered": 10,
+				"model":           "qwen3:8b-extract",
 			}},
 		}
 		if err := repo.CompleteWithWarning(ctx, item.ID, "", warning); err != nil {
@@ -1019,7 +1019,7 @@ func TestEnrichmentQueueRepo_TickHeartbeatAdvancesUpdatedAt(t *testing.T) {
 		// RFC3339 has 1-second resolution so we need at least a 1.1s sleep.
 		baseline, _ := repo.GetByID(ctx, item.ID)
 		// Scoped wait — fine in test, harmless in CI.
-		for i := 0; i < 12; i++ {
+		for range 12 {
 			n, err := repo.TickHeartbeat(ctx, "worker-X")
 			if err != nil {
 				t.Fatalf("tick: %v", err)
@@ -1061,7 +1061,7 @@ func backdateClaimedRow(t *testing.T, ctx context.Context, db DB, id uuid.UUID, 
 // resilience (other tests' pending rows may interleave).
 func claimSpecific(t *testing.T, ctx context.Context, repo *EnrichmentQueueRepo, target uuid.UUID, workerID string) {
 	t.Helper()
-	for i := 0; i < 64; i++ {
+	for range 64 {
 		c, err := repo.ClaimNext(ctx, workerID)
 		if err != nil {
 			t.Fatalf("claim: %v", err)

@@ -96,7 +96,7 @@ func (p *ContradictionPhase) Name() string { return model.DreamPhaseContradictio
 // stamp-write path does not have to re-parse on completion.
 type staleMemory struct {
 	Mem  model.Memory
-	Meta map[string]interface{}
+	Meta map[string]any
 }
 
 // mirrorToStale propagates the latest writable fields from mem back into the
@@ -352,7 +352,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			}
 		}
 
-		edgeCtx, _ := json.Marshal(map[string]interface{}{
+		edgeCtx, _ := json.Marshal(map[string]any{
 			"detection_count": detection,
 			"winner":          normalized,
 		})
@@ -371,7 +371,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 
 		_ = logger.LogOperation(ctx, model.DreamPhaseContradictions, "",
 			model.DreamOpContradictionDetected, "memory", pair[0].ID,
-			nil, map[string]interface{}{
+			nil, map[string]any{
 				"conflicting_id":  pair[1].ID.String(),
 				"winner":          normalized,
 				"detection_count": detection,
@@ -469,7 +469,7 @@ func (p *ContradictionPhase) collectStale(memories []model.Memory) []staleMemory
 // time is strictly before the memory's UpdatedAt. Equal stamp and UpdatedAt
 // are considered fresh — the stamping path sets both to the same instant
 // and we don't want a just-stamped memory to look stale on the next cycle.
-func isStale(mem *model.Memory, meta map[string]interface{}) bool {
+func isStale(mem *model.Memory, meta map[string]any) bool {
 	raw, ok := meta[ContradictionsCheckedStampKey]
 	if !ok {
 		return true
@@ -808,7 +808,7 @@ func dispatchCandidates(
 // later anchors in the same cycle.
 func (p *ContradictionPhase) paraphraseSupersede(
 	ctx context.Context,
-	cycle *model.DreamCycle,
+	_ *model.DreamCycle,
 	logger *DreamLogWriter,
 	a, b *model.Memory,
 	cosine float64,
@@ -849,7 +849,7 @@ func (p *ContradictionPhase) paraphraseSupersede(
 
 	_ = logger.LogOperation(ctx, model.DreamPhaseContradictions, "",
 		model.DreamOpParaphraseSuperseded, "memory", loser.ID,
-		nil, map[string]interface{}{
+		nil, map[string]any{
 			"superseded_by": winner.ID.String(),
 			"winner":        winnerSide,
 			"cosine":        cosine,
@@ -860,9 +860,9 @@ func (p *ContradictionPhase) paraphraseSupersede(
 // stampContradictionsChecked records the visit stamp anchored to
 // mem.UpdatedAt via UpdateMetadata so the staleness check
 // (stamp < UpdatedAt) does not self-invalidate next cycle.
-func (p *ContradictionPhase) stampContradictionsChecked(ctx context.Context, mem *model.Memory, meta map[string]interface{}) error {
+func (p *ContradictionPhase) stampContradictionsChecked(ctx context.Context, mem *model.Memory, meta map[string]any) error {
 	if meta == nil {
-		meta = map[string]interface{}{}
+		meta = map[string]any{}
 	}
 	meta[ContradictionsCheckedStampKey] = mem.UpdatedAt.UTC().Format(time.RFC3339Nano)
 
@@ -920,4 +920,3 @@ func (p *ContradictionPhase) checkContradiction(
 
 	return result.Contradicts, result.Winner, result.Explanation, usage, nil
 }
-

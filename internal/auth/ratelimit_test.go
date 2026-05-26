@@ -31,7 +31,7 @@ func TestRateLimitWithinLimitSucceeds(t *testing.T) {
 	userID := uuid.New()
 
 	// First 5 requests (burst) should all succeed.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		rec := httptest.NewRecorder()
 		req := makeAuthRequest(t, userID)
 		handler.ServeHTTP(rec, req)
@@ -70,7 +70,7 @@ func TestRateLimitExceedingLimitReturns429(t *testing.T) {
 	userID := uuid.New()
 
 	// Exhaust the burst.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		rec := httptest.NewRecorder()
 		req := makeAuthRequest(t, userID)
 		handler.ServeHTTP(rec, req)
@@ -113,7 +113,7 @@ func TestRateLimitIndependentUsers(t *testing.T) {
 	user2 := uuid.New()
 
 	// Exhaust user1's burst.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		rec := httptest.NewRecorder()
 		req := makeAuthRequest(t, user1)
 		handler.ServeHTTP(rec, req)
@@ -146,7 +146,7 @@ func TestRateLimitUnauthenticatedPassThrough(t *testing.T) {
 	handler := rl.Handler(rateLimitOKHandler)
 
 	// Make requests without auth context — they should all pass through.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		handler.ServeHTTP(rec, req)
@@ -265,11 +265,11 @@ func TestRateLimitConcurrency(t *testing.T) {
 
 	// Spawn multiple goroutines with different users hitting the middleware concurrently.
 	done := make(chan struct{}, 100)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			userID := uuid.New()
-			for j := 0; j < 10; j++ {
+			for range 10 {
 				rec := httptest.NewRecorder()
 				req := makeAuthRequest(t, userID)
 				handler.ServeHTTP(rec, req)
@@ -278,7 +278,7 @@ func TestRateLimitConcurrency(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		<-done
 	}
 }

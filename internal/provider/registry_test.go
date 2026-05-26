@@ -305,24 +305,20 @@ func TestRegistryConcurrentAccess(t *testing.T) {
 	const goroutines = 50
 
 	// Concurrent readers.
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			_ = r.GetEmbedding()
 			_ = r.GetFact()
 			_ = r.GetEntity()
 			_ = r.IsConfigured()
-		}()
+		})
 	}
 
 	// Concurrent reloads interleaved with reads.
-	for i := 0; i < goroutines/5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines / 5 {
+		wg.Go(func() {
 			_ = r.Reload(cfg)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -557,7 +553,7 @@ func TestRegistryProbe_SingleflightCollapsesConcurrent(t *testing.T) {
 		errs    = make([]error, callers)
 	)
 	wg.Add(callers)
-	for i := 0; i < callers; i++ {
+	for i := range callers {
 		go func(i int) {
 			defer wg.Done()
 			d, err := r.EmbeddingDim(context.Background())

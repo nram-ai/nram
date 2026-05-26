@@ -23,8 +23,8 @@ func authContextFromRequest(r *http.Request) *auth.AuthContext {
 // RemoteAddr's host portion.
 func clientIPFromRequest(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if comma := strings.Index(xff, ","); comma >= 0 {
-			return strings.TrimSpace(xff[:comma])
+		if before, _, ok := strings.Cut(xff, ","); ok {
+			return strings.TrimSpace(before)
 		}
 		return strings.TrimSpace(xff)
 	}
@@ -63,8 +63,8 @@ const (
 	AuditActionPasskeyRegister = "passkey.register"
 	AuditActionPasskeyDelete   = "passkey.delete"
 
-	AuditActionIdPLogin     = "idp.login"
-	AuditActionLogin        = "auth.login"
+	AuditActionIdPLogin      = "idp.login"
+	AuditActionLogin         = "auth.login"
 	AuditActionSetupComplete = "system.setup_complete"
 
 	AuditActionProviderConfigure = "provider.configure"
@@ -73,17 +73,17 @@ const (
 
 // AuditEvent represents a single audit log row.
 type AuditEvent struct {
-	ID           uuid.UUID       `json:"id"`
-	OccurredAt   time.Time       `json:"occurred_at"`
-	ActorUserID  *uuid.UUID      `json:"actor_user_id,omitempty"`
-	ActorRole    string          `json:"actor_role,omitempty"`
-	Action       string          `json:"action"`
-	TargetType   string          `json:"target_type,omitempty"`
-	TargetID     *uuid.UUID      `json:"target_id,omitempty"`
-	TargetOrgID  *uuid.UUID      `json:"target_org_id,omitempty"`
-	SourceIP     string          `json:"source_ip,omitempty"`
-	UserAgent    string          `json:"user_agent,omitempty"`
-	Details      json.RawMessage `json:"details,omitempty"`
+	ID          uuid.UUID       `json:"id"`
+	OccurredAt  time.Time       `json:"occurred_at"`
+	ActorUserID *uuid.UUID      `json:"actor_user_id,omitempty"`
+	ActorRole   string          `json:"actor_role,omitempty"`
+	Action      string          `json:"action"`
+	TargetType  string          `json:"target_type,omitempty"`
+	TargetID    *uuid.UUID      `json:"target_id,omitempty"`
+	TargetOrgID *uuid.UUID      `json:"target_org_id,omitempty"`
+	SourceIP    string          `json:"source_ip,omitempty"`
+	UserAgent   string          `json:"user_agent,omitempty"`
+	Details     json.RawMessage `json:"details,omitempty"`
 }
 
 // AuditScope filters AuditStore.Query results. Each field is an independent

@@ -84,10 +84,7 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projec
 	}
 	if item.Status == model.EnrichmentStatusProcessing && item.ClaimedAt != nil {
 		out.ClaimedAt = item.ClaimedAt
-		ageMs := now.Sub(*item.ClaimedAt).Milliseconds()
-		if ageMs < 0 {
-			ageMs = 0
-		}
+		ageMs := max(now.Sub(*item.ClaimedAt).Milliseconds(), 0)
 		out.ClaimedAtAgeMs = &ageMs
 		// Half-threshold is the early-warning point — same intent as
 		// dreaming's is_stale_diagnostic.

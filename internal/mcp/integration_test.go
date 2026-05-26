@@ -320,10 +320,10 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 	// Store a memory.
 	storeReq := mcp.CallToolRequest{}
 	storeReq.Params.Name = "store"
-	storeReq.Params.Arguments = map[string]interface{}{
+	storeReq.Params.Arguments = map[string]any{
 		"project": "test-project",
 		"content": "The quick brown fox jumps over the lazy dog",
-		"tags":    []interface{}{"animal", "speed"},
+		"tags":    []any{"animal", "speed"},
 		"source":  "unit-test",
 	}
 
@@ -369,7 +369,7 @@ func TestMCP_StoreAndRecall_RoundTrip(t *testing.T) {
 
 	recallReq := mcp.CallToolRequest{}
 	recallReq.Params.Name = "recall"
-	recallReq.Params.Arguments = map[string]interface{}{
+	recallReq.Params.Arguments = map[string]any{
 		"query":   "quick brown fox",
 		"project": "test-project",
 	}
@@ -434,7 +434,7 @@ func TestMCP_StoreAutoCreatesProject(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "brand-new-project",
 		"content": "something worth remembering",
 	}
@@ -477,12 +477,12 @@ func TestMCP_StoreBatch_AllSucceed(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test-project",
-		"items": []interface{}{
-			map[string]interface{}{"content": "batch item one", "tags": []interface{}{"t1"}},
-			map[string]interface{}{"content": "batch item two"},
-			map[string]interface{}{"content": "batch item three", "source": "src"},
+		"items": []any{
+			map[string]any{"content": "batch item one", "tags": []any{"t1"}},
+			map[string]any{"content": "batch item two"},
+			map[string]any{"content": "batch item three", "source": "src"},
 		},
 	}
 
@@ -538,12 +538,12 @@ func TestMCP_StoreBatch_PartialFailure(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test-project",
-		"items": []interface{}{
-			map[string]interface{}{"content": "item A"},
-			map[string]interface{}{"content": "item B — will fail"},
-			map[string]interface{}{"content": "item C"},
+		"items": []any{
+			map[string]any{"content": "item A"},
+			map[string]any{"content": "item B — will fail"},
+			map[string]any{"content": "item C"},
 		},
 	}
 
@@ -606,11 +606,11 @@ func TestMCP_UpdateMemory(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"id":      memoryID.String(),
 		"project": "test-project",
 		"content": "updated content",
-		"tags":    []interface{}{"new-tag"},
+		"tags":    []any{"new-tag"},
 	}
 
 	ctx := buildAuthCtx(userID)
@@ -684,8 +684,8 @@ func TestMCP_GetMemory_FoundAndNotFound(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "get"
-	req.Params.Arguments = map[string]interface{}{
-		"ids":     []interface{}{memID1.String(), memID2.String(), fakeID.String()},
+	req.Params.Arguments = map[string]any{
+		"ids":     []any{memID1.String(), memID2.String(), fakeID.String()},
 		"project": "test-project",
 	}
 
@@ -754,9 +754,9 @@ func TestMCP_ForgetMemory_Soft(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test-project",
-		"ids":     []interface{}{memoryID.String()},
+		"ids":     []any{memoryID.String()},
 		// hard omitted → defaults to false (soft delete)
 	}
 
@@ -816,9 +816,9 @@ func TestMCP_ForgetMemory_Hard(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test-project",
-		"ids":     []interface{}{memoryID.String()},
+		"ids":     []any{memoryID.String()},
 		"hard":    true,
 	}
 
@@ -858,42 +858,42 @@ func TestMCP_NoAuth_RequiresAuthentication(t *testing.T) {
 	type toolCase struct {
 		name   string
 		toolFn func(ctx context.Context, s *Server, r mcp.CallToolRequest) (*mcp.CallToolResult, error)
-		args   map[string]interface{}
+		args   map[string]any
 	}
 
 	tests := []toolCase{
 		{
 			name:   "recall_no_auth",
 			toolFn: handleMemoryRecall,
-			args:   map[string]interface{}{"query": "something"},
+			args:   map[string]any{"query": "something"},
 		},
 		{
 			name:   "store_no_auth",
 			toolFn: handleMemoryStore,
-			args:   map[string]interface{}{"project": "p", "content": "c"},
+			args:   map[string]any{"project": "p", "content": "c"},
 		},
 		{
 			name:   "batch_store_no_auth",
 			toolFn: handleMemoryStoreBatch,
-			args: map[string]interface{}{
+			args: map[string]any{
 				"project": "p",
-				"items":   []interface{}{map[string]interface{}{"content": "c"}},
+				"items":   []any{map[string]any{"content": "c"}},
 			},
 		},
 		{
 			name:   "update_no_auth",
 			toolFn: handleMemoryUpdate,
-			args:   map[string]interface{}{"id": uuid.New().String(), "project": "p", "content": "c"},
+			args:   map[string]any{"id": uuid.New().String(), "project": "p", "content": "c"},
 		},
 		{
 			name:   "get_no_auth",
 			toolFn: handleMemoryGet,
-			args:   map[string]interface{}{"ids": []interface{}{uuid.New().String()}, "project": "p"},
+			args:   map[string]any{"ids": []any{uuid.New().String()}, "project": "p"},
 		},
 		{
 			name:   "forget_no_auth",
 			toolFn: handleMemoryForget,
-			args:   map[string]interface{}{"project": "p", "ids": []interface{}{uuid.New().String()}},
+			args:   map[string]any{"project": "p", "ids": []any{uuid.New().String()}},
 		},
 	}
 
@@ -924,7 +924,7 @@ func TestMCP_StoreEmptyContent(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "some-project",
 		"content": "   ", // whitespace only
 	}
@@ -946,7 +946,7 @@ func TestMCP_RecallEmptyQuery(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"query": "   ", // whitespace only
 	}
 
@@ -1042,7 +1042,7 @@ func TestMCP_ExportProject(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "export"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test-project",
 		"format":  "json",
 	}
@@ -1107,7 +1107,7 @@ func TestMCP_StoreEmitsEvent(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test-project",
 		"content": "event emission test",
 	}
@@ -1189,9 +1189,9 @@ func TestMCP_ForgetEmitsEvent(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "forget"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test-project",
-		"ids":     []interface{}{memoryID.String()},
+		"ids":     []any{memoryID.String()},
 	}
 
 	ctx := buildAuthCtx(userID)
@@ -1265,7 +1265,7 @@ func TestMCP_UpdateEmitsEvent(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "update"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"id":      memoryID.String(),
 		"project": "test-project",
 		"content": "post-update content",

@@ -397,7 +397,6 @@ func TestOllamaContextLength_ParsesAnyArchKey(t *testing.T) {
 		`{"model_info":{"unknown_arch.context_length":131072}}`: 131072,
 	}
 	for body, want := range cases {
-		body, want := body, want
 		t.Run(body, func(t *testing.T) {
 			srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
 				"/api/show": func(w http.ResponseWriter, r *http.Request) {
@@ -634,7 +633,6 @@ func TestParseNumCtxFromParameters_EdgeCases(t *testing.T) {
 		{"first match wins", "num_ctx 1024\nnum_ctx 8192\n", 1024},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := parseNumCtxFromParameters(tc.in)
 			if got != tc.want {

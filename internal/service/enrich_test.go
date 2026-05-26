@@ -41,10 +41,7 @@ func (m *enrichMemoryReader) ListByNamespace(_ context.Context, _ uuid.UUID, lim
 	if offset >= len(m.nsList) {
 		return nil, nil
 	}
-	end := offset + limit
-	if end > len(m.nsList) {
-		end = len(m.nsList)
-	}
+	end := min(offset+limit, len(m.nsList))
 	return m.nsList[offset:end], nil
 }
 
@@ -63,10 +60,7 @@ func (m *enrichMemoryReader) ListByNamespaceFiltered(_ context.Context, _ uuid.U
 	if offset >= len(rows) {
 		return nil, nil
 	}
-	end := offset + limit
-	if end > len(rows) {
-		end = len(rows)
-	}
+	end := min(offset+limit, len(rows))
 	return rows[offset:end], nil
 }
 

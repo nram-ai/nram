@@ -346,7 +346,7 @@ func TestGenerateJWT_RoundTrip(t *testing.T) {
 
 	// Verify the token can be parsed back
 	claims := &Claims{}
-	tok, err := jwt.ParseWithClaims(tokenStr, claims, func(_ *jwt.Token) (interface{}, error) {
+	tok, err := jwt.ParseWithClaims(tokenStr, claims, func(_ *jwt.Token) (any, error) {
 		return testSecret, nil
 	})
 	if err != nil {

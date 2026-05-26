@@ -333,7 +333,7 @@ func TestRecall_LimitRespected(t *testing.T) {
 
 	now := time.Now()
 	var nsList []model.Memory
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		nsList = append(nsList, *makeTestMemory(uuid.New(), nsID, fmt.Sprintf("memory %d", i), nil, 0.5, 1, now))
 	}
 
@@ -360,7 +360,7 @@ func TestRecall_DefaultLimit(t *testing.T) {
 
 	now := time.Now()
 	var nsList []model.Memory
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		nsList = append(nsList, *makeTestMemory(uuid.New(), nsID, fmt.Sprintf("memory %d", i), nil, 0.5, 1, now))
 	}
 
@@ -1039,7 +1039,7 @@ func TestRecall_DiversifyByTagPrefix_Deterministic(t *testing.T) {
 	svc, _ := buildDiversifyService(t, projects, namespaces, nsID, seeds)
 
 	var first *RecallResponse
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		resp, err := svc.Recall(context.Background(), &RecallRequest{
 			ProjectID:            projectID,
 			Query:                "q",
@@ -1863,13 +1863,13 @@ func TestRecall_NamespaceQuotaReservesProjectSlots(t *testing.T) {
 	memMap := map[uuid.UUID]*model.Memory{}
 	var vecResults []storage.VectorSearchResult
 	var projectIDs []uuid.UUID
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		id := uuid.New()
 		projectIDs = append(projectIDs, id)
 		memMap[id] = makeTestMemory(id, primaryNs, "project content", nil, 0.5, 0, now)
 		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.30, NamespaceID: primaryNs})
 	}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		id := uuid.New()
 		memMap[id] = makeTestMemory(id, globalNs, "global content", nil, 0.5, 0, now)
 		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.90, NamespaceID: globalNs})
@@ -1926,7 +1926,7 @@ func TestRecall_NamespaceQuotaRespectsAvailability(t *testing.T) {
 	memMap[projectMemID] = makeTestMemory(projectMemID, primaryNs, "only project mem", nil, 0.5, 0, now)
 	vecResults = append(vecResults, storage.VectorSearchResult{ID: projectMemID, Score: 0.40, NamespaceID: primaryNs})
 
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		id := uuid.New()
 		memMap[id] = makeTestMemory(id, globalNs, "global content", nil, 0.5, 0, now)
 		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.90, NamespaceID: globalNs})
@@ -1976,7 +1976,7 @@ func TestRecall_NamespaceQuotaDefaultZero_BehaviorUnchanged(t *testing.T) {
 	projectMemID := uuid.New()
 	memMap[projectMemID] = makeTestMemory(projectMemID, primaryNs, "weak project hit", nil, 0.5, 0, now)
 	vecResults = append(vecResults, storage.VectorSearchResult{ID: projectMemID, Score: 0.30, NamespaceID: primaryNs})
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		id := uuid.New()
 		memMap[id] = makeTestMemory(id, globalNs, "strong global hit", nil, 0.5, 0, now)
 		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.90, NamespaceID: globalNs})
@@ -2038,7 +2038,7 @@ func TestRecall_FusionNormalizePerChannel_BalancesUnevenCorpora(t *testing.T) {
 	primaryLex := []storage.MemoryRank{{ID: projectMemID, Rank: 1.0}}
 
 	var globalIDs []uuid.UUID
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		id := uuid.New()
 		globalIDs = append(globalIDs, id)
 		memMap[id] = makeTestMemory(id, globalNs, "global hit", nil, 0.5, 0, now)

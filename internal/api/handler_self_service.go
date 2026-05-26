@@ -110,7 +110,7 @@ func handleListAPIKeys(w http.ResponseWriter, r *http.Request, keys APIKeyManage
 		result = []model.APIKey{}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"data": result,
 	})
 }
@@ -244,7 +244,7 @@ func handleListOAuthClients(w http.ResponseWriter, r *http.Request, clients OAut
 		result = []model.OAuthClient{}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"data": result,
 	})
 }

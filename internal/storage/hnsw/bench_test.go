@@ -19,7 +19,7 @@ func buildGraph(b *testing.B, n, dim int) *Graph {
 	b.Helper()
 	g := NewGraph(dim, WithSeed(42))
 	rng := rand.New(rand.NewSource(42))
-	for i := 0; i < n; i++ {
+	for range n {
 		_ = g.Add(Node{ID: uuid.New(), Vector: randomVector(rng, dim)})
 	}
 	return g
@@ -108,7 +108,7 @@ func BenchmarkCosineSimilarity_384d(b *testing.B) {
 	a := randomVector(rng, 384)
 	vec := randomVector(rng, 384)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		CosineSimilarity(a, vec)
 	}
 }
@@ -118,7 +118,7 @@ func BenchmarkCosineSimilarity_1536d(b *testing.B) {
 	a := randomVector(rng, 1536)
 	vec := randomVector(rng, 1536)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		CosineSimilarity(a, vec)
 	}
 }

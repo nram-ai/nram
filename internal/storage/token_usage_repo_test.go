@@ -299,7 +299,7 @@ func TestTokenUsageRepo_QueryByScope(t *testing.T) {
 		recallOp := "recall-" + uniqueSuffix
 
 		// Record several usage entries with unique memorize operation.
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			u := newTestTokenUsage(nsID)
 			u.Operation = memorizeOp
 			if err := repo.Record(ctx, u); err != nil {
@@ -397,7 +397,7 @@ func TestTokenUsageRepo_QueryByScope_OrderDesc(t *testing.T) {
 
 		// Insert 3 records.
 		ids := make([]uuid.UUID, 3)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			u := newTestTokenUsage(nsID)
 			u.Operation = uniqueOp
 			u.TokensInput = (i + 1) * 100
@@ -440,7 +440,7 @@ func TestTokenUsageRepo_Purge(t *testing.T) {
 
 		// Record 3 entries and track their IDs.
 		ids := make([]uuid.UUID, 3)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			u := newTestTokenUsage(nsID)
 			if err := repo.Record(ctx, u); err != nil {
 				t.Fatalf("failed to record %d: %v", i, err)

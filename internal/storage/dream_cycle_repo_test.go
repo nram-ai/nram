@@ -16,7 +16,7 @@ import (
 func setCycleTimestamps(t *testing.T, ctx context.Context, db DB, id uuid.UUID, updatedAt time.Time, heartbeatAt *time.Time) {
 	t.Helper()
 
-	var hb interface{}
+	var hb any
 	if heartbeatAt != nil {
 		hb = heartbeatAt.UTC().Format(time.RFC3339)
 	}

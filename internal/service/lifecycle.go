@@ -39,7 +39,9 @@ type graphPrunerAdapter struct {
 	entities interface {
 		DeleteOrphaned(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error)
 	}
-	relationships interface{ DeleteDangling(ctx context.Context) (int64, error) }
+	relationships interface {
+		DeleteDangling(ctx context.Context) (int64, error)
+	}
 }
 
 // NewGraphPruner creates a GraphPruner from entity and relationship repos.
@@ -47,7 +49,9 @@ func NewGraphPruner(
 	entities interface {
 		DeleteOrphaned(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error)
 	},
-	relationships interface{ DeleteDangling(ctx context.Context) (int64, error) },
+	relationships interface {
+		DeleteDangling(ctx context.Context) (int64, error)
+	},
 ) GraphPruner {
 	return &graphPrunerAdapter{entities: entities, relationships: relationships}
 }
@@ -111,10 +115,7 @@ func (s *LifecycleService) resolveBatchSize(ctx context.Context) int {
 	if s.config.BatchSize > 0 {
 		return s.config.BatchSize
 	}
-	v := s.settings.ResolveIntWithDefault(ctx, SettingLifecycleBatchSize, "global")
-	if v < 1 {
-		v = 1
-	}
+	v := max(s.settings.ResolveIntWithDefault(ctx, SettingLifecycleBatchSize, "global"), 1)
 	return v
 }
 
@@ -123,10 +124,7 @@ func (s *LifecycleService) resolvePurgeDelay(ctx context.Context) time.Duration 
 	if s.config.DefaultPurgeDelay > 0 {
 		return s.config.DefaultPurgeDelay
 	}
-	days := s.settings.ResolveIntWithDefault(ctx, SettingMemorySoftDeleteRetentionDays, "global")
-	if days < 1 {
-		days = 1
-	}
+	days := max(s.settings.ResolveIntWithDefault(ctx, SettingMemorySoftDeleteRetentionDays, "global"), 1)
 	return time.Duration(days) * 24 * time.Hour
 }
 
@@ -150,11 +148,8 @@ func (s *LifecycleService) resolveSweepInterval(ctx context.Context) time.Durati
 	if s.config.SweepInterval > 0 {
 		return s.config.SweepInterval
 	}
-	v := s.settings.ResolveDurationSecondsWithDefault(ctx,
-		SettingLifecycleSweepIntervalSeconds, "global")
-	if v < time.Second {
-		v = time.Second
-	}
+	v := max(s.settings.ResolveDurationSecondsWithDefault(ctx,
+		SettingLifecycleSweepIntervalSeconds, "global"), time.Second)
 	return v
 }
 
@@ -164,11 +159,9 @@ func (s *LifecycleService) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		s.loop(ctx)
-	}()
+	})
 }
 
 // Stop cancels the background loop and waits for it to finish.

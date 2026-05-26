@@ -44,9 +44,10 @@ func setupQdrantTest(t *testing.T) *QdrantStore {
 		// would leak points across runs against a shared dev Qdrant instance.
 		for _, family := range []map[int]string{qdrantMemoryCollections, qdrantEntityCollections} {
 			for _, collection := range family {
+				limit := uint32(10000)
 				points, err := client.Scroll(ctx, &qdrant.ScrollPoints{
 					CollectionName: collection,
-					Limit:          qdrant.PtrOf(uint32(10000)),
+					Limit:          &limit,
 				})
 				if err == nil && len(points) > 0 {
 					ids := make([]*qdrant.PointId, len(points))
@@ -94,7 +95,7 @@ func TestQdrantStore_UpsertAndSearch(t *testing.T) {
 	}
 	emb2 := make([]float32, dim)
 	emb2[1] = 1.0
-	for i := 0; i < dim; i++ {
+	for i := range dim {
 		if i != 1 {
 			emb2[i] = 0.01
 		}

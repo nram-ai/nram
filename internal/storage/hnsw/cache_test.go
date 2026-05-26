@@ -228,7 +228,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 	// Insert vectors into DB.
 	nVectors := 5
 	ids := make([]uuid.UUID, nVectors)
-	for i := 0; i < nVectors; i++ {
+	for i := range nVectors {
 		ids[i] = uuid.New()
 		insertTestVector(t, db, nsID, dim, ids[i], randomVector(rng, dim))
 	}

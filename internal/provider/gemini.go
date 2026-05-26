@@ -94,9 +94,9 @@ type geminiGenerationConfig struct {
 
 // geminiGenerateRequest is the request body for generateContent.
 type geminiGenerateRequest struct {
-	Contents         []geminiContent         `json:"contents"`
+	Contents          []geminiContent         `json:"contents"`
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
-	GenerationConfig *geminiGenerationConfig `json:"generationConfig,omitempty"`
+	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 }
 
 // geminiCandidate is a single candidate in a generateContent response.
@@ -200,7 +200,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 
 	body := geminiGenerateRequest{
-		Contents:         contents,
+		Contents:          contents,
 		SystemInstruction: systemInstruction,
 	}
 
@@ -234,13 +234,13 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 
 	candidate := genResp.Candidates[0]
-	var content string
+	var content strings.Builder
 	for _, part := range candidate.Content.Parts {
-		content += part.Text
+		content.WriteString(part.Text)
 	}
 
 	return &CompletionResponse{
-		Content:      content,
+		Content:      content.String(),
 		Model:        model,
 		FinishReason: strings.ToLower(candidate.FinishReason),
 		Usage: TokenUsage{

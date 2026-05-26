@@ -39,7 +39,7 @@ type AliasManager interface {
 type EntityInput struct {
 	Name       string
 	Type       string
-	Properties map[string]interface{}
+	Properties map[string]any
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ func (r *EntityResolver) Resolve(
 	namespaceID uuid.UUID,
 	name string,
 	entityType string,
-	properties map[string]interface{},
+	properties map[string]any,
 ) (*model.Entity, bool, error) {
 	canonical := canonicalize(name)
 

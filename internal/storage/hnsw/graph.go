@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"sort"
 	"sync"
 
@@ -190,7 +191,7 @@ func (g *Graph) addSingle(n Node) error {
 		if lc == 0 {
 			maxConn = g.mMax0
 		}
-		selected := g.selectNeighborsHeuristic(gn, neighbors, maxConn, lc)
+		selected := g.selectNeighborsHeuristic(gn, neighbors, maxConn)
 
 		// Connect the new node to selected neighbors.
 		gn.friends[lc] = selected
@@ -214,7 +215,7 @@ func (g *Graph) addSingle(n Node) error {
 			}
 			if len(neighbor.friends[lc]) > nMaxConn {
 				// Prune the neighbor's connections using the heuristic.
-				neighbor.friends[lc] = g.selectNeighborsHeuristic(neighbor, neighbor.friends[lc], nMaxConn, lc)
+				neighbor.friends[lc] = g.selectNeighborsHeuristic(neighbor, neighbor.friends[lc], nMaxConn)
 			}
 		}
 
@@ -259,10 +260,7 @@ func (g *Graph) Search(query []float32, k int) ([]SearchResult, error) {
 	}
 
 	// Phase 2: Search layer 0 with efSearch candidates.
-	ef := g.efSearch
-	if ef < k {
-		ef = k
-	}
+	ef := max(g.efSearch, k)
 	candidates := g.searchLayer(ep, query, queryNorm, ef, 0)
 
 	// Build results from top candidates.
@@ -377,13 +375,13 @@ func (g *Graph) removeLocked(gn *graphNode) {
 // RepairStats summarizes invariant violations dropped by repairInvariants.
 // A zero-value RepairStats means the graph was already consistent.
 type RepairStats struct {
-	NodesScanned     int
-	EdgesScanned     int
-	ForwardDropped   int
-	SelfLoopDropped  int
-	DupDropped       int
-	OverLongFriends  int
-	EpLevelFixed     int
+	NodesScanned    int
+	EdgesScanned    int
+	ForwardDropped  int
+	SelfLoopDropped int
+	DupDropped      int
+	OverLongFriends int
+	EpLevelFixed    int
 }
 
 // AnyDropped reports whether the repair pass had to modify the graph.
@@ -542,7 +540,7 @@ func (g *Graph) searchLayer(ep *graphNode, query []float32, queryNorm float32, e
 
 // selectNeighborsHeuristic implements Algorithm 4 from the HNSW paper.
 // It selects up to maxConn neighbors that provide diverse coverage.
-func (g *Graph) selectNeighborsHeuristic(target *graphNode, candidates []*graphNode, maxConn int, layer int) []*graphNode {
+func (g *Graph) selectNeighborsHeuristic(target *graphNode, candidates []*graphNode, maxConn int) []*graphNode {
 	if len(candidates) <= maxConn {
 		result := make([]*graphNode, len(candidates))
 		copy(result, candidates)
@@ -620,10 +618,5 @@ func removeFromSlice(s []*graphNode, target *graphNode) []*graphNode {
 
 // containsNode checks if a slice contains a specific graphNode.
 func containsNode(s []*graphNode, target *graphNode) bool {
-	for _, n := range s {
-		if n == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, target)
 }

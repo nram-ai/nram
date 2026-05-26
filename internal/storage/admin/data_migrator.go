@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -193,21 +194,13 @@ func (m *DataMigrator) skipOrphanUpdate(table, column string) {
 // and per-FK orphan-skip counts.
 func (m *DataMigrator) Stats() MigrationStats {
 	inserted := make(map[string]int, len(m.tableCounts))
-	for k, v := range m.tableCounts {
-		inserted[k] = v
-	}
+	maps.Copy(inserted, m.tableCounts)
 	skipped := make(map[string]int, len(m.skipped))
-	for k, v := range m.skipped {
-		skipped[k] = v
-	}
+	maps.Copy(skipped, m.skipped)
 	updates := make(map[string]int, len(m.skippedUpdates))
-	for k, v := range m.skippedUpdates {
-		updates[k] = v
-	}
+	maps.Copy(updates, m.skippedUpdates)
 	reset := make(map[string]int, len(m.resetStuck))
-	for k, v := range m.resetStuck {
-		reset[k] = v
-	}
+	maps.Copy(reset, m.resetStuck)
 	return MigrationStats{
 		Inserted:       inserted,
 		SkippedOrphans: skipped,
@@ -507,7 +500,7 @@ func (m *DataMigrator) migrateNamespaces(ctx context.Context) error {
 		if err := rows.Scan(&id, &name, &slug, &kind, &parentID, &path, &depth, &metadata, &createdAt, &updatedAt); err != nil {
 			return err
 		}
-		var pgParent interface{}
+		var pgParent any
 		if parentID.Valid {
 			if !m.hasInserted("namespaces", parentID.String) {
 				// Orphan parent (SQLite FKs were disabled at some point and the
@@ -2251,7 +2244,7 @@ func jsonArrayToPostgresUUIDArray(jsonStr string) (string, error) {
 
 // nullStringToInterface returns nil when the NullString is invalid, or the
 // string value otherwise. This allows database/sql to transmit NULL correctly.
-func nullStringToInterface(ns sql.NullString) interface{} {
+func nullStringToInterface(ns sql.NullString) any {
 	if !ns.Valid {
 		return nil
 	}
@@ -2259,7 +2252,7 @@ func nullStringToInterface(ns sql.NullString) interface{} {
 }
 
 // nullInt64ToInterface returns nil when the NullInt64 is invalid.
-func nullInt64ToInterface(ni sql.NullInt64) interface{} {
+func nullInt64ToInterface(ni sql.NullInt64) any {
 	if !ni.Valid {
 		return nil
 	}
@@ -2292,7 +2285,7 @@ func sanitizeJSONB(raw, fallback string) string {
 // it is passed through verbatim so structured errors survive round-tripping;
 // otherwise json.Marshal wraps it as a JSON string literal (manual quoting
 // would miss backslashes, newlines, and control chars).
-func textToJSONB(ns sql.NullString) (interface{}, error) {
+func textToJSONB(ns sql.NullString) (any, error) {
 	if !ns.Valid || ns.String == "" {
 		return nil, nil
 	}

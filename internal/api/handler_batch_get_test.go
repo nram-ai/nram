@@ -39,7 +39,7 @@ func newBatchGetRouter(handler http.HandlerFunc) *chi.Mux {
 	return r
 }
 
-func doBatchGetRequest(router http.Handler, projectID string, body interface{}) *httptest.ResponseRecorder {
+func doBatchGetRequest(router http.Handler, projectID string, body any) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(body)
 
@@ -86,7 +86,7 @@ func TestBatchGetHandler_Success(t *testing.T) {
 	router := newBatchGetRouter(NewBatchGetHandler(svc))
 	projectID := uuid.New()
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{id1.String(), id2.String(), id3.String()},
 	}
 
@@ -120,7 +120,7 @@ func TestBatchGetHandler_EmptyIDs(t *testing.T) {
 	router := newBatchGetRouter(NewBatchGetHandler(svc))
 	projectID := uuid.New()
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{},
 	}
 
@@ -143,7 +143,7 @@ func TestBatchGetHandler_InvalidProjectID(t *testing.T) {
 	svc := &mockBatchGetServicer{}
 	router := newBatchGetRouter(NewBatchGetHandler(svc))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{uuid.New().String()},
 	}
 
@@ -169,7 +169,7 @@ func TestBatchGetHandler_ServiceError_NotFound(t *testing.T) {
 	router := newBatchGetRouter(NewBatchGetHandler(svc))
 	projectID := uuid.New()
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{uuid.New().String()},
 	}
 
@@ -195,7 +195,7 @@ func TestBatchGetHandler_ServiceError_Internal(t *testing.T) {
 	router := newBatchGetRouter(NewBatchGetHandler(svc))
 	projectID := uuid.New()
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{uuid.New().String()},
 	}
 
@@ -221,7 +221,7 @@ func TestBatchGetHandler_PassesIncludeSupersededFlag(t *testing.T) {
 	router := newBatchGetRouter(NewBatchGetHandler(svc))
 	projectID := uuid.New()
 
-	body := map[string]interface{}{"ids": []string{uuid.New().String()}}
+	body := map[string]any{"ids": []string{uuid.New().String()}}
 
 	if w := doBatchGetRequest(router, projectID.String(), body); w.Code != http.StatusOK {
 		t.Fatalf("default request: expected 200, got %d: %s", w.Code, w.Body.String())
@@ -245,4 +245,3 @@ func TestBatchGetHandler_PassesIncludeSupersededFlag(t *testing.T) {
 		t.Errorf("include_superseded=true should set IncludeSuperseded; got %+v", svc.lastRequest)
 	}
 }
-

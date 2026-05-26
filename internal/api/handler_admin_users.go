@@ -292,7 +292,7 @@ func nullableTargetOrgID(id uuid.UUID) *uuid.UUID {
 
 // mustJSON marshals a value to json.RawMessage; returns "{}" on error.
 // Used for AuditEvent.Details.
-func mustJSON(v interface{}) json.RawMessage {
+func mustJSON(v any) json.RawMessage {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return json.RawMessage(`{}`)

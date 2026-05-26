@@ -103,7 +103,7 @@ func (s *AuditStore) Query(ctx context.Context, scope api.AuditScope, since time
 	limit = clampAuditQueryLimit(limit)
 
 	conds := []string{}
-	args := []interface{}{}
+	args := []any{}
 	argIdx := 1
 	ph := func() string {
 		if s.db.Backend() == storage.BackendPostgres {
@@ -201,21 +201,21 @@ func (s *AuditStore) Query(ctx context.Context, scope api.AuditScope, since time
 	return events, nil
 }
 
-func nullableUUID(id *uuid.UUID) interface{} {
+func nullableUUID(id *uuid.UUID) any {
 	if id == nil {
 		return nil
 	}
 	return id.String()
 }
 
-func nullableString(s string) interface{} {
+func nullableString(s string) any {
 	if s == "" {
 		return nil
 	}
 	return s
 }
 
-func nullableJSON(raw json.RawMessage) interface{} {
+func nullableJSON(raw json.RawMessage) any {
 	if len(raw) == 0 {
 		return "{}"
 	}

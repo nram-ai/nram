@@ -175,7 +175,7 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 		projectSlug = "global"
 	}
 
-	rawIDs, ok := args["ids"].([]interface{})
+	rawIDs, ok := args["ids"].([]any)
 	if !ok || len(rawIDs) == 0 {
 		return mcp.NewToolResultError("ids is required and must be a non-empty array"), nil
 	}

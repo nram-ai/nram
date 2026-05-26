@@ -137,11 +137,8 @@ func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
 	// staleness; ListStaleClaimed's predicate has `(? > 0 AND ...)` gating
 	// for exactly this case. Only normalize negatives to 0 — leave zero
 	// alone so it reaches the predicate as "disabled".
-	claimMaxAge := s.settings.ResolveDurationSecondsWithDefault(ctx,
-		service.SettingEnrichmentClaimMaxAge, "global")
-	if claimMaxAge < 0 {
-		claimMaxAge = 0
-	}
+	claimMaxAge := max(s.settings.ResolveDurationSecondsWithDefault(ctx,
+		service.SettingEnrichmentClaimMaxAge, "global"), 0)
 
 	scanLimit := s.settings.ResolveIntWithDefault(ctx, service.SettingEnrichmentStuckScanLimit, "global")
 	jobs, err := s.queueRepo.ListStaleClaimed(ctx, threshold, claimMaxAge, scanLimit)

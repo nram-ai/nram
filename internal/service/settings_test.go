@@ -371,7 +371,7 @@ func TestResolveCachesRepeatedReads(t *testing.T) {
 	// the counter so this test only measures Resolve-time repo hits.
 	repo.getCalls = 0
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		v, err := svc.Resolve(context.Background(), "cache.key", "global")
 		if err != nil || v != "value" {
 			t.Fatalf("iteration %d: got (%q, %v)", i, v, err)
@@ -388,7 +388,7 @@ func TestResolveCachesMissPath(t *testing.T) {
 	repo := newMockSettingsRepo()
 	svc := NewSettingsService(repo)
 	repo.getCalls = 0
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, _ = svc.Resolve(context.Background(), SettingRankWeightSim, "global")
 	}
 	if repo.getCalls != 1 {

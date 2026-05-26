@@ -71,10 +71,7 @@ func getEncoding(name string) *tiktoken.Tiktoken {
 // roughTokenCount is a last-resort fallback that approximates ~4 characters
 // per token for English-like text.
 func roughTokenCount(text string) int {
-	n := len(text) / 4
-	if n < 1 {
-		n = 1
-	}
+	n := max(len(text)/4, 1)
 	return n
 }
 

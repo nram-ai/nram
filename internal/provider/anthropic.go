@@ -174,15 +174,15 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	}
 
 	// Extract text from content blocks.
-	var content string
+	var content strings.Builder
 	for _, block := range msgResp.Content {
 		if block.Type == "text" {
-			content += block.Text
+			content.WriteString(block.Text)
 		}
 	}
 
 	return &CompletionResponse{
-		Content:      content,
+		Content:      content.String(),
 		Model:        msgResp.Model,
 		FinishReason: msgResp.StopReason,
 		Usage: TokenUsage{

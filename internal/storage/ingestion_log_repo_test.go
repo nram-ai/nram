@@ -156,7 +156,7 @@ func TestIngestionLogRepo_Create_WithErrorJSON(t *testing.T) {
 			t.Fatalf("failed to get: %v", err)
 		}
 
-		var errMap map[string]interface{}
+		var errMap map[string]any
 		if err := json.Unmarshal(fetched.Error, &errMap); err != nil {
 			t.Fatalf("failed to unmarshal error json: %v", err)
 		}
@@ -219,7 +219,7 @@ func TestIngestionLogRepo_ListByNamespace(t *testing.T) {
 		nsID := createTestNamespace(t, ctx, db)
 
 		// Create 5 ingestion logs
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			log := newTestIngestionLog(nsID)
 			if err := repo.Create(ctx, log); err != nil {
 				t.Fatalf("failed to create ingestion log %d: %v", i, err)
@@ -243,7 +243,7 @@ func TestIngestionLogRepo_ListByNamespace_Pagination(t *testing.T) {
 		nsID := createTestNamespace(t, ctx, db)
 
 		// Create 5 ingestion logs
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			log := newTestIngestionLog(nsID)
 			if err := repo.Create(ctx, log); err != nil {
 				t.Fatalf("failed to create ingestion log %d: %v", i, err)
@@ -353,7 +353,7 @@ func TestIngestionLogRepo_ListByNamespace_OrderByCreatedAtDesc(t *testing.T) {
 
 		// Create 3 logs
 		ids := make([]uuid.UUID, 3)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			log := newTestIngestionLog(nsID)
 			if err := repo.Create(ctx, log); err != nil {
 				t.Fatalf("failed to create log %d: %v", i, err)

@@ -45,7 +45,7 @@ func NewMePasskeysListHandler(creds WebAuthnCredManager) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]interface{}{
+		writeJSON(w, http.StatusOK, map[string]any{
 			"data": list,
 		})
 	}

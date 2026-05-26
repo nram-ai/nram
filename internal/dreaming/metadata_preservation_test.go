@@ -44,7 +44,7 @@ func freshSynthesis(t *testing.T, sourceIDs []uuid.UUID) model.Memory {
 	for i, id := range sourceIDs {
 		ids[i] = id.String()
 	}
-	raw, err := json.Marshal(map[string]interface{}{
+	raw, err := json.Marshal(map[string]any{
 		model.DreamMetaCycleID:         cycleID.String(),
 		model.DreamMetaSourceMemoryIDs: ids,
 	})
@@ -91,7 +91,7 @@ func (c *configurableLineageWriter) FindParentIDsByRelation(_ context.Context, _
 // expected.
 func assertHasSourceMemoryIDs(t *testing.T, label string, raw json.RawMessage, expected []uuid.UUID) {
 	t.Helper()
-	var got map[string]interface{}
+	var got map[string]any
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("%s: unmarshal persisted metadata: %v\nraw=%s", label, err, string(raw))
 	}
@@ -99,7 +99,7 @@ func assertHasSourceMemoryIDs(t *testing.T, label string, raw json.RawMessage, e
 	if !ok {
 		t.Fatalf("%s: persisted metadata is missing source_memory_ids; raw=%s", label, string(raw))
 	}
-	arr, ok := arrRaw.([]interface{})
+	arr, ok := arrRaw.([]any)
 	if !ok {
 		t.Fatalf("%s: source_memory_ids is not a JSON array; raw=%s", label, string(raw))
 	}
@@ -126,11 +126,11 @@ func TestEncodeStampWrite_PreservesOnDiskFieldsWhenCallerPassesEmpty(t *testing.
 		"dream_cycle_id":    "ddd",
 		"some_other_field":  42
 	}`)
-	encoded, err := encodeStampWrite(onDisk, map[string]interface{}{})
+	encoded, err := encodeStampWrite(onDisk, map[string]any{})
 	if err != nil {
 		t.Fatalf("encodeStampWrite: %v", err)
 	}
-	var got map[string]interface{}
+	var got map[string]any
 	if err := json.Unmarshal(encoded, &got); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
@@ -147,13 +147,13 @@ func TestEncodeStampWrite_PreservesOnDiskFieldsWhenCallerPassesEmpty(t *testing.
 // stamp key and trusts the merge to layer it over whatever was on disk.
 func TestEncodeStampWrite_CallerOverridesOnDiskKeys(t *testing.T) {
 	onDisk := json.RawMessage(`{"reinforce_checked_at": "2026-01-01T00:00:00Z", "source_memory_ids": ["a"]}`)
-	encoded, err := encodeStampWrite(onDisk, map[string]interface{}{
+	encoded, err := encodeStampWrite(onDisk, map[string]any{
 		"reinforce_checked_at": "2026-05-03T20:00:00Z",
 	})
 	if err != nil {
 		t.Fatalf("encodeStampWrite: %v", err)
 	}
-	var got map[string]interface{}
+	var got map[string]any
 	if err := json.Unmarshal(encoded, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestCollectReinforceStale_DecodesFreshSynthesisMetadata(t *testing.T) {
 	if !ok {
 		t.Fatalf("stale.meta is missing source_memory_ids — collectReinforceStale dropped on-disk fields by passing an empty map")
 	}
-	arr, _ := gotIDs.([]interface{})
+	arr, _ := gotIDs.([]any)
 	if len(arr) != len(sourceIDs) {
 		t.Fatalf("stale.meta source_memory_ids length=%d, want %d", len(arr), len(sourceIDs))
 	}
@@ -268,7 +268,7 @@ func TestStampReinforce_RecoversFromCallerPassingEmptyMeta(t *testing.T) {
 	)
 
 	// Caller passes a deliberately-empty meta map.
-	phase.stampReinforce(context.Background(), &mem, map[string]interface{}{})
+	phase.stampReinforce(context.Background(), &mem, map[string]any{})
 
 	if len(writer.metadataUpdates) != 1 {
 		t.Fatalf("expected 1 UpdateMetadata call, got %d", len(writer.metadataUpdates))

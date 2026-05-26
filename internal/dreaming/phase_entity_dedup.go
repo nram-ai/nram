@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -108,7 +109,7 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 	progressStep := progressEmitStep(len(entities))
 	progressLabel := "entities[" + entityType + "]"
 
-	for i := 0; i < len(entities); i++ {
+	for i := range entities {
 		if shouldEmitProgress(i, len(entities), progressStep) {
 			if tracker != nil {
 				tracker.EmitPhaseProgress(ctx, i+1, len(entities), progressLabel)
@@ -228,7 +229,7 @@ func (p *EntityDedupPhase) shouldMerge(a, b *model.Entity, vectorsByID map[uuid.
 // did not actually commit.
 func (p *EntityDedupPhase) mergeEntities(
 	ctx context.Context,
-	cycle *model.DreamCycle,
+	_ *model.DreamCycle,
 	primary, candidate *model.Entity,
 	logger *DreamLogWriter,
 ) error {
@@ -337,10 +338,5 @@ func isVariantSuffix(a, b string) bool {
 	}
 
 	commonSuffixes := []string{"js", "lang", "lib", "framework", "tool", "app", "cli", "sdk"}
-	for _, suffix := range commonSuffixes {
-		if diff == suffix {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(commonSuffixes, diff)
 }

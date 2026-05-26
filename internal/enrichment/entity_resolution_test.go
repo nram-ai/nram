@@ -181,7 +181,7 @@ func TestResolve_NewEntity(t *testing.T) {
 	resolver := NewEntityResolver(ef, am)
 
 	nsID := uuid.New()
-	entity, isNew, err := resolver.Resolve(ctx, nsID, "Alice", "person", map[string]interface{}{"role": "engineer"})
+	entity, isNew, err := resolver.Resolve(ctx, nsID, "Alice", "person", map[string]any{"role": "engineer"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -389,8 +389,8 @@ func TestResolveAll_MixOfNewAndExisting(t *testing.T) {
 	}
 
 	inputs := []EntityInput{
-		{Name: "Alice", Type: "person"},         // existing
-		{Name: "Bob", Type: "person"},            // new
+		{Name: "Alice", Type: "person"},           // existing
+		{Name: "Bob", Type: "person"},             // new
 		{Name: "Acme Corp", Type: "organization"}, // new
 	}
 

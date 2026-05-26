@@ -42,7 +42,7 @@ func seedParentFamily(
 	time.Sleep(1100 * time.Millisecond)
 
 	children := make([]*model.Memory, 0, childCount)
-	for i := 0; i < childCount; i++ {
+	for i := range childCount {
 		childSrc := "enrichment-worker"
 		child := &model.Memory{
 			NamespaceID: nsID,

@@ -52,12 +52,12 @@ func newOllamaTestServer(t *testing.T, models []provider.OllamaModel) *httptest.
 		switch r.URL.Path {
 		case "/api/tags":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			json.NewEncoder(w).Encode(map[string]any{
 				"models": models,
 			})
 		case "/api/pull":
 			w.Header().Set("Content-Type", "application/x-ndjson")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			json.NewEncoder(w).Encode(map[string]any{
 				"status": "success",
 			})
 		default:

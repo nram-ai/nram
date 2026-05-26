@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,15 +29,15 @@ import (
 // ---------------------------------------------------------------------------
 
 type jsonrpcRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id,omitempty"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
+	JSONRPC string `json:"jsonrpc"`
+	ID      any    `json:"id,omitempty"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
 }
 
 type jsonrpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      interface{}     `json:"id"`
+	ID      any             `json:"id"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *jsonrpcError   `json:"error,omitempty"`
 }
@@ -70,7 +71,7 @@ func (t *testUserIdentityLookup) GetIdentityByID(_ context.Context, _ uuid.UUID)
 
 var httpStackTestSecret = []byte("http-stack-test-secret-32bytes!!")
 
-func generateHTTPStackJWT(t *testing.T, userID uuid.UUID, host string) string {
+func generateHTTPStackJWT(t *testing.T, userID uuid.UUID) string {
 	t.Helper()
 	// Generate a JWT without audience so it passes the audience check
 	// (audience check is skipped when aud claim is empty).
@@ -168,7 +169,7 @@ func newHTTPStackEnv(t *testing.T) *httpStackEnv {
 	})
 
 	ts := httptest.NewServer(r)
-	token := generateHTTPStackJWT(t, userID, ts.URL)
+	token := generateHTTPStackJWT(t, userID)
 
 	return &httpStackEnv{
 		Server:    ts,
@@ -368,8 +369,8 @@ func parseSSEResponse(t *testing.T, body []byte) *jsonrpcResponse {
 	scanner := bufio.NewScanner(bytes.NewReader(body))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
+		if after, ok := strings.CutPrefix(line, "data: "); ok {
+			data := after
 			var rpcResp jsonrpcResponse
 			if err := json.Unmarshal([]byte(data), &rpcResp); err != nil {
 				continue // skip non-JSON data lines
@@ -399,10 +400,10 @@ func initMCPSession(t *testing.T, env *httpStackEnv) *mcpSession {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo": map[string]interface{}{
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
 				"name":    "test-client",
 				"version": "1.0",
 			},
@@ -452,7 +453,7 @@ func initMCPSession(t *testing.T, env *httpStackEnv) *mcpSession {
 }
 
 // call sends a JSON-RPC request within the established session.
-func (s *mcpSession) call(t *testing.T, id interface{}, method string, params interface{}) (*http.Response, *jsonrpcResponse) {
+func (s *mcpSession) call(t *testing.T, id any, method string, params any) (*http.Response, *jsonrpcResponse) {
 	t.Helper()
 
 	req := jsonrpcRequest{
@@ -483,10 +484,10 @@ func TestHTTPStack_MCP_Initialize(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo": map[string]interface{}{
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
 				"name":    "test-client",
 				"version": "1.0",
 			},
@@ -502,7 +503,7 @@ func TestHTTPStack_MCP_Initialize(t *testing.T) {
 	}
 
 	// Parse result fields.
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal(rpcResp.Result, &result); err != nil {
 		t.Fatalf("failed to unmarshal result: %v", err)
 	}
@@ -511,7 +512,7 @@ func TestHTTPStack_MCP_Initialize(t *testing.T) {
 		t.Error("result missing protocolVersion")
 	}
 
-	caps, ok := result["capabilities"].(map[string]interface{})
+	caps, ok := result["capabilities"].(map[string]any)
 	if !ok {
 		t.Fatal("result missing capabilities")
 	}
@@ -519,7 +520,7 @@ func TestHTTPStack_MCP_Initialize(t *testing.T) {
 		t.Error("capabilities missing tools")
 	}
 
-	serverInfo, ok := result["serverInfo"].(map[string]interface{})
+	serverInfo, ok := result["serverInfo"].(map[string]any)
 	if !ok {
 		t.Fatal("result missing serverInfo")
 	}
@@ -527,11 +528,11 @@ func TestHTTPStack_MCP_Initialize(t *testing.T) {
 		t.Errorf("expected serverInfo.name == 'nram', got %q", name)
 	}
 
-	icons, ok := serverInfo["icons"].([]interface{})
+	icons, ok := serverInfo["icons"].([]any)
 	if !ok || len(icons) == 0 {
 		t.Fatalf("serverInfo missing icons (got %T)", serverInfo["icons"])
 	}
-	icon, ok := icons[0].(map[string]interface{})
+	icon, ok := icons[0].(map[string]any)
 	if !ok {
 		t.Fatalf("icons[0] not an object: %T", icons[0])
 	}
@@ -581,9 +582,9 @@ func TestHTTPStack_MCP_InitializeAndCallTool(t *testing.T) {
 	session := initMCPSession(t, env)
 
 	// Call memory_store tool.
-	_, rpcResp := session.call(t, 2, "tools/call", map[string]interface{}{
+	_, rpcResp := session.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-project",
 			"content": "test memory content",
 			"tags":    []string{"test"},
@@ -649,9 +650,9 @@ func TestHTTPStack_MCP_StoreAndRecall(t *testing.T) {
 	session := initMCPSession(t, env)
 
 	// Store a memory.
-	_, storeRPC := session.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := session.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-project",
 			"content": "the capital of France is Paris",
 			"tags":    []string{"geography"},
@@ -665,9 +666,9 @@ func TestHTTPStack_MCP_StoreAndRecall(t *testing.T) {
 	}
 
 	// Recall that memory.
-	_, recallRPC := session.call(t, 3, "tools/call", map[string]interface{}{
+	_, recallRPC := session.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "capital of France",
 			"project": "test-project",
 		},
@@ -713,10 +714,10 @@ func TestHTTPStack_MCP_Unauthenticated_Returns401(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
 
@@ -752,10 +753,10 @@ func TestHTTPStack_MCP_InvalidOrigin_Authenticated_Allowed(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
 
@@ -788,10 +789,10 @@ func TestHTTPStack_MCP_InvalidOrigin_Unauthenticated_Blocked(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
 
@@ -826,10 +827,10 @@ func TestHTTPStack_MCP_ValidOrigin_Passes(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
 
@@ -871,9 +872,9 @@ func TestHTTPStack_MCP_ListTools(t *testing.T) {
 
 	var result struct {
 		Tools []struct {
-			Name        string                 `json:"name"`
-			Description string                 `json:"description"`
-			InputSchema map[string]interface{} `json:"inputSchema"`
+			Name        string         `json:"name"`
+			Description string         `json:"description"`
+			InputSchema map[string]any `json:"inputSchema"`
 		} `json:"tools"`
 	}
 	if err := json.Unmarshal(rpcResp.Result, &result); err != nil {
@@ -903,7 +904,7 @@ func TestHTTPStack_MCP_ListTools(t *testing.T) {
 	}
 
 	// Verify at least one tool has a proper inputSchema with required fields.
-	var storeSchema map[string]interface{}
+	var storeSchema map[string]any
 	for _, tool := range result.Tools {
 		if tool.Name == "store" {
 			storeSchema = tool.InputSchema
@@ -941,8 +942,8 @@ func TestHTTPStack_MCP_ListResources(t *testing.T) {
 
 	// Parse result. It may contain "resources" and/or "resourceTemplates".
 	var result struct {
-		Resources         []map[string]interface{} `json:"resources"`
-		ResourceTemplates []map[string]interface{} `json:"resourceTemplates"`
+		Resources         []map[string]any `json:"resources"`
+		ResourceTemplates []map[string]any `json:"resourceTemplates"`
 	}
 	if err := json.Unmarshal(rpcResp.Result, &result); err != nil {
 		t.Fatalf("resources/list: unmarshal failed: %v (raw: %s)", err, string(rpcResp.Result))
@@ -984,9 +985,9 @@ func TestHTTPStack_MCP_StoreUpdateForgetFlow(t *testing.T) {
 	session := initMCPSession(t, env)
 
 	// Step 1: Store.
-	_, storeRPC := session.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := session.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-project",
 			"content": "original content for lifecycle test",
 		},
@@ -1010,9 +1011,9 @@ func TestHTTPStack_MCP_StoreUpdateForgetFlow(t *testing.T) {
 	}
 
 	// Step 2: Update content.
-	_, updateRPC := session.call(t, 3, "tools/call", map[string]interface{}{
+	_, updateRPC := session.call(t, 3, "tools/call", map[string]any{
 		"name": "update",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"id":      memoryID.String(),
 			"project": "test-project",
 			"content": "updated content for lifecycle test",
@@ -1038,9 +1039,9 @@ func TestHTTPStack_MCP_StoreUpdateForgetFlow(t *testing.T) {
 	}
 
 	// Step 3: Forget (soft delete).
-	_, forgetRPC := session.call(t, 4, "tools/call", map[string]interface{}{
+	_, forgetRPC := session.call(t, 4, "tools/call", map[string]any{
 		"name": "forget",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-project",
 			"ids":     []string{memoryID.String()},
 		},
@@ -1073,14 +1074,14 @@ func TestHTTPStack_MCP_BatchStore(t *testing.T) {
 
 	session := initMCPSession(t, env)
 
-	_, rpcResp := session.call(t, 2, "tools/call", map[string]interface{}{
+	_, rpcResp := session.call(t, 2, "tools/call", map[string]any{
 		"name": "store_batch",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-project",
-			"items": []interface{}{
-				map[string]interface{}{"content": "batch item 1", "tags": []string{"alpha"}},
-				map[string]interface{}{"content": "batch item 2"},
-				map[string]interface{}{"content": "batch item 3", "source": "test-source"},
+			"items": []any{
+				map[string]any{"content": "batch item 1", "tags": []string{"alpha"}},
+				map[string]any{"content": "batch item 2"},
+				map[string]any{"content": "batch item 3", "source": "test-source"},
 			},
 		},
 	})
@@ -1569,7 +1570,7 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 
 	var users []multiUserEnvUser
 	for _, cfg := range configs {
-		token := generateHTTPStackJWT(t, cfg.userID, ts.URL)
+		token := generateHTTPStackJWT(t, cfg.userID)
 		users = append(users, multiUserEnvUser{
 			UserID:    cfg.userID,
 			NsID:      cfg.nsID,
@@ -1654,9 +1655,9 @@ func TestHTTPStack_MCP_TwoUsers_SeparateStores(t *testing.T) {
 	sessB := env.sessionFor(t, 1)
 
 	// User A stores "Alice's secret".
-	_, storeRPC := sessA.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sessA.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "shared-proj",
 			"content": "Alice's secret",
 			"tags":    []string{"secret"},
@@ -1667,9 +1668,9 @@ func TestHTTPStack_MCP_TwoUsers_SeparateStores(t *testing.T) {
 	}
 
 	// User B stores "Bob's secret".
-	_, storeRPC = sessB.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC = sessB.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "shared-proj",
 			"content": "Bob's secret",
 			"tags":    []string{"secret"},
@@ -1680,9 +1681,9 @@ func TestHTTPStack_MCP_TwoUsers_SeparateStores(t *testing.T) {
 	}
 
 	// User A recalls "secret" — must only get Alice's.
-	_, recallRPC := sessA.call(t, 3, "tools/call", map[string]interface{}{
+	_, recallRPC := sessA.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "secret",
 			"project": "shared-proj",
 		},
@@ -1703,9 +1704,9 @@ func TestHTTPStack_MCP_TwoUsers_SeparateStores(t *testing.T) {
 	}
 
 	// User B recalls "secret" — must only get Bob's.
-	_, recallRPC = sessB.call(t, 3, "tools/call", map[string]interface{}{
+	_, recallRPC = sessB.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "secret",
 			"project": "shared-proj",
 		},
@@ -1747,9 +1748,9 @@ func TestHTTPStack_MCP_TwoUsers_SeparateProjects(t *testing.T) {
 	sessB := env.sessionFor(t, 1)
 
 	// User A stores in "alpha".
-	_, storeRPC := sessA.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sessA.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "alpha",
 			"content": "Alpha memory",
 		},
@@ -1759,9 +1760,9 @@ func TestHTTPStack_MCP_TwoUsers_SeparateProjects(t *testing.T) {
 	}
 
 	// User B stores in "beta".
-	_, storeRPC = sessB.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC = sessB.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "beta",
 			"content": "Beta memory",
 		},
@@ -1771,9 +1772,9 @@ func TestHTTPStack_MCP_TwoUsers_SeparateProjects(t *testing.T) {
 	}
 
 	// User A lists projects — should only see "alpha".
-	_, projRPC := sessA.call(t, 3, "tools/call", map[string]interface{}{
+	_, projRPC := sessA.call(t, 3, "tools/call", map[string]any{
 		"name":      "list_projects",
-		"arguments": map[string]interface{}{},
+		"arguments": map[string]any{},
 	})
 	if projRPC == nil || projRPC.Error != nil {
 		t.Fatalf("User A list projects failed")
@@ -1791,9 +1792,9 @@ func TestHTTPStack_MCP_TwoUsers_SeparateProjects(t *testing.T) {
 	}
 
 	// User B lists projects — should only see "beta".
-	_, projRPC = sessB.call(t, 3, "tools/call", map[string]interface{}{
+	_, projRPC = sessB.call(t, 3, "tools/call", map[string]any{
 		"name":      "list_projects",
-		"arguments": map[string]interface{}{},
+		"arguments": map[string]any{},
 	})
 	if projRPC == nil || projRPC.Error != nil {
 		t.Fatalf("User B list projects failed")
@@ -1833,9 +1834,9 @@ func TestHTTPStack_MCP_UserCannotAccessOtherUserProject(t *testing.T) {
 	sessB := env.sessionFor(t, 1)
 
 	// User A stores in "private".
-	_, storeRPC := sessA.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sessA.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "private",
 			"content": "User A private data",
 		},
@@ -1845,9 +1846,9 @@ func TestHTTPStack_MCP_UserCannotAccessOtherUserProject(t *testing.T) {
 	}
 
 	// User B tries to recall from "private" — should get error (project not found for User B).
-	_, recallRPC := sessB.call(t, 2, "tools/call", map[string]interface{}{
+	_, recallRPC := sessB.call(t, 2, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "private data",
 			"project": "private",
 		},
@@ -1887,16 +1888,16 @@ func TestHTTPStack_MCP_BatchStoreAndRecall(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Batch store 5 items with different tags.
-	_, batchRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, batchRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store_batch",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
-			"items": []interface{}{
-				map[string]interface{}{"content": "Go goroutines are lightweight threads", "tags": []interface{}{"go", "concurrency"}},
-				map[string]interface{}{"content": "Rust ownership model prevents data races", "tags": []interface{}{"rust", "safety"}},
-				map[string]interface{}{"content": "Python GIL limits true parallelism", "tags": []interface{}{"python", "concurrency"}},
-				map[string]interface{}{"content": "JavaScript event loop is single-threaded", "tags": []interface{}{"javascript", "concurrency"}},
-				map[string]interface{}{"content": "TypeScript adds type safety to JavaScript", "tags": []interface{}{"typescript", "safety"}},
+			"items": []any{
+				map[string]any{"content": "Go goroutines are lightweight threads", "tags": []any{"go", "concurrency"}},
+				map[string]any{"content": "Rust ownership model prevents data races", "tags": []any{"rust", "safety"}},
+				map[string]any{"content": "Python GIL limits true parallelism", "tags": []any{"python", "concurrency"}},
+				map[string]any{"content": "JavaScript event loop is single-threaded", "tags": []any{"javascript", "concurrency"}},
+				map[string]any{"content": "TypeScript adds type safety to JavaScript", "tags": []any{"typescript", "safety"}},
 			},
 		},
 	})
@@ -1916,12 +1917,12 @@ func TestHTTPStack_MCP_BatchStoreAndRecall(t *testing.T) {
 	}
 
 	// Recall with tag filter ["concurrency"] — should get 3 items.
-	_, recallRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "concurrency",
 			"project": "test-proj",
-			"tags":    []interface{}{"concurrency"},
+			"tags":    []any{"concurrency"},
 			"limit":   float64(10),
 		},
 	})
@@ -1937,22 +1938,16 @@ func TestHTTPStack_MCP_BatchStoreAndRecall(t *testing.T) {
 		t.Errorf("recall with tag 'concurrency': expected 3 memories, got %d", len(recallResp.Memories))
 	}
 	for _, mem := range recallResp.Memories {
-		hasConcurrency := false
-		for _, tag := range mem.Tags {
-			if tag == "concurrency" {
-				hasConcurrency = true
-				break
-			}
-		}
+		hasConcurrency := slices.Contains(mem.Tags, "concurrency")
 		if !hasConcurrency {
 			t.Errorf("recall result %q missing 'concurrency' tag", mem.Content)
 		}
 	}
 
 	// Recall without tag filter — should get all 5.
-	_, recallRPC = sess.call(t, 4, "tools/call", map[string]interface{}{
+	_, recallRPC = sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "programming language",
 			"project": "test-proj",
 			"limit":   float64(10),
@@ -1987,14 +1982,14 @@ func TestHTTPStack_MCP_BatchStorePartialContent(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Batch store 3 items with distinct content.
-	_, batchRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, batchRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store_batch",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
-			"items": []interface{}{
-				map[string]interface{}{"content": "The Eiffel Tower is in Paris France"},
-				map[string]interface{}{"content": "Mount Everest is the tallest mountain"},
-				map[string]interface{}{"content": "The Pacific Ocean is the largest ocean"},
+			"items": []any{
+				map[string]any{"content": "The Eiffel Tower is in Paris France"},
+				map[string]any{"content": "Mount Everest is the tallest mountain"},
+				map[string]any{"content": "The Pacific Ocean is the largest ocean"},
 			},
 		},
 	})
@@ -2013,9 +2008,9 @@ func TestHTTPStack_MCP_BatchStorePartialContent(t *testing.T) {
 	}
 
 	for i, kw := range keywords {
-		_, recallRPC := sess.call(t, 3+i, "tools/call", map[string]interface{}{
+		_, recallRPC := sess.call(t, 3+i, "tools/call", map[string]any{
 			"name": "recall",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"query":   kw.query,
 				"project": "test-proj",
 				"limit":   float64(5),
@@ -2060,9 +2055,9 @@ func TestHTTPStack_MCP_StoreInMultipleProjects(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store in "frontend".
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "frontend",
 			"content": "React component lifecycle",
 		},
@@ -2072,9 +2067,9 @@ func TestHTTPStack_MCP_StoreInMultipleProjects(t *testing.T) {
 	}
 
 	// Store in "backend" (auto-created).
-	_, storeRPC = sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, storeRPC = sess.call(t, 3, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "backend",
 			"content": "Go HTTP handler patterns",
 		},
@@ -2084,9 +2079,9 @@ func TestHTTPStack_MCP_StoreInMultipleProjects(t *testing.T) {
 	}
 
 	// Recall from "frontend" — only frontend memories.
-	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "development",
 			"project": "frontend",
 		},
@@ -2115,9 +2110,9 @@ func TestHTTPStack_MCP_StoreInMultipleProjects(t *testing.T) {
 	}
 
 	// Recall from "backend" — only backend memories.
-	_, recallRPC = sess.call(t, 5, "tools/call", map[string]interface{}{
+	_, recallRPC = sess.call(t, 5, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "development",
 			"project": "backend",
 		},
@@ -2162,9 +2157,9 @@ func TestHTTPStack_MCP_ProjectAutoCreate(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store to a project that doesn't exist — should auto-create.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "brand-new",
 			"content": "something in a new project",
 		},
@@ -2183,9 +2178,9 @@ func TestHTTPStack_MCP_ProjectAutoCreate(t *testing.T) {
 	}
 
 	// List projects — should see "brand-new".
-	_, projRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, projRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name":      "list_projects",
-		"arguments": map[string]interface{}{},
+		"arguments": map[string]any{},
 	})
 	if projRPC == nil || projRPC.Error != nil {
 		t.Fatalf("list projects failed")
@@ -2224,9 +2219,9 @@ func TestHTTPStack_MCP_RecallAcrossAllProjects(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store in project-a.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "project-a",
 			"content": "Memory in project A about databases",
 		},
@@ -2236,9 +2231,9 @@ func TestHTTPStack_MCP_RecallAcrossAllProjects(t *testing.T) {
 	}
 
 	// Store in project-b (auto-created).
-	_, storeRPC = sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, storeRPC = sess.call(t, 3, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "project-b",
 			"content": "Memory in project B about caching",
 		},
@@ -2253,9 +2248,9 @@ func TestHTTPStack_MCP_RecallAcrossAllProjects(t *testing.T) {
 	// Since the memories are stored in child namespaces (project namespaces),
 	// the user-scoped recall won't find them in a real system with proper
 	// namespace hierarchy. But this tests the code path.
-	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query": "data storage",
 		},
 	})
@@ -2292,9 +2287,9 @@ func TestHTTPStack_MCP_UpdateNonexistentMemory(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	fakeID := uuid.New()
-	_, updateRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, updateRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "update",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"id":      fakeID.String(),
 			"project": "test-proj",
 			"content": "updated content",
@@ -2330,9 +2325,9 @@ func TestHTTPStack_MCP_ForgetThenRecall(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"content": "ephemeral data that will be forgotten",
 		},
@@ -2348,9 +2343,9 @@ func TestHTTPStack_MCP_ForgetThenRecall(t *testing.T) {
 	memID := storeResp.ID
 
 	// Forget.
-	_, forgetRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, forgetRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "forget",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"ids":     []string{memID.String()},
 		},
@@ -2368,9 +2363,9 @@ func TestHTTPStack_MCP_ForgetThenRecall(t *testing.T) {
 	}
 
 	// Recall — forgotten memory should NOT appear.
-	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "ephemeral data",
 			"project": "test-proj",
 		},
@@ -2407,9 +2402,9 @@ func TestHTTPStack_MCP_ForgetNonexistentMemory(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	fakeID := uuid.New()
-	_, forgetRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, forgetRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "forget",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"ids":     []string{fakeID.String()},
 		},
@@ -2446,9 +2441,9 @@ func TestHTTPStack_MCP_DoubleForget(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"content": "double-forget test data",
 		},
@@ -2464,9 +2459,9 @@ func TestHTTPStack_MCP_DoubleForget(t *testing.T) {
 	memID := storeResp.ID
 
 	// First forget.
-	_, forgetRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, forgetRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "forget",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"ids":     []string{memID.String()},
 		},
@@ -2484,9 +2479,9 @@ func TestHTTPStack_MCP_DoubleForget(t *testing.T) {
 	}
 
 	// Second forget — should not crash, deleted=0 (already soft-deleted).
-	_, forgetRPC = sess.call(t, 4, "tools/call", map[string]interface{}{
+	_, forgetRPC = sess.call(t, 4, "tools/call", map[string]any{
 		"name": "forget",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"ids":     []string{memID.String()},
 		},
@@ -2520,12 +2515,12 @@ func TestHTTPStack_MCP_StoreWithMetadata(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store with metadata.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"content": "memory with metadata",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"agent":   "claude",
 				"session": "abc123",
 			},
@@ -2548,7 +2543,7 @@ func TestHTTPStack_MCP_StoreWithMetadata(t *testing.T) {
 	if mem.Metadata == nil {
 		t.Fatal("expected metadata to be stored, got nil")
 	}
-	var meta map[string]interface{}
+	var meta map[string]any
 	if err := json.Unmarshal(mem.Metadata, &meta); err != nil {
 		t.Fatalf("unmarshal metadata: %v", err)
 	}
@@ -2577,12 +2572,12 @@ func TestHTTPStack_MCP_StoreWithTags(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store with tags.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"content": "architecture decision about authentication",
-			"tags":    []interface{}{"architecture", "auth"},
+			"tags":    []any{"architecture", "auth"},
 		},
 	})
 	if storeRPC == nil || storeRPC.Error != nil {
@@ -2590,12 +2585,12 @@ func TestHTTPStack_MCP_StoreWithTags(t *testing.T) {
 	}
 
 	// Also store something without the "auth" tag.
-	_, storeRPC = sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, storeRPC = sess.call(t, 3, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"content": "deployment pipeline setup",
-			"tags":    []interface{}{"devops", "deployment"},
+			"tags":    []any{"devops", "deployment"},
 		},
 	})
 	if storeRPC == nil || storeRPC.Error != nil {
@@ -2603,12 +2598,12 @@ func TestHTTPStack_MCP_StoreWithTags(t *testing.T) {
 	}
 
 	// Recall with tag filter ["auth"].
-	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "decisions",
 			"project": "test-proj",
-			"tags":    []interface{}{"auth"},
+			"tags":    []any{"auth"},
 		},
 	})
 	if recallRPC == nil || recallRPC.Error != nil {
@@ -2643,9 +2638,9 @@ func TestHTTPStack_MCP_StoreEmptyContent_Rejected(t *testing.T) {
 
 	sess := env.sessionFor(t, 0)
 
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"content": "",
 		},
@@ -2683,9 +2678,9 @@ func TestHTTPStack_MCP_GetSpecificMemories(t *testing.T) {
 	var ids []uuid.UUID
 	contents := []string{"first memory", "second memory", "third memory"}
 	for i, content := range contents {
-		_, storeRPC := sess.call(t, 2+i, "tools/call", map[string]interface{}{
+		_, storeRPC := sess.call(t, 2+i, "tools/call", map[string]any{
 			"name": "store",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"project": "test-proj",
 				"content": content,
 			},
@@ -2702,9 +2697,9 @@ func TestHTTPStack_MCP_GetSpecificMemories(t *testing.T) {
 	}
 
 	// Get 2 of them by ID (first and third).
-	_, getRPC := sess.call(t, 10, "tools/call", map[string]interface{}{
+	_, getRPC := sess.call(t, 10, "tools/call", map[string]any{
 		"name": "get",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"ids":     []string{ids[0].String(), ids[2].String()},
 		},
@@ -2754,9 +2749,9 @@ func TestHTTPStack_MCP_GetWithInvalidID(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store one memory.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"content": "valid memory",
 		},
@@ -2773,9 +2768,9 @@ func TestHTTPStack_MCP_GetWithInvalidID(t *testing.T) {
 	invalidID := uuid.New()
 
 	// Get with mix of valid and invalid IDs.
-	_, getRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, getRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "get",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 			"ids":     []string{validID.String(), invalidID.String()},
 		},
@@ -2825,9 +2820,9 @@ func TestHTTPStack_MCP_ExportProject(t *testing.T) {
 		"Export test memory three",
 	}
 	for i, content := range contents {
-		_, storeRPC := sess.call(t, 2+i, "tools/call", map[string]interface{}{
+		_, storeRPC := sess.call(t, 2+i, "tools/call", map[string]any{
 			"name": "store",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"project": "export-proj",
 				"content": content,
 			},
@@ -2838,9 +2833,9 @@ func TestHTTPStack_MCP_ExportProject(t *testing.T) {
 	}
 
 	// Export the project.
-	_, exportRPC := sess.call(t, 10, "tools/call", map[string]interface{}{
+	_, exportRPC := sess.call(t, 10, "tools/call", map[string]any{
 		"name": "export",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "export-proj",
 		},
 	})
@@ -2895,10 +2890,10 @@ func TestHTTPStack_MCP_SessionIDPersists(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
 
@@ -2962,17 +2957,17 @@ func TestHTTPStack_MCP_ConcurrentStoresFromSameUser(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, goroutines)
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			sess := env.sessionFor(t, 0)
-			_, storeRPC := sess.call(t, 100+idx, "tools/call", map[string]interface{}{
+			_, storeRPC := sess.call(t, 100+idx, "tools/call", map[string]any{
 				"name": "store",
-				"arguments": map[string]interface{}{
+				"arguments": map[string]any{
 					"project": "conc-proj",
 					"content": fmt.Sprintf("concurrent memory %d", idx),
-					"tags":    []interface{}{"concurrent"},
+					"tags":    []any{"concurrent"},
 				},
 			})
 			if storeRPC == nil || storeRPC.Error != nil {
@@ -2998,9 +2993,9 @@ func TestHTTPStack_MCP_ConcurrentStoresFromSameUser(t *testing.T) {
 
 	// Recall all memories — expect 10.
 	sess := env.sessionFor(t, 0)
-	_, recallRPC := sess.call(t, 200, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 200, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "concurrent",
 			"project": "conc-proj",
 			"limit":   float64(20),
@@ -3041,8 +3036,8 @@ func TestHTTPStack_MCP_ConcurrentStoresFromDifferentUsers(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, perUser*2)
 
-	for userIdx := 0; userIdx < 2; userIdx++ {
-		for i := 0; i < perUser; i++ {
+	for userIdx := range 2 {
+		for i := range perUser {
 			wg.Add(1)
 			go func(uIdx, idx int) {
 				defer wg.Done()
@@ -3051,12 +3046,12 @@ func TestHTTPStack_MCP_ConcurrentStoresFromDifferentUsers(t *testing.T) {
 				if uIdx == 1 {
 					name = "Bob"
 				}
-				_, storeRPC := sess.call(t, 100+uIdx*100+idx, "tools/call", map[string]interface{}{
+				_, storeRPC := sess.call(t, 100+uIdx*100+idx, "tools/call", map[string]any{
 					"name": "store",
-					"arguments": map[string]interface{}{
+					"arguments": map[string]any{
 						"project": "shared",
 						"content": fmt.Sprintf("%s memory %d", name, idx),
-						"tags":    []interface{}{"multi-user"},
+						"tags":    []any{"multi-user"},
 					},
 				})
 				if storeRPC == nil || storeRPC.Error != nil {
@@ -3083,9 +3078,9 @@ func TestHTTPStack_MCP_ConcurrentStoresFromDifferentUsers(t *testing.T) {
 
 	// User A recalls — should see exactly 5.
 	sessA := env.sessionFor(t, 0)
-	_, recallRPC := sessA.call(t, 300, "tools/call", map[string]interface{}{
+	_, recallRPC := sessA.call(t, 300, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "memory",
 			"project": "shared",
 			"limit":   float64(20),
@@ -3110,9 +3105,9 @@ func TestHTTPStack_MCP_ConcurrentStoresFromDifferentUsers(t *testing.T) {
 
 	// User B recalls — should see exactly 5.
 	sessB := env.sessionFor(t, 1)
-	_, recallRPC = sessB.call(t, 300, "tools/call", map[string]interface{}{
+	_, recallRPC = sessB.call(t, 300, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "memory",
 			"project": "shared",
 			"limit":   float64(20),
@@ -3162,9 +3157,9 @@ func TestHTTPStack_MCP_LargeContent(t *testing.T) {
 		t.Fatalf("expected at least 50KB, got %d bytes", len(largeContent))
 	}
 
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "large-proj",
 			"content": largeContent,
 		},
@@ -3179,9 +3174,9 @@ func TestHTTPStack_MCP_LargeContent(t *testing.T) {
 	}
 
 	// Recall and verify content round-trips.
-	_, recallRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "abcdefghij",
 			"project": "large-proj",
 		},
@@ -3220,9 +3215,9 @@ func TestHTTPStack_MCP_UnicodeContent(t *testing.T) {
 
 	unicodeContent := "Hello world! Emoji: \U0001F680\U0001F30D\U0001F525 CJK: \u4f60\u597d\u4e16\u754c Arabic: \u0645\u0631\u062d\u0628\u0627 \u0628\u0627\u0644\u0639\u0627\u0644\u0645 Korean: \uc548\ub155\ud558\uc138\uc694 Japanese: \u3053\u3093\u306b\u3061\u306f"
 
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "unicode-proj",
 			"content": unicodeContent,
 		},
@@ -3232,9 +3227,9 @@ func TestHTTPStack_MCP_UnicodeContent(t *testing.T) {
 	}
 
 	// Recall and verify exact preservation.
-	_, recallRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "hello",
 			"project": "unicode-proj",
 		},
@@ -3273,9 +3268,9 @@ func TestHTTPStack_MCP_SpecialCharsInProjectSlug(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store to project with hyphens, underscores, dots.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "my-project_v2.0",
 			"content": "special slug content",
 		},
@@ -3293,9 +3288,9 @@ func TestHTTPStack_MCP_SpecialCharsInProjectSlug(t *testing.T) {
 	}
 
 	// Store to a project with spaces — should either error or normalize.
-	_, spaceRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, spaceRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "project with spaces",
 			"content": "space slug content",
 		},
@@ -3332,14 +3327,14 @@ func TestHTTPStack_MCP_ManyTags(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Build 50 tags.
-	tags := make([]interface{}, 50)
-	for i := 0; i < 50; i++ {
+	tags := make([]any, 50)
+	for i := range 50 {
 		tags[i] = fmt.Sprintf("tag-%03d", i)
 	}
 
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "tags-proj",
 			"content": "memory with 50 tags",
 			"tags":    tags,
@@ -3356,9 +3351,9 @@ func TestHTTPStack_MCP_ManyTags(t *testing.T) {
 	memID := storeResp.ID
 
 	// Get the memory and verify all 50 tags.
-	_, getRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, getRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "get",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "tags-proj",
 			"ids":     []string{memID.String()},
 		},
@@ -3383,7 +3378,7 @@ func TestHTTPStack_MCP_ManyTags(t *testing.T) {
 	for _, tag := range getResp.Found[0].Tags {
 		tagSet[tag] = true
 	}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		expected := fmt.Sprintf("tag-%03d", i)
 		if !tagSet[expected] {
 			t.Errorf("missing tag %q", expected)
@@ -3408,9 +3403,9 @@ func TestHTTPStack_MCP_StoreMinimalFields(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store with ONLY project + content.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "minimal-proj",
 			"content": "minimal fields only",
 		},
@@ -3449,10 +3444,10 @@ func TestHTTPStack_MCP_RecallWithLimit(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store 10 memories.
-	for i := 0; i < 10; i++ {
-		_, storeRPC := sess.call(t, 2+i, "tools/call", map[string]interface{}{
+	for i := range 10 {
+		_, storeRPC := sess.call(t, 2+i, "tools/call", map[string]any{
 			"name": "store",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"project": "limit-proj",
 				"content": fmt.Sprintf("limit test memory %d", i),
 			},
@@ -3463,9 +3458,9 @@ func TestHTTPStack_MCP_RecallWithLimit(t *testing.T) {
 	}
 
 	// Recall with limit=3.
-	_, recallRPC := sess.call(t, 20, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 20, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "limit test",
 			"project": "limit-proj",
 			"limit":   float64(3),
@@ -3500,9 +3495,9 @@ func TestHTTPStack_MCP_UnknownToolCall(t *testing.T) {
 
 	sess := env.sessionFor(t, 0)
 
-	_, rpcResp := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, rpcResp := sess.call(t, 2, "tools/call", map[string]any{
 		"name":      "nonexistent_tool",
-		"arguments": map[string]interface{}{},
+		"arguments": map[string]any{},
 	})
 	if rpcResp == nil {
 		t.Fatal("expected non-nil response for unknown tool")
@@ -3539,9 +3534,9 @@ func TestHTTPStack_MCP_ToolCallMissingRequiredParams(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Call memory_store without content.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 		},
 	})
@@ -3558,9 +3553,9 @@ func TestHTTPStack_MCP_ToolCallMissingRequiredParams(t *testing.T) {
 	}
 
 	// Call memory_recall without query.
-	_, recallRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "test-proj",
 		},
 	})
@@ -3635,14 +3630,14 @@ func TestHTTPStack_MCP_InvalidJSONRPCVersion(t *testing.T) {
 	})
 	defer env.Close()
 
-	invalidReq := map[string]interface{}{
+	invalidReq := map[string]any{
 		"jsonrpc": "1.0",
 		"id":      1,
 		"method":  "initialize",
-		"params": map[string]interface{}{
+		"params": map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
 	body, _ := json.Marshal(invalidReq)
@@ -3687,12 +3682,12 @@ func TestHTTPStack_MCP_UpdateTagsOnly(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "update-proj",
 			"content": "content that should not change",
-			"tags":    []interface{}{"original"},
+			"tags":    []any{"original"},
 		},
 	})
 	if storeRPC == nil || storeRPC.Error != nil {
@@ -3706,12 +3701,12 @@ func TestHTTPStack_MCP_UpdateTagsOnly(t *testing.T) {
 	memID := storeResp.ID
 
 	// Update with only new tags (no content).
-	_, updateRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, updateRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "update",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"id":      memID.String(),
 			"project": "update-proj",
-			"tags":    []interface{}{"updated-tag-1", "updated-tag-2"},
+			"tags":    []any{"updated-tag-1", "updated-tag-2"},
 		},
 	})
 	if updateRPC == nil || updateRPC.Error != nil {
@@ -3751,12 +3746,12 @@ func TestHTTPStack_MCP_UpdateClearsMetadata(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store with metadata.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "meta-proj",
 			"content": "memory with metadata to clear",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"key1": "value1",
 				"key2": "value2",
 			},
@@ -3777,17 +3772,17 @@ func TestHTTPStack_MCP_UpdateClearsMetadata(t *testing.T) {
 	if mem == nil {
 		t.Fatal("memory not found in repo")
 	}
-	if mem.Metadata == nil || len(mem.Metadata) == 0 {
+	if len(mem.Metadata) == 0 {
 		t.Fatal("expected metadata to be stored")
 	}
 
 	// Update with empty metadata.
-	_, updateRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, updateRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "update",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"id":       memID.String(),
 			"project":  "meta-proj",
-			"metadata": map[string]interface{}{},
+			"metadata": map[string]any{},
 		},
 	})
 	if updateRPC == nil || updateRPC.Error != nil {
@@ -3803,8 +3798,8 @@ func TestHTTPStack_MCP_UpdateClearsMetadata(t *testing.T) {
 	if updatedMem == nil {
 		t.Fatal("memory not found after update")
 	}
-	if updatedMem.Metadata != nil && len(updatedMem.Metadata) > 0 {
-		var meta map[string]interface{}
+	if len(updatedMem.Metadata) > 0 {
+		var meta map[string]any
 		if err := json.Unmarshal(updatedMem.Metadata, &meta); err == nil && len(meta) > 0 {
 			t.Errorf("expected metadata to be cleared, got %v", meta)
 		}
@@ -3828,9 +3823,9 @@ func TestHTTPStack_MCP_RecallEmptyProject(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Store a memory, then forget it, leaving the project empty.
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "empty-proj",
 			"content": "temporary memory",
 		},
@@ -3845,9 +3840,9 @@ func TestHTTPStack_MCP_RecallEmptyProject(t *testing.T) {
 	}
 
 	// Forget it.
-	_, forgetRPC := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, forgetRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "forget",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "empty-proj",
 			"ids":     []string{storeResp.ID.String()},
 		},
@@ -3857,9 +3852,9 @@ func TestHTTPStack_MCP_RecallEmptyProject(t *testing.T) {
 	}
 
 	// Recall from the now-empty project.
-	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "anything",
 			"project": "empty-proj",
 		},
@@ -3895,12 +3890,12 @@ func TestHTTPStack_MCP_RecallMultipleTagFilter(t *testing.T) {
 
 	// Store 3 memories with different tag combos.
 	// Memory 1: tags [alpha, beta]
-	_, storeRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "multitag-proj",
 			"content": "has both alpha and beta",
-			"tags":    []interface{}{"alpha", "beta"},
+			"tags":    []any{"alpha", "beta"},
 		},
 	})
 	if storeRPC == nil || storeRPC.Error != nil {
@@ -3908,12 +3903,12 @@ func TestHTTPStack_MCP_RecallMultipleTagFilter(t *testing.T) {
 	}
 
 	// Memory 2: tags [alpha]
-	_, storeRPC = sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, storeRPC = sess.call(t, 3, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "multitag-proj",
 			"content": "has only alpha",
-			"tags":    []interface{}{"alpha"},
+			"tags":    []any{"alpha"},
 		},
 	})
 	if storeRPC == nil || storeRPC.Error != nil {
@@ -3921,12 +3916,12 @@ func TestHTTPStack_MCP_RecallMultipleTagFilter(t *testing.T) {
 	}
 
 	// Memory 3: tags [beta, gamma]
-	_, storeRPC = sess.call(t, 4, "tools/call", map[string]interface{}{
+	_, storeRPC = sess.call(t, 4, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "multitag-proj",
 			"content": "has beta and gamma",
-			"tags":    []interface{}{"beta", "gamma"},
+			"tags":    []any{"beta", "gamma"},
 		},
 	})
 	if storeRPC == nil || storeRPC.Error != nil {
@@ -3934,12 +3929,12 @@ func TestHTTPStack_MCP_RecallMultipleTagFilter(t *testing.T) {
 	}
 
 	// Recall with tags [alpha, beta] — only memory 1 has BOTH.
-	_, recallRPC := sess.call(t, 5, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 5, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   "has",
 			"project": "multitag-proj",
-			"tags":    []interface{}{"alpha", "beta"},
+			"tags":    []any{"alpha", "beta"},
 			"limit":   float64(10),
 		},
 	})
@@ -3980,9 +3975,9 @@ func TestHTTPStack_MCP_StoreDuplicateContent(t *testing.T) {
 	duplicateContent := "this exact content is stored twice"
 
 	// Store first copy.
-	_, storeRPC1 := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, storeRPC1 := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "dup-proj",
 			"content": duplicateContent,
 		},
@@ -3997,9 +3992,9 @@ func TestHTTPStack_MCP_StoreDuplicateContent(t *testing.T) {
 	}
 
 	// Store second copy.
-	_, storeRPC2 := sess.call(t, 3, "tools/call", map[string]interface{}{
+	_, storeRPC2 := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "store",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "dup-proj",
 			"content": duplicateContent,
 		},
@@ -4019,9 +4014,9 @@ func TestHTTPStack_MCP_StoreDuplicateContent(t *testing.T) {
 	}
 
 	// Recall — only one row exists, so only one result.
-	_, recallRPC := sess.call(t, 4, "tools/call", map[string]interface{}{
+	_, recallRPC := sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"query":   duplicateContent,
 			"project": "dup-proj",
 			"limit":   float64(10),
@@ -4057,9 +4052,9 @@ func TestHTTPStack_MCP_ExportEmptyProject(t *testing.T) {
 	sess := env.sessionFor(t, 0)
 
 	// Export a project that has no memories.
-	_, exportRPC := sess.call(t, 2, "tools/call", map[string]interface{}{
+	_, exportRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "export",
-		"arguments": map[string]interface{}{
+		"arguments": map[string]any{
 			"project": "empty-export",
 		},
 	})
@@ -4104,9 +4099,9 @@ func TestHTTPStack_MCP_ToolCallBeforeInitialize(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "tools/call",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"name": "store",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"project": "test-proj",
 				"content": "should not work",
 			},
@@ -4178,10 +4173,10 @@ func TestHTTPStack_MCP_DoubleInitialize(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
 	resp1, rpcResp1 := doMCPRequest(t, fakeEnv, initReq)
@@ -4198,10 +4193,10 @@ func TestHTTPStack_MCP_DoubleInitialize(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      2,
 		Method:  "initialize",
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "test", "version": "1.0"},
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
 	headers := map[string]string{}

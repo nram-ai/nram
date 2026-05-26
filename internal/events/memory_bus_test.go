@@ -154,7 +154,7 @@ func TestMemoryBus_FullChannel(t *testing.T) {
 	defer cancel()
 
 	// Fill the channel buffer
-	for i := 0; i < fallbackSubscriberBufferSize; i++ {
+	for i := range fallbackSubscriberBufferSize {
 		evt := makeEvent(MemoryCreated, "test")
 		evt.ID = "fill"
 		if err := bus.Publish(ctx, evt); err != nil {
@@ -200,7 +200,7 @@ func TestMemoryBus_ConcurrentPublish(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numPublishers)
 
-	for i := 0; i < numPublishers; i++ {
+	for range numPublishers {
 		go func() {
 			defer wg.Done()
 			evt := makeEvent(MemoryCreated, "test")

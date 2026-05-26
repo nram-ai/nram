@@ -127,10 +127,7 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 		}
 
 		// Within limit — compute approximate remaining tokens.
-		remaining := int(lim.TokensAt(now)) - 1
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := max(int(lim.TokensAt(now))-1, 0)
 
 		// Reset time is when the bucket will be full again.
 		tokensNeeded := float64(rl.burst) - float64(remaining)

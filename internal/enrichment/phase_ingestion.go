@@ -428,7 +428,6 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 	return nil
 }
 
-
 // applyIngestionUpdate writes the supersedes lineage edge and marks the
 // target memory superseded by the new one. Failures are logged but not
 // propagated: the new memory is already enriched and useful even if the
@@ -442,7 +441,7 @@ func (wp *WorkerPool) applyIngestionUpdate(ctx context.Context, p *pendingJob) {
 	target := *p.ingestionTarget
 
 	// Lineage: child = the new memory, parent = the existing one.
-	contextBytes, _ := json.Marshal(map[string]interface{}{
+	contextBytes, _ := json.Marshal(map[string]any{
 		"source":               "ingestion_decision",
 		"top_score":            p.ingestionTopScore,
 		"rationale":            p.ingestionRationale,
@@ -484,11 +483,11 @@ func stampIngestionMetadata(p *pendingJob) {
 	if p.ingestionDecision == "" {
 		return
 	}
-	meta := map[string]interface{}{}
+	meta := map[string]any{}
 	if len(p.mem.Metadata) > 0 {
 		_ = json.Unmarshal(p.mem.Metadata, &meta)
 		if meta == nil {
-			meta = map[string]interface{}{}
+			meta = map[string]any{}
 		}
 	}
 	meta["ingestion_decision"] = p.ingestionDecision

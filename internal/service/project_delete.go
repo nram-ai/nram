@@ -127,22 +127,22 @@ var ErrNoGlobalProject = errors.New("project delete: owner has no global project
 // database is unchanged. Vector store cleanup (in-memory HNSW graph nodes)
 // and event emission run after commit.
 type ProjectDeleteService struct {
-	txBeginner            TxBeginner
-	projectGetter         ProjectDeleteGetter
-	projectDeleter        ProjectDeleter
-	memoryIDLister        MemoryIDLister
-	memoryLineageDeleter  MemoryLineageDeleter
-	memoryBulkDeleter     MemoryBulkDeleter
-	vectorStore           VectorDeleter
-	entityAliasDeleter    EntityAliasDeleter
-	entityDeleter         EntityBulkDeleter
-	relationshipDeleter   RelationshipBulkDeleter
-	enrichmentDeleter     EnrichmentBulkDeleter
-	tokenUsageReassign    TokenUsageReassigner
-	ingestionDeleter      IngestionLogDeleter
-	hnswDeleter           HNSWSnapshotDeleter
-	namespaceDeleter      NamespaceDeleter
-	eventBus              events.EventBus
+	txBeginner           TxBeginner
+	projectGetter        ProjectDeleteGetter
+	projectDeleter       ProjectDeleter
+	memoryIDLister       MemoryIDLister
+	memoryLineageDeleter MemoryLineageDeleter
+	memoryBulkDeleter    MemoryBulkDeleter
+	vectorStore          VectorDeleter
+	entityAliasDeleter   EntityAliasDeleter
+	entityDeleter        EntityBulkDeleter
+	relationshipDeleter  RelationshipBulkDeleter
+	enrichmentDeleter    EnrichmentBulkDeleter
+	tokenUsageReassign   TokenUsageReassigner
+	ingestionDeleter     IngestionLogDeleter
+	hnswDeleter          HNSWSnapshotDeleter
+	namespaceDeleter     NamespaceDeleter
+	eventBus             events.EventBus
 }
 
 // NewProjectDeleteService creates a new ProjectDeleteService with the given dependencies.
@@ -241,7 +241,7 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 	}
 
 	if s.eventBus != nil {
-		data, _ := json.Marshal(map[string]interface{}{
+		data, _ := json.Marshal(map[string]any{
 			"project_id":   project.ID.String(),
 			"project_slug": project.Slug,
 			"memories":     len(memoryIDs),

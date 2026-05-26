@@ -92,12 +92,12 @@ func TestSettingsSchemaRequiresRestart(t *testing.T) {
 	// admin UI must surface the restart badge; if an entry here ever flips to
 	// hot-reloadable, remove it from this list at the same commit.
 	mustRestart := map[string]struct{}{
-		"qdrant.addr":                                   {},
-		"qdrant.api_key":                                {},
-		"qdrant.use_tls":                                {},
-		"qdrant.pool_size":                              {},
-		"qdrant.keepalive_time":                         {},
-		"qdrant.keepalive_timeout":                      {},
+		"qdrant.addr":                                      {},
+		"qdrant.api_key":                                   {},
+		"qdrant.use_tls":                                   {},
+		"qdrant.pool_size":                                 {},
+		"qdrant.keepalive_time":                            {},
+		"qdrant.keepalive_timeout":                         {},
 		service.SettingEnrichmentWorkerCountSQLite:         {},
 		service.SettingEnrichmentWorkerCountPostgres:       {},
 		service.SettingEnrichmentWorkerPollIntervalSeconds: {},
@@ -110,17 +110,17 @@ func TestSettingsSchemaRequiresRestart(t *testing.T) {
 		// SettingLifecycleSweepIntervalSeconds is hot-reloadable: the
 		// lifecycle loop re-reads it on every iteration (see
 		// internal/service/lifecycle.go resolveSweepInterval).
-		service.SettingCascadeCacheTTLSeconds:              {},
-		service.SettingSettingsCacheTTLSeconds:             {},
-		service.SettingAPIRateLimitCleanupSeconds:          {},
-		service.SettingAPIRateLimitStaleSeconds:            {},
-		service.SettingEventsSubscriberBufferSize:          {},
-		service.SettingEventsReplayCapacity:                {},
-		service.SettingEventsSSEKeepaliveSeconds:           {},
-		service.SettingHNSWM:                               {},
-		service.SettingHNSWEfConstruction:                  {},
-		service.SettingHNSWEfSearch:                        {},
-		service.SettingHNSWMaxLoadedIndexes:                {},
+		service.SettingCascadeCacheTTLSeconds:     {},
+		service.SettingSettingsCacheTTLSeconds:    {},
+		service.SettingAPIRateLimitCleanupSeconds: {},
+		service.SettingAPIRateLimitStaleSeconds:   {},
+		service.SettingEventsSubscriberBufferSize: {},
+		service.SettingEventsReplayCapacity:       {},
+		service.SettingEventsSSEKeepaliveSeconds:  {},
+		service.SettingHNSWM:                      {},
+		service.SettingHNSWEfConstruction:         {},
+		service.SettingHNSWEfSearch:               {},
+		service.SettingHNSWMaxLoadedIndexes:       {},
 	}
 
 	seen := make(map[string]bool, len(mustRestart))
@@ -211,7 +211,7 @@ func TestSettingsSchemaDefaultsMatchRuntime(t *testing.T) {
 				t.Errorf("key %q: UI default %q != runtime default %q", entry.Key, uiVal, runtime)
 			}
 		case "json":
-			var uiVal, runtimeVal interface{}
+			var uiVal, runtimeVal any
 			if err := json.Unmarshal(entry.DefaultValue, &uiVal); err != nil {
 				t.Errorf("key %q: cannot decode UI default %s as JSON: %v", entry.Key, string(entry.DefaultValue), err)
 				continue

@@ -88,7 +88,7 @@ func TestExportImportMultiple(t *testing.T) {
 	g := NewGraph(dim, WithM(16), WithEfConstruction(200), WithEfSearch(50), WithSeed(42))
 
 	ids := make([]uuid.UUID, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		ids[i] = uuid.New()
 		if err := g.Add(Node{ID: ids[i], Vector: randomVector(rng, dim)}); err != nil {
 			t.Fatalf("Add[%d]: %v", i, err)
@@ -131,7 +131,7 @@ func TestExportImportMultiple(t *testing.T) {
 
 	// Verify search results match.
 	queryRng := rand.New(rand.NewSource(9999))
-	for q := 0; q < 5; q++ {
+	for q := range 5 {
 		query := randomVector(queryRng, dim)
 		origResults, err := g.Search(query, 10)
 		if err != nil {
@@ -168,7 +168,7 @@ func TestExportImportWithDeletes(t *testing.T) {
 
 	// Delete first 10.
 	deleted := make(map[uuid.UUID]bool)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		g.Delete(ids[i])
 		deleted[ids[i]] = true
 	}
@@ -247,15 +247,15 @@ func TestImportTruncated(t *testing.T) {
 
 func TestExportImportPreservesSearchResults(t *testing.T) {
 	const (
-		dim       = 128
-		count     = 500
+		dim        = 128
+		count      = 500
 		numQueries = 10
-		k         = 10
+		k          = 10
 	)
 	rng := rand.New(rand.NewSource(54321))
 	g := NewGraph(dim, WithM(16), WithEfConstruction(200), WithEfSearch(100), WithSeed(42))
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if err := g.Add(Node{ID: uuid.New(), Vector: randomVector(rng, dim)}); err != nil {
 			t.Fatalf("Add[%d]: %v", i, err)
 		}
@@ -265,7 +265,7 @@ func TestExportImportPreservesSearchResults(t *testing.T) {
 	queryRng := rand.New(rand.NewSource(11111))
 	queries := make([][]float32, numQueries)
 	origResults := make([][]SearchResult, numQueries)
-	for q := 0; q < numQueries; q++ {
+	for q := range numQueries {
 		queries[q] = randomVector(queryRng, dim)
 		var err error
 		origResults[q], err = g.Search(queries[q], k)
@@ -284,7 +284,7 @@ func TestExportImportPreservesSearchResults(t *testing.T) {
 		t.Fatalf("Import: %v", err)
 	}
 
-	for q := 0; q < numQueries; q++ {
+	for q := range numQueries {
 		impResults, err := imported.Search(queries[q], k)
 		if err != nil {
 			t.Fatalf("imported Search[%d]: %v", q, err)
@@ -310,7 +310,7 @@ func TestImportedGraphIsFullyFunctional(t *testing.T) {
 	g := NewGraph(dim, WithSeed(42))
 
 	// Add initial nodes.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if err := g.Add(Node{ID: uuid.New(), Vector: randomVector(rng, dim)}); err != nil {
 			t.Fatalf("Add[%d]: %v", i, err)
 		}

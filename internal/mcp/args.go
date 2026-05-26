@@ -22,7 +22,7 @@ const includeSupersededDesc = "Include rows that were superseded by paraphrase o
 
 // argBool extracts a boolean tool argument by key, returning defaultVal
 // when the key is absent or not a bool.
-func argBool(args map[string]interface{}, key string, defaultVal bool) bool {
+func argBool(args map[string]any, key string, defaultVal bool) bool {
 	if v, ok := args[key].(bool); ok {
 		return v
 	}
@@ -44,7 +44,7 @@ func argBool(args map[string]interface{}, key string, defaultVal bool) bool {
 //
 // Use minVal=0 (and check separately) for "must be > 0" semantics — callers
 // that need a strict positive can pass minVal=1 directly.
-func parseIntArg(args map[string]interface{}, key string, defaultVal, minVal, maxVal int) int {
+func parseIntArg(args map[string]any, key string, defaultVal, minVal, maxVal int) int {
 	raw, ok := args[key].(float64)
 	if !ok {
 		return defaultVal

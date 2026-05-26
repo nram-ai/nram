@@ -199,7 +199,7 @@ func handleResetSetting(w http.ResponseWriter, r *http.Request, cfg SettingsAdmi
 			WriteError(w, mapSettingsError(err))
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "reset": 1})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "reset": 1})
 		return
 	}
 
@@ -208,7 +208,7 @@ func handleResetSetting(w http.ResponseWriter, r *http.Request, cfg SettingsAdmi
 		WriteError(w, mapSettingsError(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "reset": count})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "reset": count})
 }
 
 // handleListSettings handles GET /settings — returns settings optionally filtered by scope.
@@ -271,7 +271,7 @@ func handleSettingsSchema(w http.ResponseWriter, r *http.Request, cfg SettingsAd
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"data": schemas})
+	writeJSON(w, http.StatusOK, map[string]any{"data": schemas})
 }
 
 // handleUpdateSetting handles PUT /settings — updates a setting by key.

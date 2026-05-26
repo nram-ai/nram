@@ -114,7 +114,7 @@ func (r *OAuthRepo) ListClientsByUser(ctx context.Context, userID uuid.UUID) ([]
 			ORDER BY created_at DESC`
 	}
 
-	args := []interface{}{userID.String()}
+	args := []any{userID.String()}
 	if r.db.Backend() != BackendPostgres {
 		// SQLite uses positional ? — need two params for the two ?
 		args = append(args, userID.String())

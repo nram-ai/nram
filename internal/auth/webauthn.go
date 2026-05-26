@@ -465,7 +465,7 @@ func (h *WebAuthnHandler) LoginBeginHandler() http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"publicKey":   assertion.Response,
 			"session_key": sessionKey,
 		})
@@ -550,9 +550,9 @@ func (h *WebAuthnHandler) LoginFinishHandler() http.HandlerFunc {
 		_ = h.userRepo.UpdateLastLogin(r.Context(), user.ID)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"token": token,
-			"user": map[string]interface{}{
+			"user": map[string]any{
 				"id":           user.ID.String(),
 				"email":        user.Email,
 				"display_name": user.DisplayName,

@@ -32,7 +32,7 @@ func findNodesByLevelLocked(t *testing.T, g *Graph) (high, low *graphNode) {
 func populateGraph(t *testing.T, g *Graph, n int, seed int64) {
 	t.Helper()
 	rng := rand.New(rand.NewSource(seed))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		vec := make([]float32, g.Dimension())
 		for d := range vec {
 			vec[d] = float32(rng.NormFloat64())

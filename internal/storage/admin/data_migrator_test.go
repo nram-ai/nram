@@ -539,7 +539,7 @@ func cleanPostgres(t *testing.T, db *sql.DB) {
 // compares them field-by-field against expected values. Each expected row is a
 // map of column-name to expected value. Values are compared as strings after
 // normalization (NULL -> "<NULL>", bool -> "true"/"false", etc.).
-func verifyRows(t *testing.T, pgDB *sql.DB, table string, expectedRows []map[string]interface{}) {
+func verifyRows(t *testing.T, pgDB *sql.DB, table string, expectedRows []map[string]any) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -556,8 +556,8 @@ func verifyRows(t *testing.T, pgDB *sql.DB, table string, expectedRows []map[str
 
 	var actualRows []map[string]string
 	for rows.Next() {
-		vals := make([]interface{}, len(cols))
-		ptrs := make([]interface{}, len(cols))
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
 		for i := range vals {
 			ptrs[i] = &vals[i]
 		}
@@ -599,7 +599,7 @@ func verifyRows(t *testing.T, pgDB *sql.DB, table string, expectedRows []map[str
 }
 
 // pgValToString normalizes a Postgres scan result to a comparable string.
-func pgValToString(v interface{}) string {
+func pgValToString(v any) string {
 	if v == nil {
 		return "<NULL>"
 	}
@@ -627,7 +627,7 @@ func pgValToString(v interface{}) string {
 }
 
 // expectedValToString normalizes an expected test value to a comparable string.
-func expectedValToString(v interface{}) string {
+func expectedValToString(v any) string {
 	if v == nil {
 		return "<NULL>"
 	}
@@ -694,7 +694,7 @@ func normalizeTimestamp(s string) string {
 }
 
 func jsonEquivalent(a, b string) bool {
-	var va, vb interface{}
+	var va, vb any
 	if json.Unmarshal([]byte(a), &va) != nil {
 		return false
 	}
@@ -791,7 +791,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	t.Run("namespaces", func(t *testing.T) {
 		// Skip root namespace (inserted by migration with dynamic timestamps).
 		// Verify 5 seeded rows ordered by id.
-		verifyRows(t, pgConn, "namespaces WHERE id != '00000000-0000-0000-0000-000000000000'", []map[string]interface{}{
+		verifyRows(t, pgConn, "namespaces WHERE id != '00000000-0000-0000-0000-000000000000'", []map[string]any{
 			{
 				"id": "aaaaaaaa-0000-0000-0000-000000000001", "name": "TestOrg", "slug": "testorg",
 				"kind": "organization", "parent_id": "00000000-0000-0000-0000-000000000000",
@@ -835,7 +835,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("organizations", func(t *testing.T) {
-		verifyRows(t, pgConn, "organizations", []map[string]interface{}{
+		verifyRows(t, pgConn, "organizations", []map[string]any{
 			{
 				"id": "bbbbbbbb-0000-0000-0000-000000000001", "namespace_id": "aaaaaaaa-0000-0000-0000-000000000001",
 				"name": "TestOrg", "slug": "testorg", "settings": `{}`,
@@ -850,22 +850,22 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("users", func(t *testing.T) {
-		verifyRows(t, pgConn, "users", []map[string]interface{}{
+		verifyRows(t, pgConn, "users", []map[string]any{
 			{
 				"id": "cccccccc-0000-0000-0000-000000000001", "email": "test@example.com",
 				"display_name": "Test User", "password_hash": "$2a$10$hash",
-				"org_id": "bbbbbbbb-0000-0000-0000-000000000001",
+				"org_id":       "bbbbbbbb-0000-0000-0000-000000000001",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"role": "administrator", "settings": `{"theme":"dark"}`,
+				"role":         "administrator", "settings": `{"theme":"dark"}`,
 				"last_login": "2025-06-15T09:00:00Z", "disabled_at": "2025-07-01T00:00:00Z",
 				"created_at": "2025-01-02T00:00:00Z", "updated_at": "2025-01-02T00:00:00Z",
 			},
 			{
 				"id": "cccccccc-0000-0000-0000-000000000002", "email": "unicode@example.com",
 				"display_name": "Ünïcödé Üser", "password_hash": nil,
-				"org_id": "bbbbbbbb-0000-0000-0000-000000000001",
+				"org_id":       "bbbbbbbb-0000-0000-0000-000000000001",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"role": "member", "settings": `{}`,
+				"role":         "member", "settings": `{}`,
 				"last_login": nil, "disabled_at": nil,
 				"created_at": "2025-01-02T00:01:00Z", "updated_at": "2025-01-02T00:01:00Z",
 			},
@@ -873,30 +873,30 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("api_keys", func(t *testing.T) {
-		verifyRows(t, pgConn, "api_keys", []map[string]interface{}{
+		verifyRows(t, pgConn, "api_keys", []map[string]any{
 			{
-				"id": "dddddddd-0000-0000-0000-000000000001",
-				"user_id": "cccccccc-0000-0000-0000-000000000001",
+				"id":         "dddddddd-0000-0000-0000-000000000001",
+				"user_id":    "cccccccc-0000-0000-0000-000000000001",
 				"key_prefix": "nram_k_", "key_hash": "hashvalue123",
 				"name": "empty-scopes-key", "scopes": "{}",
 				"last_used": nil, "expires_at": nil,
 				"created_at": "2025-01-03T00:00:00Z",
 			},
 			{
-				"id": "dddddddd-0000-0000-0000-000000000002",
-				"user_id": "cccccccc-0000-0000-0000-000000000001",
+				"id":         "dddddddd-0000-0000-0000-000000000002",
+				"user_id":    "cccccccc-0000-0000-0000-000000000001",
 				"key_prefix": "nram_k_", "key_hash": "hashvalue456",
-				"name": "scoped-key",
-				"scopes": `{"eeeeeeee-0000-0000-0000-000000000001"}`,
+				"name":      "scoped-key",
+				"scopes":    `{"eeeeeeee-0000-0000-0000-000000000001"}`,
 				"last_used": "2025-05-10T12:00:00Z", "expires_at": "2026-05-10T12:00:00Z",
 				"created_at": "2025-01-03T00:01:00Z",
 			},
 			{
-				"id": "dddddddd-0000-0000-0000-000000000003",
-				"user_id": "cccccccc-0000-0000-0000-000000000002",
+				"id":         "dddddddd-0000-0000-0000-000000000003",
+				"user_id":    "cccccccc-0000-0000-0000-000000000002",
 				"key_prefix": "nram_k_", "key_hash": "hashvalue789",
-				"name": "multi-scope-key",
-				"scopes": `{"eeeeeeee-0000-0000-0000-000000000001","eeeeeeee-0000-0000-0000-000000000002"}`,
+				"name":      "multi-scope-key",
+				"scopes":    `{"eeeeeeee-0000-0000-0000-000000000001","eeeeeeee-0000-0000-0000-000000000002"}`,
 				"last_used": nil, "expires_at": nil,
 				"created_at": "2025-01-03T00:02:00Z",
 			},
@@ -904,32 +904,32 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("projects", func(t *testing.T) {
-		verifyRows(t, pgConn, "projects", []map[string]interface{}{
+		verifyRows(t, pgConn, "projects", []map[string]any{
 			{
-				"id": "eeeeeeee-0000-0000-0000-000000000001",
-				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000003",
+				"id":                 "eeeeeeee-0000-0000-0000-000000000001",
+				"namespace_id":       "aaaaaaaa-0000-0000-0000-000000000003",
 				"owner_namespace_id": "aaaaaaaa-0000-0000-0000-000000000001",
-				"name": "TestProject", "slug": "testproject",
-				"description": "A project for testing",
+				"name":               "TestProject", "slug": "testproject",
+				"description":  "A project for testing",
 				"default_tags": `{"tag with spaces","tag-with-dashes","日本語"}`,
-				"settings": "{}",
-				"created_at": "2025-01-04T00:00:00Z", "updated_at": "2025-01-04T00:00:00Z",
+				"settings":     "{}",
+				"created_at":   "2025-01-04T00:00:00Z", "updated_at": "2025-01-04T00:00:00Z",
 			},
 			{
-				"id": "eeeeeeee-0000-0000-0000-000000000002",
-				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000005",
+				"id":                 "eeeeeeee-0000-0000-0000-000000000002",
+				"namespace_id":       "aaaaaaaa-0000-0000-0000-000000000005",
 				"owner_namespace_id": "aaaaaaaa-0000-0000-0000-000000000001",
-				"name": "EmptyProject", "slug": "emptyproject",
-				"description": "",
+				"name":               "EmptyProject", "slug": "emptyproject",
+				"description":  "",
 				"default_tags": "{}",
-				"settings": "{}",
-				"created_at": "2025-01-04T00:01:00Z", "updated_at": "2025-01-04T00:01:00Z",
+				"settings":     "{}",
+				"created_at":   "2025-01-04T00:01:00Z", "updated_at": "2025-01-04T00:01:00Z",
 			},
 		})
 	})
 
 	t.Run("settings", func(t *testing.T) {
-		verifyRows(t, pgConn, "settings", []map[string]interface{}{
+		verifyRows(t, pgConn, "settings", []map[string]any{
 			{"key": "array_val", "value": "[1,2,3]", "scope": "global", "updated_by": nil, "updated_at": "2025-01-05T00:03:00Z"},
 			{"key": "bool_val", "value": "true", "scope": "global", "updated_by": nil, "updated_at": "2025-01-05T00:04:00Z"},
 			{"key": "null_val", "value": "null", "scope": "global", "updated_by": nil, "updated_at": "2025-01-05T00:05:00Z"},
@@ -942,21 +942,21 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 
 	t.Run("system_meta", func(t *testing.T) {
 		// Filter to only seeded rows (exclude storage_backend inserted by migrator).
-		verifyRows(t, pgConn, "system_meta WHERE key NOT IN ('storage_backend')", []map[string]interface{}{
+		verifyRows(t, pgConn, "system_meta WHERE key NOT IN ('storage_backend')", []map[string]any{
 			{"key": "another_meta", "value": "value2", "created_at": "2025-01-06T00:01:00Z", "updated_at": "2025-01-06T00:01:00Z"},
 			{"key": "test_meta", "value": "value1", "created_at": "2025-01-06T00:00:00Z", "updated_at": "2025-01-06T00:00:00Z"},
 		})
 	})
 
 	t.Run("memories", func(t *testing.T) {
-		verifyRows(t, pgConn, "memories", []map[string]interface{}{
+		verifyRows(t, pgConn, "memories", []map[string]any{
 			{
 				"id":            "ffffffff-0000-0000-0000-000000000001",
 				"namespace_id":  "aaaaaaaa-0000-0000-0000-000000000002",
 				"content":       "A comprehensive test memory with Unicode: 你好世界 and symbols: ñ é ü ö",
 				"embedding_dim": int(384), "source": "api",
-				"tags":          `{"tag1","tag2","alpha","beta","gamma"}`,
-				"confidence":    0.95, "importance": 0.8,
+				"tags":       `{"tag1","tag2","alpha","beta","gamma"}`,
+				"confidence": 0.95, "importance": 0.8,
 				"access_count":  int(5),
 				"last_accessed": "2025-03-15T10:30:00Z",
 				"expires_at":    "2026-12-31T23:59:59Z",
@@ -973,23 +973,23 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"namespace_id":  "aaaaaaaa-0000-0000-0000-000000000002",
 				"content":       "Minimal memory",
 				"embedding_dim": nil, "source": nil,
-				"tags":          "{}",
-				"confidence":    0.5, "importance": 0.3,
+				"tags":       "{}",
+				"confidence": 0.5, "importance": 0.3,
 				"access_count":  int(0),
 				"last_accessed": nil, "expires_at": nil, "superseded_by": nil,
-				"enriched":      false,
-				"metadata":      "{}",
-				"created_at":    "2025-02-01T08:00:00Z",
-				"updated_at":    "2025-02-01T08:00:00Z",
-				"deleted_at":    nil, "purge_after": nil,
+				"enriched":   false,
+				"metadata":   "{}",
+				"created_at": "2025-02-01T08:00:00Z",
+				"updated_at": "2025-02-01T08:00:00Z",
+				"deleted_at": nil, "purge_after": nil,
 			},
 			{
 				"id":            "ffffffff-0000-0000-0000-000000000003",
 				"namespace_id":  "aaaaaaaa-0000-0000-0000-000000000002",
 				"content":       "Line1\nLine2 with \"quotes\" and back\\slash and emoji 🎉",
 				"embedding_dim": nil, "source": nil,
-				"tags":          `{"special"}`,
-				"confidence":    0.7, "importance": 0.6,
+				"tags":       `{"special"}`,
+				"confidence": 0.7, "importance": 0.6,
 				"access_count":  int(0),
 				"last_accessed": nil, "expires_at": nil,
 				"superseded_by": "ffffffff-0000-0000-0000-000000000001",
@@ -1003,11 +1003,11 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("entities", func(t *testing.T) {
-		verifyRows(t, pgConn, "entities", []map[string]interface{}{
+		verifyRows(t, pgConn, "entities", []map[string]any{
 			{
-				"id": "11111111-0000-0000-0000-000000000001",
+				"id":           "11111111-0000-0000-0000-000000000001",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"name": "Alice", "canonical": "alice", "entity_type": "person",
+				"name":         "Alice", "canonical": "alice", "entity_type": "person",
 				"embedding_dim": nil,
 				"properties":    `{"role":"antagonist","age":42}`,
 				"mention_count": int(1),
@@ -1015,9 +1015,9 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at":    "2025-01-15T10:30:00Z", "updated_at": "2025-01-15T10:30:00Z",
 			},
 			{
-				"id": "11111111-0000-0000-0000-000000000002",
+				"id":           "11111111-0000-0000-0000-000000000002",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"name": "Böb Müller", "canonical": "bob-muller", "entity_type": "person",
+				"name":         "Böb Müller", "canonical": "bob-muller", "entity_type": "person",
 				"embedding_dim": nil,
 				"properties":    "{}",
 				"mention_count": int(1),
@@ -1025,9 +1025,9 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at":    "2025-01-16T10:30:00Z", "updated_at": "2025-01-16T10:30:00Z",
 			},
 			{
-				"id": "11111111-0000-0000-0000-000000000003",
+				"id":           "11111111-0000-0000-0000-000000000003",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"name": "Acme Corp", "canonical": "acme-corp", "entity_type": "organization",
+				"name":         "Acme Corp", "canonical": "acme-corp", "entity_type": "organization",
 				"embedding_dim": int(768),
 				"properties":    "{}",
 				"mention_count": int(1),
@@ -1038,39 +1038,39 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("entity_aliases", func(t *testing.T) {
-		verifyRows(t, pgConn, "entity_aliases", []map[string]interface{}{
+		verifyRows(t, pgConn, "entity_aliases", []map[string]any{
 			{
-				"id": "22222222-0000-0000-0000-000000000001",
+				"id":           "22222222-0000-0000-0000-000000000001",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"entity_id": "11111111-0000-0000-0000-000000000001",
-				"alias": "Ali", "alias_type": "nickname",
+				"entity_id":    "11111111-0000-0000-0000-000000000001",
+				"alias":        "Ali", "alias_type": "nickname",
 				"created_at": "2025-01-15T10:30:00Z",
 			},
 			{
-				"id": "22222222-0000-0000-0000-000000000002",
+				"id":           "22222222-0000-0000-0000-000000000002",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"entity_id": "11111111-0000-0000-0000-000000000001",
-				"alias": "Алиса", "alias_type": "translation",
+				"entity_id":    "11111111-0000-0000-0000-000000000001",
+				"alias":        "Алиса", "alias_type": "translation",
 				"created_at": "2025-01-16T10:30:00Z",
 			},
 			{
-				"id": "22222222-0000-0000-0000-000000000003",
+				"id":           "22222222-0000-0000-0000-000000000003",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"entity_id": "11111111-0000-0000-0000-000000000002",
-				"alias": "Bob", "alias_type": "shortname",
+				"entity_id":    "11111111-0000-0000-0000-000000000002",
+				"alias":        "Bob", "alias_type": "shortname",
 				"created_at": "2025-01-16T10:30:00Z",
 			},
 		})
 	})
 
 	t.Run("relationships", func(t *testing.T) {
-		verifyRows(t, pgConn, "relationships", []map[string]interface{}{
+		verifyRows(t, pgConn, "relationships", []map[string]any{
 			{
-				"id": "33333333-0000-0000-0000-000000000001",
+				"id":           "33333333-0000-0000-0000-000000000001",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"source_id": "11111111-0000-0000-0000-000000000001",
-				"target_id": "11111111-0000-0000-0000-000000000002",
-				"relation": "knows", "weight": 0.85,
+				"source_id":    "11111111-0000-0000-0000-000000000001",
+				"target_id":    "11111111-0000-0000-0000-000000000002",
+				"relation":     "knows", "weight": 0.85,
 				"properties":    `{"since":"2020"}`,
 				"valid_from":    "2025-01-01T00:00:00Z",
 				"valid_until":   "2026-01-01T00:00:00Z",
@@ -1078,11 +1078,11 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at":    "2025-01-15T10:30:00Z",
 			},
 			{
-				"id": "33333333-0000-0000-0000-000000000002",
+				"id":           "33333333-0000-0000-0000-000000000002",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"source_id": "11111111-0000-0000-0000-000000000002",
-				"target_id": "11111111-0000-0000-0000-000000000003",
-				"relation": "works_at", "weight": 1.0,
+				"source_id":    "11111111-0000-0000-0000-000000000002",
+				"target_id":    "11111111-0000-0000-0000-000000000003",
+				"relation":     "works_at", "weight": 1.0,
 				"properties":    "{}",
 				"valid_from":    "2025-01-16T00:00:00Z",
 				"valid_until":   nil,
@@ -1093,33 +1093,33 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("memory_lineage", func(t *testing.T) {
-		verifyRows(t, pgConn, "memory_lineage", []map[string]interface{}{
+		verifyRows(t, pgConn, "memory_lineage", []map[string]any{
 			{
-				"id": "44444444-0000-0000-0000-000000000001",
+				"id":           "44444444-0000-0000-0000-000000000001",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"memory_id": "ffffffff-0000-0000-0000-000000000001",
-				"parent_id": nil, "relation": "origin",
+				"memory_id":    "ffffffff-0000-0000-0000-000000000001",
+				"parent_id":    nil, "relation": "origin",
 				"context":    "{}",
 				"created_at": "2025-01-15T10:30:00Z",
 			},
 			{
-				"id": "44444444-0000-0000-0000-000000000002",
+				"id":           "44444444-0000-0000-0000-000000000002",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"memory_id": "ffffffff-0000-0000-0000-000000000002",
-				"parent_id": "ffffffff-0000-0000-0000-000000000001",
-				"relation":  "derived",
-				"context":   `{"reason":"summarized"}`,
-				"created_at": "2025-02-01T08:00:00Z",
+				"memory_id":    "ffffffff-0000-0000-0000-000000000002",
+				"parent_id":    "ffffffff-0000-0000-0000-000000000001",
+				"relation":     "derived",
+				"context":      `{"reason":"summarized"}`,
+				"created_at":   "2025-02-01T08:00:00Z",
 			},
 		})
 	})
 
 	t.Run("ingestion_log", func(t *testing.T) {
-		verifyRows(t, pgConn, "ingestion_log", []map[string]interface{}{
+		verifyRows(t, pgConn, "ingestion_log", []map[string]any{
 			{
-				"id": "55555555-0000-0000-0000-000000000001",
+				"id":           "55555555-0000-0000-0000-000000000001",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"source": "api", "content_hash": "sha256:abc123",
+				"source":       "api", "content_hash": "sha256:abc123",
 				"raw_content": "raw content here",
 				"memory_ids":  `{"ffffffff-0000-0000-0000-000000000001","ffffffff-0000-0000-0000-000000000002"}`,
 				"status":      "completed",
@@ -1128,9 +1128,9 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at":  "2025-01-15T10:30:00Z",
 			},
 			{
-				"id": "55555555-0000-0000-0000-000000000002",
+				"id":           "55555555-0000-0000-0000-000000000002",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"source": "file", "content_hash": nil,
+				"source":       "file", "content_hash": nil,
 				"raw_content": "failed raw content",
 				"memory_ids":  "{}",
 				"status":      "error",
@@ -1139,9 +1139,9 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at":  "2025-01-16T10:30:00Z",
 			},
 			{
-				"id": "55555555-0000-0000-0000-000000000003",
+				"id":           "55555555-0000-0000-0000-000000000003",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"source": "webhook", "content_hash": nil,
+				"source":       "webhook", "content_hash": nil,
 				"raw_content": "webhook payload",
 				"memory_ids":  `{"ffffffff-0000-0000-0000-000000000003"}`,
 				"status":      "completed",
@@ -1153,53 +1153,53 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("enrichment_queue", func(t *testing.T) {
-		verifyRows(t, pgConn, "enrichment_queue", []map[string]interface{}{
+		verifyRows(t, pgConn, "enrichment_queue", []map[string]any{
 			{
-				"id": "66666666-0000-0000-0000-000000000001",
-				"memory_id": "ffffffff-0000-0000-0000-000000000001",
+				"id":           "66666666-0000-0000-0000-000000000001",
+				"memory_id":    "ffffffff-0000-0000-0000-000000000001",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"status": "pending", "priority": int(0),
+				"status":       "pending", "priority": int(0),
 				"claimed_at": nil, "claimed_by": nil,
 				"attempts": int(0), "max_attempts": int(3),
-				"last_error": nil,
+				"last_error":      nil,
 				"steps_completed": "[]",
 				"completed_at":    nil,
-				"created_at": "2025-01-15T10:30:00Z", "updated_at": "2025-01-15T10:30:00Z",
+				"created_at":      "2025-01-15T10:30:00Z", "updated_at": "2025-01-15T10:30:00Z",
 			},
 			{
 				// Seeded as 'processing' with worker-1 owning it; finalizeStuckJobs
 				// resets it to pending with cleared claim fields and bumps updated_at
 				// so the Postgres deployment doesn't wait on a worker that's gone.
-				"id": "66666666-0000-0000-0000-000000000002",
-				"memory_id": "ffffffff-0000-0000-0000-000000000002",
+				"id":           "66666666-0000-0000-0000-000000000002",
+				"memory_id":    "ffffffff-0000-0000-0000-000000000002",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"status": "pending", "priority": int(0),
+				"status":       "pending", "priority": int(0),
 				"claimed_at": nil, "claimed_by": nil,
 				"attempts": int(0), "max_attempts": int(3),
-				"last_error": nil,
+				"last_error":      nil,
 				"steps_completed": `["embedding","entity_extraction"]`,
 				"completed_at":    nil,
-				"created_at": "2025-02-01T08:00:00Z", "updated_at": "<ANY>",
+				"created_at":      "2025-02-01T08:00:00Z", "updated_at": "<ANY>",
 			},
 			{
-				"id": "66666666-0000-0000-0000-000000000003",
-				"memory_id": "ffffffff-0000-0000-0000-000000000003",
+				"id":           "66666666-0000-0000-0000-000000000003",
+				"memory_id":    "ffffffff-0000-0000-0000-000000000003",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"status": "completed", "priority": int(0),
+				"status":       "completed", "priority": int(0),
 				"claimed_at": nil, "claimed_by": nil,
 				"attempts": int(2), "max_attempts": int(3),
 				"last_error":      `"timeout on first attempt"`,
 				"steps_completed": `["embedding","entity_extraction","summarization"]`,
 				"completed_at":    "2025-03-01T10:00:00Z",
-				"created_at": "2025-03-01T09:00:00Z", "updated_at": "2025-03-01T10:00:00Z",
+				"created_at":      "2025-03-01T09:00:00Z", "updated_at": "2025-03-01T10:00:00Z",
 			},
 		})
 	})
 
 	t.Run("webhooks", func(t *testing.T) {
-		verifyRows(t, pgConn, "webhooks", []map[string]interface{}{
+		verifyRows(t, pgConn, "webhooks", []map[string]any{
 			{
-				"id": "77777777-0000-0000-0000-000000000001",
+				"id":  "77777777-0000-0000-0000-000000000001",
 				"url": "https://example.com/hook", "secret": "whsec_supersecret",
 				"events": `{"memory.created","memory.deleted"}`,
 				"scope":  "global", "active": true,
@@ -1209,7 +1209,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at":    "2025-01-15T10:30:00Z", "updated_at": "2025-06-01T12:00:00Z",
 			},
 			{
-				"id": "77777777-0000-0000-0000-000000000002",
+				"id":  "77777777-0000-0000-0000-000000000002",
 				"url": "https://other.example.com/hook", "secret": nil,
 				"events": `{"memory.updated"}`,
 				"scope":  "ns:aaaaaaaa-0000-0000-0000-000000000002", "active": false,
@@ -1222,14 +1222,14 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("token_usage", func(t *testing.T) {
-		verifyRows(t, pgConn, "token_usage", []map[string]interface{}{
+		verifyRows(t, pgConn, "token_usage", []map[string]any{
 			{
-				"id": "aabbccdd-0000-0000-0000-000000000001",
-				"org_id": "bbbbbbbb-0000-0000-0000-000000000001",
-				"user_id": "cccccccc-0000-0000-0000-000000000001",
-				"project_id": "eeeeeeee-0000-0000-0000-000000000001",
+				"id":           "aabbccdd-0000-0000-0000-000000000001",
+				"org_id":       "bbbbbbbb-0000-0000-0000-000000000001",
+				"user_id":      "cccccccc-0000-0000-0000-000000000001",
+				"project_id":   "eeeeeeee-0000-0000-0000-000000000001",
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"operation": "embed", "provider": "openai", "model": "text-embedding-3-small",
+				"operation":    "embed", "provider": "openai", "model": "text-embedding-3-small",
 				"tokens_input": int(150), "tokens_output": int(0),
 				"memory_id":  "ffffffff-0000-0000-0000-000000000001",
 				"api_key_id": "dddddddd-0000-0000-0000-000000000001",
@@ -1237,20 +1237,20 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at": "2025-03-15T10:30:00Z",
 			},
 			{
-				"id": "aabbccdd-0000-0000-0000-000000000002",
+				"id":     "aabbccdd-0000-0000-0000-000000000002",
 				"org_id": nil, "user_id": nil, "project_id": nil,
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"operation": "recall", "provider": "anthropic", "model": "claude-3-opus",
+				"operation":    "recall", "provider": "anthropic", "model": "claude-3-opus",
 				"tokens_input": int(200), "tokens_output": int(500),
 				"memory_id": nil, "api_key_id": nil, "latency_ms": nil,
 				"created_at": "2025-03-16T10:30:00Z",
 			},
 			{
-				"id": "aabbccdd-0000-0000-0000-000000000003",
-				"org_id": "bbbbbbbb-0000-0000-0000-000000000001",
+				"id":      "aabbccdd-0000-0000-0000-000000000003",
+				"org_id":  "bbbbbbbb-0000-0000-0000-000000000001",
 				"user_id": nil, "project_id": nil,
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
-				"operation": "enrich", "provider": "openai", "model": "gpt-4o",
+				"operation":    "enrich", "provider": "openai", "model": "gpt-4o",
 				"tokens_input": int(300), "tokens_output": int(600),
 				"memory_id": nil, "api_key_id": nil,
 				"latency_ms": int(1250),
@@ -1260,61 +1260,61 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("oauth_clients", func(t *testing.T) {
-		verifyRows(t, pgConn, "oauth_clients", []map[string]interface{}{
+		verifyRows(t, pgConn, "oauth_clients", []map[string]any{
 			{
-				"id": "99999999-0000-0000-0000-000000000001",
+				"id":        "99999999-0000-0000-0000-000000000001",
 				"client_id": "test-client-id", "client_secret": "secret123",
-				"name": "Test App",
-				"redirect_uris":  `{"https://app.example.com/callback","https://app.example.com/callback2"}`,
-				"grant_types":    `{"authorization_code","refresh_token"}`,
-				"org_id":         "bbbbbbbb-0000-0000-0000-000000000001",
+				"name":            "Test App",
+				"redirect_uris":   `{"https://app.example.com/callback","https://app.example.com/callback2"}`,
+				"grant_types":     `{"authorization_code","refresh_token"}`,
+				"org_id":          "bbbbbbbb-0000-0000-0000-000000000001",
 				"auto_registered": false,
-				"created_at":     "2025-01-15T10:30:00Z",
+				"created_at":      "2025-01-15T10:30:00Z",
 			},
 			{
-				"id": "99999999-0000-0000-0000-000000000002",
+				"id":        "99999999-0000-0000-0000-000000000002",
 				"client_id": "auto-client-id", "client_secret": nil,
-				"name": "Auto Client",
-				"redirect_uris":  `{"https://dynamic.example.com/callback"}`,
-				"grant_types":    `{"authorization_code"}`,
-				"org_id":         nil,
+				"name":            "Auto Client",
+				"redirect_uris":   `{"https://dynamic.example.com/callback"}`,
+				"grant_types":     `{"authorization_code"}`,
+				"org_id":          nil,
 				"auto_registered": true,
-				"created_at":     "2025-02-01T10:30:00Z",
+				"created_at":      "2025-02-01T10:30:00Z",
 			},
 		})
 	})
 
 	t.Run("oauth_authorization_codes", func(t *testing.T) {
-		verifyRows(t, pgConn, "oauth_authorization_codes", []map[string]interface{}{
+		verifyRows(t, pgConn, "oauth_authorization_codes", []map[string]any{
 			{
-				"code":      "testcode123",
-				"client_id": "test-client-id",
-				"user_id":   "cccccccc-0000-0000-0000-000000000001",
-				"redirect_uri":         "https://app.example.com/callback",
-				"scope":                "read write",
-				"code_challenge":       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+				"code":                  "testcode123",
+				"client_id":             "test-client-id",
+				"user_id":               "cccccccc-0000-0000-0000-000000000001",
+				"redirect_uri":          "https://app.example.com/callback",
+				"scope":                 "read write",
+				"code_challenge":        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
 				"code_challenge_method": "S256",
-				"expires_at":           "2025-06-01T12:10:00Z",
-				"created_at":           "2025-06-01T12:00:00Z",
-				"resource":             "https://api.example.com/",
+				"expires_at":            "2025-06-01T12:10:00Z",
+				"created_at":            "2025-06-01T12:00:00Z",
+				"resource":              "https://api.example.com/",
 			},
 			{
-				"code":      "testcode456",
-				"client_id": "auto-client-id",
-				"user_id":   "cccccccc-0000-0000-0000-000000000002",
-				"redirect_uri":         "https://dynamic.example.com/callback",
-				"scope":                "read",
-				"code_challenge":       nil,
+				"code":                  "testcode456",
+				"client_id":             "auto-client-id",
+				"user_id":               "cccccccc-0000-0000-0000-000000000002",
+				"redirect_uri":          "https://dynamic.example.com/callback",
+				"scope":                 "read",
+				"code_challenge":        nil,
 				"code_challenge_method": "S256",
-				"expires_at":           "2025-06-02T12:10:00Z",
-				"created_at":           "2025-06-02T12:00:00Z",
-				"resource":             nil,
+				"expires_at":            "2025-06-02T12:10:00Z",
+				"created_at":            "2025-06-02T12:00:00Z",
+				"resource":              nil,
 			},
 		})
 	})
 
 	t.Run("oauth_refresh_tokens", func(t *testing.T) {
-		verifyRows(t, pgConn, "oauth_refresh_tokens", []map[string]interface{}{
+		verifyRows(t, pgConn, "oauth_refresh_tokens", []map[string]any{
 			{
 				"token_hash": "refreshhash123",
 				"client_id":  "test-client-id",
@@ -1337,12 +1337,12 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	})
 
 	t.Run("oauth_idp_configs", func(t *testing.T) {
-		verifyRows(t, pgConn, "oauth_idp_configs", []map[string]interface{}{
+		verifyRows(t, pgConn, "oauth_idp_configs", []map[string]any{
 			{
-				"id": "aaaaaaaa-1111-0000-0000-000000000001",
-				"org_id": "bbbbbbbb-0000-0000-0000-000000000001",
+				"id":            "aaaaaaaa-1111-0000-0000-000000000001",
+				"org_id":        "bbbbbbbb-0000-0000-0000-000000000001",
 				"provider_type": "google",
-				"client_id": "google-client-id", "client_secret": "google-client-secret",
+				"client_id":     "google-client-id", "client_secret": "google-client-secret",
 				"issuer_url":      "https://accounts.google.com",
 				"allowed_domains": `{"example.com","test.com"}`,
 				"auto_provision":  true,
@@ -1350,10 +1350,10 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at":      "2025-01-15T10:30:00Z", "updated_at": "2025-01-15T10:30:00Z",
 			},
 			{
-				"id": "aaaaaaaa-1111-0000-0000-000000000002",
-				"org_id": "bbbbbbbb-0000-0000-0000-000000000002",
+				"id":            "aaaaaaaa-1111-0000-0000-000000000002",
+				"org_id":        "bbbbbbbb-0000-0000-0000-000000000002",
 				"provider_type": "github",
-				"client_id": "github-client-id", "client_secret": "github-client-secret",
+				"client_id":     "github-client-id", "client_secret": "github-client-secret",
 				"issuer_url":      nil,
 				"allowed_domains": `{"github.example.com"}`,
 				"auto_provision":  false,
@@ -1439,10 +1439,10 @@ type testSQLiteDB struct {
 	db *sql.DB
 }
 
-func (d *testSQLiteDB) Backend() string { return "sqlite" }
+func (d *testSQLiteDB) Backend() string                { return "sqlite" }
 func (d *testSQLiteDB) Ping(ctx context.Context) error { return d.db.PingContext(ctx) }
-func (d *testSQLiteDB) Close() error                  { return d.db.Close() }
-func (d *testSQLiteDB) DB() *sql.DB                   { return d.db }
+func (d *testSQLiteDB) Close() error                   { return d.db.Close() }
+func (d *testSQLiteDB) DB() *sql.DB                    { return d.db }
 func (d *testSQLiteDB) Exec(ctx context.Context, q string, args ...any) (sql.Result, error) {
 	return d.db.ExecContext(ctx, q, args...)
 }
@@ -1465,7 +1465,7 @@ func (d *testSQLiteDB) WriteDB() *sql.DB { return d.db }
 
 type testPostgresDB struct{}
 
-func (d *testPostgresDB) Backend() string { return "postgres" }
+func (d *testPostgresDB) Backend() string              { return "postgres" }
 func (d *testPostgresDB) Ping(_ context.Context) error { return nil }
 func (d *testPostgresDB) Close() error                 { return nil }
 func (d *testPostgresDB) DB() *sql.DB                  { return nil }

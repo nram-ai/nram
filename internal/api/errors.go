@@ -9,10 +9,10 @@ import (
 
 // APIError represents a structured error response returned by the API.
 type APIError struct {
-	Code    string      `json:"code"`
-	Message string      `json:"message"`
-	Status  int         `json:"-"`
-	Details interface{} `json:"details,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Status  int    `json:"-"`
+	Details any    `json:"details,omitempty"`
 }
 
 // Error implements the error interface.
@@ -26,9 +26,9 @@ type errorEnvelope struct {
 }
 
 type errorBody struct {
-	Code    string      `json:"code"`
-	Message string      `json:"message"`
-	Details interface{} `json:"details,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Details any    `json:"details,omitempty"`
 }
 
 // ErrBadRequest returns a 400 Bad Request error.

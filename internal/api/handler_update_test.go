@@ -37,7 +37,7 @@ func newUpdateTestRouter(handler http.HandlerFunc) *chi.Mux {
 	return r
 }
 
-func doUpdateRequest(router http.Handler, projectID, memoryID string, body interface{}, ac *auth.AuthContext) *httptest.ResponseRecorder {
+func doUpdateRequest(router http.Handler, projectID, memoryID string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(body)
 
@@ -83,7 +83,7 @@ func TestUpdateHandler_ContentSuccess(t *testing.T) {
 
 	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "updated content",
 	}
 
@@ -139,7 +139,7 @@ func TestUpdateHandler_TagsOnlySuccess(t *testing.T) {
 	}
 
 	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
-	body := map[string]interface{}{
+	body := map[string]any{
 		"tags": []string{"new", "tags"},
 	}
 
@@ -169,7 +169,7 @@ func TestUpdateHandler_MissingAllFields(t *testing.T) {
 	}
 
 	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
-	body := map[string]interface{}{}
+	body := map[string]any{}
 
 	w := doUpdateRequest(router, projectID.String(), memoryID.String(), body, nil)
 
@@ -191,7 +191,7 @@ func TestUpdateHandler_InvalidProjectID(t *testing.T) {
 	svc := &mockUpdateService{}
 
 	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "test",
 	}
 
@@ -215,7 +215,7 @@ func TestUpdateHandler_InvalidMemoryID(t *testing.T) {
 	svc := &mockUpdateService{}
 
 	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "test",
 	}
 
@@ -245,7 +245,7 @@ func TestUpdateHandler_ServiceError_NotFound(t *testing.T) {
 	}
 
 	router := newUpdateTestRouter(NewUpdateHandler(svc, nil))
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "test",
 	}
 
@@ -281,7 +281,7 @@ func TestUpdateHandler_EmitsMemoryUpdatedEvent(t *testing.T) {
 	router := newUpdateTestRouter(NewUpdateHandler(svc, bus))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "updated content",
 	}
 

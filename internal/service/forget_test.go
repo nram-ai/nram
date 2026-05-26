@@ -54,10 +54,7 @@ func (m *mockMemoryDeleter) ListByNamespace(_ context.Context, _ uuid.UUID, limi
 	if offset >= len(m.nsList) {
 		return nil, nil
 	}
-	end := offset + limit
-	if end > len(m.nsList) {
-		end = len(m.nsList)
-	}
+	end := min(offset+limit, len(m.nsList))
 	return m.nsList[offset:end], nil
 }
 

@@ -156,8 +156,8 @@ func TestMemoryBus_ScopeFiltering_Prefix(t *testing.T) {
 		newEvt("p1", MemoryCreated, "project:aaa"),
 		newEvt("p2", MemoryUpdated, "project:bbb"),
 		newEvt("p3", MemoryDeleted, "project:ccc"),
-		newEvt("x1", MemoryCreated, "entity:xxx"),  // must not arrive
-		newEvt("x2", EntityCreated, "other:zzz"),   // must not arrive
+		newEvt("x1", MemoryCreated, "entity:xxx"), // must not arrive
+		newEvt("x2", EntityCreated, "other:zzz"),  // must not arrive
 	}
 	for i := range events {
 		if err := bus.Publish(ctx, events[i]); err != nil {
@@ -360,11 +360,10 @@ func TestMemoryBus_ConcurrentPublish_AllReceived(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for g := 0; g < goroutines; g++ {
-		g := g
+	for g := range goroutines {
 		go func() {
 			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
+			for i := range perGoroutine {
 				id := fmt.Sprintf("g%d-e%d", g, i)
 				_ = bus.Publish(ctx, newEvt(id, MemoryCreated, "project:concurrent"))
 			}
@@ -399,7 +398,7 @@ func TestMemoryBus_FullChannelDropsEvents(t *testing.T) {
 	t.Cleanup(cancel)
 
 	// Fill the channel buffer exactly.
-	for i := 0; i < fallbackSubscriberBufferSize; i++ {
+	for i := range fallbackSubscriberBufferSize {
 		e := newEvt(fmt.Sprintf("fill-%d", i), MemoryCreated, "test")
 		if err := bus.Publish(ctx, e); err != nil {
 			t.Fatalf("Publish fill[%d]: %v", i, err)
@@ -407,7 +406,7 @@ func TestMemoryBus_FullChannelDropsEvents(t *testing.T) {
 	}
 
 	// Overflow events — must not block and must return nil.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		e := newEvt(fmt.Sprintf("overflow-%d", i), MemoryCreated, "test")
 		if err := bus.Publish(ctx, e); err != nil {
 			t.Fatalf("Publish overflow[%d] returned error: %v", i, err)
@@ -479,7 +478,7 @@ func TestReplayBuffer_Overflow(t *testing.T) {
 	const cap = 5
 	rb := NewReplayBuffer(cap)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rb.Add(newEvt(fmt.Sprintf("e%d", i), MemoryCreated, "test"))
 	}
 
@@ -565,7 +564,7 @@ func TestReplayBuffer_OrderPreservedAfterMultipleOverflows(t *testing.T) {
 	rb := NewReplayBuffer(cap)
 
 	// Write 3× the capacity so the ring wraps multiple times.
-	for i := 0; i < cap*3; i++ {
+	for i := range cap * 3 {
 		rb.Add(newEvt(fmt.Sprintf("e%d", i), MemoryCreated, "test"))
 	}
 
@@ -574,7 +573,7 @@ func TestReplayBuffer_OrderPreservedAfterMultipleOverflows(t *testing.T) {
 		t.Fatalf("expected %d events, got %d", cap, len(got))
 	}
 	// Events should be in insertion order (oldest retained first).
-	for i := 0; i < cap; i++ {
+	for i := range cap {
 		wantID := fmt.Sprintf("e%d", cap*3-cap+i)
 		if got[i].ID != wantID {
 			t.Errorf("got[%d].ID = %q, want %q", i, got[i].ID, wantID)
@@ -638,7 +637,7 @@ func TestEmit_DataSerialization(t *testing.T) {
 	t.Cleanup(cancel)
 
 	Emit(context.Background(), bus, MemoryCreated, "project:ds",
-		map[string]interface{}{
+		map[string]any{
 			"string_field": "hello",
 			"number_field": 42,
 			"bool_field":   true,
@@ -646,7 +645,7 @@ func TestEmit_DataSerialization(t *testing.T) {
 
 	got := recv(t, ch, 2*time.Second)
 
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(got.Data, &m); err != nil {
 		t.Fatalf("Data is not valid JSON: %v (raw: %s)", err, got.Data)
 	}
@@ -678,7 +677,6 @@ func TestEmit_AllEventTypes(t *testing.T) {
 	}
 
 	for _, typ := range allTypes {
-		typ := typ
 		t.Run(typ, func(t *testing.T) {
 			bus := NewMemoryBus(0, 0)
 			t.Cleanup(func() { _ = bus.Close() })
@@ -1238,8 +1236,7 @@ func TestMemoryBus_ConcurrentSubscribeCancel(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(workers)
 
-	for i := 0; i < workers; i++ {
-		i := i
+	for i := range workers {
 		go func() {
 			defer wg.Done()
 			ch, cancel, err := bus.Subscribe(ctx, "project:")
@@ -1247,7 +1244,7 @@ func TestMemoryBus_ConcurrentSubscribeCancel(t *testing.T) {
 				return // bus may already be closed if timing is extreme
 			}
 			// Publish a few events.
-			for j := 0; j < 5; j++ {
+			for j := range 5 {
 				_ = bus.Publish(ctx, newEvt(fmt.Sprintf("cc-%d-%d", i, j), MemoryCreated, "project:stress"))
 			}
 			// Drain briefly.

@@ -39,7 +39,7 @@ func newBatchStoreRouter(handler http.HandlerFunc) *chi.Mux {
 	return r
 }
 
-func doBatchStoreRequest(router http.Handler, projectID string, body interface{}, ac *auth.AuthContext) *httptest.ResponseRecorder {
+func doBatchStoreRequest(router http.Handler, projectID string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(body)
 
@@ -63,12 +63,12 @@ func TestBatchStoreHandler_Success(t *testing.T) {
 	userID := uuid.New()
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
-		"items": []map[string]interface{}{
+	body := map[string]any{
+		"items": []map[string]any{
 			{"content": "first memory", "tags": []string{"tag1"}, "source": "test"},
 			{"content": "second memory", "tags": []string{"tag2"}},
 		},
-		"options": map[string]interface{}{
+		"options": map[string]any{
 			"enrich": false,
 			"ttl":    "30d",
 		},
@@ -101,8 +101,8 @@ func TestBatchStoreHandler_EmptyItems(t *testing.T) {
 	router := newBatchStoreRouter(NewBatchStoreHandler(svc, nil))
 
 	projectID := uuid.New()
-	body := map[string]interface{}{
-		"items": []map[string]interface{}{},
+	body := map[string]any{
+		"items": []map[string]any{},
 	}
 
 	w := doBatchStoreRequest(router, projectID.String(), body, nil)
@@ -124,8 +124,8 @@ func TestBatchStoreHandler_InvalidProjectID(t *testing.T) {
 	svc := &mockBatchStoreService{}
 	router := newBatchStoreRouter(NewBatchStoreHandler(svc, nil))
 
-	body := map[string]interface{}{
-		"items": []map[string]interface{}{
+	body := map[string]any{
+		"items": []map[string]any{
 			{"content": "test content"},
 		},
 	}
@@ -154,8 +154,8 @@ func TestBatchStoreHandler_ServiceError_ProjectNotFound(t *testing.T) {
 	router := newBatchStoreRouter(NewBatchStoreHandler(svc, nil))
 
 	projectID := uuid.New()
-	body := map[string]interface{}{
-		"items": []map[string]interface{}{
+	body := map[string]any{
+		"items": []map[string]any{
 			{"content": "test content"},
 		},
 	}
@@ -194,8 +194,8 @@ func TestBatchStoreHandler_PartialSuccess(t *testing.T) {
 	userID := uuid.New()
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
-		"items": []map[string]interface{}{
+	body := map[string]any{
+		"items": []map[string]any{
 			{"content": "first memory"},
 			{"content": "bad memory"},
 			{"content": "third memory"},
@@ -243,8 +243,8 @@ func TestBatchStoreHandler_EmitsMemoryCreatedEvents(t *testing.T) {
 	projectID := uuid.New()
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	body := map[string]interface{}{
-		"items": []map[string]interface{}{
+	body := map[string]any{
+		"items": []map[string]any{
 			{"content": "first memory"},
 			{"content": "second memory"},
 		},
@@ -256,7 +256,7 @@ func TestBatchStoreHandler_EmitsMemoryCreatedEvents(t *testing.T) {
 	}
 
 	// The mock returns MemoriesCreated=2, so we expect 2 events.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		select {
 		case ev := <-ch:
 			if ev.Type != events.MemoryCreated {

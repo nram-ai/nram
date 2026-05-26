@@ -55,11 +55,8 @@ type CascadeResolver struct {
 // TTL is read once from SettingCascadeCacheTTLSeconds; nil settings falls
 // through to the registered default.
 func NewCascadeResolver(s *SettingsService, projects CascadeProjectReader, users CascadeUserReader) *CascadeResolver {
-	ttl := s.ResolveDurationSecondsWithDefault(context.Background(),
-		SettingCascadeCacheTTLSeconds, "global")
-	if ttl < time.Second {
-		ttl = time.Second
-	}
+	ttl := max(s.ResolveDurationSecondsWithDefault(context.Background(),
+		SettingCascadeCacheTTLSeconds, "global"), time.Second)
 	return &CascadeResolver{
 		settings: s,
 		projects: projects,

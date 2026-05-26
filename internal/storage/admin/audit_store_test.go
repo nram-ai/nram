@@ -43,7 +43,7 @@ func TestClampAuditQueryLimit(t *testing.T) {
 func seedAuditEvents(t *testing.T, store *AuditStore, ctx context.Context, n int) {
 	t.Helper()
 	base := time.Now().UTC()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ev := api.AuditEvent{
 			Action:     "test.event",
 			OccurredAt: base.Add(time.Duration(-i) * time.Millisecond),
@@ -110,7 +110,7 @@ func seedAuditEventsBulk(t *testing.T, db storage.DB, ctx context.Context, n int
 		t.Fatalf("BeginTx: %v", err)
 	}
 	base := time.Now().UTC()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		occurredAt := base.Add(time.Duration(-i) * time.Millisecond).
 			Format("2006-01-02T15:04:05.000Z")
 		if _, err := tx.ExecContext(ctx, q,

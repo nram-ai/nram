@@ -195,11 +195,11 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 	// payload (old + new weight) that LogOperation replays after each
 	// batch returns.
 	type expireOp struct {
-		id                  uuid.UUID
+		id                   uuid.UUID
 		oldWeight, newWeight float64
 	}
 	type weightOp struct {
-		id                  uuid.UUID
+		id                   uuid.UUID
 		oldWeight, newWeight float64
 	}
 	var expireOps []expireOp
@@ -264,8 +264,8 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 			for _, op := range expireOps {
 				if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
 					model.DreamOpRelationshipExpired, "relationship", op.id,
-					map[string]interface{}{"weight": op.oldWeight},
-					map[string]interface{}{"weight": op.newWeight, "reason": "decayed_below_threshold"}); err != nil {
+					map[string]any{"weight": op.oldWeight},
+					map[string]any{"weight": op.newWeight, "reason": "decayed_below_threshold"}); err != nil {
 					slog.Warn("dreaming: log operation failed", "err", err)
 				}
 				expired++
@@ -284,8 +284,8 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 			for _, op := range weightOps {
 				if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
 					model.DreamOpRelationshipUpdated, "relationship", op.id,
-					map[string]interface{}{"weight": op.oldWeight},
-					map[string]interface{}{"weight": op.newWeight}); err != nil {
+					map[string]any{"weight": op.oldWeight},
+					map[string]any{"weight": op.newWeight}); err != nil {
 					slog.Warn("dreaming: log operation failed", "err", err)
 				}
 			}
@@ -304,7 +304,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 			"cycle", cycle.ID)
 	}
 
-	p.writePhaseSummary(ctx, logger, map[string]interface{}{
+	p.writePhaseSummary(ctx, logger, map[string]any{
 		"sub_phase":        "weight_adjustment",
 		"direction_up":     directionUp,
 		"direction_down":   directionDown,
@@ -420,7 +420,7 @@ func (p *WeightAdjustmentPhase) resolveWeightTuning(ctx context.Context) weightT
 func (p *WeightAdjustmentPhase) writePhaseSummary(
 	ctx context.Context,
 	logger *DreamLogWriter,
-	stats map[string]interface{},
+	stats map[string]any,
 	budget *TokenBudget,
 	tokensBefore int,
 ) {
@@ -486,8 +486,8 @@ func (p *WeightAdjustmentPhase) recalibrateMentionCounts(
 
 			if err := logger.LogOperation(ctx, model.DreamPhaseWeightAdjust, "",
 				model.DreamOpEntityUpdated, "entity", entity.ID,
-				map[string]interface{}{"mention_count": entity.MentionCount},
-				map[string]interface{}{"mention_count": activeCount}); err != nil {
+				map[string]any{"mention_count": entity.MentionCount},
+				map[string]any{"mention_count": activeCount}); err != nil {
 				slog.Warn("dreaming: log operation failed", "err", err)
 			}
 		}

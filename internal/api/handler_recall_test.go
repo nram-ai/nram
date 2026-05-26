@@ -68,7 +68,7 @@ func newMeRecallRouter(handler http.HandlerFunc) *chi.Mux {
 	return r
 }
 
-func doRecallRequest(router http.Handler, path string, body interface{}, ac *auth.AuthContext) *httptest.ResponseRecorder {
+func doRecallRequest(router http.Handler, path string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(body)
 
@@ -118,7 +118,7 @@ func TestRecallHandler_Success(t *testing.T) {
 	userID := uuid.New()
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query":         "dark mode preferences",
 		"limit":         5,
 		"threshold":     0.5,
@@ -154,7 +154,7 @@ func TestRecallHandler_MissingQuery(t *testing.T) {
 	router := newRecallRouter(NewRecallHandler(svc))
 
 	projectID := uuid.New()
-	body := map[string]interface{}{
+	body := map[string]any{
 		"limit": 10,
 	}
 
@@ -177,7 +177,7 @@ func TestRecallHandler_InvalidProjectID(t *testing.T) {
 	svc := &mockRecallService{}
 	router := newRecallRouter(NewRecallHandler(svc))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query": "test query",
 	}
 
@@ -227,7 +227,7 @@ func TestMeRecallHandler_Success(t *testing.T) {
 	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query": "my preferences",
 	}
 
@@ -283,7 +283,7 @@ func TestRecallHandler_ServiceError(t *testing.T) {
 
 			router := newRecallRouter(NewRecallHandler(svc))
 			projectID := uuid.New()
-			body := map[string]interface{}{
+			body := map[string]any{
 				"query": "test query",
 			}
 
@@ -324,7 +324,7 @@ func TestRecallHandler_DiversifyByTagPrefix_Forwarded(t *testing.T) {
 	router := newRecallRouter(NewRecallHandler(svc))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query":                   "q",
 		"limit":                   2,
 		"diversify_by_tag_prefix": "category-",
@@ -367,7 +367,7 @@ func TestMeRecallHandler_DiversifyByTagPrefix_Forwarded(t *testing.T) {
 	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query":                   "q",
 		"diversify_by_tag_prefix": "category-",
 	}
@@ -396,7 +396,7 @@ func TestRecallHandler_DiversifyByTagPrefix_OmittedFromJSON(t *testing.T) {
 	}
 	router := newRecallRouter(NewRecallHandler(svc))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
-	body := map[string]interface{}{"query": "q"}
+	body := map[string]any{"query": "q"}
 
 	w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall", body, ac)
 	if w.Code != http.StatusOK {
@@ -412,7 +412,7 @@ func TestMeRecallHandler_NoAuth(t *testing.T) {
 	users := &mockUserReader{}
 	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query": "test query",
 	}
 
@@ -440,7 +440,7 @@ func TestRecallHandler_SimilarityThreshold_Forwarded(t *testing.T) {
 	router := newRecallRouter(NewRecallHandler(svc))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query":                     "q",
 		"similarity_threshold":      0.75,
 		"similarity_threshold_mode": "fused_combined",
@@ -473,7 +473,7 @@ func TestRecallHandler_SimilarityThresholdMode_Invalid(t *testing.T) {
 	router := newRecallRouter(NewRecallHandler(svc))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query":                     "q",
 		"similarity_threshold":      0.5,
 		"similarity_threshold_mode": "garbage",
@@ -509,7 +509,7 @@ func TestMeRecallHandler_SimilarityThreshold_Forwarded(t *testing.T) {
 	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query":                     "q",
 		"similarity_threshold":      0.6,
 		"similarity_threshold_mode": "raw_cosine",
@@ -536,7 +536,7 @@ func TestRecallHandler_FusedCombinedRequiresFusion_400(t *testing.T) {
 	router := newRecallRouter(NewRecallHandler(svc))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query":                     "q",
 		"similarity_threshold":      0.5,
 		"similarity_threshold_mode": "fused_combined",
@@ -566,7 +566,7 @@ func TestRecallHandler_SimilarityNullSerialization(t *testing.T) {
 	router := newRecallRouter(NewRecallHandler(svc))
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
-	w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall", map[string]interface{}{"query": "q"}, ac)
+	w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall", map[string]any{"query": "q"}, ac)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -593,7 +593,7 @@ func TestRecallHandler_PassesIncludeLowNoveltyFlag(t *testing.T) {
 
 	// Default: omitted → false.
 	if w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall",
-		map[string]interface{}{"query": "q"}, ac); w.Code != http.StatusOK {
+		map[string]any{"query": "q"}, ac); w.Code != http.StatusOK {
 		t.Fatalf("default request: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	if captured == nil || captured.IncludeLowNovelty {
@@ -602,7 +602,7 @@ func TestRecallHandler_PassesIncludeLowNoveltyFlag(t *testing.T) {
 
 	// Opt-in: body field → true.
 	if w := doRecallRequest(router, "/v1/projects/"+projectID.String()+"/memories/recall",
-		map[string]interface{}{"query": "q", "include_low_novelty": true}, ac); w.Code != http.StatusOK {
+		map[string]any{"query": "q", "include_low_novelty": true}, ac); w.Code != http.StatusOK {
 		t.Fatalf("opt-in request: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	if captured == nil || !captured.IncludeLowNovelty {

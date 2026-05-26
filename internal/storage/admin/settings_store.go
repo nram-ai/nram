@@ -444,7 +444,7 @@ var settingsSchemas = []api.SettingSchema{
 // ptrF returns a pointer to v. Convenience helper for the *float64 Min/Max/Step
 // fields on SettingSchema so the literals stay readable inline. Marker name
 // keeps the registry table from getting noisy with longer helper invocations.
-func ptrF(v float64) *float64 { return &v }
+func ptrF(v float64) *float64 { p := v; return &p }
 
 // SettingsSchemas returns a copy of the canonical registry. The slice is
 // allocated freshly on each call so callers may sort, filter, or iterate

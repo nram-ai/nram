@@ -318,7 +318,7 @@ func TestWebhookRepo_RecordFailure(t *testing.T) {
 		}
 
 		// Record 3 failures
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			if err := repo.RecordFailure(ctx, webhook.ID); err != nil {
 				t.Fatalf("failed to record failure %d: %v", i+1, err)
 			}
@@ -349,7 +349,7 @@ func TestWebhookRepo_RecordFailure_AutoDisable(t *testing.T) {
 		}
 
 		// Record 10 failures to trigger auto-disable
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			if err := repo.RecordFailure(ctx, webhook.ID); err != nil {
 				t.Fatalf("failed to record failure %d: %v", i+1, err)
 			}
@@ -380,7 +380,7 @@ func TestWebhookRepo_RecordSuccess(t *testing.T) {
 		}
 
 		// Record some failures first
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			if err := repo.RecordFailure(ctx, webhook.ID); err != nil {
 				t.Fatalf("failed to record failure: %v", err)
 			}
@@ -411,7 +411,7 @@ func TestWebhookRepo_ListByNamespace(t *testing.T) {
 		nsID := createTestNamespace(t, ctx, db)
 
 		// Create 3 webhooks
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			w := newTestWebhook(nsID)
 			if err := repo.Create(ctx, w); err != nil {
 				t.Fatalf("failed to create webhook %d: %v", i, err)

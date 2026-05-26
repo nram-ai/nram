@@ -50,12 +50,12 @@ func (r *RelationshipRepo) Create(ctx context.Context, rel *model.Relationship) 
 		rel.CreatedAt = now
 	}
 
-	var validUntil interface{}
+	var validUntil any
 	if rel.ValidUntil != nil {
 		validUntil = rel.ValidUntil.UTC().Format(time.RFC3339)
 	}
 
-	var sourceMemory interface{}
+	var sourceMemory any
 	if rel.SourceMemory != nil {
 		sourceMemory = rel.SourceMemory.String()
 	}
@@ -499,10 +499,7 @@ func (r *RelationshipRepo) BatchCreate(ctx context.Context, rels []*model.Relati
 
 	var result model.BatchCreateResult
 	for i := 0; i < len(rels); i += relationshipBatchChunkSize {
-		end := i + relationshipBatchChunkSize
-		if end > len(rels) {
-			end = len(rels)
-		}
+		end := min(i+relationshipBatchChunkSize, len(rels))
 		chunk := rels[i:end]
 		chunkName := fmt.Sprintf("rel_batch_%d", i/relationshipBatchChunkSize)
 		outcome, err := withSavepoint(ctx, tx, chunkName, func() error {
@@ -647,10 +644,7 @@ func (r *RelationshipRepo) BatchExpire(ctx context.Context, namespaceID uuid.UUI
 	isPg := r.db.Backend() == BackendPostgres
 	var total int64
 	for i := 0; i < len(ids); i += relationshipBatchChunkSize {
-		end := i + relationshipBatchChunkSize
-		if end > len(ids) {
-			end = len(ids)
-		}
+		end := min(i+relationshipBatchChunkSize, len(ids))
 		chunk := ids[i:end]
 		n, execErr := r.execBatchExpireChunk(ctx, tx, namespaceID, chunk, now, isPg)
 		if execErr != nil {
@@ -712,10 +706,7 @@ func (r *RelationshipRepo) BatchDeleteByID(ctx context.Context, namespaceID uuid
 	isPg := r.db.Backend() == BackendPostgres
 	var total int64
 	for i := 0; i < len(ids); i += relationshipBatchChunkSize {
-		end := i + relationshipBatchChunkSize
-		if end > len(ids) {
-			end = len(ids)
-		}
+		end := min(i+relationshipBatchChunkSize, len(ids))
 		chunk := ids[i:end]
 		n, execErr := r.execBatchDeleteChunk(ctx, tx, namespaceID, chunk, isPg)
 		if execErr != nil {
@@ -783,10 +774,7 @@ func (r *RelationshipRepo) BatchReinforce(ctx context.Context, namespaceID uuid.
 	isPg := r.db.Backend() == BackendPostgres
 	var total int64
 	for i := 0; i < len(items); i += relationshipBatchChunkSize {
-		end := i + relationshipBatchChunkSize
-		if end > len(items) {
-			end = len(items)
-		}
+		end := min(i+relationshipBatchChunkSize, len(items))
 		chunk := items[i:end]
 		n, execErr := r.execBatchReinforceChunk(ctx, tx, namespaceID, chunk, isPg)
 		if execErr != nil {
@@ -860,10 +848,7 @@ func (r *RelationshipRepo) BatchUpdateWeight(ctx context.Context, namespaceID uu
 	isPg := r.db.Backend() == BackendPostgres
 	var total int64
 	for i := 0; i < len(items); i += relationshipBatchChunkSize {
-		end := i + relationshipBatchChunkSize
-		if end > len(items) {
-			end = len(items)
-		}
+		end := min(i+relationshipBatchChunkSize, len(items))
 		chunk := items[i:end]
 		n, execErr := r.execBatchUpdateWeightChunk(ctx, tx, namespaceID, chunk, isPg)
 		if execErr != nil {
@@ -958,15 +943,6 @@ func withSavepoint(ctx context.Context, tx *sql.Tx, name string, fn func() error
 	return savepointOK, nil
 }
 
-// reload fetches the relationship by ID and populates the struct in place.
-func (r *RelationshipRepo) reload(ctx context.Context, rel *model.Relationship) error {
-	fetched, err := r.GetByID(ctx, rel.ID)
-	if err != nil {
-		return fmt.Errorf("relationship reload: %w", err)
-	}
-	*rel = *fetched
-	return nil
-}
 
 const selectRelationshipColumns = `SELECT id, namespace_id, source_id, target_id, relation,
 	weight, properties, valid_from, valid_until, source_memory, created_at`

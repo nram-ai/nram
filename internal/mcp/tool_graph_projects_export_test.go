@@ -229,7 +229,7 @@ func TestHandleMemoryGraph_NoHTTPRequest(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{"entity": "test"}
+	req.Params.Arguments = map[string]any{"entity": "test"}
 
 	result, err := handleMemoryGraph(context.Background(), srv, req)
 	if err != nil {
@@ -243,7 +243,7 @@ func TestHandleMemoryGraph_NoAuth(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{"entity": "test"}
+	req.Params.Arguments = map[string]any{"entity": "test"}
 
 	ctx := buildNoAuthCtx()
 	result, err := handleMemoryGraph(ctx, srv, req)
@@ -258,7 +258,7 @@ func TestHandleMemoryGraph_MissingEntity(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{}
+	req.Params.Arguments = map[string]any{}
 
 	ctx := buildAuthCtx(uuid.New())
 	result, err := handleMemoryGraph(ctx, srv, req)
@@ -304,7 +304,7 @@ func TestHandleMemoryGraph_EntitySearch(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"entity": "Alice",
 		"depth":  float64(3),
 	}
@@ -359,7 +359,7 @@ func TestHandleMemoryGraph_DefaultDepth(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"entity": "something",
 	}
 
@@ -413,7 +413,7 @@ func TestHandleMemoryGraph_EdgeCapTruncated(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{"entity": "Alice"}
+	req.Params.Arguments = map[string]any{"entity": "Alice"}
 	ctx := buildAuthCtx(userID)
 	result, err := handleMemoryGraph(ctx, srv, req)
 	if err != nil {
@@ -502,7 +502,7 @@ func TestHandleMemoryGraph_CumulativeCapAcrossSeeds(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{"entity": "seed"}
+	req.Params.Arguments = map[string]any{"entity": "seed"}
 	ctx := buildAuthCtx(userID)
 	if _, err := handleMemoryGraph(ctx, srv, req); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -640,7 +640,7 @@ func TestHandleMemoryExport_NoHTTPRequest(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{"project": "test"}
+	req.Params.Arguments = map[string]any{"project": "test"}
 
 	result, err := handleMemoryExport(context.Background(), srv, req)
 	if err != nil {
@@ -654,7 +654,7 @@ func TestHandleMemoryExport_NoAuth(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{"project": "test"}
+	req.Params.Arguments = map[string]any{"project": "test"}
 
 	ctx := buildNoAuthCtx()
 	result, err := handleMemoryExport(ctx, srv, req)
@@ -678,7 +678,7 @@ func TestHandleMemoryExport_InvalidFormat(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 		"format":  "csv",
 	}
@@ -716,7 +716,7 @@ func TestHandleMemoryExport_JSONSuccess(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 	}
 
@@ -767,7 +767,7 @@ func TestHandleMemoryExport_NDJSONSuccess(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 		"format":  "ndjson",
 	}
@@ -792,7 +792,7 @@ func TestHandleMemoryExport_NDJSONSuccess(t *testing.T) {
 		t.Fatal("expected at least one NDJSON line")
 	}
 
-	var first map[string]interface{}
+	var first map[string]any
 	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
 		t.Fatalf("failed to unmarshal first NDJSON line: %v", err)
 	}
@@ -814,7 +814,7 @@ func TestHandleMemoryExport_ProjectNotFound(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "nonexistent",
 	}
 
@@ -876,7 +876,7 @@ func TestHandleMemoryGraph_AlwaysFiltersSupersededSourceMemory(t *testing.T) {
 	// Even with include_superseded=true on the request (now ignored on MCP),
 	// only the live relationship surfaces.
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"entity":             "Alice",
 		"include_superseded": true,
 	}
@@ -934,7 +934,7 @@ func TestHandleMemoryExport_HidesSupersededByDefault(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{"project": "test"}
+	req.Params.Arguments = map[string]any{"project": "test"}
 	ctx := buildAuthCtx(userID)
 	result, err := handleMemoryExport(ctx, srv, req)
 	if err != nil {
@@ -952,7 +952,7 @@ func TestHandleMemoryExport_HidesSupersededByDefault(t *testing.T) {
 	}
 
 	reqIncl := mcp.CallToolRequest{}
-	reqIncl.Params.Arguments = map[string]interface{}{
+	reqIncl.Params.Arguments = map[string]any{
 		"project":            "test",
 		"include_superseded": true,
 	}

@@ -240,8 +240,8 @@ func (s *ExportService) Export(ctx context.Context, req *ExportRequest) (*Export
 
 // ndjsonRecord is a wrapper that adds a "type" field to streamed NDJSON records.
 type ndjsonRecord struct {
-	Type string      `json:"type"`
-	Data interface{} `json:"data"`
+	Type string `json:"type"`
+	Data any    `json:"data"`
 }
 
 // ExportNDJSON streams project data as newline-delimited JSON to the given writer.
@@ -331,10 +331,7 @@ func (s *ExportService) ExportNDJSON(ctx context.Context, req *ExportRequest, w 
 // superseded_by set so exports don't ship duplicate losers.
 func (s *ExportService) collectAllMemories(ctx context.Context, namespaceID uuid.UUID, includeSuperseded bool) ([]model.Memory, error) {
 	filters := storage.MemoryListFilters{HideSuperseded: !includeSuperseded}
-	pageSize := s.settings.ResolveIntWithDefault(ctx, SettingExportPageSize, "global")
-	if pageSize < 1 {
-		pageSize = 1
-	}
+	pageSize := max(s.settings.ResolveIntWithDefault(ctx, SettingExportPageSize, "global"), 1)
 	all := []model.Memory{}
 	offset := 0
 	for {

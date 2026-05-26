@@ -124,6 +124,6 @@ func NewMeRankingWeightsDefaultsHandler(cfg MeRankingWeightsDefaultsConfig) http
 			})
 		}
 
-		writeJSON(w, http.StatusOK, map[string]interface{}{"data": out})
+		writeJSON(w, http.StatusOK, map[string]any{"data": out})
 	}
 }

@@ -161,7 +161,7 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 	projectDesc, _ := args["project_description"].(string)
 	projectDesc = strings.TrimSpace(projectDesc)
 
-	rawItems, ok := args["items"].([]interface{})
+	rawItems, ok := args["items"].([]any)
 	if !ok || len(rawItems) == 0 {
 		return mcp.NewToolResultError("items is required and must be a non-empty array"), nil
 	}
@@ -266,11 +266,11 @@ func resolveOrCreateProject(ctx context.Context, deps Dependencies, userID uuid.
 
 // extractStringSlice converts an interface{} (expected []interface{} of strings)
 // into a []string. Returns nil if the input is nil or not a slice.
-func extractStringSlice(v interface{}) []string {
+func extractStringSlice(v any) []string {
 	if v == nil {
 		return nil
 	}
-	arr, ok := v.([]interface{})
+	arr, ok := v.([]any)
 	if !ok {
 		return nil
 	}
@@ -285,7 +285,7 @@ func extractStringSlice(v interface{}) []string {
 
 // extractRawJSON converts an interface{} (expected map[string]interface{}) back
 // into json.RawMessage. Returns nil if the input is nil or marshalling fails.
-func extractRawJSON(v interface{}) json.RawMessage {
+func extractRawJSON(v any) json.RawMessage {
 	if v == nil {
 		return nil
 	}
@@ -297,10 +297,10 @@ func extractRawJSON(v interface{}) json.RawMessage {
 }
 
 // extractBatchItems converts a []interface{} of map items into service.BatchStoreItem slice.
-func extractBatchItems(raw []interface{}) ([]service.BatchStoreItem, error) {
+func extractBatchItems(raw []any) ([]service.BatchStoreItem, error) {
 	items := make([]service.BatchStoreItem, 0, len(raw))
 	for i, v := range raw {
-		m, ok := v.(map[string]interface{})
+		m, ok := v.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("item at index %d is not an object", i)
 		}
@@ -322,7 +322,7 @@ func extractBatchItems(raw []interface{}) ([]service.BatchStoreItem, error) {
 }
 
 // stringFromMap extracts a string value from a map by key, returning "" if absent.
-func stringFromMap(m map[string]interface{}, key string) string {
+func stringFromMap(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
 }

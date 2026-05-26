@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,9 +20,9 @@ import (
 )
 
 const (
-	authCodeExpiry        = 10 * time.Minute
-	accessTokenExpiry     = 1 * time.Hour
-	refreshTokenExpiry    = 30 * 24 * time.Hour
+	authCodeExpiry          = 10 * time.Minute
+	accessTokenExpiry       = 1 * time.Hour
+	refreshTokenExpiry      = 30 * 24 * time.Hour
 	codeChallengeMethodS256 = "S256"
 )
 
@@ -223,7 +224,7 @@ func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
 			userID = ac.UserID
 		} else if cookie, err := r.Cookie("nram_session"); err == nil && cookie.Value != "" {
 			claims := &Claims{}
-			tok, parseErr := jwt.ParseWithClaims(cookie.Value, claims, func(t *jwt.Token) (interface{}, error) {
+			tok, parseErr := jwt.ParseWithClaims(cookie.Value, claims, func(t *jwt.Token) (any, error) {
 				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 					return nil, fmt.Errorf("unexpected signing method")
 				}
@@ -585,7 +586,7 @@ func (s *OAuthServer) UserInfoHandler() http.HandlerFunc {
 		}
 
 		claims := &Claims{}
-		tok, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+		tok, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 			}
@@ -703,12 +704,7 @@ func hashSecret(secret string) string {
 
 // containsString checks if a string slice contains a specific value.
 func containsString(slice []string, val string) bool {
-	for _, s := range slice {
-		if s == val {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, val)
 }
 
 // oauthError represents an OAuth 2.0 error response.

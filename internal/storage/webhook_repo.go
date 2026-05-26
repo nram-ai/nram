@@ -57,7 +57,7 @@ func (r *WebhookRepo) decodeEvents(s string) ([]string, error) {
 }
 
 // encodeActive returns the appropriate value for the active column.
-func (r *WebhookRepo) encodeActive(active bool) interface{} {
+func (r *WebhookRepo) encodeActive(active bool) any {
 	if r.db.Backend() == BackendPostgres {
 		return active
 	}
@@ -166,15 +166,15 @@ func (r *WebhookRepo) ListActiveForEvent(ctx context.Context, namespaceID uuid.U
 	query := selectWebhookColumns + ` FROM webhooks
 		WHERE active = 1 AND scope = ? AND events LIKE ?
 		ORDER BY created_at DESC`
-	var args []interface{}
+	var args []any
 	if r.db.Backend() == BackendPostgres {
 		query = selectWebhookColumns + ` FROM webhooks
 			WHERE active = true AND scope = $1 AND $2 = ANY(events)
 			ORDER BY created_at DESC`
-		args = []interface{}{scope, event}
+		args = []any{scope, event}
 	} else {
 		pattern := "%" + `"` + event + `"` + "%"
-		args = []interface{}{scope, pattern}
+		args = []any{scope, pattern}
 	}
 
 	rows, err := r.db.Query(ctx, query, args...)

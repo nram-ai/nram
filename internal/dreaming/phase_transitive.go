@@ -315,10 +315,10 @@ func (p *TransitivePhase) resolveInt(ctx context.Context, key string) int {
 // isTransitiveRelationship checks whether a relationship was created by the
 // transitive closure phase by inspecting its Properties JSON.
 func isTransitiveRelationship(rel *model.Relationship) bool {
-	if rel.Properties == nil || len(rel.Properties) == 0 {
+	if len(rel.Properties) == 0 {
 		return false
 	}
-	var props map[string]interface{}
+	var props map[string]any
 	if err := json.Unmarshal(rel.Properties, &props); err != nil {
 		return false
 	}

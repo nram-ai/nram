@@ -27,7 +27,7 @@ func (s *UsageStore) QueryUsage(ctx context.Context, filter api.UsageFilter) (*a
 
 	// Build WHERE clauses from filter.
 	var conditions []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if filter.OrgID != nil {

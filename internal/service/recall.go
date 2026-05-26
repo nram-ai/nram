@@ -1223,7 +1223,6 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 
 	g, gctx := errgroup.WithContext(ctx)
 	for _, nsID := range args.Namespaces {
-		nsID := nsID
 		g.Go(func() error {
 			results, err := s.vectorSearch.Search(gctx, storage.VectorKindMemory, args.Embedding, nsID, args.Dim, args.TopK)
 			if err != nil {
@@ -1419,10 +1418,7 @@ func (s *RecallService) recallOverfetch(ctx context.Context, limit int) int {
 		mul = s.settings.ResolveFloatWithDefault(ctx, SettingRecallOverfetchMultiplier, "global")
 		floor = s.settings.ResolveIntWithDefault(ctx, SettingRecallOverfetchMin, "global")
 	}
-	out := int(math.Round(float64(limit) * mul))
-	if out < floor {
-		out = floor
-	}
+	out := max(int(math.Round(float64(limit)*mul)), floor)
 	return out
 }
 
@@ -1508,7 +1504,7 @@ func splitQueryWords(query string) []string {
 	}
 
 	var words []string
-	for _, word := range strings.Fields(query) {
+	for word := range strings.FieldsSeq(query) {
 		// Strip common punctuation
 		word = strings.Trim(word, ".,;:!?\"'()[]{}—–-")
 		lower := strings.ToLower(word)
@@ -1525,7 +1521,7 @@ func isLowNovelty(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false
 	}
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return false
 	}
@@ -1621,10 +1617,7 @@ func applyNamespaceQuota(passing []RecallResult, limit, projectMin int) []Recall
 		return passing
 	}
 
-	floor := projectMin
-	if floor > limit {
-		floor = limit
-	}
+	floor := min(projectMin, limit)
 	out := make([]RecallResult, 0, limit)
 	claimed := make(map[uuid.UUID]struct{}, limit)
 	for _, r := range passing {

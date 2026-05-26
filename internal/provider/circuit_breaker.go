@@ -51,10 +51,7 @@ func (e *CircuitOpenError) Error() string {
 	if provider == "" {
 		provider = "<unnamed>"
 	}
-	retryIn := time.Until(e.RetryAt).Round(time.Second)
-	if retryIn < 0 {
-		retryIn = 0
-	}
+	retryIn := max(time.Until(e.RetryAt).Round(time.Second), 0)
 	if e.Cause != nil {
 		return fmt.Sprintf("circuit breaker open for %s (last error: %v; retry in %s)",
 			provider, e.Cause, retryIn)

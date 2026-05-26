@@ -49,7 +49,7 @@ func (r *MemoryRepo) AttachVectorStore(vs VectorStore) {
 // backend-specific INSERT query. Mutates mem to fill in defaults
 // (ID, Tags, Metadata, ContentHash, CreatedAt, UpdatedAt) so callers
 // can reuse the populated struct without an extra reload SELECT.
-func (r *MemoryRepo) memoryInsertArgs(mem *model.Memory) (string, []interface{}) {
+func (r *MemoryRepo) memoryInsertArgs(mem *model.Memory) (string, []any) {
 	if mem.ID == uuid.Nil {
 		mem.ID = uuid.New()
 	}
@@ -71,8 +71,8 @@ func (r *MemoryRepo) memoryInsertArgs(mem *model.Memory) (string, []interface{})
 		mem.ContentHash = HashContent(mem.Content)
 	}
 
-	var source, embeddingDim, lastAccessed, expiresAt, supersededBy, supersededAt, purgeAfter interface{}
-	var augmentedQueries, augmentedEmbeddingAt interface{}
+	var source, embeddingDim, lastAccessed, expiresAt, supersededBy, supersededAt, purgeAfter any
+	var augmentedQueries, augmentedEmbeddingAt any
 	if mem.Source != nil {
 		source = *mem.Source
 	}
@@ -113,7 +113,7 @@ func (r *MemoryRepo) memoryInsertArgs(mem *model.Memory) (string, []interface{})
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`
 	}
 
-	return query, []interface{}{
+	return query, []any{
 		mem.ID.String(), mem.NamespaceID.String(), mem.Content, mem.ContentHash,
 		embeddingDim, source, encodeStringArray(r.db.Backend(), mem.Tags),
 		mem.Confidence, mem.Importance, mem.AccessCount,
@@ -248,9 +248,9 @@ func (r *MemoryRepo) BackfillContentHashes(ctx context.Context, batchSize int) (
 // IN-list. startIndex is the first Postgres placeholder number ($N); it is
 // ignored for SQLite (which always uses "?"). Returned ids are stringified so
 // callers can append directly to the Exec/Query args slice.
-func uuidInPlaceholders(db DB, ids []uuid.UUID, startIndex int) ([]string, []interface{}) {
+func uuidInPlaceholders(db DB, ids []uuid.UUID, startIndex int) ([]string, []any) {
 	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
+	args := make([]any, len(ids))
 	pg := db.Backend() == BackendPostgres
 	for i, id := range ids {
 		if pg {
@@ -335,7 +335,7 @@ func (f MemoryListFilters) IsZero() bool {
 type whereBuilder struct {
 	postgres bool
 	clauses  []string
-	args     []interface{}
+	args     []any
 }
 
 func (w *whereBuilder) placeholder() string {
@@ -345,7 +345,7 @@ func (w *whereBuilder) placeholder() string {
 	return "?"
 }
 
-func (w *whereBuilder) add(clauseFmt string, value interface{}) {
+func (w *whereBuilder) add(clauseFmt string, value any) {
 	w.clauses = append(w.clauses, fmt.Sprintf(clauseFmt, w.placeholder()))
 	w.args = append(w.args, value)
 }
@@ -357,7 +357,7 @@ func (w *whereBuilder) where() string {
 // buildFilterWhere produces a WHERE clause + arg slice for the given filters,
 // always anchored on namespace_id and deleted_at IS NULL. The returned args
 // can be appended with limit/offset/etc. as needed.
-func (r *MemoryRepo) buildFilterWhere(namespaceID uuid.UUID, filters MemoryListFilters) (string, []interface{}) {
+func (r *MemoryRepo) buildFilterWhere(namespaceID uuid.UUID, filters MemoryListFilters) (string, []any) {
 	wb := &whereBuilder{postgres: r.db.Backend() == BackendPostgres}
 	wb.add("namespace_id = %s", namespaceID.String())
 	wb.clauses = append(wb.clauses, "deleted_at IS NULL")
@@ -615,7 +615,7 @@ var FactExtractionRelations = []string{
 // returning the placeholder string. Unlike add(), it does not append to
 // clauses — the caller is responsible for placing the placeholder inside a
 // larger SQL fragment.
-func (w *whereBuilder) bindOnly(value interface{}) string {
+func (w *whereBuilder) bindOnly(value any) string {
 	ph := w.placeholder()
 	w.args = append(w.args, value)
 	return ph
@@ -697,7 +697,7 @@ func memoryColumnsAliased(alias string) string {
 // filters matching either the parent itself or any of its enrichment
 // descendants. The returned WHERE references alias `m` for the outer
 // memories table.
-func (r *MemoryRepo) buildParentListWhere(namespaceID uuid.UUID, filters MemoryListFilters) (string, []interface{}) {
+func (r *MemoryRepo) buildParentListWhere(namespaceID uuid.UUID, filters MemoryListFilters) (string, []any) {
 	wb := &whereBuilder{postgres: r.db.Backend() == BackendPostgres}
 
 	wb.add("m.namespace_id = %s", namespaceID.String())
@@ -799,7 +799,7 @@ func (r *MemoryRepo) FindChildrenByParents(ctx context.Context, namespaceID uuid
 	}
 
 	postgres := r.db.Backend() == BackendPostgres
-	args := make([]interface{}, 0, 1+len(parentIDs)+len(relations))
+	args := make([]any, 0, 1+len(parentIDs)+len(relations))
 	args = append(args, namespaceID.String())
 
 	parentPHs := make([]string, len(parentIDs))
@@ -930,7 +930,7 @@ func (r *MemoryRepo) ClearAllEmbeddingDims(ctx context.Context) (int64, error) {
 // runtime ignores anyway. limit == 0 returns all matches.
 func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error) {
 	pg := r.db.Backend() == BackendPostgres
-	args := []interface{}{}
+	args := []any{}
 	where := []string{
 		"augmented_embedding_at IS NULL",
 		"deleted_at IS NULL",
@@ -991,7 +991,7 @@ func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, nam
 // so the candidate count matches what the worker can actually act on.
 func (r *MemoryRepo) ListEnrichedParentsWithExtractedChildren(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error) {
 	pg := r.db.Backend() == BackendPostgres
-	args := []interface{}{}
+	args := []any{}
 	args = append(args, EncodeBool(r.db.Backend(), true))
 	enrichedPH := "?"
 	if pg {
@@ -1095,32 +1095,32 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 
 	tagsVal := encodeStringArray(r.db.Backend(), mem.Tags)
 
-	var source interface{}
+	var source any
 	if mem.Source != nil {
 		source = *mem.Source
 	}
 
-	var embeddingDim interface{}
+	var embeddingDim any
 	if mem.EmbeddingDim != nil {
 		embeddingDim = *mem.EmbeddingDim
 	}
 
-	var lastAccessed interface{}
+	var lastAccessed any
 	if mem.LastAccessed != nil {
 		lastAccessed = mem.LastAccessed.UTC().Format(time.RFC3339)
 	}
 
-	var expiresAt interface{}
+	var expiresAt any
 	if mem.ExpiresAt != nil {
 		expiresAt = mem.ExpiresAt.UTC().Format(time.RFC3339)
 	}
 
-	var supersededBy interface{}
+	var supersededBy any
 	if mem.SupersededBy != nil {
 		supersededBy = mem.SupersededBy.String()
 	}
 
-	var supersededAt interface{}
+	var supersededAt any
 	if mem.SupersededAt != nil {
 		supersededAt = mem.SupersededAt.UTC().Format(time.RFC3339)
 	}
@@ -1128,12 +1128,12 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 	// Recompute content hash on update so in-place content edits stay truthful.
 	mem.ContentHash = HashContent(mem.Content)
 
-	var purgeAfter interface{}
+	var purgeAfter any
 	if mem.PurgeAfter != nil {
 		purgeAfter = mem.PurgeAfter.UTC().Format(time.RFC3339)
 	}
 
-	var augmentedQueries, augmentedEmbeddingAt interface{}
+	var augmentedQueries, augmentedEmbeddingAt any
 	if len(mem.AugmentedQueries) > 0 {
 		raw, _ := json.Marshal(mem.AugmentedQueries)
 		augmentedQueries = string(raw)
@@ -1338,7 +1338,7 @@ func (r *MemoryRepo) MarkEnriched(
 	pg := r.db.Backend() == BackendPostgres
 
 	setClauses := []string{"enriched = "}
-	args := []interface{}{EncodeBool(r.db.Backend(), true)}
+	args := []any{EncodeBool(r.db.Backend(), true)}
 	if embeddingDim != nil {
 		setClauses = append(setClauses, "embedding_dim = ")
 		args = append(args, *embeddingDim)
@@ -1363,15 +1363,16 @@ func (r *MemoryRepo) MarkEnriched(
 	args = append(args, now)
 	args = append(args, id.String(), namespaceID.String())
 
-	var setSQL string
+	var setSQL strings.Builder
 	for i, clause := range setClauses {
 		if i > 0 {
-			setSQL += ", "
+			setSQL.WriteString(", ")
 		}
+		setSQL.WriteString(clause)
 		if pg {
-			setSQL += clause + fmt.Sprintf("$%d", i+1)
+			fmt.Fprintf(&setSQL, "$%d", i+1)
 		} else {
-			setSQL += clause + "?"
+			setSQL.WriteString("?")
 		}
 	}
 	var whereSQL string
@@ -1382,7 +1383,7 @@ func (r *MemoryRepo) MarkEnriched(
 		whereSQL = "WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL"
 	}
 
-	query := "UPDATE memories SET " + setSQL + " " + whereSQL
+	query := "UPDATE memories SET " + setSQL.String() + " " + whereSQL
 	result, err := r.db.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("memory mark enriched: %w", err)
@@ -1416,7 +1417,7 @@ func (r *MemoryRepo) BumpReinforcement(ctx context.Context, ids []uuid.UUID, now
 
 	// Two fixed args come first (last_accessed, factor). IDs follow starting at $3.
 	placeholders, idArgs := uuidInPlaceholders(r.db, ids, 3)
-	args := make([]interface{}, 0, 2+len(ids))
+	args := make([]any, 0, 2+len(ids))
 	args = append(args, nowStr, factor)
 	args = append(args, idArgs...)
 
@@ -1463,7 +1464,7 @@ func (r *MemoryRepo) DecayConfidence(ctx context.Context, ids []uuid.UUID, multi
 	// the largest argument, so the SQL reads the same way with matching
 	// placeholder positions.
 	placeholders, idArgs := uuidInPlaceholders(r.db, ids, 3)
-	args := make([]interface{}, 0, 2+len(ids))
+	args := make([]any, 0, 2+len(ids))
 	args = append(args, floor, multiplier)
 	args = append(args, idArgs...)
 
@@ -1565,7 +1566,7 @@ func (r *MemoryRepo) FindMemoriesMissingVector(ctx context.Context, namespaceID 
 	selectCols := memoryColumnsAliased("m")
 
 	var query string
-	var args []interface{}
+	var args []any
 	if r.db.Backend() == BackendPostgres {
 		table := fmt.Sprintf("memory_vectors_%d", dim)
 		query = selectCols + ` FROM memories m
@@ -1578,7 +1579,7 @@ func (r *MemoryRepo) FindMemoriesMissingVector(ctx context.Context, namespaceID 
 			  AND v.memory_id IS NULL
 			ORDER BY m.created_at DESC
 			LIMIT $3`
-		args = []interface{}{namespaceID.String(), dim, limit}
+		args = []any{namespaceID.String(), dim, limit}
 	} else {
 		query = selectCols + ` FROM memories m
 			LEFT JOIN memory_vectors v ON v.memory_id = m.id AND v.dimension = ?
@@ -1590,7 +1591,7 @@ func (r *MemoryRepo) FindMemoriesMissingVector(ctx context.Context, namespaceID 
 			  AND v.memory_id IS NULL
 			ORDER BY m.created_at DESC
 			LIMIT ?`
-		args = []interface{}{dim, namespaceID.String(), dim, limit}
+		args = []any{dim, namespaceID.String(), dim, limit}
 	}
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -1705,7 +1706,7 @@ func (r *MemoryRepo) SupersedeReplacing(
 			WHERE id = $4 AND namespace_id = $5 AND deleted_at IS NULL AND superseded_by IS NULL`
 	}
 
-	var lineageParentID interface{}
+	var lineageParentID any
 	if lineage.ParentID != nil {
 		lineageParentID = lineage.ParentID.String()
 	}
@@ -1773,7 +1774,7 @@ func (r *MemoryRepo) HardDeleteSoftDeletedBefore(ctx context.Context, cutoff tim
 		cutoffPh, limitPh = "$1", "$2"
 	}
 
-	args := []interface{}{cutoffStr}
+	args := []any{cutoffStr}
 	inner := `SELECT id FROM memories WHERE deleted_at IS NOT NULL AND deleted_at < ` + cutoffPh
 	if limit > 0 {
 		inner += ` LIMIT ` + limitPh
@@ -1939,7 +1940,7 @@ func (r *MemoryRepo) SearchByText(ctx context.Context, namespaceID uuid.UUID, qu
 	}
 
 	var sql string
-	var args []interface{}
+	var args []any
 	if r.db.Backend() == BackendPostgres {
 		// Compute plainto_tsquery once via CTE so it is reused in both
 		// the rank expression and the @@ filter.
@@ -1951,7 +1952,7 @@ func (r *MemoryRepo) SearchByText(ctx context.Context, namespaceID uuid.UUID, qu
 			  AND m.content_tsv @@ q.tsq
 			ORDER BY rank DESC
 			LIMIT $3`
-		args = []interface{}{query, namespaceID.String(), limit}
+		args = []any{query, namespaceID.String(), limit}
 	} else {
 		sql = `SELECT m.id, bm25(memories_fts) AS rank
 			FROM memories_fts
@@ -1961,7 +1962,7 @@ func (r *MemoryRepo) SearchByText(ctx context.Context, namespaceID uuid.UUID, qu
 			  AND m.deleted_at IS NULL
 			ORDER BY rank ASC
 			LIMIT ?`
-		args = []interface{}{query, namespaceID.String(), limit}
+		args = []any{query, namespaceID.String(), limit}
 	}
 
 	rows, err := r.db.Query(ctx, sql, args...)

@@ -293,7 +293,7 @@ func TestMemoryRepo_GetBatch(t *testing.T) {
 		nsID := createTestMemoryNamespace(t, ctx, db)
 
 		var ids []uuid.UUID
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			mem := newTestMemory(nsID)
 			if err := repo.Create(ctx, mem); err != nil {
 				t.Fatalf("failed to create memory %d: %v", i, err)
@@ -367,7 +367,7 @@ func TestMemoryRepo_ListByNamespace(t *testing.T) {
 		nsID := createTestMemoryNamespace(t, ctx, db)
 
 		// Create 3 memories
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			mem := newTestMemory(nsID)
 			if err := repo.Create(ctx, mem); err != nil {
 				t.Fatalf("failed to create memory %d: %v", i, err)
@@ -397,7 +397,7 @@ func TestMemoryRepo_ListByNamespace_Pagination(t *testing.T) {
 		repo := NewMemoryRepo(db)
 		nsID := createTestMemoryNamespace(t, ctx, db)
 
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			mem := newTestMemory(nsID)
 			if err := repo.Create(ctx, mem); err != nil {
 				t.Fatalf("failed to create memory %d: %v", i, err)
@@ -1331,7 +1331,7 @@ func TestMemoryRepo_ClearAllEmbeddingDims(t *testing.T) {
 
 		// 3 live memories with embedding_dim, 1 with NULL, 1 soft-deleted with dim.
 		var liveDimIDs []uuid.UUID
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			m := newTestMemory(nsID)
 			m.EmbeddingDim = &dim
 			if err := repo.Create(ctx, m); err != nil {
@@ -1585,7 +1585,7 @@ func TestMemoryRepo_ListByNamespaceStale_AllStamped(t *testing.T) {
 		const key = "paraphrase_checked_at"
 		now := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
 
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			updated := now.Add(-time.Duration(i+1) * time.Hour)
 			stampVal := updated.UTC().Format(time.RFC3339Nano)
 			mem := &model.Memory{

@@ -5,11 +5,11 @@ import (
 	"reflect"
 )
 
-var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+var jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
 
 // sanitizeForJSON recursively replaces nil slices with empty slices and nil
 // maps with empty maps so that json.Marshal produces [] and {} instead of null.
-func sanitizeForJSON(v interface{}) interface{} {
+func sanitizeForJSON(v any) any {
 	if v == nil {
 		return v
 	}
@@ -18,7 +18,7 @@ func sanitizeForJSON(v interface{}) interface{} {
 
 func sanitizeVal(v reflect.Value) reflect.Value {
 	// Special-case json.RawMessage: if nil, default to "{}".
-	if v.Type() == reflect.TypeOf(json.RawMessage{}) {
+	if v.Type() == reflect.TypeFor[json.RawMessage]() {
 		if v.IsNil() || v.Len() == 0 {
 			return reflect.ValueOf(json.RawMessage("{}"))
 		}
@@ -39,7 +39,7 @@ func sanitizeVal(v reflect.Value) reflect.Value {
 		}
 		n := v.Len()
 		out := reflect.MakeSlice(v.Type(), n, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			out.Index(i).Set(sanitizeVal(v.Index(i)))
 		}
 		return out
@@ -67,7 +67,7 @@ func sanitizeVal(v reflect.Value) reflect.Value {
 		}
 		return out
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if v.IsNil() {
 			return v
 		}

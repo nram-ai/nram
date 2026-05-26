@@ -45,7 +45,7 @@ func (m *mockEmbedding) Embed(_ context.Context, _ *EmbeddingRequest) (*Embeddin
 	}
 	return &EmbeddingResponse{Embeddings: [][]float32{{0.1, 0.2}}}, nil
 }
-func (m *mockEmbedding) Name() string   { return "mock-embedding" }
+func (m *mockEmbedding) Name() string      { return "mock-embedding" }
 func (m *mockEmbedding) Dimensions() []int { return []int{128} }
 
 func testConfig() CircuitBreakerConfig {
@@ -83,7 +83,7 @@ func TestCircuitBreaker_ClosedAllowsRequests(t *testing.T) {
 func TestCircuitBreaker_OpensAfterMaxFailures(t *testing.T) {
 	cb := NewCircuitBreaker(testConfig())
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return errSimulated })
 	}
 
@@ -96,7 +96,7 @@ func TestCircuitBreaker_RejectsWhenOpen(t *testing.T) {
 	cb := NewCircuitBreaker(testConfig())
 
 	// Trip the circuit.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return errSimulated })
 	}
 
@@ -110,7 +110,7 @@ func TestCircuitBreaker_TransitionsToHalfOpenAfterTimeout(t *testing.T) {
 	cb := NewCircuitBreaker(testConfig())
 
 	// Trip the circuit.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return errSimulated })
 	}
 
@@ -129,7 +129,7 @@ func TestCircuitBreaker_HalfOpenSuccessCloses(t *testing.T) {
 	cb := NewCircuitBreaker(testConfig())
 
 	// Trip the circuit.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return errSimulated })
 	}
 
@@ -152,7 +152,7 @@ func TestCircuitBreaker_HalfOpenFailureReopens(t *testing.T) {
 	cb := NewCircuitBreaker(testConfig())
 
 	// Trip the circuit.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return errSimulated })
 	}
 
@@ -177,7 +177,7 @@ func TestCircuitBreaker_OpenErrorCarriesProviderAndCause(t *testing.T) {
 	cfg.Name = "ollama-fact"
 	cb := NewCircuitBreaker(cfg)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return errSimulated })
 	}
 
@@ -217,7 +217,7 @@ func TestCircuitBreaker_OpenErrorCarriesProviderAndCause(t *testing.T) {
 
 func TestCircuitBreaker_OpenErrorMissingNameFallsBackToUnnamed(t *testing.T) {
 	cb := NewCircuitBreaker(testConfig())
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return errSimulated })
 	}
 	err := cb.Execute(func() error { return nil })
@@ -235,7 +235,7 @@ func TestCircuitBreaker_OpenErrorMissingNameFallsBackToUnnamed(t *testing.T) {
 // so subsequent windows are not stranded.
 func TestCircuitBreaker_HalfOpenInFlightDecremented(t *testing.T) {
 	cb := NewCircuitBreaker(testConfig())
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return errSimulated })
 	}
 
@@ -271,7 +271,7 @@ func TestCircuitBreaker_HalfOpenInFlightDecremented(t *testing.T) {
 // re-arm the window so the breaker is not permanently jammed.
 func TestCircuitBreaker_HalfOpenSelfHealsStuckQuota(t *testing.T) {
 	cb := NewCircuitBreaker(testConfig())
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return errSimulated })
 	}
 
@@ -319,7 +319,7 @@ func TestCircuitBreaker_LastErrorRetained(t *testing.T) {
 	cb := NewCircuitBreaker(cfg)
 
 	specific := errors.New("dial tcp 127.0.0.1:11434: connect: connection refused")
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = cb.Execute(func() error { return specific })
 	}
 
@@ -370,7 +370,7 @@ func TestCircuitBreakerLLM_DelegatesCorrectly(t *testing.T) {
 
 	// Failing calls trip the circuit.
 	mock.completeErr = errSimulated
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, _ = wrapped.Complete(context.Background(), &CompletionRequest{})
 	}
 
@@ -413,7 +413,7 @@ func TestCircuitBreakerEmbedding_DelegatesCorrectly(t *testing.T) {
 
 	// Failing calls trip the circuit.
 	mock.embedErr = errSimulated
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, _ = wrapped.Embed(context.Background(), &EmbeddingRequest{})
 	}
 
@@ -438,11 +438,11 @@ func TestCircuitBreaker_ThreadSafety(t *testing.T) {
 	const goroutines = 50
 	const iterations = 100
 
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				if id%2 == 0 {
 					_ = cb.Execute(func() error { return nil })
 				} else {

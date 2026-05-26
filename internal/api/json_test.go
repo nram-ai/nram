@@ -50,7 +50,7 @@ func TestSanitizeNils_NestedNilSlice(t *testing.T) {
 func TestSanitizeNils_MapWrapper(t *testing.T) {
 	// Simulates handler pattern: map[string]interface{}{"data": nilSlice}
 	var items []string
-	v := map[string]interface{}{"data": items}
+	v := map[string]any{"data": items}
 	sanitized := sanitizeNils(v)
 	b, _ := json.Marshal(sanitized)
 	expected := `{"data":[]}`

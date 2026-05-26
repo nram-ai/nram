@@ -64,15 +64,15 @@ func (v *integrationUserIdentityLookup) GetIdentityByID(_ context.Context, _ uui
 
 // integrationRouterConfig holds all dependencies needed to build the full router.
 type integrationRouterConfig struct {
-	store     http.HandlerFunc
-	list      http.HandlerFunc
-	detail    http.HandlerFunc
-	update    http.HandlerFunc
-	delete_   http.HandlerFunc
-	batchGet  http.HandlerFunc
-	recall    http.HandlerFunc
+	store      http.HandlerFunc
+	list       http.HandlerFunc
+	detail     http.HandlerFunc
+	update     http.HandlerFunc
+	delete_    http.HandlerFunc
+	batchGet   http.HandlerFunc
+	recall     http.HandlerFunc
 	bulkForget http.HandlerFunc
-	meRecall  http.HandlerFunc
+	meRecall   http.HandlerFunc
 	meProjects http.HandlerFunc
 	// admin
 	adminDashboard   http.HandlerFunc
@@ -140,7 +140,7 @@ func nullableHandler(h http.HandlerFunc) http.HandlerFunc {
 // Request helpers
 // ---------------------------------------------------------------------------
 
-func integrationRequest(t *testing.T, router http.Handler, method, path string, body interface{}, token string) *httptest.ResponseRecorder {
+func integrationRequest(t *testing.T, router http.Handler, method, path string, body any, token string) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
@@ -158,7 +158,7 @@ func integrationRequest(t *testing.T, router http.Handler, method, path string, 
 	return w
 }
 
-func decodeJSON(t *testing.T, w *httptest.ResponseRecorder, dest interface{}) {
+func decodeJSON(t *testing.T, w *httptest.ResponseRecorder, dest any) {
 	t.Helper()
 	if err := json.NewDecoder(w.Body).Decode(dest); err != nil {
 		t.Fatalf("decode JSON (status %d, body %q): %v", w.Code, w.Body.String(), err)
@@ -208,7 +208,7 @@ func TestHTTP_StoreMemory_Success(t *testing.T) {
 		store: NewStoreHandler(svc, nil),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "The user always prefers dark mode.",
 		"source":  "conversation",
 		"tags":    []string{"ui", "preference"},
@@ -265,7 +265,7 @@ func TestHTTP_StoreMemory_MissingContent(t *testing.T) {
 		store: NewStoreHandler(svc, nil),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"source": "test",
 	}
 
@@ -284,7 +284,7 @@ func TestHTTP_StoreMemory_InvalidProjectID(t *testing.T) {
 		store: NewStoreHandler(svc, nil),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "some content",
 	}
 
@@ -326,7 +326,7 @@ func TestHTTP_RecallMemory_Success(t *testing.T) {
 		recall: NewRecallHandler(svc),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"query": "dark mode",
 		"limit": 10,
 	}
@@ -375,7 +375,7 @@ func TestHTTP_RecallMemory_MissingQuery(t *testing.T) {
 		recall: NewRecallHandler(svc),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"limit": 10,
 	}
 
@@ -409,7 +409,7 @@ func TestHTTP_RecallMemory_EmptyResults(t *testing.T) {
 		recall: NewRecallHandler(svc),
 	})
 
-	body := map[string]interface{}{"query": "something obscure"}
+	body := map[string]any{"query": "something obscure"}
 	w := integrationRequest(t, router, http.MethodPost, "/v1/projects/"+projectID.String()+"/memories/recall", body, token)
 
 	if w.Code != http.StatusOK {
@@ -450,7 +450,7 @@ func TestHTTP_MeRecall_Unauthenticated(t *testing.T) {
 		meRecall: NewMeRecallHandler(svc, users),
 	})
 
-	body := map[string]interface{}{"query": "anything"}
+	body := map[string]any{"query": "anything"}
 	// No token.
 	w := integrationRequest(t, router, http.MethodPost, "/v1/me/memories/recall", body, "")
 
@@ -480,7 +480,7 @@ func TestHTTP_BulkForget_Success(t *testing.T) {
 		bulkForget: NewBulkForgetHandler(svc, nil),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{id1.String(), id2.String()},
 	}
 
@@ -571,7 +571,7 @@ func TestHTTP_UpdateMemory_Success(t *testing.T) {
 		update: NewUpdateHandler(svc, nil),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "new content",
 	}
 
@@ -624,7 +624,7 @@ func TestHTTP_BatchGet_Success(t *testing.T) {
 		batchGet: NewBatchGetHandler(svc),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{id1.String(), id2.String(), idMissing.String()},
 	}
 
@@ -663,7 +663,7 @@ func TestHTTP_BatchGet_EmptyIDs(t *testing.T) {
 		batchGet: NewBatchGetHandler(svc),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{},
 	}
 
@@ -913,7 +913,7 @@ func TestHTTP_CreateProject_Success(t *testing.T) {
 		meProjects: NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{}),
 	})
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"name":        "Integration Test Project",
 		"slug":        "integration-test",
 		"description": "Created from integration test",
@@ -1026,18 +1026,18 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 		name       string
 		method     string
 		path       string
-		body       interface{}
+		body       any
 		token      string
 		wantStatus int
 		wantCode   string
 		// handler overrides (lazily built per subtest)
-		store     http.HandlerFunc
-		recall    http.HandlerFunc
-		batchGet  http.HandlerFunc
+		store      http.HandlerFunc
+		recall     http.HandlerFunc
+		batchGet   http.HandlerFunc
 		bulkForget http.HandlerFunc
-		update    http.HandlerFunc
-		list      http.HandlerFunc
-		detail    http.HandlerFunc
+		update     http.HandlerFunc
+		list       http.HandlerFunc
+		detail     http.HandlerFunc
 	}
 
 	// Shared mocks.
@@ -1050,7 +1050,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 			name:       "store no content 400",
 			method:     http.MethodPost,
 			path:       "/v1/projects/" + projectID.String() + "/memories",
-			body:       map[string]interface{}{"source": "x"},
+			body:       map[string]any{"source": "x"},
 			token:      memberToken,
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "bad_request",
@@ -1060,7 +1060,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 			name:       "store invalid project uuid 400",
 			method:     http.MethodPost,
 			path:       "/v1/projects/not-uuid/memories",
-			body:       map[string]interface{}{"content": "x"},
+			body:       map[string]any{"content": "x"},
 			token:      memberToken,
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "bad_request",
@@ -1070,7 +1070,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 			name:       "recall no query 400",
 			method:     http.MethodPost,
 			path:       "/v1/projects/" + projectID.String() + "/memories/recall",
-			body:       map[string]interface{}{},
+			body:       map[string]any{},
 			token:      memberToken,
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "bad_request",
@@ -1080,7 +1080,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 			name:       "batch get empty ids 400",
 			method:     http.MethodPost,
 			path:       "/v1/projects/" + projectID.String() + "/memories/get",
-			body:       map[string]interface{}{"ids": []string{}},
+			body:       map[string]any{"ids": []string{}},
 			token:      memberToken,
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "bad_request",
@@ -1090,7 +1090,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 			name:       "bulk forget no filter 400",
 			method:     http.MethodPost,
 			path:       "/v1/projects/" + projectID.String() + "/memories/forget",
-			body:       map[string]interface{}{},
+			body:       map[string]any{},
 			token:      memberToken,
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "bad_request",
@@ -1100,7 +1100,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 			name:   "update missing fields 400",
 			method: http.MethodPut,
 			path:   "/v1/projects/" + projectID.String() + "/memories/" + uuid.New().String(),
-			body:   map[string]interface{}{},
+			body:   map[string]any{},
 			token:  memberToken,
 			// service returns "at least one of" error => mapped to 400
 			wantStatus: http.StatusBadRequest,
@@ -1138,7 +1138,6 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			router := newIntegrationRouter(t, integrationRouterConfig{
 				store:      tc.store,
@@ -1201,7 +1200,7 @@ func TestHTTP_NilTags_BecomeEmptyArray(t *testing.T) {
 	})
 
 	// Do not provide tags in the request.
-	body := map[string]interface{}{
+	body := map[string]any{
 		"content": "A memory without any tags.",
 	}
 
@@ -1252,7 +1251,7 @@ func TestHTTP_NilMemories_BecomeEmptyArray(t *testing.T) {
 		recall: NewRecallHandler(svc),
 	})
 
-	body := map[string]interface{}{"query": "anything"}
+	body := map[string]any{"query": "anything"}
 	w := integrationRequest(t, router, http.MethodPost, "/v1/projects/"+projectID.String()+"/memories/recall", body, token)
 
 	if w.Code != http.StatusOK {

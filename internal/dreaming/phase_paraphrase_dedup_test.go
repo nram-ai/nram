@@ -3,6 +3,7 @@ package dreaming
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -166,13 +167,7 @@ func TestParaphraseDedupPhase_SupersedesNearDuplicate(t *testing.T) {
 		t.Errorf("loser should have EmbeddingDim cleared on supersede; got %v", *loserUpdate.EmbeddingDim)
 	}
 
-	purgedLoser := false
-	for _, id := range vs.deleted {
-		if id == newer.ID {
-			purgedLoser = true
-			break
-		}
-	}
+	purgedLoser := slices.Contains(vs.deleted, newer.ID)
 	if !purgedLoser {
 		t.Errorf("expected vector purge on loser %s; deleted=%v", newer.ID, vs.deleted)
 	}
@@ -216,7 +211,7 @@ func TestParaphraseDedupPhase_StampsSurvivorWithoutMatch(t *testing.T) {
 	if stamped.ID != mem.ID {
 		t.Errorf("stamped wrong memory; got %s, want %s", stamped.ID, mem.ID)
 	}
-	var meta map[string]interface{}
+	var meta map[string]any
 	_ = json.Unmarshal(stamped.Metadata, &meta)
 	if _, ok := meta[ParaphraseCheckedStampKey]; !ok {
 		t.Errorf("survivor should carry %s stamp; got metadata=%s", ParaphraseCheckedStampKey, string(stamped.Metadata))
@@ -230,7 +225,7 @@ func TestParaphraseDedupPhase_SkipsAlreadyStamped(t *testing.T) {
 	ns := uuid.New()
 	dim := 2
 	mem, vec := userMemoryWithVector("Content already paraphrase-checked", 1.0, time.Now(), dim, ns, 1.0)
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		ParaphraseCheckedStampKey: mem.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
 	raw, _ := json.Marshal(meta)
@@ -418,4 +413,3 @@ func TestParaphraseDedupPhase_SkipsUnembeddedMemories(t *testing.T) {
 		}
 	}
 }
-

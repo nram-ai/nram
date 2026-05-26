@@ -31,10 +31,7 @@ func (s *stubReader) ListByNamespace(_ context.Context, _ uuid.UUID, limit, offs
 	if offset >= len(s.memories) {
 		return []model.Memory{}, nil
 	}
-	end := offset + limit
-	if end > len(s.memories) {
-		end = len(s.memories)
-	}
+	end := min(offset+limit, len(s.memories))
 	out := make([]model.Memory, end-offset)
 	copy(out, s.memories[offset:end])
 	return out, nil
@@ -240,4 +237,3 @@ func TestIterateMemoriesByNamespace_GuardsNilArguments(t *testing.T) {
 		t.Fatal("expected nil-callback error")
 	}
 }
-

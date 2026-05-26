@@ -192,7 +192,7 @@ func TestHandleMemoryList_ProjectNotFound(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "nonexistent",
 	}
 
@@ -225,7 +225,7 @@ func TestHandleMemoryList_DefaultsToGlobal(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{}
+	req.Params.Arguments = map[string]any{}
 
 	ctx := buildAuthCtx(userID)
 	result, err := handleMemoryList(ctx, srv, req)
@@ -290,7 +290,7 @@ func TestHandleMemoryList_NonGlobalIncludesGlobal(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "myproj",
 	}
 
@@ -349,7 +349,7 @@ func TestHandleMemoryList_GlobalProjectDoesNotDoubleInclude(t *testing.T) {
 
 	// Explicitly request "global" — should NOT double-include global.
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "global",
 	}
 
@@ -391,7 +391,7 @@ func TestHandleMemoryList_WithMemories(t *testing.T) {
 	}
 	mem2 := model.Memory{
 		ID: uuid.New(), Content: "second memory",
-		Tags: []string{"tag2", "tag3"},
+		Tags:      []string{"tag2", "tag3"},
 		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
 	}
 
@@ -416,7 +416,7 @@ func TestHandleMemoryList_WithMemories(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 		"limit":   float64(10),
 		"offset":  float64(0),
@@ -476,7 +476,7 @@ func TestHandleMemoryList_LimitClamped(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"limit": float64(500),
 	}
 
@@ -518,7 +518,7 @@ func TestHandleMemoryList_CountError(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{}
+	req.Params.Arguments = map[string]any{}
 
 	ctx := buildAuthCtx(userID)
 	result, err := handleMemoryList(ctx, srv, req)
@@ -548,7 +548,7 @@ func TestHandleMemoryList_ListError(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{}
+	req.Params.Arguments = map[string]any{}
 
 	ctx := buildAuthCtx(userID)
 	result, err := handleMemoryList(ctx, srv, req)
@@ -578,7 +578,7 @@ func TestHandleMemoryList_EmptyList(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{}
+	req.Params.Arguments = map[string]any{}
 
 	ctx := buildAuthCtx(userID)
 	result, err := handleMemoryList(ctx, srv, req)
@@ -636,7 +636,7 @@ func TestHandleMemoryList_Pagination(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 		"limit":   float64(10),
 		"offset":  float64(10),
@@ -694,7 +694,7 @@ func TestHandleMemoryList_NoGlobalProjectGraceful(t *testing.T) {
 	srv := newTestServer(deps)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "myproj",
 	}
 
@@ -752,7 +752,7 @@ func TestHandleMemoryList_AlwaysHidesSuperseded(t *testing.T) {
 	// stripped from the schema) and unconditionally sets HideSuperseded=true
 	// before calling the store. Result: only the winner surfaces.
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project":            "myproj",
 		"include_superseded": true,
 	}

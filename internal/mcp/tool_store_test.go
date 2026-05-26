@@ -29,12 +29,12 @@ func (m *mockUserRepoStore) GetByID(_ context.Context, _ uuid.UUID) (*model.User
 }
 
 type mockProjectRepoStore struct {
-	project     *model.Project
-	getErr      error
-	created     *model.Project
-	createErr   error
-	listResult  []model.Project
-	listErr     error
+	project    *model.Project
+	getErr     error
+	created    *model.Project
+	createErr  error
+	listResult []model.Project
+	listErr    error
 }
 
 func (m *mockProjectRepoStore) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (*model.Project, error) {
@@ -137,7 +137,7 @@ func TestHandleMemoryStore_NoHTTPRequest(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 		"content": "hello",
 	}
@@ -155,7 +155,7 @@ func TestHandleMemoryStore_NoAuth(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 		"content": "hello",
 	}
@@ -174,7 +174,7 @@ func TestHandleMemoryStore_MissingContent(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 	}
 
@@ -197,7 +197,7 @@ func TestHandleMemoryStore_UserNotFound(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
 		"content": "hello",
 	}
@@ -232,12 +232,12 @@ func TestHandleMemoryStore_ExistingProject(t *testing.T) {
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "store"
-	callReq.Params.Arguments = map[string]interface{}{
+	callReq.Params.Arguments = map[string]any{
 		"project":  "test",
 		"content":  "hello world",
 		"source":   "test-source",
-		"tags":     []interface{}{"tag1", "tag2"},
-		"metadata": map[string]interface{}{"key": "value"},
+		"tags":     []any{"tag1", "tag2"},
+		"metadata": map[string]any{"key": "value"},
 	}
 
 	ctx := buildAuthCtx(userID)
@@ -287,7 +287,7 @@ func TestHandleMemoryStore_AutoCreateProject(t *testing.T) {
 
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = "store"
-	callReq.Params.Arguments = map[string]interface{}{
+	callReq.Params.Arguments = map[string]any{
 		"project": "new-project",
 		"content": "hello",
 	}
@@ -318,9 +318,9 @@ func TestHandleMemoryStoreBatch_NoHTTPRequest(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"items":   []interface{}{map[string]interface{}{"content": "a"}},
+		"items":   []any{map[string]any{"content": "a"}},
 	}
 
 	result, err := handleMemoryStoreBatch(context.Background(), srv, req)
@@ -336,9 +336,9 @@ func TestHandleMemoryStoreBatch_NoAuth(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"items":   []interface{}{map[string]interface{}{"content": "a"}},
+		"items":   []any{map[string]any{"content": "a"}},
 	}
 
 	ctx := buildNoAuthCtx()
@@ -355,9 +355,9 @@ func TestHandleMemoryStoreBatch_EmptyItems(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"items":   []interface{}{},
+		"items":   []any{},
 	}
 
 	ctx := buildAuthCtx(uuid.New())
@@ -384,9 +384,9 @@ func TestHandleMemoryStoreBatch_ItemMissingContent(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"items":   []interface{}{map[string]interface{}{"source": "no-content"}},
+		"items":   []any{map[string]any{"source": "no-content"}},
 	}
 
 	ctx := buildAuthCtx(userID)
@@ -405,7 +405,7 @@ func TestHandleMemoryStoreBatch_Success(t *testing.T) {
 	user := &model.User{ID: userID, NamespaceID: nsID}
 	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "test"}
 
-	batchSvc := newMockBatchStoreService(2)
+	batchSvc := newMockBatchStoreService()
 
 	deps := Dependencies{
 		Backend:       storage.BackendSQLite,
@@ -418,11 +418,11 @@ func TestHandleMemoryStoreBatch_Success(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "store_batch"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"project": "test",
-		"items": []interface{}{
-			map[string]interface{}{"content": "memory 1"},
-			map[string]interface{}{"content": "memory 2", "tags": []interface{}{"t1"}},
+		"items": []any{
+			map[string]any{"content": "memory 1"},
+			map[string]any{"content": "memory 2", "tags": []any{"t1"}},
 		},
 	}
 
@@ -450,13 +450,13 @@ func TestHandleMemoryStoreBatch_Success(t *testing.T) {
 func TestExtractStringSlice(t *testing.T) {
 	tests := []struct {
 		name string
-		in   interface{}
+		in   any
 		want int
 	}{
 		{"nil", nil, 0},
-		{"empty", []interface{}{}, 0},
-		{"strings", []interface{}{"a", "b"}, 2},
-		{"mixed", []interface{}{"a", 42}, 1},
+		{"empty", []any{}, 0},
+		{"strings", []any{"a", "b"}, 2},
+		{"mixed", []any{"a", 42}, 1},
 		{"not_slice", "hello", 0},
 	}
 	for _, tt := range tests {
@@ -472,7 +472,7 @@ func TestExtractStringSlice(t *testing.T) {
 }
 
 func TestExtractRawJSON(t *testing.T) {
-	result := extractRawJSON(map[string]interface{}{"key": "val"})
+	result := extractRawJSON(map[string]any{"key": "val"})
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -490,13 +490,13 @@ func TestExtractRawJSON(t *testing.T) {
 }
 
 func TestExtractBatchItems_Valid(t *testing.T) {
-	raw := []interface{}{
-		map[string]interface{}{
+	raw := []any{
+		map[string]any{
 			"content": "hello",
 			"source":  "src",
-			"tags":    []interface{}{"t1"},
+			"tags":    []any{"t1"},
 		},
-		map[string]interface{}{
+		map[string]any{
 			"content": "world",
 		},
 	}
@@ -520,8 +520,8 @@ func TestExtractBatchItems_Valid(t *testing.T) {
 }
 
 func TestExtractBatchItems_MissingContent(t *testing.T) {
-	raw := []interface{}{
-		map[string]interface{}{"source": "only-source"},
+	raw := []any{
+		map[string]any{"source": "only-source"},
 	}
 	_, err := extractBatchItems(raw)
 	if err == nil {
@@ -530,7 +530,7 @@ func TestExtractBatchItems_MissingContent(t *testing.T) {
 }
 
 func TestExtractBatchItems_InvalidType(t *testing.T) {
-	raw := []interface{}{"not-a-map"}
+	raw := []any{"not-a-map"}
 	_, err := extractBatchItems(raw)
 	if err == nil {
 		t.Fatal("expected error for non-object item")
@@ -540,11 +540,11 @@ func TestExtractBatchItems_InvalidType(t *testing.T) {
 // --- test helpers ---
 
 func containsField(schema string, field string) bool {
-	var s map[string]interface{}
+	var s map[string]any
 	if err := json.Unmarshal([]byte(schema), &s); err != nil {
 		return false
 	}
-	props, ok := s["properties"].(map[string]interface{})
+	props, ok := s["properties"].(map[string]any)
 	if !ok {
 		return false
 	}
@@ -618,7 +618,7 @@ func newMockStoreService(memID, projectID uuid.UUID, slug string) *service.Store
 	)
 }
 
-func newMockBatchStoreService(memoriesCreated int) *service.BatchStoreService {
+func newMockBatchStoreService() *service.BatchStoreService {
 	nsID := uuid.New()
 	return service.NewBatchStoreService(
 		&mockMemoryRepo{id: uuid.New()},

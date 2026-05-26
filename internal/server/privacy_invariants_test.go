@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -153,7 +154,7 @@ func TestPrivacy_TenancyListsAreMetadataOnly(t *testing.T) {
 			}
 			defer resp.Body.Close()
 
-			var body interface{}
+			var body any
 			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 				t.Fatalf("decode body: %v", err)
 			}
@@ -169,21 +170,19 @@ func TestPrivacy_TenancyListsAreMetadataOnly(t *testing.T) {
 // findKey walks the decoded JSON value recursively and returns the first
 // forbidden key it finds, or "" if none. Used by privacy tests to assert
 // response shapes carry no content fields.
-func findKey(v interface{}, forbidden []string) string {
+func findKey(v any, forbidden []string) string {
 	switch tv := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for k, child := range tv {
 			lk := strings.ToLower(k)
-			for _, f := range forbidden {
-				if lk == f {
-					return k
-				}
+			if slices.Contains(forbidden, lk) {
+				return k
 			}
 			if found := findKey(child, forbidden); found != "" {
 				return found
 			}
 		}
-	case []interface{}:
+	case []any:
 		for _, child := range tv {
 			if found := findKey(child, forbidden); found != "" {
 				return found

@@ -261,7 +261,7 @@ func TestLegacyZeroConfidenceRestore_Idempotent(t *testing.T) {
 	}
 
 	stmt := `UPDATE memories SET confidence = 1.0 WHERE confidence = 0 AND id NOT IN (SELECT target_id FROM dream_logs WHERE target_type = 'memory' AND operation = 'confidence_adjusted')`
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatalf("pass %d: %v", i, err)
 		}

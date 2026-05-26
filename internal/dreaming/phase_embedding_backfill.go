@@ -77,7 +77,7 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 		cap = 200
 	}
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"sub_phase":     model.DreamPhaseEmbeddingBackfill,
 		"candidates":    0,
 		"visited":       0,
@@ -156,7 +156,7 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 // on success; false on embedder unavailability, embedder failure, or
 // persistent vector-store error. On false the caller falls back to
 // clearDim so the divergent row stops claiming a vector.
-func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memory, dim int, budget *TokenBudget, stats map[string]interface{}) bool {
+func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memory, dim int, budget *TokenBudget, stats map[string]any) bool {
 	if p.embedder == nil {
 		return false
 	}
@@ -220,7 +220,7 @@ func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memor
 // vector that no longer exists. The memory remains usable via tag,
 // keyword, and graph recall; vector recall will pick it back up after
 // the next content edit triggers a re-embed at the write path.
-func (p *EmbeddingBackfillPhase) clearDim(ctx context.Context, mem *model.Memory, stats map[string]interface{}) {
+func (p *EmbeddingBackfillPhase) clearDim(ctx context.Context, mem *model.Memory, stats map[string]any) {
 	mem.EmbeddingDim = nil
 	if err := p.memWriter.ClearEmbeddingDim(ctx, mem.ID, mem.NamespaceID); err != nil {
 		slog.Warn("dreaming: embedding backfill clear dim failed",
@@ -231,7 +231,7 @@ func (p *EmbeddingBackfillPhase) clearDim(ctx context.Context, mem *model.Memory
 	stats["cleared"] = stats["cleared"].(int) + 1
 }
 
-func (p *EmbeddingBackfillPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWriter, stats map[string]interface{}, budget *TokenBudget, tokensBefore int) {
+func (p *EmbeddingBackfillPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWriter, stats map[string]any, budget *TokenBudget, tokensBefore int) {
 	if budget != nil {
 		stats["tokens_spent"] = budget.Used() - tokensBefore
 		stats["budget_remaining"] = budget.Remaining()

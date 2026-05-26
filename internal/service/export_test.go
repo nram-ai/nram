@@ -51,10 +51,7 @@ func (m *mockExportMemoryReader) ListByNamespace(_ context.Context, namespaceID 
 	if offset >= len(mems) {
 		return nil, nil
 	}
-	end := offset + limit
-	if end > len(mems) {
-		end = len(mems)
-	}
+	end := min(offset+limit, len(mems))
 	return mems[offset:end], nil
 }
 
@@ -73,10 +70,7 @@ func (m *mockExportMemoryReader) ListByNamespaceFiltered(_ context.Context, name
 	if offset >= len(rows) {
 		return nil, nil
 	}
-	end := offset + limit
-	if end > len(rows) {
-		end = len(rows)
-	}
+	end := min(offset+limit, len(rows))
 	return rows[offset:end], nil
 }
 
@@ -422,7 +416,7 @@ func TestExport_JSONFormat_EmptyProject(t *testing.T) {
 
 	// Ensure slices are non-nil for clean JSON marshalling.
 	b, _ := json.Marshal(data)
-	var raw map[string]interface{}
+	var raw map[string]any
 	_ = json.Unmarshal(b, &raw)
 	if raw["memories"] == nil {
 		t.Error("memories should be non-nil empty array in JSON")

@@ -148,7 +148,7 @@ func TestMemoryRepo_BumpReinforcement_Batch(t *testing.T) {
 		nsID := createTestMemoryNamespace(t, ctx, db)
 
 		var ids []uuid.UUID
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			mem := newTestMemory(nsID)
 			mem.Confidence = 0.5
 			if err := repo.Create(ctx, mem); err != nil {

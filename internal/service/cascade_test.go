@@ -173,7 +173,7 @@ func TestCascade_RepeatedLookupsHitCache(t *testing.T) {
 	}}
 	r := NewCascadeResolver(nil, projects, &mockCascadeUsers{})
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_ = r.ResolveDedupThreshold(context.Background(), projNS)
 		_ = r.ResolveEnrichmentEnabled(context.Background(), projNS)
 	}

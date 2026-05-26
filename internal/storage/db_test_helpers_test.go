@@ -20,7 +20,7 @@ import (
 // (e.g. Postgres JSONB normalization). Falls back to string comparison
 // if either value is not valid JSON.
 func jsonEqual(a, b string) bool {
-	var ja, jb interface{}
+	var ja, jb any
 	if err := json.Unmarshal([]byte(a), &ja); err != nil {
 		return a == b
 	}

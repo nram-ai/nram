@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-func ptrF64(v float64) *float64 { return &v }
-
 func TestCosineSim_DegenerateInputs(t *testing.T) {
 	cases := []struct {
 		name string
@@ -80,7 +78,8 @@ func TestMmrSelect_EmptyInput(t *testing.T) {
 }
 
 func TestMmrSelect_SingleElement(t *testing.T) {
-	in := []RecallResult{resultAt("solo", 0.9, ptrF64(0.9), []float32{1, 0, 0})}
+	simSolo := 0.9
+	in := []RecallResult{resultAt("solo", 0.9, &simSolo, []float32{1, 0, 0})}
 	got := mmrSelect(in, nil, 0.5, 10)
 	if len(got) != 1 || got[0].Content != "solo" {
 		t.Errorf("single-element input should return the input, got %+v", got)
@@ -88,9 +87,10 @@ func TestMmrSelect_SingleElement(t *testing.T) {
 }
 
 func TestMmrSelect_NonPositiveWindowReturnsInput(t *testing.T) {
+	simA, simB := 0.9, 0.8
 	in := []RecallResult{
-		resultAt("a", 0.9, ptrF64(0.9), []float32{1, 0, 0}),
-		resultAt("b", 0.8, ptrF64(0.8), []float32{0, 1, 0}),
+		resultAt("a", 0.9, &simA, []float32{1, 0, 0}),
+		resultAt("b", 0.8, &simB, []float32{0, 1, 0}),
 	}
 	got := mmrSelect(in, nil, 0.5, 0)
 	if len(got) != len(in) {
@@ -105,10 +105,11 @@ func TestMmrSelect_NonPositiveWindowReturnsInput(t *testing.T) {
 func TestMmrSelect_LambdaOneFastPath(t *testing.T) {
 	// lambda 1.0 should preserve composite order: passing comes in already
 	// sorted by composite score, so the result is passing[:window].
+	simFirst, simSecond, simThird := 0.9, 0.85, 0.6
 	in := []RecallResult{
-		resultAt("first", 0.9, ptrF64(0.9), []float32{1, 0, 0}),
-		resultAt("second", 0.85, ptrF64(0.85), []float32{0.99, 0.01, 0}), // near-dup of first
-		resultAt("third", 0.6, ptrF64(0.6), []float32{0, 1, 0}),
+		resultAt("first", 0.9, &simFirst, []float32{1, 0, 0}),
+		resultAt("second", 0.85, &simSecond, []float32{0.99, 0.01, 0}), // near-dup of first
+		resultAt("third", 0.6, &simThird, []float32{0, 1, 0}),
 	}
 	got := mmrSelect(in, nil, 1.0, 2)
 	want := []string{"first", "second"}
@@ -120,10 +121,11 @@ func TestMmrSelect_LambdaOneFastPath(t *testing.T) {
 func TestMmrSelect_LambdaZeroFastPath(t *testing.T) {
 	// lambda 0.0 disables MMR (pure-diversity mode is not implemented; the
 	// schema description documents 0.0 as a disable, matching this fast path).
+	simFirst, simSecond, simThird := 0.9, 0.85, 0.6
 	in := []RecallResult{
-		resultAt("first", 0.9, ptrF64(0.9), []float32{1, 0, 0}),
-		resultAt("second", 0.85, ptrF64(0.85), []float32{0.99, 0.01, 0}),
-		resultAt("third", 0.6, ptrF64(0.6), []float32{0, 1, 0}),
+		resultAt("first", 0.9, &simFirst, []float32{1, 0, 0}),
+		resultAt("second", 0.85, &simSecond, []float32{0.99, 0.01, 0}),
+		resultAt("third", 0.6, &simThird, []float32{0, 1, 0}),
 	}
 	got := mmrSelect(in, nil, 0.0, 2)
 	want := []string{"first", "second"}
@@ -137,12 +139,13 @@ func TestMmrSelect_DemotesNearDuplicate(t *testing.T) {
 	// e is unrelated. With lambda 0.5 and windowSize 3, MMR should pick one
 	// representative from the cluster and leave room for e instead of
 	// returning the top-3 of the cluster.
+	simA, simB, simC, simD, simE := 0.85, 0.84, 0.83, 0.82, 0.65
 	in := []RecallResult{
-		resultAt("a", 0.85, ptrF64(0.85), []float32{1, 0.1, 0}),
-		resultAt("b", 0.84, ptrF64(0.84), []float32{1, 0.12, 0}),
-		resultAt("c", 0.83, ptrF64(0.83), []float32{1, 0.11, 0}),
-		resultAt("d", 0.82, ptrF64(0.82), []float32{1, 0.13, 0}),
-		resultAt("e", 0.65, ptrF64(0.65), []float32{0, 1, 0}),
+		resultAt("a", 0.85, &simA, []float32{1, 0.1, 0}),
+		resultAt("b", 0.84, &simB, []float32{1, 0.12, 0}),
+		resultAt("c", 0.83, &simC, []float32{1, 0.11, 0}),
+		resultAt("d", 0.82, &simD, []float32{1, 0.13, 0}),
+		resultAt("e", 0.65, &simE, []float32{0, 1, 0}),
 	}
 	got := mmrSelect(in, nil, 0.5, 3)
 	if len(got) != 3 {
@@ -166,9 +169,10 @@ func TestMmrSelect_DemotesNearDuplicate(t *testing.T) {
 }
 
 func TestMmrSelect_WindowLargerThanInputDoesNotPanic(t *testing.T) {
+	simA, simB := 0.9, 0.8
 	in := []RecallResult{
-		resultAt("a", 0.9, ptrF64(0.9), []float32{1, 0, 0}),
-		resultAt("b", 0.8, ptrF64(0.8), []float32{0, 1, 0}),
+		resultAt("a", 0.9, &simA, []float32{1, 0, 0}),
+		resultAt("b", 0.8, &simB, []float32{0, 1, 0}),
 	}
 	got := mmrSelect(in, nil, 0.5, 100)
 	if len(got) != 2 {
@@ -180,9 +184,10 @@ func TestMmrSelect_FewerThanTwoEmbeddedFallsThrough(t *testing.T) {
 	// One embedded candidate plus a missing-embedding candidate. With only
 	// one embedded, MMR is degenerate and the helper falls through to
 	// composite-order truncation (same as lambda 1.0 path).
+	simFirst, simMissing := 0.9, 0.8
 	in := []RecallResult{
-		resultAt("first", 0.9, ptrF64(0.9), []float32{1, 0, 0}),
-		resultAt("missing", 0.8, ptrF64(0.8), nil),
+		resultAt("first", 0.9, &simFirst, []float32{1, 0, 0}),
+		resultAt("missing", 0.8, &simMissing, nil),
 	}
 	got := mmrSelect(in, nil, 0.5, 2)
 	want := []string{"first", "missing"}
@@ -198,11 +203,12 @@ func TestMmrSelect_PreservesHighCompositeMissingEmbedding(t *testing.T) {
 	// demoted the rank-0 row to the end of the output, where the final-limit
 	// slice could truncate it out. The current helper anchors missing rows at
 	// their composite-rank position so the high-composite hit survives.
+	simEmbA, simEmbB, simEmbC := 0.85, 0.80, 0.75
 	in := []RecallResult{
 		resultAt("missing_high", 0.95, nil, nil),
-		resultAt("emb_a", 0.85, ptrF64(0.85), []float32{1, 0.1, 0}),
-		resultAt("emb_b", 0.80, ptrF64(0.80), []float32{1, 0.11, 0}),
-		resultAt("emb_c", 0.75, ptrF64(0.75), []float32{1, 0.12, 0}),
+		resultAt("emb_a", 0.85, &simEmbA, []float32{1, 0.1, 0}),
+		resultAt("emb_b", 0.80, &simEmbB, []float32{1, 0.11, 0}),
+		resultAt("emb_c", 0.75, &simEmbC, []float32{1, 0.12, 0}),
 	}
 	got := mmrSelect(in, nil, 0.5, 4)
 	if len(got) != 4 {
@@ -229,10 +235,11 @@ func TestMmrSelect_MissingEmbeddingsAnchoredAtTailComposite(t *testing.T) {
 	// Mirror of the high-composite case: a low-composite missing-embedding
 	// candidate stays at its tail composite-rank position rather than being
 	// promoted into the MMR-reordered embedded slots.
+	simEmbA, simEmbB, simMissingLow := 0.9, 0.85, 0.5
 	in := []RecallResult{
-		resultAt("emb_a", 0.9, ptrF64(0.9), []float32{1, 0.1, 0}),
-		resultAt("emb_b", 0.85, ptrF64(0.85), []float32{1, 0.11, 0}),
-		resultAt("missing_low", 0.5, ptrF64(0.5), nil),
+		resultAt("emb_a", 0.9, &simEmbA, []float32{1, 0.1, 0}),
+		resultAt("emb_b", 0.85, &simEmbB, []float32{1, 0.11, 0}),
+		resultAt("missing_low", 0.5, &simMissingLow, nil),
 	}
 	got := mmrSelect(in, nil, 0.5, 3)
 	if len(got) != 3 {
@@ -256,10 +263,11 @@ func TestMmrSelect_UsesSimilarityNotScoreForRelevance(t *testing.T) {
 	//   c:        Score 0.60, Similarity 0.30  <- highest Score among remaining
 	// If MMR used Score for relevance, second pick would be c (0.60 > 0.40).
 	// Since MMR uses Similarity, second pick should be b (0.90 > 0.30).
+	simA, simC, simB := 0.5, 0.3, 0.9
 	in := []RecallResult{
-		resultAt("a", 0.95, ptrF64(0.5), []float32{1, 0, 0}),
-		resultAt("c", 0.60, ptrF64(0.3), []float32{0, 0, 1}),
-		resultAt("b", 0.40, ptrF64(0.9), []float32{0, 1, 0}),
+		resultAt("a", 0.95, &simA, []float32{1, 0, 0}),
+		resultAt("c", 0.60, &simC, []float32{0, 0, 1}),
+		resultAt("b", 0.40, &simB, []float32{0, 1, 0}),
 	}
 	got := mmrSelect(in, nil, 0.5, 2)
 	if len(got) != 2 || got[0].Content != "a" {
@@ -312,10 +320,11 @@ func TestMmrSelect_NegativeCosineDoesNotClampToZero(t *testing.T) {
 	// contribution. With a 0.0 floor, opposite's penalty is treated as 0
 	// and the two candidates tie on relevance plus 0 penalty, so the order
 	// would be ambiguous or favor whichever appears first.
+	simA, simNear, simOpposite := 0.90, 0.60, 0.60
 	in := []RecallResult{
-		resultAt("a", 0.90, ptrF64(0.90), []float32{1, 0, 0}),
-		resultAt("near", 0.60, ptrF64(0.60), []float32{1, 0, 0}),    // cosine to a = 1.0
-		resultAt("opposite", 0.60, ptrF64(0.60), []float32{-1, 0, 0}), // cosine to a = -1.0
+		resultAt("a", 0.90, &simA, []float32{1, 0, 0}),
+		resultAt("near", 0.60, &simNear, []float32{1, 0, 0}),         // cosine to a = 1.0
+		resultAt("opposite", 0.60, &simOpposite, []float32{-1, 0, 0}), // cosine to a = -1.0
 	}
 	got := mmrSelect(in, nil, 0.5, 2)
 	if len(got) != 2 || got[0].Content != "a" {

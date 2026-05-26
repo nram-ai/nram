@@ -174,7 +174,7 @@ func handleMigrateVectors(args []string, db *sql.DB) error {
 	for _, dim := range vectorDimensions {
 		table := qdrantCollectionName(dim)
 		pgTable := fmt.Sprintf("memory_vectors_%d", dim)
-		count, err := migrateVectorTable(ctx, db, client, pgTable, table, dim, parsed.BatchSize, parsed.DryRun)
+		count, err := migrateVectorTable(ctx, db, client, pgTable, table, parsed.BatchSize, parsed.DryRun)
 		if err != nil {
 			return fmt.Errorf("migrate-vectors: failed to migrate %s: %w", pgTable, err)
 		}
@@ -338,10 +338,11 @@ func migrateVectorTableReverse(ctx context.Context, db *sql.DB, client *qdrant.C
 		pgTable,
 	)
 
+	limit := uint32(batchSize)
 	for {
 		scrollReq := &qdrant.ScrollPoints{
 			CollectionName: collection,
-			Limit:          qdrant.PtrOf(uint32(batchSize)),
+			Limit:          &limit,
 			WithVectors:    qdrant.NewWithVectors(true),
 			Offset:         offset,
 		}
@@ -375,7 +376,7 @@ func migrateVectorTableReverse(ctx context.Context, db *sql.DB, client *qdrant.C
 					return total, fmt.Errorf("invalid point ID %q: %w", memoryID, err)
 				}
 
-				embedding := point.GetVectors().GetVector().GetData()
+				embedding := point.GetVectors().GetVector().GetDenseVector().GetData()
 				embeddingText := formatEmbeddingText(embedding)
 
 				if _, err := stmt.ExecContext(ctx, memoryID, embeddingText); err != nil {
@@ -408,7 +409,7 @@ func migrateVectorTableReverse(ctx context.Context, db *sql.DB, client *qdrant.C
 
 // migrateVectorTable reads vectors from a single pgvector dimension table and upserts them into Qdrant.
 // Returns the number of vectors processed.
-func migrateVectorTable(ctx context.Context, db *sql.DB, client *qdrant.Client, pgTable string, collection string, dimension int, batchSize int, dryRun bool) (int, error) {
+func migrateVectorTable(ctx context.Context, db *sql.DB, client *qdrant.Client, pgTable string, collection string, batchSize int, dryRun bool) (int, error) {
 	query := fmt.Sprintf(
 		`SELECT v.memory_id, m.namespace_id, v.embedding::text FROM %s v JOIN memories m ON v.memory_id = m.id`,
 		pgTable,

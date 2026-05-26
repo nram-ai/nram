@@ -176,9 +176,10 @@ func (s *QdrantStore) Upsert(ctx context.Context, kind VectorKind, id uuid.UUID,
 		return err
 	}
 
+	wait := true
 	_, err = s.client.Upsert(ctx, &qdrant.UpsertPoints{
 		CollectionName: collection,
-		Wait:           qdrant.PtrOf(true),
+		Wait:           &wait,
 		Points: []*qdrant.PointStruct{
 			{
 				Id:      qdrant.NewID(id.String()),
@@ -231,9 +232,10 @@ func (s *QdrantStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem)
 			}
 		}
 
+		wait := true
 		_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
 			CollectionName: collection,
-			Wait:           qdrant.PtrOf(true),
+			Wait:           &wait,
 			Points:         points,
 		})
 		if err != nil {
@@ -320,10 +322,7 @@ func (s *QdrantStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.
 		// NewVectorsDense. Read Dense first; fall back to Data so older
 		// servers keep working.
 		v := pt.GetVectors().GetVector()
-		vec := v.GetDense().GetData()
-		if len(vec) == 0 {
-			vec = v.GetData()
-		}
+		vec := v.GetDenseVector().GetData()
 		if len(vec) == 0 {
 			// Sparse or named-vector points are not produced by this store;
 			// skip rather than return a zero-length slice that callers would

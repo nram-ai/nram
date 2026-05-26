@@ -65,9 +65,9 @@ func TestWriteError(t *testing.T) {
 
 	var envelope struct {
 		Error struct {
-			Code    string      `json:"code"`
-			Message string      `json:"message"`
-			Details interface{} `json:"details"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details any    `json:"details"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
@@ -97,9 +97,9 @@ func TestWriteErrorWithDetails(t *testing.T) {
 
 	var envelope struct {
 		Error struct {
-			Code    string                 `json:"code"`
-			Message string                 `json:"message"`
-			Details map[string]interface{} `json:"details"`
+			Code    string         `json:"code"`
+			Message string         `json:"message"`
+			Details map[string]any `json:"details"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {

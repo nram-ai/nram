@@ -233,7 +233,7 @@ func (s *ImportService) Import(ctx context.Context, req *ImportRequest) (*Import
 		status = "partial"
 	}
 
-	logMeta, _ := json.Marshal(map[string]interface{}{
+	logMeta, _ := json.Marshal(map[string]any{
 		"format":   req.Format,
 		"imported": resp.Imported,
 		"skipped":  resp.Skipped,

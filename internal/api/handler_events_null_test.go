@@ -55,9 +55,9 @@ func TestEventsHandler_SSE_SanitizedDataLine(t *testing.T) {
 
 	// Extract the data: line.
 	var dataLine string
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, "data: ") {
-			dataLine = strings.TrimPrefix(line, "data: ")
+	for line := range strings.SplitSeq(body, "\n") {
+		if after, ok := strings.CutPrefix(line, "data: "); ok {
+			dataLine = after
 			break
 		}
 	}
@@ -127,9 +127,9 @@ func TestEventsHandler_SSE_NilDataFieldSanitized(t *testing.T) {
 	}
 
 	var dataLine string
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, "data: ") {
-			dataLine = strings.TrimPrefix(line, "data: ")
+	for line := range strings.SplitSeq(body, "\n") {
+		if after, ok := strings.CutPrefix(line, "data: "); ok {
+			dataLine = after
 			break
 		}
 	}
@@ -198,7 +198,7 @@ func TestEventsHandler_SSE_ReplayedEventSanitized(t *testing.T) {
 	body := rec.Body.String()
 
 	// Find a data: line that contains items.
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}

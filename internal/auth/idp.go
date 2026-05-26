@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	idpStateExpiry   = 10 * time.Minute
-	idpCallbackPath  = "/auth/idp/callback"
-	idpMaxStates     = 10000
+	idpStateExpiry    = 10 * time.Minute
+	idpCallbackPath   = "/auth/idp/callback"
+	idpMaxStates      = 10000
 	discoveryCacheTTL = 15 * time.Minute
 )
 
@@ -534,7 +534,7 @@ func (h *IdPHandler) fetchUserInfo(ctx context.Context, userinfoEndpoint, access
 		return nil, fmt.Errorf("userinfo returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var claims map[string]interface{}
+	var claims map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 256*1024)).Decode(&claims); err != nil {
 		return nil, fmt.Errorf("decode userinfo response: %w", err)
 	}
@@ -604,7 +604,7 @@ func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, ac
 }
 
 // extractUserInfoFromClaims extracts email and display name from OIDC claims.
-func extractUserInfoFromClaims(claims map[string]interface{}) *idpUserInfo {
+func extractUserInfoFromClaims(claims map[string]any) *idpUserInfo {
 	info := &idpUserInfo{}
 
 	if email, ok := claims["email"].(string); ok {

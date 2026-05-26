@@ -73,7 +73,7 @@ func TestScheduler_CancelCycle_RaceWithUnregister(t *testing.T) {
 	var wg sync.WaitGroup
 	var canceled atomic.Int64
 
-	for i := 0; i < cycles; i++ {
+	for range cycles {
 		id := uuid.New()
 		s.registerCycle(id, func() { canceled.Add(1) })
 

@@ -504,14 +504,8 @@ func handleMemoryProjects(ctx context.Context, s *Server, request mcp.CallToolRe
 
 	// Apply offset + limit slice. Bounds-safe: offset >= total returns empty;
 	// offset+limit > total clamps to total.
-	start := offset
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
+	start := min(offset, total)
+	end := min(start+limit, total)
 	page := projects[start:end]
 
 	items := make([]projectItem, 0, len(page))

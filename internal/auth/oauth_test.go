@@ -491,7 +491,7 @@ func TestTokenHandler_AuthCodeGrant_ValidPKCE(t *testing.T) {
 
 	// Verify the access token is a valid JWT
 	claims := &Claims{}
-	tok, err := jwt.ParseWithClaims(resp.AccessToken, claims, func(t *jwt.Token) (interface{}, error) {
+	tok, err := jwt.ParseWithClaims(resp.AccessToken, claims, func(t *jwt.Token) (any, error) {
 		return testSecret, nil
 	})
 	if err != nil {
@@ -692,7 +692,7 @@ func TestTokenHandler_RefreshTokenGrant(t *testing.T) {
 
 	// Verify the new access token is a valid JWT
 	claims := &Claims{}
-	tok, err := jwt.ParseWithClaims(refreshResp.AccessToken, claims, func(t *jwt.Token) (interface{}, error) {
+	tok, err := jwt.ParseWithClaims(refreshResp.AccessToken, claims, func(t *jwt.Token) (any, error) {
 		return testSecret, nil
 	})
 	if err != nil {

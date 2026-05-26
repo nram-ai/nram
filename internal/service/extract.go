@@ -43,9 +43,9 @@ func (f ExtractedFact) text() string {
 
 // ExtractedEntityData represents a single entity extracted by an LLM.
 type ExtractedEntityData struct {
-	Name       string                 `json:"name"`
-	Type       string                 `json:"type"`
-	Properties map[string]interface{} `json:"properties"`
+	Name       string         `json:"name"`
+	Type       string         `json:"type"`
+	Properties map[string]any `json:"properties"`
 }
 
 // ExtractedRelation represents a single relationship extracted by an LLM.
@@ -93,18 +93,18 @@ type LineageCreator interface {
 
 // ExtractionService orchestrates synchronous fact and entity extraction from memory content.
 type ExtractionService struct {
-	memories      MemoryRepository
-	projects      ProjectRepository
-	namespaces    NamespaceRepository
-	ingestionLogs IngestionLogRepository
-	entities      EntityCreator
-	relationships RelationshipCreator
-	lineage       LineageCreator
-	vectorStore   VectorStoreWriter
-	factProvider  func() provider.LLMProvider
+	memories       MemoryRepository
+	projects       ProjectRepository
+	namespaces     NamespaceRepository
+	ingestionLogs  IngestionLogRepository
+	entities       EntityCreator
+	relationships  RelationshipCreator
+	lineage        LineageCreator
+	vectorStore    VectorStoreWriter
+	factProvider   func() provider.LLMProvider
 	entityProvider func() provider.LLMProvider
-	embedProvider func() provider.EmbeddingProvider
-	settings      *SettingsService
+	embedProvider  func() provider.EmbeddingProvider
+	settings       *SettingsService
 }
 
 // NewExtractionService creates a new ExtractionService with the given
@@ -142,7 +142,6 @@ func NewExtractionService(
 		settings:       settings,
 	}
 }
-
 
 // Extract performs synchronous fact and entity extraction on the given store request.
 func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*ExtractResponse, error) {
@@ -459,4 +458,3 @@ func (s *ExtractionService) embedMemory(
 	}
 	mem.EmbeddingDim = &embDim
 }
-

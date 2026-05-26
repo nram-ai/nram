@@ -122,10 +122,11 @@ func NewAdminUsageHandler(cfg UsageConfig) http.HandlerFunc {
 		// success_only=true filters out rows recorded for failed provider
 		// calls so billing/cost rollups exclude error noise.
 		if raw := q.Get("success_only"); raw != "" {
-			if raw == "true" || raw == "1" {
+			switch raw {
+			case "true", "1":
 				v := true
 				filter.SuccessOnly = &v
-			} else if raw == "false" || raw == "0" {
+			case "false", "0":
 				v := false
 				filter.SuccessOnly = &v
 			}

@@ -10,7 +10,7 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
-func ptr[T any](v T) *T { return &v }
+func ptr[T any](v T) *T { p := v; return &p }
 
 // TestUsageStoreAggregation_SuccessErrorLatency exercises the new aggregate
 // columns (success_count, error_count, avg_latency_ms) on the storage path

@@ -185,7 +185,7 @@ func handleDreamCycleDetail(w http.ResponseWriter, r *http.Request, cfg DreamAdm
 		logs = []model.DreamLog{}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"cycle": cycle,
 		"logs":  logs,
 	})

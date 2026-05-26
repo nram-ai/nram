@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"regexp"
 	"sort"
 	"strings"
@@ -287,7 +288,7 @@ func (p *ConsolidationPhase) reinforce(
 
 	stale := collectReinforceStale(syntheses)
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"sub_phase":           "reinforce",
 		"syntheses_total":     len(syntheses),
 		"syntheses_stale":     len(stale),
@@ -404,8 +405,8 @@ func (p *ConsolidationPhase) reinforce(
 		stats["confidence_adjusted"] = stats["confidence_adjusted"].(int) + 1
 		if err := logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 			model.DreamOpConfidenceAdjusted, "memory", synthesis.ID,
-			map[string]interface{}{"confidence": oldConfidence},
-			map[string]interface{}{"confidence": newConfidence, "alignment": alignment}); err != nil {
+			map[string]any{"confidence": oldConfidence},
+			map[string]any{"confidence": newConfidence, "alignment": alignment}); err != nil {
 			slog.Warn("dreaming: log confidence adjustment failed", "err", err)
 		}
 
@@ -483,7 +484,7 @@ func (p *ConsolidationPhase) scoreAlignment(
 // reinforce sub-phase, so the log entry is attributed accordingly.
 func (p *ConsolidationPhase) supersedeOriginals(
 	ctx context.Context,
-	cycle *model.DreamCycle,
+	_ *model.DreamCycle,
 	synthesis *model.Memory,
 	logger *DreamLogWriter,
 ) {
@@ -515,8 +516,8 @@ func (p *ConsolidationPhase) supersedeOriginals(
 
 		if err := logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 			model.DreamOpMemorySuperseded, "memory", memID,
-			map[string]interface{}{"superseded_by": nil},
-			map[string]interface{}{"superseded_by": synthesis.ID.String()}); err != nil {
+			map[string]any{"superseded_by": nil},
+			map[string]any{"superseded_by": synthesis.ID.String()}); err != nil {
 			slog.Warn("dreaming: log supersession failed", "err", err)
 		}
 	}
@@ -585,21 +586,21 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 		eligible++
 	}
 
-	stats := map[string]interface{}{
-		"sub_phase":              "backfill_audit",
-		"candidates_total":       eligible,
-		"per_cycle_cap":          perCycleCap,
-		"audited":                0,
-		"passed":                 0,
-		"demoted":                0,
-		"orphans_demoted":        0,
-		"fetch_errors":           0,
-		"audit_errors":           0,
+	stats := map[string]any{
+		"sub_phase":               "backfill_audit",
+		"candidates_total":        eligible,
+		"per_cycle_cap":           perCycleCap,
+		"audited":                 0,
+		"passed":                  0,
+		"demoted":                 0,
+		"orphans_demoted":         0,
+		"fetch_errors":            0,
+		"audit_errors":            0,
 		"persistent_audit_errors": 0,
-		"skipped_budget":         0,
-		"embedding_calls":        0,
-		"judge_calls":            0,
-		"embedding_tokens_spent": 0,
+		"skipped_budget":          0,
+		"embedding_calls":         0,
+		"judge_calls":             0,
+		"embedding_tokens_spent":  0,
 	}
 	tokensBefore := budget.Used()
 
@@ -750,7 +751,7 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 
 // stampAudited records that a dream memory passed the novelty audit so
 // future cycles skip it. Mutates only the metadata field.
-func (p *ConsolidationPhase) stampAudited(ctx context.Context, mem *model.Memory, meta map[string]interface{}, reason string) {
+func (p *ConsolidationPhase) stampAudited(ctx context.Context, mem *model.Memory, meta map[string]any, reason string) {
 	p.writeAuditDecision(ctx, nil, mem, meta, reason, false)
 }
 
@@ -793,7 +794,7 @@ func isPersistentEmbedError(err error) bool {
 
 // demoteDream zeroes Confidence and stamps low_novelty so the recall service
 // excludes the row from competitive ranking. Logs DreamOpMemoryDemoted.
-func (p *ConsolidationPhase) demoteDream(ctx context.Context, logger *DreamLogWriter, mem *model.Memory, meta map[string]interface{}, reason string) {
+func (p *ConsolidationPhase) demoteDream(ctx context.Context, logger *DreamLogWriter, mem *model.Memory, meta map[string]any, reason string) {
 	p.writeAuditDecision(ctx, logger, mem, meta, reason, true)
 }
 
@@ -809,13 +810,13 @@ func (p *ConsolidationPhase) writeAuditDecision(
 	ctx context.Context,
 	logger *DreamLogWriter,
 	mem *model.Memory,
-	meta map[string]interface{},
+	meta map[string]any,
 	reason string,
 	demote bool,
 ) {
 	const subPhase = model.DreamSubPhaseBackfillAudit
 	if meta == nil {
-		meta = map[string]interface{}{}
+		meta = map[string]any{}
 	}
 	beforeConfidence := mem.Confidence
 
@@ -858,8 +859,8 @@ func (p *ConsolidationPhase) writeAuditDecision(
 	if logger != nil {
 		_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 			model.DreamOpMemoryDemoted, "memory", mem.ID,
-			map[string]interface{}{"confidence": beforeConfidence},
-			map[string]interface{}{
+			map[string]any{"confidence": beforeConfidence},
+			map[string]any{
 				"confidence":  0,
 				"low_novelty": true,
 				"reason":      reason,
@@ -871,7 +872,7 @@ func (p *ConsolidationPhase) writeAuditDecision(
 // reinforce stamp path does not have to re-parse on completion.
 type staleSynthesis struct {
 	mem  model.Memory
-	meta map[string]interface{}
+	meta map[string]any
 }
 
 // collectReinforceStale returns the subset of syntheses whose
@@ -903,7 +904,7 @@ func collectReinforceStale(syntheses []model.Memory) []staleSynthesis {
 // fails both RFC3339Nano and RFC3339 parses — in every case the caller
 // should treat the row as stale. RFC3339 fallback covers stamps written by
 // older versions that did not use the nano variant.
-func parseStampTime(meta map[string]interface{}, key string) (time.Time, bool) {
+func parseStampTime(meta map[string]any, key string) (time.Time, bool) {
 	raw, ok := meta[key]
 	if !ok {
 		return time.Time{}, false
@@ -926,7 +927,7 @@ func parseStampTime(meta map[string]interface{}, key string) (time.Time, bool) {
 // Equal stamp and UpdatedAt is fresh — the stamp path writes
 // mem.UpdatedAt.UTC() through UpdateMetadata, which does not bump updated_at,
 // so a just-stamped row reports stamp == updated_at and stays fresh next cycle.
-func isReinforceStale(mem *model.Memory, meta map[string]interface{}) bool {
+func isReinforceStale(mem *model.Memory, meta map[string]any) bool {
 	t, ok := parseStampTime(meta, ReinforceCheckedStampKey)
 	if !ok {
 		return true
@@ -945,10 +946,10 @@ func isReinforceStale(mem *model.Memory, meta map[string]interface{}) bool {
 // (notably source_memory_ids and dream_cycle_id on fresh syntheses) are
 // preserved through the write.
 func (p *ConsolidationPhase) stampReinforce(
-	ctx context.Context, mem *model.Memory, meta map[string]interface{},
+	ctx context.Context, mem *model.Memory, meta map[string]any,
 ) {
 	if meta == nil {
-		meta = map[string]interface{}{}
+		meta = map[string]any{}
 	}
 	meta[ReinforceCheckedStampKey] = mem.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	encoded, err := encodeStampWrite(mem.Metadata, meta)
@@ -967,7 +968,7 @@ func (p *ConsolidationPhase) stampReinforce(
 // re-parse on completion. Parallel to staleSynthesis.
 type staleCluster struct {
 	members     []model.Memory
-	metas       []map[string]interface{}
+	metas       []map[string]any
 	fingerprint string
 }
 
@@ -999,7 +1000,7 @@ func collectConsolidateStale(clusters [][]model.Memory) (stale []staleCluster, e
 		}
 		eligible++
 		fp := clusterFingerprint(cluster)
-		metas := make([]map[string]interface{}, len(cluster))
+		metas := make([]map[string]any, len(cluster))
 		clusterStale := false
 		for i := range cluster {
 			m := &cluster[i]
@@ -1022,7 +1023,7 @@ func collectConsolidateStale(clusters [][]model.Memory) (stale []staleCluster, e
 // isClusterMemberStale extends the time-stamp check (see isReinforceStale)
 // with a fingerprint check so a survivor-only cluster reshape stales even
 // when every member's UpdatedAt is unchanged.
-func isClusterMemberStale(mem *model.Memory, meta map[string]interface{}, currentFingerprint string) bool {
+func isClusterMemberStale(mem *model.Memory, meta map[string]any, currentFingerprint string) bool {
 	t, ok := parseStampTime(meta, ConsolidationClusterStampKey)
 	if !ok || t.Before(mem.UpdatedAt) {
 		return true
@@ -1041,13 +1042,13 @@ func isClusterMemberStale(mem *model.Memory, meta map[string]interface{}, curren
 func (p *ConsolidationPhase) stampConsolidateCluster(
 	ctx context.Context,
 	members []model.Memory,
-	metas []map[string]interface{},
+	metas []map[string]any,
 	fingerprint string,
 ) {
 	for i := range members {
 		meta := metas[i]
 		if meta == nil {
-			meta = map[string]interface{}{}
+			meta = map[string]any{}
 		}
 		meta[ConsolidationClusterStampKey] = members[i].UpdatedAt.UTC().Format(time.RFC3339Nano)
 		meta[ConsolidationClusterFingerprintKey] = fingerprint
@@ -1098,13 +1099,13 @@ func (p *ConsolidationPhase) stampConsolidateLoad(ctx context.Context, members [
 
 // decodeMetadata returns a mutable map from the raw JSON metadata, or an empty
 // map if the bytes are missing or unparseable.
-func decodeMetadata(raw json.RawMessage) map[string]interface{} {
+func decodeMetadata(raw json.RawMessage) map[string]any {
 	if len(raw) == 0 {
-		return map[string]interface{}{}
+		return map[string]any{}
 	}
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
-		return map[string]interface{}{}
+		return map[string]any{}
 	}
 	return m
 }
@@ -1119,11 +1120,9 @@ func decodeMetadata(raw json.RawMessage) map[string]interface{} {
 // Precedence: caller's `updates` keys win over on-disk keys (the caller is
 // the one mutating state). To delete a field, the caller must explicitly
 // set it to nil in `updates` — missing keys are preserved as-is.
-func encodeStampWrite(onDisk json.RawMessage, updates map[string]interface{}) ([]byte, error) {
+func encodeStampWrite(onDisk json.RawMessage, updates map[string]any) ([]byte, error) {
 	merged := decodeMetadata(onDisk)
-	for k, v := range updates {
-		merged[k] = v
-	}
+	maps.Copy(merged, updates)
 	return json.Marshal(merged)
 }
 
@@ -1142,7 +1141,7 @@ func encodeStampWrite(onDisk json.RawMessage, updates map[string]interface{}) ([
 func (p *ConsolidationPhase) resolveSourceMemoryIDs(
 	ctx context.Context,
 	mem *model.Memory,
-	meta map[string]interface{},
+	meta map[string]any,
 ) []uuid.UUID {
 	if ids := extractSourceMemoryIDs(meta); len(ids) > 0 {
 		return ids
@@ -1164,7 +1163,7 @@ func (p *ConsolidationPhase) resolveSourceMemoryIDs(
 	for i, parent := range parents {
 		parentStrs[i] = parent.String()
 	}
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		model.DreamMetaSourceMemoryIDs: parentStrs,
 	}
 	encoded, encErr := encodeStampWrite(mem.Metadata, updates)
@@ -1179,9 +1178,7 @@ func (p *ConsolidationPhase) resolveSourceMemoryIDs(
 		return parents
 	}
 	mem.Metadata = encoded
-	for k, v := range updates {
-		meta[k] = v
-	}
+	maps.Copy(meta, updates)
 	slog.Info("dreaming: source_memory_ids recovered from lineage",
 		"memory", mem.ID, "parents", len(parents))
 	return parents
@@ -1190,12 +1187,12 @@ func (p *ConsolidationPhase) resolveSourceMemoryIDs(
 // extractSourceMemoryIDs pulls the source_memory_ids array out of a decoded
 // metadata map and returns it as parsed UUIDs. Skips entries that are not
 // strings or do not parse as UUIDs.
-func extractSourceMemoryIDs(meta map[string]interface{}) []uuid.UUID {
+func extractSourceMemoryIDs(meta map[string]any) []uuid.UUID {
 	raw, ok := meta["source_memory_ids"]
 	if !ok {
 		return nil
 	}
-	arr, ok := raw.([]interface{})
+	arr, ok := raw.([]any)
 	if !ok {
 		return nil
 	}
@@ -1239,7 +1236,7 @@ func (p *ConsolidationPhase) consolidate(
 		candidates = append(candidates, m)
 	}
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"sub_phase":              "consolidate",
 		"candidates_total":       len(candidates),
 		"clusters_total":         0,
@@ -1384,7 +1381,7 @@ func (p *ConsolidationPhase) consolidate(
 				_ = logger.LogOperation(ctx, model.DreamPhaseConsolidation, subPhase,
 					model.DreamOpMemoryRejected, "memory", uuid.Nil,
 					nil,
-					map[string]interface{}{
+					map[string]any{
 						"reason":            reason,
 						"source_memory_ids": rejectedSources,
 					})
@@ -1405,8 +1402,8 @@ func (p *ConsolidationPhase) consolidate(
 			sourceIDs[i] = m.ID.String()
 		}
 
-		metadata, _ := json.Marshal(map[string]interface{}{
-			model.DreamMetaCycleID:    cycle.ID.String(),
+		metadata, _ := json.Marshal(map[string]any{
+			model.DreamMetaCycleID:         cycle.ID.String(),
 			model.DreamMetaSourceMemoryIDs: sourceIDs,
 		})
 
@@ -1666,7 +1663,7 @@ func (p *ConsolidationPhase) clusterMemories(memories []model.Memory, overlapThr
 
 func extractWords(s string) map[string]bool {
 	words := make(map[string]bool)
-	for _, w := range strings.Fields(strings.ToLower(s)) {
+	for w := range strings.FieldsSeq(strings.ToLower(s)) {
 		if len(w) > 3 {
 			words[w] = true
 		}
@@ -1684,10 +1681,7 @@ func wordOverlap(a, b map[string]bool) float64 {
 			overlap++
 		}
 	}
-	smaller := len(a)
-	if len(b) < smaller {
-		smaller = len(b)
-	}
+	smaller := min(len(b), len(a))
 	return float64(overlap) / float64(smaller)
 }
 
@@ -1706,7 +1700,7 @@ func sampleMemories(memories []model.Memory, n int) []model.Memory {
 func (p *ConsolidationPhase) writePhaseSummary(
 	ctx context.Context,
 	logger *DreamLogWriter,
-	stats map[string]interface{},
+	stats map[string]any,
 	budget *TokenBudget,
 	tokensBefore int,
 ) {

@@ -426,7 +426,7 @@ func TestEnrichmentBackfillExtractedFactParaphrase_Execute_200(t *testing.T) {
 		},
 	})
 
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"project_id": projID.String(),
 		"limit":      50,
 	})

@@ -574,7 +574,7 @@ func TestOAuthRepo_RevokeAllForUser(t *testing.T) {
 		client := newTestOAuthClient(t, ctx, repo, user)
 
 		// Create 3 tokens for the user
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			token := &model.OAuthRefreshToken{
 				TokenHash: "revokeall-" + uuid.New().String()[:8],
 				ClientID:  client.ClientID,
@@ -766,7 +766,7 @@ func TestOAuthRepo_ListIdPs(t *testing.T) {
 		ctx := context.Background()
 		repo := NewOAuthRepo(db)
 
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			idp := &model.OAuthIdPConfig{
 				ProviderType: "provider-" + uuid.New().String()[:4],
 				ClientID:     "cid-" + uuid.New().String()[:8],

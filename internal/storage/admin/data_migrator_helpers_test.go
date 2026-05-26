@@ -70,7 +70,7 @@ func TestNullStringToInterface(t *testing.T) {
 	tests := []struct {
 		name string
 		ns   sql.NullString
-		want interface{}
+		want any
 	}{
 		{"invalid returns nil", sql.NullString{Valid: false}, nil},
 		{"valid returns string", sql.NullString{String: "hello", Valid: true}, "hello"},
@@ -91,7 +91,7 @@ func TestNullInt64ToInterface(t *testing.T) {
 	tests := []struct {
 		name string
 		ni   sql.NullInt64
-		want interface{}
+		want any
 	}{
 		{"invalid returns nil", sql.NullInt64{Valid: false}, nil},
 		{"valid returns int64", sql.NullInt64{Int64: 42, Valid: true}, int64(42)},

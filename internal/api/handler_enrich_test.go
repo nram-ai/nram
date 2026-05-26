@@ -36,7 +36,7 @@ func newEnrichRouter(handler http.HandlerFunc) *chi.Mux {
 	return r
 }
 
-func doEnrichRequest(router http.Handler, projectID string, body interface{}) *httptest.ResponseRecorder {
+func doEnrichRequest(router http.Handler, projectID string, body any) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(body)
 
@@ -74,7 +74,7 @@ func TestEnrichHandler_ByIDs_Success(t *testing.T) {
 	}
 
 	router := newEnrichRouter(NewEnrichHandler(svc, nil))
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids":      []string{id1.String(), id2.String()},
 		"priority": 5,
 	}
@@ -119,7 +119,7 @@ func TestEnrichHandler_All_Success(t *testing.T) {
 	}
 
 	router := newEnrichRouter(NewEnrichHandler(svc, nil))
-	body := map[string]interface{}{
+	body := map[string]any{
 		"all": true,
 	}
 
@@ -146,7 +146,7 @@ func TestEnrichHandler_MissingIDsAndAll(t *testing.T) {
 	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 
 	projectID := uuid.New()
-	body := map[string]interface{}{
+	body := map[string]any{
 		"priority": 3,
 	}
 
@@ -169,7 +169,7 @@ func TestEnrichHandler_InvalidProjectID(t *testing.T) {
 	svc := &mockEnrichService{}
 	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"all": true,
 	}
 
@@ -197,7 +197,7 @@ func TestEnrichHandler_ServiceError_NotFound(t *testing.T) {
 	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 
 	projectID := uuid.New()
-	body := map[string]interface{}{
+	body := map[string]any{
 		"all": true,
 	}
 
@@ -225,7 +225,7 @@ func TestEnrichHandler_ServiceError_Internal(t *testing.T) {
 	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 
 	projectID := uuid.New()
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{uuid.New().String()},
 	}
 
@@ -265,7 +265,7 @@ func TestEnrichHandler_EmitsMemoryEnrichedEvent(t *testing.T) {
 
 	router := newEnrichRouter(NewEnrichHandler(svc, bus))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{id1.String()},
 	}
 
@@ -308,7 +308,7 @@ func TestEnrichHandler_EmitsEnrichmentFailedEvent(t *testing.T) {
 
 	router := newEnrichRouter(NewEnrichHandler(svc, bus))
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"ids": []string{id1.String()},
 	}
 
@@ -340,7 +340,7 @@ func TestEnrichHandler_PassesIncludeSupersededFlag(t *testing.T) {
 	}
 	router := newEnrichRouter(NewEnrichHandler(svc, nil))
 	projectID := uuid.New()
-	body := map[string]interface{}{"all": true}
+	body := map[string]any{"all": true}
 
 	if w := doEnrichRequest(router, projectID.String(), body); w.Code != http.StatusOK {
 		t.Fatalf("default request: %d %s", w.Code, w.Body.String())
