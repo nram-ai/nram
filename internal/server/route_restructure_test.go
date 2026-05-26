@@ -15,6 +15,7 @@ import (
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/mcp"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 	adminstore "github.com/nram-ai/nram/internal/storage/admin"
@@ -438,7 +439,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	authMw := auth.NewAuthMiddleware(apiKeyRepo, userRepo, e2eJWTSecret, nil)
 	rl := auth.NewRateLimiter(10000, 20000, 0, 0)
 	t.Cleanup(rl.Stop)
-	metrics := api.NewMetrics()
+	promMetrics := metrics.New()
 	projectAccessMw := api.ProjectAccessMiddleware(api.ProjectAccessConfig{
 		Projects:   projectLookup,
 		Namespaces: namespaceLookup,
@@ -521,7 +522,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 	cfg := RouterConfig{
 		AuthMiddleware: authMw,
 		RateLimiter:    rl,
-		Metrics:        metrics,
+		Metrics:        promMetrics,
 		ProjectAccess:  projectAccessMw,
 	}
 

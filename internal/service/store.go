@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 	"github.com/nram-ai/nram/internal/storage"
 	"github.com/nram-ai/nram/internal/tags"
 )
@@ -115,11 +116,13 @@ type StoreService struct {
 	ingestionLogs   IngestionLogRepository
 	enrichmentQueue EnrichmentQueueRepository
 	settings        *SettingsService
+	metrics         *metrics.Metrics
 }
 
 // NewStoreService creates a new StoreService with the given dependencies.
 // settings may be nil; the importance/confidence defaults fall back to the
-// values registered in service.settingDefaults.
+// values registered in service.settingDefaults. Prometheus metrics are
+// opt-in via WithMetrics — production wires them in main; tests leave them off.
 func NewStoreService(
 	memories MemoryRepository,
 	projects ProjectRepository,
@@ -136,6 +139,13 @@ func NewStoreService(
 		enrichmentQueue: enrichmentQueue,
 		settings:        settings,
 	}
+}
+
+// WithMetrics attaches the Prometheus metrics sink. Returns the same service
+// for chaining at construction time.
+func (s *StoreService) WithMetrics(m *metrics.Metrics) *StoreService {
+	s.metrics = m
+	return s
 }
 
 // Store persists the memory and enqueues one enrichment job.
@@ -239,6 +249,9 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 	// Persist the memory.
 	if err := s.memories.Create(ctx, mem); err != nil {
 		return nil, fmt.Errorf("failed to create memory: %w", err)
+	}
+	if s.metrics != nil {
+		s.metrics.MemoriesTotal.Inc()
 	}
 
 	// Create ingestion log.

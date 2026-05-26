@@ -1,4 +1,9 @@
-package api
+// Package metrics owns the Prometheus instrumentation surface for nram:
+// the metric definitions, the chi middleware that records HTTP timings,
+// and the /metrics handler. Keeping it in its own package avoids an
+// import cycle when service-layer code (which is already imported by
+// internal/api) needs to record business metrics.
+package metrics
 
 import (
 	"bufio"
@@ -7,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -21,18 +27,27 @@ type Metrics struct {
 	HTTPRequestsInFlight prometheus.Gauge
 
 	// Business metrics
-	MemoriesTotal            prometheus.Counter
-	MemoriesRecalled         prometheus.Counter
-	MemoriesForgotten        prometheus.Counter
-	EnrichmentsTotal         *prometheus.CounterVec
-	EmbeddingsTotal          prometheus.Counter
-	EmbeddingDuration        prometheus.Histogram
-	TokensUsedTotal          *prometheus.CounterVec
-	VectorSearchDuration     prometheus.Histogram
+	MemoriesTotal        prometheus.Counter
+	MemoriesRecalled     prometheus.Counter
+	MemoriesForgotten    prometheus.Counter
+	EnrichmentsTotal     *prometheus.CounterVec
+	EmbeddingsTotal      *prometheus.CounterVec
+	EmbeddingDuration    prometheus.Histogram
+	TokensUsedTotal      *prometheus.CounterVec
+	VectorSearchDuration prometheus.Histogram
+
+	// Deprecated aliases. Earlier nram releases exposed
+	// nram_memories_recalled and nram_memories_forgotten without the
+	// _total suffix. The suffix was added to comply with Prometheus
+	// naming convention; these aliases continue to expose the old series
+	// so external dashboards and alerting rules keep working through one
+	// release. Remove no earlier than the second release after this one.
+	memoriesRecalledLegacy  prometheus.Counter
+	memoriesForgottenLegacy prometheus.Counter
 }
 
-// NewMetrics creates and registers all Prometheus metrics in a custom registry.
-func NewMetrics() *Metrics {
+// New creates and registers all Prometheus metrics in a custom registry.
+func New() *Metrics {
 	reg := prometheus.NewRegistry()
 
 	m := &Metrics{
@@ -60,13 +75,13 @@ func NewMetrics() *Metrics {
 		}),
 
 		MemoriesRecalled: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "nram_memories_recalled",
+			Name: "nram_memories_recalled_total",
 			Help: "Total number of recall operations.",
 		}),
 
 		MemoriesForgotten: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "nram_memories_forgotten",
-			Help: "Total number of forget operations.",
+			Name: "nram_memories_forgotten_total",
+			Help: "Total number of individual memories forgotten (one increment per deleted row, not per forget request — a bulk-forget request deleting N memories increments by N).",
 		}),
 
 		EnrichmentsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -74,10 +89,10 @@ func NewMetrics() *Metrics {
 			Help: "Total number of enrichment operations.",
 		}, []string{"status"}),
 
-		EmbeddingsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+		EmbeddingsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "nram_embeddings_total",
-			Help: "Total number of embedding operations.",
-		}),
+			Help: "Total number of embedding operations, labeled by outcome (success|failure).",
+		}, []string{"status"}),
 
 		EmbeddingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "nram_embedding_duration_seconds",
@@ -95,6 +110,15 @@ func NewMetrics() *Metrics {
 			Help:    "Duration of vector search operations in seconds.",
 			Buckets: prometheus.DefBuckets,
 		}),
+
+		memoriesRecalledLegacy: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "nram_memories_recalled",
+			Help: "DEPRECATED: use nram_memories_recalled_total. Kept for one release to avoid breaking existing scrapers and dashboards.",
+		}),
+		memoriesForgottenLegacy: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "nram_memories_forgotten",
+			Help: "DEPRECATED: use nram_memories_forgotten_total. Kept for one release to avoid breaking existing scrapers and dashboards.",
+		}),
 	}
 
 	reg.MustRegister(
@@ -109,9 +133,31 @@ func NewMetrics() *Metrics {
 		m.EmbeddingDuration,
 		m.TokensUsedTotal,
 		m.VectorSearchDuration,
+		m.memoriesRecalledLegacy,
+		m.memoriesForgottenLegacy,
 	)
 
 	return m
+}
+
+// IncMemoriesRecalled increments both the suffixed counter and the
+// deprecated alias so scrapers on the old name keep seeing data through
+// the rename window. Call this from service code instead of touching
+// MemoriesRecalled directly.
+func (m *Metrics) IncMemoriesRecalled() {
+	m.MemoriesRecalled.Inc()
+	m.memoriesRecalledLegacy.Inc()
+}
+
+// AddMemoriesForgotten increments both the suffixed counter and the
+// deprecated alias. n is the number of memories deleted in this
+// operation. See IncMemoriesRecalled for the alias rationale.
+func (m *Metrics) AddMemoriesForgotten(n float64) {
+	if n <= 0 {
+		return
+	}
+	m.MemoriesForgotten.Add(n)
+	m.memoriesForgottenLegacy.Add(n)
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.
@@ -141,12 +187,16 @@ func (sr *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, http.ErrNotSupported
 }
 
-// Unwrap exposes the underlying writer for http.ResponseController callers.
 func (sr *statusRecorder) Unwrap() http.ResponseWriter { return sr.ResponseWriter }
 
-// MetricsMiddleware returns HTTP middleware that records request count,
+// Middleware returns HTTP middleware that records request count,
 // duration, and in-flight gauge using the provided Metrics instance.
-func MetricsMiddleware(m *Metrics) func(http.Handler) http.Handler {
+//
+// The path label is the chi route pattern (e.g. /v1/projects/{projectID}/memories)
+// rather than the raw URL, so dynamic IDs collapse to a single time series and
+// cardinality stays bounded. Requests that do not match any route fall through
+// to an empty-string pattern, which also collapses cleanly.
+func Middleware(m *Metrics) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -160,14 +210,19 @@ func MetricsMiddleware(m *Metrics) func(http.Handler) http.Handler {
 			duration := time.Since(start).Seconds()
 			status := strconv.Itoa(rec.statusCode)
 
-			m.HTTPRequestsTotal.WithLabelValues(r.Method, r.URL.Path, status).Inc()
-			m.HTTPRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
+			pattern := ""
+			if rc := chi.RouteContext(r.Context()); rc != nil {
+				pattern = rc.RoutePattern()
+			}
+
+			m.HTTPRequestsTotal.WithLabelValues(r.Method, pattern, status).Inc()
+			m.HTTPRequestDuration.WithLabelValues(r.Method, pattern).Observe(duration)
 		})
 	}
 }
 
-// MetricsHandler returns an http.Handler that serves Prometheus metrics
+// Handler returns an http.Handler that serves Prometheus metrics
 // from the custom registry.
-func MetricsHandler(m *Metrics) http.Handler {
+func Handler(m *Metrics) http.Handler {
 	return promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{})
 }

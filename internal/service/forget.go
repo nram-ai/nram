@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -57,6 +58,7 @@ type ForgetService struct {
 	projects       ProjectRepository
 	vectorStore    VectorDeleter
 	lineageQuerier LineageQuerier
+	metrics        *metrics.Metrics
 }
 
 // NewForgetService creates a new ForgetService with the given dependencies.
@@ -72,6 +74,13 @@ func NewForgetService(
 		vectorStore:    vectorStore,
 		lineageQuerier: lineageQuerier,
 	}
+}
+
+// WithMetrics attaches the Prometheus metrics sink. Returns the same service
+// for chaining at construction time.
+func (s *ForgetService) WithMetrics(m *metrics.Metrics) *ForgetService {
+	s.metrics = m
+	return s
 }
 
 // Forget deletes memories according to the request parameters.
@@ -161,6 +170,10 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 	}
 
 	latency := time.Since(start).Milliseconds()
+
+	if s.metrics != nil {
+		s.metrics.AddMemoriesForgotten(float64(deleted))
+	}
 
 	return &ForgetResponse{
 		Deleted:   deleted,

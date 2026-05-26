@@ -10,9 +10,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 )
 
 // mockAPIKeyValidator implements auth.APIKeyValidator for testing.
@@ -198,12 +198,12 @@ func newTestRouter(t *testing.T, handlers Handlers) http.Handler {
 	authMw := auth.NewAuthMiddleware(validator, &mockUserIdentityLookup{}, testJWTSecret, nil)
 	rl := auth.NewRateLimiter(100, 200, 0, 0)
 	t.Cleanup(rl.Stop)
-	metrics := api.NewMetrics()
+	m := metrics.New()
 
 	cfg := RouterConfig{
 		AuthMiddleware: authMw,
 		RateLimiter:    rl,
-		Metrics:        metrics,
+		Metrics:        m,
 	}
 
 	return NewRouter(cfg, handlers)

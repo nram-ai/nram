@@ -7,13 +7,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 )
 
 // RouterConfig holds the dependencies needed to build the HTTP router.
 type RouterConfig struct {
 	AuthMiddleware *auth.AuthMiddleware
 	RateLimiter    *auth.RateLimiter
-	Metrics        *api.Metrics
+	Metrics        *metrics.Metrics
 	// SetupGuard is middleware that returns 503 until initial setup is complete.
 	// If nil, no setup guard is applied.
 	SetupGuard func(http.Handler) http.Handler
@@ -189,12 +190,12 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	r.Use(api.ErrorMiddleware)
 	r.Use(RequestIDMiddleware)
 	if config.Metrics != nil {
-		r.Use(api.MetricsMiddleware(config.Metrics))
+		r.Use(metrics.Middleware(config.Metrics))
 	}
 
 	// Public routes (no auth required).
 	if config.Metrics != nil {
-		r.Handle("/metrics", api.MetricsHandler(config.Metrics))
+		r.Handle("/metrics", metrics.Handler(config.Metrics))
 	}
 	r.Get("/v1/health", handler(handlers.Health))
 

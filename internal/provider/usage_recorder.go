@@ -19,6 +19,14 @@ type UsageRecorder interface {
 	Record(ctx context.Context, u *model.TokenUsage) error
 }
 
+// TokenCounter receives every recorded token-usage event so an external
+// metrics system (e.g. Prometheus) can aggregate the totals. The callback
+// is invoked synchronously after each Record call; nil counters are
+// ignored at the call site. Defined as a func type rather than an
+// interface to avoid a circular import between internal/provider and
+// internal/observability/metrics.
+type TokenCounter func(providerName, operation string, tokens float64)
+
 // UsageContextResolver resolves org/user/project from a namespace ID. The
 // middleware uses this as a fallback when the caller did not stamp a
 // resolved *model.UsageContext on the context.
@@ -64,6 +72,7 @@ type UsageRecordingLLM struct {
 	inner    LLMProvider
 	recorder UsageRecorder
 	resolver UsageContextResolver
+	counter  TokenCounter
 }
 
 // NewUsageRecordingLLM wraps inner so every Complete call lands a token_usage
@@ -71,6 +80,13 @@ type UsageRecordingLLM struct {
 // stamping a *model.UsageContext on the context (preferred path).
 func NewUsageRecordingLLM(inner LLMProvider, recorder UsageRecorder, resolver UsageContextResolver) *UsageRecordingLLM {
 	return &UsageRecordingLLM{inner: inner, recorder: recorder, resolver: resolver}
+}
+
+// WithTokenCounter attaches a Prometheus-style token counter that fires on
+// every Record. Returns the same wrapper for chaining at construction time.
+func (u *UsageRecordingLLM) WithTokenCounter(c TokenCounter) *UsageRecordingLLM {
+	u.counter = c
+	return u
 }
 
 // Complete delegates to the wrapped provider and records token usage.
@@ -120,6 +136,14 @@ func (u *UsageRecordingLLM) record(
 		completionTokens = EstimateTokens(modelName, resp.Content)
 	}
 
+	// Fire the Prometheus counter BEFORE the synchronous DB write. A
+	// panic or hang in u.recorder.Record must not drop the in-process
+	// metric — the counter is the always-on observability signal; the DB
+	// row is the durable best-effort audit.
+	if u.counter != nil {
+		u.counter(u.inner.Name(), string(op), float64(promptTokens+completionTokens))
+	}
+
 	recCtx, cancel := recordingContext(ctx)
 	defer cancel()
 	rec := buildUsageRow(recCtx, u.resolver, u.inner.Name(), modelName, op,
@@ -141,12 +165,20 @@ type UsageRecordingEmbedding struct {
 	inner    EmbeddingProvider
 	recorder UsageRecorder
 	resolver UsageContextResolver
+	counter  TokenCounter
 }
 
 // NewUsageRecordingEmbedding wraps inner so every Embed call lands a
 // token_usage row.
 func NewUsageRecordingEmbedding(inner EmbeddingProvider, recorder UsageRecorder, resolver UsageContextResolver) *UsageRecordingEmbedding {
 	return &UsageRecordingEmbedding{inner: inner, recorder: recorder, resolver: resolver}
+}
+
+// WithTokenCounter attaches a Prometheus-style token counter that fires on
+// every Record. Returns the same wrapper for chaining at construction time.
+func (u *UsageRecordingEmbedding) WithTokenCounter(c TokenCounter) *UsageRecordingEmbedding {
+	u.counter = c
+	return u
 }
 
 // Embed delegates to the wrapped provider and records token usage.
@@ -194,6 +226,11 @@ func (u *UsageRecordingEmbedding) record(
 		for _, in := range req.Input {
 			promptTokens += EstimateTokens(modelName, in)
 		}
+	}
+
+	// Counter before Record — see UsageRecordingLLM.record for rationale.
+	if u.counter != nil {
+		u.counter(u.inner.Name(), string(op), float64(promptTokens))
 	}
 
 	recCtx, cancel := recordingContext(ctx)

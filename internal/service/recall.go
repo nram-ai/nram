@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -322,6 +323,16 @@ type RecallService struct {
 	// every successful recall asynchronously bumps access_count, last_accessed,
 	// and confidence on the surfaced memories — the reconsolidation hook.
 	reinforcement *ReinforcementDeps
+	// metrics is optional. When non-nil, a successful Recall increments the
+	// nram_memories_recalled_total counter.
+	metrics *metrics.Metrics
+}
+
+// WithMetrics attaches the Prometheus metrics sink. Returns the same service
+// for chaining at construction time.
+func (s *RecallService) WithMetrics(m *metrics.Metrics) *RecallService {
+	s.metrics = m
+	return s
 }
 
 // NewRecallService creates a new RecallService with the given dependencies.
@@ -1209,6 +1220,10 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	}
 
 	latency := time.Since(start).Milliseconds()
+
+	if s.metrics != nil {
+		s.metrics.IncMemoriesRecalled()
+	}
 
 	return &RecallResponse{
 		Memories: results,

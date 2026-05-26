@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nram-ai/nram/internal/events"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 )
 
 func publishTestEvent(t *testing.T, bus events.EventBus, id, typ, scope string) {
@@ -238,8 +239,8 @@ func TestEventsHandler_FlushesThroughMetricsMiddleware(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
 	defer bus.Close()
 
-	metrics := NewMetrics()
-	handler := MetricsMiddleware(metrics)(NewEventsHandler(bus, 0))
+	m := metrics.New()
+	handler := metrics.Middleware(m)(NewEventsHandler(bus, 0))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

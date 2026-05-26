@@ -21,12 +21,12 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/config"
 	"github.com/nram-ai/nram/internal/mcp"
 	"github.com/nram-ai/nram/internal/migration"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -428,7 +428,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	t.Cleanup(rl.Stop)
 
 	// Real metrics
-	metrics := api.NewMetrics()
+	promMetrics := metrics.New()
 
 	// MCP server with in-memory mock services that actually store/recall
 	memRepo := newE2EMemoryRepo()
@@ -520,7 +520,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	cfg := RouterConfig{
 		AuthMiddleware: authMw,
 		RateLimiter:    rl,
-		Metrics:        metrics,
+		Metrics:        promMetrics,
 		// No setup guard — setup is "complete"
 	}
 
@@ -1949,7 +1949,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 	t.Cleanup(rl.Stop)
 
 	// Real metrics
-	metrics := api.NewMetrics()
+	promMetrics := metrics.New()
 
 	// MCP server with in-memory mock services
 	memRepo := newE2EMemoryRepo()
@@ -2060,7 +2060,7 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 	cfg := RouterConfig{
 		AuthMiddleware: authMw,
 		RateLimiter:    rl,
-		Metrics:        metrics,
+		Metrics:        promMetrics,
 	}
 
 	router := NewRouter(cfg, handlers)

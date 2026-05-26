@@ -18,6 +18,7 @@ import (
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/mcp"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -617,7 +618,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 	t.Cleanup(rl.Stop)
 
 	// --- Metrics ---
-	metrics := api.NewMetrics()
+	promMetrics := metrics.New()
 
 	// --- Project access middleware (real) ---
 	projectAccessMw := api.ProjectAccessMiddleware(api.ProjectAccessConfig{
@@ -671,7 +672,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 	cfg := RouterConfig{
 		AuthMiddleware: authMw,
 		RateLimiter:    rl,
-		Metrics:        metrics,
+		Metrics:        promMetrics,
 		ProjectAccess:  projectAccessMw,
 	}
 
@@ -1579,7 +1580,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	t.Cleanup(rl.Stop)
 
 	// --- Metrics ---
-	metrics := api.NewMetrics()
+	promMetrics := metrics.New()
 
 	// --- Project access middleware ---
 	projectAccessMw := api.ProjectAccessMiddleware(api.ProjectAccessConfig{
@@ -1652,7 +1653,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 	cfg := RouterConfig{
 		AuthMiddleware: authMw,
 		RateLimiter:    rl,
-		Metrics:        metrics,
+		Metrics:        promMetrics,
 		ProjectAccess:  projectAccessMw,
 	}
 

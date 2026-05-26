@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
@@ -338,6 +339,7 @@ type WorkerPool struct {
 	deduplicator      *Deduplicator
 	settings          *service.SettingsService
 	cascade           *service.CascadeResolver
+	metrics           *metrics.Metrics
 
 	idleWorkers atomic.Int32
 
@@ -422,6 +424,13 @@ func NewWorkerPool(
 		bus:               bus,
 		progress:          newProgressTracker(bus, settings),
 	}
+}
+
+// WithMetrics attaches the Prometheus metrics sink. Returns the same pool
+// for chaining at construction time.
+func (wp *WorkerPool) WithMetrics(m *metrics.Metrics) *WorkerPool {
+	wp.metrics = m
+	return wp
 }
 
 // heartbeatTickTimeout caps how long a single TickHeartbeat write may block.
@@ -799,17 +808,41 @@ type pendingJob struct {
 func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *model.EnrichmentJob) error {
 	p, err := wp.runPreEmbed(ctx, workerID, job)
 	if err != nil {
+		wp.recordEnrichmentOutcome(nil, err)
 		return err
 	}
 	// runPreEmbed returns (nil, nil) when a per-namespace gate skipped the
 	// job; the queue entry is already Complete-marked, so there is nothing
-	// further to do for this caller.
+	// further to do for this caller. Cooperative skips are intentionally
+	// NOT counted as completed or failed — they did not produce
+	// enrichment, but they also are not a failure operators should alert
+	// on. Recording them under either status would distort both rates.
 	if p == nil {
 		return nil
 	}
 	wp.applyQueryAugment(ctx, p)
 	wp.runEmbedBatch(ctx, []*pendingJob{p})
-	return wp.finalizeJob(ctx, p)
+	err = wp.finalizeJob(ctx, p)
+	wp.recordEnrichmentOutcome(p, err)
+	return err
+}
+
+// recordEnrichmentOutcome bumps the enrichment outcome counter once per
+// terminated job. status="completed" only when finalizeJob returned nil
+// AND the vector write succeeded — runEmbedBatch failures already marked
+// the queue row failed but cause finalizeJob to return nil via the
+// vectorWriteFailed early-return, so the err alone is not sufficient.
+// Pass p==nil for failure paths that happened before pendingJob construction
+// (e.g. runPreEmbed errors). nil-safe so tests without a metrics sink no-op.
+func (wp *WorkerPool) recordEnrichmentOutcome(p *pendingJob, err error) {
+	if wp.metrics == nil {
+		return
+	}
+	status := "completed"
+	if err != nil || (p != nil && p.vectorWriteFailed) {
+		status = "failed"
+	}
+	wp.metrics.EnrichmentsTotal.WithLabelValues(status).Inc()
 }
 
 // applyQueryAugment runs the augmentation phase for a single pending job and
@@ -865,11 +898,14 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 					err, "worker", workerID, "job", job.ID)
 				wp.progress.JobCompleted(ctx, job.ID, job.MemoryID, job.NamespaceID,
 					workerID, jobStartTimes[i], 0, 0, 0, err)
+				wp.recordEnrichmentOutcome(nil, err)
 				return
 			}
 			if p == nil {
 				// Cascade-skipped: queue is already Complete-marked. Clear
 				// the in-flight entry so the UI does not show a stale row.
+				// Cooperative skips are intentionally not counted (see
+				// processJob); they are neither completed nor failed.
 				wp.progress.JobCompleted(ctx, job.ID, job.MemoryID, job.NamespaceID,
 					workerID, jobStartTimes[i], 0, 0, 0, nil)
 				return
@@ -929,6 +965,7 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 	for _, p := range pendings {
 		wp.progress.SetStage(p.job.ID, StageFinalize)
 		err := wp.finalizeJob(ctx, p)
+		wp.recordEnrichmentOutcome(p, err)
 		if err != nil {
 			wp.logBreakerOrError(ctx, "enrichment: batch finalize failed",
 				err, "worker", workerID, "job", p.job.ID)

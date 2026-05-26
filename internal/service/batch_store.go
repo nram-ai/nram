@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -63,11 +64,13 @@ type BatchStoreService struct {
 	ingestionLogs   IngestionLogRepository
 	enrichmentQueue EnrichmentQueueRepository
 	settings        *SettingsService
+	metrics         *metrics.Metrics
 }
 
 // NewBatchStoreService creates a new BatchStoreService with the given dependencies.
 // settings may be nil; the per-request item cap then falls through to the
-// registered default for SettingAPIBatchStoreMaxItems.
+// registered default for SettingAPIBatchStoreMaxItems. Prometheus metrics are
+// opt-in via WithMetrics.
 func NewBatchStoreService(
 	memories MemoryRepository,
 	projects ProjectRepository,
@@ -84,6 +87,13 @@ func NewBatchStoreService(
 		enrichmentQueue: enrichmentQueue,
 		settings:        settings,
 	}
+}
+
+// WithMetrics attaches the Prometheus metrics sink. Returns the same service
+// for chaining at construction time.
+func (s *BatchStoreService) WithMetrics(m *metrics.Metrics) *BatchStoreService {
+	s.metrics = m
+	return s
 }
 
 // BatchStore persists items independently; failure of one item does not
@@ -205,6 +215,9 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 
 		seenHashes[hash] = memID
 		memoriesCreated++
+		if s.metrics != nil {
+			s.metrics.MemoriesTotal.Inc()
+		}
 
 		// Create ingestion log for this item.
 		ingLog := &model.IngestionLog{

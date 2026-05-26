@@ -22,6 +22,7 @@ import (
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/mcp"
 	"github.com/nram-ai/nram/internal/migration"
+	"github.com/nram-ai/nram/internal/observability/metrics"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/server"
 	"github.com/nram-ai/nram/internal/service"
@@ -229,13 +230,43 @@ func main() {
 	// settings table (provider.{embedding,fact,entity}) and is managed via
 	// the admin UI. On a fresh install the slots are empty and the registry
 	// reports providers unavailable until an admin completes setup.
+	// Create Prometheus metrics before the provider registry so the token
+	// counter is wired in at construction time. Tests leave the metrics
+	// sink nil and the recording sites no-op.
+	promMetrics := metrics.New()
+
 	regCfg := adminstore.LoadProviderRegistryConfig(context.Background(), settingsRepo)
 	registry, err := provider.NewRegistry(regCfg, tokenUsageRepo, namespaceRepo)
 	if err != nil {
 		log.Printf("warning: provider registry init failed (providers disabled): %v", err)
 		registry = nil
 	}
+	if registry != nil {
+		// Install the metrics hooks. The Registry's wrap funcs read these
+		// through atomic.Pointers via indirect closures, so the hooks
+		// survive future Reload calls without re-wrapping.
+		//
+		// The embed wrapper sits INSIDE the usage recorder (see
+		// registry.wrapEmbedding) so nram_embedding_duration_seconds
+		// measures only the upstream provider call, not the synchronous
+		// token_usage DB write.
+		registry.WithTokenCounter(func(p, op string, n float64) {
+			promMetrics.TokensUsedTotal.WithLabelValues(p, op).Add(n)
+		})
+		registry.WithEmbeddingWrapper(func(ep provider.EmbeddingProvider) provider.EmbeddingProvider {
+			return metrics.WrapEmbeddingProvider(ep, promMetrics)
+		})
+		// Reload so the embedding provider already wrapped by NewRegistry
+		// picks up the freshly-installed embed wrapper. On configs with
+		// no embedding slot this is a no-op.
+		if rerr := registry.Reload(regCfg); rerr != nil {
+			log.Printf("warning: registry reload to install metrics hooks failed: %v", rerr)
+		}
+	}
 
+	// embedProvider returns the live embedding provider from the registry.
+	// The metrics wrap is now installed via the registry's EmbeddingWrapper
+	// hook above, so no wrapping happens here per call.
 	embedProvider := func() provider.EmbeddingProvider {
 		if registry == nil {
 			return nil
@@ -290,6 +321,12 @@ func main() {
 			hnswCfg.M, hnswCfg.EfConstruction, hnswCfg.EfSearch, hnswCfg.MaxLoadedIndexes)
 	}
 
+	// Wrap the vector store with metrics instrumentation so every Search
+	// call lands in nram_vector_search_duration_seconds. The wrapper is a
+	// no-op when promMetrics is nil. Wrap before entityRepo.SetVectorStore
+	// so the entity repo's promoteStub path is instrumented too.
+	vectorStore = metrics.WrapVectorStore(vectorStore, promMetrics)
+
 	// Wire the vector store into the entity repo so promoteStub (called from
 	// EntityRepo.Upsert when a real-typed entity is upserted over an existing
 	// stub) can opportunistically clean up the stub's vector. SQL-backed
@@ -323,12 +360,12 @@ func main() {
 		memoryRepo, projectRepo, namespaceRepo,
 		ingestionLogRepo, enrichmentQueueRepo,
 		settingsSvc,
-	)
+	).WithMetrics(promMetrics)
 	recallSvc := service.NewRecallService(
 		memoryRepo, projectRepo, namespaceRepo,
 		vectorStore, entityRepo,
 		relationshipRepo, shareRepo, embedProvider,
-	)
+	).WithMetrics(promMetrics)
 	updateSvc := service.NewUpdateService(
 		memoryRepo, projectRepo,
 		vectorStore, embedProvider, enrichmentQueueRepo,
@@ -336,13 +373,13 @@ func main() {
 	forgetSvc := service.NewForgetService(
 		memoryRepo, projectRepo, vectorStore,
 		lineageRepo,
-	)
+	).WithMetrics(promMetrics)
 	batchGetSvc := service.NewBatchGetService(memoryRepo, projectRepo)
 	batchStoreSvc := service.NewBatchStoreService(
 		memoryRepo, projectRepo, namespaceRepo,
 		ingestionLogRepo, enrichmentQueueRepo,
 		settingsSvc,
-	)
+	).WithMetrics(promMetrics)
 	var hnswDeleter service.HNSWSnapshotDeleter
 	if hnswStore != nil {
 		hnswDeleter = hnswStore
@@ -441,9 +478,6 @@ func main() {
 		},
 	})
 
-	// Create metrics.
-	metrics := api.NewMetrics()
-
 	// Build start time for health handler.
 	startTime := time.Now()
 
@@ -520,7 +554,7 @@ func main() {
 		factProvider, entityProvider, embedProvider,
 		factProvider, ingestionDedup, settingsSvc, cascadeResolver,
 		eventBus,
-	)
+	).WithMetrics(promMetrics)
 	workerPool.Start()
 	defer workerPool.Stop()
 	log.Println("enrichment worker pool started")
@@ -921,7 +955,7 @@ func main() {
 	}
 
 	routerCfg := server.RouterConfig{
-		Metrics:        metrics,
+		Metrics:        promMetrics,
 		AuthMiddleware: authMiddleware,
 		RateLimiter:    rateLimiter,
 		SetupGuard:     api.SetupGuardMiddleware(setupChecker.IsComplete),
