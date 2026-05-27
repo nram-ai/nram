@@ -62,9 +62,21 @@ func mcpBudgetBytes(ctx context.Context, s *service.SettingsService) int {
 // DroppedIDs surfaces the actual UUIDs the reducer trimmed from typed-id
 // responses (e.g. batch_get's Found tail). Callers parse it to retry with a
 // known subset rather than guessing which ids "don't exist" versus "were
-// budget-trimmed". Dropped (field paths like "graph.entities" or
-// "coverage_gaps_kept:N/M") describes shape-level trims; DroppedIDs describes
+// budget-trimmed". Dropped describes shape-level trims; DroppedIDs describes
 // item-identity-level trims. Both omitempty.
+//
+// Dropped sentinel formats (kept consistent across reducers so an agent
+// parser handles them uniformly):
+//   - "graph.entities", "graph.relationships" — recall reducer, signals the
+//     entire graph was dropped (stage 1).
+//   - "coverage_gaps_kept:N/M" — recall reducer, frame-independent kept/total
+//     ratio for the diversification diagnostic.
+//   - "entities_kept:N/M", "relationships_kept:N/M" — graph reducer, same
+//     frame-independent ratio applied symmetrically to both axes.
+//
+// Future reducers SHOULD reuse the `<axis>_kept:N/M` pattern rather than
+// invent new sentinel shapes; the snapshot test in schema_snapshot_test.go
+// pins the schema shape so additive struct changes are flagged.
 type truncationInfo struct {
 	Reason        string   `json:"reason"`
 	OriginalCount int      `json:"original_count,omitempty"`
@@ -543,11 +555,29 @@ func newBatchGetReducer(orig *mcpBatchGetResponse) reducerFunc {
 	}
 }
 
-// newGraphReducer halves relationships first (the verbose tail), then
-// halves entities. When the upstream traversal already short-circuited at
-// graph.max_edges (orig.Truncated has Reason "edge_cap"), the reducer
-// preserves that root-cause Reason and merges its byte-budget hint into the
-// emitted envelope so the client sees the actual remediation (raise
+// newGraphReducer shrinks entities and relationships in parallel rather
+// than draining one axis before touching the other. The prior switch-based
+// algorithm halved relationships ALL the way to zero (up to 11 iterations
+// for the 2000-edge upstream cap) before a single entity was trimmed,
+// producing a "node list with no edges" payload that defeated the graph
+// tool's purpose. The replacement applies the same halving step to BOTH
+// axes per iteration with a structural floor at 1 (when started non-zero)
+// so neither side gets driven to zero except when the upstream traversal
+// returned zero items on that axis.
+//
+// Stall detection: when both newE == len(entities) AND newR == len(rels)
+// (both at floor or both at zero), signal (nil, false) so the wrapper
+// falls to tier-3 hardTruncate. Without this check the loop would spin to
+// maxReducerIterations re-marshaling the same payload.
+//
+// Pre-reducer ordering: handleMemoryGraph sorts rels by Weight DESC and
+// entities by MentionCount DESC before the wrapper sees the payload, so
+// each slice prefix retains the highest-signal items.
+//
+// When the upstream traversal already short-circuited at graph.max_edges
+// (orig.Truncated has Reason "edge_cap"), the reducer preserves that
+// root-cause Reason and merges its byte-budget hint into the emitted
+// envelope so the client sees the actual remediation (raise
 // graph.max_edges) rather than being misdirected to query-shape tuning.
 func newGraphReducer(orig *graphResponse) reducerFunc {
 	entities := append([]graphEntity(nil), orig.Entities...)
@@ -555,20 +585,23 @@ func newGraphReducer(orig *graphResponse) reducerFunc {
 	origE, origR := len(entities), len(rels)
 	origTrunc := orig.Truncated
 	return func() (any, bool) {
-		switch {
-		case len(rels) > 0:
-			rels = rels[:len(rels)/2]
-		case len(entities) > 1:
-			entities = entities[:len(entities)/2]
-		default:
+		newE := halveWithFloor(len(entities))
+		newR := halveWithFloor(len(rels))
+		if newE == len(entities) && newR == len(rels) {
 			return nil, false
 		}
-		more := len(rels) > 0 || len(entities) > 1
+		entities = entities[:newE]
+		rels = rels[:newR]
+
 		info := &truncationInfo{
 			Reason:        "response_too_large",
 			OriginalCount: origE + origR,
 			ReturnedCount: len(entities) + len(rels),
-			Hint:          "narrow the entity query, lower depth, or raise min_weight",
+			Dropped: []string{
+				fmt.Sprintf("entities_kept:%d/%d", len(entities), origE),
+				fmt.Sprintf("relationships_kept:%d/%d", len(rels), origR),
+			},
+			Hint: "narrow the entity query, lower depth, or raise min_weight",
 		}
 		if origTrunc != nil && origTrunc.Reason != "" {
 			info.Reason = origTrunc.Reason + "+response_too_large"
@@ -576,12 +609,25 @@ func newGraphReducer(orig *graphResponse) reducerFunc {
 				info.Hint = origTrunc.Hint + "; response further halved to fit MCP token budget"
 			}
 		}
+
+		more := len(entities) > 1 || len(rels) > 1
 		return &graphResponse{
 			Entities:      entities,
 			Relationships: rels,
 			Truncated:     info,
 		}, more
 	}
+}
+
+// halveWithFloor returns n/2 for n >= 2, n for n <= 1. The floor at 1 is
+// what prevents the graph reducer from zeroing out a non-empty axis: the
+// final iteration before stall leaves each axis at exactly 1 item rather
+// than discarding the last signal.
+func halveWithFloor(n int) int {
+	if n <= 1 {
+		return n
+	}
+	return n / 2
 }
 
 // newExportReducer halves memories, entities, and relationships in

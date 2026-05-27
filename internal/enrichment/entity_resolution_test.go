@@ -374,6 +374,58 @@ func TestResolve_MentionCountIncremented(t *testing.T) {
 	}
 }
 
+// TestResolveDoesNotAliasUnrelatedTokenMatch documents the contract
+// Resolve relies on: FindBySimilarity is literal-substring, not
+// token-OR. The Step 3 fuzzy fallback (entity_resolution.go:140-163)
+// blindly registers the new name as an alias of similar[0]; if
+// FindBySimilarity ever returned per-token-OR matches, the resolver
+// would silently merge distinct entities (e.g. "John Smith" → aliased
+// to "John Doe" because both share the "John" token).
+//
+// The storage-level guard is TestEntityRepo_FindBySimilarity_MultiWordIsLiteral
+// in internal/storage/entity_repo_test.go. THIS test pins Resolve's
+// END behavior given the literal-substring contract: with ["John Doe",
+// "Jane Smith"] in the namespace and an incoming "John Smith", a NEW
+// entity is created and no cross-entity alias is registered.
+//
+// If a future change to either the real EntityRepo or the mock
+// FindBySimilarity reintroduces token-OR semantics, this test fails:
+// Resolve would alias "John Smith" onto whichever similar[0] the
+// reordered query returned.
+func TestResolveDoesNotAliasUnrelatedTokenMatch(t *testing.T) {
+	ctx := context.Background()
+	ef := newMockEntityFinder()
+	am := newMockAliasManager()
+	resolver := NewEntityResolver(ef, am)
+
+	nsID := uuid.New()
+
+	if _, _, err := resolver.Resolve(ctx, nsID, "John Doe", "person", nil); err != nil {
+		t.Fatalf("seed John Doe: %v", err)
+	}
+	if _, _, err := resolver.Resolve(ctx, nsID, "Jane Smith", "person", nil); err != nil {
+		t.Fatalf("seed Jane Smith: %v", err)
+	}
+
+	entity, isNew, err := resolver.Resolve(ctx, nsID, "John Smith", "person", nil)
+	if err != nil {
+		t.Fatalf("resolve John Smith: %v", err)
+	}
+	if !isNew {
+		t.Errorf("expected isNew=true for 'John Smith' (no literal-substring overlap with seeded names); got isNew=false, aliased to %q", entity.Name)
+	}
+	if entity.Name != "John Smith" {
+		t.Errorf("expected resolved entity Name='John Smith', got %q (resolver merged into a wrong-entity alias)", entity.Name)
+	}
+
+	// No alias should have been registered onto either seeded entity.
+	for _, a := range am.aliases {
+		if a.Alias == "John Smith" {
+			t.Errorf("an alias 'John Smith' was registered on entity %s; expected no alias creation for a literally-distinct name", a.EntityID)
+		}
+	}
+}
+
 func TestResolveAll_MixOfNewAndExisting(t *testing.T) {
 	ctx := context.Background()
 	ef := newMockEntityFinder()

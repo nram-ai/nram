@@ -355,6 +355,150 @@ func TestEntityRepo_FindBySimilarity_CaseInsensitive(t *testing.T) {
 	})
 }
 
+// TestEntityRepo_FindBySimilarity_MultiWordIsLiteral pins the contract
+// that FindBySimilarity is LITERAL substring match for every input,
+// including multi-word ones. The previous rebalance branched on token
+// count and silently turned multi-word inputs into a token-OR query,
+// which broke EntityResolver.Resolve's Step 3 fuzzy-fallback by
+// returning unrelated rows that the resolver then aliased onto the wrong
+// entity. The token-OR semantics moved to SearchEntities; this test
+// guards against re-introducing it on FindBySimilarity.
+//
+// Assertion: against ["John Doe", "Jane Smith"], the multi-word query
+// "John Smith" matches NEITHER (no entity name literally contains the
+// phrase) — token-OR would return both as fuzzy hits.
+func TestEntityRepo_FindBySimilarity_MultiWordIsLiteral(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		entities := []*model.Entity{
+			{NamespaceID: nsID, Name: "John Doe", Canonical: "john doe", EntityType: "person", MentionCount: 1},
+			{NamespaceID: nsID, Name: "Jane Smith", Canonical: "jane smith", EntityType: "person", MentionCount: 5},
+		}
+		for _, e := range entities {
+			if err := repo.Create(ctx, e); err != nil {
+				t.Fatalf("create %q: %v", e.Name, err)
+			}
+		}
+
+		results, err := repo.FindBySimilarity(ctx, nsID, "John Smith", "", 10)
+		if err != nil {
+			t.Fatalf("FindBySimilarity err: %v", err)
+		}
+		if len(results) != 0 {
+			gotNames := make([]string, len(results))
+			for i, r := range results {
+				gotNames[i] = r.Name
+			}
+			t.Fatalf("FindBySimilarity('John Smith') must be literal — expected 0 results, got %d: %v (token-OR semantics belong on SearchEntities, not here)", len(results), gotNames)
+		}
+	})
+}
+
+// TestEntityRepo_SearchEntities_MultiToken pins the agent-facing matcher.
+// SearchEntities tokenizes on whitespace and ORs LIKE clauses across
+// tokens, ranking by name-token-match-count DESC.
+//
+// Assertions:
+//  1. A query "John Doe" returns BOTH "John Doe" and "John Smith" (each
+//     matches at least one token) plus "Jane Doe" (matches "Doe").
+//  2. "John Doe" returns "John Doe" first (matches 2 tokens — name AND
+//     surname) before "John Smith" / "Jane Doe" (1 token each).
+//  3. mention_count breaks the tie within an equal-score bucket.
+func TestEntityRepo_SearchEntities_MultiToken(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		entities := []*model.Entity{
+			{NamespaceID: nsID, Name: "John Doe", Canonical: "john_doe", EntityType: "person", MentionCount: 1},
+			{NamespaceID: nsID, Name: "John Smith", Canonical: "john_smith", EntityType: "person", MentionCount: 5},
+			{NamespaceID: nsID, Name: "Jane Doe", Canonical: "jane_doe", EntityType: "person", MentionCount: 3},
+			{NamespaceID: nsID, Name: "Acme Corp", Canonical: "acme_corp", EntityType: "organization", MentionCount: 1},
+		}
+		for _, e := range entities {
+			if err := repo.Create(ctx, e); err != nil {
+				t.Fatalf("create %q: %v", e.Name, err)
+			}
+		}
+
+		results, err := repo.SearchEntities(ctx, nsID, "John Doe", "", 10)
+		if err != nil {
+			t.Fatalf("multi-token search failed: %v", err)
+		}
+		if len(results) != 3 {
+			gotNames := make([]string, len(results))
+			for i, r := range results {
+				gotNames[i] = r.Name
+			}
+			t.Fatalf("expected 3 person matches for 'John Doe' (John Doe, John Smith, Jane Doe), got %d: %v", len(results), gotNames)
+		}
+
+		// John Doe matches 2 tokens (John + Doe) and must rank first
+		// despite having lower mention_count than John Smith (which
+		// matches only 1 token but has mention_count=5). The ranking
+		// rule is score DESC FIRST, then mention_count DESC.
+		if results[0].Name != "John Doe" {
+			gotNames := make([]string, len(results))
+			for i, r := range results {
+				gotNames[i] = r.Name
+			}
+			t.Errorf("expected 'John Doe' first (matches 2 tokens), got order: %v", gotNames)
+		}
+	})
+}
+
+// TestEntityRepo_SearchEntities_AliasMatch pins that SearchEntities
+// surfaces entities whose ALIAS contains one or more tokens, even when
+// the entity's own name matches no tokens. The MCP graph tool would
+// otherwise need a second FindByAlias call.
+//
+// Alias matches do not contribute to the score axis (a deliberate
+// trade-off documented on searchEntitiesMultiToken), so an alias-only
+// match ranks below name matches but still surfaces.
+func TestEntityRepo_SearchEntities_AliasMatch(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		alice := &model.Entity{NamespaceID: nsID, Name: "Alice Walker", Canonical: "alice_walker", EntityType: "person", MentionCount: 2}
+		bob := &model.Entity{NamespaceID: nsID, Name: "Bob Stevens", Canonical: "bob_stevens", EntityType: "person", MentionCount: 1}
+		for _, e := range []*model.Entity{alice, bob} {
+			if err := repo.Create(ctx, e); err != nil {
+				t.Fatalf("create %q: %v", e.Name, err)
+			}
+		}
+
+		// Register "AW" as an alias of Alice. The query "AW author" has
+		// no name match against either entity but should surface Alice
+		// via the alias-OR clause.
+		createTestEntityAlias(t, ctx, db, nsID, alice.ID, "AW", "abbreviation")
+
+		results, err := repo.SearchEntities(ctx, nsID, "AW author", "", 10)
+		if err != nil {
+			t.Fatalf("multi-token + alias search failed: %v", err)
+		}
+		var sawAlice bool
+		for _, r := range results {
+			if r.ID == alice.ID {
+				sawAlice = true
+				break
+			}
+		}
+		if !sawAlice {
+			gotNames := make([]string, len(results))
+			for i, r := range results {
+				gotNames[i] = r.Name
+			}
+			t.Errorf("expected Alice (matched via alias 'AW') in results; got: %v", gotNames)
+		}
+	})
+}
+
 func TestEntityRepo_FindByAlias(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

@@ -448,9 +448,20 @@ func (r *EntityRepo) mergeAliasesToEntity(ctx context.Context, stubID, realID st
 	return nil
 }
 
-// FindBySimilarity finds entities with similar names in the same namespace.
-// If kind is non-empty, results are filtered to that entity type.
-// Uses case-insensitive LIKE matching with the name.
+// FindBySimilarity finds entities whose name contains the given string as
+// a case-insensitive substring within the same namespace. If kind is
+// non-empty, results are filtered to that entity type. Ordered by
+// mention_count DESC, created_at DESC.
+//
+// **Semantics are literal substring.** A multi-word query like "John Doe"
+// matches only entities whose name literally contains "John Doe" — it
+// does NOT split into tokens. This is the contract every internal caller
+// (enrichment dedup, recall context build, dreaming) was written against:
+// canonical names are pre-normalised (`canonicalize` in
+// `internal/enrichment/entity_resolution.go`), and the call asks "does an
+// entity with this canonical exist." For agent-supplied free-form
+// queries that need tokenized + alias-aware search, use
+// `SearchEntities` instead.
 func (r *EntityRepo) FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error) {
 	pattern := "%" + name + "%"
 
@@ -482,6 +493,171 @@ func (r *EntityRepo) FindBySimilarity(ctx context.Context, namespaceID uuid.UUID
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("entity find by similarity: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanEntities(rows)
+}
+
+// SearchEntities is the free-form-agent-query counterpart to
+// FindBySimilarity. It tokenizes the query on whitespace and, for
+// multi-token inputs, ORs LIKE clauses across tokens against both
+// `entities.name` AND `entity_aliases.alias`, ranking rows by the number
+// of distinct name-token matches. Single-token (or empty) queries fall
+// through to `FindBySimilarity` so the result set is identical to a
+// literal call — there's no token-OR to do.
+//
+// Use this for agent-supplied queries (e.g. the MCP `graph` tool's
+// `entity` argument). Do NOT use it from programmatic / canonical paths
+// (enrichment Resolve, dreaming consolidation): the broader match shape
+// will pull in unrelated entities sharing a single token, which the
+// canonical-dedup logic then treats as fuzzy matches and aliases
+// incorrectly. Those callers belong on `FindBySimilarity`.
+//
+// Scoring rule for the multi-token branch: ORDER BY name-token-match-count
+// DESC, mention_count DESC, created_at DESC. Alias matches surface a row
+// but do not contribute to the score axis — name matches are higher
+// signal than alias matches, so an entity matched only via alias loses
+// the score-tier tiebreak to one matched via name and falls back to
+// mention_count ordering. This avoids a second per-row EXISTS subquery
+// in the ORDER BY (the WHERE clause already runs it once) at the cost
+// of one tiebreak rule.
+func (r *EntityRepo) SearchEntities(ctx context.Context, namespaceID uuid.UUID, query string, kind string, limit int) ([]model.Entity, error) {
+	tokens := splitQueryTokens(query)
+	if len(tokens) <= 1 {
+		return r.FindBySimilarity(ctx, namespaceID, query, kind, limit)
+	}
+	return r.searchEntitiesMultiToken(ctx, namespaceID, tokens, kind, limit)
+}
+
+// splitQueryTokens trims and whitespace-splits a query into non-empty
+// tokens. Returns nil for an empty/whitespace-only input. Used by
+// SearchEntities to branch between the single-token fallback (delegating
+// to FindBySimilarity) and the multi-token tokenized matcher.
+func splitQueryTokens(name string) []string {
+	fields := strings.Fields(name)
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f != "" {
+			out = append(out, f)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// searchEntitiesMultiToken implements the multi-token branch of
+// SearchEntities. SQL shape (Postgres positional, SQLite uses ?):
+//
+//	SELECT <cols> FROM entities e
+//	WHERE e.namespace_id = $1
+//	  [AND e.entity_type = $K]
+//	  AND (
+//	    e.name ILIKE $tN1 OR e.name ILIKE $tN2 OR ...
+//	    OR EXISTS (SELECT 1 FROM entity_aliases ea
+//	               WHERE ea.entity_id = e.id
+//	                 AND (ea.alias ILIKE $tA1 OR ea.alias ILIKE $tA2 OR ...))
+//	  )
+//	ORDER BY
+//	  ((CASE WHEN e.name ILIKE $tS1 THEN 1 ELSE 0 END)
+//	 + (CASE WHEN e.name ILIKE $tS2 THEN 1 ELSE 0 END) + ...) DESC,
+//	  e.mention_count DESC, e.created_at DESC
+//	LIMIT $L
+//
+// Each token's pattern is bound THREE times (name-WHERE, alias-WHERE,
+// score-ORDER-BY) so the bind positions need to be carefully tracked.
+// The builder emits args in lockstep with placeholder generation so a
+// reordering or new token-position would only need updates in one
+// place.
+func (r *EntityRepo) searchEntitiesMultiToken(ctx context.Context, namespaceID uuid.UUID, tokens []string, kind string, limit int) ([]model.Entity, error) {
+	isPg := r.db.Backend() == BackendPostgres
+
+	patterns := make([]string, len(tokens))
+	for i, t := range tokens {
+		patterns[i] = "%" + t + "%"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(selectEntityColumns)
+	sb.WriteString(` FROM entities e WHERE `)
+
+	args := make([]any, 0, 3*len(patterns)+3)
+
+	ph := func() string {
+		if isPg {
+			return fmt.Sprintf("$%d", len(args))
+		}
+		return "?"
+	}
+
+	args = append(args, namespaceID.String())
+	if isPg {
+		sb.WriteString(`e.namespace_id = $1`)
+	} else {
+		sb.WriteString(`e.namespace_id = ?`)
+	}
+
+	if kind != "" {
+		args = append(args, kind)
+		sb.WriteString(` AND e.entity_type = `)
+		sb.WriteString(ph())
+	}
+
+	// Name LIKE clauses.
+	sb.WriteString(` AND (`)
+	nameOp := "LIKE"
+	if isPg {
+		nameOp = "ILIKE"
+	}
+	for i, pat := range patterns {
+		args = append(args, pat)
+		if i > 0 {
+			sb.WriteString(" OR ")
+		}
+		fmt.Fprintf(&sb, "e.name %s %s", nameOp, ph())
+		if !isPg {
+			sb.WriteString(" COLLATE NOCASE")
+		}
+	}
+
+	// Alias EXISTS clause.
+	sb.WriteString(` OR EXISTS (SELECT 1 FROM entity_aliases ea WHERE ea.entity_id = e.id AND (`)
+	for i, pat := range patterns {
+		args = append(args, pat)
+		if i > 0 {
+			sb.WriteString(" OR ")
+		}
+		fmt.Fprintf(&sb, "ea.alias %s %s", nameOp, ph())
+		if !isPg {
+			sb.WriteString(" COLLATE NOCASE")
+		}
+	}
+	sb.WriteString(`))`)
+
+	sb.WriteString(`) ORDER BY (`)
+
+	// Score: sum of name-LIKE CASE WHEN per token. Alias matches are NOT
+	// scored — they surface via WHERE but tiebreak via mention_count.
+	for i, pat := range patterns {
+		args = append(args, pat)
+		if i > 0 {
+			sb.WriteString(" + ")
+		}
+		fmt.Fprintf(&sb, "(CASE WHEN e.name %s %s", nameOp, ph())
+		if !isPg {
+			sb.WriteString(" COLLATE NOCASE")
+		}
+		sb.WriteString(" THEN 1 ELSE 0 END)")
+	}
+	sb.WriteString(`) DESC, e.mention_count DESC, e.created_at DESC LIMIT `)
+	args = append(args, limit)
+	sb.WriteString(ph())
+
+	rows, err := r.db.Query(ctx, sb.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("entity search (multi-token): %w", err)
 	}
 	defer rows.Close()
 

@@ -26,6 +26,10 @@ func (m *mockEntityReader) FindBySimilarity(_ context.Context, _ uuid.UUID, _ st
 	return m.entities, m.err
 }
 
+func (m *mockEntityReader) SearchEntities(_ context.Context, _ uuid.UUID, _ string, _ string, _ int) ([]model.Entity, error) {
+	return m.entities, m.err
+}
+
 func (m *mockEntityReader) FindByAlias(_ context.Context, _ uuid.UUID, _ string) ([]model.Entity, error) {
 	return m.entities, m.err
 }
@@ -992,4 +996,88 @@ func splitNDJSON(text string) []string {
 		}
 	}
 	return lines
+}
+
+// TestGraphSortIsDeterministicOnEqualWeights pins that two graph() calls
+// against the same set of equal-weight edges produce byte-identical
+// responses regardless of upstream input order. The prior sort used
+// Weight as the sole comparator, leaving tiebreaks to sort.SliceStable's
+// preservation of input order — which itself depended on BFS traversal +
+// `seenRels` map iteration (Go-randomized). The fix added a full
+// tiebreak chain (Weight DESC, SourceID, TargetID, Relation) so the
+// surviving prefix after byte-budget reducer truncation is reproducible.
+//
+// Construction: build the same logical edge set twice but feed it to
+// the traverser in REVERSED order. Run the handler against both. Assert
+// the response bodies are byte-identical.
+func TestGraphSortIsDeterministicOnEqualWeights(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	anchor := uuid.New()
+	user := &model.User{ID: userID, NamespaceID: nsID}
+
+	// Anchor entity + 6 neighbours, all known to the anchor with Weight=1.0
+	// — the classic "extractor doesn't differentiate" case where the
+	// tiebreak chain has to do all the work.
+	neighbours := make([]uuid.UUID, 6)
+	for i := range neighbours {
+		neighbours[i] = uuid.New()
+	}
+	entities := []model.Entity{{ID: anchor, NamespaceID: nsID, Name: "Anchor", EntityType: "person", Canonical: "anchor"}}
+	for i, n := range neighbours {
+		entities = append(entities, model.Entity{
+			ID:          n,
+			NamespaceID: nsID,
+			Name:        fmt.Sprintf("Neighbour-%d", i),
+			EntityType:  "person",
+			Canonical:   fmt.Sprintf("n%d", i),
+		})
+	}
+	relsForward := make([]model.Relationship, len(neighbours))
+	for i, n := range neighbours {
+		relsForward[i] = model.Relationship{
+			ID:        uuid.New(),
+			SourceID:  anchor,
+			TargetID:  n,
+			Relation:  "knows",
+			Weight:    1.0,
+			ValidFrom: time.Now(),
+		}
+	}
+	// Same edge set, fed to the traverser in reverse insertion order.
+	relsReversed := make([]model.Relationship, len(relsForward))
+	for i, r := range relsForward {
+		relsReversed[len(relsForward)-1-i] = r
+	}
+
+	run := func(rels []model.Relationship) string {
+		deps := Dependencies{
+			Backend:      storage.BackendPostgres,
+			UserRepo:     &mockUserRepoStore{user: user},
+			ProjectRepo:  &mockProjectRepoStore{getErr: nil, project: nil},
+			EntityReader: &mockEntityReader{entities: entities},
+			Traverser:    &mockTraverser{rels: rels},
+		}
+		srv := newTestServer(deps)
+		req := mcp.CallToolRequest{}
+		req.Params.Arguments = map[string]any{
+			"entity": "Anchor",
+			"depth":  float64(2),
+		}
+		res, err := handleMemoryGraph(buildAuthCtx(userID), srv, req)
+		if err != nil {
+			t.Fatalf("handleMemoryGraph err: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("unexpected tool error: %v", res.Content)
+		}
+		return extractText(res)
+	}
+
+	textForward := run(relsForward)
+	textReversed := run(relsReversed)
+
+	if textForward != textReversed {
+		t.Errorf("graph response differs between input orderings of equal-weight edges; sort tiebreak is incomplete\n--- forward\n%s\n--- reversed\n%s", textForward, textReversed)
+	}
 }

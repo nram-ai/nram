@@ -1592,3 +1592,198 @@ func TestMCPBudgetBytesFloorsAtSentinelSize(t *testing.T) {
 		t.Fatalf("hardTruncate at floor must still emit sentinel; tail=%q", text[max(0, len(text)-30):])
 	}
 }
+
+// TestGraphReducerShrinksBothAxes pins the central invariant of the
+// rebalanced graph reducer: when oversized, BOTH entities and relationships
+// shrink on each iteration (parallel halving) instead of one axis being
+// drained to zero before the other is touched. The prior algorithm halved
+// relationships first via a switch — for a typical dense graph
+// (graph.max_edges=2000), all 2000 edges drained to 0 in 11 iterations
+// before a single entity was trimmed, producing a node-list-with-no-edges
+// payload that defeated the graph tool's purpose.
+//
+// Assertion: with a payload large enough to require multiple halvings,
+// after one reducer iteration both entities count AND relationships count
+// have decreased (strictly less than the originals).
+func TestGraphReducerShrinksBothAxes(t *testing.T) {
+	const (
+		nEntities = 64
+		nRels     = 128
+	)
+	entities := make([]graphEntity, nEntities)
+	for i := range entities {
+		entities[i] = graphEntity{ID: uuid.New(), Name: fmt.Sprintf("e-%d", i), Type: "person", MentionCount: nEntities - i}
+	}
+	rels := make([]graphRelationship, nRels)
+	for i := range rels {
+		rels[i] = graphRelationship{
+			SourceID: uuid.New(),
+			TargetID: uuid.New(),
+			Relation: "knows",
+			Weight:   1.0,
+		}
+	}
+	orig := &graphResponse{Entities: entities, Relationships: rels}
+
+	reducer := newGraphReducer(orig)
+	smaller, more := reducer()
+	if smaller == nil {
+		t.Fatalf("reducer returned nil on first call with oversized input; expected a smaller payload")
+	}
+	if !more {
+		t.Errorf("reducer signaled more=false on first call when both axes have >1 items; expected more=true")
+	}
+	reduced, ok := smaller.(*graphResponse)
+	if !ok {
+		t.Fatalf("reducer returned %T; want *graphResponse", smaller)
+	}
+	if len(reduced.Entities) >= nEntities {
+		t.Errorf("entities did not shrink: got %d, started %d (the bug this test guards: one axis stays full while the other drains)", len(reduced.Entities), nEntities)
+	}
+	if len(reduced.Relationships) >= nRels {
+		t.Errorf("relationships did not shrink: got %d, started %d (the bug this test guards: one axis stays full while the other drains)", len(reduced.Relationships), nRels)
+	}
+}
+
+// TestGraphReducerNeitherAxisReachesZeroFromNonZero pins the structural
+// floor: as long as either axis started with at least one item, the
+// reducer must never trim that axis to zero. The prior algorithm zeroed
+// relationships under any pressure; the rebalanced algorithm preserves at
+// least one item per non-empty axis so a graph response always carries
+// some signal until the wrapper falls through to tier-3 hardTruncate.
+//
+// Assertion: drive the reducer to exhaustion. After every call, both
+// counts are either zero (if started at zero) or >= 1.
+func TestGraphReducerNeitherAxisReachesZeroFromNonZero(t *testing.T) {
+	entities := []graphEntity{
+		{ID: uuid.New(), Name: "alice", Type: "person", MentionCount: 5},
+		{ID: uuid.New(), Name: "bob", Type: "person", MentionCount: 3},
+		{ID: uuid.New(), Name: "carol", Type: "person", MentionCount: 1},
+	}
+	rels := []graphRelationship{
+		{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "knows", Weight: 0.9},
+		{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "knows", Weight: 0.5},
+	}
+	orig := &graphResponse{Entities: entities, Relationships: rels}
+
+	reducer := newGraphReducer(orig)
+	for i := 0; i < maxReducerIterations; i++ {
+		smaller, more := reducer()
+		if smaller == nil {
+			// Reducer signaled exhaustion. Floor invariant already
+			// enforced on the prior iteration's payload.
+			break
+		}
+		reduced := smaller.(*graphResponse)
+		if len(reduced.Entities) == 0 {
+			t.Fatalf("iteration %d: entities reached 0 from non-zero start; the floor failed", i)
+		}
+		if len(reduced.Relationships) == 0 {
+			t.Fatalf("iteration %d: relationships reached 0 from non-zero start; the floor failed", i)
+		}
+		if !more {
+			break
+		}
+	}
+}
+
+// TestGraphReducerStallsWhenBothAtFloor pins the termination condition.
+// Once both axes are at floor (len == 1) and the payload still exceeds
+// budget, the reducer must signal (nil, false) so the wrapper falls
+// through to hardTruncate rather than spinning maxReducerIterations times
+// re-marshaling the same payload.
+//
+// Construction: a graphResponse with exactly one entity and one
+// relationship. First reducer call: nothing to shrink, both already at
+// floor → expect (nil, false).
+func TestGraphReducerStallsWhenBothAtFloor(t *testing.T) {
+	orig := &graphResponse{
+		Entities:      []graphEntity{{ID: uuid.New(), Name: "alice", Type: "person", MentionCount: 1}},
+		Relationships: []graphRelationship{{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "knows", Weight: 1.0}},
+	}
+	reducer := newGraphReducer(orig)
+	smaller, more := reducer()
+	if smaller != nil {
+		t.Errorf("expected nil smaller payload when both axes already at floor; got %T", smaller)
+	}
+	if more {
+		t.Errorf("expected more=false at stall; got true (would loop indefinitely)")
+	}
+}
+
+// TestGraphReducerDroppedReportsBothAxes pins that the truncation
+// envelope reports kept/original counts SYMMETRICALLY for both entities
+// and relationships. The prior reducer reported only the verbose tail
+// being trimmed (no per-axis markers); the rebalanced reducer surfaces
+// both axes so callers can see exactly what fraction of each survived.
+func TestGraphReducerDroppedReportsBothAxes(t *testing.T) {
+	const nE, nR = 50, 100
+	entities := make([]graphEntity, nE)
+	for i := range entities {
+		entities[i] = graphEntity{ID: uuid.New(), Name: fmt.Sprintf("e-%d", i), Type: "person", MentionCount: nE - i}
+	}
+	rels := make([]graphRelationship, nR)
+	for i := range rels {
+		rels[i] = graphRelationship{
+			SourceID: uuid.New(),
+			TargetID: uuid.New(),
+			Relation: "knows",
+			Weight:   1.0,
+		}
+	}
+	orig := &graphResponse{Entities: entities, Relationships: rels}
+
+	reducer := newGraphReducer(orig)
+	smaller, _ := reducer()
+	reduced := smaller.(*graphResponse)
+	if reduced.Truncated == nil {
+		t.Fatalf("expected _truncated envelope; got nil")
+	}
+	dropped := reduced.Truncated.Dropped
+	var sawEntities, sawRels bool
+	for _, d := range dropped {
+		if strings.HasPrefix(d, "entities_kept:") {
+			sawEntities = true
+			expected := fmt.Sprintf("entities_kept:%d/%d", len(reduced.Entities), nE)
+			if d != expected {
+				t.Errorf("entities_kept marker = %q, want %q", d, expected)
+			}
+		}
+		if strings.HasPrefix(d, "relationships_kept:") {
+			sawRels = true
+			expected := fmt.Sprintf("relationships_kept:%d/%d", len(reduced.Relationships), nR)
+			if d != expected {
+				t.Errorf("relationships_kept marker = %q, want %q", d, expected)
+			}
+		}
+	}
+	if !sawEntities {
+		t.Errorf("expected entities_kept marker in Dropped %v", dropped)
+	}
+	if !sawRels {
+		t.Errorf("expected relationships_kept marker in Dropped %v", dropped)
+	}
+}
+
+// TestHalveWithFloor pins the per-axis shrinkage rule the graph reducer
+// composes on top of. n==0 stays at 0 (don't conjure data); n==1 stays at
+// 1 (floor); n>=2 returns n/2. This is the building block that prevents
+// the reducer from zeroing a non-empty axis.
+func TestHalveWithFloor(t *testing.T) {
+	cases := []struct {
+		in, want int
+	}{
+		{0, 0},
+		{1, 1},
+		{2, 1},
+		{3, 1},
+		{4, 2},
+		{100, 50},
+		{2000, 1000},
+	}
+	for _, tc := range cases {
+		if got := halveWithFloor(tc.in); got != tc.want {
+			t.Errorf("halveWithFloor(%d) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}

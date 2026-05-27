@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -208,14 +209,39 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		namespaces = append(namespaces, user.NamespaceID)
 	}
 
-	// Find matching entities across all namespaces.
+	// Find matching entities across all namespaces. SearchEntities is the
+	// agent-facing matcher: tokenizes on whitespace and ORs LIKE clauses
+	// against name AND alias. The literal-substring FindBySimilarity is
+	// reserved for canonical/programmatic callers (enrichment dedup,
+	// dreaming) — using it here would mean multi-word agent queries like
+	// "OAuth client" only match entities literally named that phrase.
 	var entities []model.Entity
 	for _, nsID := range namespaces {
-		found, err := deps.EntityReader.FindBySimilarity(ctx, nsID, entityQuery, "", 10)
+		found, err := deps.EntityReader.SearchEntities(ctx, nsID, entityQuery, "", 10)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("entity search failed: %v", err)), nil
 		}
 		entities = append(entities, found...)
+	}
+
+	// No-match diagnostic for multi-token queries. SearchEntities tokenizes
+	// via strings.Fields (any Unicode whitespace), so the gate here must use
+	// the same rule — checking for ASCII space/tab only would let a query
+	// like "OAuth\nclient" take the multi-token matcher path and then fall
+	// through to a silently-empty response if every token missed. Surface
+	// the miss explicitly so the agent has a signal to retry rather than
+	// concluding the graph is empty.
+	if len(entities) == 0 && len(strings.Fields(entityQuery)) > 1 {
+		empty := []graphEntity{}
+		emptyRels := []graphRelationship{}
+		return wrapToolResult(s.deps.Metrics, "graph", mcpBudgetBytes(ctx, s.deps.Settings), &graphResponse{
+			Entities:      empty,
+			Relationships: emptyRels,
+			Truncated: &truncationInfo{
+				Reason: "no_match",
+				Hint:   "entity name match is substring-based; try a single token (e.g. 'OAuth' instead of the full phrase) or a known canonical name",
+			},
+		}, nil)
 	}
 
 	// Cap pre-filter relationships so the BFS short-circuits before it
@@ -382,6 +408,45 @@ seeds:
 	if graphRels == nil {
 		graphRels = []graphRelationship{}
 	}
+
+	// Sort both axes by signal-strength descending so the byte-budget
+	// reducer in result_limit.go (which trims via prefix slice) preserves
+	// the most informative items first when the response exceeds budget.
+	//
+	// Tiebreak chains produce a total order so the prefix is deterministic
+	// across calls. Equal-weight edges are common (many extractors emit
+	// Weight=1.0) and BFS traversal order depends on `seenRels` map
+	// iteration (Go-randomized), so without a tiebreak chain two identical
+	// graph() calls could return different surviving prefixes when
+	// truncation fires. UUIDs are stringified for lex ordering — bytes
+	// would compare equally but UUID has no comparable receiver and
+	// String() is O(36).
+	sort.Slice(graphRels, func(i, j int) bool {
+		a, b := graphRels[i], graphRels[j]
+		if a.Weight != b.Weight {
+			return a.Weight > b.Weight
+		}
+		if a.SourceID != b.SourceID {
+			return a.SourceID.String() < b.SourceID.String()
+		}
+		if a.TargetID != b.TargetID {
+			return a.TargetID.String() < b.TargetID.String()
+		}
+		return a.Relation < b.Relation
+	})
+	sort.Slice(graphEntities, func(i, j int) bool {
+		a, b := graphEntities[i], graphEntities[j]
+		if a.MentionCount != b.MentionCount {
+			return a.MentionCount > b.MentionCount
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		// Two distinct entities can share a display name (different
+		// sources, same canonical) — final tiebreak on ID guarantees a
+		// total order.
+		return a.ID.String() < b.ID.String()
+	})
 
 	resp := &graphResponse{
 		Entities:      graphEntities,

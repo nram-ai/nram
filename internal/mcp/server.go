@@ -52,8 +52,17 @@ type MetricsRecorder interface {
 }
 
 // EntityReader provides entity lookup operations for MCP tool handlers.
+//
+// SearchEntities is preferred over FindBySimilarity for agent-supplied
+// free-form queries (e.g. the graph tool's `entity` argument): it
+// tokenises on whitespace, ORs LIKE clauses across tokens against both
+// name and alias, and ranks by token-match-count. FindBySimilarity is
+// literal-substring-only and is used by canonical/programmatic paths
+// (entity dedup, dreaming consolidation) where token-OR semantics would
+// cross-link unrelated entities.
 type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
+	SearchEntities(ctx context.Context, namespaceID uuid.UUID, query string, kind string, limit int) ([]model.Entity, error)
 	FindByAlias(ctx context.Context, namespaceID uuid.UUID, alias string) ([]model.Entity, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.Entity, error)
 	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Entity, error)
