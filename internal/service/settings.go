@@ -426,6 +426,18 @@ const (
 	// Export pagination size for memories. Hot-reloadable.
 	SettingExportPageSize = "export.page_size"
 
+	// Self-service export job knobs. ArtifactDir is the filesystem root the
+	// worker writes per-user zips into (one file per job under
+	// <root>/<user_id>/<job_id>.zip); empty falls through to <cwd>/exports
+	// so the default works in dev without operator setup. TTLHours bounds how
+	// long a completed artifact survives before the cleanup sweep deletes it
+	// and flips the row to status='expired'. MaxPerUserPerDay caps how many
+	// exports a single user can enqueue in a rolling 24h window — prevents one
+	// account from queueing hundreds of large zips.
+	SettingExportArtifactDir      = "export.artifact_dir"
+	SettingExportTTLHours         = "export.ttl_hours"
+	SettingExportMaxPerUserPerDay = "export.max_per_user_per_day"
+
 	// Recall scoring and pagination. Hot-reloadable. Operators reach for
 	// these during incident response to retune the recency / over-fetch
 	// math without redeploying.
@@ -883,7 +895,10 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 
 	SettingAPIBatchStoreMaxItems: "1000",
 
-	SettingExportPageSize: "100",
+	SettingExportPageSize:          "100",
+	SettingExportArtifactDir:       "",
+	SettingExportTTLHours:          "168",
+	SettingExportMaxPerUserPerDay:  "5",
 
 	// Recall scoring and pagination defaults. recency_decay_per_hour matches
 	// the historical hardcoded math.Exp(-0.01 * hours) in computeScore.
@@ -1259,6 +1274,23 @@ func (s *SettingsService) ResolveFloatWithDefault(ctx context.Context, key, scop
 // the registered default if the configured value is missing or unparseable.
 func (s *SettingsService) ResolveDurationSecondsWithDefault(ctx context.Context, key, scope string) time.Duration {
 	return time.Duration(s.ResolveIntWithDefault(ctx, key, scope)) * time.Second
+}
+
+// ResolveStringWithDefault resolves a string setting, falling back to the
+// value registered in settingDefaults when the configured value is missing
+// or the SettingsService itself is nil (test stubs). Same panic-on-missing-
+// default contract as the typed siblings.
+func (s *SettingsService) ResolveStringWithDefault(ctx context.Context, key, scope string) string {
+	if s != nil {
+		if v, err := s.Resolve(ctx, key, scope); err == nil && v != "" {
+			return v
+		}
+	}
+	def, ok := settingDefaults[key]
+	if !ok {
+		panic("settings: ResolveStringWithDefault called for key with no registered default: " + key)
+	}
+	return def
 }
 
 // Set writes a setting at the given scope.

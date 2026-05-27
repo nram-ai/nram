@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/model"
-	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -95,81 +93,6 @@ func (m *mockTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, depth
 	return storage.TraversalResult{Relationships: out, Truncated: m.truncated, Cap: maxEdges}, m.err
 }
 
-type mockExportMemoryReader struct {
-	memories []model.Memory
-}
-
-func (m *mockExportMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
-	for _, mem := range m.memories {
-		if mem.ID == id {
-			return &mem, nil
-		}
-	}
-	return nil, nil
-}
-
-func (m *mockExportMemoryReader) GetBatch(_ context.Context, _ []uuid.UUID) ([]model.Memory, error) {
-	return m.memories, nil
-}
-
-func (m *mockExportMemoryReader) ListByNamespace(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
-	return m.memories, nil
-}
-
-func (m *mockExportMemoryReader) ListByNamespaceFiltered(_ context.Context, _ uuid.UUID, filters storage.MemoryListFilters, _, _ int) ([]model.Memory, error) {
-	if !filters.HideSuperseded {
-		return m.memories, nil
-	}
-	out := make([]model.Memory, 0, len(m.memories))
-	for _, mem := range m.memories {
-		if mem.SupersededBy != nil {
-			continue
-		}
-		out = append(out, mem)
-	}
-	return out, nil
-}
-
-type mockExportEntityLister struct {
-	entities []model.Entity
-}
-
-func (m *mockExportEntityLister) ListByNamespace(_ context.Context, _ uuid.UUID) ([]model.Entity, error) {
-	return m.entities, nil
-}
-
-type mockExportRelLister struct {
-	rels []model.Relationship
-}
-
-func (m *mockExportRelLister) ListByEntity(_ context.Context, _ uuid.UUID) ([]model.Relationship, error) {
-	return m.rels, nil
-}
-
-type mockExportLineageReader struct{}
-
-func (m *mockExportLineageReader) ListByMemory(_ context.Context, _ uuid.UUID, _ uuid.UUID) ([]model.MemoryLineage, error) {
-	return nil, nil
-}
-
-type mockExportProjectRepo struct {
-	project *model.Project
-}
-
-func (m *mockExportProjectRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.Project, error) {
-	if m.project != nil {
-		return m.project, nil
-	}
-	return nil, io.ErrUnexpectedEOF
-}
-
-func (m *mockExportProjectRepo) GetByNamespaceID(_ context.Context, namespaceID uuid.UUID) (*model.Project, error) {
-	if m.project != nil && m.project.NamespaceID == namespaceID {
-		return m.project, nil
-	}
-	return nil, io.ErrUnexpectedEOF
-}
-
 // --- memory_graph schema tests ---
 
 func TestMemoryGraph_Registered_Postgres(t *testing.T) {
@@ -204,27 +127,10 @@ func TestMemoryProjects_Registered_Postgres(t *testing.T) {
 	}
 }
 
-// --- memory_export schema tests ---
-
-func TestMemoryExport_Registered_SQLite(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := newTestServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["export"]; !ok {
-		t.Error("expected memory_export to be registered on SQLite")
-	}
-}
-
-func TestMemoryExport_Registered_Postgres(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendPostgres}
-	srv := newTestServer(deps)
-
-	tools := srv.MCPServer().ListTools()
-	if _, ok := tools["export"]; !ok {
-		t.Error("expected memory_export to be registered on Postgres")
-	}
-}
+// --- memory_export tool removed 2026-05-27 (truncation-bound payload). The
+// /v1/me/exports REST + UI pipeline replaces it. A regression guard that
+// the tool is NOT registered lives in tool_graph_projects_test.go (renamed
+// from the historical export-suffixed file).
 
 // --- memory_graph handler tests ---
 
@@ -637,197 +543,24 @@ func TestHandleMemoryProjects_EmptyList(t *testing.T) {
 	}
 }
 
-// --- memory_export handler tests ---
+// --- memory_export handler tests removed 2026-05-27 along with the tool. ---
 
-func TestHandleMemoryExport_NoHTTPRequest(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := newTestServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"project": "test"}
-
-	result, err := handleMemoryExport(context.Background(), srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// TestExportToolNotRegistered guards against a future re-registration of the
+// MCP export tool: the tool was withdrawn because its payload travelled
+// inline through the MCP transport, which truncates anything beyond the
+// configured byte budget. If a regression brings it back, this test fails
+// — re-add the test only after replacing the response-payload pattern with
+// an async tool that returns a job ID and a separate poll/download tool.
+func TestExportToolNotRegistered(t *testing.T) {
+	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
+		t.Run(backend, func(t *testing.T) {
+			srv := newTestServer(Dependencies{Backend: backend})
+			tools := srv.MCPServer().ListTools()
+			if _, ok := tools["export"]; ok {
+				t.Fatal("export MCP tool re-registered; was deliberately withdrawn — use /v1/me/exports instead")
+			}
+		})
 	}
-	assertToolError(t, result, "no HTTP request in context")
-}
-
-func TestHandleMemoryExport_NoAuth(t *testing.T) {
-	deps := Dependencies{Backend: storage.BackendSQLite}
-	srv := newTestServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"project": "test"}
-
-	ctx := buildNoAuthCtx()
-	result, err := handleMemoryExport(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "authentication required")
-}
-
-func TestHandleMemoryExport_InvalidFormat(t *testing.T) {
-	userID := uuid.New()
-	nsID := uuid.New()
-	user := &model.User{ID: userID, NamespaceID: nsID}
-	project := &model.Project{ID: uuid.New(), NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "test"}
-
-	deps := Dependencies{
-		Backend:     storage.BackendSQLite,
-		UserRepo:    &mockUserRepoStore{user: user},
-		ProjectRepo: &mockProjectRepoStore{project: project},
-	}
-	srv := newTestServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{
-		"project": "test",
-		"format":  "csv",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryExport(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "unsupported format")
-}
-
-func TestHandleMemoryExport_JSONSuccess(t *testing.T) {
-	userID := uuid.New()
-	nsID := uuid.New()
-	projectID := uuid.New()
-	user := &model.User{ID: userID, NamespaceID: nsID}
-	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Name: "Test", Slug: "test"}
-
-	exportSvc := service.NewExportService(
-		&mockExportMemoryReader{memories: []model.Memory{}},
-		&mockExportEntityLister{entities: []model.Entity{}},
-		&mockExportRelLister{rels: []model.Relationship{}},
-		&mockExportLineageReader{},
-		&mockExportProjectRepo{project: project},
-		nil,
-	)
-
-	deps := Dependencies{
-		Backend:     storage.BackendSQLite,
-		UserRepo:    &mockUserRepoStore{user: user},
-		ProjectRepo: &mockProjectRepoStore{project: project},
-		Export:      exportSvc,
-	}
-	srv := newTestServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{
-		"project": "test",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryExport(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("unexpected tool error: %v", result.Content)
-	}
-
-	text := extractText(result)
-	var data service.ExportData
-	if err := json.Unmarshal([]byte(text), &data); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-	if data.Version != "1.0" {
-		t.Errorf("expected version %q, got %q", "1.0", data.Version)
-	}
-	if data.Project.Slug != "test" {
-		t.Errorf("expected project slug %q, got %q", "test", data.Project.Slug)
-	}
-}
-
-func TestHandleMemoryExport_NDJSONSuccess(t *testing.T) {
-	userID := uuid.New()
-	nsID := uuid.New()
-	projectID := uuid.New()
-	user := &model.User{ID: userID, NamespaceID: nsID}
-	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Name: "Test", Slug: "test"}
-
-	exportSvc := service.NewExportService(
-		&mockExportMemoryReader{memories: []model.Memory{}},
-		&mockExportEntityLister{entities: []model.Entity{}},
-		&mockExportRelLister{rels: []model.Relationship{}},
-		&mockExportLineageReader{},
-		&mockExportProjectRepo{project: project},
-		nil,
-	)
-
-	deps := Dependencies{
-		Backend:     storage.BackendSQLite,
-		UserRepo:    &mockUserRepoStore{user: user},
-		ProjectRepo: &mockProjectRepoStore{project: project},
-		Export:      exportSvc,
-	}
-	srv := newTestServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{
-		"project": "test",
-		"format":  "ndjson",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryExport(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("unexpected tool error: %v", result.Content)
-	}
-
-	text := extractText(result)
-	if text == "" {
-		t.Error("expected non-empty NDJSON output")
-	}
-
-	// First line should be a project record.
-	lines := splitNDJSON(text)
-	if len(lines) == 0 {
-		t.Fatal("expected at least one NDJSON line")
-	}
-
-	var first map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
-		t.Fatalf("failed to unmarshal first NDJSON line: %v", err)
-	}
-	if first["type"] != "project" {
-		t.Errorf("expected first line type %q, got %q", "project", first["type"])
-	}
-}
-
-func TestHandleMemoryExport_ProjectNotFound(t *testing.T) {
-	userID := uuid.New()
-	nsID := uuid.New()
-	user := &model.User{ID: userID, NamespaceID: nsID}
-
-	deps := Dependencies{
-		Backend:     storage.BackendSQLite,
-		UserRepo:    &mockUserRepoStore{user: user},
-		ProjectRepo: &mockProjectRepoStore{getErr: io.ErrUnexpectedEOF},
-	}
-	srv := newTestServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{
-		"project": "nonexistent",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryExport(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertToolError(t, result, "project not found")
 }
 
 // TestHandleMemoryGraph_AlwaysFiltersSupersededSourceMemory confirms the MCP
@@ -905,98 +638,6 @@ func TestHandleMemoryGraph_AlwaysFiltersSupersededSourceMemory(t *testing.T) {
 	assertNoOrphanRelationships(t, resp)
 }
 
-func TestHandleMemoryExport_HidesSupersededByDefault(t *testing.T) {
-	userID := uuid.New()
-	nsID := uuid.New()
-	projectID := uuid.New()
-	user := &model.User{ID: userID, NamespaceID: nsID}
-	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "test"}
-
-	winnerID := uuid.New()
-	loserID := uuid.New()
-	now := time.Now().UTC()
-	mems := []model.Memory{
-		{ID: winnerID, NamespaceID: nsID, Content: "winner", Tags: []string{}, CreatedAt: now, UpdatedAt: now},
-		{ID: loserID, NamespaceID: nsID, Content: "loser", Tags: []string{}, CreatedAt: now, UpdatedAt: now, SupersededBy: &winnerID},
-	}
-
-	exportSvc := service.NewExportService(
-		&mockExportMemoryReader{memories: mems},
-		&mockExportEntityLister{entities: []model.Entity{}},
-		&mockExportRelLister{rels: []model.Relationship{}},
-		&mockExportLineageReader{},
-		&mockExportProjectRepo{project: project},
-		nil,
-	)
-
-	deps := Dependencies{
-		Backend:     storage.BackendSQLite,
-		UserRepo:    &mockUserRepoStore{user: user},
-		ProjectRepo: &mockProjectRepoStore{project: project},
-		Export:      exportSvc,
-	}
-	srv := newTestServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"project": "test"}
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryExport(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("default export: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("default export errored: %v", result.Content)
-	}
-	var data service.ExportData
-	if err := json.Unmarshal([]byte(extractText(result)), &data); err != nil {
-		t.Fatalf("decode default: %v", err)
-	}
-	if len(data.Memories) != 1 || data.Memories[0].ID != winnerID {
-		t.Fatalf("expected only winner in default export; got %+v", data.Memories)
-	}
-
-	reqIncl := mcp.CallToolRequest{}
-	reqIncl.Params.Arguments = map[string]any{
-		"project":            "test",
-		"include_superseded": true,
-	}
-	resultIncl, err := handleMemoryExport(ctx, srv, reqIncl)
-	if err != nil {
-		t.Fatalf("include export: %v", err)
-	}
-	if resultIncl.IsError {
-		t.Fatalf("include export errored: %v", resultIncl.Content)
-	}
-	var dataIncl service.ExportData
-	if err := json.Unmarshal([]byte(extractText(resultIncl)), &dataIncl); err != nil {
-		t.Fatalf("decode include: %v", err)
-	}
-	if len(dataIncl.Memories) != 2 {
-		t.Fatalf("expected both rows with include_superseded; got %d", len(dataIncl.Memories))
-	}
-}
-
-// splitNDJSON splits NDJSON text into individual lines, skipping empty lines.
-func splitNDJSON(text string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(text); i++ {
-		if text[i] == '\n' {
-			line := text[start:i]
-			if len(line) > 0 {
-				lines = append(lines, line)
-			}
-			start = i + 1
-		}
-	}
-	if start < len(text) {
-		line := text[start:]
-		if len(line) > 0 {
-			lines = append(lines, line)
-		}
-	}
-	return lines
-}
 
 // TestGraphSortIsDeterministicOnEqualWeights pins that two graph() calls
 // against the same set of equal-weight edges produce byte-identical

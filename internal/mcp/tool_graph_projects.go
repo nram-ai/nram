@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -75,19 +74,15 @@ type listProjectsResponse struct {
 	Truncated  *truncationInfo  `json:"_truncated,omitempty"`
 }
 
-// mcpExportResponse wraps service.ExportData with the byte-budget reducer
-// envelope. The service type stays untouched so REST consumers don't see the
-// MCP-specific Truncated field.
-type mcpExportResponse struct {
-	service.ExportData
-	Truncated *truncationInfo `json:"_truncated,omitempty"`
-}
-
-// RegisterGraphProjectsExportTools registers graph, list_projects, and export.
-func RegisterGraphProjectsExportTools(s *Server) {
+// RegisterGraphProjectsTools registers graph and list_projects. The export
+// tool that previously rounded out this trio was withdrawn 2026-05-27: its
+// payload travelled inline through the MCP transport, which truncates
+// anything beyond the configured byte budget, so the only exports it could
+// return were toy-sized. The REST + UI pipeline at /v1/me/exports is the
+// only export surface now.
+func RegisterGraphProjectsTools(s *Server) {
 	registerMemoryGraph(s)
 	registerMemoryProjects(s)
-	registerMemoryExport(s)
 }
 
 func registerMemoryGraph(s *Server) {
@@ -123,27 +118,6 @@ func registerMemoryProjects(s *Server) {
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return handleMemoryProjects(ctx, s, request)
-	})
-}
-
-func registerMemoryExport(s *Server) {
-	tool := mcp.NewTool("export",
-		mcp.WithTitleAnnotation("Export Project"),
-		mcp.WithReadOnlyHintAnnotation(true),
-		mcp.WithOpenWorldHintAnnotation(false),
-		mcp.WithToolIcons(iconAnnotation()),
-		// No outputSchema: the tool has two output shapes — format=json
-		// returns a structured mcpExportResponse, format=ndjson returns
-		// a line-delimited text body. A single JSON Schema cannot honestly
-		// describe both, so the tool advertises none.
-		mcp.WithDescription("Export all memories from a project for backup, migration, or analysis. Project must already exist."),
-		mcp.WithString("project", mcp.Description("Project slug to export (default: 'global')")),
-		mcp.WithString("format", mcp.Description("Export format: \"json\" or \"ndjson\" (default \"json\")")),
-		mcp.WithBoolean(includeSupersededArg, mcp.Description(includeSupersededDesc)),
-	)
-
-	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return handleMemoryExport(ctx, s, request)
 	})
 }
 
@@ -594,76 +568,3 @@ func handleMemoryProjects(ctx context.Context, s *Server, request mcp.CallToolRe
 	return wrapToolResult(s.deps.Metrics, "list_projects", mcpBudgetBytes(ctx, s.deps.Settings), resp, newListProjectsReducer(resp))
 }
 
-func handleMemoryExport(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	r := HTTPRequestFromContext(ctx)
-	if r == nil {
-		return mcp.NewToolResultError("no HTTP request in context"), nil
-	}
-	ac := auth.FromContext(r.Context())
-	if ac == nil {
-		return mcp.NewToolResultError("authentication required"), nil
-	}
-
-	args := request.GetArguments()
-
-	projectSlug, _ := args["project"].(string)
-	projectSlug = strings.TrimSpace(projectSlug)
-	if projectSlug == "" {
-		projectSlug = "global"
-	}
-
-	format := "json"
-	if v, ok := args["format"].(string); ok && strings.TrimSpace(v) != "" {
-		format = strings.TrimSpace(strings.ToLower(v))
-	}
-	if format != "json" && format != "ndjson" {
-		return mcp.NewToolResultError(fmt.Sprintf("unsupported format %q; use \"json\" or \"ndjson\"", format)), nil
-	}
-
-	deps := s.Deps()
-
-	user, err := deps.UserRepo.GetByID(ctx, ac.UserID)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("user not found: %v", err)), nil
-	}
-
-	project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
-	if err != nil {
-		return mcp.NewToolResultError("project not found"), nil
-	}
-
-	includeSuperseded := argBool(args, includeSupersededArg, false)
-
-	exportSvc := deps.Export
-
-	if format == "ndjson" {
-		req := &service.ExportRequest{
-			ProjectID:         project.ID,
-			Format:            service.ExportFormatNDJSON,
-			IncludeSuperseded: includeSuperseded,
-		}
-		var buf bytes.Buffer
-		if err := exportSvc.ExportNDJSON(ctx, req, &buf); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("export failed: %v", err)), nil
-		}
-		return wrapToolResultText(s.deps.Metrics, "export", mcpBudgetBytes(ctx, s.deps.Settings), buf.String())
-	}
-
-	req := &service.ExportRequest{
-		ProjectID:         project.ID,
-		Format:            service.ExportFormatJSON,
-		IncludeSuperseded: includeSuperseded,
-	}
-	data, err := exportSvc.Export(ctx, req)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("export failed: %v", err)), nil
-	}
-
-	// Export is exempt from outputSchema (the tool has two output shapes —
-	// json structured and ndjson text — that a single schema cannot honestly
-	// describe). Without a declared schema, structuredContent is half-honored
-	// per the MCP spec (clients MAY ignore it), so emit text only and use
-	// the full byte budget rather than the halved structured budget.
-	resp := &mcpExportResponse{ExportData: *data}
-	return wrapToolResultJSONText(s.deps.Metrics, "export", mcpBudgetBytes(ctx, s.deps.Settings), resp, newExportReducer(resp))
-}

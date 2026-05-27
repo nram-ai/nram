@@ -8,26 +8,9 @@ import (
 	"github.com/nram-ai/nram/internal/service"
 )
 
-// includeSupersededArg is the optional bool argument that controls whether
-// the export MCP tool surfaces rows that paraphrase or contradiction dedup
-// has marked as losers. The other read-side MCP tools have this flag
-// stripped (the diagnostic surface is REST/admin-only); export retains it
-// because exports are an intentional backup/migration surface where seeing
-// the full lineage often matters.
-const includeSupersededArg = "include_superseded"
-
-// includeSupersededDesc is the standard tool-arg description for export's
-// include_superseded flag.
-const includeSupersededDesc = "Include rows that were superseded by paraphrase or contradiction dedup. Default false hides them."
-
-// argBool extracts a boolean tool argument by key, returning defaultVal
-// when the key is absent or not a bool.
-func argBool(args map[string]any, key string, defaultVal bool) bool {
-	if v, ok := args[key].(bool); ok {
-		return v
-	}
-	return defaultVal
-}
+// The include_superseded MCP tool argument and its argBool helper were
+// removed 2026-05-27 along with the export tool. Other read-side MCP tools
+// deliberately strip the flag (the diagnostic surface is REST/admin-only).
 
 // parseIntArg extracts an integer tool argument from a JSON-decoded args map.
 // JSON unmarshal hands numerics back as float64, so this helper:

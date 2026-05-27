@@ -77,6 +77,14 @@ type Handlers struct {
 	// who cannot read /v1/admin/settings.
 	MeRankingWeightsDefaults http.HandlerFunc
 
+	// Self-tier export job pipeline. Replaced the truncation-bound MCP
+	// export tool — large multi-project exports run asynchronously, the
+	// artifact lands on disk, and the caller downloads it through these
+	// handlers. See internal/service/export_job.go.
+	MeExports        http.HandlerFunc // GET (list) + POST (create) /v1/me/exports
+	MeExportItem     http.HandlerFunc // GET + DELETE /v1/me/exports/{job_id}
+	MeExportDownload http.HandlerFunc // GET /v1/me/exports/{job_id}/download
+
 	// Org-scoped handlers
 	OrgUsers http.HandlerFunc
 	OrgIdP   http.HandlerFunc
@@ -342,6 +350,16 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			// /v1/admin/settings; this is the narrow read surface that lets
 			// them populate placeholders without an admin gate.
 			r.Get("/ranking-weights/defaults", handler(handlers.MeRankingWeightsDefaults))
+
+			// Self-tier export jobs. List/create at the root; per-job
+			// status and delete at {job_id}; artifact download under
+			// /download. No admin equivalent — the codebase's privacy
+			// invariant deliberately keeps memory content off admin
+			// surfaces, so an admin cannot trigger an export against
+			// another user's data.
+			r.HandleFunc("/exports", handler(handlers.MeExports))
+			r.HandleFunc("/exports/{job_id}", handler(handlers.MeExportItem))
+			r.Get("/exports/{job_id}/download", handler(handlers.MeExportDownload))
 		})
 
 		// Scoped data-viewing routes (all authenticated users — scope auto-applied).

@@ -51,6 +51,10 @@ var preflightTables = []string{
 	"settings",
 	"entities",
 	"memories",
+	// export_jobs holds FKs to both users (ON DELETE CASCADE) and projects
+	// (ON DELETE CASCADE). Listed before its parents so the dependency-aware
+	// truncate path orders it correctly.
+	"export_jobs",
 	// Parent tables last.
 	"projects",
 	"users",

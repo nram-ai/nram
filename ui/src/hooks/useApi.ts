@@ -53,6 +53,8 @@ import {
   type LoginResponse,
   type SystemRankingWeights,
   type UsageGroupBy,
+  type ExportJob,
+  type CreateExportJobRequest,
 } from "../api/client";
 import {
   isWebAuthnAvailable,
@@ -1470,6 +1472,48 @@ export function useDeletePasskey() {
     mutationFn: (id: string) => meAPI.deletePasskey(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["me", "passkeys"] });
+    },
+  });
+}
+
+// --- Export job hooks ---
+//
+// The MyAccount page polls in-flight jobs at 3s while at least one row is
+// in pending/processing; React Query's refetchInterval callback returns a
+// number when polling should continue and false when terminal, mirroring
+// the cadence used by EnrichmentMonitor.
+
+export function useMeExportJobs() {
+  return useQuery({
+    queryKey: ["me", "exports"],
+    queryFn: meAPI.listExportJobs,
+    refetchInterval: (query) => {
+      const jobs = query.state.data as ExportJob[] | undefined;
+      if (!jobs) return false;
+      const hasInflight = jobs.some(
+        (j) => j.status === "pending" || j.status === "processing",
+      );
+      return hasInflight ? 3000 : false;
+    },
+  });
+}
+
+export function useCreateMeExportJob() {
+  const qc = useQueryClient();
+  return useMutation<ExportJob, Error, CreateExportJobRequest>({
+    mutationFn: (data) => meAPI.createExportJob(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "exports"] });
+    },
+  });
+}
+
+export function useDeleteMeExportJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => meAPI.deleteExportJob(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "exports"] });
     },
   });
 }

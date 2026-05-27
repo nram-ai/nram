@@ -459,51 +459,9 @@ func TestWrapToolResultReducedPathPopulatesStructuredContent(t *testing.T) {
 	}
 }
 
-// TestMCPExportResponseTopLevelKeys pins the embedded-field JSON promotion of
-// mcpExportResponse. service.ExportData is embedded by value; if a future
-// change adds a custom MarshalJSON on ExportData (or a field whose json tag
-// collides with `_truncated`), encoding/json's anonymous-field promotion
-// silently breaks and the wire shape changes from
-// {version, exported_at, project, memories, entities, relationships, stats, _truncated}
-// to {ExportData: {...}, _truncated: ...} (or drops _truncated). This test
-// catches the regression at compile-or-test time.
-func TestMCPExportResponseTopLevelKeys(t *testing.T) {
-	resp := &mcpExportResponse{
-		ExportData: service.ExportData{
-			Version: "1",
-		},
-		Truncated: &truncationInfo{Reason: "test"},
-	}
-	out, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("marshal mcpExportResponse: %v", err)
-	}
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(out, &top); err != nil {
-		t.Fatalf("unmarshal top-level: %v", err)
-	}
-	want := []string{
-		"version", "exported_at", "project",
-		"memories", "entities", "relationships", "stats",
-		"_truncated",
-	}
-	for _, k := range want {
-		if _, ok := top[k]; !ok {
-			t.Errorf("expected top-level key %q on mcpExportResponse wire shape; got keys %v", k, mapKeys(top))
-		}
-	}
-	if _, ok := top["ExportData"]; ok {
-		t.Errorf("unexpected unflattened 'ExportData' key — embedded promotion broke; got keys %v", mapKeys(top))
-	}
-}
-
-func mapKeys(m map[string]json.RawMessage) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
+// TestMCPExportResponseTopLevelKeys removed 2026-05-27 along with the
+// mcpExportResponse wrapper. The MCP export tool no longer exists; see
+// internal/api/handler_me_exports.go for the replacement REST surface.
 
 // stubMetrics records the (tool, tier) increments wrapToolResult emits so
 // tests can assert telemetry behavior without standing up a real Prometheus

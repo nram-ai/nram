@@ -889,7 +889,6 @@ func TestHTTPStack_MCP_ListTools(t *testing.T) {
 		"recall",
 		"forget",
 		"list_projects",
-		"export",
 	}
 
 	toolNames := make(map[string]bool)
@@ -1529,14 +1528,6 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 		projectLookup, nil, nil, &mockEnrichmentQueueRepo{},
 	)
 	batchGetSvc := service.NewBatchGetService(memRepo, projectLookup)
-	exportSvc := service.NewExportService(
-		memRepo,
-		&mockExportEntityLister{entities: []model.Entity{}},
-		&mockExportRelLister{rels: []model.Relationship{}},
-		&mockExportLineageReader{},
-		projectLookup,
-		nil,
-	)
 
 	deps := Dependencies{
 		Backend:       storage.BackendSQLite,
@@ -1546,7 +1537,6 @@ func newMultiUserHTTPStackEnv(t *testing.T, configs []multiUserEnvConfig) *multi
 		Update:        updateSvc,
 		BatchStore:    batchStoreSvc,
 		BatchGet:      batchGetSvc,
-		Export:        exportSvc,
 		ProjectRepo:   projectRepo,
 		UserRepo:      userRepo,
 		NamespaceRepo: nsRepo,
@@ -2797,77 +2787,10 @@ func TestHTTPStack_MCP_GetWithInvalidID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Test 29: TestHTTPStack_MCP_ExportProject
-// ---------------------------------------------------------------------------
-
-func TestHTTPStack_MCP_ExportProject(t *testing.T) {
-	userA := uuid.New()
-	nsA := uuid.New()
-	projA := uuid.New()
-
-	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
-		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "export-proj"},
-	})
-	defer env.Close()
-
-	sess := env.sessionFor(t, 0)
-
-	// Store several memories.
-	contents := []string{
-		"Export test memory one",
-		"Export test memory two",
-		"Export test memory three",
-	}
-	for i, content := range contents {
-		_, storeRPC := sess.call(t, 2+i, "tools/call", map[string]any{
-			"name": "store",
-			"arguments": map[string]any{
-				"project": "export-proj",
-				"content": content,
-			},
-		})
-		if storeRPC == nil || storeRPC.Error != nil {
-			t.Fatalf("store %d failed", i)
-		}
-	}
-
-	// Export the project.
-	_, exportRPC := sess.call(t, 10, "tools/call", map[string]any{
-		"name": "export",
-		"arguments": map[string]any{
-			"project": "export-proj",
-		},
-	})
-	if exportRPC == nil || exportRPC.Error != nil {
-		t.Fatalf("export failed")
-	}
-	exportText := extractToolResultText(t, exportRPC)
-	var exportData service.ExportData
-	if err := json.Unmarshal([]byte(exportText), &exportData); err != nil {
-		t.Fatalf("unmarshal export: %v", err)
-	}
-	if exportData.Stats.MemoryCount != 3 {
-		t.Errorf("expected 3 exported memories, got %d", exportData.Stats.MemoryCount)
-	}
-	if len(exportData.Memories) != 3 {
-		t.Fatalf("expected 3 memories in export, got %d", len(exportData.Memories))
-	}
-
-	// Verify all contents are present.
-	exportedContents := make(map[string]bool)
-	for _, mem := range exportData.Memories {
-		exportedContents[mem.Content] = true
-	}
-	for _, content := range contents {
-		if !exportedContents[content] {
-			t.Errorf("expected exported content %q not found", content)
-		}
-	}
-	if exportData.Project.Slug != "export-proj" {
-		t.Errorf("expected project slug 'export-proj', got %q", exportData.Project.Slug)
-	}
-}
+// Test 29 (TestHTTPStack_MCP_ExportProject) removed 2026-05-27 with the
+// MCP export tool. Per-project export coverage now lives in
+// internal/api/handler_export_import_test.go against the REST endpoint at
+// GET /v1/projects/{project_id}/memories/export.
 
 // ---------------------------------------------------------------------------
 // Test 30: TestHTTPStack_MCP_SessionIDPersists
@@ -4035,48 +3958,9 @@ func TestHTTPStack_MCP_StoreDuplicateContent(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Test 48: TestHTTPStack_MCP_ExportEmptyProject
-// ---------------------------------------------------------------------------
-
-func TestHTTPStack_MCP_ExportEmptyProject(t *testing.T) {
-	userA := uuid.New()
-	nsA := uuid.New()
-	projA := uuid.New()
-
-	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
-		{userID: userA, nsID: nsA, nsPath: "/users/alice", projectID: projA, projSlug: "empty-export"},
-	})
-	defer env.Close()
-
-	sess := env.sessionFor(t, 0)
-
-	// Export a project that has no memories.
-	_, exportRPC := sess.call(t, 2, "tools/call", map[string]any{
-		"name": "export",
-		"arguments": map[string]any{
-			"project": "empty-export",
-		},
-	})
-	if exportRPC == nil || exportRPC.Error != nil {
-		msg := ""
-		if exportRPC != nil && exportRPC.Error != nil {
-			msg = exportRPC.Error.Message
-		}
-		t.Fatalf("export failed: %s", msg)
-	}
-	exportText := extractToolResultText(t, exportRPC)
-	var exportData service.ExportData
-	if err := json.Unmarshal([]byte(exportText), &exportData); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(exportData.Memories) != 0 {
-		t.Errorf("expected 0 memories in empty export, got %d", len(exportData.Memories))
-	}
-	if exportData.Stats.MemoryCount != 0 {
-		t.Errorf("expected memory_count=0, got %d", exportData.Stats.MemoryCount)
-	}
-}
+// Test 48 (TestHTTPStack_MCP_ExportEmptyProject) removed 2026-05-27 with
+// the MCP export tool. Equivalent coverage exists in
+// internal/api/handler_export_import_test.go's empty-project case.
 
 // ---------------------------------------------------------------------------
 // Test 49: TestHTTPStack_MCP_ToolCallBeforeInitialize

@@ -9,8 +9,13 @@ import {
   useMePasskeys,
   useRegisterPasskey,
   useDeletePasskey,
+  useMeExportJobs,
+  useCreateMeExportJob,
+  useDeleteMeExportJob,
 } from "../hooks/useApi";
-import type { APIKey, Passkey } from "../api/client";
+import type { APIKey, ExportJob, ExportJobStatus, Passkey } from "../api/client";
+import { downloadExportJobArtifact } from "../api/client";
+import { formatBytes } from "../lib/formatters";
 import { isWebAuthnAvailable } from "../api/webauthn";
 
 // ---------------------------------------------------------------------------
@@ -418,6 +423,200 @@ function CreatePasskeyForm({ onCreated }: { onCreated: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
+// Data Export Card
+//
+// Renders the asynchronous export-job pipeline at /v1/me/exports — kicks off
+// an account-wide zip, lists the caller's recent jobs, polls in-flight rows
+// at 3s via useMeExportJobs's refetchInterval, downloads succeeded
+// artifacts through an auth-attached fetch+blob path.
+// ---------------------------------------------------------------------------
+
+function exportStatusBadgeClass(status: ExportJobStatus): string {
+  switch (status) {
+    case "pending":
+    case "processing":
+      return "bg-info/10 text-info";
+    case "succeeded":
+      return "bg-success/10 text-success";
+    case "failed":
+      return "bg-destructive/10 text-destructive";
+    case "expired":
+      return "bg-muted text-muted-foreground";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function ExportJobRow({ job, onDelete, deleting }: { job: ExportJob; onDelete: (id: string) => void; deleting: boolean }) {
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  async function handleDownload() {
+    setDownloadError(null);
+    setDownloading(true);
+    try {
+      await downloadExportJobArtifact(job.id);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : "download failed");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  const canDownload = job.status === "succeeded";
+
+  return (
+    <tr className="border-b last:border-0">
+      <td className="px-4 py-3 text-sm">{job.scope}</td>
+      <td className="px-4 py-3 text-xs">
+        <span className={`inline-block rounded-full px-2 py-0.5 font-medium ${exportStatusBadgeClass(job.status)}`}>
+          {job.status}
+        </span>
+        {job.error && (
+          <p className="mt-1 text-xs text-destructive" title={job.error}>
+            {job.error.length > 80 ? `${job.error.slice(0, 80)}…` : job.error}
+          </p>
+        )}
+      </td>
+      <td className="px-4 py-3 text-xs text-muted-foreground">{formatDate(job.created_at)}</td>
+      <td className="px-4 py-3 text-xs text-muted-foreground">{formatBytes(job.artifact_bytes)}</td>
+      <td className="px-4 py-3 text-xs text-muted-foreground">
+        {job.expires_at ? formatDate(job.expires_at) : "-"}
+      </td>
+      <td className="px-4 py-3 text-right">
+        <span className="inline-flex items-center gap-2">
+          {downloadError && <span className="text-xs text-destructive">{downloadError}</span>}
+          {canDownload && (
+            <button
+              type="button"
+              className="rounded border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+              onClick={handleDownload}
+              disabled={downloading}
+            >
+              {downloading ? "Downloading..." : "Download"}
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+            onClick={() => onDelete(job.id)}
+            disabled={deleting}
+          >
+            {deleting ? "Deleting..." : "Delete"}
+          </button>
+        </span>
+      </td>
+    </tr>
+  );
+}
+
+function DataExportCard() {
+  const jobsQuery = useMeExportJobs();
+  const createMut = useCreateMeExportJob();
+  const deleteMut = useDeleteMeExportJob();
+  const [includeSuperseded, setIncludeSuperseded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const jobs: ExportJob[] = jobsQuery.data ?? [];
+  const hasInflight = jobs.some((j) => j.status === "pending" || j.status === "processing");
+
+  function handleStart() {
+    setError(null);
+    createMut.mutate(
+      { scope: "account", include_superseded: includeSuperseded },
+      {
+        onError: (err) => {
+          let detail = err instanceof Error ? err.message : "failed to start export";
+          if ("body" in err && typeof (err as Record<string, unknown>).body === "object" && (err as Record<string, unknown>).body !== null) {
+            const body = (err as Record<string, unknown>).body as Record<string, unknown>;
+            if (typeof body.message === "string") detail = body.message;
+          }
+          setError(detail);
+        },
+      },
+    );
+  }
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="border-b px-4 py-3">
+        <h2 className="text-sm font-semibold">Data Export</h2>
+      </div>
+      <div className="p-4 space-y-4">
+        <p className="text-xs text-muted-foreground">
+          Export your data as a zip archive. The archive contains one JSON file per project
+          you own (memories, entities, relationships, and lineage) plus a manifest. Exports
+          run asynchronously; large accounts may take a minute or two.
+        </p>
+
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeSuperseded}
+              onChange={(e) => setIncludeSuperseded(e.target.checked)}
+            />
+            Include superseded memories
+          </label>
+          <button
+            type="button"
+            className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            onClick={handleStart}
+            disabled={createMut.isPending || hasInflight}
+            title={hasInflight ? "An export is already in flight — wait for it to finish before starting another." : undefined}
+          >
+            {createMut.isPending ? "Starting..." : "Start account export"}
+          </button>
+        </div>
+
+        {error && (
+          <p className="text-sm text-destructive">{error}</p>
+        )}
+
+        {jobsQuery.isLoading ? (
+          <div className="py-4 text-center text-sm text-muted-foreground">Loading...</div>
+        ) : jobs.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">
+            No exports yet. Click "Start account export" to create one.
+          </p>
+        ) : (
+          <div className="overflow-auto rounded-lg border">
+            <table className="w-full">
+              <thead className="border-b bg-muted/50">
+                <tr>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Scope</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Created</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Size</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Expires</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((job) => (
+                  <ExportJobRow
+                    key={job.id}
+                    job={job}
+                    onDelete={(id) => deleteMut.mutate(id)}
+                    deleting={deleteMut.isPending}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {jobsQuery.isError && (
+          <p className="text-sm text-destructive">
+            Failed to load exports: {jobsQuery.error?.message}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main MyAccount
 // ---------------------------------------------------------------------------
 
@@ -654,6 +853,12 @@ function MyAccount() {
           )}
         </div>
       </div>
+
+      {/* Data Export — async job pipeline at /v1/me/exports. Self-service
+          only; admins do NOT get an equivalent surface elsewhere in the
+          UI (per the codebase's privacy invariant — admins cannot read
+          other users' memory content). */}
+      <DataExportCard />
 
     </div>
   );

@@ -1,4 +1,5 @@
 import { decodeUserFromJWT, type UserInfo } from "../context/AuthContext";
+import { triggerBlobDownload, parseAttachmentFilename } from "../lib/download";
 
 /** Base URL is auto-detected: same origin in production, proxied in dev. */
 const BASE_URL = "/v1";
@@ -1771,6 +1772,87 @@ export interface MeProfilePatchRequest {
   theme?: Theme;
 }
 
+// ExportJob mirrors model.ExportJob on the backend. status transitions
+// pending → processing → succeeded|failed, then later → expired once the
+// cleanup sweep reclaims the artifact. project_id is set only for
+// scope="project"; scope="account" produces a zip covering every project
+// the user owns.
+export type ExportJobScope = "account" | "project";
+export type ExportJobStatus = "pending" | "processing" | "succeeded" | "failed" | "expired";
+export type ExportJobFormat = "zip" | "json" | "ndjson";
+
+export interface ExportJob {
+  id: string;
+  user_id: string;
+  scope: ExportJobScope;
+  project_id?: string | null;
+  format: ExportJobFormat;
+  include_superseded: boolean;
+  status: ExportJobStatus;
+  artifact_path?: string | null;
+  artifact_bytes?: number | null;
+  artifact_sha256?: string | null;
+  error?: string | null;
+  claimed_by?: string | null;
+  claimed_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateExportJobRequest {
+  scope: ExportJobScope;
+  project_id?: string;
+  format?: ExportJobFormat;
+  include_superseded?: boolean;
+}
+
+// downloadExportJobArtifact streams the succeeded artifact through fetch
+// (so the Authorization header travels with the request) and triggers a
+// browser download via a temporary blob URL. Resolves once the download
+// has been initiated; rejects on a non-2xx status. Filename is derived
+// from the Content-Disposition header the handler sends, falling back to
+// nram-export-{id}.zip if absent.
+export async function downloadExportJobArtifact(id: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/me/exports/${id}/download`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new APIError(res.status, text || "download failed");
+  }
+  const blob = await res.blob();
+  const filename = parseAttachmentFilename(res.headers.get("Content-Disposition")) ?? `nram-export-${id}.zip`;
+  triggerBlobDownload(blob, filename);
+}
+
+// downloadProjectExport hits the synchronous per-project export endpoint
+// and triggers a browser download. Used by the per-project Export action
+// in ProjectManagement; bypasses the async job pipeline because the
+// payload is built in memory and streamed back inline.
+export async function downloadProjectExport(
+  projectID: string,
+  projectSlug: string,
+  opts?: { format?: "json" | "ndjson"; includeSuperseded?: boolean },
+): Promise<void> {
+  const sp = new URLSearchParams();
+  const format = opts?.format ?? "json";
+  sp.set("format", format);
+  if (opts?.includeSuperseded) sp.set("include_superseded", "true");
+  const res = await fetch(`${BASE_URL}/projects/${projectID}/memories/export?${sp.toString()}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new APIError(res.status, text || "export failed");
+  }
+  const blob = await res.blob();
+  const ext = format === "ndjson" ? "ndjson" : "json";
+  triggerBlobDownload(blob, `nram-${projectSlug}.${ext}`);
+}
+
 export const meAPI = {
   getProfile: () => request<MeProfile>("GET", "/me/profile"),
 
@@ -1861,6 +1943,20 @@ export const meAPI = {
     request<DreamAbandonResponse>("POST", `/me/dreaming/cycles/${cycleId}/abandon`),
   rollbackDreamCycle: (cycleId: string) =>
     request<DreamRollbackResponse>("POST", `/me/dreaming/cycles/${cycleId}/rollback`),
+
+  // Self-service export jobs. The async pipeline replaces the
+  // truncation-bound MCP export tool withdrawn 2026-05-27. List/create at
+  // the root; status + delete at {job_id}; artifact download under
+  // /download. Per-project synchronous exports remain at
+  // /v1/projects/{id}/memories/export — see exportProjectURL below.
+  listExportJobs: () =>
+    request<{ data: ExportJob[] }>("GET", "/me/exports").then((r) => r.data ?? []),
+  createExportJob: (data: CreateExportJobRequest) =>
+    request<ExportJob>("POST", "/me/exports", data),
+  getExportJob: (id: string) =>
+    request<ExportJob>("GET", `/me/exports/${id}`),
+  deleteExportJob: (id: string) =>
+    request<void>("DELETE", `/me/exports/${id}`),
 };
 
 // --- Org API (org-scoped endpoints) ---

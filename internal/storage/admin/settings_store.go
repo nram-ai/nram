@@ -378,6 +378,11 @@ var settingsSchemas = []api.SettingSchema{
 	// Export pagination size.
 	{Key: service.SettingExportPageSize, Type: "number", DefaultValue: json.RawMessage(`100`), Description: "Memories fetched per page when collecting an export. Hot-reloads on the next export.", Category: "performance", Min: ptrF(1), Max: ptrF(10000), Step: ptrF(10)},
 
+	// Self-service export job knobs.
+	{Key: service.SettingExportArtifactDir, Type: "string", DefaultValue: json.RawMessage(`""`), Description: "Filesystem directory where the export worker writes per-user zip archives (one file per job under <root>/<user_id>/<job_id>.zip). Empty falls through to <cwd>/exports so the default works in dev without operator setup. Hot-reloads on the next job — in-flight jobs already started will complete to the old directory.", Category: "export"},
+	{Key: service.SettingExportTTLHours, Type: "number", DefaultValue: json.RawMessage(`168`), Description: "Hours a completed export artifact survives before the cleanup sweep deletes it and flips the row to status='expired'. Default 168 = 7 days.", Category: "export", Min: ptrF(1), Max: ptrF(8760), Step: ptrF(1)},
+	{Key: service.SettingExportMaxPerUserPerDay, Type: "number", DefaultValue: json.RawMessage(`5`), Description: "Maximum exports a single user can enqueue in a rolling 24h window (in addition to the 1-in-flight cap). Prevents one account from queueing hundreds of large zips.", Category: "export", Min: ptrF(1), Max: ptrF(1000), Step: ptrF(1)},
+
 	// MCP CallToolResult byte budget in tokens (~2 bytes/token at the
 	// charsPerTokenEstimate ratio). Bounds each tool response so a single
 	// call cannot consume the whole client context. Min=100 because the

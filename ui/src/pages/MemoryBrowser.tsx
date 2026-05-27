@@ -13,6 +13,7 @@ import {
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import { useDebounce } from "../hooks/useDebounce";
 import { useAuth } from "../context/AuthContext";
+import { downloadJson } from "../lib/download";
 import { useSelectedProject } from "../context/ProjectContext";
 import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
 import { MemoryAugmentPreviewBlock } from "../components/MemoryAugmentPreviewBlock";
@@ -65,17 +66,6 @@ function preview(content: string, maxLen = 200): string {
   return content.slice(0, maxLen) + "...";
 }
 
-function downloadJson(data: unknown, filename: string) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 // ---------------------------------------------------------------------------
 // Tag chip colors

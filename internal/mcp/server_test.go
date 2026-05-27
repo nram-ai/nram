@@ -233,10 +233,10 @@ func TestToolDescriptions_UnderSizeLimit(t *testing.T) {
 func TestEveryToolHasOutputSchema(t *testing.T) {
 	expected := []string{
 		"list", "store", "store_batch", "recall", "forget",
-		"update", "get", "graph", "list_projects", "export",
+		"update", "get", "graph", "list_projects",
 		"delete_project", "update_project",
 	}
-	exempt := map[string]bool{"export": true}
+	exempt := map[string]bool{} // export was the sole exemption; tool withdrawn 2026-05-27
 
 	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
 		// delete_project is gated on a non-nil ProjectDelete service

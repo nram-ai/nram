@@ -630,48 +630,6 @@ func halveWithFloor(n int) int {
 	return n / 2
 }
 
-// newExportReducer halves memories, entities, and relationships in
-// lockstep. Truncated counts aggregate across all three categories so a
-// caller computing "fraction returned" gets a true completeness signal.
-func newExportReducer(orig *mcpExportResponse) reducerFunc {
-	memories := append([]service.ExportMemory(nil), orig.Memories...)
-	entities := append([]service.ExportEntity(nil), orig.Entities...)
-	rels := append([]service.ExportRelationship(nil), orig.Relationships...)
-	origTotal := len(memories) + len(entities) + len(rels)
-	return func() (any, bool) {
-		if len(memories) <= 1 && len(entities) <= 1 && len(rels) <= 1 {
-			return nil, false
-		}
-		if len(memories) > 1 {
-			memories = memories[:len(memories)/2]
-		}
-		if len(entities) > 1 {
-			entities = entities[:len(entities)/2]
-		}
-		if len(rels) > 1 {
-			rels = rels[:len(rels)/2]
-		}
-		more := len(memories) > 1 || len(entities) > 1 || len(rels) > 1
-		return &mcpExportResponse{
-			ExportData: service.ExportData{
-				Version:       orig.Version,
-				ExportedAt:    orig.ExportedAt,
-				Project:       orig.Project,
-				Memories:      memories,
-				Entities:      entities,
-				Relationships: rels,
-				Stats:         orig.Stats,
-			},
-			Truncated: &truncationInfo{
-				Reason:        "response_too_large",
-				OriginalCount: origTotal,
-				ReturnedCount: len(memories) + len(entities) + len(rels),
-				Hint:          "export exceeded MCP token budget; result is partial — narrow the project scope or paginate memories via list",
-			},
-		}, more
-	}
-}
-
 // classifyTier returns the tier label that wrapToolResult assigned to res.
 // Exposed for tests to assert which path was taken. The contract:
 //   - tier1: StructuredContent != nil

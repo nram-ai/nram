@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"strings"
 
@@ -83,7 +82,6 @@ type Dependencies struct {
 	Update         *service.UpdateService
 	BatchGet       *service.BatchGetService
 	BatchStore     *service.BatchStoreService
-	Export         *service.ExportService
 	ProjectDelete  *service.ProjectDeleteService
 	ProjectUpdater ProjectUpdater
 	ProjectRepo    ProjectRepo
@@ -259,7 +257,7 @@ func NewServer(deps Dependencies) *Server {
 	RegisterRecallTool(s)
 	RegisterListTool(s)
 	RegisterForgetTool(s)
-	RegisterGraphProjectsExportTools(s)
+	RegisterGraphProjectsTools(s)
 	RegisterProjectDeleteTool(s)
 	RegisterProjectUpdateTool(s)
 	RegisterResources(s)
@@ -337,9 +335,3 @@ func (s *Server) Deps() Dependencies {
 	return s.deps
 }
 
-// ExportServicer is a convenience interface satisfied by *service.ExportService.
-// It is used by tool handlers that need both Export and ExportNDJSON.
-type ExportServicer interface {
-	Export(ctx context.Context, req *service.ExportRequest) (*service.ExportData, error)
-	ExportNDJSON(ctx context.Context, req *service.ExportRequest, w io.Writer) error
-}

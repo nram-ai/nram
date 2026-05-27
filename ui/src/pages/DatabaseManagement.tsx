@@ -14,18 +14,11 @@ import type {
 } from "../api/client";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner, faCircleExclamation, faTriangleExclamation, faCheck, faCircleCheck } from "../lib/icons";
+import { formatBytes } from "../lib/formatters";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const val = bytes / Math.pow(1024, i);
-  return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
 
 function poolBarWidth(value: number, max: number): string {
   if (max <= 0) return "0%";

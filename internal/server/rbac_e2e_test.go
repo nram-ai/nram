@@ -1566,7 +1566,6 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		Update:        updateSvc,
 		BatchGet:      batchGetSvc,
 		BatchStore:    batchStoreSvc,
-		Export:        exportSvc,
 		ProjectRepo:   projectLookup,
 		UserRepo:      userLookup,
 		NamespaceRepo: namespaceLookup,
@@ -2474,31 +2473,11 @@ func TestRBAC_MCP_AllRoles_Get(t *testing.T) {
 	}
 }
 
-// ===========================================================================
-// Test 20: TestRBAC_MCP_AllRoles_Export
-// ===========================================================================
-
-func TestRBAC_MCP_AllRoles_Export(t *testing.T) {
-	env := newRBACFullTestEnv(t)
-
-	// Seed "rbac-proj" for each user.
-	rbacMCPSeedProject(t, env)
-
-	tests := rbacMCPReadCases(env)
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sessionID := rbacMCPInitialize(t, env.Server.URL, tt.token)
-			rpc := rbacMCPCallTool(t, env.Server.URL, tt.token, sessionID, "export", map[string]any{
-				"project": tt.project,
-			})
-			gotError := rbacMCPIsError(rpc)
-			if gotError != tt.wantError {
-				t.Fatalf("expected error=%v, got error=%v; result=%s", tt.wantError, gotError, string(rpc.Result))
-			}
-		})
-	}
-}
+// Test 20 (TestRBAC_MCP_AllRoles_Export) removed 2026-05-27 along with the
+// MCP export tool. The REST-tier export endpoint at
+// /v1/projects/{project_id}/memories/export is covered by
+// TestRBAC_AllRoles_Export (Test 8) above, which is the canonical RBAC
+// regression for export access now.
 
 // ===========================================================================
 // Test 21: TestRBAC_MCP_AllRoles_Projects

@@ -123,41 +123,6 @@ func (m *trackingMemoryDeleter) FindBySupersededBy(_ context.Context, _ uuid.UUI
 	return out, nil
 }
 
-// mockMemoryReaderForExport satisfies service.MemoryReader with an in-memory
-// slice for use in the export integration test.
-type mockMemoryReaderForExport struct {
-	memories []model.Memory
-}
-
-func (m *mockMemoryReaderForExport) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
-	for i := range m.memories {
-		if m.memories[i].ID == id {
-			return &m.memories[i], nil
-		}
-	}
-	return nil, errors.New("not found")
-}
-
-func (m *mockMemoryReaderForExport) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
-	var out []model.Memory
-	for _, id := range ids {
-		for i := range m.memories {
-			if m.memories[i].ID == id {
-				out = append(out, m.memories[i])
-			}
-		}
-	}
-	return out, nil
-}
-
-func (m *mockMemoryReaderForExport) ListByNamespace(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
-	return m.memories, nil
-}
-
-func (m *mockMemoryReaderForExport) ListByNamespaceFiltered(ctx context.Context, ns uuid.UUID, _ storage.MemoryListFilters, limit, offset int) ([]model.Memory, error) {
-	return m.ListByNamespace(ctx, ns, limit, offset)
-}
-
 // ---------------------------------------------------------------------------
 // Integration test helpers
 // ---------------------------------------------------------------------------
@@ -213,20 +178,6 @@ func buildIntegBatchGetService(memories []model.Memory, project *model.Project) 
 	return service.NewBatchGetService(
 		&mockMemoryBatchReader{memories: memories},
 		&mockProjectLookup{project: project},
-	)
-}
-
-// buildIntegExportService builds a real ExportService.
-// It reuses mockExportEntityLister and mockExportLineageReader from
-// tool_graph_projects_export_test.go, plus the local mockMemoryReaderForExport.
-func buildIntegExportService(memories []model.Memory, project *model.Project) *service.ExportService {
-	return service.NewExportService(
-		&mockMemoryReaderForExport{memories: memories},
-		&mockExportEntityLister{entities: []model.Entity{}},
-		&mockExportRelLister{rels: []model.Relationship{}},
-		&mockExportLineageReader{},
-		&mockProjectLookup{project: project},
-		nil,
 	)
 }
 
@@ -1011,71 +962,12 @@ func TestMCP_ProjectsList(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 16. TestMCP_ExportProject
-// ---------------------------------------------------------------------------
-
-func TestMCP_ExportProject(t *testing.T) {
-	userID, nsID, projectID, user, _, project := standardIntegSetup()
-
-	now := time.Now()
-	memories := []model.Memory{
-		{
-			ID:          uuid.New(),
-			NamespaceID: nsID,
-			Content:     "exported memory one",
-			Tags:        []string{"export"},
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		},
-	}
-
-	exportSvc := buildIntegExportService(memories, project)
-
-	deps := Dependencies{
-		Backend:     storage.BackendSQLite,
-		UserRepo:    &mockUserRepoStore{user: user},
-		ProjectRepo: &mockProjectRepoStore{project: project},
-		Export:      exportSvc,
-	}
-	srv := newTestServer(deps)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "export"
-	req.Params.Arguments = map[string]any{
-		"project": "test-project",
-		"format":  "json",
-	}
-
-	ctx := buildAuthCtx(userID)
-	result, err := handleMemoryExport(ctx, srv, req)
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("unexpected tool error: %s", extractText(result))
-	}
-
-	var data service.ExportData
-	if err := json.Unmarshal([]byte(extractText(result)), &data); err != nil {
-		t.Fatalf("failed to unmarshal export response: %v", err)
-	}
-	if data.Version == "" {
-		t.Error("expected export version to be set")
-	}
-	if data.Project.ID != projectID {
-		t.Errorf("expected project ID %s, got %s", projectID, data.Project.ID)
-	}
-	if data.Stats.MemoryCount != 1 {
-		t.Errorf("expected memory_count=1, got %d", data.Stats.MemoryCount)
-	}
-	if len(data.Memories) != 1 {
-		t.Errorf("expected 1 memory in export, got %d", len(data.Memories))
-	}
-	if len(data.Memories) == 1 && data.Memories[0].Content != "exported memory one" {
-		t.Errorf("exported memory content: expected %q, got %q", "exported memory one", data.Memories[0].Content)
-	}
-}
+// Section 16 ("TestMCP_ExportProject") removed 2026-05-27 along with the
+// MCP export tool. Per-project export integration coverage lives in
+// internal/api/handler_export_import_test.go (REST handler) and
+// internal/service/export_test.go (service layer). Account-wide exports
+// run asynchronously via /v1/me/exports and are covered in
+// internal/api/handler_me_exports_test.go.
 
 // ---------------------------------------------------------------------------
 // 17. TestMCP_StoreEmitsEvent
@@ -1537,7 +1429,6 @@ func TestMCP_CoreToolsRegistered_SQLite(t *testing.T) {
 		"get",
 		"forget",
 		"list_projects",
-		"export",
 	}
 
 	deps := Dependencies{Backend: storage.BackendSQLite}
@@ -1560,7 +1451,6 @@ func TestMCP_CoreToolsRegistered_Postgres(t *testing.T) {
 		"get",
 		"forget",
 		"list_projects",
-		"export",
 		"graph",
 	}
 

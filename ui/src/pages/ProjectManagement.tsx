@@ -15,6 +15,7 @@ import type {
   ProjectUpdateRequest,
   SystemRankingWeights,
 } from "../api/client";
+import { downloadProjectExport } from "../api/client";
 import {
   buildProjectSettingsPayload,
   fromTriState,
@@ -235,6 +236,50 @@ function AddTagInput({ onAdd }: { onAdd: (tag: string) => void }) {
         onClick={submit}
       >
         +
+      </button>
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ProjectExportButton — per-row Export action that hits the synchronous
+// REST endpoint at /v1/projects/{id}/memories/export and streams a JSON
+// download. stopPropagation keeps the row-click detail-panel toggle
+// inactive while the button handles its own click.
+// ---------------------------------------------------------------------------
+
+function ProjectExportButton({ projectId, projectSlug }: { projectId: string; projectSlug: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    setError(null);
+    setBusy(true);
+    try {
+      await downloadProjectExport(projectId, projectSlug, { format: "json" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "export failed";
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span
+      className="inline-flex items-center gap-2"
+      onClick={(e) => e.stopPropagation()}
+      title={error ?? "Download a JSON export of this project's memories, entities, and relationships."}
+    >
+      {error && <span className="text-xs text-destructive">{error}</span>}
+      <button
+        type="button"
+        className="rounded border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+        onClick={handleClick}
+        disabled={busy}
+      >
+        {busy ? "Exporting..." : "Export"}
       </button>
     </span>
   );
@@ -1116,6 +1161,9 @@ function ProjectManagement() {
                 currentDir={sortDir}
                 onSort={handleSort}
               />
+              <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -1129,7 +1177,7 @@ function ProjectManagement() {
               </>
             ) : filteredProjects.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-12 text-center">
+                <td colSpan={7} className="px-4 py-12 text-center">
                   <p className="text-sm text-muted-foreground">
                     {debouncedSearch
                       ? "No projects match your search."
@@ -1166,6 +1214,9 @@ function ProjectManagement() {
                   </td>
                   <td className="px-4 py-3 text-xs text-muted-foreground">
                     {formatDate(p.created_at)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <ProjectExportButton projectId={p.id} projectSlug={p.slug} />
                   </td>
                 </tr>
               ))

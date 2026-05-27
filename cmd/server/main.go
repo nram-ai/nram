@@ -215,6 +215,7 @@ func main() {
 	ingestionLogRepo := storage.NewIngestionLogRepo(db)
 	tokenUsageRepo := storage.NewTokenUsageRepo(db)
 	enrichmentQueueRepo := storage.NewEnrichmentQueueRepo(db)
+	exportJobRepo := storage.NewExportJobRepo(db)
 	settingsRepo := storage.NewSettingsRepo(db)
 	settingsSvc := service.NewSettingsService(settingsRepo)
 
@@ -397,10 +398,26 @@ func main() {
 		memoryRepo, entityRepo, relationshipRepo, lineageRepo, projectRepo,
 		settingsSvc,
 	)
-	importSvc := service.NewImportService(
+importSvc := service.NewImportService(
 		memoryRepo, projectRepo, namespaceRepo, ingestionLogRepo,
 		settingsSvc,
 	)
+
+	// Self-service export job worker. Replaces the truncation-bound MCP
+	// export tool — large multi-project exports run asynchronously, land
+	// on disk under SettingExportArtifactDir (default <cwd>/exports), and
+	// the caller downloads them through /v1/me/exports/{job_id}/download.
+	// workerID is a per-process UUID so claim-loss detection can
+	// distinguish workers across instances; dataDir is "." so SQLite
+	// deployments get the artifact tree next to the database file.
+	exportJobWorkerID := "export-worker-" + uuid.NewString()
+	exportJobSvc := service.NewExportJobService(
+		exportJobRepo, userRepo, projectRepo, exportSvc, settingsSvc,
+		exportJobWorkerID, ".", nil,
+	)
+	exportJobCtx, exportJobCancel := context.WithCancel(context.Background())
+	defer exportJobCancel()
+	go exportJobSvc.Run(exportJobCtx)
 
 	// Reconsolidation hook on recall. Mode defaults to shadow (observable-only
 	// via events.MemoryReinforced) so the first deployment emits without
@@ -456,7 +473,6 @@ func main() {
 		Update:         updateSvc,
 		BatchGet:       batchGetSvc,
 		BatchStore:     batchStoreSvc,
-		Export:         exportSvc,
 		ProjectDelete:  projectDeleteSvc,
 		ProjectUpdater: projectRepo,
 		ProjectRepo:    projectRepo,
@@ -699,6 +715,10 @@ func main() {
 		Timings:    sessionTimings,
 	})
 
+	// Build the /v1/me/exports handler trio once — one factory, three named
+	// fields the server.Handlers struct points to.
+	meExportHandlers := api.NewMeExportHandlers(exportJobSvc)
+
 	// Assemble handlers.
 	handlers := server.Handlers{
 		// Health
@@ -768,6 +788,15 @@ func main() {
 		MeRankingWeightsDefaults: api.NewMeRankingWeightsDefaultsHandler(api.MeRankingWeightsDefaultsConfig{
 			Store: settingsAdminStore,
 		}),
+
+		// Self-service exports — caller-only. No admin equivalent (the
+		// codebase's privacy invariant test in internal/server keeps
+		// memory content off admin surfaces). Authentication is enforced
+		// by the parent /v1/me group; per-row ownership is enforced
+		// inside the service against (job.user_id == caller.user_id).
+		MeExports:        meExportHandlers.List,
+		MeExportItem:     meExportHandlers.Item,
+		MeExportDownload: meExportHandlers.Download,
 
 		// Passkey management handlers. Register-finish gets an
 		// audit-on-success wrapper because the upstream webauthn handler
