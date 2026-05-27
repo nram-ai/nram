@@ -111,7 +111,7 @@ func NewBatchStoreHandler(svc BatchStoreServicer, bus events.EventBus) http.Hand
 		}
 
 		scope := "project:" + projectID.String()
-		for i := 0; i < resp.MemoriesCreated; i++ {
+		for range resp.MemoriesCreated {
 			events.Emit(r.Context(), bus, events.MemoryCreated, scope, map[string]string{
 				"project_id": projectID.String(),
 			})

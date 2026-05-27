@@ -1667,7 +1667,7 @@ func TestGraphReducerNeitherAxisReachesZeroFromNonZero(t *testing.T) {
 	orig := &graphResponse{Entities: entities, Relationships: rels}
 
 	reducer := newGraphReducer(orig)
-	for i := 0; i < maxReducerIterations; i++ {
+	for i := range maxReducerIterations {
 		smaller, more := reducer()
 		if smaller == nil {
 			// Reducer signaled exhaustion. Floor invariant already

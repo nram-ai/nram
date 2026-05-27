@@ -51,7 +51,7 @@ func (rb *ReplayBuffer) Since(lastEventID string) []Event {
 
 	// Collect all buffered events in order.
 	all := make([]Event, rb.count)
-	for i := 0; i < rb.count; i++ {
+	for i := range rb.count {
 		all[i] = rb.buf[(rb.start+i)%rb.capacity]
 	}
 

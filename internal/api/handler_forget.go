@@ -95,7 +95,7 @@ func NewBulkForgetHandler(svc ForgetServicer, bus events.EventBus) http.HandlerF
 				})
 			}
 		} else {
-			for i := 0; i < resp.Deleted; i++ {
+			for range resp.Deleted {
 				events.Emit(r.Context(), bus, events.MemoryDeleted, scope, map[string]string{
 					"project_id": projectID.String(),
 				})

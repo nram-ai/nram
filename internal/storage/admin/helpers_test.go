@@ -136,7 +136,7 @@ func execSeed(t *testing.T, db storage.DB, ctx context.Context, q string, args .
 func qmarkToDollar(q string) string {
 	var b strings.Builder
 	n := 0
-	for i := 0; i < len(q); i++ {
+	for i := range len(q) {
 		if q[i] == '?' {
 			n++
 			fmt.Fprintf(&b, "$%d", n)
