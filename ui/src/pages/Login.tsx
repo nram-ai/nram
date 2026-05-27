@@ -129,10 +129,10 @@ function Login() {
     "w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <div className="app-shell flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-md">
         <div className="text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">Sign in to nram</h1>
+          <h1 className="font-display text-4xl text-foreground">Sign in to nram</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {step === "email" && "Enter your email address to continue."}
             {step === "password" && "Enter your password to sign in."}
@@ -142,6 +142,7 @@ function Login() {
               "Your organization uses external authentication."}
           </p>
         </div>
+        <div className="surface-elevated mt-8 rounded-lg p-6 shadow-lg shadow-black/10">
 
         {error && (
           <div className="mt-6 rounded-lg border border-destructive/40 bg-destructive/10 p-4">
@@ -150,7 +151,7 @@ function Login() {
         )}
 
         {step === "email" && (
-          <form onSubmit={handleEmailSubmit} className="mt-8 space-y-5">
+          <form onSubmit={handleEmailSubmit} className="space-y-5">
             <div>
               <label htmlFor="login-email" className="block text-sm font-medium text-foreground">
                 Email
@@ -174,7 +175,7 @@ function Login() {
         )}
 
         {step === "passkey-or-password" && (
-          <div className="mt-8 space-y-5">
+          <div className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-foreground">Email</label>
               <p className="mt-1.5 text-sm text-muted-foreground">{email.trim()}</p>
@@ -209,7 +210,7 @@ function Login() {
         )}
 
         {step === "idp-redirect" && (
-          <div className="mt-8 space-y-5">
+          <div className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-foreground">Email</label>
               <p className="mt-1.5 text-sm text-muted-foreground">{email.trim()}</p>
@@ -257,7 +258,7 @@ function Login() {
         )}
 
         {step === "password" && (
-          <form onSubmit={handlePasswordSubmit} className="mt-8 space-y-5">
+          <form onSubmit={handlePasswordSubmit} className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-foreground">Email</label>
               <p className="mt-1.5 text-sm text-muted-foreground">{email.trim()}</p>
@@ -292,6 +293,7 @@ function Login() {
             </div>
           </form>
         )}
+        </div>
       </div>
     </div>
   );

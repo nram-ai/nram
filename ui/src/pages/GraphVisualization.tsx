@@ -34,19 +34,22 @@ function resolveLayoutValue(
   return { value: schemaDefault, hasOverride: false };
 }
 
-// Color map for entity types — vibrant for dark/holographic background
+// Retoned to live in the cyan-blue luminance band of the neural-network
+// backdrop. Categorical hue distinctions preserved; saturation pulled
+// inward so the graph view reads as "zooming into the constellation"
+// rather than a separate widget.
 const ENTITY_TYPE_COLORS: Record<string, { color: string; emissive: string }> = {
-  person: { color: "#60a5fa", emissive: "#2563eb" },
-  organization: { color: "#4ade80", emissive: "#16a34a" },
-  concept: { color: "#fbbf24", emissive: "#d97706" },
-  location: { color: "#f472b6", emissive: "#db2777" },
-  event: { color: "#818cf8", emissive: "#4f46e5" },
-  technology: { color: "#34d399", emissive: "#059669" },
-  product: { color: "#fb7185", emissive: "#e11d48" },
-  tool: { color: "#a78bfa", emissive: "#7c3aed" },
+  person: { color: "#5C8FDA", emissive: "#3B6CB8" },
+  organization: { color: "#4CC8E8", emissive: "#2A9AC2" },
+  concept: { color: "#7CCEF8", emissive: "#3FA9DC" },
+  location: { color: "#4FCFA0", emissive: "#2F9D75" },
+  event: { color: "#EFB868", emissive: "#C28734" },
+  technology: { color: "#4CD9C7", emissive: "#2BAA9A" },
+  product: { color: "#B580E1", emissive: "#8554B6" },
+  tool: { color: "#809DEC", emissive: "#5872C5" },
 };
 
-const DEFAULT_TYPE_COLOR = { color: "#6b7280", emissive: "#374151" };
+const DEFAULT_TYPE_COLOR = { color: "#5A6884", emissive: "#3A465D" };
 
 function getTypeColor(entityType: string) {
   return ENTITY_TYPE_COLORS[entityType.toLowerCase()] || DEFAULT_TYPE_COLOR;
@@ -707,7 +710,7 @@ function GraphVisualization() {
     <div className="flex flex-col h-full" style={{ height: "calc(100vh - 3rem)" }}>
       <div className="flex flex-col gap-2 mb-2 shrink-0 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Graph Visualization</h1>
+          <h1 className="text-xl sm:font-display text-3xl text-foreground">Graph Visualization</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Explore entity relationships in 3D.
           </p>

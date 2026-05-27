@@ -15,6 +15,8 @@ import { useAuth, type Tier } from "../context/AuthContext";
 import { TierTabs } from "../components/TierTabs";
 import { ExtractionErrorView } from "../lib/extractionError";
 import { MemoryAugmentPreviewBlock } from "../components/MemoryAugmentPreviewBlock";
+import { StatusNode } from "../components/StatusNode/StatusNode";
+import { firePulse } from "../components/NeuralNetwork/networkBus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faSpinner,
@@ -139,14 +141,20 @@ function useEnrichmentLiveState(orgId?: string) {
           break;
         }
         case "enrichment.pool.tick": {
+          const inFlight = data.in_flight ?? 0;
           setPoolTick({
-            inFlight: data.in_flight ?? 0,
+            inFlight,
             oldestClaimAt: data.oldest_claim_at,
             oldestClaimAgeMs: data.oldest_claim_age_ms,
             paused: !!data.paused,
             byStage: (data.by_stage ?? {}) as Record<string, number>,
             receivedAt: Date.now(),
           });
+          // Push a signal through the neural-network backdrop when work is
+          // happening so the visual reflects system activity.
+          if (inFlight > 0 && !data.paused) {
+            firePulse(0, 1);
+          }
           break;
         }
         case "enrichment.job.requeued": {
@@ -318,10 +326,7 @@ function EnrichmentPoolBanner({
           </span>
         )}
         {tick?.paused && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-500" />
-            paused
-          </span>
+          <StatusNode kind="paused" label="paused" />
         )}
         {tickStale && (
           <span className="text-muted-foreground">(tick stale — using polled fallback)</span>
@@ -981,7 +986,7 @@ function EnrichmentMonitor() {
       {/* Page header */}
       <div className="mb-6 flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="font-display text-3xl text-foreground">
             {tier === "system"
               ? "Enrichment Queue"
               : tier === "org"
@@ -1090,10 +1095,7 @@ function EnrichmentMonitor() {
             {/* On non-system tiers the paused flag is informational only —
                 surface it without exposing the pause/resume control. */}
             {tier !== "system" && isPaused && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-yellow-100 px-3 py-1 text-xs font-medium text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300">
-                <span className="h-2 w-2 rounded-full bg-yellow-500 animate-pulse" />
-                Workers paused
-              </span>
+              <StatusNode kind="paused" label="Workers paused" />
             )}
 
             <div className="flex-1" />

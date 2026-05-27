@@ -119,7 +119,7 @@ function CompletionScreen({
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success/20">
           <FontAwesomeIcon icon={faCircleCheck} className="h-8 w-8 text-success" />
         </div>
-        <h1 className="mt-4 text-2xl font-semibold tracking-tight">Setup Complete</h1>
+        <h1 className="mt-4 font-display text-3xl text-foreground">Setup Complete</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Your nram instance is ready. Review the information below to get started.
         </p>
@@ -276,16 +276,16 @@ function SetupWizard() {
     : null;
 
   return (
-    <div className="flex min-h-[80vh] items-center justify-center">
+    <div className="app-shell flex min-h-[80vh] items-center justify-center p-6">
       <div className="w-full max-w-md">
         <div className="text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">Welcome to nram</h1>
+          <h1 className="font-display text-4xl text-foreground">Welcome to nram</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Create your administrator account to get started.
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+        <form onSubmit={handleSubmit} className="surface-elevated mt-8 space-y-5 rounded-lg p-6 shadow-lg shadow-black/10">
           {/* Errors */}
           {(validationErrors.length > 0 || serverError) && (
             <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">

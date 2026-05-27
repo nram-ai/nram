@@ -468,7 +468,7 @@ function MyAccount() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">My Account</h1>
+        <h1 className="font-display text-3xl text-foreground">My Account</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Manage your profile, API keys, OAuth clients, and session.
         </p>

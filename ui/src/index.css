@@ -4,140 +4,298 @@
 
 @layer base {
   :root {
-    /* Light mode (inverted lightness on greyscale tokens; saturated tokens
-       hold the same value as dark mode per design decision). */
-    --background: 222 47% 94%;
-    --foreground: 210 40% 2%;
-    --card: 223 47% 92%;
-    --card-foreground: 210 40% 2%;
-    --primary: 210 40% 2%;
-    --primary-foreground: 222 47% 94%;
-    --secondary: 217 33% 86%;
-    --secondary-foreground: 210 40% 2%;
-    --muted: 217 33% 86%;
-    --muted-foreground: 215 20% 35%;
-    --accent: 217 33% 83%;
-    --accent-foreground: 210 40% 2%;
-    --destructive: 0 63% 50%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217 33% 82%;
-    --input: 217 33% 82%;
-    --ring: 212 100% 60%;
+    /* Light mode: tonal sibling of dark mode in the same blue-cyan family.
+       Cyan darkens to a deeper value so AA contrast holds against white. */
+    --background: 215 40% 97%;
+    --background-elevated: 215 35% 100%;
+    --foreground: 215 49% 10%;
+    --card: 215 35% 100%;
+    --card-foreground: 215 49% 10%;
+    --popover: 215 35% 100%;
+    --popover-foreground: 215 49% 10%;
+    --primary: 201 75% 38%;
+    --primary-foreground: 215 35% 100%;
+    --secondary: 218 30% 90%;
+    --secondary-foreground: 215 49% 10%;
+    --muted: 218 30% 90%;
+    --muted-foreground: 215 18% 38%;
+    --accent: 201 85% 92%;
+    --accent-foreground: 201 75% 30%;
+    --destructive: 350 75% 50%;
+    --destructive-foreground: 215 35% 100%;
+    --border: 218 25% 84%;
+    --border-soft: 218 25% 88%;
+    --input: 218 25% 84%;
+    --ring: 201 75% 50%;
     --radius: 0.5rem;
 
-    /* Component-scoped tokens (saturated; same value in both modes). */
-    --switch-on: 142 71% 45%;
+    --switch-on: 201 75% 50%;
 
-    /* Semantic tokens (light values; iterate in dev). */
-    --success: 142 71% 38%;
-    --success-foreground: 210 40% 98%;
-    --warning: 38 92% 42%;
-    --warning-foreground: 210 40% 98%;
-    --info: 212 100% 50%;
-    --info-foreground: 210 40% 98%;
+    --success: 158 60% 38%;
+    --success-foreground: 215 35% 100%;
+    --warning: 30 90% 48%;
+    --warning-foreground: 215 35% 100%;
+    --info: 201 75% 38%;
+    --info-foreground: 215 35% 100%;
 
-    /* Knowledge-graph node colors per entity type (light values). */
-    --graph-person-bg: 215 60% 88%;
-    --graph-person-border: 215 70% 50%;
+    /* Recharts data scale, darkened so it reads on near-white backgrounds. */
+    --data-1: 201 75% 42%;
+    --data-2: 215 80% 50%;
+    --data-3: 158 60% 38%;
+    --data-4: 30 85% 48%;
+    --data-5: 270 60% 55%;
+    --data-6: 195 75% 38%;
+    --data-7: 350 70% 50%;
+
+    /* Neural-network backdrop colors and intensity (light mode). */
+    --network-opacity: 0.22;
+    --network-node: 201 70% 38%;
+    --network-edge: 201 60% 45%;
+    --network-pulse: 201 85% 45%;
+
+    /* Knowledge-graph node colors per entity type (retoned to the cyan-blue
+       luminance band so the graph view feels continuous with the backdrop). */
+    --graph-person-bg: 215 70% 85%;
+    --graph-person-border: 215 75% 45%;
     --graph-person-text: 215 80% 18%;
-    --graph-organization-bg: 142 50% 88%;
-    --graph-organization-border: 142 60% 38%;
-    --graph-organization-text: 142 70% 18%;
-    --graph-concept-bg: 28 70% 88%;
-    --graph-concept-border: 28 80% 45%;
-    --graph-concept-text: 28 80% 18%;
-    --graph-location-bg: 320 50% 90%;
-    --graph-location-border: 320 60% 50%;
-    --graph-location-text: 320 70% 22%;
-    --graph-technology-bg: 165 50% 88%;
-    --graph-technology-border: 165 60% 38%;
-    --graph-technology-text: 165 70% 18%;
-    --graph-event-bg: 230 60% 90%;
-    --graph-event-border: 230 70% 50%;
-    --graph-event-text: 230 80% 22%;
-    --graph-product-bg: 350 60% 90%;
-    --graph-product-border: 350 70% 50%;
-    --graph-product-text: 350 80% 22%;
-    --graph-tool-bg: 255 50% 90%;
-    --graph-tool-border: 255 60% 50%;
-    --graph-tool-text: 255 70% 22%;
-    --graph-default-bg: 220 15% 88%;
-    --graph-default-border: 220 10% 50%;
-    --graph-default-text: 220 15% 22%;
+    --graph-organization-bg: 195 60% 86%;
+    --graph-organization-border: 195 70% 38%;
+    --graph-organization-text: 195 80% 18%;
+    --graph-concept-bg: 201 80% 88%;
+    --graph-concept-border: 201 80% 40%;
+    --graph-concept-text: 201 80% 18%;
+    --graph-location-bg: 158 55% 86%;
+    --graph-location-border: 158 60% 35%;
+    --graph-location-text: 158 70% 18%;
+    --graph-technology-bg: 175 60% 86%;
+    --graph-technology-border: 175 65% 35%;
+    --graph-technology-text: 175 75% 18%;
+    --graph-event-bg: 38 75% 86%;
+    --graph-event-border: 38 80% 42%;
+    --graph-event-text: 38 80% 22%;
+    --graph-product-bg: 280 55% 88%;
+    --graph-product-border: 280 60% 50%;
+    --graph-product-text: 280 70% 22%;
+    --graph-tool-bg: 230 60% 88%;
+    --graph-tool-border: 230 65% 50%;
+    --graph-tool-text: 230 75% 22%;
+    --graph-default-bg: 218 20% 88%;
+    --graph-default-border: 218 15% 45%;
+    --graph-default-text: 218 25% 22%;
   }
 
   .dark {
-    /* Dark mode (current values, preserved). */
-    --background: 222 47% 6%;
-    --foreground: 210 40% 98%;
-    --card: 223 47% 8%;
-    --card-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222 47% 6%;
-    --secondary: 217 33% 14%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217 33% 14%;
-    --muted-foreground: 215 20% 55%;
-    --accent: 217 33% 17%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 63% 50%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217 33% 18%;
-    --input: 217 33% 18%;
-    --ring: 212 100% 60%;
+    /* Dark mode: sourced from nram.ai/src/styles/tokens.css (hex translated
+       to HSL so Tailwind's hsl(var(--*)) contract holds). */
+    --background: 215 49% 8%;            /* #0A1320 */
+    --background-elevated: 215 53% 12%;  /* #0E1A2D */
+    --foreground: 214 25% 93%;           /* #E8EEF5 */
+    --card: 215 53% 12%;
+    --card-foreground: 214 25% 93%;
+    --popover: 215 53% 12%;
+    --popover-foreground: 214 25% 93%;
+    --primary: 201 92% 74%;              /* #7FCFFA */
+    --primary-foreground: 215 49% 8%;
+    --secondary: 217 47% 15%;            /* #142239 */
+    --secondary-foreground: 214 25% 93%;
+    --muted: 217 47% 15%;
+    --muted-foreground: 215 22% 62%;     /* #8A99B3 */
+    --accent: 218 44% 17%;
+    --accent-foreground: 201 94% 82%;    /* #A5DEFC */
+    --destructive: 350 85% 65%;
+    --destructive-foreground: 215 49% 8%;
+    --border: 218 39% 20%;               /* #1E2D47 */
+    --border-soft: 218 44% 17%;          /* #18253D */
+    --input: 218 44% 17%;
+    --ring: 201 92% 74%;
 
-    --switch-on: 142 71% 45%;
+    --switch-on: 201 92% 74%;
 
-    --success: 142 71% 45%;
-    --success-foreground: 210 40% 98%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 210 40% 98%;
-    --info: 212 100% 60%;
-    --info-foreground: 210 40% 98%;
+    --success: 158 64% 52%;
+    --success-foreground: 215 49% 8%;
+    --warning: 38 95% 64%;
+    --warning-foreground: 215 49% 8%;
+    --info: 201 92% 74%;
+    --info-foreground: 215 49% 8%;
 
-    /* Knowledge-graph node colors (dark; sourced from EntityBrowser hexes). */
-    --graph-person-bg: 215 50% 25%;
-    --graph-person-border: 215 91% 68%;
-    --graph-person-text: 215 91% 87%;
-    --graph-organization-bg: 142 64% 19%;
-    --graph-organization-border: 142 69% 58%;
-    --graph-organization-text: 142 76% 86%;
-    --graph-concept-bg: 28 89% 14%;
-    --graph-concept-border: 38 92% 50%;
-    --graph-concept-text: 49 96% 89%;
-    --graph-location-bg: 318 47% 19%;
-    --graph-location-border: 326 86% 70%;
-    --graph-location-text: 327 86% 92%;
-    --graph-technology-bg: 161 88% 17%;
-    --graph-technology-border: 156 64% 51%;
-    --graph-technology-text: 152 76% 89%;
-    --graph-event-bg: 240 56% 35%;
-    --graph-event-border: 234 89% 74%;
-    --graph-event-text: 226 100% 93%;
-    --graph-product-bg: 343 87% 16%;
-    --graph-product-border: 351 95% 71%;
-    --graph-product-text: 356 100% 95%;
-    --graph-tool-bg: 254 71% 23%;
-    --graph-tool-border: 250 95% 76%;
-    --graph-tool-text: 252 100% 95%;
-    --graph-default-bg: 220 13% 28%;
-    --graph-default-border: 220 9% 46%;
-    --graph-default-text: 220 14% 75%;
+    --data-1: 201 92% 74%;
+    --data-2: 215 91% 68%;
+    --data-3: 158 64% 52%;
+    --data-4: 38 95% 64%;
+    --data-5: 280 75% 72%;
+    --data-6: 195 70% 50%;
+    --data-7: 350 85% 65%;
+
+    --network-opacity: 0.42;
+    --network-node: 201 92% 74%;
+    --network-edge: 201 92% 74%;
+    --network-pulse: 201 94% 82%;
+
+    /* Retoned entity tokens: hue preserved where possible, saturation pulled
+       inward, lightness clamped to 60-72% so categories sit in the same
+       luminance band as the backdrop. */
+    --graph-person-bg: 215 60% 22%;
+    --graph-person-border: 215 80% 65%;
+    --graph-person-text: 215 80% 90%;
+    --graph-organization-bg: 195 55% 20%;
+    --graph-organization-border: 195 75% 60%;
+    --graph-organization-text: 195 80% 90%;
+    --graph-concept-bg: 201 70% 22%;
+    --graph-concept-border: 201 92% 72%;
+    --graph-concept-text: 201 95% 92%;
+    --graph-location-bg: 158 45% 20%;
+    --graph-location-border: 158 60% 58%;
+    --graph-location-text: 158 75% 90%;
+    --graph-technology-bg: 175 55% 20%;
+    --graph-technology-border: 175 70% 60%;
+    --graph-technology-text: 175 80% 90%;
+    --graph-event-bg: 38 60% 22%;
+    --graph-event-border: 38 80% 65%;
+    --graph-event-text: 38 90% 92%;
+    --graph-product-bg: 280 50% 24%;
+    --graph-product-border: 280 65% 68%;
+    --graph-product-text: 280 80% 92%;
+    --graph-tool-bg: 230 50% 24%;
+    --graph-tool-border: 230 70% 68%;
+    --graph-tool-text: 230 85% 92%;
+    --graph-default-bg: 218 25% 22%;
+    --graph-default-border: 218 18% 62%;
+    --graph-default-text: 218 30% 88%;
   }
 
   * {
     @apply border-border;
   }
 
+  html,
+  body {
+    background-color: hsl(var(--background));
+  }
+
   body {
     @apply bg-background text-foreground;
-    font-family:
-      -apple-system,
-      BlinkMacSystemFont,
-      "Segoe UI",
-      Roboto,
-      "Helvetica Neue",
-      Arial,
-      sans-serif;
+    font-family: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  code,
+  kbd,
+  pre,
+  samp,
+  .font-mono {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+}
+
+@layer components {
+  /* Translucent container surface: lets the neural-network backdrop read
+     through faintly. Use for page cards, modals, dropdowns, the sidebar. */
+  .surface-elevated {
+    background-color: hsl(var(--card) / 0.72);
+    -webkit-backdrop-filter: blur(8px) saturate(110%);
+    backdrop-filter: blur(8px) saturate(110%);
+    border: 1px solid hsl(var(--border) / 0.6);
+  }
+
+  /* Opaque data surface: legibility outranks aesthetics. Use for tables,
+     JSON viewers, code blocks, the graph visualization container. */
+  .surface-opaque {
+    background-color: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+  }
+
+  /* Page-level container that hosts content above the neural-network
+     backdrop. Establishes a stacking context so children composite cleanly. */
+  .app-shell {
+    position: relative;
+    z-index: 10;
+  }
+
+  /* Display-class typography. Used sparingly on H1 page titles, empty-state
+     headlines, dashboard hero metrics. */
+  .font-display {
+    font-family: "Instrument Serif", Georgia, serif;
+    font-weight: 400;
+    letter-spacing: -0.005em;
+  }
+
+  /* Cyan-sweep shimmer that replaces animate-pulse on skeletons. */
+  .skeleton-shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--muted)) 35%,
+      hsl(var(--primary) / 0.18) 50%,
+      hsl(var(--muted)) 65%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer-sweep 1.4s ease-in-out infinite;
+  }
+
+  /* Page route entrance fade. Mount on the keyed route wrapper. */
+  .route-enter {
+    animation: route-fade 140ms ease-out both;
+  }
+
+  /* Memory row pulse: highlights the row for ~2s when fresh enrichment
+     lands on that memory. */
+  .row-pulse {
+    animation: row-pulse-anim 2s ease-out both;
+  }
+}
+
+@layer base {
+  /* Table row hover: cyan inset-edge that reads as a small synapse. */
+  tbody tr:hover {
+    box-shadow: inset 2px 0 0 hsl(var(--primary));
+  }
+}
+
+@keyframes shimmer-sweep {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes route-fade {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes row-pulse-anim {
+  0% {
+    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0);
+    background-color: hsl(var(--primary) / 0);
+  }
+  15% {
+    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.55);
+    background-color: hsl(var(--primary) / 0.08);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0);
+    background-color: hsl(var(--primary) / 0);
+  }
+}
+
+/* Honor the OS-level reduced-motion preference. One toggle disables every
+   animation and transition across the app. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -447,7 +447,7 @@ function MCPConfigGenerator() {
     <div className="space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">MCP Config Generator</h1>
+        <h1 className="font-display text-3xl text-foreground">MCP Config Generator</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Generate connection instructions for your preferred AI tool. OAuth is
           the recommended authentication method for all supported clients.

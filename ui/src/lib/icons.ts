@@ -3,6 +3,7 @@
 // one place to see what icons are in use and to swap variants.
 
 export {
+  // Existing chrome / control icons.
   faBars,
   faXmark,
   faCheck,
@@ -36,4 +37,42 @@ export {
   faEye,
   faEyeSlash,
   faArrowUpRightFromSquare,
+
+  // Nav route icons (one per page).
+  faGauge,
+  faBrain,
+  faCubes,
+  faDiagramProject,
+  faFolderTree,
+  faBuilding,
+  faUsers,
+  faPlug,
+  faSliders,
+  faMessage,
+  faSatelliteDish,
+  faKey,
+  faFingerprint,
+  faPuzzlePiece,
+  faDatabase,
+  faListCheck,
+  faCloudMoon,
+  faChartLine,
+  faFileImport,
+  faUserAstronaut,
+  faRightToBracket,
+  faWandMagicSparkles,
+
+  // Sidebar section icons.
+  faStar,
+  faTableCellsLarge,
+  faPeopleGroup,
+  faGears,
+  faServer,
+  faUser,
+
+  // Empty-state and action icons.
+  faSeedling,
+  faFloppyDisk,
+  faBolt,
+  faTerminal,
 } from "@fortawesome/free-solid-svg-icons";

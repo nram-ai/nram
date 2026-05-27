@@ -244,7 +244,7 @@ function EntityBrowser() {
     <div>
       <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Entity Browser</h1>
+          <h1 className="font-display text-3xl text-foreground">Entity Browser</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Browse and manage extracted entities.
           </p>

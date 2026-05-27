@@ -1089,7 +1089,7 @@ function SettingsEditor() {
       {/* Page header */}
       <div className="mb-6 flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+          <h1 className="font-display text-3xl text-foreground">Settings</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             System configuration. Changes take effect immediately unless a setting is flagged as requiring a server restart.
           </p>

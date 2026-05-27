@@ -1064,7 +1064,7 @@ function BulkImport() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Bulk Import</h1>
+        <h1 className="font-display text-3xl text-foreground">Bulk Import</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Import memories from Mem0, Zep, or custom JSON/CSV files.
         </p>

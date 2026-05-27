@@ -1316,7 +1316,7 @@ function MemoryBrowser() {
       {/* Header */}
       <div className="space-y-4 pb-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="font-display text-3xl text-foreground">
             Memory Browser
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -1329,7 +1329,7 @@ function MemoryBrowser() {
           {/* Project selector */}
           <div className="sm:w-56">
             {projectsQuery.isLoading ? (
-              <div className="h-9 animate-pulse rounded-md bg-muted" />
+              <div className="h-9 skeleton-shimmer rounded-md" />
             ) : (
               <select
                 className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"

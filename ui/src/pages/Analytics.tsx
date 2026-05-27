@@ -60,14 +60,16 @@ import {
 // Constants
 // ---------------------------------------------------------------------------
 
-const CHART_COLORS = [
-  "#3b82f6",
-  "#22c55e",
-  "#f59e0b",
-  "#ec4899",
-  "#6366f1",
-  "#10b981",
-];
+import { getChartColors } from "../lib/chartColors";
+
+// Resolve at render time so a runtime theme switch picks up the new palette.
+function chartColors(): string[] {
+  return getChartColors();
+}
+// Stable reference so existing CHART_COLORS[0]-style accesses still work
+// for the initial render. Charts that need theme-reactive colors should
+// call chartColors() inside the render path.
+const CHART_COLORS = chartColors();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1359,7 +1361,7 @@ function Analytics() {
       {/* Header */}
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          <h1 className="font-display text-3xl text-foreground">{title}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
         </div>
         <TierTabs current={tier} onChange={handleTierChange} ariaLabel="Analytics scope" />

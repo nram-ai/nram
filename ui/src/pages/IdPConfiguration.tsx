@@ -1101,7 +1101,7 @@ function AdminIdPView() {
     <div className="space-y-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="font-display text-3xl text-foreground">
             Identity Providers
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -1212,7 +1212,7 @@ function OrgOwnerIdPView({ orgId }: { orgId: string }) {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="font-display text-3xl text-foreground">
             Identity Providers
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -1297,7 +1297,7 @@ function IdPConfiguration() {
   if (!orgId) {
     return (
       <div className="space-y-8">
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <h1 className="font-display text-3xl text-foreground">
           Identity Providers
         </h1>
         <p className="text-sm text-destructive">

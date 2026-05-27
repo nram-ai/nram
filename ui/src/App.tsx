@@ -1,14 +1,51 @@
 import React, { Suspense, useState, useEffect } from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
+import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import { useSetupStatus } from "./hooks/useApi";
 import { useEnrichmentAvailable } from "./hooks/useEnrichmentAvailable";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ProjectProvider } from "./context/ProjectContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBars, faXmark, faSun, faMoon, faRightFromBracket } from "./lib/icons";
+import {
+  faBars,
+  faXmark,
+  faSun,
+  faMoon,
+  faRightFromBracket,
+  faSpinner,
+  faGauge,
+  faBrain,
+  faCubes,
+  faDiagramProject,
+  faFolderTree,
+  faBuilding,
+  faUsers,
+  faPlug,
+  faSliders,
+  faMessage,
+  faSatelliteDish,
+  faKey,
+  faFingerprint,
+  faPuzzlePiece,
+  faDatabase,
+  faListCheck,
+  faCloudMoon,
+  faChartLine,
+  faFileImport,
+  faUserAstronaut,
+  faStar,
+  faTableCellsLarge,
+  faPeopleGroup,
+  faGears,
+  faServer,
+  faUser,
+} from "./lib/icons";
 import { useTheme } from "./context/ThemeContext";
 import RequireRole from "./components/RequireRole";
+import { NeuralNetwork } from "./components/NeuralNetwork/NeuralNetwork";
+import { Logo } from "./components/Logo";
+import { EmptyState } from "./components/EmptyState";
 import Dashboard from "./pages/Dashboard";
 // Dashboard, Login, and SetupWizard stay eager: they are the only pages an
 // unauthenticated/cold-start user can land on, and a Suspense flash on the
@@ -40,7 +77,7 @@ function RouteFallback({ fullScreen = false }: { fullScreen?: boolean }) {
   const sizing = fullScreen ? "h-screen" : "h-full min-h-[40vh]";
   return (
     <div className={`flex ${sizing} items-center justify-center text-sm text-muted-foreground`}>
-      Loading...
+      <FontAwesomeIcon icon={faSpinner} spin className="h-5 w-5 text-primary/70" />
     </div>
   );
 }
@@ -70,26 +107,23 @@ class ErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-col items-center justify-center py-16 gap-4">
-          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-6 max-w-lg">
-            <h2 className="text-lg font-semibold text-destructive mb-2">
-              Something went wrong
-            </h2>
-            <p className="text-sm text-destructive mb-4">
-              {this.state.error?.message || "An unexpected error occurred."}
-            </p>
+        <EmptyState
+          icon={faSatelliteDish}
+          title="Lost in the network."
+          body={this.state.error?.message || "An unexpected error occurred."}
+          action={
             <button
               type="button"
               onClick={() => {
                 this.setState({ hasError: false, error: null });
                 window.location.href = "/";
               }}
-              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90"
+              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
             >
               Go to Dashboard
             </button>
-          </div>
-        </div>
+          }
+        />
       );
     }
     return this.props.children;
@@ -97,40 +131,54 @@ class ErrorBoundary extends React.Component<
 }
 
 // ---------------------------------------------------------------------------
-// Types
+// Types and nav model
 // ---------------------------------------------------------------------------
 
 interface NavItem {
   path: string;
   label: string;
   section: string;
+  icon: IconDefinition;
   minRole?: string;
   writeOnly?: boolean;
   requiresEnrichment?: boolean;
 }
 
 const navItems: NavItem[] = [
-  { path: "/", label: "Dashboard", section: "Overview" },
-  { path: "/memories", label: "Memory Browser", section: "Data" },
-  { path: "/entities", label: "Entity Browser", section: "Data" },
-  { path: "/graph", label: "Graph Visualization", section: "Data" },
-  { path: "/projects", label: "Projects", section: "Management" },
-  { path: "/organizations", label: "Organizations", section: "Management", minRole: "administrator" },
-  { path: "/users", label: "Users", section: "Management", minRole: "org_owner" },
-  { path: "/providers", label: "Providers", section: "Configuration", minRole: "administrator" },
-  { path: "/settings", label: "Settings", section: "Configuration", minRole: "administrator" },
-  { path: "/prompt-templates", label: "Prompt Templates", section: "Configuration", minRole: "administrator", requiresEnrichment: true },
-  { path: "/webhooks", label: "Webhooks", section: "Configuration", minRole: "administrator" },
-  { path: "/oauth", label: "OAuth Clients", section: "Configuration" },
-  { path: "/idp", label: "Identity Providers", section: "Configuration", minRole: "org_owner" },
-  { path: "/mcp-config", label: "MCP Config", section: "Configuration" },
-  { path: "/database", label: "Database", section: "System", minRole: "administrator" },
-  { path: "/enrichment", label: "Enrichment Queue", section: "System", requiresEnrichment: true },
-  { path: "/dreaming", label: "Dreaming", section: "System", requiresEnrichment: true },
-  { path: "/analytics", label: "Analytics", section: "System" },
-  { path: "/import", label: "Bulk Import", section: "System", writeOnly: true },
-  { path: "/account", label: "My Account", section: "Account" },
+  { path: "/", label: "Dashboard", section: "Overview", icon: faGauge },
+  { path: "/memories", label: "Memory Browser", section: "Data", icon: faBrain },
+  { path: "/entities", label: "Entity Browser", section: "Data", icon: faCubes },
+  { path: "/graph", label: "Graph Visualization", section: "Data", icon: faDiagramProject },
+  { path: "/projects", label: "Projects", section: "Management", icon: faFolderTree },
+  { path: "/organizations", label: "Organizations", section: "Management", icon: faBuilding, minRole: "administrator" },
+  { path: "/users", label: "Users", section: "Management", icon: faUsers, minRole: "org_owner" },
+  { path: "/providers", label: "Providers", section: "Configuration", icon: faPlug, minRole: "administrator" },
+  { path: "/settings", label: "Settings", section: "Configuration", icon: faSliders, minRole: "administrator" },
+  { path: "/prompt-templates", label: "Prompt Templates", section: "Configuration", icon: faMessage, minRole: "administrator", requiresEnrichment: true },
+  { path: "/webhooks", label: "Webhooks", section: "Configuration", icon: faSatelliteDish, minRole: "administrator" },
+  { path: "/oauth", label: "OAuth Clients", section: "Configuration", icon: faKey },
+  { path: "/idp", label: "Identity Providers", section: "Configuration", icon: faFingerprint, minRole: "org_owner" },
+  { path: "/mcp-config", label: "MCP Config", section: "Configuration", icon: faPuzzlePiece },
+  { path: "/database", label: "Database", section: "System", icon: faDatabase, minRole: "administrator" },
+  { path: "/enrichment", label: "Enrichment Queue", section: "System", icon: faListCheck, requiresEnrichment: true },
+  { path: "/dreaming", label: "Dreaming", section: "System", icon: faCloudMoon, requiresEnrichment: true },
+  { path: "/analytics", label: "Analytics", section: "System", icon: faChartLine },
+  { path: "/import", label: "Bulk Import", section: "System", icon: faFileImport, writeOnly: true },
+  { path: "/account", label: "My Account", section: "Account", icon: faUserAstronaut },
 ];
+
+const SECTION_ICONS: Record<string, IconDefinition> = {
+  Overview: faStar,
+  Data: faTableCellsLarge,
+  Management: faPeopleGroup,
+  Configuration: faGears,
+  System: faServer,
+  Account: faUser,
+};
+
+// Routes where the neural-network backdrop fades back so foreground
+// data-visualizations own the visual budget.
+const DIM_BACKDROP_ROUTES = ["/graph", "/entities", "/analytics"];
 
 function groupBySection(items: NavItem[]): Record<string, NavItem[]> {
   const groups: Record<string, NavItem[]> = {};
@@ -182,6 +230,19 @@ function AppLayout() {
     setSidebarOpen(false);
   }, [location.pathname]);
 
+  // Drop the neural-network backdrop opacity on data-heavy routes so the
+  // foreground visualization is what reads.
+  useEffect(() => {
+    const dim = DIM_BACKDROP_ROUTES.some((r) => location.pathname.startsWith(r));
+    if (dim) {
+      document.documentElement.style.setProperty("--network-opacity", "0.06");
+    } else {
+      // Clear inline override so the value falls back to the :root/.dark
+      // declaration in index.css.
+      document.documentElement.style.removeProperty("--network-opacity");
+    }
+  }, [location.pathname]);
+
   const filteredItems = navItems.filter((item) => {
     if (item.minRole && !auth.hasMinRole(item.minRole)) {
       return false;
@@ -202,9 +263,9 @@ function AppLayout() {
   }
 
   return (
-    <div className="flex h-screen">
+    <div className="app-shell flex h-screen">
       {/* Mobile header bar */}
-      <div className="fixed top-0 left-0 right-0 z-40 flex items-center border-b border-border bg-card px-4 py-3 md:hidden">
+      <div className="surface-elevated fixed top-0 left-0 right-0 z-40 flex items-center px-4 py-3 md:hidden">
         <button
           type="button"
           onClick={() => setSidebarOpen(true)}
@@ -213,7 +274,7 @@ function AppLayout() {
         >
           <FontAwesomeIcon icon={faBars} className="h-6 w-6" />
         </button>
-        <h1 className="text-lg font-semibold tracking-tight">nram</h1>
+        <Logo size="sm" />
       </div>
 
       {/* Backdrop overlay (mobile) */}
@@ -226,14 +287,14 @@ function AppLayout() {
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-60 border-r border-border bg-card overflow-y-auto flex flex-col transform transition-transform duration-200 ease-in-out md:static md:translate-x-0 md:shrink-0 ${
+        className={`surface-elevated fixed inset-y-0 left-0 z-50 w-60 overflow-y-auto flex flex-col transform transition-transform duration-200 ease-in-out md:static md:translate-x-0 md:shrink-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <div className="flex items-center justify-between px-4 py-5">
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">nram</h1>
-            <p className="text-xs text-muted-foreground">
+            <Logo size="sm" />
+            <p className="mt-1 text-xs text-muted-foreground">
               {auth.isAdmin ? "Admin Console" : "Console"}
             </p>
           </div>
@@ -249,7 +310,13 @@ function AppLayout() {
         <nav className="px-2 pb-4 flex-1">
           {Object.entries(sections).map(([section, items]) => (
             <div key={section} className="mb-4">
-              <h2 className="px-2 mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <h2 className="px-2 mb-1 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                {SECTION_ICONS[section] && (
+                  <FontAwesomeIcon
+                    icon={SECTION_ICONS[section]}
+                    className="h-3 w-3 opacity-60"
+                  />
+                )}
                 {section}
               </h2>
               <ul className="space-y-0.5">
@@ -259,14 +326,18 @@ function AppLayout() {
                       to={item.path}
                       end={item.path === "/"}
                       className={({ isActive }) =>
-                        `block rounded-md px-2 py-2.5 md:py-1.5 text-sm transition-colors ${
+                        `relative flex items-center gap-2.5 rounded-md px-2 py-2.5 md:py-1.5 text-sm transition-colors ${
                           isActive
-                            ? "bg-accent text-accent-foreground font-medium"
+                            ? "bg-accent text-accent-foreground font-medium shadow-[0_0_24px_-12px_hsl(var(--ring))] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-r before:bg-primary"
                             : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                         }`
                       }
                     >
-                      {item.label}
+                      <FontAwesomeIcon
+                        icon={item.icon}
+                        className="h-4 w-4 opacity-80"
+                      />
+                      <span>{item.label}</span>
                     </NavLink>
                   </li>
                 ))}
@@ -274,7 +345,7 @@ function AppLayout() {
             </div>
           ))}
         </nav>
-        <div className="border-t border-border px-2 py-3 space-y-1">
+        <div className="border-t border-border/60 px-2 py-3 space-y-1">
           <button
             type="button"
             onClick={toggleTheme}
@@ -301,29 +372,31 @@ function AppLayout() {
         <div className="p-4 sm:p-6">
           <ErrorBoundary>
             <Suspense fallback={<RouteFallback />}>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/memories" element={<MemoryBrowser />} />
-                <Route path="/projects" element={<ProjectManagement />} />
-                <Route path="/organizations" element={<RequireRole minRole="administrator"><OrganizationManagement /></RequireRole>} />
-                <Route path="/users" element={<RequireRole minRole="org_owner"><UserManagement /></RequireRole>} />
-                <Route path="/providers" element={<RequireRole minRole="administrator"><ProviderConfiguration /></RequireRole>} />
-                <Route path="/settings" element={<RequireRole minRole="administrator"><SettingsEditor /></RequireRole>} />
-                <Route path="/prompt-templates" element={<RequireRole minRole="administrator"><PromptTemplates /></RequireRole>} />
-                <Route path="/extraction-prompts" element={<Navigate to="/prompt-templates" replace />} />
-                <Route path="/database" element={<RequireRole minRole="administrator"><DatabaseManagement /></RequireRole>} />
-                <Route path="/enrichment" element={<EnrichmentMonitor />} />
-                <Route path="/dreaming" element={<DreamingMonitor />} />
-                <Route path="/graph" element={<GraphVisualization />} />
-                <Route path="/entities" element={<EntityBrowser />} />
-                <Route path="/analytics" element={<Analytics />} />
-                <Route path="/import" element={<BulkImport />} />
-                <Route path="/webhooks" element={<RequireRole minRole="administrator"><WebhookManagement /></RequireRole>} />
-                <Route path="/oauth" element={<OAuthClients />} />
-                <Route path="/idp" element={<RequireRole minRole="org_owner"><IdPConfiguration /></RequireRole>} />
-                <Route path="/mcp-config" element={<MCPConfigGenerator />} />
-                <Route path="/account" element={<MyAccount />} />
-              </Routes>
+              <div key={location.pathname} className="route-enter">
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/memories" element={<MemoryBrowser />} />
+                  <Route path="/projects" element={<ProjectManagement />} />
+                  <Route path="/organizations" element={<RequireRole minRole="administrator"><OrganizationManagement /></RequireRole>} />
+                  <Route path="/users" element={<RequireRole minRole="org_owner"><UserManagement /></RequireRole>} />
+                  <Route path="/providers" element={<RequireRole minRole="administrator"><ProviderConfiguration /></RequireRole>} />
+                  <Route path="/settings" element={<RequireRole minRole="administrator"><SettingsEditor /></RequireRole>} />
+                  <Route path="/prompt-templates" element={<RequireRole minRole="administrator"><PromptTemplates /></RequireRole>} />
+                  <Route path="/extraction-prompts" element={<Navigate to="/prompt-templates" replace />} />
+                  <Route path="/database" element={<RequireRole minRole="administrator"><DatabaseManagement /></RequireRole>} />
+                  <Route path="/enrichment" element={<EnrichmentMonitor />} />
+                  <Route path="/dreaming" element={<DreamingMonitor />} />
+                  <Route path="/graph" element={<GraphVisualization />} />
+                  <Route path="/entities" element={<EntityBrowser />} />
+                  <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/import" element={<BulkImport />} />
+                  <Route path="/webhooks" element={<RequireRole minRole="administrator"><WebhookManagement /></RequireRole>} />
+                  <Route path="/oauth" element={<OAuthClients />} />
+                  <Route path="/idp" element={<RequireRole minRole="org_owner"><IdPConfiguration /></RequireRole>} />
+                  <Route path="/mcp-config" element={<MCPConfigGenerator />} />
+                  <Route path="/account" element={<MyAccount />} />
+                </Routes>
+              </div>
             </Suspense>
           </ErrorBoundary>
         </div>
@@ -337,6 +410,7 @@ function App() {
     <AuthProvider>
       <ThemeProvider>
         <ProjectProvider>
+          <NeuralNetwork />
           <SetupGuard>
             <Routes>
               <Route path="/setup" element={<SetupWizard />} />

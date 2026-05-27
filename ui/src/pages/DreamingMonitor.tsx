@@ -16,6 +16,7 @@ import { useAuth, type Tier } from "../context/AuthContext";
 import { TierTabs } from "../components/TierTabs";
 import { ExtractionErrorView } from "../lib/extractionError";
 import Switch from "../components/Switch";
+import { firePulse } from "../components/NeuralNetwork/networkBus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner, faChevronDown, faChevronRight } from "../lib/icons";
 import type { DreamCycle, DreamLog, DreamPhaseSummary } from "../api/client";
@@ -455,6 +456,7 @@ function useDreamingLiveState(orgId?: string) {
         }
         case "dream.call.started": {
           if (!cycleId) return;
+          firePulse(0, 2);
           setLive((prev) => {
             const cur = prev[cycleId] ?? { cycleId, recentCalls: [] };
             const inFlight: LiveInFlightCall = {
@@ -1627,7 +1629,7 @@ export default function DreamingMonitor() {
       {/* Header */}
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">
+          <h1 className="font-display text-3xl text-foreground">
             {tier === "system"
               ? "Dreaming"
               : tier === "org"

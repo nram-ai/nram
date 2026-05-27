@@ -14,6 +14,10 @@ import {
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import { useAuth, type Tier } from "../context/AuthContext";
 import { TierTabs } from "../components/TierTabs";
+import { PageHeader } from "../components/PageHeader";
+import { Shimmer } from "../components/Shimmer";
+import { StatusNode } from "../components/StatusNode/StatusNode";
+import { faGauge } from "../lib/icons";
 import {
   memoryRowLabel,
   type ProjectMemoryCount,
@@ -75,9 +79,9 @@ function activityBadge(type: string): { label: string; cls: string } {
 
 function SkeletonCard() {
   return (
-    <div className="animate-pulse rounded-lg border bg-card p-6">
-      <div className="h-4 w-24 rounded bg-muted" />
-      <div className="mt-3 h-8 w-16 rounded bg-muted" />
+    <div className="surface-elevated rounded-lg p-6">
+      <Shimmer variant="line" className="w-24" />
+      <Shimmer variant="line" className="mt-3 h-8 w-16" />
     </div>
   );
 }
@@ -86,9 +90,9 @@ function SkeletonRows({ count }: { count: number }) {
   return (
     <>
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="animate-pulse flex gap-4 py-2">
-          <div className="h-4 w-1/3 rounded bg-muted" />
-          <div className="h-4 w-1/4 rounded bg-muted" />
+        <div key={i} className="flex gap-4 py-2">
+          <Shimmer variant="line" className="w-1/3" />
+          <Shimmer variant="line" className="w-1/4" />
         </div>
       ))}
     </>
@@ -129,9 +133,12 @@ function SummaryCards({
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
       {cards.map((c) => (
-        <div key={c.label} className="rounded-lg border bg-card p-6">
-          <p className="text-sm font-medium text-muted-foreground">{c.label}</p>
-          <p className="mt-1 text-3xl font-bold tracking-tight">
+        <div
+          key={c.label}
+          className="surface-elevated rounded-lg p-6 transition-transform duration-150 hover:-translate-y-0.5 hover:border-primary/30"
+        >
+          <p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">{c.label}</p>
+          <p className="mt-2 font-display text-4xl text-foreground">
             {c.value.toLocaleString()}
           </p>
         </div>
@@ -433,22 +440,23 @@ function ProviderHealthCards({
       <div className="divide-y">
         {slots.map((s) => {
           const isOk = s.status === "ok";
-          let dotColor = "bg-muted-foreground";
           let statusText = "Not configured";
 
           if (s.configured && isOk) {
-            dotColor = "bg-success";
             statusText = s.type;
           } else if (s.configured && !isOk) {
-            dotColor = "bg-destructive";
             statusText = `${s.type} (${s.status ?? "unhealthy"})`;
           }
 
+          const kind = !s.configured
+            ? "paused"
+            : isOk
+              ? "success"
+              : "error";
+
           return (
             <div key={s.slot} className="flex items-center gap-3 px-4 py-3">
-              <span
-                className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${dotColor}`}
-              />
+              <StatusNode kind={kind} noIcon />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium">{SLOT_LABELS[s.slot] ?? s.slot}</p>
                 <p className="truncate text-xs text-muted-foreground">
@@ -518,15 +526,11 @@ function DreamingStatusCard({ isLoading }: { isLoading: boolean }) {
     <div className="rounded-lg border bg-card">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Dreaming</h2>
-        <span
-          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-            status.enabled
-              ? "bg-success/10 text-success"
-              : "bg-muted text-muted-foreground"
-          }`}
-        >
-          {status.enabled ? "Enabled" : "Disabled"}
-        </span>
+        <StatusNode
+          kind={status.enabled ? "success" : "paused"}
+          label={status.enabled ? "Enabled" : "Disabled"}
+          rate={running > 0 ? 1 : undefined}
+        />
       </div>
       <div className="flex gap-4 p-4">
         <div className="flex-1 text-center">
@@ -632,7 +636,7 @@ function QuickStore({
                 Project
               </label>
               {isLoadingProjects ? (
-                <div className="h-9 animate-pulse rounded-md bg-muted" />
+                <div className="h-9 skeleton-shimmer rounded-md" />
               ) : (
                 <select
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -806,13 +810,12 @@ function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
-        </div>
-        <TierTabs current={tier} onChange={setTier} ariaLabel="Dashboard scope" />
-      </div>
+      <PageHeader
+        icon={faGauge}
+        title={title}
+        subtitle={subtitle}
+        actions={<TierTabs current={tier} onChange={setTier} ariaLabel="Dashboard scope" />}
+      />
 
       {hasError && <ErrorBanner message={errorMessage} onRetry={handleRetry} />}
 
