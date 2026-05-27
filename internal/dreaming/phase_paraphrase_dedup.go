@@ -337,16 +337,22 @@ func (p *ParaphraseDedupPhase) applySupersede(
 	loser, winner *model.Memory,
 	cosine float64,
 ) error {
+	// MarkSupersededBy is a partial-column UPDATE that touches only
+	// superseded_by, superseded_at, embedding_dim, updated_at — the exact
+	// fields this path assigns. Using it instead of full-row Update means
+	// no read-modify-write window and no lock needed; the WHERE clause
+	// also guards on superseded_by IS NULL so a concurrent supersede
+	// surfaces as ErrConcurrentSupersede instead of a silent clobber.
+	if err := p.memWriter.MarkSupersededBy(ctx, loser.ID, loser.NamespaceID, winner.ID); err != nil {
+		slog.Warn("dreaming: paraphrase dedup supersede update failed",
+			"memory", loser.ID, "winner", winner.ID, "err", err)
+		return err
+	}
 	now := time.Now().UTC()
 	loser.SupersededBy = &winner.ID
 	loser.SupersededAt = &now
 	loser.UpdatedAt = now
 	loser.EmbeddingDim = nil // vector is purged below; keep row state in sync
-	if err := p.memWriter.Update(ctx, loser); err != nil {
-		slog.Warn("dreaming: paraphrase dedup supersede update failed",
-			"memory", loser.ID, "winner", winner.ID, "err", err)
-		return err
-	}
 	if p.vectorPurger != nil {
 		if err := p.vectorPurger.Delete(ctx, storage.VectorKindMemory, loser.ID); err != nil {
 			slog.Warn("dreaming: paraphrase dedup vector purge failed",

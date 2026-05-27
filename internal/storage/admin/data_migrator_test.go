@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
@@ -1461,6 +1462,9 @@ func (d *testSQLiteDB) WriteQuery(ctx context.Context, q string, args ...any) (*
 func (d *testSQLiteDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return d.db.BeginTx(ctx, opts)
 }
+func (d *testSQLiteDB) WithMemoryLock(_ context.Context, _ uuid.UUID, _ func(context.Context, *sql.Tx) error) error {
+	return fmt.Errorf("not implemented")
+}
 func (d *testSQLiteDB) WriteDB() *sql.DB { return d.db }
 
 type testPostgresDB struct{}
@@ -1486,5 +1490,8 @@ func (d *testPostgresDB) WriteQuery(_ context.Context, _ string, _ ...any) (*sql
 }
 func (d *testPostgresDB) BeginTx(_ context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	return nil, fmt.Errorf("not implemented")
+}
+func (d *testPostgresDB) WithMemoryLock(_ context.Context, _ uuid.UUID, _ func(context.Context, *sql.Tx) error) error {
+	return fmt.Errorf("not implemented")
 }
 func (d *testPostgresDB) WriteDB() *sql.DB { return nil }

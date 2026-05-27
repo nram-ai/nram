@@ -29,6 +29,12 @@ type MemoryReader interface {
 type MemoryWriter interface {
 	Create(ctx context.Context, mem *model.Memory) error
 	Update(ctx context.Context, mem *model.Memory) error
+	// MutateInLock acquires the cross-process memory row lock, re-reads
+	// the row inside the lock, and writes mutate's changes back under the
+	// same lock. Required for any read-modify-write on a memory row that
+	// could race with concurrent workers — full-row Update without the
+	// lock has a lost-update window the helper closes.
+	MutateInLock(ctx context.Context, id uuid.UUID, mutate func(*model.Memory) (write bool, err error)) (*model.Memory, error)
 	// UpdateMetadata writes only the metadata column without bumping
 	// updated_at. Phases use it to record visit stamps so the staleness
 	// check (stamp < updated_at) does not immediately re-invalidate the

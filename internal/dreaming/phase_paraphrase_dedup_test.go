@@ -142,29 +142,26 @@ func TestParaphraseDedupPhase_SupersedesNearDuplicate(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	if len(writer.updates) == 0 {
-		t.Fatalf("expected at least one Update; got 0")
+	// Supersede now lands via MarkSupersededBy (partial-column UPDATE)
+	// instead of a full-row Update — the partial path avoids the
+	// lost-update window that the row lock guards against on the merge
+	// paths. The behavioral assertions are unchanged: a supersede mark
+	// against the loser, pointing at the older as winner.
+	if len(writer.supersedeMarks) == 0 {
+		t.Fatalf("expected at least one MarkSupersededBy; got 0")
 	}
-
-	var loserUpdate *model.Memory
-	for i := range writer.updates {
-		u := writer.updates[i]
-		if u.SupersededBy != nil {
-			loserUpdate = &u
+	var loserMark *supersedeMarkRecord
+	for i := range writer.supersedeMarks {
+		if writer.supersedeMarks[i].OldID == newer.ID {
+			loserMark = &writer.supersedeMarks[i]
 			break
 		}
 	}
-	if loserUpdate == nil {
-		t.Fatalf("no Update with SupersededBy set; updates=%d", len(writer.updates))
+	if loserMark == nil {
+		t.Fatalf("no MarkSupersededBy for loser %s; marks=%v", newer.ID, writer.supersedeMarks)
 	}
-	if loserUpdate.ID != newer.ID {
-		t.Errorf("loser should be the newer memory (confidence tie → older survives). got %s, want %s", loserUpdate.ID, newer.ID)
-	}
-	if *loserUpdate.SupersededBy != older.ID {
-		t.Errorf("loser should point to older as winner; got %s, want %s", *loserUpdate.SupersededBy, older.ID)
-	}
-	if loserUpdate.EmbeddingDim != nil {
-		t.Errorf("loser should have EmbeddingDim cleared on supersede; got %v", *loserUpdate.EmbeddingDim)
+	if loserMark.NewID != older.ID {
+		t.Errorf("loser should point to older as winner; got %s, want %s", loserMark.NewID, older.ID)
 	}
 
 	purgedLoser := slices.Contains(vs.deleted, newer.ID)

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nram-ai/nram/internal/config"
 )
 
@@ -45,6 +47,14 @@ type DB interface {
 
 	// BeginTx starts a write transaction (routed to write pool for SQLite).
 	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+
+	// WithMemoryLock serializes the critical section against concurrent
+	// writes to the given memory row. The body runs exactly once inside a
+	// write transaction that already holds the lock; commit on success is
+	// automatic, rollback on any returned error. See rowlock.go for the
+	// backend-specific implementations (pg_advisory_xact_lock on Postgres,
+	// in-process sync.Mutex on SQLite).
+	WithMemoryLock(ctx context.Context, memoryID uuid.UUID, fn func(ctx context.Context, tx *sql.Tx) error) error
 
 	// DB returns the read *sql.DB (or shared pool for Postgres). Used by migration tools.
 	DB() *sql.DB

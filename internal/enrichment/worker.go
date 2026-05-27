@@ -166,9 +166,12 @@ type MemoryReader interface {
 // MemoryUpdater persists changes to an existing memory. The partial
 // setters are how the finalize path avoids clobbering a concurrent
 // supersede with a stale full-row write — each touches only the
-// columns it intentionally mutates.
+// columns it intentionally mutates. MutateInLock is the only safe path
+// for any read-modify-write merge on Tags or Metadata, since full-row
+// Update without the lock has a lost-update window between workers.
 type MemoryUpdater interface {
 	Update(ctx context.Context, mem *model.Memory) error
+	MutateInLock(ctx context.Context, id uuid.UUID, mutate func(*model.Memory) (write bool, err error)) (*model.Memory, error)
 	UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error
 	MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage, augmentedQueries []string, augmentedEmbeddingAt *time.Time) error
 	MarkSupersededBy(ctx context.Context, oldID, namespaceID, newID uuid.UUID) error
@@ -345,17 +348,6 @@ type WorkerPool struct {
 	// Exposed via WorkerIDsSnapshot for tests that need to assert the
 	// minted IDs without racing the worker goroutines.
 	workerIDs []string
-
-	// parentMergeLocks serializes mergeTagsIntoParent calls against the
-	// same parent memory inside this process. Two enrichment jobs that
-	// both want to merge tags onto the same parent (e.g. pre-insert
-	// guard from one job racing the backfill sweep on another) would
-	// otherwise race on read-modify-write of the parent's Tags and
-	// Metadata columns, with last-write-wins losing the absorbed tag set
-	// from one of them. This map is in-process only: cross-process races
-	// (multiple server replicas pointed at the same DB) still exist and
-	// would need optimistic-concurrency or row locks at the repo layer.
-	parentMergeLocks sync.Map // map[uuid.UUID]*sync.Mutex
 }
 
 // NewWorkerPool creates a new enrichment worker pool. Provider functions may
@@ -1776,7 +1768,7 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 			"shadow_op", p.ingestionShadowOp)
 	}
 
-	stampIngestionMetadata(p)
+	stampIngestionMetadataOn(p.mem, p)
 
 	// Single partial UPDATE so a concurrent memory_update that supersedes
 	// this row keeps its supersede pointer. The augmentation marker
@@ -1956,26 +1948,6 @@ func mergeTags(parent, child []string) []string {
 	return tags.Normalize(combined)
 }
 
-// lockParent returns a release closure for the given parent's per-process
-// mutex. The mutex is lazy-created on first call for a given ID and reused
-// thereafter; entries are intentionally NOT removed when the lock count
-// drops to zero (the lookup map is bounded by namespace cardinality, and
-// removal would require reference-counting under another lock). Callers
-// MUST invoke the release closure exactly once, typically via defer.
-func (wp *WorkerPool) lockParent(id uuid.UUID) func() {
-	mxAny, _ := wp.parentMergeLocks.LoadOrStore(id, &sync.Mutex{})
-	mx := mxAny.(*sync.Mutex)
-	mx.Lock()
-	return mx.Unlock
-}
-
-// mergeTagsIntoParent absorbs a suppressed extracted-fact's tags into its
-// parent memory and writes a LineageExtractedFactSuppressed audit row. Used by
-// both the pre-insert paraphrase guard in runPreEmbed and the backfill step
-// handler. The parent is re-read inside this function (instead of trusting the
-// stale row passed in) to narrow the lost-update window between concurrent
-// enrichment jobs touching the same parent's tags; the residual race is
-// noted in the plan as a follow-up.
 // mergeTagsIntoParent absorbs a suppressed extracted-fact's tags into the
 // parent memory and writes a LineageExtractedFactSuppressed audit row.
 // The inMemoryParent argument is the live in-memory parent struct the
@@ -1987,6 +1959,13 @@ func (wp *WorkerPool) lockParent(id uuid.UUID) func() {
 // is non-nil only on the backfill sweep path (a real child memory exists
 // to reference in the audit JSON); the pre-insert guard passes nil because
 // the suppressed fact never became a memory row.
+//
+// The Get → mutate → Update happens inside MutateInLock, which holds a
+// cross-process row lock on the parent memory id (pg_advisory_xact_lock
+// on Postgres, in-process mutex on SQLite). Without that lock, two
+// concurrent enrichment jobs targeting the same parent would each read
+// the same baseline, compute their tag unions independently, and the
+// second write would clobber the first — silently losing absorbed tags.
 func (wp *WorkerPool) mergeTagsIntoParent(
 	ctx context.Context,
 	inMemoryParent *model.Memory,
@@ -1997,36 +1976,29 @@ func (wp *WorkerPool) mergeTagsIntoParent(
 	against string,
 	source string,
 ) error {
-	// Serialize concurrent guard merges against the same parent within
-	// this process. Without this, two enrichment jobs racing on the same
-	// parent both read the parent, both compute a tag union, and both
-	// write — the second write clobbers the first, losing one set of
-	// absorbed tags. Cross-process races (multiple replicas) still exist
-	// and would need optimistic-concurrency at the repo layer.
-	release := wp.lockParent(inMemoryParent.ID)
-	defer release()
-
-	fresh, err := wp.memories.GetByID(ctx, inMemoryParent.ID)
-	if err != nil {
-		return fmt.Errorf("re-read parent: %w", err)
-	}
-	merged := mergeTags(fresh.Tags, newTags)
-	delta := tagDelta(fresh.Tags, merged)
-
+	var delta []string
 	now := time.Now().UTC()
-	if len(delta) > 0 {
-		fresh.Tags = merged
-		fresh.UpdatedAt = now
-		stampSuppressedFactMetadata(fresh, score)
-		if err := wp.memUpdater.Update(ctx, fresh); err != nil {
-			return fmt.Errorf("update parent tags: %w", err)
+	fresh, err := wp.memUpdater.MutateInLock(ctx, inMemoryParent.ID, func(mem *model.Memory) (bool, error) {
+		merged := mergeTags(mem.Tags, newTags)
+		delta = tagDelta(mem.Tags, merged)
+		if len(delta) == 0 {
+			return false, nil
 		}
+		mem.Tags = merged
+		mem.UpdatedAt = now
+		stampSuppressedFactMetadata(mem, score)
+		return true, nil
+	})
+	if err != nil {
+		return fmt.Errorf("merge parent tags: %w", err)
+	}
+	if len(delta) > 0 {
 		// Propagate the freshly-persisted state back into the caller's
 		// in-memory copy so a subsequent MarkEnriched / Update in the
 		// same job does not overwrite the stamp.
-		inMemoryParent.Tags = merged
+		inMemoryParent.Tags = fresh.Tags
 		inMemoryParent.Metadata = fresh.Metadata
-		inMemoryParent.UpdatedAt = now
+		inMemoryParent.UpdatedAt = fresh.UpdatedAt
 	}
 
 	if wp.lineage == nil {

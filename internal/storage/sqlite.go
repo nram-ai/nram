@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"sync"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver.
 )
@@ -13,6 +14,11 @@ import (
 type sqliteDB struct {
 	readDB  *sql.DB
 	writeDB *sql.DB
+	// memoryLocks holds per-memory_id sync.Mutexes for WithMemoryLock. See
+	// rowlock.go for the rationale: SQLite is single-process by definition,
+	// so in-process serialization is sufficient for cross-writer races on
+	// a given memory row.
+	memoryLocks sync.Map // map[uuid.UUID]*sync.Mutex
 }
 
 func (s *sqliteDB) Backend() string {

@@ -371,9 +371,7 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 		// Safety: the phase should not have decided DELETE without a
 		// deleter wired. Treat as a normal completion to avoid losing the
 		// memory; an operator will see the unexpected state in metadata.
-		stampIngestionMetadata(p)
-		p.mem.UpdatedAt = time.Now().UTC()
-		if err := wp.memUpdater.Update(ctx, p.mem); err != nil {
+		if err := wp.stampIngestionUnderLock(ctx, p); err != nil {
 			if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, fmt.Sprintf("update memory: %v", err)); failErr != nil {
 				logClaimLostOr(failErr, "enrichment: fail-mark after memory update fallback", "job", p.job.ID, "worker", p.workerID)
 			}
@@ -395,9 +393,7 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 	// Stamp metadata BEFORE soft-delete. The Update path filters
 	// `deleted_at IS NULL`, so the stamp would be silently dropped if it
 	// happened after the delete.
-	stampIngestionMetadata(p)
-	p.mem.UpdatedAt = time.Now().UTC()
-	if err := wp.memUpdater.Update(ctx, p.mem); err != nil {
+	if err := wp.stampIngestionUnderLock(ctx, p); err != nil {
 		slog.Warn("enrichment: stamp ingestion metadata before soft-delete",
 			"job", p.job.ID, "memory", p.mem.ID, "err", err)
 	}
@@ -476,16 +472,39 @@ func (wp *WorkerPool) applyIngestionUpdate(ctx context.Context, p *pendingJob) {
 	}
 }
 
-// stampIngestionMetadata writes ingestion-decision fields onto the parent
-// memory's `metadata` JSONB column so admin views and downstream consumers
-// can see what happened. Existing metadata keys are preserved.
-func stampIngestionMetadata(p *pendingJob) {
+// stampIngestionUnderLock runs the metadata merge inside MutateInLock so
+// the read-modify-write happens atomically under the row's advisory lock,
+// then propagates the freshly-persisted Metadata and UpdatedAt back into
+// p.mem so downstream code in the same job sees the post-write state.
+// Returns the error verbatim on failure (and leaves p.mem untouched).
+func (wp *WorkerPool) stampIngestionUnderLock(ctx context.Context, p *pendingJob) error {
+	fresh, err := wp.memUpdater.MutateInLock(ctx, p.mem.ID, func(mem *model.Memory) (bool, error) {
+		stampIngestionMetadataOn(mem, p)
+		mem.UpdatedAt = time.Now().UTC()
+		return true, nil
+	})
+	if err != nil {
+		return err
+	}
+	p.mem.Metadata = fresh.Metadata
+	p.mem.UpdatedAt = fresh.UpdatedAt
+	return nil
+}
+
+// stampIngestionMetadataOn merges the ingestion-decision keys onto the
+// given memory's Metadata in place, preserving existing keys. Used by
+// stampIngestionUnderLock under MutateInLock so the merge happens against
+// the freshly re-read row rather than the job-start snapshot, closing the
+// cross-worker lost-update window for the metadata column. finalizeJob's
+// pre-MarkEnriched stamp on the in-memory p.mem.Metadata calls it
+// directly with p.mem.
+func stampIngestionMetadataOn(mem *model.Memory, p *pendingJob) {
 	if p.ingestionDecision == "" {
 		return
 	}
 	meta := map[string]any{}
-	if len(p.mem.Metadata) > 0 {
-		_ = json.Unmarshal(p.mem.Metadata, &meta)
+	if len(mem.Metadata) > 0 {
+		_ = json.Unmarshal(mem.Metadata, &meta)
 		if meta == nil {
 			meta = map[string]any{}
 		}
@@ -507,5 +526,5 @@ func stampIngestionMetadata(p *pendingJob) {
 	if err != nil {
 		return
 	}
-	p.mem.Metadata = encoded
+	mem.Metadata = encoded
 }

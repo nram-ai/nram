@@ -110,6 +110,9 @@ func (r *recordingMemoryWriter) Demote(_ context.Context, _, _ uuid.UUID, _ json
 func (r *recordingMemoryWriter) MarkSupersededBy(_ context.Context, _, _, _ uuid.UUID) error {
 	return nil
 }
+func (r *recordingMemoryWriter) MutateInLock(_ context.Context, _ uuid.UUID, _ func(*model.Memory) (bool, error)) (*model.Memory, error) {
+	return nil, nil
+}
 
 type staticDreamSettings struct {
 	values map[string]string

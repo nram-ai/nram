@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -93,6 +94,11 @@ type updatingMemoryWriter struct {
 	demotes             []demoteRecord
 	supersedeMarks      []supersedeMarkRecord
 	createErr           error
+	// seed is the initial memory state MutateInLock re-reads against
+	// when no prior Update for the id exists. Tests that exercise paths
+	// going through MutateInLock should populate seed with the same
+	// memories given to the reader.
+	seed []model.Memory
 }
 
 type embeddingDimUpdateRecord struct {
@@ -183,6 +189,36 @@ func (w *updatingMemoryWriter) MarkSupersededBy(_ context.Context, oldID, namesp
 		OldID: oldID, NamespaceID: namespaceID, NewID: newID,
 	})
 	return nil
+}
+func (w *updatingMemoryWriter) MutateInLock(_ context.Context, id uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
+	var current *model.Memory
+	for i := len(w.updates) - 1; i >= 0; i-- {
+		if w.updates[i].ID == id {
+			cp := w.updates[i]
+			current = &cp
+			break
+		}
+	}
+	if current == nil {
+		for i := range w.seed {
+			if w.seed[i].ID == id {
+				cp := w.seed[i]
+				current = &cp
+				break
+			}
+		}
+	}
+	if current == nil {
+		return nil, fmt.Errorf("updatingMemoryWriter.MutateInLock: memory %s not in updates or seed", id)
+	}
+	write, err := mutate(current)
+	if err != nil {
+		return nil, err
+	}
+	if write {
+		w.updates = append(w.updates, *current)
+	}
+	return current, nil
 }
 
 // --- helpers ---

@@ -317,32 +317,48 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		// Conditional supersede: when the winner was already well-established
 		// before the haircut, mark the loser as superseded so the supersede
 		// prune branch (with its 7d clock from SupersededAt) cleans it up
-		// faster than waiting for confidence drift to reach zero. Set the
-		// fields here so the haircut Update below carries them in one write.
+		// faster than waiting for confidence drift to reach zero. Applied
+		// inside the loser's MutateInLock body so the supersede pointer and
+		// the confidence haircut land in one write.
 		loserSuperseded := false
+		var loserSupersededBy *uuid.UUID
 		if winnerMem != nil && winnerMem.Confidence > supersedeThreshold {
-			loserMem.SupersededBy = &winnerMem.ID
-			loserMem.SupersededAt = &now
-			loserMem.EmbeddingDim = nil
+			loserSupersededBy = &winnerMem.ID
 			loserSuperseded = true
 		}
 
-		applyHaircut := func(mem *model.Memory, factor float64) {
-			mem.Confidence = math.Max(0.0, mem.Confidence*factor)
-			mem.UpdatedAt = now
-			if err := p.memWriter.Update(ctx, mem); err != nil {
+		// applyHaircut runs the confidence multiplication inside MutateInLock
+		// so the read-modify-write is serialized against any other writer
+		// touching the same memory (concurrent dream phase, enrichment job
+		// merging tags, ingestion-decision stamp). Without the lock, two
+		// haircuts on the same memory could read the same baseline and one
+		// of the factors would be silently dropped by the second writer.
+		applyHaircut := func(mem *model.Memory, factor float64, supersededBy *uuid.UUID) {
+			fresh, err := p.memWriter.MutateInLock(ctx, mem.ID, func(row *model.Memory) (bool, error) {
+				row.Confidence = math.Max(0.0, row.Confidence*factor)
+				row.UpdatedAt = now
+				if supersededBy != nil {
+					row.SupersededBy = supersededBy
+					row.SupersededAt = &now
+					row.EmbeddingDim = nil
+				}
+				return true, nil
+			})
+			if err != nil {
 				slog.Warn("dreaming: contradiction haircut update failed",
 					"memory", mem.ID, "err", err)
+				return
 			}
+			*mem = *fresh
 			mirrorToStale(staleByID, mem)
 		}
 
 		if normalized == WinnerTie {
-			applyHaircut(&pair[0], loserFactor)
-			applyHaircut(&pair[1], winnerFactor)
+			applyHaircut(&pair[0], loserFactor, nil)
+			applyHaircut(&pair[1], winnerFactor, nil)
 		} else {
-			applyHaircut(loserMem, loserFactor)
-			applyHaircut(winnerMem, winnerFactor)
+			applyHaircut(loserMem, loserFactor, loserSupersededBy)
+			applyHaircut(winnerMem, winnerFactor, nil)
 		}
 
 		if loserSuperseded && p.vectorPurger != nil {

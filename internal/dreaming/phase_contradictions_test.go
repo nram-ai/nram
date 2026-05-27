@@ -834,6 +834,25 @@ func (m *mutableMemoryStore) MarkSupersededBy(_ context.Context, oldID, _, newID
 	return errors.New("not found")
 }
 
+func (m *mutableMemoryStore) MutateInLock(_ context.Context, id uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
+	for i := range m.memories {
+		if m.memories[i].ID == id {
+			fresh := m.memories[i]
+			write, err := mutate(&fresh)
+			if err != nil {
+				return nil, err
+			}
+			if write {
+				m.memories[i] = fresh
+				m.updates++
+			}
+			result := fresh
+			return &result, nil
+		}
+	}
+	return nil, errors.New("not found")
+}
+
 // --- haircut/winner tests (item #5) ---
 
 // decidingLLM emits a structured contradiction response with a configurable
@@ -891,7 +910,9 @@ func haircutMemories(n int) []model.Memory {
 func runContradictionCycle(t *testing.T, llm provider.LLMProvider, mems []model.Memory, lineage LineageWriter) *updatingMemoryWriter {
 	t.Helper()
 	reader := &fakeMemoryReader{list: mems}
-	writer := &updatingMemoryWriter{}
+	// seed mirrors the reader so MutateInLock — used by the haircut path
+	// — can re-read each memory under its row lock without a separate store.
+	writer := &updatingMemoryWriter{seed: mems}
 	phase := NewContradictionPhase(
 		reader,
 		writer,
@@ -1019,7 +1040,8 @@ func TestContradictionPhase_HighConfidenceWinnerSupersedes(t *testing.T) {
 	mems[1].EmbeddingDim = &d
 
 	reader := &fakeMemoryReader{list: mems}
-	writer := &updatingMemoryWriter{}
+	// seed mirrors the reader so the haircut path's MutateInLock can re-read.
+	writer := &updatingMemoryWriter{seed: mems}
 	vs := &fakeContradictionVectorStore{vectorsByID: map[uuid.UUID][]float32{}}
 	lineage := &countingLineageWriter{}
 	phase := NewContradictionPhase(

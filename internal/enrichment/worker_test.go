@@ -69,6 +69,11 @@ type mockMemoryUpdater struct {
 	enrichedMarks  []enrichedMark
 	supersedeMarks []supersedeMark
 	err            error
+	// reader, when wired, lets MutateInLock re-read the freshest stored
+	// memory before invoking the mutator. Tests that exercise the merge
+	// paths (paraphrase guard, ingestion stamp) need this; tests that
+	// only exercise partial-column writes can leave it nil.
+	reader *mockMemoryReader
 }
 
 type supersedeMark struct {
@@ -150,6 +155,49 @@ func (m *mockMemoryUpdater) MarkSupersededBy(_ context.Context, oldID, namespace
 	}
 	m.supersedeMarks = append(m.supersedeMarks, supersedeMark{oldID: oldID, namespaceID: namespaceID, newID: newID})
 	return nil
+}
+
+func (m *mockMemoryUpdater) MutateInLock(ctx context.Context, id uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
+	if m.reader == nil {
+		return nil, fmt.Errorf("mockMemoryUpdater.MutateInLock: no reader wired (set updater.reader in the test harness)")
+	}
+	// Hold m.mu across the entire lookup-mutate-write so two concurrent
+	// MutateInLock callers on the same id cannot both read the same
+	// baseline and clobber each other — the same invariant the production
+	// WithMemoryLock provides. Mutators in this codebase never re-enter
+	// the stub, so the long hold cannot deadlock.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var current *model.Memory
+	for i := len(m.updated) - 1; i >= 0; i-- {
+		if m.updated[i].ID == id {
+			cp := *m.updated[i]
+			cp.Tags = append([]string(nil), m.updated[i].Tags...)
+			cp.Metadata = append(json.RawMessage(nil), m.updated[i].Metadata...)
+			current = &cp
+			break
+		}
+	}
+	if current == nil {
+		fresh, err := m.reader.GetByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		current = fresh
+	}
+	write, err := mutate(current)
+	if err != nil {
+		return nil, err
+	}
+	if write {
+		if m.err != nil {
+			return nil, m.err
+		}
+		cp := *current
+		m.updated = append(m.updated, &cp)
+	}
+	return current, nil
 }
 
 type mockMemoryCreator struct {
@@ -648,6 +696,10 @@ func newTestHarness(
 		tokens:   &mockTokenRecorder{},
 		vectors:  &mockVectorWriter{},
 	}
+	// Wire reader into updater so MutateInLock can re-read fresh memory
+	// state before invoking the mutator (mirrors production WithMemoryLock
+	// + GetByIDTx flow).
+	h.updater.reader = h.reader
 
 	// Wrap test provider stubs so the middleware writes token_usage rows
 	// to h.tokens on every wrapped call — matches production wiring
@@ -1581,9 +1633,10 @@ func TestProcessJob_FactGuard_FailsOpenOnEmbedError(t *testing.T) {
 // default mockMemoryReader returns a detached copy from GetByID and so
 // would hide lost-update bugs by always serving the original state.
 type statefulMemoryStore struct {
-	mu     sync.Mutex
-	byID   map[uuid.UUID]*model.Memory
-	writes int
+	mu      sync.Mutex
+	byID    map[uuid.UUID]*model.Memory
+	writes  int
+	idLocks sync.Map // map[uuid.UUID]*sync.Mutex — mirrors WithMemoryLock per-id serialization
 }
 
 func newStatefulMemoryStore() *statefulMemoryStore {
@@ -1643,6 +1696,29 @@ func (s *statefulMemoryStore) MarkEnriched(_ context.Context, _, _ uuid.UUID, _ 
 
 func (s *statefulMemoryStore) MarkSupersededBy(_ context.Context, _, _, _ uuid.UUID) error {
 	return nil
+}
+
+func (s *statefulMemoryStore) MutateInLock(ctx context.Context, id uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
+	mxAny, _ := s.idLocks.LoadOrStore(id, &sync.Mutex{})
+	mx := mxAny.(*sync.Mutex)
+	mx.Lock()
+	defer mx.Unlock()
+
+	fresh, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	write, err := mutate(fresh)
+	if err != nil {
+		return nil, err
+	}
+	if !write {
+		return fresh, nil
+	}
+	if err := s.Update(ctx, fresh); err != nil {
+		return nil, err
+	}
+	return fresh, nil
 }
 
 func TestMergeTagsIntoParent_ConcurrentMergesAreSerialized(t *testing.T) {

@@ -136,24 +136,39 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 
 // GetByID returns a memory by its UUID. Soft-deleted records are excluded.
 func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error) {
+	return r.getByIDExec(ctx, dbExec{r.db}, id)
+}
+
+// GetByIDTx is the transactional variant of GetByID. Used by callers that
+// pair Get with a subsequent Update inside a WithMemoryLock body so the
+// read sees the locked row's committed state.
+func (r *MemoryRepo) GetByIDTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*model.Memory, error) {
+	return r.getByIDExec(ctx, tx, id)
+}
+
+func (r *MemoryRepo) getByIDExec(ctx context.Context, exec sqlExecer, id uuid.UUID) (*model.Memory, error) {
 	query := selectMemoryColumns + ` FROM memories WHERE id = ? AND deleted_at IS NULL`
 	if r.db.Backend() == BackendPostgres {
 		query = selectMemoryColumns + ` FROM memories WHERE id = $1 AND deleted_at IS NULL`
 	}
 
-	row := r.db.QueryRow(ctx, query, id.String())
+	row := exec.QueryRowContext(ctx, query, id.String())
 	return r.scanMemory(row)
 }
 
 // getByIDIncludeDeleted returns a memory by its UUID including soft-deleted records.
 // Used internally for reload after create.
 func (r *MemoryRepo) getByIDIncludeDeleted(ctx context.Context, id uuid.UUID) (*model.Memory, error) {
+	return r.getByIDIncludeDeletedExec(ctx, dbExec{r.db}, id)
+}
+
+func (r *MemoryRepo) getByIDIncludeDeletedExec(ctx context.Context, exec sqlExecer, id uuid.UUID) (*model.Memory, error) {
 	query := selectMemoryColumns + ` FROM memories WHERE id = ?`
 	if r.db.Backend() == BackendPostgres {
 		query = selectMemoryColumns + ` FROM memories WHERE id = $1`
 	}
 
-	row := r.db.QueryRow(ctx, query, id.String())
+	row := exec.QueryRowContext(ctx, query, id.String())
 	return r.scanMemory(row)
 }
 
@@ -1083,6 +1098,58 @@ func (r *MemoryRepo) UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim i
 
 // Update updates all mutable fields of a memory and bumps updated_at.
 func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
+	return r.updateExec(ctx, dbExec{r.db}, mem)
+}
+
+// UpdateTx is the transactional variant of Update. Used by callers that
+// pair Get with Update inside a WithMemoryLock body so the read-modify-write
+// happens atomically under the row's advisory lock.
+func (r *MemoryRepo) UpdateTx(ctx context.Context, tx *sql.Tx, mem *model.Memory) error {
+	return r.updateExec(ctx, tx, mem)
+}
+
+// MutateInLock acquires the cross-process memory row lock, re-reads the row
+// inside the lock, invokes mutate to apply changes in place, and writes the
+// result back under the same lock when mutate signals a write is needed.
+// Returns the post-write (or post-read, on no-write) memory, or nil with
+// the error if any step fails.
+//
+// Use this for any read-modify-write on a memory row — the alternative,
+// GetByID + mutate in Go + Update, has a lost-update window between
+// concurrent workers (or processes) that this helper closes via
+// pg_advisory_xact_lock on Postgres and an in-process mutex on SQLite.
+func (r *MemoryRepo) MutateInLock(
+	ctx context.Context,
+	id uuid.UUID,
+	mutate func(*model.Memory) (write bool, err error),
+) (*model.Memory, error) {
+	var result *model.Memory
+	err := r.db.WithMemoryLock(ctx, id, func(ctx context.Context, tx *sql.Tx) error {
+		fresh, err := r.getByIDExec(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		write, err := mutate(fresh)
+		if err != nil {
+			return err
+		}
+		if !write {
+			result = fresh
+			return nil
+		}
+		if err := r.updateExec(ctx, tx, fresh); err != nil {
+			return err
+		}
+		result = fresh
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *MemoryRepo) updateExec(ctx context.Context, exec sqlExecer, mem *model.Memory) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	mem.Tags = tags.Normalize(mem.Tags)
@@ -1157,7 +1224,7 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 			WHERE id = $19 AND namespace_id = $20 AND deleted_at IS NULL`
 	}
 
-	result, err := r.db.Exec(ctx, query,
+	result, err := exec.ExecContext(ctx, query,
 		mem.Content, mem.ContentHash, embeddingDim, source, tagsVal,
 		mem.Confidence, mem.Importance, mem.AccessCount, lastAccessed,
 		expiresAt, supersededBy, supersededAt, enrichedVal, string(mem.Metadata),
@@ -1175,7 +1242,14 @@ func (r *MemoryRepo) Update(ctx context.Context, mem *model.Memory) error {
 		return sql.ErrNoRows
 	}
 
-	return r.reload(ctx, mem)
+	// Reload through the same exec so a transactional Update sees its own
+	// uncommitted write.
+	fetched, err := r.getByIDIncludeDeletedExec(ctx, exec, mem.ID)
+	if err != nil {
+		return fmt.Errorf("memory reload: %w", err)
+	}
+	*mem = *fetched
+	return nil
 }
 
 // UpdateMetadata writes only the metadata column. It deliberately does
@@ -1991,16 +2065,6 @@ func (r *MemoryRepo) SearchByText(ctx context.Context, namespaceID uuid.UUID, qu
 		return nil, fmt.Errorf("memory search by text iteration: %w", err)
 	}
 	return result, nil
-}
-
-// reload fetches the memory by ID and populates the struct in place.
-func (r *MemoryRepo) reload(ctx context.Context, mem *model.Memory) error {
-	fetched, err := r.getByIDIncludeDeleted(ctx, mem.ID)
-	if err != nil {
-		return fmt.Errorf("memory reload: %w", err)
-	}
-	*mem = *fetched
-	return nil
 }
 
 const selectMemoryColumns = `SELECT id, namespace_id, content, embedding_dim, source, tags,
