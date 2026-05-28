@@ -354,6 +354,207 @@ func TestAuthorizeContext_Unauthenticated(t *testing.T) {
 	}
 }
 
+// Identity for the consent screen comes from the AuthMiddleware context,
+// the Authorization: Bearer header (the SPA sends this with every fetch
+// using the localStorage session JWT), or the short-lived nram_session
+// cookie. The Bearer branch is what lets a long-running admin-UI session
+// stay recognized on /authorize after the 5-minute cookie has expired.
+func TestAuthorizeContext_BearerSession_RecognizedAsAccountUser(t *testing.T) {
+	env := setupOAuthEnv(t)
+
+	jwtStr, err := GenerateSessionJWT(env.user.ID, env.user.OrgID, env.user.Role, env.user.Email, env.user.DisplayName, testSecret, time.Hour)
+	if err != nil {
+		t.Fatalf("mint session jwt: %v", err)
+	}
+
+	q := url.Values{}
+	q.Set("client_id", env.client.ClientID)
+	q.Set("redirect_uri", "https://example.com/callback")
+	q.Set("response_type", "code")
+	q.Set("code_challenge", "abc")
+	q.Set("code_challenge_method", "S256")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?"+q.Encode(), nil)
+	req.Header.Set("Authorization", "Bearer "+jwtStr)
+	// No nram_session cookie set: the bearer header is the only identity
+	// source available, mirroring the post-cookie-expiry SPA case.
+	rec := httptest.NewRecorder()
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		AccountUser *struct {
+			DisplayName string `json:"display_name"`
+			Email       string `json:"email"`
+		} `json:"account_user"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v; body: %s", err, rec.Body.String())
+	}
+	if got.AccountUser == nil {
+		t.Fatalf("expected account_user populated from Bearer, got null; body: %s", rec.Body.String())
+	}
+	if got.AccountUser.DisplayName != env.user.DisplayName {
+		t.Fatalf("account_user.display_name: got %q, want %q", got.AccountUser.DisplayName, env.user.DisplayName)
+	}
+	if got.AccountUser.Email != env.user.Email {
+		t.Fatalf("account_user.email: got %q, want %q", got.AccountUser.Email, env.user.Email)
+	}
+}
+
+// The approve POST is a native HTML form submit, which carries cookies
+// only (no Authorization header). If the context endpoint did not roll
+// the nram_session cookie forward whenever it recognized a user, a
+// Bearer-only context lookup would render "Continue as <user>" and the
+// subsequent form POST would then 302 to /login because no cookie was
+// present. Guard against that by asserting the response sets a fresh
+// session cookie.
+func TestAuthorizeContext_BearerSession_RefreshesSessionCookie(t *testing.T) {
+	env := setupOAuthEnv(t)
+
+	jwtStr, err := GenerateSessionJWT(env.user.ID, env.user.OrgID, env.user.Role, env.user.Email, env.user.DisplayName, testSecret, time.Hour)
+	if err != nil {
+		t.Fatalf("mint session jwt: %v", err)
+	}
+
+	q := url.Values{}
+	q.Set("client_id", env.client.ClientID)
+	q.Set("redirect_uri", "https://example.com/callback")
+	q.Set("response_type", "code")
+	q.Set("code_challenge", "abc")
+	q.Set("code_challenge_method", "S256")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?"+q.Encode(), nil)
+	req.Header.Set("Authorization", "Bearer "+jwtStr)
+	rec := httptest.NewRecorder()
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var refreshed *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "nram_session" {
+			refreshed = c
+		}
+	}
+	if refreshed == nil {
+		t.Fatalf("expected Set-Cookie: nram_session in response, got cookies: %v", rec.Result().Cookies())
+	}
+	if refreshed.Value == "" {
+		t.Fatalf("expected nram_session cookie to carry a fresh JWT, got empty value")
+	}
+	uid, parseErr := env.server.parseSessionCookie(refreshed.Value)
+	if parseErr != nil {
+		t.Fatalf("refreshed cookie did not parse as a valid session JWT: %v", parseErr)
+	}
+	if uid != env.user.ID {
+		t.Fatalf("refreshed cookie subject: got %s, want %s", uid, env.user.ID)
+	}
+}
+
+// Symmetric guard: anonymous context calls must NOT mint a cookie.
+// Otherwise a Bearer-less caller would walk away with an unexpected
+// nram_session header attempting to set state in their browser.
+func TestAuthorizeContext_Anonymous_DoesNotMintCookie(t *testing.T) {
+	env := setupOAuthEnv(t)
+
+	q := url.Values{}
+	q.Set("client_id", env.client.ClientID)
+	q.Set("redirect_uri", "https://example.com/callback")
+	q.Set("response_type", "code")
+	q.Set("code_challenge", "abc")
+	q.Set("code_challenge_method", "S256")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?"+q.Encode(), nil)
+	rec := httptest.NewRecorder()
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
+
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "nram_session" {
+			t.Fatalf("expected no nram_session cookie for anonymous context call, got %+v", c)
+		}
+	}
+}
+
+func TestAuthorizeContext_BearerExpired_AccountUserNil(t *testing.T) {
+	env := setupOAuthEnv(t)
+
+	// Expiry in the past: the JWT itself is rejected at parse time, so
+	// resolveUserIDFromRequest falls through to the cookie branch which
+	// is also empty, yielding account_user: null.
+	jwtStr, err := GenerateSessionJWT(env.user.ID, env.user.OrgID, env.user.Role, env.user.Email, env.user.DisplayName, testSecret, -time.Minute)
+	if err != nil {
+		t.Fatalf("mint expired jwt: %v", err)
+	}
+
+	q := url.Values{}
+	q.Set("client_id", env.client.ClientID)
+	q.Set("redirect_uri", "https://example.com/callback")
+	q.Set("response_type", "code")
+	q.Set("code_challenge", "abc")
+	q.Set("code_challenge_method", "S256")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?"+q.Encode(), nil)
+	req.Header.Set("Authorization", "Bearer "+jwtStr)
+	rec := httptest.NewRecorder()
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		AccountUser any `json:"account_user"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.AccountUser != nil {
+		t.Fatalf("expected account_user null for expired bearer, got %+v", got.AccountUser)
+	}
+}
+
+func TestAuthorizeContext_BearerWrongSecret_AccountUserNil(t *testing.T) {
+	env := setupOAuthEnv(t)
+
+	// JWT signed with a different secret: HMAC validation fails, no user
+	// is recovered from the bearer, the cookie branch is empty, so
+	// account_user must be null. Without this guard a forged token could
+	// impersonate any user on the consent screen.
+	wrongSecret := []byte("not-the-real-secret-key-32-bytes!")
+	jwtStr, err := GenerateSessionJWT(env.user.ID, env.user.OrgID, env.user.Role, env.user.Email, env.user.DisplayName, wrongSecret, time.Hour)
+	if err != nil {
+		t.Fatalf("mint forged jwt: %v", err)
+	}
+
+	q := url.Values{}
+	q.Set("client_id", env.client.ClientID)
+	q.Set("redirect_uri", "https://example.com/callback")
+	q.Set("response_type", "code")
+	q.Set("code_challenge", "abc")
+	q.Set("code_challenge_method", "S256")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?"+q.Encode(), nil)
+	req.Header.Set("Authorization", "Bearer "+jwtStr)
+	rec := httptest.NewRecorder()
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		AccountUser any `json:"account_user"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.AccountUser != nil {
+		t.Fatalf("expected account_user null for bearer signed with wrong secret, got %+v", got.AccountUser)
+	}
+}
+
 func TestAuthorizeContext_MissingClientID(t *testing.T) {
 	env := setupOAuthEnv(t)
 

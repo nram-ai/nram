@@ -179,12 +179,24 @@ func (s *OAuthServer) resolveAccountUserForConsent(r *http.Request) *accountUser
 	}
 }
 
-// resolveUserIDFromRequest returns the authenticated user id from either the
-// AuthMiddleware context or the short-lived nram_session cookie. Returns
-// uuid.Nil if no identity is present.
+// resolveUserIDFromRequest returns the authenticated user id from the
+// first identity source it finds: the AuthMiddleware context, an
+// Authorization: Bearer header (the SPA sends this with every fetch from
+// the localStorage session JWT), or the short-lived nram_session cookie
+// (the IdP-callback bridge). Returns uuid.Nil if no identity is present.
+//
+// The public OAuth route group does not mount AuthMiddleware, so the
+// Bearer-header branch is what makes an admin-UI session visible on the
+// consent screen after the 5-minute cookie has expired but while the
+// long-lived localStorage JWT is still valid.
 func (s *OAuthServer) resolveUserIDFromRequest(r *http.Request) uuid.UUID {
 	if ac := FromContext(r.Context()); ac != nil && ac.UserID != uuid.Nil {
 		return ac.UserID
+	}
+	if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		if uid, err := s.parseSessionCookie(token); err == nil {
+			return uid
+		}
 	}
 	cookie, err := r.Cookie("nram_session")
 	if err != nil || cookie.Value == "" {
@@ -248,6 +260,17 @@ func (s *OAuthServer) AuthorizeContextHandler() http.HandlerFunc {
 			return
 		}
 
+		accountUser := s.resolveAccountUserForConsent(r)
+		// Roll the nram_session cookie forward whenever the React
+		// consent page loads against a recognized session. The
+		// approve POST is a native HTML form submit, which carries
+		// cookies only (no Authorization header), so without this
+		// refresh the form POST silently loses identity 5 minutes
+		// after login and bounces the user to /login despite the
+		// page already saying "Continue as <user>".
+		if accountUser != nil {
+			s.refreshSessionCookie(w, r)
+		}
 		resp := authorizeContextResponse{
 			ClientID:            params.ClientID,
 			ClientName:          client.Name,
@@ -258,11 +281,39 @@ func (s *OAuthServer) AuthorizeContextHandler() http.HandlerFunc {
 			Scope:               params.Scope,
 			Resource:            params.Resource,
 			State:               params.State,
-			AccountUser:         s.resolveAccountUserForConsent(r),
+			AccountUser:         accountUser,
 			ShareTokenSupported: s.shareTokens != nil,
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+// refreshSessionCookie re-mints the nram_session cookie for the
+// currently-recognized user. Called when the consent context endpoint
+// has identified the user (via Bearer or an unexpired cookie) so the
+// subsequent approve form POST has a fresh cookie. The form POST cannot
+// carry an Authorization header, only cookies.
+func (s *OAuthServer) refreshSessionCookie(w http.ResponseWriter, r *http.Request) {
+	uid := s.resolveUserIDFromRequest(r)
+	if uid == uuid.Nil {
+		return
+	}
+	user, err := s.userRepo.GetByID(r.Context(), uid)
+	if err != nil {
+		return
+	}
+	token, err := GenerateSessionJWT(user.ID, user.OrgID, user.Role, user.Email, user.DisplayName, s.jwtSecret, 5*time.Minute)
+	if err != nil {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "nram_session",
+		Value:    token,
+		Path:     "/",
+		MaxAge:   300,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   RequestIsSecure(r),
+	})
 }
 
 // SharePreviewHandler serves POST /v1/oauth/share/preview. Validates the
