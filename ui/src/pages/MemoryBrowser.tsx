@@ -450,7 +450,7 @@ function MemoryCard({
                 enriched
               </span>
             )}
-            {memory.augmented_embedding_at && !isChild && (
+            {memory.augmented_embedding_at && (
               <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
                 augmented
               </span>
