@@ -1173,10 +1173,21 @@ export function useMemoryRecall(
   });
 }
 
-export function useMemoryDetail(projectId: string, memoryId: string) {
+export function useMemoryDetail(
+  projectId: string,
+  memoryId: string,
+  opts?: { includeSuperseded?: boolean },
+) {
+  const includeSuperseded = opts?.includeSuperseded ?? false;
   return useQuery({
-    queryKey: ["memories", "detail", projectId, memoryId],
-    queryFn: () => memoryAPI.get(projectId, memoryId),
+    queryKey: [
+      "memories",
+      "detail",
+      projectId,
+      memoryId,
+      includeSuperseded,
+    ],
+    queryFn: () => memoryAPI.get(projectId, memoryId, { includeSuperseded }),
     enabled: !!projectId && !!memoryId,
   });
 }

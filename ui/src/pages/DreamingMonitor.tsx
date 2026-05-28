@@ -1243,14 +1243,17 @@ function LiveActivitySection({ state }: { state?: LiveCycleState }) {
 function FactChip({ projectId, fact: f }: { projectId: string; fact: Fact }) {
   const [copied, setCopied] = useState(false);
   const value = String(f.value ?? "");
-  if (!value) return <span className="text-muted-foreground">\u2014</span>;
+  if (!value) return <span className="text-muted-foreground">{"\u2014"}</span>;
 
-  if (f.kind === "memory_id") {
+  if (f.kind === "memory_id" || f.kind === "memory_id_superseded") {
+    const superseded = f.kind === "memory_id_superseded";
     return (
       <Link
-        to={memoryFocusHref(projectId, value)}
+        to={memoryFocusHref(projectId, value, {
+          includeSuperseded: superseded,
+        })}
         className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-info hover:bg-muted/80 hover:underline"
-        title={value}
+        title={superseded ? `${value} (merged away)` : value}
       >
         {shortId(value)}
       </Link>
@@ -1282,7 +1285,8 @@ function FactChip({ projectId, fact: f }: { projectId: string; fact: Fact }) {
   if (f.kind === "text" && value.length > 80) {
     return (
       <span className="text-xs text-foreground" title={value}>
-        {value.slice(0, 80)}\u2026
+        {value.slice(0, 80)}
+        {"\u2026"}
       </span>
     );
   }

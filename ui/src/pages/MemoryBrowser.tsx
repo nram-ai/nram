@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   useMeProjects,
   useMemoryListInfinite,
@@ -16,6 +16,7 @@ import { useAuth } from "../context/AuthContext";
 import { downloadJson } from "../lib/download";
 import { useSelectedProject } from "../context/ProjectContext";
 import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
+import { memoryFocusHref, shortId } from "../lib/dreaming";
 import { MemoryAugmentPreviewBlock } from "../components/MemoryAugmentPreviewBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheck } from "../lib/icons";
@@ -492,16 +493,18 @@ function MemoryCard({
 function MemoryDetailPanel({
   projectId,
   memoryId,
+  includeSuperseded,
   onClose,
   onDeleted,
 }: {
   projectId: string;
   memoryId: string;
+  includeSuperseded?: boolean;
   onClose: () => void;
   onDeleted: () => void;
 }) {
   const { canWrite } = useAuth();
-  const detail = useMemoryDetail(projectId, memoryId);
+  const detail = useMemoryDetail(projectId, memoryId, { includeSuperseded });
   const updateMut = useUpdateMemory();
   const deleteMut = useDeleteMemory();
   const [addingTag, setAddingTag] = useState(false);
@@ -583,6 +586,23 @@ function MemoryDetailPanel({
 
         {memory && (
           <div className="flex-1 space-y-6 p-6">
+            {memory.superseded_by && (
+              <div className="rounded border-l-4 border-info bg-info/10 px-3 py-2 text-xs text-foreground">
+                <span className="font-medium">Merged into</span>{" "}
+                <Link
+                  to={memoryFocusHref(projectId, memory.superseded_by)}
+                  className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-info hover:bg-muted/80 hover:underline"
+                  title={memory.superseded_by}
+                >
+                  {shortId(memory.superseded_by)}
+                </Link>
+                {memory.superseded_at && (
+                  <span className="ml-2 text-muted-foreground">
+                    on {formatDate(memory.superseded_at)}
+                  </span>
+                )}
+              </div>
+            )}
             {/* Content */}
             <div>
               <h3 className="mb-2 text-sm font-medium text-muted-foreground">
@@ -951,23 +971,33 @@ function MemoryBrowser() {
   // "page" because the matching set has changed.
   const [selectionScope, setSelectionScope] = useState<"page" | "all-matching">("page");
   const [detailMemoryId, setDetailMemoryId] = useState<string | null>(null);
+  // True when the detail target may be a soft-deleted (superseded) memory —
+  // the deep-link from a Merged-paraphrase or Memory-superseded dream-log
+  // chip carries ?include_superseded=1 so the detail fetch can still load it.
+  // List-row clicks never set this because the list endpoint already hides
+  // superseded rows from browse results.
+  const [detailIncludeSuperseded, setDetailIncludeSuperseded] = useState(false);
 
-  // Deep-link entry: /memories?project=<id>&focus=<memoryId> (e.g. from a
-  // dream-log narrative chip). Switches the active project if needed and
-  // opens the memory detail panel; the detail panel's useMemoryDetail hook
-  // fetches the row even when it isn't on the current browse page. Params
-  // are cleared after they're consumed so navigating back doesn't re-fire.
+  // Deep-link entry: /memories?project=<id>&focus=<memoryId>[&include_superseded=1]
+  // (e.g. from a dream-log narrative chip). Switches the active project if
+  // needed and opens the memory detail panel; the detail panel's
+  // useMemoryDetail hook fetches the row even when it isn't on the current
+  // browse page. Params are cleared after they're consumed so navigating
+  // back doesn't re-fire.
   useEffect(() => {
     const focusId = searchParams.get("focus");
     const focusProject = searchParams.get("project");
+    const includeSuperseded = searchParams.get("include_superseded") === "1";
     if (!focusId) return;
     if (focusProject && focusProject !== selectedProjectId) {
       setSelectedProjectId(focusProject);
     }
     setDetailMemoryId(focusId);
+    setDetailIncludeSuperseded(includeSuperseded);
     const next = new URLSearchParams(searchParams);
     next.delete("focus");
     next.delete("project");
+    next.delete("include_superseded");
     setSearchParams(next, { replace: true });
   }, [searchParams, selectedProjectId, setSelectedProjectId, setSearchParams]);
 
@@ -1601,7 +1631,10 @@ function MemoryBrowser() {
                           childCount > 0 ? () => toggleExpand(m.id) : undefined
                         }
                         onToggleSelect={() => toggleSelect(m.id)}
-                        onClick={() => setDetailMemoryId(m.id)}
+                        onClick={() => {
+                          setDetailMemoryId(m.id);
+                          setDetailIncludeSuperseded(false);
+                        }}
                       />
                       {expanded &&
                         children.map((child) => (
@@ -1612,7 +1645,10 @@ function MemoryBrowser() {
                             isSelected={selectedIds.has(child.id)}
                             isChild
                             onToggleSelect={() => toggleSelect(child.id)}
-                            onClick={() => setDetailMemoryId(child.id)}
+                            onClick={() => {
+                              setDetailMemoryId(child.id);
+                              setDetailIncludeSuperseded(false);
+                            }}
                           />
                         ))}
                     </div>
@@ -1655,7 +1691,11 @@ function MemoryBrowser() {
         <MemoryDetailPanel
           projectId={selectedProjectId}
           memoryId={detailMemoryId}
-          onClose={() => setDetailMemoryId(null)}
+          includeSuperseded={detailIncludeSuperseded}
+          onClose={() => {
+            setDetailMemoryId(null);
+            setDetailIncludeSuperseded(false);
+          }}
           onDeleted={() => {
             selectedIds.delete(detailMemoryId);
             setSelectedIds(new Set(selectedIds));

@@ -45,6 +45,10 @@ export function phaseColor(key: string): string {
 export type FactKind =
   | "text"
   | "memory_id"
+  // memory_id_superseded: the target row has been soft-deleted (superseded_by
+  // is set on the row). Renders like memory_id but the deep-link adds
+  // include_superseded=1 so MemoryBrowser can still load it.
+  | "memory_id_superseded"
   | "entity_id"
   | "relationship_id"
   | "namespace_id"
@@ -161,6 +165,7 @@ export function formatFactValue(f: Fact): string {
     case "reason":
       return typeof f.value === "string" ? formatReason(f.value) : String(f.value ?? "");
     case "memory_id":
+    case "memory_id_superseded":
     case "entity_id":
     case "relationship_id":
     case "namespace_id":
@@ -322,7 +327,7 @@ function formatParaphraseSuperseded(log: DreamLog): FormattedLog {
   const cosine = pickNumber(after.cosine);
   const reason = pickString(after.reason);
   const facts: Record<string, Fact> = {
-    loser: fact("Loser", log.target_id, "memory_id"),
+    loser: fact("Loser", log.target_id, "memory_id_superseded"),
     winner: fact("Winner", winner, "memory_id"),
   };
   if (cosine !== undefined) facts.cosine = fact("Cosine", cosine, "percent");
@@ -391,7 +396,7 @@ function formatMemorySuperseded(log: DreamLog): FormattedLog {
   return {
     narrative: "Superseded source memory {memId} by synthesis {synthesis}",
     facts: {
-      memId: fact("Memory", log.target_id, "memory_id"),
+      memId: fact("Memory", log.target_id, "memory_id_superseded"),
       synthesis: fact("Synthesis", synthesisId, "memory_id"),
     },
   };
@@ -609,10 +614,15 @@ export function formatDreamLog(log: DreamLog): FormattedLog {
 // memoryFocusHref builds the MemoryBrowser deep-link for a memory referenced
 // from a dream log. Includes the project so the browser can switch projects
 // if the user is currently viewing a different one.
-export function memoryFocusHref(projectId: string, memoryId: string): string {
+export function memoryFocusHref(
+  projectId: string,
+  memoryId: string,
+  opts?: { includeSuperseded?: boolean },
+): string {
   const params = new URLSearchParams();
   if (projectId) params.set("project", projectId);
   params.set("focus", memoryId);
+  if (opts?.includeSuperseded) params.set("include_superseded", "1");
   return `/memories?${params.toString()}`;
 }
 

@@ -211,6 +211,7 @@ export interface Memory {
   last_accessed?: string | null;
   expires_at?: string | null;
   superseded_by?: string | null;
+  superseded_at?: string | null;
   enriched: boolean;
   metadata: Record<string, unknown>;
   created_at: string;
@@ -1685,8 +1686,17 @@ export const memoryAPI = {
       body,
     ),
 
-  get: (projectId: string, memoryId: string) =>
-    request<Memory>("GET", `/projects/${projectId}/memories/${memoryId}`),
+  get: (
+    projectId: string,
+    memoryId: string,
+    opts?: { includeSuperseded?: boolean },
+  ) => {
+    const qs = opts?.includeSuperseded ? "?include_superseded=true" : "";
+    return request<Memory>(
+      "GET",
+      `/projects/${projectId}/memories/${memoryId}${qs}`,
+    );
+  },
 
   update: (projectId: string, memoryId: string, body: MemoryUpdateRequest) =>
     request<UpdateMemoryResponse>(

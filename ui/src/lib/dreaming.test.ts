@@ -88,6 +88,17 @@ describe("primitive formatters", () => {
     );
   });
 
+  it("memoryFocusHref appends include_superseded=1 when opted in", () => {
+    expect(memoryFocusHref(PROJECT, A, { includeSuperseded: true })).toBe(
+      `/memories?project=${PROJECT}&focus=${A}&include_superseded=1`,
+    );
+    // Default (no opts and explicit false) does not include the flag — the
+    // detail endpoint hides superseded rows unless this is set.
+    expect(memoryFocusHref(PROJECT, A, { includeSuperseded: false })).toBe(
+      `/memories?project=${PROJECT}&focus=${A}`,
+    );
+  });
+
   it("isZeroId only matches all-zero UUID", () => {
     expect(isZeroId("00000000-0000-0000-0000-000000000000")).toBe(true);
     expect(isZeroId(A)).toBe(false);
@@ -195,7 +206,14 @@ describe("formatDreamLog: paraphrase_dedup", () => {
     expect(out.narrative).toBe(
       "Merged paraphrase {loser} into {winner} — {cosine} similar",
     );
-    expect(out.facts.loser.kind).toBe("memory_id");
+    // The loser row is soft-deleted (superseded_by set), so the chip needs
+    // to carry the include_superseded flag — kind="memory_id_superseded"
+    // routes through the FactChip branch that adds it to the deep-link.
+    expect(out.facts.loser).toEqual({
+      label: "Loser",
+      value: A,
+      kind: "memory_id_superseded",
+    });
     expect(out.facts.winner).toEqual({ label: "Winner", value: B, kind: "memory_id" });
     expect(out.facts.cosine).toEqual({ label: "Cosine", value: 0.94, kind: "percent" });
   });
@@ -329,7 +347,15 @@ describe("formatDreamLog: consolidation", () => {
       }),
     );
     expect(out.narrative).toBe("Superseded source memory {memId} by synthesis {synthesis}");
+    // memId points at the soft-deleted source memory — same superseded-link
+    // treatment as the paraphrase-merge loser.
+    expect(out.facts.memId).toEqual({
+      label: "Memory",
+      value: A,
+      kind: "memory_id_superseded",
+    });
     expect(out.facts.synthesis.value).toBe(B);
+    expect(out.facts.synthesis.kind).toBe("memory_id");
   });
 
   it("memory_demoted carries old confidence + reason", () => {
