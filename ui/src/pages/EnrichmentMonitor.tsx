@@ -1,4 +1,5 @@
 import { Fragment, useState, useCallback, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useEnrichmentStatus,
@@ -31,6 +32,7 @@ import {
 } from "../lib/icons";
 import type { EnrichmentQueueItem } from "../api/client";
 import { truncateId } from "../lib/formatters";
+import { memoryFocusHref } from "../lib/dreaming";
 
 // Live SSE state for the enrichment worker pool. liveJobs is keyed by
 // queue job id (the EnrichmentQueueItem.id, identical to the worker's
@@ -564,6 +566,7 @@ function QueueTable({
   liveJobs,
   showWriteActions = true,
   showProjectName = false,
+  linkMemoryIds = false,
 }: {
   items: EnrichmentQueueItem[];
   selectedIds: Set<string>;
@@ -578,6 +581,10 @@ function QueueTable({
   // system tiers leave it empty so callers see project_id only and never
   // learn the names of other users' projects.
   showProjectName?: boolean;
+  // linkMemoryIds renders the Memory ID cell as a Link to the MemoryBrowser
+  // detail panel. Self tier only — org/system viewers may see jobs for
+  // memories they cannot open in the standard browser.
+  linkMemoryIds?: boolean;
 }) {
   // Re-render every second so processing-row Elapsed counters tick.
   const hasProcessing = items.some((i) => i.status === "processing");
@@ -771,14 +778,29 @@ function QueueTable({
                     />
                   </td>
                 )}
-                <td className="px-3 py-2.5">
-                  <span
-                    className="font-mono text-xs text-foreground"
-                    title={item.memory_id}
+                {linkMemoryIds && item.project_id ? (
+                  <td
+                    className="px-3 py-2.5"
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    {truncateId(item.memory_id)}
-                  </span>
-                </td>
+                    <Link
+                      to={memoryFocusHref(item.project_id, item.memory_id)}
+                      className="font-mono text-xs text-info hover:underline"
+                      title={item.memory_id}
+                    >
+                      {truncateId(item.memory_id)}
+                    </Link>
+                  </td>
+                ) : (
+                  <td className="px-3 py-2.5">
+                    <span
+                      className="font-mono text-xs text-foreground"
+                      title={item.memory_id}
+                    >
+                      {truncateId(item.memory_id)}
+                    </span>
+                  </td>
+                )}
                 <td
                   className="px-3 py-2.5 text-xs text-muted-foreground"
                   title={item.project_id ?? ""}
@@ -1165,6 +1187,7 @@ function EnrichmentMonitor() {
               liveJobs={liveJobs}
               showWriteActions={showWriteActions}
               showProjectName={tier === "self"}
+              linkMemoryIds={tier === "self"}
             />
           </div>
 
