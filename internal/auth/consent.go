@@ -334,11 +334,13 @@ func parseAuthorizeRest(get func(string) string, p *authorizeRequestParams) stri
 	return ""
 }
 
-// renderConsentScreen writes the consent HTML. Caller is responsible for
-// setting status code; this function only writes headers and body.
-func (s *OAuthServer) renderConsentScreen(w http.ResponseWriter, r *http.Request, view consentViewData) {
+// renderConsentScreen writes the consent HTML with the given status. Headers
+// must be set before WriteHeader; once the status is written, subsequent
+// Header().Set calls become no-ops and Cache-Control would silently drop.
+func (s *OAuthServer) renderConsentScreen(w http.ResponseWriter, status int, view consentViewData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
 	if err := consentTemplate.Execute(w, view); err != nil {
 		http.Error(w, "consent screen render failed", http.StatusInternalServerError)
 	}
@@ -438,8 +440,7 @@ func (s *OAuthServer) handleAuthorizeGET(w http.ResponseWriter, r *http.Request)
 		ShareInputName:    "share_token",
 	}
 
-	w.WriteHeader(http.StatusOK)
-	s.renderConsentScreen(w, r, view)
+	s.renderConsentScreen(w, http.StatusOK, view)
 }
 
 // handleAuthorizePOST processes a consent submission. Two paths are
@@ -564,8 +565,7 @@ func (s *OAuthServer) renderSharePreview(w http.ResponseWriter, r *http.Request,
 		ShareInputName:    "share_token",
 		SharePreview:      preview,
 	}
-	w.WriteHeader(http.StatusOK)
-	s.renderConsentScreen(w, r, view)
+	s.renderConsentScreen(w, http.StatusOK, view)
 }
 
 func (s *OAuthServer) completeAccountAuthorize(w http.ResponseWriter, r *http.Request, params authorizeRequestParams) {
@@ -624,8 +624,7 @@ func (s *OAuthServer) renderConsentError(w http.ResponseWriter, r *http.Request,
 		ShareInputName:    "share_token",
 		Error:             msg,
 	}
-	w.WriteHeader(http.StatusBadRequest)
-	s.renderConsentScreen(w, r, view)
+	s.renderConsentScreen(w, http.StatusBadRequest, view)
 }
 
 // mintCodeAndRedirect creates the OAuth authorization code, optionally

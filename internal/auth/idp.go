@@ -325,7 +325,7 @@ func (h *IdPHandler) CallbackHandler() http.HandlerFunc {
 			Path:     "/",
 			MaxAge:   300, // Short-lived: SPA reads it on load and moves to localStorage.
 			SameSite: http.SameSiteLaxMode,
-			Secure:   requestIsSecure(r),
+			Secure:   RequestIsSecure(r),
 		})
 
 		_ = h.userRepo.UpdateLastLogin(r.Context(), user.ID)

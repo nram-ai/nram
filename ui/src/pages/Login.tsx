@@ -73,7 +73,6 @@ function Login() {
 
   function completeLogin(token: string, user: { id: string; email: string; display_name: string; role: string; org_id: string }) {
     auth.login(token, user);
-    document.cookie = `nram_session=${token}; path=/; max-age=300; SameSite=Lax`;
     const redirect = searchParams.get("redirect");
     if (redirect) {
       window.location.href = redirect;

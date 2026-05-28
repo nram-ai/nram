@@ -249,8 +249,8 @@ func writeUnauthorized(w http.ResponseWriter, r *http.Request, msg string) {
 	http.Error(w, msg, http.StatusUnauthorized)
 }
 
-// requestIsSecure returns true if the request is over TLS or behind an HTTPS proxy.
-func requestIsSecure(r *http.Request) bool {
+// RequestIsSecure returns true if the request is over TLS or behind an HTTPS proxy.
+func RequestIsSecure(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 

@@ -549,6 +549,17 @@ func (h *WebAuthnHandler) LoginFinishHandler() http.HandlerFunc {
 
 		_ = h.userRepo.UpdateLastLogin(r.Context(), user.ID)
 
+		// Mirror the password/IdP login: set the short-lived session cookie
+		// so the Go-rendered /authorize consent screen can detect the user.
+		http.SetCookie(w, &http.Cookie{
+			Name:     "nram_session",
+			Value:    token,
+			Path:     "/",
+			MaxAge:   300,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   RequestIsSecure(r),
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"token": token,

@@ -143,6 +143,19 @@ func NewLoginHandler(cfg AuthConfig) http.HandlerFunc {
 		// Best-effort update of last_login timestamp.
 		_ = cfg.UserRepo.UpdateLastLogin(r.Context(), user.ID)
 
+		// Set the short-lived session cookie so the Go-rendered /authorize
+		// consent screen can detect the just-signed-in user without the SPA
+		// having to bridge the token via document.cookie. Attributes mirror
+		// the IdP callback (idp.go).
+		http.SetCookie(w, &http.Cookie{
+			Name:     "nram_session",
+			Value:    token,
+			Path:     "/",
+			MaxAge:   300,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   auth.RequestIsSecure(r),
+		})
+
 		writeJSON(w, http.StatusOK, loginResponse{
 			Token: token,
 			User:  newSessionUser(user),
