@@ -117,6 +117,40 @@ func computeCodeChallenge(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(h[:])
 }
 
+// doAuthorizeAccountConsent submits the account-holder consent form to
+// /authorize and returns the response. This is the post-consent equivalent
+// of the old GET /authorize?<params> + cookie auto-approve flow: the OAuth
+// params are passed as form fields (consent screen template renders them as
+// hidden inputs), along with auth_mode=account + decision=approve, and the
+// session cookie identifies the authenticated user.
+func doAuthorizeAccountConsent(t *testing.T, client *http.Client, baseURL string, oauthParams url.Values, sessionToken string) *http.Response {
+	t.Helper()
+
+	form := url.Values{}
+	for k, v := range oauthParams {
+		if len(v) > 0 {
+			form.Set(k, v[0])
+		}
+	}
+	form.Set("auth_mode", "account")
+	form.Set("decision", "approve")
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/authorize", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("doAuthorizeAccountConsent: new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if sessionToken != "" {
+		req.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("doAuthorizeAccountConsent: POST /authorize: %v", err)
+	}
+	return resp
+}
+
 // ---------------------------------------------------------------------------
 // Router builder
 // ---------------------------------------------------------------------------
@@ -139,7 +173,7 @@ func buildOAuthRouter(oauthSrv *OAuthServer, secret []byte) http.Handler {
 	r.Get("/.well-known/oauth-authorization-server", oauthSrv.MetadataHandler())
 
 	// OAuth endpoints at MCP spec fallback paths (no auth middleware)
-	r.Get("/authorize", oauthSrv.AuthorizeHandler())
+	r.HandleFunc("/authorize", oauthSrv.AuthorizeHandler())
 	r.Post("/token", oauthSrv.TokenHandler())
 	r.Post("/register", oauthSrv.RegisterClientHandler())
 	r.Get("/userinfo", oauthSrv.UserInfoHandler())
@@ -329,19 +363,8 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 		t.Fatalf("step 7 generate session JWT: %v", err)
 	}
 
-	authReq, err := http.NewRequest(http.MethodGet, authURL, nil)
-	if err != nil {
-		t.Fatalf("step 7 new request: %v", err)
-	}
-	authReq.AddCookie(&http.Cookie{
-		Name:  "nram_session",
-		Value: sessionToken,
-	})
-
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("step 7 GET /authorize: %v", err)
-	}
+	_ = authURL
+	resp = doAuthorizeAccountConsent(t, client, ts.URL, authParams, sessionToken)
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 
@@ -868,13 +891,7 @@ func TestOAuthFlow_PKCE_WrongVerifier(t *testing.T) {
 	params.Set("code_challenge_method", "S256")
 	params.Set("state", "test-state")
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/authorize?"+params.Encode(), nil)
-	req.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
-
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("GET /authorize: %v", err)
-	}
+	resp := doAuthorizeAccountConsent(t, client, ts.URL, params, sessionToken)
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
@@ -1045,9 +1062,7 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 	params.Set("code_challenge_method", "S256")
 	params.Set("state", "test-state")
 
-	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/authorize?"+params.Encode(), nil)
-	authReq.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
-	authResp, _ := httpClient.Do(authReq)
+	authResp := doAuthorizeAccountConsent(t, httpClient, ts.URL, params, sessionToken)
 	authResp.Body.Close()
 
 	location := authResp.Header.Get("Location")
@@ -1297,13 +1312,7 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate session JWT: %v", err)
 	}
-	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/authorize?"+authParams.Encode(), nil)
-	authReq.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
-
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
+	resp = doAuthorizeAccountConsent(t, client, ts.URL, authParams, sessionToken)
 	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound {
@@ -1405,13 +1414,7 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate session JWT: %v", err)
 	}
-	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/authorize?"+authParams.Encode(), nil)
-	authReq.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
-
-	resp, err = httpClient.Do(authReq)
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
+	resp = doAuthorizeAccountConsent(t, httpClient, ts.URL, authParams, sessionToken)
 	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound {
@@ -1535,13 +1538,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate session JWT: %v", err)
 	}
-	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/authorize?"+authParams.Encode(), nil)
-	authReq.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
-
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
+	resp = doAuthorizeAccountConsent(t, client, ts.URL, authParams, sessionToken)
 	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound {

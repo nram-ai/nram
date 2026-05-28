@@ -226,6 +226,7 @@ func NewServer(deps Dependencies) *Server {
 		server.WithRecovery(),                        // recover from panics in tool handlers
 		server.WithInstructions(buildInstructions(hasEmbed, hasEnrich)),
 		server.WithHooks(hooks),
+		server.WithToolFilter(shareToolFilter), // hide disallowed tools from share-bearer connections
 	)
 
 	httpSrv := server.NewStreamableHTTPServer(
@@ -319,6 +320,140 @@ func checkWriteAccess(ctx context.Context) *mcp.CallToolResult {
 	return nil
 }
 
+// shareToolPolicy maps every MCP tool name to the minimum share-token
+// permission tier required to invoke it. Tools absent from the map are
+// rejected outright for share-bearer callers (delete_project,
+// update_project), regardless of tier.
+//
+// Keep in lockstep with the permission matrix documented in the share-token
+// design (read, read_store, read_store_modify). New MCP tools must add an
+// entry here OR be explicitly denied to share-bearers; a missing entry
+// fails closed.
+var shareToolPolicy = map[string]model.SharePermission{
+	"recall":        model.SharePermissionRead,
+	"list":          model.SharePermissionRead,
+	"get":           model.SharePermissionRead,
+	"graph":         model.SharePermissionRead,
+	"list_projects": model.SharePermissionRead,
+	"store":         model.SharePermissionReadStore,
+	"store_batch":   model.SharePermissionReadStore,
+	"update":        model.SharePermissionReadStoreModify,
+	"forget":        model.SharePermissionReadStoreModify,
+}
+
+// shareToolAllowed reports whether the share-bearer's grant set covers the
+// minimum tier this tool requires. Returns (allowed, projectGrant) where
+// projectGrant is the tier the share has on the resolved project (for
+// per-project enforcement, not just any-project).
+//
+// projectID == uuid.Nil means "ignore the project gate" (used by
+// list_projects which fans out across the whole allowlist). All other tools
+// must pass a non-Nil project id resolved from the caller's `project`
+// argument under the share owner's namespace.
+func shareToolAllowed(ac *auth.AuthContext, toolName string, projectID uuid.UUID) (bool, model.SharePermission) {
+	if ac == nil || ac.ShareTokenID == nil {
+		return true, "" // non-share callers are gated elsewhere
+	}
+	required, ok := shareToolPolicy[toolName]
+	if !ok {
+		return false, ""
+	}
+	if projectID == uuid.Nil {
+		// any-project mode (list_projects): allow if the share has ANY grant
+		// at the required tier. Per-project filtering happens in the handler.
+		for _, g := range ac.ShareGrants {
+			if g.Permission.Allows(required) {
+				return true, g.Permission
+			}
+		}
+		return false, ""
+	}
+	for _, g := range ac.ShareGrants {
+		if g.ProjectID == projectID && g.Permission.Allows(required) {
+			return true, g.Permission
+		}
+	}
+	return false, ""
+}
+
+// requireShareProject is a convenience used by every read/write tool that
+// accepts a `project` argument. For share-bearers it enforces:
+//   - the argument is non-empty (omitted-project is rejected per the
+//     2026-05-27 decision so we never silently fan out to global),
+//   - the resolved project is in the share's allowlist at the required tier.
+//
+// For non-share callers it is a no-op (returns nil). Callers must still
+// resolve the project themselves; this just gates access.
+func requireShareProject(ctx context.Context, ac *auth.AuthContext, toolName, projectSlug string, projectID uuid.UUID) *mcp.CallToolResult {
+	if ac == nil || ac.ShareTokenID == nil {
+		return nil
+	}
+	if strings.TrimSpace(projectSlug) == "" {
+		return mcp.NewToolResultError("share-bearer requests must specify project; the global fan-out is not available")
+	}
+	ok, _ := shareToolAllowed(ac, toolName, projectID)
+	if !ok {
+		return mcp.NewToolResultError("share-bearer is not authorized to call " + toolName + " on project " + projectSlug)
+	}
+	return nil
+}
+
+// shareTokenAllowsProjectID reports whether the share-bearer has any grant
+// covering the given project, regardless of tier. Used by handlers that need
+// to gate read access without forcing a tier check upstream.
+func shareTokenAllowsProjectID(ac *auth.AuthContext, projectID uuid.UUID) bool {
+	if ac == nil || ac.ShareTokenID == nil {
+		return true
+	}
+	for _, g := range ac.ShareGrants {
+		if g.ProjectID == projectID {
+			return true
+		}
+	}
+	return false
+}
+
+// shareToolFilter is the *server.ToolFilterFunc that hides disallowed tools
+// from tools/list responses on share-bearer connections. The MCP go-sdk
+// applies this per-list-call so dynamic re-evaluation matches the per-
+// request enforcement in each handler.
+func shareToolFilter(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
+	r := HTTPRequestFromContext(ctx)
+	if r == nil {
+		// Fail closed: a call path with no *http.Request means the per-request
+		// auth gate didn't run, so we can't prove the caller isn't a share
+		// bearer. The server is HTTP-only today; if a future non-HTTP transport
+		// is wired in, it must populate request context (or this filter must
+		// be made transport-aware) before reopening the unfiltered catalog.
+		return nil
+	}
+	ac := auth.FromContext(r.Context())
+	if ac == nil || ac.ShareTokenID == nil {
+		return tools
+	}
+	filtered := make([]mcp.Tool, 0, len(tools))
+	for _, t := range tools {
+		required, ok := shareToolPolicy[t.Name]
+		if !ok {
+			continue
+		}
+		// Surface a tool only if the share holds the required tier on at
+		// least one project. Per-project gating still applies at handler
+		// time when the caller invokes it.
+		anyGrant := false
+		for _, g := range ac.ShareGrants {
+			if g.Permission.Allows(required) {
+				anyGrant = true
+				break
+			}
+		}
+		if anyGrant {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
 // Backend returns the storage backend identifier ("sqlite" or "postgres")
 // configured for this server instance.
 func (s *Server) Backend() string {
@@ -334,4 +469,3 @@ func (s *Server) MCPServer() *server.MCPServer {
 func (s *Server) Deps() Dependencies {
 	return s.deps
 }
-

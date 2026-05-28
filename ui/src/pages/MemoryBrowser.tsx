@@ -550,7 +550,7 @@ function MemoryDetailPanel({
         onClick={onClose}
       />
       {/* Panel */}
-      <div className="relative z-10 flex h-full w-full max-w-2xl flex-col overflow-y-auto border-l bg-background shadow-xl">
+      <div className="relative z-10 flex h-screen w-full max-w-2xl flex-col overflow-y-auto border-l bg-background shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b px-6 py-4">
           <h2 className="text-lg font-semibold">Memory Detail</h2>

@@ -166,15 +166,25 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	projectSlug, _ := args["project"].(string)
 	projectSlug = strings.TrimSpace(projectSlug)
 
-	// Collect namespaces to search: project-scoped + global (consistent with memory_recall).
+	isShareBearer := ac.ShareTokenID != nil
+	if isShareBearer && projectSlug == "" {
+		return mcp.NewToolResultError("share-bearer requests must specify project; the global fan-out is not available"), nil
+	}
+
+	// Collect namespaces to search: project-scoped + global (consistent with
+	// memory_recall). Share-bearer callers stay project-only — the owner's
+	// global namespace is never part of an implicit share.
 	var namespaces []uuid.UUID
 	if projectSlug != "" {
 		project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
 		if err != nil {
 			return mcp.NewToolResultError("project not found"), nil
 		}
+		if denied := requireShareProject(ctx, ac, "graph", projectSlug, project.ID); denied != nil {
+			return denied, nil
+		}
 		namespaces = append(namespaces, project.NamespaceID)
-		if projectSlug != "global" {
+		if !isShareBearer && projectSlug != "global" {
 			if gp, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, "global"); err == nil && gp != nil {
 				namespaces = append(namespaces, gp.NamespaceID)
 			}
@@ -537,6 +547,19 @@ func handleMemoryProjects(ctx context.Context, s *Server, request mcp.CallToolRe
 	projects, err := deps.ProjectRepo.ListByUser(ctx, user.NamespaceID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list projects: %v", err)), nil
+	}
+
+	// Share-bearer callers see only the projects in their allowlist. Filter
+	// the full list before pagination so offset/limit operate on the visible
+	// subset.
+	if ac.ShareTokenID != nil {
+		filtered := projects[:0]
+		for _, p := range projects {
+			if shareTokenAllowsProjectID(ac, p.ID) {
+				filtered = append(filtered, p)
+			}
+		}
+		projects = filtered
 	}
 
 	total := len(projects)

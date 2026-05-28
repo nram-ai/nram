@@ -118,6 +118,11 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 	// from another user's scope.
 	var allowedNS []uuid.UUID
 
+	// Share-bearer callers MUST scope to a project they hold a grant on, and
+	// MUST NOT pick up the owner's global namespace via the fan-out below.
+	// The omitted-project case is rejected before any namespace decisions.
+	isShareBearer := ac.ShareTokenID != nil
+
 	if projectSlug != "" {
 		// Project-scoped recall: search this project + global.
 		project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
@@ -125,16 +130,25 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 			return mcp.NewToolResultError("project not found"), nil
 		}
 
+		if denied := requireShareProject(ctx, ac, "recall", projectSlug, project.ID); denied != nil {
+			return denied, nil
+		}
+
 		req.ProjectID = project.ID
 		allowedNS = append(allowedNS, project.NamespaceID)
-		// Include global memories alongside project-specific results.
-		if projectSlug != "global" {
+		// Include global memories alongside project-specific results — but
+		// only for non-share-bearer callers. The share grant is per-project
+		// by design; the owner's global namespace is not implicitly shared.
+		if !isShareBearer && projectSlug != "global" {
 			req.GlobalNamespaceID = globalNsID
 			if globalNsID != nil {
 				allowedNS = append(allowedNS, *globalNsID)
 			}
 		}
 	} else {
+		if isShareBearer {
+			return mcp.NewToolResultError("share-bearer requests must specify project; the global fan-out is not available"), nil
+		}
 		// No project specified: search only the global project.
 		if globalProject != nil {
 			req.ProjectID = globalProject.ID

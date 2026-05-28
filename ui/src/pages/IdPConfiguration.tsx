@@ -115,8 +115,9 @@ function DeleteIdPDialog({
   isPending: boolean;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="mx-4 w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-lg">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/30" onClick={onCancel} />
+      <div className="relative z-10 flex h-screen w-full max-w-sm flex-col overflow-y-auto border-l border-border bg-card p-6">
         <h3 className="text-lg font-semibold">Delete Identity Provider</h3>
         <p className="mt-2 text-sm text-muted-foreground">
           Are you sure you want to delete the{" "}
@@ -258,8 +259,9 @@ function CreateIdPDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="mx-4 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-lg">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative z-10 flex h-screen w-full flex-col overflow-y-auto border-l max-h-[90vh] max-w-lg border border-border bg-card p-6">
         <h3 className="text-lg font-semibold">Add Identity Provider</h3>
 
         <div className="mt-4 space-y-3">
@@ -433,8 +435,9 @@ function CreateOrgIdPDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="mx-4 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-lg">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative z-10 flex h-screen w-full flex-col overflow-y-auto border-l max-h-[90vh] max-w-lg border border-border bg-card p-6">
         <h3 className="text-lg font-semibold">Add Identity Provider</h3>
 
         <div className="mt-4 space-y-3">
@@ -899,8 +902,9 @@ function EditIdPDialog({
   void setProviderType;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="mx-4 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-lg">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative z-10 flex h-screen w-full flex-col overflow-y-auto border-l max-h-[90vh] max-w-lg border border-border bg-card p-6">
         <h3 className="text-lg font-semibold">Edit Identity Provider</h3>
 
         <div className="mt-4 space-y-3">

@@ -52,6 +52,7 @@ export {
   faSatelliteDish,
   faKey,
   faFingerprint,
+  faShareNodes,
   faPuzzlePiece,
   faDatabase,
   faListCheck,

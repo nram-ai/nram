@@ -84,8 +84,12 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError(fmt.Sprintf("invalid memory id: %v", err)), nil
 	}
 
-	projectSlug, _ := args["project"].(string)
-	projectSlug = strings.TrimSpace(projectSlug)
+	rawSlug, _ := args["project"].(string)
+	rawSlug = strings.TrimSpace(rawSlug)
+	if ac.ShareTokenID != nil && rawSlug == "" {
+		return mcp.NewToolResultError("share-bearer requests must specify project"), nil
+	}
+	projectSlug := rawSlug
 	if projectSlug == "" {
 		projectSlug = "global"
 	}
@@ -132,6 +136,10 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError("project not found"), nil
 	}
 
+	if denied := requireShareProject(ctx, ac, "update", projectSlug, project.ID); denied != nil {
+		return denied, nil
+	}
+
 	uid := ac.UserID
 	req := &service.UpdateRequest{
 		ProjectID: project.ID,
@@ -169,8 +177,12 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 
 	args := request.GetArguments()
 
-	projectSlug, _ := args["project"].(string)
-	projectSlug = strings.TrimSpace(projectSlug)
+	rawSlug, _ := args["project"].(string)
+	rawSlug = strings.TrimSpace(rawSlug)
+	if ac.ShareTokenID != nil && rawSlug == "" {
+		return mcp.NewToolResultError("share-bearer requests must specify project"), nil
+	}
+	projectSlug := rawSlug
 	if projectSlug == "" {
 		projectSlug = "global"
 	}
@@ -203,6 +215,10 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 	project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
 	if err != nil {
 		return mcp.NewToolResultError("project not found"), nil
+	}
+
+	if denied := requireShareProject(ctx, ac, "get", projectSlug, project.ID); denied != nil {
+		return denied, nil
 	}
 
 	req := &service.BatchGetRequest{

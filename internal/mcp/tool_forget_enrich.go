@@ -48,8 +48,12 @@ func handleMemoryForget(ctx context.Context, s *Server, request mcp.CallToolRequ
 
 	args := request.GetArguments()
 
-	projectSlug, _ := args["project"].(string)
-	projectSlug = strings.TrimSpace(projectSlug)
+	rawSlug, _ := args["project"].(string)
+	rawSlug = strings.TrimSpace(rawSlug)
+	if ac.ShareTokenID != nil && rawSlug == "" {
+		return mcp.NewToolResultError("share-bearer requests must specify project"), nil
+	}
+	projectSlug := rawSlug
 	if projectSlug == "" {
 		projectSlug = "global"
 	}
@@ -87,6 +91,10 @@ func handleMemoryForget(ctx context.Context, s *Server, request mcp.CallToolRequ
 	project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
 	if err != nil {
 		return mcp.NewToolResultError("project not found"), nil
+	}
+
+	if denied := requireShareProject(ctx, ac, "forget", projectSlug, project.ID); denied != nil {
+		return denied, nil
 	}
 
 	uid := ac.UserID

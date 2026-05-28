@@ -57,6 +57,12 @@ import {
   type CreateExportJobRequest,
 } from "../api/client";
 import {
+  sharesAPI,
+  type ShareGrantInput,
+  type CreateShareRequest,
+  type ShareCreatedResponse,
+} from "../api/shares";
+import {
   isWebAuthnAvailable,
   prepareCreationOptions,
   prepareRequestOptions,
@@ -1423,6 +1429,55 @@ export function useRevokeMeOAuthClient() {
     mutationFn: (id: string) => meAPI.revokeOAuthClient(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["me", "oauth-clients"] });
+    },
+  });
+}
+
+// --- Share-token hooks ---
+
+export function useMeShares() {
+  return useQuery({
+    queryKey: ["me", "shares"],
+    queryFn: sharesAPI.list,
+  });
+}
+
+export function useMeShareDetail(id: string | undefined) {
+  return useQuery({
+    queryKey: ["me", "shares", id],
+    queryFn: () => sharesAPI.get(id ?? ""),
+    enabled: Boolean(id),
+  });
+}
+
+export function useCreateMeShare() {
+  const qc = useQueryClient();
+  return useMutation<ShareCreatedResponse, Error, CreateShareRequest>({
+    mutationFn: (data) => sharesAPI.create(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "shares"] });
+    },
+  });
+}
+
+export function useUpdateMeShareGrants() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { id: string; grants: ShareGrantInput[] }>({
+    mutationFn: ({ id, grants }) => sharesAPI.updateGrants(id, grants),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ["me", "shares"] });
+      qc.invalidateQueries({ queryKey: ["me", "shares", vars.id] });
+    },
+  });
+}
+
+export function useRevokeMeShare() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => sharesAPI.revoke(id),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ["me", "shares"] });
+      qc.invalidateQueries({ queryKey: ["me", "shares", id] });
     },
   });
 }

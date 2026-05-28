@@ -398,7 +398,7 @@ func main() {
 		memoryRepo, entityRepo, relationshipRepo, lineageRepo, projectRepo,
 		settingsSvc,
 	)
-importSvc := service.NewImportService(
+	importSvc := service.NewImportService(
 		memoryRepo, projectRepo, namespaceRepo, ingestionLogRepo,
 		settingsSvc,
 	)
@@ -679,9 +679,26 @@ importSvc := service.NewImportService(
 		log.Fatalf("failed to load jwt secret: %v", err)
 	}
 
+	// Share-token repo + service back the capability-bearer flow that lets
+	// owners delegate scoped access to external recipients without an nram
+	// account. The service brokers the oauth_repo cascade-revoke on share
+	// revoke and is also passed to the auth middleware (resolves bearer-
+	// direct nram_s_* tokens and hydrates JWT-carried share_token_id claims).
+	shareTokenRepo := storage.NewShareTokenRepo(db)
+	shareTokenSvc := service.NewShareTokenService(shareTokenRepo, oauthRepo)
+
+	// Wire the share-token sweep onto the project-delete cascade. When a
+	// project deletion drops a share's last grant via the FK cascade, the
+	// sweep post-commit auto-revokes the share so it does not linger as
+	// "active" in the owner's UI.
+	projectDeleteSvc.WithShareSweeper(shareTokenSvc, userRepo)
+
 	// Create OAuth server. Base URL for metadata, JWT audience, etc. is derived
 	// from the request Host header automatically — no configuration needed.
-	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret)
+	// Share-paste consent + magic-link landing depend on the share-token
+	// service and a project lookup for the grants display.
+	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret).
+		WithShareTokens(shareTokenSvc, projectRepo)
 
 	// Session-JWT TTL and refresh threshold are runtime-configurable via
 	// the settings registry (auth.session_token_ttl_seconds /
@@ -760,6 +777,8 @@ importSvc := service.NewImportService(
 		MeAPIKeyRevoke:      api.NewMeAPIKeyRevokeHandler(apiKeyRepo, auditStore),
 		MeOAuthClients:      api.NewMeOAuthClientsHandler(oauthRepo),
 		MeOAuthClientRevoke: api.NewMeOAuthClientRevokeHandler(oauthRepo, auditStore),
+		MeShares:            api.NewMeSharesHandler(shareTokenSvc, projectRepo, userRepo),
+		MeShareItem:         api.NewMeShareItemHandler(shareTokenSvc, projectRepo, userRepo),
 		MeChangePassword:    api.NewMeChangePasswordHandler(userRepo, auditStore),
 		MeProfile:           api.NewMeProfileHandler(userRepo),
 		MeProfilePatch:      api.NewMeProfilePatchHandler(userRepo),
@@ -839,6 +858,7 @@ importSvc := service.NewImportService(
 		OAuthUserInfo:          oauthServer.UserInfoHandler(),
 		OAuthMetadata:          oauthServer.MetadataHandler(),
 		OAuthProtectedResource: oauthServer.ProtectedResourceHandler(),
+		ShareAccept:            oauthServer.ShareAcceptHandler(),
 
 		// IdP SSO handlers
 		IdPLogin: idpHandler.LoginHandler(),
@@ -858,11 +878,11 @@ importSvc := service.NewImportService(
 			OnComplete: setupChecker.MarkComplete,
 			Audit:      auditStore,
 		}),
-		AdminDashboard: api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashboardStore}),
-		AdminActivity:  api.NewAdminActivityHandler(api.DashboardConfig{Store: dashboardStore}),
-		AdminOrgs:      api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore, Audit: auditStore}),
-		AdminUsers:     api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore, Audit: auditStore}),
-		AdminProjects:  api.NewAdminProjectsHandler(api.ProjectAdminConfig{Store: projectAdminStore}),
+		AdminDashboard:     api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashboardStore}),
+		AdminActivity:      api.NewAdminActivityHandler(api.DashboardConfig{Store: dashboardStore}),
+		AdminOrgs:          api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore, Audit: auditStore}),
+		AdminUsers:         api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore, Audit: auditStore}),
+		AdminProjects:      api.NewAdminProjectsHandler(api.ProjectAdminConfig{Store: projectAdminStore}),
 		AdminProviders:     api.NewAdminProvidersHandler(api.ProviderAdminConfig{Store: providerAdminStore}),
 		AdminSettings:      api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
 		AdminSettingsReset: api.NewAdminSettingsResetHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
@@ -966,7 +986,8 @@ importSvc := service.NewImportService(
 	// Build router config with auth middleware and rate limiter. Cleanup
 	// and stale-after windows are read once from settings; runtime changes
 	// require server restart.
-	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, userRepo, jwtSecret, sessionTimings)
+	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, userRepo, jwtSecret, sessionTimings).
+		WithShareTokens(shareTokenSvc, shareTokenRepo)
 	rateLimiter := auth.NewRateLimiter(10, 20,
 		settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
 			service.SettingAPIRateLimitCleanupSeconds, "global"),

@@ -261,15 +261,14 @@
   }
 }
 
+/* route-fade is opacity-only on purpose. A transform here (even an identity
+   one) would establish a containing block for fixed-positioned descendants,
+   which silently breaks every slide-out drawer rendered inside the routed
+   view — the drawer's `fixed inset-0` ends up bound to the route wrapper
+   instead of the viewport, collapsing to the wrapper's height. */
 @keyframes route-fade {
-  from {
-    opacity: 0;
-    transform: translateY(2px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes row-pulse-anim {

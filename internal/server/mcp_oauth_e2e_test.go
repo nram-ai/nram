@@ -569,6 +569,44 @@ func e2eCreateSessionCookie(t *testing.T, userID uuid.UUID) *http.Cookie {
 // HTTP client that does NOT follow redirects
 // ---------------------------------------------------------------------------
 
+// e2eAuthorizeConsent submits the account-holder consent form to /authorize
+// and returns the response. The pre-consent flow accepted GET + cookie and
+// auto-approved; with the consent screen in place, the request must be a
+// POST form with auth_mode=account + decision=approve and the OAuth params
+// echoed as form fields (consent template renders them as hidden inputs).
+//
+// Callers pass the OAuth URL they would have GET'd; this helper parses the
+// query and re-emits it as form fields.
+func e2eAuthorizeConsent(t *testing.T, client *http.Client, authURL string, sessionCookie *http.Cookie) *http.Response {
+	t.Helper()
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("e2eAuthorizeConsent: parse url: %v", err)
+	}
+	form := url.Values{}
+	for k, v := range parsed.Query() {
+		if len(v) > 0 {
+			form.Set(k, v[0])
+		}
+	}
+	form.Set("auth_mode", "account")
+	form.Set("decision", "approve")
+	authorizeURL := parsed.Scheme + "://" + parsed.Host + parsed.Path
+	req, err := http.NewRequest(http.MethodPost, authorizeURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("e2eAuthorizeConsent: new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if sessionCookie != nil {
+		req.AddCookie(sessionCookie)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("e2eAuthorizeConsent: POST /authorize: %v", err)
+	}
+	return resp
+}
+
 func e2eNoRedirectClient() *http.Client {
 	return &http.Client{
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -862,15 +900,9 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	// -----------------------------------------------------------------------
 	// Step 6: GET /authorize with nram_session cookie
 	// -----------------------------------------------------------------------
-	t.Log("Step 6: GET /authorize with session cookie")
-	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
+	t.Log("Step 6: POST /authorize consent (account path) with session cookie")
 	sessionCookie := e2eCreateSessionCookie(t, env.User.ID)
-	authReq.AddCookie(sessionCookie)
-
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("step 6: %v", err)
-	}
+	resp = e2eAuthorizeConsent(t, client, authURL, sessionCookie)
 	io.ReadAll(resp.Body)
 	resp.Body.Close()
 
@@ -1330,12 +1362,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		url.QueryEscape(resource),
 	)
 
-	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
-	authReq.AddCookie(e2eCreateSessionCookie(t, env.User.ID))
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
+	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
 	io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
@@ -1732,12 +1759,8 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 		}
 	}
 
-	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
-	authReq.AddCookie(sessionCookie)
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("oauth flow: authorize: %v", err)
-	}
+	resp = e2eAuthorizeConsent(t, client, authURL, sessionCookie)
+	err = nil
 	io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
@@ -1851,12 +1874,7 @@ func e2eGetAuthCode(t *testing.T, env *e2eEnv, clientName, redirectURI string) *
 		url.QueryEscape(resource),
 	)
 
-	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
-	authReq.AddCookie(e2eCreateSessionCookie(t, env.User.ID))
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("get auth code: authorize: %v", err)
-	}
+	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
 	io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
@@ -2395,12 +2413,7 @@ func TestE2E_OAuth_WrongRedirectURI(t *testing.T) {
 		url.QueryEscape(state),
 	)
 
-	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
-	authReq.AddCookie(e2eCreateSessionCookie(t, env.User.ID))
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
+	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 
@@ -2570,12 +2583,7 @@ func TestE2E_OAuth_UnregisteredClientID(t *testing.T) {
 		url.QueryEscape(state),
 	)
 
-	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
-	authReq.AddCookie(e2eCreateSessionCookie(t, env.User.ID))
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
+	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 
@@ -2652,12 +2660,7 @@ func TestE2E_OAuth_MissingPKCE(t *testing.T) {
 		url.QueryEscape(state),
 	)
 
-	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
-	authReq.AddCookie(e2eCreateSessionCookie(t, env.User.ID))
-	resp, err = client.Do(authReq)
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
+	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 

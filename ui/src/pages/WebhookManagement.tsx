@@ -174,9 +174,9 @@ function WebhookFormDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
-      <div className="relative z-10 w-full max-w-lg rounded-lg border bg-background shadow-xl">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/30" onClick={onCancel} />
+      <div className="relative z-10 flex h-screen w-full flex-col overflow-y-auto border-l max-w-lg border bg-background">
         <form onSubmit={handleSubmit}>
           <div className="border-b px-6 py-4">
             <h2 className="text-lg font-semibold">{title}</h2>
@@ -344,9 +344,9 @@ function DeleteConfirmDialog({
   isPending: boolean;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
-      <div className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-xl">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/30" onClick={onCancel} />
+      <div className="relative z-10 flex h-screen w-full flex-col overflow-y-auto border-l max-w-md border bg-background">
         <h2 className="text-lg font-semibold">Delete Webhook</h2>
         <p className="mt-2 text-sm text-muted-foreground">
           Are you sure you want to delete the webhook for{" "}
@@ -388,9 +388,9 @@ function TestResultDialog({
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-xl">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative z-10 flex h-screen w-full flex-col overflow-y-auto border-l max-w-md border bg-background">
         <h2 className="text-lg font-semibold">Test Fire Result</h2>
         <div className="mt-4 space-y-2">
           <div className="flex items-center gap-2">

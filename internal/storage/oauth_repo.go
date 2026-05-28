@@ -54,16 +54,22 @@ func (r *OAuthRepo) CreateClient(ctx context.Context, client *model.OAuthClient)
 		userID = &s
 	}
 
-	query := `INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	var shareID *string
+	if client.ShareTokenID != nil {
+		s := client.ShareTokenID.String()
+		shareID = &s
+	}
+
+	query := `INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered, share_token_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+		query = `INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered, share_token_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
 		client.ID.String(), client.ClientID, client.ClientSecret, client.Name,
-		redirectVal, grantVal, orgID, userID, autoRegVal,
+		redirectVal, grantVal, orgID, userID, autoRegVal, shareID,
 	)
 	if err != nil {
 		return fmt.Errorf("oauth client create: %w", err)
@@ -214,7 +220,7 @@ func (r *OAuthRepo) reloadClient(ctx context.Context, client *model.OAuthClient)
 	return nil
 }
 
-const selectOAuthClientColumns = `SELECT id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered, created_at`
+const selectOAuthClientColumns = `SELECT id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered, share_token_id, created_at`
 
 func (r *OAuthRepo) scanClient(row *sql.Row) (*model.OAuthClient, error) {
 	var client model.OAuthClient
@@ -222,18 +228,19 @@ func (r *OAuthRepo) scanClient(row *sql.Row) (*model.OAuthClient, error) {
 	var redirectStr, grantStr string
 	var orgIDStr sql.NullString
 	var userIDStr sql.NullString
+	var shareIDStr sql.NullString
 	var autoReg bool
 	var createdAtStr string
 
 	err := row.Scan(
 		&idStr, &client.ClientID, &client.ClientSecret, &client.Name,
-		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &createdAtStr,
+		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &shareIDStr, &createdAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, autoReg, createdAtStr)
+	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, shareIDStr, autoReg, createdAtStr)
 }
 
 func (r *OAuthRepo) scanClientFromRows(rows *sql.Rows) (*model.OAuthClient, error) {
@@ -242,18 +249,19 @@ func (r *OAuthRepo) scanClientFromRows(rows *sql.Rows) (*model.OAuthClient, erro
 	var redirectStr, grantStr string
 	var orgIDStr sql.NullString
 	var userIDStr sql.NullString
+	var shareIDStr sql.NullString
 	var autoReg bool
 	var createdAtStr string
 
 	err := rows.Scan(
 		&idStr, &client.ClientID, &client.ClientSecret, &client.Name,
-		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &createdAtStr,
+		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &shareIDStr, &createdAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("oauth client scan rows: %w", err)
 	}
 
-	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, autoReg, createdAtStr)
+	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, shareIDStr, autoReg, createdAtStr)
 }
 
 func (r *OAuthRepo) scanClients(rows *sql.Rows) ([]model.OAuthClient, error) {
@@ -274,7 +282,7 @@ func (r *OAuthRepo) scanClients(rows *sql.Rows) ([]model.OAuthClient, error) {
 func (r *OAuthRepo) populateClient(
 	client *model.OAuthClient,
 	idStr, redirectStr, grantStr string,
-	orgIDStr, userIDStr sql.NullString,
+	orgIDStr, userIDStr, shareIDStr sql.NullString,
 	autoReg bool,
 	createdAtStr string,
 ) (*model.OAuthClient, error) {
@@ -318,6 +326,14 @@ func (r *OAuthRepo) populateClient(
 		client.UserID = &uid
 	}
 
+	if shareIDStr.Valid {
+		sid, err := uuid.Parse(shareIDStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("oauth client parse share_token_id: %w", err)
+		}
+		client.ShareTokenID = &sid
+	}
+
 	client.AutoRegistered = autoReg
 
 	client.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
@@ -334,11 +350,11 @@ func (r *OAuthRepo) populateClient(
 
 // CreateAuthCode inserts a new OAuth authorization code.
 func (r *OAuthRepo) CreateAuthCode(ctx context.Context, code *model.OAuthAuthorizationCode) error {
-	query := `INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, resource, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, resource, share_token_id, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, resource, expires_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+		query = `INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, resource, share_token_id, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 	}
 
 	var resource *string
@@ -347,10 +363,16 @@ func (r *OAuthRepo) CreateAuthCode(ctx context.Context, code *model.OAuthAuthori
 		resource = &r
 	}
 
+	var shareID *string
+	if code.ShareTokenID != nil {
+		s := code.ShareTokenID.String()
+		shareID = &s
+	}
+
 	_, err := r.db.Exec(ctx, query,
 		code.Code, code.ClientID, code.UserID.String(), code.RedirectURI,
 		code.Scope, code.CodeChallenge, code.CodeChallengeMethod,
-		resource, code.ExpiresAt.UTC().Format(time.RFC3339),
+		resource, shareID, code.ExpiresAt.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("oauth auth code create: %w", err)
@@ -421,30 +443,30 @@ func (r *OAuthRepo) reloadAuthCode(ctx context.Context, code *model.OAuthAuthori
 	return nil
 }
 
-const selectAuthCodeColumns = `SELECT code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, resource, expires_at, created_at`
+const selectAuthCodeColumns = `SELECT code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, resource, share_token_id, expires_at, created_at`
 
 func (r *OAuthRepo) scanAuthCode(row *sql.Row) (*model.OAuthAuthorizationCode, error) {
 	var ac model.OAuthAuthorizationCode
 	var userIDStr string
-	var resourceStr sql.NullString
+	var resourceStr, shareIDStr sql.NullString
 	var expiresAtStr, createdAtStr string
 
 	err := row.Scan(
 		&ac.Code, &ac.ClientID, &userIDStr, &ac.RedirectURI,
 		&ac.Scope, &ac.CodeChallenge, &ac.CodeChallengeMethod,
-		&resourceStr, &expiresAtStr, &createdAtStr,
+		&resourceStr, &shareIDStr, &expiresAtStr, &createdAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return r.populateAuthCode(&ac, userIDStr, resourceStr, expiresAtStr, createdAtStr)
+	return r.populateAuthCode(&ac, userIDStr, resourceStr, shareIDStr, expiresAtStr, createdAtStr)
 }
 
 func (r *OAuthRepo) populateAuthCode(
 	ac *model.OAuthAuthorizationCode,
 	userIDStr string,
-	resourceStr sql.NullString,
+	resourceStr, shareIDStr sql.NullString,
 	expiresAtStr, createdAtStr string,
 ) (*model.OAuthAuthorizationCode, error) {
 	var err error
@@ -455,6 +477,14 @@ func (r *OAuthRepo) populateAuthCode(
 
 	if resourceStr.Valid {
 		ac.Resource = resourceStr.String
+	}
+
+	if shareIDStr.Valid {
+		sid, err := uuid.Parse(shareIDStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("oauth auth code parse share_token_id: %w", err)
+		}
+		ac.ShareTokenID = &sid
 	}
 
 	ac.ExpiresAt, err = time.Parse(time.RFC3339, expiresAtStr)
@@ -482,15 +512,21 @@ func (r *OAuthRepo) CreateRefreshToken(ctx context.Context, token *model.OAuthRe
 		expiresAt = &s
 	}
 
-	query := `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scope, expires_at)
-		VALUES (?, ?, ?, ?, ?)`
+	var shareID *string
+	if token.ShareTokenID != nil {
+		s := token.ShareTokenID.String()
+		shareID = &s
+	}
+
+	query := `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scope, share_token_id, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
-		query = `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scope, expires_at)
-			VALUES ($1, $2, $3, $4, $5)`
+		query = `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scope, share_token_id, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6)`
 	}
 
 	_, err := r.db.Exec(ctx, query,
-		token.TokenHash, token.ClientID, token.UserID.String(), token.Scope, expiresAt,
+		token.TokenHash, token.ClientID, token.UserID.String(), token.Scope, shareID, expiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("oauth refresh token create: %w", err)
@@ -580,35 +616,43 @@ func (r *OAuthRepo) reloadRefreshToken(ctx context.Context, token *model.OAuthRe
 	return nil
 }
 
-const selectRefreshTokenColumns = `SELECT token_hash, client_id, user_id, scope, expires_at, revoked_at, created_at`
+const selectRefreshTokenColumns = `SELECT token_hash, client_id, user_id, scope, share_token_id, expires_at, revoked_at, created_at`
 
 func (r *OAuthRepo) scanRefreshToken(row *sql.Row) (*model.OAuthRefreshToken, error) {
 	var token model.OAuthRefreshToken
 	var userIDStr string
-	var expiresAtStr, revokedAtStr sql.NullString
+	var shareIDStr, expiresAtStr, revokedAtStr sql.NullString
 	var createdAtStr string
 
 	err := row.Scan(
 		&token.TokenHash, &token.ClientID, &userIDStr, &token.Scope,
-		&expiresAtStr, &revokedAtStr, &createdAtStr,
+		&shareIDStr, &expiresAtStr, &revokedAtStr, &createdAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return r.populateRefreshToken(&token, userIDStr, expiresAtStr, revokedAtStr, createdAtStr)
+	return r.populateRefreshToken(&token, userIDStr, shareIDStr, expiresAtStr, revokedAtStr, createdAtStr)
 }
 
 func (r *OAuthRepo) populateRefreshToken(
 	token *model.OAuthRefreshToken,
 	userIDStr string,
-	expiresAtStr, revokedAtStr sql.NullString,
+	shareIDStr, expiresAtStr, revokedAtStr sql.NullString,
 	createdAtStr string,
 ) (*model.OAuthRefreshToken, error) {
 	var err error
 	token.UserID, err = uuid.Parse(userIDStr)
 	if err != nil {
 		return nil, fmt.Errorf("oauth refresh token parse user_id: %w", err)
+	}
+
+	if shareIDStr.Valid {
+		sid, err := uuid.Parse(shareIDStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("oauth refresh token parse share_token_id: %w", err)
+		}
+		token.ShareTokenID = &sid
 	}
 
 	if expiresAtStr.Valid {
@@ -633,6 +677,86 @@ func (r *OAuthRepo) populateRefreshToken(
 	}
 
 	return token, nil
+}
+
+// BindClientToShare sets oauth_clients.share_token_id on an existing client.
+// Called from the consent flow's share-paste path so derived auth-code +
+// refresh-token rows can inherit the binding, and so share revocation
+// cascades through to delete the client (via the FK ON DELETE CASCADE).
+//
+// Fails if the client is already bound to a different share — re-pasting a
+// different share against the same client_id is rejected to keep
+// one-share-per-client semantics. Rebinding to the same share is idempotent.
+//
+// SECURITY: refuses to bind a client that has any pre-existing refresh
+// tokens, and refuses to bind a client owned by an authenticated account
+// (oauth_clients.user_id IS NOT NULL). Otherwise an attacker possessing a
+// share secret could nominate someone else's DCR-registered client_id;
+// when the share is later revoked, ON DELETE CASCADE would delete that
+// client row out from under its account-holder. A fresh anonymous DCR
+// registration per share-paste session is the supported flow.
+func (r *OAuthRepo) BindClientToShare(ctx context.Context, clientID string, shareTokenID uuid.UUID) error {
+	var existing int
+	countQ := `SELECT COUNT(*) FROM oauth_refresh_tokens WHERE client_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		countQ = `SELECT COUNT(*) FROM oauth_refresh_tokens WHERE client_id = $1`
+	}
+	if err := r.db.QueryRow(ctx, countQ, clientID).Scan(&existing); err != nil {
+		return fmt.Errorf("oauth client bind to share: probe refresh tokens: %w", err)
+	}
+	if existing > 0 {
+		return fmt.Errorf("oauth client bind to share: client is already in use; register a fresh OAuth client for share-paste flows")
+	}
+
+	// Only bind clients that are unowned (auto-registered or share-bound).
+	// A client with user_id set was DCR'd by an authenticated account; binding
+	// it to a share would expose that account to cascade-delete on share revoke.
+	query := `UPDATE oauth_clients SET share_token_id = ? WHERE client_id = ? AND user_id IS NULL AND (share_token_id IS NULL OR share_token_id = ?)`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE oauth_clients SET share_token_id = $1 WHERE client_id = $2 AND user_id IS NULL AND (share_token_id IS NULL OR share_token_id = $3)`
+	}
+	res, err := r.db.Exec(ctx, query, shareTokenID.String(), clientID, shareTokenID.String())
+	if err != nil {
+		return fmt.Errorf("oauth client bind to share: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return fmt.Errorf("oauth client bind to share: client not found, owned by an account, or bound to a different share")
+	}
+	return nil
+}
+
+// ListClientsByShareToken returns oauth_clients minted under the given share.
+// Used by the share-detail UI to render derived bindings.
+func (r *OAuthRepo) ListClientsByShareToken(ctx context.Context, shareTokenID uuid.UUID) ([]model.OAuthClient, error) {
+	query := selectOAuthClientColumns + ` FROM oauth_clients WHERE share_token_id = ? ORDER BY created_at DESC`
+	if r.db.Backend() == BackendPostgres {
+		query = selectOAuthClientColumns + ` FROM oauth_clients WHERE share_token_id = $1 ORDER BY created_at DESC`
+	}
+
+	rows, err := r.db.Query(ctx, query, shareTokenID.String())
+	if err != nil {
+		return nil, fmt.Errorf("oauth client list by share: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanClients(rows)
+}
+
+// RevokeRefreshTokensByShareToken revokes every non-revoked refresh token
+// minted under the given share. Called when the share itself is revoked so
+// derived OAuth access stops on the recipient's next token refresh.
+func (r *OAuthRepo) RevokeRefreshTokensByShareToken(ctx context.Context, shareTokenID uuid.UUID) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	query := `UPDATE oauth_refresh_tokens SET revoked_at = ? WHERE share_token_id = ? AND revoked_at IS NULL`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE oauth_refresh_tokens SET revoked_at = $1 WHERE share_token_id = $2 AND revoked_at IS NULL`
+	}
+
+	if _, err := r.db.Exec(ctx, query, now, shareTokenID.String()); err != nil {
+		return fmt.Errorf("oauth revoke refresh tokens by share: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

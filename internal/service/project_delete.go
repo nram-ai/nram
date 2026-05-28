@@ -95,6 +95,23 @@ type NamespaceDeleter interface {
 	DeleteTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) error
 }
 
+// ShareTokenSweeper revokes any share-tokens that have been orphaned (zero
+// grants) as a side effect of project deletion. Optional dependency on
+// ProjectDeleteService — when nil, the share-revoke sweep is skipped and
+// the share-token middleware's per-request zero-grants check still gates
+// access; the sweep just keeps the owner's UI consistent.
+type ShareTokenSweeper interface {
+	SweepZeroGrantShares(ctx context.Context, ownerUserID uuid.UUID) (int, error)
+}
+
+// ProjectOwnerLookup resolves the user who owns a given owner_namespace_id.
+// Required by the share-token sweep — the share belongs to a user, not a
+// namespace, so we need the user record to scope the sweep query. Satisfied
+// directly by *storage.UserRepo.
+type ProjectOwnerLookup interface {
+	GetByNamespaceID(ctx context.Context, namespaceID uuid.UUID) (*model.User, error)
+}
+
 // ProjectDeleteRequest contains all parameters needed to delete a project.
 type ProjectDeleteRequest struct {
 	ProjectID uuid.UUID `json:"project_id"`
@@ -143,6 +160,8 @@ type ProjectDeleteService struct {
 	hnswDeleter          HNSWSnapshotDeleter
 	namespaceDeleter     NamespaceDeleter
 	eventBus             events.EventBus
+	shareSweeper         ShareTokenSweeper  // optional
+	projectOwnerLookup   ProjectOwnerLookup // optional, paired with shareSweeper
 }
 
 // NewProjectDeleteService creates a new ProjectDeleteService with the given dependencies.
@@ -182,6 +201,17 @@ func NewProjectDeleteService(
 		namespaceDeleter:     namespaceDeleter,
 		eventBus:             eventBus,
 	}
+}
+
+// WithShareSweeper wires the optional share-token sweep that runs post-
+// commit on project deletion. When configured, any share owned by the
+// project's owner that ends up with zero grants (because the FK cascade
+// dropped its last grant row) is auto-revoked, matching the cascade rule
+// in the share-token design.
+func (s *ProjectDeleteService) WithShareSweeper(sweeper ShareTokenSweeper, ownerLookup ProjectOwnerLookup) *ProjectDeleteService {
+	s.shareSweeper = sweeper
+	s.projectOwnerLookup = ownerLookup
+	return s
 }
 
 // Delete recursively deletes a project and all associated data. The project's
@@ -236,6 +266,29 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 		for _, entID := range entityIDs {
 			if err := s.vectorStore.Delete(ctx, storage.VectorKindEntity, entID); err != nil {
 				log.Printf("project delete: vector for entity %s: %v", entID, err)
+			}
+		}
+	}
+
+	// Sweep share-tokens that lost their last grant via FK cascade. The
+	// middleware-level zero-grants gate already blocks runtime access from
+	// such shares; this revoke keeps the owner's UI honest by flipping the
+	// status from "active" to "revoked" and triggers refresh-token cleanup.
+	// Log every skip path so a missing sweep is diagnosable rather than
+	// silent — the owner's UI showing "active but unusable" shares is a
+	// confusing failure mode we want to alert on.
+	if s.shareSweeper != nil && s.projectOwnerLookup != nil {
+		owner, err := s.projectOwnerLookup.GetByNamespaceID(ctx, project.OwnerNamespaceID)
+		switch {
+		case err != nil:
+			log.Printf("project delete: share sweep skipped, owner lookup for namespace %s failed: %v", project.OwnerNamespaceID, err)
+		case owner == nil:
+			log.Printf("project delete: share sweep skipped, no owner for namespace %s", project.OwnerNamespaceID)
+		default:
+			if n, sweepErr := s.shareSweeper.SweepZeroGrantShares(ctx, owner.ID); sweepErr != nil {
+				log.Printf("project delete: share sweep: %v", sweepErr)
+			} else if n > 0 {
+				log.Printf("project delete: revoked %d zero-grant share(s) for owner %s", n, owner.ID)
 			}
 		}
 	}

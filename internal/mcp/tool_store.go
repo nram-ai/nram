@@ -81,8 +81,12 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 
 	args := request.GetArguments()
 
-	projectSlug, _ := args["project"].(string)
-	projectSlug = strings.TrimSpace(projectSlug)
+	rawSlug, _ := args["project"].(string)
+	rawSlug = strings.TrimSpace(rawSlug)
+	if ac.ShareTokenID != nil && rawSlug == "" {
+		return mcp.NewToolResultError("share-bearer requests must specify project"), nil
+	}
+	projectSlug := rawSlug
 	if projectSlug == "" {
 		projectSlug = "global"
 	}
@@ -101,9 +105,31 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 
 	ttl, _ := args["ttl"].(string)
 
-	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to resolve project: %v", err)), nil
+	// Share-bearer must use an existing project from the allowlist; the
+	// auto-create branch in resolveOrCreateProject would let a share-bearer
+	// create new projects in the owner's namespace, which is outside the
+	// share's grant set.
+	var project *model.Project
+	if ac.ShareTokenID != nil {
+		deps := s.Deps()
+		user, err := deps.UserRepo.GetByID(ctx, ac.UserID)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("user not found: %v", err)), nil
+		}
+		project, err = deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
+		if err != nil {
+			return mcp.NewToolResultError("project not found"), nil
+		}
+	} else {
+		var err error
+		project, err = resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to resolve project: %v", err)), nil
+		}
+	}
+
+	if denied := requireShareProject(ctx, ac, "store", projectSlug, project.ID); denied != nil {
+		return denied, nil
 	}
 
 	uid := ac.UserID
@@ -152,8 +178,12 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 
 	args := request.GetArguments()
 
-	projectSlug, _ := args["project"].(string)
-	projectSlug = strings.TrimSpace(projectSlug)
+	rawSlug, _ := args["project"].(string)
+	rawSlug = strings.TrimSpace(rawSlug)
+	if ac.ShareTokenID != nil && rawSlug == "" {
+		return mcp.NewToolResultError("share-bearer requests must specify project"), nil
+	}
+	projectSlug := rawSlug
 	if projectSlug == "" {
 		projectSlug = "global"
 	}
@@ -173,9 +203,28 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 
 	ttl, _ := args["ttl"].(string)
 
-	project, err := resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to resolve project: %v", err)), nil
+	// Share-bearer must use an existing project from the allowlist; see the
+	// same guard in handleMemoryStore for rationale.
+	var project *model.Project
+	if ac.ShareTokenID != nil {
+		deps := s.Deps()
+		user, err := deps.UserRepo.GetByID(ctx, ac.UserID)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("user not found: %v", err)), nil
+		}
+		project, err = deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, projectSlug)
+		if err != nil {
+			return mcp.NewToolResultError("project not found"), nil
+		}
+	} else {
+		project, err = resolveOrCreateProject(ctx, s.Deps(), ac.UserID, projectSlug, projectDesc)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to resolve project: %v", err)), nil
+		}
+	}
+
+	if denied := requireShareProject(ctx, ac, "store_batch", projectSlug, project.ID); denied != nil {
+		return denied, nil
 	}
 
 	uid := ac.UserID

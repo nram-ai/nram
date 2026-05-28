@@ -64,6 +64,9 @@ func handleProjectUpdate(ctx context.Context, s *Server, request mcp.CallToolReq
 	if ac == nil {
 		return mcp.NewToolResultError("authentication required"), nil
 	}
+	if ac.ShareTokenID != nil {
+		return mcp.NewToolResultError("share-bearer is not authorized to modify project metadata"), nil
+	}
 
 	args := request.GetArguments()
 

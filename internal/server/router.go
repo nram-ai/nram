@@ -85,6 +85,12 @@ type Handlers struct {
 	MeExportItem     http.HandlerFunc // GET + DELETE /v1/me/exports/{job_id}
 	MeExportDownload http.HandlerFunc // GET /v1/me/exports/{job_id}/download
 
+	// Self-tier share-token management. Capability-bearer credentials for
+	// granting external recipients scoped access to curated projects without
+	// the recipient having an nram account.
+	MeShares     http.HandlerFunc // GET (list) + POST (create) /v1/me/shares
+	MeShareItem  http.HandlerFunc // GET + PATCH + DELETE /v1/me/shares/{id}
+
 	// Org-scoped handlers
 	OrgUsers http.HandlerFunc
 	OrgIdP   http.HandlerFunc
@@ -120,6 +126,10 @@ type Handlers struct {
 	OAuthUserInfo          http.HandlerFunc
 	OAuthMetadata          http.HandlerFunc
 	OAuthProtectedResource http.HandlerFunc
+	// Share-token magic-link landing at /share/accept?token=…. Friendly
+	// informational page that describes the grants to the recipient and
+	// shows the MCP server URL to configure in their client.
+	ShareAccept http.HandlerFunc
 
 	// IdP SSO handlers (public — no auth required)
 	IdPLogin    http.HandlerFunc
@@ -223,6 +233,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.HandleFunc("/authorize", handler(handlers.OAuthAuthorize))
 		r.HandleFunc("/token", handler(handlers.OAuthToken))
 		r.HandleFunc("/register", handler(handlers.OAuthRegister))
+		// Share-accept landing is intentionally public — the magic link is
+		// shared via human channels (email, DM) and recipients should not
+		// have to log in just to read the description of what was shared.
+		r.Get("/share/accept", handler(handlers.ShareAccept))
 	})
 
 	// Semi-public routes: setup guard required but no auth (login flow).
@@ -253,6 +267,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		if config.RateLimiter != nil {
 			r.Use(config.RateLimiter.Handler)
 		}
+		// Share-token credentials are scoped to /mcp + /userinfo only.
+		// Mount the guard after AuthMiddleware so AuthContext is populated;
+		// the guard checks the path and short-circuits MCP-allowed routes.
+		r.Use(api.RejectShareTokenMiddleware)
 
 		// OAuth userinfo and MCP endpoints need CORS for browser-based clients.
 		r.Group(func(r chi.Router) {
@@ -360,6 +378,12 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/exports", handler(handlers.MeExports))
 			r.HandleFunc("/exports/{job_id}", handler(handlers.MeExportItem))
 			r.Get("/exports/{job_id}/download", handler(handlers.MeExportDownload))
+
+			// Share-token management. Owner-only by virtue of running under
+			// the /v1/me/* route group; each handler also re-checks owner_user_id
+			// before mutating to prevent reads/edits on another user's share.
+			r.HandleFunc("/shares", handler(handlers.MeShares))
+			r.HandleFunc("/shares/{id}", handler(handlers.MeShareItem))
 		})
 
 		// Scoped data-viewing routes (all authenticated users — scope auto-applied).

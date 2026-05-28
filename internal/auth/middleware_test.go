@@ -436,7 +436,7 @@ func TestHandler_JWT_WrongAudience_Rejected(t *testing.T) {
 
 	userID := uuid.New()
 	// Generate a token with audience for a DIFFERENT server.
-	wrongAudToken, err := generateJWTWithAudience(userID, uuid.Nil, "member", testSecret, time.Hour, "https://other-server.example.com/mcp")
+	wrongAudToken, err := generateJWTWithAudience(userID, uuid.Nil, "member", testSecret, time.Hour, "https://other-server.example.com/mcp", nil)
 	if err != nil {
 		t.Fatalf("generate JWT: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestHandler_JWT_CorrectAudience_Accepted(t *testing.T) {
 
 	userID := uuid.New()
 	// Audience must match what baseURLFromRequest returns for Host: example.com.
-	correctAudToken, err := generateJWTWithAudience(userID, uuid.Nil, "member", testSecret, time.Hour, "http://example.com/mcp")
+	correctAudToken, err := generateJWTWithAudience(userID, uuid.Nil, "member", testSecret, time.Hour, "http://example.com/mcp", nil)
 	if err != nil {
 		t.Fatalf("generate JWT: %v", err)
 	}
@@ -512,5 +512,268 @@ func TestHandler_APIKeyValidatorArbitraryError(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Share-token middleware tests
+// ---------------------------------------------------------------------------
+
+// mockShareTokenLookup implements ShareTokenLookup for testing. Returns the
+// configured share + grants for any ID lookup; tests that need misses set err.
+type mockShareTokenLookup struct {
+	share  *model.ShareToken
+	grants []model.ShareTokenGrant
+	err    error
+}
+
+func (m *mockShareTokenLookup) GetByID(_ context.Context, _ uuid.UUID) (*model.ShareToken, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.share, nil
+}
+
+func (m *mockShareTokenLookup) ListGrants(_ context.Context, _ uuid.UUID) ([]model.ShareTokenGrant, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.grants, nil
+}
+
+// mockShareTokenValidator is for the nram_s_ bearer-direct path. Reports
+// success for the configured secret; everything else rejects.
+type mockShareTokenValidator struct {
+	share  *model.ShareToken
+	grants []model.ShareTokenGrant
+	secret string
+}
+
+func (m *mockShareTokenValidator) Resolve(_ context.Context, rawSecret string) (*model.ShareToken, []model.ShareTokenGrant, error) {
+	if rawSecret != m.secret {
+		return nil, nil, errors.New("invalid share token")
+	}
+	return m.share, m.grants, nil
+}
+
+// captureContextHandler captures the AuthContext into the closure so tests
+// can assert ShareTokenID + ShareGrants population without going through HTTP.
+func captureContextHandler(dst **AuthContext) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ac := FromContext(r.Context())
+		*dst = ac
+		if ac == nil {
+			http.Error(w, "no auth context", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+// TestHandler_JWT_WithShareTokenID_PopulatesShareGrants verifies the
+// receiving end of the stid plumbing: a JWT carrying a share_token_id claim
+// must result in AuthContext.ShareTokenID + ShareGrants being populated so
+// downstream MCP enforcement can gate the request. Without this, the JWT
+// could carry the claim and the middleware could still silently ignore it.
+func TestHandler_JWT_WithShareTokenID_PopulatesShareGrants(t *testing.T) {
+	userID := uuid.New()
+	shareID := uuid.New()
+	projectA := uuid.New()
+
+	share := &model.ShareToken{
+		ID:          shareID,
+		OwnerUserID: userID,
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+	}
+	grants := []model.ShareTokenGrant{{
+		ShareTokenID: shareID,
+		ProjectID:    projectA,
+		Permission:   model.SharePermissionReadStore,
+	}}
+	lookup := &mockShareTokenLookup{share: share, grants: grants}
+
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
+		WithShareTokens(nil, lookup)
+
+	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", &shareID)
+	if err != nil {
+		t.Fatalf("generate share-scoped JWT: %v", err)
+	}
+
+	var captured *AuthContext
+	handler := mw.Handler(captureContextHandler(&captured))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if captured == nil {
+		t.Fatal("no AuthContext captured")
+	}
+	if captured.ShareTokenID == nil {
+		t.Fatal("middleware did not populate ShareTokenID from stid claim — share-scoped JWTs would be silently treated as plain user JWTs")
+	}
+	if *captured.ShareTokenID != shareID {
+		t.Fatalf("ShareTokenID = %s, want %s", *captured.ShareTokenID, shareID)
+	}
+	if len(captured.ShareGrants) != 1 {
+		t.Fatalf("expected 1 ShareGrant, got %d", len(captured.ShareGrants))
+	}
+	g := captured.ShareGrants[0]
+	if g.ProjectID != projectA {
+		t.Fatalf("grant project_id = %s, want %s", g.ProjectID, projectA)
+	}
+	if g.Permission != model.SharePermissionReadStore {
+		t.Fatalf("grant permission = %s, want %s", g.Permission, model.SharePermissionReadStore)
+	}
+}
+
+// TestHandler_NramSPrefix_PopulatesShareGrants exercises the bearer-direct
+// path (nram_s_<secret>) and asserts the AuthContext is populated with
+// ShareTokenID + ShareGrants. UserID collapses to the share's owner.
+func TestHandler_NramSPrefix_PopulatesShareGrants(t *testing.T) {
+	ownerID := uuid.New()
+	shareID := uuid.New()
+	projectA := uuid.New()
+
+	share := &model.ShareToken{
+		ID:          shareID,
+		OwnerUserID: ownerID,
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+	}
+	grants := []model.ShareTokenGrant{{
+		ShareTokenID: shareID,
+		ProjectID:    projectA,
+		Permission:   model.SharePermissionRead,
+	}}
+	validator := &mockShareTokenValidator{share: share, grants: grants, secret: "nram_s_test_secret_value_for_middleware_unit_test"}
+
+	mw := NewAuthMiddleware(
+		&mockAPIKeyValidator{},
+		&mockUserIdentityLookup{fixedRole: "member"},
+		testSecret,
+		nil,
+	).WithShareTokens(validator, nil)
+
+	var captured *AuthContext
+	handler := mw.Handler(captureContextHandler(&captured))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+validator.secret)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if captured == nil {
+		t.Fatal("no AuthContext captured")
+	}
+	if captured.UserID != ownerID {
+		t.Fatalf("UserID = %s, want owner %s (share-bearer identity must collapse to owner)", captured.UserID, ownerID)
+	}
+	if captured.ShareTokenID == nil || *captured.ShareTokenID != shareID {
+		t.Fatalf("ShareTokenID = %v, want %s", captured.ShareTokenID, shareID)
+	}
+	if len(captured.ShareGrants) != 1 {
+		t.Fatalf("expected 1 ShareGrant, got %d", len(captured.ShareGrants))
+	}
+}
+
+// TestHandler_JWT_WithShareTokenID_ZeroGrantsRejected verifies that an
+// access JWT carrying a stid for a share whose grants have all been
+// cascade-deleted (e.g. all referenced projects were deleted) returns 401.
+// Without this gate the share would appear "active" while every MCP call
+// silently rejects, producing confusing zombie shares in the UI.
+func TestHandler_JWT_WithShareTokenID_ZeroGrantsRejected(t *testing.T) {
+	userID := uuid.New()
+	shareID := uuid.New()
+	share := &model.ShareToken{
+		ID:          shareID,
+		OwnerUserID: userID,
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+	}
+	// Empty grants — simulates the FK cascade emptying share_token_grants.
+	lookup := &mockShareTokenLookup{share: share, grants: nil}
+
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
+		WithShareTokens(nil, lookup)
+
+	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", &shareID)
+	if err != nil {
+		t.Fatalf("generate JWT: %v", err)
+	}
+
+	handler := mw.Handler(okHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for zero-grants share JWT, got %d", rec.Code)
+	}
+}
+
+// TestHandler_NramSPrefix_ZeroGrantsRejected verifies the same zero-grants
+// gate on the bearer-direct path.
+func TestHandler_NramSPrefix_ZeroGrantsRejected(t *testing.T) {
+	share := &model.ShareToken{
+		ID:          uuid.New(),
+		OwnerUserID: uuid.New(),
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+	}
+	validator := &mockShareTokenValidator{share: share, grants: nil, secret: "nram_s_zero_grants_bearer_direct_test_secret_value"}
+
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
+		WithShareTokens(validator, nil)
+
+	handler := mw.Handler(okHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+validator.secret)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for zero-grants bearer-direct, got %d", rec.Code)
+	}
+}
+
+// TestHandler_JWT_WithShareTokenID_RevokedShareRejected verifies that an
+// access JWT carrying a stid for a revoked share returns 401 — share
+// revocation must take effect on the next request, not wait for JWT expiry.
+func TestHandler_JWT_WithShareTokenID_RevokedShareRejected(t *testing.T) {
+	userID := uuid.New()
+	shareID := uuid.New()
+	revoked := time.Now().Add(-1 * time.Hour)
+
+	share := &model.ShareToken{
+		ID:          shareID,
+		OwnerUserID: userID,
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+		RevokedAt:   &revoked,
+	}
+	lookup := &mockShareTokenLookup{share: share, grants: nil}
+
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
+		WithShareTokens(nil, lookup)
+
+	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", &shareID)
+	if err != nil {
+		t.Fatalf("generate JWT: %v", err)
+	}
+
+	handler := mw.Handler(okHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for revoked share JWT, got %d", rec.Code)
 	}
 }

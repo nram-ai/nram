@@ -48,6 +48,9 @@ func handleProjectDelete(ctx context.Context, s *Server, request mcp.CallToolReq
 	if ac == nil {
 		return mcp.NewToolResultError("authentication required"), nil
 	}
+	if ac.ShareTokenID != nil {
+		return mcp.NewToolResultError("share-bearer is not authorized to delete projects"), nil
+	}
 
 	args := request.GetArguments()
 

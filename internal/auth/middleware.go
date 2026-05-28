@@ -18,6 +18,15 @@ import (
 // The SPA client reads it and rotates localStorage.
 const SessionRefreshHeader = "X-Refreshed-Token"
 
+// APIKeyBearerPrefix and ShareTokenBearerPrefix are the wire-format prefixes
+// the middleware uses to dispatch Bearer credentials. The share-token storage
+// layer exposes ShareTokenWirePrefix; both must stay in lockstep — if the
+// wire format changes, update both constants.
+const (
+	APIKeyBearerPrefix     = "nram_k_"
+	ShareTokenBearerPrefix = "nram_s_"
+)
+
 // DefaultSessionTokenTTL is the fallback session-JWT lifetime applied when
 // no SessionTimings is wired (tests, ad-hoc callers). Production wiring
 // supplies a SessionTimings backed by the settings registry, which
@@ -78,6 +87,22 @@ type APIKeyValidator interface {
 	Validate(ctx context.Context, rawKey string) (*model.APIKey, error)
 }
 
+// ShareTokenValidator validates a raw nram_s_<secret> credential.
+// Implementations reject one-shot shares whose ConsumedAt is set; the
+// middleware and the consent flow both rely on that guard.
+type ShareTokenValidator interface {
+	Resolve(ctx context.Context, rawSecret string) (*model.ShareToken, []model.ShareTokenGrant, error)
+}
+
+// ShareTokenLookup hydrates a share + grants from the DB by ID. Used on the
+// OAuth-issued JWT path, where the access token carries share_token_id and
+// the middleware must re-resolve the current grant state on every request
+// (so owner edits take effect immediately without a token refresh).
+type ShareTokenLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.ShareToken, error)
+	ListGrants(ctx context.Context, shareID uuid.UUID) ([]model.ShareTokenGrant, error)
+}
+
 // UserIdentityLookup resolves the role and org ID for an active user by ID.
 // It must return an error if the user is disabled or not found.
 type UserIdentityLookup interface {
@@ -86,11 +111,17 @@ type UserIdentityLookup interface {
 
 // AuthContext holds the authenticated identity extracted from a request.
 type AuthContext struct {
-	UserID   uuid.UUID
-	OrgID    uuid.UUID
-	Role     string
-	APIKeyID *uuid.UUID // non-nil when authenticated via API key
-	Scopes   []uuid.UUID
+	UserID       uuid.UUID
+	OrgID        uuid.UUID
+	Role         string
+	APIKeyID     *uuid.UUID // non-nil when authenticated via API key
+	ShareTokenID *uuid.UUID // non-nil when authenticated via share token (bearer-direct OR OAuth-bound)
+	Scopes       []uuid.UUID
+	// ShareGrants is the current project-permission set when ShareTokenID is
+	// non-nil. Empty for non-share-token authentication. Populated per request
+	// from share_token_grants so owner edits take effect on the recipient's
+	// next call.
+	ShareGrants []model.ProjectGrant
 }
 
 type contextKey int
@@ -110,22 +141,37 @@ func WithContext(ctx context.Context, ac *AuthContext) context.Context {
 }
 
 // Claims defines the JWT claims used by nram.
+//
+// ShareTokenID is set on access tokens issued through the share-paste consent
+// flow. The wire format is the share's UUID as a hex string; the middleware
+// looks up share_tokens + share_token_grants on every request so owner edits
+// take effect immediately without a token refresh.
 type Claims struct {
 	jwt.RegisteredClaims
-	Role        string `json:"role"`
-	OrgID       string `json:"org_id,omitempty"`
-	Email       string `json:"email,omitempty"`
-	DisplayName string `json:"display_name,omitempty"`
+	Role         string `json:"role"`
+	OrgID        string `json:"org_id,omitempty"`
+	Email        string `json:"email,omitempty"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ShareTokenID string `json:"stid,omitempty"`
 }
 
 // AuthMiddleware validates Bearer tokens from the Authorization header.
-// Tokens with the "nram_k_" prefix are validated as API keys; all others
-// are parsed as JWTs signed with HMAC-SHA256.
+// Tokens with the "nram_k_" prefix are validated as API keys; tokens with the
+// "nram_s_" prefix are validated as share tokens (bearer-direct path); all
+// others are parsed as JWTs signed with HMAC-SHA256.
+//
+// shareTokenValidator and shareTokenLookup are optional. When nil the
+// nram_s_ branch is rejected as an unknown credential format and the
+// share_token_id claim on JWTs is silently ignored (the request authenticates
+// as the underlying user without scoped grants). Tests can pass nil; production
+// wiring supplies both.
 type AuthMiddleware struct {
-	apiKeyValidator    APIKeyValidator
-	userIdentityLookup UserIdentityLookup
-	jwtSecret          []byte
-	timings            SessionTimings
+	apiKeyValidator     APIKeyValidator
+	shareTokenValidator ShareTokenValidator
+	shareTokenLookup    ShareTokenLookup
+	userIdentityLookup  UserIdentityLookup
+	jwtSecret           []byte
+	timings             SessionTimings
 }
 
 // NewAuthMiddleware creates a new AuthMiddleware with the given dependencies.
@@ -138,6 +184,16 @@ func NewAuthMiddleware(apiKeyValidator APIKeyValidator, userIdentityLookup UserI
 		jwtSecret:          jwtSecret,
 		timings:            timings,
 	}
+}
+
+// WithShareTokens wires share-token validation paths onto the middleware.
+// Returns the receiver to support fluent construction in the application
+// bootstrap (which builds the middleware before the share-token service
+// exists due to the existing user/api-key wiring order).
+func (m *AuthMiddleware) WithShareTokens(validator ShareTokenValidator, lookup ShareTokenLookup) *AuthMiddleware {
+	m.shareTokenValidator = validator
+	m.shareTokenLookup = lookup
+	return m
 }
 
 // Handler returns an http.Handler middleware that authenticates requests.
@@ -159,9 +215,12 @@ func (m *AuthMiddleware) Handler(next http.Handler) http.Handler {
 		var refreshed string
 		var err error
 
-		if strings.HasPrefix(token, "nram_k_") {
+		switch {
+		case strings.HasPrefix(token, APIKeyBearerPrefix):
 			ac, err = m.validateAPIKey(r.Context(), token)
-		} else {
+		case strings.HasPrefix(token, ShareTokenBearerPrefix):
+			ac, err = m.validateShareToken(r.Context(), token)
+		default:
 			ac, refreshed, err = m.validateJWT(r, token)
 		}
 
@@ -234,6 +293,53 @@ func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*Au
 	}, nil
 }
 
+// validateShareToken handles the bearer-direct path for nram_s_<secret>. The
+// recipient identity collapses to the owner's identity (share-bearer activity
+// logs as the owner with share_token_id annotation); the AuthContext carries
+// the share id + grant set so downstream MCP handlers can enforce the
+// per-tier matrix and project allowlist.
+//
+// Returns an unauthorized error if the share-token validator is unwired,
+// the secret does not parse, the share is revoked/expired, or the share is
+// one-shot and already consumed (bearer-direct on a consumed one-shot is a
+// hard reject per the 2026-05-27 design decision; the recipient must obtain
+// a fresh share or use the OAuth flow).
+func (m *AuthMiddleware) validateShareToken(ctx context.Context, rawSecret string) (*AuthContext, error) {
+	if m.shareTokenValidator == nil {
+		return nil, fmt.Errorf("share-token authentication not configured")
+	}
+
+	share, grants, err := m.shareTokenValidator.Resolve(ctx, rawSecret)
+	if err != nil {
+		return nil, fmt.Errorf("invalid share token: %w", err)
+	}
+	if len(grants) == 0 {
+		return nil, fmt.Errorf("share token has no active project grants")
+	}
+
+	role, orgID, err := m.userIdentityLookup.GetIdentityByID(ctx, share.OwnerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("share-token owner unavailable: %w", err)
+	}
+
+	shareID := share.ID
+	projectGrants := make([]model.ProjectGrant, 0, len(grants))
+	for _, g := range grants {
+		projectGrants = append(projectGrants, model.ProjectGrant{
+			ProjectID:  g.ProjectID,
+			Permission: g.Permission,
+		})
+	}
+
+	return &AuthContext{
+		UserID:       share.OwnerUserID,
+		OrgID:        orgID,
+		Role:         role,
+		ShareTokenID: &shareID,
+		ShareGrants:  projectGrants,
+	}, nil
+}
+
 func (m *AuthMiddleware) validateJWT(r *http.Request, tokenStr string) (*AuthContext, string, error) {
 	claims := &Claims{}
 	tok, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
@@ -285,6 +391,53 @@ func (m *AuthMiddleware) validateJWT(r *http.Request, tokenStr string) (*AuthCon
 		Role:   claims.Role,
 	}
 
+	// OAuth-issued access tokens carrying a share_token_id claim re-resolve
+	// the share + grants from the DB on every request so owner edits take
+	// effect without a refresh, and so revocation kills the session at the
+	// next call (instead of waiting for JWT expiry).
+	//
+	// If the JWT carries stid but the lookup is unwired, REJECT the token
+	// rather than silently authenticating as the unscoped owner. A misconfigured
+	// deployment must never collapse a share-scoped credential into full
+	// account access.
+	if claims.ShareTokenID != "" {
+		if m.shareTokenLookup == nil {
+			return nil, "", fmt.Errorf("share-scoped jwt presented but share-token lookup is not configured")
+		}
+		shareID, parseErr := uuid.Parse(claims.ShareTokenID)
+		if parseErr != nil {
+			return nil, "", fmt.Errorf("jwt share_token_id is not a valid uuid: %w", parseErr)
+		}
+		share, lookupErr := m.shareTokenLookup.GetByID(r.Context(), shareID)
+		if lookupErr != nil {
+			return nil, "", fmt.Errorf("share token unavailable: %w", lookupErr)
+		}
+		if !share.Active(time.Now().UTC()) {
+			return nil, "", fmt.Errorf("share token no longer active")
+		}
+		grants, grantErr := m.shareTokenLookup.ListGrants(r.Context(), shareID)
+		if grantErr != nil {
+			return nil, "", fmt.Errorf("share token grants lookup: %w", grantErr)
+		}
+		// A share whose project grants have all been cascade-deleted (every
+		// project the share covered was deleted) is effectively dead. Reject
+		// the request so the recipient sees an unambiguous 401 instead of
+		// per-tool "not authorized" errors on every call, and so the share
+		// stops appearing usable.
+		if len(grants) == 0 {
+			return nil, "", fmt.Errorf("share token has no active project grants")
+		}
+		projectGrants := make([]model.ProjectGrant, 0, len(grants))
+		for _, g := range grants {
+			projectGrants = append(projectGrants, model.ProjectGrant{
+				ProjectID:  g.ProjectID,
+				Permission: g.Permission,
+			})
+		}
+		ac.ShareTokenID = &shareID
+		ac.ShareGrants = projectGrants
+	}
+
 	refreshed, err := m.maybeRefreshSessionJWT(r.Context(), claims, userID, orgID)
 	if err != nil {
 		// A refresh-side error never invalidates the request — return an
@@ -334,7 +487,16 @@ func containsAudience(aud jwt.ClaimStrings, expected string) bool {
 // GenerateJWT creates a signed JWT for the given user without an audience claim.
 // Use generateJWTWithAudience when an RFC 8707 resource indicator must be bound.
 func GenerateJWT(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration) (string, error) {
-	return generateJWTWithAudience(userID, orgID, role, secret, expiry, "")
+	return generateJWTWithAudience(userID, orgID, role, secret, expiry, "", nil)
+}
+
+// GenerateShareScopedJWT creates a signed JWT that carries a share_token_id
+// claim. The middleware uses this claim to re-resolve the share + grants on
+// every request, so owner edits and revocation take effect without a token
+// refresh. Use only on the share-paste OAuth mint path; the account-holder
+// path passes shareTokenID=nil to GenerateJWT or generateJWTWithAudience.
+func GenerateShareScopedJWT(userID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string, shareTokenID *uuid.UUID) (string, error) {
+	return generateJWTWithAudience(userID, orgID, role, secret, expiry, resource, shareTokenID)
 }
 
 // GenerateSessionJWT creates a signed JWT that includes user profile claims
@@ -363,8 +525,10 @@ func GenerateSessionJWT(userID uuid.UUID, orgID uuid.UUID, role, email, displayN
 }
 
 // generateJWTWithAudience creates a signed JWT. When resource is non-empty it
-// is set as the sole audience claim (RFC 8707 §2).
-func generateJWTWithAudience(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string) (string, error) {
+// is set as the sole audience claim (RFC 8707 §2). When shareTokenID is
+// non-nil it is set as the stid claim so the middleware can scope the
+// caller's identity to the share's grant set.
+func generateJWTWithAudience(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string, shareTokenID *uuid.UUID) (string, error) {
 	now := time.Now().UTC()
 	reg := jwt.RegisteredClaims{
 		Subject:   userID.String(),
@@ -379,10 +543,15 @@ func generateJWTWithAudience(userID uuid.UUID, orgID uuid.UUID, role string, sec
 	if orgID != uuid.Nil {
 		orgIDStr = orgID.String()
 	}
+	var stid string
+	if shareTokenID != nil {
+		stid = shareTokenID.String()
+	}
 	claims := Claims{
 		RegisteredClaims: reg,
 		Role:             role,
 		OrgID:            orgIDStr,
+		ShareTokenID:     stid,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

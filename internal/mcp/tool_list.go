@@ -81,8 +81,15 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 
 	args := request.GetArguments()
 
-	projectSlug, _ := args["project"].(string)
-	projectSlug = strings.TrimSpace(projectSlug)
+	rawProjectSlug, _ := args["project"].(string)
+	rawProjectSlug = strings.TrimSpace(rawProjectSlug)
+
+	isShareBearer := ac.ShareTokenID != nil
+	if isShareBearer && rawProjectSlug == "" {
+		return mcp.NewToolResultError("share-bearer requests must specify project; the global fan-out is not available"), nil
+	}
+
+	projectSlug := rawProjectSlug
 	if projectSlug == "" {
 		projectSlug = "global"
 	}
@@ -104,11 +111,17 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		return mcp.NewToolResultError("project not found"), nil
 	}
 
+	if denied := requireShareProject(ctx, ac, "list", projectSlug, project.ID); denied != nil {
+		return denied, nil
+	}
+
 	// Collect namespaces to query: always the specified project, plus global
 	// when a non-global project is specified (consistent with memory_recall).
+	// Share-bearer callers stay project-only — the owner's global namespace
+	// is not implicitly part of any share.
 	namespaces := []uuid.UUID{project.NamespaceID}
 	nsIDToSlug := map[uuid.UUID]string{project.NamespaceID: projectSlug}
-	if projectSlug != "global" {
+	if !isShareBearer && projectSlug != "global" {
 		if gp, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, "global"); err == nil && gp != nil {
 			namespaces = append(namespaces, gp.NamespaceID)
 			nsIDToSlug[gp.NamespaceID] = "global"

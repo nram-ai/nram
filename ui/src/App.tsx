@@ -27,6 +27,7 @@ import {
   faSatelliteDish,
   faKey,
   faFingerprint,
+  faShareNodes,
   faPuzzlePiece,
   faDatabase,
   faListCheck,
@@ -69,6 +70,7 @@ const WebhookManagement = React.lazy(() => import("./pages/WebhookManagement"));
 const OAuthClients = React.lazy(() => import("./pages/OAuthClients"));
 const IdPConfiguration = React.lazy(() => import("./pages/IdPConfiguration"));
 const MCPConfigGenerator = React.lazy(() => import("./pages/MCPConfigGenerator"));
+const Shares = React.lazy(() => import("./pages/Shares"));
 const PromptTemplates = React.lazy(() => import("./pages/PromptTemplates"));
 const DreamingMonitor = React.lazy(() => import("./pages/DreamingMonitor"));
 const MyAccount = React.lazy(() => import("./pages/MyAccount"));
@@ -158,6 +160,7 @@ const navItems: NavItem[] = [
   { path: "/webhooks", label: "Webhooks", section: "Configuration", icon: faSatelliteDish, minRole: "administrator" },
   { path: "/oauth", label: "OAuth Clients", section: "Configuration", icon: faKey },
   { path: "/idp", label: "Identity Providers", section: "Configuration", icon: faFingerprint, minRole: "org_owner" },
+  { path: "/shares", label: "Shares", section: "Configuration", icon: faShareNodes },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration", icon: faPuzzlePiece },
   { path: "/database", label: "Database", section: "System", icon: faDatabase, minRole: "administrator" },
   { path: "/enrichment", label: "Enrichment Queue", section: "System", icon: faListCheck, requiresEnrichment: true },
@@ -394,6 +397,7 @@ function AppLayout() {
                   <Route path="/oauth" element={<OAuthClients />} />
                   <Route path="/idp" element={<RequireRole minRole="org_owner"><IdPConfiguration /></RequireRole>} />
                   <Route path="/mcp-config" element={<MCPConfigGenerator />} />
+                <Route path="/shares" element={<Shares />} />
                   <Route path="/account" element={<MyAccount />} />
                 </Routes>
               </div>

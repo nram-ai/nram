@@ -16,30 +16,33 @@ type OAuthClient struct {
 	OrgID          *uuid.UUID `json:"org_id"`
 	UserID         *uuid.UUID `json:"user_id,omitempty"`
 	AutoRegistered bool       `json:"auto_registered"`
+	ShareTokenID   *uuid.UUID `json:"share_token_id,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 }
 
 type OAuthAuthorizationCode struct {
-	Code                string    `json:"code"`
-	ClientID            string    `json:"client_id"`
-	UserID              uuid.UUID `json:"user_id"`
-	RedirectURI         string    `json:"redirect_uri"`
-	Scope               string    `json:"scope"`
-	CodeChallenge       *string   `json:"code_challenge"`
-	CodeChallengeMethod string    `json:"code_challenge_method"`
-	Resource            string    `json:"resource,omitempty"`
-	ExpiresAt           time.Time `json:"expires_at"`
-	CreatedAt           time.Time `json:"created_at"`
+	Code                string     `json:"code"`
+	ClientID            string     `json:"client_id"`
+	UserID              uuid.UUID  `json:"user_id"`
+	RedirectURI         string     `json:"redirect_uri"`
+	Scope               string     `json:"scope"`
+	CodeChallenge       *string    `json:"code_challenge"`
+	CodeChallengeMethod string     `json:"code_challenge_method"`
+	Resource            string     `json:"resource,omitempty"`
+	ShareTokenID        *uuid.UUID `json:"share_token_id,omitempty"`
+	ExpiresAt           time.Time  `json:"expires_at"`
+	CreatedAt           time.Time  `json:"created_at"`
 }
 
 type OAuthRefreshToken struct {
-	TokenHash string     `json:"token_hash"`
-	ClientID  string     `json:"client_id"`
-	UserID    uuid.UUID  `json:"user_id"`
-	Scope     string     `json:"scope"`
-	ExpiresAt *time.Time `json:"expires_at"`
-	RevokedAt *time.Time `json:"revoked_at"`
-	CreatedAt time.Time  `json:"created_at"`
+	TokenHash    string     `json:"token_hash"`
+	ClientID     string     `json:"client_id"`
+	UserID       uuid.UUID  `json:"user_id"`
+	Scope        string     `json:"scope"`
+	ShareTokenID *uuid.UUID `json:"share_token_id,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at"`
+	RevokedAt    *time.Time `json:"revoked_at"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type OAuthIdPConfig struct {

@@ -571,7 +571,7 @@ function ProjectDetailPanel({
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
       {/* Panel */}
-      <div className="relative z-10 flex h-full w-full max-w-2xl flex-col overflow-y-auto border-l bg-background shadow-xl">
+      <div className="relative z-10 flex h-screen w-full max-w-2xl flex-col overflow-y-auto border-l bg-background shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b px-6 py-4">
           <h2 className="text-lg font-semibold">Project Detail</h2>
@@ -966,9 +966,9 @@ function CreateMeProjectDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-xl">
+      <div className="relative z-10 flex h-screen w-full flex-col overflow-y-auto border-l max-w-md border bg-background">
         <h2 className="text-lg font-semibold">Create Project</h2>
         <div className="mt-4 space-y-4">
           <div>
@@ -1285,7 +1285,7 @@ function ProjectReadOnlyPanel({
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative z-10 flex h-full w-full max-w-2xl flex-col overflow-y-auto border-l bg-background shadow-xl">
+      <div className="relative z-10 flex h-screen w-full max-w-2xl flex-col overflow-y-auto border-l bg-background shadow-xl">
         <div className="flex items-center justify-between border-b px-6 py-4">
           <h2 className="text-lg font-semibold">Project Detail</h2>
           <button

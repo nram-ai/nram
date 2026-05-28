@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -26,12 +27,31 @@ const (
 	codeChallengeMethodS256 = "S256"
 )
 
+// ShareTokenResolver is the subset of *service.ShareTokenService needed by
+// the consent flow and the token-refresh re-validation. Defined as an
+// interface so the auth package does not depend on internal/service (which
+// depends on storage, which depends on auth — a direct import would cycle).
+type ShareTokenResolver interface {
+	Resolve(ctx context.Context, rawSecret string) (*model.ShareToken, []model.ShareTokenGrant, error)
+	MarkConsumed(ctx context.Context, shareID uuid.UUID) error
+	GetByID(ctx context.Context, id uuid.UUID) (*model.ShareToken, error)
+}
+
+// ProjectByIDLookup resolves a project for the consent screen's grants
+// display. Returning ErrProjectNotFound (or any error) collapses to a
+// generic "project unavailable" row so the consent screen still renders.
+type ProjectByIDLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error)
+}
+
 // OAuthServer implements OAuth 2.0 Authorization Code + PKCE (RFC 7636),
 // Dynamic Client Registration (RFC 7591), and Server Metadata (RFC 8414).
 type OAuthServer struct {
-	oauthRepo *storage.OAuthRepo
-	userRepo  *storage.UserRepo
-	jwtSecret []byte
+	oauthRepo     *storage.OAuthRepo
+	userRepo      *storage.UserRepo
+	jwtSecret     []byte
+	shareTokens   ShareTokenResolver // optional; nil disables the share-paste consent path
+	projectLookup ProjectByIDLookup  // optional; nil collapses grant rows to "(project unavailable)"
 }
 
 // NewOAuthServer creates a new OAuthServer with the given dependencies.
@@ -41,6 +61,14 @@ func NewOAuthServer(oauthRepo *storage.OAuthRepo, userRepo *storage.UserRepo, jw
 		userRepo:  userRepo,
 		jwtSecret: jwtSecret,
 	}
+}
+
+// WithShareTokens wires the share-paste consent path. Returns the receiver
+// for fluent construction.
+func (s *OAuthServer) WithShareTokens(resolver ShareTokenResolver, projects ProjectByIDLookup) *OAuthServer {
+	s.shareTokens = resolver
+	s.projectLookup = projects
+	return s
 }
 
 // serverMetadata is the response for RFC 8414 server metadata.
@@ -154,141 +182,23 @@ func (s *OAuthServer) RegisterClientHandler() http.HandlerFunc {
 	}
 }
 
-// AuthorizeHandler handles GET requests for the OAuth authorization endpoint.
-// It validates the request, auto-approves (no consent screen), and redirects with an authorization code.
+// AuthorizeHandler handles GET and POST requests for the OAuth authorization
+// endpoint. GET renders the consent screen (consent.go); POST processes the
+// submission and mints the authorization code. The pre-consent auto-approve
+// behavior was removed when the share-paste consent path was introduced —
+// auto-approving an OAuth client whose user is already logged in would also
+// bypass the share-paste opportunity, which is the only way an external
+// recipient can authorize against an owner's projects.
 func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-
-		clientID := q.Get("client_id")
-		if clientID == "" {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "client_id is required")
-			return
+		switch r.Method {
+		case http.MethodGet:
+			s.handleAuthorizeGET(w, r)
+		case http.MethodPost:
+			s.handleAuthorizePOST(w, r)
+		default:
+			writeOAuthError(w, http.StatusMethodNotAllowed, "invalid_request", "method not allowed")
 		}
-
-		client, err := s.oauthRepo.GetClientByID(r.Context(), clientID)
-		if err != nil {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "unknown client_id")
-			return
-		}
-
-		redirectURI := q.Get("redirect_uri")
-		if redirectURI == "" {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "redirect_uri is required")
-			return
-		}
-
-		if !containsString(client.RedirectURIs, redirectURI) {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "redirect_uri not registered")
-			return
-		}
-
-		responseType := q.Get("response_type")
-		if responseType != "code" {
-			redirectWithError(w, r, redirectURI, "unsupported_response_type", "only response_type=code is supported", q.Get("state"))
-			return
-		}
-
-		codeChallenge := q.Get("code_challenge")
-		if codeChallenge == "" {
-			redirectWithError(w, r, redirectURI, "invalid_request", "code_challenge is required (PKCE)", q.Get("state"))
-			return
-		}
-
-		codeChallengeMethod := q.Get("code_challenge_method")
-		if codeChallengeMethod == "" {
-			codeChallengeMethod = codeChallengeMethodS256
-		}
-		if codeChallengeMethod != codeChallengeMethodS256 {
-			redirectWithError(w, r, redirectURI, "invalid_request", "only S256 code_challenge_method is supported", q.Get("state"))
-			return
-		}
-
-		scope := q.Get("scope")
-		resource := q.Get("resource")
-
-		// RFC 8707: Validate the resource parameter identifies THIS server.
-		// The canonical resource URI is issuerURL + "/mcp".
-		base := baseURLFromRequest(r)
-		if resource != "" && resource != base+"/mcp" {
-			redirectWithError(w, r, redirectURI, "invalid_target",
-				fmt.Sprintf("resource parameter must be %s/mcp", base), q.Get("state"))
-			return
-		}
-
-		// Determine the authenticated user. Check the auth context first (set by
-		// AuthMiddleware), then fall back to the nram_session cookie which the
-		// login page sets for the short-lived OAuth redirect flow.
-		var userID uuid.UUID
-		if ac := FromContext(r.Context()); ac != nil {
-			userID = ac.UserID
-		} else if cookie, err := r.Cookie("nram_session"); err == nil && cookie.Value != "" {
-			claims := &Claims{}
-			tok, parseErr := jwt.ParseWithClaims(cookie.Value, claims, func(t *jwt.Token) (any, error) {
-				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, fmt.Errorf("unexpected signing method")
-				}
-				return s.jwtSecret, nil
-			})
-			if parseErr == nil && tok.Valid {
-				sub, _ := claims.GetSubject()
-				if uid, parseErr := uuid.Parse(sub); parseErr == nil {
-					userID = uid
-				}
-			}
-			if userID == uuid.Nil {
-				loginURL := "/login?redirect=" + url.QueryEscape("/authorize?"+r.URL.RawQuery)
-				http.Redirect(w, r, loginURL, http.StatusFound)
-				return
-			}
-		} else {
-			loginURL := "/login?redirect=" + url.QueryEscape("/authorize?"+r.URL.RawQuery)
-			http.Redirect(w, r, loginURL, http.StatusFound)
-			return
-		}
-
-		code := generateAuthCode()
-
-		authCode := &model.OAuthAuthorizationCode{
-			Code:                code,
-			ClientID:            clientID,
-			UserID:              userID,
-			RedirectURI:         redirectURI,
-			Scope:               scope,
-			CodeChallenge:       &codeChallenge,
-			CodeChallengeMethod: codeChallengeMethodS256,
-			Resource:            resource,
-			ExpiresAt:           time.Now().UTC().Add(authCodeExpiry),
-		}
-
-		if err := s.oauthRepo.CreateAuthCode(r.Context(), authCode); err != nil {
-			redirectWithError(w, r, redirectURI, "server_error", "failed to create authorization code", q.Get("state"))
-			return
-		}
-
-		// Build redirect URL with code
-		redirectURL, err := url.Parse(redirectURI)
-		if err != nil {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "invalid redirect_uri")
-			return
-		}
-		rq := redirectURL.Query()
-		rq.Set("code", code)
-		if state := q.Get("state"); state != "" {
-			rq.Set("state", state)
-		}
-		redirectURL.RawQuery = rq.Encode()
-
-		// Clear the short-lived session cookie after successful authorization
-		http.SetCookie(w, &http.Cookie{
-			Name:     "nram_session",
-			Value:    "",
-			Path:     "/",
-			MaxAge:   -1,
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
-		http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 	}
 }
 
@@ -444,8 +354,12 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 	}
 
 	// Generate access token (JWT), including the audience claim when a resource
-	// indicator is present (RFC 8707 §2).
-	accessToken, err := generateJWTWithAudience(authCode.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry, effectiveResource)
+	// indicator is present (RFC 8707 §2). If the auth code was minted under a
+	// share, the share_token_id propagates to the JWT (stid claim) and the
+	// refresh token (share_token_id column) so the middleware can scope every
+	// downstream request against the share's grant set and so share revocation
+	// cascades through the entire derived chain.
+	accessToken, err := generateJWTWithAudience(authCode.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry, effectiveResource, authCode.ShareTokenID)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to generate access token")
 		return
@@ -457,11 +371,12 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 	refreshExpiry := time.Now().UTC().Add(refreshTokenExpiry)
 
 	refreshToken := &model.OAuthRefreshToken{
-		TokenHash: refreshHash,
-		ClientID:  authCode.ClientID,
-		UserID:    authCode.UserID,
-		Scope:     authCode.Scope,
-		ExpiresAt: &refreshExpiry,
+		TokenHash:    refreshHash,
+		ClientID:     authCode.ClientID,
+		UserID:       authCode.UserID,
+		Scope:        authCode.Scope,
+		ShareTokenID: authCode.ShareTokenID,
+		ExpiresAt:    &refreshExpiry,
 	}
 	if err := s.oauthRepo.CreateRefreshToken(r.Context(), refreshToken); err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to create refresh token")
@@ -508,6 +423,23 @@ func (s *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Share-scoped refresh tokens must re-validate the parent share on every
+	// rotation. The cascade-revoke on share revocation is best-effort; if it
+	// raced or errored, the refresh row could still be live while the share
+	// itself is dead. Fail at /token rather than minting a fresh access JWT
+	// that the middleware will then reject on every /mcp call.
+	if storedToken.ShareTokenID != nil {
+		if s.shareTokens == nil {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "share-token validation is not configured")
+			return
+		}
+		share, err := s.shareTokens.GetByID(r.Context(), *storedToken.ShareTokenID)
+		if err != nil || share == nil || !share.Active(time.Now().UTC()) {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "share token no longer active")
+			return
+		}
+	}
+
 	// Look up user role and org ID
 	role := "member"
 	var userOrgID uuid.UUID
@@ -517,8 +449,11 @@ func (s *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 		userOrgID = user.OrgID
 	}
 
-	// Generate new access token
-	accessToken, err := GenerateJWT(storedToken.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry)
+	// Generate new access token. Share-scoped tokens propagate share_token_id
+	// across the refresh boundary so the middleware continues to apply the
+	// share's grant set after rotation. Plain account-holder refreshes pass
+	// nil and behave as before.
+	accessToken, err := GenerateShareScopedJWT(storedToken.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry, "", storedToken.ShareTokenID)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to generate access token")
 		return
@@ -535,11 +470,12 @@ func (s *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 	newRefreshExpiry := time.Now().UTC().Add(refreshTokenExpiry)
 
 	newRefreshToken := &model.OAuthRefreshToken{
-		TokenHash: newRefreshHash,
-		ClientID:  storedToken.ClientID,
-		UserID:    storedToken.UserID,
-		Scope:     storedToken.Scope,
-		ExpiresAt: &newRefreshExpiry,
+		TokenHash:    newRefreshHash,
+		ClientID:     storedToken.ClientID,
+		UserID:       storedToken.UserID,
+		Scope:        storedToken.Scope,
+		ShareTokenID: storedToken.ShareTokenID,
+		ExpiresAt:    &newRefreshExpiry,
 	}
 	if err := s.oauthRepo.CreateRefreshToken(r.Context(), newRefreshToken); err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to create new refresh token")
@@ -621,6 +557,36 @@ func (s *OAuthServer) UserInfoHandler() http.HandlerFunc {
 			Name:  user.DisplayName,
 			Role:  user.Role,
 			OrgID: user.OrgID.String(),
+		}
+
+		// Share-scoped tokens authenticate as the owner but the recipient is
+		// a third party. Re-validate the share is still active (mirrors the
+		// per-request middleware check; without this, /userinfo keeps
+		// returning identity for the JWT TTL after the owner revokes), and
+		// scrub every owner-identifying field so the recipient cannot learn
+		// the owner's name, email, stable user UUID, or org assignment.
+		// Sub is rewritten to the share id so the response stays OIDC-valid
+		// without leaking the owner.
+		if claims.ShareTokenID != "" {
+			if s.shareTokens == nil {
+				writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "share-token validation is not configured")
+				return
+			}
+			shareID, parseErr := uuid.Parse(claims.ShareTokenID)
+			if parseErr != nil {
+				writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "share_token_id is not a valid uuid")
+				return
+			}
+			share, lookupErr := s.shareTokens.GetByID(r.Context(), shareID)
+			if lookupErr != nil || share == nil || !share.Active(time.Now().UTC()) {
+				writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "share token no longer active")
+				return
+			}
+			resp.Sub = shareID.String()
+			resp.Email = ""
+			resp.Name = ""
+			resp.Role = "share_bearer"
+			resp.OrgID = ""
 		}
 
 		w.Header().Set("Content-Type", "application/json")

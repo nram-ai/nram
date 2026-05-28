@@ -68,6 +68,11 @@ func handleProjectsResource(ctx context.Context, s *Server, _ mcp.ReadResourceRe
 
 	items := make([]projectItem, 0, len(projects))
 	for _, p := range projects {
+		// Share-bearers may only see projects covered by their grant set.
+		// shareTokenAllowsProjectID is a no-op for non-share callers.
+		if !shareTokenAllowsProjectID(ac, p.ID) {
+			continue
+		}
 		items = append(items, projectItem{
 			ID:          p.ID,
 			Name:        p.Name,
@@ -157,6 +162,11 @@ func handleProjectEntitiesResource(ctx context.Context, s *Server, request mcp.R
 		return nil, fmt.Errorf("project not found")
 	}
 
+	// Share-bearers may only read entities for projects in their grant set.
+	if !shareTokenAllowsProjectID(ac, project.ID) {
+		return nil, fmt.Errorf("project not found")
+	}
+
 	entities, err := deps.EntityReader.ListByNamespace(ctx, project.NamespaceID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list entities: %w", err)
@@ -238,6 +248,11 @@ func handleProjectGraphResource(ctx context.Context, s *Server, request mcp.Read
 
 	project, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, slug)
 	if err != nil {
+		return nil, fmt.Errorf("project not found")
+	}
+
+	// Share-bearers may only read the graph for projects in their grant set.
+	if !shareTokenAllowsProjectID(ac, project.ID) {
 		return nil, fmt.Errorf("project not found")
 	}
 

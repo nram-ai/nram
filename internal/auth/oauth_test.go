@@ -275,15 +275,21 @@ func TestAuthorizeHandler_ValidPKCE_RedirectsWithCode(t *testing.T) {
 	codeVerifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	codeChallenge := generateCodeChallenge(codeVerifier)
 
-	q := url.Values{}
-	q.Set("client_id", env.client.ClientID)
-	q.Set("redirect_uri", "https://example.com/callback")
-	q.Set("response_type", "code")
-	q.Set("code_challenge", codeChallenge)
-	q.Set("code_challenge_method", "S256")
-	q.Set("state", "xyz123")
+	// Drive the consent screen's account-holder path. The pre-consent
+	// auto-approve flow was replaced; POST /authorize with auth_mode=account
+	// is the equivalent of the old GET-with-auth-context redirect.
+	form := url.Values{}
+	form.Set("client_id", env.client.ClientID)
+	form.Set("redirect_uri", "https://example.com/callback")
+	form.Set("response_type", "code")
+	form.Set("code_challenge", codeChallenge)
+	form.Set("code_challenge_method", "S256")
+	form.Set("state", "xyz123")
+	form.Set("auth_mode", "account")
+	form.Set("decision", "approve")
 
-	req := httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil)
+	req := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req = req.WithContext(WithContext(req.Context(), &AuthContext{UserID: env.user.ID, Role: env.user.Role}))
 	rec := httptest.NewRecorder()
 
@@ -318,21 +324,22 @@ func TestAuthorizeHandler_Unauthenticated(t *testing.T) {
 	q.Set("code_challenge_method", "S256")
 
 	req := httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil)
-	// No auth context set
+	// No auth context set — the consent screen renders the share-paste path
+	// and a "Sign in" link to /login for the account-holder path. The old
+	// auto-redirect-to-/login was removed when the consent screen took over.
 	rec := httptest.NewRecorder()
 
 	env.server.AuthorizeHandler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected 302, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (consent screen), got %d", rec.Code)
 	}
 
-	loc := rec.Header().Get("Location")
-	if loc == "" {
-		t.Fatal("expected Location header on redirect")
+	if !strings.Contains(rec.Body.String(), "/login?redirect=") {
+		t.Fatalf("expected consent screen to include /login link; body did not contain it")
 	}
-	if !strings.HasPrefix(loc, "/login?redirect=") {
-		t.Fatalf("expected redirect to /login, got %q", loc)
+	if !strings.Contains(rec.Body.String(), "nram_s_") {
+		t.Fatalf("expected consent screen to mention share-token prefix; body did not contain it")
 	}
 }
 
@@ -416,20 +423,26 @@ func TestAuthorizeHandler_UnregisteredRedirectURI(t *testing.T) {
 // Token endpoint tests
 // ---------------------------------------------------------------------------
 
-// createAuthCodeForTokenTest creates a valid authorization code via the authorize endpoint.
+// createAuthCodeForTokenTest creates a valid authorization code via the
+// authorize endpoint. Uses the consent screen's POST flow (auth_mode=account,
+// decision=approve) with the auth context already set on the request to
+// represent an already-logged-in user.
 func createAuthCodeForTokenTest(t *testing.T, env *testOAuthEnv, codeVerifier string) string {
 	t.Helper()
 	codeChallenge := generateCodeChallenge(codeVerifier)
 
-	q := url.Values{}
-	q.Set("client_id", env.client.ClientID)
-	q.Set("redirect_uri", "https://example.com/callback")
-	q.Set("response_type", "code")
-	q.Set("code_challenge", codeChallenge)
-	q.Set("code_challenge_method", "S256")
-	q.Set("scope", "read write")
+	form := url.Values{}
+	form.Set("client_id", env.client.ClientID)
+	form.Set("redirect_uri", "https://example.com/callback")
+	form.Set("response_type", "code")
+	form.Set("code_challenge", codeChallenge)
+	form.Set("code_challenge_method", "S256")
+	form.Set("scope", "read write")
+	form.Set("auth_mode", "account")
+	form.Set("decision", "approve")
 
-	req := httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil)
+	req := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req = req.WithContext(WithContext(req.Context(), &AuthContext{UserID: env.user.ID, Role: env.user.Role}))
 	rec := httptest.NewRecorder()
 	env.server.AuthorizeHandler().ServeHTTP(rec, req)

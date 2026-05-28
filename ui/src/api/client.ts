@@ -37,7 +37,7 @@ function getAuthHeaders(): Record<string, string> {
   return {};
 }
 
-async function request<T>(
+export async function request<T>(
   method: string,
   path: string,
   body?: unknown,
@@ -1957,7 +1957,21 @@ export const meAPI = {
     request<ExportJob>("GET", `/me/exports/${id}`),
   deleteExportJob: (id: string) =>
     request<void>("DELETE", `/me/exports/${id}`),
+
 };
+
+// Share-token types + sharesAPI live in ./shares.ts. Re-exported here so
+// existing imports from "./client" continue to compile after the extraction.
+export type {
+  SharePermission,
+  ShareGrantInput,
+  ShareGrant,
+  ShareBinding,
+  ShareToken,
+  CreateShareRequest,
+  ShareCreatedResponse,
+} from "./shares";
+export { sharesAPI } from "./shares";
 
 // --- Org API (org-scoped endpoints) ---
 
