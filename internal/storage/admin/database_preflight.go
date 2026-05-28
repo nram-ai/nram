@@ -44,6 +44,13 @@ var preflightTables = []string{
 	"oauth_authorization_codes",
 	"oauth_idp_configs",
 	"oauth_clients",
+	// share_token_grants references share_tokens (and projects); drop it
+	// first. share_tokens is referenced by oauth_clients /
+	// oauth_authorization_codes / oauth_refresh_tokens via the
+	// share_token_id columns added in migration 000040, so it must drop
+	// after those oauth_* entries above.
+	"share_token_grants",
+	"share_tokens",
 	"token_usage",
 	"webhooks",
 	"api_keys",
