@@ -75,6 +75,7 @@ type ConsolidationPhase struct {
 	embedderProvider EmbeddingProviderFunc
 	settings         SettingsResolver
 	vectorPurger     VectorPurger
+	enrichmentQueue  EnrichmentQueueWriter
 }
 
 // AttachVectorPurger wires a VectorPurger so dream-side state transitions
@@ -91,6 +92,12 @@ func (p *ConsolidationPhase) AttachVectorPurger(vp VectorPurger) {
 // the embedding provider is unavailable. token_usage rows are written by the
 // UsageRecordingProvider middleware wrapping the registry-issued providers;
 // no per-phase recorder is needed.
+//
+// enrichmentQueue may be nil; when nil, newly-synthesized dream memories are
+// not enqueued for augmentation/embedding and must rely on the admin
+// BackfillAugmentation path to become vector-searchable. Production wiring
+// always passes a non-nil queue; test harnesses pass nil when they do not
+// exercise the enqueue.
 func NewConsolidationPhase(
 	memories MemoryReader,
 	memWriter MemoryWriter,
@@ -98,6 +105,7 @@ func NewConsolidationPhase(
 	llmProvider LLMProviderFunc,
 	embedderProvider EmbeddingProviderFunc,
 	settings SettingsResolver,
+	enrichmentQueue EnrichmentQueueWriter,
 ) *ConsolidationPhase {
 	return &ConsolidationPhase{
 		memories:         memories,
@@ -106,6 +114,7 @@ func NewConsolidationPhase(
 		llmProvider:      llmProvider,
 		embedderProvider: embedderProvider,
 		settings:         settings,
+		enrichmentQueue:  enrichmentQueue,
 	}
 }
 
@@ -1229,7 +1238,23 @@ func (p *ConsolidationPhase) consolidate(
 	allMemories []model.Memory,
 ) (bool, error) {
 	const subPhase = model.DreamSubPhaseConsolidate
-	// Filter to non-deleted, non-dream, non-superseded memories.
+	// DREAM-RECURSION GUARD — second prong (consolidation side).
+	//
+	// The source==DreamSource filter below is load-bearing: without it the
+	// next consolidation pass would cluster existing dream syntheses into
+	// new dreams, producing dream-of-dream-of-dream cascades. This is the
+	// counterpart to the first prong at the synthMemory creation site
+	// below (search for "DREAM-RECURSION GUARD — first prong") and to the
+	// worker-side skip gates in:
+	//
+	//   - internal/enrichment/worker.go (WorkerPool.runPreEmbed skipFact / skipEntity)
+	//   - internal/enrichment/phase_ingestion.go (runIngestionDecision early-return)
+	//
+	// Contract enforcer: internal/dreaming/dream_recursion_guard_test.go.
+	//
+	// Also filters non-deleted, non-superseded — those are independent of
+	// the recursion guard but share the same "candidates the next cluster
+	// can pull from" predicate.
 	var candidates []model.Memory
 	for _, m := range allMemories {
 		if m.DeletedAt != nil || m.SupersededBy != nil {
@@ -1256,6 +1281,7 @@ func (p *ConsolidationPhase) consolidate(
 		"errors_synth":           0,
 		"errors_audit":           0,
 		"errors_create":          0,
+		"errors_enrich_enqueue":  0,
 		"embedding_calls":        0,
 		"embedding_tokens_spent": 0,
 	}
@@ -1421,6 +1447,29 @@ func (p *ConsolidationPhase) consolidate(
 			model.DreamMetaSourceMemoryIDs: sourceIDs,
 		})
 
+		// DREAM-RECURSION GUARD — first prong (creation side).
+		//
+		// Source=DreamSource and Enriched=true are both load-bearing for the
+		// dream-of-dream-of-dream cascade prevention contract. The enrichment
+		// worker reads BOTH signals at three skip sites; either alone is
+		// sufficient. Symmetric sites that must stay aligned with this one:
+		//
+		//   - internal/enrichment/worker.go (WorkerPool.runPreEmbed skipFact / skipEntity)
+		//   - internal/enrichment/phase_ingestion.go (runIngestionDecision early-return)
+		//   - internal/dreaming/phase_consolidation.go (second prong: consolidate()
+		//       candidate-filter loop excludes source=="dream" so dreams cannot
+		//       be clustered into further dreams)
+		//
+		// What runs for the enqueued job below: ingestion-decision short-
+		// circuits (Enriched/source), fact + entity extraction skip (the only
+		// memory- and graph-node-creating phases), augmentation generates
+		// paraphrase queries (no new rows), embedding writes the vector,
+		// finalize stamps augmented_queries / augmented_embedding_at /
+		// embedding_dim. Nothing in the enrichment pipeline can produce a
+		// derivative row that would feed back into the next dream cycle.
+		//
+		// Contract enforcer:
+		//   internal/dreaming/dream_recursion_guard_test.go
 		source := model.DreamSource
 		synthMemory := &model.Memory{
 			ID:          uuid.New(),
@@ -1449,6 +1498,35 @@ func (p *ConsolidationPhase) consolidate(
 				ParentID:    &parentID,
 				Relation:    model.LineageSynthesizedFrom,
 			})
+		}
+
+		// Enqueue for augmentation + embedding. The dream-recursion-guard
+		// comment above explains why this is safe: every phase that could
+		// create derivative rows short-circuits on Source=DreamSource or
+		// Enriched=true. Enqueue failure is non-fatal — the memory still
+		// exists; the admin BackfillAugmentation path in
+		// service.EnrichService remains the recovery route. The cycle
+		// stats counter lets operators distinguish "synthesis created
+		// and scheduled" from "synthesis created but stranded" without
+		// having to grep logs.
+		if p.enrichmentQueue != nil {
+			now := time.Now().UTC()
+			job := &model.EnrichmentJob{
+				ID:          uuid.New(),
+				MemoryID:    synthMemory.ID,
+				NamespaceID: cycle.NamespaceID,
+				Status:      model.EnrichmentStatusPending,
+				Priority:    0,
+				Attempts:    0,
+				MaxAttempts: 3,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			}
+			if err := p.enrichmentQueue.Enqueue(ctx, job); err != nil {
+				slog.Warn("dreaming: synthesis enrichment enqueue failed",
+					"memory", synthMemory.ID, "err", err)
+				stats["errors_enrich_enqueue"] = stats["errors_enrich_enqueue"].(int) + 1
+			}
 		}
 
 		stats["created"] = stats["created"].(int) + 1

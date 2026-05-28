@@ -593,7 +593,7 @@ func main() {
 	dreamLogRepo := storage.NewDreamLogRepo(db)
 	dreamDirtyRepo := storage.NewDreamDirtyRepo(db)
 
-	consolidationPhase := dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc)
+	consolidationPhase := dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, enrichmentQueueRepo)
 	contradictionPhase := dreaming.NewContradictionPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc)
 	// Wire the active vector store into dream-side state transitions so that
 	// demotion and supersession purge vectors alongside the row-level update,

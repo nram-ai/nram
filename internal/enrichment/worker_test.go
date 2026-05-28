@@ -1122,6 +1122,53 @@ func TestProcessJob_SkipsLLMWhenAlreadyEnriched(t *testing.T) {
 	}
 }
 
+// TestProcessJob_SkipsLLMWhenSourceIsDream pins one half of the dream-
+// recursion guard at the worker's skipFact / skipEntity gates. A memory
+// with Source=DreamSource MUST skip fact and entity extraction even when
+// Enriched=false, because the source check (not the Enriched flag) is the
+// readable expression of the recursion-prevention contract. Removing the
+// Source==DreamSource clause from worker.go skipFact/skipEntity makes this test fail
+// — that is the entire point. Sibling site: phase_ingestion.go (the
+// runIngestionDecision source-check early-return covered by
+// TestIngestion_SkipsWhenSourceIsDream).
+func TestProcessJob_SkipsLLMWhenSourceIsDream(t *testing.T) {
+	factLLM, entityLLM, embedProv, factCalls, entityCalls, embedCalls := backfillProbeProviders()
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	mem := testMemory()
+	// Deliberately Enriched=false so the source check is the only signal
+	// gating fact/entity extraction. If the worker dropped the source
+	// check from its predicate, this test would see factCalls>0.
+	mem.Enriched = false
+	src := model.DreamSource
+	mem.Source = &src
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+
+	if *factCalls != 0 {
+		t.Errorf("dream-source memory must skip fact extraction; got %d fact calls", *factCalls)
+	}
+	if *entityCalls != 0 {
+		t.Errorf("dream-source memory must skip entity extraction; got %d entity calls", *entityCalls)
+	}
+	if *embedCalls != 1 {
+		t.Errorf("dream-source memory must still embed (augmentation runs unchanged); got %d embed calls", *embedCalls)
+	}
+	if len(h.creator.created) != 0 {
+		t.Errorf("dream-source memory must not produce extracted-fact children; got %d created", len(h.creator.created))
+	}
+	if len(h.lineage.created) != 0 {
+		t.Errorf("dream-source memory must not produce new lineage rows; got %d", len(h.lineage.created))
+	}
+	if len(h.entities.upserted) != 0 {
+		t.Errorf("dream-source memory must not upsert entities; got %d", len(h.entities.upserted))
+	}
+}
+
 // backfillProbeProviders builds counting fact/entity/embed providers used
 // across the per-step gating tests. Returns the providers and pointers to
 // per-call counters so individual tests can assert which LLM steps fired.

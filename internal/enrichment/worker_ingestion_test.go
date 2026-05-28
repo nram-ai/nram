@@ -213,6 +213,67 @@ func TestIngestion_Disabled_PhaseSkipped(t *testing.T) {
 	}
 }
 
+// TestIngestion_SkipsWhenSourceIsDream pins the ingestion-decision half of
+// the dream-recursion guard. A memory with Source=DreamSource MUST early-
+// return from runIngestionDecision even when Enriched=false and the phase
+// is enabled, because the source check (not the Enriched flag) is the
+// readable expression of the recursion-prevention contract. Removing the
+// Source==DreamSource clause from phase_ingestion.go runIngestionDecision makes this test
+// fail — that is the entire point. Sibling test: worker_test.go
+// TestProcessJob_SkipsLLMWhenSourceIsDream.
+func TestIngestion_SkipsWhenSourceIsDream(t *testing.T) {
+	ingestCalls := 0
+	ingestLLM := &mockLLMProvider{name: "test-ingest", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		ingestCalls++
+		return &provider.CompletionResponse{Content: `{"operation":"ADD","target_id":null,"rationale":""}`, Model: "ingest-model"}, nil
+	}}
+	h := newIngestionHarness(
+		map[string]string{
+			service.SettingIngestionDecisionEnabled:  "true",
+			service.SettingIngestionDecisionShadow:   "false",
+			service.SettingExtractedFactGuardEnabled: "false",
+		},
+		nil,
+		minimalFactLLM(),
+		minimalEntityLLM(),
+		ingestLLM,
+		constEmbedder(),
+	)
+
+	mem := testMemory()
+	// Deliberately Enriched=false so the source check is the only signal
+	// gating the ingestion-decision phase. If the early-return dropped the
+	// source clause, ingestCalls would be > 0.
+	mem.Enriched = false
+	src := model.DreamSource
+	mem.Source = &src
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+
+	if ingestCalls != 0 {
+		t.Errorf("dream-source memory must not invoke the ingestion-decision LLM; got %d calls", ingestCalls)
+	}
+	// MarkEnriched still runs at the end of the job, but with no
+	// ingestion_decision stamp in metadata (the phase early-returned).
+	if len(h.updater.enrichedMarks) != 1 {
+		t.Fatalf("expected 1 parent MarkEnriched, got %d", len(h.updater.enrichedMarks))
+	}
+	if md := h.updater.enrichedMarks[0].metadata; md != nil {
+		// A dream-source skip should write nil metadata (same as the
+		// disabled-phase case), not stamp an ingestion_decision key.
+		var meta map[string]any
+		if err := json.Unmarshal(md, &meta); err == nil {
+			if _, present := meta["ingestion_decision"]; present {
+				t.Errorf("dream-source skip must not stamp ingestion_decision metadata; got %q", string(md))
+			}
+		}
+	}
+}
+
 func TestIngestion_NoMatches_AddDecisionStampsMetadata(t *testing.T) {
 	h := newIngestionHarness(
 		map[string]string{

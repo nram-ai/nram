@@ -205,6 +205,7 @@ func TestStampReinforce_PreservesSourceMemoryIDs(t *testing.T) {
 		func() provider.LLMProvider { return nil },
 		func() provider.EmbeddingProvider { return nil },
 		noveltySettings(false),
+		nil,
 	)
 
 	stale := collectReinforceStale([]model.Memory{mem})
@@ -265,6 +266,7 @@ func TestStampReinforce_RecoversFromCallerPassingEmptyMeta(t *testing.T) {
 		func() provider.LLMProvider { return nil },
 		func() provider.EmbeddingProvider { return nil },
 		noveltySettings(false),
+		nil,
 	)
 
 	// Caller passes a deliberately-empty meta map.
@@ -300,6 +302,7 @@ func TestResolveSourceMemoryIDs_FallsBackToLineage(t *testing.T) {
 		func() provider.LLMProvider { return nil },
 		func() provider.EmbeddingProvider { return nil },
 		noveltySettings(false),
+		nil,
 	)
 
 	meta := decodeMetadata(mem.Metadata)
@@ -336,6 +339,7 @@ func TestResolveSourceMemoryIDs_NoFallbackWhenMetadataAlreadyHasIDs(t *testing.T
 		func() provider.LLMProvider { return nil },
 		func() provider.EmbeddingProvider { return nil },
 		noveltySettings(false),
+		nil,
 	)
 
 	meta := decodeMetadata(mem.Metadata)
@@ -365,6 +369,7 @@ func TestResolveSourceMemoryIDs_TrueOrphanReturnsNil(t *testing.T) {
 		func() provider.LLMProvider { return nil },
 		func() provider.EmbeddingProvider { return nil },
 		noveltySettings(false),
+		nil,
 	)
 
 	got := phase.resolveSourceMemoryIDs(context.Background(), &mem, decodeMetadata(mem.Metadata))

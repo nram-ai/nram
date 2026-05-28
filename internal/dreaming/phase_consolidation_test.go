@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -251,6 +252,7 @@ func newAuditPhase(emb provider.EmbeddingProvider, llm provider.LLMProvider, set
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
 		settings,
+		nil,
 	)
 }
 
@@ -1076,6 +1078,7 @@ func reinforcePhase(llm provider.LLMProvider, settings SettingsResolver) (*Conso
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return nil },
 		settings,
+		nil,
 	)
 	return phase, writer
 }
@@ -1528,11 +1531,46 @@ func consolidateSettings(noveltyEnabled bool) *staticDreamSettings {
 	}
 }
 
-// consolidatePhase wires a ConsolidationPhase + writer for direct
-// invocation of consolidate(). embedder may be nil to skip the audit's
-// embed pre-filter and route directly to the LLM judge.
-func consolidatePhase(llm provider.LLMProvider, embedder provider.EmbeddingProvider, settings SettingsResolver) (*ConsolidationPhase, *updatingMemoryWriter) {
+// enqueueRecorder is a test double for EnrichmentQueueWriter that captures
+// every Enqueue call so tests can assert ConsolidationPhase enqueued the
+// expected job for a newly-synthesized dream memory. When err is non-nil
+// every Enqueue call fails with that error and no job is recorded; tests
+// that want to flip between failure and success modes can mutate err
+// between cycles. Sticky failure (as opposed to a one-shot reset) makes
+// multi-cluster fixtures behave predictably: every cluster's enqueue
+// failure is observed, not silently absorbed after the first.
+type enqueueRecorder struct {
+	mu   sync.Mutex
+	jobs []model.EnrichmentJob
+	err  error
+}
+
+func (r *enqueueRecorder) Enqueue(_ context.Context, item *model.EnrichmentJob) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
+	}
+	r.jobs = append(r.jobs, *item)
+	return nil
+}
+
+func (r *enqueueRecorder) snapshot() []model.EnrichmentJob {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]model.EnrichmentJob, len(r.jobs))
+	copy(out, r.jobs)
+	return out
+}
+
+// consolidatePhase wires a ConsolidationPhase + writer + enqueue recorder
+// for direct invocation of consolidate(). embedder may be nil to skip the
+// audit's embed pre-filter and route directly to the LLM judge. The
+// recorder lets the synthesis-creation tests assert the dream memory is
+// enqueued for augmentation; tests that do not care can discard with `_`.
+func consolidatePhase(llm provider.LLMProvider, embedder provider.EmbeddingProvider, settings SettingsResolver) (*ConsolidationPhase, *updatingMemoryWriter, *enqueueRecorder) {
 	writer := &updatingMemoryWriter{}
+	recorder := &enqueueRecorder{}
 	phase := NewConsolidationPhase(
 		&fakeMemoryReader{},
 		writer,
@@ -1540,8 +1578,9 @@ func consolidatePhase(llm provider.LLMProvider, embedder provider.EmbeddingProvi
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return embedder },
 		settings,
+		recorder,
 	)
-	return phase, writer
+	return phase, writer, recorder
 }
 
 // candidateForConsolidate builds a non-DreamSource memory eligible as a
@@ -1601,7 +1640,7 @@ func TestConsolidate_StampsOnAuditRejection(t *testing.T) {
 		content: `{"novel_facts": []}`,
 		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
 	}
-	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+	phase, writer, _ := consolidatePhase(llm, nil, consolidateSettings(true))
 
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
@@ -1661,7 +1700,7 @@ func TestConsolidate_StampsOnSuccessfulCreate(t *testing.T) {
 		content: `{"novel_facts": ["new fact"]}`,
 		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
 	}
-	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+	phase, writer, _ := consolidatePhase(llm, nil, consolidateSettings(true))
 
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
@@ -1688,6 +1727,94 @@ func TestConsolidate_StampsOnSuccessfulCreate(t *testing.T) {
 	}
 }
 
+// TestConsolidate_EnqueuesEnrichmentForCreatedSynthesis pins the dream-
+// augmentation contract: when consolidate() creates a synthesis memory,
+// it must also enqueue exactly one EnrichmentJob targeting that memory so
+// the augmentation + embedding pipeline runs. Without the enqueue, the
+// synthesis stays unembedded and unsearchable until the admin
+// BackfillAugmentation path is run manually.
+func TestConsolidate_EnqueuesEnrichmentForCreatedSynthesis(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	llm := &scriptedJudgeLLM{
+		content: `{"novel_facts": ["new fact"]}`,
+		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+	}
+	phase, writer, recorder := consolidatePhase(llm, nil, consolidateSettings(true))
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.consolidate(context.Background(), cycle, budget, logger, llm, []model.Memory{a, b, c}); err != nil {
+		t.Fatalf("consolidate returned error: %v", err)
+	}
+
+	if len(writer.creates) != 1 {
+		t.Fatalf("expected exactly one synthesis Create; got %d", len(writer.creates))
+	}
+	synthID := writer.creates[0].ID
+
+	enqueued := recorder.snapshot()
+	if len(enqueued) != 1 {
+		t.Fatalf("expected exactly one enrichment Enqueue for the new synthesis; got %d", len(enqueued))
+	}
+	job := enqueued[0]
+	if job.MemoryID != synthID {
+		t.Errorf("enqueued job.MemoryID = %s; want synthesis ID %s", job.MemoryID, synthID)
+	}
+	if job.NamespaceID != ns {
+		t.Errorf("enqueued job.NamespaceID = %s; want cycle namespace %s", job.NamespaceID, ns)
+	}
+	if job.Status != model.EnrichmentStatusPending {
+		t.Errorf("enqueued job.Status = %q; want %q", job.Status, model.EnrichmentStatusPending)
+	}
+	if job.MaxAttempts == 0 {
+		t.Errorf("enqueued job.MaxAttempts must be > 0; got 0 (would never retry)")
+	}
+	if job.ID == uuid.Nil {
+		t.Errorf("enqueued job.ID must be non-zero (DB requires unique non-nil)")
+	}
+}
+
+// TestConsolidate_EnqueueFailureIsNonFatal pins the recovery contract: when
+// the enrichment queue Enqueue call fails (e.g. transient DB write error),
+// the consolidation cycle must continue. The dream memory still exists in
+// the memories table, and the admin BackfillAugmentation path remains the
+// recovery route. Failing the cycle on enqueue error would block every
+// subsequent cluster in the same run for a transient failure.
+func TestConsolidate_EnqueueFailureIsNonFatal(t *testing.T) {
+	ns := uuid.New()
+	now := time.Now().UTC()
+	a, b, c := triClusterCandidates(ns, now)
+
+	llm := &scriptedJudgeLLM{
+		content: `{"novel_facts": ["new fact"]}`,
+		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+	}
+	phase, writer, recorder := consolidatePhase(llm, nil, consolidateSettings(true))
+	recorder.err = errors.New("simulated enqueue failure")
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+	budget := NewTokenBudget(10000, 2048)
+
+	if _, err := phase.consolidate(context.Background(), cycle, budget, logger, llm, []model.Memory{a, b, c}); err != nil {
+		t.Fatalf("consolidate must not return error when enqueue fails; got %v", err)
+	}
+	if len(writer.creates) != 1 {
+		t.Fatalf("synthesis must persist even when enqueue fails; got %d creates", len(writer.creates))
+	}
+	if len(recorder.snapshot()) != 0 {
+		t.Errorf("failing enqueue must not be recorded; got %d snapshots", len(recorder.snapshot()))
+	}
+	if len(writer.metadataUpdates) != 3 {
+		t.Errorf("source members must still be stamped after enqueue failure; got %d UpdateMetadata calls", len(writer.metadataUpdates))
+	}
+}
+
 // TestConsolidate_FreshClusterSkipped asserts the eligibility filter:
 // when every member of the cluster is stamp-fresh AND the stored
 // fingerprint matches the current cluster's fingerprint, the cluster is
@@ -1701,7 +1828,7 @@ func TestConsolidate_FreshClusterSkipped(t *testing.T) {
 	stampClusterFresh(t, []*model.Memory{&a, &b, &c}, fp)
 
 	llm := &scriptedJudgeLLM{content: `{"novel_facts": []}`}
-	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+	phase, writer, _ := consolidatePhase(llm, nil, consolidateSettings(true))
 
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
@@ -1745,7 +1872,7 @@ func TestConsolidate_StaleStampReEvaluated(t *testing.T) {
 		content: `{"novel_facts": []}`,
 		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
 	}
-	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+	phase, writer, _ := consolidatePhase(llm, nil, consolidateSettings(true))
 
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
@@ -1789,7 +1916,7 @@ func TestConsolidate_ClusterReshape_StalesSurvivors(t *testing.T) {
 		content: `{"novel_facts": []}`,
 		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
 	}
-	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+	phase, writer, _ := consolidatePhase(llm, nil, consolidateSettings(true))
 
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
@@ -1826,7 +1953,7 @@ func TestConsolidate_StampsPersistAcrossCycles(t *testing.T) {
 		content: `{"novel_facts": []}`,
 		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
 	}
-	phase, writer := consolidatePhase(llm, nil, consolidateSettings(true))
+	phase, writer, _ := consolidatePhase(llm, nil, consolidateSettings(true))
 
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
@@ -1923,7 +2050,7 @@ func TestConsolidate_ErrorPathsLeaveStampFree(t *testing.T) {
 			now := time.Now().UTC()
 			a, b, c := triClusterCandidates(ns, now)
 
-			phase, writer := consolidatePhase(tc.llm, tc.embedder, tc.settings)
+			phase, writer, _ := consolidatePhase(tc.llm, tc.embedder, tc.settings)
 			if tc.writerSetup != nil {
 				tc.writerSetup(writer)
 			}
@@ -2051,6 +2178,7 @@ func TestStampConsolidateLoad_WritesStampPerMember(t *testing.T) {
 		func() provider.LLMProvider { return nil },
 		func() provider.EmbeddingProvider { return nil },
 		noveltySettings(false),
+		nil,
 	)
 
 	ns := uuid.New()

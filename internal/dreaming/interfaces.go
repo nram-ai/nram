@@ -124,6 +124,15 @@ type LineageReader interface {
 	FindConflicts(ctx context.Context, namespaceID uuid.UUID, memoryID uuid.UUID) ([]model.MemoryLineage, error)
 }
 
+// EnrichmentQueueWriter enqueues enrichment jobs. The consolidation phase
+// uses it to schedule augmentation + embedding for newly-synthesized dream
+// memories so they become vector-searchable with the same augmented-query
+// embedding shape user-stored memories receive. Satisfied by
+// *storage.EnrichmentQueueRepo. Matches service.EnrichmentQueueRepository.
+type EnrichmentQueueWriter interface {
+	Enqueue(ctx context.Context, item *model.EnrichmentJob) error
+}
+
 // LLMProviderFunc returns an LLM provider or nil if unavailable.
 type LLMProviderFunc func() provider.LLMProvider
 

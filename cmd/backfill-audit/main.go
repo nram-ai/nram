@@ -106,11 +106,15 @@ func main() {
 		return
 	}
 
+	// nil enrichmentQueue — this CLI only drives AuditExistingDreams,
+	// which never creates new synthesis memories. consolidate() (the path
+	// that enqueues for augmentation) is not exercised here.
 	consolidationPhase := dreaming.NewConsolidationPhase(
 		memoryRepo, memoryRepo, lineageRepo,
 		func() provider.LLMProvider { return registry.GetFact() },
 		func() provider.EmbeddingProvider { return registry.GetEmbedding() },
 		settingsSvc,
+		nil,
 	)
 
 	cycle := &model.DreamCycle{

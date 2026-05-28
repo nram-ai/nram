@@ -1065,9 +1065,27 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	// was wired into the worker, or before mem.Enriched was set on the
 	// synchronous write path). Probe errors fail open — run the step rather
 	// than skip on a transient DB hiccup.
+	//
+	// DREAM-RECURSION GUARD — worker-side enforcement of the dream-of-dream
+	// cascade prevention contract. isDream is the explicit signal so the
+	// guard is readable here regardless of whether Enriched ever decouples
+	// from "skip memory-creating phases" in the future. Both clauses are
+	// load-bearing — either alone is sufficient. Symmetric sites:
+	//
+	//   - internal/dreaming/phase_consolidation.go (synthMemory creation,
+	//       "DREAM-RECURSION GUARD — first prong")
+	//   - internal/dreaming/phase_consolidation.go (consolidate() candidate
+	//       filter, "DREAM-RECURSION GUARD — second prong")
+	//   - internal/enrichment/phase_ingestion.go (runIngestionDecision
+	//       Enriched/source early-return)
+	//
+	// Contract enforcer: internal/dreaming/dream_recursion_guard_test.go
+	// (TestDreamRecursionGuard_EndToEnd, table-driven across Enriched=true
+	// AND Enriched=false to pin each clause independently).
+	isDream := model.MemorySource(mem) == model.DreamSource
 	stepDone := stepDoneSet(job.StepsCompleted)
-	skipFact := mem.Enriched || stepDone[model.StepFactExtraction]
-	skipEntity := mem.Enriched || stepDone[model.StepEntityExtraction]
+	skipFact := isDream || mem.Enriched || stepDone[model.StepFactExtraction]
+	skipEntity := isDream || mem.Enriched || stepDone[model.StepEntityExtraction]
 
 	if !skipFact {
 		if has, probeErr := wp.lineage.HasExtractedFactChildren(ctx, mem.NamespaceID, mem.ID); probeErr != nil {

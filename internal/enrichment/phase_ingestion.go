@@ -66,7 +66,23 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	}
 	// Re-judging an already-enriched memory would write a duplicate lineage
 	// edge. Backfill jobs should never run through this phase.
-	if mem.Enriched {
+	//
+	// DREAM-RECURSION GUARD — the Source==DreamSource clause is the
+	// ingestion-side enforcement of the dream-of-dream cascade prevention
+	// contract. Both clauses are load-bearing — either alone is sufficient.
+	// Symmetric sites:
+	//
+	//   - internal/dreaming/phase_consolidation.go (synthMemory creation,
+	//       "DREAM-RECURSION GUARD — first prong"; sets Source=DreamSource
+	//       and Enriched=true)
+	//   - internal/dreaming/phase_consolidation.go (consolidate() candidate
+	//       filter, "DREAM-RECURSION GUARD — second prong")
+	//   - internal/enrichment/worker.go (WorkerPool.runPreEmbed skipFact /
+	//       skipEntity)
+	//
+	// Contract enforcer: internal/dreaming/dream_recursion_guard_test.go
+	// (TestDreamRecursionGuard_EndToEnd).
+	if mem.Enriched || model.MemorySource(mem) == model.DreamSource {
 		return nil
 	}
 
