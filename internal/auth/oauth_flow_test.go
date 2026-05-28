@@ -158,7 +158,9 @@ func doAuthorizeAccountConsent(t *testing.T, client *http.Client, baseURL string
 // buildOAuthRouter constructs a chi router with:
 //   - GET  /.well-known/oauth-protected-resource
 //   - GET  /.well-known/oauth-authorization-server
-//   - GET  /authorize
+//   - POST /authorize  (consent UI is a React SPA page served separately;
+//     this endpoint handles the form-POST decision)
+//   - GET  /v1/oauth/authorize/context
 //   - POST /token
 //   - POST /register
 //   - GET  /userinfo
@@ -173,7 +175,8 @@ func buildOAuthRouter(oauthSrv *OAuthServer, secret []byte) http.Handler {
 	r.Get("/.well-known/oauth-authorization-server", oauthSrv.MetadataHandler())
 
 	// OAuth endpoints at MCP spec fallback paths (no auth middleware)
-	r.HandleFunc("/authorize", oauthSrv.AuthorizeHandler())
+	r.Post("/authorize", oauthSrv.AuthorizeHandler())
+	r.Get("/v1/oauth/authorize/context", oauthSrv.AuthorizeContextHandler())
 	r.Post("/token", oauthSrv.TokenHandler())
 	r.Post("/register", oauthSrv.RegisterClientHandler())
 	r.Get("/userinfo", oauthSrv.UserInfoHandler())
@@ -813,36 +816,36 @@ func TestOAuthFlow_PKCE_Required(t *testing.T) {
 	params.Set("state", "test-state")
 	// Intentionally omitting code_challenge and code_challenge_method
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/authorize?"+params.Encode(), nil)
+	// PKCE validation runs in the context endpoint that the React consent
+	// page calls on mount. redirect_uri is trusted at this point, so the
+	// server returns 200 with {redirect_to} for the SPA to navigate to.
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/oauth/authorize/context?"+params.Encode(), nil)
 	req.AddCookie(&http.Cookie{Name: "nram_session", Value: sessionToken})
 
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("GET /authorize: %v", err)
+		t.Fatalf("GET /v1/oauth/authorize/context: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	// Should redirect with error since PKCE is required
-	if resp.StatusCode == http.StatusOK {
-		t.Fatal("expected redirect or error, got 200")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with redirect_to, got %d; body: %s", resp.StatusCode, body)
 	}
-
-	if resp.StatusCode == http.StatusFound {
-		location := resp.Header.Get("Location")
-		redirected, _ := url.Parse(location)
-		errParam := redirected.Query().Get("error")
-		if errParam == "" {
-			t.Fatalf("expected error in redirect, got location: %s", location)
-		}
-		t.Logf("PKCE required correctly rejected: error=%s", errParam)
-	} else {
-		// Some servers return 400 directly
-		t.Logf("PKCE required rejected with status %d: %s", resp.StatusCode, body)
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Fatalf("expected 400 or redirect with error, got %d", resp.StatusCode)
-		}
+	var ctxResp struct {
+		RedirectTo string `json:"redirect_to"`
 	}
+	if err := json.Unmarshal(body, &ctxResp); err != nil {
+		t.Fatalf("decode body: %v; body: %s", err, body)
+	}
+	if ctxResp.RedirectTo == "" {
+		t.Fatalf("expected redirect_to set when PKCE missing; got body: %s", body)
+	}
+	redirected, _ := url.Parse(ctxResp.RedirectTo)
+	if redirected.Query().Get("error") == "" {
+		t.Fatalf("expected error in redirect_to, got: %s", ctxResp.RedirectTo)
+	}
+	t.Logf("PKCE required correctly rejected via redirect_to: %s", ctxResp.RedirectTo)
 }
 
 // ---------------------------------------------------------------------------

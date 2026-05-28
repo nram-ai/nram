@@ -2103,3 +2103,101 @@ export const systemAPI = {
     return request<UsageReport>("GET", `/admin/system/usage${qs ? `?${qs}` : ""}`);
   },
 };
+
+// --- OAuth consent + share-accept API ---
+//
+// Backs the pre-auth /authorize and /share/accept React pages. The OAuth
+// consent flow keeps form-POSTs to /authorize for approve and deny so the
+// browser follows the OAuth 302 redirect natively; these JSON endpoints
+// only cover the read-side (validating the request, previewing a pasted
+// share) and the share-accept landing.
+
+export interface OAuthAuthorizeParams {
+  client_id: string;
+  redirect_uri: string;
+  response_type: string;
+  code_challenge: string;
+  code_challenge_method: string;
+  scope?: string;
+  resource?: string;
+  state?: string;
+}
+
+export interface AuthorizeContextResponse {
+  client_id: string;
+  client_name?: string;
+  redirect_uri: string;
+  response_type: string;
+  code_challenge: string;
+  code_challenge_method: string;
+  scope?: string;
+  resource?: string;
+  state?: string;
+  account_user: { display_name: string; email: string } | null;
+  share_token_supported: boolean;
+}
+
+/**
+ * Either the full context payload or a redirect_to URL (returned when an
+ * OAuth error must be surfaced via the registered redirect_uri).
+ */
+export type AuthorizeContextResult =
+  | AuthorizeContextResponse
+  | { redirect_to: string };
+
+export interface SharePreviewGrant {
+  project_name: string;
+  project_slug: string;
+  permission: string;
+}
+
+export interface SharePreviewResponse {
+  owner_name: string;
+  share_name: string;
+  description: string;
+  expires_at: string;
+  is_one_shot: boolean;
+  grants: SharePreviewGrant[];
+}
+
+export interface ShareAcceptResponse {
+  owner_name?: string;
+  share_name?: string;
+  description?: string;
+  expires_at?: string;
+  grants?: SharePreviewGrant[];
+  mcp_server_url?: string;
+  share_token?: string;
+  error?: string;
+}
+
+function oauthQueryString(params: OAuthAuthorizeParams): string {
+  const sp = new URLSearchParams();
+  sp.set("client_id", params.client_id);
+  sp.set("redirect_uri", params.redirect_uri);
+  sp.set("response_type", params.response_type);
+  sp.set("code_challenge", params.code_challenge);
+  sp.set("code_challenge_method", params.code_challenge_method);
+  if (params.scope) sp.set("scope", params.scope);
+  if (params.resource) sp.set("resource", params.resource);
+  if (params.state) sp.set("state", params.state);
+  return sp.toString();
+}
+
+export const oauthAPI = {
+  getAuthorizeContext: (params: OAuthAuthorizeParams) =>
+    request<AuthorizeContextResult>(
+      "GET",
+      `/oauth/authorize/context?${oauthQueryString(params)}`,
+    ),
+  previewShare: (params: OAuthAuthorizeParams & { share_token: string }) =>
+    request<SharePreviewResponse>("POST", "/oauth/share/preview", params),
+};
+
+export const shareAcceptAPI = {
+  get: (token: string) =>
+    request<ShareAcceptResponse>(
+      "GET",
+      `/share/accept?token=${encodeURIComponent(token)}`,
+    ),
+};

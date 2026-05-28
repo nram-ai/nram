@@ -313,7 +313,12 @@ func TestAuthorizeHandler_ValidPKCE_RedirectsWithCode(t *testing.T) {
 	}
 }
 
-func TestAuthorizeHandler_Unauthenticated(t *testing.T) {
+// The pre-render validation that used to back GET /authorize now lives at
+// GET /v1/oauth/authorize/context. The React consent page calls it on
+// mount; the tests below exercise the same validation pathway against
+// the new JSON endpoint.
+
+func TestAuthorizeContext_Unauthenticated(t *testing.T) {
 	env := setupOAuthEnv(t)
 
 	q := url.Values{}
@@ -323,40 +328,46 @@ func TestAuthorizeHandler_Unauthenticated(t *testing.T) {
 	q.Set("code_challenge", "abc")
 	q.Set("code_challenge_method", "S256")
 
-	req := httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil)
-	// No auth context set — the consent screen renders the share-paste path
-	// and a "Sign in" link to /login for the account-holder path. The old
-	// auto-redirect-to-/login was removed when the consent screen took over.
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?"+q.Encode(), nil)
 	rec := httptest.NewRecorder()
 
-	env.server.AuthorizeHandler().ServeHTTP(rec, req)
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 (consent screen), got %d", rec.Code)
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
 	}
-
-	if !strings.Contains(rec.Body.String(), "/login?redirect=") {
-		t.Fatalf("expected consent screen to include /login link; body did not contain it")
+	var got struct {
+		ClientID            string `json:"client_id"`
+		AccountUser         *struct {
+			DisplayName string `json:"display_name"`
+		} `json:"account_user"`
+		ShareTokenSupported bool `json:"share_token_supported"`
 	}
-	if !strings.Contains(rec.Body.String(), "nram_s_") {
-		t.Fatalf("expected consent screen to mention share-token prefix; body did not contain it")
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v; body: %s", err, rec.Body.String())
+	}
+	if got.ClientID != env.client.ClientID {
+		t.Fatalf("client_id echo: got %q, want %q", got.ClientID, env.client.ClientID)
+	}
+	if got.AccountUser != nil {
+		t.Fatalf("expected account_user to be null for unauthenticated caller, got %+v", got.AccountUser)
 	}
 }
 
-func TestAuthorizeHandler_MissingClientID(t *testing.T) {
+func TestAuthorizeContext_MissingClientID(t *testing.T) {
 	env := setupOAuthEnv(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/authorize?response_type=code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?response_type=code", nil)
 	rec := httptest.NewRecorder()
 
-	env.server.AuthorizeHandler().ServeHTTP(rec, req)
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 
-func TestAuthorizeHandler_MissingCodeChallenge(t *testing.T) {
+func TestAuthorizeContext_MissingCodeChallenge_RedirectsViaJSON(t *testing.T) {
 	env := setupOAuthEnv(t)
 
 	q := url.Values{}
@@ -364,22 +375,35 @@ func TestAuthorizeHandler_MissingCodeChallenge(t *testing.T) {
 	q.Set("redirect_uri", "https://example.com/callback")
 	q.Set("response_type", "code")
 
-	req := httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?"+q.Encode(), nil)
 	rec := httptest.NewRecorder()
 
-	env.server.AuthorizeHandler().ServeHTTP(rec, req)
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
 
-	// Should redirect with error since redirect_uri is present
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected 302, got %d", rec.Code)
+	// Post-validated redirect_uri: surface as 200 + {redirect_to} so the
+	// React SPA does the window.location.replace itself.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with redirect_to, got %d; body: %s", rec.Code, rec.Body.String())
 	}
-	loc, _ := url.Parse(rec.Header().Get("Location"))
+	var body struct {
+		RedirectTo string `json:"redirect_to"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.RedirectTo == "" {
+		t.Fatalf("expected redirect_to set, got empty")
+	}
+	loc, err := url.Parse(body.RedirectTo)
+	if err != nil {
+		t.Fatalf("parse redirect_to: %v", err)
+	}
 	if loc.Query().Get("error") != "invalid_request" {
 		t.Fatalf("expected error=invalid_request, got %q", loc.Query().Get("error"))
 	}
 }
 
-func TestAuthorizeHandler_UnknownClientID(t *testing.T) {
+func TestAuthorizeContext_UnknownClientID(t *testing.T) {
 	env := setupOAuthEnv(t)
 
 	q := url.Values{}
@@ -389,17 +413,17 @@ func TestAuthorizeHandler_UnknownClientID(t *testing.T) {
 	q.Set("code_challenge", "abc")
 	q.Set("code_challenge_method", "S256")
 
-	req := httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?"+q.Encode(), nil)
 	rec := httptest.NewRecorder()
 
-	env.server.AuthorizeHandler().ServeHTTP(rec, req)
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 
-func TestAuthorizeHandler_UnregisteredRedirectURI(t *testing.T) {
+func TestAuthorizeContext_UnregisteredRedirectURI(t *testing.T) {
 	env := setupOAuthEnv(t)
 
 	q := url.Values{}
@@ -409,10 +433,10 @@ func TestAuthorizeHandler_UnregisteredRedirectURI(t *testing.T) {
 	q.Set("code_challenge", "abc")
 	q.Set("code_challenge_method", "S256")
 
-	req := httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/oauth/authorize/context?"+q.Encode(), nil)
 	rec := httptest.NewRecorder()
 
-	env.server.AuthorizeHandler().ServeHTTP(rec, req)
+	env.server.AuthorizeContextHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)

@@ -2,9 +2,9 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,9 +16,10 @@ import (
 )
 
 // authorizeRequestParams captures the OAuth authorize request after each
-// field has been validated. The consent screen renders the params back as
-// hidden inputs so the POST handler can recover them without re-parsing the
-// URL (and without trusting client-side preservation across the flow).
+// field has been validated. The React consent page reads these from query
+// params on GET and round-trips them through hidden inputs on the
+// approve/deny form POST so the POST handler can recover them without
+// re-parsing the URL.
 type authorizeRequestParams struct {
 	ClientID            string
 	RedirectURI         string
@@ -30,263 +31,89 @@ type authorizeRequestParams struct {
 	State               string
 }
 
-// consentViewData is the template input for the consent screen.
-type consentViewData struct {
-	BaseURL           string
-	Params            authorizeRequestParams
-	AccountUser       *consentAccount // nil → not logged in; offer login link
-	Error             string          // populated on POST validation failure
-	ShareInputName    string          // matches form field name on POST
-	AuthModeFieldName string
-	// SharePreview is set on the share-paste preview step: the recipient
-	// pasted a valid secret, the server resolved it, and the consent screen
-	// now displays the grants/owner/expiry for explicit approval. The full
-	// approve form is gated behind this preview to avoid mints without a
-	// "you're about to authorize X" review step.
-	SharePreview *sharePreviewData
+// authorizeContextResponse is the JSON payload served at
+// GET /v1/oauth/authorize/context. The React consent page calls this on
+// mount to validate the OAuth request, learn whether a session is present
+// (account-holder path), and discover whether share-paste is configured.
+//
+// When validation produces an OAuth-spec error redirect (RFC 6749
+// §4.1.2.1, error_response sent to redirect_uri), the response is 200
+// with {redirect_to: "<callback URL with error params>"} and the SPA
+// does a window.location.replace. When validation produces an
+// unredirectable error (no trusted redirect_uri yet), the response is
+// 400 with {error, error_description}.
+type authorizeContextResponse struct {
+	ClientID            string               `json:"client_id"`
+	ClientName          string               `json:"client_name,omitempty"`
+	RedirectURI         string               `json:"redirect_uri"`
+	ResponseType        string               `json:"response_type"`
+	CodeChallenge       string               `json:"code_challenge"`
+	CodeChallengeMethod string               `json:"code_challenge_method"`
+	Scope               string               `json:"scope,omitempty"`
+	Resource            string               `json:"resource,omitempty"`
+	State               string               `json:"state,omitempty"`
+	AccountUser         *accountUserResponse `json:"account_user"`
+	ShareTokenSupported bool                 `json:"share_token_supported"`
 }
 
-// sharePreviewData is the structured "you're about to approve" payload
-// rendered between the paste and the final approve in the share-paste
-// consent flow.
-type sharePreviewData struct {
-	OwnerName   string
-	ShareName   string
-	Description string
-	ExpiresAt   string
-	IsOneShot   bool
-	Grants      []shareGrantView
-	// SecretEcho carries the raw secret back into the approve form so the
-	// final POST has everything it needs without the recipient re-pasting.
-	// The HTML template escapes this value; it sits in a hidden password
-	// field that is form-submitted, not displayed.
-	SecretEcho string
+// accountUserResponse is the minimal account snapshot surfaced to the
+// React consent page so it can render "Continue as <DisplayName>".
+type accountUserResponse struct {
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
 }
 
-// consentAccount is the minimal user representation surfaced on the consent
-// screen for the account-holder path.
-type consentAccount struct {
-	DisplayName string
-	Email       string
+// sharePreviewRequest is the JSON body for POST /v1/oauth/share/preview.
+// All OAuth params travel with the secret so the server re-validates the
+// authorization request alongside the share, even though preview itself
+// does not consume the share.
+type sharePreviewRequest struct {
+	ClientID            string `json:"client_id"`
+	RedirectURI         string `json:"redirect_uri"`
+	ResponseType        string `json:"response_type"`
+	CodeChallenge       string `json:"code_challenge"`
+	CodeChallengeMethod string `json:"code_challenge_method"`
+	Scope               string `json:"scope"`
+	Resource            string `json:"resource"`
+	State               string `json:"state"`
+	ShareToken          string `json:"share_token"`
 }
 
-// shareAcceptViewData is the template input for /share/accept.
-type shareAcceptViewData struct {
-	BaseURL      string
-	OwnerName    string
-	ShareName    string
-	Description  string
-	ExpiresAt    string
-	Grants       []shareGrantView
-	MCPServerURL string
-	ShareToken   string
-	Error        string
+// sharePreviewResponse is the JSON payload returned to the React consent
+// page after a successful preview. It describes what the recipient is
+// about to authorize so they can review before the final approve POST.
+type sharePreviewResponse struct {
+	OwnerName   string           `json:"owner_name"`
+	ShareName   string           `json:"share_name"`
+	Description string           `json:"description"`
+	ExpiresAt   string           `json:"expires_at"`
+	IsOneShot   bool             `json:"is_one_shot"`
+	Grants      []shareGrantJSON `json:"grants"`
 }
 
-// shareGrantView is one row in the grants table on the consent / share-accept
-// screens. Permission is the human-readable tier label.
-type shareGrantView struct {
-	ProjectName string
-	ProjectSlug string
-	Permission  string
+// shareGrantJSON is one row in the grants table on the consent / share
+// accept React pages.
+type shareGrantJSON struct {
+	ProjectName string `json:"project_name"`
+	ProjectSlug string `json:"project_slug"`
+	Permission  string `json:"permission"`
 }
 
-var (
-	consentTemplate     = template.Must(template.New("consent").Parse(consentHTML))
-	shareAcceptTemplate = template.Must(template.New("share-accept").Parse(shareAcceptHTML))
-)
-
-const consentHTML = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Authorize access · nram</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #0b0d10; color: #eaeef2; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-  .card { background: #14181d; border: 1px solid #2b313a; border-radius: 12px; padding: 32px; max-width: 520px; width: calc(100% - 32px); box-shadow: 0 24px 60px rgba(0,0,0,0.4); }
-  h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; }
-  .sub { color: #8a93a0; margin-bottom: 28px; font-size: 14px; }
-  .option { border: 1px solid #2b313a; border-radius: 8px; padding: 18px; margin-bottom: 14px; }
-  .option h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
-  .option p { margin: 0 0 12px; font-size: 13px; color: #b9c1cc; }
-  button, .btn { background: #5b8dff; color: #fff; border: 0; border-radius: 6px; padding: 9px 16px; font-size: 14px; font-weight: 500; cursor: pointer; }
-  button.secondary { background: #2b313a; color: #eaeef2; }
-  button:hover { filter: brightness(1.1); }
-  input[type=text], input[type=password] { width: 100%; box-sizing: border-box; background: #0b0d10; border: 1px solid #2b313a; color: #eaeef2; border-radius: 6px; padding: 9px 12px; font-size: 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .row { display: flex; gap: 10px; align-items: center; }
-  .row > * { flex: 1; }
-  .row > button { flex: 0 0 auto; }
-  .err { background: #2c1316; border: 1px solid #5a2731; color: #ffb1ba; padding: 10px 12px; border-radius: 6px; margin-bottom: 18px; font-size: 13px; }
-  .muted { color: #8a93a0; font-size: 12px; }
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>Authorize {{ if .Params.ClientID }}{{ .Params.ClientID }}{{ else }}MCP client{{ end }}</h1>
-  <p class="sub">This application is requesting access to your nram memory. Choose how to authorize.</p>
-  {{ if .Error }}<div class="err">{{ .Error }}</div>{{ end }}
-
-  {{ if .AccountUser }}
-  <form class="option" method="POST" action="/authorize">
-    <h2>Continue as {{ .AccountUser.DisplayName }}</h2>
-    <p>Authorize this client to access your full account ({{ .AccountUser.Email }}).</p>
-    <input type="hidden" name="{{ .AuthModeFieldName }}" value="account">
-    <input type="hidden" name="decision" value="approve">
-    {{ template "params" . }}
-    <button type="submit">Approve</button>
-  </form>
-  {{ else }}
-  <div class="option">
-    <h2>Log in to your nram account</h2>
-    <p>Authorize this client with your own account credentials.</p>
-    <a class="btn" href="/login?redirect={{ .BaseURL }}/authorize?{{ .Params.PreservedQuery }}">Sign in</a>
-  </div>
-  {{ end }}
-
-  {{ if .SharePreview }}
-  <form class="option" method="POST" action="/authorize">
-    <h2>You're about to authorize</h2>
-    <p>
-      {{ if .SharePreview.OwnerName }}<strong>{{ .SharePreview.OwnerName }}</strong> shared{{ else }}You've been granted{{ end }}
-      access to <strong>{{ .SharePreview.ShareName }}</strong>.
-    </p>
-    {{ if .SharePreview.Description }}<p class="muted">{{ .SharePreview.Description }}</p>{{ end }}
-    <p class="muted">Access expires {{ .SharePreview.ExpiresAt }}.{{ if .SharePreview.IsOneShot }} <strong>One-shot:</strong> once approved, this share cannot be redeemed again.{{ end }}</p>
-    <table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:13px">
-      <thead><tr><th style="text-align:left;padding:6px 4px;color:#8a93a0;font-weight:500;border-bottom:1px solid #20262e">Project</th><th style="text-align:left;padding:6px 4px;color:#8a93a0;font-weight:500;border-bottom:1px solid #20262e">Access</th></tr></thead>
-      <tbody>
-        {{ range .SharePreview.Grants }}<tr><td style="padding:6px 4px;border-bottom:1px solid #20262e">{{ .ProjectName }} <code>{{ .ProjectSlug }}</code></td><td style="padding:6px 4px;border-bottom:1px solid #20262e">{{ .Permission }}</td></tr>{{ end }}
-      </tbody>
-    </table>
-    <input type="hidden" name="{{ .AuthModeFieldName }}" value="share">
-    <input type="hidden" name="decision" value="approve">
-    <input type="hidden" name="{{ .ShareInputName }}" value="{{ .SharePreview.SecretEcho }}">
-    {{ template "params" . }}
-    <button type="submit">Approve</button>
-  </form>
-  {{ else }}
-  <form class="option" method="POST" action="/authorize">
-    <h2>I have a share link</h2>
-    <p>Paste a share token (starts with <code>nram_s_</code>) you received from another nram user.</p>
-    <input type="hidden" name="{{ .AuthModeFieldName }}" value="share">
-    <input type="hidden" name="decision" value="preview">
-    {{ template "params" . }}
-    <div class="row">
-      <input type="password" name="{{ .ShareInputName }}" placeholder="nram_s_…" autocomplete="off" required>
-      <button type="submit">Continue</button>
-    </div>
-    <p class="muted" style="margin-top:10px">You'll see what projects this share covers before approving.</p>
-  </form>
-  {{ end }}
-
-  <form method="POST" action="/authorize" style="margin-top: 12px">
-    <input type="hidden" name="decision" value="deny">
-    {{ template "params" . }}
-    <button type="submit" class="secondary">Deny</button>
-  </form>
-</div>
-
-{{ define "params" }}
-<input type="hidden" name="client_id" value="{{ .Params.ClientID }}">
-<input type="hidden" name="redirect_uri" value="{{ .Params.RedirectURI }}">
-<input type="hidden" name="response_type" value="{{ .Params.ResponseType }}">
-<input type="hidden" name="code_challenge" value="{{ .Params.CodeChallenge }}">
-<input type="hidden" name="code_challenge_method" value="{{ .Params.CodeChallengeMethod }}">
-<input type="hidden" name="scope" value="{{ .Params.Scope }}">
-<input type="hidden" name="resource" value="{{ .Params.Resource }}">
-<input type="hidden" name="state" value="{{ .Params.State }}">
-{{ end }}
-</body>
-</html>
-`
-
-const shareAcceptHTML = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>{{ if .OwnerName }}{{ .OwnerName }}{{ else }}Someone{{ end }} shared a project with you · nram</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #0b0d10; color: #eaeef2; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
-  .card { background: #14181d; border: 1px solid #2b313a; border-radius: 12px; padding: 32px; max-width: 560px; width: 100%; box-shadow: 0 24px 60px rgba(0,0,0,0.4); }
-  h1 { font-size: 22px; margin: 0 0 10px; font-weight: 600; }
-  .sub { color: #b9c1cc; margin-bottom: 20px; font-size: 14px; }
-  .meta { color: #8a93a0; font-size: 13px; margin-bottom: 24px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 14px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #20262e; }
-  th { color: #8a93a0; font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
-  code { background: #0b0d10; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .url-row { display: flex; gap: 8px; align-items: stretch; }
-  .url { flex: 1; background: #0b0d10; border: 1px solid #2b313a; border-radius: 6px; padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
-  button.copy { background: #5b8dff; color: #fff; border: 0; border-radius: 6px; padding: 0 16px; font-size: 13px; font-weight: 500; cursor: pointer; }
-  button.copy:hover { filter: brightness(1.1); }
-  .err { background: #2c1316; border: 1px solid #5a2731; color: #ffb1ba; padding: 10px 12px; border-radius: 6px; margin-bottom: 18px; font-size: 13px; }
-  .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #1e3a5a; color: #b9d4ff; }
-</style>
-</head>
-<body>
-<div class="card">
-  {{ if .Error }}
-    <h1>Share unavailable</h1>
-    <div class="err">{{ .Error }}</div>
-  {{ else }}
-    <h1>{{ if .OwnerName }}{{ .OwnerName }} shared "{{ .ShareName }}" with you{{ else }}You've been given access to "{{ .ShareName }}"{{ end }}</h1>
-    {{ if .Description }}<p class="sub">{{ .Description }}</p>{{ end }}
-    <p class="meta">Access expires {{ .ExpiresAt }}.</p>
-    <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:#8a93a0;margin-bottom:8px">Projects in this share</h2>
-    <table>
-      <thead><tr><th>Project</th><th>Access</th></tr></thead>
-      <tbody>
-        {{ range .Grants }}<tr><td>{{ .ProjectName }} <code>{{ .ProjectSlug }}</code></td><td><span class="tag">{{ .Permission }}</span></td></tr>{{ end }}
-      </tbody>
-    </table>
-    <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:#8a93a0;margin-bottom:8px">Add to your MCP client</h2>
-    <p class="sub">Paste this URL into Claude.ai's custom connector, ChatGPT's MCP server settings, or any MCP-capable tool.</p>
-    <div class="url-row">
-      <div class="url" id="mcp-url">{{ .MCPServerURL }}</div>
-      <button type="button" class="copy" onclick="(function(b){navigator.clipboard.writeText(document.getElementById('mcp-url').textContent);b.textContent='Copied';setTimeout(function(){b.textContent='Copy URL'},2000);})(this)">Copy URL</button>
-    </div>
-    <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:#8a93a0;margin:24px 0 8px">Share token</h2>
-    <p class="sub">When the MCP client prompts you to authorize, paste this token.</p>
-    <div class="url-row">
-      <div class="url" id="share-token">{{ .ShareToken }}</div>
-      <button type="button" class="copy" onclick="(function(b){navigator.clipboard.writeText(document.getElementById('share-token').textContent);b.textContent='Copied';setTimeout(function(){b.textContent='Copy token'},2000);})(this)">Copy token</button>
-    </div>
-  {{ end }}
-</div>
-</body>
-</html>
-`
-
-// PreservedQuery is a helper used by the consent template to round-trip
-// OAuth params through the login redirect. Returns the URL-encoded query
-// fragment without a leading "?".
-func (p authorizeRequestParams) PreservedQuery() string {
-	q := url.Values{}
-	if p.ClientID != "" {
-		q.Set("client_id", p.ClientID)
-	}
-	if p.RedirectURI != "" {
-		q.Set("redirect_uri", p.RedirectURI)
-	}
-	if p.ResponseType != "" {
-		q.Set("response_type", p.ResponseType)
-	}
-	if p.CodeChallenge != "" {
-		q.Set("code_challenge", p.CodeChallenge)
-	}
-	if p.CodeChallengeMethod != "" {
-		q.Set("code_challenge_method", p.CodeChallengeMethod)
-	}
-	if p.Scope != "" {
-		q.Set("scope", p.Scope)
-	}
-	if p.Resource != "" {
-		q.Set("resource", p.Resource)
-	}
-	if p.State != "" {
-		q.Set("state", p.State)
-	}
-	return q.Encode()
+// shareAcceptResponse is the JSON payload for GET /v1/share/accept. The
+// React landing page renders this for recipients of a share link before
+// they configure their MCP client. The page is intentionally tolerant of
+// resolution failures: revoked / expired / consumed shares return 200
+// with {error} so the React page can show a friendly message instead of
+// a stack trace.
+type shareAcceptResponse struct {
+	OwnerName    string           `json:"owner_name,omitempty"`
+	ShareName    string           `json:"share_name,omitempty"`
+	Description  string           `json:"description,omitempty"`
+	ExpiresAt    string           `json:"expires_at,omitempty"`
+	Grants       []shareGrantJSON `json:"grants,omitempty"`
+	MCPServerURL string           `json:"mcp_server_url,omitempty"`
+	ShareToken   string           `json:"share_token,omitempty"`
+	Error        string           `json:"error,omitempty"`
 }
 
 // parseAuthorizeClientAndRedirect extracts the client_id and redirect_uri
@@ -334,22 +161,10 @@ func parseAuthorizeRest(get func(string) string, p *authorizeRequestParams) stri
 	return ""
 }
 
-// renderConsentScreen writes the consent HTML with the given status. Headers
-// must be set before WriteHeader; once the status is written, subsequent
-// Header().Set calls become no-ops and Cache-Control would silently drop.
-func (s *OAuthServer) renderConsentScreen(w http.ResponseWriter, status int, view consentViewData) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	if err := consentTemplate.Execute(w, view); err != nil {
-		http.Error(w, "consent screen render failed", http.StatusInternalServerError)
-	}
-}
-
-// resolveAccountUserForConsent returns a non-nil consentAccount when the
-// caller is already authenticated via the AuthMiddleware (Bearer token) or
-// the short-lived nram_session cookie set by the login flow.
-func (s *OAuthServer) resolveAccountUserForConsent(r *http.Request) *consentAccount {
+// resolveAccountUserForConsent returns a non-nil accountUserResponse when
+// the caller is already authenticated via the AuthMiddleware (Bearer
+// token) or the short-lived nram_session cookie set by the login flow.
+func (s *OAuthServer) resolveAccountUserForConsent(r *http.Request) *accountUserResponse {
 	uid := s.resolveUserIDFromRequest(r)
 	if uid == uuid.Nil {
 		return nil
@@ -358,7 +173,7 @@ func (s *OAuthServer) resolveAccountUserForConsent(r *http.Request) *consentAcco
 	if err != nil {
 		return nil
 	}
-	return &consentAccount{
+	return &accountUserResponse{
 		DisplayName: user.DisplayName,
 		Email:       user.Email,
 	}
@@ -401,57 +216,169 @@ func (s *OAuthServer) parseSessionCookie(value string) (uuid.UUID, error) {
 	return uid, nil
 }
 
-// handleAuthorizeGET renders the consent screen for a valid /authorize GET.
-// Behavior matches the pre-consent AuthorizeHandler's validation up to the
-// point where the auto-approve would mint a code; instead of minting, it
-// renders the consent screen. POSTed approvals re-validate every field.
+// AuthorizeContextHandler serves GET /v1/oauth/authorize/context. The
+// React consent page calls this on mount to validate the OAuth request
+// and learn its rendering context.
 //
-// Validation order matters: client_id + redirect_uri must validate FIRST so
-// later parameter errors can be surfaced via redirect-with-error (RFC 6749
-// §4.1.2.1). PKCE failures, unsupported response_type, or wrong
-// code_challenge_method all redirect with error rather than returning 400.
-func (s *OAuthServer) handleAuthorizeGET(w http.ResponseWriter, r *http.Request) {
-	params, paramErr := parseAuthorizeClientAndRedirect(r.URL.Query().Get)
-	if paramErr != "" {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_request", paramErr)
-		return
-	}
-	if err := s.validateClientAndRedirect(r.Context(), params); err != nil {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if restErr := parseAuthorizeRest(r.URL.Query().Get, &params); restErr != "" {
-		redirectWithError(w, r, params.RedirectURI, "invalid_request", restErr, r.URL.Query().Get("state"))
-		return
-	}
-	if msg, ok := s.validateResource(r, params.Resource); !ok {
-		redirectWithError(w, r, params.RedirectURI, "invalid_target", msg, params.State)
-		return
-	}
+// Validation order matters: client_id + redirect_uri must validate FIRST
+// so later parameter errors can be surfaced via redirect-with-error (RFC
+// 6749 §4.1.2.1). PKCE failures, unsupported response_type, or wrong
+// code_challenge_method are surfaced as {redirect_to: "..."} so the React
+// page does window.location.replace; unredirectable failures are 400.
+func (s *OAuthServer) AuthorizeContextHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 
-	// The share secret is NEVER read from a URL query param: putting it
-	// there would leak it via browser history, server access logs, and any
-	// Referer header. The recipient pastes the secret into the form by hand.
-	view := consentViewData{
-		BaseURL:           baseURLFromRequest(r),
-		Params:            params,
-		AccountUser:       s.resolveAccountUserForConsent(r),
-		AuthModeFieldName: "auth_mode",
-		ShareInputName:    "share_token",
-	}
+		params, paramErr := parseAuthorizeClientAndRedirect(r.URL.Query().Get)
+		if paramErr != "" {
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", paramErr)
+			return
+		}
+		client, err := s.validateClientAndRedirect(r.Context(), params)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if restErr := parseAuthorizeRest(r.URL.Query().Get, &params); restErr != "" {
+			writeJSONRedirect(w, redirectErrorURL(params.RedirectURI, "invalid_request", restErr, r.URL.Query().Get("state")))
+			return
+		}
+		if msg, ok := s.validateResource(r, params.Resource); !ok {
+			writeJSONRedirect(w, redirectErrorURL(params.RedirectURI, "invalid_target", msg, params.State))
+			return
+		}
 
-	s.renderConsentScreen(w, http.StatusOK, view)
+		resp := authorizeContextResponse{
+			ClientID:            params.ClientID,
+			ClientName:          client.Name,
+			RedirectURI:         params.RedirectURI,
+			ResponseType:        params.ResponseType,
+			CodeChallenge:       params.CodeChallenge,
+			CodeChallengeMethod: params.CodeChallengeMethod,
+			Scope:               params.Scope,
+			Resource:            params.Resource,
+			State:               params.State,
+			AccountUser:         s.resolveAccountUserForConsent(r),
+			ShareTokenSupported: s.shareTokens != nil,
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// SharePreviewHandler serves POST /v1/oauth/share/preview. Validates the
+// pasted secret and returns the share owner, name, description, expiry,
+// one-shot flag, and grants. Does NOT consume the share; the subsequent
+// approve POST to /authorize does that via completeShareAuthorize.
+func (s *OAuthServer) SharePreviewHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+
+		if s.shareTokens == nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", "share-token authorization is not configured on this server")
+			return
+		}
+
+		var req sharePreviewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+			return
+		}
+		get := func(key string) string {
+			switch key {
+			case "client_id":
+				return req.ClientID
+			case "redirect_uri":
+				return req.RedirectURI
+			case "response_type":
+				return req.ResponseType
+			case "code_challenge":
+				return req.CodeChallenge
+			case "code_challenge_method":
+				return req.CodeChallengeMethod
+			case "scope":
+				return req.Scope
+			case "resource":
+				return req.Resource
+			case "state":
+				return req.State
+			}
+			return ""
+		}
+
+		params, paramErr := parseAuthorizeClientAndRedirect(get)
+		if paramErr != "" {
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", paramErr)
+			return
+		}
+		if _, err := s.validateClientAndRedirect(r.Context(), params); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if restErr := parseAuthorizeRest(get, &params); restErr != "" {
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", restErr)
+			return
+		}
+		if msg, ok := s.validateResource(r, params.Resource); !ok {
+			writeJSONError(w, http.StatusBadRequest, "invalid_target", msg)
+			return
+		}
+
+		secret := strings.TrimSpace(req.ShareToken)
+		if secret == "" {
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", "share token is required")
+			return
+		}
+
+		share, grants, err := s.shareTokens.Resolve(r.Context(), secret)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_grant", fmt.Sprintf("share token rejected: %v", err))
+			return
+		}
+
+		preview := sharePreviewResponse{
+			ShareName:   share.Name,
+			Description: share.Description,
+			ExpiresAt:   share.ExpiresAt.Format("January 2, 2006 at 15:04 MST"),
+			IsOneShot:   share.IsOneShot,
+		}
+		if owner, oerr := s.userRepo.GetByID(r.Context(), share.OwnerUserID); oerr == nil {
+			preview.OwnerName = owner.DisplayName
+		}
+		preview.Grants = make([]shareGrantJSON, 0, len(grants))
+		for _, g := range grants {
+			row := shareGrantJSON{
+				ProjectSlug: g.ProjectID.String(),
+				Permission:  permissionLabel(g.Permission),
+			}
+			if s.projectLookup != nil {
+				if project, perr := s.projectLookup.GetByID(r.Context(), g.ProjectID); perr == nil {
+					row.ProjectName = project.Name
+					row.ProjectSlug = project.Slug
+				}
+			}
+			if row.ProjectName == "" {
+				row.ProjectName = "(project unavailable)"
+			}
+			preview.Grants = append(preview.Grants, row)
+		}
+		writeJSON(w, http.StatusOK, preview)
+	}
 }
 
 // handleAuthorizePOST processes a consent submission. Two paths are
 // supported via the auth_mode form field:
 //   - "account": account-holder flow, mints a code bound to the caller's
-//     user id with no share_token_id (today's behavior pre-consent).
+//     user id with no share_token_id.
 //   - "share":   share-paste flow, validates the secret, binds the OAuth
 //     client to the share, records share_token_id on the code, and (when
 //     the share is one-shot) marks it consumed.
 //
 // A "deny" decision redirects with access_denied per RFC 6749 §4.1.2.1.
+//
+// Errors after redirect_uri has been validated redirect to the OAuth
+// client with access_denied so the client sees a consistent failure
+// surface. Errors before redirect_uri validation return 400 JSON for the
+// browser to display (the React consent page does not retry these).
 func (s *OAuthServer) handleAuthorizePOST(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "invalid form body")
@@ -463,7 +390,7 @@ func (s *OAuthServer) handleAuthorizePOST(w http.ResponseWriter, r *http.Request
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", paramErr)
 		return
 	}
-	if err := s.validateClientAndRedirect(r.Context(), params); err != nil {
+	if _, err := s.validateClientAndRedirect(r.Context(), params); err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -481,22 +408,12 @@ func (s *OAuthServer) handleAuthorizePOST(w http.ResponseWriter, r *http.Request
 		redirectWithError(w, r, params.RedirectURI, "access_denied", "user denied authorization", params.State)
 		return
 	}
-
-	mode := r.PostFormValue("auth_mode")
-
-	// The share-paste flow is two-step: first POST decides "preview" (paste
-	// → grants/owner/expiry shown for explicit approval), second POST is
-	// "approve" (mint). Account-holder is single-step.
-	if mode == "share" && decision == "preview" {
-		s.renderSharePreview(w, r, params)
-		return
-	}
-
 	if decision != "approve" {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "missing decision")
 		return
 	}
 
+	mode := r.PostFormValue("auth_mode")
 	switch mode {
 	case "account":
 		s.completeAccountAuthorize(w, r, params)
@@ -507,71 +424,10 @@ func (s *OAuthServer) handleAuthorizePOST(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// renderSharePreview validates the pasted secret and re-renders the consent
-// screen with the share's grants, owner display name, expiry, and one-shot
-// flag. The recipient sees what they're about to authorize before the final
-// approve POST mints the OAuth code.
-func (s *OAuthServer) renderSharePreview(w http.ResponseWriter, r *http.Request, params authorizeRequestParams) {
-	if s.shareTokens == nil {
-		s.renderConsentError(w, r, params, "share-token authorization is not configured on this server")
-		return
-	}
-	secret := strings.TrimSpace(r.PostFormValue("share_token"))
-	if secret == "" {
-		s.renderConsentError(w, r, params, "share token is required")
-		return
-	}
-	// Preview itself does not consume the share; the subsequent approve POST
-	// does that via completeShareAuthorize → MarkConsumed.
-	share, grants, err := s.shareTokens.Resolve(r.Context(), secret)
-	if err != nil {
-		s.renderConsentError(w, r, params, fmt.Sprintf("share token rejected: %v", err))
-		return
-	}
-
-	preview := &sharePreviewData{
-		ShareName:   share.Name,
-		Description: share.Description,
-		ExpiresAt:   share.ExpiresAt.Format("January 2, 2006 at 15:04 MST"),
-		IsOneShot:   share.IsOneShot,
-		SecretEcho:  secret,
-	}
-	if owner, oerr := s.userRepo.GetByID(r.Context(), share.OwnerUserID); oerr == nil {
-		preview.OwnerName = owner.DisplayName
-	}
-	preview.Grants = make([]shareGrantView, 0, len(grants))
-	for _, g := range grants {
-		row := shareGrantView{
-			ProjectSlug: g.ProjectID.String(),
-			Permission:  permissionLabel(g.Permission),
-		}
-		if s.projectLookup != nil {
-			if project, perr := s.projectLookup.GetByID(r.Context(), g.ProjectID); perr == nil {
-				row.ProjectName = project.Name
-				row.ProjectSlug = project.Slug
-			}
-		}
-		if row.ProjectName == "" {
-			row.ProjectName = "(project unavailable)"
-		}
-		preview.Grants = append(preview.Grants, row)
-	}
-
-	view := consentViewData{
-		BaseURL:           baseURLFromRequest(r),
-		Params:            params,
-		AccountUser:       s.resolveAccountUserForConsent(r),
-		AuthModeFieldName: "auth_mode",
-		ShareInputName:    "share_token",
-		SharePreview:      preview,
-	}
-	s.renderConsentScreen(w, http.StatusOK, view)
-}
-
 func (s *OAuthServer) completeAccountAuthorize(w http.ResponseWriter, r *http.Request, params authorizeRequestParams) {
 	uid := s.resolveUserIDFromRequest(r)
 	if uid == uuid.Nil {
-		loginURL := "/login?redirect=" + url.QueryEscape("/authorize?"+params.PreservedQuery())
+		loginURL := "/login?redirect=" + url.QueryEscape("/authorize?"+preservedQuery(params))
 		http.Redirect(w, r, loginURL, http.StatusFound)
 		return
 	}
@@ -580,12 +436,12 @@ func (s *OAuthServer) completeAccountAuthorize(w http.ResponseWriter, r *http.Re
 
 func (s *OAuthServer) completeShareAuthorize(w http.ResponseWriter, r *http.Request, params authorizeRequestParams) {
 	if s.shareTokens == nil {
-		s.renderConsentError(w, r, params, "share-token authorization is not configured on this server")
+		redirectWithError(w, r, params.RedirectURI, "access_denied", "share-token authorization is not configured on this server", params.State)
 		return
 	}
 	secret := strings.TrimSpace(r.PostFormValue("share_token"))
 	if secret == "" {
-		s.renderConsentError(w, r, params, "share token is required")
+		redirectWithError(w, r, params.RedirectURI, "invalid_request", "share token is required", params.State)
 		return
 	}
 
@@ -593,18 +449,18 @@ func (s *OAuthServer) completeShareAuthorize(w http.ResponseWriter, r *http.Requ
 	// (MarkConsumed below); Resolve rejects any already-consumed one-shot.
 	share, _, err := s.shareTokens.Resolve(r.Context(), secret)
 	if err != nil {
-		s.renderConsentError(w, r, params, fmt.Sprintf("share token rejected: %v", err))
+		redirectWithError(w, r, params.RedirectURI, "access_denied", fmt.Sprintf("share token rejected: %v", err), params.State)
 		return
 	}
 
 	if err := s.oauthRepo.BindClientToShare(r.Context(), params.ClientID, share.ID); err != nil {
-		s.renderConsentError(w, r, params, fmt.Sprintf("share binding failed: %v", err))
+		redirectWithError(w, r, params.RedirectURI, "server_error", fmt.Sprintf("share binding failed: %v", err), params.State)
 		return
 	}
 
 	if share.IsOneShot {
 		if err := s.shareTokens.MarkConsumed(r.Context(), share.ID); err != nil {
-			s.renderConsentError(w, r, params, fmt.Sprintf("one-shot consume failed: %v", err))
+			redirectWithError(w, r, params.RedirectURI, "server_error", fmt.Sprintf("one-shot consume failed: %v", err), params.State)
 			return
 		}
 	}
@@ -613,23 +469,9 @@ func (s *OAuthServer) completeShareAuthorize(w http.ResponseWriter, r *http.Requ
 	s.mintCodeAndRedirect(w, r, params, share.OwnerUserID, &shareID)
 }
 
-// renderConsentError re-renders the consent screen with an error banner.
-// Status is 400; the OAuth params are preserved so the user can retry.
-func (s *OAuthServer) renderConsentError(w http.ResponseWriter, r *http.Request, params authorizeRequestParams, msg string) {
-	view := consentViewData{
-		BaseURL:           baseURLFromRequest(r),
-		Params:            params,
-		AccountUser:       s.resolveAccountUserForConsent(r),
-		AuthModeFieldName: "auth_mode",
-		ShareInputName:    "share_token",
-		Error:             msg,
-	}
-	s.renderConsentScreen(w, http.StatusBadRequest, view)
-}
-
 // mintCodeAndRedirect creates the OAuth authorization code, optionally
 // records share_token_id on it, and redirects to the recipient's MCP client
-// with code + state. Mirrors the pre-consent AuthorizeHandler mint path.
+// with code + state.
 func (s *OAuthServer) mintCodeAndRedirect(w http.ResponseWriter, r *http.Request, params authorizeRequestParams, userID uuid.UUID, shareTokenID *uuid.UUID) {
 	code := generateAuthCode()
 	codeChallenge := params.CodeChallenge
@@ -674,17 +516,18 @@ func (s *OAuthServer) mintCodeAndRedirect(w http.ResponseWriter, r *http.Request
 }
 
 // validateClientAndRedirect verifies the client exists and the redirect_uri
-// matches one of the client's registered URIs. Returns nil on success or an
-// error suitable for surfacing as an OAuth error_description.
-func (s *OAuthServer) validateClientAndRedirect(ctx context.Context, params authorizeRequestParams) error {
+// matches one of the client's registered URIs. Returns the loaded client
+// on success so callers can use fields like Name without re-fetching, or
+// an error suitable for surfacing as an OAuth error_description.
+func (s *OAuthServer) validateClientAndRedirect(ctx context.Context, params authorizeRequestParams) (*model.OAuthClient, error) {
 	client, err := s.oauthRepo.GetClientByID(ctx, params.ClientID)
 	if err != nil {
-		return errors.New("unknown client_id")
+		return nil, errors.New("unknown client_id")
 	}
 	if !containsString(client.RedirectURIs, params.RedirectURI) {
-		return errors.New("redirect_uri not registered")
+		return nil, errors.New("redirect_uri not registered")
 	}
-	return nil
+	return client, nil
 }
 
 // validateResource enforces RFC 8707 §2 for the consent flow: when a
@@ -701,60 +544,53 @@ func (s *OAuthServer) validateResource(r *http.Request, resource string) (string
 	return "", true
 }
 
-// ShareAcceptHandler serves /share/accept?token=<raw secret> as the
-// friendly magic-link entry. Resolves the share (read-only — does not mark
-// consumed) and renders the grants table + MCP server URL. The recipient
-// configures their MCP client with the URL and the consent flow at
-// /authorize handles the actual code mint.
-//
-// Bearer-direct-style errors (consumed one-shot, expired, revoked) are
-// surfaced as a friendly "share unavailable" message rather than a 4xx
-// because the link is shared via human channels and the recipient should
-// see something other than a stack trace when reused.
+// ShareAcceptHandler serves GET /v1/share/accept?token=<raw secret>. The
+// React landing page calls this when a recipient opens a magic link and
+// renders the grants table + MCP server URL + token. Resolution failures
+// (revoked, expired, consumed) return 200 with {error} so the React page
+// can render the friendly "share unavailable" card instead of an HTTP
+// error code (the link is shared via human channels and reuse should not
+// look like a stack trace).
 func (s *OAuthServer) ShareAcceptHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 
-		view := shareAcceptViewData{
-			BaseURL:      baseURLFromRequest(r),
+		resp := shareAcceptResponse{
 			MCPServerURL: baseURLFromRequest(r) + "/mcp",
 		}
 
 		if s.shareTokens == nil {
-			view.Error = "share-token acceptance is not configured on this server."
-			_ = shareAcceptTemplate.Execute(w, view)
+			resp.Error = "share-token acceptance is not configured on this server."
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 
 		secret := strings.TrimSpace(r.URL.Query().Get("token"))
 		if secret == "" {
-			view.Error = "share token is required."
-			_ = shareAcceptTemplate.Execute(w, view)
+			resp.Error = "share token is required."
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 
-		// This page does not consume the share, it just describes it. The
-		// consent flow at /authorize is where redemption actually happens.
 		share, grants, err := s.shareTokens.Resolve(r.Context(), secret)
 		if err != nil {
-			view.Error = "this share link is no longer valid (revoked, expired, or already consumed)."
-			_ = shareAcceptTemplate.Execute(w, view)
+			resp.Error = "this share link is no longer valid (revoked, expired, or already consumed)."
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 
 		owner, err := s.userRepo.GetByID(r.Context(), share.OwnerUserID)
 		if err == nil {
-			view.OwnerName = owner.DisplayName
+			resp.OwnerName = owner.DisplayName
 		}
-		view.ShareName = share.Name
-		view.Description = share.Description
-		view.ExpiresAt = share.ExpiresAt.Format("January 2, 2006 at 15:04 MST")
-		view.ShareToken = secret
+		resp.ShareName = share.Name
+		resp.Description = share.Description
+		resp.ExpiresAt = share.ExpiresAt.Format("January 2, 2006 at 15:04 MST")
+		resp.ShareToken = secret
 
-		view.Grants = make([]shareGrantView, 0, len(grants))
+		resp.Grants = make([]shareGrantJSON, 0, len(grants))
 		for _, g := range grants {
-			row := shareGrantView{
+			row := shareGrantJSON{
 				ProjectSlug: g.ProjectID.String(),
 				Permission:  permissionLabel(g.Permission),
 			}
@@ -767,10 +603,10 @@ func (s *OAuthServer) ShareAcceptHandler() http.HandlerFunc {
 			if row.ProjectName == "" {
 				row.ProjectName = "(project unavailable)"
 			}
-			view.Grants = append(view.Grants, row)
+			resp.Grants = append(resp.Grants, row)
 		}
 
-		_ = shareAcceptTemplate.Execute(w, view)
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -786,4 +622,83 @@ func permissionLabel(p model.SharePermission) string {
 		return "Read + Store + Modify"
 	}
 	return string(p)
+}
+
+// preservedQuery URL-encodes the OAuth params so the login redirect can
+// round-trip them back to /authorize after the user signs in.
+func preservedQuery(p authorizeRequestParams) string {
+	q := url.Values{}
+	if p.ClientID != "" {
+		q.Set("client_id", p.ClientID)
+	}
+	if p.RedirectURI != "" {
+		q.Set("redirect_uri", p.RedirectURI)
+	}
+	if p.ResponseType != "" {
+		q.Set("response_type", p.ResponseType)
+	}
+	if p.CodeChallenge != "" {
+		q.Set("code_challenge", p.CodeChallenge)
+	}
+	if p.CodeChallengeMethod != "" {
+		q.Set("code_challenge_method", p.CodeChallengeMethod)
+	}
+	if p.Scope != "" {
+		q.Set("scope", p.Scope)
+	}
+	if p.Resource != "" {
+		q.Set("resource", p.Resource)
+	}
+	if p.State != "" {
+		q.Set("state", p.State)
+	}
+	return q.Encode()
+}
+
+// redirectErrorURL builds the redirect_uri callback URL with the OAuth
+// error parameters. The React consent context endpoint returns this URL
+// in {redirect_to} when validation after redirect_uri-trust fails.
+func redirectErrorURL(redirectURI, errCode, description, state string) string {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		return redirectURI
+	}
+	q := u.Query()
+	q.Set("error", errCode)
+	if description != "" {
+		q.Set("error_description", description)
+	}
+	if state != "" {
+		q.Set("state", state)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// writeJSON serializes v to the response writer with status and JSON
+// content type. Encoding errors fall through silently; by that point the
+// headers are already on the wire.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeJSONError emits an OAuth-style error JSON body with the given
+// status. Used by the new context and share-preview endpoints when
+// validation fails before redirect_uri can be trusted.
+func writeJSONError(w http.ResponseWriter, status int, errCode, description string) {
+	writeJSON(w, status, map[string]string{
+		"error":             errCode,
+		"error_description": description,
+	})
+}
+
+// writeJSONRedirect tells the React page to do a top-level browser
+// navigation to redirectTo. Used when the consent context endpoint
+// catches a redirect-with-error case (post redirect_uri trust).
+func writeJSONRedirect(w http.ResponseWriter, redirectTo string) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"redirect_to": redirectTo,
+	})
 }

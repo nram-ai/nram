@@ -858,6 +858,8 @@ func main() {
 		OAuthUserInfo:          oauthServer.UserInfoHandler(),
 		OAuthMetadata:          oauthServer.MetadataHandler(),
 		OAuthProtectedResource: oauthServer.ProtectedResourceHandler(),
+		OAuthAuthorizeContext:  oauthServer.AuthorizeContextHandler(),
+		OAuthSharePreview:      oauthServer.SharePreviewHandler(),
 		ShareAccept:            oauthServer.ShareAcceptHandler(),
 
 		// IdP SSO handlers

@@ -126,9 +126,19 @@ type Handlers struct {
 	OAuthUserInfo          http.HandlerFunc
 	OAuthMetadata          http.HandlerFunc
 	OAuthProtectedResource http.HandlerFunc
-	// Share-token magic-link landing at /share/accept?token=…. Friendly
-	// informational page that describes the grants to the recipient and
-	// shows the MCP server URL to configure in their client.
+	// OAuthAuthorizeContext serves GET /v1/oauth/authorize/context. The
+	// React consent page at /authorize calls this on mount to validate
+	// the OAuth request and learn its rendering context.
+	OAuthAuthorizeContext http.HandlerFunc
+	// OAuthSharePreview serves POST /v1/oauth/share/preview. Validates a
+	// pasted share secret and returns the share's grants without
+	// consuming it, so the React consent page can show the recipient
+	// what they are about to authorize before the final approve POST.
+	OAuthSharePreview http.HandlerFunc
+	// ShareAccept serves GET /v1/share/accept?token=<secret>. The React
+	// landing page at /share/accept calls this to render the share's
+	// grants and the MCP server URL to configure in the recipient's
+	// client.
 	ShareAccept http.HandlerFunc
 
 	// IdP SSO handlers (public — no auth required)
@@ -198,6 +208,30 @@ func handler(h http.HandlerFunc) http.HandlerFunc {
 	return h
 }
 
+// uiHandler returns h.ServeHTTP if h is non-nil, otherwise notImplemented.
+// Used where the chi route must be registered unconditionally (e.g. GET
+// /authorize wires explicit method routing so chi does not return 405)
+// but tests construct Handlers without populating the UI field.
+func uiHandler(h http.Handler) http.HandlerFunc {
+	if h == nil {
+		return notImplemented
+	}
+	return h.ServeHTTP
+}
+
+// uiHandlerNoStore wraps uiHandler with Cache-Control: no-store. Used for
+// the SPA shell on sensitive pre-auth surfaces (OAuth consent at
+// /authorize, share-accept landing at /share/accept) where browser cache
+// or bfcache reuse could surface stale state alongside fresh OAuth
+// params.
+func uiHandlerNoStore(h http.Handler) http.HandlerFunc {
+	inner := uiHandler(h)
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		inner(w, r)
+	}
+}
+
 // NewRouter constructs the chi router with all middleware and route groups.
 func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	r := chi.NewRouter()
@@ -230,13 +264,29 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Use(CORSMiddleware)
 		r.HandleFunc("/.well-known/oauth-authorization-server", handler(handlers.OAuthMetadata))
 		r.HandleFunc("/.well-known/oauth-protected-resource", handler(handlers.OAuthProtectedResource))
-		r.HandleFunc("/authorize", handler(handlers.OAuthAuthorize))
+		// /authorize: GET serves the React consent SPA shell, POST
+		// receives the user's decision and 302-redirects to the OAuth
+		// client. Chi's method routing returns 405 for unmatched
+		// methods on a registered path (it does not fall through to
+		// NotFound), so GET is wired explicitly to the UI handler
+		// rather than relying on the SPA fallback. no-store on the
+		// shell response prevents browser cache / bfcache reuse on a
+		// sensitive consent surface.
+		r.Get("/authorize", uiHandlerNoStore(handlers.UI))
+		r.Post("/authorize", handler(handlers.OAuthAuthorize))
+		// /share/accept also serves the SPA shell with no-store, for
+		// the same reason. The data side lives at /v1/share/accept.
+		r.Get("/share/accept", uiHandlerNoStore(handlers.UI))
+		// JSON endpoints driven by the React consent and share-accept
+		// pages. The React /authorize page calls authorize/context on
+		// mount and share/preview when the recipient pastes a secret;
+		// /v1/share/accept backs the magic-link landing at
+		// /share/accept.
+		r.Get("/v1/oauth/authorize/context", handler(handlers.OAuthAuthorizeContext))
+		r.Post("/v1/oauth/share/preview", handler(handlers.OAuthSharePreview))
+		r.Get("/v1/share/accept", handler(handlers.ShareAccept))
 		r.HandleFunc("/token", handler(handlers.OAuthToken))
 		r.HandleFunc("/register", handler(handlers.OAuthRegister))
-		// Share-accept landing is intentionally public — the magic link is
-		// shared via human channels (email, DM) and recipients should not
-		// have to log in just to read the description of what was shared.
-		r.Get("/share/accept", handler(handlers.ShareAccept))
 	})
 
 	// Semi-public routes: setup guard required but no auth (login flow).

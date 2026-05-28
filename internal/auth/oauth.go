@@ -182,24 +182,16 @@ func (s *OAuthServer) RegisterClientHandler() http.HandlerFunc {
 	}
 }
 
-// AuthorizeHandler handles GET and POST requests for the OAuth authorization
-// endpoint. GET renders the consent screen (consent.go); POST processes the
-// submission and mints the authorization code. The pre-consent auto-approve
-// behavior was removed when the share-paste consent path was introduced —
-// auto-approving an OAuth client whose user is already logged in would also
-// bypass the share-paste opportunity, which is the only way an external
-// recipient can authorize against an owner's projects.
+// AuthorizeHandler handles POST submissions to the OAuth authorization
+// endpoint. The consent screen itself is now a React SPA page served by
+// the UI fallback at GET /authorize; the page calls
+// /v1/oauth/authorize/context to validate the OAuth request and learn its
+// rendering context, then form-POSTs back to /authorize with the user's
+// decision. This handler processes that submission and mints the
+// authorization code. The router wires this only on POST, so no method
+// guard is needed here.
 func (s *OAuthServer) AuthorizeHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			s.handleAuthorizeGET(w, r)
-		case http.MethodPost:
-			s.handleAuthorizePOST(w, r)
-		default:
-			writeOAuthError(w, http.StatusMethodNotAllowed, "invalid_request", "method not allowed")
-		}
-	}
+	return s.handleAuthorizePOST
 }
 
 // tokenRequest represents the POST body for the /token endpoint.

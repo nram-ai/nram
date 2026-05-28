@@ -505,6 +505,8 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 
 		// OAuth handlers
 		OAuthAuthorize:         oauthSrv.AuthorizeHandler(),
+		OAuthAuthorizeContext:  oauthSrv.AuthorizeContextHandler(),
+		OAuthSharePreview:      oauthSrv.SharePreviewHandler(),
 		OAuthToken:             oauthSrv.TokenHandler(),
 		OAuthRegister:          oauthSrv.RegisterClientHandler(),
 		OAuthUserInfo:          oauthSrv.UserInfoHandler(),
@@ -1997,6 +1999,8 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 
 		// OAuth handlers
 		OAuthAuthorize:         oauthSrv.AuthorizeHandler(),
+		OAuthAuthorizeContext:  oauthSrv.AuthorizeContextHandler(),
+		OAuthSharePreview:      oauthSrv.SharePreviewHandler(),
 		OAuthToken:             oauthSrv.TokenHandler(),
 		OAuthRegister:          oauthSrv.RegisterClientHandler(),
 		OAuthUserInfo:          oauthSrv.UserInfoHandler(),

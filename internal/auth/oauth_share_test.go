@@ -501,3 +501,133 @@ func TestUserInfoHandler_ShareBearer_RedactsOwnerAndRevalidatesShare(t *testing.
 		}
 	})
 }
+
+func TestSharePreviewHandler_ReturnsGrantsWithoutConsuming(t *testing.T) {
+	f := setupShareConsent(t)
+
+	codeVerifier := "share-preview-verifier-0123456789abcdefghijkl"
+	codeChallenge := generateCodeChallenge(codeVerifier)
+	reqBody := map[string]string{
+		"client_id":             f.env.client.ClientID,
+		"redirect_uri":          "https://example.com/callback",
+		"response_type":         "code",
+		"code_challenge":        codeChallenge,
+		"code_challenge_method": "S256",
+		"share_token":           f.rawSecret,
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/oauth/share/preview", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.env.server.SharePreviewHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OwnerName string `json:"owner_name"`
+		ShareName string `json:"share_name"`
+		IsOneShot bool   `json:"is_one_shot"`
+		Grants    []struct {
+			ProjectName string `json:"project_name"`
+			Permission  string `json:"permission"`
+		} `json:"grants"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ShareName != f.share.Name {
+		t.Fatalf("share_name: got %q, want %q", resp.ShareName, f.share.Name)
+	}
+	if len(resp.Grants) != 1 {
+		t.Fatalf("grants len: got %d, want 1", len(resp.Grants))
+	}
+	if f.shareSvc.consumeCalled {
+		t.Fatalf("preview must not consume the share; MarkConsumed was called")
+	}
+}
+
+func TestSharePreviewHandler_RejectsInvalidSecret(t *testing.T) {
+	f := setupShareConsent(t)
+
+	codeVerifier := "share-preview-bad-verifier-0123456789abcdefghi"
+	codeChallenge := generateCodeChallenge(codeVerifier)
+	reqBody := map[string]string{
+		"client_id":             f.env.client.ClientID,
+		"redirect_uri":          "https://example.com/callback",
+		"response_type":         "code",
+		"code_challenge":        codeChallenge,
+		"code_challenge_method": "S256",
+		"share_token":           "nram_s_obviouslynotarealsecret",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/oauth/share/preview", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.env.server.SharePreviewHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on bad secret, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestShareAcceptHandler_JSONResponse(t *testing.T) {
+	f := setupShareConsent(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/share/accept?token="+f.rawSecret, nil)
+	rec := httptest.NewRecorder()
+	f.env.server.ShareAcceptHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("expected JSON content type, got %q", ct)
+	}
+	var resp struct {
+		ShareName    string `json:"share_name"`
+		MCPServerURL string `json:"mcp_server_url"`
+		ShareToken   string `json:"share_token"`
+		Error        string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("unexpected error: %s", resp.Error)
+	}
+	if resp.ShareName != f.share.Name {
+		t.Fatalf("share_name: got %q, want %q", resp.ShareName, f.share.Name)
+	}
+	if resp.ShareToken != f.rawSecret {
+		t.Fatalf("share_token not echoed; got %q", resp.ShareToken)
+	}
+	if !strings.HasSuffix(resp.MCPServerURL, "/mcp") {
+		t.Fatalf("mcp_server_url should end in /mcp, got %q", resp.MCPServerURL)
+	}
+}
+
+func TestShareAcceptHandler_RevokedShareFriendlyError(t *testing.T) {
+	f := setupShareConsent(t)
+	now := time.Now().UTC()
+	f.share.RevokedAt = &now
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/share/accept?token="+f.rawSecret, nil)
+	rec := httptest.NewRecorder()
+	f.env.server.ShareAcceptHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (friendly error), got %d", rec.Code)
+	}
+	var resp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == "" {
+		t.Fatalf("expected error message for revoked share; got body: %s", rec.Body.String())
+	}
+}

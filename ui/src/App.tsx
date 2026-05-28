@@ -54,6 +54,13 @@ import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import SetupWizard from "./pages/SetupWizard";
 
+// Pre-auth routes served by the SPA fallback when the OAuth client
+// redirects the browser to /authorize or a recipient opens a share
+// magic-link at /share/accept. Lazy-loaded so they do not weigh on the
+// admin-UI entry chunk.
+const Authorize = React.lazy(() => import("./pages/Authorize"));
+const ShareAccept = React.lazy(() => import("./pages/ShareAccept"));
+
 const MemoryBrowser = React.lazy(() => import("./pages/MemoryBrowser"));
 const ProjectManagement = React.lazy(() => import("./pages/ProjectManagement"));
 const OrganizationManagement = React.lazy(() => import("./pages/OrganizationManagement"));
@@ -416,11 +423,22 @@ function App() {
         <ProjectProvider>
           <NeuralNetwork />
           <SetupGuard>
-            <Routes>
-              <Route path="/setup" element={<SetupWizard />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
-            </Routes>
+            <Suspense fallback={<RouteFallback />}>
+              <Routes>
+                <Route path="/setup" element={<SetupWizard />} />
+                <Route path="/login" element={<Login />} />
+                {/*
+                  /authorize and /share/accept must work for unauthenticated
+                  callers: the OAuth client redirects an external browser
+                  to /authorize, and share recipients open /share/accept
+                  magic-links before they ever sign in. Both pages tolerate
+                  a logged-in session but never require one.
+                */}
+                <Route path="/authorize" element={<Authorize />} />
+                <Route path="/share/accept" element={<ShareAccept />} />
+                <Route path="/*" element={<AuthGuard><AppLayout /></AuthGuard>} />
+              </Routes>
+            </Suspense>
           </SetupGuard>
         </ProjectProvider>
       </ThemeProvider>

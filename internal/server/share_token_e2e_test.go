@@ -196,6 +196,8 @@ func newShareE2EEnv(t *testing.T) *shareE2EEnv {
 	handlers := Handlers{
 		MCP:                    mcpSrv.Handler(),
 		OAuthAuthorize:         oauthSrv.AuthorizeHandler(),
+		OAuthAuthorizeContext:  oauthSrv.AuthorizeContextHandler(),
+		OAuthSharePreview:      oauthSrv.SharePreviewHandler(),
 		OAuthToken:             oauthSrv.TokenHandler(),
 		OAuthRegister:          oauthSrv.RegisterClientHandler(),
 		OAuthUserInfo:          oauthSrv.UserInfoHandler(),
