@@ -49,6 +49,11 @@ export type FactKind =
   // is set on the row). Renders like memory_id but the deep-link adds
   // include_superseded=1 so MemoryBrowser can still load it.
   | "memory_id_superseded"
+  // memory_id_deleted: the target row is soft-deleted (deleted_at is set) and
+  // the public detail handler has no include_deleted flag. Renders as a
+  // non-clickable monospace short-id chip — visually consistent with other
+  // memory chips but signals dead-end.
+  | "memory_id_deleted"
   | "entity_id"
   | "relationship_id"
   | "namespace_id"
@@ -166,6 +171,7 @@ export function formatFactValue(f: Fact): string {
       return typeof f.value === "string" ? formatReason(f.value) : String(f.value ?? "");
     case "memory_id":
     case "memory_id_superseded":
+    case "memory_id_deleted":
     case "entity_id":
     case "relationship_id":
     case "namespace_id":
@@ -351,13 +357,19 @@ function formatContradictionDetected(log: DreamLog): FormattedLog {
     [WinnerTie]: { value: "tie", kind: "text" },
   };
   const kept = keptByWinner[winnerSide] ?? { value: "", kind: "memory_id" };
+  // The loser side may be marked superseded by the haircut path (when the
+  // winner's pre-haircut confidence cleared the supersede threshold —
+  // phase_contradictions.go:325). Tag the loser chip so the deep-link can
+  // still load the row; live losers tolerate include_superseded=1 fine.
+  const aKind: FactKind = winnerSide === WinnerSideB ? "memory_id_superseded" : "memory_id";
+  const bKind: FactKind = winnerSide === WinnerSideA ? "memory_id_superseded" : "memory_id";
   const winnerFactor = pickNumber(after.winner_factor);
   const loserFactor = pickNumber(after.loser_factor);
   const detectionCount = pickNumber(after.detection_count);
   const explanation = pickString(after.explanation);
   const facts: Record<string, Fact> = {
-    a: fact("Memory A", log.target_id, "memory_id"),
-    b: fact("Memory B", conflictingId, "memory_id"),
+    a: fact("Memory A", log.target_id, aKind),
+    b: fact("Memory B", conflictingId, bKind),
     winner: fact("Kept", kept.value, kept.kind),
   };
   if (winnerFactor !== undefined) facts.winnerFactor = fact("Winner factor", winnerFactor, "confidence");
@@ -407,8 +419,13 @@ function formatMemoryDemoted(log: DreamLog): FormattedLog {
   const after = isObj(log.after_state) ? log.after_state : {};
   const oldConf = pickNumber(before.confidence);
   const reason = pickString(after.reason);
+  // The demoted row's confidence/embedding are cleared in place, but the same
+  // row may already carry superseded_by from an earlier cycle — backfill audit
+  // pulls from ListByNamespaceStale which does not filter superseded. Tag the
+  // chip so the deep-link adds include_superseded=1; harmless when the row is
+  // actually live.
   const facts: Record<string, Fact> = {
-    memId: fact("Memory", log.target_id, "memory_id"),
+    memId: fact("Memory", log.target_id, "memory_id_superseded"),
   };
   if (oldConf !== undefined) facts.oldConf = fact("Old confidence", oldConf, "confidence");
   if (reason) facts.reason = fact("Reason", reason, "reason");
@@ -465,8 +482,11 @@ function formatMemoryDeleted(log: DreamLog): FormattedLog {
   const reason = pickString(after.reason);
   const content = pickString(before.content);
   const createdAt = pickString(before.created_at);
+  // The target row is soft-deleted by phase_pruning.go; the public detail
+  // handler has no include_deleted flag, so the chip renders as a non-clickable
+  // monospace shortId (see FactChip in DreamingMonitor.tsx).
   const facts: Record<string, Fact> = {
-    memId: fact("Memory", log.target_id, "memory_id"),
+    memId: fact("Memory", log.target_id, "memory_id_deleted"),
   };
   if (reason) facts.reason = fact("Reason", reason, "reason");
   if (createdAt) facts.createdAt = fact("Created", createdAt, "text");

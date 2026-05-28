@@ -1260,6 +1260,17 @@ function FactChip({ projectId, fact: f }: { projectId: string; fact: Fact }) {
     );
   }
 
+  if (f.kind === "memory_id_deleted") {
+    return (
+      <span
+        className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+        title={`${value} (deleted)`}
+      >
+        {shortId(value)}
+      </span>
+    );
+  }
+
   if (
     f.kind === "entity_id" ||
     f.kind === "relationship_id" ||

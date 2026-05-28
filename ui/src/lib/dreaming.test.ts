@@ -266,6 +266,11 @@ describe("formatDreamLog: contradiction_detection", () => {
     expect(out.facts.a.value).toBe(A);
     expect(out.facts.b.value).toBe(B);
     expect(out.facts.winner).toEqual({ label: "Kept", value: A, kind: "memory_id" });
+    // winner=a → A is the kept (live) row, B is the loser (potentially
+    // superseded). The loser chip carries include_superseded=1 so the
+    // deep-link can load the row when the supersede haircut fired.
+    expect(out.facts.a.kind).toBe("memory_id");
+    expect(out.facts.b.kind).toBe("memory_id_superseded");
     expect(out.facts.winnerFactor).toEqual({
       label: "Winner factor",
       value: 0.78,
@@ -289,6 +294,10 @@ describe("formatDreamLog: contradiction_detection", () => {
       }),
     );
     expect(out.facts.winner).toEqual({ label: "Kept", value: B, kind: "memory_id" });
+    // winner=b → B is the kept (live) row, A is the loser (potentially
+    // superseded). Loser-side kind flips to memory_id_superseded.
+    expect(out.facts.a.kind).toBe("memory_id_superseded");
+    expect(out.facts.b.kind).toBe("memory_id");
   });
 
   it("contradiction_detected with winner='tie' renders as text, not a memory link", () => {
@@ -308,6 +317,10 @@ describe("formatDreamLog: contradiction_detection", () => {
     expect(out.narrative).toBe("Resolved contradiction between {a} and {b} — tie");
     expect(out.facts.winner.kind).toBe("text");
     expect(out.facts.winner.value).toBe("tie");
+    // Ties take symmetric haircuts and neither side is superseded; both
+    // chips stay as plain memory_id deep-links.
+    expect(out.facts.a.kind).toBe("memory_id");
+    expect(out.facts.b.kind).toBe("memory_id");
   });
 });
 
@@ -378,6 +391,14 @@ describe("formatDreamLog: consolidation", () => {
       value: "orphan_no_sources",
       kind: "reason",
     });
+    // The demoted row may also carry superseded_by from an earlier cycle
+    // (backfill audit doesn't filter superseded). Chip uses the superseded
+    // kind so the deep-link adds include_superseded=1 and stays loadable.
+    expect(out.facts.memId).toEqual({
+      label: "Memory",
+      value: A,
+      kind: "memory_id_superseded",
+    });
   });
 
   it("memory_rejected handles uuid.Nil target + source list", () => {
@@ -438,6 +459,13 @@ describe("formatDreamLog: pruning", () => {
     expect(out.narrative).toBe("Deleted memory {memId} — {reason}");
     expect(out.facts.reason.value).toBe("expired_low_confidence");
     expect(out.facts.createdAt.value).toBe("2025-01-01T00:00:00Z");
+    // The target row is soft-deleted and unreachable through the public
+    // detail handler (no include_deleted flag). Chip renders non-clickable.
+    expect(out.facts.memId).toEqual({
+      label: "Memory",
+      value: A,
+      kind: "memory_id_deleted",
+    });
   });
 
   it("relationship_expired (pruning, namespace) reports aggregate count", () => {
