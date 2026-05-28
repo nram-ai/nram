@@ -1102,7 +1102,7 @@ function AdminIdPView() {
   );
 
   return (
-    <div className="space-y-8">
+    <div className="flex h-full flex-col gap-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-3xl text-foreground">
@@ -1131,23 +1131,25 @@ function AdminIdPView() {
         </p>
       )}
 
-      {configs && configs.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No identity providers configured.
-        </p>
-      )}
+      <div className="flex-1 overflow-auto rounded-lg border">
+        {configs && configs.length === 0 && (
+          <p className="p-6 text-sm text-muted-foreground">
+            No identity providers configured.
+          </p>
+        )}
 
-      {configs && configs.length > 0 && (
-        <IdPTable
-          configs={configs}
-          onDelete={setDeleteTarget}
-          onEdit={setEditTarget}
-          showOrgColumn={true}
-          orgNames={Object.fromEntries(
-            (orgs ?? []).map((o) => [o.id, o.name]),
-          )}
-        />
-      )}
+        {configs && configs.length > 0 && (
+          <IdPTable
+            configs={configs}
+            onDelete={setDeleteTarget}
+            onEdit={setEditTarget}
+            showOrgColumn={true}
+            orgNames={Object.fromEntries(
+              (orgs ?? []).map((o) => [o.id, o.name]),
+            )}
+          />
+        )}
+      </div>
 
       <CreateIdPDialog
         open={showCreate}
@@ -1213,7 +1215,7 @@ function OrgOwnerIdPView({ orgId }: { orgId: string }) {
   );
 
   return (
-    <div className="space-y-8">
+    <div className="flex h-full flex-col gap-8">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-3xl text-foreground">
@@ -1243,20 +1245,22 @@ function OrgOwnerIdPView({ orgId }: { orgId: string }) {
         </p>
       )}
 
-      {configs && configs.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No identity providers configured for your organization.
-        </p>
-      )}
+      <div className="flex-1 overflow-auto rounded-lg border">
+        {configs && configs.length === 0 && (
+          <p className="p-6 text-sm text-muted-foreground">
+            No identity providers configured for your organization.
+          </p>
+        )}
 
-      {configs && configs.length > 0 && (
-        <IdPTable
-          configs={configs}
-          onDelete={setDeleteTarget}
-          onEdit={setEditTarget}
-          showOrgColumn={false}
-        />
-      )}
+        {configs && configs.length > 0 && (
+          <IdPTable
+            configs={configs}
+            onDelete={setDeleteTarget}
+            onEdit={setEditTarget}
+            showOrgColumn={false}
+          />
+        )}
+      </div>
 
       <CreateOrgIdPDialog
         open={showCreate}

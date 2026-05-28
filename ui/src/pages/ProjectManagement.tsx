@@ -967,8 +967,7 @@ function CreateMeProjectDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative z-10 flex h-screen w-full flex-col overflow-y-auto border-l max-w-md border bg-background">
+      <div className="relative z-10 flex h-screen w-full max-w-lg flex-col overflow-y-auto border-l border-border bg-card p-6">
         <h2 className="text-lg font-semibold">Create Project</h2>
         <div className="mt-4 space-y-4">
           <div>
@@ -1096,7 +1095,7 @@ function ProjectManagement() {
           <span className="text-sm text-muted-foreground">
             {filteredProjects.length} project{filteredProjects.length !== 1 ? "s" : ""}
           </span>
-          {!auth.isAdmin && auth.canWrite && (
+          {auth.canWrite && (
             <button
               type="button"
               className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
@@ -1247,7 +1246,6 @@ function ProjectManagement() {
         ) : null;
       })()}
 
-      {/* Create dialog for non-admin */}
       {showCreate && <CreateMeProjectDialog onClose={() => setShowCreate(false)} />}
     </div>
   );
