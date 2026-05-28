@@ -272,11 +272,17 @@ function PhaseSummaryRowExpandable({
 
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-muted/30 cursor-pointer">
+      <tr
+        className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
+        onClick={() => togglePhase(ps.phase)}
+      >
         <td className="px-3 py-2">
           <button
             type="button"
-            onClick={() => togglePhase(ps.phase)}
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePhase(ps.phase);
+            }}
             aria-expanded={phaseExpanded}
             className="flex items-center gap-1.5 text-left hover:text-foreground"
           >
@@ -343,11 +349,17 @@ function PhaseSummaryRowExpandable({
               : "Unattributed";
             return (
               <Fragment key={key}>
-                <tr className="border-b bg-muted/10 last:border-0 hover:bg-muted/30 cursor-pointer">
+                <tr
+                  className="border-b bg-muted/10 last:border-0 hover:bg-muted/30 cursor-pointer"
+                  onClick={() => toggleSubPhase(key)}
+                >
                   <td colSpan={6} className="px-3 py-2 pl-8">
                     <button
                       type="button"
-                      onClick={() => toggleSubPhase(key)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleSubPhase(key);
+                      }}
                       aria-expanded={subExpanded}
                       className="flex items-center gap-1.5 text-left text-sm hover:text-foreground"
                     >
