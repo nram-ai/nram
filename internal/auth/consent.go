@@ -79,6 +79,7 @@ type shareAcceptViewData struct {
 	ExpiresAt    string
 	Grants       []shareGrantView
 	MCPServerURL string
+	ShareToken   string
 	Error        string
 }
 
@@ -239,10 +240,16 @@ const shareAcceptHTML = `<!doctype html>
       </tbody>
     </table>
     <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:#8a93a0;margin-bottom:8px">Add to your MCP client</h2>
-    <p class="sub">Paste this URL into Claude.ai's custom connector, ChatGPT's MCP server settings, or any MCP-capable tool. When prompted to authorize, paste the share token you received.</p>
+    <p class="sub">Paste this URL into Claude.ai's custom connector, ChatGPT's MCP server settings, or any MCP-capable tool.</p>
     <div class="url-row">
       <div class="url" id="mcp-url">{{ .MCPServerURL }}</div>
       <button type="button" class="copy" onclick="(function(b){navigator.clipboard.writeText(document.getElementById('mcp-url').textContent);b.textContent='Copied';setTimeout(function(){b.textContent='Copy URL'},2000);})(this)">Copy URL</button>
+    </div>
+    <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:#8a93a0;margin:24px 0 8px">Share token</h2>
+    <p class="sub">When the MCP client prompts you to authorize, paste this token.</p>
+    <div class="url-row">
+      <div class="url" id="share-token">{{ .ShareToken }}</div>
+      <button type="button" class="copy" onclick="(function(b){navigator.clipboard.writeText(document.getElementById('share-token').textContent);b.textContent='Copied';setTimeout(function(){b.textContent='Copy token'},2000);})(this)">Copy token</button>
     </div>
   {{ end }}
 </div>
@@ -744,6 +751,7 @@ func (s *OAuthServer) ShareAcceptHandler() http.HandlerFunc {
 		view.ShareName = share.Name
 		view.Description = share.Description
 		view.ExpiresAt = share.ExpiresAt.Format("January 2, 2006 at 15:04 MST")
+		view.ShareToken = secret
 
 		view.Grants = make([]shareGrantView, 0, len(grants))
 		for _, g := range grants {
