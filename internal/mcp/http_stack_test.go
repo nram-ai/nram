@@ -536,11 +536,11 @@ func TestHTTPStack_MCP_Initialize(t *testing.T) {
 	if !ok {
 		t.Fatalf("icons[0] not an object: %T", icons[0])
 	}
-	if src, _ := icon["src"].(string); !strings.HasPrefix(src, "data:image/png;base64,") {
-		t.Errorf("icons[0].src missing data-URI prefix: %q", src)
+	if src, _ := icon["src"].(string); src != "https://nram.ai/favicon.ico" {
+		t.Errorf("icons[0].src = %q, want https://nram.ai/favicon.ico", src)
 	}
-	if mt, _ := icon["mimeType"].(string); mt != "image/png" {
-		t.Errorf("icons[0].mimeType = %q, want image/png", mt)
+	if mt, _ := icon["mimeType"].(string); mt != "image/x-icon" {
+		t.Errorf("icons[0].mimeType = %q, want image/x-icon", mt)
 	}
 
 	sessionID := resp.Header.Get("Mcp-Session-Id")
@@ -875,10 +875,29 @@ func TestHTTPStack_MCP_ListTools(t *testing.T) {
 			Name        string         `json:"name"`
 			Description string         `json:"description"`
 			InputSchema map[string]any `json:"inputSchema"`
+			Icons       []struct {
+				Src      string `json:"src"`
+				MIMEType string `json:"mimeType"`
+			} `json:"icons"`
 		} `json:"tools"`
 	}
 	if err := json.Unmarshal(rpcResp.Result, &result); err != nil {
 		t.Fatalf("tools/list: failed to unmarshal result: %v (raw: %s)", err, string(rpcResp.Result))
+	}
+
+	// Every tool must advertise the hosted brand mark by URL, never an inline
+	// base64 data URI (the latter bloats tools/list with no consumer).
+	for _, tool := range result.Tools {
+		if len(tool.Icons) == 0 {
+			t.Errorf("tool %q: missing icons", tool.Name)
+			continue
+		}
+		if got := tool.Icons[0].Src; got != "https://nram.ai/favicon.ico" {
+			t.Errorf("tool %q: icons[0].src = %q, want https://nram.ai/favicon.ico", tool.Name, got)
+		}
+		if got := tool.Icons[0].MIMEType; got != "image/x-icon" {
+			t.Errorf("tool %q: icons[0].mimeType = %q, want image/x-icon", tool.Name, got)
+		}
 	}
 
 	expectedTools := []string{

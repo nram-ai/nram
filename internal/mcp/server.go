@@ -211,11 +211,7 @@ func NewServer(deps Dependencies) *Server {
 			he, hr = deps.ProviderStatus()
 		}
 		result.Instructions = buildInstructions(he, hr)
-		result.ServerInfo.Icons = []mcp.Icon{{
-			Src:      iconDataURIValue,
-			MIMEType: "image/png",
-			Sizes:    []string{"200x200"},
-		}}
+		result.ServerInfo.Icons = []mcp.Icon{iconAnnotation()}
 	})
 
 	mcpSrv := server.NewMCPServer(
