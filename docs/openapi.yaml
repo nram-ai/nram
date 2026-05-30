@@ -3295,16 +3295,17 @@ components:
 
     RecallResult:
       type: object
+      description: |
+        A single recalled memory. This per-memory shape is shared byte-for-byte
+        with the MCP recall tool output. Per-row audit bookkeeping (ingestion
+        decisions, consolidation/reinforce stamps, migration markers) is
+        stripped from metadata on the recall path; the full metadata remains
+        available via the memory detail endpoint.
       properties:
         id:
           type: string
           format: uuid
-        project_id:
-          type: string
-          format: uuid
         project_slug:
-          type: string
-        path:
           type: string
         content:
           type: string
@@ -3325,20 +3326,28 @@ components:
         score:
           type: number
           format: double
-        similarity:
-          type: number
-          format: double
-          nullable: true
         confidence:
           type: number
           format: double
-        access_count:
-          type: integer
-        enriched:
+        low_novelty:
           type: boolean
+          description: |
+            True when the dream novelty audit demoted this memory (paired with
+            confidence 0). Always present.
+        derived_from:
+          type: array
+          description: |
+            Source memory IDs this memory was synthesized from (dream lineage).
+            Omitted when the memory has no lineage.
+          items:
+            type: string
+            format: uuid
         metadata:
           type: object
         created_at:
+          type: string
+          format: date-time
+        updated_at:
           type: string
           format: date-time
 

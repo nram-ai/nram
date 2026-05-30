@@ -547,17 +547,20 @@ func TestRecallHandler_FusedCombinedRequiresFusion_400(t *testing.T) {
 	}
 }
 
-// TestRecallHandler_SimilarityNullSerialization confirms F1.7: a nil
-// Similarity pointer must hit the wire as "similarity":null, not be
-// omitted. OpenAPI declares the field nullable: true, so consumers reading
-// `result.similarity is None` must work.
-func TestRecallHandler_SimilarityNullSerialization(t *testing.T) {
+// TestRecallHandler_SlimMemoryShape confirms the recall response now emits the
+// canonical slim per-memory shape shared with the MCP transport: the internal
+// carrier fields (similarity, access_count, enriched, path, project_id) are
+// dropped from the wire, and the decision signals confidence + low_novelty are
+// present as typed top-level fields. This supersedes the former F1.7 contract
+// that pinned "similarity":null.
+func TestRecallHandler_SlimMemoryShape(t *testing.T) {
 	projectID := uuid.New()
+	sim := 0.9
 	svc := &mockRecallService{
 		recallFn: func(_ context.Context, _ *service.RecallRequest) (*service.RecallResponse, error) {
 			return &service.RecallResponse{
 				Memories: []service.RecallResult{
-					{ID: uuid.New(), Score: 0.5, Similarity: nil},
+					{ID: uuid.New(), Score: 0.5, Similarity: &sim, Confidence: 0.8, AccessCount: 4, Enriched: true, Path: "p", ProjectID: uuid.New()},
 				},
 				LatencyMs: 1,
 			}, nil
@@ -570,8 +573,16 @@ func TestRecallHandler_SimilarityNullSerialization(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), `"similarity":null`) {
-		t.Errorf("expected response to contain \"similarity\":null; got %s", w.Body.String())
+	body := w.Body.String()
+	for _, banned := range []string{`"similarity"`, `"access_count"`, `"enriched"`, `"path"`, `"project_id"`} {
+		if strings.Contains(body, banned) {
+			t.Errorf("expected %s dropped from slim recall response; got %s", banned, body)
+		}
+	}
+	for _, want := range []string{`"confidence"`, `"low_novelty"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %s present in slim recall response; got %s", want, body)
+		}
 	}
 }
 

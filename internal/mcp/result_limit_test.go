@@ -143,6 +143,134 @@ func TestWrapToolResultUsesReducer(t *testing.T) {
 	}
 }
 
+// TestRecallReducerGraphSurvivesAfterAuditStrip is the observable guard for the
+// headline acceptance criterion: stripping per-row audit bookkeeping reclaims
+// enough budget that the graph round-trips instead of being dropped by the
+// reducer's stage-1 graph drop.
+//
+// It models the SAME dense response before and after the strip. "leaky" carries
+// the per-row audit blob the recall projection used to leak (consolidation/
+// reinforce/ingestion/migration keys); "slim" is what recallview.Project now
+// emits (audit stripped, residual nil). At a budget sized to the slim payload's
+// Tier-1 structured boundary (budget/2), the slim response ships Tier 1 with its
+// graph intact and no _truncated marker, while the audit-laden response
+// overflows and trips the stage-1 graph drop. This is the reclaimed-budget ->
+// graph-survives causal chain, asserted on real serialized output.
+func TestRecallReducerGraphSurvivesAfterAuditStrip(t *testing.T) {
+	const n = 10
+	// A realistic audit blob: the keys the recall path now strips, with
+	// RFC3339Nano timestamps and UUID-shaped values like the real writers emit.
+	auditBlob := json.RawMessage(`{` +
+		`"consolidation_load_checked_at":"2026-04-26T09:43:17.123456789Z",` +
+		`"reinforce_checked_at":"2026-04-26T09:43:17.123456789Z",` +
+		`"consolidation_cluster_checked_at":"2026-04-26T09:43:17.123456789Z",` +
+		`"consolidation_cluster_fingerprint":"f0e1d2c3b4a5968778695a4b3c2d1e0f",` +
+		`"ingestion_decision":"ADD","ingestion_decision_at":"2026-04-26T09:43:17.123456789Z",` +
+		`"ingestion_match_count":0,"ingestion_top_score":0,"ingestion_shadow_op":"none",` +
+		`"migrated_from_global":true,"migration_date":"2026-05-24",` +
+		`"original_global_id":"0a813a7e-47ce-4f35-ae15-71439239ee0f"}`)
+
+	graph := graphResponse{
+		Entities: []graphEntity{
+			{ID: uuid.New(), Name: "Anchor", Type: "concept"},
+			{ID: uuid.New(), Name: "Topic", Type: "concept"},
+			{ID: uuid.New(), Name: "Person", Type: "person"},
+		},
+		Relationships: []graphRelationship{
+			{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "relates_to", Weight: 0.9},
+			{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "mentions", Weight: 0.7},
+		},
+	}
+
+	fixed := time.Unix(1700000000, 0).UTC()
+	mkMems := func(withAudit bool) []mcpRecallMemory {
+		mems := make([]mcpRecallMemory, n)
+		for i := range mems {
+			m := mcpRecallMemory{
+				ID:          uuid.New(),
+				ProjectSlug: "dense",
+				Content:     "memory content number " + fmt.Sprint(i),
+				Tags:        []string{"alpha", "beta"},
+				Origin:      model.OriginDream,
+				Score:       float64(n - i),
+				Confidence:  0.5,
+				CreatedAt:   fixed,
+				UpdatedAt:   fixed,
+			}
+			if withAudit {
+				m.Metadata = auditBlob
+			}
+			mems[i] = m
+		}
+		return mems
+	}
+
+	slim := &mcpRecallResponse{Memories: mkMems(false), Graph: graph, LatencyMs: 5}
+	leaky := &mcpRecallResponse{Memories: mkMems(true), Graph: graph, LatencyMs: 5}
+
+	slimRaw, err := json.Marshal(slim)
+	if err != nil {
+		t.Fatalf("marshal slim: %v", err)
+	}
+	leakyRaw, err := json.Marshal(leaky)
+	if err != nil {
+		t.Fatalf("marshal leaky: %v", err)
+	}
+
+	// Tier 1 (graph-preserving) requires the payload to fit budget/2. Size the
+	// budget to the slim payload's Tier-1 boundary.
+	budget := 2 * len(slimRaw)
+	if len(leakyRaw) <= budget {
+		t.Fatalf("fixture invalid: leaky(%d) must exceed budget(%d=2*slim(%d)) so it cannot ship intact",
+			len(leakyRaw), budget, len(slimRaw))
+	}
+
+	// Slim: ships Tier 1 with the graph intact, no _truncated.
+	slimRes, err := wrapToolResult(&stubMetrics{}, "recall", budget, slim, newRecallReducer(slim))
+	if err != nil {
+		t.Fatalf("wrapToolResult slim err = %v", err)
+	}
+	slimText := extractText(slimRes)
+	var slimDecoded map[string]any
+	if err := json.Unmarshal([]byte(slimText), &slimDecoded); err != nil {
+		t.Fatalf("slim result not valid JSON: %v\nbody: %s", err, slimText)
+	}
+	if _, truncated := slimDecoded["_truncated"]; truncated {
+		t.Errorf("slim response should NOT be truncated; got _truncated=%v", slimDecoded["_truncated"])
+	}
+	slimGraph, _ := slimDecoded["graph"].(map[string]any)
+	ents, _ := slimGraph["entities"].([]any)
+	if len(ents) != 3 {
+		t.Errorf("expected slim graph to round-trip 3 entities, got %d (graph=%v)", len(ents), slimGraph)
+	}
+
+	// Leaky: the audit bloat pushes it past the Tier-1 boundary; the reducer's
+	// stage-1 graph drop fires.
+	leakyRes, err := wrapToolResult(&stubMetrics{}, "recall", budget, leaky, newRecallReducer(leaky))
+	if err != nil {
+		t.Fatalf("wrapToolResult leaky err = %v", err)
+	}
+	leakyText := extractText(leakyRes)
+	var leakyDecoded map[string]any
+	if err := json.Unmarshal([]byte(leakyText), &leakyDecoded); err != nil {
+		t.Fatalf("leaky result not valid JSON: %v\nbody: %s", err, leakyText)
+	}
+	trunc, ok := leakyDecoded["_truncated"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected leaky response to be _truncated; got %v", leakyDecoded)
+	}
+	dropped, _ := trunc["dropped"].([]any)
+	var graphDropped bool
+	for _, d := range dropped {
+		if s, _ := d.(string); s == "graph.entities" {
+			graphDropped = true
+		}
+	}
+	if !graphDropped {
+		t.Errorf("expected leaky response to drop graph.entities; dropped=%v", dropped)
+	}
+}
+
 // TestRecallReducerPreservesCoverageGapsThroughStages1To3 pins that
 // coverage_gaps is NOT trimmed during stages 1-3 (graph drop, content
 // truncation) — only at stage 4+ does it halve in lockstep with memories.

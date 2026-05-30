@@ -10,8 +10,41 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/recallview"
 	"github.com/nram-ai/nram/internal/service"
 )
+
+// recallResponseBody is the REST recall wire shape. Per-memory it serializes
+// recallview.Memory, the same struct the MCP recall tool emits, so a recalled
+// memory is byte-identical across both transports. The envelope keeps REST's
+// total_searched and its native graph shape (per-memory symmetry, not whole-
+// envelope symmetry).
+type recallResponseBody struct {
+	Memories      []recallview.Memory   `json:"memories"`
+	Graph         service.RecallGraph   `json:"graph"`
+	TotalSearched int                   `json:"total_searched"`
+	LatencyMs     int64                 `json:"latency_ms"`
+	CoverageGaps  []service.CoverageGap `json:"coverage_gaps,omitempty"`
+}
+
+// buildRecallResponseBody projects the internal service result into the slim
+// REST shape, stripping per-row audit bookkeeping and hoisting the decision
+// signals. opts carries the include_low_novelty request flag through to the
+// projection (it controls whether low_novelty_reason survives in residual
+// metadata); the low_novelty bool itself is always emitted.
+func buildRecallResponseBody(resp *service.RecallResponse, opts recallview.Options) recallResponseBody {
+	memories := make([]recallview.Memory, 0, len(resp.Memories))
+	for _, m := range resp.Memories {
+		memories = append(memories, recallview.Project(m, opts))
+	}
+	return recallResponseBody{
+		Memories:      memories,
+		Graph:         resp.Graph,
+		TotalSearched: resp.TotalSearched,
+		LatencyMs:     resp.LatencyMs,
+		CoverageGaps:  resp.CoverageGaps,
+	}
+}
 
 // UserReader provides read access to user records for user-scoped handlers.
 type UserReader interface {
@@ -102,7 +135,7 @@ func NewRecallHandler(svc RecallServicer) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, http.StatusOK, buildRecallResponseBody(resp, recallview.Options{IncludeLowNovelty: body.IncludeLowNovelty}))
 	}
 }
 
@@ -157,6 +190,6 @@ func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, http.StatusOK, buildRecallResponseBody(resp, recallview.Options{IncludeLowNovelty: body.IncludeLowNovelty}))
 	}
 }

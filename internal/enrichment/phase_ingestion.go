@@ -525,18 +525,18 @@ func stampIngestionMetadataOn(mem *model.Memory, p *pendingJob) {
 			meta = map[string]any{}
 		}
 	}
-	meta["ingestion_decision"] = p.ingestionDecision
-	meta["ingestion_decision_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	meta[model.IngestionMetaDecision] = p.ingestionDecision
+	meta[model.IngestionMetaDecisionAt] = time.Now().UTC().Format(time.RFC3339Nano)
 	if p.ingestionTarget != nil {
-		meta["ingestion_target_id"] = p.ingestionTarget.String()
+		meta[model.IngestionMetaTargetID] = p.ingestionTarget.String()
 	}
 	if p.ingestionRationale != "" {
-		meta["ingestion_rationale"] = p.ingestionRationale
+		meta[model.IngestionMetaRationale] = p.ingestionRationale
 	}
-	meta["ingestion_match_count"] = p.ingestionMatchN
-	meta["ingestion_top_score"] = p.ingestionTopScore
+	meta[model.IngestionMetaMatchCount] = p.ingestionMatchN
+	meta[model.IngestionMetaTopScore] = p.ingestionTopScore
 	if p.ingestionShadowOp != "" {
-		meta["ingestion_shadow_op"] = p.ingestionShadowOp
+		meta[model.IngestionMetaShadowOp] = p.ingestionShadowOp
 	}
 	encoded, err := json.Marshal(meta)
 	if err != nil {

@@ -3,30 +3,21 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/dreaming"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/recallview"
 	"github.com/nram-ai/nram/internal/service"
 )
 
-// mcpRecallMemory hoists source_memory_ids from metadata into derived_from so
-// the agent gets a typed lineage pointer (each id is fetchable via memory_get)
-// instead of a buried UUID blob.
-type mcpRecallMemory struct {
-	ID          uuid.UUID          `json:"id"`
-	ProjectSlug string             `json:"project_slug"`
-	Content     string             `json:"content"`
-	Tags        []string           `json:"tags"`
-	Source      *string            `json:"source,omitempty"`
-	Origin      model.MemoryOrigin `json:"origin"`
-	Score       float64            `json:"score"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
-	DerivedFrom []uuid.UUID        `json:"derived_from,omitempty"`
-	Metadata    json.RawMessage    `json:"metadata,omitempty"`
-}
+// mcpRecallMemory is the per-memory recall shape. It aliases recallview.Memory
+// so the REST recall handlers and the MCP recall tool serialize the exact same
+// struct (byte-identical wire shape). The reducer in result_limit.go and the
+// output-schema reflection in tool_recall.go (schemaFor[mcpRecallResponse])
+// both operate on this type, so adding/removing a field here flows to both the
+// wire and the published tools/list output schema.
+type mcpRecallMemory = recallview.Memory
 
 // mcpRecallResponse passes service.CoverageGap through verbatim because the
 // diversify_by_tag_prefix wire contract is shared with REST clients.
@@ -52,6 +43,12 @@ type mcpRecallResponse struct {
 	Truncated    *truncationInfo       `json:"_truncated,omitempty"`
 }
 
+// The strip-key sets and extractDerivedFrom below now serve only the list
+// (tool_list.go) and get/detail (projection_store.go) MCP tools. The recall
+// path moved to internal/recallview, which keeps its own — deliberately
+// broader — strip set; these are intentionally left at their prior coverage so
+// list/get behavior is unchanged.
+
 // alwaysStrippedKeys are removed from emitted metadata regardless of caller
 // flags. dream_cycle_id is unresolvable from the MCP surface; source_memory_ids
 // is hoisted into the typed derived_from field on the same response and would
@@ -61,11 +58,10 @@ var alwaysStrippedKeys = map[string]struct{}{
 	model.DreamMetaSourceMemoryIDs: {},
 }
 
-// lowNoveltyKeys are surfaced when include_low_novelty=true on the REST recall
-// path (and when include_audit=true on the REST get path). They are the
-// *reason* a dream was demoted, paired with the demoted memory itself. The MCP
-// recall and get tools no longer expose these flags; the projection on those
-// paths always strips these keys.
+// lowNoveltyKeys are surfaced when include_low_novelty=true (or
+// include_audit=true) on the list/get projection. They are the demotion marker
+// and its *reason*. The MCP list and get tools do not expose these flags, so on
+// those paths the projection always strips these keys.
 var lowNoveltyKeys = map[string]struct{}{
 	"low_novelty":        {},
 	"low_novelty_reason": {},
@@ -143,21 +139,16 @@ func extractDerivedFrom(raw json.RawMessage, opts projectionOpts) (derived []uui
 	return derived, cleaned
 }
 
+// projectMemory maps one recalled memory to the canonical wire shape. The
+// projection lives in internal/recallview so the REST recall handler produces
+// the identical struct without internal/api having to import internal/mcp.
+// projectionOpts mirrors recallview.Options field-for-field; translate rather
+// than alias so the two packages stay independently evolvable.
 func projectMemory(m service.RecallResult, opts projectionOpts) mcpRecallMemory {
-	derived, meta := extractDerivedFrom(m.Metadata, opts)
-	return mcpRecallMemory{
-		ID:          m.ID,
-		ProjectSlug: m.ProjectSlug,
-		Content:     m.Content,
-		Tags:        m.Tags,
-		Source:      m.Source,
-		Origin:      m.Origin,
-		Score:       m.Score,
-		CreatedAt:   m.CreatedAt,
-		UpdatedAt:   m.UpdatedAt,
-		DerivedFrom: derived,
-		Metadata:    meta,
-	}
+	return recallview.Project(m, recallview.Options{
+		IncludeLowNovelty: opts.IncludeLowNovelty,
+		IncludeAudit:      opts.IncludeAudit,
+	})
 }
 
 // buildMCPRecallResponse projects a service.RecallResponse into the MCP shape,

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/recallview"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -192,12 +193,20 @@ func TestBuildMCPRecallResponse_StripsBookkeepingMetadata(t *testing.T) {
 			`"novelty_audit_reason":"orphan_no_sources",`+
 			`"low_novelty":true,"low_novelty_reason":"orphan_no_sources",`+
 			`"paraphrase_checked_at":"2026-04-26T09:43:17Z",`+
+			`"consolidation_load_checked_at":"2026-04-26T09:43:17Z",`+
+			`"reinforce_checked_at":"2026-04-26T09:43:17Z",`+
+			`"consolidation_cluster_checked_at":"2026-04-26T09:43:17Z",`+
+			`"consolidation_cluster_fingerprint":"abc123",`+
+			`"ingestion_decision":"ADD","ingestion_decision_at":"2026-04-26T09:43:17Z",`+
+			`"ingestion_target_id":"%s","ingestion_rationale":"new fact",`+
+			`"ingestion_match_count":0,"ingestion_top_score":0.0,"ingestion_shadow_op":"none",`+
+			`"migrated_from_global":true,"migration_date":"2026-05-24","original_global_id":"%s",`+
 			`"user_key":"keep me"}`,
-		uuid.New(), srcA, srcB,
+		uuid.New(), srcA, srcB, uuid.New(), uuid.New(),
 	))
 	resp := &service.RecallResponse{
 		Memories: []service.RecallResult{
-			{ID: uuid.New(), Content: "audited memory", Metadata: rawMeta},
+			{ID: uuid.New(), Content: "audited memory", Confidence: 0.42, Metadata: rawMeta},
 		},
 	}
 
@@ -207,6 +216,15 @@ func TestBuildMCPRecallResponse_StripsBookkeepingMetadata(t *testing.T) {
 		t.Fatalf("expected 1 memory, got %d", len(out.Memories))
 	}
 	got := out.Memories[0]
+
+	// The novelty bool and confidence are hoisted to typed fields, not left in
+	// the metadata blob.
+	if !got.LowNovelty {
+		t.Errorf("expected low_novelty hoisted to typed field LowNovelty=true, got false")
+	}
+	if got.Confidence != 0.42 {
+		t.Errorf("expected confidence surfaced as 0.42, got %v", got.Confidence)
+	}
 
 	if len(got.DerivedFrom) != 2 {
 		t.Fatalf("expected derived_from of length 2, got %v", got.DerivedFrom)
@@ -237,6 +255,13 @@ func TestBuildMCPRecallResponse_StripsBookkeepingMetadata(t *testing.T) {
 		"contradictions_checked_at", "novelty_audited_at",
 		"novelty_audit_reason", "low_novelty", "low_novelty_reason",
 		"paraphrase_checked_at",
+		// Newly stripped on the recall path (previously leaked).
+		"consolidation_load_checked_at", "reinforce_checked_at",
+		"consolidation_cluster_checked_at", "consolidation_cluster_fingerprint",
+		"ingestion_decision", "ingestion_decision_at", "ingestion_target_id",
+		"ingestion_rationale", "ingestion_match_count", "ingestion_top_score",
+		"ingestion_shadow_op",
+		"migrated_from_global", "migration_date", "original_global_id",
 	}
 	for _, k := range stripped {
 		if _, ok := parsed[k]; ok {
@@ -249,10 +274,12 @@ func TestBuildMCPRecallResponse_StripsBookkeepingMetadata(t *testing.T) {
 }
 
 // TestBuildMCPRecallResponse_IncludeLowNovelty pairs with the strip drift
-// catcher: when projectionOpts.IncludeLowNovelty=true, low_novelty and
-// low_novelty_reason MUST survive the strip (so the caller knows why a
-// dream was demoted), while the other audit-stamp keys stay stripped (those
-// are exposed only by include_audit on memory_get).
+// catcher: the low_novelty bool is always hoisted to the typed LowNovelty
+// field (and stripped from residual metadata). When
+// projectionOpts.IncludeLowNovelty=true, the low_novelty_reason detail
+// additionally survives in residual metadata (so the caller knows WHY a dream
+// was demoted), while the other audit-stamp keys stay stripped (those are
+// exposed only by include_audit on memory_get).
 func TestBuildMCPRecallResponse_IncludeLowNovelty(t *testing.T) {
 	rawMeta := json.RawMessage(
 		`{"low_novelty":true,"low_novelty_reason":"orphan_no_sources",` +
@@ -273,12 +300,15 @@ func TestBuildMCPRecallResponse_IncludeLowNovelty(t *testing.T) {
 	if len(out.Memories) != 1 || out.Memories[0].Metadata == nil {
 		t.Fatalf("expected 1 memory with metadata; got %+v", out.Memories)
 	}
+	if !out.Memories[0].LowNovelty {
+		t.Errorf("expected low_novelty hoisted to typed field LowNovelty=true, got false")
+	}
 	var parsed map[string]any
 	if err := json.Unmarshal(out.Memories[0].Metadata, &parsed); err != nil {
 		t.Fatalf("residual metadata not valid JSON: %v", err)
 	}
-	if v, ok := parsed["low_novelty"].(bool); !ok || !v {
-		t.Errorf("expected low_novelty=true to survive include_low_novelty=true; got %v", parsed["low_novelty"])
+	if _, ok := parsed["low_novelty"]; ok {
+		t.Errorf("expected low_novelty key stripped from residual (it is hoisted to LowNovelty); but it was present")
 	}
 	if v, _ := parsed["low_novelty_reason"].(string); v != "orphan_no_sources" {
 		t.Errorf("expected low_novelty_reason preserved; got %q", v)
@@ -376,15 +406,20 @@ func TestBuildMCPRecallResponse_FixtureShape(t *testing.T) {
 			t.Errorf("expected derived_from hoisted for memory %s", m.ID)
 		}
 	}
-	// Internal fields must not appear in the serialized JSON. Audit-stamp keys
-	// are written by the dreaming pipeline; the projector strips them via
-	// bookkeepingMetaKeys, and this list is the drift catcher.
+	// Internal-only fields and audit bookkeeping must not appear in the
+	// serialized JSON. confidence and low_novelty are NOT banned — they are
+	// surfaced decision signals (typed top-level fields). The remaining
+	// internal carrier fields (path/project_id/similarity/access_count/
+	// enriched) are dropped from the wire, and the dreaming/enrichment audit
+	// keys are stripped by recallview; this list is the drift catcher.
 	bannedKeys := []string{
-		`"path"`, `"project_id"`, `"similarity"`, `"confidence"`, `"access_count"`,
+		`"path"`, `"project_id"`, `"similarity"`, `"access_count"`,
 		`"enriched"`, `"total_searched"`,
 		`"dream_cycle_id"`, `"source_memory_ids"`,
 		`"contradictions_checked_at"`, `"novelty_audited_at"`, `"novelty_audit_reason"`,
-		`"low_novelty"`, `"low_novelty_reason"`, `"paraphrase_checked_at"`,
+		`"low_novelty_reason"`, `"paraphrase_checked_at"`,
+		`"consolidation_load_checked_at"`, `"reinforce_checked_at"`,
+		`"ingestion_decision"`, `"migrated_from_global"`,
 	}
 	body := string(rawAfter)
 	for _, k := range bannedKeys {
@@ -679,4 +714,76 @@ func TestHandleMemoryRecall_ProjectNotFound(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertToolError(t, result, "project not found")
+}
+
+// TestRecallTransportSymmetry is the acceptance guard for the locked
+// decision: a recalled memory must be byte-identical across the REST and MCP
+// transports. The MCP tool projects via buildMCPRecallResponse; the REST
+// handler (internal/api/handler_recall.go) projects each memory via
+// recallview.Project(m, opts) — the exact call replayed here. Asserting the
+// two marshaled per-memory objects are byte-equal proves the transports share
+// one canonical shape and cannot drift apart.
+func TestRecallTransportSymmetry(t *testing.T) {
+	srcA := uuid.New()
+	rawMeta := json.RawMessage(fmt.Sprintf(
+		`{"dream_cycle_id":"%s","source_memory_ids":["%s"],`+
+			`"low_novelty":true,"low_novelty_reason":"orphan_no_sources",`+
+			`"consolidation_load_checked_at":"2026-04-26T09:43:17Z",`+
+			`"ingestion_decision":"ADD","migrated_from_global":true,`+
+			`"user_key":"keep me"}`,
+		uuid.New(), srcA,
+	))
+	sim := 0.7
+	res := service.RecallResult{
+		ID:          uuid.New(),
+		ProjectID:   uuid.New(),
+		ProjectSlug: "fixture",
+		Path:        "users/x/projects/y/fixture",
+		Content:     "symmetry content",
+		Tags:        []string{"alpha", "beta"},
+		Source:      nil,
+		Origin:      model.OriginDream,
+		Score:       0.5,
+		Similarity:  &sim,
+		Confidence:  0.81,
+		AccessCount: 3,
+		Enriched:    true,
+		Metadata:    rawMeta,
+	}
+	resp := &service.RecallResponse{Memories: []service.RecallResult{res}}
+
+	// MCP transport path.
+	mcpOut := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, nil, projectionOpts{})
+	if len(mcpOut.Memories) != 1 {
+		t.Fatalf("expected 1 mcp memory, got %d", len(mcpOut.Memories))
+	}
+	mcpBytes, err := json.Marshal(mcpOut.Memories[0])
+	if err != nil {
+		t.Fatalf("marshal mcp memory: %v", err)
+	}
+
+	// REST transport path: handler_recall.go calls recallview.Project per memory.
+	restMem := recallview.Project(res, recallview.Options{})
+	restBytes, err := json.Marshal(restMem)
+	if err != nil {
+		t.Fatalf("marshal rest memory: %v", err)
+	}
+
+	if string(mcpBytes) != string(restBytes) {
+		t.Errorf("per-memory wire shape diverged across transports\n  mcp:  %s\n  rest: %s", mcpBytes, restBytes)
+	}
+
+	// And confirm the canonical shape actually slimmed: decision signals present,
+	// internal carrier + audit bookkeeping gone.
+	body := string(mcpBytes)
+	for _, want := range []string{`"confidence":0.81`, `"low_novelty":true`, `"origin":"dream"`, `"derived_from"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %s in canonical memory; got %s", want, body)
+		}
+	}
+	for _, banned := range []string{`"similarity"`, `"access_count"`, `"enriched"`, `"path"`, `"project_id"`, `"ingestion_decision"`, `"migrated_from_global"`, `"consolidation_load_checked_at"`} {
+		if strings.Contains(body, banned) {
+			t.Errorf("expected %s absent from canonical memory; got %s", banned, body)
+		}
+	}
 }
