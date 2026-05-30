@@ -226,6 +226,30 @@ func main() {
 		log.Printf("warning: settings seed failed: %v", err)
 	}
 
+	// One-time canonicalization of existing relationships.relation values so rows
+	// written before write-time canonicalization — and the admin graph viz, which
+	// reads stored relations verbatim — are clean and merged. Guarded by a marker
+	// setting so the table is scanned at most once; the pass is idempotent and not
+	// load-bearing (read-time dedup covers responses), so a failure logs and
+	// retries next boot rather than blocking startup.
+	{
+		const relCanonFlag = "relationships.canonicalized"
+		ctx := context.Background()
+		if !settingsSvc.ResolveBool(ctx, relCanonFlag, "global") {
+			changed, err := migration.CanonicalizeRelations(ctx, db.WriteDB(), db.Backend())
+			if err != nil {
+				log.Printf("warning: relation canonicalization backfill failed (will retry next boot): %v", err)
+			} else {
+				if changed > 0 {
+					log.Printf("relation canonicalization: normalized/merged %d relationship rows", changed)
+				}
+				if err := settingsSvc.Set(ctx, relCanonFlag, "true", "global", nil); err != nil {
+					log.Printf("warning: failed to record relation canonicalization marker: %v", err)
+				}
+			}
+		}
+	}
+
 	// Create provider registry. Provider configuration lives in the DB
 	// settings table (provider.{embedding,fact,entity}) and is managed via
 	// the admin UI. On a fresh install the slots are empty and the registry

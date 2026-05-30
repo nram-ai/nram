@@ -19,10 +19,26 @@ func newTestExportJob(userID uuid.UUID) *model.ExportJob {
 	}
 }
 
+// truncateExportJobsForTest clears the global export queue so each export test
+// starts clean on the shared Postgres schema. ClaimNext is a global FIFO (oldest
+// pending job, any user), so a pending job left by an earlier test would
+// otherwise be claimed by a later one, breaking ClaimNext/Complete/Fail/
+// ListExpired assertions. No-op on SQLite, where every test gets a fresh DB.
+func truncateExportJobsForTest(t *testing.T, db DB) {
+	t.Helper()
+	if db.Backend() != BackendPostgres {
+		return
+	}
+	if _, err := db.Exec(context.Background(), "TRUNCATE TABLE export_jobs CASCADE"); err != nil {
+		t.Fatalf("truncate export_jobs: %v", err)
+	}
+}
+
 func TestExportJobRepo_Enqueue(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		user := createTestUser(t, ctx, db)
 
 		job := newTestExportJob(user.ID)
@@ -57,6 +73,7 @@ func TestExportJobRepo_GetByID_OtherUserIsNotFound(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		owner := createTestUser(t, ctx, db)
 		other := createTestUser(t, ctx, db)
 
@@ -76,6 +93,7 @@ func TestExportJobRepo_ClaimNext(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		user := createTestUser(t, ctx, db)
 
 		// Empty queue: ErrNoRows.
@@ -117,6 +135,7 @@ func TestExportJobRepo_Complete(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		user := createTestUser(t, ctx, db)
 
 		job := newTestExportJob(user.ID)
@@ -158,6 +177,7 @@ func TestExportJobRepo_Complete_ClaimLost(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		user := createTestUser(t, ctx, db)
 
 		job := newTestExportJob(user.ID)
@@ -179,6 +199,7 @@ func TestExportJobRepo_Fail(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		user := createTestUser(t, ctx, db)
 
 		job := newTestExportJob(user.ID)
@@ -210,6 +231,7 @@ func TestExportJobRepo_ListByUser_ScopedAndOrdered(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		user := createTestUser(t, ctx, db)
 		other := createTestUser(t, ctx, db)
 
@@ -241,6 +263,7 @@ func TestExportJobRepo_DeleteByUserAndID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		owner := createTestUser(t, ctx, db)
 		other := createTestUser(t, ctx, db)
 
@@ -272,6 +295,7 @@ func TestExportJobRepo_ListExpired(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		user := createTestUser(t, ctx, db)
 
 		job := newTestExportJob(user.ID)
@@ -311,6 +335,7 @@ func TestExportJobRepo_CountInFlightByUser(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewExportJobRepo(db)
+		truncateExportJobsForTest(t, db)
 		user := createTestUser(t, ctx, db)
 
 		n, err := repo.CountInFlightByUser(ctx, user.ID)

@@ -100,6 +100,27 @@ func TestResolveFromDatabase(t *testing.T) {
 	}
 }
 
+// TestMarkerFlagRoundTrip pins the boot-guard mechanism used by the one-time
+// relation-canonicalization backfill in cmd/server/main.go: an unregistered
+// marker key reads false (no panic — ResolveBool tolerates unset/unregistered
+// keys), and reads true after Set. This is what makes the backfill run exactly
+// once.
+func TestMarkerFlagRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	const flag = "relationships.canonicalized"
+	svc := NewSettingsService(newMockSettingsRepo())
+
+	if svc.ResolveBool(ctx, flag, "global") {
+		t.Fatal("marker should read false before it is set")
+	}
+	if err := svc.Set(ctx, flag, "true", "global", nil); err != nil {
+		t.Fatalf("set marker: %v", err)
+	}
+	if !svc.ResolveBool(ctx, flag, "global") {
+		t.Error("marker should read true after Set")
+	}
+}
+
 func TestResolveFallsBackToDefault(t *testing.T) {
 	repo := newMockSettingsRepo()
 	svc := NewSettingsService(repo)

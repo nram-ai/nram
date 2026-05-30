@@ -843,11 +843,13 @@ func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
 		// Stub-only relationship must be reassigned to real.
 		var compCount int
 		var compSrcStr string
+		// Stored relations are canonicalized, so "competes_with" persists as
+		// "competes with"; assert against the canonical form.
 		compQuery := `SELECT COUNT(*), COALESCE(MAX(CAST(source_id AS TEXT)), '') FROM relationships
-			WHERE namespace_id = ? AND target_id = ? AND relation = 'competes_with'`
+			WHERE namespace_id = ? AND target_id = ? AND relation = 'competes with'`
 		if db.Backend() == BackendPostgres {
 			compQuery = `SELECT COUNT(*), COALESCE(MAX(source_id::text), '') FROM relationships
-				WHERE namespace_id = $1 AND target_id = $2 AND relation = 'competes_with'`
+				WHERE namespace_id = $1 AND target_id = $2 AND relation = 'competes with'`
 		}
 		if err := db.QueryRow(ctx, compQuery, nsID.String(), acquirer.ID.String()).Scan(&compCount, &compSrcStr); err != nil {
 			t.Fatalf("count competes_with rels: %v", err)

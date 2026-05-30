@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +16,39 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
+
+// sortGraphBySignal is a test fixture: it orders both graph axes by global
+// signal strength descending (the pre-rankGraphSlice contract) so the
+// packGraphToByteBudget / reducer tests can pre-sort input deterministically.
+// Production ranking now lives in rankGraphSlice (seed proximity); this is kept
+// only to drive the byte-budget prefix-trim tests.
+func sortGraphBySignal(entities []graphEntity, rels []graphRelationship) {
+	sort.Slice(rels, func(i, j int) bool {
+		a, b := rels[i], rels[j]
+		if a.Weight != b.Weight {
+			return a.Weight > b.Weight
+		}
+		if a.SourceID != b.SourceID {
+			return a.SourceID.String() < b.SourceID.String()
+		}
+		if a.TargetID != b.TargetID {
+			return a.TargetID.String() < b.TargetID.String()
+		}
+		return a.Relation < b.Relation
+	})
+	sort.Slice(entities, func(i, j int) bool {
+		a, b := entities[i], entities[j]
+		if a.MentionCount != b.MentionCount {
+			return a.MentionCount > b.MentionCount
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		// Two distinct entities can share a display name (different sources,
+		// same canonical) — final tiebreak on ID guarantees a total order.
+		return a.ID.String() < b.ID.String()
+	})
+}
 
 // TestMCPBudgetBytesFallsThroughToRegisteredDefault pins that mcpBudgetBytes
 // with a nil SettingsService falls through to the registered default in

@@ -817,7 +817,9 @@ func TestRelationshipRepo_Create_ConcurrentWeightMerge(t *testing.T) {
 		var gotWeight float64
 		row := db.QueryRow(ctx, countQuery,
 			nsID.String(), srcID.String(), tgtID.String(),
-			"works_at", validFrom.UTC().Format("2006-01-02T15:04:05Z07:00"),
+			// Stored relations are canonicalized, so "works_at" persists as
+			// "works at"; query by the canonical form.
+			model.CanonicalRelation("works_at"), validFrom.UTC().Format("2006-01-02T15:04:05Z07:00"),
 		)
 		if err := row.Scan(&count, &gotWeight); err != nil {
 			t.Fatalf("scan count: %v", err)

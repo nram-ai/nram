@@ -67,7 +67,25 @@ func isUniqueViolation(err error) bool {
 // writers can absorb and continue past. Everything else (driver error,
 // network, tx state) propagates and aborts the outer transaction.
 func isTolerableRowError(err error) bool {
-	return isForeignKeyViolation(err) || isUniqueViolation(err)
+	return isForeignKeyViolation(err) || isUniqueViolation(err) || isOnConflictCardinalityError(err)
+}
+
+// isOnConflictCardinalityError detects the Postgres cardinality violation raised
+// when one INSERT ... ON CONFLICT DO UPDATE statement carries two VALUES rows
+// that map to the same conflict key (SQLSTATE 21000, "cannot affect row a
+// second time") — e.g. two relation-formatting variants that canonicalize to
+// the same (namespace_id, source_id, target_id, relation, valid_from). Treating
+// it as tolerable lets the batch fall back to per-row inserts, where the second
+// row conflicts with the first (now in the table) and merges via ON CONFLICT.
+// SQLite never raises this; it applies each row's ON CONFLICT in statement
+// order, so this is a Postgres-only recovery path.
+func isOnConflictCardinalityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "cannot affect row a second time") ||
+		strings.Contains(msg, "SQLSTATE 21000")
 }
 
 // HNSWConfig holds configuration for the HNSW vector store.

@@ -49,6 +49,12 @@ func (r *RelationshipRepo) Create(ctx context.Context, rel *model.Relationship) 
 	if rel.CreatedAt.IsZero() {
 		rel.CreatedAt = now
 	}
+	// Canonicalize the relation label so formatting variants collapse onto one
+	// row via the unique key (the ON CONFLICT below then merges weights). The
+	// repo is the single write choke point, so every caller is covered without
+	// per-writer edits. Write back onto the struct, like rel.ID above, so the
+	// caller observes the persisted value.
+	rel.Relation = model.CanonicalRelation(rel.Relation)
 
 	var validUntil any
 	if rel.ValidUntil != nil {
@@ -296,6 +302,9 @@ func (r *RelationshipRepo) UpdateWeight(ctx context.Context, id uuid.UUID, names
 // FindActiveByTriple returns an active (non-expired) relationship matching the
 // given (namespace, source, target, relation) triple, or nil if none exists.
 func (r *RelationshipRepo) FindActiveByTriple(ctx context.Context, namespaceID, sourceID, targetID uuid.UUID, relation string) (*model.Relationship, error) {
+	// Relations are stored canonical, so the lookup key must be canonicalized to
+	// match (covers callers that pass a raw extractor/LLM relation string).
+	relation = model.CanonicalRelation(relation)
 	query := selectRelationshipColumns + ` FROM relationships
 		WHERE namespace_id = ? AND source_id = ? AND target_id = ? AND relation = ? AND valid_until IS NULL
 		ORDER BY weight DESC LIMIT 1`
@@ -548,6 +557,10 @@ func (r *RelationshipRepo) execBatchCreateChunk(ctx context.Context, tx *sql.Tx,
 		} else {
 			b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 		}
+		// Canonicalize before binding so variants collide on the unique key and
+		// the ON CONFLICT merge fires. fallbackPerRowCreate re-enters this method
+		// per row, but CanonicalRelation is idempotent so that is harmless.
+		rel.Relation = model.CanonicalRelation(rel.Relation)
 		var validUntil any
 		if rel.ValidUntil != nil {
 			validUntil = rel.ValidUntil.UTC().Format(time.RFC3339)

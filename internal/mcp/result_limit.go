@@ -7,7 +7,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -673,41 +675,239 @@ func halveWithFloor(n int) int {
 	return n / 2
 }
 
-// sortGraphBySignal orders both graph axes by signal strength descending so a
-// prefix-slice truncation (newGraphReducer for the graph tool,
-// packGraphToByteBudget for recall) preserves the most informative items
-// first. The tiebreak chains produce a total order, so the surviving prefix is
-// deterministic across calls despite Go-randomized map iteration in the
-// upstream traversal. Equal-weight edges are common (many extractors emit
-// Weight=1.0); without the tiebreak two identical calls could return different
-// prefixes when truncation fires. Both the graph tool (handleMemoryGraph) and
-// the recall projection call this so the two tools order identically.
-func sortGraphBySignal(entities []graphEntity, rels []graphRelationship) {
-	sort.Slice(rels, func(i, j int) bool {
-		a, b := rels[i], rels[j]
-		if a.Weight != b.Weight {
-			return a.Weight > b.Weight
+// hopUnreachable is the hop-distance sentinel for a node not reachable from any
+// seed. It is the max int so min()/comparison treat it as +inf: a reachable
+// node always ranks ahead of (and is "lower-hop than") an unreachable one.
+const hopUnreachable = int(^uint(0) >> 1)
+
+// dedupGraphRelationships collapses formatting variants and exact (src,tgt,rel)
+// duplicates onto one edge per (SourceID, TargetID, CanonicalRelation(Relation)).
+// It rewrites Relation to its canonical form, keeps the MAX-weight row, and that
+// survivor carries its own ValidUntil/SourceMemory. It runs BEFORE rankGraphSlice
+// so the byte-budget reducer never spends slice budget on duplicate variants.
+// Even with write-time canonicalization live, legacy rows and the window before
+// the one-time backfill completes still produce variants; this is the read-path
+// guarantee. Operates in place on the input's backing array.
+func dedupGraphRelationships(rels []graphRelationship) []graphRelationship {
+	if len(rels) == 0 {
+		return rels
+	}
+	idx := make(map[graphEdgeKey]int, len(rels))
+	out := rels[:0]
+	for _, r := range rels {
+		r.Relation = model.CanonicalRelation(r.Relation)
+		k := graphEdgeKey{src: r.SourceID, tgt: r.TargetID, rel: r.Relation}
+		if i, ok := idx[k]; ok {
+			if r.Weight > out[i].Weight {
+				out[i] = r
+			}
+			continue
 		}
-		if a.SourceID != b.SourceID {
-			return a.SourceID.String() < b.SourceID.String()
+		idx[k] = len(out)
+		out = append(out, r)
+	}
+	return out
+}
+
+// graphHopInfo holds the BFS-derived per-node hop distance from the seed set and
+// the per-node seed-connection strength. Computed once per rankGraphSlice call
+// and consumed by both axis orderings; kept in transient maps rather than on the
+// wire structs so the serialized shape and byte budget are unchanged.
+type graphHopInfo struct {
+	hop      map[uuid.UUID]int     // node ID -> hop distance (0 = seed)
+	seedConn map[uuid.UUID]float64 // node ID -> max weight of an edge to a strictly lower-hop node
+}
+
+// hopOf returns a node's hop distance, or hopUnreachable when the node was not
+// reached from any seed.
+func (g graphHopInfo) hopOf(id uuid.UUID) int {
+	if h, ok := g.hop[id]; ok {
+		return h
+	}
+	return hopUnreachable
+}
+
+// tierOf returns an edge's hop tier: the hop distance of its closer-to-seed
+// endpoint. An edge bridging hop h-1 and hop h belongs to tier h-1, so a prefix
+// of tier-ordered edges stays proximity-prioritized.
+func (g graphHopInfo) tierOf(r graphRelationship) int {
+	hs, ht := g.hopOf(r.SourceID), g.hopOf(r.TargetID)
+	if hs < ht {
+		return hs
+	}
+	return ht
+}
+
+// computeGraphHops runs an undirected BFS over rels from seedIDs, mirroring
+// TraverseFromEntity's "the other endpoint" neighbour rule, to assign every
+// reachable node a hop distance (seeds = 0). seedConn[n] is the max weight of an
+// edge connecting n to a strictly lower-hop node — its strongest tether toward
+// the seed, the resolution within a hop ring that hop distance is too blunt to
+// provide. Lateral (equal-hop) edges contribute to neither endpoint's seedConn.
+func computeGraphHops(seedIDs map[uuid.UUID]struct{}, rels []graphRelationship) graphHopInfo {
+	info := graphHopInfo{
+		hop:      make(map[uuid.UUID]int, len(seedIDs)),
+		seedConn: make(map[uuid.UUID]float64),
+	}
+	// Undirected adjacency: node -> incident edge indices.
+	adj := make(map[uuid.UUID][]int)
+	for i, r := range rels {
+		adj[r.SourceID] = append(adj[r.SourceID], i)
+		adj[r.TargetID] = append(adj[r.TargetID], i)
+	}
+	queue := make([]uuid.UUID, 0, len(seedIDs))
+	for s := range seedIDs {
+		info.hop[s] = 0
+		queue = append(queue, s)
+	}
+	for len(queue) > 0 {
+		u := queue[0]
+		queue = queue[1:]
+		d := info.hop[u]
+		for _, ei := range adj[u] {
+			r := rels[ei]
+			v := r.TargetID
+			if v == u {
+				v = r.SourceID
+			}
+			if _, seen := info.hop[v]; !seen {
+				info.hop[v] = d + 1
+				queue = append(queue, v)
+			}
 		}
-		if a.TargetID != b.TargetID {
-			return a.TargetID.String() < b.TargetID.String()
+	}
+	for _, r := range rels {
+		hs, ht := info.hopOf(r.SourceID), info.hopOf(r.TargetID)
+		switch {
+		case hs < ht:
+			if r.Weight > info.seedConn[r.TargetID] {
+				info.seedConn[r.TargetID] = r.Weight
+			}
+		case ht < hs:
+			if r.Weight > info.seedConn[r.SourceID] {
+				info.seedConn[r.SourceID] = r.Weight
+			}
 		}
-		return a.Relation < b.Relation
-	})
+	}
+	return info
+}
+
+// rankGraphSlice reorders both graph axes in place so a prefix of either slice
+// is a valid proximity-prioritized, source-diversified subset — the byte-budget
+// prefix trim (packGraphToByteBudget / newGraphReducer) stays dumb. seedIDs is
+// the seed entity set captured BEFORE resolveGraphOrphans ran (hop 0); rels must
+// already be normalized+deduped (dedupGraphRelationships). It supersedes
+// sortGraphBySignal on both production surfaces (recall projection and the graph
+// tool); sortGraphBySignal is retained only as a test fixture helper.
+//
+// Ordering key hierarchy:
+//
+//	entities:      hop ASC, seedConn DESC, MentionCount DESC, Name ASC, ID ASC
+//	relationships: hop tier ASC (min endpoint hop), then a source_id round-robin
+//	               WITHIN each tier so one node's fan-out cannot monopolize a
+//	               tier's prefix. Global salience (weight) sets the within-group
+//	               order and is the tertiary signal, never the primary one.
+func rankGraphSlice(seedIDs map[uuid.UUID]struct{}, entities []graphEntity, rels []graphRelationship) {
+	info := computeGraphHops(seedIDs, rels)
+	sortGraphEntitiesByProximity(entities, info)
+	ordered := orderGraphRelsByProximity(rels, info)
+	// ordered is a permutation of rels (same length); rewrite in place so the
+	// caller's slice header keeps the new order without reassignment.
+	copy(rels, ordered)
+}
+
+// sortGraphEntitiesByProximity orders entities by (hop ASC, seedConn DESC,
+// MentionCount DESC, Name ASC, ID ASC). Entities do not round-robin — there is
+// no source axis on a node. The chain is a total order, so the surviving prefix
+// is deterministic.
+func sortGraphEntitiesByProximity(entities []graphEntity, info graphHopInfo) {
 	sort.Slice(entities, func(i, j int) bool {
 		a, b := entities[i], entities[j]
+		if ha, hb := info.hopOf(a.ID), info.hopOf(b.ID); ha != hb {
+			return ha < hb
+		}
+		if ca, cb := info.seedConn[a.ID], info.seedConn[b.ID]; ca != cb {
+			return ca > cb
+		}
 		if a.MentionCount != b.MentionCount {
 			return a.MentionCount > b.MentionCount
 		}
 		if a.Name != b.Name {
 			return a.Name < b.Name
 		}
-		// Two distinct entities can share a display name (different sources,
-		// same canonical) — final tiebreak on ID guarantees a total order.
 		return a.ID.String() < b.ID.String()
 	})
+}
+
+// orderGraphRelsByProximity returns a permutation of rels: partition into hop
+// tiers (tier = min endpoint hop), concatenate tiers ascending, and within each
+// tier run a source_id round-robin (mirroring diversifyByTagPrefix in
+// service/recall.go) so the front of every tier interleaves distinct sources.
+// Determinism survives Go's randomized map iteration: tier keys are sorted, the
+// per-tier pre-sort is a total order, and group first-seen order is derived from
+// that pre-sort rather than from map iteration.
+func orderGraphRelsByProximity(rels []graphRelationship, info graphHopInfo) []graphRelationship {
+	if len(rels) <= 1 {
+		return rels
+	}
+	tiers := make(map[int][]int)
+	for i, r := range rels {
+		t := info.tierOf(r)
+		tiers[t] = append(tiers[t], i)
+	}
+	tierKeys := make([]int, 0, len(tiers))
+	for t := range tiers {
+		tierKeys = append(tierKeys, t)
+	}
+	sort.Ints(tierKeys)
+
+	out := make([]graphRelationship, 0, len(rels))
+	for _, t := range tierKeys {
+		idxs := tiers[t]
+		// Pre-sort the tier by (Weight DESC, src, tgt, relation) so the group
+		// first-seen order is descending representative weight and within-group
+		// edges stay weight-ranked. Equal weights are extremely common
+		// (extractors emit 1.0), so the full tiebreak chain is mandatory for a
+		// deterministic prefix.
+		sort.Slice(idxs, func(a, b int) bool {
+			ra, rb := rels[idxs[a]], rels[idxs[b]]
+			if ra.Weight != rb.Weight {
+				return ra.Weight > rb.Weight
+			}
+			if ra.SourceID != rb.SourceID {
+				return ra.SourceID.String() < rb.SourceID.String()
+			}
+			if ra.TargetID != rb.TargetID {
+				return ra.TargetID.String() < rb.TargetID.String()
+			}
+			return ra.Relation < rb.Relation
+		})
+		var groupOrder []uuid.UUID
+		groups := make(map[uuid.UUID][]int)
+		for _, ix := range idxs {
+			src := rels[ix].SourceID
+			if _, seen := groups[src]; !seen {
+				groupOrder = append(groupOrder, src)
+			}
+			groups[src] = append(groups[src], ix)
+		}
+		for {
+			picked := false
+			for _, src := range groupOrder {
+				g := groups[src]
+				if len(g) == 0 {
+					continue
+				}
+				out = append(out, rels[g[0]])
+				groups[src] = g[1:]
+				picked = true
+			}
+			if !picked {
+				break
+			}
+		}
+	}
+	return out
 }
 
 // packGraphToByteBudget trims an already-signal-sorted graph so its marshaled

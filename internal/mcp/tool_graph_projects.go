@@ -363,6 +363,10 @@ seeds:
 			SourceMemory: rel.SourceMemory,
 		})
 	}
+	// graphEntities holds exactly the seed entities here; resolveGraphOrphans
+	// appends edge-endpoint orphans next. Capture the seed set first so
+	// rankGraphSlice can rank by hop distance from the query's seeds.
+	seedIDs := graphEntityIDSet(graphEntities)
 	graphEntities, graphRels = resolveGraphOrphans(ctx, deps.EntityReader, graphEntities, graphRels, namespaces)
 
 	// Orphan resolver may have pruned edges; intersect surviving (s,t,rel)
@@ -392,12 +396,17 @@ seeds:
 		graphRels = []graphRelationship{}
 	}
 
-	// Sort both axes by signal-strength descending so the byte-budget reducer
-	// in result_limit.go (which trims via prefix slice) preserves the most
-	// informative items first when the response exceeds budget. The shared
-	// sortGraphBySignal keeps this ordering identical to the recall tool's
-	// pre-cap so both surfaces rank the graph the same way.
-	sortGraphBySignal(graphEntities, graphRels)
+	// Collapse relation-string variants (legacy / pre-backfill rows) before
+	// ranking so duplicate edges never consume slice budget. Runs AFTER the
+	// reinforcement refs above, which key on the raw relations, so every
+	// traversed edge is still reinforced by id.
+	graphRels = dedupGraphRelationships(graphRels)
+
+	// Rank by proximity to the seed entities (hop distance, then seed-connection
+	// strength, with global salience only as a tiebreak) and diversify each hop
+	// tier across distinct source nodes, so the byte-budget reducer's prefix trim
+	// keeps the seed-relevant, source-diverse edges rather than namespace hubs.
+	rankGraphSlice(seedIDs, graphEntities, graphRels)
 
 	resp := &graphResponse{
 		Entities:      graphEntities,
@@ -431,6 +440,17 @@ func namespaceSet(allowedNamespaces []uuid.UUID) map[uuid.UUID]struct{} {
 		allowed[ns] = struct{}{}
 	}
 	return allowed
+}
+
+// graphEntityIDSet builds a set of the entities' IDs. Both graph-slice surfaces
+// use it to capture the seed set (the pre-orphan-resolution entities) for
+// proximity ranking.
+func graphEntityIDSet(ents []graphEntity) map[uuid.UUID]struct{} {
+	ids := make(map[uuid.UUID]struct{}, len(ents))
+	for _, e := range ents {
+		ids[e.ID] = struct{}{}
+	}
+	return ids
 }
 
 // resolveGraphOrphans guarantees that every relationship's endpoints appear
@@ -599,4 +619,3 @@ func handleMemoryProjects(ctx context.Context, s *Server, request mcp.CallToolRe
 	}
 	return wrapToolResult(s.deps.Metrics, "list_projects", mcpBudgetBytes(ctx, s.deps.Settings), resp, newListProjectsReducer(resp))
 }
-

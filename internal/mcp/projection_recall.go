@@ -189,16 +189,23 @@ func buildMCPRecallResponse(
 	}
 	// The service layer drops MentionCount (it's an MCP-only presentation
 	// field; adding it to service.RecallEntity would leak onto the REST recall
-	// wire). Backfill it here so sortGraphBySignal can rank the recall graph by
-	// the same signal the graph tool uses. resolveGraphOrphans already sets it
+	// wire). Backfill it here so rankGraphSlice can use MentionCount as its
+	// tertiary sort key, the same signal the graph tool uses. resolveGraphOrphans already sets it
 	// on the orphan endpoints it fetches; this one batch covers the
 	// originally-discovered set. Running it first means resolveGraphOrphans only
 	// fetches the still-missing endpoints (a disjoint, smaller set).
 	backfillMentionCounts(ctx, entityReader, entities, allowedNamespaces)
+	// entities holds exactly the seed entities here (resp.Graph.Entities is
+	// seed-only; resolveGraphOrphans appends edge endpoints next). Capture the
+	// seed set first so rankGraphSlice can rank by hop distance from the query
+	// seeds rather than by global salience.
+	seedIDs := graphEntityIDSet(entities)
 	entities, rels = resolveGraphOrphans(ctx, entityReader, entities, rels, allowedNamespaces)
-	// Signal-sort the resolved graph so the recall pre-cap (packGraphToByteBudget)
-	// and any reducer prefix trim keep the highest-signal items deterministically.
-	sortGraphBySignal(entities, rels)
+	// Collapse relation-string variants, then rank by seed proximity with
+	// per-hop-tier source diversity so the recall pre-cap (packGraphToByteBudget)
+	// keeps seed-relevant, diverse edges rather than namespace hubs.
+	rels = dedupGraphRelationships(rels)
+	rankGraphSlice(seedIDs, entities, rels)
 
 	return &mcpRecallResponse{
 		Memories:     memories,
