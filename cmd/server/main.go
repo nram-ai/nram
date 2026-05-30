@@ -925,6 +925,19 @@ func main() {
 			QueryAugmentPromptDef: func(ctx context.Context) string {
 				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingQueryAugmentPrompt, "global")
 			},
+			IngestionPromptDefault: func(ctx context.Context) string {
+				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingIngestionDecisionPrompt, "global")
+			},
+			// Resolve the per-feature model overrides the same way the runtime
+			// phases do (plain Resolve, empty when unset → provider default).
+			QueryAugmentModelDefault: func(ctx context.Context) string {
+				m, _ := settingsSvc.Resolve(ctx, service.SettingQueryAugmentModel, "global")
+				return m
+			},
+			IngestionModelDefault: func(ctx context.Context) string {
+				m, _ := settingsSvc.Resolve(ctx, service.SettingIngestionDecisionModel, "global")
+				return m
+			},
 			BackfillAugmentation: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
 				resp, err := enrichSvc.BackfillAugmentation(ctx, &service.BackfillAugmentationRequest{
 					ProjectID: projectID,

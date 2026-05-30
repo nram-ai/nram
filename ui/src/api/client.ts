@@ -1248,6 +1248,10 @@ export interface EnrichmentPauseResponse {
 export interface ExtractionTestResult {
   output: string;
   parsed: unknown;
+  // model is the model the test actually ran against — the resolved per-feature
+  // override for augment/ingestion, or the provider default otherwise. Lets the
+  // UI confirm a configured model override took effect.
+  model?: string;
   error?: string;
   latency_ms: number;
 }
@@ -1593,7 +1597,7 @@ export const adminAPI = {
   pauseEnrichment: (paused: boolean) =>
     request<EnrichmentPauseResponse>("POST", "/admin/enrichment/pause", { paused }),
   testExtractionPrompt: (
-    type: "fact" | "entity" | "augment",
+    type: "fact" | "entity" | "augment" | "ingestion",
     prompt: string,
     sampleInput: string,
     count?: number,

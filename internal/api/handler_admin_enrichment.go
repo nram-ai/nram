@@ -38,6 +38,22 @@ type EnrichmentAdminConfig struct {
 	EntityPromptDefault   func(ctx context.Context) string
 	QueryAugmentPromptDef func(ctx context.Context) string
 
+	// IngestionPromptDefault resolves the operator-edited ingestion-decision
+	// prompt (or its registered default). Nil falls back to a bare-template
+	// error like the other prompt resolvers.
+	IngestionPromptDefault func(ctx context.Context) string
+
+	// QueryAugmentModelDefault and IngestionModelDefault resolve the
+	// per-feature model overrides (enrichment.query_augment.model /
+	// enrichment.ingestion_decision.model). Both phases reuse the Fact
+	// provider at runtime and swap only the model name; the test surface must
+	// resolve the same override so "Test" runs against the model the live
+	// pipeline would use, not the Fact slot's default. Nil (or an empty
+	// resolved value) leaves the request model empty, so the provider falls
+	// back to its configured default — exactly matching the runtime fallback.
+	QueryAugmentModelDefault func(ctx context.Context) string
+	IngestionModelDefault    func(ctx context.Context) string
+
 	// BackfillAugmentation runs the query-augmentation backfill against memories
 	// whose vector pre-dates the feature flip. Nil disables the backfill
 	// endpoint with a 503 response so the UI button can render "not available"
@@ -324,7 +340,7 @@ func handleEnrichmentPause(w http.ResponseWriter, r *http.Request, cfg Enrichmen
 
 // enrichmentTestPromptRequest is the request body for POST /enrichment/test-prompt.
 type enrichmentTestPromptRequest struct {
-	Type        string `json:"type"`            // "fact", "entity", or "augment"
+	Type        string `json:"type"`            // "fact", "entity", "augment", or "ingestion"
 	Prompt      string `json:"prompt"`          // custom prompt text (optional; uses default if empty)
 	SampleInput string `json:"sample_input"`    // memory content to test against
 	Count       int    `json:"count,omitempty"` // only used when type=="augment"; defaults to 4
@@ -332,11 +348,23 @@ type enrichmentTestPromptRequest struct {
 
 // enrichmentTestPromptResponse is the response for POST /enrichment/test-prompt.
 type enrichmentTestPromptResponse struct {
-	Output    string `json:"output"` // raw LLM output
-	Parsed    any    `json:"parsed"` // parsed structured data (facts or entities)
+	Output string `json:"output"` // raw LLM output
+	Parsed any    `json:"parsed"` // parsed structured data (facts or entities)
+	// Model is the model the test actually ran against — the resolved
+	// per-feature override for augment/ingestion, or the provider's default
+	// for fact/entity (and for augment/ingestion when no override is set). Lets
+	// the UI confirm that a configured model override took effect.
+	Model     string `json:"model,omitempty"`
 	Error     string `json:"error,omitempty"`
 	LatencyMs int64  `json:"latency_ms"`
 }
+
+// ingestionTestTopK is the candidate-count placeholder substituted into the
+// ingestion-decision prompt's "up to %d candidates" line for the Test surface.
+// The test runs with an empty candidate list (there is no real near-neighbour
+// search), so the value is cosmetic; it mirrors the phase's default top_k (see
+// resolveIngestionSettings) for parity with the live prompt text.
+const ingestionTestTopK = 5
 
 // handleEnrichmentTestPrompt handles POST /enrichment/test-prompt.
 // It sends the sample input through the configured LLM provider using the given prompt
@@ -353,8 +381,8 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		return
 	}
 
-	if body.Type != "fact" && body.Type != "entity" && body.Type != "augment" {
-		WriteError(w, ErrBadRequest("type must be 'fact', 'entity', or 'augment'"))
+	if body.Type != "fact" && body.Type != "entity" && body.Type != "augment" && body.Type != "ingestion" {
+		WriteError(w, ErrBadRequest("type must be 'fact', 'entity', 'augment', or 'ingestion'"))
 		return
 	}
 
@@ -365,6 +393,11 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 
 	var llmProvider provider.LLMProvider
 	var promptTemplate string
+	// modelOverride is the resolved per-feature model name for augment and
+	// ingestion (both reuse the Fact provider and swap only the model). Empty
+	// for fact/entity, and empty when no override is configured — in which case
+	// the provider falls back to its default model, matching the runtime phase.
+	var modelOverride string
 
 	switch body.Type {
 	case "fact":
@@ -398,9 +431,11 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			promptTemplate = cfg.EntityPromptDefault(r.Context())
 		}
 	case "augment":
-		// Augmentation reuses the fact-extraction provider by default; the
-		// runtime phase does the same. A future operator setting may override
-		// the model, but the provider plumbing is shared.
+		// Augmentation reuses the fact-extraction provider but honors the
+		// enrichment.query_augment.model override, exactly as the runtime
+		// phase does (internal/enrichment/phase_query_augment.go). Resolving
+		// the override here is what makes the Test button reflect the live
+		// model instead of always running on the Fact slot's default.
 		if cfg.FactProvider == nil {
 			WriteError(w, ErrBadRequest("no fact extraction provider configured"))
 			return
@@ -414,6 +449,32 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			promptTemplate = body.Prompt
 		} else if cfg.QueryAugmentPromptDef != nil {
 			promptTemplate = cfg.QueryAugmentPromptDef(r.Context())
+		}
+		if cfg.QueryAugmentModelDefault != nil {
+			modelOverride = strings.TrimSpace(cfg.QueryAugmentModelDefault(r.Context()))
+		}
+	case "ingestion":
+		// The ingestion-decision phase reuses the fact-extraction provider and
+		// honors the enrichment.ingestion_decision.model override
+		// (internal/enrichment/phase_ingestion.go). The test runs the prompt
+		// with an empty candidate list, so it exercises the prompt + model
+		// override without a real near-neighbour search.
+		if cfg.FactProvider == nil {
+			WriteError(w, ErrBadRequest("no fact extraction provider configured"))
+			return
+		}
+		llmProvider = cfg.FactProvider()
+		if llmProvider == nil {
+			WriteError(w, ErrBadRequest("fact extraction provider is not available"))
+			return
+		}
+		if strings.TrimSpace(body.Prompt) != "" {
+			promptTemplate = body.Prompt
+		} else if cfg.IngestionPromptDefault != nil {
+			promptTemplate = cfg.IngestionPromptDefault(r.Context())
+		}
+		if cfg.IngestionModelDefault != nil {
+			modelOverride = strings.TrimSpace(cfg.IngestionModelDefault(r.Context()))
 		}
 	}
 
@@ -429,23 +490,32 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 
 	start := time.Now()
 
-	rendered := fmt.Sprintf(promptTemplate, body.SampleInput)
-	if body.Type == "augment" {
+	var rendered string
+	switch body.Type {
+	case "augment":
 		rendered = enrichment.RenderQueryAugmentPrompt(promptTemplate, body.SampleInput, count)
+	case "ingestion":
+		// The ingestion prompt template carries three verbs: %d (candidate
+		// cap), %s (new memory content), %s (candidate block). The test has no
+		// candidates, so the block is empty and the cap is cosmetic.
+		rendered = fmt.Sprintf(promptTemplate, ingestionTestTopK, body.SampleInput, "")
+	default:
+		rendered = fmt.Sprintf(promptTemplate, body.SampleInput)
 	}
 
 	completionReq := &provider.CompletionRequest{
 		Messages: []provider.Message{
 			{Role: "user", Content: rendered},
 		},
+		Model:       modelOverride,
 		MaxTokens:   2048,
 		Temperature: 0.1,
-		// Augmentation expects a JSON-array response. The runtime phase and
-		// the per-memory preview endpoint both set JSONMode; without it
-		// here, the Test button can fail to parse on providers that emit
-		// prose without an explicit JSON-mode signal even when the prompt
+		// Augmentation and ingestion both expect a JSON response. The runtime
+		// ingestion phase and the per-memory augment preview set JSONMode;
+		// without it here, the Test button can fail to parse on providers that
+		// emit prose without an explicit JSON-mode signal even when the prompt
 		// requests JSON, masking a working production prompt as broken.
-		JSONMode: body.Type == "augment",
+		JSONMode: body.Type == "augment" || body.Type == "ingestion",
 	}
 
 	resp, err := llmProvider.Complete(r.Context(), completionReq)
@@ -486,11 +556,19 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		} else {
 			parsed = queries
 		}
+	case "ingestion":
+		decision, err := parseTestIngestionResponse(rawOutput)
+		if err != nil {
+			parseErr = err.Error()
+		} else {
+			parsed = decision
+		}
 	}
 
 	response := enrichmentTestPromptResponse{
 		Output:    rawOutput,
 		Parsed:    parsed,
+		Model:     resp.Model,
 		LatencyMs: latency,
 	}
 	if parseErr != "" {
@@ -530,29 +608,50 @@ func parseTestFactResponse(raw string) (any, error) {
 	return nil, fmt.Errorf("could not parse response as JSON fact array")
 }
 
-// parseTestEntityResponse parses an LLM entity extraction response.
-func parseTestEntityResponse(raw string) (any, error) {
+// parseTestJSONObject decodes a single JSON object from an LLM response,
+// tolerating markdown code fences and surrounding prose (clip to the outermost
+// braces). Returns (object, true) on the first decode that succeeds, else
+// (nil, false) so the caller can attach a type-specific error message.
+func parseTestJSONObject(raw string) (map[string]any, bool) {
 	raw = strings.TrimSpace(raw)
 
 	var result map[string]any
 	if err := json.Unmarshal([]byte(raw), &result); err == nil {
-		return result, nil
+		return result, true
 	}
 
 	stripped := stripTestMarkdownFences(raw)
 	if err := json.Unmarshal([]byte(stripped), &result); err == nil {
-		return result, nil
+		return result, true
 	}
 
-	re := regexp.MustCompile(`\{[\s\S]*\}`)
-	match := re.FindString(raw)
-	if match != "" {
+	if match := regexp.MustCompile(`\{[\s\S]*\}`).FindString(raw); match != "" {
 		if err := json.Unmarshal([]byte(match), &result); err == nil {
-			return result, nil
+			return result, true
 		}
 	}
 
+	return nil, false
+}
+
+// parseTestEntityResponse parses an LLM entity extraction response.
+func parseTestEntityResponse(raw string) (any, error) {
+	if result, ok := parseTestJSONObject(raw); ok {
+		return result, nil
+	}
 	return nil, fmt.Errorf("could not parse response as JSON entity object")
+}
+
+// parseTestIngestionResponse parses an LLM ingestion-decision response into a
+// generic object so the UI can render the {operation, target_id, rationale}
+// shape. Mirrors parseTestEntityResponse's fence-stripping and brace-extraction
+// fallbacks; deliberately loose-typed since the test surface only displays the
+// decision, it does not act on it.
+func parseTestIngestionResponse(raw string) (any, error) {
+	if result, ok := parseTestJSONObject(raw); ok {
+		return result, nil
+	}
+	return nil, fmt.Errorf("could not parse response as JSON decision object")
 }
 
 // enrichmentBackfillAugmentRequest is the body for

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/provider"
 )
 
 // enrichmentAdminRequest creates a request with administrator auth context.
@@ -471,6 +472,124 @@ func TestEnrichmentBackfillExtractedFactParaphrase_ServiceError_500(t *testing.T
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 on service error, got %d", w.Code)
+	}
+}
+
+// --- test-prompt model-override coverage ---
+
+// capturingLLMProvider records the Model on the last completion request and
+// echoes a model back in the response, so a test can assert which model the
+// handler asked the provider to use. When the request Model is empty it echoes
+// a sentinel, simulating a real provider falling back to its default model.
+type capturingLLMProvider struct {
+	gotModel string
+	content  string
+}
+
+func (c *capturingLLMProvider) Complete(_ context.Context, req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+	c.gotModel = req.Model
+	respModel := req.Model
+	if respModel == "" {
+		respModel = "default-fact-model"
+	}
+	return &provider.CompletionResponse{Content: c.content, Model: respModel}, nil
+}
+
+func (c *capturingLLMProvider) Name() string     { return "mock" }
+func (c *capturingLLMProvider) Models() []string { return []string{"mock"} }
+
+// TestEnrichmentTestPrompt_AugmentAppliesModelOverride pins the fix: the augment
+// Test surface must run against enrichment.query_augment.model, not the Fact
+// slot's default. Regression guard for the reported "override didn't override".
+func TestEnrichmentTestPrompt_AugmentAppliesModelOverride(t *testing.T) {
+	capLLM := &capturingLLMProvider{content: `["how does x work?", "what is x?"]`}
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store:                    &mockEnrichmentAdminStore{},
+		FactProvider:             func() provider.LLMProvider { return capLLM },
+		QueryAugmentPromptDef:    func(_ context.Context) string { return "Generate {N} queries for: {content}" },
+		QueryAugmentModelDefault: func(_ context.Context) string { return "augment-override-model" },
+	})
+
+	body := `{"type":"augment","sample_input":"some memory content"}`
+	req := enrichmentAdminRequest(http.MethodPost, "/v1/admin/enrichment/test-prompt", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	if capLLM.gotModel != "augment-override-model" {
+		t.Errorf("augment test must call provider with the override model; got %q", capLLM.gotModel)
+	}
+	var resp enrichmentTestPromptResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Model != "augment-override-model" {
+		t.Errorf("response model = %q, want the override to be surfaced", resp.Model)
+	}
+}
+
+// TestEnrichmentTestPrompt_AugmentFallsBackWhenNoOverride confirms an empty
+// override leaves the request model empty so the provider uses its default —
+// matching the runtime fallback (empty ⇒ Fact slot model).
+func TestEnrichmentTestPrompt_AugmentFallsBackWhenNoOverride(t *testing.T) {
+	capLLM := &capturingLLMProvider{content: `["q"]`}
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store:                    &mockEnrichmentAdminStore{},
+		FactProvider:             func() provider.LLMProvider { return capLLM },
+		QueryAugmentPromptDef:    func(_ context.Context) string { return "Generate {N} for {content}" },
+		QueryAugmentModelDefault: func(_ context.Context) string { return "" },
+	})
+
+	body := `{"type":"augment","sample_input":"content"}`
+	req := enrichmentAdminRequest(http.MethodPost, "/v1/admin/enrichment/test-prompt", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	if capLLM.gotModel != "" {
+		t.Errorf("no override should leave request model empty (provider default); got %q", capLLM.gotModel)
+	}
+}
+
+// TestEnrichmentTestPrompt_IngestionAppliesModelOverride pins the new ingestion
+// test surface and that it honors enrichment.ingestion_decision.model.
+func TestEnrichmentTestPrompt_IngestionAppliesModelOverride(t *testing.T) {
+	capLLM := &capturingLLMProvider{content: `{"operation":"ADD","target_id":null,"rationale":"distinct"}`}
+	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+		Store:        &mockEnrichmentAdminStore{},
+		FactProvider: func() provider.LLMProvider { return capLLM },
+		IngestionPromptDefault: func(_ context.Context) string {
+			return "Up to %d candidates. New memory: %s Candidates: %s"
+		},
+		IngestionModelDefault: func(_ context.Context) string { return "ingestion-override-model" },
+	})
+
+	body := `{"type":"ingestion","sample_input":"a brand new memory"}`
+	req := enrichmentAdminRequest(http.MethodPost, "/v1/admin/enrichment/test-prompt", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	if capLLM.gotModel != "ingestion-override-model" {
+		t.Errorf("ingestion test must call provider with the override model; got %q", capLLM.gotModel)
+	}
+	var resp enrichmentTestPromptResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Model != "ingestion-override-model" {
+		t.Errorf("response model = %q, want the override surfaced", resp.Model)
+	}
+	// The canned object response must parse into the decision shape.
+	parsed, ok := resp.Parsed.(map[string]any)
+	if !ok || parsed["operation"] != "ADD" {
+		t.Errorf("expected parsed ingestion decision with operation ADD, got %#v", resp.Parsed)
 	}
 }
 

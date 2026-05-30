@@ -5,7 +5,7 @@ import {
   useUpdateSetting,
   useTestExtractionPrompt,
 } from "../hooks/useApi";
-import type { Setting, SettingSchema } from "../api/client";
+import type { ExtractionTestResult, Setting, SettingSchema } from "../api/client";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheck, faXmark, faSpinner } from "../lib/icons";
 
@@ -19,6 +19,7 @@ import { faCheck, faXmark, faSpinner } from "../lib/icons";
 const FACT_PROMPT_KEY = "enrichment.fact_prompt";
 const ENTITY_PROMPT_KEY = "enrichment.entity_prompt";
 const AUGMENT_PROMPT_KEY = "enrichment.query_augment.prompt";
+const INGESTION_PROMPT_KEY = "enrichment.ingestion_decision.prompt";
 
 interface SimplePromptSpec {
   key: string;
@@ -33,10 +34,6 @@ const DREAMING_PROMPTS: SimplePromptSpec[] = [
   { key: "dreaming.synthesis_prompt", title: "Memory Synthesis Prompt" },
   { key: "dreaming.alignment_prompt", title: "Alignment Scoring Prompt" },
   { key: "dreaming.novelty.judge_prompt", title: "Novelty Judge Prompt" },
-];
-
-const ENRICHMENT_PROMPTS: SimplePromptSpec[] = [
-  { key: "enrichment.ingestion_decision.prompt", title: "Ingestion Decision Prompt" },
 ];
 
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:
@@ -218,12 +215,7 @@ function PromptEditorCard({
   saving: boolean;
   onTest: () => void;
   testing: boolean;
-  testResult: {
-    output: string;
-    parsed: unknown;
-    error?: string;
-    latency_ms: number;
-  } | null;
+  testResult: ExtractionTestResult | null;
   sampleInput: string;
   onSampleInputChange: (value: string) => void;
 }) {
@@ -389,6 +381,7 @@ function PromptEditorCard({
           {testResult && (
             <span className="text-xs text-muted-foreground">
               Completed in {testResult.latency_ms}ms
+              {testResult.model ? ` · model: ${testResult.model}` : ""}
             </span>
           )}
         </div>
@@ -587,32 +580,25 @@ export default function PromptTemplates() {
   const [factSampleInput, setFactSampleInput] = useState("");
   const [entitySampleInput, setEntitySampleInput] = useState("");
   const [augmentSampleInput, setAugmentSampleInput] = useState("");
-  const [factTestResult, setFactTestResult] = useState<{
-    output: string;
-    parsed: unknown;
-    error?: string;
-    latency_ms: number;
-  } | null>(null);
-  const [entityTestResult, setEntityTestResult] = useState<{
-    output: string;
-    parsed: unknown;
-    error?: string;
-    latency_ms: number;
-  } | null>(null);
-  const [augmentTestResult, setAugmentTestResult] = useState<{
-    output: string;
-    parsed: unknown;
-    error?: string;
-    latency_ms: number;
-  } | null>(null);
+  const [ingestionSampleInput, setIngestionSampleInput] = useState("");
+  const [factTestResult, setFactTestResult] =
+    useState<ExtractionTestResult | null>(null);
+  const [entityTestResult, setEntityTestResult] =
+    useState<ExtractionTestResult | null>(null);
+  const [augmentTestResult, setAugmentTestResult] =
+    useState<ExtractionTestResult | null>(null);
+  const [ingestionTestResult, setIngestionTestResult] =
+    useState<ExtractionTestResult | null>(null);
   const [testingFact, setTestingFact] = useState(false);
   const [testingEntity, setTestingEntity] = useState(false);
   const [testingAugment, setTestingAugment] = useState(false);
+  const [testingIngestion, setTestingIngestion] = useState(false);
 
   // Track the current prompt values for testing (updated when textarea changes).
   const factPromptRef = useRef("");
   const entityPromptRef = useRef("");
   const augmentPromptRef = useRef("");
+  const ingestionPromptRef = useRef("");
 
   const showToast = useCallback(
     (message: string, type: "success" | "error") => {
@@ -666,11 +652,12 @@ export default function PromptTemplates() {
     settingsMap,
     "",
   );
-
-  const enrichmentPrompts = ENRICHMENT_PROMPTS.map((spec) => ({
-    spec,
-    data: resolvePromptData([spec.key], schemas, settingsMap, ""),
-  }));
+  const ingestionPromptData = resolvePromptData(
+    [INGESTION_PROMPT_KEY],
+    schemas,
+    settingsMap,
+    "",
+  );
 
   const dreamingPrompts = DREAMING_PROMPTS.map((spec) => ({
     spec,
@@ -686,6 +673,9 @@ export default function PromptTemplates() {
   }
   if (augmentPromptData) {
     augmentPromptRef.current = augmentPromptData.currentValue;
+  }
+  if (ingestionPromptData) {
+    ingestionPromptRef.current = ingestionPromptData.currentValue;
   }
 
   const handleTestFact = useCallback(() => {
@@ -746,6 +736,34 @@ export default function PromptTemplates() {
       },
     );
   }, [augmentSampleInput, testMutation]);
+
+  const handleTestIngestion = useCallback(() => {
+    if (!ingestionSampleInput.trim()) return;
+    setTestingIngestion(true);
+    setIngestionTestResult(null);
+    testMutation.mutate(
+      {
+        type: "ingestion",
+        prompt: ingestionPromptRef.current,
+        sampleInput: ingestionSampleInput,
+      },
+      {
+        onSuccess: (data) => {
+          setIngestionTestResult(data);
+          setTestingIngestion(false);
+        },
+        onError: (err) => {
+          setIngestionTestResult({
+            output: "",
+            parsed: null,
+            error: err.message,
+            latency_ms: 0,
+          });
+          setTestingIngestion(false);
+        },
+      },
+    );
+  }, [ingestionSampleInput, testMutation]);
 
   const handleTestEntity = useCallback(() => {
     if (!entitySampleInput.trim()) return;
@@ -860,7 +878,7 @@ export default function PromptTemplates() {
           )}
 
           {/* Enrichment Prompts Section */}
-          {enrichmentPrompts.length > 0 && (
+          {ingestionPromptData && (
             <div className="border-t border-border pt-8">
               <div className="mb-6">
                 <h2 className="text-xl font-semibold tracking-tight">
@@ -870,22 +888,25 @@ export default function PromptTemplates() {
                   Additional prompts used by the enrichment pipeline beyond
                   fact and entity extraction. The ingestion-decision prompt
                   drives the ADD/UPDATE/DELETE/NONE judgment on near-duplicate
-                  matches at write time.
+                  matches at write time. The test runs the prompt with an empty
+                  candidate list, so it exercises the prompt and the configured
+                  model override (Provider Configuration → Fact → Ingestion
+                  Decision Model Override).
                 </p>
               </div>
 
-              <div className="space-y-6">
-                {enrichmentPrompts.map(({ spec, data }) => (
-                  <SimplePromptEditorCard
-                    key={spec.key}
-                    title={spec.title}
-                    description={data.description}
-                    promptData={data}
-                    onSave={handleSave}
-                    saving={updateMutation.isPending}
-                  />
-                ))}
-              </div>
+              <PromptEditorCard
+                title="Ingestion Decision Prompt"
+                description={ingestionPromptData.description}
+                promptData={ingestionPromptData}
+                onSave={handleSave}
+                saving={updateMutation.isPending}
+                onTest={handleTestIngestion}
+                testing={testingIngestion}
+                testResult={ingestionTestResult}
+                sampleInput={ingestionSampleInput}
+                onSampleInputChange={setIngestionSampleInput}
+              />
             </div>
           )}
 
