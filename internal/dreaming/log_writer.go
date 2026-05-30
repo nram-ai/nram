@@ -41,7 +41,7 @@ func (w *DreamLogWriter) LogOperation(
 	before, after any,
 ) error {
 	if w.repo == nil {
-		w.opCount++
+		w.countOp(operation)
 		return nil
 	}
 
@@ -71,11 +71,21 @@ func (w *DreamLogWriter) LogOperation(
 	if err := w.repo.Create(ctx, entry); err != nil {
 		return err
 	}
-	w.opCount++
+	w.countOp(operation)
 	return nil
 }
 
-// OpCount returns the number of operations logged so far.
+// countOp advances the per-phase counter for countable ops only (see
+// model.IsCountableDreamOp), keeping the count the runner surfaces as the UI
+// "Ops" column free of phase_summary metadata.
+func (w *DreamLogWriter) countOp(operation string) {
+	if model.IsCountableDreamOp(operation) {
+		w.opCount++
+	}
+}
+
+// OpCount returns the number of real mutations logged so far. phase_summary
+// metadata writes are not counted (see countOp).
 func (w *DreamLogWriter) OpCount() int {
 	return w.opCount
 }

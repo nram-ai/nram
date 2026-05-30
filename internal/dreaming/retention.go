@@ -139,13 +139,19 @@ type logSummaryData struct {
 
 func buildLogSummary(logs []model.DreamLog) logSummaryData {
 	summary := logSummaryData{
-		TotalOperations: len(logs),
-		ByPhase:         make(map[string]int),
-		ByOperation:     make(map[string]int),
-		ByTargetType:    make(map[string]int),
+		ByPhase:      make(map[string]int),
+		ByOperation:  make(map[string]int),
+		ByTargetType: make(map[string]int),
 	}
 
 	for _, log := range logs {
+		// Exclude phase_summary metadata so the compressed summary matches the
+		// live OpCount semantics (see model.IsCountableDreamOp). The per-phase
+		// stats these rows carry survive in DreamCycle.PhaseSummary.
+		if !model.IsCountableDreamOp(log.Operation) {
+			continue
+		}
+		summary.TotalOperations++
 		summary.ByPhase[log.Phase]++
 		summary.ByOperation[log.Operation]++
 		summary.ByTargetType[log.TargetType]++

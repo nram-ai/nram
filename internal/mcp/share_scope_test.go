@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"testing"
 
 	"github.com/google/uuid"
@@ -111,7 +110,7 @@ func TestRequireShareProject_RejectsEmptyProjectForShareBearer(t *testing.T) {
 	projectA := uuid.New()
 	ac := makeShareAC(projectA, model.SharePermissionRead)
 
-	if res := requireShareProject(context.Background(), ac, "recall", "", uuid.Nil); res == nil {
+	if res := requireShareProject(ac, "recall", "", uuid.Nil); res == nil {
 		t.Fatal("requireShareProject must reject empty project for share-bearer (no global fan-out)")
 	}
 }
@@ -121,7 +120,7 @@ func TestRequireShareProject_RejectsOffAllowlist(t *testing.T) {
 	projectB := uuid.New()
 	ac := makeShareAC(projectA, model.SharePermissionReadStoreModify)
 
-	if res := requireShareProject(context.Background(), ac, "recall", "other", projectB); res == nil {
+	if res := requireShareProject(ac, "recall", "other", projectB); res == nil {
 		t.Fatal("requireShareProject must reject off-allowlist project")
 	}
 }
@@ -130,7 +129,7 @@ func TestRequireShareProject_AllowsInAllowlist(t *testing.T) {
 	projectA := uuid.New()
 	ac := makeShareAC(projectA, model.SharePermissionRead)
 
-	if res := requireShareProject(context.Background(), ac, "recall", "alpha", projectA); res != nil {
+	if res := requireShareProject(ac, "recall", "alpha", projectA); res != nil {
 		t.Fatalf("requireShareProject rejected an in-allowlist call: %v", res)
 	}
 }
@@ -138,7 +137,7 @@ func TestRequireShareProject_AllowsInAllowlist(t *testing.T) {
 func TestRequireShareProject_NonShareCallerPasses(t *testing.T) {
 	// Non-share callers should not be affected by share-bearer gates.
 	ac := &auth.AuthContext{UserID: uuid.New()}
-	if res := requireShareProject(context.Background(), ac, "recall", "", uuid.Nil); res != nil {
+	if res := requireShareProject(ac, "recall", "", uuid.Nil); res != nil {
 		t.Fatalf("requireShareProject must be a no-op for non-share callers: %v", res)
 	}
 }

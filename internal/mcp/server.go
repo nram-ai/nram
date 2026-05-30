@@ -380,7 +380,7 @@ func shareToolAllowed(ac *auth.AuthContext, toolName string, projectID uuid.UUID
 //
 // For non-share callers it is a no-op (returns nil). Callers must still
 // resolve the project themselves; this just gates access.
-func requireShareProject(ctx context.Context, ac *auth.AuthContext, toolName, projectSlug string, projectID uuid.UUID) *mcp.CallToolResult {
+func requireShareProject(ac *auth.AuthContext, toolName, projectSlug string, projectID uuid.UUID) *mcp.CallToolResult {
 	if ac == nil || ac.ShareTokenID == nil {
 		return nil
 	}

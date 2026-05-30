@@ -179,7 +179,7 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 		if err != nil {
 			return mcp.NewToolResultError("project not found"), nil
 		}
-		if denied := requireShareProject(ctx, ac, "graph", projectSlug, project.ID); denied != nil {
+		if denied := requireShareProject(ac, "graph", projectSlug, project.ID); denied != nil {
 			return denied, nil
 		}
 		namespaces = append(namespaces, project.NamespaceID)

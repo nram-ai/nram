@@ -425,11 +425,12 @@ func TestPruning_Execute_StreamsAllBatches(t *testing.T) {
 		}
 	}
 
-	// Phase emits exactly one LogOperation: the phase_summary. No memories
-	// trip shouldPrune (Confidence=0.9, AccessCount=1, no SupersededBy), no
-	// relationships expire (noopRelWriter), and decay is disabled.
-	if logger.OpCount() != 1 {
-		t.Errorf("expected exactly 1 logged operation (phase_summary), got %d", logger.OpCount())
+	// The phase emits only a phase_summary, which is metadata and not counted
+	// as an operation. No memories trip shouldPrune (Confidence=0.9,
+	// AccessCount=1, no SupersededBy), no relationships expire (noopRelWriter),
+	// and decay is disabled, so the real-operation count is zero.
+	if logger.OpCount() != 0 {
+		t.Errorf("expected 0 real operations (phase_summary is not counted), got %d", logger.OpCount())
 	}
 }
 

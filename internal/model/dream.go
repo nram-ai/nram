@@ -70,6 +70,17 @@ const (
 	DreamOpPhaseSummary          = "phase_summary"
 )
 
+// IsCountableDreamOp reports whether a dream-log operation counts toward a
+// cycle's operation tally. phase_summary rows are per-phase metadata, not
+// mutations, so they are excluded; every other DreamOp is a real operation.
+// This is the single source of truth shared by the live counter
+// (DreamLogWriter.OpCount) and the compressed retention summary
+// (buildLogSummary); keep it aligned with the UI's phase_summary filter in
+// ui/src/lib/dreaming.ts.
+func IsCountableDreamOp(operation string) bool {
+	return operation != DreamOpPhaseSummary
+}
+
 // MemorySource returns the source string for a memory, or empty string if nil.
 func MemorySource(m *Memory) string {
 	if m.Source != nil {

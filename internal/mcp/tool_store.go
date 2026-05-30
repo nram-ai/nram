@@ -128,7 +128,7 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 		}
 	}
 
-	if denied := requireShareProject(ctx, ac, "store", projectSlug, project.ID); denied != nil {
+	if denied := requireShareProject(ac, "store", projectSlug, project.ID); denied != nil {
 		return denied, nil
 	}
 
@@ -224,7 +224,7 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 		}
 	}
 
-	if denied := requireShareProject(ctx, ac, "store_batch", projectSlug, project.ID); denied != nil {
+	if denied := requireShareProject(ac, "store_batch", projectSlug, project.ID); denied != nil {
 		return denied, nil
 	}
 

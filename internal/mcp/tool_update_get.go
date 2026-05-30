@@ -136,7 +136,7 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		return mcp.NewToolResultError("project not found"), nil
 	}
 
-	if denied := requireShareProject(ctx, ac, "update", projectSlug, project.ID); denied != nil {
+	if denied := requireShareProject(ac, "update", projectSlug, project.ID); denied != nil {
 		return denied, nil
 	}
 
@@ -218,7 +218,7 @@ func handleMemoryGet(ctx context.Context, s *Server, request mcp.CallToolRequest
 		return mcp.NewToolResultError("project not found"), nil
 	}
 
-	if denied := requireShareProject(ctx, ac, "get", projectSlug, project.ID); denied != nil {
+	if denied := requireShareProject(ac, "get", projectSlug, project.ID); denied != nil {
 		return denied, nil
 	}
 

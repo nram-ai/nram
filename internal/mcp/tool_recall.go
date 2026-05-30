@@ -130,7 +130,7 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 			return mcp.NewToolResultError("project not found"), nil
 		}
 
-		if denied := requireShareProject(ctx, ac, "recall", projectSlug, project.ID); denied != nil {
+		if denied := requireShareProject(ac, "recall", projectSlug, project.ID); denied != nil {
 			return denied, nil
 		}
 
