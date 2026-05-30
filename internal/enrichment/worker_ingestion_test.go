@@ -306,9 +306,10 @@ func TestIngestion_NoMatches_AddDecisionStampsMetadata(t *testing.T) {
 	if got, _ := md["ingestion_decision"].(string); got != IngestionOpAdd {
 		t.Errorf("ingestion_decision = %q, want ADD", got)
 	}
-	// 2 vector upserts: parent (reused from dedup phase) + 1 child fact.
-	if len(h.vectors.vectors) != 2 {
-		t.Errorf("expected 2 vector upserts (parent + child), got %d", len(h.vectors.vectors))
+	// 1 vector upsert: parent only (reused from dedup phase). The extracted
+	// fact child is vectored by its own enrichment job, not inline here.
+	if len(h.vectors.vectors) != 1 {
+		t.Errorf("expected 1 vector upsert (parent only), got %d", len(h.vectors.vectors))
 	}
 	// Parent vector must be present in the upsert set.
 	parentSeen := false
@@ -320,6 +321,10 @@ func TestIngestion_NoMatches_AddDecisionStampsMetadata(t *testing.T) {
 	}
 	if !parentSeen {
 		t.Error("parent vector missing from upsert batch")
+	}
+	// The one extracted fact must be enqueued for its own augmentation job.
+	if len(h.queue.enqueued) != 1 {
+		t.Errorf("expected 1 child enrichment job enqueued, got %d", len(h.queue.enqueued))
 	}
 }
 

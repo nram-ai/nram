@@ -227,6 +227,8 @@ type mockQueueClaimer struct {
 	queryAugmentSkips map[uuid.UUID]string
 	heartbeats        map[string]int
 	claimErr          error
+	enqueued          []*model.EnrichmentJob
+	enqueueErr        error
 }
 
 func newMockQueueClaimer() *mockQueueClaimer {
@@ -235,6 +237,16 @@ func newMockQueueClaimer() *mockQueueClaimer {
 		stepsCompleted:    make(map[uuid.UUID][]string),
 		queryAugmentSkips: make(map[uuid.UUID]string),
 	}
+}
+
+func (m *mockQueueClaimer) Enqueue(_ context.Context, item *model.EnrichmentJob) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.enqueueErr != nil {
+		return m.enqueueErr
+	}
+	m.enqueued = append(m.enqueued, item)
+	return nil
 }
 
 func (m *mockQueueClaimer) ClaimNext(_ context.Context, _ string) (*model.EnrichmentJob, error) {
@@ -971,25 +983,42 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 	}
 
 	// Parent's enriched flag, dim, and metadata land in one MarkEnriched
-	// call. Children still take the focused UpdateEmbeddingDim path.
+	// call. Children are no longer embedded inline, so the parent job issues
+	// no child UpdateEmbeddingDim calls — each child's own enrichment job
+	// stamps its dim via MarkEnriched.
 	if len(h.updater.enrichedMarks) != 1 {
 		t.Errorf("expected 1 parent MarkEnriched, got %d", len(h.updater.enrichedMarks))
 	}
 	if mark := h.updater.enrichedMarks[0]; mark.embeddingDim == nil || *mark.embeddingDim != 3 {
 		t.Errorf("MarkEnriched embedding_dim = %v, want 3", mark.embeddingDim)
 	}
-	if len(h.updater.dimUpdates) != 2 {
-		t.Errorf("expected 2 child dim updates, got %d", len(h.updater.dimUpdates))
-	}
-	for i, du := range h.updater.dimUpdates {
-		if du.dim != 3 {
-			t.Errorf("child dim update %d: dim = %d, want 3", i, du.dim)
-		}
+	if len(h.updater.dimUpdates) != 0 {
+		t.Errorf("expected 0 child dim updates (children embed via their own jobs), got %d", len(h.updater.dimUpdates))
 	}
 
 	// Two child memories (facts).
 	if len(h.creator.created) != 2 {
 		t.Errorf("expected 2 child memories, got %d", len(h.creator.created))
+	}
+
+	// Each child is enqueued for its own augmentation + embedding job.
+	if len(h.queue.enqueued) != 2 {
+		t.Fatalf("expected 2 child enrichment jobs enqueued, got %d", len(h.queue.enqueued))
+	}
+	childIDs := make(map[uuid.UUID]bool, len(h.creator.created))
+	for _, child := range h.creator.created {
+		childIDs[child.ID] = true
+	}
+	for i, cj := range h.queue.enqueued {
+		if !childIDs[cj.MemoryID] {
+			t.Errorf("enqueued job %d: MemoryID %s is not one of the created children", i, cj.MemoryID)
+		}
+		if cj.Status != model.EnrichmentStatusPending {
+			t.Errorf("enqueued job %d: status = %q, want %q", i, cj.Status, model.EnrichmentStatusPending)
+		}
+		if cj.MaxAttempts != 3 {
+			t.Errorf("enqueued job %d: max_attempts = %d, want 3", i, cj.MaxAttempts)
+		}
 	}
 
 	// Child memories must inherit parent source and tags.
@@ -1040,11 +1069,12 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 		}
 	}
 
-	// Vectors upserted for the parent memory, each extracted-fact child, and
-	// each upserted entity. Fixture produces 2 facts and 2 entities, so we
-	// expect 5 total upserts (parent + 2 facts + 2 entities).
-	if len(h.vectors.vectors) != 5 {
-		t.Errorf("expected 5 vector upserts (parent + 2 facts + 2 entities), got %d", len(h.vectors.vectors))
+	// Vectors upserted for the parent memory and each upserted entity only.
+	// Extracted-fact children are vectored by their own enrichment jobs, not
+	// inline here. Fixture produces 2 entities, so we expect 3 total upserts
+	// (parent + 2 entities) and no child memory vectors.
+	if len(h.vectors.vectors) != 3 {
+		t.Errorf("expected 3 vector upserts (parent + 2 entities), got %d", len(h.vectors.vectors))
 	}
 	// First upsert must be the parent memory itself, not a fact — guards
 	// against the old bug where the first fact's embedding was stored under
@@ -1052,10 +1082,160 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 	if len(h.vectors.vectors) > 0 && h.vectors.vectors[0].ID != mem.ID {
 		t.Errorf("first vector upsert should target parent memory %s, got %s", mem.ID, h.vectors.vectors[0].ID)
 	}
+	// No child memory should be embedded inline by the parent job.
+	for _, v := range h.vectors.vectors {
+		if childIDs[v.ID] {
+			t.Errorf("child memory %s was embedded inline; it should be vectored by its own job", v.ID)
+		}
+	}
 
 	// Token usage: fact_extraction + entity_extraction + embedding = 3 records.
 	if len(h.tokens.records) != 3 {
 		t.Errorf("expected 3 token usage records, got %d", len(h.tokens.records))
+	}
+}
+
+// TestProcessJob_ChildJobAugmentsAndEmbeds is the direct regression test for
+// the fix: an extracted-fact child (Enriched=true) processed through its own
+// enrichment job must receive query augmentation and an augmented embedding,
+// exactly like a parent or a dream synthesis. With augmentation enabled and
+// the fact provider returning a query array (fact extraction is skipped, so
+// the only completion call is augmentation), finalizeJob must stamp
+// augmented_queries + augmented_embedding_at and mark the query_augmentation
+// and embedding steps.
+func TestProcessJob_ChildJobAugmentsAndEmbeds(t *testing.T) {
+	factLLM := &mockLLMProvider{name: "test-fact", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		// Enriched=true skips fact extraction, so this provider is reached
+		// only for query augmentation. Return a JSON query array.
+		return &provider.CompletionResponse{Content: `["how does the child fact work","child fact summary"]`, Model: "augment-model"}, nil
+	}}
+	entityLLM := &mockLLMProvider{name: "test-entity", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		return &provider.CompletionResponse{Content: entityJSON(), Model: "entity-model"}, nil
+	}}
+	embedProv := constEmbedder()
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	if err := h.settings.Set(context.Background(), service.SettingQueryAugmentEnabled, "true", "global", nil); err != nil {
+		t.Fatalf("enable query augment: %v", err)
+	}
+
+	// A child memory: Enriched=true, so ingestion/fact/entity all skip and
+	// only augmentation + embedding run.
+	mem := testMemory()
+	mem.Enriched = true
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+
+	if len(h.updater.enrichedMarks) != 1 {
+		t.Fatalf("expected 1 MarkEnriched, got %d", len(h.updater.enrichedMarks))
+	}
+	mark := h.updater.enrichedMarks[0]
+	if len(mark.augmentedQueries) != 2 {
+		t.Errorf("expected 2 augmented queries stamped, got %v", mark.augmentedQueries)
+	}
+	if mark.augmentedEmbeddingAt == nil {
+		t.Error("expected augmented_embedding_at to be stamped, got nil")
+	}
+	if mark.embeddingDim == nil || *mark.embeddingDim != 3 {
+		t.Errorf("expected embedding_dim 3, got %v", mark.embeddingDim)
+	}
+	// The query-augmentation skip reason must be cleared (augmentation ran).
+	if reason, ok := h.queue.queryAugmentSkips[job.ID]; ok && reason != "" {
+		t.Errorf("expected no query_augment skip reason, got %q", reason)
+	}
+	steps := h.queue.stepsCompleted[job.ID]
+	if !slices.Contains(steps, model.StepQueryAugmentation) {
+		t.Errorf("expected query_augmentation step marked, got %v", steps)
+	}
+	if !slices.Contains(steps, model.StepEmbedding) {
+		t.Errorf("expected embedding step marked, got %v", steps)
+	}
+	// A child is a leaf: it must not itself create children or new lineage.
+	if len(h.creator.created) != 0 {
+		t.Errorf("child job must not create further children, got %d", len(h.creator.created))
+	}
+	if len(h.queue.enqueued) != 0 {
+		t.Errorf("child job must not enqueue further jobs, got %d", len(h.queue.enqueued))
+	}
+}
+
+// TestProcessJob_EnqueueChildFailureIsNonFatal verifies that a failure to
+// enqueue a child's augmentation job does not fail the parent job: the child
+// memory and its lineage are still created, and the parent completes. The
+// stranded child is recoverable via the BackfillAugmentation admin path,
+// the same guarantee the dream path relies on.
+func TestProcessJob_EnqueueChildFailureIsNonFatal(t *testing.T) {
+	h := newTestHarness(
+		&mockLLMProvider{name: "test-fact", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+			return &provider.CompletionResponse{Content: factJSON(), Model: "fact-model"}, nil
+		}},
+		&mockLLMProvider{name: "test-entity", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+			return &provider.CompletionResponse{Content: entityJSON(), Model: "entity-model"}, nil
+		}},
+		constEmbedder(),
+	)
+	disableParaphraseGuard(t, h)
+	h.queue.enqueueErr = errors.New("queue insert boom")
+
+	mem := testMemory()
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("enqueue failure must not fail the parent job, got: %v", err)
+	}
+	if len(h.queue.completed) != 1 || h.queue.completed[0] != job.ID {
+		t.Errorf("expected parent job completed despite enqueue failure, got %v", h.queue.completed)
+	}
+	if len(h.creator.created) != 2 {
+		t.Errorf("expected 2 child memories still created, got %d", len(h.creator.created))
+	}
+	if len(h.lineage.created) != 2 {
+		t.Errorf("expected 2 lineage rows still created, got %d", len(h.lineage.created))
+	}
+	if len(h.queue.enqueued) != 0 {
+		t.Errorf("enqueue errored, so nothing should be recorded enqueued, got %d", len(h.queue.enqueued))
+	}
+}
+
+// TestProcessJob_SuppressedFactNotEnqueued verifies the paraphrase guard's
+// interaction with the enqueue path: a fact suppressed as a near-duplicate of
+// its parent produces no child memory and therefore no enqueued augmentation
+// job. The fixed-vector embedder makes every fact cosine=1 to the parent, so
+// with the guard enabled the single extracted fact is suppressed.
+func TestProcessJob_SuppressedFactNotEnqueued(t *testing.T) {
+	factLLM := &mockLLMProvider{name: "test-fact", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		return &provider.CompletionResponse{Content: factJSON(), Model: "fact-model"}, nil
+	}}
+	entityLLM := &mockLLMProvider{name: "test-entity", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		return &provider.CompletionResponse{Content: `{"entities":[],"relationships":[]}`, Model: "entity-model"}, nil
+	}}
+	embedProv := constEmbedder()
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	// Guard ON (production default, but set explicitly so the test is robust
+	// against default changes). Fixed-vector embedder => every fact cosine=1
+	// to the parent => suppressed.
+	if err := h.settings.Set(context.Background(), service.SettingExtractedFactGuardEnabled, "true", "global", nil); err != nil {
+		t.Fatalf("enable guard: %v", err)
+	}
+
+	mem := testMemory()
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+	if len(h.creator.created) != 0 {
+		t.Errorf("expected all facts suppressed (0 children), got %d", len(h.creator.created))
+	}
+	if len(h.queue.enqueued) != 0 {
+		t.Errorf("suppressed facts must not be enqueued, got %d", len(h.queue.enqueued))
 	}
 }
 

@@ -189,6 +189,14 @@ type MemoryCreator interface {
 // defers a job (e.g., the enrichment-available gate is closed) rather than
 // failing it.
 type QueueClaimer interface {
+	// Enqueue inserts a new pending job. Used by the worker to schedule
+	// augmentation + embedding for extracted-fact children it creates
+	// mid-job, mirroring the dream-synthesis enqueue in
+	// internal/dreaming/phase_consolidation.go. The insert is not deduped at
+	// the queue level; a child is enqueued exactly once because a parent
+	// retry skips fact extraction (HasExtractedFactChildren probe +
+	// steps_completed), so no second generation of children is created.
+	Enqueue(ctx context.Context, item *model.EnrichmentJob) error
 	ClaimNext(ctx context.Context, workerID string) (*model.EnrichmentJob, error)
 	ClaimNextBatch(ctx context.Context, workerID string, max int) ([]*model.EnrichmentJob, error)
 	// Pass workerID to enable the stale-write guard (returns
@@ -686,12 +694,6 @@ func (wp *WorkerPool) sleepWithBackoff(ctx context.Context, emptyPolls, maxBacko
 // processJob / processBatch — the enrichment pipeline
 // ---------------------------------------------------------------------------
 
-type childFact struct {
-	id      uuid.UUID
-	content string
-	mem     *model.Memory
-}
-
 // entityFact is the per-job entity record carried into the shared embed call
 // so the entity's canonical text can be embedded alongside the parent and
 // child memories. The pointer is retained so the embed_dim write-back can
@@ -703,16 +705,17 @@ type entityFact struct {
 }
 
 // pendingJob is the per-job state carried between pre-embed, embed, and
-// finalize phases. embedStart/embedCount index into the shared batched embed
-// response for the parent + children; embedEntStart/embedEntCount cover the
-// entity canonicals appended after them in the same batch. Ingestion-decision
-// fields are populated by runIngestionDecision when the phase is enabled;
-// parentEmbedFromPhase / shortCircuitDelete are derived from them.
+// finalize phases. embedStart indexes into the shared batched embed response
+// for the parent memory; embedEntStart marks where this job's entity
+// canonicals begin in the same batch. Extracted-fact children are not
+// embedded here — each carries its own enrichment job enqueued in
+// runPreEmbed. Ingestion-decision fields are populated by runIngestionDecision
+// when the phase is enabled; parentEmbedFromPhase / shortCircuitDelete are
+// derived from them.
 type pendingJob struct {
 	job           *model.EnrichmentJob
 	mem           *model.Memory
 	workerID      string // owner of the claim — passed to *Owned write methods so a sweeper-requeued row is not silently overwritten by this worker.
-	children      []childFact
 	entities      []entityFact
 	factUsage     *provider.TokenUsage
 	factModel     string
@@ -721,9 +724,7 @@ type pendingJob struct {
 	entityModel   string
 	entityProv    string
 	embedStart    int
-	embedCount    int
 	embedEntStart int
-	embedEntCount int
 
 	parentEmbedding []float32
 
@@ -1178,7 +1179,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	}
 	parentEmbedTried := false
 
-	children := make([]childFact, 0, len(facts))
+	childCount := 0
 	acceptedSiblingEmbeds := make([][]float32, 0, len(facts))
 
 	for _, fact := range facts {
@@ -1259,7 +1260,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 			slog.Error("enrichment: create child memory", "job", job.ID, "err", err)
 			continue
 		}
-		children = append(children, childFact{id: childID, content: fact.Content, mem: child})
+		childCount++
 
 		parentID := mem.ID
 		lin := &model.MemoryLineage{
@@ -1273,6 +1274,43 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		if err := wp.lineage.Create(ctx, lin); err != nil {
 			slog.Error("enrichment: create lineage", "job", job.ID, "err", err)
 		}
+
+		// Schedule the child's own augmentation + embedding by enqueuing a
+		// fresh enrichment job, mirroring the dream-synthesis enqueue in
+		// internal/dreaming/phase_consolidation.go. The child carries
+		// Enriched=true, so when its job is claimed the ingestion-decision,
+		// fact-extraction, and entity-extraction phases all short-circuit
+		// (phase_ingestion.go and runPreEmbed skipFact/skipEntity); only
+		// query augmentation and embedding run. No dream-recursion concern:
+		// fact children are never dream-origin (dream memories skip fact
+		// extraction at skipFact=isDream), so a child job cannot create a
+		// further derivative that feeds a dream cycle.
+		//
+		// Enqueue failure is non-fatal: the child row already exists, and
+		// EnrichService.BackfillAugmentation is the operator recovery route
+		// for any child stranded without a vector — the same guarantee the
+		// dream path relies on.
+		now := time.Now().UTC()
+		childJob := &model.EnrichmentJob{
+			ID:          uuid.New(),
+			MemoryID:    childID,
+			NamespaceID: mem.NamespaceID,
+			Status:      model.EnrichmentStatusPending,
+			Priority:    0,
+			Attempts:    0,
+			MaxAttempts: 3,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := wp.queue.Enqueue(ctx, childJob); err != nil {
+			slog.Warn("enrichment: enqueue child augmentation job",
+				"job", job.ID, "child", childID, "err", err)
+		}
+	}
+
+	if childCount > 0 {
+		slog.Info("enrichment: scheduled extracted-fact child augmentation jobs",
+			"job", job.ID, "memory", mem.ID, "children", childCount)
 	}
 
 	// Mark fact_extraction as completed when the LLM call succeeded —
@@ -1297,7 +1335,6 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		job:                    job,
 		mem:                    mem,
 		workerID:               workerID,
-		children:               children,
 		entities:               entities,
 		factUsage:              factUsage,
 		factModel:              factModel,
@@ -1539,6 +1576,12 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		// computed for this content (only reachable when augmentation
 		// did not run). Otherwise embed against augmentedContent when
 		// present, falling back to raw mem.Content.
+		//
+		// Extracted-fact children are NOT embedded here. Each child carries
+		// its own enrichment job (enqueued in runPreEmbed) that augments and
+		// embeds it against its augmented blob, so embedding it inline would
+		// produce a redundant raw vector that the child's job immediately
+		// supersedes.
 		if !p.parentEmbedFromPhase() {
 			parentInput := p.mem.Content
 			if p.augmentedContent != "" {
@@ -1547,20 +1590,11 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 			}
 			inputs = append(inputs, parentInput)
 		}
-		for _, c := range p.children {
-			inputs = append(inputs, c.content)
-		}
-		if p.parentEmbedFromPhase() {
-			p.embedCount = len(p.children)
-		} else {
-			p.embedCount = 1 + len(p.children)
-		}
 
 		p.embedEntStart = len(inputs)
 		for _, e := range p.entities {
 			inputs = append(inputs, e.canonical)
 		}
-		p.embedEntCount = len(p.entities)
 	}
 
 	var (
@@ -1634,31 +1668,10 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 			})
 		}
 
-		// Children index from embedStart (parent absent) or embedStart+1
-		// (parent present in the embed batch).
-		childOffset := p.embedStart
-		if !p.parentEmbedFromPhase() {
-			childOffset = p.embedStart + 1
-		}
-		for i, c := range p.children {
-			idx := childOffset + i
-			if idx >= len(embeddings) {
-				break
-			}
-			vec := embeddings[idx]
-			if d := len(vec); d > 0 {
-				if c.mem != nil {
-					c.mem.EmbeddingDim = &d
-				}
-				items = append(items, storage.VectorUpsertItem{
-					Kind:        storage.VectorKindMemory,
-					ID:          c.id,
-					NamespaceID: p.mem.NamespaceID,
-					Embedding:   vec,
-					Dimension:   d,
-				})
-			}
-		}
+		// Extracted-fact children are not embedded in this batch (see the
+		// input-assembly note above); they are vectored by their own
+		// enrichment jobs. The embed slice therefore runs parent → entities
+		// with no child rows in between.
 		for j, e := range p.entities {
 			idx := p.embedEntStart + j
 			if idx >= len(embeddings) {
@@ -1833,13 +1846,9 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 		return fmt.Errorf("update memory: %w", err)
 	}
 
-	for _, c := range p.children {
-		if c.mem != nil && c.mem.EmbeddingDim != nil {
-			if err := wp.memUpdater.UpdateEmbeddingDim(ctx, c.id, *c.mem.EmbeddingDim); err != nil {
-				slog.Warn("enrichment: update child embedding_dim", "child", c.id, "err", err)
-			}
-		}
-	}
+	// Extracted-fact children are not embedded in this job, so there is no
+	// child embedding_dim to persist here. Each child's own enrichment job
+	// stamps its embedding_dim via MarkEnriched when it augments and embeds.
 
 	// Group entity dim writes by dim so a single batch covers the whole job.
 	// In practice every entity in one cycle lands at the same dim, so this is
