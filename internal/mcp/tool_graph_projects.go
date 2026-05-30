@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -393,44 +392,12 @@ seeds:
 		graphRels = []graphRelationship{}
 	}
 
-	// Sort both axes by signal-strength descending so the byte-budget
-	// reducer in result_limit.go (which trims via prefix slice) preserves
-	// the most informative items first when the response exceeds budget.
-	//
-	// Tiebreak chains produce a total order so the prefix is deterministic
-	// across calls. Equal-weight edges are common (many extractors emit
-	// Weight=1.0) and BFS traversal order depends on `seenRels` map
-	// iteration (Go-randomized), so without a tiebreak chain two identical
-	// graph() calls could return different surviving prefixes when
-	// truncation fires. UUIDs are stringified for lex ordering — bytes
-	// would compare equally but UUID has no comparable receiver and
-	// String() is O(36).
-	sort.Slice(graphRels, func(i, j int) bool {
-		a, b := graphRels[i], graphRels[j]
-		if a.Weight != b.Weight {
-			return a.Weight > b.Weight
-		}
-		if a.SourceID != b.SourceID {
-			return a.SourceID.String() < b.SourceID.String()
-		}
-		if a.TargetID != b.TargetID {
-			return a.TargetID.String() < b.TargetID.String()
-		}
-		return a.Relation < b.Relation
-	})
-	sort.Slice(graphEntities, func(i, j int) bool {
-		a, b := graphEntities[i], graphEntities[j]
-		if a.MentionCount != b.MentionCount {
-			return a.MentionCount > b.MentionCount
-		}
-		if a.Name != b.Name {
-			return a.Name < b.Name
-		}
-		// Two distinct entities can share a display name (different
-		// sources, same canonical) — final tiebreak on ID guarantees a
-		// total order.
-		return a.ID.String() < b.ID.String()
-	})
+	// Sort both axes by signal-strength descending so the byte-budget reducer
+	// in result_limit.go (which trims via prefix slice) preserves the most
+	// informative items first when the response exceeds budget. The shared
+	// sortGraphBySignal keeps this ordering identical to the recall tool's
+	// pre-cap so both surfaces rank the graph the same way.
+	sortGraphBySignal(graphEntities, graphRels)
 
 	resp := &graphResponse{
 		Entities:      graphEntities,
@@ -453,6 +420,17 @@ seeds:
 type graphEdgeKey struct {
 	src, tgt uuid.UUID
 	rel      string
+}
+
+// namespaceSet builds a set of the allowed namespace IDs for O(1) membership
+// tests. Used by every graph-entity path that must drop rows the caller cannot
+// read (resolveGraphOrphans, backfillMentionCounts).
+func namespaceSet(allowedNamespaces []uuid.UUID) map[uuid.UUID]struct{} {
+	allowed := make(map[uuid.UUID]struct{}, len(allowedNamespaces))
+	for _, ns := range allowedNamespaces {
+		allowed[ns] = struct{}{}
+	}
+	return allowed
 }
 
 // resolveGraphOrphans guarantees that every relationship's endpoints appear
@@ -487,10 +465,7 @@ func resolveGraphOrphans(
 			ids = append(ids, id)
 		}
 		if fetched, err := entityReader.GetBatch(ctx, ids); err == nil {
-			allowed := make(map[uuid.UUID]struct{}, len(allowedNamespaces))
-			for _, ns := range allowedNamespaces {
-				allowed[ns] = struct{}{}
-			}
+			allowed := namespaceSet(allowedNamespaces)
 			for _, ent := range fetched {
 				if _, ok := allowed[ent.NamespaceID]; !ok {
 					continue
@@ -520,6 +495,40 @@ func resolveGraphOrphans(
 		pruned = append(pruned, rel)
 	}
 	return entities, pruned
+}
+
+// backfillMentionCounts populates MentionCount on entities in place by batch-
+// fetching the entity records, filtered to allowedNamespaces (the same scope
+// guard resolveGraphOrphans applies, so a caller cannot pull mention signal
+// from a namespace it lacks read access to). Entities not returned by the batch
+// (or outside the allowed namespaces) keep their existing count. A GetBatch
+// error leaves all counts unchanged — mention signal is best-effort ranking
+// input, never a correctness gate.
+func backfillMentionCounts(ctx context.Context, entityReader EntityReader, entities []graphEntity, allowedNamespaces []uuid.UUID) {
+	if entityReader == nil || len(entities) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(entities))
+	for _, e := range entities {
+		ids = append(ids, e.ID)
+	}
+	fetched, err := entityReader.GetBatch(ctx, ids)
+	if err != nil {
+		return
+	}
+	allowed := namespaceSet(allowedNamespaces)
+	counts := make(map[uuid.UUID]int, len(fetched))
+	for _, ent := range fetched {
+		if _, ok := allowed[ent.NamespaceID]; !ok {
+			continue
+		}
+		counts[ent.ID] = ent.MentionCount
+	}
+	for i := range entities {
+		if c, ok := counts[entities[i].ID]; ok {
+			entities[i].MentionCount = c
+		}
+	}
 }
 
 func handleMemoryProjects(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -28,6 +29,13 @@ const (
 	charsPerTokenEstimate = 2
 	maxReducerIterations  = 32
 	truncationSuffix      = "... [TRUNCATED: response exceeded MCP token budget; narrow the query, lower the limit, or paginate via list]"
+	// recallGraphTrimHint is emitted when the recall graph was balance-trimmed
+	// to its reserved byte slice (packGraphToByteBudget) rather than dropped
+	// wholesale. Shared by the recall handler (which stamps it when the pre-cap
+	// fires and the response otherwise fits) and recallReductions.hint (which
+	// re-emits it when the memory reducer also fires). Keeping one constant
+	// means both paths surface identical remediation text.
+	recallGraphTrimHint = "graph trimmed to fit; call graph() for the full neighborhood"
 )
 
 // mcpBudgetBytes resolves the per-tool MCP result budget through the
@@ -305,6 +313,14 @@ func hardTruncate(out []byte, budget int) string {
 // composed hint and Dropped list never claim a reduction that did not
 // happen.
 type recallReductions struct {
+	// graphPreTrimmed records that the handler balance-trimmed the graph to its
+	// reserved byte slice (packGraphToByteBudget) before the reducer ran. Unlike
+	// the other flags it is set at construction, not by a reducer stage — it is
+	// carried so the reduced response re-emits the pre-cap kept/total sentinels
+	// and hint. It is deliberately NOT part of any(): the pre-cap envelope is
+	// already stamped on orig by the handler, so a no-op reducer stage returning
+	// orig preserves it without the reducer claiming a reduction it did not make.
+	graphPreTrimmed     bool
 	graphDropped        bool
 	contentTrimmedTo800 bool
 	contentTrimmedTo200 bool
@@ -328,6 +344,8 @@ func (r recallReductions) hint() string {
 	var parts []string
 	if r.graphDropped {
 		parts = append(parts, "graph dropped; lower graph_depth or omit the graph")
+	} else if r.graphPreTrimmed {
+		parts = append(parts, recallGraphTrimHint)
 	}
 	if r.contentTrimmedTo800 || r.contentTrimmedTo200 {
 		parts = append(parts, "memory content truncated; lower the limit, narrow the query, or filter by tags")
@@ -341,24 +359,35 @@ func (r recallReductions) hint() string {
 	return strings.Join(parts, "; ")
 }
 
-// newRecallReducer builds a stateful reducer for recall responses. Stages:
+// newRecallReducer builds a stateful reducer for recall responses. The graph
+// is NOT touched first — the handler has already balance-trimmed it to its
+// reserved byte slice (packGraphToByteBudget) so it occupies at most ~15% of
+// the budget. graphPreTrimmed records whether that pre-cap fired, so the
+// reduced response can re-emit the pre-cap kept/total sentinels and hint.
 //
-//  1. Drop the entire graph (only if non-empty).
-//  2. Truncate every memory.content > 800 chars to 800.
-//  3. Truncate every memory.content > 200 chars to 200.
-//     4+. Halve the memories slice AND coverage_gaps in lockstep. Halving
+// Stages:
+//
+//  1. Truncate every memory.content > 800 chars to 800.
+//  2. Truncate every memory.content > 200 chars to 200.
+//     3+. Halve the memories slice AND coverage_gaps in lockstep. Halving
 //     bounds the reducer at O(log N) iterations; coverage_gaps trim is
 //     in lockstep because gaps can dominate the budget on diversified
 //     queries (see the comment on mcpRecallResponse.CoverageGaps).
 //
+// Last resort: only once memories and coverage_gaps are both at their floor of
+// 1 and the payload still overflows does the reducer drop the (already tiny)
+// graph entirely, freeing its reserved slice for the surviving memory. This
+// inverts the old behavior, where the graph was the FIRST casualty and recall
+// therefore never surfaced any graph context on a budget-busting response.
+//
 // The reducer returns *mcpRecallResponse with Truncated populated by the
 // recallReductions flags (composed hint, Dropped list, counts).
-func newRecallReducer(orig *mcpRecallResponse) reducerFunc {
+func newRecallReducer(orig *mcpRecallResponse, graphPreTrimmed bool) reducerFunc {
 	memories := append([]mcpRecallMemory(nil), orig.Memories...)
 	coverageGaps := append([]service.CoverageGap(nil), orig.CoverageGaps...)
 	originalMemories := len(memories)
 	origGraphEmpty := len(orig.Graph.Entities) == 0 && len(orig.Graph.Relationships) == 0
-	var flags recallReductions
+	flags := recallReductions{graphPreTrimmed: graphPreTrimmed}
 	stage := 0
 
 	origCoverageGaps := len(coverageGaps)
@@ -366,17 +395,13 @@ func newRecallReducer(orig *mcpRecallResponse) reducerFunc {
 		stage++
 		switch stage {
 		case 1:
-			if !origGraphEmpty {
-				flags.graphDropped = true
-			}
-		case 2:
 			for i := range memories {
 				if len(memories[i].Content) > 800 {
 					memories[i].Content = memories[i].Content[:800] + "..."
 					flags.contentTrimmedTo800 = true
 				}
 			}
-		case 3:
+		case 2:
 			for i := range memories {
 				if len(memories[i].Content) > 200 {
 					memories[i].Content = memories[i].Content[:200] + "..."
@@ -388,9 +413,7 @@ func newRecallReducer(orig *mcpRecallResponse) reducerFunc {
 			// only real hit while setting flags.memoriesHalved=true, producing
 			// a Truncated envelope with ReturnedCount=0 that is strictly worse
 			// than letting tier-3 byte-cut the single-memory response (which
-			// at least carries the memory id and partial fields). When both
-			// memories and coverage_gaps reach 1, the reducer is exhausted
-			// and signals nil/false so the wrapper falls to tier-3.
+			// at least carries the memory id and partial fields).
 			halved := false
 			if len(memories) > 1 {
 				memories = memories[:len(memories)/2]
@@ -403,13 +426,26 @@ func newRecallReducer(orig *mcpRecallResponse) reducerFunc {
 				halved = true
 			}
 			if !halved {
-				return nil, false
+				// Memories and coverage_gaps are at floor. Drop the graph as the
+				// absolute last resort so a single oversized memory still ships.
+				// Only when the graph is empty or already dropped is the reducer
+				// exhausted; it then signals nil/false so the wrapper falls to
+				// tier-3 byte-cut.
+				if origGraphEmpty || flags.graphDropped {
+					return nil, false
+				}
+				flags.graphDropped = true
 			}
 		}
-		more := stage < 4 || len(memories) > 1 || len(coverageGaps) > 1
-		// No-op stage: return the original payload unmodified (no
-		// Truncated envelope). Signal more=true so the loop advances
-		// to the next stage rather than terminating on a false negative.
+		// more stays true while any axis can still shrink: content stages remain
+		// (stage<2), the memory/coverage lists are above floor, OR the graph is
+		// still droppable as the last-resort stage.
+		canStillDropGraph := !origGraphEmpty && !flags.graphDropped
+		more := stage < 2 || len(memories) > 1 || len(coverageGaps) > 1 || canStillDropGraph
+		// No-op stage: return the original payload unmodified. When the graph was
+		// pre-trimmed, orig already carries the pre-cap Truncated envelope, so
+		// returning it preserves that signal without the reducer claiming a
+		// reduction it did not make. Signal more=true so the loop advances.
 		if !flags.any() {
 			return orig, more
 		}
@@ -432,7 +468,14 @@ func buildReducedRecallResponse(
 		Hint:          flags.hint(),
 	}
 	if flags.graphDropped {
+		// Last-resort full drop supersedes any pre-cap kept/total sentinels:
+		// the graph is gone, so reporting "entities_kept:N/M" would mislead.
 		info.Dropped = append(info.Dropped, "graph.entities", "graph.relationships")
+	} else if flags.graphPreTrimmed && orig.Truncated != nil {
+		// Carry the handler's pre-cap kept/total sentinels forward so a response
+		// that also triggered memory reduction still reports the balanced graph
+		// trim. orig.Truncated.Dropped holds exactly those graph sentinels.
+		info.Dropped = append(info.Dropped, orig.Truncated.Dropped...)
 	}
 	if flags.coverageGapsTrimmed {
 		// Frame-independent marker: how many of the original gaps remain
@@ -628,6 +671,90 @@ func halveWithFloor(n int) int {
 		return n
 	}
 	return n / 2
+}
+
+// sortGraphBySignal orders both graph axes by signal strength descending so a
+// prefix-slice truncation (newGraphReducer for the graph tool,
+// packGraphToByteBudget for recall) preserves the most informative items
+// first. The tiebreak chains produce a total order, so the surviving prefix is
+// deterministic across calls despite Go-randomized map iteration in the
+// upstream traversal. Equal-weight edges are common (many extractors emit
+// Weight=1.0); without the tiebreak two identical calls could return different
+// prefixes when truncation fires. Both the graph tool (handleMemoryGraph) and
+// the recall projection call this so the two tools order identically.
+func sortGraphBySignal(entities []graphEntity, rels []graphRelationship) {
+	sort.Slice(rels, func(i, j int) bool {
+		a, b := rels[i], rels[j]
+		if a.Weight != b.Weight {
+			return a.Weight > b.Weight
+		}
+		if a.SourceID != b.SourceID {
+			return a.SourceID.String() < b.SourceID.String()
+		}
+		if a.TargetID != b.TargetID {
+			return a.TargetID.String() < b.TargetID.String()
+		}
+		return a.Relation < b.Relation
+	})
+	sort.Slice(entities, func(i, j int) bool {
+		a, b := entities[i], entities[j]
+		if a.MentionCount != b.MentionCount {
+			return a.MentionCount > b.MentionCount
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		// Two distinct entities can share a display name (different sources,
+		// same canonical) — final tiebreak on ID guarantees a total order.
+		return a.ID.String() < b.ID.String()
+	})
+}
+
+// packGraphToByteBudget trims an already-signal-sorted graph so its marshaled
+// JSON fits reserveBytes, halving BOTH axes per iteration (halveWithFloor) so
+// neither entities nor relationships is driven to zero unless it started empty
+// — the same balance newGraphReducer applies for the graph tool. It is a
+// one-shot pack (not a reducerFunc): the recall handler calls it once before
+// the memory-focused newRecallReducer runs, guaranteeing the graph occupies at
+// most its reserved slice of the overall budget so memories get the rest.
+//
+// Returns the trimmed slices plus the kept/total sentinels ("entities_kept:N/M",
+// "relationships_kept:N/M") when it actually trimmed; nil sentinels when the
+// graph already fit or was empty (so the caller stamps no truncation envelope).
+// Like newGraphReducer, a prefix trim can leave an edge whose endpoint fell
+// into the dropped entity suffix; that is the accepted best-effort behavior
+// under explicit truncation (the envelope signals incompleteness, and the
+// caller can fetch the full neighborhood via graph()).
+func packGraphToByteBudget(entities []graphEntity, rels []graphRelationship, reserveBytes int) ([]graphEntity, []graphRelationship, []string) {
+	origE, origR := len(entities), len(rels)
+	if origE == 0 && origR == 0 {
+		return entities, rels, nil
+	}
+	fits := func() bool {
+		out, err := json.Marshal(graphResponse{Entities: entities, Relationships: rels})
+		return err == nil && len(out) <= reserveBytes
+	}
+	for !fits() {
+		newE := halveWithFloor(len(entities))
+		newR := halveWithFloor(len(rels))
+		if newE == len(entities) && newR == len(rels) {
+			// Both axes at floor (1/1) and still over budget: stop. The
+			// floor-sized graph rides along; the memory reducer's last-resort
+			// stage drops it only if even this minimal graph won't fit.
+			break
+		}
+		entities = entities[:newE]
+		rels = rels[:newR]
+	}
+	// No sentinels when nothing was trimmed (a graph that already fit, or one
+	// that hit the floor without shrinking): the kept counts equal the originals.
+	if len(entities) == origE && len(rels) == origR {
+		return entities, rels, nil
+	}
+	return entities, rels, []string{
+		fmt.Sprintf("entities_kept:%d/%d", len(entities), origE),
+		fmt.Sprintf("relationships_kept:%d/%d", len(rels), origR),
+	}
 }
 
 // classifyTier returns the tier label that wrapToolResult assigned to res.

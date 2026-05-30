@@ -166,5 +166,37 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 	}
 
 	mcpResp := buildMCPRecallResponse(ctx, deps.EntityReader, resp, allowedNS, projectionOpts{})
-	return wrapToolResult(s.deps.Metrics, "recall", mcpBudgetBytes(ctx, s.deps.Settings), mcpResp, newRecallReducer(mcpResp))
+
+	// Pre-cap the graph to a reserved slice of the byte budget BEFORE the
+	// memory-focused reducer runs. Without this the reducer's last-resort
+	// stage would drop the whole graph on any over-budget response, blinding
+	// the caller to graph context. The pack keeps a balanced, signal-sorted
+	// subset (entities AND relationships) so recall always surfaces some graph.
+	budget := mcpBudgetBytes(ctx, s.deps.Settings)
+	reserveBytes := int(float64(budget) * recallGraphReserveFraction(ctx, s.deps.Settings))
+	keptE, keptR, graphSentinels := packGraphToByteBudget(mcpResp.Graph.Entities, mcpResp.Graph.Relationships, reserveBytes)
+	mcpResp.Graph.Entities, mcpResp.Graph.Relationships = keptE, keptR
+	graphPreTrimmed := len(graphSentinels) > 0
+	if graphPreTrimmed {
+		// The pre-cap is itself a truncation; stamp it so the envelope is
+		// present even when the response fits without the reducer firing (the
+		// reducer is the only other writer of Truncated — see projection_recall.go).
+		mcpResp.Truncated = &truncationInfo{
+			Reason:  "response_too_large",
+			Dropped: graphSentinels,
+			Hint:    recallGraphTrimHint,
+		}
+	}
+
+	return wrapToolResult(s.deps.Metrics, "recall", budget, mcpResp, newRecallReducer(mcpResp, graphPreTrimmed))
+}
+
+// recallGraphReserveFraction resolves recall.graph.reserve_fraction through the
+// SettingsService cascade, falling back to the registered default when Settings
+// is nil (matching the mcpBudgetBytes nil-safe pattern).
+func recallGraphReserveFraction(ctx context.Context, s *service.SettingsService) float64 {
+	if s == nil {
+		return service.GetDefaultFloat(service.SettingRecallGraphReserveFraction)
+	}
+	return s.ResolveFloatWithDefault(ctx, service.SettingRecallGraphReserveFraction, "global")
 }

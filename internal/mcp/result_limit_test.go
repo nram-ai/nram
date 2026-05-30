@@ -125,7 +125,7 @@ func TestWrapToolResultUsesReducer(t *testing.T) {
 		},
 		LatencyMs: 12,
 	}
-	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp))
+	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp, false))
 	if err != nil {
 		t.Fatalf("wrapToolResult err = %v", err)
 	}
@@ -143,19 +143,20 @@ func TestWrapToolResultUsesReducer(t *testing.T) {
 	}
 }
 
-// TestRecallReducerGraphSurvivesAfterAuditStrip is the observable guard for the
-// headline acceptance criterion: stripping per-row audit bookkeeping reclaims
-// enough budget that the graph round-trips instead of being dropped by the
-// reducer's stage-1 graph drop.
+// TestRecallReducerGraphSurvivesAfterAuditStrip is the observable guard for two
+// graph-survival properties on real serialized output.
 //
-// It models the SAME dense response before and after the strip. "leaky" carries
-// the per-row audit blob the recall projection used to leak (consolidation/
-// reinforce/ingestion/migration keys); "slim" is what recallview.Project now
-// emits (audit stripped, residual nil). At a budget sized to the slim payload's
-// Tier-1 structured boundary (budget/2), the slim response ships Tier 1 with its
-// graph intact and no _truncated marker, while the audit-laden response
-// overflows and trips the stage-1 graph drop. This is the reclaimed-budget ->
-// graph-survives causal chain, asserted on real serialized output.
+// It models the SAME dense response before and after the audit strip. "leaky"
+// carries the per-row audit blob the recall projection used to leak
+// (consolidation/reinforce/ingestion/migration keys); "slim" is what
+// recallview.Project now emits (audit stripped, residual nil). At a budget sized
+// to the slim payload's Tier-1 structured boundary (budget/2):
+//   - slim ships Tier 1 with its graph intact and no _truncated marker
+//     (reclaimed budget -> fits naturally);
+//   - leaky overflows, so the reducer fires — but with the recall-graph
+//     rebalance the graph is no longer dropped first. The reducer trims
+//     memories and the graph survives, so an over-budget recall still surfaces
+//     graph context.
 func TestRecallReducerGraphSurvivesAfterAuditStrip(t *testing.T) {
 	const n = 10
 	// A realistic audit blob: the keys the recall path now strips, with
@@ -226,7 +227,7 @@ func TestRecallReducerGraphSurvivesAfterAuditStrip(t *testing.T) {
 	}
 
 	// Slim: ships Tier 1 with the graph intact, no _truncated.
-	slimRes, err := wrapToolResult(&stubMetrics{}, "recall", budget, slim, newRecallReducer(slim))
+	slimRes, err := wrapToolResult(&stubMetrics{}, "recall", budget, slim, newRecallReducer(slim, false))
 	if err != nil {
 		t.Fatalf("wrapToolResult slim err = %v", err)
 	}
@@ -244,9 +245,13 @@ func TestRecallReducerGraphSurvivesAfterAuditStrip(t *testing.T) {
 		t.Errorf("expected slim graph to round-trip 3 entities, got %d (graph=%v)", len(ents), slimGraph)
 	}
 
-	// Leaky: the audit bloat pushes it past the Tier-1 boundary; the reducer's
-	// stage-1 graph drop fires.
-	leakyRes, err := wrapToolResult(&stubMetrics{}, "recall", budget, leaky, newRecallReducer(leaky))
+	// Leaky: the audit bloat pushes it past the Tier-1 boundary so the reducer
+	// fires — but the graph is NO LONGER the first casualty. The reducer trims
+	// memories first (here: halves the list, since the bloat is in metadata, not
+	// content) and the graph rides along untouched. This is the headline
+	// invariant of the recall-graph rebalance: an over-budget recall still
+	// surfaces graph context instead of blinding the caller.
+	leakyRes, err := wrapToolResult(&stubMetrics{}, "recall", budget, leaky, newRecallReducer(leaky, false))
 	if err != nil {
 		t.Fatalf("wrapToolResult leaky err = %v", err)
 	}
@@ -259,23 +264,26 @@ func TestRecallReducerGraphSurvivesAfterAuditStrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected leaky response to be _truncated; got %v", leakyDecoded)
 	}
-	dropped, _ := trunc["dropped"].([]any)
-	var graphDropped bool
-	for _, d := range dropped {
-		if s, _ := d.(string); s == "graph.entities" {
-			graphDropped = true
-		}
+	// The graph must survive: entities still present on the wire.
+	leakyGraph, _ := leakyDecoded["graph"].(map[string]any)
+	leakyEnts, _ := leakyGraph["entities"].([]any)
+	if len(leakyEnts) == 0 {
+		t.Errorf("expected leaky response to retain its graph; got empty entities (graph=%v)", leakyGraph)
 	}
-	if !graphDropped {
-		t.Errorf("expected leaky response to drop graph.entities; dropped=%v", dropped)
+	// ...and the reducer must NOT claim a wholesale graph drop.
+	dropped, _ := trunc["dropped"].([]any)
+	for _, d := range dropped {
+		if s, _ := d.(string); s == "graph.entities" || s == "graph.relationships" {
+			t.Errorf("graph must not be dropped wholesale under memory-trimmable budget; dropped=%v", dropped)
+		}
 	}
 }
 
 // TestRecallReducerPreservesCoverageGapsThroughStages1To3 pins that
-// coverage_gaps is NOT trimmed during stages 1-3 (graph drop, content
-// truncation) — only at stage 4+ does it halve in lockstep with memories.
-// Callers relying on the diversify diagnostic should always see it when the
-// reducer was able to fit by trimming content rather than the diagnostic.
+// coverage_gaps is NOT trimmed during the content-truncation stages (1-2) —
+// only the later halving stages shed it in lockstep with memories. Callers
+// relying on the diversify diagnostic should always see it when the reducer was
+// able to fit by trimming content rather than the diagnostic.
 func TestRecallReducerPreservesCoverageGapsThroughStages1To3(t *testing.T) {
 	budget := 100000 * charsPerTokenEstimate // generous: stages 1-3 are sufficient
 
@@ -302,7 +310,7 @@ func TestRecallReducerPreservesCoverageGapsThroughStages1To3(t *testing.T) {
 		LatencyMs:    7,
 	}
 
-	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp))
+	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp, false))
 	if err != nil {
 		t.Fatalf("wrapToolResult err = %v", err)
 	}
@@ -342,7 +350,7 @@ func TestRecallReducerOmitsCoverageGapsWhenEmpty(t *testing.T) {
 	}
 	resp := &mcpRecallResponse{Memories: mems, LatencyMs: 1}
 
-	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp))
+	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp, false))
 	if err != nil {
 		t.Fatalf("wrapToolResult err = %v", err)
 	}
@@ -567,7 +575,7 @@ func TestWrapToolResultReducedPathPopulatesStructuredContent(t *testing.T) {
 		}
 	}
 	resp := &mcpRecallResponse{Memories: mems, LatencyMs: 1}
-	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp))
+	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp, false))
 	if err != nil {
 		t.Fatalf("wrapToolResult err = %v", err)
 	}
@@ -682,17 +690,19 @@ func TestWrapToolResultTier2GracefulDegradation(t *testing.T) {
 	}
 }
 
-// TestRecallReducerHintsComposed pins that a multi-stage reduction
-// (graph drop + content trim) emits a hint that mentions BOTH reductions,
-// not just the last one. The recallReductions flag struct composes hints
-// from every flag set so far.
+// TestRecallReducerHintsComposed pins that a multi-stage reduction emits a hint
+// that mentions BOTH reductions, not just the last one. Here the graph was
+// balance-trimmed by the handler's pre-cap (graphPreTrimmed=true, with the
+// kept/total sentinels stamped on orig.Truncated as the handler does) and the
+// memory reducer additionally trims content. The composed hint must surface the
+// graph-trim clause AND the content-truncation clause.
 func TestRecallReducerHintsComposed(t *testing.T) {
 	budget := 1500 * charsPerTokenEstimate
 	mems := make([]mcpRecallMemory, 5)
 	for i := range mems {
 		mems[i] = mcpRecallMemory{
 			ID:        uuid.New(),
-			Content:   strings.Repeat("x", 2000), // forces stages 2/3
+			Content:   strings.Repeat("x", 2000), // forces the content-trim stages
 			Tags:      []string{"a"},
 			Score:     float64(5 - i),
 			CreatedAt: time.Now(),
@@ -704,9 +714,15 @@ func TestRecallReducerHintsComposed(t *testing.T) {
 			Entities:      []graphEntity{{ID: uuid.New(), Name: "n", Type: "concept"}},
 			Relationships: []graphRelationship{},
 		},
+		// Simulate the handler's pre-cap having balance-trimmed the graph.
+		Truncated: &truncationInfo{
+			Reason:  "response_too_large",
+			Dropped: []string{"entities_kept:1/4", "relationships_kept:0/0"},
+			Hint:    recallGraphTrimHint,
+		},
 		LatencyMs: 1,
 	}
-	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp))
+	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp, true))
 	if err != nil {
 		t.Fatalf("wrapToolResult err = %v", err)
 	}
@@ -720,10 +736,20 @@ func TestRecallReducerHintsComposed(t *testing.T) {
 	}
 	hint := decoded.Truncated.Hint
 	if !strings.Contains(hint, "graph") {
-		t.Errorf("composed hint must mention graph drop; got %q", hint)
+		t.Errorf("composed hint must mention the graph trim; got %q", hint)
 	}
 	if !strings.Contains(hint, "content") {
 		t.Errorf("composed hint must mention content truncation; got %q", hint)
+	}
+	// The pre-cap kept/total sentinels must survive into the reduced envelope.
+	foundGraphSentinel := false
+	for _, d := range decoded.Truncated.Dropped {
+		if strings.HasPrefix(d, "entities_kept:") {
+			foundGraphSentinel = true
+		}
+	}
+	if !foundGraphSentinel {
+		t.Errorf("expected pre-cap entities_kept:N/M sentinel to survive; got %v", decoded.Truncated.Dropped)
 	}
 }
 
@@ -749,7 +775,7 @@ func TestRecallReducerNoGraphNoDropClaim(t *testing.T) {
 		Graph:     graphResponse{Entities: []graphEntity{}, Relationships: []graphRelationship{}},
 		LatencyMs: 1,
 	}
-	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp))
+	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp, false))
 	if err != nil {
 		t.Fatalf("wrapToolResult err = %v", err)
 	}
@@ -814,9 +840,8 @@ func TestListReducerPreservesRequestLimit(t *testing.T) {
 	}
 }
 
-// TestRecallReducerCoverageGapsTrimmed pins that stage 4+ halves
-// coverage_gaps in lockstep with memories and records the trim index in
-// Dropped.
+// TestRecallReducerCoverageGapsTrimmed pins that the halving stages (3+) shed
+// coverage_gaps in lockstep with memories and record the trim ratio in Dropped.
 func TestRecallReducerCoverageGapsTrimmed(t *testing.T) {
 	budget := 800 * charsPerTokenEstimate
 	mems := make([]mcpRecallMemory, 4)
@@ -841,7 +866,7 @@ func TestRecallReducerCoverageGapsTrimmed(t *testing.T) {
 		CoverageGaps: gaps,
 		LatencyMs:    1,
 	}
-	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp))
+	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp, false))
 	if err != nil {
 		t.Fatalf("wrapToolResult err = %v", err)
 	}
@@ -1283,7 +1308,7 @@ func TestRecallReducerFlagToHintFaithfulness(t *testing.T) {
 		}
 
 		// Drive the reducer to exhaustion.
-		reducer := newRecallReducer(orig)
+		reducer := newRecallReducer(orig, false)
 		var last *mcpRecallResponse
 		for range maxReducerIterations {
 			smaller, more := reducer()
@@ -1305,11 +1330,11 @@ func TestRecallReducerFlagToHintFaithfulness(t *testing.T) {
 		graphActuallyDropped := hasGraph && len(last.Graph.Entities) == 0 && len(last.Graph.Relationships) == 0
 		memoriesActuallyHalved := len(last.Memories) < memCount
 		coverageGapsActuallyTrimmed := len(last.CoverageGaps) < gapCount
-		// Content-trim detection: the reducer always runs stages 1-3 before
-		// halving (the reducer is driven to exhaustion here). If any memory
-		// originally had content > 200 chars, stage 3 trimmed it — even if
-		// that memory was later halved away by stage 4+, the flag was set
-		// legitimately at the time of the trim.
+		// Content-trim detection: the reducer always runs the content stages
+		// (1-2) before halving (the reducer is driven to exhaustion here). If any
+		// memory originally had content > 200 chars, stage 2 trimmed it — even if
+		// that memory was later halved away by the halving stages, the flag was
+		// set legitimately at the time of the trim.
 		contentActuallyTrimmed := anyLongContent
 
 		// If the fixture admitted no actual reduction (graph empty, all
@@ -1448,7 +1473,7 @@ func TestTier1AfterReducerRecordsTelemetry(t *testing.T) {
 	}
 	resp := &mcpRecallResponse{Memories: mems, LatencyMs: 1}
 	rec := &stubMetrics{}
-	res, err := wrapToolResult(rec, "recall", budget, resp, newRecallReducer(resp))
+	res, err := wrapToolResult(rec, "recall", budget, resp, newRecallReducer(resp, false))
 	if err != nil {
 		t.Fatalf("wrapToolResult err = %v", err)
 	}
@@ -1460,30 +1485,31 @@ func TestTier1AfterReducerRecordsTelemetry(t *testing.T) {
 	}
 }
 
-// TestRecallReducerNoopStageReturnsOriginal pins that when stages 1-3 are
-// no-ops (empty graph, short content), the reducer returns the original
+// TestRecallReducerNoopStageReturnsOriginal pins that when the content-trim
+// stages (1-2) are no-ops (short content), the reducer returns the original
 // payload byte-for-byte WITHOUT stamping a Truncated envelope. A no-op stage
-// must not pretend a reduction happened.
+// must not pretend a reduction happened. (Stage 3+ halves the >1-element memory
+// list, which IS a reduction, so it is intentionally outside this loop.)
 func TestRecallReducerNoopStageReturnsOriginal(t *testing.T) {
 	mems := make([]mcpRecallMemory, 3)
 	for i := range mems {
 		mems[i] = mcpRecallMemory{
 			ID:        uuid.New(),
-			Content:   "short", // well under 200 chars — stages 2/3 are no-ops
+			Content:   "short", // well under 200 chars — stages 1-2 are no-ops
 			Tags:      []string{"a"},
 			Score:     float64(3 - i),
 			CreatedAt: time.Now(),
 		}
 	}
-	// Empty graph means stage 1 is a no-op too.
+	// Empty graph means there is no graph reduction to claim either.
 	resp := &mcpRecallResponse{
 		Memories: mems,
 		Graph:    graphResponse{Entities: []graphEntity{}, Relationships: []graphRelationship{}},
 	}
-	reducer := newRecallReducer(resp)
-	// Drive stages 1, 2, 3 — all no-ops. Each must return the original
-	// pointer with Truncated == nil.
-	for stage := 1; stage <= 3; stage++ {
+	reducer := newRecallReducer(resp, false)
+	// Drive the content stages (1, 2) — both no-ops. Each must return the
+	// original pointer with Truncated == nil.
+	for stage := 1; stage <= 2; stage++ {
 		out, more := reducer()
 		if out == nil {
 			t.Fatalf("stage %d returned nil unexpectedly", stage)
@@ -1498,7 +1524,7 @@ func TestRecallReducerNoopStageReturnsOriginal(t *testing.T) {
 		if got != resp {
 			t.Errorf("stage %d returned a copy instead of the original pointer", stage)
 		}
-		if !more && stage < 3 {
+		if !more {
 			t.Errorf("stage %d signaled more=false early", stage)
 		}
 	}
@@ -1626,7 +1652,7 @@ func TestRecallReducerPreservesSingleMemoryAtStage4(t *testing.T) {
 		CoverageGaps: nil,
 		LatencyMs:    1,
 	}
-	reducer := newRecallReducer(resp)
+	reducer := newRecallReducer(resp, false)
 
 	// Drive the reducer to exhaustion. The final non-nil output, if any,
 	// must NOT have memoriesHalved set; ReturnedCount must equal 1 if a
@@ -1871,5 +1897,262 @@ func TestHalveWithFloor(t *testing.T) {
 		if got := halveWithFloor(tc.in); got != tc.want {
 			t.Errorf("halveWithFloor(%d) = %d, want %d", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestSortGraphBySignalSharedWithGraphTool pins the ordering contract that both
+// the graph tool (handleMemoryGraph) and the recall pre-cap now route through:
+// relationships by Weight DESC, entities by MentionCount DESC, with deterministic
+// tiebreaks so prefix truncation is stable across calls.
+func TestSortGraphBySignalSharedWithGraphTool(t *testing.T) {
+	ents := []graphEntity{
+		{ID: uuid.New(), Name: "low", MentionCount: 1},
+		{ID: uuid.New(), Name: "high", MentionCount: 9},
+		{ID: uuid.New(), Name: "mid", MentionCount: 5},
+	}
+	rels := []graphRelationship{
+		{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "a", Weight: 0.2},
+		{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "b", Weight: 0.8},
+	}
+	sortGraphBySignal(ents, rels)
+	if ents[0].MentionCount != 9 || ents[1].MentionCount != 5 || ents[2].MentionCount != 1 {
+		t.Errorf("entities not sorted by MentionCount DESC: %+v", ents)
+	}
+	if rels[0].Weight != 0.8 || rels[1].Weight != 0.2 {
+		t.Errorf("relationships not sorted by Weight DESC: %+v", rels)
+	}
+
+	// Equal-signal items get a total order via the ID tiebreak.
+	a, b := uuid.New(), uuid.New()
+	if a.String() > b.String() {
+		a, b = b, a // ensure a < b lexically
+	}
+	tie := []graphEntity{
+		{ID: b, Name: "same", MentionCount: 3},
+		{ID: a, Name: "same", MentionCount: 3},
+	}
+	sortGraphBySignal(tie, nil)
+	if tie[0].ID != a {
+		t.Errorf("equal-mention tiebreak must order by ID asc; got %v before %v", tie[0].ID, tie[1].ID)
+	}
+}
+
+// TestRecallGraphPreCapKeepsBalancedSubset is the direct unit test for the
+// recall pre-cap: under a tiny byte reserve it trims BOTH axes (never zeroing
+// one while the other survives) and emits the kept/total sentinels.
+func TestRecallGraphPreCapKeepsBalancedSubset(t *testing.T) {
+	// Asymmetric input (2 entities, 40 relationships) proves the small axis is
+	// floor-protected while the large axis keeps halving.
+	ents := make([]graphEntity, 2)
+	for i := range ents {
+		ents[i] = graphEntity{ID: uuid.New(), Name: fmt.Sprintf("e%d", i), Type: "concept", MentionCount: 2 - i}
+	}
+	rels := make([]graphRelationship, 40)
+	for i := range rels {
+		rels[i] = graphRelationship{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "rel", Weight: float64(40 - i)}
+	}
+	sortGraphBySignal(ents, rels)
+
+	const reserve = 500
+	keptE, keptR, sentinels := packGraphToByteBudget(ents, rels, reserve)
+
+	if len(keptE) == 0 || len(keptR) == 0 {
+		t.Fatalf("balanced pack must keep >=1 of each axis; got entities=%d relationships=%d", len(keptE), len(keptR))
+	}
+	if len(keptR) >= 40 {
+		t.Fatalf("expected the relationships axis to be trimmed under a tiny reserve; got %d", len(keptR))
+	}
+	out, _ := json.Marshal(graphResponse{Entities: keptE, Relationships: keptR})
+	atFloor := len(keptE) == 1 && len(keptR) == 1
+	if len(out) > reserve && !atFloor {
+		t.Errorf("packed graph %d bytes exceeds reserve %d without being at the 1/1 floor", len(out), reserve)
+	}
+	if len(sentinels) != 2 {
+		t.Fatalf("expected entities_kept + relationships_kept sentinels, got %v", sentinels)
+	}
+	if !strings.HasPrefix(sentinels[0], "entities_kept:") || !strings.HasPrefix(sentinels[1], "relationships_kept:") {
+		t.Errorf("sentinel shape drift: %v", sentinels)
+	}
+}
+
+// TestRecallGraphPreCapNoopWhenFits confirms the pre-cap leaves a graph that
+// already fits the reserve untouched and emits no sentinels (so the handler
+// stamps no truncation envelope).
+func TestRecallGraphPreCapNoopWhenFits(t *testing.T) {
+	ents := []graphEntity{{ID: uuid.New(), Name: "a", Type: "c", MentionCount: 1}}
+	rels := []graphRelationship{{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "r", Weight: 1}}
+	keptE, keptR, sentinels := packGraphToByteBudget(ents, rels, 1_000_000)
+	if len(keptE) != 1 || len(keptR) != 1 {
+		t.Errorf("expected the graph to pass through untrimmed; got %d/%d", len(keptE), len(keptR))
+	}
+	if sentinels != nil {
+		t.Errorf("expected no sentinels when the graph fits; got %v", sentinels)
+	}
+
+	// Empty graph is also a no-op.
+	e2, r2, s2 := packGraphToByteBudget(nil, nil, 10)
+	if len(e2) != 0 || len(r2) != 0 || s2 != nil {
+		t.Errorf("empty graph must pack to empty with no sentinels; got %d/%d %v", len(e2), len(r2), s2)
+	}
+}
+
+// TestRecallGraphPreCapDeterministic pins that the pre-cap keeps an identical
+// prefix across two runs on identical input (relies on sortGraphBySignal's
+// total order plus deterministic prefix slicing).
+func TestRecallGraphPreCapDeterministic(t *testing.T) {
+	mkGraph := func() ([]graphEntity, []graphRelationship) {
+		ents := make([]graphEntity, 12)
+		for i := range ents {
+			ents[i] = graphEntity{
+				ID:           uuid.MustParse(fmt.Sprintf("00000000-0000-0000-0000-%012d", i)),
+				Name:         fmt.Sprintf("e%d", i),
+				Type:         "concept",
+				MentionCount: i % 4, // deliberate ties to exercise the tiebreak
+			}
+		}
+		rels := make([]graphRelationship, 18)
+		for i := range rels {
+			rels[i] = graphRelationship{
+				SourceID: ents[i%12].ID,
+				TargetID: ents[(i+1)%12].ID,
+				Relation: "r",
+				Weight:   float64(i % 5), // deliberate ties
+			}
+		}
+		return ents, rels
+	}
+
+	run := func() ([]graphEntity, []graphRelationship, []string) {
+		e, r := mkGraph()
+		sortGraphBySignal(e, r)
+		return packGraphToByteBudget(e, r, 400)
+	}
+	e1, r1, s1 := run()
+	e2, r2, s2 := run()
+
+	if len(e1) != len(e2) || len(r1) != len(r2) {
+		t.Fatalf("nondeterministic kept counts: run1 %d/%d run2 %d/%d", len(e1), len(r1), len(e2), len(r2))
+	}
+	for i := range e1 {
+		if e1[i].ID != e2[i].ID {
+			t.Errorf("entity prefix diverged at %d: %v vs %v", i, e1[i].ID, e2[i].ID)
+		}
+	}
+	for i := range r1 {
+		if r1[i] != r2[i] {
+			t.Errorf("relationship prefix diverged at %d", i)
+		}
+	}
+	if strings.Join(s1, "|") != strings.Join(s2, "|") {
+		t.Errorf("sentinels diverged: %v vs %v", s1, s2)
+	}
+}
+
+// TestRecallReducerNeverDropsGraphWholesaleUnderTypicalBudget is the headline
+// behavioral guard: an over-budget recall whose overflow is absorbable by
+// trimming memories must keep BOTH graph axes, never falling back to the
+// last-resort wholesale drop.
+func TestRecallReducerNeverDropsGraphWholesaleUnderTypicalBudget(t *testing.T) {
+	budget := 2000 * charsPerTokenEstimate // 4000B; structured 2000B
+	mems := make([]mcpRecallMemory, 8)
+	for i := range mems {
+		mems[i] = mcpRecallMemory{
+			ID:        uuid.New(),
+			Content:   strings.Repeat("z", 1200),
+			Tags:      []string{"a"},
+			Score:     float64(8 - i),
+			CreatedAt: time.Now(),
+		}
+	}
+	graph := graphResponse{
+		Entities: []graphEntity{
+			{ID: uuid.New(), Name: "A", Type: "concept", MentionCount: 5},
+			{ID: uuid.New(), Name: "B", Type: "concept", MentionCount: 3},
+		},
+		Relationships: []graphRelationship{
+			{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "knows", Weight: 0.9},
+		},
+	}
+	resp := &mcpRecallResponse{Memories: mems, Graph: graph, LatencyMs: 1}
+
+	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, resp, newRecallReducer(resp, false))
+	if err != nil {
+		t.Fatalf("wrapToolResult err = %v", err)
+	}
+	var decoded mcpRecallResponse
+	if err := json.Unmarshal([]byte(extractText(res)), &decoded); err != nil {
+		t.Fatalf("reduced result is not valid JSON: %v", err)
+	}
+	if len(decoded.Graph.Entities) == 0 {
+		t.Errorf("graph entities must survive a memory-trimmable reduction; got 0")
+	}
+	if len(decoded.Graph.Relationships) == 0 {
+		t.Errorf("graph relationships must survive a memory-trimmable reduction; got 0")
+	}
+	if decoded.Truncated != nil {
+		for _, d := range decoded.Truncated.Dropped {
+			if d == "graph.entities" || d == "graph.relationships" {
+				t.Errorf("graph must not be dropped wholesale here; dropped=%v", decoded.Truncated.Dropped)
+			}
+		}
+	}
+}
+
+// TestRecallReducerDropsGraphOnlyAsLastResort pins the inverse: when memories
+// are at floor and the payload still overflows, the graph is dropped — but only
+// AFTER it survived every earlier stage. Drives the reducer directly so the
+// last-resort stage is observed without depending on tier classification.
+func TestRecallReducerDropsGraphOnlyAsLastResort(t *testing.T) {
+	resp := &mcpRecallResponse{
+		Memories: []mcpRecallMemory{{
+			ID:        uuid.New(),
+			Content:   "short", // content trim cannot help
+			Tags:      []string{"a"},
+			CreatedAt: time.Now(),
+		}},
+		Graph: graphResponse{
+			Entities:      []graphEntity{{ID: uuid.New(), Name: "A", Type: "concept"}},
+			Relationships: []graphRelationship{{SourceID: uuid.New(), TargetID: uuid.New(), Relation: "r", Weight: 1}},
+		},
+		LatencyMs: 1,
+	}
+	reducer := newRecallReducer(resp, false)
+
+	var last *mcpRecallResponse
+	graphIntactBeforeDrop := false
+	for range maxReducerIterations {
+		smaller, more := reducer()
+		if smaller == nil {
+			break
+		}
+		r := smaller.(*mcpRecallResponse)
+		if len(r.Graph.Entities) > 0 || len(r.Graph.Relationships) > 0 {
+			graphIntactBeforeDrop = true
+		}
+		last = r
+		if !more {
+			break
+		}
+	}
+	if last == nil {
+		t.Fatal("reducer produced no output")
+	}
+	if !graphIntactBeforeDrop {
+		t.Error("graph should have survived the earlier stages before the last-resort drop")
+	}
+	if len(last.Graph.Entities) != 0 || len(last.Graph.Relationships) != 0 {
+		t.Errorf("last-resort stage must empty the graph; got entities=%d rels=%d", len(last.Graph.Entities), len(last.Graph.Relationships))
+	}
+	if last.Truncated == nil {
+		t.Fatal("expected Truncated set on the last-resort output")
+	}
+	hasGraphDrop := false
+	for _, d := range last.Truncated.Dropped {
+		if d == "graph.entities" || d == "graph.relationships" {
+			hasGraphDrop = true
+		}
+	}
+	if !hasGraphDrop {
+		t.Errorf("expected graph.entities/graph.relationships drop sentinels at exhaustion; got %v", last.Truncated.Dropped)
 	}
 }

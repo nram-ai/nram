@@ -456,6 +456,7 @@ const (
 	SettingRecallMaxLimit                 = "recall.max_limit"
 	SettingRecallGraphDefaultDepth        = "recall.graph.default_depth"
 	SettingRecallGraphMaxDepth            = "recall.graph.max_depth"
+	SettingRecallGraphReserveFraction     = "recall.graph.reserve_fraction"
 	SettingRecallOverfetchMultiplier      = "recall.overfetch_multiplier"
 	SettingRecallOverfetchMin             = "recall.overfetch_min"
 	SettingRecallNamespaceQuotaProjectMin = "recall.namespace_quota.project_min"
@@ -913,6 +914,7 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingRecallMaxLimit:             "50",
 	SettingRecallGraphDefaultDepth:    "2",
 	SettingRecallGraphMaxDepth:        "5",
+	SettingRecallGraphReserveFraction: "0.15",
 	SettingRecallOverfetchMultiplier:  "3",
 	SettingRecallOverfetchMin:         "10",
 

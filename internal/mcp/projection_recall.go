@@ -22,19 +22,25 @@ type mcpRecallMemory = recallview.Memory
 // mcpRecallResponse passes service.CoverageGap through verbatim because the
 // diversify_by_tag_prefix wire contract is shared with REST clients.
 //
-// CoverageGaps participates in the reducer's stage 4+ lockstep halving with
+// CoverageGaps participates in the memory reducer's lockstep halving with
 // memories — when coverage_gaps alone would dominate the budget on a
 // diversified query, the reducer trims the tail and records a frame-
 // independent kept/original ratio in Truncated.Dropped (e.g.
 // "coverage_gaps_kept:5/20" meaning 5 of the original 20 gaps remain on
 // the wire).
 //
-// Truncated is RESERVED for newRecallReducer's buildReducedRecallResponse
-// (result_limit.go) and MUST NOT be set by recall handler code. The field's
-// semantics are "this response was shrunk to fit the MCP token budget";
-// setting it on an unreduced response misleads clients into treating a
-// complete result as partial. The field is exported only because
-// encoding/json requires it; treat it as package-private to result_limit.go.
+// Truncated has TWO writers, both meaning "this response was shrunk to fit the
+// MCP token budget":
+//   - newRecallReducer's buildReducedRecallResponse (result_limit.go), and
+//   - the recall handler's graph pre-cap (tool_recall.go), which stamps the
+//     balanced-graph kept/total sentinels so the envelope is present even when
+//     the response fits without the reducer firing. When the reducer also runs,
+//     buildReducedRecallResponse MERGES those pre-cap sentinels rather than
+//     overwriting them (graphPreTrimmed path).
+//
+// No OTHER recall code may set it: stamping it on an otherwise-complete response
+// misleads clients into treating a full result as partial. The field is exported
+// only because encoding/json requires it.
 type mcpRecallResponse struct {
 	Memories     []mcpRecallMemory     `json:"memories"`
 	Graph        graphResponse         `json:"graph"`
@@ -181,7 +187,18 @@ func buildMCPRecallResponse(
 			Weight:   r.Weight,
 		})
 	}
+	// The service layer drops MentionCount (it's an MCP-only presentation
+	// field; adding it to service.RecallEntity would leak onto the REST recall
+	// wire). Backfill it here so sortGraphBySignal can rank the recall graph by
+	// the same signal the graph tool uses. resolveGraphOrphans already sets it
+	// on the orphan endpoints it fetches; this one batch covers the
+	// originally-discovered set. Running it first means resolveGraphOrphans only
+	// fetches the still-missing endpoints (a disjoint, smaller set).
+	backfillMentionCounts(ctx, entityReader, entities, allowedNamespaces)
 	entities, rels = resolveGraphOrphans(ctx, entityReader, entities, rels, allowedNamespaces)
+	// Signal-sort the resolved graph so the recall pre-cap (packGraphToByteBudget)
+	// and any reducer prefix trim keep the highest-signal items deterministically.
+	sortGraphBySignal(entities, rels)
 
 	return &mcpRecallResponse{
 		Memories:     memories,

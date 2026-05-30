@@ -100,6 +100,54 @@ func TestBuildMCPRecallResponse_SurfacesOrigin(t *testing.T) {
 	}
 }
 
+// TestBuildMCPRecallResponse_PopulatesMentionCount confirms the projection
+// backfills MentionCount onto the originally-discovered graph entities (the
+// service layer drops it) so sortGraphBySignal can rank by it — and that the
+// backfill is namespace-scoped: an entity whose record lives outside the
+// allowed namespaces does not pick up a mention signal.
+func TestBuildMCPRecallResponse_PopulatesMentionCount(t *testing.T) {
+	nsID := uuid.New()
+	otherNS := uuid.New()
+	a, b, c := uuid.New(), uuid.New(), uuid.New()
+
+	resp := &service.RecallResponse{
+		Memories: []service.RecallResult{},
+		Graph: service.RecallGraph{
+			Entities: []service.RecallEntity{
+				{ID: a, Name: "Alpha", EntityType: "concept"},
+				{ID: b, Name: "Beta", EntityType: "concept"},
+				{ID: c, Name: "Gamma", EntityType: "concept"},
+			},
+			Relationships: []service.RecallRelationship{},
+		},
+	}
+	reader := &mockEntityReader{entities: []model.Entity{
+		{ID: a, NamespaceID: nsID, Name: "Alpha", EntityType: "concept", MentionCount: 7},
+		{ID: b, NamespaceID: nsID, Name: "Beta", EntityType: "concept", MentionCount: 3},
+		{ID: c, NamespaceID: otherNS, Name: "Gamma", EntityType: "concept", MentionCount: 99},
+	}}
+
+	out := buildMCPRecallResponse(context.Background(), reader, resp, []uuid.UUID{nsID}, projectionOpts{})
+
+	got := map[uuid.UUID]int{}
+	for _, e := range out.Graph.Entities {
+		got[e.ID] = e.MentionCount
+	}
+	if got[a] != 7 {
+		t.Errorf("entity a MentionCount = %d, want 7", got[a])
+	}
+	if got[b] != 3 {
+		t.Errorf("entity b MentionCount = %d, want 3", got[b])
+	}
+	if got[c] != 0 {
+		t.Errorf("out-of-scope entity c MentionCount = %d, want 0 (namespace-filtered)", got[c])
+	}
+	// Signal sort: highest mention count first.
+	if len(out.Graph.Entities) == 0 || out.Graph.Entities[0].ID != a {
+		t.Errorf("expected highest-mention entity (a) sorted first; got %+v", out.Graph.Entities)
+	}
+}
+
 // TestBuildMCPRecallResponse_ResolvesOrphanGraphEndpoints exercises the
 // orphan-resolution path that's the core MCP-side improvement: a relationship
 // whose far endpoint isn't in the service-layer entities[] gets the missing
@@ -544,6 +592,103 @@ func TestMemoryRecall_Schema_LacksSimilarityThresholdFields(t *testing.T) {
 		if containsField(schema, "similarity_threshold_mode") {
 			t.Errorf("backend %s: similarity_threshold_mode was removed from MCP; should not appear in schema: %s", backend, schema)
 		}
+	}
+}
+
+// TestRecallGraphReserveFraction_NilSafe confirms the reserve-fraction resolver
+// falls back to the registered default (0.15) when the SettingsService is nil,
+// matching the mcpBudgetBytes nil-safe pattern, and that the registered default
+// is what the handler expects.
+func TestRecallGraphReserveFraction_NilSafe(t *testing.T) {
+	if got := recallGraphReserveFraction(context.Background(), nil); got != 0.15 {
+		t.Errorf("nil settings should resolve the default 0.15; got %v", got)
+	}
+	if d := service.GetDefaultFloat(service.SettingRecallGraphReserveFraction); d != 0.15 {
+		t.Errorf("registered default = %v, want 0.15", d)
+	}
+}
+
+// TestRecallHandlerTailSurfacesBalancedGraph is the integrated proof that the
+// handler tail (buildMCPRecallResponse -> mcpBudgetBytes ->
+// recallGraphReserveFraction -> packGraphToByteBudget -> wrapToolResult+
+// newRecallReducer, exactly as handleMemoryRecall wires them) surfaces a
+// balanced graph subset on a budget-busting recall, instead of dropping the
+// graph wholesale. Memories remain present and the graph stays within its
+// reserved slice.
+func TestRecallHandlerTailSurfacesBalancedGraph(t *testing.T) {
+	nsID := uuid.New()
+
+	mems := make([]service.RecallResult, 25)
+	for i := range mems {
+		mems[i] = service.RecallResult{
+			ID:      uuid.New(),
+			Content: strings.Repeat("memory body ", 60), // ~720 chars each -> busts budget
+			Tags:    []string{"a"},
+		}
+	}
+
+	anchor := uuid.New()
+	ents := []service.RecallEntity{{ID: anchor, Name: "Anchor", EntityType: "concept"}}
+	rels := make([]service.RecallRelationship, 40)
+	targets := make([]uuid.UUID, len(rels))
+	for i := range rels {
+		targets[i] = uuid.New()
+		rels[i] = service.RecallRelationship{
+			ID:       uuid.New(),
+			SourceID: anchor,
+			TargetID: targets[i],
+			Relation: "related_to",
+			Weight:   float64(40 - i),
+		}
+	}
+	resp := &service.RecallResponse{
+		Memories: mems,
+		Graph:    service.RecallGraph{Entities: ents, Relationships: rels},
+	}
+
+	readerEnts := make([]model.Entity, 0, len(targets)+1)
+	readerEnts = append(readerEnts, model.Entity{ID: anchor, NamespaceID: nsID, Name: "Anchor", EntityType: "concept", MentionCount: 100})
+	for i, id := range targets {
+		readerEnts = append(readerEnts, model.Entity{ID: id, NamespaceID: nsID, Name: fmt.Sprintf("T%d", i), EntityType: "concept", MentionCount: i})
+	}
+	reader := &mockEntityReader{entities: readerEnts}
+
+	mcpResp := buildMCPRecallResponse(context.Background(), reader, resp, []uuid.UUID{nsID}, projectionOpts{})
+
+	// Replicate the handler tail (handleMemoryRecall) with the real helpers.
+	settings := newSettingsServiceWithMCPBudget(2000) // 2000 tokens -> 4000 bytes
+	ctx := context.Background()
+	budget := mcpBudgetBytes(ctx, settings)
+	reserveBytes := int(float64(budget) * recallGraphReserveFraction(ctx, settings))
+	keptE, keptR, sentinels := packGraphToByteBudget(mcpResp.Graph.Entities, mcpResp.Graph.Relationships, reserveBytes)
+	mcpResp.Graph.Entities, mcpResp.Graph.Relationships = keptE, keptR
+	graphPreTrimmed := len(sentinels) > 0
+	if graphPreTrimmed {
+		mcpResp.Truncated = &truncationInfo{Reason: "response_too_large", Dropped: sentinels, Hint: recallGraphTrimHint}
+	}
+	res, err := wrapToolResult(&stubMetrics{}, "recall", budget, mcpResp, newRecallReducer(mcpResp, graphPreTrimmed))
+	if err != nil {
+		t.Fatalf("wrapToolResult: %v", err)
+	}
+
+	var decoded mcpRecallResponse
+	if err := json.Unmarshal([]byte(extractText(res)), &decoded); err != nil {
+		t.Fatalf("integrated recall result is not valid JSON: %v", err)
+	}
+	if len(decoded.Graph.Entities) == 0 || len(decoded.Graph.Relationships) == 0 {
+		t.Fatalf("integrated recall must surface a balanced graph; got entities=%d relationships=%d",
+			len(decoded.Graph.Entities), len(decoded.Graph.Relationships))
+	}
+	if len(decoded.Memories) == 0 {
+		t.Error("memories must still be present alongside the graph")
+	}
+	if decoded.Truncated == nil {
+		t.Fatal("expected a _truncated envelope on this budget-busting recall")
+	}
+	// The graph must stay within its reserved slice, not crowd out memories.
+	gb, _ := json.Marshal(decoded.Graph)
+	if len(gb) > budget/2 {
+		t.Errorf("graph (%d B) should stay within its reserve, well under budget/2=%d", len(gb), budget/2)
 	}
 }
 
