@@ -341,7 +341,7 @@ func parseJSONRPCResponse(t *testing.T, resp *http.Response) *jsonrpcResponse {
 
 	ct := resp.Header.Get("Content-Type")
 	bodyBytes, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if err != nil {
 		t.Fatalf("failed to read response body: %v", err)
 	}
@@ -441,8 +441,8 @@ func initMCPSession(t *testing.T, env *httpStackEnv) *mcpSession {
 	if err != nil {
 		t.Fatalf("initialized notification: HTTP error: %v", err)
 	}
-	io.ReadAll(notifResp.Body)
-	notifResp.Body.Close()
+	_, _ = io.ReadAll(notifResp.Body)
+	_ = notifResp.Body.Close()
 
 	// 202 or 200 are both acceptable for notifications.
 	if notifResp.StatusCode != http.StatusAccepted && notifResp.StatusCode != http.StatusOK {
@@ -563,8 +563,8 @@ func TestHTTPStack_MCP_Initialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initialized notification failed: %v", err)
 	}
-	io.ReadAll(notifResp.Body)
-	notifResp.Body.Close()
+	_, _ = io.ReadAll(notifResp.Body)
+	_ = notifResp.Body.Close()
 
 	if notifResp.StatusCode != http.StatusAccepted && notifResp.StatusCode != http.StatusOK {
 		t.Fatalf("initialized notification: expected 202 or 200, got %d", notifResp.StatusCode)
@@ -724,7 +724,7 @@ func TestHTTPStack_MCP_Unauthenticated_Returns401(t *testing.T) {
 	body, _ := json.Marshal(initReq)
 	resp := doRawMCPPost(t, env.Server.URL, body, nil) // no Authorization header
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d (body: %s)", resp.StatusCode, string(bodyBytes))
@@ -768,7 +768,7 @@ func TestHTTPStack_MCP_InvalidOrigin_Authenticated_Allowed(t *testing.T) {
 
 	resp := doRawMCPPost(t, env.Server.URL, body, headers)
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode == http.StatusForbidden {
 		t.Fatalf("expected authenticated cross-origin request to be allowed, got 403 (body: %s)", string(bodyBytes))
@@ -803,7 +803,7 @@ func TestHTTPStack_MCP_InvalidOrigin_Unauthenticated_Blocked(t *testing.T) {
 
 	resp := doRawMCPPost(t, env.Server.URL, body, headers)
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Auth middleware rejects unauthenticated requests with 401 before
 	// the MCP origin check runs, which is the correct security behavior.
@@ -842,7 +842,7 @@ func TestHTTPStack_MCP_ValidOrigin_Passes(t *testing.T) {
 
 	resp := doRawMCPPost(t, env.Server.URL, body, headers)
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode == http.StatusForbidden {
 		t.Fatalf("expected NOT 403 with valid origin, got 403 (body: %s)", string(bodyBytes))
@@ -3535,7 +3535,7 @@ func TestHTTPStack_MCP_MalformedJSONRPC(t *testing.T) {
 	}
 	resp := doRawMCPPost(t, env.Server.URL, garbage, headers)
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Expect either 400 Bad Request or a JSON-RPC error response.
 	if resp.StatusCode == http.StatusBadRequest {
@@ -3588,7 +3588,7 @@ func TestHTTPStack_MCP_InvalidJSONRPCVersion(t *testing.T) {
 	}
 	resp := doRawMCPPost(t, env.Server.URL, body, headers)
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Expect either an error status or a JSON-RPC error response.
 	if resp.StatusCode >= 400 {
@@ -4016,7 +4016,7 @@ func TestHTTPStack_MCP_ToolCallBeforeInitialize(t *testing.T) {
 	}
 	resp := doRawMCPPost(t, fakeEnv.Server.URL, body, headers)
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// The SDK should reject pre-init tool calls with an error.
 	if resp.StatusCode >= 400 {

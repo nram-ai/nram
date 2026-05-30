@@ -152,7 +152,7 @@ func TestPrivacy_TenancyListsAreMetadataOnly(t *testing.T) {
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("expected 200 for %s, got %d", path, resp.StatusCode)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			var body any
 			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {

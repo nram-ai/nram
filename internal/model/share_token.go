@@ -13,9 +13,9 @@ import (
 type SharePermission string
 
 const (
-	SharePermissionRead             SharePermission = "read"
-	SharePermissionReadStore        SharePermission = "read_store"
-	SharePermissionReadStoreModify  SharePermission = "read_store_modify"
+	SharePermissionRead            SharePermission = "read"
+	SharePermissionReadStore       SharePermission = "read_store"
+	SharePermissionReadStoreModify SharePermission = "read_store_modify"
 )
 
 // Allows reports whether this tier covers the requested tier.

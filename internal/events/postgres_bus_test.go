@@ -18,7 +18,7 @@ func TestPostgresBus_LocalDelivery(t *testing.T) {
 	bus := &PostgresBus{
 		local: NewMemoryBus(0, 0),
 	}
-	defer bus.local.Close()
+	defer func() { _ = bus.local.Close() }()
 
 	ctx := context.Background()
 	ch, cancel, err := bus.local.Subscribe(ctx, "org/")

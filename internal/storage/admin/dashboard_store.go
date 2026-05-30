@@ -116,7 +116,7 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID, userID *uuid
 	if err != nil {
 		return nil, fmt.Errorf("dashboard memories by project: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var idStr string
@@ -187,7 +187,7 @@ func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID, u
 	if err != nil {
 		return nil, fmt.Errorf("recent activity: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	events := []api.ActivityEvent{}
 	for rows.Next() {

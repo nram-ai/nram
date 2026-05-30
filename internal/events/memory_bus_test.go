@@ -20,7 +20,7 @@ func makeEvent(typ, scope string) Event {
 
 func TestMemoryBus_PublishSubscribe(t *testing.T) {
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ctx := context.Background()
 	ch, cancel, err := bus.Subscribe(ctx, "")
@@ -49,7 +49,7 @@ func TestMemoryBus_PublishSubscribe(t *testing.T) {
 
 func TestMemoryBus_ScopeFiltering(t *testing.T) {
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ctx := context.Background()
 
@@ -91,7 +91,7 @@ func TestMemoryBus_ScopeFiltering(t *testing.T) {
 
 func TestMemoryBus_Cancel(t *testing.T) {
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ctx := context.Background()
 	ch, cancel, err := bus.Subscribe(ctx, "")
@@ -144,7 +144,7 @@ func TestMemoryBus_Close(t *testing.T) {
 
 func TestMemoryBus_FullChannel(t *testing.T) {
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ctx := context.Background()
 	ch, cancel, err := bus.Subscribe(ctx, "")
@@ -187,7 +187,7 @@ done:
 
 func TestMemoryBus_ConcurrentPublish(t *testing.T) {
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ctx := context.Background()
 	ch, cancel, err := bus.Subscribe(ctx, "")

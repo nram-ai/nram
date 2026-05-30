@@ -91,21 +91,9 @@ func (m *mockIngestionLogRepo) Create(ctx context.Context, log *model.IngestionL
 	return nil
 }
 
-type mockTokenUsageRepo struct{}
-
-func (m *mockTokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) error {
-	return nil
-}
-
 type mockEnrichmentQueueRepo struct{}
 
 func (m *mockEnrichmentQueueRepo) Enqueue(ctx context.Context, item *model.EnrichmentJob) error {
-	return nil
-}
-
-type mockVectorStore struct{}
-
-func (m *mockVectorStore) Upsert(ctx context.Context, id uuid.UUID, nsID uuid.UUID, embedding []float32, dimension int) error {
 	return nil
 }
 
@@ -130,7 +118,7 @@ func newTestRouter(handler http.HandlerFunc) *chi.Mux {
 
 func doStoreRequest(router http.Handler, projectID string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	_ = json.NewEncoder(&buf).Encode(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/memories", &buf)
 	req.Header.Set("Content-Type", "application/json")
@@ -311,7 +299,7 @@ func TestStoreHandler_InvalidJSON(t *testing.T) {
 
 func TestStoreHandler_EmitsMemoryCreatedEvent(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
 	if err != nil {

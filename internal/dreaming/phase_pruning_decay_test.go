@@ -338,10 +338,10 @@ func TestApplyConfidenceDecay_BadSettingsFallBackToDefaults(t *testing.T) {
 
 type noopRelWriter struct{}
 
-func (noopRelWriter) Create(_ context.Context, _ *model.Relationship) error      { return nil }
+func (noopRelWriter) Create(_ context.Context, _ *model.Relationship) error        { return nil }
 func (noopRelWriter) Reinforce(_ context.Context, _, _ uuid.UUID, _ float64) error { return nil }
-func (noopRelWriter) Expire(_ context.Context, _, _ uuid.UUID) error              { return nil }
-func (noopRelWriter) DeleteByID(_ context.Context, _, _ uuid.UUID) error          { return nil }
+func (noopRelWriter) Expire(_ context.Context, _, _ uuid.UUID) error               { return nil }
+func (noopRelWriter) DeleteByID(_ context.Context, _, _ uuid.UUID) error           { return nil }
 func (noopRelWriter) UpdateWeight(_ context.Context, _, _ uuid.UUID, _ float64) error {
 	return nil
 }

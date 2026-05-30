@@ -147,4 +147,3 @@ func handleAdminCreateProject(w http.ResponseWriter, r *http.Request, store Proj
 
 	writeJSON(w, http.StatusCreated, project)
 }
-

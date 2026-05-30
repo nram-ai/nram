@@ -39,10 +39,10 @@ type ParentIDFinder interface {
 }
 
 const (
-	defaultLimit       = 50
-	maxLimit           = 200
-	defaultMaxListIDs  = 10000
-	hardCapListIDs     = 50000
+	defaultLimit      = 50
+	maxLimit          = 200
+	defaultMaxListIDs = 10000
+	hardCapListIDs    = 50000
 )
 
 // parseMemoryFilters extracts filter parameters from a request URL. It accepts:

@@ -89,7 +89,7 @@ func (s *WebhookAdminStore) TestWebhook(ctx context.Context, id uuid.UUID) (*api
 			LatencyMs: latency,
 		}, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return &api.WebhookTestResult{
 		Success:    resp.StatusCode >= 200 && resp.StatusCode < 300,

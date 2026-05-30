@@ -7,18 +7,18 @@ import (
 
 // Event type constants.
 const (
-	MemoryCreated      = "memory.created"
-	MemoryEnriched     = "memory.enriched"
-	MemoryUpdated      = "memory.updated"
-	MemoryDeleted      = "memory.deleted"
-	MemoryReinforced   = "memory.reinforced"
-	EntityCreated      = "entity.created"
+	MemoryCreated          = "memory.created"
+	MemoryEnriched         = "memory.enriched"
+	MemoryUpdated          = "memory.updated"
+	MemoryDeleted          = "memory.deleted"
+	MemoryReinforced       = "memory.reinforced"
+	EntityCreated          = "entity.created"
 	RelationshipCreated    = "relationship.created"
 	RelationshipExpired    = "relationship.expired"
 	RelationshipReinforced = "relationship.reinforced"
-	ConflictDetected   = "conflict.detected"
-	EnrichmentFailed   = "enrichment.failed"
-	ProjectDeleted     = "project.deleted"
+	ConflictDetected       = "conflict.detected"
+	EnrichmentFailed       = "enrichment.failed"
+	ProjectDeleted         = "project.deleted"
 
 	// Dream lifecycle events.
 	DreamCycleStarted    = "dream.cycle.started"

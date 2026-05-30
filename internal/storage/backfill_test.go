@@ -117,7 +117,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 		if err != nil {
 			t.Fatalf("query jobs: %v", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		byMem := map[uuid.UUID][]jobRow{}
 		for rows.Next() {
@@ -344,7 +344,7 @@ func TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("count: %v", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		got := map[uuid.UUID]int{}
 		for rows.Next() {
 			var idStr string

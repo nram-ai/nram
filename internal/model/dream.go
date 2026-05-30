@@ -12,7 +12,7 @@ import (
 // that produced it. Treated as a contract between the dreaming package
 // (writer) and any reader that needs to surface or strip the lineage.
 const (
-	DreamMetaCycleID    = "dream_cycle_id"
+	DreamMetaCycleID         = "dream_cycle_id"
 	DreamMetaSourceMemoryIDs = "source_memory_ids"
 )
 

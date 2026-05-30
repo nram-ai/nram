@@ -42,14 +42,14 @@ func (f *fakeRelationshipReader) CountActiveByNamespace(_ context.Context, _ uui
 // and batchUpdateWeightCalls count batch invocations so post-migration
 // tests can confirm the per-row paths are no longer used.
 type recordingRelationshipWriter struct {
-	mu                    sync.Mutex
-	weights               map[uuid.UUID]float64
-	expired               map[uuid.UUID]struct{}
-	creates               []model.Relationship
-	batchExpireCalls      int
-	batchUpdateCalls      int
-	perRowExpireCalls     int
-	perRowUpdateCalls     int
+	mu                sync.Mutex
+	weights           map[uuid.UUID]float64
+	expired           map[uuid.UUID]struct{}
+	creates           []model.Relationship
+	batchExpireCalls  int
+	batchUpdateCalls  int
+	perRowExpireCalls int
+	perRowUpdateCalls int
 }
 
 func newRecordingRelationshipWriter() *recordingRelationshipWriter {
@@ -379,7 +379,7 @@ func TestExecute_DirectionTriad_AppearsInOpCount(t *testing.T) {
 	src1, tgt1 := uuid.New(), uuid.New() // rising edge
 	src2, tgt2 := uuid.New(), uuid.New() // falling edge
 	memA, memB := uuid.New(), uuid.New() // direct support for rising edge
-	memDead := uuid.New()                 // dead source for falling edge
+	memDead := uuid.New()                // dead source for falling edge
 
 	rels := []model.Relationship{
 		mkRel(src1, tgt1, "knows", 0.5, &memA),

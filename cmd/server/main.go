@@ -104,7 +104,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	log.Printf("database backend: %s", db.Backend())
 
@@ -126,7 +126,7 @@ func main() {
 		if err := m.Up(); err != nil {
 			log.Fatalf("auto-migration failed: %v", err)
 		}
-		m.Close()
+		_ = m.Close()
 		log.Println("migrations applied successfully")
 	}
 
@@ -340,7 +340,7 @@ func main() {
 		}
 		hnswStore = storage.NewHNSWStore(db.DB(), db.WriteDB(), hnswCfg)
 		vectorStore = hnswStore
-		defer hnswStore.Close()
+		defer func() { _ = hnswStore.Close() }()
 		log.Printf("hnsw vector store initialized (SQLite backend; M=%d ef_construction=%d ef_search=%d max_loaded=%d)",
 			hnswCfg.M, hnswCfg.EfConstruction, hnswCfg.EfSearch, hnswCfg.MaxLoadedIndexes)
 	}
@@ -367,7 +367,7 @@ func main() {
 	eventBusReplay := settingsSvc.ResolveIntWithDefault(context.Background(),
 		service.SettingEventsReplayCapacity, "global")
 	eventBus := events.NewEventBus(db.Backend(), nil, eventBusBuf, eventBusReplay)
-	defer eventBus.Close()
+	defer func() { _ = eventBus.Close() }()
 
 	// Create webhook deliverer.
 	webhookDeliverer := events.NewWebhookDeliverer(eventBus, webhookRepo)

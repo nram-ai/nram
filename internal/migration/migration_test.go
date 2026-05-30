@@ -17,7 +17,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
@@ -27,7 +27,7 @@ func TestNewMigratorSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMigrator failed: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	if m.backend != "sqlite" {
 		t.Errorf("expected backend sqlite, got %s", m.backend)
@@ -110,7 +110,7 @@ func TestMigratorUpDownStatus(t *testing.T) {
 		t.Error("expected test_table to be dropped after Down")
 	}
 
-	m.Close()
+	_ = m.Close()
 }
 
 func TestParseMigrateArgs(t *testing.T) {
@@ -206,7 +206,7 @@ func TestCreateMigrationFiles(t *testing.T) {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("failed to chdir: %v", err)
 	}
-	t.Cleanup(func() { os.Chdir(origDir) })
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	sqliteDir := filepath.Join(tmpDir, "migrations", "sqlite")
 	postgresDir := filepath.Join(tmpDir, "migrations", "postgres")

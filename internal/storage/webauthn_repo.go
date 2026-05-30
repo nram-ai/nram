@@ -72,7 +72,7 @@ func (r *WebAuthnRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]mode
 	if err != nil {
 		return nil, fmt.Errorf("webauthn credential list by user: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.WebAuthnCredential{}
 	for rows.Next() {

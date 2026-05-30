@@ -141,10 +141,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 			systemText += m.Content
 			continue
 		}
-		messages = append(messages, anthropicMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		})
+		messages = append(messages, anthropicMessage(m))
 	}
 
 	maxTokens := req.MaxTokens
@@ -257,7 +254,7 @@ func (p *AnthropicProvider) doRequest(ctx context.Context, method, path string, 
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

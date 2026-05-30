@@ -36,7 +36,6 @@ func (m *mockProjectAdminStore) CreateProject(ctx context.Context, name, slug, d
 	return m.createProjectFunc(ctx, name, slug, description, ownerNamespaceID, defaultTags, settings)
 }
 
-
 // --- helpers ---
 
 func newTestProject(name, slug string) model.Project {

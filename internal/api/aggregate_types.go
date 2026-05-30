@@ -34,12 +34,12 @@ type TypeBucket struct {
 // handlers. Carries org metadata + counts only — no per-user, no
 // per-memory data.
 type OrgAggregate struct {
-	OrgID          uuid.UUID `json:"org_id"`
-	OrgName        string    `json:"org_name"`
-	TotalMemories  int       `json:"total_memories"`
-	TotalUsers     int       `json:"total_users"`
-	TotalProjects  int       `json:"total_projects"`
-	TotalEntities  int       `json:"total_entities"`
+	OrgID         uuid.UUID `json:"org_id"`
+	OrgName       string    `json:"org_name"`
+	TotalMemories int       `json:"total_memories"`
+	TotalUsers    int       `json:"total_users"`
+	TotalProjects int       `json:"total_projects"`
+	TotalEntities int       `json:"total_entities"`
 }
 
 // UserAggregate is one row of a per-user breakdown returned by tier-B

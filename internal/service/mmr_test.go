@@ -323,7 +323,7 @@ func TestMmrSelect_NegativeCosineDoesNotClampToZero(t *testing.T) {
 	simA, simNear, simOpposite := 0.90, 0.60, 0.60
 	in := []RecallResult{
 		resultAt("a", 0.90, &simA, []float32{1, 0, 0}),
-		resultAt("near", 0.60, &simNear, []float32{1, 0, 0}),         // cosine to a = 1.0
+		resultAt("near", 0.60, &simNear, []float32{1, 0, 0}),          // cosine to a = 1.0
 		resultAt("opposite", 0.60, &simOpposite, []float32{-1, 0, 0}), // cosine to a = -1.0
 	}
 	got := mmrSelect(in, nil, 0.5, 2)

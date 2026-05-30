@@ -38,7 +38,7 @@ func (m *mockMeDreamStore) GetCycle(_ context.Context, _ uuid.UUID) (*model.Drea
 func (m *mockMeDreamStore) GetCycleLogs(_ context.Context, _ uuid.UUID) ([]model.DreamLog, error) {
 	return nil, nil
 }
-func (m *mockMeDreamStore) SetEnabled(_ context.Context, _ bool) error                      { return nil }
+func (m *mockMeDreamStore) SetEnabled(_ context.Context, _ bool) error { return nil }
 func (m *mockMeDreamStore) AbandonCycle(_ context.Context, _ uuid.UUID, _ string) (bool, error) {
 	return true, nil
 }

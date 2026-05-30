@@ -59,7 +59,7 @@ func OpenRouterContextLength(ctx context.Context, baseURL, apiKey, modelID strin
 	if err != nil {
 		return 0, fmt.Errorf("openrouter: models request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

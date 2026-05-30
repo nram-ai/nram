@@ -133,7 +133,7 @@ func handleMigrateVectors(args []string, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("migrate-vectors: failed to connect to Qdrant at %s: %w", parsed.QdrantAddr, err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Ensure collections exist.
 	for _, dim := range vectorDimensions {
@@ -282,7 +282,7 @@ func handleMigrateVectorsReverse(args []string, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("migrate-vectors-reverse: failed to connect to Qdrant at %s: %w", parsed.QdrantAddr, err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	fmt.Printf("connected to Qdrant at %s\n", parsed.QdrantAddr)
 
@@ -371,7 +371,7 @@ func migrateVectorTableReverse(ctx context.Context, db *sql.DB, client *qdrant.C
 			for _, point := range points {
 				memoryID := point.GetId().GetUuid()
 				if _, err := uuid.Parse(memoryID); err != nil {
-					stmt.Close()
+					_ = stmt.Close()
 					tx.Rollback() //nolint:errcheck
 					return total, fmt.Errorf("invalid point ID %q: %w", memoryID, err)
 				}
@@ -380,13 +380,13 @@ func migrateVectorTableReverse(ctx context.Context, db *sql.DB, client *qdrant.C
 				embeddingText := formatEmbeddingText(embedding)
 
 				if _, err := stmt.ExecContext(ctx, memoryID, embeddingText); err != nil {
-					stmt.Close()
+					_ = stmt.Close()
 					tx.Rollback() //nolint:errcheck
 					return total, fmt.Errorf("failed to upsert vector for memory %s: %w", memoryID, err)
 				}
 			}
 
-			stmt.Close()
+			_ = stmt.Close()
 			if err := tx.Commit(); err != nil {
 				return total, fmt.Errorf("failed to commit batch: %w", err)
 			}
@@ -419,7 +419,7 @@ func migrateVectorTable(ctx context.Context, db *sql.DB, client *qdrant.Client, 
 	if err != nil {
 		return 0, fmt.Errorf("query failed: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	total := 0
 	batch := make([]*qdrant.PointStruct, 0, batchSize)

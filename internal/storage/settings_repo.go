@@ -206,7 +206,7 @@ func (r *SettingsRepo) ListByScope(ctx context.Context, scope string) ([]model.S
 	if err != nil {
 		return nil, fmt.Errorf("settings list by scope: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Setting{}
 	for rows.Next() {
@@ -231,7 +231,7 @@ func (r *SettingsRepo) ListAll(ctx context.Context) ([]model.Setting, error) {
 	if err != nil {
 		return nil, fmt.Errorf("settings list all: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Setting{}
 	for rows.Next() {
@@ -284,7 +284,7 @@ func (r *SettingsRepo) ListAllPaged(ctx context.Context, limit, offset int) ([]m
 	if err != nil {
 		return nil, fmt.Errorf("settings list all paged: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Setting{}
 	for rows.Next() {
@@ -313,7 +313,7 @@ func (r *SettingsRepo) ListByScopePaged(ctx context.Context, scope string, limit
 	if err != nil {
 		return nil, fmt.Errorf("settings list by scope paged: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Setting{}
 	for rows.Next() {

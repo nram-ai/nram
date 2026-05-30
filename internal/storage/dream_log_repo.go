@@ -70,7 +70,7 @@ func (r *DreamLogRepo) ListByCycle(ctx context.Context, cycleID uuid.UUID) ([]mo
 	if err != nil {
 		return nil, fmt.Errorf("dream log list by cycle: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanRows(rows)
 }
@@ -86,7 +86,7 @@ func (r *DreamLogRepo) ListByCycleReversed(ctx context.Context, cycleID uuid.UUI
 	if err != nil {
 		return nil, fmt.Errorf("dream log list by cycle reversed: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanRows(rows)
 }
@@ -102,7 +102,7 @@ func (r *DreamLogRepo) ListByProject(ctx context.Context, projectID uuid.UUID, l
 	if err != nil {
 		return nil, fmt.Errorf("dream log list by project: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanRows(rows)
 }
@@ -180,7 +180,7 @@ func (r *DreamLogRepo) ListSummaries(ctx context.Context, projectID uuid.UUID) (
 	if err != nil {
 		return nil, fmt.Errorf("dream log summary list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var result []model.DreamLogSummary
 	for rows.Next() {

@@ -176,7 +176,7 @@ func existingSQLiteTables(ctx context.Context, db *sql.DB) (map[string]bool, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tables := make(map[string]bool)
 	for rows.Next() {

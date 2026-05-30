@@ -76,7 +76,7 @@ func NewEventsHandler(bus events.EventBus, keepalive time.Duration) http.Handler
 				writeSSE(w, evt)
 				flusher.Flush()
 			case <-keepaliveTicker.C:
-				fmt.Fprint(w, ": keepalive\n\n")
+				_, _ = fmt.Fprint(w, ": keepalive\n\n")
 				flusher.Flush()
 			}
 		}
@@ -92,5 +92,5 @@ func writeSSE(w http.ResponseWriter, evt events.Event) {
 	if err != nil {
 		return
 	}
-	fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", evt.ID, evt.Type, data)
+	_, _ = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", evt.ID, evt.Type, data)
 }

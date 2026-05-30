@@ -88,8 +88,8 @@ type Handlers struct {
 	// Self-tier share-token management. Capability-bearer credentials for
 	// granting external recipients scoped access to curated projects without
 	// the recipient having an nram account.
-	MeShares     http.HandlerFunc // GET (list) + POST (create) /v1/me/shares
-	MeShareItem  http.HandlerFunc // GET + PATCH + DELETE /v1/me/shares/{id}
+	MeShares    http.HandlerFunc // GET (list) + POST (create) /v1/me/shares
+	MeShareItem http.HandlerFunc // GET + PATCH + DELETE /v1/me/shares/{id}
 
 	// Org-scoped handlers
 	OrgUsers http.HandlerFunc
@@ -114,8 +114,8 @@ type Handlers struct {
 	MePasskeyDelete         http.HandlerFunc
 
 	// Auth handlers (semi-public: setup guard, no auth)
-	AuthLogin        http.HandlerFunc
-	AuthLookup       http.HandlerFunc
+	AuthLogin         http.HandlerFunc
+	AuthLookup        http.HandlerFunc
 	AuthPasskeyBegin  http.HandlerFunc
 	AuthPasskeyFinish http.HandlerFunc
 
@@ -150,37 +150,37 @@ type Handlers struct {
 	// Mounted at /v1/dashboard, /v1/activity, /v1/analytics, /v1/usage,
 	// /v1/graph, /v1/namespaces/tree. Self-scoped to caller (post-2026-04-30
 	// leak fix); admin sees own data only on these surfaces.
-	AdminSetupStatus http.HandlerFunc
-	AdminSetup       http.HandlerFunc
-	AdminDashboard   http.HandlerFunc
-	AdminActivity    http.HandlerFunc
-	AdminOrgs        http.HandlerFunc
-	AdminUsers       http.HandlerFunc
-	AdminProjects    http.HandlerFunc
-	AdminProviders   http.HandlerFunc
-	AdminSettings    http.HandlerFunc
+	AdminSetupStatus   http.HandlerFunc
+	AdminSetup         http.HandlerFunc
+	AdminDashboard     http.HandlerFunc
+	AdminActivity      http.HandlerFunc
+	AdminOrgs          http.HandlerFunc
+	AdminUsers         http.HandlerFunc
+	AdminProjects      http.HandlerFunc
+	AdminProviders     http.HandlerFunc
+	AdminSettings      http.HandlerFunc
 	AdminSettingsReset http.HandlerFunc
-	AdminEnrichment  http.HandlerFunc
-	AdminOAuth       http.HandlerFunc
-	AdminWebhooks    http.HandlerFunc
-	AdminAnalytics   http.HandlerFunc
-	AdminUsage       http.HandlerFunc
-	UsageCostRates   http.HandlerFunc
-	AdminNamespaces  http.HandlerFunc
-	AdminDatabase    http.HandlerFunc
-	AdminGraph       http.HandlerFunc
-	AdminDreaming    http.HandlerFunc
+	AdminEnrichment    http.HandlerFunc
+	AdminOAuth         http.HandlerFunc
+	AdminWebhooks      http.HandlerFunc
+	AdminAnalytics     http.HandlerFunc
+	AdminUsage         http.HandlerFunc
+	UsageCostRates     http.HandlerFunc
+	AdminNamespaces    http.HandlerFunc
+	AdminDatabase      http.HandlerFunc
+	AdminGraph         http.HandlerFunc
+	AdminDreaming      http.HandlerFunc
 
 	// Tier-B (org-aggregate) handlers at /v1/orgs/{org_id}/{dashboard,
 	// activity,analytics,usage}. Caller must be RoleOrgOwner+ of the org.
 	// Aggregate counts + distributions only; no row-level user/memory data,
 	// no content.
-	OrgDashboard   http.HandlerFunc
-	OrgActivity    http.HandlerFunc
-	OrgAnalytics   http.HandlerFunc
-	OrgUsage       http.HandlerFunc
-	OrgDreaming    http.HandlerFunc
-	OrgEnrichment  http.HandlerFunc
+	OrgDashboard  http.HandlerFunc
+	OrgActivity   http.HandlerFunc
+	OrgAnalytics  http.HandlerFunc
+	OrgUsage      http.HandlerFunc
+	OrgDreaming   http.HandlerFunc
+	OrgEnrichment http.HandlerFunc
 
 	// Tier-C (system-aggregate) handlers at /v1/admin/system/{dashboard,
 	// activity,analytics,usage}. RoleAdministrator only. System totals +
@@ -195,7 +195,7 @@ type Handlers struct {
 func notImplemented(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusNotImplemented)
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error": "not implemented",
 	})
 }
@@ -488,7 +488,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				r.HandleFunc("/idp/*", handler(handlers.OrgIdP))
 			})
 
-			})
+		})
 
 		// Admin routes (require administrator role).
 		//

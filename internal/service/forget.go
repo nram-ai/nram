@@ -268,4 +268,3 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 
 	return cascaded + 1, nil
 }
-

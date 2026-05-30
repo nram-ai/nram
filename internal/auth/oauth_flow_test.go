@@ -41,13 +41,13 @@ func oauthTestDB(t *testing.T) storage.DB {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("oauthTestDB: chdir: %v", err)
 	}
-	t.Cleanup(func() { os.Chdir(origDir) })
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	db, err := storage.Open(config.DatabaseConfig{})
 	if err != nil {
 		t.Fatalf("oauthTestDB: open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	migrator, err := migration.NewMigrator(db.DB(), db.Backend())
 	if err != nil {
@@ -184,7 +184,7 @@ func buildOAuthRouter(oauthSrv *OAuthServer, secret []byte) http.Handler {
 	// Protected MCP stub — returns 200 when authenticated
 	r.With(mw.Handler).Get("/mcp", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 
 	return r
@@ -221,7 +221,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("step 1 GET /mcp: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("step 1: expected 401, got %d", resp.StatusCode)
@@ -253,7 +253,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 		t.Fatalf("step 3 GET oauth-protected-resource: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 3: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -281,7 +281,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 		t.Fatalf("step 4 GET oauth-authorization-server: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 4: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -318,7 +318,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 		t.Fatalf("step 5 POST /register: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 5: expected 200/201, got %d; body: %s", resp.StatusCode, body)
@@ -369,7 +369,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 	_ = authURL
 	resp = doAuthorizeAccountConsent(t, client, ts.URL, authParams, sessionToken)
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("step 7: expected 302 redirect, got %d; body: %s", resp.StatusCode, body)
@@ -416,7 +416,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 		t.Fatalf("step 9 POST /token: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 9: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -459,7 +459,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 		t.Fatalf("step 10 GET /mcp: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 10: expected 200 with valid token, got %d; body: %s", resp.StatusCode, body)
@@ -479,7 +479,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow(t *testing.T) {
 		t.Fatalf("step 11 POST /token refresh: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 11: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -523,7 +523,7 @@ func TestOAuthFlow_ProtectedResourceMetadata(t *testing.T) {
 		t.Fatalf("GET: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -581,7 +581,7 @@ func TestOAuthFlow_AuthServerMetadata(t *testing.T) {
 		t.Fatalf("GET: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -674,7 +674,7 @@ func TestOAuthFlow_DynamicRegistration(t *testing.T) {
 			t.Fatalf("POST: %v", err)
 		}
 		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusCreated {
 			t.Fatalf("expected 201, got %d; body: %s", resp.StatusCode, respBody)
@@ -726,7 +726,7 @@ func TestOAuthFlow_DynamicRegistration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("POST: %v", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d", resp.StatusCode)
 		}
@@ -738,7 +738,7 @@ func TestOAuthFlow_DynamicRegistration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("POST: %v", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d", resp.StatusCode)
 		}
@@ -751,7 +751,7 @@ func TestOAuthFlow_DynamicRegistration(t *testing.T) {
 			t.Fatalf("POST: %v", err)
 		}
 		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusCreated {
 			t.Fatalf("expected 201, got %d; body: %s", resp.StatusCode, respBody)
@@ -798,12 +798,12 @@ func TestOAuthFlow_PKCE_Required(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	regData, _ := io.ReadAll(regResp.Body)
-	regResp.Body.Close()
+	_ = regResp.Body.Close()
 
 	var reg struct {
 		ClientID string `json:"client_id"`
 	}
-	json.Unmarshal(regData, &reg)
+	_ = json.Unmarshal(regData, &reg)
 
 	// Create session token
 	sessionToken, _ := GenerateJWT(user.ID, user.OrgID, user.Role, secret, time.Hour)
@@ -827,7 +827,7 @@ func TestOAuthFlow_PKCE_Required(t *testing.T) {
 		t.Fatalf("GET /v1/oauth/authorize/context: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 with redirect_to, got %d; body: %s", resp.StatusCode, body)
@@ -873,12 +873,12 @@ func TestOAuthFlow_PKCE_WrongVerifier(t *testing.T) {
 	regBody := `{"client_name":"Wrong Verifier Test","redirect_uris":["http://localhost/cb"],"grant_types":["authorization_code"]}`
 	regResp, _ := client.Post(ts.URL+"/register", "application/json", strings.NewReader(regBody))
 	regData, _ := io.ReadAll(regResp.Body)
-	regResp.Body.Close()
+	_ = regResp.Body.Close()
 
 	var reg struct {
 		ClientID string `json:"client_id"`
 	}
-	json.Unmarshal(regData, &reg)
+	_ = json.Unmarshal(regData, &reg)
 
 	// PKCE with correct verifier for authorization
 	codeVerifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
@@ -896,7 +896,7 @@ func TestOAuthFlow_PKCE_WrongVerifier(t *testing.T) {
 
 	resp := doAuthorizeAccountConsent(t, client, ts.URL, params, sessionToken)
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("expected 302 redirect, got %d; body: %s", resp.StatusCode, body)
@@ -923,7 +923,7 @@ func TestOAuthFlow_PKCE_WrongVerifier(t *testing.T) {
 		t.Fatalf("POST /token: %v", err)
 	}
 	tokenBody, _ := io.ReadAll(tokenResp.Body)
-	tokenResp.Body.Close()
+	_ = tokenResp.Body.Close()
 
 	if tokenResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 for wrong verifier, got %d; body: %s", tokenResp.StatusCode, tokenBody)
@@ -932,7 +932,7 @@ func TestOAuthFlow_PKCE_WrongVerifier(t *testing.T) {
 	var errResp struct {
 		Error string `json:"error"`
 	}
-	json.Unmarshal(tokenBody, &errResp)
+	_ = json.Unmarshal(tokenBody, &errResp)
 	if errResp.Error == "" {
 		t.Fatal("expected error in JSON response")
 	}
@@ -1003,7 +1003,7 @@ func TestOAuthFlow_ExpiredCode(t *testing.T) {
 		t.Fatalf("POST /token: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 for expired code, got %d; body: %s", resp.StatusCode, body)
@@ -1013,7 +1013,7 @@ func TestOAuthFlow_ExpiredCode(t *testing.T) {
 		Error            string `json:"error"`
 		ErrorDescription string `json:"error_description"`
 	}
-	json.Unmarshal(body, &errResp)
+	_ = json.Unmarshal(body, &errResp)
 
 	if errResp.Error != "invalid_grant" {
 		t.Errorf("expected error=invalid_grant, got %q", errResp.Error)
@@ -1046,11 +1046,11 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 	regBody := `{"client_name":"Refresh Test","redirect_uris":["http://localhost/cb"],"grant_types":["authorization_code","refresh_token"]}`
 	regResp, _ := httpClient.Post(ts.URL+"/register", "application/json", strings.NewReader(regBody))
 	regData, _ := io.ReadAll(regResp.Body)
-	regResp.Body.Close()
+	_ = regResp.Body.Close()
 	var reg struct {
 		ClientID string `json:"client_id"`
 	}
-	json.Unmarshal(regData, &reg)
+	_ = json.Unmarshal(regData, &reg)
 
 	// Complete auth code flow
 	codeVerifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
@@ -1066,7 +1066,7 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 	params.Set("state", "test-state")
 
 	authResp := doAuthorizeAccountConsent(t, httpClient, ts.URL, params, sessionToken)
-	authResp.Body.Close()
+	_ = authResp.Body.Close()
 
 	location := authResp.Header.Get("Location")
 	redirected, _ := url.Parse(location)
@@ -1081,13 +1081,13 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 
 	tokenResp, _ := httpClient.Post(ts.URL+"/token", "application/x-www-form-urlencoded", strings.NewReader(tokenParams.Encode()))
 	tokenData, _ := io.ReadAll(tokenResp.Body)
-	tokenResp.Body.Close()
+	_ = tokenResp.Body.Close()
 
 	var firstTokens struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 	}
-	json.Unmarshal(tokenData, &firstTokens)
+	_ = json.Unmarshal(tokenData, &firstTokens)
 
 	if firstTokens.RefreshToken == "" {
 		t.Fatal("no refresh token after initial authorization")
@@ -1101,7 +1101,7 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 
 	refresh1Resp, _ := httpClient.Post(ts.URL+"/token", "application/x-www-form-urlencoded", strings.NewReader(refreshParams.Encode()))
 	refresh1Data, _ := io.ReadAll(refresh1Resp.Body)
-	refresh1Resp.Body.Close()
+	_ = refresh1Resp.Body.Close()
 
 	if refresh1Resp.StatusCode != http.StatusOK {
 		t.Fatalf("first refresh: expected 200, got %d; body: %s", refresh1Resp.StatusCode, refresh1Data)
@@ -1111,7 +1111,7 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 	}
-	json.Unmarshal(refresh1Data, &secondTokens)
+	_ = json.Unmarshal(refresh1Data, &secondTokens)
 
 	if secondTokens.AccessToken == "" {
 		t.Fatal("no access_token after first refresh")
@@ -1131,7 +1131,7 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 
 	reuseResp, _ := httpClient.Post(ts.URL+"/token", "application/x-www-form-urlencoded", strings.NewReader(oldRefreshParams.Encode()))
 	reuseData, _ := io.ReadAll(reuseResp.Body)
-	reuseResp.Body.Close()
+	_ = reuseResp.Body.Close()
 
 	if reuseResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("reuse of revoked refresh token: expected 400, got %d; body: %s", reuseResp.StatusCode, reuseData)
@@ -1140,7 +1140,7 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 	var reuseErr struct {
 		Error string `json:"error"`
 	}
-	json.Unmarshal(reuseData, &reuseErr)
+	_ = json.Unmarshal(reuseData, &reuseErr)
 	if reuseErr.Error != "invalid_grant" {
 		t.Errorf("expected error=invalid_grant for revoked token, got %q", reuseErr.Error)
 	}
@@ -1153,7 +1153,7 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 
 	refresh2Resp, _ := httpClient.Post(ts.URL+"/token", "application/x-www-form-urlencoded", strings.NewReader(newRefreshParams.Encode()))
 	refresh2Data, _ := io.ReadAll(refresh2Resp.Body)
-	refresh2Resp.Body.Close()
+	_ = refresh2Resp.Body.Close()
 
 	if refresh2Resp.StatusCode != http.StatusOK {
 		t.Fatalf("second refresh with new token: expected 200, got %d; body: %s", refresh2Resp.StatusCode, refresh2Data)
@@ -1180,7 +1180,7 @@ func TestOAuthFlow_WWWAuthenticate_Header(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /mcp: %v", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("expected 401, got %d", resp.StatusCode)
@@ -1216,7 +1216,7 @@ func TestOAuthFlow_WWWAuthenticate_Header(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /mcp: %v", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("expected 401 for invalid token, got %d", resp.StatusCode)
@@ -1244,7 +1244,7 @@ func TestOAuthFlow_WWWAuthenticate_Header(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /mcp: %v", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		// Should not be 401 — either 200 (found in DB) or some other status but not 401
 		if resp.StatusCode == http.StatusUnauthorized {
@@ -1289,8 +1289,8 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 	var regResp struct {
 		ClientID string `json:"client_id"`
 	}
-	json.NewDecoder(resp.Body).Decode(&regResp)
-	resp.Body.Close()
+	_ = json.NewDecoder(resp.Body).Decode(&regResp)
+	_ = resp.Body.Close()
 
 	if regResp.ClientID == "" {
 		t.Fatal("expected non-empty client_id from registration")
@@ -1316,7 +1316,7 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 		t.Fatalf("generate session JWT: %v", err)
 	}
 	resp = doAuthorizeAccountConsent(t, client, ts.URL, authParams, sessionToken)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("authorize: expected 302, got %d", resp.StatusCode)
@@ -1342,7 +1342,7 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 	body, _ := io.ReadAll(tokenResp.Body)
-	tokenResp.Body.Close()
+	_ = tokenResp.Body.Close()
 
 	if tokenResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 for resource mismatch, got %d; body: %s", tokenResp.StatusCode, body)
@@ -1392,8 +1392,8 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 	var regResp struct {
 		ClientID string `json:"client_id"`
 	}
-	json.NewDecoder(resp.Body).Decode(&regResp)
-	resp.Body.Close()
+	_ = json.NewDecoder(resp.Body).Decode(&regResp)
+	_ = resp.Body.Close()
 
 	if regResp.ClientID == "" {
 		t.Fatal("expected non-empty client_id from registration")
@@ -1418,7 +1418,7 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 		t.Fatalf("generate session JWT: %v", err)
 	}
 	resp = doAuthorizeAccountConsent(t, httpClient, ts.URL, authParams, sessionToken)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("authorize: expected 302, got %d", resp.StatusCode)
@@ -1444,7 +1444,7 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 	body, _ := io.ReadAll(tokenResp.Body)
-	tokenResp.Body.Close()
+	_ = tokenResp.Body.Close()
 
 	if tokenResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", tokenResp.StatusCode, body)
@@ -1514,8 +1514,8 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 	var regResp struct {
 		ClientID string `json:"client_id"`
 	}
-	json.NewDecoder(resp.Body).Decode(&regResp)
-	resp.Body.Close()
+	_ = json.NewDecoder(resp.Body).Decode(&regResp)
+	_ = resp.Body.Close()
 
 	if regResp.ClientID == "" {
 		t.Fatal("empty client_id")
@@ -1542,7 +1542,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 		t.Fatalf("generate session JWT: %v", err)
 	}
 	resp = doAuthorizeAccountConsent(t, client, ts.URL, authParams, sessionToken)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("authorize: expected 302, got %d", resp.StatusCode)
@@ -1571,7 +1571,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 	body, _ := io.ReadAll(tokenHTTPResp.Body)
-	tokenHTTPResp.Body.Close()
+	_ = tokenHTTPResp.Body.Close()
 
 	if tokenHTTPResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", tokenHTTPResp.StatusCode, body)
@@ -1622,7 +1622,7 @@ func TestOAuthFlow_MCPDiscovery_FullFlow_WithResource(t *testing.T) {
 		t.Fatalf("GET /mcp: %v", err)
 	}
 	mcpBody, _ := io.ReadAll(mcpResp.Body)
-	mcpResp.Body.Close()
+	_ = mcpResp.Body.Close()
 
 	if mcpResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 from /mcp with resource-bound token, got %d; body: %s", mcpResp.StatusCode, mcpBody)

@@ -306,7 +306,7 @@ func (h *WebAuthnHandler) RegisterBeginHandler() http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(creation)
+		_ = json.NewEncoder(w).Encode(creation)
 	}
 }
 
@@ -397,7 +397,7 @@ func (h *WebAuthnHandler) RegisterFinishHandler() http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(cred)
+		_ = json.NewEncoder(w).Encode(cred)
 	}
 }
 
@@ -465,7 +465,7 @@ func (h *WebAuthnHandler) LoginBeginHandler() http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"publicKey":   assertion.Response,
 			"session_key": sessionKey,
 		})
@@ -561,7 +561,7 @@ func (h *WebAuthnHandler) LoginFinishHandler() http.HandlerFunc {
 		})
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"token": token,
 			"user": map[string]any{
 				"id":           user.ID.String(),

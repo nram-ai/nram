@@ -331,19 +331,11 @@ type rbacIngestionLogRepo struct{}
 
 func (m *rbacIngestionLogRepo) Create(_ context.Context, _ *model.IngestionLog) error { return nil }
 
-type rbacTokenUsageRepo struct{}
-
-func (m *rbacTokenUsageRepo) Record(_ context.Context, _ *model.TokenUsage) error { return nil }
-
 type rbacEnrichmentQueueRepo struct{}
 
 func (m *rbacEnrichmentQueueRepo) Enqueue(_ context.Context, _ *model.EnrichmentJob) error {
 	return nil
 }
-
-type rbacLineageCreator struct{}
-
-func (m *rbacLineageCreator) Create(_ context.Context, _ *model.MemoryLineage) error { return nil }
 
 // rbacDashboardStore implements api.DashboardStore for admin dashboard tests.
 type rbacDashboardStore struct{}
@@ -658,14 +650,14 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 		// Health
 		Health: func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"ok"}`))
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		},
 
 		// Setup status (returns setup complete)
 		AdminSetupStatus: func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"complete":true}`))
+			_, _ = w.Write([]byte(`{"complete":true}`))
 		},
 	}
 
@@ -732,7 +724,7 @@ func rbacDoRequest(t *testing.T, method, url, token string, body any) *http.Resp
 func rbacReadBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	b, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
@@ -1149,7 +1141,7 @@ func TestRBAC_MCP_MemberCannotStoreInOtherOrg(t *testing.T) {
 					Text string `json:"text"`
 				} `json:"content"`
 			}
-			json.Unmarshal(rpc.Result, &checkText)
+			_ = json.Unmarshal(rpc.Result, &checkText)
 			for _, c := range checkText.Content {
 				if c.Text != "" {
 					// Project not found or access denied is acceptable
@@ -1626,14 +1618,14 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		// Health
 		Health: func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"ok"}`))
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		},
 
 		// Setup status
 		AdminSetupStatus: func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"complete":true}`))
+			_, _ = w.Write([]byte(`{"complete":true}`))
 		},
 
 		// SSE events (simple handler that returns 200 with SSE headers)
@@ -1643,7 +1635,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 			w.Header().Set("Connection", "keep-alive")
 			w.WriteHeader(http.StatusOK)
 			// Write a single keepalive comment and return immediately.
-			w.Write([]byte(": keepalive\n\n"))
+			_, _ = w.Write([]byte(": keepalive\n\n"))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
@@ -2253,12 +2245,12 @@ func rbacMCPStoreAndGetID(t *testing.T, baseURL, token, sessionID, project strin
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	json.Unmarshal(rpc.Result, &result)
+	_ = json.Unmarshal(rpc.Result, &result)
 	var storeResp struct {
 		ID string `json:"id"`
 	}
 	if len(result.Content) > 0 {
-		json.Unmarshal([]byte(result.Content[0].Text), &storeResp)
+		_ = json.Unmarshal([]byte(result.Content[0].Text), &storeResp)
 	}
 	if storeResp.ID == "" {
 		t.Fatalf("empty memory ID from MCP store; result=%s", string(rpc.Result))

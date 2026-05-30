@@ -224,7 +224,7 @@ func (r *ShareTokenRepo) ListByOwner(ctx context.Context, ownerUserID uuid.UUID)
 	if err != nil {
 		return nil, fmt.Errorf("share token list by owner: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.ShareToken{}
 	for rows.Next() {
@@ -260,7 +260,7 @@ func (r *ShareTokenRepo) ListGrantsByOwner(ctx context.Context, ownerUserID uuid
 	if err != nil {
 		return nil, fmt.Errorf("share token grants by owner: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make(map[uuid.UUID][]model.ShareTokenGrant)
 	for rows.Next() {
@@ -298,7 +298,7 @@ func (r *ShareTokenRepo) ListGrants(ctx context.Context, shareID uuid.UUID) ([]m
 	if err != nil {
 		return nil, fmt.Errorf("share token grant list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.ShareTokenGrant{}
 	for rows.Next() {
@@ -419,17 +419,17 @@ func (r *ShareTokenRepo) RevokeZeroGrantSharesForOwner(ctx context.Context, owne
 	for rows.Next() {
 		var idStr string
 		if scanErr := rows.Scan(&idStr); scanErr != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("share token revoke zero-grant scan: %w", scanErr)
 		}
 		id, parseErr := uuid.Parse(idStr)
 		if parseErr != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("share token revoke zero-grant parse id: %w", parseErr)
 		}
 		ids = append(ids, id)
 	}
-	rows.Close()
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("share token revoke zero-grant iterate: %w", err)
 	}

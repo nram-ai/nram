@@ -15,10 +15,10 @@ import (
 
 // mockDreamAdminStore implements DreamAdminStore for handler tests.
 type mockDreamAdminStore struct {
-	abandonOK     bool
-	abandonErr    error
-	lastCycleID   uuid.UUID
-	lastReason    string
+	abandonOK   bool
+	abandonErr  error
+	lastCycleID uuid.UUID
+	lastReason  string
 }
 
 func (m *mockDreamAdminStore) Status(_ context.Context) (*DreamStatusResponse, error) {

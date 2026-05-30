@@ -38,7 +38,7 @@ const (
 // SlotConfig represents the configuration for a single provider slot as stored
 // in settings.
 type SlotConfig struct {
-	Type    string `json:"type"`     // "openai", "gemini", "anthropic"
+	Type    string `json:"type"` // "openai", "gemini", "anthropic"
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key"`
 	Model   string `json:"model"`

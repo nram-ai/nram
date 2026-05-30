@@ -181,7 +181,7 @@ func (r *WebhookRepo) ListActiveForEvent(ctx context.Context, namespaceID uuid.U
 	if err != nil {
 		return nil, fmt.Errorf("webhook list active for event: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanWebhooks(rows)
 }
@@ -244,7 +244,7 @@ func (r *WebhookRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("webhook list by namespace: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanWebhooks(rows)
 }
@@ -257,7 +257,7 @@ func (r *WebhookRepo) ListAll(ctx context.Context) ([]model.Webhook, error) {
 	if err != nil {
 		return nil, fmt.Errorf("webhook list all: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanWebhooks(rows)
 }
@@ -283,7 +283,7 @@ func (r *WebhookRepo) ListAllPaged(ctx context.Context, limit, offset int) ([]mo
 	if err != nil {
 		return nil, fmt.Errorf("webhook list all paged: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanWebhooks(rows)
 }

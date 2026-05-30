@@ -68,7 +68,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	log.Printf("database backend: %s", db.Backend())
 
 	memoryRepo := storage.NewMemoryRepo(db)

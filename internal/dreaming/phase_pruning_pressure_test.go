@@ -48,7 +48,7 @@ type recordingRelWriter struct {
 	transitiveResult *int64
 }
 
-func (w *recordingRelWriter) Create(context.Context, *model.Relationship) error      { return nil }
+func (w *recordingRelWriter) Create(context.Context, *model.Relationship) error { return nil }
 func (w *recordingRelWriter) Reinforce(context.Context, uuid.UUID, uuid.UUID, float64) error {
 	return nil
 }
@@ -98,8 +98,8 @@ func pressureSettings(hardCap int, highWater, lowWater float64) *staticDreamSett
 	return &staticDreamSettings{
 		values: map[string]string{},
 		floats: map[string]float64{
-			service.SettingDreamTransitiveNamespaceHighWater:   highWater,
-			service.SettingDreamTransitiveNamespaceLowWater:    lowWater,
+			service.SettingDreamTransitiveNamespaceHighWater:       highWater,
+			service.SettingDreamTransitiveNamespaceLowWater:        lowWater,
 			service.SettingDreamPruningRelationshipWeightThreshold: 0.0001,
 		},
 		ints: map[string]int{

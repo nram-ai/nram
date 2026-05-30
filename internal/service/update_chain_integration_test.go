@@ -41,13 +41,13 @@ func TestUpdateAndForgetChain_RealSQL(t *testing.T) {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("chdir tmp: %v", err)
 	}
-	t.Cleanup(func() { os.Chdir(origDir) })
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	db, err := storage.Open(config.DatabaseConfig{})
 	if err != nil {
 		t.Fatalf("storage.Open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	migrator, err := migration.NewMigrator(db.DB(), db.Backend())
 	if err != nil {

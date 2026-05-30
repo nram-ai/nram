@@ -51,25 +51,25 @@ type IdleChecker interface {
 // specific in-phase limit that fired. Keep RESIDUAL_REASON_LABELS in
 // ui/src/pages/DreamingMonitor.tsx in sync with this set.
 const (
-	ResidualReasonBudgetExhaustedBeforePhase  = "budget_exhausted_before_phase"
-	ResidualReasonPhaseSliceZero              = "phase_slice_zero"
-	ResidualReasonBudgetExhaustedDuringPhase  = "budget_exhausted_during_phase"
-	ResidualReasonPhaseSliceExhausted         = "phase_slice_exhausted"
-	ResidualReasonMoreCandidatesThanBatch     = "more_candidates_than_batch"
-	ResidualReasonParaphraseUnvisited         = "paraphrase_unvisited_candidates"
-	ResidualReasonTransitivePerCycleCap       = "transitive_per_cycle_cap"
-	ResidualReasonTransitiveHardCapApproach   = "transitive_hard_cap_approach"
+	ResidualReasonBudgetExhaustedBeforePhase = "budget_exhausted_before_phase"
+	ResidualReasonPhaseSliceZero             = "phase_slice_zero"
+	ResidualReasonBudgetExhaustedDuringPhase = "budget_exhausted_during_phase"
+	ResidualReasonPhaseSliceExhausted        = "phase_slice_exhausted"
+	ResidualReasonMoreCandidatesThanBatch    = "more_candidates_than_batch"
+	ResidualReasonParaphraseUnvisited        = "paraphrase_unvisited_candidates"
+	ResidualReasonTransitivePerCycleCap      = "transitive_per_cycle_cap"
+	ResidualReasonTransitiveHardCapApproach  = "transitive_hard_cap_approach"
 
 	// DreamPruningTriggerTransitivePressure tags the pruning phase's
 	// pressure-driven transitive expiry in dream_logs.after_state.trigger.
 	// Mirrored by ui/src/lib/dreaming.ts:formatRelationshipExpired.
-	DreamPruningTriggerTransitivePressure = "transitive_pressure"
-	ResidualReasonDispatchCapReached          = "dispatch_cap_reached"
-	ResidualReasonPhaseBudgetStopped          = "phase_budget_stopped"
-	ResidualReasonAuditStaleRemaining         = "audit_stale_remaining"
-	ResidualReasonReinforceCapHit             = "reinforce_cap_hit"
+	DreamPruningTriggerTransitivePressure      = "transitive_pressure"
+	ResidualReasonDispatchCapReached           = "dispatch_cap_reached"
+	ResidualReasonPhaseBudgetStopped           = "phase_budget_stopped"
+	ResidualReasonAuditStaleRemaining          = "audit_stale_remaining"
+	ResidualReasonReinforceCapHit              = "reinforce_cap_hit"
 	ResidualReasonConsolidateClustersRemaining = "consolidate_clusters_remaining"
-	ResidualReasonStaleFetchCap               = "stale_fetch_cap"
+	ResidualReasonStaleFetchCap                = "stale_fetch_cap"
 )
 
 // PhaseResult captures the outcome of a single phase. ResidualDetail is

@@ -896,10 +896,10 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 
 	SettingAPIBatchStoreMaxItems: "1000",
 
-	SettingExportPageSize:          "100",
-	SettingExportArtifactDir:       "",
-	SettingExportTTLHours:          "168",
-	SettingExportMaxPerUserPerDay:  "5",
+	SettingExportPageSize:         "100",
+	SettingExportArtifactDir:      "",
+	SettingExportTTLHours:         "168",
+	SettingExportMaxPerUserPerDay: "5",
 
 	// Recall scoring and pagination defaults. recency_decay_per_hour matches
 	// the historical hardcoded math.Exp(-0.01 * hours) in computeScore.

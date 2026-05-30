@@ -371,7 +371,7 @@ func (p *GeminiProvider) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("gemini: ping failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -406,7 +406,7 @@ func (p *GeminiProvider) doRequest(ctx context.Context, method, path string, bod
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

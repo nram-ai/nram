@@ -288,7 +288,7 @@ func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, Repai
 	if err != nil {
 		return nil, RepairStats{}, fmt.Errorf("hnsw: cache: query %s: %w", spec.vectorTable, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	g := NewGraph(key.Dimension, c.graphOpts...)
 	for rows.Next() {

@@ -31,8 +31,8 @@ func (m *mockLLMProvider) Complete(_ context.Context, req *provider.CompletionRe
 	return m.resp, nil
 }
 
-func (m *mockLLMProvider) Name() string      { return m.name }
-func (m *mockLLMProvider) Models() []string   { return m.models }
+func (m *mockLLMProvider) Name() string     { return m.name }
+func (m *mockLLMProvider) Models() []string { return m.models }
 
 type mockEntityRepo struct {
 	entities []*model.Entity
@@ -991,4 +991,3 @@ func TestExtract_VectorUpsertFailure_ClearsEmbeddingDim(t *testing.T) {
 		t.Errorf("Upsert calls should have failed; got %d successful upserts", len(deps.vectors.upserted))
 	}
 }
-

@@ -174,7 +174,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 
 	messages := make([]openaiChatMessage, len(req.Messages))
 	for i, m := range req.Messages {
-		messages[i] = openaiChatMessage{Role: m.Role, Content: m.Content}
+		messages[i] = openaiChatMessage(m)
 	}
 
 	body := openaiChatRequest{
@@ -301,7 +301,7 @@ func (p *OpenAIProvider) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("openai: ping failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -343,7 +343,7 @@ func (p *OpenAIProvider) doRequest(ctx context.Context, method, path string, bod
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

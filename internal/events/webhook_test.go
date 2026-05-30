@@ -126,7 +126,7 @@ func TestWebhookDelivery_Success(t *testing.T) {
 	})
 
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	deliverer := NewWebhookDeliverer(bus, store,
 		WithHTTPClient(srv.Client()),
@@ -139,7 +139,7 @@ func TestWebhookDelivery_Success(t *testing.T) {
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	defer deliverer.Stop()
+	defer func() { _ = deliverer.Stop() }()
 
 	event := Event{
 		ID:        uuid.New().String(),
@@ -218,7 +218,7 @@ func TestWebhookDelivery_RetryThenSuccess(t *testing.T) {
 	})
 
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	deliverer := NewWebhookDeliverer(bus, store,
 		WithHTTPClient(srv.Client()),
@@ -231,7 +231,7 @@ func TestWebhookDelivery_RetryThenSuccess(t *testing.T) {
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	defer deliverer.Stop()
+	defer func() { _ = deliverer.Stop() }()
 
 	event := Event{
 		ID:        uuid.New().String(),
@@ -274,7 +274,7 @@ func TestWebhookDelivery_MaxRetriesExceeded(t *testing.T) {
 	})
 
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	deliverer := NewWebhookDeliverer(bus, store,
 		WithHTTPClient(srv.Client()),
@@ -287,7 +287,7 @@ func TestWebhookDelivery_MaxRetriesExceeded(t *testing.T) {
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	defer deliverer.Stop()
+	defer func() { _ = deliverer.Stop() }()
 
 	event := Event{
 		ID:        uuid.New().String(),
@@ -340,7 +340,7 @@ func TestWebhookDelivery_NoSecret(t *testing.T) {
 	})
 
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	deliverer := NewWebhookDeliverer(bus, store,
 		WithHTTPClient(srv.Client()),
@@ -351,7 +351,7 @@ func TestWebhookDelivery_NoSecret(t *testing.T) {
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	defer deliverer.Stop()
+	defer func() { _ = deliverer.Stop() }()
 
 	event := Event{
 		ID:        uuid.New().String(),
@@ -427,7 +427,7 @@ func TestWebhookDelivery_NoMatchingScope(t *testing.T) {
 	})
 
 	bus := NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	deliverer := NewWebhookDeliverer(bus, store,
 		WithHTTPClient(srv.Client()),
@@ -438,7 +438,7 @@ func TestWebhookDelivery_NoMatchingScope(t *testing.T) {
 	if err := deliverer.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	defer deliverer.Stop()
+	defer func() { _ = deliverer.Stop() }()
 
 	// Publish event with a different namespace ID.
 	differentNS := uuid.New()

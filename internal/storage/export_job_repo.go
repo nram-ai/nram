@@ -269,7 +269,7 @@ func (r *ExportJobRepo) ListByUser(ctx context.Context, userID uuid.UUID, limit,
 	if err != nil {
 		return nil, fmt.Errorf("export job list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := []model.ExportJob{}
 	for rows.Next() {
@@ -364,7 +364,7 @@ func (r *ExportJobRepo) ListExpired(ctx context.Context, limit int) ([]model.Exp
 	if err != nil {
 		return nil, fmt.Errorf("export job list expired: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := []model.ExportJob{}
 	for rows.Next() {
@@ -417,12 +417,12 @@ type scanFn func(dest ...any) error
 
 func (r *ExportJobRepo) populate(scan scanFn) (*model.ExportJob, error) {
 	var (
-		idStr, userIDStr, scope, format, status                                                        string
-		projectIDStr, artifactPath, artifactSHA256, errorMsg, claimedBy                                sql.NullString
-		claimedAtStr, startedAtStr, completedAtStr, expiresAtStr                                       sql.NullString
-		createdAtStr, updatedAtStr                                                                     string
-		artifactBytes                                                                                  sql.NullInt64
-		includeSuperseded                                                                              bool
+		idStr, userIDStr, scope, format, status                         string
+		projectIDStr, artifactPath, artifactSHA256, errorMsg, claimedBy sql.NullString
+		claimedAtStr, startedAtStr, completedAtStr, expiresAtStr        sql.NullString
+		createdAtStr, updatedAtStr                                      string
+		artifactBytes                                                   sql.NullInt64
+		includeSuperseded                                               bool
 	)
 	if err := scan(
 		&idStr, &userIDStr, &scope, &projectIDStr, &format, &includeSuperseded,

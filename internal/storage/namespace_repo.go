@@ -96,7 +96,7 @@ func (r *NamespaceRepo) ListByParent(ctx context.Context, parentID uuid.UUID) ([
 	if err != nil {
 		return nil, fmt.Errorf("namespace list by parent: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Namespace{}
 	for rows.Next() {
@@ -211,7 +211,7 @@ func (r *NamespaceRepo) ResolvePathPrefix(ctx context.Context, prefix string) ([
 	if err != nil {
 		return nil, fmt.Errorf("namespace resolve path prefix: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	ids := []uuid.UUID{}
 	for rows.Next() {

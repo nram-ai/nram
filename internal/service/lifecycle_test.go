@@ -531,7 +531,7 @@ func TestSweep_OrphanedEntityVectorCleanup_Qdrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewQdrantStore: %v", err)
 	}
-	t.Cleanup(func() { qstore.Close() })
+	t.Cleanup(func() { _ = qstore.Close() })
 	if err := qstore.EnsureCollections(ctx); err != nil {
 		t.Fatalf("EnsureCollections: %v", err)
 	}

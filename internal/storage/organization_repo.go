@@ -110,7 +110,7 @@ func (r *OrganizationRepo) ListPaged(ctx context.Context, limit, offset int) ([]
 	if err != nil {
 		return nil, fmt.Errorf("organization list paged: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Organization{}
 	for rows.Next() {
@@ -135,7 +135,7 @@ func (r *OrganizationRepo) List(ctx context.Context) ([]model.Organization, erro
 	if err != nil {
 		return nil, fmt.Errorf("organization list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Organization{}
 	for rows.Next() {

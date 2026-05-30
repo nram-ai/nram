@@ -10,7 +10,7 @@ import (
 
 func TestMigrationAudit_CleanDB(t *testing.T) {
 	sqliteDB := openSQLiteInMemory(t)
-	defer sqliteDB.Close()
+	defer func() { _ = sqliteDB.Close() }()
 	store := &DatabaseAdminStore{db: &testSQLiteDB{db: sqliteDB}}
 
 	audit, err := store.MigrationAudit(context.Background())
@@ -30,7 +30,7 @@ func TestMigrationAudit_CleanDB(t *testing.T) {
 
 func TestMigrationAudit_DetectsOrphans(t *testing.T) {
 	sqliteDB := openSQLiteInMemory(t)
-	defer sqliteDB.Close()
+	defer func() { _ = sqliteDB.Close() }()
 
 	// Disable FK enforcement to seed deliberate orphans — mimics production SQLite
 	// accumulating orphans over time with PRAGMA foreign_keys=OFF.
@@ -136,7 +136,7 @@ func TestMigrationAudit_RejectsPostgresBackend(t *testing.T) {
 // table in sqliteFKRelations should exist in a freshly migrated SQLite DB.
 func TestMigrationAudit_AllRelationsReferExistingTables(t *testing.T) {
 	sqliteDB := openSQLiteInMemory(t)
-	defer sqliteDB.Close()
+	defer func() { _ = sqliteDB.Close() }()
 
 	tables, err := existingSQLiteTables(context.Background(), sqliteDB)
 	if err != nil {
@@ -160,7 +160,7 @@ func TestMigrationAudit_AllRelationsReferExistingTables(t *testing.T) {
 // syntax error against a fresh SQLite schema (even with zero rows).
 func TestMigrationAudit_QueriesCompile(t *testing.T) {
 	sqliteDB := openSQLiteInMemory(t)
-	defer sqliteDB.Close()
+	defer func() { _ = sqliteDB.Close() }()
 
 	for _, rel := range sqliteFKRelations {
 		if _, err := countOrphans(context.Background(), sqliteDB, rel); err != nil {

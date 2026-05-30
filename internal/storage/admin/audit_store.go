@@ -145,7 +145,7 @@ func (s *AuditStore) Query(ctx context.Context, scope api.AuditScope, since time
 	if err != nil {
 		return nil, fmt.Errorf("audit query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	events := []api.AuditEvent{}
 	for rows.Next() {

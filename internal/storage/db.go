@@ -76,11 +76,11 @@ func Open(cfg config.DatabaseConfig) (DB, error) {
 
 // sqlitePragmas are applied to every SQLite connection (both read and write pools).
 var sqlitePragmas = []string{
-	"PRAGMA journal_mode=WAL",        // concurrent readers + single writer
-	"PRAGMA busy_timeout=10000",      // 10s wait on lock contention
-	"PRAGMA foreign_keys=ON",         // enforce FK constraints
-	"PRAGMA synchronous=NORMAL",      // safe with WAL, much faster than FULL
-	"PRAGMA cache_size=-64000",       // 64MB in-memory page cache
+	"PRAGMA journal_mode=WAL",   // concurrent readers + single writer
+	"PRAGMA busy_timeout=10000", // 10s wait on lock contention
+	"PRAGMA foreign_keys=ON",    // enforce FK constraints
+	"PRAGMA synchronous=NORMAL", // safe with WAL, much faster than FULL
+	"PRAGMA cache_size=-64000",  // 64MB in-memory page cache
 }
 
 // applySQLitePragmas sets all required PRAGMAs on a SQLite *sql.DB.
@@ -108,14 +108,14 @@ func openSQLite() (DB, error) {
 	writeDB.SetConnMaxLifetime(0) // keep connection alive forever
 
 	if err := applySQLitePragmas(writeDB); err != nil {
-		writeDB.Close()
+		_ = writeDB.Close()
 		return nil, err
 	}
 
 	// Read pool: multiple connections for concurrent reads.
 	readDB, err := sql.Open("sqlite", "nram.db")
 	if err != nil {
-		writeDB.Close()
+		_ = writeDB.Close()
 		return nil, fmt.Errorf("failed to open sqlite read pool: %w", err)
 	}
 	readDB.SetMaxOpenConns(4)
@@ -123,14 +123,14 @@ func openSQLite() (DB, error) {
 	readDB.SetConnMaxLifetime(0)
 
 	if err := applySQLitePragmas(readDB); err != nil {
-		writeDB.Close()
-		readDB.Close()
+		_ = writeDB.Close()
+		_ = readDB.Close()
 		return nil, err
 	}
 
 	if err := writeDB.Ping(); err != nil {
-		writeDB.Close()
-		readDB.Close()
+		_ = writeDB.Close()
+		_ = readDB.Close()
 		return nil, fmt.Errorf("failed to ping sqlite database: %w", err)
 	}
 
@@ -154,7 +154,7 @@ func openPostgres(cfg config.DatabaseConfig) (DB, error) {
 	db.SetConnMaxLifetime(30 * time.Minute)
 
 	if err := db.Ping(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping postgres database: %w", err)
 	}
 

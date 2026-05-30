@@ -73,7 +73,7 @@ func (r *EntityAliasRepo) FindByAlias(ctx context.Context, namespaceID uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("entity alias find by alias: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanAliases(rows)
 }
@@ -93,7 +93,7 @@ func (r *EntityAliasRepo) ListByEntity(ctx context.Context, entityID uuid.UUID) 
 	if err != nil {
 		return nil, fmt.Errorf("entity alias list by entity: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanAliases(rows)
 }

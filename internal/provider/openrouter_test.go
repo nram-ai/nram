@@ -20,7 +20,7 @@ func TestOpenRouterContextLength_FindsConfiguredModel(t *testing.T) {
 			t.Errorf("Authorization = %q, want Bearer test-key", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(openRouterModelsResponse{
+		_ = json.NewEncoder(w).Encode(openRouterModelsResponse{
 			Data: []openRouterModel{
 				{ID: "anthropic/claude-sonnet-4", ContextLength: 200000},
 				{ID: "openai/gpt-4o", ContextLength: 128000},
@@ -41,7 +41,7 @@ func TestOpenRouterContextLength_FindsConfiguredModel(t *testing.T) {
 
 func TestOpenRouterContextLength_UnknownModelReturnsZero(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(openRouterModelsResponse{
+		_ = json.NewEncoder(w).Encode(openRouterModelsResponse{
 			Data: []openRouterModel{{ID: "openai/gpt-4o", ContextLength: 128000}},
 		})
 	}))
@@ -80,9 +80,9 @@ func TestOpenRouterContextLength_HTTPError(t *testing.T) {
 
 func TestNormalizeOpenRouterModelsURL(t *testing.T) {
 	cases := map[string]string{
-		"":                                            "https://openrouter.ai/api/v1/models",
-		"https://openrouter.ai/api/v1":                "https://openrouter.ai/api/v1/models",
-		"https://openrouter.ai/api/v1/":               "https://openrouter.ai/api/v1/models",
+		"":                              "https://openrouter.ai/api/v1/models",
+		"https://openrouter.ai/api/v1":  "https://openrouter.ai/api/v1/models",
+		"https://openrouter.ai/api/v1/": "https://openrouter.ai/api/v1/models",
 		"https://openrouter.ai/api/v1/chat/completions": "https://openrouter.ai/api/v1/models",
 		"https://openrouter.ai/api/v1/completions":      "https://openrouter.ai/api/v1/models",
 		"https://openrouter.ai/api/v1/embeddings":       "https://openrouter.ai/api/v1/models",

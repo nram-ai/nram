@@ -19,15 +19,15 @@ import (
 // --- mock implementations for list/detail tests ---
 
 type mockMemoryLister struct {
-	listFn        func(ctx context.Context, nsID uuid.UUID, limit, offset int) ([]model.Memory, error)
-	countFn       func(ctx context.Context, nsID uuid.UUID) (int, error)
-	listIDsFn     func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, max int) ([]uuid.UUID, error)
-	getFn         func(ctx context.Context, id uuid.UUID) (*model.Memory, error)
-	listParentsFn func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
+	listFn         func(ctx context.Context, nsID uuid.UUID, limit, offset int) ([]model.Memory, error)
+	countFn        func(ctx context.Context, nsID uuid.UUID) (int, error)
+	listIDsFn      func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, max int) ([]uuid.UUID, error)
+	getFn          func(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	listParentsFn  func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
 	countParentsFn func(ctx context.Context, nsID uuid.UUID, filters storage.MemoryListFilters) (int, error)
 	findChildrenFn func(ctx context.Context, nsID uuid.UUID, parentIDs []uuid.UUID, relations []string) (map[uuid.UUID][]model.Memory, error)
-	lastFilters   storage.MemoryListFilters
-	filtersSeen   bool
+	lastFilters    storage.MemoryListFilters
+	filtersSeen    bool
 }
 
 func (m *mockMemoryLister) ListByNamespace(ctx context.Context, nsID uuid.UUID, limit, offset int) ([]model.Memory, error) {

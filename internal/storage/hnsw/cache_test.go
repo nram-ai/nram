@@ -17,7 +17,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open in-memory sqlite: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	schema := `
 	CREATE TABLE IF NOT EXISTS memories (
@@ -68,7 +68,7 @@ func TestCacheGetOrCreateEmpty(t *testing.T) {
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour, // no background flush during test
 	})
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	ctx := context.Background()
 	nsID := uuid.New()
@@ -94,7 +94,7 @@ func TestCacheGetOrCreateCached(t *testing.T) {
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	ctx := context.Background()
 	nsID := uuid.New()
@@ -120,7 +120,7 @@ func TestCacheLRUEviction(t *testing.T) {
 		MaxIndexes:       2,
 		SnapshotInterval: time.Hour,
 	})
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	ctx := context.Background()
 	ns1 := uuid.New()
@@ -172,7 +172,7 @@ func TestCacheMarkDirtyAndFlush(t *testing.T) {
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	ctx := context.Background()
 	nsID := uuid.New()
@@ -238,7 +238,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	ctx := context.Background()
 	g, err := cache.GetOrCreate(ctx, KindMemory, nsID, dim)
@@ -267,7 +267,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
-	defer cache2.Close()
+	defer func() { _ = cache2.Close() }()
 
 	g2, err := cache2.GetOrCreate(ctx, KindMemory, nsID, dim)
 	if err != nil {
@@ -331,7 +331,7 @@ func TestCacheRemove(t *testing.T) {
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
 	})
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	ctx := context.Background()
 	nsID := uuid.New()

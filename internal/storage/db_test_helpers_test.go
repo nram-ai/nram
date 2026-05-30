@@ -53,7 +53,7 @@ func setupSharedPostgres() bool {
 	}
 
 	if _, err := setupDB.Exec("CREATE SCHEMA " + schema); err != nil {
-		setupDB.Close()
+		_ = setupDB.Close()
 		fmt.Fprintf(os.Stderr, "failed to create test schema: %v\n", err)
 		return false
 	}
@@ -66,24 +66,24 @@ func setupSharedPostgres() bool {
 
 	db, err := Open(config.DatabaseConfig{URL: testURL})
 	if err != nil {
-		setupDB.Exec("DROP SCHEMA " + schema + " CASCADE")
-		setupDB.Close()
+		_, _ = setupDB.Exec("DROP SCHEMA " + schema + " CASCADE")
+		_ = setupDB.Close()
 		fmt.Fprintf(os.Stderr, "failed to open postgres with test schema: %v\n", err)
 		return false
 	}
 
 	migrator, err := migration.NewMigrator(db.DB(), db.Backend())
 	if err != nil {
-		db.Close()
-		setupDB.Exec("DROP SCHEMA " + schema + " CASCADE")
-		setupDB.Close()
+		_ = db.Close()
+		_, _ = setupDB.Exec("DROP SCHEMA " + schema + " CASCADE")
+		_ = setupDB.Close()
 		fmt.Fprintf(os.Stderr, "failed to create migrator: %v\n", err)
 		return false
 	}
 	if err := migrator.Up(); err != nil {
-		db.Close()
-		setupDB.Exec("DROP SCHEMA " + schema + " CASCADE")
-		setupDB.Close()
+		_ = db.Close()
+		_, _ = setupDB.Exec("DROP SCHEMA " + schema + " CASCADE")
+		_ = setupDB.Close()
 		fmt.Fprintf(os.Stderr, "failed to run postgres migrations: %v\n", err)
 		return false
 	}
@@ -98,11 +98,11 @@ func setupSharedPostgres() bool {
 // Called from TestMain.
 func teardownSharedPostgres() {
 	if sharedPostgresDB != nil {
-		sharedPostgresDB.Close()
+		_ = sharedPostgresDB.Close()
 	}
 	if sharedPostgresSetupDB != nil && sharedPostgresSchema != "" {
-		sharedPostgresSetupDB.Exec(fmt.Sprintf("DROP SCHEMA %s CASCADE", sharedPostgresSchema))
-		sharedPostgresSetupDB.Close()
+		_, _ = sharedPostgresSetupDB.Exec(fmt.Sprintf("DROP SCHEMA %s CASCADE", sharedPostgresSchema))
+		_ = sharedPostgresSetupDB.Close()
 	}
 }
 

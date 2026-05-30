@@ -31,7 +31,7 @@ func testOAuthDB(t *testing.T) storage.DB {
 		t.Fatalf("failed to chdir to temp dir: %v", err)
 	}
 	t.Cleanup(func() {
-		os.Chdir(origDir)
+		_ = os.Chdir(origDir)
 	})
 
 	db, err := storage.Open(config.DatabaseConfig{})
@@ -39,7 +39,7 @@ func testOAuthDB(t *testing.T) storage.DB {
 		t.Fatalf("failed to open sqlite database: %v", err)
 	}
 	t.Cleanup(func() {
-		db.Close()
+		_ = db.Close()
 	})
 
 	migrator, err := migration.NewMigrator(db.DB(), db.Backend())
@@ -337,8 +337,8 @@ func TestAuthorizeContext_Unauthenticated(t *testing.T) {
 		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 	var got struct {
-		ClientID            string `json:"client_id"`
-		AccountUser         *struct {
+		ClientID    string `json:"client_id"`
+		AccountUser *struct {
 			DisplayName string `json:"display_name"`
 		} `json:"account_user"`
 		ShareTokenSupported bool `json:"share_token_supported"`
@@ -767,7 +767,7 @@ func TestTokenHandler_AuthCodeGrant_InvalidPKCE(t *testing.T) {
 	}
 
 	var errResp oauthError
-	json.NewDecoder(rec.Body).Decode(&errResp)
+	_ = json.NewDecoder(rec.Body).Decode(&errResp)
 	if errResp.Error != "invalid_grant" {
 		t.Fatalf("expected error=invalid_grant, got %q", errResp.Error)
 	}
@@ -826,7 +826,7 @@ func TestTokenHandler_AuthCodeGrant_InvalidCode(t *testing.T) {
 	}
 
 	var errResp oauthError
-	json.NewDecoder(rec.Body).Decode(&errResp)
+	_ = json.NewDecoder(rec.Body).Decode(&errResp)
 	if errResp.Error != "invalid_grant" {
 		t.Fatalf("expected error=invalid_grant, got %q", errResp.Error)
 	}
@@ -896,7 +896,7 @@ func TestTokenHandler_RefreshTokenGrant(t *testing.T) {
 	}
 
 	var tokenResp tokenResponse
-	json.NewDecoder(rec.Body).Decode(&tokenResp)
+	_ = json.NewDecoder(rec.Body).Decode(&tokenResp)
 
 	// Use refresh token to get new access token
 	refreshForm := url.Values{}
@@ -913,7 +913,7 @@ func TestTokenHandler_RefreshTokenGrant(t *testing.T) {
 	}
 
 	var refreshResp tokenResponse
-	json.NewDecoder(rec2.Body).Decode(&refreshResp)
+	_ = json.NewDecoder(rec2.Body).Decode(&refreshResp)
 
 	if refreshResp.AccessToken == "" {
 		t.Fatal("expected non-empty access_token from refresh")
@@ -960,7 +960,7 @@ func TestTokenHandler_RefreshTokenGrant_OldTokenRevoked(t *testing.T) {
 	env.server.TokenHandler().ServeHTTP(rec, req)
 
 	var tokenResp tokenResponse
-	json.NewDecoder(rec.Body).Decode(&tokenResp)
+	_ = json.NewDecoder(rec.Body).Decode(&tokenResp)
 
 	// Refresh once
 	refreshForm := url.Values{}
@@ -1139,7 +1139,7 @@ func TestTokenHandler_AuthCodeGrant_ExpiredCode(t *testing.T) {
 	}
 
 	var errResp oauthError
-	json.NewDecoder(rec.Body).Decode(&errResp)
+	_ = json.NewDecoder(rec.Body).Decode(&errResp)
 	if errResp.Error != "invalid_grant" {
 		t.Fatalf("expected error=invalid_grant, got %q", errResp.Error)
 	}

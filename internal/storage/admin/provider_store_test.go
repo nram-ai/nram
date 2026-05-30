@@ -27,13 +27,13 @@ func testSQLiteDBWithMigrations(t *testing.T) storage.DB {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
-	t.Cleanup(func() { os.Chdir(origDir) })
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	db, err := storage.Open(config.DatabaseConfig{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	migrator, err := migration.NewMigrator(db.DB(), db.Backend())
 	if err != nil {
@@ -52,12 +52,12 @@ func newOllamaTestServer(t *testing.T, models []provider.OllamaModel) *httptest.
 		switch r.URL.Path {
 		case "/api/tags":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"models": models,
 			})
 		case "/api/pull":
 			w.Header().Set("Content-Type", "application/x-ndjson")
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status": "success",
 			})
 		default:

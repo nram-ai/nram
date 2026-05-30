@@ -90,7 +90,7 @@ func (m *mockNamespaceCreator) GetByID(ctx context.Context, id uuid.UUID) (*mode
 func doProjectsRequest(handler http.HandlerFunc, method string, body any, ac *auth.AuthContext, query string) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	if body != nil {
-		json.NewEncoder(&buf).Encode(body)
+		_ = json.NewEncoder(&buf).Encode(body)
 	}
 
 	target := "/v1/me/projects"

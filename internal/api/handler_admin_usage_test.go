@@ -17,8 +17,8 @@ import (
 // --- mock UsageStore ---
 
 type mockUsageStore struct {
-	report    *UsageReport
-	err       error
+	report     *UsageReport
+	err        error
 	lastFilter UsageFilter
 }
 

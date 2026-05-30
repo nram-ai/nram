@@ -110,7 +110,7 @@ func TestUsageRecordingE2E_RequestIDPropagatedToTokenUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.Header.Get("X-Request-ID") != "test-e2e-001" {
 		t.Errorf("response did not echo X-Request-ID: got %q", resp.Header.Get("X-Request-ID"))
@@ -165,7 +165,7 @@ func TestUsageRecordingE2E_ProviderErrorRecordsFailureRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	rows := rec.snapshot()
 	if len(rows) != 1 {
@@ -218,7 +218,7 @@ func TestUsageRecordingE2E_NoIncomingRequestIDStampsGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	echoed := resp.Header.Get("X-Request-ID")
 	if echoed == "" {

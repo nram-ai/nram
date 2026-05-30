@@ -20,7 +20,7 @@ type mockDatabasePinger struct {
 	pingErr error
 }
 
-func (m *mockDatabasePinger) Backend() string            { return m.backend }
+func (m *mockDatabasePinger) Backend() string              { return m.backend }
 func (m *mockDatabasePinger) Ping(_ context.Context) error { return m.pingErr }
 
 type mockProviderRegistry struct {
@@ -31,7 +31,7 @@ type mockProviderRegistry struct {
 
 func (m *mockProviderRegistry) GetEmbedding() provider.EmbeddingProvider { return m.embedding }
 func (m *mockProviderRegistry) GetFact() provider.LLMProvider            { return m.fact }
-func (m *mockProviderRegistry) GetEntity() provider.LLMProvider           { return m.entity }
+func (m *mockProviderRegistry) GetEntity() provider.LLMProvider          { return m.entity }
 
 type mockQueueStatter struct {
 	stats *storage.QueueStats
@@ -51,14 +51,13 @@ type mockEmbeddingProvider struct {
 func (m *mockEmbeddingProvider) Embed(_ context.Context, _ *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
 	return nil, nil
 }
-func (m *mockEmbeddingProvider) Name() string     { return m.name }
-func (m *mockEmbeddingProvider) Dimensions() []int { return m.dimensions }
+func (m *mockEmbeddingProvider) Name() string                   { return m.name }
+func (m *mockEmbeddingProvider) Dimensions() []int              { return m.dimensions }
 func (m *mockEmbeddingProvider) Ping(ctx context.Context) error { return m.pingErr }
 
 type mockLLMProvider struct {
-	name    string
-	models  []string
-	pingErr *error // nil pointer means no ProviderHealth interface
+	name   string
+	models []string
 }
 
 func (m *mockLLMProvider) Complete(_ context.Context, _ *provider.CompletionRequest) (*provider.CompletionResponse, error) {

@@ -60,12 +60,6 @@ func (m *mockMemoryUpdater) SupersedeReplacing(_ context.Context, _ uuid.UUID, n
 	return nil
 }
 
-type mockLineageCreator struct{}
-
-func (m *mockLineageCreator) Create(_ context.Context, _ *model.MemoryLineage) error {
-	return nil
-}
-
 type mockMemoryBatchReader struct {
 	memories []model.Memory
 	err      error

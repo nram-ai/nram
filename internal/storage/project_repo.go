@@ -119,7 +119,7 @@ func (r *ProjectRepo) ListByUser(ctx context.Context, ownerNamespaceID uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("project list by user: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Project{}
 	for rows.Next() {
@@ -156,7 +156,7 @@ func (r *ProjectRepo) ListAll(ctx context.Context) ([]model.Project, error) {
 	if err != nil {
 		return nil, fmt.Errorf("project list all: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Project{}
 	for rows.Next() {
@@ -193,7 +193,7 @@ func (r *ProjectRepo) ListAllPaged(ctx context.Context, limit, offset int) ([]mo
 	if err != nil {
 		return nil, fmt.Errorf("project list all paged: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Project{}
 	for rows.Next() {

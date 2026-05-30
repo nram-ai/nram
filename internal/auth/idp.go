@@ -386,7 +386,7 @@ func (h *IdPHandler) discoverOIDC(ctx context.Context, issuerURL string) (*oidcD
 	if err != nil {
 		return nil, fmt.Errorf("fetch discovery document: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
@@ -443,7 +443,7 @@ func (h *IdPHandler) exchangeCode(ctx context.Context, tokenEndpoint, code, redi
 	if err != nil {
 		return nil, fmt.Errorf("token request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
@@ -527,7 +527,7 @@ func (h *IdPHandler) fetchUserInfo(ctx context.Context, userinfoEndpoint, access
 	if err != nil {
 		return nil, fmt.Errorf("userinfo request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
@@ -566,7 +566,7 @@ func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, ac
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("emails endpoint returned %d", resp.StatusCode)

@@ -39,7 +39,7 @@ func newUpdateTestRouter(handler http.HandlerFunc) *chi.Mux {
 
 func doUpdateRequest(router http.Handler, projectID, memoryID string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	_ = json.NewEncoder(&buf).Encode(body)
 
 	req := httptest.NewRequest(http.MethodPut, "/v1/projects/"+projectID+"/memories/"+memoryID, &buf)
 	req.Header.Set("Content-Type", "application/json")
@@ -266,7 +266,7 @@ func TestUpdateHandler_ServiceError_NotFound(t *testing.T) {
 
 func TestUpdateHandler_EmitsMemoryUpdatedEvent(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
 	if err != nil {

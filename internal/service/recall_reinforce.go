@@ -75,12 +75,12 @@ type ReinforcementDeps struct {
 // Only the first 20 memory IDs are included to bound event size; the count
 // field carries the true total.
 type reinforcementEvent struct {
-	Mode       string      `json:"mode"`
-	Count      int         `json:"count"`
-	Factor     float64     `json:"factor"`
-	MemoryIDs  []uuid.UUID `json:"memory_ids,omitempty"`
-	ElapsedMs  int64       `json:"elapsed_ms"`
-	Persisted  int64       `json:"persisted,omitempty"` // non-zero only in persist mode
+	Mode      string      `json:"mode"`
+	Count     int         `json:"count"`
+	Factor    float64     `json:"factor"`
+	MemoryIDs []uuid.UUID `json:"memory_ids,omitempty"`
+	ElapsedMs int64       `json:"elapsed_ms"`
+	Persisted int64       `json:"persisted,omitempty"` // non-zero only in persist mode
 }
 
 // relReinforcementEvent is the data payload for
@@ -102,7 +102,7 @@ type relReinforcementEvent struct {
 //
 //   - mode=off       → do nothing.
 //   - mode=shadow    → emit the event with the would-be deltas but do not
-//                       write to the database.
+//     write to the database.
 //   - mode=persist   → write to the database and emit the event.
 //
 // reinforce is called from a goroutine spawned by Recall. It is safe to call

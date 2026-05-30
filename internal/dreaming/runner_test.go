@@ -269,12 +269,12 @@ func (p *recordingPhase) Execute(_ context.Context, _ *model.DreamCycle, b *Toke
 // not the unit under test here.
 type noopRepo struct{}
 
-func (noopRepo) Start(context.Context, uuid.UUID) error                                  { return nil }
-func (noopRepo) UpdateStatus(context.Context, uuid.UUID, string, string) error           { return nil }
-func (noopRepo) UpdatePhaseSummary(context.Context, uuid.UUID, json.RawMessage) error    { return nil }
-func (noopRepo) TickProgress(context.Context, uuid.UUID) (int, error)                    { return 0, nil }
-func (noopRepo) Complete(context.Context, uuid.UUID, json.RawMessage) error              { return nil }
-func (noopRepo) Fail(context.Context, uuid.UUID, string) error                           { return nil }
+func (noopRepo) Start(context.Context, uuid.UUID) error                               { return nil }
+func (noopRepo) UpdateStatus(context.Context, uuid.UUID, string, string) error        { return nil }
+func (noopRepo) UpdatePhaseSummary(context.Context, uuid.UUID, json.RawMessage) error { return nil }
+func (noopRepo) TickProgress(context.Context, uuid.UUID) (int, error)                 { return 0, nil }
+func (noopRepo) Complete(context.Context, uuid.UUID, json.RawMessage) error           { return nil }
+func (noopRepo) Fail(context.Context, uuid.UUID, string) error                        { return nil }
 
 // newTestRunner builds a Runner directly so tests can stub the cycle repo,
 // settings, and phase list without going through the cmd/server wiring.

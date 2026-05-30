@@ -130,7 +130,7 @@ func (r *OAuthRepo) ListClientsByUser(ctx context.Context, userID uuid.UUID) ([]
 	if err != nil {
 		return nil, fmt.Errorf("oauth client list by user: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanClients(rows)
 }
@@ -143,7 +143,7 @@ func (r *OAuthRepo) ListAllClients(ctx context.Context) ([]model.OAuthClient, er
 	if err != nil {
 		return nil, fmt.Errorf("oauth client list all: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanClients(rows)
 }
@@ -737,7 +737,7 @@ func (r *OAuthRepo) ListClientsByShareToken(ctx context.Context, shareTokenID uu
 	if err != nil {
 		return nil, fmt.Errorf("oauth client list by share: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanClients(rows)
 }
@@ -820,7 +820,7 @@ func (r *OAuthRepo) ListIdPs(ctx context.Context) ([]model.OAuthIdPConfig, error
 	if err != nil {
 		return nil, fmt.Errorf("oauth idp list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanIdPs(rows)
 }
@@ -836,7 +836,7 @@ func (r *OAuthRepo) ListIdPsByOrg(ctx context.Context, orgID uuid.UUID) ([]model
 	if err != nil {
 		return nil, fmt.Errorf("oauth idp list by org: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanIdPs(rows)
 }

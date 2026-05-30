@@ -49,7 +49,7 @@ func TestOpenAIComplete(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -88,7 +88,7 @@ func TestOpenAICompleteAPIError(t *testing.T) {
 		"POST /v1/chat/completions": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(openaiErrorResponse{
+			_ = json.NewEncoder(w).Encode(openaiErrorResponse{
 				Error: openaiErrorDetail{
 					Message: "Rate limit exceeded",
 					Type:    "rate_limit_error",
@@ -157,7 +157,7 @@ func TestOpenAIEmbed(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -217,7 +217,7 @@ func TestOpenAIEmbedMultipleInputs(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -250,7 +250,7 @@ func TestOpenAIPingSuccess(t *testing.T) {
 		"GET /v1/models": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"object":"list","data":[]}`))
+			_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
 		},
 	})
 	defer srv.Close()
@@ -269,7 +269,7 @@ func TestOpenAIPingFailure(t *testing.T) {
 	srv := newTestServer(t, map[string]http.HandlerFunc{
 		"GET /v1/models": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":{"message":"invalid api key"}}`))
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid api key"}}`))
 		},
 	})
 	defer srv.Close()
@@ -296,7 +296,7 @@ func TestOpenAICustomBaseURL(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -337,7 +337,7 @@ func TestOpenAIRequestHeaders(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()

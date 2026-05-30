@@ -386,7 +386,7 @@ func TestProjectRepo_Delete(t *testing.T) {
 			t.Fatalf("begin tx: %v", err)
 		}
 		if err := repo.DeleteTx(ctx, tx, project.ID); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			t.Fatalf("failed to delete: %v", err)
 		}
 		if err := tx.Commit(); err != nil {

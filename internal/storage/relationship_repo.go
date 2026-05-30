@@ -246,7 +246,7 @@ func (r *RelationshipRepo) ListByNamespace(ctx context.Context, namespaceID uuid
 	if err != nil {
 		return nil, fmt.Errorf("relationship list by namespace: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanRelationships(rows)
 }
@@ -267,7 +267,7 @@ func (r *RelationshipRepo) ListByEntity(ctx context.Context, entityID uuid.UUID)
 	if err != nil {
 		return nil, fmt.Errorf("relationship list by entity: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanRelationships(rows)
 }
@@ -355,7 +355,7 @@ func (r *RelationshipRepo) HasBySourceMemory(ctx context.Context, namespaceID uu
 	if err != nil {
 		return false, fmt.Errorf("relationship has by source memory: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return rows.Next(), rows.Err()
 }
 
@@ -504,7 +504,7 @@ func (r *RelationshipRepo) BatchCreate(ctx context.Context, rels []*model.Relati
 	if err != nil {
 		return model.BatchCreateResult{}, fmt.Errorf("relationship batch create begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var result model.BatchCreateResult
 	for i := 0; i < len(rels); i += relationshipBatchChunkSize {
@@ -585,7 +585,7 @@ func (r *RelationshipRepo) execBatchCreateChunk(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return fmt.Errorf("batch create chunk exec: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	i := 0
 	for rows.Next() {
 		if i >= len(chunk) {
@@ -651,7 +651,7 @@ func (r *RelationshipRepo) BatchExpire(ctx context.Context, namespaceID uuid.UUI
 	if err != nil {
 		return 0, fmt.Errorf("relationship batch expire begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	isPg := r.db.Backend() == BackendPostgres
@@ -714,7 +714,7 @@ func (r *RelationshipRepo) BatchDeleteByID(ctx context.Context, namespaceID uuid
 	if err != nil {
 		return 0, fmt.Errorf("relationship batch delete begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	isPg := r.db.Backend() == BackendPostgres
 	var total int64
@@ -782,7 +782,7 @@ func (r *RelationshipRepo) BatchReinforce(ctx context.Context, namespaceID uuid.
 	if err != nil {
 		return 0, fmt.Errorf("relationship batch reinforce begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	isPg := r.db.Backend() == BackendPostgres
 	var total int64
@@ -856,7 +856,7 @@ func (r *RelationshipRepo) BatchUpdateWeight(ctx context.Context, namespaceID uu
 	if err != nil {
 		return 0, fmt.Errorf("relationship batch update weight begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	isPg := r.db.Backend() == BackendPostgres
 	var total int64
@@ -955,7 +955,6 @@ func withSavepoint(ctx context.Context, tx *sql.Tx, name string, fn func() error
 	}
 	return savepointOK, nil
 }
-
 
 const selectRelationshipColumns = `SELECT id, namespace_id, source_id, target_id, relation,
 	weight, properties, valid_from, valid_until, source_memory, created_at`

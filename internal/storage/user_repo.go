@@ -176,7 +176,7 @@ func (r *UserRepo) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]model.User
 	if err != nil {
 		return nil, fmt.Errorf("user list by org: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.User{}
 	for rows.Next() {
@@ -217,7 +217,7 @@ func (r *UserRepo) ListByOrgPaged(ctx context.Context, orgID uuid.UUID, limit, o
 	if err != nil {
 		return nil, fmt.Errorf("user list by org paged: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.User{}
 	for rows.Next() {
@@ -241,7 +241,7 @@ func (r *UserRepo) ListAll(ctx context.Context) ([]model.User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("user list all: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.User{}
 	for rows.Next() {
@@ -278,7 +278,7 @@ func (r *UserRepo) ListAllPaged(ctx context.Context, limit, offset int) ([]model
 	if err != nil {
 		return nil, fmt.Errorf("user list all paged: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.User{}
 	for rows.Next() {

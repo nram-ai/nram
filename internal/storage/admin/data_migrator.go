@@ -155,7 +155,7 @@ func (m *DataMigrator) sourceColumnExists(ctx context.Context, table, column str
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
 			cid       int
@@ -237,19 +237,19 @@ func newDataMigrator(ctx context.Context, src *sql.DB, targetURL string) (*DataM
 	dst.SetConnMaxLifetime(5 * time.Minute)
 
 	if err := dst.PingContext(ctx); err != nil {
-		dst.Close()
+		_ = dst.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
 	// Run schema migrations on the target database.
 	mg, err := migration.NewMigrator(dst, storage.BackendPostgres)
 	if err != nil {
-		dst.Close()
+		_ = dst.Close()
 		return nil, fmt.Errorf("create postgres migrator: %w", err)
 	}
 	if err := mg.Up(); err != nil {
 		_ = mg.Close()
-		dst.Close()
+		_ = dst.Close()
 		return nil, fmt.Errorf("postgres migrations: %w", err)
 	}
 	_ = mg.Close()
@@ -469,7 +469,7 @@ func (m *DataMigrator) migrateNamespaces(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -486,7 +486,7 @@ func (m *DataMigrator) migrateNamespaces(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -527,7 +527,7 @@ func (m *DataMigrator) migrateOrganizations(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -543,7 +543,7 @@ func (m *DataMigrator) migrateOrganizations(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var id, nsID, name, slug, settings, createdAt, updatedAt string
@@ -572,7 +572,7 @@ func (m *DataMigrator) migrateUsers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -589,7 +589,7 @@ func (m *DataMigrator) migrateUsers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -632,7 +632,7 @@ func (m *DataMigrator) migrateAPIKeys(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -648,7 +648,7 @@ func (m *DataMigrator) migrateAPIKeys(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -689,7 +689,7 @@ func (m *DataMigrator) migrateProjects(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -706,7 +706,7 @@ func (m *DataMigrator) migrateProjects(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -748,7 +748,7 @@ func (m *DataMigrator) migrateSettings(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -764,7 +764,7 @@ func (m *DataMigrator) migrateSettings(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -803,7 +803,7 @@ func (m *DataMigrator) migrateSystemMeta(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -819,7 +819,7 @@ func (m *DataMigrator) migrateSystemMeta(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var key, value, createdAt, updatedAt string
@@ -850,7 +850,7 @@ func (m *DataMigrator) migrateMemories(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -868,7 +868,7 @@ func (m *DataMigrator) migrateMemories(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -939,7 +939,7 @@ func (m *DataMigrator) migrateMemoriesSupersededByPass2(ctx context.Context) err
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -952,7 +952,7 @@ func (m *DataMigrator) migrateMemoriesSupersededByPass2(ctx context.Context) err
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var id, supersededBy string
@@ -980,7 +980,7 @@ func (m *DataMigrator) migrateMemoryVectors(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// Group vectors by target dimension table so we can batch-insert per table in a transaction.
 	type vectorRow struct {
@@ -1046,7 +1046,7 @@ func (m *DataMigrator) migrateMemoryVectors(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() { _ = stmt.Close() }()
 
 		for _, v := range vectors {
 			if _, err := stmt.ExecContext(ctx, v.memoryID, pgvector.NewVector(v.floats)); err != nil {
@@ -1071,7 +1071,7 @@ func (m *DataMigrator) migrateEntities(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1088,7 +1088,7 @@ func (m *DataMigrator) migrateEntities(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1127,7 +1127,7 @@ func (m *DataMigrator) migrateEntityAliases(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1143,7 +1143,7 @@ func (m *DataMigrator) migrateEntityAliases(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var id, namespaceID, entityID, alias, aliasType, createdAt string
@@ -1175,7 +1175,7 @@ func (m *DataMigrator) migrateRelationships(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1192,7 +1192,7 @@ func (m *DataMigrator) migrateRelationships(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1244,7 +1244,7 @@ func (m *DataMigrator) migrateMemoryLineage(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1260,7 +1260,7 @@ func (m *DataMigrator) migrateMemoryLineage(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1304,7 +1304,7 @@ func (m *DataMigrator) migrateIngestionLog(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1321,7 +1321,7 @@ func (m *DataMigrator) migrateIngestionLog(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1373,7 +1373,7 @@ func (m *DataMigrator) migrateEnrichmentQueue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1392,7 +1392,7 @@ func (m *DataMigrator) migrateEnrichmentQueue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1450,7 +1450,7 @@ func (m *DataMigrator) migrateWebhooks(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1467,7 +1467,7 @@ func (m *DataMigrator) migrateWebhooks(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1514,7 +1514,7 @@ func (m *DataMigrator) migrateTokenUsage(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1532,7 +1532,7 @@ func (m *DataMigrator) migrateTokenUsage(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1599,7 +1599,7 @@ func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1616,7 +1616,7 @@ func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1670,7 +1670,7 @@ func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1688,7 +1688,7 @@ func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1732,7 +1732,7 @@ func (m *DataMigrator) migrateOAuthRefreshTokens(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1749,7 +1749,7 @@ func (m *DataMigrator) migrateOAuthRefreshTokens(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1791,7 +1791,7 @@ func (m *DataMigrator) migrateOAuthIDPConfigs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1809,7 +1809,7 @@ func (m *DataMigrator) migrateOAuthIDPConfigs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1870,7 +1870,7 @@ func (m *DataMigrator) migrateDreamCycles(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1888,7 +1888,7 @@ func (m *DataMigrator) migrateDreamCycles(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -1963,7 +1963,7 @@ func (m *DataMigrator) migrateDreamLogs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -1980,7 +1980,7 @@ func (m *DataMigrator) migrateDreamLogs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -2029,7 +2029,7 @@ func (m *DataMigrator) migrateDreamLogSummaries(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -2045,7 +2045,7 @@ func (m *DataMigrator) migrateDreamLogSummaries(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -2090,7 +2090,7 @@ func (m *DataMigrator) migrateDreamProjectDirty(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -2106,7 +2106,7 @@ func (m *DataMigrator) migrateDreamProjectDirty(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (
@@ -2151,7 +2151,7 @@ func (m *DataMigrator) migrateWebauthnCredentials(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tx, err := m.dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -2170,7 +2170,7 @@ func (m *DataMigrator) migrateWebauthnCredentials(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for rows.Next() {
 		var (

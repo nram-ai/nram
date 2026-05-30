@@ -13,18 +13,18 @@ import (
 // --- mock DatabaseAdminStore ---
 
 type mockDatabaseAdminStore struct {
-	info       *DatabaseInfo
-	infoErr    error
-	testRes    *ConnectionTestResult
-	testErr    error
-	migrateRes *MigrationStatus
-	migrateErr error
+	info         *DatabaseInfo
+	infoErr      error
+	testRes      *ConnectionTestResult
+	testErr      error
+	migrateRes   *MigrationStatus
+	migrateErr   error
 	preflightRes *PreflightReport
 	preflightErr error
-	resetRes   *ResetResult
-	resetErr   error
-	auditRes   *MigrationAudit
-	auditErr   error
+	resetRes     *ResetResult
+	resetErr     error
+	auditRes     *MigrationAudit
+	auditErr     error
 
 	// capture args
 	testURL      string

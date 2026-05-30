@@ -20,7 +20,7 @@ func testSQLiteDB(t *testing.T) DB {
 		t.Fatalf("failed to chdir to temp dir: %v", err)
 	}
 	t.Cleanup(func() {
-		os.Chdir(origDir)
+		_ = os.Chdir(origDir)
 	})
 
 	db, err := Open(config.DatabaseConfig{})
@@ -28,7 +28,7 @@ func testSQLiteDB(t *testing.T) DB {
 		t.Fatalf("failed to open sqlite database: %v", err)
 	}
 	t.Cleanup(func() {
-		db.Close()
+		_ = db.Close()
 	})
 	return db
 }
@@ -43,14 +43,14 @@ func TestOpenSQLiteCreatesFile(t *testing.T) {
 		t.Fatalf("failed to chdir to temp dir: %v", err)
 	}
 	t.Cleanup(func() {
-		os.Chdir(origDir)
+		_ = os.Chdir(origDir)
 	})
 
 	db, err := Open(config.DatabaseConfig{})
 	if err != nil {
 		t.Fatalf("failed to open sqlite database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	dbPath := filepath.Join(tmpDir, "nram.db")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
@@ -102,7 +102,7 @@ func TestSQLiteExecQueryQueryRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to query rows: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var names []string
 	for rows.Next() {
@@ -146,7 +146,7 @@ func TestSQLiteBeginTxCommit(t *testing.T) {
 
 	_, err = tx.ExecContext(ctx, "INSERT INTO tx_test (val) VALUES (?)", "committed")
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		t.Fatalf("failed to insert in transaction: %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestSQLiteBeginTxRollback(t *testing.T) {
 
 	_, err = tx.ExecContext(ctx, "INSERT INTO tx_rollback_test (val) VALUES (?)", "rolled_back")
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		t.Fatalf("failed to insert in transaction: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestSQLiteClose(t *testing.T) {
 		t.Fatalf("failed to chdir to temp dir: %v", err)
 	}
 	t.Cleanup(func() {
-		os.Chdir(origDir)
+		_ = os.Chdir(origDir)
 	})
 
 	db, err := Open(config.DatabaseConfig{})

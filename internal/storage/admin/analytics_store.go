@@ -199,7 +199,7 @@ func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause st
 	if err != nil {
 		return nil, fmt.Errorf("ranked memories query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	items := []api.MemoryRankItem{}
 	for rows.Next() {

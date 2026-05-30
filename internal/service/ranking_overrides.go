@@ -142,4 +142,3 @@ func MergeWeights(base RankingWeights, ov ProjectRankingOverride) RankingWeights
 	}
 	return out
 }
-

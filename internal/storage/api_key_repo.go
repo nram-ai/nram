@@ -127,7 +127,7 @@ func (r *APIKeyRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]model.
 	if err != nil {
 		return nil, fmt.Errorf("api key list by user: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.APIKey{}
 	for rows.Next() {
@@ -170,7 +170,7 @@ func (r *APIKeyRepo) ListByUserPaged(ctx context.Context, userID uuid.UUID, limi
 	if err != nil {
 		return nil, fmt.Errorf("api key list by user paged: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.APIKey{}
 	for rows.Next() {
@@ -225,7 +225,7 @@ func (r *APIKeyRepo) CheckExpiry(ctx context.Context, userID uuid.UUID) ([]model
 	if err != nil {
 		return nil, fmt.Errorf("api key check expiry: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var result []model.APIKey
 	for rows.Next() {

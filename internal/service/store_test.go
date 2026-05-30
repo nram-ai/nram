@@ -351,8 +351,8 @@ func TestStore_WithTagsAndMetadata(t *testing.T) {
 		ProjectID: projectID,
 		Content:   "Tagged content",
 		Source:    "test",
-		Tags:     tags,
-		Metadata: meta,
+		Tags:      tags,
+		Metadata:  meta,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

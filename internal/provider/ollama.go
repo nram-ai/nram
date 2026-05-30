@@ -133,7 +133,7 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]OllamaModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ollama: list models request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -186,7 +186,7 @@ func (c *OllamaClient) PullModel(ctx context.Context, name string, progress func
 	if err != nil {
 		return fmt.Errorf("ollama: pull request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
@@ -291,7 +291,7 @@ func (c *OllamaClient) fetchShow(ctx context.Context, modelName string) (ollamaS
 	if err != nil {
 		return ollamaShowResponse{}, fmt.Errorf("ollama: show request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -323,7 +323,7 @@ func (c *OllamaClient) runningModels(ctx context.Context) ([]ollamaPSModel, erro
 	if err != nil {
 		return nil, fmt.Errorf("ollama: ps request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -412,7 +412,7 @@ func (c *OllamaClient) ProbeURL(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ollama: probe failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

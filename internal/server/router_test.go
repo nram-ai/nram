@@ -47,7 +47,7 @@ func TestHealthEndpointNoAuth(t *testing.T) {
 		Health: func(w http.ResponseWriter, r *http.Request) {
 			healthCalled = true
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"ok"}`))
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		},
 	}
 
@@ -138,7 +138,7 @@ func TestAdminRouteAdminReturns200(t *testing.T) {
 		AdminDashboard: func(w http.ResponseWriter, r *http.Request) {
 			dashboardCalled = true
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"data":"dashboard"}`))
+			_, _ = w.Write([]byte(`{"data":"dashboard"}`))
 		},
 	}
 

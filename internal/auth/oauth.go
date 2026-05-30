@@ -102,7 +102,7 @@ func (s *OAuthServer) MetadataHandler() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(meta)
+		_ = json.NewEncoder(w).Encode(meta)
 	}
 }
 
@@ -178,7 +178,7 @@ func (s *OAuthServer) RegisterClientHandler() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 
@@ -294,7 +294,7 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 	// Check expiration
 	if time.Now().UTC().After(authCode.ExpiresAt) {
 		// Consume the expired code
-		s.oauthRepo.ConsumeAuthCode(r.Context(), req.Code)
+		_ = s.oauthRepo.ConsumeAuthCode(r.Context(), req.Code)
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code expired")
 		return
 	}
@@ -386,7 +386,7 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request, req *tokenRequest) {
@@ -485,7 +485,7 @@ func (s *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // userInfoResponse is the response for the UserInfo endpoint.
@@ -583,7 +583,7 @@ func (s *OAuthServer) UserInfoHandler() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 
@@ -610,7 +610,7 @@ func (s *OAuthServer) ProtectedResourceHandler() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(meta)
+		_ = json.NewEncoder(w).Encode(meta)
 	}
 }
 
@@ -675,7 +675,7 @@ type oauthError struct {
 func writeOAuthError(w http.ResponseWriter, statusCode int, errCode, description string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(oauthError{
+	_ = json.NewEncoder(w).Encode(oauthError{
 		Error:            errCode,
 		ErrorDescription: description,
 	})

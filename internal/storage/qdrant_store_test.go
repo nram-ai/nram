@@ -32,7 +32,7 @@ func setupQdrantTest(t *testing.T) *QdrantStore {
 
 	ctx := context.Background()
 	if err := store.EnsureCollections(ctx); err != nil {
-		store.Close()
+		_ = store.Close()
 		t.Fatalf("EnsureCollections: %v", err)
 	}
 
@@ -61,7 +61,7 @@ func setupQdrantTest(t *testing.T) *QdrantStore {
 				}
 			}
 		}
-		store.Close()
+		_ = store.Close()
 	})
 
 	return store
@@ -401,7 +401,7 @@ func TestQdrantStore_NewWithFullConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewQdrantStore with full config: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 
 	ctx := context.Background()
 
@@ -449,7 +449,7 @@ func TestQdrantStore_NewWithPoolSizeOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewQdrantStore with PoolSize=1: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 
 	ctx := context.Background()
 
@@ -497,7 +497,7 @@ func TestQdrantStore_NewWithKeepAliveDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewQdrantStore with KeepAliveTime=-1: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 
 	if err := store.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping: %v", err)
@@ -514,7 +514,7 @@ func TestQdrantStore_NewWithEmptyAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewQdrantStore with empty APIKey: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 
 	if err := store.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping: %v", err)

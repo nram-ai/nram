@@ -31,13 +31,13 @@ type UpdateProviderSlotOpts struct {
 // providing confirm_invalidate=true; the response carries row counts
 // the UI can show in its confirmation modal.
 type UpdateProviderSlotResult struct {
-	NeedsConfirmation     bool   `json:"needs_confirmation,omitempty"`
-	OldModel              string `json:"old_model,omitempty"`
-	NewModel              string `json:"new_model,omitempty"`
-	MemoriesAffected      int64  `json:"memories_affected,omitempty"`
-	EntitiesAffected      int64  `json:"entities_affected,omitempty"`
-	MemoryJobsEnqueued    int64  `json:"memory_jobs_enqueued,omitempty"`
-	EntityReembedQueued   bool   `json:"entity_reembed_queued,omitempty"`
+	NeedsConfirmation   bool   `json:"needs_confirmation,omitempty"`
+	OldModel            string `json:"old_model,omitempty"`
+	NewModel            string `json:"new_model,omitempty"`
+	MemoriesAffected    int64  `json:"memories_affected,omitempty"`
+	EntitiesAffected    int64  `json:"entities_affected,omitempty"`
+	MemoryJobsEnqueued  int64  `json:"memory_jobs_enqueued,omitempty"`
+	EntityReembedQueued bool   `json:"entity_reembed_queued,omitempty"`
 }
 
 // ProviderAdminConfig holds the dependencies for the provider admin handler.

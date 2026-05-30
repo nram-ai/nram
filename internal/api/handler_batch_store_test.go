@@ -41,7 +41,7 @@ func newBatchStoreRouter(handler http.HandlerFunc) *chi.Mux {
 
 func doBatchStoreRequest(router http.Handler, projectID string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	_ = json.NewEncoder(&buf).Encode(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/memories/batch", &buf)
 	req.Header.Set("Content-Type", "application/json")
@@ -229,7 +229,7 @@ func TestBatchStoreHandler_PartialSuccess(t *testing.T) {
 
 func TestBatchStoreHandler_EmitsMemoryCreatedEvents(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
 	if err != nil {

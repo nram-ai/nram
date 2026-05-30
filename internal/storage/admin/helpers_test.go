@@ -27,13 +27,13 @@ func setupAdminTestDB(t *testing.T) storage.DB {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
-	t.Cleanup(func() { os.Chdir(origDir) })
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	db, err := storage.Open(config.DatabaseConfig{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	migrator, err := migration.NewMigrator(db.DB(), db.Backend())
 	if err != nil {
@@ -69,7 +69,7 @@ func setupAdminTestPostgres(t *testing.T) storage.DB {
 	if err != nil {
 		t.Fatalf("open admin postgres: %v", err)
 	}
-	defer admin.Close()
+	defer func() { _ = admin.Close() }()
 
 	dbName := "t_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	// SQL_ASCII encoding so the database accepts arbitrary bytes in TEXT
@@ -90,13 +90,13 @@ func setupAdminTestPostgres(t *testing.T) storage.DB {
 		t.Fatalf("open test db: %v", err)
 	}
 	t.Cleanup(func() {
-		db.Close()
+		_ = db.Close()
 		admin2, err := sql.Open("pgx", resolvedPostgresURL)
 		if err == nil {
 			// FORCE disconnects any stragglers so DROP succeeds even if a
 			// pooled conn hasn't fully released. Postgres 13+.
-			admin2.Exec("DROP DATABASE IF EXISTS " + dbName + " WITH (FORCE)")
-			admin2.Close()
+			_, _ = admin2.Exec("DROP DATABASE IF EXISTS " + dbName + " WITH (FORCE)")
+			_ = admin2.Close()
 		}
 	})
 

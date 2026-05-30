@@ -45,7 +45,7 @@ func newDeleteRouter(handler http.HandlerFunc) *chi.Mux {
 
 func doBulkForgetRequest(router http.Handler, path string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	_ = json.NewEncoder(&buf).Encode(body)
 
 	req := httptest.NewRequest(http.MethodPost, path, &buf)
 	req.Header.Set("Content-Type", "application/json")
@@ -320,7 +320,7 @@ func TestBulkForgetHandler_TagsOnly(t *testing.T) {
 
 func TestDeleteHandler_EmitsMemoryDeletedEvent(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
 	if err != nil {
@@ -360,7 +360,7 @@ func TestDeleteHandler_EmitsMemoryDeletedEvent(t *testing.T) {
 
 func TestBulkForgetHandler_EmitsMemoryDeletedEvents(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
 	if err != nil {

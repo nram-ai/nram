@@ -102,7 +102,7 @@ func (r *DreamDirtyRepo) ListDirtyProjects(ctx context.Context) ([]model.DirtyPr
 	if err != nil {
 		return nil, fmt.Errorf("dream dirty list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var result []model.DirtyProject
 	for rows.Next() {

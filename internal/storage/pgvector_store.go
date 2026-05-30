@@ -71,11 +71,11 @@ func NewPgVectorStoreFromPool(pool *pgxpool.Pool) *PgVectorStore {
 // pgvectorTableSpec captures everything routing needs to know to dispatch a
 // query to the correct family of tables.
 type pgvectorTableSpec struct {
-	table       string          // dimension-specific vector table
-	parent      string          // parent row table for namespace JOINs
-	idColumn    string          // foreign-key column (memory_id / entity_id)
-	softDeletes bool            // parent table has a deleted_at column
-	dimTables   map[int]string  // every dim table for this kind, used for delete-all-dim
+	table       string         // dimension-specific vector table
+	parent      string         // parent row table for namespace JOINs
+	idColumn    string         // foreign-key column (memory_id / entity_id)
+	softDeletes bool           // parent table has a deleted_at column
+	dimTables   map[int]string // every dim table for this kind, used for delete-all-dim
 }
 
 func dimTablesForKind(kind VectorKind) map[int]string {
@@ -182,7 +182,7 @@ func (s *PgVectorStore) UpsertBatch(ctx context.Context, items []VectorUpsertIte
 		br := tx.SendBatch(ctx, batch)
 		for range group {
 			if _, err := br.Exec(); err != nil {
-				br.Close()
+				_ = br.Close()
 				return fmt.Errorf("pgvector: batch upsert failed for table %s: %w", spec.table, err)
 			}
 		}
@@ -292,7 +292,7 @@ func (s *PgVectorStore) Delete(ctx context.Context, kind VectorKind, id uuid.UUI
 	}
 
 	br := s.pool.SendBatch(ctx, batch)
-	defer br.Close()
+	defer func() { _ = br.Close() }()
 
 	for range tables {
 		if _, err := br.Exec(); err != nil {

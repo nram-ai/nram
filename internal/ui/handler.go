@@ -27,7 +27,7 @@ func Handler() http.Handler {
 		// Check if the file exists in the embedded filesystem.
 		f, err := distRoot.Open(path)
 		if err == nil {
-			f.Close()
+			_ = f.Close()
 			fileServer.ServeHTTP(w, r)
 			return
 		}

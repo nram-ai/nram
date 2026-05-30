@@ -75,7 +75,6 @@ type integrationRouterConfig struct {
 	meRecall   http.HandlerFunc
 	meProjects http.HandlerFunc
 	// admin
-	adminDashboard   http.HandlerFunc
 	adminSetupStatus http.HandlerFunc
 	adminSetup       http.HandlerFunc
 	// health

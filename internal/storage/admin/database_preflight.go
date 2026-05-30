@@ -90,7 +90,7 @@ func (s *DatabaseAdminStore) Preflight(ctx context.Context, url string) (*api.Pr
 		})
 		return report, nil
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	db.SetMaxOpenConns(2)
 	db.SetConnMaxLifetime(30 * time.Second)
@@ -315,7 +315,7 @@ func existingNramTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	present := make(map[string]bool)
 	for rows.Next() {
@@ -358,7 +358,7 @@ func (s *DatabaseAdminStore) ResetTarget(ctx context.Context, url, mode string) 
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	db.SetMaxOpenConns(2)
 	db.SetConnMaxLifetime(30 * time.Second)

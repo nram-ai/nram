@@ -88,7 +88,7 @@ func (r *IngestionLogRepo) ListByNamespace(ctx context.Context, namespaceID uuid
 	if err != nil {
 		return nil, fmt.Errorf("ingestion_log list by namespace: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanIngestionLogs(rows)
 }

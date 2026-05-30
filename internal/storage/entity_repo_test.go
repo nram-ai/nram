@@ -960,7 +960,6 @@ func TestEntityRepo_ClearAllEmbeddingDims(t *testing.T) {
 
 		// 3 entities with embedding_dim set, 1 with NULL.
 		dim := 768
-		var ids []uuid.UUID
 		for i := range 3 {
 			e := newTestEntity(ns)
 			e.Canonical = fmt.Sprintf("e%d", i)
@@ -968,7 +967,6 @@ func TestEntityRepo_ClearAllEmbeddingDims(t *testing.T) {
 			if err := repo.Create(ctx, e); err != nil {
 				t.Fatalf("create with dim: %v", err)
 			}
-			ids = append(ids, e.ID)
 		}
 		eNull := newTestEntity(ns)
 		eNull.Canonical = "e_null"

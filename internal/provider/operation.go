@@ -30,13 +30,13 @@ const (
 	// Dream-cycle operations. Kept distinct from the consolidation/
 	// contradiction-check generics so analytics can drill into the specific
 	// stage of the dream pipeline that consumed tokens.
-	OperationDreamSynthesis            Operation = "dream_synthesis"
-	OperationDreamAlignmentScoring     Operation = "dream_alignment_scoring"
-	OperationDreamContradiction        Operation = "dream_contradiction"
-	OperationDreamContradictionEmbed   Operation = "dream_contradiction_embedding"
-	OperationDreamNoveltyEmbedding     Operation = "dream_novelty_embedding"
-	OperationDreamNoveltyAudit         Operation = "dream_novelty_audit"
-	OperationDreamNoveltyBackfill      Operation = "dream_novelty_backfill"
+	OperationDreamSynthesis          Operation = "dream_synthesis"
+	OperationDreamAlignmentScoring   Operation = "dream_alignment_scoring"
+	OperationDreamContradiction      Operation = "dream_contradiction"
+	OperationDreamContradictionEmbed Operation = "dream_contradiction_embedding"
+	OperationDreamNoveltyEmbedding   Operation = "dream_novelty_embedding"
+	OperationDreamNoveltyAudit       Operation = "dream_novelty_audit"
+	OperationDreamNoveltyBackfill    Operation = "dream_novelty_backfill"
 )
 
 type ctxKey int

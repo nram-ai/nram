@@ -260,7 +260,7 @@ type rrTestEnv struct {
 func rrEmptyOK(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{}`))
+	_, _ = w.Write([]byte(`{}`))
 }
 
 func newRRTestEnv(t *testing.T) *rrTestEnv {
@@ -510,12 +510,12 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 
 		Health: func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"ok"}`))
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		},
 		AdminSetupStatus: func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"complete":true}`))
+			_, _ = w.Write([]byte(`{"complete":true}`))
 		},
 	}
 

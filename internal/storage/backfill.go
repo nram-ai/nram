@@ -86,7 +86,7 @@ func hasUncoveredMemory(ctx context.Context, db DB) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("enqueue uncovered memories: probe: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return rows.Next(), rows.Err()
 }
 
@@ -118,7 +118,7 @@ func NormalizeMemoryTags(ctx context.Context, db DB) (int64, error) {
 	for rows.Next() {
 		var id, raw string
 		if err := rows.Scan(&id, &raw); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, fmt.Errorf("normalize memory tags: scan: %w", err)
 		}
 		decoded, decErr := decodeStringArray(backend, raw)
@@ -137,10 +137,10 @@ func NormalizeMemoryTags(ctx context.Context, db DB) (int64, error) {
 		changes = append(changes, pending{id: id, encoded: encoded})
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return 0, fmt.Errorf("normalize memory tags: rows: %w", err)
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	if len(changes) == 0 {
 		return 0, nil

@@ -68,7 +68,7 @@ func TestGeminiComplete(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -113,7 +113,7 @@ func TestGeminiCompleteWithSystemMessage(t *testing.T) {
 
 	srv := newGeminiTestServer(t, map[string]http.HandlerFunc{
 		":generateContent": func(w http.ResponseWriter, r *http.Request) {
-			json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
 
 			resp := geminiGenerateResponse{
 				Candidates: []geminiCandidate{
@@ -132,7 +132,7 @@ func TestGeminiCompleteWithSystemMessage(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -176,7 +176,7 @@ func TestGeminiCompleteAssistantRoleMapping(t *testing.T) {
 
 	srv := newGeminiTestServer(t, map[string]http.HandlerFunc{
 		":generateContent": func(w http.ResponseWriter, r *http.Request) {
-			json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
 
 			resp := geminiGenerateResponse{
 				Candidates: []geminiCandidate{
@@ -190,7 +190,7 @@ func TestGeminiCompleteAssistantRoleMapping(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -226,7 +226,7 @@ func TestGeminiCompleteAPIError(t *testing.T) {
 		":generateContent": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(geminiErrorResponse{
+			_ = json.NewEncoder(w).Encode(geminiErrorResponse{
 				Error: geminiErrorDetail{
 					Code:    429,
 					Message: "Resource exhausted",
@@ -285,7 +285,7 @@ func TestGeminiEmbedSingle(t *testing.T) {
 			resp := geminiEmbedResponse{}
 			resp.Embedding.Values = []float32{0.1, 0.2, 0.3}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -342,7 +342,7 @@ func TestGeminiEmbedBatch(t *testing.T) {
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -379,7 +379,7 @@ func TestGeminiPingSuccess(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(geminiModelsResponse{
+			_ = json.NewEncoder(w).Encode(geminiModelsResponse{
 				Models: []geminiModel{{Name: "models/gemini-2.0-flash"}},
 			})
 		},
@@ -401,7 +401,7 @@ func TestGeminiPingFailure(t *testing.T) {
 		"/v1beta/models": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(geminiErrorResponse{
+			_ = json.NewEncoder(w).Encode(geminiErrorResponse{
 				Error: geminiErrorDetail{
 					Code:    403,
 					Message: "API key not valid",
@@ -446,7 +446,7 @@ func TestGeminiAPIKeyAsQueryParam(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -476,7 +476,7 @@ func TestGeminiRequestFormat(t *testing.T) {
 	srv := newGeminiTestServer(t, map[string]http.HandlerFunc{
 		":generateContent": func(w http.ResponseWriter, r *http.Request) {
 			receivedPath = r.URL.Path
-			json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
 
 			resp := geminiGenerateResponse{
 				Candidates: []geminiCandidate{
@@ -490,7 +490,7 @@ func TestGeminiRequestFormat(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -549,12 +549,12 @@ func TestGeminiEmbedRequestFormat(t *testing.T) {
 	srv := newGeminiTestServer(t, map[string]http.HandlerFunc{
 		":embedContent": func(w http.ResponseWriter, r *http.Request) {
 			receivedPath = r.URL.Path
-			json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
 
 			resp := geminiEmbedResponse{}
 			resp.Embedding.Values = []float32{0.1, 0.2, 0.3}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()

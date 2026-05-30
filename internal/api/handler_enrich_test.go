@@ -38,7 +38,7 @@ func newEnrichRouter(handler http.HandlerFunc) *chi.Mux {
 
 func doEnrichRequest(router http.Handler, projectID string, body any) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	_ = json.NewEncoder(&buf).Encode(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/memories/enrich", &buf)
 	req.Header.Set("Content-Type", "application/json")
@@ -246,7 +246,7 @@ func TestEnrichHandler_ServiceError_Internal(t *testing.T) {
 
 func TestEnrichHandler_EmitsMemoryEnrichedEvent(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
 	if err != nil {
@@ -289,7 +289,7 @@ func TestEnrichHandler_EmitsMemoryEnrichedEvent(t *testing.T) {
 
 func TestEnrichHandler_EmitsEnrichmentFailedEvent(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	ch, cancel, err := bus.Subscribe(context.Background(), "")
 	if err != nil {
@@ -351,7 +351,7 @@ func TestEnrichHandler_PassesIncludeSupersededFlag(t *testing.T) {
 
 	got = nil
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	_ = json.NewEncoder(&buf).Encode(body)
 	req := httptest.NewRequest(http.MethodPost,
 		"/v1/projects/"+projectID.String()+"/memories/enrich?include_superseded=true", &buf)
 	req.Header.Set("Content-Type", "application/json")

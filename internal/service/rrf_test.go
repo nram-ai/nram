@@ -60,8 +60,8 @@ func TestReciprocalRankFusion_DocInOnlyOneRanking(t *testing.T) {
 
 	got := ReciprocalRankFusion(
 		[][]storage.MemoryRank{
-			ranking(a),         // a in list 1 only
-			ranking(b),         // b in list 2 only
+			ranking(a), // a in list 1 only
+			ranking(b), // b in list 2 only
 		},
 		60,
 		[]float64{0.7, 0.3},

@@ -42,9 +42,9 @@ func (f *fakeStuckSettings) ResolveDurationSecondsWithDefault(_ context.Context,
 }
 
 type fakeStuckStore struct {
-	mu        sync.Mutex
-	stale     []model.DreamCycle
-	abandoned []uuid.UUID
+	mu         sync.Mutex
+	stale      []model.DreamCycle
+	abandoned  []uuid.UUID
 	abandonErr error
 }
 

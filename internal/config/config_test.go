@@ -22,7 +22,7 @@ func clearEnv(t *testing.T) {
 	vars = append(vars, deprecatedEnvVars...)
 	for _, v := range vars {
 		t.Setenv(v, "")
-		os.Unsetenv(v)
+		_ = os.Unsetenv(v)
 	}
 }
 
@@ -311,7 +311,7 @@ server:
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("changing to temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.Chdir(origDir) })
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	cfg, err := Load("")
 	if err != nil {

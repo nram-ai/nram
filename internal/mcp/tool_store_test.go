@@ -678,12 +678,6 @@ func (m *mockIngestionLogRepo) Create(_ context.Context, _ *model.IngestionLog) 
 	return nil
 }
 
-type mockTokenUsageRepo struct{}
-
-func (m *mockTokenUsageRepo) Record(_ context.Context, _ *model.TokenUsage) error {
-	return nil
-}
-
 type mockEnrichmentQueueRepo struct{}
 
 func (m *mockEnrichmentQueueRepo) Enqueue(_ context.Context, _ *model.EnrichmentJob) error {

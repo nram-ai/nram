@@ -39,7 +39,7 @@ func TestEmbeddedMigrations_UpAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMigrator: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	if err := m.Up(); err != nil {
 		t.Fatalf("Up: %v", err)
@@ -60,7 +60,7 @@ func TestEmbeddedMigrations_UpAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMigrator (idempotent): %v", err)
 	}
-	defer m2.Close()
+	defer func() { _ = m2.Close() }()
 	if err := m2.Up(); err != nil {
 		t.Fatalf("Up (idempotent): %v", err)
 	}

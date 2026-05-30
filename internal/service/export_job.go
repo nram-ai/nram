@@ -533,4 +533,3 @@ func sanitizeFileSegment(s string) string {
 	}
 	return clean
 }
-

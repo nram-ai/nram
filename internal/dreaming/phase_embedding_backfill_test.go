@@ -17,12 +17,12 @@ import (
 // divergent rows per dim. The phase queries one dim at a time so the
 // double maps dim → rows.
 type fakeMemoryDimRepairer struct {
-	rowsByDim    map[int][]model.Memory
-	queryCalls   int
-	lastDim      int
-	lastLimit    int
-	errOnDim     int
-	errToReturn  error
+	rowsByDim   map[int][]model.Memory
+	queryCalls  int
+	lastDim     int
+	lastLimit   int
+	errOnDim    int
+	errToReturn error
 }
 
 func (f *fakeMemoryDimRepairer) FindMemoriesMissingVector(_ context.Context, _ uuid.UUID, dim, limit int) ([]model.Memory, error) {
@@ -45,9 +45,9 @@ func (f *fakeMemoryDimRepairer) FindMemoriesMissingVector(_ context.Context, _ u
 // recordingVectorStore captures Upsert and Delete calls so backfill tests
 // can assert what got repaired vs. cleared.
 type recordingVectorStore struct {
-	upserts    []vectorUpsertRecord
-	deletes    []uuid.UUID
-	upsertErr  error
+	upserts   []vectorUpsertRecord
+	deletes   []uuid.UUID
+	upsertErr error
 }
 
 type vectorUpsertRecord struct {
@@ -92,9 +92,9 @@ func (f *failingEmbedder) Embed(_ context.Context, _ *provider.EmbeddingRequest)
 	f.calls++
 	return nil, f.err
 }
-func (f *failingEmbedder) Name() string         { return "failing-embedder" }
-func (f *failingEmbedder) Models() []string     { return []string{"failing-model"} }
-func (f *failingEmbedder) Dimensions() []int    { return []int{384} }
+func (f *failingEmbedder) Name() string          { return "failing-embedder" }
+func (f *failingEmbedder) Models() []string      { return []string{"failing-model"} }
+func (f *failingEmbedder) Dimensions() []int     { return []int{384} }
 func (f *failingEmbedder) DefaultDimension() int { return 384 }
 
 func backfillSettings(enabled bool, capPerCycle int) *staticDreamSettings {

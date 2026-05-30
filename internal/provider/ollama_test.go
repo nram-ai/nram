@@ -40,7 +40,7 @@ func TestOllamaListModelsSuccess(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -75,7 +75,7 @@ func TestOllamaListModelsEmpty(t *testing.T) {
 		"/api/tags": func(w http.ResponseWriter, r *http.Request) {
 			resp := ollamaTagsResponse{Models: nil}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -144,7 +144,7 @@ func TestOllamaPullModelSuccess(t *testing.T) {
 
 			for _, u := range updates {
 				line, _ := json.Marshal(u)
-				fmt.Fprintf(w, "%s\n", line)
+				_, _ = fmt.Fprintf(w, "%s\n", line)
 				flusher.Flush()
 			}
 		},
@@ -177,7 +177,7 @@ func TestOllamaPullModelProgressCallback(t *testing.T) {
 
 			for _, u := range updates {
 				line, _ := json.Marshal(u)
-				fmt.Fprintf(w, "%s\n", line)
+				_, _ = fmt.Fprintf(w, "%s\n", line)
 				flusher.Flush()
 			}
 		},
@@ -253,7 +253,7 @@ func TestOllamaPullModelErrorInStream(t *testing.T) {
 
 			for _, u := range updates {
 				line, _ := json.Marshal(u)
-				fmt.Fprintf(w, "%s\n", line)
+				_, _ = fmt.Fprintf(w, "%s\n", line)
 				flusher.Flush()
 			}
 		},
@@ -278,7 +278,7 @@ func TestOllamaProbeURLSuccess(t *testing.T) {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, "Ollama is running")
+			_, _ = fmt.Fprint(w, "Ollama is running")
 		},
 	})
 	defer srv.Close()
@@ -368,7 +368,7 @@ func TestOllamaContextLength_ParsesQwen2Family(t *testing.T) {
 				t.Errorf("expected name=qwen3:8b, got %q", body.Name)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"model_info":{"qwen2.context_length":40960,"qwen2.attention.head_count":32}}`))
+			_, _ = w.Write([]byte(`{"model_info":{"qwen2.context_length":40960,"qwen2.attention.head_count":32}}`))
 		},
 	})
 	defer srv.Close()
@@ -400,7 +400,7 @@ func TestOllamaContextLength_ParsesAnyArchKey(t *testing.T) {
 		t.Run(body, func(t *testing.T) {
 			srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
 				"/api/show": func(w http.ResponseWriter, r *http.Request) {
-					w.Write([]byte(body))
+					_, _ = w.Write([]byte(body))
 				},
 			})
 			defer srv.Close()
@@ -425,7 +425,7 @@ func TestOllamaContextLength_MissingFieldReturnsZero(t *testing.T) {
 			// Real Ollama responses sometimes lack model_info entirely; the
 			// detector must treat this as "unknown" without surfacing an
 			// error.
-			w.Write([]byte(`{"details":{"family":"llama"}}`))
+			_, _ = w.Write([]byte(`{"details":{"family":"llama"}}`))
 		},
 	})
 	defer srv.Close()
@@ -468,7 +468,7 @@ func TestOllamaContextLength_PrefersPSOverShow(t *testing.T) {
 	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
 		"/api/show": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{
+			_, _ = w.Write([]byte(`{
 				"model_info":{"qwen2.context_length":40960},
 				"parameters":"num_ctx                        16384\nstop                          \"<|im_start|>\""
 			}`))
@@ -478,7 +478,7 @@ func TestOllamaContextLength_PrefersPSOverShow(t *testing.T) {
 				t.Errorf("expected GET on /api/ps, got %s", r.Method)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"models":[{"name":"qwen3:8b","model":"qwen3:8b","context_length":8192}]}`))
+			_, _ = w.Write([]byte(`{"models":[{"name":"qwen3:8b","model":"qwen3:8b","context_length":8192}]}`))
 		},
 	})
 	defer srv.Close()
@@ -503,7 +503,7 @@ func TestOllamaContextLength_FallsBackToParameters(t *testing.T) {
 	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
 		"/api/show": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{
+			_, _ = w.Write([]byte(`{
 				"model_info":{"qwen2.context_length":40960},
 				"parameters":"num_ctx 8192\nstop \"<|im_start|>\""
 			}`))
@@ -511,7 +511,7 @@ func TestOllamaContextLength_FallsBackToParameters(t *testing.T) {
 		"/api/ps": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			// A different model is loaded; ours is not in the list.
-			w.Write([]byte(`{"models":[{"name":"llama3:latest","model":"llama3:latest","context_length":2048}]}`))
+			_, _ = w.Write([]byte(`{"models":[{"name":"llama3:latest","model":"llama3:latest","context_length":2048}]}`))
 		},
 	})
 	defer srv.Close()
@@ -538,7 +538,7 @@ func TestOllamaContextLength_ParametersOnlyMatchesNumCtx(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			// Other parameter lines (stop strings, repeat_penalty, top_k)
 			// must not be misread as num_ctx.
-			w.Write([]byte(`{
+			_, _ = w.Write([]byte(`{
 				"model_info":{"llama.context_length":8192},
 				"parameters":"stop \"<|im_start|>\"\nstop \"<|im_end|>\"\nrepeat_penalty 1.1\ntop_k 40\nnum_ctx 4096\n"
 			}`))
@@ -566,7 +566,7 @@ func TestOllamaContextLength_PSFailureIsNonFatal(t *testing.T) {
 	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
 		"/api/show": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"model_info":{"llama.context_length":8192}}`))
+			_, _ = w.Write([]byte(`{"model_info":{"llama.context_length":8192}}`))
 		},
 		"/api/ps": func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "boom", http.StatusInternalServerError)
@@ -594,7 +594,7 @@ func TestOllamaContextLength_ConfiguredAboveMaxIgnored(t *testing.T) {
 	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
 		"/api/show": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{
+			_, _ = w.Write([]byte(`{
 				"model_info":{"llama.context_length":8192},
 				"parameters":"num_ctx 99999\n"
 			}`))

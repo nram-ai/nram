@@ -94,11 +94,11 @@ func NewHealthHandler(cfg HealthConfig) http.HandlerFunc {
 
 		// Build response.
 		resp := healthResponse{
-			Status:    overallStatus,
-			Version:   cfg.Version,
-			Backend:   backend,
-			Database:  dbStatus,
-			Providers: providers,
+			Status:        overallStatus,
+			Version:       cfg.Version,
+			Backend:       backend,
+			Database:      dbStatus,
+			Providers:     providers,
 			UptimeSeconds: int64(time.Since(cfg.StartTime).Seconds()),
 		}
 
@@ -141,11 +141,6 @@ func checkEmbeddingProvider(ctx context.Context, reg ProviderRegistry) healthPro
 	status := healthProviderStatus{
 		Status:   "ok",
 		Provider: ep.Name(),
-	}
-
-	dims := ep.Dimensions()
-	if len(dims) > 0 {
-		// Use the first dimension as a representative value — not shown as "model" for embedding.
 	}
 
 	// Check if provider implements ProviderHealth for ping.

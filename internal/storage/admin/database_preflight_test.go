@@ -28,7 +28,7 @@ func resetEmbeddedPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open embedded postgres: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	tables, err := existingNramTables(context.Background(), db)
 	if err != nil {
@@ -48,7 +48,7 @@ func applyPostgresMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open embedded postgres: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mg, err := migration.NewMigrator(db, "postgres")
 	if err != nil {
@@ -147,7 +147,7 @@ func TestPreflight_TargetHasLeftoverData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec(`INSERT INTO system_meta (key, value) VALUES ('preflight_probe', 'x')`); err != nil {
 		t.Fatalf("seed system_meta: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestResetTarget_TruncateKeepsSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec(`INSERT INTO system_meta (key, value) VALUES ('reset_probe', 'y')`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestResetTarget_DropSchemaRemovesTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	remaining, err := existingNramTables(context.Background(), db)
 	if err != nil {
 		t.Fatalf("enumerate post-drop: %v", err)

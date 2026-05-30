@@ -22,7 +22,7 @@ func TestShouldPrune_EffectivelyZeroConfidenceCohort(t *testing.T) {
 	mem := &model.Memory{
 		ID:           uuid.New(),
 		NamespaceID:  uuid.New(),
-		Confidence:   0.0005,                       // contradiction-haircut residual
+		Confidence:   0.0005,                        // contradiction-haircut residual
 		UpdatedAt:    now.Add(-10 * 24 * time.Hour), // older than the 7d idle gate
 		CreatedAt:    now.Add(-10 * 24 * time.Hour),
 		SupersededBy: nil,

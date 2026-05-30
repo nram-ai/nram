@@ -85,4 +85,3 @@ func TestNumericSchemasHaveRange(t *testing.T) {
 		}
 	}
 }
-

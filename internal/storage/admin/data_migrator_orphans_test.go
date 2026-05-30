@@ -44,7 +44,7 @@ func TestTextToJSONB_HandlesProblematicText(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open pg: %v", err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			var got string
 			if err := db.QueryRowContext(context.Background(),
 				"SELECT $1::jsonb::text", s,
@@ -63,7 +63,7 @@ func TestDataMigrator_FinalizesStuckJobs(t *testing.T) {
 	ctx := context.Background()
 
 	srcDB := openSQLiteInMemory(t)
-	defer srcDB.Close()
+	defer func() { _ = srcDB.Close() }()
 	if _, err := srcDB.Exec("PRAGMA foreign_keys=OFF"); err != nil {
 		t.Fatalf("disable FKs: %v", err)
 	}
@@ -117,13 +117,13 @@ func TestDataMigrator_FinalizesStuckJobs(t *testing.T) {
 		t.Fatalf("open pg: %v", err)
 	}
 	cleanPostgres(t, pgDB)
-	pgDB.Close()
+	_ = pgDB.Close()
 
 	dm, err := newDataMigrator(ctx, srcDB, resolvedPostgresURL)
 	if err != nil {
 		t.Fatalf("newDataMigrator: %v", err)
 	}
-	defer dm.Close()
+	defer func() { _ = dm.Close() }()
 	if err := dm.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestDataMigrator_FinalizesStuckJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen pg: %v", err)
 	}
-	defer pg.Close()
+	defer func() { _ = pg.Close() }()
 
 	// Previously-processing rows are now pending with cleared claim fields.
 	var pending int
@@ -233,7 +233,7 @@ func TestDataMigrator_DropsOrphansAndSetsSupersededBy(t *testing.T) {
 	ctx := context.Background()
 
 	srcDB := openSQLiteInMemory(t)
-	defer srcDB.Close()
+	defer func() { _ = srcDB.Close() }()
 
 	// Turn FKs off in source so we can seed deliberate orphans (matching
 	// production SQLite that ran for years with PRAGMA foreign_keys=OFF).
@@ -246,15 +246,15 @@ func TestDataMigrator_DropsOrphansAndSetsSupersededBy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	defer pgDB.Close()
+	defer func() { _ = pgDB.Close() }()
 	cleanPostgres(t, pgDB)
-	pgDB.Close()
+	_ = pgDB.Close()
 
 	dm, err := newDataMigrator(ctx, srcDB, resolvedPostgresURL)
 	if err != nil {
 		t.Fatalf("newDataMigrator: %v", err)
 	}
-	defer dm.Close()
+	defer func() { _ = dm.Close() }()
 
 	if err := dm.Run(ctx); err != nil {
 		t.Fatalf("Run (should succeed despite orphans): %v", err)
@@ -264,10 +264,10 @@ func TestDataMigrator_DropsOrphansAndSetsSupersededBy(t *testing.T) {
 
 	// Verify the orphan skips we deliberately introduced are recorded.
 	want := map[string]int{
-		"memories.namespace_id":         1, // 1 memory with bad namespace
-		"relationships.source_memory":   2, // 2 relationships with bad source_memory
-		"memory_lineage.parent_id":      1, // 1 lineage with bad parent_id
-		"enrichment_queue.memory_id":    1, // 1 enrichment entry with bad memory_id
+		"memories.namespace_id":       1, // 1 memory with bad namespace
+		"relationships.source_memory": 2, // 2 relationships with bad source_memory
+		"memory_lineage.parent_id":    1, // 1 lineage with bad parent_id
+		"enrichment_queue.memory_id":  1, // 1 enrichment entry with bad memory_id
 	}
 	for key, want := range want {
 		if got := stats.SkippedOrphans[key]; got != want {
@@ -286,7 +286,7 @@ func TestDataMigrator_DropsOrphansAndSetsSupersededBy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer pg.Close()
+	defer func() { _ = pg.Close() }()
 	var supersededBy sql.NullString
 	if err := pg.QueryRowContext(ctx,
 		"SELECT superseded_by FROM memories WHERE id = $1",

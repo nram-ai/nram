@@ -311,7 +311,7 @@ func (r *DreamCycleRepo) ListStale(ctx context.Context, threshold time.Duration,
 	if err != nil {
 		return nil, fmt.Errorf("dream cycle list stale: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanRows(rows)
 }
@@ -392,7 +392,7 @@ func (r *DreamCycleRepo) ListByProject(ctx context.Context, projectID uuid.UUID,
 	if err != nil {
 		return nil, fmt.Errorf("dream cycle list by project: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanRows(rows)
 }
@@ -431,7 +431,7 @@ func (r *DreamCycleRepo) ListByNamespacePathPrefix(ctx context.Context, prefix s
 	if err != nil {
 		return nil, fmt.Errorf("dream cycle list by namespace prefix: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var result []model.DreamCycle
 	for rows.Next() {
@@ -480,7 +480,7 @@ func (r *DreamCycleRepo) ListRecent(ctx context.Context, limit int) ([]model.Dre
 	if err != nil {
 		return nil, fmt.Errorf("dream cycle list recent: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanRows(rows)
 }

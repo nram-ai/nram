@@ -31,6 +31,6 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
-	embeddedDB.Stop()
+	_ = embeddedDB.Stop()
 	os.Exit(code)
 }

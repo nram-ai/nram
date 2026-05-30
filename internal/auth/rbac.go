@@ -9,7 +9,7 @@ const (
 	RoleAdministrator = "administrator"
 	RoleOrgOwner      = "org_owner"
 	RoleMember        = "member"
-	RoleReadonly       = "readonly"
+	RoleReadonly      = "readonly"
 	RoleService       = "service"
 )
 
@@ -22,7 +22,7 @@ var roleLevels = map[string]int{
 	RoleAdministrator: 40,
 	RoleOrgOwner:      30,
 	RoleMember:        20,
-	RoleReadonly:       10,
+	RoleReadonly:      10,
 	RoleService:       20, // same privilege tier as member by default
 }
 

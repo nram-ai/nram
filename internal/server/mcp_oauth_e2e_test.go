@@ -76,13 +76,13 @@ func e2eTestDB(t *testing.T) storage.DB {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("e2eTestDB: chdir: %v", err)
 	}
-	t.Cleanup(func() { os.Chdir(origDir) })
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	db, err := storage.Open(config.DatabaseConfig{})
 	if err != nil {
 		t.Fatalf("e2eTestDB: open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	migrator, err := migration.NewMigrator(db.DB(), db.Backend())
 	if err != nil {
@@ -382,19 +382,11 @@ type e2eIngestionLogRepo struct{}
 
 func (m *e2eIngestionLogRepo) Create(_ context.Context, _ *model.IngestionLog) error { return nil }
 
-type e2eTokenUsageRepo struct{}
-
-func (m *e2eTokenUsageRepo) Record(_ context.Context, _ *model.TokenUsage) error { return nil }
-
 type e2eEnrichmentQueueRepo struct{}
 
 func (m *e2eEnrichmentQueueRepo) Enqueue(_ context.Context, _ *model.EnrichmentJob) error {
 	return nil
 }
-
-type e2eLineageCreator struct{}
-
-func (m *e2eLineageCreator) Create(_ context.Context, _ *model.MemoryLineage) error { return nil }
 
 // ---------------------------------------------------------------------------
 // Build the REAL production router for E2E tests
@@ -516,7 +508,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		// Health
 		Health: func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"ok"}`))
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		},
 	}
 
@@ -626,7 +618,7 @@ func e2eParseJSONRPC(t *testing.T, resp *http.Response) *e2eJSONRPCResponse {
 
 	ct := resp.Header.Get("Content-Type")
 	bodyBytes, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if err != nil {
 		t.Fatalf("failed to read response body: %v", err)
 	}
@@ -751,8 +743,8 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("step 1: %v", err)
 	}
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("step 1: expected 401, got %d", resp.StatusCode)
@@ -781,7 +773,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("step 2: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 2: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -812,7 +804,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("step 3: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 3: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -858,7 +850,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("step 4: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("step 4: expected 201, got %d; body: %s", resp.StatusCode, body)
@@ -905,8 +897,8 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	t.Log("Step 6: POST /authorize consent (account path) with session cookie")
 	sessionCookie := e2eCreateSessionCookie(t, env.User.ID)
 	resp = e2eAuthorizeConsent(t, client, authURL, sessionCookie)
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("step 6: expected 302, got %d", resp.StatusCode)
@@ -950,7 +942,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("step 7: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 7: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -1011,7 +1003,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 
 	if mcpResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(mcpResp.Body)
-		mcpResp.Body.Close()
+		_ = mcpResp.Body.Close()
 		t.Fatalf("step 8: expected 200, got %d; body: %s", mcpResp.StatusCode, string(bodyBytes))
 	}
 
@@ -1045,7 +1037,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	}, sessionID)
 
 	notifBody, _ := io.ReadAll(notifResp.Body)
-	notifResp.Body.Close()
+	_ = notifResp.Body.Close()
 	if notifResp.StatusCode != http.StatusAccepted && notifResp.StatusCode != http.StatusOK {
 		t.Fatalf("step 9: expected 202 or 200, got %d; body: %s", notifResp.StatusCode, string(notifBody))
 	}
@@ -1062,7 +1054,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 
 	if toolsListResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(toolsListResp.Body)
-		toolsListResp.Body.Close()
+		_ = toolsListResp.Body.Close()
 		t.Fatalf("step 10: expected 200, got %d; body: %s", toolsListResp.StatusCode, string(bodyBytes))
 	}
 
@@ -1115,7 +1107,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 
 	if storeCallResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(storeCallResp.Body)
-		storeCallResp.Body.Close()
+		_ = storeCallResp.Body.Close()
 		t.Fatalf("step 11: expected 200, got %d; body: %s", storeCallResp.StatusCode, string(bodyBytes))
 	}
 
@@ -1156,7 +1148,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 
 	if recallCallResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(recallCallResp.Body)
-		recallCallResp.Body.Close()
+		_ = recallCallResp.Body.Close()
 		t.Fatalf("step 12: expected 200, got %d; body: %s", recallCallResp.StatusCode, string(bodyBytes))
 	}
 
@@ -1200,7 +1192,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("step 13: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 13: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -1234,8 +1226,8 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("step 13 retry: %v", err)
 	}
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
 		t.Fatal("step 13: old refresh token should have been revoked but was accepted")
 	}
@@ -1259,7 +1251,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 
 	if recallResp2.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(recallResp2.Body)
-		recallResp2.Body.Close()
+		_ = recallResp2.Body.Close()
 		t.Fatalf("step 14: expected 200, got %d; body: %s", recallResp2.StatusCode, string(bodyBytes))
 	}
 
@@ -1306,8 +1298,8 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("step 1: %v", err)
 	}
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("step 1: expected 401, got %d", resp.StatusCode)
 	}
@@ -1318,13 +1310,13 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("discovery: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	var meta struct {
 		AuthorizationEndpoint string `json:"authorization_endpoint"`
 		TokenEndpoint         string `json:"token_endpoint"`
 		RegistrationEndpoint  string `json:"registration_endpoint"`
 	}
-	json.Unmarshal(body, &meta)
+	_ = json.Unmarshal(body, &meta)
 
 	// Step 4: Register with Claude Desktop redirect URI
 	regBody, _ := json.Marshal(map[string]any{
@@ -1337,7 +1329,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: expected 201, got %d; body: %s", resp.StatusCode, body)
 	}
@@ -1345,7 +1337,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 	var regResp struct {
 		ClientID string `json:"client_id"`
 	}
-	json.Unmarshal(body, &regResp)
+	_ = json.Unmarshal(body, &regResp)
 
 	// Step 5-6: PKCE + authorize
 	codeVerifier := "claude-desktop-verifier-which-is-at-least-43-characters-long-for-pkce"
@@ -1365,8 +1357,8 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 	)
 
 	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("authorize: expected 302, got %d", resp.StatusCode)
 	}
@@ -1401,7 +1393,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("token: expected 200, got %d; body: %s", resp.StatusCode, body)
 	}
@@ -1409,7 +1401,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 	var tokenResp struct {
 		AccessToken string `json:"access_token"`
 	}
-	json.Unmarshal(body, &tokenResp)
+	_ = json.Unmarshal(body, &tokenResp)
 	if tokenResp.AccessToken == "" {
 		t.Fatal("token: empty access_token")
 	}
@@ -1428,7 +1420,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 
 	if mcpResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(mcpResp.Body)
-		mcpResp.Body.Close()
+		_ = mcpResp.Body.Close()
 		t.Fatalf("initialize: expected 200, got %d; body: %s", mcpResp.StatusCode, string(bodyBytes))
 	}
 
@@ -1438,7 +1430,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 	}
 
 	var initResult map[string]any
-	json.Unmarshal(rpcResp.Result, &initResult)
+	_ = json.Unmarshal(rpcResp.Result, &initResult)
 	si, _ := initResult["serverInfo"].(map[string]any)
 	if name, _ := si["name"].(string); name != "nram" {
 		t.Fatalf("initialize: expected serverInfo.name=nram, got %q", name)
@@ -1451,8 +1443,8 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 		JSONRPC: "2.0",
 		Method:  "notifications/initialized",
 	}, sessionID)
-	io.ReadAll(notifResp.Body)
-	notifResp.Body.Close()
+	_, _ = io.ReadAll(notifResp.Body)
+	_ = notifResp.Body.Close()
 
 	// Tools/list
 	toolsResp := e2eMCPPost(t, baseURL, tokenResp.AccessToken, e2eJSONRPCRequest{
@@ -1463,7 +1455,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 
 	if toolsResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(toolsResp.Body)
-		toolsResp.Body.Close()
+		_ = toolsResp.Body.Close()
 		t.Fatalf("tools/list: expected 200, got %d; body: %s", toolsResp.StatusCode, string(bodyBytes))
 	}
 
@@ -1477,7 +1469,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 			Name string `json:"name"`
 		} `json:"tools"`
 	}
-	json.Unmarshal(toolsRPC.Result, &toolsList)
+	_ = json.Unmarshal(toolsRPC.Result, &toolsList)
 
 	found := false
 	for _, tool := range toolsList.Tools {
@@ -1507,7 +1499,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 
 	if storeResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(storeResp.Body)
-		storeResp.Body.Close()
+		_ = storeResp.Body.Close()
 		t.Fatalf("store: expected 200, got %d; body: %s", storeResp.StatusCode, string(bodyBytes))
 	}
 	storeRPC := e2eParseJSONRPC(t, storeResp)
@@ -1560,7 +1552,7 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 
 	if initResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(initResp.Body)
-		initResp.Body.Close()
+		_ = initResp.Body.Close()
 		t.Fatalf("initialize: expected 200, got %d; body: %s", initResp.StatusCode, string(bodyBytes))
 	}
 
@@ -1570,7 +1562,7 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 	}
 
 	var initResult map[string]any
-	json.Unmarshal(rpcResp.Result, &initResult)
+	_ = json.Unmarshal(rpcResp.Result, &initResult)
 	si, _ := initResult["serverInfo"].(map[string]any)
 	if name, _ := si["name"].(string); name != "nram" {
 		t.Fatalf("initialize: expected serverInfo.name=nram, got %q", name)
@@ -1583,8 +1575,8 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 		JSONRPC: "2.0",
 		Method:  "notifications/initialized",
 	}, sessionID)
-	io.ReadAll(notifResp.Body)
-	notifResp.Body.Close()
+	_, _ = io.ReadAll(notifResp.Body)
+	_ = notifResp.Body.Close()
 
 	// Step 3: Store a memory
 	t.Log("Step 2: Store memory with API key")
@@ -1604,7 +1596,7 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 
 	if storeResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(storeResp.Body)
-		storeResp.Body.Close()
+		_ = storeResp.Body.Close()
 		t.Fatalf("store: expected 200, got %d; body: %s", storeResp.StatusCode, string(bodyBytes))
 	}
 
@@ -1639,7 +1631,7 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 
 	if recallResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(recallResp.Body)
-		recallResp.Body.Close()
+		_ = recallResp.Body.Close()
 		t.Fatalf("recall: expected 200, got %d; body: %s", recallResp.StatusCode, string(bodyBytes))
 	}
 
@@ -1699,7 +1691,7 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 		t.Fatalf("oauth flow: discovery: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("oauth flow: discovery: expected 200, got %d", resp.StatusCode)
 	}
@@ -1708,7 +1700,7 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 		TokenEndpoint         string `json:"token_endpoint"`
 		RegistrationEndpoint  string `json:"registration_endpoint"`
 	}
-	json.Unmarshal(body, &meta)
+	_ = json.Unmarshal(body, &meta)
 
 	// Register client
 	regBody, _ := json.Marshal(map[string]any{
@@ -1721,14 +1713,14 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 		t.Fatalf("oauth flow: register: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("oauth flow: register: expected 201, got %d; body: %s", resp.StatusCode, body)
 	}
 	var regResp struct {
 		ClientID string `json:"client_id"`
 	}
-	json.Unmarshal(body, &regResp)
+	_ = json.Unmarshal(body, &regResp)
 
 	// PKCE + authorize
 	codeVerifier := "e2e-flow-verifier-which-is-at-least-43-characters-long-for-pkce-" + uuid.New().String()[:8]
@@ -1762,9 +1754,8 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 	}
 
 	resp = e2eAuthorizeConsent(t, client, authURL, sessionCookie)
-	err = nil
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("oauth flow: authorize: expected 302, got %d", resp.StatusCode)
 	}
@@ -1790,7 +1781,7 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 		t.Fatalf("oauth flow: token: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("oauth flow: token: expected 200, got %d; body: %s", resp.StatusCode, body)
 	}
@@ -1798,7 +1789,7 @@ func e2eFullOAuthFlow(t *testing.T, env *e2eEnv, clientName, redirectURI string,
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 	}
-	json.Unmarshal(body, &tokenResp)
+	_ = json.Unmarshal(body, &tokenResp)
 
 	return &e2eOAuthResult{
 		AccessToken:   tokenResp.AccessToken,
@@ -1832,13 +1823,13 @@ func e2eGetAuthCode(t *testing.T, env *e2eEnv, clientName, redirectURI string) *
 		t.Fatalf("get auth code: discovery: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	var meta struct {
 		AuthorizationEndpoint string `json:"authorization_endpoint"`
 		TokenEndpoint         string `json:"token_endpoint"`
 		RegistrationEndpoint  string `json:"registration_endpoint"`
 	}
-	json.Unmarshal(body, &meta)
+	_ = json.Unmarshal(body, &meta)
 
 	// Register client
 	regBody, _ := json.Marshal(map[string]any{
@@ -1851,14 +1842,14 @@ func e2eGetAuthCode(t *testing.T, env *e2eEnv, clientName, redirectURI string) *
 		t.Fatalf("get auth code: register: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("get auth code: register: expected 201, got %d; body: %s", resp.StatusCode, body)
 	}
 	var regResp struct {
 		ClientID string `json:"client_id"`
 	}
-	json.Unmarshal(body, &regResp)
+	_ = json.Unmarshal(body, &regResp)
 
 	// PKCE + authorize
 	codeVerifier := "e2e-authcode-verifier-at-least-43-characters-long-for-pkce-" + uuid.New().String()[:8]
@@ -1877,8 +1868,8 @@ func e2eGetAuthCode(t *testing.T, env *e2eEnv, clientName, redirectURI string) *
 	)
 
 	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("get auth code: authorize: expected 302, got %d", resp.StatusCode)
 	}
@@ -2010,28 +2001,28 @@ func newE2EEnvWithAdmin(t *testing.T) *e2eEnv {
 		// Health
 		Health: func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"ok"}`))
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		},
 
 		// Admin setup status (returns setup complete)
 		AdminSetupStatus: func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"setup_complete":true}`))
+			_, _ = w.Write([]byte(`{"setup_complete":true}`))
 		},
 
 		// Admin dashboard stub (now mounted at /v1/dashboard for all authenticated users)
 		AdminDashboard: func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"total_memories":42,"total_projects":3}`))
+			_, _ = w.Write([]byte(`{"total_memories":42,"total_projects":3}`))
 		},
 
 		// Admin orgs stub (admin-only route)
 		AdminOrgs: func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"data":[],"pagination":{"total":0,"limit":50,"offset":0}}`))
+			_, _ = w.Write([]byte(`{"data":[],"pagination":{"total":0,"limit":50,"offset":0}}`))
 		},
 	}
 
@@ -2077,11 +2068,11 @@ func TestE2E_ExpiredToken_MCPReturns401_ThenRefresh(t *testing.T) {
 	}, "")
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Fatalf("valid token should work: got %d; body: %s", resp.StatusCode, string(bodyBytes))
 	}
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 
 	// Manually create an EXPIRED JWT (exp set to the past)
 	now := time.Now().UTC()
@@ -2113,8 +2104,8 @@ func TestE2E_ExpiredToken_MCPReturns401_ThenRefresh(t *testing.T) {
 			"clientInfo":      map[string]any{"name": "Expired Token Test", "version": "1.0"},
 		},
 	}, "")
-	io.ReadAll(expiredResp.Body)
-	expiredResp.Body.Close()
+	_, _ = io.ReadAll(expiredResp.Body)
+	_ = expiredResp.Body.Close()
 
 	if expiredResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expired token: expected 401, got %d", expiredResp.StatusCode)
@@ -2140,7 +2131,7 @@ func TestE2E_ExpiredToken_MCPReturns401_ThenRefresh(t *testing.T) {
 		t.Fatalf("refresh: %v", err)
 	}
 	body, _ := io.ReadAll(refreshResp.Body)
-	refreshResp.Body.Close()
+	_ = refreshResp.Body.Close()
 	if refreshResp.StatusCode != http.StatusOK {
 		t.Fatalf("refresh: expected 200, got %d; body: %s", refreshResp.StatusCode, body)
 	}
@@ -2149,7 +2140,7 @@ func TestE2E_ExpiredToken_MCPReturns401_ThenRefresh(t *testing.T) {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 	}
-	json.Unmarshal(body, &newTokenResp)
+	_ = json.Unmarshal(body, &newTokenResp)
 	if newTokenResp.AccessToken == "" {
 		t.Fatal("refresh: empty new access_token")
 	}
@@ -2168,11 +2159,11 @@ func TestE2E_ExpiredToken_MCPReturns401_ThenRefresh(t *testing.T) {
 	}, "")
 	if newResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(newResp.Body)
-		newResp.Body.Close()
+		_ = newResp.Body.Close()
 		t.Fatalf("refreshed token: expected 200, got %d; body: %s", newResp.StatusCode, string(bodyBytes))
 	}
-	io.ReadAll(newResp.Body)
-	newResp.Body.Close()
+	_, _ = io.ReadAll(newResp.Body)
+	_ = newResp.Body.Close()
 
 	t.Log("expired token → 401 → refresh → new token works: PASSED")
 }
@@ -2201,11 +2192,11 @@ func TestE2E_WrongAudience_MCPRejects(t *testing.T) {
 	}, "")
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Fatalf("valid token should work: got %d; body: %s", resp.StatusCode, string(bodyBytes))
 	}
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 
 	// Craft a JWT with wrong audience
 	now := time.Now().UTC()
@@ -2237,8 +2228,8 @@ func TestE2E_WrongAudience_MCPRejects(t *testing.T) {
 			"clientInfo":      map[string]any{"name": "Wrong Aud Test", "version": "1.0"},
 		},
 	}, "")
-	io.ReadAll(wrongResp.Body)
-	wrongResp.Body.Close()
+	_, _ = io.ReadAll(wrongResp.Body)
+	_ = wrongResp.Body.Close()
 
 	if wrongResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("wrong audience: expected 401, got %d", wrongResp.StatusCode)
@@ -2268,7 +2259,7 @@ func TestE2E_RevokedRefreshToken_Rejected(t *testing.T) {
 		t.Fatalf("first refresh: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("first refresh: expected 200, got %d; body: %s", resp.StatusCode, body)
 	}
@@ -2276,7 +2267,7 @@ func TestE2E_RevokedRefreshToken_Rejected(t *testing.T) {
 	var newTokenResp struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	json.Unmarshal(body, &newTokenResp)
+	_ = json.Unmarshal(body, &newTokenResp)
 	if newTokenResp.RefreshToken == "" {
 		t.Fatal("first refresh: empty new refresh_token")
 	}
@@ -2296,7 +2287,7 @@ func TestE2E_RevokedRefreshToken_Rejected(t *testing.T) {
 		t.Fatalf("old refresh: %v", err)
 	}
 	body2, _ := io.ReadAll(resp2.Body)
-	resp2.Body.Close()
+	_ = resp2.Body.Close()
 
 	if resp2.StatusCode == http.StatusOK {
 		t.Fatal("old refresh token should have been rejected but was accepted")
@@ -2306,7 +2297,7 @@ func TestE2E_RevokedRefreshToken_Rejected(t *testing.T) {
 	var errResp struct {
 		Error string `json:"error"`
 	}
-	json.Unmarshal(body2, &errResp)
+	_ = json.Unmarshal(body2, &errResp)
 	if errResp.Error != "invalid_grant" {
 		t.Logf("note: error was %q (expected invalid_grant); status=%d", errResp.Error, resp2.StatusCode)
 	}
@@ -2340,7 +2331,7 @@ func TestE2E_OAuth_WrongPKCEVerifier(t *testing.T) {
 		t.Fatalf("token exchange: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
 		t.Fatal("wrong PKCE verifier should have been rejected but token was issued")
@@ -2352,7 +2343,7 @@ func TestE2E_OAuth_WrongPKCEVerifier(t *testing.T) {
 	var errResp struct {
 		Error string `json:"error"`
 	}
-	json.Unmarshal(body, &errResp)
+	_ = json.Unmarshal(body, &errResp)
 	if errResp.Error != "invalid_grant" {
 		t.Logf("note: error was %q (expected invalid_grant)", errResp.Error)
 	}
@@ -2375,12 +2366,12 @@ func TestE2E_OAuth_WrongRedirectURI(t *testing.T) {
 		t.Fatalf("discovery: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	var meta struct {
 		AuthorizationEndpoint string `json:"authorization_endpoint"`
 		RegistrationEndpoint  string `json:"registration_endpoint"`
 	}
-	json.Unmarshal(body, &meta)
+	_ = json.Unmarshal(body, &meta)
 
 	// Register client with redirect_uri A
 	regBody, _ := json.Marshal(map[string]any{
@@ -2393,14 +2384,14 @@ func TestE2E_OAuth_WrongRedirectURI(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: expected 201, got %d; body: %s", resp.StatusCode, body)
 	}
 	var regResp struct {
 		ClientID string `json:"client_id"`
 	}
-	json.Unmarshal(body, &regResp)
+	_ = json.Unmarshal(body, &regResp)
 
 	// Call /authorize with redirect_uri B (different from registered)
 	t.Log("calling /authorize with wrong redirect_uri")
@@ -2419,7 +2410,7 @@ func TestE2E_OAuth_WrongRedirectURI(t *testing.T) {
 
 	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Should be rejected — either as a 400 error or a redirect with error param
 	switch resp.StatusCode {
@@ -2474,7 +2465,7 @@ func TestE2E_OAuth_ExpiredAuthCode(t *testing.T) {
 		t.Fatalf("token exchange: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
 		t.Fatal("expired auth code should have been rejected but token was issued")
@@ -2518,7 +2509,7 @@ func TestE2E_OAuth_CodeReuse(t *testing.T) {
 		t.Fatalf("first exchange: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("first exchange: expected 200, got %d; body: %s", resp.StatusCode, body)
 	}
@@ -2530,7 +2521,7 @@ func TestE2E_OAuth_CodeReuse(t *testing.T) {
 		t.Fatalf("second exchange: %v", err)
 	}
 	body2, _ := io.ReadAll(resp2.Body)
-	resp2.Body.Close()
+	_ = resp2.Body.Close()
 
 	if resp2.StatusCode == http.StatusOK {
 		t.Fatal("code reuse should have been rejected but second exchange succeeded")
@@ -2542,7 +2533,7 @@ func TestE2E_OAuth_CodeReuse(t *testing.T) {
 	var errResp struct {
 		Error string `json:"error"`
 	}
-	json.Unmarshal(body2, &errResp)
+	_ = json.Unmarshal(body2, &errResp)
 	if errResp.Error != "invalid_grant" {
 		t.Logf("note: error was %q (expected invalid_grant)", errResp.Error)
 	}
@@ -2565,11 +2556,11 @@ func TestE2E_OAuth_UnregisteredClientID(t *testing.T) {
 		t.Fatalf("discovery: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	var meta struct {
 		AuthorizationEndpoint string `json:"authorization_endpoint"`
 	}
-	json.Unmarshal(body, &meta)
+	_ = json.Unmarshal(body, &meta)
 
 	// Call /authorize with a fake client_id that doesn't exist
 	t.Log("calling /authorize with unregistered client_id")
@@ -2589,7 +2580,7 @@ func TestE2E_OAuth_UnregisteredClientID(t *testing.T) {
 
 	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Should get an error — either 400 directly or a redirect with error
 	switch resp.StatusCode {
@@ -2626,12 +2617,12 @@ func TestE2E_OAuth_MissingPKCE(t *testing.T) {
 		t.Fatalf("discovery: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	var meta struct {
 		AuthorizationEndpoint string `json:"authorization_endpoint"`
 		RegistrationEndpoint  string `json:"registration_endpoint"`
 	}
-	json.Unmarshal(body, &meta)
+	_ = json.Unmarshal(body, &meta)
 
 	// Register a client
 	regBody, _ := json.Marshal(map[string]any{
@@ -2644,14 +2635,14 @@ func TestE2E_OAuth_MissingPKCE(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: expected 201, got %d; body: %s", resp.StatusCode, body)
 	}
 	var regResp struct {
 		ClientID string `json:"client_id"`
 	}
-	json.Unmarshal(body, &regResp)
+	_ = json.Unmarshal(body, &regResp)
 
 	// Call /authorize WITHOUT code_challenge (no PKCE)
 	t.Log("calling /authorize without PKCE code_challenge")
@@ -2666,7 +2657,7 @@ func TestE2E_OAuth_MissingPKCE(t *testing.T) {
 
 	resp = e2eAuthorizeConsent(t, client, authURL, e2eCreateSessionCookie(t, env.User.ID))
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Should be rejected — PKCE is required per MCP spec
 	switch resp.StatusCode {
@@ -2732,11 +2723,11 @@ func TestE2E_TwoClients_SeparateTokens(t *testing.T) {
 	}, "")
 	if respA.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(respA.Body)
-		respA.Body.Close()
+		_ = respA.Body.Close()
 		t.Fatalf("client A MCP: expected 200, got %d; body: %s", respA.StatusCode, string(bodyBytes))
 	}
-	io.ReadAll(respA.Body)
-	respA.Body.Close()
+	_, _ = io.ReadAll(respA.Body)
+	_ = respA.Body.Close()
 
 	t.Log("verifying client B can call /mcp")
 	respB := e2eMCPPost(t, baseURL, clientB.AccessToken, e2eJSONRPCRequest{
@@ -2751,11 +2742,11 @@ func TestE2E_TwoClients_SeparateTokens(t *testing.T) {
 	}, "")
 	if respB.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(respB.Body)
-		respB.Body.Close()
+		_ = respB.Body.Close()
 		t.Fatalf("client B MCP: expected 200, got %d; body: %s", respB.StatusCode, string(bodyBytes))
 	}
-	io.ReadAll(respB.Body)
-	respB.Body.Close()
+	_, _ = io.ReadAll(respB.Body)
+	_ = respB.Body.Close()
 
 	// Revoke client A's refresh token by using it (rotation)
 	t.Log("rotating client A's refresh token")
@@ -2768,8 +2759,8 @@ func TestE2E_TwoClients_SeparateTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rotate client A: %v", err)
 	}
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("rotate client A: expected 200, got %d", resp.StatusCode)
 	}
@@ -2786,7 +2777,7 @@ func TestE2E_TwoClients_SeparateTokens(t *testing.T) {
 		t.Fatalf("refresh client B: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("refresh client B: expected 200, got %d; body: %s", resp.StatusCode, body)
 	}
@@ -2794,7 +2785,7 @@ func TestE2E_TwoClients_SeparateTokens(t *testing.T) {
 	var newB struct {
 		AccessToken string `json:"access_token"`
 	}
-	json.Unmarshal(body, &newB)
+	_ = json.Unmarshal(body, &newB)
 	if newB.AccessToken == "" {
 		t.Fatal("client B refresh: empty access token")
 	}
@@ -2835,7 +2826,7 @@ func TestE2E_ChatGPT_OAuthFlow(t *testing.T) {
 	}, "")
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Fatalf("ChatGPT MCP: expected 200, got %d; body: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -2845,7 +2836,7 @@ func TestE2E_ChatGPT_OAuthFlow(t *testing.T) {
 	}
 
 	var initResult map[string]any
-	json.Unmarshal(rpc.Result, &initResult)
+	_ = json.Unmarshal(rpc.Result, &initResult)
 	si, _ := initResult["serverInfo"].(map[string]any)
 	if name, _ := si["name"].(string); name != "nram" {
 		t.Fatalf("ChatGPT MCP: expected serverInfo.name=nram, got %q", name)
@@ -2913,7 +2904,7 @@ func TestE2E_AdminRoute_WithOAuthToken(t *testing.T) {
 		t.Fatalf("admin orgs: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("admin orgs with administrator token: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -2965,8 +2956,8 @@ func TestE2E_AdminRoute_WithOAuthToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("member admin orgs: %v", err)
 	}
-	io.ReadAll(resp2.Body)
-	resp2.Body.Close()
+	_, _ = io.ReadAll(resp2.Body)
+	_ = resp2.Body.Close()
 
 	if resp2.StatusCode != http.StatusForbidden {
 		t.Fatalf("member admin orgs: expected 403, got %d", resp2.StatusCode)
@@ -3008,8 +2999,8 @@ func TestE2E_OAuth_OriginValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bad origin request: %v", err)
 	}
-	io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 
 	// Authenticated requests with any Origin are allowed — the OAuth token
 	// proves legitimacy, enabling browser-based clients like Claude.ai.
@@ -3031,11 +3022,11 @@ func TestE2E_OAuth_OriginValidation(t *testing.T) {
 	}, "")
 	if goodResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(goodResp.Body)
-		goodResp.Body.Close()
+		_ = goodResp.Body.Close()
 		t.Fatalf("good origin: expected 200, got %d; body: %s", goodResp.StatusCode, string(bodyBytes))
 	}
-	io.ReadAll(goodResp.Body)
-	goodResp.Body.Close()
+	_, _ = io.ReadAll(goodResp.Body)
+	_ = goodResp.Body.Close()
 
 	t.Log("Origin validation allows authenticated cross-origin requests: PASSED")
 }
@@ -3055,7 +3046,7 @@ func TestE2E_HealthEndpoint_NoAuth(t *testing.T) {
 		t.Fatalf("health: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("health: expected 200, got %d; body: %s", resp.StatusCode, body)
@@ -3089,7 +3080,7 @@ func TestE2E_SetupStatusEndpoint_NoAuth(t *testing.T) {
 		t.Fatalf("setup status: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("setup status: expected 200, got %d; body: %s", resp.StatusCode, body)

@@ -36,8 +36,8 @@ type stubEmbedding struct {
 func (s *stubEmbedding) Embed(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
 	return s.resp, s.err
 }
-func (s *stubEmbedding) Name() string       { return s.name }
-func (s *stubEmbedding) Dimensions() []int  { return nil }
+func (s *stubEmbedding) Name() string      { return s.name }
+func (s *stubEmbedding) Dimensions() []int { return nil }
 
 // captureRecorder collects every TokenUsage row sent through Record so
 // tests can assert on the exact persisted shape.
@@ -339,10 +339,10 @@ func TestUsageRecordingLLM_FallbackResolver(t *testing.T) {
 // the recording context taken inline at Record time, since the caller's
 // deferred cancel() fires the moment record() returns.
 type recordCtxSnapshot struct {
-	row     *model.TokenUsage
-	err     error
-	op      Operation
-	hasDdl  bool
+	row    *model.TokenUsage
+	err    error
+	op     Operation
+	hasDdl bool
 }
 
 type ctxCaptureRecorder struct {

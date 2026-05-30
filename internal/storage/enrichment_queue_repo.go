@@ -226,12 +226,12 @@ func (r *EnrichmentQueueRepo) ClaimNextBatch(ctx context.Context, workerID strin
 		for rows.Next() {
 			var idStr string
 			if err := rows.Scan(&idStr); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, fmt.Errorf("enrichment queue claim batch scan: %w", err)
 			}
 			ids = append(ids, idStr)
 		}
-		rows.Close()
+		_ = rows.Close()
 		if err := rows.Err(); err != nil {
 			return nil, fmt.Errorf("enrichment queue claim batch rows: %w", err)
 		}
@@ -694,7 +694,7 @@ func (r *EnrichmentQueueRepo) ListStaleClaimed(ctx context.Context, updatedThres
 	if err != nil {
 		return nil, fmt.Errorf("enrichment queue list stale claimed: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make([]*model.EnrichmentJob, 0)
 	for rows.Next() {
@@ -946,7 +946,7 @@ func (r *EnrichmentQueueRepo) CountByStatus(ctx context.Context) (*QueueStats, e
 	if err != nil {
 		return nil, fmt.Errorf("enrichment queue count by status: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	stats := &QueueStats{}
 	for rows.Next() {
@@ -1004,7 +1004,7 @@ func (r *EnrichmentQueueRepo) ListRecent(ctx context.Context, limit int) ([]mode
 	if err != nil {
 		return nil, fmt.Errorf("enrichment queue list recent: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.EnrichmentJob{}
 	for rows.Next() {

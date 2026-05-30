@@ -52,7 +52,7 @@ func (s *NamespaceAdminStore) GetNamespaceTree(ctx context.Context, orgID *uuid.
 	if err != nil {
 		return nil, fmt.Errorf("namespace tree query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type flatNode struct {
 		ID       uuid.UUID

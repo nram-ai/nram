@@ -28,37 +28,37 @@ func (s *UsageStore) QueryUsage(ctx context.Context, filter api.UsageFilter) (*a
 	// Build WHERE clauses from filter.
 	var conditions []string
 	var args []any
-	argIdx := 1
+	argIdx := 0
 
 	if filter.OrgID != nil {
+		argIdx++
 		conditions = append(conditions, s.placeholder("org_id", argIdx))
 		args = append(args, filter.OrgID.String())
-		argIdx++
 	}
 	if filter.UserID != nil {
+		argIdx++
 		conditions = append(conditions, s.placeholder("user_id", argIdx))
 		args = append(args, filter.UserID.String())
-		argIdx++
 	}
 	if filter.ProjectID != nil {
+		argIdx++
 		conditions = append(conditions, s.placeholder("project_id", argIdx))
 		args = append(args, filter.ProjectID.String())
-		argIdx++
 	}
 	if filter.From != nil {
+		argIdx++
 		conditions = append(conditions, s.placeholder("created_at >=", argIdx))
 		args = append(args, filter.From.Format("2006-01-02T15:04:05Z"))
-		argIdx++
 	}
 	if filter.To != nil {
+		argIdx++
 		conditions = append(conditions, s.placeholder("created_at <=", argIdx))
 		args = append(args, filter.To.Format("2006-01-02T15:04:05Z"))
-		argIdx++
 	}
 	if filter.SuccessOnly != nil {
+		argIdx++
 		conditions = append(conditions, s.placeholder("success", argIdx))
 		args = append(args, storage.EncodeBool(s.db.Backend(), *filter.SuccessOnly))
-		argIdx++
 	}
 
 	whereClause := ""
@@ -90,7 +90,7 @@ func (s *UsageStore) QueryUsage(ctx context.Context, filter api.UsageFilter) (*a
 		)
 		rows, err := s.db.Query(ctx, groupQuery, args...)
 		if err == nil {
-			defer rows.Close()
+			defer func() { _ = rows.Close() }()
 			for rows.Next() {
 				var g api.UsageGroup
 				if err := rows.Scan(

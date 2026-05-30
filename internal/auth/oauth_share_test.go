@@ -287,7 +287,7 @@ func TestShareTokenRepo_RevokeZeroGrantSharesForOwner(t *testing.T) {
 		}
 		if s.rev {
 			now := time.Now().UTC().Format(time.RFC3339)
-			env.db.Exec(ctx, `UPDATE share_tokens SET revoked_at = ? WHERE id = ?`, now, s.id.String())
+			_, _ = env.db.Exec(ctx, `UPDATE share_tokens SET revoked_at = ? WHERE id = ?`, now, s.id.String())
 		}
 	}
 

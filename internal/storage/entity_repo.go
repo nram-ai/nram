@@ -494,7 +494,7 @@ func (r *EntityRepo) FindBySimilarity(ctx context.Context, namespaceID uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("entity find by similarity: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanEntities(rows)
 }
@@ -659,7 +659,7 @@ func (r *EntityRepo) searchEntitiesMultiToken(ctx context.Context, namespaceID u
 	if err != nil {
 		return nil, fmt.Errorf("entity search (multi-token): %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanEntities(rows)
 }
@@ -680,7 +680,7 @@ func (r *EntityRepo) FindByAlias(ctx context.Context, namespaceID uuid.UUID, ali
 	if err != nil {
 		return nil, fmt.Errorf("entity find by alias: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanEntities(rows)
 }
@@ -701,7 +701,7 @@ func (r *EntityRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Ent
 	if err != nil {
 		return nil, fmt.Errorf("entity get batch: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanEntities(rows)
 }
@@ -721,7 +721,7 @@ func (r *EntityRepo) ListByNamespace(ctx context.Context, namespaceID uuid.UUID)
 	if err != nil {
 		return nil, fmt.Errorf("entity list by namespace: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanEntities(rows)
 }
@@ -744,7 +744,7 @@ func (r *EntityRepo) ListAll(ctx context.Context, limit, offset int) ([]model.En
 	if err != nil {
 		return nil, fmt.Errorf("entity list all: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return r.scanEntities(rows)
 }
 
@@ -786,7 +786,7 @@ func (r *EntityRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namesp
 	if err != nil {
 		return nil, fmt.Errorf("entity delete by namespace: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanReturnedUUIDs(rows, "entity delete by namespace")
 }
 
@@ -818,7 +818,7 @@ func (r *EntityRepo) DeleteOrphaned(ctx context.Context, olderThan time.Time) ([
 	if err != nil {
 		return nil, fmt.Errorf("entity delete orphaned: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanReturnedUUIDs(rows, "entity delete orphaned")
 }
 

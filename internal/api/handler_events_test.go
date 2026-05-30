@@ -30,7 +30,7 @@ func publishTestEvent(t *testing.T, bus events.EventBus, id, typ, scope string) 
 
 func TestEventsHandler_SSEDelivery(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	handler := NewEventsHandler(bus, 0)
 
@@ -79,7 +79,7 @@ func TestEventsHandler_SSEDelivery(t *testing.T) {
 
 func TestEventsHandler_ScopeFiltering(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	handler := NewEventsHandler(bus, 0)
 
@@ -117,7 +117,7 @@ func TestEventsHandler_ScopeFiltering(t *testing.T) {
 
 func TestEventsHandler_LastEventIDReplay(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	// Publish some events before connecting.
 	publishTestEvent(t, bus, "evt-a", events.MemoryCreated, "org/proj")
@@ -160,7 +160,7 @@ func TestEventsHandler_LastEventIDReplay(t *testing.T) {
 
 func TestEventsHandler_Keepalive(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	// Create a handler with a very short keepalive for testing.
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +194,7 @@ func TestEventsHandler_Keepalive(t *testing.T) {
 					return
 				}
 			case <-keepalive.C:
-				w.Write([]byte(": keepalive\n\n"))
+				_, _ = w.Write([]byte(": keepalive\n\n"))
 				flusher.Flush()
 			}
 		}
@@ -215,7 +215,7 @@ func TestEventsHandler_Keepalive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	scanner := bufio.NewScanner(resp.Body)
 	found := false
@@ -241,7 +241,7 @@ func TestEventsHandler_Keepalive(t *testing.T) {
 // the interface. This test only catches the bug if the wrapper delegates.
 func TestEventsHandler_FlushesThroughMetricsMiddleware(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	m := metrics.New()
 	handler := metrics.Middleware(m)(NewEventsHandler(bus, 0))
@@ -281,7 +281,7 @@ func TestEventsHandler_FlushesThroughMetricsMiddleware(t *testing.T) {
 
 func TestEventsHandler_ReplayWithScopeFilter(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	// Publish events with different scopes.
 	publishTestEvent(t, bus, "evt-1", events.MemoryCreated, "org/proj")

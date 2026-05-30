@@ -190,15 +190,15 @@ func TestExportJobService_Enqueue_RateLimit(t *testing.T) {
 // on per-project filenames inside the zip.
 func TestSanitizeFileSegment(t *testing.T) {
 	cases := map[string]string{
-		"global":         "global",
-		"my-project":     "my-project",
-		"../escape":      "__escape", // ".." → "_", then "/" → "_"; both substitutions disarm traversal
-		"a/b":            "a_b",
-		"a\\b":           "a_b",
-		"":               "project",
-		"   ":            "project",
-		"with:colon":     "with_colon",
-		"with\x00null":   "with_null",
+		"global":       "global",
+		"my-project":   "my-project",
+		"../escape":    "__escape", // ".." → "_", then "/" → "_"; both substitutions disarm traversal
+		"a/b":          "a_b",
+		"a\\b":         "a_b",
+		"":             "project",
+		"   ":          "project",
+		"with:colon":   "with_colon",
+		"with\x00null": "with_null",
 	}
 	for input, want := range cases {
 		got := sanitizeFileSegment(input)

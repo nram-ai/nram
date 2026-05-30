@@ -85,7 +85,7 @@ func (r *MemoryLineageRepo) HasExtractedFactChildren(ctx context.Context, namesp
 	if err != nil {
 		return false, fmt.Errorf("memory lineage has extracted fact children: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return rows.Next(), rows.Err()
 }
 
@@ -105,7 +105,7 @@ func (r *MemoryLineageRepo) ListByMemory(ctx context.Context, namespaceID uuid.U
 	if err != nil {
 		return nil, fmt.Errorf("memory lineage list by memory: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanLineages(rows)
 }
@@ -126,7 +126,7 @@ func (r *MemoryLineageRepo) FindConflicts(ctx context.Context, namespaceID uuid.
 	if err != nil {
 		return nil, fmt.Errorf("memory lineage find conflicts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanLineages(rows)
 }
@@ -189,7 +189,7 @@ func (r *MemoryLineageRepo) FindChildIDsByRelation(ctx context.Context, namespac
 	if err != nil {
 		return nil, fmt.Errorf("lineage find child ids by relation: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var ids []uuid.UUID
 	for rows.Next() {
@@ -232,7 +232,7 @@ func (r *MemoryLineageRepo) FindParentIDsByRelation(ctx context.Context, namespa
 	if err != nil {
 		return nil, fmt.Errorf("lineage find parent ids by relation: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var ids []uuid.UUID
 	for rows.Next() {
@@ -289,7 +289,7 @@ func (r *MemoryLineageRepo) FindParentIDs(ctx context.Context, namespaceID uuid.
 	if err != nil {
 		return nil, fmt.Errorf("lineage find parent ids: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[uuid.UUID]uuid.UUID)
 	for rows.Next() {

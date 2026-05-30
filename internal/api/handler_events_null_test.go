@@ -17,7 +17,7 @@ import (
 // [] and {} instead of null.
 func TestEventsHandler_SSE_SanitizedDataLine(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	handler := NewEventsHandler(bus, 0)
 
@@ -85,7 +85,7 @@ func TestEventsHandler_SSE_SanitizedDataLine(t *testing.T) {
 // a nil Data field on the Event envelope to {} instead of null.
 func TestEventsHandler_SSE_NilDataFieldSanitized(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	handler := NewEventsHandler(bus, 0)
 
@@ -150,7 +150,7 @@ func TestEventsHandler_SSE_NilDataFieldSanitized(t *testing.T) {
 // also have sanitized data (no null collections).
 func TestEventsHandler_SSE_ReplayedEventSanitized(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 
 	// Publish events before connecting — they go into the replay buffer.
 	// Use Emit so nil slices are sanitized.

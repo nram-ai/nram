@@ -24,12 +24,12 @@ type subscriber struct {
 
 // MemoryBus is a thread-safe in-memory implementation of EventBus.
 type MemoryBus struct {
-	mu             sync.RWMutex
-	subscribers    map[uint64]*subscriber
-	nextID         uint64
-	closed         bool
-	replay         *ReplayBuffer
-	subscriberBuf  int
+	mu            sync.RWMutex
+	subscribers   map[uint64]*subscriber
+	nextID        uint64
+	closed        bool
+	replay        *ReplayBuffer
+	subscriberBuf int
 }
 
 // NewMemoryBus creates a new in-memory event bus. subscriberBuf and

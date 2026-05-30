@@ -69,7 +69,7 @@ func handleMigrate(args []string, db *sql.DB, backend string) (bool, error) {
 		if err != nil {
 			return true, fmt.Errorf("failed to create migrator: %w", err)
 		}
-		defer m.Close()
+		defer func() { _ = m.Close() }()
 		if err := m.Up(); err != nil {
 			return true, fmt.Errorf("migration up failed: %w", err)
 		}
@@ -81,7 +81,7 @@ func handleMigrate(args []string, db *sql.DB, backend string) (bool, error) {
 		if err != nil {
 			return true, fmt.Errorf("failed to create migrator: %w", err)
 		}
-		defer m.Close()
+		defer func() { _ = m.Close() }()
 		if err := m.Down(); err != nil {
 			return true, fmt.Errorf("migration down failed: %w", err)
 		}
@@ -93,7 +93,7 @@ func handleMigrate(args []string, db *sql.DB, backend string) (bool, error) {
 		if err != nil {
 			return true, fmt.Errorf("failed to create migrator: %w", err)
 		}
-		defer m.Close()
+		defer func() { _ = m.Close() }()
 		version, dirty, err := m.Status()
 		if err != nil {
 			return true, fmt.Errorf("failed to get migration status: %w", err)
@@ -199,7 +199,7 @@ func handleMigrateToPostgres(args []string, sqliteDB *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("failed to open postgres database: %w", err)
 	}
-	defer pgDB.Close()
+	defer func() { _ = pgDB.Close() }()
 
 	if err := pgDB.Ping(); err != nil {
 		return fmt.Errorf("failed to connect to postgres: %w", err)
@@ -213,10 +213,10 @@ func handleMigrateToPostgres(args []string, sqliteDB *sql.DB) error {
 		return fmt.Errorf("failed to create postgres migrator: %w", err)
 	}
 	if err := m.Up(); err != nil {
-		m.Close()
+		_ = m.Close()
 		return fmt.Errorf("postgres migration failed: %w", err)
 	}
-	m.Close()
+	_ = m.Close()
 
 	fmt.Println("postgres migrations applied, copying data...")
 
@@ -261,7 +261,7 @@ func copyTable(srcDB, dstDB *sql.DB, table string) error {
 		return nil
 	}
 	columns, err := rows.Columns()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return fmt.Errorf("failed to get columns: %w", err)
 	}
@@ -276,7 +276,7 @@ func copyTable(srcDB, dstDB *sql.DB, table string) error {
 	if err != nil {
 		return fmt.Errorf("failed to query source: %w", err)
 	}
-	defer dataRows.Close()
+	defer func() { _ = dataRows.Close() }()
 
 	// Build insert statement with positional parameters.
 	placeholders := make([]string, len(columns))
@@ -297,10 +297,10 @@ func copyTable(srcDB, dstDB *sql.DB, table string) error {
 
 	stmt, err := tx.PrepareContext(ctx, insertSQL)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return fmt.Errorf("failed to prepare insert: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	rowCount := 0
 	for dataRows.Next() {
@@ -311,19 +311,19 @@ func copyTable(srcDB, dstDB *sql.DB, table string) error {
 		}
 
 		if err := dataRows.Scan(valuePtrs...); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("failed to scan row: %w", err)
 		}
 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("failed to insert row: %w", err)
 		}
 		rowCount++
 	}
 
 	if err := dataRows.Err(); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return fmt.Errorf("error reading source rows: %w", err)
 	}
 

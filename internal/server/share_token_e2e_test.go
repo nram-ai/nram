@@ -257,7 +257,7 @@ func driveShareConsent(t *testing.T, env *shareE2EEnv, secret string) string {
 		t.Fatalf("consent: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("consent: expected 302, got %d; body: %s", resp.StatusCode, body)
 	}
@@ -280,7 +280,7 @@ func driveShareConsent(t *testing.T, env *shareE2EEnv, secret string) string {
 		t.Fatalf("token: %v", err)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("token: expected 200, got %d; body: %s", resp.StatusCode, body)
 	}
@@ -312,7 +312,7 @@ func initializeMCPSession(t *testing.T, env *shareE2EEnv, accessToken string) st
 		},
 	}
 	resp := e2eMCPPost(t, env.Server.URL, accessToken, initReq, "")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		t.Fatalf("initialize: status %d, body: %s", resp.StatusCode, bodyBytes)
@@ -329,7 +329,7 @@ func initializeMCPSession(t *testing.T, env *shareE2EEnv, accessToken string) st
 		Method:  "notifications/initialized",
 	}
 	notifResp := e2eMCPPost(t, env.Server.URL, accessToken, notif, sessionID)
-	notifResp.Body.Close()
+	_ = notifResp.Body.Close()
 
 	return sessionID
 }
@@ -355,7 +355,7 @@ func callRecall(t *testing.T, env *shareE2EEnv, accessToken, projectSlug string)
 		},
 	}
 	resp := e2eMCPPost(t, env.Server.URL, accessToken, rpcReq, sessionID)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return false, "unauthorized"
@@ -534,7 +534,7 @@ func TestShareE2E_RevokeKillsActiveToken(t *testing.T) {
 		Params:  map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "x", "version": "1"}},
 	}
 	resp := e2eMCPPost(t, env.Server.URL, accessToken, initReq, "")
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("post-revoke: expected 401, got %d", resp.StatusCode)
 	}
@@ -615,7 +615,7 @@ func TestShareE2E_BearerDirect_OneShotConsumedRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bearer-direct probe: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("bearer-direct on consumed one-shot must return 401, got %d", resp.StatusCode)
 	}
@@ -663,7 +663,7 @@ func TestShareE2E_ExpiredShareRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bearer-direct probe: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("bearer-direct on expired share must return 401, got %d", resp.StatusCode)
 	}
@@ -747,7 +747,7 @@ func TestShareE2E_BearerDirect_RestRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mcp probe: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
 		t.Fatalf("/mcp should accept share-bearer credentials, got 401")
 	}
@@ -759,9 +759,8 @@ func TestShareE2E_BearerDirect_RestRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rest probe: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("/v1/me/profile must reject share-bearer with 403, got %d", resp.StatusCode)
 	}
 }
-

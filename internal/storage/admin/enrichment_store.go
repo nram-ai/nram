@@ -281,7 +281,7 @@ func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespac
 	if err != nil {
 		return nil, fmt.Errorf("self queue items: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	threshold := s.staleThresholdMs(ctx)
 	now := time.Now().UTC()
@@ -336,7 +336,7 @@ func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context) (*api.Enrichment
 	if err != nil {
 		return nil, fmt.Errorf("queue status items: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	threshold := s.staleThresholdMs(ctx)
 	now := time.Now().UTC()
@@ -441,7 +441,7 @@ func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UU
 	if err != nil {
 		return nil, fmt.Errorf("org queue items: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	threshold := s.staleThresholdMs(ctx)
 	now := time.Now().UTC()
@@ -504,7 +504,7 @@ func (s *EnrichmentAdminStore) retryFailedInNamespacePath(ctx context.Context, p
 		if err != nil {
 			return 0, fmt.Errorf("retry list by namespace: %w", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		var scoped []uuid.UUID
 		for rows.Next() {
 			var idStr string

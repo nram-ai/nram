@@ -218,7 +218,7 @@ func newMeExportDownload(svc MeExportService) http.HandlerFunc {
 			WriteError(w, ErrInternal("failed to open artifact"))
 			return
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		filename := "nram-export-" + jobID.String() + ".zip"
 		w.Header().Set("Content-Type", "application/zip")

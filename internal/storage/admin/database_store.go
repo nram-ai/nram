@@ -70,7 +70,7 @@ func (s *DatabaseAdminStore) GetDatabaseInfo(ctx context.Context) (*api.Database
 	if s.db.Backend() == storage.BackendSQLite {
 		// SQLite version.
 		row := s.db.QueryRow(ctx, "SELECT sqlite_version()")
-		row.Scan(&info.Version)
+		_ = row.Scan(&info.Version)
 
 		// File info.
 		fi, err := os.Stat("nram.db")
@@ -83,7 +83,7 @@ func (s *DatabaseAdminStore) GetDatabaseInfo(ctx context.Context) (*api.Database
 	} else {
 		// PostgreSQL version.
 		row := s.db.QueryRow(ctx, "SELECT version()")
-		row.Scan(&info.Version)
+		_ = row.Scan(&info.Version)
 
 		pgInfo := &api.PostgresInfo{}
 
@@ -118,7 +118,7 @@ func (s *DatabaseAdminStore) TestConnection(ctx context.Context, url string) (*a
 			Message: fmt.Sprintf("failed to open connection: %v", err),
 		}, nil
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(10 * time.Second)
@@ -166,7 +166,7 @@ func (s *DatabaseAdminStore) TriggerMigration(ctx context.Context, url string) (
 			Message: fmt.Sprintf("failed to initialize migration: %v", err),
 		}, nil
 	}
-	defer dm.Close()
+	defer func() { _ = dm.Close() }()
 
 	if err := dm.Run(ctx); err != nil {
 		stats := dm.Stats()

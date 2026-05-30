@@ -222,12 +222,12 @@ func (r *MemoryRepo) BackfillContentHashes(ctx context.Context, batchSize int) (
 	for rows.Next() {
 		var p pending
 		if err := rows.Scan(&p.id, &p.content); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, fmt.Errorf("backfill scan: %w", err)
 		}
 		batch = append(batch, p)
 	}
-	rows.Close()
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("backfill iter: %w", err)
 	}
@@ -294,7 +294,7 @@ func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Mem
 	if err != nil {
 		return nil, fmt.Errorf("memory get batch: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Memory{}
 	for rows.Next() {
@@ -482,7 +482,7 @@ func (r *MemoryRepo) ListByNamespaceFiltered(ctx context.Context, namespaceID uu
 	if err != nil {
 		return nil, fmt.Errorf("memory list by namespace: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Memory{}
 	for rows.Next() {
@@ -527,7 +527,7 @@ func (r *MemoryRepo) ListByNamespaceStale(ctx context.Context, namespaceID uuid.
 	if err != nil {
 		return nil, fmt.Errorf("memory list stale: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Memory{}
 	for rows.Next() {
@@ -586,7 +586,7 @@ func (r *MemoryRepo) ListIDsByNamespaceFiltered(ctx context.Context, namespaceID
 	if err != nil {
 		return nil, fmt.Errorf("memory list ids by namespace: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []uuid.UUID{}
 	for rows.Next() {
@@ -774,7 +774,7 @@ func (r *MemoryRepo) ListParentsByNamespaceFiltered(ctx context.Context, namespa
 	if err != nil {
 		return nil, fmt.Errorf("memory list parents by namespace: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Memory{}
 	for rows.Next() {
@@ -854,7 +854,7 @@ func (r *MemoryRepo) FindChildrenByParents(ctx context.Context, namespaceID uuid
 	if err != nil {
 		return nil, fmt.Errorf("memory find children by parents: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[uuid.UUID][]model.Memory)
 	for rows.Next() {
@@ -978,7 +978,7 @@ func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, nam
 	if err != nil {
 		return nil, fmt.Errorf("list augmentation backfill candidates: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := []uuid.UUID{}
 	for rows.Next() {
@@ -1062,7 +1062,7 @@ ORDER BY m.id ASC`
 	if err != nil {
 		return nil, fmt.Errorf("list paraphrase backfill candidates: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := []uuid.UUID{}
 	for rows.Next() {
@@ -1675,7 +1675,7 @@ func (r *MemoryRepo) FindMemoriesMissingVector(ctx context.Context, namespaceID 
 	if err != nil {
 		return nil, fmt.Errorf("memory find missing vector: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := []model.Memory{}
 	for rows.Next() {
@@ -1706,7 +1706,7 @@ func (r *MemoryRepo) FindBySupersededBy(ctx context.Context, namespaceID uuid.UU
 	if err != nil {
 		return nil, fmt.Errorf("memory find by superseded_by: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var ids []uuid.UUID
 	for rows.Next() {
@@ -1881,7 +1881,7 @@ func (r *MemoryRepo) ListIDsByNamespace(ctx context.Context, namespaceID uuid.UU
 	if err != nil {
 		return nil, fmt.Errorf("memory list ids by namespace: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var ids []uuid.UUID
 	for rows.Next() {
@@ -1933,7 +1933,7 @@ func (r *MemoryRepo) ListExpired(ctx context.Context, before time.Time, limit in
 	if err != nil {
 		return nil, fmt.Errorf("memory list expired: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Memory{}
 	for rows.Next() {
@@ -1967,7 +1967,7 @@ func (r *MemoryRepo) ListPurgeable(ctx context.Context, before time.Time, limit 
 	if err != nil {
 		return nil, fmt.Errorf("memory list purgeable: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []model.Memory{}
 	for rows.Next() {
@@ -2049,7 +2049,7 @@ func (r *MemoryRepo) SearchByText(ctx context.Context, namespaceID uuid.UUID, qu
 		// a user typed `:` or `(` into the query box.
 		return nil, nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := []MemoryRank{}
 	for rows.Next() {

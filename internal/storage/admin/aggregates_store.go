@@ -73,7 +73,7 @@ func (s *AggregatesStore) RecallDistribution(ctx context.Context, orgID *uuid.UU
 	if err != nil {
 		return nil, fmt.Errorf("recall distribution: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	counts := make(map[string]int, len(recallBuckets))
 	for rows.Next() {
@@ -116,7 +116,7 @@ func (s *AggregatesStore) OrgBreakdown(ctx context.Context) ([]api.OrgAggregate,
 	for rows.Next() {
 		var idStr, name, nsIDStr string
 		if err := rows.Scan(&idStr, &name, &nsIDStr); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("org breakdown scan: %w", err)
 		}
 		id, err1 := uuid.Parse(idStr)
@@ -126,7 +126,7 @@ func (s *AggregatesStore) OrgBreakdown(ctx context.Context) ([]api.OrgAggregate,
 		}
 		orgs = append(orgs, orgRow{ID: id, Name: name, NsID: nsID})
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	out := make([]api.OrgAggregate, 0, len(orgs))
 	for _, o := range orgs {
@@ -226,7 +226,7 @@ func (s *AggregatesStore) EntityTypeHistogram(ctx context.Context, orgID *uuid.U
 	if err != nil {
 		return nil, fmt.Errorf("entity type histogram: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := []api.TypeBucket{}
 	for rows.Next() {
@@ -262,7 +262,7 @@ func (s *AggregatesStore) RelationshipTypeHistogram(ctx context.Context, orgID *
 	if err != nil {
 		return nil, fmt.Errorf("relationship type histogram: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := []api.TypeBucket{}
 	for rows.Next() {
@@ -306,7 +306,7 @@ func (s *AggregatesStore) UserBreakdown(ctx context.Context, orgID uuid.UUID) ([
 	if err != nil {
 		return nil, fmt.Errorf("user breakdown: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := []api.UserAggregate{}
 	for rows.Next() {
@@ -345,7 +345,7 @@ func (s *AggregatesStore) OrgEnrichmentQueueStats(ctx context.Context, orgID uui
 	if err != nil {
 		return nil, fmt.Errorf("org enrichment queue stats: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	stats := &api.DashboardQueueStats{}
 	for rows.Next() {
@@ -449,7 +449,7 @@ func (s *AggregatesStore) SystemEnrichmentStats(ctx context.Context) (api.Enrich
 	if err != nil {
 		return stats, fmt.Errorf("enrichment stats: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var completed, failed int
 	for rows.Next() {
@@ -526,7 +526,7 @@ func (s *AggregatesStore) ActivityHistogram(ctx context.Context, orgID *uuid.UUI
 	if err != nil {
 		return nil, fmt.Errorf("activity histogram: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := []api.DailyBucket{}
 	for rows.Next() {

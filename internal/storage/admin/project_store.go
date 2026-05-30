@@ -73,6 +73,3 @@ func (s *ProjectAdminStore) CreateProject(ctx context.Context, name, slug, descr
 	}
 	return project, nil
 }
-
-
-

@@ -17,17 +17,6 @@ import (
 
 // --- mock types for recall tool tests ---
 
-type mockRecallService struct {
-	resp *service.RecallResponse
-	err  error
-	req  *service.RecallRequest // captures the last request
-}
-
-func (m *mockRecallService) Recall(_ context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
-	m.req = req
-	return m.resp, m.err
-}
-
 // newMockRecallSvc creates a mock RecallService that returns a fixed response.
 // Since RecallService is a concrete type with unexported fields, we create a
 // real instance with minimal mocks for the recall path.

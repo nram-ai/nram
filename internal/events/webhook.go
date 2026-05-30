@@ -188,8 +188,8 @@ func (d *WebhookDeliverer) sendRequest(ctx context.Context, wh *model.Webhook, e
 		return fmt.Errorf("http request: %w", err)
 	}
 	defer func() {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {

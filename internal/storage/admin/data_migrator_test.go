@@ -548,7 +548,7 @@ func verifyRows(t *testing.T, pgDB *sql.DB, table string, expectedRows []map[str
 	if err != nil {
 		t.Fatalf("query %s: %v", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {
@@ -722,7 +722,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 
 	// Build source SQLite database with test data.
 	srcDB := openSQLiteInMemory(t)
-	defer srcDB.Close()
+	defer func() { _ = srcDB.Close() }()
 	seedSQLite(t, srcDB)
 
 	// Open the pgvector-capable Postgres target and clean it before the test.
@@ -730,16 +730,16 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	defer pgDB.Close()
+	defer func() { _ = pgDB.Close() }()
 	cleanPostgres(t, pgDB)
-	pgDB.Close() // DataMigrator will open its own connection.
+	_ = pgDB.Close() // DataMigrator will open its own connection.
 
 	// Run the migration.
 	dm, err := newDataMigrator(ctx, srcDB, resolvedPostgresURL)
 	if err != nil {
 		t.Fatalf("newDataMigrator: %v", err)
 	}
-	defer dm.Close()
+	defer func() { _ = dm.Close() }()
 
 	if err := dm.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -750,7 +750,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open postgres for verification: %v", err)
 	}
-	defer pgConn.Close()
+	defer func() { _ = pgConn.Close() }()
 
 	// ── Row count verification ─────────────────────────────────────────────
 	t.Run("row_counts", func(t *testing.T) {
@@ -826,7 +826,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 		})
 		// Verify root namespace parent_id is NULL.
 		var parentID sql.NullString
-		pgConn.QueryRowContext(ctx,
+		_ = pgConn.QueryRowContext(ctx,
 			"SELECT parent_id FROM namespaces WHERE id = $1",
 			"00000000-0000-0000-0000-000000000000",
 		).Scan(&parentID)
@@ -1398,12 +1398,12 @@ func TestDatabaseAdminStore_TestConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	defer srcDB.Close()
+	defer func() { _ = srcDB.Close() }()
 
 	// We need a storage.DB to build the store; use a minimal wrapper via the
 	// package-level openSQLiteInMemory helper.
 	sqliteDB := openSQLiteInMemory(t)
-	defer sqliteDB.Close()
+	defer func() { _ = sqliteDB.Close() }()
 
 	// Wrap in a dbWrapper so we can build the store.
 	store := &DatabaseAdminStore{db: &testSQLiteDB{db: sqliteDB}}

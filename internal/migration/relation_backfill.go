@@ -35,7 +35,7 @@ func CanonicalizeRelations(ctx context.Context, db *sql.DB, backend string) (int
 	if err != nil {
 		return 0, fmt.Errorf("canonicalize relations: query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type clusterRow struct {
 		id       string

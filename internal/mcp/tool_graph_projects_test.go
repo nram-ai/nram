@@ -638,7 +638,6 @@ func TestHandleMemoryGraph_AlwaysFiltersSupersededSourceMemory(t *testing.T) {
 	assertNoOrphanRelationships(t, resp)
 }
 
-
 // TestGraphSortIsDeterministicOnEqualWeights pins that two graph() calls
 // against the same set of equal-weight edges produce byte-identical
 // responses regardless of upstream input order. The prior sort used

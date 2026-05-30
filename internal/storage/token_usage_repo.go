@@ -126,7 +126,7 @@ func (r *TokenUsageRepo) QueryByScope(ctx context.Context, scope string, from, t
 	if err != nil {
 		return nil, fmt.Errorf("token usage query by scope: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return r.scanTokenUsages(rows)
 }

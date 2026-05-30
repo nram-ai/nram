@@ -35,7 +35,6 @@ type QueryAugmentPromptResolver interface {
 	Resolve(ctx context.Context, key, scope string) (string, error)
 }
 
-
 // MemoryPreviewAugmentConfig wires the per-memory preview endpoint. All
 // dependencies are required; nil checks in the handler surface a 503 rather
 // than a panic so deployments without augmentation wired report cleanly.
@@ -214,4 +213,3 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		})
 	}
 }
-

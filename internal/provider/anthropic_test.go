@@ -67,7 +67,7 @@ func TestAnthropicComplete(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -112,7 +112,7 @@ func TestAnthropicCompleteSystemMessageExtraction(t *testing.T) {
 
 	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
 		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
-			json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
 
 			resp := anthropicMessagesResponse{
 				ID:         "msg_test456",
@@ -129,7 +129,7 @@ func TestAnthropicCompleteSystemMessageExtraction(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -172,7 +172,7 @@ func TestAnthropicCompleteDefaultModel(t *testing.T) {
 
 	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
 		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
-			json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
 
 			resp := anthropicMessagesResponse{
 				ID:         "msg_test789",
@@ -186,7 +186,7 @@ func TestAnthropicCompleteDefaultModel(t *testing.T) {
 				Usage: anthropicUsage{InputTokens: 1, OutputTokens: 1},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -216,7 +216,7 @@ func TestAnthropicCompleteCustomModel(t *testing.T) {
 
 	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
 		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
-			json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
 
 			resp := anthropicMessagesResponse{
 				ID:         "msg_custom",
@@ -230,7 +230,7 @@ func TestAnthropicCompleteCustomModel(t *testing.T) {
 				Usage: anthropicUsage{InputTokens: 1, OutputTokens: 1},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -261,7 +261,7 @@ func TestAnthropicCompleteTemperatureAndStopSequences(t *testing.T) {
 
 	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
 		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
-			json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
 
 			resp := anthropicMessagesResponse{
 				ID:         "msg_params",
@@ -275,7 +275,7 @@ func TestAnthropicCompleteTemperatureAndStopSequences(t *testing.T) {
 				Usage: anthropicUsage{InputTokens: 5, OutputTokens: 2},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -312,7 +312,7 @@ func TestAnthropicCompleteDefaultMaxTokens(t *testing.T) {
 
 	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
 		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
-			json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
 
 			resp := anthropicMessagesResponse{
 				ID:         "msg_default_max",
@@ -326,7 +326,7 @@ func TestAnthropicCompleteDefaultMaxTokens(t *testing.T) {
 				Usage: anthropicUsage{InputTokens: 1, OutputTokens: 1},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -355,7 +355,7 @@ func TestAnthropicCompleteAPIError(t *testing.T) {
 		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(anthropicErrorResponse{
+			_ = json.NewEncoder(w).Encode(anthropicErrorResponse{
 				Type: "error",
 				Error: anthropicErrorDetail{
 					Type:    "rate_limit_error",
@@ -396,7 +396,7 @@ func TestAnthropicCompleteEmptyContentBlocks(t *testing.T) {
 				Usage:      anthropicUsage{InputTokens: 5, OutputTokens: 0},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -434,7 +434,7 @@ func TestAnthropicCompleteMultipleContentBlocks(t *testing.T) {
 				Usage: anthropicUsage{InputTokens: 5, OutputTokens: 6},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -471,7 +471,7 @@ func TestAnthropicPingSuccess(t *testing.T) {
 				Usage: anthropicUsage{InputTokens: 1, OutputTokens: 1},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
 	})
 	defer srv.Close()
@@ -491,7 +491,7 @@ func TestAnthropicPingFailure(t *testing.T) {
 		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(anthropicErrorResponse{
+			_ = json.NewEncoder(w).Encode(anthropicErrorResponse{
 				Type: "error",
 				Error: anthropicErrorDetail{
 					Type:    "authentication_error",

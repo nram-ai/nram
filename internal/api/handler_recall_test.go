@@ -70,7 +70,7 @@ func newMeRecallRouter(handler http.HandlerFunc) *chi.Mux {
 
 func doRecallRequest(router http.Handler, path string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	_ = json.NewEncoder(&buf).Encode(body)
 
 	req := httptest.NewRequest(http.MethodPost, path, &buf)
 	req.Header.Set("Content-Type", "application/json")

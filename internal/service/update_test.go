@@ -18,12 +18,12 @@ import (
 // --- Mock implementations for update tests ---
 
 type mockMemoryUpdater struct {
-	memories         map[uuid.UUID]*model.Memory
-	updated          []*model.Memory
-	supersedes       []supersedeCall
-	getErr           error
-	updateErr        error
-	supersedeErr     error
+	memories     map[uuid.UUID]*model.Memory
+	updated      []*model.Memory
+	supersedes   []supersedeCall
+	getErr       error
+	updateErr    error
+	supersedeErr error
 }
 
 type supersedeCall struct {
@@ -89,7 +89,6 @@ func (m *mockMemoryUpdater) SupersedeReplacing(_ context.Context, oldID uuid.UUI
 	})
 	return nil
 }
-
 
 // --- Test helpers ---
 

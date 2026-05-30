@@ -41,7 +41,7 @@ func newBatchGetRouter(handler http.HandlerFunc) *chi.Mux {
 
 func doBatchGetRequest(router http.Handler, projectID string, body any) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	_ = json.NewEncoder(&buf).Encode(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/memories/get", &buf)
 	req.Header.Set("Content-Type", "application/json")
@@ -231,7 +231,7 @@ func TestBatchGetHandler_PassesIncludeSupersededFlag(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	_ = json.NewEncoder(&buf).Encode(body)
 	req := httptest.NewRequest(http.MethodPost,
 		"/v1/projects/"+projectID.String()+"/memories/get?include_superseded=true", &buf)
 	req.Header.Set("Content-Type", "application/json")

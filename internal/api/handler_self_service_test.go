@@ -102,7 +102,7 @@ func (m *mockOAuthClientManager) RevokeTokensForUserClient(_ context.Context, _ 
 func doSelfServiceRequest(handler http.HandlerFunc, method, target string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	if body != nil {
-		json.NewEncoder(&buf).Encode(body)
+		_ = json.NewEncoder(&buf).Encode(body)
 	}
 
 	req := httptest.NewRequest(method, target, &buf)
@@ -120,7 +120,7 @@ func doSelfServiceRequest(handler http.HandlerFunc, method, target string, body 
 func doChiRequest(handler http.HandlerFunc, method, path string, params map[string]string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	if body != nil {
-		json.NewEncoder(&buf).Encode(body)
+		_ = json.NewEncoder(&buf).Encode(body)
 	}
 
 	req := httptest.NewRequest(method, path, &buf)

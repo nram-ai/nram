@@ -122,7 +122,7 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 			w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", resetTime.Unix()))
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter)))
 			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprint(w, "rate limit exceeded")
+			_, _ = fmt.Fprint(w, "rate limit exceeded")
 			return
 		}
 
