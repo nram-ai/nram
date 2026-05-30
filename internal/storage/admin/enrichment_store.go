@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -216,10 +217,77 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 	}, pid, pname, augmentedQueries, augmentedEmbeddingAt, threshold, now), nil
 }
 
+// placeholderFn returns a generator that emits successive SQL bind
+// placeholders for the active backend: "$1", "$2", … for Postgres or "?" for
+// SQLite. Each call advances the counter, so callers must invoke it in the
+// same order the corresponding args are appended.
+func placeholderFn(pg bool) func() string {
+	idx := 0
+	return func() string {
+		idx++
+		if pg {
+			return "$" + strconv.Itoa(idx)
+		}
+		return "?"
+	}
+}
+
+// queueOrderClause renders the ORDER BY tail for a queue list query from
+// pre-normalized params (see api.QueueListParams.Normalize). The Sort column
+// and Dir are whitelisted literals — never bound parameters. A deterministic
+// (eq.created_at DESC, eq.id) tiebreaker is always appended so rows that share
+// the primary sort key keep a stable order across refetches; without it,
+// batch-enqueued rows with identical created_at shuffle between polls and the
+// UI table visibly jumps.
+func queueOrderClause(params api.QueueListParams) string {
+	dir := "DESC"
+	if params.Dir == "asc" {
+		dir = "ASC"
+	}
+	switch params.Sort {
+	case "status":
+		return " ORDER BY eq.status " + dir + ", eq.created_at DESC, eq.id ASC"
+	case "attempts":
+		return " ORDER BY eq.attempts " + dir + ", eq.created_at DESC, eq.id ASC"
+	default: // created_at
+		return " ORDER BY eq.created_at " + dir + ", eq.id ASC"
+	}
+}
+
+// buildQueueListItemsQuery assembles the items query shared by the self, org,
+// and system-wide queue-list methods. fromJoin is the FROM ... JOIN block
+// (immediately following the column list); where is the scope predicate
+// already built with leading placeholders from ph (empty for the system-wide
+// view, which has no namespace scope); args holds the values bound to those
+// placeholders. It appends the optional status filter — choosing WHERE vs AND
+// based on whether a scope predicate exists — then the deterministic ORDER BY
+// and LIMIT/OFFSET, returning the finished query and complete args. ph must be
+// the same generator used to build where so placeholder numbering stays
+// contiguous. params must already be Normalized by the caller.
+func buildQueueListItemsQuery(cols, fromJoin, where string, args []any, ph func() string, params api.QueueListParams) (string, []any) {
+	if params.Status != "" {
+		if where == "" {
+			where = "eq.status = " + ph()
+		} else {
+			where += " AND eq.status = " + ph()
+		}
+		args = append(args, params.Status)
+	}
+	q := `SELECT ` + cols + fromJoin
+	if where != "" {
+		q += ` WHERE ` + where
+	}
+	q += queueOrderClause(params) + ` LIMIT ` + ph()
+	args = append(args, params.Limit)
+	q += ` OFFSET ` + ph()
+	args = append(args, params.Offset)
+	return q, args
+}
+
 // SelfQueueStatus returns the queue items whose memory.namespace_id is
 // descended from the given user namespace. Counts are also scoped to the
 // caller. Used by /v1/me/enrichment.
-func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespaceID uuid.UUID) (*api.EnrichmentQueueStatus, error) {
+func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespaceID uuid.UUID, params api.QueueListParams) (*api.EnrichmentQueueStatus, error) {
 	var callerPath string
 	row := s.db.QueryRow(ctx, "SELECT path FROM namespaces WHERE id = ?", userNamespaceID.String())
 	if s.db.Backend() == storage.BackendPostgres {
@@ -258,26 +326,20 @@ func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespac
 		_ = row.Scan(st.dest)
 	}
 
-	cols := queueItemSelectColumns(true)
-	var itemsQ string
-	if s.db.Backend() == storage.BackendPostgres {
-		itemsQ = `SELECT ` + cols + `
-			FROM enrichment_queue eq
-			JOIN memories m ON eq.memory_id = m.id
-			JOIN namespaces n ON m.namespace_id = n.id
-			LEFT JOIN projects p ON p.namespace_id = m.namespace_id
-			WHERE n.path = $1 OR n.path LIKE $2
-			ORDER BY eq.created_at DESC LIMIT 50`
-	} else {
-		itemsQ = `SELECT ` + cols + `
-			FROM enrichment_queue eq
-			JOIN memories m ON eq.memory_id = m.id
-			JOIN namespaces n ON m.namespace_id = n.id
-			LEFT JOIN projects p ON p.namespace_id = m.namespace_id
-			WHERE n.path = ? OR n.path LIKE ?
-			ORDER BY eq.created_at DESC LIMIT 50`
-	}
-	rows, err := s.db.Query(ctx, itemsQ, exactPath, prefixPattern)
+	params = params.Normalize()
+	ph := placeholderFn(s.db.Backend() == storage.BackendPostgres)
+	where := "n.path = " + ph() + " OR n.path LIKE " + ph()
+	itemsQ, args := buildQueueListItemsQuery(
+		queueItemSelectColumns(true),
+		`
+		FROM enrichment_queue eq
+		JOIN memories m ON eq.memory_id = m.id
+		JOIN namespaces n ON m.namespace_id = n.id
+		LEFT JOIN projects p ON p.namespace_id = m.namespace_id`,
+		where, []any{exactPath, prefixPattern}, ph, params,
+	)
+
+	rows, err := s.db.Query(ctx, itemsQ, args...)
 	if err != nil {
 		return nil, fmt.Errorf("self queue items: %w", err)
 	}
@@ -320,19 +382,24 @@ func parseQueueTime(s string) (t time.Time, err error) {
 // QueueStatus returns the system-wide queue. Items carry project_id (no
 // project_name) so cross-tenant admins see UUIDs only — matching the
 // privacy posture for system-tier dreaming cycles.
-func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context) (*api.EnrichmentQueueStatus, error) {
+func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context, params api.QueueListParams) (*api.EnrichmentQueueStatus, error) {
 	stats, err := s.queueRepo.CountByStatus(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("queue status counts: %w", err)
 	}
 
-	cols := queueItemSelectColumns(false)
-	itemsQ := `SELECT ` + cols + `
+	params = params.Normalize()
+	ph := placeholderFn(s.db.Backend() == storage.BackendPostgres)
+	itemsQ, args := buildQueueListItemsQuery(
+		queueItemSelectColumns(false),
+		`
 		FROM enrichment_queue eq
 		JOIN memories m ON eq.memory_id = m.id
-		LEFT JOIN projects p ON p.namespace_id = m.namespace_id
-		ORDER BY eq.created_at DESC LIMIT 50`
-	rows, err := s.db.Query(ctx, itemsQ)
+		LEFT JOIN projects p ON p.namespace_id = m.namespace_id`,
+		"", nil, ph, params,
+	)
+
+	rows, err := s.db.Query(ctx, itemsQ, args...)
 	if err != nil {
 		return nil, fmt.Errorf("queue status items: %w", err)
 	}
@@ -384,7 +451,7 @@ func (s *EnrichmentAdminStore) orgNamespacePath(ctx context.Context, orgID uuid.
 // sees UUIDs only for projects owned by other users in the org — matching
 // the privacy posture for system-tier views. Used by
 // /v1/orgs/{orgId}/enrichment.
-func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UUID) (*api.EnrichmentQueueStatus, error) {
+func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UUID, params api.QueueListParams) (*api.EnrichmentQueueStatus, error) {
 	orgPath, err := s.orgNamespacePath(ctx, orgID)
 	if err != nil {
 		return nil, err
@@ -418,26 +485,20 @@ func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UU
 		_ = row.Scan(st.dest)
 	}
 
-	cols := queueItemSelectColumns(false)
-	var itemsQ string
-	if s.db.Backend() == storage.BackendPostgres {
-		itemsQ = `SELECT ` + cols + `
-			FROM enrichment_queue eq
-			JOIN memories m ON eq.memory_id = m.id
-			JOIN namespaces n ON m.namespace_id = n.id
-			LEFT JOIN projects p ON p.namespace_id = m.namespace_id
-			WHERE n.path = $1 OR n.path LIKE $2
-			ORDER BY eq.created_at DESC LIMIT 50`
-	} else {
-		itemsQ = `SELECT ` + cols + `
-			FROM enrichment_queue eq
-			JOIN memories m ON eq.memory_id = m.id
-			JOIN namespaces n ON m.namespace_id = n.id
-			LEFT JOIN projects p ON p.namespace_id = m.namespace_id
-			WHERE n.path = ? OR n.path LIKE ?
-			ORDER BY eq.created_at DESC LIMIT 50`
-	}
-	rows, err := s.db.Query(ctx, itemsQ, exactPath, prefixPattern)
+	params = params.Normalize()
+	ph := placeholderFn(s.db.Backend() == storage.BackendPostgres)
+	where := "n.path = " + ph() + " OR n.path LIKE " + ph()
+	itemsQ, args := buildQueueListItemsQuery(
+		queueItemSelectColumns(false),
+		`
+		FROM enrichment_queue eq
+		JOIN memories m ON eq.memory_id = m.id
+		JOIN namespaces n ON m.namespace_id = n.id
+		LEFT JOIN projects p ON p.namespace_id = m.namespace_id`,
+		where, []any{exactPath, prefixPattern}, ph, params,
+	)
+
+	rows, err := s.db.Query(ctx, itemsQ, args...)
 	if err != nil {
 		return nil, fmt.Errorf("org queue items: %w", err)
 	}

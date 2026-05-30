@@ -279,7 +279,7 @@ function SetupWizard() {
     <div className="app-shell flex min-h-[80vh] items-center justify-center p-6">
       <div className="w-full max-w-md">
         <div className="text-center">
-          <h1 className="font-display text-4xl text-foreground">Welcome to nram</h1>
+          <h1 className="font-display text-4xl text-foreground">Welcome to Neural Ram</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Create your administrator account to get started.
           </p>

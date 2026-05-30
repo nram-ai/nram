@@ -1200,6 +1200,37 @@ export interface EnrichmentQueueStatus {
   paused: boolean;
 }
 
+// EnrichmentQueueStatus item status values, used for the status filter.
+export type EnrichmentStatusFilter =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed";
+
+export type EnrichmentSortField = "created_at" | "status" | "attempts";
+
+// EnrichmentQueueParams mirrors the server-side QueueListParams: pagination,
+// ordering, and an optional single-status filter. The server caps limit at
+// 200 and defaults to created_at/desc across all statuses.
+export interface EnrichmentQueueParams {
+  limit?: number;
+  offset?: number;
+  sort?: EnrichmentSortField;
+  dir?: "asc" | "desc";
+  status?: EnrichmentStatusFilter;
+}
+
+function buildEnrichmentQueueQuery(params?: EnrichmentQueueParams): string {
+  const sp = new URLSearchParams();
+  if (params?.limit !== undefined) sp.set("limit", String(params.limit));
+  if (params?.offset !== undefined) sp.set("offset", String(params.offset));
+  if (params?.sort) sp.set("sort", params.sort);
+  if (params?.dir) sp.set("dir", params.dir);
+  if (params?.status) sp.set("status", params.status);
+  const qs = sp.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export interface EnrichmentRetryResponse {
   retried: number;
 }
@@ -1546,8 +1577,11 @@ export const adminAPI = {
     request<DreamAbandonResponse>("POST", `/admin/dreaming/cycles/${cycleId}/abandon`),
 
   // Enrichment
-  getEnrichmentStatus: () =>
-    request<EnrichmentQueueStatus>("GET", "/admin/enrichment"),
+  getEnrichmentStatus: (params?: EnrichmentQueueParams) =>
+    request<EnrichmentQueueStatus>(
+      "GET",
+      `/admin/enrichment${buildEnrichmentQueueQuery(params)}`,
+    ),
   retryEnrichment: (ids?: string[]) =>
     request<EnrichmentRetryResponse>("POST", "/admin/enrichment/retry", { ids: ids ?? [] }),
   pauseEnrichment: (paused: boolean) =>
@@ -1953,8 +1987,11 @@ export const meAPI = {
 
   // Self-tier enrichment queue: caller's own queue items + caller-scoped
   // counts. Pause/test-prompt remain admin-only at /admin/enrichment/*.
-  getEnrichmentStatus: () =>
-    request<EnrichmentQueueStatus>("GET", "/me/enrichment"),
+  getEnrichmentStatus: (params?: EnrichmentQueueParams) =>
+    request<EnrichmentQueueStatus>(
+      "GET",
+      `/me/enrichment${buildEnrichmentQueueQuery(params)}`,
+    ),
   retryEnrichment: (ids?: string[]) =>
     request<EnrichmentRetryResponse>("POST", "/me/enrichment/retry", { ids: ids ?? [] }),
   abandonDreamCycle: (cycleId: string) =>
@@ -2056,8 +2093,11 @@ export const orgAPI = {
     request<DreamAbandonResponse>("POST", `/orgs/${orgId}/dreaming/cycles/${cycleId}/abandon`),
   rollbackDreamCycle: (orgId: string, cycleId: string) =>
     request<DreamRollbackResponse>("POST", `/orgs/${orgId}/dreaming/cycles/${cycleId}/rollback`),
-  getEnrichmentStatus: (orgId: string) =>
-    request<EnrichmentQueueStatus>("GET", `/orgs/${orgId}/enrichment`),
+  getEnrichmentStatus: (orgId: string, params?: EnrichmentQueueParams) =>
+    request<EnrichmentQueueStatus>(
+      "GET",
+      `/orgs/${orgId}/enrichment${buildEnrichmentQueueQuery(params)}`,
+    ),
   retryEnrichment: (orgId: string, ids?: string[]) =>
     request<EnrichmentRetryResponse>("POST", `/orgs/${orgId}/enrichment/retry`, { ids: ids ?? [] }),
 

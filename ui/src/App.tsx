@@ -305,7 +305,7 @@ function AppLayout() {
           <div>
             <Logo size="sm" />
             <p className="mt-1 text-xs text-muted-foreground">
-              {auth.isAdmin ? "Admin Console" : "Console"}
+              Console
             </p>
           </div>
           <button

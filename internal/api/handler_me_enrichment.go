@@ -12,7 +12,7 @@ import (
 // MeEnrichmentStore narrows the EnrichmentAdminStore surface to the
 // self-scoped operations /v1/me/enrichment exposes.
 type MeEnrichmentStore interface {
-	SelfQueueStatus(ctx context.Context, userNamespaceID uuid.UUID) (*EnrichmentQueueStatus, error)
+	SelfQueueStatus(ctx context.Context, userNamespaceID uuid.UUID, params QueueListParams) (*EnrichmentQueueStatus, error)
 	SelfRetryFailed(ctx context.Context, userNamespacePath string, ids []uuid.UUID) (int, error)
 }
 
@@ -62,7 +62,7 @@ func handleMeEnrichmentQueue(w http.ResponseWriter, r *http.Request, cfg MeEnric
 		WriteError(w, ErrBadRequest("method not allowed"))
 		return
 	}
-	status, err := cfg.Store.SelfQueueStatus(r.Context(), userNS)
+	status, err := cfg.Store.SelfQueueStatus(r.Context(), userNS, parseQueueListParams(r))
 	if err != nil {
 		WriteError(w, ErrInternal("failed to get enrichment queue status"))
 		return

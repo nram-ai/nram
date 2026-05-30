@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -66,7 +67,7 @@ func TestEnrichment_SelfQueueStatus_PopulatesProjectFields(t *testing.T) {
 
 	userNsID, _, projectID, projectName := seedEnrichmentFixture(t, db, ctx)
 
-	resp, err := store.SelfQueueStatus(ctx, userNsID)
+	resp, err := store.SelfQueueStatus(ctx, userNsID, api.QueueListParams{})
 	if err != nil {
 		t.Fatalf("SelfQueueStatus: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestEnrichment_QueueStatus_AdminEmitsProjectIDOnly(t *testing.T) {
 
 	_, _, projectID, _ := seedEnrichmentFixture(t, db, ctx)
 
-	resp, err := store.QueueStatus(ctx)
+	resp, err := store.QueueStatus(ctx, api.QueueListParams{})
 	if err != nil {
 		t.Fatalf("QueueStatus: %v", err)
 	}
@@ -208,7 +209,7 @@ func TestEnrichment_OrgQueueStatus_EmitsProjectIDOnly(t *testing.T) {
 				[]string{"pending", "processing", "completed"},
 			)
 
-			resp, err := store.OrgQueueStatus(ctx, orgAID)
+			resp, err := store.OrgQueueStatus(ctx, orgAID, api.QueueListParams{})
 			if err != nil {
 				t.Fatalf("OrgQueueStatus(orgA): %v", err)
 			}
@@ -250,7 +251,7 @@ func TestEnrichment_OrgQueueStatus_EmitsProjectIDOnly(t *testing.T) {
 
 			// Sanity check the other direction: querying orgB returns
 			// only its 3 rows, none of orgA's.
-			respB, err := store.OrgQueueStatus(ctx, orgBID)
+			respB, err := store.OrgQueueStatus(ctx, orgBID, api.QueueListParams{})
 			if err != nil {
 				t.Fatalf("OrgQueueStatus(orgB): %v", err)
 			}
@@ -269,5 +270,141 @@ func TestEnrichment_OrgQueueStatus_EmitsProjectIDOnly(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEnrichment_SelfQueueStatus_Pagination exercises the limit/offset/sort/
+// status params and the deterministic ordering tiebreaker. The 5 pending rows
+// share one created_at — the exact case where, before the (created_at, id)
+// tiebreaker, the DB was free to return tied rows in a different order on each
+// query, making the UI table jump. The test asserts paging covers every row
+// without overlap and that repeated identical queries return an identical
+// ordering.
+func TestEnrichment_SelfQueueStatus_Pagination(t *testing.T) {
+	db := setupAdminTestDB(t)
+	ctx := context.Background()
+
+	queueRepo := storage.NewEnrichmentQueueRepo(db)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewEnrichmentAdminStore(queueRepo, settingsRepo, nil, db)
+
+	_, orgNsID := insertOrgWithNamespace(t, db, ctx)
+	userNsID := uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		userNsID.String(), "alice", userNsID.String(), "user",
+		"test-org/"+userNsID.String(), 1, orgNsID.String())
+	projNsID := uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		projNsID.String(), "p", "p", "project",
+		"test-org/"+userNsID.String()+"/p", 2, userNsID.String())
+	memID := uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO memories (id, namespace_id, content) VALUES (?, ?, ?)",
+		memID.String(), projNsID.String(), "x")
+
+	// 5 pending rows sharing one created_at, plus 2 failed.
+	const tied = "2026-01-01T00:00:00.000Z"
+	pendingIDs := map[string]bool{}
+	for i := range 5 {
+		id := uuid.New().String()
+		pendingIDs[id] = true
+		execSeed(t, db, ctx,
+			"INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, attempts, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+			id, memID.String(), projNsID.String(), "pending", i, tied)
+	}
+	for range 2 {
+		execSeed(t, db, ctx,
+			"INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, attempts, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+			uuid.New().String(), memID.String(), projNsID.String(), "failed", 0, tied)
+	}
+
+	// status filter scopes items to pending; counts still report all states.
+	pendingPage, err := store.SelfQueueStatus(ctx, userNsID, api.QueueListParams{Status: "pending", Limit: 50})
+	if err != nil {
+		t.Fatalf("SelfQueueStatus(pending): %v", err)
+	}
+	if len(pendingPage.Items) != 5 {
+		t.Fatalf("status=pending: got %d items, want 5", len(pendingPage.Items))
+	}
+	for _, it := range pendingPage.Items {
+		if it.Status != "pending" {
+			t.Errorf("status filter leaked a %q row", it.Status)
+		}
+	}
+	if pendingPage.Counts.Pending != 5 || pendingPage.Counts.Failed != 2 {
+		t.Errorf("counts must ignore the filter: got pending=%d failed=%d, want 5/2",
+			pendingPage.Counts.Pending, pendingPage.Counts.Failed)
+	}
+
+	// Paging by limit/offset covers every pending row exactly once.
+	seen := map[string]int{}
+	for offset := 0; offset < 6; offset += 2 {
+		page, err := store.SelfQueueStatus(ctx, userNsID,
+			api.QueueListParams{Status: "pending", Limit: 2, Offset: offset})
+		if err != nil {
+			t.Fatalf("SelfQueueStatus(offset=%d): %v", offset, err)
+		}
+		for _, it := range page.Items {
+			seen[it.ID.String()]++
+		}
+	}
+	if len(seen) != 5 {
+		t.Errorf("paging covered %d distinct pending rows, want 5 (overlap or gaps mean unstable ordering)", len(seen))
+	}
+	for id, n := range seen {
+		if !pendingIDs[id] {
+			t.Errorf("paging returned unexpected id %s", id)
+		}
+		if n != 1 {
+			t.Errorf("id %s appeared %d times across pages, want 1", id, n)
+		}
+	}
+
+	// Deterministic ordering: identical queries over the tied-timestamp rows
+	// must return the same id order every time.
+	order := func() []string {
+		page, err := store.SelfQueueStatus(ctx, userNsID,
+			api.QueueListParams{Status: "pending", Limit: 50, Sort: "created_at", Dir: "desc"})
+		if err != nil {
+			t.Fatalf("SelfQueueStatus(order): %v", err)
+		}
+		ids := make([]string, len(page.Items))
+		for i, it := range page.Items {
+			ids[i] = it.ID.String()
+		}
+		return ids
+	}
+	first, second := order(), order()
+	if len(first) != 5 {
+		t.Fatalf("ordering page: got %d items, want 5", len(first))
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatalf("tied-timestamp ordering not deterministic at index %d: %s vs %s", i, first[i], second[i])
+		}
+	}
+
+	// Sort by attempts ascending must be monotonic.
+	asc, err := store.SelfQueueStatus(ctx, userNsID,
+		api.QueueListParams{Status: "pending", Limit: 50, Sort: "attempts", Dir: "asc"})
+	if err != nil {
+		t.Fatalf("SelfQueueStatus(attempts asc): %v", err)
+	}
+	for i := 1; i < len(asc.Items); i++ {
+		if asc.Items[i].Attempts < asc.Items[i-1].Attempts {
+			t.Errorf("attempts asc not sorted: item[%d]=%d < item[%d]=%d",
+				i, asc.Items[i].Attempts, i-1, asc.Items[i-1].Attempts)
+		}
+	}
+
+	// Zero-value params resolve to the default page across all statuses.
+	all, err := store.SelfQueueStatus(ctx, userNsID, api.QueueListParams{})
+	if err != nil {
+		t.Fatalf("SelfQueueStatus(default): %v", err)
+	}
+	if len(all.Items) != 7 {
+		t.Errorf("default params: got %d items, want 7 (5 pending + 2 failed)", len(all.Items))
 	}
 }

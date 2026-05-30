@@ -40,7 +40,7 @@ type mockEnrichmentAdminStore struct {
 	isPausedErr    error
 }
 
-func (m *mockEnrichmentAdminStore) QueueStatus(_ context.Context) (*EnrichmentQueueStatus, error) {
+func (m *mockEnrichmentAdminStore) QueueStatus(_ context.Context, _ QueueListParams) (*EnrichmentQueueStatus, error) {
 	return m.queueStatus, m.queueStatusErr
 }
 

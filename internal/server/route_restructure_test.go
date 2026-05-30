@@ -72,7 +72,7 @@ var _ api.NamespaceStore = (*rrNamespaceStore)(nil)
 
 type rrEnrichmentStore struct{}
 
-func (s *rrEnrichmentStore) QueueStatus(_ context.Context) (*api.EnrichmentQueueStatus, error) {
+func (s *rrEnrichmentStore) QueueStatus(_ context.Context, _ api.QueueListParams) (*api.EnrichmentQueueStatus, error) {
 	return &api.EnrichmentQueueStatus{
 		Counts: api.EnrichmentQueueCounts{},
 		Items:  []api.EnrichmentQueueItem{},

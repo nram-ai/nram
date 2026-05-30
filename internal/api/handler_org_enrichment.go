@@ -12,7 +12,7 @@ import (
 // OrgEnrichmentStore narrows the admin store surface to the org-scoped
 // operations /v1/orgs/{orgId}/enrichment needs.
 type OrgEnrichmentStore interface {
-	OrgQueueStatus(ctx context.Context, orgID uuid.UUID) (*EnrichmentQueueStatus, error)
+	OrgQueueStatus(ctx context.Context, orgID uuid.UUID, params QueueListParams) (*EnrichmentQueueStatus, error)
 	OrgRetryFailed(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, error)
 }
 
@@ -58,7 +58,7 @@ func handleOrgEnrichmentQueue(w http.ResponseWriter, r *http.Request, cfg OrgEnr
 		WriteError(w, ErrBadRequest("method not allowed"))
 		return
 	}
-	status, err := cfg.Store.OrgQueueStatus(r.Context(), orgID)
+	status, err := cfg.Store.OrgQueueStatus(r.Context(), orgID, parseQueueListParams(r))
 	if err != nil {
 		WriteError(w, ErrInternal("failed to get enrichment queue status"))
 		return

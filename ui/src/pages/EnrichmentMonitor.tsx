@@ -1,10 +1,17 @@
-import { Fragment, useState, useCallback, useMemo } from "react";
-import { Link } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
 import {
-  useEnrichmentStatus,
+  Fragment,
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+  useEffect,
+} from "react";
+import { Link } from "react-router-dom";
+import {
+  useEnrichmentStatusInfinite,
   useRetryEnrichment,
   usePauseEnrichment,
+  enrichmentTotalForFilter,
 } from "../hooks/useApi";
 import { useEventStream } from "../hooks/useEventStream";
 import {
@@ -30,7 +37,11 @@ import {
   faCheck,
   faXmark,
 } from "../lib/icons";
-import type { EnrichmentQueueItem } from "../api/client";
+import type {
+  EnrichmentQueueItem,
+  EnrichmentQueueCounts,
+  EnrichmentStatusFilter,
+} from "../api/client";
 import { truncateId } from "../lib/formatters";
 import { memoryFocusHref } from "../lib/dreaming";
 
@@ -102,16 +113,17 @@ function Spinner({ className = "h-3.5 w-3.5" }: { className?: string }) {
 // Live SSE state
 // ---------------------------------------------------------------------------
 
-function useEnrichmentLiveState(orgId?: string) {
-  const qc = useQueryClient();
+function useEnrichmentLiveState() {
   const [liveJobs, setLiveJobs] = useState<Record<string, LiveJob>>({});
   const [poolTick, setPoolTick] = useState<PoolTick | null>(null);
-  const refreshAllTiers = () => {
-    qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
-    qc.invalidateQueries({ queryKey: ["me", "enrichment"] });
-    if (orgId) qc.invalidateQueries({ queryKey: ["org", orgId, "enrichment"] });
-  };
 
+  // The table is intentionally NOT invalidated on per-job SSE events. During
+  // active draining those fire many times per second; invalidating the queue
+  // query on each one refetched and reordered the whole table constantly,
+  // which is what made the list jump. Instead the live pool banner + per-row
+  // liveJobs overlay reflect activity in real time (updating in place, no
+  // reordering), and the table itself refreshes on its poll interval with
+  // placeholderData keeping the prior page steady between fetches.
   const { connected } = useEventStream({
     scope: "",
     onEvent: (evt) => {
@@ -136,10 +148,8 @@ function useEnrichmentLiveState(orgId?: string) {
             delete next[data.job_id];
             return next;
           });
-          // Status flipped to completed/failed — invalidate so the UI
-          // updates ahead of the next poll. The SSE hook is shared across
-          // every tier viewer (self/org/system).
-          refreshAllTiers();
+          // Row status flips on the next poll (see note above); no per-event
+          // table invalidation.
           break;
         }
         case "enrichment.pool.tick": {
@@ -161,8 +171,8 @@ function useEnrichmentLiveState(orgId?: string) {
         }
         case "enrichment.job.requeued": {
           // Sweeper auto-requeued a stuck job. Drop any live-job state for
-          // it (the original claim is gone) and refresh the queue cache so
-          // the row's status flips to 'pending' and the RequeuedPill renders.
+          // it (the original claim is gone); the row's status flips to
+          // 'pending' and the RequeuedPill renders on the next poll.
           if (data.job_id) {
             setLiveJobs((prev) => {
               const next = { ...prev };
@@ -170,7 +180,6 @@ function useEnrichmentLiveState(orgId?: string) {
               return next;
             });
           }
-          refreshAllTiers();
           break;
         }
         default:
@@ -553,11 +562,129 @@ function JobExpansion({ item }: { item: EnrichmentQueueItem }) {
 }
 
 // ---------------------------------------------------------------------------
+// Status filter tabs
+// ---------------------------------------------------------------------------
+
+const STATUS_TAB_ORDER: { key: EnrichmentStatusFilter; label: string }[] = [
+  { key: "pending", label: "Pending" },
+  { key: "processing", label: "Processing" },
+  { key: "completed", label: "Completed" },
+  { key: "failed", label: "Failed" },
+];
+
+// StatusFilterTabs scopes the server-side query to a single queue state (or
+// All). Counts come from the queue-wide totals so each tab shows how many rows
+// exist in that state regardless of which page is loaded.
+function StatusFilterTabs({
+  current,
+  counts,
+  onSelect,
+}: {
+  current: EnrichmentStatusFilter | undefined;
+  counts: EnrichmentQueueCounts;
+  onSelect: (next: EnrichmentStatusFilter | undefined) => void;
+}) {
+  const tabCls = (active: boolean) =>
+    `inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+      active
+        ? "bg-primary text-primary-foreground"
+        : "bg-muted text-muted-foreground hover:bg-muted/70"
+    }`;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <button
+        type="button"
+        className={tabCls(current === undefined)}
+        onClick={() => onSelect(undefined)}
+      >
+        All
+      </button>
+      {STATUS_TAB_ORDER.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          className={tabCls(current === t.key)}
+          onClick={() => onSelect(t.key)}
+        >
+          {t.label}
+          <span className="rounded-full bg-background/30 px-1.5 text-[10px] tabular-nums">
+            {counts[t.key]}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Load-more sentinel (infinite scroll)
+// ---------------------------------------------------------------------------
+
+// LoadMoreSentinel auto-fetches the next page when it scrolls into view and
+// also exposes an explicit button as a fallback. It mirrors the Memory
+// Browser's IntersectionObserver pattern and renders a "Showing N of M"
+// progress line driven by the queue-wide totals.
+function LoadMoreSentinel({
+  hasNextPage,
+  isFetchingNextPage,
+  loadedCount,
+  totalCount,
+  onLoadMore,
+}: {
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  loadedCount: number;
+  totalCount: number;
+  onLoadMore: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!hasNextPage) return;
+    const node = ref.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !isFetchingNextPage) {
+          onLoadMore();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, onLoadMore]);
+
+  if (loadedCount === 0) return null;
+
+  return (
+    <div ref={ref} className="mt-3 flex flex-col items-center gap-2">
+      {hasNextPage && (
+        <button
+          type="button"
+          onClick={() => onLoadMore()}
+          disabled={isFetchingNextPage}
+          className="inline-flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm hover:bg-muted/50 disabled:opacity-50"
+        >
+          {isFetchingNextPage && <Spinner className="h-3.5 w-3.5" />}
+          {isFetchingNextPage ? "Loading..." : "Load more"}
+        </button>
+      )}
+      <p className="text-xs text-muted-foreground tabular-nums">
+        Showing {loadedCount} of {totalCount}
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Queue Table
 // ---------------------------------------------------------------------------
 
 function QueueTable({
   items,
+  sortField,
+  sortDir,
+  onSort,
   selectedIds,
   onToggleSelect,
   onToggleSelectAll,
@@ -569,6 +696,11 @@ function QueueTable({
   linkMemoryIds = false,
 }: {
   items: EnrichmentQueueItem[];
+  // Sort is owned by the page and applied server-side; the table only renders
+  // items in the order they arrive and reports header clicks back up.
+  sortField: SortField;
+  sortDir: SortDir;
+  onSort: (field: SortField) => void;
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
   onToggleSelectAll: () => void;
@@ -589,8 +721,6 @@ function QueueTable({
   // Re-render every second so processing-row Elapsed counters tick.
   const hasProcessing = items.some((i) => i.status === "processing");
   useElapsedTicker(hasProcessing);
-  const [sortField, setSortField] = useState<SortField>("created_at");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
   // expandedJobs holds the queue-job ids whose per-pass detail accordion is
   // open. Held inside QueueTable (not above) so it resets only when the
   // table unmounts, surviving live SSE-driven row updates that re-key the
@@ -609,40 +739,6 @@ function QueueTable({
       return next;
     });
   }, []);
-
-  const handleSort = useCallback(
-    (field: SortField) => {
-      if (sortField === field) {
-        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-      } else {
-        setSortField(field);
-        setSortDir("desc");
-      }
-    },
-    [sortField],
-  );
-
-  const sorted = useMemo(() => {
-    const copy = [...items];
-    copy.sort((a, b) => {
-      let cmp = 0;
-      switch (sortField) {
-        case "status":
-          cmp = a.status.localeCompare(b.status);
-          break;
-        case "attempts":
-          cmp = a.attempts - b.attempts;
-          break;
-        case "created_at":
-          cmp =
-            new Date(a.created_at).getTime() -
-            new Date(b.created_at).getTime();
-          break;
-      }
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-    return copy;
-  }, [items, sortField, sortDir]);
 
   const failedIds = useMemo(
     () => new Set(items.filter((i) => i.status === "failed").map((i) => i.id)),
@@ -697,7 +793,7 @@ function QueueTable({
                 field="status"
                 currentField={sortField}
                 currentDir={sortDir}
-                onSort={handleSort}
+                onSort={onSort}
               />
             </th>
             <th className="px-3 py-2.5 text-left">
@@ -706,7 +802,7 @@ function QueueTable({
                 field="attempts"
                 currentField={sortField}
                 currentDir={sortDir}
-                onSort={handleSort}
+                onSort={onSort}
               />
             </th>
             <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
@@ -718,7 +814,7 @@ function QueueTable({
                 field="created_at"
                 currentField={sortField}
                 currentDir={sortDir}
-                onSort={handleSort}
+                onSort={onSort}
               />
             </th>
             <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
@@ -727,7 +823,7 @@ function QueueTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
-          {sorted.map((item) => {
+          {items.map((item) => {
             const isFailed = item.status === "failed";
             const badgeCls =
               STATUS_BADGES[item.status] || STATUS_BADGES.pending;
@@ -906,7 +1002,7 @@ function QueueTable({
 function EnrichmentMonitor() {
   const { isAdmin, isOrgOwner, user } = useAuth();
   const orgId = user?.org_id;
-  const { liveJobs, poolTick, connected } = useEnrichmentLiveState(orgId);
+  const { liveJobs, poolTick, connected } = useEnrichmentLiveState();
   const statusIntervalMs = connected ? 10_000 : 3_000;
 
   // Default to self-tier for everyone. The TierTabs picker only renders
@@ -914,10 +1010,22 @@ function EnrichmentMonitor() {
   // no picker at all.
   const [tier, setTier] = useState<Tier>("self");
 
-  const statusQuery = useEnrichmentStatus({
+  // Sort and status filter are owned here and pushed to the server through the
+  // infinite query, so they order/scope the entire queue rather than the
+  // currently loaded window. statusFilter undefined = all statuses.
+  const [sortField, setSortField] = useState<SortField>("created_at");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [statusFilter, setStatusFilter] = useState<
+    EnrichmentStatusFilter | undefined
+  >(undefined);
+
+  const statusQuery = useEnrichmentStatusInfinite({
     intervalMs: statusIntervalMs,
     tier,
     orgId,
+    sort: sortField,
+    dir: sortDir,
+    status: statusFilter,
   });
   const retryMutation = useRetryEnrichment({ tier, orgId });
   const pauseMutation = usePauseEnrichment();
@@ -928,16 +1036,47 @@ function EnrichmentMonitor() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const data = statusQuery.data;
-  const counts = data?.counts ?? {
+  // Counts and paused are queue-wide and identical on every page, so read them
+  // off the first page; items concatenate every loaded page in server order.
+  const firstPage = statusQuery.data?.pages[0];
+  const counts = firstPage?.counts ?? {
     pending: 0,
     processing: 0,
     completed: 0,
     failed: 0,
   };
-  const items = data?.items ?? [];
-  const isPaused = data?.paused ?? false;
+  const pages = statusQuery.data?.pages;
+  const items = useMemo(
+    () => pages?.flatMap((p) => p.items) ?? [],
+    [pages],
+  );
+  const isPaused = firstPage?.paused ?? false;
 
+  const handleSort = useCallback(
+    (field: SortField) => {
+      if (field === sortField) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      } else {
+        setSortField(field);
+        setSortDir("desc");
+      }
+    },
+    [sortField],
+  );
+
+  const handleSelectStatus = useCallback(
+    (next: EnrichmentStatusFilter | undefined) => {
+      setStatusFilter(next);
+      // Selection references rows from the previous filter that may no longer
+      // be loaded; clear it so the bulk-retry count stays meaningful.
+      setSelectedIds(new Set());
+    },
+    [],
+  );
+
+  // failedItems is the failed subset currently loaded; used to drive the
+  // select-all checkbox over visible rows. The "Retry All Failed" action below
+  // uses counts.failed (the true total) since it retries server-side.
   const failedItems = useMemo(
     () => items.filter((i) => i.status === "failed"),
     [items],
@@ -1135,7 +1274,7 @@ function EnrichmentMonitor() {
               </button>
             )}
 
-            {failedItems.length > 0 && (
+            {counts.failed > 0 && (
               <button
                 type="button"
                 onClick={handleRetryAllFailed}
@@ -1143,7 +1282,7 @@ function EnrichmentMonitor() {
                 className="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 px-3 py-2 text-sm font-medium text-destructive shadow-sm hover:bg-destructive/10 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {retryMutation.isPending && <Spinner />}
-                Retry All Failed ({failedItems.length})
+                Retry All Failed ({counts.failed})
               </button>
             )}
           </div>
@@ -1174,11 +1313,21 @@ function EnrichmentMonitor() {
 
           {/* Queue table */}
           <div>
-            <h2 className="mb-3 text-lg font-medium text-foreground">
-              Queue Items
-            </h2>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-medium text-foreground">
+                Queue Items
+              </h2>
+              <StatusFilterTabs
+                current={statusFilter}
+                counts={counts}
+                onSelect={handleSelectStatus}
+              />
+            </div>
             <QueueTable
               items={items}
+              sortField={sortField}
+              sortDir={sortDir}
+              onSort={handleSort}
               selectedIds={selectedIds}
               onToggleSelect={handleToggleSelect}
               onToggleSelectAll={handleToggleSelectAll}
@@ -1188,6 +1337,15 @@ function EnrichmentMonitor() {
               showWriteActions={showWriteActions}
               showProjectName={tier === "self"}
               linkMemoryIds={tier === "self"}
+            />
+            {/* Infinite-scroll sentinel: auto-loads the next page when it
+                scrolls into view, with an explicit fallback button. */}
+            <LoadMoreSentinel
+              hasNextPage={!!statusQuery.hasNextPage}
+              isFetchingNextPage={statusQuery.isFetchingNextPage}
+              loadedCount={items.length}
+              totalCount={enrichmentTotalForFilter(counts, statusFilter)}
+              onLoadMore={statusQuery.fetchNextPage}
             />
           </div>
 

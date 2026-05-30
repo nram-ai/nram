@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,8 +19,8 @@ import (
 // EnrichmentAdminStore abstracts storage and worker management operations
 // for the enrichment admin API.
 type EnrichmentAdminStore interface {
-	// QueueStatus returns counts by status and recent queue items.
-	QueueStatus(ctx context.Context) (*EnrichmentQueueStatus, error)
+	// QueueStatus returns counts by status and a page of queue items.
+	QueueStatus(ctx context.Context, params QueueListParams) (*EnrichmentQueueStatus, error)
 	// RetryFailed retries failed enrichment jobs. If ids is nil/empty, retries all failed.
 	RetryFailed(ctx context.Context, ids []uuid.UUID) (int, error)
 	// SetPaused pauses or resumes enrichment workers.
@@ -55,6 +56,88 @@ type EnrichmentQueueStatus struct {
 	Counts EnrichmentQueueCounts `json:"counts"`
 	Items  []EnrichmentQueueItem `json:"items"`
 	Paused bool                  `json:"paused"`
+}
+
+// Queue list pagination bounds. The default page size matches the historical
+// hardcoded LIMIT; the max caps how much a single request can pull.
+const (
+	QueueListDefaultLimit = 50
+	QueueListMaxLimit     = 200
+)
+
+// QueueListParams controls pagination, ordering, and status filtering for the
+// enrichment queue list endpoints (/v1/me, /v1/orgs/{id}, /v1/admin). The zero
+// value is valid: Normalize resolves it to the first page (limit 50, offset 0)
+// ordered newest-first across all statuses, so internal callers and tests may
+// pass QueueListParams{} unchanged.
+type QueueListParams struct {
+	Limit  int
+	Offset int
+	// Sort is one of "created_at", "status", "attempts". Anything else
+	// normalizes to "created_at".
+	Sort string
+	// Dir is "asc" or "desc" (default "desc").
+	Dir string
+	// Status filters to a single queue state ("pending", "processing",
+	// "completed", "failed"). Empty means no filter (all states).
+	Status string
+}
+
+// Normalize returns a copy with out-of-range or unrecognized values replaced
+// by safe defaults. Storage implementations call this so a zero-value params
+// still yields the default first page, and the Sort/Dir/Status whitelists are
+// enforced before any value reaches a SQL ORDER BY / WHERE clause.
+func (p QueueListParams) Normalize() QueueListParams {
+	out := p
+	if out.Limit <= 0 {
+		out.Limit = QueueListDefaultLimit
+	}
+	if out.Limit > QueueListMaxLimit {
+		out.Limit = QueueListMaxLimit
+	}
+	if out.Offset < 0 {
+		out.Offset = 0
+	}
+	switch out.Sort {
+	case "status", "attempts", "created_at":
+		// recognized
+	default:
+		out.Sort = "created_at"
+	}
+	if strings.EqualFold(out.Dir, "asc") {
+		out.Dir = "asc"
+	} else {
+		out.Dir = "desc"
+	}
+	switch out.Status {
+	case "pending", "processing", "completed", "failed":
+		// recognized
+	default:
+		out.Status = ""
+	}
+	return out
+}
+
+// parseQueueListParams reads pagination/sort/filter query parameters from an
+// enrichment queue list request and returns a normalized QueueListParams.
+func parseQueueListParams(r *http.Request) QueueListParams {
+	q := r.URL.Query()
+	p := QueueListParams{
+		Sort:   q.Get("sort"),
+		Dir:    q.Get("dir"),
+		Status: q.Get("status"),
+	}
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			p.Limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			p.Offset = n
+		}
+	}
+	return p.Normalize()
 }
 
 // EnrichmentQueueCounts contains the count of items in each queue state.
@@ -183,7 +266,7 @@ func handleEnrichmentQueue(w http.ResponseWriter, r *http.Request, cfg Enrichmen
 		return
 	}
 
-	status, err := cfg.Store.QueueStatus(r.Context())
+	status, err := cfg.Store.QueueStatus(r.Context(), parseQueueListParams(r))
 	if err != nil {
 		WriteError(w, ErrInternal("failed to get enrichment queue status"))
 		return

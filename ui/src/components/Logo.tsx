@@ -28,7 +28,7 @@ export function Logo({ size = "md", className }: Props) {
       }`}
       style={{ fontSize: WORDMARK_PX[size], lineHeight: 1 }}
     >
-      nram
+      Neural Ram
     </span>
   );
 }

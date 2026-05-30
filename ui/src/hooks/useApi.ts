@@ -3,6 +3,7 @@ import {
   useInfiniteQuery,
   useMutation,
   useQueryClient,
+  keepPreviousData,
 } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
@@ -55,6 +56,9 @@ import {
   type UsageGroupBy,
   type ExportJob,
   type CreateExportJobRequest,
+  type EnrichmentQueueCounts,
+  type EnrichmentSortField,
+  type EnrichmentStatusFilter,
 } from "../api/client";
 import {
   sharesAPI,
@@ -1012,26 +1016,70 @@ export function useAbandonDreamCycle(scope: TierWithOrg = { tier: "system" }) {
 
 // --- Enrichment ---
 
-export function useEnrichmentStatus(
-  opts: {
-    intervalMs?: number;
-    tier?: "self" | "org" | "system";
-    orgId?: string;
-  } = {},
-) {
+// ENRICHMENT_PAGE_SIZE matches the server-side default limit. The queue list
+// is paged through this many items per "Load more".
+export const ENRICHMENT_PAGE_SIZE = 50;
+
+// enrichmentTotalForFilter derives the total row count for the active status
+// filter from the per-status counts the server always returns. With no filter
+// it sums every status; with one selected it reads that bucket. This is what
+// getNextPageParam uses to decide whether another page exists, so no extra
+// total field is needed on the response.
+export function enrichmentTotalForFilter(
+  counts: EnrichmentQueueCounts,
+  status?: EnrichmentStatusFilter,
+): number {
+  if (status) return counts[status] ?? 0;
+  return counts.pending + counts.processing + counts.completed + counts.failed;
+}
+
+// useEnrichmentStatusInfinite pages the enrichment queue server-side. Sort,
+// direction, and status filter are part of the query key, so changing any of
+// them refetches from the first page. placeholderData keeps the previously
+// loaded pages visible during background refetches (poll interval) so the
+// table does not blank or reshuffle while the worker drains jobs.
+export function useEnrichmentStatusInfinite(opts: {
+  intervalMs?: number;
+  tier?: "self" | "org" | "system";
+  orgId?: string;
+  sort?: EnrichmentSortField;
+  dir?: "asc" | "desc";
+  status?: EnrichmentStatusFilter;
+  pageSize?: number;
+}) {
   const tier = opts.tier ?? "system";
-  return useQuery({
+  const pageSize = opts.pageSize ?? ENRICHMENT_PAGE_SIZE;
+  const sort = opts.sort ?? "created_at";
+  const dir = opts.dir ?? "desc";
+  const status = opts.status;
+  const keyScope = { sort, dir, status: status ?? null, pageSize };
+  return useInfiniteQuery({
     queryKey:
       tier === "org"
-        ? ["org", opts.orgId, "enrichment"]
-        : [tier === "self" ? "me" : "admin", "enrichment"],
-    queryFn: () => {
-      if (tier === "org") return orgAPI.getEnrichmentStatus(opts.orgId!);
-      if (tier === "self") return meAPI.getEnrichmentStatus();
-      return adminAPI.getEnrichmentStatus();
-    },
+        ? ["org", opts.orgId, "enrichment", keyScope]
+        : [tier === "self" ? "me" : "admin", "enrichment", keyScope],
     enabled: tier !== "org" || !!opts.orgId,
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => {
+      const params = {
+        limit: pageSize,
+        offset: pageParam as number,
+        sort,
+        dir,
+        status,
+      };
+      if (tier === "org")
+        return orgAPI.getEnrichmentStatus(opts.orgId!, params);
+      if (tier === "self") return meAPI.getEnrichmentStatus(params);
+      return adminAPI.getEnrichmentStatus(params);
+    },
+    getNextPageParam: (lastPage, _allPages, lastPageParam) => {
+      const next = (lastPageParam as number) + pageSize;
+      const total = enrichmentTotalForFilter(lastPage.counts, status);
+      return next >= total ? undefined : next;
+    },
     refetchInterval: opts.intervalMs ?? 10_000,
+    placeholderData: keepPreviousData,
   });
 }
 

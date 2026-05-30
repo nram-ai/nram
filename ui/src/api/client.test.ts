@@ -891,6 +891,27 @@ describe("API Client E2E", () => {
       expect(typeof s.paused).toBe("boolean");
     });
 
+    it("getEnrichmentStatus() honors pagination, sort, and status params", async () => {
+      // limit caps the page; the server caps at 200 and never returns more
+      // than asked. An empty queue simply returns 0 items, which still
+      // exercises the query-string path and server-side parsing.
+      const page = await adminAPI.getEnrichmentStatus({
+        limit: 5,
+        offset: 0,
+        sort: "attempts",
+        dir: "asc",
+        status: "pending",
+      });
+      expect(Array.isArray(page.items)).toBe(true);
+      expect(page.items.length).toBeLessThanOrEqual(5);
+      // status filter must not return rows of other states.
+      for (const item of page.items) {
+        expect(item.status).toBe("pending");
+      }
+      // counts are queue-wide and independent of the filter/page.
+      expect(typeof page.counts.completed).toBe("number");
+    });
+
     it("retryEnrichment() accepts empty ID list", async () => {
       try {
         const res = await adminAPI.retryEnrichment([]);

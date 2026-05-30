@@ -131,7 +131,7 @@ function Login() {
     <div className="app-shell flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-md">
         <div className="text-center">
-          <h1 className="font-display text-4xl text-foreground">Sign in to nram</h1>
+          <h1 className="font-display text-4xl text-foreground">Sign in to Neural Ram</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {step === "email" && "Enter your email address to continue."}
             {step === "password" && "Enter your password to sign in."}
