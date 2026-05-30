@@ -15,7 +15,12 @@ import { useDebounce } from "../hooks/useDebounce";
 import { useAuth } from "../context/AuthContext";
 import { downloadJson } from "../lib/download";
 import { useSelectedProject } from "../context/ProjectContext";
-import { memoryAPI, type Memory, type MemoryListParams } from "../api/client";
+import {
+  memoryAPI,
+  downloadProjectExport,
+  type Memory,
+  type MemoryListParams,
+} from "../api/client";
 import { memoryFocusHref, shortId } from "../lib/dreaming";
 import { MemoryAugmentPreviewBlock } from "../components/MemoryAugmentPreviewBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -213,7 +218,36 @@ interface FilterState {
   dateFrom: string;
   dateTo: string;
   enrichmentFilter: "all" | "enriched" | "not_enriched";
+  originFilter: "all" | "user" | "dream" | "import";
+  augmentedFilter: "all" | "augmented" | "not_augmented";
+  includeSuperseded: boolean;
   sourceFilter: string;
+}
+
+const EMPTY_FILTERS: FilterState = {
+  selectedTags: [],
+  dateFrom: "",
+  dateTo: "",
+  enrichmentFilter: "all",
+  originFilter: "all",
+  augmentedFilter: "all",
+  includeSuperseded: false,
+  sourceFilter: "",
+};
+
+// hasActiveFilters reports whether any filter dimension narrows the listing.
+// Used to drive the mobile "filters applied" badge and the empty-state copy.
+function hasActiveFilters(f: FilterState): boolean {
+  return (
+    f.selectedTags.length > 0 ||
+    !!f.dateFrom ||
+    !!f.dateTo ||
+    f.enrichmentFilter !== "all" ||
+    f.originFilter !== "all" ||
+    f.augmentedFilter !== "all" ||
+    f.includeSuperseded ||
+    !!f.sourceFilter
+  );
 }
 
 function FilterSidebar({
@@ -237,13 +271,7 @@ function FilterSidebar({
   }
 
   function clearFilters() {
-    onFiltersChange({
-      selectedTags: [],
-      dateFrom: "",
-      dateTo: "",
-      enrichmentFilter: "all",
-      sourceFilter: "",
-    });
+    onFiltersChange({ ...EMPTY_FILTERS });
   }
 
   return (
@@ -260,7 +288,7 @@ function FilterSidebar({
           onClick={onToggleCollapse}
           title={collapsed ? "Expand filters" : "Collapse filters"}
         >
-          {collapsed ? ">" : "<"}
+          {collapsed ? "<" : ">"}
         </button>
       </div>
       {!collapsed && (
@@ -345,6 +373,81 @@ function FilterSidebar({
                 </label>
               ))}
             </div>
+          </div>
+
+          {/* Origin */}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              Origin
+            </label>
+            <div className="space-y-1">
+              {(
+                [
+                  ["all", "All"],
+                  ["user", "User"],
+                  ["dream", "Dream"],
+                  ["import", "Import"],
+                ] as const
+              ).map(([val, label]) => (
+                <label key={val} className="flex items-center gap-2 text-xs">
+                  <input
+                    type="radio"
+                    name="origin"
+                    checked={filters.originFilter === val}
+                    onChange={() =>
+                      onFiltersChange({ ...filters, originFilter: val })
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Augmented */}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              Augmented
+            </label>
+            <div className="space-y-1">
+              {(
+                [
+                  ["all", "All"],
+                  ["augmented", "Augmented"],
+                  ["not_augmented", "Not Augmented"],
+                ] as const
+              ).map(([val, label]) => (
+                <label key={val} className="flex items-center gap-2 text-xs">
+                  <input
+                    type="radio"
+                    name="augmented"
+                    checked={filters.augmentedFilter === val}
+                    onChange={() =>
+                      onFiltersChange({ ...filters, augmentedFilter: val })
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Superseded */}
+          <div>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="rounded border"
+                checked={filters.includeSuperseded}
+                onChange={(e) =>
+                  onFiltersChange({
+                    ...filters,
+                    includeSuperseded: e.target.checked,
+                  })
+                }
+              />
+              <span>Include superseded</span>
+            </label>
           </div>
 
           {/* Source */}
@@ -931,13 +1034,9 @@ function MemoryBrowser() {
   const debouncedSearch = useDebounce(searchText, DEBOUNCE_MS);
 
   // Filter state
-  const [filters, setFilters] = useState<FilterState>({
-    selectedTags: [],
-    dateFrom: "",
-    dateTo: "",
-    enrichmentFilter: "all",
-    sourceFilter: "",
-  });
+  const [filters, setFilters] = useState<FilterState>({ ...EMPTY_FILTERS });
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     typeof window !== "undefined" && window.innerWidth < 768,
   );
@@ -1032,6 +1131,14 @@ function MemoryBrowser() {
           : filters.enrichmentFilter === "not_enriched"
             ? "false"
             : undefined,
+      origin: filters.originFilter === "all" ? undefined : filters.originFilter,
+      augmented:
+        filters.augmentedFilter === "augmented"
+          ? "true"
+          : filters.augmentedFilter === "not_augmented"
+            ? "false"
+            : undefined,
+      include_superseded: filters.includeSuperseded ? "true" : undefined,
       source: filters.sourceFilter || undefined,
       search: !isSemanticSearch && debouncedSearch ? debouncedSearch : undefined,
     };
@@ -1148,6 +1255,17 @@ function MemoryBrowser() {
       result = result.filter((m) => m.enriched);
     } else if (filters.enrichmentFilter === "not_enriched") {
       result = result.filter((m) => !m.enriched);
+    }
+    if (filters.originFilter !== "all") {
+      result = result.filter((m) => m.origin === filters.originFilter);
+    }
+    if (filters.augmentedFilter === "augmented") {
+      result = result.filter((m) => !!m.augmented_embedding_at);
+    } else if (filters.augmentedFilter === "not_augmented") {
+      result = result.filter((m) => !m.augmented_embedding_at);
+    }
+    if (!filters.includeSuperseded) {
+      result = result.filter((m) => !m.superseded_by);
     }
     if (filters.sourceFilter) {
       const lower = filters.sourceFilter.toLowerCase();
@@ -1337,12 +1455,19 @@ function MemoryBrowser() {
   }
 
   async function handleExportAll() {
-    if (!selectedProjectId) return;
+    if (!selectedProjectId || exporting) return;
+    const slug =
+      projects.find((p) => p.id === selectedProjectId)?.slug ?? "project";
+    setExporting(true);
+    setExportError(null);
     try {
-      const data = await memoryAPI.export(selectedProjectId);
-      downloadJson(data, "memories-export-all.json");
-    } catch {
-      // silently fail export
+      // Stream the server-built export blob directly rather than fetching it
+      // as JSON and re-serializing it client-side.
+      await downloadProjectExport(selectedProjectId, slug);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Export failed");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -1428,14 +1553,21 @@ function MemoryBrowser() {
             </button>
             <button
               type="button"
-              className="shrink-0 rounded-md border px-3 py-2 text-sm hover:bg-muted"
+              className="shrink-0 rounded-md border px-3 py-2 text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleExportAll}
+              disabled={exporting}
               title="Export all memories"
             >
-              Export All
+              {exporting ? "Exporting…" : "Export All"}
             </button>
           </div>
         </div>
+
+        {exportError && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            Export failed: {exportError}
+          </div>
+        )}
       </div>
 
       {/* Mobile filter toggle */}
@@ -1446,7 +1578,7 @@ function MemoryBrowser() {
           onClick={() => setSidebarCollapsed((c) => !c)}
         >
           {sidebarCollapsed ? "Show Filters" : "Hide Filters"}
-          {filters.selectedTags.length > 0 || filters.dateFrom || filters.dateTo || filters.enrichmentFilter !== "all" || filters.sourceFilter ? (
+          {hasActiveFilters(filters) ? (
             <span className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary text-xs text-primary-foreground">
               !
             </span>
@@ -1507,6 +1639,56 @@ function MemoryBrowser() {
                 ))}
               </div>
             </div>
+            {/* Origin */}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Origin</label>
+              <div className="flex flex-wrap gap-2">
+                {([["all", "All"], ["user", "User"], ["dream", "Dream"], ["import", "Import"]] as const).map(([val, label]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                      filters.originFilter === val
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "hover:bg-muted"
+                    }`}
+                    onClick={() => setFilters({ ...filters, originFilter: val })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Augmented */}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Augmented</label>
+              <div className="flex gap-2">
+                {([["all", "All"], ["augmented", "Augmented"], ["not_augmented", "Not Augmented"]] as const).map(([val, label]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                      filters.augmentedFilter === val
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "hover:bg-muted"
+                    }`}
+                    onClick={() => setFilters({ ...filters, augmentedFilter: val })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Superseded */}
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="rounded border"
+                checked={filters.includeSuperseded}
+                onChange={(e) => setFilters({ ...filters, includeSuperseded: e.target.checked })}
+              />
+              <span>Include superseded</span>
+            </label>
             {/* Date + Source row */}
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -1522,7 +1704,7 @@ function MemoryBrowser() {
               type="button"
               className="w-full rounded border px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted"
               onClick={() => {
-                setFilters({ selectedTags: [], dateFrom: "", dateTo: "", enrichmentFilter: "all", sourceFilter: "" });
+                setFilters({ ...EMPTY_FILTERS });
                 setSidebarCollapsed(true);
               }}
             >
@@ -1532,17 +1714,8 @@ function MemoryBrowser() {
         </div>
       )}
 
-      {/* Main content: sidebar + list */}
+      {/* Main content: list (left) + sidebar (right) */}
       <div className="flex flex-1 gap-4 overflow-hidden">
-        {/* Filter sidebar (desktop) */}
-        <FilterSidebar
-          availableTags={availableTags}
-          filters={filters}
-          onFiltersChange={setFilters}
-          collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
-        />
-
         {/* Memory list */}
         <div className="flex min-w-0 flex-1 flex-col">
           {isError && (
@@ -1560,7 +1733,7 @@ function MemoryBrowser() {
           ) : filteredMemories.length === 0 ? (
             <div className="flex flex-1 items-center justify-center">
               <p className="text-sm text-muted-foreground">
-                {debouncedSearch || filters.selectedTags.length > 0 || filters.dateFrom || filters.dateTo || filters.enrichmentFilter !== "all" || filters.sourceFilter
+                {debouncedSearch || hasActiveFilters(filters)
                   ? "No memories found matching your filters."
                   : "No memories in this project yet."}
               </p>
@@ -1685,6 +1858,15 @@ function MemoryBrowser() {
             </>
           )}
         </div>
+
+        {/* Filter sidebar (desktop, right side) */}
+        <FilterSidebar
+          availableTags={availableTags}
+          filters={filters}
+          onFiltersChange={setFilters}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+        />
       </div>
 
       {/* Bulk actions bar — only show write actions if canWrite */}

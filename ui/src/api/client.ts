@@ -302,6 +302,12 @@ export interface MemoryListParams {
   date_to?: string;
   /** "true" → enriched only, "false" → not-enriched only, undefined → no filter */
   enriched?: "true" | "false";
+  /** restrict to a single provenance; undefined → no filter */
+  origin?: MemoryOrigin;
+  /** "true" → augmented embedding only, "false" → not-augmented only, undefined → no filter */
+  augmented?: "true" | "false";
+  /** "true" surfaces superseded (paraphrase/contradiction loser) rows; default hides them */
+  include_superseded?: "true";
   /** case-insensitive substring against the source column */
   source?: string;
   /** case-insensitive substring against the content column */
@@ -1686,6 +1692,9 @@ function memoryListSearchParams(params?: MemoryListParams): URLSearchParams {
   if (params.date_from) sp.set("date_from", params.date_from);
   if (params.date_to) sp.set("date_to", params.date_to);
   if (params.enriched) sp.set("enriched", params.enriched);
+  if (params.origin) sp.set("origin", params.origin);
+  if (params.augmented) sp.set("augmented", params.augmented);
+  if (params.include_superseded) sp.set("include_superseded", params.include_superseded);
   if (params.source) sp.set("source", params.source);
   if (params.search) sp.set("search", params.search);
   if (params.group_by_parent) sp.set("group_by_parent", "true");

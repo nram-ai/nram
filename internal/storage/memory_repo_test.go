@@ -605,6 +605,95 @@ func TestMemoryRepo_ListByNamespaceFiltered_Enriched(t *testing.T) {
 	})
 }
 
+func TestMemoryRepo_ListByNamespaceFiltered_Origin(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		origins := []model.MemoryOrigin{
+			model.OriginUser, model.OriginUser, model.OriginDream, model.OriginImport,
+		}
+		for i, o := range origins {
+			if err := repo.Create(ctx, &model.Memory{
+				NamespaceID: nsID,
+				Content:     "origin memory " + string(o) + string(rune('a'+i)),
+				Origin:      o,
+			}); err != nil {
+				t.Fatalf("create origin %s: %v", o, err)
+			}
+		}
+
+		cases := map[string]int{"user": 2, "dream": 1, "import": 1}
+		for origin, want := range cases {
+			results, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+				Origin: origin,
+			}, 100, 0)
+			if err != nil {
+				t.Fatalf("origin=%s filter: %v", origin, err)
+			}
+			if len(results) != want {
+				t.Fatalf("origin=%s: expected %d, got %d", origin, want, len(results))
+			}
+			for _, m := range results {
+				if string(m.Origin) != origin {
+					t.Errorf("origin=%s filter returned row with origin %q", origin, m.Origin)
+				}
+			}
+		}
+	})
+}
+
+func TestMemoryRepo_ListByNamespaceFiltered_Augmented(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		stamp := time.Now().UTC()
+		// Two augmented (timestamp present), one not (nil).
+		seeds := []*time.Time{&stamp, &stamp, nil}
+		for i, at := range seeds {
+			if err := repo.Create(ctx, &model.Memory{
+				NamespaceID:          nsID,
+				Content:              "augmented memory " + string(rune('a'+i)),
+				AugmentedEmbeddingAt: at,
+			}); err != nil {
+				t.Fatalf("create augmented seed %d: %v", i, err)
+			}
+		}
+
+		yes, no := true, false
+		augmented, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Augmented: &yes,
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("augmented=true filter: %v", err)
+		}
+		if len(augmented) != 2 {
+			t.Fatalf("expected 2 augmented, got %d", len(augmented))
+		}
+		for _, m := range augmented {
+			if m.AugmentedEmbeddingAt == nil {
+				t.Errorf("augmented=true returned row with nil AugmentedEmbeddingAt")
+			}
+		}
+
+		notAugmented, err := repo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{
+			Augmented: &no,
+		}, 100, 0)
+		if err != nil {
+			t.Fatalf("augmented=false filter: %v", err)
+		}
+		if len(notAugmented) != 1 {
+			t.Fatalf("expected 1 not-augmented, got %d", len(notAugmented))
+		}
+		if notAugmented[0].AugmentedEmbeddingAt != nil {
+			t.Errorf("augmented=false returned row with non-nil AugmentedEmbeddingAt")
+		}
+	})
+}
+
 func TestMemoryRepo_ListByNamespaceFiltered_Source(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

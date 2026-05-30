@@ -496,7 +496,7 @@ func TestListHandler_FiltersForwardedToRepo(t *testing.T) {
 	router := newListRouter(memRepo, &mockProjectGetter{project: proj})
 
 	w := doListRequest(router, projectID.String(),
-		"tag=alpha&tag=beta&date_from=2026-01-01&date_to=2026-12-31&enriched=true&source=ingest&search=hello")
+		"tag=alpha&tag=beta&date_from=2026-01-01&date_to=2026-12-31&enriched=true&origin=dream&augmented=false&source=ingest&search=hello")
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -517,11 +517,29 @@ func TestListHandler_FiltersForwardedToRepo(t *testing.T) {
 	if got.Enriched == nil || !*got.Enriched {
 		t.Errorf("expected Enriched=*true, got %+v", got.Enriched)
 	}
+	if got.Origin != "dream" {
+		t.Errorf("origin = %q", got.Origin)
+	}
+	if got.Augmented == nil || *got.Augmented {
+		t.Errorf("expected Augmented=*false, got %+v", got.Augmented)
+	}
 	if got.Source != "ingest" {
 		t.Errorf("source = %q", got.Source)
 	}
 	if got.Search != "hello" {
 		t.Errorf("search = %q", got.Search)
+	}
+}
+
+func TestListHandler_InvalidOriginFilter(t *testing.T) {
+	projectID := uuid.New()
+	router := newListRouter(&mockMemoryLister{}, &mockProjectGetter{
+		project: &model.Project{ID: projectID, NamespaceID: uuid.New()},
+	})
+
+	w := doListRequest(router, projectID.String(), "origin=bogus")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid origin, got %d", w.Code)
 	}
 }
 

@@ -49,6 +49,8 @@ const (
 //   - tag (repeatable, AND semantics): ?tag=foo&tag=bar
 //   - date_from / date_to (RFC3339 or YYYY-MM-DD)
 //   - enriched ("true" | "false"; absent or any other value = no filter)
+//   - origin ("user" | "dream" | "import"; absent = no filter, unknown = 400)
+//   - augmented ("true" | "false"; absent or any other value = no filter)
 //   - source (case-insensitive substring)
 //   - search (case-insensitive substring against content)
 //   - include_superseded ("true" surfaces paraphrase/contradiction losers; default hides them)
@@ -90,14 +92,20 @@ func parseMemoryFilters(r *http.Request) (storage.MemoryListFilters, *APIError) 
 		filters.DateTo = &t
 	}
 
-	switch q.Get("enriched") {
-	case "true":
-		t := true
-		filters.Enriched = &t
-	case "false":
-		f := false
-		filters.Enriched = &f
+	filters.Enriched = parseTriState(q.Get("enriched"))
+
+	// origin is server-assigned provenance; accept only the known enum values
+	// so an arbitrary string never reaches the SQL predicate.
+	if v := q.Get("origin"); v != "" {
+		switch model.MemoryOrigin(v) {
+		case model.OriginUser, model.OriginDream, model.OriginImport:
+			filters.Origin = v
+		default:
+			return filters, ErrBadRequest("invalid origin: must be user, dream, or import")
+		}
 	}
+
+	filters.Augmented = parseTriState(q.Get("augmented"))
 
 	filters.Source = q.Get("source")
 	filters.Search = q.Get("search")

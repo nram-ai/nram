@@ -323,8 +323,16 @@ type MemoryListFilters struct {
 	// Enriched is a tri-state filter: nil = no filter, *true = enriched only,
 	// *false = not-enriched only.
 	Enriched *bool
-	Source   string
-	Search   string
+	// Origin, when non-empty, restricts results to rows with a matching
+	// origin column value ("user" | "dream" | "import"). Validation of the
+	// value belongs to the caller (the REST handler rejects unknown values).
+	Origin string
+	// Augmented is a tri-state filter over augmented_embedding_at: nil = no
+	// filter, *true = augmented only (timestamp present), *false = not-augmented
+	// only (timestamp NULL).
+	Augmented *bool
+	Source    string
+	Search    string
 	// HideSuperseded excludes rows with superseded_by set. Mirrors the
 	// always-on deleted_at filter but is opt-in so dreaming phases that walk
 	// the full set with zero-value filters still see superseded rows.
@@ -342,7 +350,8 @@ type MemoryListFilters struct {
 // IsZero reports whether no filter dimensions are active.
 func (f MemoryListFilters) IsZero() bool {
 	return len(f.Tags) == 0 && f.DateFrom == nil && f.DateTo == nil &&
-		f.Enriched == nil && f.Source == "" && f.Search == "" && !f.HideSuperseded &&
+		f.Enriched == nil && f.Origin == "" && f.Augmented == nil &&
+		f.Source == "" && f.Search == "" && !f.HideSuperseded &&
 		f.StaleStampKey == ""
 }
 
@@ -410,6 +419,21 @@ func (r *MemoryRepo) buildFilterWhere(namespaceID uuid.UUID, filters MemoryListF
 
 	if filters.Enriched != nil {
 		wb.add("enriched = %s", EncodeBool(r.db.Backend(), *filters.Enriched))
+	}
+
+	if filters.Origin != "" {
+		wb.add("origin = %s", filters.Origin)
+	}
+
+	if filters.Augmented != nil {
+		// augmented_embedding_at is a nullable timestamp stamped when a
+		// memory's query-augmented embedding is computed. Presence/absence is
+		// the filter; no bind value needed.
+		if *filters.Augmented {
+			wb.clauses = append(wb.clauses, "augmented_embedding_at IS NOT NULL")
+		} else {
+			wb.clauses = append(wb.clauses, "augmented_embedding_at IS NULL")
+		}
 	}
 
 	if filters.Source != "" {
@@ -677,6 +701,17 @@ func (r *MemoryRepo) userFilterClauses(wb *whereBuilder, filters MemoryListFilte
 	if filters.Enriched != nil {
 		ph := wb.bindOnly(EncodeBool(r.db.Backend(), *filters.Enriched))
 		out = append(out, fmt.Sprintf("%s = %s", qualify("enriched"), ph))
+	}
+	if filters.Origin != "" {
+		ph := wb.bindOnly(filters.Origin)
+		out = append(out, fmt.Sprintf("%s = %s", qualify("origin"), ph))
+	}
+	if filters.Augmented != nil {
+		if *filters.Augmented {
+			out = append(out, fmt.Sprintf("%s IS NOT NULL", qualify("augmented_embedding_at")))
+		} else {
+			out = append(out, fmt.Sprintf("%s IS NULL", qualify("augmented_embedding_at")))
+		}
 	}
 	if filters.Source != "" {
 		ph := wb.bindOnly("%" + strings.ToLower(escapeLike(filters.Source)) + "%")

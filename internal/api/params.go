@@ -18,3 +18,18 @@ const groupByParentParam = "group_by_parent"
 func queryParamBool(r *http.Request, key string) bool {
 	return r.URL.Query().Get(key) == "true"
 }
+
+// parseTriState maps a query-param value to a tri-state boolean filter:
+// "true" → *true, "false" → *false, anything else (missing/empty/other) →
+// nil meaning "no filter". Shared by the enriched and augmented filters.
+func parseTriState(v string) *bool {
+	switch v {
+	case "true":
+		t := true
+		return &t
+	case "false":
+		f := false
+		return &f
+	}
+	return nil
+}
