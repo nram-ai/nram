@@ -137,7 +137,7 @@ func TestStuckJobSweeper_RequeuesStale(t *testing.T) {
 		requeueOK: true,
 	}
 	bus := events.NewMemoryBus(8, 8)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 	ch, cancelSub, err := bus.Subscribe(context.Background(), "namespace:"+store.stale[0].NamespaceID.String())
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
@@ -179,7 +179,7 @@ func TestStuckJobSweeper_NoOpOnRace(t *testing.T) {
 		// ListStaleClaimed and RequeueStale.
 	}
 	bus := events.NewMemoryBus(8, 8)
-	defer bus.Close()
+	defer func() { _ = bus.Close() }()
 	ch, cancelSub, err := bus.Subscribe(context.Background(), "namespace:"+store.stale[0].NamespaceID.String())
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)

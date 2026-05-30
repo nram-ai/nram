@@ -54,8 +54,8 @@ func (m *dedupMockEmbedder) Embed(_ context.Context, req *provider.EmbeddingRequ
 	}, nil
 }
 
-func (m *dedupMockEmbedder) Name() string       { return "mock" }
-func (m *dedupMockEmbedder) Dimensions() []int   { return []int{3} }
+func (m *dedupMockEmbedder) Name() string      { return "mock" }
+func (m *dedupMockEmbedder) Dimensions() []int { return []int{3} }
 
 // ---------------------------------------------------------------------------
 // Tests

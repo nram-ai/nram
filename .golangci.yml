@@ -1,70 +1,39 @@
-# golangci-lint configuration for the nram repo.
+# golangci-lint configuration for the nram repo (v2 schema).
 #
-# The single load-bearing rule here is the forbidigo entry that flags
-# raw `0.<digits>` float literals in the dreaming and recall hot paths.
-# The settings-hygiene PR (May 2026) eliminated dozens of these literals
-# by routing every operator-tunable behavioural knob through
-# service.Setting* keys; the lint rule keeps that invariant from
-# regressing.
+# Enables the standard high-signal linters repo-wide. errcheck catches
+# unchecked errors, govet/staticcheck catch correctness and API misuse,
+# ineffassign catches dead assignments, and unused catches dead symbols.
 #
-# When this rule fires:
-#   1. Preferred fix: declare a Setting* constant in
-#      internal/service/settings.go, register a schema row and
-#      settingDefaults entry, and resolve at the call site via
-#      ResolveFloatWithDefault / ResolveIntWithDefault.
-#   2. Acceptable for genuinely structural / mathematical literals:
-#      add `//nolint:forbidigo // <reason>` on the line, e.g.
-#      `multiplier := 1.0 // identity, no operator tuning needed`.
-#
-# Rationale: see /Users/brandonlehmann/.claude/plans/settings-hygiene-polished-wren.md
-# §9.2 and the "if a number changes operator-observable behavior, it
-# goes in the settings table" principle in the audit context.
+# History: this file previously enabled only a forbidigo "naked float
+# literal" guard intended to keep operator-tunable magic numbers out of
+# the dreaming/recall hot paths. That rule never fired — forbidigo matches
+# identifiers and call expressions, not numeric literals, so it flagged
+# e.g. uuid.New() while ignoring an adjacent 0.5 literal — and its path
+# scoping used an invalid `issues.include-rules` key. Both were removed in
+# the v2 migration. If the naked-float invariant needs real enforcement,
+# the `mnd` (magic-number) linter scoped to internal/dreaming/phase_*.go
+# and internal/service/recall.go is the correct tool.
+
+version: "2"
 
 run:
-  timeout: 5m
   go: "1.26"
 
 linters:
-  disable-all: true
+  default: none
   enable:
-    - forbidigo
-
-linters-settings:
-  forbidigo:
-    forbid:
-      - p: '\b0\.\d+\b'
-        msg: |
-          Naked float literal in a dreaming/recall hot path. If this number
-          changes operator-observable behavior, it belongs in the settings
-          table: declare a Setting* in internal/service/settings.go and
-          resolve via Resolve{Float,Int}WithDefault. For genuinely
-          structural literals (math identities, scaling constants),
-          annotate with //nolint:forbidigo // <reason>.
-    exclude-godoc-examples: true
-    analyze-types: false
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
 issues:
-  # The forbidigo rule applies only to the two hot paths the settings
-  # PR cleaned up. Other packages may legitimately carry float literals
-  # (test fixtures, math libs, prompt strings) — scoping by directory
-  # avoids a sea of //nolint comments elsewhere.
-  include-rules:
-    - path: 'internal/dreaming/phase_.*\.go$'
-      linters: [forbidigo]
-    - path: 'internal/service/recall\.go$'
-      linters: [forbidigo]
-  exclude-rules:
-    # Test files freely use literals as fixtures — they're not the
-    # operator-facing surface this rule guards.
-    - path: '_test\.go$'
-      linters: [forbidigo]
-    # settings.go is the registry — settingDefaults legitimately holds
-    # every numeric default as a string literal.
-    - path: 'internal/service/settings\.go$'
-      linters: [forbidigo]
-  # When linting only the scoped paths above, golangci-lint's default
-  # filter would still scan everything and report all the rules' default
-  # exclusions. exclude-use-default=false keeps the report tight.
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0

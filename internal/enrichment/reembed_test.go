@@ -16,9 +16,9 @@ import (
 // reembedFakeRepo is a stub EntityReembedRepo backed by an in-memory list,
 // returning entities once and then an empty page (single-pass behavior).
 type reembedFakeRepo struct {
-	entities    []model.Entity
-	called      bool
-	dimUpdates  []reembedDimUpdate
+	entities   []model.Entity
+	called     bool
+	dimUpdates []reembedDimUpdate
 }
 
 type reembedDimUpdate struct {
@@ -67,15 +67,15 @@ func (s *reembedFakeVectorStore) Ping(context.Context) error               { ret
 // every ctx it receives so the test can assert that operation/namespace_id
 // were stamped before the wrapped middleware runs.
 type reembedCapturingEmbedder struct {
-	mu        sync.Mutex
-	calls     []capturedCall
+	mu    sync.Mutex
+	calls []capturedCall
 }
 
 type capturedCall struct {
-	op           provider.Operation
-	hasOp        bool
-	namespaceID  uuid.UUID
-	inputCount   int
+	op          provider.Operation
+	hasOp       bool
+	namespaceID uuid.UUID
+	inputCount  int
 }
 
 func (e *reembedCapturingEmbedder) Embed(ctx context.Context, req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
