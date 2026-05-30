@@ -48,7 +48,6 @@ interface PromptData {
   key: string;
   currentValue: string;
   defaultValue: string;
-  scope: string;
   isModified: boolean;
   description: string;
 }
@@ -81,7 +80,6 @@ function resolvePromptData(
         key,
         currentValue: currentVal,
         defaultValue: defaultVal,
-        scope: setting?.scope ?? "global",
         isModified: setting !== null && setting !== undefined,
         description: schema.description,
       };
@@ -99,7 +97,6 @@ function resolvePromptData(
     key: keys[0],
     currentValue: fallbackDefault,
     defaultValue: fallbackDefault,
-    scope: "global",
     isModified: false,
     description,
   };
@@ -211,7 +208,7 @@ function PromptEditorCard({
   title: string;
   description: string;
   promptData: PromptData;
-  onSave: (key: string, value: string, scope: string) => void;
+  onSave: (key: string, value: string) => void;
   saving: boolean;
   onTest: () => void;
   testing: boolean;
@@ -220,14 +217,12 @@ function PromptEditorCard({
   onSampleInputChange: (value: string) => void;
 }) {
   const [editValue, setEditValue] = useState(promptData.currentValue);
-  const [editScope, setEditScope] = useState(promptData.scope);
   const [showDefault, setShowDefault] = useState(false);
 
   // Sync editValue when promptData changes (e.g. after save).
   useEffect(() => {
     setEditValue(promptData.currentValue);
-    setEditScope(promptData.scope);
-  }, [promptData.currentValue, promptData.scope]);
+  }, [promptData.currentValue]);
 
   const hasChanges = editValue !== promptData.currentValue;
   const isCustomized = editValue !== promptData.defaultValue;
@@ -261,21 +256,6 @@ function PromptEditorCard({
 
       {/* Prompt Editor */}
       <div className="px-5 py-4 space-y-4">
-        {/* Scope selector */}
-        <div className="flex items-center gap-3">
-          <label className="text-xs font-medium text-muted-foreground">
-            Scope:
-          </label>
-          <select
-            value={editScope}
-            onChange={(e) => setEditScope(e.target.value)}
-            className="rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="global">Global</option>
-            <option value="project">Project</option>
-          </select>
-        </div>
-
         {/* Textarea with line numbers */}
         <LineNumberedTextarea
           value={editValue}
@@ -289,7 +269,7 @@ function PromptEditorCard({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => onSave(promptData.key, editValue, editScope)}
+              onClick={() => onSave(promptData.key, editValue)}
               disabled={saving || !hasChanges}
               className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -439,17 +419,15 @@ function SimplePromptEditorCard({
   title: string;
   description: string;
   promptData: PromptData;
-  onSave: (key: string, value: string, scope: string) => void;
+  onSave: (key: string, value: string) => void;
   saving: boolean;
 }) {
   const [editValue, setEditValue] = useState(promptData.currentValue);
-  const [editScope, setEditScope] = useState(promptData.scope);
   const [showDefault, setShowDefault] = useState(false);
 
   useEffect(() => {
     setEditValue(promptData.currentValue);
-    setEditScope(promptData.scope);
-  }, [promptData.currentValue, promptData.scope]);
+  }, [promptData.currentValue]);
 
   const hasChanges = editValue !== promptData.currentValue;
   const isCustomized = editValue !== promptData.defaultValue;
@@ -481,19 +459,6 @@ function SimplePromptEditorCard({
       </div>
 
       <div className="px-5 py-4 space-y-4">
-        <div className="flex items-center gap-3">
-          <label className="text-xs font-medium text-muted-foreground">
-            Scope:
-          </label>
-          <select
-            value={editScope}
-            onChange={(e) => setEditScope(e.target.value)}
-            className="rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="global">Global</option>
-          </select>
-        </div>
-
         <LineNumberedTextarea
           value={editValue}
           onChange={setEditValue}
@@ -505,7 +470,7 @@ function SimplePromptEditorCard({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => onSave(promptData.key, editValue, editScope)}
+              onClick={() => onSave(promptData.key, editValue)}
               disabled={saving || !hasChanges}
               className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -610,9 +575,9 @@ export default function PromptTemplates() {
   );
 
   const handleSave = useCallback(
-    (key: string, value: string, scope: string) => {
+    (key: string, value: string) => {
       updateMutation.mutate(
-        { key, value, scope },
+        { key, value },
         {
           onSuccess: () => showToast(`Saved "${key}"`, "success"),
           onError: (err) =>

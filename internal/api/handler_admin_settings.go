@@ -135,6 +135,23 @@ func NewAdminSettingsResetHandler(cfg SettingsAdminConfig) http.HandlerFunc {
 	}
 }
 
+// requireGlobalScope rejects any scope other than "global", writing a 400 and
+// returning true when it does (matching requireValidProjectSettings et al.).
+// Every admin-managed setting — prompt templates, provider config, ranking
+// weights, cost rates, and the rest of the registry — is resolved exclusively
+// at global scope. The settings table's cascade machinery (project/user/org) is
+// not wired to any of these keys, so a non-global write would persist an orphan
+// row that is never read. Genuine per-project/user overrides live in
+// projects.settings / users.settings JSON via the cascade resolver, not this
+// endpoint. Rejecting the write keeps the failure visible instead of silently dead.
+func requireGlobalScope(w http.ResponseWriter, scope string) bool {
+	if scope != "global" {
+		WriteError(w, ErrBadRequest(fmt.Sprintf("scope %q is not supported; settings are global-only", scope)))
+		return true
+	}
+	return false
+}
+
 // handleResetSetting handles POST /settings/reset. An empty key resets every
 // registered schema key at the given scope; a non-empty key resets only that
 // one. The runtime default comes from the schema registry (DefaultValue) so
@@ -161,6 +178,9 @@ func handleResetSetting(w http.ResponseWriter, r *http.Request, cfg SettingsAdmi
 	body.Scope = strings.TrimSpace(body.Scope)
 	if body.Scope == "" {
 		body.Scope = "global"
+	}
+	if requireGlobalScope(w, body.Scope) {
+		return
 	}
 
 	var updatedBy *uuid.UUID
@@ -295,6 +315,9 @@ func handleUpdateSetting(w http.ResponseWriter, r *http.Request, cfg SettingsAdm
 
 	if body.Scope == "" {
 		body.Scope = "global"
+	}
+	if requireGlobalScope(w, body.Scope) {
+		return
 	}
 
 	var updatedBy *uuid.UUID

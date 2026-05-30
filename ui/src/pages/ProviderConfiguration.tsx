@@ -551,7 +551,7 @@ function IngestionDecisionModelOverride({
 }: {
   factSlot: ProviderSlot;
 }) {
-  const settingsQuery = useSettings("global");
+  const settingsQuery = useSettings();
   const updateSetting = useUpdateSetting();
   const [editValue, setEditValue] = useState("");
 
@@ -576,7 +576,6 @@ function IngestionDecisionModelOverride({
       updateSetting.mutate({
         key: INGESTION_MODEL_SETTING_KEY,
         value,
-        scope: "global",
       });
     },
     [updateSetting],
@@ -684,7 +683,7 @@ function QueryAugmentModelOverride({
 }: {
   factSlot: ProviderSlot;
 }) {
-  const settingsQuery = useSettings("global");
+  const settingsQuery = useSettings();
   const updateSetting = useUpdateSetting();
   const [editValue, setEditValue] = useState("");
 
@@ -709,7 +708,6 @@ function QueryAugmentModelOverride({
       updateSetting.mutate({
         key: QUERY_AUGMENT_MODEL_SETTING_KEY,
         value,
-        scope: "global",
       });
     },
     [updateSetting],

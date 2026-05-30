@@ -1299,7 +1299,7 @@ function Analytics() {
   const updateSetting = useUpdateSetting();
   const handleCostRateUpdate = useCallback(
     (rates: CostRate[]) => {
-      updateSetting.mutate({ key: "usage.cost_rates", value: rates, scope: "global" });
+      updateSetting.mutate({ key: "usage.cost_rates", value: rates });
     },
     [updateSetting],
   );

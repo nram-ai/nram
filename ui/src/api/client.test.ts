@@ -741,11 +741,7 @@ describe("API Client E2E", () => {
     });
 
     it("updateSetting() updates a setting value", async () => {
-      const res = await adminAPI.updateSetting(
-        "enrichment.enabled",
-        false,
-        "global",
-      );
+      const res = await adminAPI.updateSetting("enrichment.enabled", false);
       expect(res).toBeDefined();
       expect(typeof res.status).toBe("string");
     });

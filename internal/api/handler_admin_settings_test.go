@@ -368,6 +368,60 @@ func TestAdminSettingsUpdateSettingMissingKey(t *testing.T) {
 	}
 }
 
+func TestAdminSettingsUpdateSettingRejectsNonGlobalScope(t *testing.T) {
+	store := &mockSettingsAdminStore{}
+
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"memory.max_facts","value":2000,"scope":"project"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{
+		UserID: uuid.New(),
+		Role:   "admin",
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	var resp errorEnvelope
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error.Code != "bad_request" {
+		t.Errorf("expected code bad_request, got %q", resp.Error.Code)
+	}
+	// The orphan-row write must not reach the store.
+	if store.updatedKey != "" {
+		t.Errorf("expected no store write, got updatedKey %q", store.updatedKey)
+	}
+}
+
+func TestAdminSettingsUpdateSettingDefaultsScopeToGlobal(t *testing.T) {
+	store := &mockSettingsAdminStore{}
+
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	// Scope omitted entirely: the handler defaults it to global and accepts.
+	body := `{"key":"memory.max_facts","value":2000}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{
+		UserID: uuid.New(),
+		Role:   "admin",
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedScope != "global" {
+		t.Errorf("expected scope defaulted to global, got %q", store.updatedScope)
+	}
+}
+
 func TestAdminSettingsListStoreError(t *testing.T) {
 	store := &mockSettingsAdminStore{
 		listErr: errors.New("database failure"),
@@ -1034,6 +1088,38 @@ func TestAdminSettingsResetSingleKey(t *testing.T) {
 	}
 	if n, _ := resp["reset"].(float64); n != 1 {
 		t.Errorf("expected reset=1, got %v", resp["reset"])
+	}
+}
+
+func TestAdminSettingsResetRejectsNonGlobalScope(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		schemas: []SettingSchema{
+			{Key: "memory.max_facts", Type: "number", DefaultValue: json.RawMessage(`1000`)},
+		},
+	}
+	h := NewAdminSettingsResetHandler(SettingsAdminConfig{Store: store})
+
+	body := `{"key":"memory.max_facts","scope":"project"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings/reset", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithContext(req.Context(), &auth.AuthContext{UserID: uuid.New(), Role: "admin"}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	var resp errorEnvelope
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error.Code != "bad_request" {
+		t.Errorf("expected code bad_request, got %q", resp.Error.Code)
+	}
+	// The reset must not reach the store for a non-global scope.
+	if store.resetKey != "" {
+		t.Errorf("expected no store reset, got resetKey %q", store.resetKey)
 	}
 }
 

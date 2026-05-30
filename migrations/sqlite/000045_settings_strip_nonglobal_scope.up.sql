@@ -1,0 +1,11 @@
+-- Strip orphan settings rows written at any non-global scope. The admin
+-- Settings / Prompt-Templates UI previously offered a "Project" scope toggle
+-- that wrote rows at scope='project' (no project id). Nothing ever resolved
+-- them: prompt templates and admin settings resolve exclusively at scope
+-- 'global', and real per-project overrides live in projects.settings JSON via
+-- the cascade resolver, not the settings table. These rows were write-only
+-- dead data. The same change removes the UI affordance and rejects non-global
+-- scopes on the settings write paths, so this cannot regenerate.
+--
+-- Idempotent: re-running finds no non-global rows.
+DELETE FROM settings WHERE scope <> 'global';

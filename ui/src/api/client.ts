@@ -1488,30 +1488,30 @@ export const adminAPI = {
     request<UpdateProviderSlotResult | { status: string }>("PUT", `/admin/providers/${slot}`, data),
   testProviderSlot: (slot: string, config: UpdateProviderSlotRequest) =>
     request<TestProviderResult>("POST", "/admin/providers/test", { slot, config }),
-  getOllamaModels: (ollamaUrl?: string) => {
+  getOllamaModels: async (ollamaUrl?: string) => {
     const params = ollamaUrl ? `?url=${encodeURIComponent(ollamaUrl)}` : "";
-    return request<OllamaModel[]>("GET", `/admin/providers/ollama/models${params}`).then(
-      (models) => ({ models }),
+    const models = await request<OllamaModel[]>(
+      "GET",
+      `/admin/providers/ollama/models${params}`,
     );
+    return { models };
   },
   pullOllamaModel: (model: string, ollamaUrl?: string) =>
     request<{ status: string; model: string }>("POST", "/admin/providers/ollama/pull", { model, url: ollamaUrl || undefined }),
 
   // Settings
-  getSettings: (scope?: string) => {
+  getSettings: () => {
     // limit is pinned explicitly so the UI's correctness does not silently
     // depend on the server's default page size. The registry is bounded
-    // compile-time data; we want the whole list, not a page.
-    const params = scope
-      ? `?limit=500&scope=${encodeURIComponent(scope)}`
-      : `?limit=500`;
-    return request<{ data: Setting[] }>("GET", `/admin/settings${params}`);
+    // compile-time data; we want the whole list, not a page. Settings are
+    // global-only; there is no per-scope filtering.
+    return request<{ data: Setting[] }>("GET", "/admin/settings?limit=500");
   },
   getSettingsSchema: () =>
     request<{ data: SettingSchema[] }>("GET", "/admin/settings?schema=true"),
-  updateSetting: (key: string, value: unknown, scope: string) =>
-    request<{ status: string }>("PUT", "/admin/settings", { key, value, scope }),
-  resetSettings: (body: { key?: string; scope?: string } = {}) =>
+  updateSetting: (key: string, value: unknown) =>
+    request<{ status: string }>("PUT", "/admin/settings", { key, value }),
+  resetSettings: (body: { key?: string } = {}) =>
     request<{ status: string; reset: number }>("POST", "/admin/settings/reset", body),
 
   // Webhooks

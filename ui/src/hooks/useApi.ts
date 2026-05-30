@@ -471,11 +471,11 @@ export function usePullOllamaModel() {
 // supplied {min, max, step} default when no data is present. The admin
 // Settings, Provider Configuration, and Prompt Templates pages are admin-
 // gated UI surfaces; the gating here matches the server-side authorization.
-export function useSettings(scope?: string) {
+export function useSettings() {
   const { isAdmin } = useAuth();
   return useQuery({
-    queryKey: ["admin", "settings", scope],
-    queryFn: () => adminAPI.getSettings(scope),
+    queryKey: ["admin", "settings"],
+    queryFn: () => adminAPI.getSettings(),
     enabled: isAdmin,
   });
 }
@@ -665,8 +665,8 @@ export function useSystemRankingWeights(): SystemRankingWeightsResolution {
 export function useUpdateSetting() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ key, value, scope }: { key: string; value: unknown; scope: string }) =>
-      adminAPI.updateSetting(key, value, scope),
+    mutationFn: ({ key, value }: { key: string; value: unknown }) =>
+      adminAPI.updateSetting(key, value),
     onSuccess: () => {
       // Settings, dreaming, and self-tier dreaming all read from the same
       // global key (dreaming.enabled). A change to one must invalidate the
@@ -680,14 +680,14 @@ export function useUpdateSetting() {
 }
 
 // useResetSettings reverts one setting (when `key` is supplied) or every
-// registered setting (when omitted) to the registered default at the given
-// scope. Mirrors useUpdateSetting's cache invalidation so the SettingsEditor,
-// Dreaming admin panel, and cost-rates consumers all re-render against the
-// post-reset state on success.
+// registered setting (when omitted) to the registered default. Mirrors
+// useUpdateSetting's cache invalidation so the SettingsEditor, Dreaming admin
+// panel, and cost-rates consumers all re-render against the post-reset state
+// on success.
 export function useResetSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { key?: string; scope?: string } = {}) =>
+    mutationFn: (body: { key?: string } = {}) =>
       adminAPI.resetSettings(body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "settings"] });

@@ -374,25 +374,6 @@ function isPromptKey(key: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Scope Badge
-// ---------------------------------------------------------------------------
-
-function ScopeBadge({ scope }: { scope: string }) {
-  const isGlobal = scope === "global";
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-        isGlobal
-          ? "bg-info/10 text-info"
-          : "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300"
-      }`}
-    >
-      {isGlobal ? "Global" : "Project"}
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Status Toast
 // ---------------------------------------------------------------------------
 
@@ -586,20 +567,18 @@ function InlineSettingEditor({
   resetting,
 }: {
   item: SettingWithSchema;
-  onSave: (key: string, value: unknown, scope: string) => void;
-  onReset: (key: string, scope: string) => void;
+  onSave: (key: string, value: unknown) => void;
+  onReset: (key: string) => void;
   saving: boolean;
   resetting: boolean;
 }) {
   const { schema, setting } = item;
   const currentValue = setting?.value ?? schema.default_value;
-  const currentScope = setting?.scope ?? "global";
   const isDefault = setting === null;
   const isPrompt = isPromptKey(schema.key);
 
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
-  const [editScope, setEditScope] = useState(currentScope);
   const [confirmingReset, setConfirmingReset] = useState(false);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
 
@@ -621,9 +600,8 @@ function InlineSettingEditor({
 
   const startEdit = useCallback(() => {
     setEditValue(formatValue(currentValue));
-    setEditScope(currentScope);
     setEditing(true);
-  }, [currentValue, currentScope]);
+  }, [currentValue]);
 
   useEffect(() => {
     if (editing && inputRef.current) {
@@ -633,9 +611,9 @@ function InlineSettingEditor({
 
   const handleSave = useCallback(() => {
     const parsed = parseValue(editValue, schema.type);
-    onSave(schema.key, parsed, editScope);
+    onSave(schema.key, parsed);
     setEditing(false);
-  }, [editValue, editScope, schema.key, schema.type, onSave]);
+  }, [editValue, schema.key, schema.type, onSave]);
 
   const handleCancel = useCallback(() => {
     setEditing(false);
@@ -662,7 +640,6 @@ function InlineSettingEditor({
           {schema.key}
         </span>
         <HelpTooltip text={schema.description ?? ""} />
-        <ScopeBadge scope={currentScope} />
         {isDefault && (
           <span className="text-xs text-muted-foreground">(default)</span>
         )}
@@ -687,7 +664,7 @@ function InlineSettingEditor({
         <Switch
           checked={boolVal}
           disabled={saving}
-          onChange={(v) => onSave(schema.key, v, currentScope)}
+          onChange={(v) => onSave(schema.key, v)}
         />
       </div>
     );
@@ -737,10 +714,8 @@ function InlineSettingEditor({
                 <button
                   type="button"
                   onClick={() => {
-                    // Reset the same row the user is looking at: a global row
-                    // resets the global value; a project/user/org row deletes
-                    // the override so the cascade falls back to global.
-                    onReset(schema.key, currentScope);
+                    // Reset the global row back to its registered default.
+                    onReset(schema.key);
                     setConfirmingReset(false);
                   }}
                   disabled={resetting}
@@ -781,21 +756,6 @@ function InlineSettingEditor({
           {schema.key}
         </span>
         <p className="text-xs text-muted-foreground">{schema.description}</p>
-      </div>
-
-      {/* Scope selector */}
-      <div className="mb-2">
-        <label className="mb-1 block text-xs font-medium text-muted-foreground">
-          Scope
-        </label>
-        <select
-          value={editScope}
-          onChange={(e) => setEditScope(e.target.value)}
-          className="rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-        >
-          <option value="global">Global</option>
-          <option value="project">Project</option>
-        </select>
       </div>
 
       {/* Value input based on type */}
@@ -866,8 +826,8 @@ function ParentGroupCard({
 }: {
   group: ParentGroup;
   itemsByCategory: Map<string, SettingWithSchema[]>;
-  onSave: (key: string, value: unknown, scope: string) => void;
-  onReset: (key: string, scope: string) => void;
+  onSave: (key: string, value: unknown) => void;
+  onReset: (key: string) => void;
   saving: boolean;
   resetting: boolean;
 }) {
@@ -987,9 +947,9 @@ function SettingsEditor() {
   );
 
   const handleSave = useCallback(
-    (key: string, value: unknown, scope: string) => {
+    (key: string, value: unknown) => {
       updateMutation.mutate(
-        { key, value, scope },
+        { key, value },
         {
           onSuccess: () => showToast(`Saved "${key}"`, "success"),
           onError: (err) =>
@@ -1004,9 +964,9 @@ function SettingsEditor() {
   );
 
   const handleReset = useCallback(
-    (key: string, scope: string) => {
+    (key: string) => {
       resetMutation.mutate(
-        { key, scope },
+        { key },
         {
           onSuccess: () => showToast(`Reset "${key}" to default`, "success"),
           onError: (err) =>
@@ -1019,7 +979,7 @@ function SettingsEditor() {
 
   const handleResetAll = useCallback(() => {
     resetMutation.mutate(
-      { scope: "global" },
+      {},
       {
         onSuccess: (resp) =>
           showToast(

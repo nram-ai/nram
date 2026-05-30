@@ -185,6 +185,57 @@ func TestUsersRankingWeightsStrip_RemovesField(t *testing.T) {
 	}
 }
 
+// TestSettingsStripNonGlobalScope_RemovesOrphanRows verifies the 000045
+// (sqlite) migration deletes settings rows written at any non-global scope
+// (orphan rows from the retired admin "Project" scope toggle) while leaving
+// global rows untouched.
+func TestSettingsStripNonGlobalScope_RemovesOrphanRows(t *testing.T) {
+	db := runEmbeddedSQLiteMigrations(t)
+
+	// A legitimate global row plus orphan rows at non-global scopes.
+	for _, row := range []struct{ key, value, scope string }{
+		{"memory.max_facts", `2000`, "global"},
+		{"prompt.fact", `"custom"`, "project"},
+		{"prompt.entity", `"custom"`, "project:" + uuid.New().String()},
+		{"enrichment.enabled", `false`, "user:" + uuid.New().String()},
+	} {
+		if _, err := db.Exec(`INSERT INTO settings (key, value, scope) VALUES (?, ?, ?)`,
+			row.key, row.value, row.scope); err != nil {
+			t.Fatalf("insert %s/%s: %v", row.key, row.scope, err)
+		}
+	}
+
+	// The up migration body.
+	if _, err := db.Exec(`DELETE FROM settings WHERE scope <> 'global'`); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+
+	var nonGlobal int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM settings WHERE scope <> 'global'`).Scan(&nonGlobal); err != nil {
+		t.Fatalf("count non-global: %v", err)
+	}
+	if nonGlobal != 0 {
+		t.Errorf("expected all non-global rows stripped, got %d", nonGlobal)
+	}
+
+	var globalCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM settings WHERE scope = 'global' AND key = 'memory.max_facts'`).Scan(&globalCount); err != nil {
+		t.Fatalf("count global: %v", err)
+	}
+	if globalCount != 1 {
+		t.Errorf("expected the global row preserved, got %d", globalCount)
+	}
+
+	// Idempotent: re-running is a clean no-op.
+	res, err := db.Exec(`DELETE FROM settings WHERE scope <> 'global'`)
+	if err != nil {
+		t.Fatalf("strip (rerun): %v", err)
+	}
+	if n, _ := res.RowsAffected(); n != 0 {
+		t.Errorf("expected re-run to delete 0 rows, got %d", n)
+	}
+}
+
 // TestLegacyZeroConfidenceRestore_RespectsLog verifies the 000027 (sqlite)
 // migration restores legacy zero-confidence rows but preserves rows that
 // were deliberately demoted by the dream alignment phase. The dream_log
