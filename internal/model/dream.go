@@ -45,7 +45,11 @@ const (
 	DreamSubPhaseConsolidate   = "consolidate"
 )
 
-// DreamSource is the memory source value for dream-created content.
+// DreamSource is the reserved Source string formerly written on dream-created
+// content. The dream cycle no longer writes it (it sets Origin=OriginDream and
+// leaves Source nil); the constant survives only as the reserved value that
+// user-facing write paths reject, so "dream" can never re-enter the Source
+// column. Internal logic must branch on Origin, never on this string.
 const DreamSource = "dream"
 
 // DreamOp constants define the operation types logged during dream cycles.

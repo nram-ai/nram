@@ -1077,12 +1077,12 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	//   - internal/dreaming/phase_consolidation.go (consolidate() candidate
 	//       filter, "DREAM-RECURSION GUARD — second prong")
 	//   - internal/enrichment/phase_ingestion.go (runIngestionDecision
-	//       Enriched/source early-return)
+	//       Enriched/origin early-return)
 	//
 	// Contract enforcer: internal/dreaming/dream_recursion_guard_test.go
 	// (TestDreamRecursionGuard_EndToEnd, table-driven across Enriched=true
 	// AND Enriched=false to pin each clause independently).
-	isDream := model.MemorySource(mem) == model.DreamSource
+	isDream := mem.IsDream()
 	stepDone := stepDoneSet(job.StepsCompleted)
 	skipFact := isDream || mem.Enriched || stepDone[model.StepFactExtraction]
 	skipEntity := isDream || mem.Enriched || stepDone[model.StepEntityExtraction]
@@ -1249,6 +1249,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 			Confidence:  fact.Confidence,
 			Tags:        mergeTags(mem.Tags, fact.Tags),
 			Source:      mem.Source,
+			Origin:      mem.Origin,
 			Importance:  0.5,
 			Enriched:    true,
 			CreatedAt:   time.Now().UTC(),

@@ -1137,11 +1137,10 @@ func TestProcessJob_SkipsLLMWhenSourceIsDream(t *testing.T) {
 	h := newTestHarness(factLLM, entityLLM, embedProv)
 	mem := testMemory()
 	// Deliberately Enriched=false so the source check is the only signal
-	// gating fact/entity extraction. If the worker dropped the source
+	// gating fact/entity extraction. If the worker dropped the origin
 	// check from its predicate, this test would see factCalls>0.
 	mem.Enriched = false
-	src := model.DreamSource
-	mem.Source = &src
+	mem.Origin = model.OriginDream
 	h.reader.byID[mem.ID] = mem
 	job := testJob(mem.ID, mem.NamespaceID)
 

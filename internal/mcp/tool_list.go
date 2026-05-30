@@ -25,15 +25,16 @@ const (
 // project_slug disambiguates per-item because list crosses the requested
 // project's namespace and the global namespace.
 type listMemoryItem struct {
-	ID          uuid.UUID       `json:"id"`
-	ProjectSlug string          `json:"project_slug"`
-	Content     string          `json:"content"`
-	Source      *string         `json:"source,omitempty"`
-	Tags        []string        `json:"tags"`
-	DerivedFrom []uuid.UUID     `json:"derived_from,omitempty"`
-	Metadata    json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID          uuid.UUID          `json:"id"`
+	ProjectSlug string             `json:"project_slug"`
+	Content     string             `json:"content"`
+	Source      *string            `json:"source,omitempty"`
+	Origin      model.MemoryOrigin `json:"origin"`
+	Tags        []string           `json:"tags"`
+	DerivedFrom []uuid.UUID        `json:"derived_from,omitempty"`
+	Metadata    json.RawMessage    `json:"metadata,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
 }
 
 // listMemoryResponse is the paginated response envelope for memory_list.
@@ -170,6 +171,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 			ProjectSlug: nsIDToSlug[m.NamespaceID],
 			Content:     m.Content,
 			Source:      m.Source,
+			Origin:      m.Origin,
 			Tags:        m.Tags,
 			DerivedFrom: derived,
 			Metadata:    meta,

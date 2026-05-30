@@ -8,11 +8,16 @@ import (
 )
 
 type Memory struct {
-	ID           uuid.UUID       `json:"id"`
-	NamespaceID  uuid.UUID       `json:"namespace_id"`
-	Content      string          `json:"content"`
-	EmbeddingDim *int            `json:"embedding_dim"`
-	Source       *string         `json:"source"`
+	ID           uuid.UUID `json:"id"`
+	NamespaceID  uuid.UUID `json:"namespace_id"`
+	Content      string    `json:"content"`
+	EmbeddingDim *int      `json:"embedding_dim"`
+	Source       *string   `json:"source"`
+	// Origin is the coarse, server-assigned provenance category. Unlike Source
+	// (a free-form label), Origin is the authoritative discriminator internal
+	// logic branches on (e.g. the dream-recursion guard). It is never settable
+	// from request input. See MemoryOrigin in origin.go.
+	Origin       MemoryOrigin    `json:"origin"`
 	Tags         []string        `json:"tags"`
 	Confidence   float64         `json:"confidence"`
 	Importance   float64         `json:"importance"`

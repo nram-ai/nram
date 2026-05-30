@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/events"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -113,6 +114,7 @@ func NewStoreHandler(svc *service.StoreService, bus events.EventBus) http.Handle
 			"memory_id":  resp.ID.String(),
 			"project_id": projectID.String(),
 			"source":     body.Source,
+			"origin":     string(model.OriginUser),
 		})
 
 		writeJSON(w, http.StatusCreated, resp)

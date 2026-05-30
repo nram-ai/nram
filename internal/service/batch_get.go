@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/model"
 )
 
 // BatchGetRequest contains the parameters for a batch memory retrieval.
@@ -28,14 +29,15 @@ type BatchGetResponse struct {
 
 // MemoryDetail is a projection of a memory for batch get responses.
 type MemoryDetail struct {
-	ID        uuid.UUID       `json:"id"`
-	Content   string          `json:"content"`
-	Tags      []string        `json:"tags"`
-	Source    *string         `json:"source,omitempty"`
-	Metadata  json.RawMessage `json:"metadata,omitempty"`
-	Enriched  bool            `json:"enriched"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID        uuid.UUID          `json:"id"`
+	Content   string             `json:"content"`
+	Tags      []string           `json:"tags"`
+	Source    *string            `json:"source,omitempty"`
+	Origin    model.MemoryOrigin `json:"origin"`
+	Metadata  json.RawMessage    `json:"metadata,omitempty"`
+	Enriched  bool               `json:"enriched"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
 }
 
 // BatchGetService handles batch retrieval of memories by ID.
@@ -106,6 +108,7 @@ func (s *BatchGetService) BatchGet(ctx context.Context, req *BatchGetRequest) (*
 			Content:   mem.Content,
 			Tags:      tags,
 			Source:    mem.Source,
+			Origin:    mem.Origin,
 			Metadata:  mem.Metadata,
 			Enriched:  mem.Enriched,
 			CreatedAt: mem.CreatedAt,

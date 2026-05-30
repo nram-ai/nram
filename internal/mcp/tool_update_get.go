@@ -160,6 +160,7 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		"memory_id":          resp.ID.String(),
 		"previous_memory_id": resp.PreviousMemoryID.String(),
 		"project_id":         project.ID.String(),
+		"origin":             string(resp.Origin),
 	})
 
 	return wrapToolResult(s.deps.Metrics, "update", mcpBudgetBytes(ctx, s.deps.Settings), buildMCPUpdateResponse(resp), nil)

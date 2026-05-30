@@ -132,21 +132,22 @@ type RecallRequest struct {
 
 // RecallResult holds a single recalled memory with its computed score.
 type RecallResult struct {
-	ID          uuid.UUID       `json:"id"`
-	ProjectID   uuid.UUID       `json:"project_id"`
-	ProjectSlug string          `json:"project_slug"`
-	Path        string          `json:"path"`
-	Content     string          `json:"content"`
-	Tags        []string        `json:"tags"`
-	Source      *string         `json:"source,omitempty"`
-	Score       float64         `json:"score"`
-	Similarity  *float64        `json:"similarity"`
-	Confidence  float64         `json:"confidence"`
-	AccessCount int             `json:"access_count"`
-	Enriched    bool            `json:"enriched"`
-	Metadata    json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID          uuid.UUID          `json:"id"`
+	ProjectID   uuid.UUID          `json:"project_id"`
+	ProjectSlug string             `json:"project_slug"`
+	Path        string             `json:"path"`
+	Content     string             `json:"content"`
+	Tags        []string           `json:"tags"`
+	Source      *string            `json:"source,omitempty"`
+	Origin      model.MemoryOrigin `json:"origin"`
+	Score       float64            `json:"score"`
+	Similarity  *float64           `json:"similarity"`
+	Confidence  float64            `json:"confidence"`
+	AccessCount int                `json:"access_count"`
+	Enriched    bool               `json:"enriched"`
+	Metadata    json.RawMessage    `json:"metadata,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
 
 	// Unexported so JSON serialization drops it; threaded through to the
 	// post-sort namespace-quota truncation.
@@ -1030,10 +1031,10 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		if c.memory.SupersededBy != nil {
 			continue
 		}
-		// isLowNovelty stays gated on dream-source because the metadata key is
+		// isLowNovelty stays gated on dream origin because the metadata key is
 		// only written by the dream novelty audit. Callers can opt into the
 		// demoted set via IncludeLowNovelty for inspection/debugging.
-		if !req.IncludeLowNovelty && c.memory.Source != nil && *c.memory.Source == model.DreamSource {
+		if !req.IncludeLowNovelty && c.memory.IsDream() {
 			if isLowNovelty(c.memory.Metadata) {
 				continue
 			}
@@ -1068,6 +1069,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			Content:     c.memory.Content,
 			Tags:        tags,
 			Source:      c.memory.Source,
+			Origin:      c.memory.Origin,
 			Score:       score,
 			Similarity:  sim,
 			Confidence:  c.memory.Confidence,

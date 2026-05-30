@@ -198,12 +198,19 @@ func (s *ImportService) Import(ctx context.Context, req *ImportRequest) (*Import
 		if importance <= 0 {
 			importance = resolveDefaultImportance(ctx, s.settings)
 		}
+		// Drop a reserved "dream" source carried by legacy export data; the row
+		// is classified by Origin=OriginImport, never the reserved string.
+		src := item.Source
+		if src != nil && isReservedSource(*src) {
+			src = nil
+		}
 		mem := &model.Memory{
 			ID:          memID,
 			NamespaceID: ns.ID,
 			Content:     item.Content,
 			ContentHash: hash,
-			Source:      item.Source,
+			Source:      src,
+			Origin:      model.OriginImport,
 			Tags:        item.Tags,
 			Confidence:  confidence,
 			Importance:  importance,

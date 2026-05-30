@@ -257,7 +257,6 @@ func newAuditPhase(emb provider.EmbeddingProvider, llm provider.LLMProvider, set
 }
 
 func dreamMemory(content string, sourceIDs []uuid.UUID) model.Memory {
-	src := model.DreamSource
 	meta := map[string]any{}
 	if len(sourceIDs) > 0 {
 		ids := make([]string, len(sourceIDs))
@@ -271,7 +270,7 @@ func dreamMemory(content string, sourceIDs []uuid.UUID) model.Memory {
 		ID:          uuid.New(),
 		NamespaceID: uuid.New(),
 		Content:     content,
-		Source:      &src,
+		Origin:      model.OriginDream,
 		Confidence:  0.3,
 		Metadata:    raw,
 	}
@@ -714,12 +713,11 @@ func TestAuditExistingDreams_DisabledByZeroCap(t *testing.T) {
 }
 
 func TestAuditExistingDreams_OrphanGetsDemoted(t *testing.T) {
-	srcStr := model.DreamSource
 	orphan := model.Memory{
 		ID:          uuid.New(),
 		NamespaceID: uuid.New(),
 		Content:     "orphan with no lineage",
-		Source:      &srcStr,
+		Origin:      model.OriginDream,
 		Confidence:  0.5,
 		Metadata:    json.RawMessage(`{}`),
 	}
@@ -863,13 +861,12 @@ func TestSupersedeOriginals_PurgesOriginalVectors(t *testing.T) {
 	srcB := model.Memory{ID: uuid.New(), Content: "source B", EmbeddingDim: &d}
 
 	// Build a synthesis whose metadata lists srcA and srcB as source memories.
-	src := model.DreamSource
 	meta, _ := json.Marshal(map[string]any{
 		"source_memory_ids": []string{srcA.ID.String(), srcB.ID.String()},
 	})
 	synthesis := &model.Memory{
 		ID:         uuid.New(),
-		Source:     &src,
+		Origin:     model.OriginDream,
 		Confidence: 0.9,
 		Metadata:   meta,
 	}
@@ -1103,12 +1100,11 @@ func userMemoryForReinforce(content string, ns uuid.UUID) model.Memory {
 // synthesisForReinforce builds a DreamSource memory with a known UpdatedAt
 // so stamp/staleness round-trips are exact.
 func synthesisForReinforce(content string, ns uuid.UUID, updatedAt time.Time) model.Memory {
-	src := model.DreamSource
 	return model.Memory{
 		ID:          uuid.New(),
 		NamespaceID: ns,
 		Content:     content,
-		Source:      &src,
+		Origin:      model.OriginDream,
 		Confidence:  0.3,
 		Metadata:    json.RawMessage("{}"),
 		CreatedAt:   updatedAt,

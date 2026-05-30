@@ -152,6 +152,16 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 	defaultConfidence := resolveDefaultConfidence(ctx, s.settings)
 
 	for i, item := range req.Items {
+		// "dream" is reserved for the consolidation cycle (provenance is recorded
+		// via Origin=OriginDream). Reject it per-item rather than failing the batch.
+		if isReservedSource(item.Source) {
+			errs = append(errs, BatchStoreError{
+				Index:   i,
+				Message: fmt.Sprintf("source %q is reserved for dream syntheses", model.DreamSource),
+			})
+			continue
+		}
+
 		hash := storage.HashContent(item.Content)
 
 		// Same-batch collision: an earlier item already created (or matched) this
@@ -195,6 +205,7 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 			Content:     item.Content,
 			ContentHash: hash,
 			Source:      source,
+			Origin:      model.OriginUser,
 			Tags:        item.Tags,
 			Confidence:  defaultConfidence,
 			Importance:  importance,

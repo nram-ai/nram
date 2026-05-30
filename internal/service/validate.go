@@ -3,7 +3,18 @@ package service
 import (
 	"fmt"
 	"math"
+	"strings"
+
+	"github.com/nram-ai/nram/internal/model"
 )
+
+// isReservedSource reports whether s is the reserved "dream" provenance label
+// (case- and whitespace-insensitive). The consolidation cycle owns it via
+// Origin=OriginDream; user-facing write paths must never let it back into the
+// source column, or the string-as-discriminator footgun returns.
+func isReservedSource(s string) bool {
+	return strings.EqualFold(strings.TrimSpace(s), model.DreamSource)
+}
 
 // ValidateUnitFloat checks that v is finite and in [0.0, 1.0]. Returns a
 // caller-friendly error naming the offending field so handlers can reuse

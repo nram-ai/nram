@@ -158,6 +158,7 @@ func handleMemoryStore(ctx context.Context, s *Server, request mcp.CallToolReque
 	events.Emit(ctx, s.Deps().EventBus, events.MemoryCreated, "project:"+project.ID.String(), map[string]string{
 		"memory_id":  resp.ID.String(),
 		"project_id": project.ID.String(),
+		"origin":     string(model.OriginUser),
 	})
 
 	return wrapToolResult(s.deps.Metrics, "store", mcpBudgetBytes(ctx, s.deps.Settings), buildMCPStoreResponse(resp), nil)
@@ -251,6 +252,7 @@ func handleMemoryStoreBatch(ctx context.Context, s *Server, request mcp.CallTool
 	for i := 0; i < resp.MemoriesCreated; i++ {
 		events.Emit(ctx, s.Deps().EventBus, events.MemoryCreated, scope, map[string]string{
 			"project_id": project.ID.String(),
+			"origin":     string(model.OriginUser),
 		})
 	}
 

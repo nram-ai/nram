@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -57,15 +58,16 @@ func buildMCPUpdateResponse(resp *service.UpdateResponse) *mcpUpdateResponse {
 // mcpMemoryDetail is the memory_get projection. derived_from is hoisted from
 // metadata so dream lineage stays resolvable.
 type mcpMemoryDetail struct {
-	ID          uuid.UUID       `json:"id"`
-	ProjectSlug string          `json:"project_slug"`
-	Content     string          `json:"content"`
-	Tags        []string        `json:"tags"`
-	Source      *string         `json:"source,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	DerivedFrom []uuid.UUID     `json:"derived_from,omitempty"`
-	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	ID          uuid.UUID          `json:"id"`
+	ProjectSlug string             `json:"project_slug"`
+	Content     string             `json:"content"`
+	Tags        []string           `json:"tags"`
+	Source      *string            `json:"source,omitempty"`
+	Origin      model.MemoryOrigin `json:"origin"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
+	DerivedFrom []uuid.UUID        `json:"derived_from,omitempty"`
+	Metadata    json.RawMessage    `json:"metadata,omitempty"`
 }
 
 func buildMCPMemoryDetail(d service.MemoryDetail, projectSlug string, opts projectionOpts) mcpMemoryDetail {
@@ -76,6 +78,7 @@ func buildMCPMemoryDetail(d service.MemoryDetail, projectSlug string, opts proje
 		Content:     d.Content,
 		Tags:        d.Tags,
 		Source:      d.Source,
+		Origin:      d.Origin,
 		CreatedAt:   d.CreatedAt,
 		UpdatedAt:   d.UpdatedAt,
 		DerivedFrom: derived,

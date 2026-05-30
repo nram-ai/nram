@@ -445,6 +445,16 @@ function MemoryCard({
           <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
             <span>{formatDate(memory.created_at)}</span>
             {memory.source && <span>Source: {memory.source}</span>}
+            {memory.origin === "dream" && (
+              <span className="rounded bg-purple-100 px-1.5 py-0.5 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300">
+                dream
+              </span>
+            )}
+            {memory.origin === "import" && (
+              <span className="rounded bg-sky-100 px-1.5 py-0.5 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300">
+                import
+              </span>
+            )}
             {memory.enriched && !isChild && (
               <span className="rounded bg-success/20 px-1.5 py-0.5 text-success">
                 enriched
@@ -670,6 +680,10 @@ function MemoryDetailPanel({
               <div>
                 <span className="text-muted-foreground">Source: </span>
                 <span>{memory.source || "N/A"}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Origin: </span>
+                <span>{memory.origin}</span>
               </div>
               <div>
                 <span className="text-muted-foreground">Enriched: </span>
@@ -1095,6 +1109,7 @@ function MemoryBrowser() {
         content: r.content,
         tags: r.tags,
         source: r.source,
+        origin: r.origin,
         enriched: r.enriched ?? false,
         metadata: r.metadata,
         created_at: r.created_at,

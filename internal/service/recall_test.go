@@ -1086,13 +1086,12 @@ func TestRecall_DiversifyByTagPrefix_Deterministic(t *testing.T) {
 func TestRecall_IncludeLowNovelty_BypassesDreamFilter(t *testing.T) {
 	projectID, nsID, projects, namespaces := setupTestFixtures()
 
-	dreamSrc := model.DreamSource
 	regularSrc := "api"
 	now := time.Now()
 
 	demotedID := uuid.New()
 	demoted := makeTestMemory(demotedID, nsID, "demoted dream", nil, 0.5, 1, now)
-	demoted.Source = &dreamSrc
+	demoted.Origin = model.OriginDream
 	demoted.Metadata = json.RawMessage(`{"low_novelty":true,"low_novelty_reason":"orphan_no_sources"}`)
 
 	keptID := uuid.New()

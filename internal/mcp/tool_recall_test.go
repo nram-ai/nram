@@ -67,6 +67,38 @@ func (m *mockMemoryReaderRecall) ListByNamespaceFiltered(_ context.Context, _ uu
 
 // --- schema tests ---
 
+// TestBuildMCPRecallResponse_SurfacesOrigin confirms the typed origin field is
+// projected onto the MCP recall shape and serializes (it is the dream-synthesis
+// discriminator the agent reads, so it must reach the wire).
+func TestBuildMCPRecallResponse_SurfacesOrigin(t *testing.T) {
+	resp := &service.RecallResponse{
+		Memories: []service.RecallResult{
+			{ID: uuid.New(), Content: "a dream", Origin: model.OriginDream, Tags: []string{}},
+			{ID: uuid.New(), Content: "a user memory", Origin: model.OriginUser, Tags: []string{}},
+		},
+	}
+
+	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, nil, projectionOpts{})
+
+	if len(out.Memories) != 2 {
+		t.Fatalf("expected 2 memories, got %d", len(out.Memories))
+	}
+	if out.Memories[0].Origin != model.OriginDream {
+		t.Errorf("expected first memory origin %q, got %q", model.OriginDream, out.Memories[0].Origin)
+	}
+	if out.Memories[1].Origin != model.OriginUser {
+		t.Errorf("expected second memory origin %q, got %q", model.OriginUser, out.Memories[1].Origin)
+	}
+
+	blob, err := json.Marshal(out.Memories[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(blob), `"origin":"dream"`) {
+		t.Errorf("origin not serialized to the wire: %s", blob)
+	}
+}
+
 // TestBuildMCPRecallResponse_ResolvesOrphanGraphEndpoints exercises the
 // orphan-resolution path that's the core MCP-side improvement: a relationship
 // whose far endpoint isn't in the service-layer entities[] gets the missing

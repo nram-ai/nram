@@ -23,7 +23,6 @@ type MemoryUpdater interface {
 	SupersedeReplacing(ctx context.Context, oldID uuid.UUID, newMem *model.Memory, lineage *model.MemoryLineage) error
 }
 
-
 // UpdateRequest contains all parameters needed to update an existing memory.
 type UpdateRequest struct {
 	ProjectID uuid.UUID        `json:"project_id"`
@@ -45,15 +44,16 @@ type UpdateRequest struct {
 // echoes the request's MemoryID so callers correlating events or webhooks
 // can map old -> new without needing to inspect the lineage table.
 type UpdateResponse struct {
-	ID               uuid.UUID `json:"id"`
-	PreviousMemoryID uuid.UUID `json:"previous_memory_id"`
-	ProjectID        uuid.UUID `json:"project_id"`
-	Content          string    `json:"content"`
-	Tags             []string  `json:"tags"`
-	PreviousContent  string    `json:"previous_content"`
-	ReEmbedded       bool      `json:"re_embedded"`
-	Superseded       bool      `json:"superseded"`
-	LatencyMs        int64     `json:"latency_ms"`
+	ID               uuid.UUID          `json:"id"`
+	PreviousMemoryID uuid.UUID          `json:"previous_memory_id"`
+	ProjectID        uuid.UUID          `json:"project_id"`
+	Content          string             `json:"content"`
+	Tags             []string           `json:"tags"`
+	PreviousContent  string             `json:"previous_content"`
+	ReEmbedded       bool               `json:"re_embedded"`
+	Superseded       bool               `json:"superseded"`
+	Origin           model.MemoryOrigin `json:"origin"`
+	LatencyMs        int64              `json:"latency_ms"`
 }
 
 // UpdateService orchestrates memory updates, re-embedding, and lineage
@@ -188,6 +188,7 @@ func (s *UpdateService) updateInPlace(
 		PreviousContent:  previousContent,
 		ReEmbedded:       false,
 		Superseded:       false,
+		Origin:           mem.Origin,
 		LatencyMs:        time.Since(start).Milliseconds(),
 	}, nil
 }
@@ -210,8 +211,10 @@ func (s *UpdateService) updateSupersede(
 	now := time.Now().UTC()
 	newID := uuid.New()
 
-	// Inherit policy fields (Source, Importance, ExpiresAt, PurgeAfter)
-	// because the logical memory is the same — only the content moved.
+	// Inherit policy fields (Source, Origin, Importance, ExpiresAt, PurgeAfter)
+	// because the logical memory is the same — only the content moved. Origin
+	// in particular must survive supersession: a re-worded dream synthesis is
+	// still a dream and must stay subject to the dream-recursion guard.
 	// Reset access metrics (AccessCount, LastAccessed, Confidence) and
 	// Enriched because the new trace has no recall history yet and needs
 	// its own enrichment pass.
@@ -232,6 +235,7 @@ func (s *UpdateService) updateSupersede(
 		Content:      *req.Content,
 		ContentHash:  storage.HashContent(*req.Content),
 		Source:       mem.Source,
+		Origin:       mem.Origin,
 		Tags:         newTags,
 		Confidence:   1.0,
 		Importance:   mem.Importance,
@@ -346,6 +350,7 @@ func (s *UpdateService) updateSupersede(
 		PreviousContent:  previousContent,
 		ReEmbedded:       reEmbedded,
 		Superseded:       true,
+		Origin:           newMem.Origin,
 		LatencyMs:        latency,
 	}, nil
 }

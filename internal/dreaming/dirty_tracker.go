@@ -16,7 +16,7 @@ import (
 
 // DirtyTracker subscribes to memory lifecycle events on the EventBus and
 // marks projects as dirty when user-originated changes occur. Dream-originated
-// changes (source = "dream") are ignored to prevent feedback loops.
+// changes (origin = "dream") are ignored to prevent feedback loops.
 type DirtyTracker struct {
 	bus       events.EventBus
 	dirtyRepo *storage.DreamDirtyRepo
@@ -81,8 +81,11 @@ func (dt *DirtyTracker) handleEvent(ctx context.Context, event events.Event) {
 		return
 	}
 
-	// Skip dream-originated changes to prevent feedback loops.
-	if data["source"] == model.DreamSource {
+	// Skip dream-originated changes to prevent feedback loops. The dream cycle
+	// emits no lifecycle events today, so this is the forward-looking contract:
+	// any future dream-path emit must carry origin=OriginDream. (Deletes omit
+	// origin — a user deleting any memory is a legitimate dirty trigger.)
+	if data["origin"] == string(model.OriginDream) {
 		return
 	}
 

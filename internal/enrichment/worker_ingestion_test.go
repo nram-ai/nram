@@ -241,12 +241,11 @@ func TestIngestion_SkipsWhenSourceIsDream(t *testing.T) {
 	)
 
 	mem := testMemory()
-	// Deliberately Enriched=false so the source check is the only signal
+	// Deliberately Enriched=false so the origin check is the only signal
 	// gating the ingestion-decision phase. If the early-return dropped the
-	// source clause, ingestCalls would be > 0.
+	// origin clause, ingestCalls would be > 0.
 	mem.Enriched = false
-	src := model.DreamSource
-	mem.Source = &src
+	mem.Origin = model.OriginDream
 	h.reader.byID[mem.ID] = mem
 	job := testJob(mem.ID, mem.NamespaceID)
 

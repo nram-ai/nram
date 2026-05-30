@@ -15,16 +15,17 @@ import (
 // the agent gets a typed lineage pointer (each id is fetchable via memory_get)
 // instead of a buried UUID blob.
 type mcpRecallMemory struct {
-	ID          uuid.UUID       `json:"id"`
-	ProjectSlug string          `json:"project_slug"`
-	Content     string          `json:"content"`
-	Tags        []string        `json:"tags"`
-	Source      *string         `json:"source,omitempty"`
-	Score       float64         `json:"score"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	DerivedFrom []uuid.UUID     `json:"derived_from,omitempty"`
-	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	ID          uuid.UUID          `json:"id"`
+	ProjectSlug string             `json:"project_slug"`
+	Content     string             `json:"content"`
+	Tags        []string           `json:"tags"`
+	Source      *string            `json:"source,omitempty"`
+	Origin      model.MemoryOrigin `json:"origin"`
+	Score       float64            `json:"score"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
+	DerivedFrom []uuid.UUID        `json:"derived_from,omitempty"`
+	Metadata    json.RawMessage    `json:"metadata,omitempty"`
 }
 
 // mcpRecallResponse passes service.CoverageGap through verbatim because the
@@ -150,6 +151,7 @@ func projectMemory(m service.RecallResult, opts projectionOpts) mcpRecallMemory 
 		Content:     m.Content,
 		Tags:        m.Tags,
 		Source:      m.Source,
+		Origin:      m.Origin,
 		Score:       m.Score,
 		CreatedAt:   m.CreatedAt,
 		UpdatedAt:   m.UpdatedAt,

@@ -159,6 +159,13 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 	if req.ProjectID == uuid.Nil {
 		return nil, fmt.Errorf("project_id is required")
 	}
+	// "dream" is a reserved provenance label owned by the consolidation cycle,
+	// which now records its provenance via Origin=OriginDream. Reject any
+	// attempt to set it from a user-facing write path so the string can never
+	// re-enter the source column and resurrect the old discriminator footgun.
+	if isReservedSource(req.Source) {
+		return nil, fmt.Errorf("source %q is reserved for dream syntheses", model.DreamSource)
+	}
 
 	if req.Options.Extract {
 		return nil, fmt.Errorf("extract support is not yet implemented")
@@ -237,6 +244,7 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 		Content:     req.Content,
 		ContentHash: contentHash,
 		Source:      source,
+		Origin:      model.OriginUser,
 		Tags:        req.Tags,
 		Confidence:  resolveDefaultConfidence(ctx, s.settings),
 		Importance:  importance,

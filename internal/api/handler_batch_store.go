@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/events"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -114,6 +115,7 @@ func NewBatchStoreHandler(svc BatchStoreServicer, bus events.EventBus) http.Hand
 		for range resp.MemoriesCreated {
 			events.Emit(r.Context(), bus, events.MemoryCreated, scope, map[string]string{
 				"project_id": projectID.String(),
+				"origin":     string(model.OriginUser),
 			})
 		}
 

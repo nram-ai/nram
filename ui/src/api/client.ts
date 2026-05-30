@@ -198,12 +198,19 @@ export interface StoredMemory {
   latency_ms: number;
 }
 
+/**
+ * Coarse, server-assigned provenance category. Authoritative discriminator for
+ * dream syntheses (the free-form `source` string no longer carries "dream").
+ */
+export type MemoryOrigin = "user" | "dream" | "import";
+
 export interface Memory {
   id: string;
   namespace_id?: string;
   content: string;
   embedding_dim?: number | null;
   source: string | null;
+  origin: MemoryOrigin;
   tags: string[];
   confidence?: number;
   importance?: number;
@@ -242,6 +249,7 @@ export interface RecallResult {
   content: string;
   tags: string[];
   source: string | null;
+  origin: MemoryOrigin;
   score: number;
   similarity?: number | null;
   confidence?: number;

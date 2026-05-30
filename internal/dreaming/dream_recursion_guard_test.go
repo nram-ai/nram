@@ -23,16 +23,16 @@ import (
 // referenced comments at:
 //
 //   - internal/dreaming/phase_consolidation.go (synthMemory creation;
-//       "DREAM-RECURSION GUARD — first prong"; sets Source=DreamSource and
-//       Enriched=true)
+//     "DREAM-RECURSION GUARD — first prong"; sets Origin=OriginDream and
+//     Enriched=true)
 //   - internal/dreaming/phase_consolidation.go (consolidate() candidate
-//       filter; "DREAM-RECURSION GUARD — second prong")
+//     filter; "DREAM-RECURSION GUARD — second prong")
 //   - internal/enrichment/worker.go (WorkerPool.runPreEmbed skipFact /
-//       skipEntity gate)
+//     skipEntity gate)
 //   - internal/enrichment/phase_ingestion.go (runIngestionDecision
-//       Enriched/source early-return)
+//     Enriched/origin early-return)
 //
-// The contract: a dream-source memory enrolled in enrichment MUST NOT
+// The contract: a dream-origin memory enrolled in enrichment MUST NOT
 // produce any derivative rows that the next dream cycle could re-cluster:
 //
 //   - zero extracted_fact lineage children
@@ -73,7 +73,7 @@ func TestDreamRecursionGuard_EndToEnd(t *testing.T) {
 		// check on its own.
 		{"enriched=true (production shape)", true},
 		// Synthetic case: a dream memory with Enriched=false isolates
-		// the source==DreamSource clause. If that clause were removed
+		// the Origin==OriginDream clause. If that clause were removed
 		// from worker.go skipFact/skipEntity or from phase_ingestion.go
 		// early-return, this sub-test would proceed to fact extraction
 		// and fail the assertions below.
@@ -110,15 +110,14 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 	relRepo := storage.NewRelationshipRepo(db)
 	queueRepo := storage.NewEnrichmentQueueRepo(db)
 
-	// Seed a dream-source synthesis memory. The enriched flag is varied
+	// Seed a dream-origin synthesis memory. The enriched flag is varied
 	// across sub-cases to pin each clause of the skip predicate
 	// independently.
-	source := model.DreamSource
 	dreamMem := &model.Memory{
 		ID:          uuid.New(),
 		NamespaceID: ns.ID,
 		Content:     "Synthesized dream content. Alice works at Acme.",
-		Source:      &source,
+		Origin:      model.OriginDream,
 		Confidence:  0.5,
 		Importance:  0.5,
 		Enriched:    enriched,

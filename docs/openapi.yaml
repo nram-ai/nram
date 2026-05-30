@@ -2419,6 +2419,13 @@ components:
         source:
           type: string
           nullable: true
+        origin:
+          type: string
+          enum: [user, dream, import]
+          readOnly: true
+          description: |
+            Server-assigned provenance category and the authoritative
+            dream-synthesis discriminator. Never accepted as client input.
         tags:
           type: array
           items:
@@ -2976,6 +2983,10 @@ components:
           type: string
         source:
           type: string
+          description: |
+            Free-form provenance label. The value "dream" is reserved for the
+            consolidation cycle and is rejected with a validation error; the
+            server assigns provenance via the read-only `origin` field instead.
         tags:
           type: array
           items:
@@ -3087,6 +3098,11 @@ components:
                 type: string
               source:
                 type: string
+                description: |
+                  Free-form provenance label. The value "dream" is reserved for
+                  the consolidation cycle; an item using it is rejected with a
+                  per-item error. Provenance is assigned via the read-only
+                  `origin` field on the stored memory instead.
               tags:
                 type: array
                 items:
@@ -3157,6 +3173,13 @@ components:
         source:
           type: string
           nullable: true
+        origin:
+          type: string
+          enum: [user, dream, import]
+          readOnly: true
+          description: |
+            Server-assigned provenance category and the authoritative
+            dream-synthesis discriminator. Never accepted as client input.
         metadata:
           type: object
         enriched:
@@ -3292,6 +3315,13 @@ components:
         source:
           type: string
           nullable: true
+        origin:
+          type: string
+          enum: [user, dream, import]
+          readOnly: true
+          description: |
+            Server-assigned provenance category and the authoritative
+            dream-synthesis discriminator. Never accepted as client input.
         score:
           type: number
           format: double
@@ -3408,6 +3438,12 @@ components:
               source:
                 type: string
                 nullable: true
+              origin:
+                type: string
+                enum: [user, dream, import]
+                description: |
+                  Server-assigned provenance category. Authoritative
+                  dream-synthesis discriminator.
               confidence:
                 type: number
                 format: double

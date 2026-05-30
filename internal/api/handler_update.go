@@ -87,6 +87,7 @@ func NewUpdateHandler(svc UpdateServicer, bus events.EventBus) http.HandlerFunc 
 			"memory_id":          resp.ID.String(),
 			"previous_memory_id": memoryID.String(),
 			"project_id":         projectID.String(),
+			"origin":             string(resp.Origin),
 		})
 
 		writeJSON(w, http.StatusOK, resp)

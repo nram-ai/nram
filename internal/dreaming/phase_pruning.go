@@ -417,8 +417,7 @@ func (p *PruningPhase) shouldPrune(mem *model.Memory, now time.Time, zeroFloor f
 		return true, pruneReasonZeroConfidence
 	}
 
-	src := model.MemorySource(mem)
-	if src == model.DreamSource && mem.Confidence < 0.1 && now.Sub(mem.CreatedAt) > 30*24*time.Hour {
+	if mem.IsDream() && mem.Confidence < 0.1 && now.Sub(mem.CreatedAt) > 30*24*time.Hour {
 		return true, pruneReasonLowConfidence
 	}
 

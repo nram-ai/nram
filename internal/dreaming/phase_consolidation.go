@@ -287,8 +287,7 @@ func (p *ConsolidationPhase) reinforce(
 		if m.DeletedAt != nil {
 			continue
 		}
-		src := model.MemorySource(&m)
-		if src == model.DreamSource {
+		if m.IsDream() {
 			syntheses = append(syntheses, m)
 		} else {
 			userMemories = append(userMemories, m)
@@ -586,7 +585,7 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 	eligible := 0
 	for i := range allMemories {
 		m := &allMemories[i]
-		if m.DeletedAt != nil || model.MemorySource(m) != model.DreamSource {
+		if m.DeletedAt != nil || !m.IsDream() {
 			continue
 		}
 		if bytes.Contains(m.Metadata, stampMarker) {
@@ -643,7 +642,7 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 		if mem.DeletedAt != nil {
 			continue
 		}
-		if model.MemorySource(&mem) != model.DreamSource {
+		if !mem.IsDream() {
 			continue
 		}
 
@@ -1240,7 +1239,7 @@ func (p *ConsolidationPhase) consolidate(
 	const subPhase = model.DreamSubPhaseConsolidate
 	// DREAM-RECURSION GUARD — second prong (consolidation side).
 	//
-	// The source==DreamSource filter below is load-bearing: without it the
+	// The Origin==OriginDream filter below is load-bearing: without it the
 	// next consolidation pass would cluster existing dream syntheses into
 	// new dreams, producing dream-of-dream-of-dream cascades. This is the
 	// counterpart to the first prong at the synthMemory creation site
@@ -1260,8 +1259,7 @@ func (p *ConsolidationPhase) consolidate(
 		if m.DeletedAt != nil || m.SupersededBy != nil {
 			continue
 		}
-		src := model.MemorySource(&m)
-		if src == model.DreamSource {
+		if m.IsDream() {
 			continue
 		}
 		candidates = append(candidates, m)
@@ -1449,7 +1447,7 @@ func (p *ConsolidationPhase) consolidate(
 
 		// DREAM-RECURSION GUARD — first prong (creation side).
 		//
-		// Source=DreamSource and Enriched=true are both load-bearing for the
+		// Origin=OriginDream and Enriched=true are both load-bearing for the
 		// dream-of-dream-of-dream cascade prevention contract. The enrichment
 		// worker reads BOTH signals at three skip sites; either alone is
 		// sufficient. Symmetric sites that must stay aligned with this one:
@@ -1457,11 +1455,14 @@ func (p *ConsolidationPhase) consolidate(
 		//   - internal/enrichment/worker.go (WorkerPool.runPreEmbed skipFact / skipEntity)
 		//   - internal/enrichment/phase_ingestion.go (runIngestionDecision early-return)
 		//   - internal/dreaming/phase_consolidation.go (second prong: consolidate()
-		//       candidate-filter loop excludes source=="dream" so dreams cannot
+		//       candidate-filter loop excludes Origin==OriginDream so dreams cannot
 		//       be clustered into further dreams)
 		//
+		// Source is deliberately left nil: the "dream" string has been retired
+		// from the source column (Origin is now the authoritative discriminator).
+		//
 		// What runs for the enqueued job below: ingestion-decision short-
-		// circuits (Enriched/source), fact + entity extraction skip (the only
+		// circuits (Enriched/origin), fact + entity extraction skip (the only
 		// memory- and graph-node-creating phases), augmentation generates
 		// paraphrase queries (no new rows), embedding writes the vector,
 		// finalize stamps augmented_queries / augmented_embedding_at /
@@ -1470,12 +1471,11 @@ func (p *ConsolidationPhase) consolidate(
 		//
 		// Contract enforcer:
 		//   internal/dreaming/dream_recursion_guard_test.go
-		source := model.DreamSource
 		synthMemory := &model.Memory{
 			ID:          uuid.New(),
 			NamespaceID: cycle.NamespaceID,
 			Content:     synthesisContent,
-			Source:      &source,
+			Origin:      model.OriginDream,
 			Confidence:  initialConfidence,
 			Importance:  0.5,
 			Enriched:    true,
