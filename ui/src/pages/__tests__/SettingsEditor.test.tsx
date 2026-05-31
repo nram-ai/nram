@@ -53,6 +53,9 @@ const SCHEMAS = [
   { key: "enrichment.batch_size", type: "number", default_value: 32, description: "Batch size", category: "enrichment", min: 1, max: 100, step: 1 },
   { key: "enrichment.dedup_threshold", type: "number", default_value: 0.9, description: "Dedup threshold", category: "enrichment_ingestion", min: 0, max: 1, step: 0.01 },
   { key: "ranking.weight.similarity", type: "number", default_value: 0.5, description: "Similarity weight", category: "ranking", min: 0, max: 1, step: 0.05 },
+  // usage category: token_retention shows here; cost_rates is edited on Analytics.
+  { key: "usage.token_retention_days", type: "number", default_value: 90, description: "Token usage retention", category: "usage", min: 1, max: 3650, step: 1 },
+  { key: "usage.cost_rates", type: "json", default_value: [], description: "Per-model cost rates", category: "usage" },
 ];
 
 const GROUPS = [
@@ -70,11 +73,16 @@ const GROUPS = [
     label: "Recall & Ranking",
     subsections: [{ category: "ranking", label: "Ranking" }],
   },
+  {
+    id: "usage_export",
+    label: "Usage & Export",
+    subsections: [{ category: "usage", label: "Usage" }],
+  },
 ];
 
-function renderPage() {
+function renderPage(path = "/settings") {
   return render(
-    <MemoryRouter initialEntries={["/settings"]}>
+    <MemoryRouter initialEntries={[path]}>
       <SettingsEditor />
     </MemoryRouter>,
   );
@@ -147,6 +155,23 @@ describe("SettingsEditor tabs + search", () => {
     fireEvent.change(screen.getByLabelText("Search settings"), {
       target: { value: "zzz-nonexistent" },
     });
+    expect(screen.getByText(/No settings match/i)).toBeInTheDocument();
+  });
+
+  it("hides usage.cost_rates (edited on Analytics) but shows other usage settings", () => {
+    renderPage("/settings?group=usage_export");
+
+    expect(screen.getByText("usage.token_retention_days")).toBeInTheDocument();
+    expect(screen.queryByText("usage.cost_rates")).not.toBeInTheDocument();
+  });
+
+  it("never surfaces usage.cost_rates via search either", () => {
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("Search settings"), {
+      target: { value: "cost_rates" },
+    });
+    expect(screen.queryByText("usage.cost_rates")).not.toBeInTheDocument();
     expect(screen.getByText(/No settings match/i)).toBeInTheDocument();
   });
 });

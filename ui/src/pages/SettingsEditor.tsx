@@ -126,6 +126,12 @@ const PROMPT_KEYS = new Set([
   "dreaming.novelty.judge_prompt",
 ]);
 
+// Keys owned by another admin surface, filtered out of the Settings page so
+// they cannot be edited in two places. usage.cost_rates is configured on the
+// Analytics page at the admin/system tier (its cost-rate editor), which is
+// where it belongs.
+const EXTERNALLY_MANAGED_KEYS = new Set(["usage.cost_rates"]);
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -161,6 +167,12 @@ function parseValue(raw: string, type: string): unknown {
 
 function isPromptKey(key: string): boolean {
   return PROMPT_KEYS.has(key);
+}
+
+// isHiddenFromSettings reports whether a key is edited on a dedicated page
+// elsewhere and so must not appear on the Settings page.
+function isHiddenFromSettings(key: string): boolean {
+  return isPromptKey(key) || EXTERNALLY_MANAGED_KEYS.has(key);
 }
 
 // ---------------------------------------------------------------------------
@@ -800,14 +812,14 @@ function SettingsEditor() {
   const serverGroups = groupsQuery.data?.data ?? [];
 
   // Group settings by their backend category. Prompt keys live on the Prompt
-  // Templates page; provider-config keys live on the Provider Configuration
-  // page. Both are filtered out so the Settings page is the single source of
-  // truth for everything else.
+  // Templates page, provider-config keys on the Provider Configuration page,
+  // and usage.cost_rates on Analytics — all filtered out so the Settings page
+  // does not edit them in two places.
   const itemsByCategory = useMemo(() => {
     const settingsMap = new Map(settings.map((s) => [s.key, s]));
     const out = new Map<string, SettingWithSchema[]>();
     for (const schema of schemas) {
-      if (isPromptKey(schema.key)) continue;
+      if (isHiddenFromSettings(schema.key)) continue;
       const cat = schema.category || "other";
       const merged: SettingWithSchema = {
         schema,

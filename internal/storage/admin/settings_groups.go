@@ -196,12 +196,12 @@ var settingsGroups = []api.SettingGroup{
 	{
 		ID:          "usage_export",
 		Label:       "Usage & Export",
-		Description: "Token-usage retention and cost accounting, plus where export artifacts are stored and how long they live.",
+		Description: "Token-usage retention, plus where export artifacts are stored and how long they live.",
 		SubSections: []api.SettingSubSection{
 			{
 				Category:    "usage",
 				Label:       "Usage",
-				Description: "Token-usage retention window and the per-model cost rates used for usage accounting.",
+				Description: "Token-usage retention window. Per-model cost rates are configured on the Analytics page at the admin/system tier.",
 			},
 			{
 				Category:    "export",
