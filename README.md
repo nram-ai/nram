@@ -243,6 +243,50 @@ a big effect on recall quality. Three tiers below; pick one and move on.
 > Anthropic does **not** offer an embeddings API. If you want Claude for fact /
 > entity extraction, pair it with OpenAI or Ollama for the embedding slot.
 
+### Local models must all fit in VRAM at once
+
+If you run the embedding **and** fact/entity slots on Ollama (or any local
+backend), budget VRAM for the **sum** of every selected model, not the largest
+single one. The embedding model and the extraction model(s) are loaded and
+called independently, and nram's enrichment pipeline alternates between them on
+essentially every job, so both need to be resident on the GPU **at the same
+time**.
+
+When they don't all fit, one of two things happens, both bad:
+
+- **Partial CPU offload.** Ollama spills the layers that don't fit to system
+  RAM. Inference still completes, but an order of magnitude slower.
+- **Model thrashing.** Ollama unloads one model to make room for the other on
+  each call. Because enrichment switches between the embedding slot and the
+  fact/entity slots constantly, this swap fires on nearly every job, and each
+  swap pays a full multi-GB cold-load. The visible symptom is enrichments that
+  appear to hang or take forever.
+
+Concrete example: the Tier 2 combo (`qwen3-embedding:0.6b` ~1.2 GB +
+`qwen3:8b` ~5.2 GB of weights, **plus** KV-cache and context buffers that grow
+with `num_ctx`) does not comfortably coexist on a 12 GB card once those buffers
+are counted.
+
+> Setting `OLLAMA_KEEP_ALIVE` does **not** fix thrashing when the models can't
+> fit together. Keep-alive only stops idle eviction; if there isn't room for
+> both, Ollama must still evict one to load the other. Keep-alive helps *after*
+> everything fits, not instead of fitting. See
+> [Keeping Ollama models loaded](#keeping-ollama-models-loaded-ollama_keep_alive).
+
+Mitigations, in rough order of preference:
+
+- Split the slots across machines. Each provider slot (embedding, fact, entity)
+  is configured independently, so they can point at different Ollama hosts on
+  different machines or GPUs. Run the embedding model on one box and the
+  extraction models on another, and neither has to share VRAM with the other.
+- Pick smaller models (e.g. drop the extraction slots to Tier 1's `qwen3:4b`).
+- Move one slot to a cloud provider (Tier 3) so only one model occupies the GPU.
+- Add VRAM.
+
+Confirm what's actually on the GPU with `ollama ps` (or
+`curl -s http://<ollama-host>:11434/api/ps`): the `SIZE` / `PROCESSOR` columns
+show whether each model is fully GPU-resident or spilling to CPU.
+
 ### Why not `nomic-embed-text`?
 
 `nomic-embed-text` is a commonly suggested Ollama embedding model, but it has
@@ -283,8 +327,8 @@ memories are long-form documents and you have the VRAM.
 ### Keeping Ollama models loaded (`OLLAMA_KEEP_ALIVE`)
 
 Ollama evicts an idle model from memory after 5 minutes by default. On slow CPUs
-or weak GPUs the first call after eviction pays the full cold-load cost — often
-several minutes for a multi-GB quantized model — which looks like a hang or a
+or weak GPUs the first call after eviction pays the full cold-load cost (often
+several minutes for a multi-GB quantized model), which looks like a hang or a
 timeout to whatever client is calling.
 
 Pin loaded models for a week by setting `OLLAMA_KEEP_ALIVE=168h` (or `-1` for
@@ -298,12 +342,12 @@ indefinite) in the Ollama server's environment and restarting the service:
 - **Windows:** add `OLLAMA_KEEP_ALIVE=168h` to user environment variables, then
   quit Ollama from the tray and reopen it.
 
-Verify with `curl -s http://<ollama-host>:11434/api/ps` after a chat call — the
+Verify with `curl -s http://<ollama-host>:11434/api/ps` after a chat call; the
 loaded model's `expires_at` should be ~168h in the future.
 
 This has to live on the Ollama server because nram inferences run through
 Ollama's OpenAI-compatibility endpoint (`/v1/chat/completions`,
-`/v1/embeddings`), and that path drops `keep_alive` from request bodies — only
+`/v1/embeddings`), and that path drops `keep_alive` from request bodies; only
 the server-side env var controls eviction for `/v1/*` traffic.
 
 ### Embedding dimensions
