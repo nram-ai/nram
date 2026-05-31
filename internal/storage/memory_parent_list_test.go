@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -272,6 +273,124 @@ func TestMemoryRepo_FindChildrenByParents_EmptyInputs(t *testing.T) {
 		if len(buckets) != 0 {
 			t.Fatalf("expected empty result with no relations, got %d buckets", len(buckets))
 		}
+	})
+}
+
+func TestMemoryRepo_ListParentsByNamespaceFiltered_StatusFiltersMatchParentOnly(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		memRepo := NewMemoryRepo(db)
+		lineageRepo := NewMemoryLineageRepo(db)
+
+		stamp := time.Now().UTC()
+		yes, no := true, false
+
+		// seed creates a fresh namespace holding one parent and one extracted-
+		// fact child, each with independently controlled status fields, and
+		// returns the namespace and parent. The child is linked via
+		// LineageExtractedFact so it is never itself a parent-anchored row;
+		// it exists only to prove a child's status cannot drag its parent in.
+		seed := func(
+			label string,
+			parentAug, childAug *time.Time,
+			parentEnriched, childEnriched bool,
+			parentOrigin, childOrigin model.MemoryOrigin,
+		) (uuid.UUID, uuid.UUID) {
+			nsID := createTestMemoryNamespace(t, ctx, db)
+			src := "test-parent"
+			parent := &model.Memory{
+				NamespaceID:          nsID,
+				Content:              "parent " + label,
+				Source:               &src,
+				Confidence:           0.9,
+				Importance:           0.8,
+				Enriched:             parentEnriched,
+				Origin:               parentOrigin,
+				AugmentedEmbeddingAt: parentAug,
+			}
+			if err := memRepo.Create(ctx, parent); err != nil {
+				t.Fatalf("create parent %s: %v", label, err)
+			}
+			childSrc := "enrichment-worker"
+			child := &model.Memory{
+				NamespaceID:          nsID,
+				Content:              "child " + label,
+				Source:               &childSrc,
+				Confidence:           0.85,
+				Importance:           0.6,
+				Enriched:             childEnriched,
+				Origin:               childOrigin,
+				AugmentedEmbeddingAt: childAug,
+			}
+			if err := memRepo.Create(ctx, child); err != nil {
+				t.Fatalf("create child %s: %v", label, err)
+			}
+			lineage := &model.MemoryLineage{
+				NamespaceID: nsID,
+				MemoryID:    child.ID,
+				ParentID:    &parent.ID,
+				Relation:    model.LineageExtractedFact,
+			}
+			if err := lineageRepo.Create(ctx, lineage); err != nil {
+				t.Fatalf("create lineage %s: %v", label, err)
+			}
+			return nsID, parent.ID
+		}
+
+		// assertParents asserts both the list and the count return exactly the
+		// expected parent IDs (order-independent) for the given filter.
+		assertParents := func(name string, nsID uuid.UUID, f MemoryListFilters, wantIDs ...uuid.UUID) {
+			t.Helper()
+			got, err := memRepo.ListParentsByNamespaceFiltered(ctx, nsID, f, 100, 0)
+			if err != nil {
+				t.Fatalf("%s: list: %v", name, err)
+			}
+			if len(got) != len(wantIDs) {
+				t.Fatalf("%s: expected %d parents, got %d", name, len(wantIDs), len(got))
+			}
+			for _, want := range wantIDs {
+				if !slices.ContainsFunc(got, func(m model.Memory) bool { return m.ID == want }) {
+					t.Fatalf("%s: expected parent %s in results", name, want)
+				}
+			}
+			count, err := memRepo.CountParentsByNamespaceFiltered(ctx, nsID, f)
+			if err != nil {
+				t.Fatalf("%s: count: %v", name, err)
+			}
+			if count != len(wantIDs) {
+				t.Fatalf("%s: count %d disagrees with list length %d", name, count, len(wantIDs))
+			}
+		}
+
+		// --- Augmented ---
+		// Augmented parent + not-augmented child: must NOT leak into "not
+		// augmented"; must appear under "augmented".
+		nsAug, augParent := seed("aug", &stamp, nil, false, false, model.OriginUser, model.OriginUser)
+		assertParents("augmented parent / not_augmented filter", nsAug, MemoryListFilters{Augmented: &no})
+		assertParents("augmented parent / augmented filter", nsAug, MemoryListFilters{Augmented: &yes}, augParent)
+
+		// Not-augmented parent + augmented child: inverse.
+		nsNotAug, notAugParent := seed("notaug", nil, &stamp, false, false, model.OriginUser, model.OriginUser)
+		assertParents("not-augmented parent / not_augmented filter", nsNotAug, MemoryListFilters{Augmented: &no}, notAugParent)
+		assertParents("not-augmented parent / augmented filter", nsNotAug, MemoryListFilters{Augmented: &yes})
+
+		// --- Enriched ---
+		nsEnr, enrParent := seed("enr", nil, nil, true, false, model.OriginUser, model.OriginUser)
+		assertParents("enriched parent / not_enriched filter", nsEnr, MemoryListFilters{Enriched: &no})
+		assertParents("enriched parent / enriched filter", nsEnr, MemoryListFilters{Enriched: &yes}, enrParent)
+
+		nsNotEnr, notEnrParent := seed("notenr", nil, nil, false, true, model.OriginUser, model.OriginUser)
+		assertParents("not-enriched parent / not_enriched filter", nsNotEnr, MemoryListFilters{Enriched: &no}, notEnrParent)
+		assertParents("not-enriched parent / enriched filter", nsNotEnr, MemoryListFilters{Enriched: &yes})
+
+		// --- Origin ---
+		nsDream, dreamParent := seed("dream", nil, nil, false, false, model.OriginDream, model.OriginUser)
+		assertParents("dream parent / origin=user filter", nsDream, MemoryListFilters{Origin: string(model.OriginUser)})
+		assertParents("dream parent / origin=dream filter", nsDream, MemoryListFilters{Origin: string(model.OriginDream)}, dreamParent)
+
+		nsUser, userParent := seed("user", nil, nil, false, false, model.OriginUser, model.OriginDream)
+		assertParents("user parent / origin=dream filter", nsUser, MemoryListFilters{Origin: string(model.OriginDream)})
+		assertParents("user parent / origin=user filter", nsUser, MemoryListFilters{Origin: string(model.OriginUser)}, userParent)
 	})
 }
 

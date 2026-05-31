@@ -316,6 +316,19 @@ func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Mem
 // case-insensitive substring matches against the source and content columns
 // respectively. Tag SQL is backend-specific because SQLite stores tags as a
 // JSON-encoded TEXT column and Postgres stores them as TEXT[].
+//
+// In parent-anchored listing (buildParentListWhere) the dimensions split into
+// two semantic classes, and a new field MUST be slotted into the right one:
+//   - Content-discovery (Tags, DateFrom, DateTo, Source, Search): surface a
+//     family when the parent OR any enrichment descendant matches. Emitted by
+//     contentFilterClauses.
+//   - Per-row status (Enriched, Origin, Augmented): a property of the displayed
+//     row itself, matched against the parent only — never via a descendant, or
+//     a non-matching parent leaks in through a matching child. Emitted by
+//     statusFilterClauses.
+// HideSuperseded and StaleStampKey get bespoke handling and belong to neither
+// helper. The flat-list path (buildFilterWhere) applies all dimensions inline
+// as ANDs; keep it in sync when adding a field.
 type MemoryListFilters struct {
 	Tags     []string
 	DateFrom *time.Time
@@ -661,19 +674,29 @@ func (w *whereBuilder) bindOnly(value any) string {
 	return ph
 }
 
-// userFilterClauses returns predicate strings for the user-facing filter
-// dimensions (tags, dates, enriched, source, search), qualified by the given
-// table alias. Args are claimed against wb so placeholders are unique within
-// the surrounding query. Anchors that always apply (namespace, deleted_at,
-// hide-superseded) are NOT emitted by this helper — callers add them
-// separately so the user filter can be reused inside an OR-EXISTS subquery.
-func (r *MemoryRepo) userFilterClauses(wb *whereBuilder, filters MemoryListFilters, alias string) []string {
-	qualify := func(col string) string {
+// aliasQualifier returns a function that prefixes a column with the given
+// table alias (e.g. "m.tags"), or returns the bare column when alias is empty.
+// Shared by the filter-clause helpers so each can qualify columns against the
+// outer table or an EXISTS-subquery alias without re-deriving the rule.
+func aliasQualifier(alias string) func(string) string {
+	return func(col string) string {
 		if alias == "" {
 			return col
 		}
 		return alias + "." + col
 	}
+}
+
+// contentFilterClauses returns predicate strings for the content-discovery
+// filter dimensions (tags, dates, source, search), qualified by the given
+// table alias. These are the filters that, in parent-anchored listing, may
+// match either the parent or any enrichment descendant: a family is surfaced
+// when any member matches. Args are claimed against wb so placeholders are
+// unique within the surrounding query. Anchors that always apply (namespace,
+// deleted_at, hide-superseded) are NOT emitted by this helper — callers add
+// them separately so the filter can be reused inside an OR-EXISTS subquery.
+func (r *MemoryRepo) contentFilterClauses(wb *whereBuilder, filters MemoryListFilters, alias string) []string {
+	qualify := aliasQualifier(alias)
 	out := []string{}
 
 	if len(filters.Tags) > 0 {
@@ -698,6 +721,29 @@ func (r *MemoryRepo) userFilterClauses(wb *whereBuilder, filters MemoryListFilte
 		ph := wb.bindOnly(filters.DateTo.UTC().Format(time.RFC3339))
 		out = append(out, fmt.Sprintf("%s < %s", qualify("created_at"), ph))
 	}
+	if filters.Source != "" {
+		ph := wb.bindOnly("%" + strings.ToLower(escapeLike(filters.Source)) + "%")
+		out = append(out, fmt.Sprintf(`LOWER(COALESCE(%s, '')) LIKE %s ESCAPE '\'`, qualify("source"), ph))
+	}
+	if filters.Search != "" {
+		ph := wb.bindOnly("%" + strings.ToLower(escapeLike(filters.Search)) + "%")
+		out = append(out, fmt.Sprintf(`LOWER(%s) LIKE %s ESCAPE '\'`, qualify("content"), ph))
+	}
+	return out
+}
+
+// statusFilterClauses returns predicate strings for the per-row status filter
+// dimensions (enriched, origin, augmented), qualified by the given table
+// alias. Unlike contentFilterClauses these describe a property of an
+// individual row, so in parent-anchored listing they must constrain the
+// displayed parent directly — never a descendant. Matching them family-wide
+// would surface a parent that does not itself satisfy the filter (e.g. an
+// augmented parent leaking into a "not augmented" view via a not-augmented
+// child). Args are claimed against wb so placeholders stay unique.
+func (r *MemoryRepo) statusFilterClauses(wb *whereBuilder, filters MemoryListFilters, alias string) []string {
+	qualify := aliasQualifier(alias)
+	out := []string{}
+
 	if filters.Enriched != nil {
 		ph := wb.bindOnly(EncodeBool(r.db.Backend(), *filters.Enriched))
 		out = append(out, fmt.Sprintf("%s = %s", qualify("enriched"), ph))
@@ -712,14 +758,6 @@ func (r *MemoryRepo) userFilterClauses(wb *whereBuilder, filters MemoryListFilte
 		} else {
 			out = append(out, fmt.Sprintf("%s IS NULL", qualify("augmented_embedding_at")))
 		}
-	}
-	if filters.Source != "" {
-		ph := wb.bindOnly("%" + strings.ToLower(escapeLike(filters.Source)) + "%")
-		out = append(out, fmt.Sprintf(`LOWER(COALESCE(%s, '')) LIKE %s ESCAPE '\'`, qualify("source"), ph))
-	}
-	if filters.Search != "" {
-		ph := wb.bindOnly("%" + strings.ToLower(escapeLike(filters.Search)) + "%")
-		out = append(out, fmt.Sprintf(`LOWER(%s) LIKE %s ESCAPE '\'`, qualify("content"), ph))
 	}
 	return out
 }
@@ -767,13 +805,21 @@ func (r *MemoryRepo) buildParentListWhere(namespaceID uuid.UUID, filters MemoryL
 	)
 	wb.clauses = append(wb.clauses, antiJoin)
 
-	parentClauses := r.userFilterClauses(wb, filters, "m")
+	// Per-row status filters (enriched, origin, augmented) describe the
+	// displayed parent row itself, so they constrain m directly and are never
+	// routed through the descendant subquery — otherwise a parent that does
+	// not match (e.g. an augmented parent) would leak in via a matching child.
+	wb.clauses = append(wb.clauses, r.statusFilterClauses(wb, filters, "m")...)
+
+	// Content-discovery filters (tags, dates, source, search) surface a family
+	// when the parent OR any enrichment descendant matches.
+	parentClauses := r.contentFilterClauses(wb, filters, "m")
 	if len(parentClauses) > 0 {
 		descRelPHs := make([]string, len(ExtractedChildRelations))
 		for i, rel := range ExtractedChildRelations {
 			descRelPHs[i] = wb.bindOnly(rel)
 		}
-		childClauses := r.userFilterClauses(wb, filters, "c")
+		childClauses := r.contentFilterClauses(wb, filters, "c")
 		descSub := fmt.Sprintf(
 			`EXISTS (SELECT 1 FROM memory_lineage ld JOIN memories c ON c.id = ld.memory_id WHERE ld.namespace_id = m.namespace_id AND ld.parent_id = m.id AND ld.relation IN (%s) AND c.deleted_at IS NULL AND %s)`,
 			strings.Join(descRelPHs, ", "),
