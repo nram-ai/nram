@@ -72,16 +72,25 @@ func NewProviderAdminStore(deps ProviderAdminDeps) *ProviderAdminStore {
 	return &ProviderAdminStore{deps: deps}
 }
 
-func (s *ProviderAdminStore) GetProviderConfig(ctx context.Context) (*api.ProviderConfigResponse, error) {
-	// Probe the three slots concurrently — each call may issue an HTTP
-	// request to Ollama (/api/show) or OpenRouter (/models) on a cache
-	// miss, so the worst-case wall time was 3 × probe-timeout. errgroup
-	// caps it at one probe-timeout regardless of slot count.
-	resp := &api.ProviderConfigResponse{}
+func (s *ProviderAdminStore) GetProviderConfig(ctx context.Context) (api.ProviderConfigResponse, error) {
+	// Probe every slot concurrently — each call may issue an HTTP request to
+	// Ollama (/api/show) or OpenRouter (/models) on a cache miss, so a serial
+	// sweep would cost len(Slots) × probe-timeout. errgroup caps it at one
+	// probe-timeout regardless of slot count. Results are written into a
+	// pre-sized slice by index to preserve canonical order without a mutex.
+	resp := make(api.ProviderConfigResponse, len(provider.Slots))
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { resp.Embedding = s.slotStatus(gctx, "embedding"); return nil })
-	g.Go(func() error { resp.Fact = s.slotStatus(gctx, "fact"); return nil })
-	g.Go(func() error { resp.Entity = s.slotStatus(gctx, "entity"); return nil })
+	for i, def := range provider.Slots {
+		g.Go(func() error {
+			st := s.slotStatus(gctx, def.Name)
+			st.Slot = def.Name
+			st.Label = def.Label
+			st.Description = def.Description
+			st.Required = def.Required
+			resp[i] = st
+			return nil
+		})
+	}
 	_ = g.Wait()
 	return resp, nil
 }
@@ -99,17 +108,12 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 		}
 	}
 
-	// Check if the live provider is loaded in the registry.
+	// Check whether a DEDICATED provider for this slot is loaded in the
+	// registry. SlotConfigured ignores fallback, so an unconfigured optional
+	// slot reads as "not configured" rather than borrowing fact's status.
 	alive := false
 	if s.deps.Registry != nil {
-		switch slot {
-		case "embedding":
-			alive = s.deps.Registry.GetEmbedding() != nil
-		case "fact":
-			alive = s.deps.Registry.GetFact() != nil
-		case "entity":
-			alive = s.deps.Registry.GetEntity() != nil
-		}
+		alive = s.deps.Registry.SlotConfigured(slot)
 	}
 
 	if persisted == nil {
@@ -234,7 +238,14 @@ func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.
 func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderTestRequest) (*api.ProviderTestResult, error) {
 	start := time.Now()
 
-	cfg := provider.RegistryConfig{}
+	def, ok := provider.SlotByName(req.Slot)
+	if !ok {
+		return &api.ProviderTestResult{
+			Success: false,
+			Message: "unknown slot: " + req.Slot,
+		}, nil
+	}
+
 	slotCfg := provider.SlotConfig{
 		Type:    req.Config.Type,
 		BaseURL: req.Config.URL,
@@ -245,19 +256,9 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 		slotCfg.Timeout = *req.Config.Timeout
 	}
 
-	switch req.Slot {
-	case "embedding":
-		cfg.Embedding = slotCfg
-	case "fact":
-		cfg.Fact = slotCfg
-	case "entity":
-		cfg.Entity = slotCfg
-	default:
-		return &api.ProviderTestResult{
-			Success: false,
-			Message: "unknown slot: " + req.Slot,
-		}, nil
-	}
+	// Build a single-slot registry and probe it by kind.
+	cfg := provider.RegistryConfig{}
+	cfg.SetSlotConfig(req.Slot, slotCfg)
 
 	tmpReg, err := provider.NewRegistry(cfg, nil, nil)
 	if err != nil {
@@ -268,27 +269,19 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 		}, nil
 	}
 
-	switch req.Slot {
-	case "embedding":
+	notCreated := func() (*api.ProviderTestResult, error) {
+		return &api.ProviderTestResult{Success: false, Message: "provider not created", LatencyMs: time.Since(start).Milliseconds()}, nil
+	}
+	if def.Kind == provider.KindEmbedding {
 		p := tmpReg.GetEmbedding()
 		if p == nil {
-			return &api.ProviderTestResult{Success: false, Message: "provider not created", LatencyMs: time.Since(start).Milliseconds()}, nil
+			return notCreated()
 		}
 		_, err = p.Embed(ctx, &provider.EmbeddingRequest{Input: []string{"test"}})
-	case "fact":
-		p := tmpReg.GetFact()
+	} else {
+		p := tmpReg.GetLLM(req.Slot)
 		if p == nil {
-			return &api.ProviderTestResult{Success: false, Message: "provider not created", LatencyMs: time.Since(start).Milliseconds()}, nil
-		}
-		_, err = p.Complete(ctx, &provider.CompletionRequest{
-			Messages:    []provider.Message{{Role: "user", Content: "test"}},
-			MaxTokens:   10,
-			Temperature: 0,
-		})
-	case "entity":
-		p := tmpReg.GetEntity()
-		if p == nil {
-			return &api.ProviderTestResult{Success: false, Message: "provider not created", LatencyMs: time.Since(start).Milliseconds()}, nil
+			return notCreated()
 		}
 		_, err = p.Complete(ctx, &provider.CompletionRequest{
 			Messages:    []provider.Message{{Role: "user", Content: "test"}},
@@ -316,7 +309,7 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string, cfg api.ProviderSlotConfig, opts api.UpdateProviderSlotOpts) (*api.UpdateProviderSlotResult, error) {
 	// An embedding-model change routes through the destructive cascade.
 	// Same-model edits (URL, key, timeout) bypass it.
-	if slot == "embedding" {
+	if slot == provider.SlotEmbedding {
 		oldModel := s.currentEmbeddingModel(ctx)
 		if oldModel != "" && cfg.Model != "" && cfg.Model != oldModel {
 			return s.switchEmbeddingModel(ctx, oldModel, cfg, opts)
@@ -461,23 +454,16 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 	}, nil
 }
 
-// LoadProviderRegistryConfig reads all three provider slot settings from the
-// database and assembles a RegistryConfig. Errors fetching or decoding any
-// slot are swallowed so a malformed row in one slot doesn't poison the others
-// — the affected slot stays empty (treated as unconfigured) and its provider
-// will report unavailable until it's repaired through the admin UI.
+// LoadProviderRegistryConfig reads every provider slot setting from the
+// database (iterating the canonical provider.Slots) and assembles a
+// RegistryConfig. Errors fetching or decoding any slot are swallowed so a
+// malformed row in one slot doesn't poison the others — the affected slot
+// stays empty (treated as unconfigured) and its provider will report
+// unavailable until it's repaired through the admin UI.
 func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.SettingsRepo) provider.RegistryConfig {
 	var cfg provider.RegistryConfig
-	slots := []struct {
-		key  string
-		dest *provider.SlotConfig
-	}{
-		{service.SettingProviderEmbedding, &cfg.Embedding},
-		{service.SettingProviderFact, &cfg.Fact},
-		{service.SettingProviderEntity, &cfg.Entity},
-	}
-	for _, slot := range slots {
-		setting, err := settingsRepo.Get(ctx, slot.key, "global")
+	for _, def := range provider.Slots {
+		setting, err := settingsRepo.Get(ctx, def.SettingKey(), "global")
 		if err != nil {
 			continue
 		}
@@ -494,7 +480,7 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 		if apiCfg.Timeout != nil {
 			sc.Timeout = *apiCfg.Timeout
 		}
-		*slot.dest = sc
+		cfg.SetSlotConfig(def.Name, sc)
 	}
 	return cfg
 }

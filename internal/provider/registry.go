@@ -48,10 +48,50 @@ type SlotConfig struct {
 // RegistryConfig holds the configuration for all provider slots and the shared
 // circuit breaker parameters.
 type RegistryConfig struct {
-	Embedding      SlotConfig           `json:"embedding"`
-	Fact           SlotConfig           `json:"fact"`
-	Entity         SlotConfig           `json:"entity"`
-	CircuitBreaker CircuitBreakerConfig `json:"circuit_breaker"`
+	Embedding SlotConfig `json:"embedding"`
+	Fact      SlotConfig `json:"fact"`
+	Entity    SlotConfig `json:"entity"`
+	// Optional per-operation slots. An empty Type means "unconfigured"; the
+	// corresponding Get accessor then falls back to the fact provider.
+	QueryAugment      SlotConfig           `json:"query_augment"`
+	IngestionDecision SlotConfig           `json:"ingestion_decision"`
+	CircuitBreaker    CircuitBreakerConfig `json:"circuit_breaker"`
+}
+
+// slotConfig returns the SlotConfig for the named slot. This is the single
+// place that maps a slot name to its RegistryConfig field; everything else
+// iterates the canonical Slots list (see slots.go).
+func (c RegistryConfig) slotConfig(name string) SlotConfig {
+	switch name {
+	case SlotEmbedding:
+		return c.Embedding
+	case SlotFact:
+		return c.Fact
+	case SlotEntity:
+		return c.Entity
+	case SlotQueryAugment:
+		return c.QueryAugment
+	case SlotIngestionDecision:
+		return c.IngestionDecision
+	}
+	return SlotConfig{}
+}
+
+// SetSlotConfig sets the SlotConfig for the named slot. Mirror of slotConfig,
+// used by the admin store to build a single-slot config for a connection test.
+func (c *RegistryConfig) SetSlotConfig(name string, sc SlotConfig) {
+	switch name {
+	case SlotEmbedding:
+		c.Embedding = sc
+	case SlotFact:
+		c.Fact = sc
+	case SlotEntity:
+		c.Entity = sc
+	case SlotQueryAugment:
+		c.QueryAugment = sc
+	case SlotIngestionDecision:
+		c.IngestionDecision = sc
+	}
 }
 
 // Registry manages the lifecycle of provider slots (embedding, fact extraction,
@@ -61,9 +101,12 @@ type RegistryConfig struct {
 type Registry struct {
 	mu        sync.RWMutex
 	embedding EmbeddingProvider
-	fact      LLMProvider
-	entity    LLMProvider
-	config    RegistryConfig
+	// llm holds the built LLM-kind providers keyed by slot name (fact, entity,
+	// query_augment, ingestion_decision). A missing key means that slot is
+	// unconfigured; GetLLM applies the slot's FallbackTo in that case. Keyed by
+	// name so build/reload/accessors stay slot-agnostic (see slots.go).
+	llm    map[string]LLMProvider
+	config RegistryConfig
 
 	// Wrapping infrastructure. Both may be nil — when nil, providers are
 	// returned without the usage-recording middleware (e.g., in tests that
@@ -133,18 +176,52 @@ func (r *Registry) GetEmbedding() EmbeddingProvider {
 	return r.embedding
 }
 
-// GetFact returns the fact extraction LLM provider, or nil if unconfigured.
-func (r *Registry) GetFact() LLMProvider {
+// GetLLM returns the provider for an LLM slot. When the dedicated slot is
+// unconfigured it applies the slot's FallbackTo (e.g. query_augment and
+// ingestion_decision fall back to fact, a small task well within the fact
+// model's capability). Returns nil only when neither the slot nor its fallback
+// is configured.
+func (r *Registry) GetLLM(name string) LLMProvider {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.fact
+	return r.resolveLLM(name)
 }
 
+// resolveLLM resolves an LLM slot with fallback. Caller must hold r.mu.
+func (r *Registry) resolveLLM(name string) LLMProvider {
+	if p := r.llm[name]; p != nil {
+		return p
+	}
+	if def, ok := SlotByName(name); ok && def.FallbackTo != "" {
+		return r.llm[def.FallbackTo]
+	}
+	return nil
+}
+
+// GetFact returns the fact extraction LLM provider, or nil if unconfigured.
+func (r *Registry) GetFact() LLMProvider { return r.GetLLM(SlotFact) }
+
 // GetEntity returns the entity extraction LLM provider, or nil if unconfigured.
-func (r *Registry) GetEntity() LLMProvider {
+func (r *Registry) GetEntity() LLMProvider { return r.GetLLM(SlotEntity) }
+
+// GetQueryAugment returns the query-augmentation provider (dedicated slot, else
+// the fact fallback per its SlotDef).
+func (r *Registry) GetQueryAugment() LLMProvider { return r.GetLLM(SlotQueryAugment) }
+
+// GetIngestionDecision returns the ingestion-decision provider (dedicated slot,
+// else the fact fallback per its SlotDef).
+func (r *Registry) GetIngestionDecision() LLMProvider { return r.GetLLM(SlotIngestionDecision) }
+
+// SlotConfigured reports whether the named slot has a DEDICATED provider built
+// (ignoring any fallback), driving the admin "configured" status so operators
+// can tell a configured slot from a fallback. Unknown names return false.
+func (r *Registry) SlotConfigured(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.entity
+	if name == SlotEmbedding {
+		return r.embedding != nil
+	}
+	return r.llm[name] != nil
 }
 
 // Reload recreates all providers from a new configuration, swapping them
@@ -161,15 +238,14 @@ func (r *Registry) GetEntity() LLMProvider {
 // would orphan the closures against fields that were never set.
 func (r *Registry) Reload(config RegistryConfig) error {
 	r.mu.Lock()
-	emb, fact, entity, err := r.buildProviders(config)
+	built, err := r.buildProviders(config)
 	if err != nil {
 		r.mu.Unlock()
 		return err
 	}
 
-	r.embedding = emb
-	r.fact = fact
-	r.entity = entity
+	r.embedding = built.embedding
+	r.llm = built.llm
 	r.config = config
 	r.embDim = 0
 	r.probeGroup = &singleflight.Group{}
@@ -264,12 +340,24 @@ func (r *Registry) IsConfigured() bool {
 	return r.embedding != nil
 }
 
-// EnrichmentAvailable returns true iff embedding, fact, and entity providers
-// are all configured. The gate behind every enrichment + dreaming surface.
+// EnrichmentAvailable returns true iff every Required slot is configured. The
+// gate behind every enrichment + dreaming surface.
 func (r *Registry) EnrichmentAvailable() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.embedding != nil && r.fact != nil && r.entity != nil
+	for _, d := range Slots {
+		if !d.Required {
+			continue
+		}
+		if d.Kind == KindEmbedding {
+			if r.embedding == nil {
+				return false
+			}
+		} else if r.llm[d.Name] == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // load is called from NewRegistry only. It writes the constructed
@@ -277,22 +365,29 @@ func (r *Registry) EnrichmentAvailable() bool {
 // buildProviders so a mid-build failure does not leave r partially
 // mutated.
 func (r *Registry) load(config RegistryConfig) error {
-	emb, fact, entity, err := r.buildProviders(config)
+	built, err := r.buildProviders(config)
 	if err != nil {
 		return err
 	}
-	r.embedding = emb
-	r.fact = fact
-	r.entity = entity
+	r.embedding = built.embedding
+	r.llm = built.llm
 	r.config = config
 	return nil
 }
 
-// buildProviders constructs each configured slot, wraps it via r's wrap
-// methods (so closures capture the live receiver), and returns the staged
-// values without writing to r. Callers install them atomically under
-// r.mu. A nil return for any slot means that slot was unconfigured.
-func (r *Registry) buildProviders(config RegistryConfig) (EmbeddingProvider, LLMProvider, LLMProvider, error) {
+// builtProviders stages the providers constructed from a RegistryConfig so
+// callers install them atomically under r.mu. A nil field means that slot
+// was unconfigured.
+type builtProviders struct {
+	embedding EmbeddingProvider
+	llm       map[string]LLMProvider // LLM-kind slots keyed by slot name
+}
+
+// buildProviders constructs each configured slot by iterating the canonical
+// Slots list, wraps it via r's wrap methods (so closures capture the live
+// receiver), and returns the staged values without writing to r. Callers
+// install them atomically under r.mu.
+func (r *Registry) buildProviders(config RegistryConfig) (builtProviders, error) {
 	cbConfig := config.CircuitBreaker
 	if cbConfig.MaxFailures == 0 {
 		cbConfig = DefaultCircuitBreakerConfig()
@@ -307,34 +402,27 @@ func (r *Registry) buildProviders(config RegistryConfig) (EmbeddingProvider, LLM
 		return c
 	}
 
-	var emb EmbeddingProvider
-	if config.Embedding.Type != "" {
-		ep, err := createEmbeddingProvider(config.Embedding)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("embedding slot: %w", err)
+	built := builtProviders{llm: make(map[string]LLMProvider)}
+	for _, def := range Slots {
+		slot := config.slotConfig(def.Name)
+		if slot.Type == "" {
+			continue // unconfigured
 		}
-		emb = r.wrapEmbedding(NewCircuitBreakerEmbedding(ep, breakerCfgFor(config.Embedding.Type, "embed")))
-	}
-
-	var fact LLMProvider
-	if config.Fact.Type != "" {
-		lp, err := createLLMProvider(config.Fact)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("fact slot: %w", err)
+		if def.Kind == KindEmbedding {
+			ep, err := createEmbeddingProvider(slot)
+			if err != nil {
+				return builtProviders{}, fmt.Errorf("%s slot: %w", def.Name, err)
+			}
+			built.embedding = r.wrapEmbedding(NewCircuitBreakerEmbedding(ep, breakerCfgFor(slot.Type, "embed")))
+			continue
 		}
-		fact = r.wrapLLM(NewCircuitBreakerLLM(lp, breakerCfgFor(config.Fact.Type, "fact")))
-	}
-
-	var entity LLMProvider
-	if config.Entity.Type != "" {
-		lp, err := createLLMProvider(config.Entity)
+		lp, err := createLLMProvider(slot)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("entity slot: %w", err)
+			return builtProviders{}, fmt.Errorf("%s slot: %w", def.Name, err)
 		}
-		entity = r.wrapLLM(NewCircuitBreakerLLM(lp, breakerCfgFor(config.Entity.Type, "entity")))
+		built.llm[def.Name] = r.wrapLLM(NewCircuitBreakerLLM(lp, breakerCfgFor(slot.Type, def.Name)))
 	}
-
-	return emb, fact, entity, nil
+	return built, nil
 }
 
 // wrapLLM wraps a circuit-breaker-protected LLM provider in the

@@ -560,19 +560,24 @@ func main() {
 	oauthAdminStore := adminstore.NewOAuthAdminStore(oauthRepo)
 	enrichmentAdminStore := adminstore.NewEnrichmentAdminStore(enrichmentQueueRepo, settingsRepo, settingsSvc, db)
 
-	// Provider accessors for enrichment test prompt.
-	factProvider := func() provider.LLMProvider {
-		if registry == nil {
-			return nil
+	// Live provider accessors for the enrichment worker and test-prompt
+	// surface. Each reads the registry on every call so an admin provider
+	// edit (registry.Reload) is picked up without restart. The query-augment
+	// and ingestion-decision accessors return their dedicated slot when
+	// configured, else fall back to the fact provider, so the worker phases
+	// get a working provider either way.
+	providerFactory := func(get func(*provider.Registry) provider.LLMProvider) func() provider.LLMProvider {
+		return func() provider.LLMProvider {
+			if registry == nil {
+				return nil
+			}
+			return get(registry)
 		}
-		return registry.GetFact()
 	}
-	entityProvider := func() provider.LLMProvider {
-		if registry == nil {
-			return nil
-		}
-		return registry.GetEntity()
-	}
+	factProvider := providerFactory((*provider.Registry).GetFact)
+	entityProvider := providerFactory((*provider.Registry).GetEntity)
+	queryAugmentProvider := providerFactory((*provider.Registry).GetQueryAugment)
+	ingestionProvider := providerFactory((*provider.Registry).GetIngestionDecision)
 
 	// Ingestion-decision deduplicator. Wires the existing dedup vector
 	// search into the enrichment worker so context-aware deduplication runs
@@ -592,7 +597,7 @@ func main() {
 		memoryRepo, memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
 		entityRepo, relationshipRepo, lineageRepo, vectorStore,
 		factProvider, entityProvider, embedProvider,
-		factProvider, ingestionDedup, settingsSvc, cascadeResolver,
+		ingestionProvider, queryAugmentProvider, ingestionDedup, settingsSvc, cascadeResolver,
 		eventBus,
 	).WithMetrics(promMetrics)
 	workerPool.Start()

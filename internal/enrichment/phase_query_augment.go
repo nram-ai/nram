@@ -348,7 +348,14 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 		return nil, model.QueryAugmentSkipContentEmpty
 	}
 
-	llmFactory := wp.factProvider
+	// Prefer the dedicated query-augment provider; fall back to the fact
+	// provider when no dedicated slot is wired (the production factory already
+	// resolves this via Registry.GetQueryAugment, but tests and bare setups may
+	// pass only factProvider).
+	llmFactory := wp.queryAugmentProvider
+	if llmFactory == nil {
+		llmFactory = wp.factProvider
+	}
 	if llmFactory == nil {
 		slog.Warn("enrichment: query_augment provider unavailable", "job", job.ID, "memory", mem.ID)
 		return nil, model.QueryAugmentSkipProviderUnavailable

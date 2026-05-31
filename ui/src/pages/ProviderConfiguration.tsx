@@ -26,18 +26,6 @@ const QUERY_AUGMENT_MODEL_SETTING_KEY = "enrichment.query_augment.model";
 // Constants
 // ---------------------------------------------------------------------------
 
-const SLOT_LABELS: Record<string, string> = {
-  embedding: "Embedding",
-  fact: "Fact Extraction",
-  entity: "Entity Extraction",
-};
-
-const SLOT_DESCRIPTIONS: Record<string, string> = {
-  embedding: "Generates vector embeddings for semantic search",
-  fact: "Extracts structured facts from stored memories",
-  entity: "Identifies entities and relationships in content",
-};
-
 const PROVIDER_TYPES = [
   "openai",
   "ollama",
@@ -819,8 +807,8 @@ function ProviderSlotCard({
   const updateMutation = useUpdateProviderSlot();
   const testMutation = useTestProviderSlot();
 
-  const label = SLOT_LABELS[slot.slot] || slot.slot;
-  const description = SLOT_DESCRIPTIONS[slot.slot] || "";
+  const label = slot.label || slot.slot;
+  const description = slot.description || "";
   const isEmbedding = slot.slot === "embedding";
   const badgeCls =
     PROVIDER_BADGE_COLORS[slot.type] || PROVIDER_BADGE_COLORS.custom;
@@ -1177,29 +1165,9 @@ function ProviderConfiguration() {
   const isLoading = slotsQuery.isLoading;
   const isError = slotsQuery.isError;
 
-  // Build slots array, defaulting to unconfigured if API returns nothing
-  const defaultSlots: ProviderSlot[] = [
-    "embedding",
-    "fact",
-    "entity",
-  ].map((s) => ({
-    slot: s,
-    configured: false,
-    type: "",
-    url: "",
-    model: "",
-  }));
-
-  const slots: ProviderSlot[] = (() => {
-    if (!slotsQuery.data) return defaultSlots;
-    const data = slotsQuery.data;
-    if (Array.isArray(data)) {
-      // Merge with defaults so all 3 slots always appear
-      const slotMap = new Map(data.map((s: ProviderSlot) => [s.slot, s]));
-      return defaultSlots.map((d) => slotMap.get(d.slot) || d);
-    }
-    return defaultSlots;
-  })();
+  // The backend returns the ordered canonical slot list with labels and live
+  // status; render it directly (empty until the query resolves).
+  const slots: ProviderSlot[] = slotsQuery.data ?? [];
 
   return (
     <div className="relative">

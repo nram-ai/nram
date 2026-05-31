@@ -150,7 +150,7 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 	// guard slipped. The response payloads are real-shaped JSON so that, if
 	// the guard breaks, the worker proceeds to write extracted_fact
 	// children rather than failing earlier on a parse error.
-	var factCalls, entityCalls, embedCalls atomic.Int64
+	var factCalls, entityCalls, embedCalls, augmentCalls atomic.Int64
 
 	factLLM := &recursionGuardLLM{
 		name:    "guard-fact-mock",
@@ -161,6 +161,15 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 		name:    "guard-entity-mock",
 		counter: &entityCalls,
 		body:    `{"entities":[{"name":"Alice","kind":"person"}],"relationships":[]}`,
+	}
+	// Query augmentation runs on dream memories by design (only fact/entity
+	// extraction skip them), so the worker calls this provider. It has its own
+	// counter and returns a valid query array, keeping augment calls off the
+	// fact counter that the recursion-guard assertions watch.
+	augmentLLM := &recursionGuardLLM{
+		name:    "guard-augment-mock",
+		counter: &augmentCalls,
+		body:    `["who is Alice","Alice employer"]`,
 	}
 	embed := &recursionGuardEmbed{
 		name:    "guard-embed-mock",
@@ -173,10 +182,11 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 	// VectorStore double surface minimal.
 	vectorStore := &recordingVectorStore{}
 
-	// Settings: defaults are fine; the worker's ingestion-decision phase
-	// is off by default at the global key. Augmentation defaults to off
-	// too; the test still verifies that fact/entity extraction is skipped
-	// (the contract).
+	// Settings: NoopSettingsService resolves the built-in defaults, under
+	// which query augmentation is on and ingestion decision is on (but the
+	// ingestion phase early-returns on dream/enriched memories). Augmentation
+	// runs on the dream memory via its own provider; the contract this test
+	// verifies is that fact/entity extraction and derivative rows are skipped.
 	settingsSvc := service.NewNoopSettingsService()
 
 	pool := enrichment.NewWorkerPool(
@@ -187,6 +197,7 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 		func() provider.LLMProvider { return entityLLM },
 		func() provider.EmbeddingProvider { return embed },
 		func() provider.LLMProvider { return nil }, // ingestion-decision provider unused
+		func() provider.LLMProvider { return augmentLLM },
 		nil, // deduplicator unused when ingestion-decision is off
 		settingsSvc,
 		nil, // cascade resolver — nil means "use settings only"
@@ -264,6 +275,15 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 	}
 	if reloaded.EmbeddingDim == nil && !upsertSeen {
 		t.Errorf("dream memory did not receive an embedding (embedding_dim=nil and no vector upsert seen); the embedding path must still run for dream memories. embed_calls=%d", embedCalls.Load())
+	}
+
+	// 7. Query augmentation MUST still run on dream memories (commit 9a6c4a5,
+	//    worker.go: "only query augmentation and embedding run"). It uses its
+	//    own provider, so it never trips the fact/entity counters above. This
+	//    pins augment-on-dreams as intended behavior, not an accident of the
+	//    skip predicates.
+	if augmentCalls.Load() == 0 {
+		t.Errorf("query augmentation did not run on the dream memory; it must run on dreams (only fact/entity extraction skip them)")
 	}
 }
 

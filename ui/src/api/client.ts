@@ -644,6 +644,11 @@ export interface NamespaceNode {
 
 export interface ProviderSlot {
   slot: string;
+  /** Human label and help text, served from the backend canonical slot list. */
+  label: string;
+  description: string;
+  /** True for slots required for enrichment (embedding/fact/entity). */
+  required: boolean;
   configured: boolean;
   type: string;
   url: string;
@@ -702,11 +707,9 @@ export interface UpdateProviderSlotResult {
   entity_reembed_queued?: boolean;
 }
 
-export interface ProviderConfigResponse {
-  embedding: Omit<ProviderSlot, "slot">;
-  fact: Omit<ProviderSlot, "slot">;
-  entity: Omit<ProviderSlot, "slot">;
-}
+// The backend returns the ordered list of slots (one entry per canonical
+// provider slot), each carrying its own identity and metadata.
+export type ProviderConfigResponse = ProviderSlot[];
 
 export interface TestProviderResult {
   success: boolean;
@@ -1476,14 +1479,10 @@ export const adminAPI = {
   listProjects: () => request<{ data: Project[] }>("GET", "/me/projects").then(r => r.data),
   createProject: (data: AdminCreateProjectRequest) =>
     request<Project>("POST", "/me/projects", data),
-  // Provider slots — backend returns { embedding: {...}, fact: {...}, entity: {...} }
+  // Provider slots — backend returns the ordered canonical slot list, each
+  // entry carrying its own slot/label/description/required plus live status.
   getProviderSlots: () =>
-    request<ProviderConfigResponse>("GET", "/admin/providers").then((r) => {
-      return (["embedding", "fact", "entity"] as const).map((slot) => ({
-        slot,
-        ...(r[slot] ?? {}),
-      })) as ProviderSlot[];
-    }),
+    request<ProviderConfigResponse>("GET", "/admin/providers"),
   updateProviderSlot: (slot: string, data: UpdateProviderSlotRequest) =>
     request<UpdateProviderSlotResult | { status: string }>("PUT", `/admin/providers/${slot}`, data),
   testProviderSlot: (slot: string, config: UpdateProviderSlotRequest) =>

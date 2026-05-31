@@ -398,7 +398,12 @@ func (s *DreamAdminStore) CycleInNamespacePrefix(ctx context.Context, prefix str
 func (s *DreamAdminStore) isEnabled(ctx context.Context) bool {
 	setting, err := s.settingsRepo.Get(ctx, service.SettingDreamingEnabled, "global")
 	if err != nil {
-		return false
+		// No global override row exists: fall through to the built-in default
+		// so the status display matches what the scheduler's cascade resolver
+		// (ResolveBool at global scope) actually sees. Otherwise a true default
+		// would run dreaming while this banner reported it disabled.
+		def, _ := service.GetDefault(service.SettingDreamingEnabled)
+		return def == "true"
 	}
 	var val string
 	if err := json.Unmarshal(setting.Value, &val); err != nil {

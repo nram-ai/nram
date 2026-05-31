@@ -13,7 +13,7 @@ import (
 // --- mock ProviderAdminStore ---
 
 type mockProviderAdminStore struct {
-	config       *ProviderConfigResponse
+	config       ProviderConfigResponse
 	configErr    error
 	testResult   *ProviderTestResult
 	testErr      error
@@ -30,8 +30,18 @@ type mockProviderAdminStore struct {
 	pulledModel string
 }
 
-func (m *mockProviderAdminStore) GetProviderConfig(_ context.Context) (*ProviderConfigResponse, error) {
+func (m *mockProviderAdminStore) GetProviderConfig(_ context.Context) (ProviderConfigResponse, error) {
 	return m.config, m.configErr
+}
+
+// findSlot returns the status for a slot name from a ProviderConfigResponse.
+func findSlot(resp ProviderConfigResponse, slot string) (ProviderSlotStatus, bool) {
+	for _, s := range resp {
+		if s.Slot == slot {
+			return s, true
+		}
+	}
+	return ProviderSlotStatus{}, false
 }
 
 func (m *mockProviderAdminStore) TestProvider(_ context.Context, req ProviderTestRequest) (*ProviderTestResult, error) {
@@ -60,8 +70,9 @@ func TestAdminProvidersGetConfig(t *testing.T) {
 	dims := 1536
 	latency := int64(42)
 	store := &mockProviderAdminStore{
-		config: &ProviderConfigResponse{
-			Embedding: ProviderSlotStatus{
+		config: ProviderConfigResponse{
+			{
+				Slot:       "embedding",
 				Configured: true,
 				Type:       "openai",
 				URL:        "https://api.openai.com",
@@ -70,11 +81,13 @@ func TestAdminProvidersGetConfig(t *testing.T) {
 				Status:     "ok",
 				LatencyMs:  &latency,
 			},
-			Fact: ProviderSlotStatus{
+			{
+				Slot:       "fact",
 				Configured: false,
 				Status:     "not_configured",
 			},
-			Entity: ProviderSlotStatus{
+			{
+				Slot:       "entity",
 				Configured: true,
 				Type:       "ollama",
 				URL:        "http://localhost:11434",
@@ -98,20 +111,21 @@ func TestAdminProvidersGetConfig(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if !resp.Embedding.Configured {
+	emb, ok := findSlot(resp, "embedding")
+	if !ok || !emb.Configured {
 		t.Error("expected embedding configured")
 	}
-	if resp.Embedding.Type != "openai" {
-		t.Errorf("expected type openai, got %q", resp.Embedding.Type)
+	if emb.Type != "openai" {
+		t.Errorf("expected type openai, got %q", emb.Type)
 	}
-	if resp.Embedding.Dimensions == nil || *resp.Embedding.Dimensions != 1536 {
+	if emb.Dimensions == nil || *emb.Dimensions != 1536 {
 		t.Errorf("expected dimensions 1536")
 	}
-	if resp.Fact.Configured {
+	if fact, _ := findSlot(resp, "fact"); fact.Configured {
 		t.Error("expected fact not configured")
 	}
-	if resp.Entity.Type != "ollama" {
-		t.Errorf("expected entity type ollama, got %q", resp.Entity.Type)
+	if ent, _ := findSlot(resp, "entity"); ent.Type != "ollama" {
+		t.Errorf("expected entity type ollama, got %q", ent.Type)
 	}
 }
 

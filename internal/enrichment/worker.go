@@ -332,11 +332,12 @@ type WorkerPool struct {
 	relationships     RelationshipCreator
 	lineage           LineageCreator
 	vectorStore       VectorWriter
-	factProvider      func() provider.LLMProvider
-	entityProvider    func() provider.LLMProvider
-	embedProvider     func() provider.EmbeddingProvider
-	ingestionProvider func() provider.LLMProvider
-	deduplicator      *Deduplicator
+	factProvider         func() provider.LLMProvider
+	entityProvider       func() provider.LLMProvider
+	embedProvider        func() provider.EmbeddingProvider
+	ingestionProvider    func() provider.LLMProvider
+	queryAugmentProvider func() provider.LLMProvider
+	deduplicator         *Deduplicator
 	settings          *service.SettingsService
 	cascade           *service.CascadeResolver
 	metrics           *metrics.Metrics
@@ -381,6 +382,7 @@ func NewWorkerPool(
 	entityProvider func() provider.LLMProvider,
 	embedProvider func() provider.EmbeddingProvider,
 	ingestionProvider func() provider.LLMProvider,
+	queryAugmentProvider func() provider.LLMProvider,
 	deduplicator *Deduplicator,
 	settings *service.SettingsService,
 	cascade *service.CascadeResolver,
@@ -403,11 +405,12 @@ func NewWorkerPool(
 		relationships:     relationships,
 		lineage:           lineage,
 		vectorStore:       vectorStore,
-		factProvider:      factProvider,
-		entityProvider:    entityProvider,
-		embedProvider:     embedProvider,
-		ingestionProvider: ingestionProvider,
-		deduplicator:      deduplicator,
+		factProvider:         factProvider,
+		entityProvider:       entityProvider,
+		embedProvider:        embedProvider,
+		ingestionProvider:    ingestionProvider,
+		queryAugmentProvider: queryAugmentProvider,
+		deduplicator:         deduplicator,
 		settings:          settings,
 		cascade:           cascade,
 		bus:               bus,
@@ -824,6 +827,13 @@ func (wp *WorkerPool) recordEnrichmentOutcome(p *pendingJob, err error) {
 // phase fails (fail-soft inside runQueryAugment). Lives here so processJob and
 // processBatch share one call site.
 func (wp *WorkerPool) applyQueryAugment(ctx context.Context, p *pendingJob) {
+	// A DELETE decision discards the memory, so skip augmentation rather than
+	// spend an LLM call augmenting a row that is about to be soft-deleted. The
+	// embed and finalize paths already short-circuit on the same signal.
+	if p.shortCircuitDelete() {
+		p.queryAugmentSkipReason = model.QueryAugmentSkipDeleted
+		return
+	}
 	res, skip := wp.runQueryAugment(ctx, p.job, p.mem)
 	if res == nil {
 		p.queryAugmentSkipReason = skip

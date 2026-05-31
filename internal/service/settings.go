@@ -15,14 +15,11 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
-// Provider slot keys. The settings table stores each LLM/embedding provider
-// configuration as a JSON blob under one of these keys; the .type/.url/.key/
-// .model constants below address sub-fields surfaced to the admin schema.
-const (
-	SettingProviderEmbedding = "provider.embedding"
-	SettingProviderFact      = "provider.fact"
-	SettingProviderEntity    = "provider.entity"
-)
+// Provider slot config is stored in the settings table as a JSON blob under
+// the key provider.<slot> for each slot in provider.Slots (the canonical
+// list); see provider.SlotDef.SettingKey. The .type/.url/.key/.model
+// sub-field constants below address individual fields surfaced to the admin
+// schema.
 
 // Well-known setting keys.
 const (
@@ -577,7 +574,7 @@ var settingDefaults = map[string]string{
 	SettingRankWeightConf:                   "0.05",
 	SettingRankWeightOrigin:                 "0.00",
 	SettingRankWeightMmr:                    "0.75",
-	SettingRecallFusionEnabled:              "false",
+	SettingRecallFusionEnabled:              "true",
 	SettingRecallFusionK:                    "60",
 	SettingRecallFusionVecW:                 "0.60",
 	SettingRecallFusionLexW:                 "0.40",
@@ -585,7 +582,7 @@ var settingDefaults = map[string]string{
 	SettingRecallNamespaceQuotaProjectMin:   "0",
 	SettingTokenRetention:                   "365",
 	SettingTokenCostRates:                   "[]",
-	SettingDreamingEnabled:                  "false",
+	SettingDreamingEnabled:                  "true",
 	SettingDreamMaxTokensPerCycle:           "1024000",
 	SettingDreamMaxTokensPerCall:            "2048",
 	SettingDreamCooldown:                    "300",
@@ -719,8 +716,8 @@ Return ONLY valid JSON. Do not include markdown fences or explanation.
 Text:
 %s`,
 
-	SettingIngestionDecisionEnabled:   "false",
-	SettingIngestionDecisionShadow:    "true",
+	SettingIngestionDecisionEnabled:   "true",
+	SettingIngestionDecisionShadow:    "false",
 	SettingIngestionDecisionThreshold: "0.92",
 	SettingIngestionDecisionTopK:      "5",
 	SettingIngestionDecisionModel:     "",
@@ -758,7 +755,7 @@ or
 or
 {"operation": "NONE", "target_id": null, "rationale": "..."}`,
 
-	SettingQueryAugmentEnabled:       "false",
+	SettingQueryAugmentEnabled:       "true",
 	SettingQueryAugmentCount:         "4",
 	SettingQueryAugmentModel:         "",
 	SettingQueryAugmentMaxInputChars: "0",
@@ -814,9 +811,9 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingHNSWEfSearch:         "50",
 	SettingHNSWMaxLoadedIndexes: "64",
 
-	SettingReconsolidationMode:          ReconsolidationModeShadow,
+	SettingReconsolidationMode:          ReconsolidationModePersist,
 	SettingReconsolidationFactor:        "0.02",
-	SettingConfidenceDecayEnabled:       "false",
+	SettingConfidenceDecayEnabled:       "true",
 	SettingConfidenceDecayThresholdDays: "14",
 	SettingConfidenceDecayRatePerCycle:  "0.02",
 	SettingConfidenceFloor:              "0.05",

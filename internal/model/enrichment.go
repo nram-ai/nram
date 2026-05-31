@@ -37,6 +37,10 @@ const (
 	QueryAugmentSkipProviderUnavailable = "provider_unavailable"
 	QueryAugmentSkipLLMError            = "llm_error"
 	QueryAugmentSkipParseError          = "parse_error"
+	// QueryAugmentSkipDeleted marks a job whose ingestion-decision phase chose
+	// DELETE: the memory is being discarded, so augmenting it would burn an LLM
+	// call on a row that is about to be soft-deleted.
+	QueryAugmentSkipDeleted = "deleted"
 )
 
 // EnrichmentJob.Status values. Mirrors the schema's set; using these

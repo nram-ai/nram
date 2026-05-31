@@ -157,8 +157,10 @@ func TestRecall_FusionConfigLiveReload(t *testing.T) {
 	settings := NewSettingsService(repo)
 	svc.SetSettings(settings)
 
-	// Phase 1: fusion off (the registered default). fused_combined with a
-	// non-zero threshold must be rejected.
+	// Phase 1: fusion off (set explicitly — the registered default is now on).
+	// fused_combined with a non-zero threshold must be rejected.
+	repo.put(SettingRecallFusionEnabled, "global", "false")
+	settings.InvalidateAllCache()
 	_, err := svc.Recall(context.Background(), &RecallRequest{
 		ProjectID:               projectID,
 		Query:                   "find something",

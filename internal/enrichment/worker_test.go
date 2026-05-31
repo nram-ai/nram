@@ -720,6 +720,14 @@ func newTestHarness(
 	entityFn := provider.WrapLLMForTest(constLLM(entityLLM), h.tokens)
 	embedFn := provider.WrapEmbeddingForTest(constEmbed(embedProv), h.tokens)
 
+	// Dedicated query-augmentation provider. Query augmentation defaults on,
+	// so the worker calls it for every non-empty memory (including dream and
+	// already-enriched ones — only fact/entity extraction skip those). Giving
+	// it its own provider keeps augment calls off the fact counter so the
+	// skip-extraction tests measure fact extraction alone. Returns a valid
+	// JSON query array so the phase succeeds rather than failing soft.
+	augmentFn := provider.WrapLLMForTest(constLLM(constStringLLM("test-augment", `["query one","query two"]`)), h.tokens)
+
 	// Use an in-memory settings repo so SettingsService.Set actually
 	// persists overrides. Settings default to production values; tests that
 	// rely on fixed-vector embedders (which would otherwise trip the
@@ -734,7 +742,7 @@ func newTestHarness(
 		h.reader, h.updater, h.creator, nil, h.queue,
 		h.entities, h.rels, h.lineage, h.vectors,
 		factFn, entityFn, embedFn,
-		nil, nil, settingsSvc, nil, nil,
+		nil, augmentFn, nil, settingsSvc, nil, nil,
 	)
 	return h
 }
@@ -1089,9 +1097,11 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 		}
 	}
 
-	// Token usage: fact_extraction + entity_extraction + embedding = 3 records.
-	if len(h.tokens.records) != 3 {
-		t.Errorf("expected 3 token usage records, got %d", len(h.tokens.records))
+	// Token usage: fact_extraction + entity_extraction + query_augment +
+	// embedding = 4 records (query augmentation defaults on and runs on the
+	// parent before embedding).
+	if len(h.tokens.records) != 4 {
+		t.Errorf("expected 4 token usage records, got %d", len(h.tokens.records))
 	}
 }
 
@@ -1971,7 +1981,7 @@ func TestMergeTagsIntoParent_ConcurrentMergesAreSerialized(t *testing.T) {
 		provider.WrapLLMForTest(constLLM(nil), &mockTokenRecorder{}),
 		provider.WrapLLMForTest(constLLM(nil), &mockTokenRecorder{}),
 		provider.WrapEmbeddingForTest(constEmbed(nil), &mockTokenRecorder{}),
-		nil, nil, service.NewNoopSettingsService(), nil, nil,
+		nil, nil, nil, service.NewNoopSettingsService(), nil, nil,
 	)
 
 	const goroutines = 8

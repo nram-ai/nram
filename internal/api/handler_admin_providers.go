@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/nram-ai/nram/internal/provider"
 )
 
 // ProviderAdminStore abstracts storage and provider management operations
 // for the provider admin API.
 type ProviderAdminStore interface {
-	GetProviderConfig(ctx context.Context) (*ProviderConfigResponse, error)
+	GetProviderConfig(ctx context.Context) (ProviderConfigResponse, error)
 	TestProvider(ctx context.Context, req ProviderTestRequest) (*ProviderTestResult, error)
 	UpdateProviderSlot(ctx context.Context, slot string, cfg ProviderSlotConfig, opts UpdateProviderSlotOpts) (*UpdateProviderSlotResult, error)
 	ListOllamaModels(ctx context.Context, ollamaURL string) ([]OllamaModel, error)
@@ -45,13 +47,11 @@ type ProviderAdminConfig struct {
 	Store ProviderAdminStore
 }
 
-// ProviderConfigResponse describes the current configuration of all three
-// provider slots (embedding, fact extraction, entity extraction).
-type ProviderConfigResponse struct {
-	Embedding ProviderSlotStatus `json:"embedding"`
-	Fact      ProviderSlotStatus `json:"fact"`
-	Entity    ProviderSlotStatus `json:"entity"`
-}
+// ProviderConfigResponse is the ordered list of every provider slot's status,
+// one entry per provider.Slots in canonical order. Each entry carries its
+// identity and metadata (slot/label/description/required) so the UI renders
+// purely from this response without re-listing the slot set.
+type ProviderConfigResponse []ProviderSlotStatus
 
 // ProviderSlotStatus describes the current state of a single provider
 // slot. Dimensions is the embedder's probed output dim
@@ -70,6 +70,13 @@ type ProviderConfigResponse struct {
 // num_ctx is the binding constraint). When present, the UI surfaces it
 // as a muted "(model max N)" suffix so users see the headroom story.
 type ProviderSlotStatus struct {
+	// Identity + metadata, stamped from the canonical provider.SlotDef so the
+	// UI renders order, labels, and help text without re-listing the slots.
+	Slot        string `json:"slot"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+
 	Configured       bool   `json:"configured"`
 	Type             string `json:"type,omitempty"`
 	URL              string `json:"url,omitempty"`
@@ -126,18 +133,17 @@ func NewAdminProvidersHandler(cfg ProviderAdminConfig) http.HandlerFunc {
 			handleProviderConfig(w, r, cfg)
 		case "test":
 			handleProviderTest(w, r, cfg)
-		case "embedding":
-			handleProviderSlotUpdate(w, r, cfg, "embedding")
-		case "fact":
-			handleProviderSlotUpdate(w, r, cfg, "fact")
-		case "entity":
-			handleProviderSlotUpdate(w, r, cfg, "entity")
 		case "ollama/models":
 			handleOllamaModels(w, r, cfg)
 		case "ollama/pull":
 			handleOllamaPull(w, r, cfg)
 		default:
-			WriteError(w, ErrBadRequest("unknown provider sub-path"))
+			// Any canonical slot name is a slot-update path.
+			if provider.IsValidSlot(sub) {
+				handleProviderSlotUpdate(w, r, cfg, sub)
+			} else {
+				WriteError(w, ErrBadRequest("unknown provider sub-path"))
+			}
 		}
 	}
 }
@@ -184,8 +190,8 @@ func handleProviderTest(w http.ResponseWriter, r *http.Request, cfg ProviderAdmi
 		return
 	}
 
-	if req.Slot != "embedding" && req.Slot != "fact" && req.Slot != "entity" {
-		WriteError(w, ErrBadRequest("slot must be one of: embedding, fact, entity"))
+	if !provider.IsValidSlot(req.Slot) {
+		WriteError(w, ErrBadRequest("unknown slot: "+req.Slot))
 		return
 	}
 

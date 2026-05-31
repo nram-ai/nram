@@ -125,11 +125,15 @@ func newIngestionHarness(
 	ingestionFn := provider.WrapLLMForTest(constLLM(ingestionLLM), h.tokens)
 	embedFn := provider.WrapEmbeddingForTest(constEmbed(embedProv), h.tokens)
 
+	// No dedicated query-augment provider: the phase falls back to the fact
+	// provider, matching production's GetQueryAugment fallback and letting the
+	// augment-focused tests script augmentation through the fact stub.
 	h.pool = NewWorkerPool(
 		WorkerConfig{Workers: 1, PollInterval: 10 * time.Millisecond},
 		h.reader, h.updater, h.creator, h.deleter, h.queue,
 		h.entities, h.rels, h.lineage, h.vectors,
 		factFn, entityFn, embedFn, ingestionFn,
+		nil,
 		dedup,
 		h.settings,
 		nil,
@@ -187,8 +191,9 @@ func minimalEntityLLM() *mockLLMProvider {
 // ---------------------------------------------------------------------------
 
 func TestIngestion_Disabled_PhaseSkipped(t *testing.T) {
-	// No overrides → enabled defaults to "false".
-	h := newIngestionHarness(nil, nil,
+	// Ingestion decision now defaults on, so disable it explicitly to exercise
+	// the phase-skipped path this test pins.
+	h := newIngestionHarness(map[string]string{service.SettingIngestionDecisionEnabled: "false"}, nil,
 		minimalFactLLM(),
 		minimalEntityLLM(),
 		constStringLLM("ingest", `{"operation":"ADD","target_id":null,"rationale":""}`),
