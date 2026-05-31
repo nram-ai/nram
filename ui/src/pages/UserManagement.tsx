@@ -731,12 +731,6 @@ function UserDetailPanel({
     }
   }, [user, initialized]);
 
-  useEffect(() => {
-    setInitialized(false);
-    setConfirmDelete(false);
-    setSaveSuccess(false);
-  }, [userId]);
-
   const isLastAdmin = useMemo(() => {
     const adminCount = userList.filter(
       (u) => u.role === "administrator" && u.disabled_at == null,
@@ -1391,7 +1385,11 @@ function UserManagement() {
 
           {/* Detail Panel */}
           {detailUserId && (
+            // key remounts the panel per user so its edit form re-initializes
+            // from a fresh instance; without it, re-opening a cached user races
+            // the init effect and renders an empty body.
             <UserDetailPanel
+              key={detailUserId}
               userId={detailUserId}
               userList={users}
               onClose={() => setDetailUserId(null)}

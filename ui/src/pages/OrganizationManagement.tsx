@@ -248,12 +248,6 @@ function OrgDetailPanel({
     }
   }, [org, initialized]);
 
-  useEffect(() => {
-    setInitialized(false);
-    setConfirmDelete(false);
-    setSaveSuccess(false);
-  }, [orgId]);
-
   function handleSave() {
     if (!org) return;
     const data: UpdateOrgRequest = { name: editName };
@@ -672,7 +666,11 @@ function OrganizationManagement() {
 
           {/* Detail Panel */}
           {detailOrgId && (
+            // key remounts the panel per org so its edit form re-initializes
+            // from a fresh instance; without it, re-opening a cached org races
+            // the init effect and renders an empty body.
             <OrgDetailPanel
+              key={detailOrgId}
               orgId={detailOrgId}
               onClose={() => setDetailOrgId(null)}
               onDeleted={() => setDetailOrgId(null)}

@@ -469,13 +469,6 @@ function ProjectDetailPanel({
     }
   }, [project, initialized]);
 
-  // Reset initialized when projectId changes
-  useEffect(() => {
-    setInitialized(false);
-    setConfirmDelete(false);
-    setSaveSuccess(false);
-  }, [projectId]);
-
   // Effective merged weights = system baseline with any project override
   // applied. Null systemWeights means the schema endpoint is missing one
   // or more ranking.weight.* keys; the panel surfaces this as a banner and
@@ -1226,7 +1219,11 @@ function ProjectManagement() {
 
       {/* Detail Panel — writable users get full edit/delete, readonly gets read-only view */}
       {detailProjectId && auth.canWrite && (
+        // key remounts the panel per project so its edit form re-initializes
+        // from a fresh instance; without it, re-opening a cached project races
+        // the init effect and renders an empty body.
         <ProjectDetailPanel
+          key={detailProjectId}
           projectId={detailProjectId}
           onClose={() => setDetailProjectId(null)}
           onDeleted={() => setDetailProjectId(null)}
@@ -1237,7 +1234,9 @@ function ProjectManagement() {
       {detailProjectId && !auth.canWrite && (() => {
         const proj = projects.find((p) => p.id === detailProjectId);
         return proj ? (
+          // key remounts per project, matching the editable panel above.
           <ProjectReadOnlyPanel
+            key={detailProjectId}
             project={proj}
             canWrite={false}
             onClose={() => setDetailProjectId(null)}
