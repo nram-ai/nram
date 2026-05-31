@@ -179,10 +179,13 @@ func (s *EnrichService) BackfillExtractedFactParaphrase(ctx context.Context, req
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
-		if err := s.enrichmentQueue.Enqueue(ctx, job); err != nil {
+		inserted, err := s.enrichmentQueue.Enqueue(ctx, job)
+		if err != nil {
 			return nil, fmt.Errorf("enqueue paraphrase backfill for memory %s: %w", mem.ID, err)
 		}
-		resp.Enqueued++
+		if inserted {
+			resp.Enqueued++
+		}
 	}
 	if skipped > 0 {
 		slog.Warn("paraphrase backfill: completed with skipped candidates",
@@ -278,10 +281,13 @@ func (s *EnrichService) BackfillAugmentation(ctx context.Context, req *BackfillA
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
-		if err := s.enrichmentQueue.Enqueue(ctx, job); err != nil {
+		inserted, err := s.enrichmentQueue.Enqueue(ctx, job)
+		if err != nil {
 			return nil, fmt.Errorf("enqueue augmentation backfill for memory %s: %w", mem.ID, err)
 		}
-		resp.Enqueued++
+		if inserted {
+			resp.Enqueued++
+		}
 	}
 	if skipped > 0 {
 		slog.Warn("backfill: completed with skipped candidates",
@@ -391,10 +397,13 @@ func (s *EnrichService) Enrich(ctx context.Context, req *EnrichRequest) (*Enrich
 			UpdatedAt:   now,
 		}
 
-		if err := s.enrichmentQueue.Enqueue(ctx, job); err != nil {
+		inserted, err := s.enrichmentQueue.Enqueue(ctx, job)
+		if err != nil {
 			return nil, fmt.Errorf("failed to enqueue enrichment job for memory %s: %w", mem.ID, err)
 		}
-		queued++
+		if inserted {
+			queued++
+		}
 	}
 
 	latency := time.Since(start).Milliseconds()

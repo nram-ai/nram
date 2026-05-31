@@ -128,9 +128,9 @@ type mockEnrichmentQueueRepo struct {
 	jobs []*model.EnrichmentJob
 }
 
-func (m *mockEnrichmentQueueRepo) Enqueue(_ context.Context, item *model.EnrichmentJob) error {
+func (m *mockEnrichmentQueueRepo) Enqueue(_ context.Context, item *model.EnrichmentJob) (bool, error) {
 	m.jobs = append(m.jobs, item)
-	return nil
+	return true, nil
 }
 
 type mockVectorStore struct {

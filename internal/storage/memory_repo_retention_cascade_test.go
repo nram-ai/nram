@@ -62,7 +62,7 @@ func TestMemoryRepo_HardDeleteSoftDeletedBefore_FKActions(t *testing.T) {
 			NamespaceID: nsID,
 			Status:      "pending",
 		}
-		if err := NewEnrichmentQueueRepo(db).Enqueue(ctx, queueItem); err != nil {
+		if _, err := NewEnrichmentQueueRepo(db).Enqueue(ctx, queueItem); err != nil {
 			t.Fatalf("enqueue enrichment: %v", err)
 		}
 

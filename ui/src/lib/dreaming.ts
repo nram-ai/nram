@@ -3,6 +3,7 @@ import type { DreamLog } from "../api/client";
 export const PHASE_LABELS: Record<string, string> = {
   entity_dedup: "Entity Dedup",
   embedding_backfill: "Embedding Backfill",
+  augmentation_backfill: "Augmentation Backfill",
   paraphrase_dedup: "Paraphrase Dedup",
   transitive_discovery: "Transitive Discovery",
   contradiction_detection: "Contradiction Detection",
@@ -23,6 +24,7 @@ export const SUB_PHASE_LABELS: Record<string, string> = {
 export const PHASE_COLORS: Record<string, string> = {
   entity_dedup: "#94a3b8",
   embedding_backfill: "#3b82f6",
+  augmentation_backfill: "#0ea5e9",
   paraphrase_dedup: "#22c55e",
   transitive_discovery: "#a3a3a3",
   contradiction_detection: "#f59e0b",
@@ -502,6 +504,7 @@ function formatMemoryDeleted(log: DreamLog): FormattedLog {
 // hide data.
 const PHASE_SUMMARY_KEYS: Record<string, string[]> = {
   embedding_backfill: ["candidates", "embedded", "errors"],
+  augmentation_backfill: ["candidates", "enqueued", "errors"],
   paraphrase_dedup: ["candidates", "visited", "superseded"],
   transitive_discovery: ["candidates", "created"],
   contradiction_detection: ["pairs", "checked", "found"],

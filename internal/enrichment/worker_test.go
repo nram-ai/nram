@@ -239,14 +239,14 @@ func newMockQueueClaimer() *mockQueueClaimer {
 	}
 }
 
-func (m *mockQueueClaimer) Enqueue(_ context.Context, item *model.EnrichmentJob) error {
+func (m *mockQueueClaimer) Enqueue(_ context.Context, item *model.EnrichmentJob) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.enqueueErr != nil {
-		return m.enqueueErr
+		return false, m.enqueueErr
 	}
 	m.enqueued = append(m.enqueued, item)
-	return nil
+	return true, nil
 }
 
 func (m *mockQueueClaimer) ClaimNext(_ context.Context, _ string) (*model.EnrichmentJob, error) {

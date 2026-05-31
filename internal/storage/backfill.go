@@ -9,8 +9,8 @@ import (
 
 // buildEnqueueLiveMemoriesQuery returns the SQL that inserts a priority-(-1)
 // pending enrichment job for every live memory. When dedupe is true, memories
-// that already have a pending or running job are skipped via a LEFT JOIN
-// guard. Both backends share this builder so the column list, dialect
+// that already have a pending or in-flight (processing) job are skipped via a
+// LEFT JOIN guard. Both backends share this builder so the column list, dialect
 // quirks, and `deleted_at IS NULL` filter stay in lockstep.
 func buildEnqueueLiveMemoriesQuery(backend string, dedupe bool) (string, error) {
 	var insertCols, idExpr, nowExpr string
@@ -33,17 +33,29 @@ func buildEnqueueLiveMemoriesQuery(backend string, dedupe bool) (string, error) 
 	if dedupe {
 		q += `
 		LEFT JOIN enrichment_queue q
-		  ON q.memory_id = m.id AND q.status IN ('pending','running')
+		  ON q.memory_id = m.id AND q.status IN ('pending','processing')
 		WHERE m.deleted_at IS NULL AND q.id IS NULL`
 	} else {
 		q += `
 		WHERE m.deleted_at IS NULL`
 	}
+	// Respect the partial unique index idx_enrichment_queue_pending_memory:
+	// memories already holding an unclaimed-pending job are skipped (the
+	// existing job covers re-processing). Memories whose only job is in-flight
+	// ('processing') still receive a fresh pending row. Harmless for the dedupe
+	// path, which already LEFT JOINs out pending rows.
+	if backend == BackendPostgres {
+		q += `
+		ON CONFLICT (memory_id) WHERE status = 'pending' DO NOTHING`
+	} else {
+		q += `
+		ON CONFLICT(memory_id) WHERE status = 'pending' DO NOTHING`
+	}
 	return q, nil
 }
 
 // EnqueueUncoveredMemories enqueues a priority-(-1) enrichment job for
-// every live memory that does not already have a pending or running job.
+// every live memory that does not already have a pending or in-flight job.
 // Idempotent. Exposed via NRAM_ENABLE_ENRICHMENT_BACKFILL=1 (startup) and
 // --backfill-enrichment (CLI). The worker skips fact/entity extraction
 // when prior lineage/relationship rows already exist for the memory, so
@@ -75,11 +87,11 @@ func EnqueueUncoveredMemories(ctx context.Context, db DB) (int64, error) {
 }
 
 // hasUncoveredMemory returns true iff at least one live memory lacks a
-// pending or running enrichment job.
+// pending or in-flight (processing) enrichment job.
 func hasUncoveredMemory(ctx context.Context, db DB) (bool, error) {
 	query := `SELECT 1 FROM memories m
 		LEFT JOIN enrichment_queue q
-		  ON q.memory_id = m.id AND q.status IN ('pending','running')
+		  ON q.memory_id = m.id AND q.status IN ('pending','processing')
 		WHERE m.deleted_at IS NULL AND q.id IS NULL
 		LIMIT 1`
 	rows, err := db.Query(ctx, query)
@@ -161,11 +173,13 @@ func NormalizeMemoryTags(ctx context.Context, db DB) (int64, error) {
 	return updated, nil
 }
 
-// EnqueueAllLiveMemories enqueues a priority-(-1) enrichment job for
-// every live memory unconditionally. Used by the embedding-model switch
-// cascade after the vector tables have been truncated and embedding_dim
-// NULL'd — duplicates against in-flight jobs are expected and handled by
-// the worker.
+// EnqueueAllLiveMemories enqueues a priority-(-1) enrichment job for every
+// live memory. Used by the embedding-model switch cascade after the vector
+// tables have been truncated and embedding_dim NULL'd. A memory that already
+// holds an unclaimed-pending job is skipped (ON CONFLICT DO NOTHING on the
+// partial unique index) since that job will re-embed it; a memory whose only
+// job is in-flight ('processing') still gets a fresh pending row, so every
+// live memory ends up with at least one pending job.
 func EnqueueAllLiveMemories(ctx context.Context, db DB) (int64, error) {
 	query, err := buildEnqueueLiveMemoriesQuery(db.Backend(), false)
 	if err != nil {

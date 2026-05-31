@@ -304,15 +304,22 @@ func TestEnrichment_SelfQueueStatus_Pagination(t *testing.T) {
 		"INSERT INTO memories (id, namespace_id, content) VALUES (?, ?, ?)",
 		memID.String(), projNsID.String(), "x")
 
-	// 5 pending rows sharing one created_at, plus 2 failed.
+	// 5 pending rows sharing one created_at, plus 2 failed. Each pending row
+	// needs its own memory: the partial unique index forbids two pending jobs
+	// for one memory. The 2 failed rows can share the original memID (failed
+	// rows do not participate in the pending-uniqueness constraint).
 	const tied = "2026-01-01T00:00:00.000Z"
 	pendingIDs := map[string]bool{}
 	for i := range 5 {
+		pmemID := uuid.New()
+		execSeed(t, db, ctx,
+			"INSERT INTO memories (id, namespace_id, content) VALUES (?, ?, ?)",
+			pmemID.String(), projNsID.String(), "x")
 		id := uuid.New().String()
 		pendingIDs[id] = true
 		execSeed(t, db, ctx,
 			"INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, attempts, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-			id, memID.String(), projNsID.String(), "pending", i, tied)
+			id, pmemID.String(), projNsID.String(), "pending", i, tied)
 	}
 	for range 2 {
 		execSeed(t, db, ctx,

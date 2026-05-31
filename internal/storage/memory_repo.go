@@ -326,6 +326,7 @@ func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Mem
 //     row itself, matched against the parent only — never via a descendant, or
 //     a non-matching parent leaks in through a matching child. Emitted by
 //     statusFilterClauses.
+//
 // HideSuperseded and StaleStampKey get bespoke handling and belong to neither
 // helper. The flat-list path (buildFilterWhere) applies all dimensions inline
 // as ANDs; keep it in sync when adding a field.

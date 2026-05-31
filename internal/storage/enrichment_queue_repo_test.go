@@ -40,7 +40,7 @@ func TestEnrichmentQueueRepo_Enqueue(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -90,7 +90,7 @@ func TestEnrichmentQueueRepo_Enqueue_GeneratesID(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 		if item.ID == uuid.Nil {
@@ -111,7 +111,7 @@ func TestEnrichmentQueueRepo_Enqueue_WithExplicitID(t *testing.T) {
 			MemoryID:    memID,
 			NamespaceID: nsID,
 		}
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 		if item.ID != explicitID {
@@ -131,7 +131,7 @@ func TestEnrichmentQueueRepo_Enqueue_WithPriority(t *testing.T) {
 			NamespaceID: nsID,
 			Priority:    10,
 		}
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 		if item.Priority != 10 {
@@ -147,7 +147,7 @@ func TestEnrichmentQueueRepo_GetByID(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -187,7 +187,7 @@ func TestEnrichmentQueueRepo_ClaimNext(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -246,7 +246,7 @@ func TestEnrichmentQueueRepo_ClaimNext_PriorityOrder(t *testing.T) {
 
 		// Enqueue low priority first
 		low := &model.EnrichmentJob{MemoryID: memID, NamespaceID: nsID, Priority: 1}
-		if err := repo.Enqueue(ctx, low); err != nil {
+		if _, err := repo.Enqueue(ctx, low); err != nil {
 			t.Fatalf("failed to enqueue low: %v", err)
 		}
 
@@ -259,7 +259,7 @@ func TestEnrichmentQueueRepo_ClaimNext_PriorityOrder(t *testing.T) {
 
 		// Enqueue high priority second
 		high := &model.EnrichmentJob{MemoryID: mem2.ID, NamespaceID: nsID, Priority: 10}
-		if err := repo.Enqueue(ctx, high); err != nil {
+		if _, err := repo.Enqueue(ctx, high); err != nil {
 			t.Fatalf("failed to enqueue high: %v", err)
 		}
 
@@ -293,7 +293,7 @@ func TestEnrichmentQueueRepo_ClaimNext_SkipsProcessing(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -326,7 +326,7 @@ func TestEnrichmentQueueRepo_Complete(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -374,7 +374,7 @@ func TestEnrichmentQueueRepo_Fail(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -424,7 +424,7 @@ func TestEnrichmentQueueRepo_Fail_StructuredPayload(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 		if _, err := repo.ClaimNext(ctx, "worker-1"); err != nil {
@@ -484,7 +484,7 @@ func TestEnrichmentQueueRepo_CompleteWithWarning(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 		if _, err := repo.ClaimNext(ctx, "worker-1"); err != nil {
@@ -542,7 +542,7 @@ func TestEnrichmentQueueRepo_Retry(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -602,7 +602,7 @@ func TestEnrichmentQueueRepo_Retry_CanBeClaimedAgain(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -639,7 +639,7 @@ func TestEnrichmentQueueRepo_FullLifecycle(t *testing.T) {
 
 		// Enqueue
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 		if item.Status != "pending" {
@@ -695,7 +695,7 @@ func TestEnrichmentQueueRepo_ListRecent(t *testing.T) {
 			MemoryID:    memID,
 			NamespaceID: nsID,
 		}
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -720,7 +720,7 @@ func TestEnrichmentQueueRepo_RetryAllFailed(t *testing.T) {
 			MemoryID:    memID,
 			NamespaceID: nsID,
 		}
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
 
@@ -758,7 +758,7 @@ func TestEnrichmentQueueRepo_MarkStepCompleted(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 
@@ -823,7 +823,7 @@ func TestEnrichmentQueueRepo_RequeueStaleIdempotent(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 		// Get a baseline by claiming so the row is in 'processing'.
@@ -870,7 +870,7 @@ func TestEnrichmentQueueRepo_RequeueStaleBumpsAttempts(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 		// Bump attempts to 2 so we can verify +1.
@@ -938,7 +938,7 @@ func TestEnrichmentQueueRepo_CompleteOwnedRefusesStaleClaim(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 		// Claim as worker-A.
@@ -1001,7 +1001,7 @@ func TestEnrichmentQueueRepo_TickHeartbeatAdvancesUpdatedAt(t *testing.T) {
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
-		if err := repo.Enqueue(ctx, item); err != nil {
+		if _, err := repo.Enqueue(ctx, item); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 		// Claim so the row is held by worker-X.
@@ -1091,7 +1091,7 @@ func TestEnrichmentQueueRepo_ListStaleClaimed(t *testing.T) {
 		for i := range items {
 			nsID, memID := createTestMemoryForQueue(t, ctx, db)
 			items[i] = newTestEnrichmentItem(nsID, memID)
-			if err := repo.Enqueue(ctx, items[i]); err != nil {
+			if _, err := repo.Enqueue(ctx, items[i]); err != nil {
 				t.Fatalf("enqueue %d: %v", i, err)
 			}
 			claimSpecific(t, ctx, repo, items[i].ID, "worker-stale-test")
@@ -1164,7 +1164,7 @@ func TestEnrichmentQueueRepo_CountStaleClaimed(t *testing.T) {
 		for i := range items {
 			nsID, memID := createTestMemoryForQueue(t, ctx, db)
 			items[i] = newTestEnrichmentItem(nsID, memID)
-			if err := repo.Enqueue(ctx, items[i]); err != nil {
+			if _, err := repo.Enqueue(ctx, items[i]); err != nil {
 				t.Fatalf("enqueue %d: %v", i, err)
 			}
 			claimSpecific(t, ctx, repo, items[i].ID, "worker-count-test")

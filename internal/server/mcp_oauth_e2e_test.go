@@ -384,8 +384,8 @@ func (m *e2eIngestionLogRepo) Create(_ context.Context, _ *model.IngestionLog) e
 
 type e2eEnrichmentQueueRepo struct{}
 
-func (m *e2eEnrichmentQueueRepo) Enqueue(_ context.Context, _ *model.EnrichmentJob) error {
-	return nil
+func (m *e2eEnrichmentQueueRepo) Enqueue(_ context.Context, _ *model.EnrichmentJob) (bool, error) {
+	return true, nil
 }
 
 // ---------------------------------------------------------------------------

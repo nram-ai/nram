@@ -130,7 +130,7 @@ type LineageReader interface {
 // embedding shape user-stored memories receive. Satisfied by
 // *storage.EnrichmentQueueRepo. Matches service.EnrichmentQueueRepository.
 type EnrichmentQueueWriter interface {
-	Enqueue(ctx context.Context, item *model.EnrichmentJob) error
+	Enqueue(ctx context.Context, item *model.EnrichmentJob) (bool, error)
 }
 
 // LLMProviderFunc returns an LLM provider or nil if unavailable.
@@ -182,4 +182,13 @@ type MemoryHardDeleter interface {
 // vector store.
 type MemoryDimRepairer interface {
 	FindMemoriesMissingVector(ctx context.Context, namespaceID uuid.UUID, dim, limit int) ([]model.Memory, error)
+}
+
+// AugmentationBacklogLister lists live memory IDs whose embedding was never
+// built from augmented queries (augmented_embedding_at IS NULL), scoped to the
+// given namespaces. The augmentation-backfill phase pages through them and
+// enqueues a query-augmentation enrichment job for each. Satisfied by
+// *storage.MemoryRepo.ListAugmentationBackfillCandidates.
+type AugmentationBacklogLister interface {
+	ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error)
 }

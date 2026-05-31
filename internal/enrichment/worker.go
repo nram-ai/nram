@@ -196,7 +196,7 @@ type QueueClaimer interface {
 	// the queue level; a child is enqueued exactly once because a parent
 	// retry skips fact extraction (HasExtractedFactChildren probe +
 	// steps_completed), so no second generation of children is created.
-	Enqueue(ctx context.Context, item *model.EnrichmentJob) error
+	Enqueue(ctx context.Context, item *model.EnrichmentJob) (bool, error)
 	ClaimNext(ctx context.Context, workerID string) (*model.EnrichmentJob, error)
 	ClaimNextBatch(ctx context.Context, workerID string, max int) ([]*model.EnrichmentJob, error)
 	// Pass workerID to enable the stale-write guard (returns
@@ -322,25 +322,25 @@ func (c WorkerConfig) withDefaults(ctx context.Context, settings *service.Settin
 // WorkerPool manages a set of background goroutines that process enrichment
 // jobs from the queue.
 type WorkerPool struct {
-	config            WorkerConfig
-	memories          MemoryReader
-	memUpdater        MemoryUpdater
-	memCreator        MemoryCreator
-	memSoftDeleter    MemorySoftDeleter
-	queue             QueueClaimer
-	entities          EntityUpserter
-	relationships     RelationshipCreator
-	lineage           LineageCreator
-	vectorStore       VectorWriter
+	config               WorkerConfig
+	memories             MemoryReader
+	memUpdater           MemoryUpdater
+	memCreator           MemoryCreator
+	memSoftDeleter       MemorySoftDeleter
+	queue                QueueClaimer
+	entities             EntityUpserter
+	relationships        RelationshipCreator
+	lineage              LineageCreator
+	vectorStore          VectorWriter
 	factProvider         func() provider.LLMProvider
 	entityProvider       func() provider.LLMProvider
 	embedProvider        func() provider.EmbeddingProvider
 	ingestionProvider    func() provider.LLMProvider
 	queryAugmentProvider func() provider.LLMProvider
 	deduplicator         *Deduplicator
-	settings          *service.SettingsService
-	cascade           *service.CascadeResolver
-	metrics           *metrics.Metrics
+	settings             *service.SettingsService
+	cascade              *service.CascadeResolver
+	metrics              *metrics.Metrics
 
 	idleWorkers atomic.Int32
 
@@ -395,26 +395,26 @@ func NewWorkerPool(
 		panic("enrichment: NewWorkerPool requires non-nil settings")
 	}
 	return &WorkerPool{
-		config:            config.withDefaults(context.Background(), settings),
-		memories:          memories,
-		memUpdater:        memUpdater,
-		memCreator:        memCreator,
-		memSoftDeleter:    memSoftDeleter,
-		queue:             queue,
-		entities:          entities,
-		relationships:     relationships,
-		lineage:           lineage,
-		vectorStore:       vectorStore,
+		config:               config.withDefaults(context.Background(), settings),
+		memories:             memories,
+		memUpdater:           memUpdater,
+		memCreator:           memCreator,
+		memSoftDeleter:       memSoftDeleter,
+		queue:                queue,
+		entities:             entities,
+		relationships:        relationships,
+		lineage:              lineage,
+		vectorStore:          vectorStore,
 		factProvider:         factProvider,
 		entityProvider:       entityProvider,
 		embedProvider:        embedProvider,
 		ingestionProvider:    ingestionProvider,
 		queryAugmentProvider: queryAugmentProvider,
 		deduplicator:         deduplicator,
-		settings:          settings,
-		cascade:           cascade,
-		bus:               bus,
-		progress:          newProgressTracker(bus, settings),
+		settings:             settings,
+		cascade:              cascade,
+		bus:                  bus,
+		progress:             newProgressTracker(bus, settings),
 	}
 }
 
@@ -1312,7 +1312,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
-		if err := wp.queue.Enqueue(ctx, childJob); err != nil {
+		if _, err := wp.queue.Enqueue(ctx, childJob); err != nil {
 			slog.Warn("enrichment: enqueue child augmentation job",
 				"job", job.ID, "child", childID, "err", err)
 		}

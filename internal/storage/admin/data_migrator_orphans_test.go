@@ -85,16 +85,24 @@ func TestDataMigrator_FinalizesStuckJobs(t *testing.T) {
 	mustExec(`INSERT INTO memories (id, namespace_id, content, confidence, importance, access_count, enriched, metadata, created_at, updated_at)
 		VALUES ('33333333-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000001',
 		        'm', 1.0, 0.5, 0, 0, '{}', '2025-01-01', '2025-01-01')`)
+	mustExec(`INSERT INTO memories (id, namespace_id, content, confidence, importance, access_count, enriched, metadata, created_at, updated_at)
+		VALUES ('33333333-0000-0000-0000-000000000002', 'aaaaaaaa-0000-0000-0000-000000000001',
+		        'm2', 1.0, 0.5, 0, 0, '{}', '2025-01-01', '2025-01-01')`)
 
-	// 2 stuck enrichment jobs + 1 already-pending (should stay pending) + 1 completed (untouched).
+	// Two stuck (processing) jobs on different memories, exercising both
+	// finalize paths under the partial unique index idx_enrichment_queue_pending_memory:
+	//   - mem-1's stuck job has no pending sibling -> reset to pending.
+	//   - mem-2's stuck job collides with mem-2's pre-existing pending -> dropped
+	//     as redundant (the pending survivor re-processes the memory).
+	// Both count as normalized (reset_stuck=2). A completed row is left untouched.
 	mustExec(`INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, claimed_at, claimed_by, attempts, steps_completed, created_at, updated_at)
 		VALUES ('77777777-0000-0000-0000-000000000001', '33333333-0000-0000-0000-000000000001',
 		        'aaaaaaaa-0000-0000-0000-000000000001', 'processing', 0, '2025-01-01', 'worker-1', 0, '[]', '2025-01-01', '2025-01-01')`)
 	mustExec(`INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, claimed_at, claimed_by, attempts, steps_completed, created_at, updated_at)
-		VALUES ('77777777-0000-0000-0000-000000000002', '33333333-0000-0000-0000-000000000001',
+		VALUES ('77777777-0000-0000-0000-000000000002', '33333333-0000-0000-0000-000000000002',
 		        'aaaaaaaa-0000-0000-0000-000000000001', 'processing', 0, '2025-01-01', 'worker-2', 0, '[]', '2025-01-01', '2025-01-01')`)
 	mustExec(`INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, steps_completed, created_at, updated_at)
-		VALUES ('77777777-0000-0000-0000-000000000003', '33333333-0000-0000-0000-000000000001',
+		VALUES ('77777777-0000-0000-0000-000000000003', '33333333-0000-0000-0000-000000000002',
 		        'aaaaaaaa-0000-0000-0000-000000000001', 'pending', 0, 0, '[]', '2025-01-01', '2025-01-01')`)
 	mustExec(`INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, steps_completed, completed_at, created_at, updated_at)
 		VALUES ('77777777-0000-0000-0000-000000000004', '33333333-0000-0000-0000-000000000001',
@@ -143,6 +151,8 @@ func TestDataMigrator_FinalizesStuckJobs(t *testing.T) {
 	defer func() { _ = pg.Close() }()
 
 	// Previously-processing rows are now pending with cleared claim fields.
+	// mem-1's stuck job was reset; mem-2's stuck job was dropped as redundant,
+	// leaving mem-2's pre-existing pending. So two distinct memories are pending.
 	var pending int
 	if err := pg.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM enrichment_queue
@@ -150,8 +160,8 @@ func TestDataMigrator_FinalizesStuckJobs(t *testing.T) {
 	).Scan(&pending); err != nil {
 		t.Fatalf("count pending: %v", err)
 	}
-	if pending != 3 {
-		t.Errorf("pending enrichment rows = %d, want 3 (2 reset + 1 originally pending)", pending)
+	if pending != 2 {
+		t.Errorf("pending enrichment rows = %d, want 2 (mem-1 reset + mem-2 originally pending)", pending)
 	}
 
 	// Completed rows were left alone.

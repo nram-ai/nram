@@ -55,7 +55,7 @@ type TokenUsageRepository interface {
 
 // EnrichmentQueueRepository defines the enrichment queue operations needed by the store service.
 type EnrichmentQueueRepository interface {
-	Enqueue(ctx context.Context, item *model.EnrichmentJob) error
+	Enqueue(ctx context.Context, item *model.EnrichmentJob) (bool, error)
 }
 
 // VectorStoreWriter defines the vector persistence operations needed by the store service.
@@ -287,7 +287,7 @@ func (s *StoreService) Store(ctx context.Context, req *StoreRequest) (*StoreResp
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
-	if err := s.enrichmentQueue.Enqueue(ctx, job); err == nil {
+	if _, err := s.enrichmentQueue.Enqueue(ctx, job); err == nil {
 		enrichmentQueued = true
 	}
 

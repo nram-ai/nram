@@ -330,7 +330,7 @@ func (s *UpdateService) updateSupersede(
 			CreatedAt:   time.Now(),
 			UpdatedAt:   time.Now(),
 		}
-		if err := s.enrichmentQueue.Enqueue(ctx, job); err != nil {
+		if _, err := s.enrichmentQueue.Enqueue(ctx, job); err != nil {
 			slog.Warn("memory update: enrichment enqueue failed; relying on dream backfill",
 				"new_memory", newID, "err", err)
 		}

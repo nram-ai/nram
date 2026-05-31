@@ -13,8 +13,8 @@ import (
 // post-write-path-refactor contract for existing deployments:
 //
 //  1. Memories with no enrichment job at all get one enqueued.
-//  2. Memories whose only existing job is already pending/running are NOT
-//     double-enqueued.
+//  2. Memories whose only existing job is already pending or in-flight
+//     (processing) are NOT double-enqueued.
 //  3. Memories whose only existing job is completed DO get re-enqueued —
 //     those are the rows that may have the old worker's fact-as-parent-vector
 //     bug, and re-embedding is the only way to fix it.
@@ -35,7 +35,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 		//   c. Memory with a completed job (should be re-enqueued).
 		//   d. Soft-deleted memory (must be skipped regardless of job state).
 		var ids struct {
-			plainA, withPending, completed, softDeleted uuid.UUID
+			plainA, withPending, completed, processing, softDeleted uuid.UUID
 		}
 
 		memA := newTestMemory(nsID)
@@ -50,7 +50,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 		}
 		ids.withPending = memB.ID
 		existingPending := &model.EnrichmentJob{MemoryID: memB.ID, NamespaceID: nsID}
-		if err := queueRepo.Enqueue(ctx, existingPending); err != nil {
+		if _, err := queueRepo.Enqueue(ctx, existingPending); err != nil {
 			t.Fatalf("seed pending job: %v", err)
 		}
 
@@ -60,7 +60,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 		}
 		ids.completed = memC.ID
 		completedJob := &model.EnrichmentJob{MemoryID: memC.ID, NamespaceID: nsID}
-		if err := queueRepo.Enqueue(ctx, completedJob); err != nil {
+		if _, err := queueRepo.Enqueue(ctx, completedJob); err != nil {
 			t.Fatalf("seed completed job: %v", err)
 		}
 		if err := queueRepo.Complete(ctx, completedJob.ID, ""); err != nil {
@@ -76,21 +76,41 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 			t.Fatalf("soft-delete memory: %v", err)
 		}
 
+		// e. Memory with an in-flight (processing) job — already covered, so it
+		//    must be skipped. Regression guard for the dedup predicate: the
+		//    claimed status is 'processing', not 'running'.
+		memE := newTestMemory(nsID)
+		if err := memRepo.Create(ctx, memE); err != nil {
+			t.Fatalf("create in-flight memory: %v", err)
+		}
+		ids.processing = memE.ID
+		processingJob := &model.EnrichmentJob{MemoryID: memE.ID, NamespaceID: nsID}
+		if _, err := queueRepo.Enqueue(ctx, processingJob); err != nil {
+			t.Fatalf("seed in-flight job: %v", err)
+		}
+		setProcessing := `UPDATE enrichment_queue SET status = 'processing' WHERE id = ?`
+		if db.Backend() == BackendPostgres {
+			setProcessing = `UPDATE enrichment_queue SET status = 'processing' WHERE id = $1`
+		}
+		if _, err := db.Exec(ctx, setProcessing, processingJob.ID.String()); err != nil {
+			t.Fatalf("mark processing: %v", err)
+		}
+
 		// Run the backfill.
 		enqueued, err := EnqueueUncoveredMemories(ctx, db)
 		if err != nil {
 			t.Fatalf("backfill failed: %v", err)
 		}
-		// Expect 2 new jobs: one for plainA, one for completed. The pending
-		// memory is skipped (already has a live job). The soft-deleted
-		// memory is skipped (deleted_at is not null).
+		// Expect 2 new jobs: one for plainA, one for completed. The pending and
+		// the in-flight (processing) memories are skipped (each already has a
+		// live job). The soft-deleted memory is skipped (deleted_at is not null).
 		if enqueued != 2 {
 			t.Fatalf("first backfill: expected 2 new jobs, got %d", enqueued)
 		}
 
 		// Idempotency: running again must insert zero rows. The jobs created
-		// in the first pass are themselves pending/running and will satisfy
-		// the LEFT JOIN ... IS NULL guard.
+		// in the first pass are themselves pending and will satisfy the
+		// LEFT JOIN ... IS NULL guard.
 		enqueuedAgain, err := EnqueueUncoveredMemories(ctx, db)
 		if err != nil {
 			t.Fatalf("second backfill failed: %v", err)
@@ -173,6 +193,14 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 			if !foundCompleted {
 				t.Errorf("completed: missing original completed job")
 			}
+		}
+
+		// processing: still exactly one job — the in-flight one. Backfill MUST
+		// NOT add a duplicate for a memory that already has a live job.
+		if got := byMem[ids.processing]; len(got) != 1 {
+			t.Errorf("processing: expected 1 job (no duplicate), got %d (%v)", len(got), got)
+		} else if got[0].status != "processing" {
+			t.Errorf("processing: expected the in-flight job to remain, got %+v", got[0])
 		}
 
 		// softDeleted: no jobs at all.
@@ -289,11 +317,11 @@ func TestNormalizeMemoryTags(t *testing.T) {
 
 // TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory exercises the
 // model-switch cascade entry point. Unlike EnqueueUncoveredMemories (which
-// dedups against existing pending/running jobs), the force-reembed path
-// MUST enqueue every live memory unconditionally — the cascade has
-// already wiped the vector store and NULL'd embedding_dim, so any prior
-// in-flight job is operating on stale assumptions and can be safely
-// duplicated.
+// dedups against existing pending or in-flight jobs), the force-reembed path
+// enqueues every live memory that does not already hold an unclaimed-pending
+// job: the partial unique index dedups those (the pending job will re-embed it
+// against the wiped vector store), while a memory whose only job is in-flight
+// ('processing') still gets a fresh pending row.
 func TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		// EnqueueAllLiveMemories is a whole-DB scan; under the shared
@@ -317,7 +345,7 @@ func TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory(t *testing.T) {
 			}
 		}
 		// Pre-existing pending job on memB — backfill must still enqueue.
-		if err := queueRepo.Enqueue(ctx, &model.EnrichmentJob{MemoryID: memB.ID, NamespaceID: nsID}); err != nil {
+		if _, err := queueRepo.Enqueue(ctx, &model.EnrichmentJob{MemoryID: memB.ID, NamespaceID: nsID}); err != nil {
 			t.Fatalf("seed pending: %v", err)
 		}
 		if err := memRepo.SoftDelete(ctx, memD.ID, nsID); err != nil {
@@ -328,14 +356,16 @@ func TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("force re-embed enqueue: %v", err)
 		}
-		// Three live memories → three jobs (memD skipped as soft-deleted).
-		if enqueued != 3 {
-			t.Fatalf("expected 3 force-enqueued jobs, got %d", enqueued)
+		// Two newly-enqueued jobs (memA, memC). memB is skipped because it
+		// already holds an unclaimed-pending job (the partial unique index
+		// dedups it); memD is skipped as soft-deleted. Every live memory still
+		// ends up with a pending job.
+		if enqueued != 2 {
+			t.Fatalf("expected 2 force-enqueued jobs, got %d", enqueued)
 		}
 
-		// Verify per-memory job counts. memB now has the original pending
-		// PLUS the new force-enqueued one (duplicates ARE expected here —
-		// see EnqueueAllLiveMemories docs).
+		// Verify per-memory job counts. memB keeps exactly its original pending
+		// job (force-all skipped it via ON CONFLICT); memA/memC each get one.
 		query := `SELECT memory_id, COUNT(*) FROM enrichment_queue WHERE namespace_id = ? GROUP BY memory_id`
 		if db.Backend() == BackendPostgres {
 			query = `SELECT memory_id, COUNT(*) FROM enrichment_queue WHERE namespace_id = $1 GROUP BY memory_id`
@@ -358,8 +388,8 @@ func TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory(t *testing.T) {
 		if got[memA.ID] != 1 {
 			t.Errorf("memA: want 1 job, got %d", got[memA.ID])
 		}
-		if got[memB.ID] != 2 {
-			t.Errorf("memB: want 2 jobs (original + force), got %d", got[memB.ID])
+		if got[memB.ID] != 1 {
+			t.Errorf("memB: want 1 job (original pending; force skipped via dedup), got %d", got[memB.ID])
 		}
 		if got[memC.ID] != 1 {
 			t.Errorf("memC: want 1 job, got %d", got[memC.ID])

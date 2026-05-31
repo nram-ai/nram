@@ -271,14 +271,14 @@ func TestAggregates_OrgEnrichmentQueueStats(t *testing.T) {
 		"INSERT INTO namespaces (id, name, slug, kind, path, depth, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		projNsID.String(), "p", "p", "project", "test-org/p", 1, orgNsID.String())
 
-	// One memory whose namespace_id matches the project ns. enrichment_queue
-	// rows are seeded with the same namespace_id since the schema requires it.
-	memID := uuid.New()
-	execSeed(t, db, ctx,
-		"INSERT INTO memories (id, namespace_id, content) VALUES (?, ?, ?)",
-		memID.String(), projNsID.String(), "x")
-
+	// One memory per queue row, all under the project ns. A distinct memory per
+	// row is required because the partial unique index forbids two pending jobs
+	// for the same memory; the two pending rows must therefore span two memories.
 	for _, status := range []string{"pending", "pending", "processing", "failed"} {
+		memID := uuid.New()
+		execSeed(t, db, ctx,
+			"INSERT INTO memories (id, namespace_id, content) VALUES (?, ?, ?)",
+			memID.String(), projNsID.String(), "x")
 		execSeed(t, db, ctx,
 			"INSERT INTO enrichment_queue (id, memory_id, namespace_id, status) VALUES (?, ?, ?, ?)",
 			uuid.New().String(), memID.String(), projNsID.String(), status)

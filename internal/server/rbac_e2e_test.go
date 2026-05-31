@@ -333,8 +333,8 @@ func (m *rbacIngestionLogRepo) Create(_ context.Context, _ *model.IngestionLog) 
 
 type rbacEnrichmentQueueRepo struct{}
 
-func (m *rbacEnrichmentQueueRepo) Enqueue(_ context.Context, _ *model.EnrichmentJob) error {
-	return nil
+func (m *rbacEnrichmentQueueRepo) Enqueue(_ context.Context, _ *model.EnrichmentJob) (bool, error) {
+	return true, nil
 }
 
 // rbacDashboardStore implements api.DashboardStore for admin dashboard tests.

@@ -89,9 +89,9 @@ type enrichQueueRepo struct {
 	jobs []*model.EnrichmentJob
 }
 
-func (m *enrichQueueRepo) Enqueue(_ context.Context, item *model.EnrichmentJob) error {
+func (m *enrichQueueRepo) Enqueue(_ context.Context, item *model.EnrichmentJob) (bool, error) {
 	m.jobs = append(m.jobs, item)
-	return nil
+	return true, nil
 }
 
 type enrichLineageQuerier struct {

@@ -58,7 +58,14 @@ func NewEnrichmentQueueRepo(db DB) *EnrichmentQueueRepo {
 // Enqueue inserts a new item into the enrichment queue with status "pending".
 // Zero-valued ID / CreatedAt / UpdatedAt are filled from Go; StepsCompleted
 // defaults to `[]`.
-func (r *EnrichmentQueueRepo) Enqueue(ctx context.Context, item *model.EnrichmentJob) error {
+//
+// At most one UNCLAIMED-pending job per memory is allowed: the insert is a
+// no-op when a row with the same memory_id and status='pending' already exists
+// (enforced by the partial unique index idx_enrichment_queue_pending_memory via
+// ON CONFLICT DO NOTHING). A claimed job is status='processing', so this still
+// permits a fresh pending row to coexist with an in-flight one. The bool return
+// reports whether a row was actually inserted (false when deduped).
+func (r *EnrichmentQueueRepo) Enqueue(ctx context.Context, item *model.EnrichmentJob) (bool, error) {
 	if item.ID == uuid.Nil {
 		item.ID = uuid.New()
 	}
@@ -87,24 +94,33 @@ func (r *EnrichmentQueueRepo) Enqueue(ctx context.Context, item *model.Enrichmen
 	createdAtStr := item.CreatedAt.UTC().Format(time.RFC3339)
 	updatedAtStr := item.UpdatedAt.UTC().Format(time.RFC3339)
 
+	// ON CONFLICT ... WHERE status='pending' DO NOTHING infers the partial
+	// unique index idx_enrichment_queue_pending_memory and dedups against an
+	// existing unclaimed-pending job for the same memory. The WHERE predicate is
+	// required for partial-index inference on both backends.
 	query := `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, last_error, steps_completed, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(memory_id) WHERE status = 'pending' DO NOTHING`
 	if r.db.Backend() == BackendPostgres {
 		query = `INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, priority, attempts, max_attempts, last_error, steps_completed, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			ON CONFLICT (memory_id) WHERE status = 'pending' DO NOTHING`
 	}
 
-	_, err := r.db.Exec(ctx, query,
+	res, err := r.db.Exec(ctx, query,
 		item.ID.String(), item.MemoryID.String(), item.NamespaceID.String(),
 		item.Status, item.Priority, item.Attempts, item.MaxAttempts,
 		lastError, string(item.StepsCompleted),
 		createdAtStr, updatedAtStr,
 	)
 	if err != nil {
-		return fmt.Errorf("enrichment queue enqueue: %w", err)
+		return false, fmt.Errorf("enrichment queue enqueue: %w", err)
 	}
-
-	return nil
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("enrichment queue enqueue rows affected: %w", err)
+	}
+	return affected > 0, nil
 }
 
 // ClaimNext atomically claims the next pending item in the enrichment queue,
@@ -542,6 +558,51 @@ func (r *EnrichmentQueueRepo) SetQueryAugmentSkipReason(ctx context.Context, id 
 	return nil
 }
 
+// dropRedundantPending deletes the queue row by id (with optional claimed_by
+// guard) when a status->pending transition collided with the partial unique
+// index idx_enrichment_queue_pending_memory. The collision means the memory
+// already holds an unclaimed-pending job, so the row being requeued is
+// redundant: a fresh pending was enqueued while this one was in flight, and it
+// will re-process the memory's latest content. Dropping the loser preserves the
+// "at most one pending per memory" invariant without losing coverage.
+func (r *EnrichmentQueueRepo) dropRedundantPending(ctx context.Context, id uuid.UUID, workerID string) error {
+	query := "DELETE FROM enrichment_queue WHERE id = ?"
+	args := []any{id.String()}
+	if workerID != "" {
+		query += " AND claimed_by = ?"
+		args = append(args, workerID)
+	}
+	if r.db.Backend() == BackendPostgres {
+		query = postgresPlaceholders(query)
+	}
+	if _, err := r.db.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("enrichment queue drop redundant pending: %w", err)
+	}
+	return nil
+}
+
+// requeueToPending runs a status->pending transition UPDATE and absorbs the
+// partial-unique-index collision in one place: when the memory already holds an
+// unclaimed-pending sibling, the row being transitioned is redundant, so it is
+// dropped (dropRedundantPending) rather than turned into a duplicate pending.
+// Returns the UPDATE's rows-affected (0 when the row was dropped or the WHERE
+// matched nothing) and whether it was dropped as redundant, leaving each caller
+// to apply its own rows==0 semantics.
+func (r *EnrichmentQueueRepo) requeueToPending(ctx context.Context, query string, args []any, id uuid.UUID, workerID string) (rows int64, dropped bool, err error) {
+	res, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		if isUniqueViolation(err) {
+			if delErr := r.dropRedundantPending(ctx, id, workerID); delErr != nil {
+				return 0, false, delErr
+			}
+			return 0, true, nil
+		}
+		return 0, false, err
+	}
+	n, err := res.RowsAffected()
+	return n, false, err
+}
+
 // Release resets a claimed enrichment queue item back to "pending" without
 // bumping the attempts counter. Used when the worker defers a job (e.g. the
 // enrichment-available gate flipped closed mid-batch) rather than fails it.
@@ -560,13 +621,12 @@ func (r *EnrichmentQueueRepo) Release(ctx context.Context, id uuid.UUID, workerI
 		query = postgresPlaceholders(query)
 	}
 
-	result, err := r.db.Exec(ctx, query, args...)
+	rows, dropped, err := r.requeueToPending(ctx, query, args, id, workerID)
 	if err != nil {
 		return fmt.Errorf("enrichment queue release: %w", err)
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("enrichment queue release rows affected: %w", err)
+	if dropped {
+		return nil
 	}
 	if rows == 0 {
 		if workerID != "" {
@@ -590,14 +650,12 @@ func (r *EnrichmentQueueRepo) Retry(ctx context.Context, id uuid.UUID) error {
 		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL, last_error = NULL, last_requeue_reason = NULL, attempts = attempts + 1, updated_at = $1 WHERE id = $2`
 	}
 
-	result, err := r.db.Exec(ctx, query, now, id.String())
+	rows, dropped, err := r.requeueToPending(ctx, query, []any{now, id.String()}, id, "")
 	if err != nil {
 		return fmt.Errorf("enrichment queue retry: %w", err)
 	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("enrichment queue retry rows affected: %w", err)
+	if dropped {
+		return nil
 	}
 	if rows == 0 {
 		return sql.ErrNoRows
@@ -787,13 +845,14 @@ func (r *EnrichmentQueueRepo) RequeueStale(ctx context.Context, id uuid.UUID, re
 			WHERE id = $3 AND status = 'processing'`
 	}
 
-	res, err := r.db.Exec(ctx, query, reason, now, id.String())
+	// A redundant stuck row (memory already has a pending sibling) is dropped and
+	// reported as normalized (true).
+	rows, dropped, err := r.requeueToPending(ctx, query, []any{reason, now, id.String()}, id, "")
 	if err != nil {
 		return false, fmt.Errorf("enrichment queue requeue stale: %w", err)
 	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("enrichment queue requeue stale rows affected: %w", err)
+	if dropped {
+		return true, nil
 	}
 	return rows > 0, nil
 }

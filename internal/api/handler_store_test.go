@@ -93,8 +93,8 @@ func (m *mockIngestionLogRepo) Create(ctx context.Context, log *model.IngestionL
 
 type mockEnrichmentQueueRepo struct{}
 
-func (m *mockEnrichmentQueueRepo) Enqueue(ctx context.Context, item *model.EnrichmentJob) error {
-	return nil
+func (m *mockEnrichmentQueueRepo) Enqueue(ctx context.Context, item *model.EnrichmentJob) (bool, error) {
+	return true, nil
 }
 
 // --- helpers ---

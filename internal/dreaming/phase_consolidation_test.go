@@ -1541,14 +1541,14 @@ type enqueueRecorder struct {
 	err  error
 }
 
-func (r *enqueueRecorder) Enqueue(_ context.Context, item *model.EnrichmentJob) error {
+func (r *enqueueRecorder) Enqueue(_ context.Context, item *model.EnrichmentJob) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.err != nil {
-		return r.err
+		return false, r.err
 	}
 	r.jobs = append(r.jobs, *item)
-	return nil
+	return true, nil
 }
 
 func (r *enqueueRecorder) snapshot() []model.EnrichmentJob {

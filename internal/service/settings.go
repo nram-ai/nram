@@ -121,14 +121,15 @@ const (
 	// SQL-only phases default to 0.0, which means "no per-phase slice; share
 	// the root budget" — they run normally because they don't call WrapLLMCall
 	// and therefore don't consume the budget. Hot-reloadable per cycle.
-	SettingDreamEntityDedupFraction       = "dreaming.entity_dedup.budget_fraction"
-	SettingDreamEmbeddingBackfillFraction = "dreaming.embedding_backfill.budget_fraction"
-	SettingDreamParaphraseFraction        = "dreaming.paraphrase_dedup.budget_fraction"
-	SettingDreamTransitiveFraction        = "dreaming.transitive.budget_fraction"
-	SettingDreamContradictionFraction     = "dreaming.contradiction.budget_fraction"
-	SettingDreamConsolidationFraction     = "dreaming.consolidation.budget_fraction"
-	SettingDreamPruningFraction           = "dreaming.pruning.budget_fraction"
-	SettingDreamWeightAdjustFraction      = "dreaming.weight_adjustment.budget_fraction"
+	SettingDreamEntityDedupFraction          = "dreaming.entity_dedup.budget_fraction"
+	SettingDreamEmbeddingBackfillFraction    = "dreaming.embedding_backfill.budget_fraction"
+	SettingDreamAugmentationBackfillFraction = "dreaming.augmentation_backfill.budget_fraction"
+	SettingDreamParaphraseFraction           = "dreaming.paraphrase_dedup.budget_fraction"
+	SettingDreamTransitiveFraction           = "dreaming.transitive.budget_fraction"
+	SettingDreamContradictionFraction        = "dreaming.contradiction.budget_fraction"
+	SettingDreamConsolidationFraction        = "dreaming.consolidation.budget_fraction"
+	SettingDreamPruningFraction              = "dreaming.pruning.budget_fraction"
+	SettingDreamWeightAdjustFraction         = "dreaming.weight_adjustment.budget_fraction"
 
 	// Contradiction-detection cap. Bounds LLM pair-check calls per cycle so
 	// the phase cannot starve the rest of the pipeline. Residual is driven
@@ -183,6 +184,16 @@ const (
 	// downstream phase sees the repaired state in the same cycle.
 	SettingDreamEmbeddingBackfillEnabled     = "dreaming.embedding_backfill.enabled"
 	SettingDreamEmbeddingBackfillCapPerCycle = "dreaming.embedding_backfill.cap_per_cycle"
+
+	// Augmentation-backfill phase. Enqueues query-augmentation enrichment jobs
+	// for live memories whose embedding was never built from augmented queries
+	// (augmented_embedding_at IS NULL) — e.g. dream syntheses or stores whose
+	// augmentation step was skipped because the augment provider was briefly
+	// unavailable. Automates what the admin "backfill augmentation" button does,
+	// so stranded rows self-heal each cycle. Enqueue-only (no LLM calls in the
+	// phase), so it carries no budget fraction.
+	SettingDreamAugmentationBackfillEnabled     = "dreaming.augmentation_backfill.enabled"
+	SettingDreamAugmentationBackfillCapPerCycle = "dreaming.augmentation_backfill.cap_per_cycle"
 
 	// Weight-adjustment phase tuning. support_gain is the multiplier alpha in
 	// weight *= 1 + alpha * (support - 1) when a relationship's supporting
@@ -650,14 +661,15 @@ alignment must be a float:
 	SettingDreamConsolidationReinforceFraction:   "0.35",
 	SettingDreamConsolidationConsolidateFraction: "0.30",
 
-	SettingDreamEntityDedupFraction:       "0.0",
-	SettingDreamEmbeddingBackfillFraction: "0.10",
-	SettingDreamParaphraseFraction:        "0.05",
-	SettingDreamTransitiveFraction:        "0.0",
-	SettingDreamContradictionFraction:     "0.40",
-	SettingDreamConsolidationFraction:     "0.40",
-	SettingDreamPruningFraction:           "0.0",
-	SettingDreamWeightAdjustFraction:      "0.0",
+	SettingDreamEntityDedupFraction:          "0.0",
+	SettingDreamEmbeddingBackfillFraction:    "0.10",
+	SettingDreamAugmentationBackfillFraction: "0.0",
+	SettingDreamParaphraseFraction:           "0.05",
+	SettingDreamTransitiveFraction:           "0.0",
+	SettingDreamContradictionFraction:        "0.40",
+	SettingDreamConsolidationFraction:        "0.40",
+	SettingDreamPruningFraction:              "0.0",
+	SettingDreamWeightAdjustFraction:         "0.0",
 
 	SettingDreamContradictionCap:                 "2000",
 	SettingDreamContradictionLoserHaircut:        "0.85",
@@ -668,6 +680,9 @@ alignment must be a float:
 
 	SettingDreamEmbeddingBackfillEnabled:     "true",
 	SettingDreamEmbeddingBackfillCapPerCycle: "1000",
+
+	SettingDreamAugmentationBackfillEnabled:     "true",
+	SettingDreamAugmentationBackfillCapPerCycle: "1000",
 
 	SettingDreamParaphraseEnabled:     "true",
 	SettingDreamParaphraseThreshold:   "0.97",

@@ -141,7 +141,7 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if err := queueRepo.Enqueue(ctx, job); err != nil {
+	if _, err := queueRepo.Enqueue(ctx, job); err != nil {
 		t.Fatalf("enqueue job: %v", err)
 	}
 

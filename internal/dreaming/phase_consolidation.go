@@ -1522,7 +1522,7 @@ func (p *ConsolidationPhase) consolidate(
 				CreatedAt:   now,
 				UpdatedAt:   now,
 			}
-			if err := p.enrichmentQueue.Enqueue(ctx, job); err != nil {
+			if _, err := p.enrichmentQueue.Enqueue(ctx, job); err != nil {
 				slog.Warn("dreaming: synthesis enrichment enqueue failed",
 					"memory", synthMemory.ID, "err", err)
 				stats["errors_enrich_enqueue"] = stats["errors_enrich_enqueue"].(int) + 1

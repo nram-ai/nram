@@ -254,7 +254,7 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 			CreatedAt:   time.Now(),
 			UpdatedAt:   time.Now(),
 		}
-		_ = s.enrichmentQueue.Enqueue(ctx, job)
+		_, _ = s.enrichmentQueue.Enqueue(ctx, job)
 	}
 
 	latency := time.Since(start).Milliseconds()

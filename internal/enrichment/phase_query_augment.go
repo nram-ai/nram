@@ -437,4 +437,3 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 		truncatedBytes:   trimmed,
 	}, ""
 }
-

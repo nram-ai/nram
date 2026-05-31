@@ -97,6 +97,33 @@ func (m *DataMigrator) markInsertedAnon(table string) {
 //
 // Counts are recorded in m.resetStuck and surfaced through Stats().
 func (m *DataMigrator) finalizeStuckJobs(ctx context.Context) error {
+	// A stuck (processing) row is redundant when its memory already holds a
+	// pending job, or another processing row for the same memory sorts earlier:
+	// resetting all of them to pending would collide on the partial unique index
+	// idx_enrichment_queue_pending_memory. Drop the redundant ones first (the
+	// surviving pending/earliest row re-processes the memory's latest content),
+	// then reset the survivors. Both count as "normalized" for the stat.
+	delRes, err := m.dst.ExecContext(ctx, `
+		DELETE FROM enrichment_queue e
+		 WHERE e.status = 'processing'
+		   AND EXISTS (
+		         SELECT 1 FROM enrichment_queue o
+		          WHERE o.memory_id = e.memory_id
+		            AND o.id <> e.id
+		            AND (o.status = 'pending'
+		                 OR (o.status = 'processing'
+		                     AND (o.created_at < e.created_at
+		                          OR (o.created_at = e.created_at AND o.id < e.id))))
+		       )
+	`)
+	if err != nil {
+		return fmt.Errorf("drop redundant stuck enrichment jobs: %w", err)
+	}
+	normalized := int64(0)
+	if n, err := delRes.RowsAffected(); err == nil {
+		normalized += n
+	}
+
 	res, err := m.dst.ExecContext(ctx, `
 		UPDATE enrichment_queue
 		   SET status = 'pending', claimed_by = NULL, claimed_at = NULL,
@@ -106,8 +133,11 @@ func (m *DataMigrator) finalizeStuckJobs(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reset stuck enrichment jobs: %w", err)
 	}
-	if n, err := res.RowsAffected(); err == nil && n > 0 {
-		m.resetStuck["enrichment_queue"] = int(n)
+	if n, err := res.RowsAffected(); err == nil {
+		normalized += n
+	}
+	if normalized > 0 {
+		m.resetStuck["enrichment_queue"] = int(normalized)
 	}
 
 	res, err = m.dst.ExecContext(ctx, `

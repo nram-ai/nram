@@ -646,6 +646,12 @@ func main() {
 		// Runs before paraphrase dedup so the downstream phase sees the
 		// repaired vector state in the same cycle.
 		dreaming.NewEmbeddingBackfillPhase(memoryRepo, memoryRepo, vectorStore, embedProvider, settingsSvc),
+		// Augmentation backfill enqueues query-augmentation jobs for rows whose
+		// vector was built from raw content (augmented_embedding_at IS NULL),
+		// automating recovery for memories whose augmentation step was skipped.
+		// Runs before consolidation so it only sweeps rows stranded by prior
+		// cycles, not the fresh syntheses consolidation enqueues itself.
+		dreaming.NewAugmentationBackfillPhase(memoryRepo, enrichmentQueueRepo, settingsSvc),
 		// Paraphrase dedup runs before contradiction so the LLM-judge pair
 		// walk operates on a deduped memory set.
 		dreaming.NewParaphraseDedupPhase(memoryRepo, memoryRepo, vectorStore, vectorStore, embedProvider, settingsSvc),

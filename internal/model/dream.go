@@ -27,14 +27,15 @@ const (
 
 // DreamPhase constants define the ordered phases of a dream cycle.
 const (
-	DreamPhaseEntityDedup       = "entity_dedup"
-	DreamPhaseEmbeddingBackfill = "embedding_backfill"
-	DreamPhaseParaphraseDedup   = "paraphrase_dedup"
-	DreamPhaseTransitive        = "transitive_discovery"
-	DreamPhaseContradictions    = "contradiction_detection"
-	DreamPhaseConsolidation     = "consolidation"
-	DreamPhasePruning           = "pruning"
-	DreamPhaseWeightAdjust      = "weight_adjustment"
+	DreamPhaseEntityDedup          = "entity_dedup"
+	DreamPhaseEmbeddingBackfill    = "embedding_backfill"
+	DreamPhaseAugmentationBackfill = "augmentation_backfill"
+	DreamPhaseParaphraseDedup      = "paraphrase_dedup"
+	DreamPhaseTransitive           = "transitive_discovery"
+	DreamPhaseContradictions       = "contradiction_detection"
+	DreamPhaseConsolidation        = "consolidation"
+	DreamPhasePruning              = "pruning"
+	DreamPhaseWeightAdjust         = "weight_adjustment"
 )
 
 // DreamSubPhase constants name the consolidation sub-phases. Mirrors the

@@ -94,6 +94,11 @@ var settingsGroups = []api.SettingGroup{
 				Description: "Repairs memories whose embedding row is missing. Re-embeds when the embedder is healthy; otherwise clears the orphan dimension marker.",
 			},
 			{
+				Category:    "dreaming_augmentation_backfill",
+				Label:       "Augmentation Backfill",
+				Description: "Re-runs query augmentation for memories whose embedding was built from raw content (e.g. when the augment provider was briefly unavailable), so they become searchable by their augmented queries without a manual backfill.",
+			},
+			{
 				Category:    "dreaming_performance",
 				Label:       "Performance",
 				Description: "How many neighbors to consider, how similar two entities must be to merge, and how often the scheduler wakes up.",
