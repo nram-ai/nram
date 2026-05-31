@@ -169,6 +169,10 @@ func (s *rrSettingsStore) GetSettingsSchema(_ context.Context) ([]api.SettingSch
 	return []api.SettingSchema{}, nil
 }
 
+func (s *rrSettingsStore) GetSettingsGroups(_ context.Context) ([]api.SettingGroup, error) {
+	return []api.SettingGroup{}, nil
+}
+
 func (s *rrSettingsStore) ResetSetting(_ context.Context, _, _ string, _ *uuid.UUID) error {
 	return fmt.Errorf("not implemented in test")
 }

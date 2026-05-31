@@ -751,6 +751,29 @@ export interface SettingSchema {
   step?: number;
 }
 
+// SettingSubSection binds one setting category to a heading inside a group.
+// label/description are optional: a single-subsection group with neither
+// renders its items flat under the group header.
+export interface SettingSubSection {
+  category: string;
+  label?: string;
+  description?: string;
+}
+
+// SettingGroup is one tab in the admin Settings UI. The group taxonomy is the
+// backend's single source of truth (GET /admin/settings?groups=true); the page
+// renders it generically rather than hardcoding the structure.
+export interface SettingGroup {
+  id: string;
+  label: string;
+  description?: string;
+  // Hide the whole group (and its settings) when enrichment is unavailable.
+  requires_enrichment?: boolean;
+  // Hide the whole group unless the active database backend is in this list.
+  requires_backend?: string[];
+  subsections: SettingSubSection[];
+}
+
 export interface Webhook {
   id: string;
   url: string;
@@ -1508,6 +1531,8 @@ export const adminAPI = {
   },
   getSettingsSchema: () =>
     request<{ data: SettingSchema[] }>("GET", "/admin/settings?schema=true"),
+  getSettingGroups: () =>
+    request<{ data: SettingGroup[] }>("GET", "/admin/settings?groups=true"),
   updateSetting: (key: string, value: unknown) =>
     request<{ status: string }>("PUT", "/admin/settings", { key, value }),
   resetSettings: (body: { key?: string } = {}) =>

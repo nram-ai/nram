@@ -558,3 +558,7 @@ func defaultsAgree(typ string, schema json.RawMessage, runtime string) bool {
 func (s *SettingsAdminStore) GetSettingsSchema(ctx context.Context) ([]api.SettingSchema, error) {
 	return settingsSchemas, nil
 }
+
+func (s *SettingsAdminStore) GetSettingsGroups(ctx context.Context) ([]api.SettingGroup, error) {
+	return settingsGroups, nil
+}

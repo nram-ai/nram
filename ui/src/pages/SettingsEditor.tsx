@@ -1,18 +1,27 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   useResetSettings,
   useSettings,
   useSettingsSchema,
+  useSettingGroups,
   useSetupStatus,
   useUpdateSetting,
 } from "../hooks/useApi";
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
-import type { Setting, SettingSchema } from "../api/client";
+import type { SettingSchema, SettingGroup } from "../api/client";
+import {
+  buildCategoryIndex,
+  buildFallbackGroup,
+  matchesQuery,
+  resolveActiveGroup,
+  type SettingWithSchema,
+} from "./settingsNav";
 import Switch from "../components/Switch";
 import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
 import { QueryAugmentBackfillBlock } from "../components/QueryAugmentBackfillBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCheck, faXmark, faCircleQuestion, faSpinner } from "../lib/icons";
+import { faCheck, faXmark, faCircleQuestion, faSpinner, faMagnifyingGlass } from "../lib/icons";
 
 // Setting keys are not always literal phase names — e.g. `dreaming.transitive.*`
 // drives the `transitive_discovery` phase. The bar needs the phase key to
@@ -94,226 +103,14 @@ function canonicalize(v: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface SettingWithSchema {
-  schema: SettingSchema;
-  setting: Setting | null;
-}
-
-// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-interface SubSection {
-  // The schema-side category key that backend entries are tagged with.
-  category: string;
-  // Sub-section heading; leave undefined when the parent has only one
-  // sub-section and the parent header already says everything.
-  label?: string;
-  description?: string;
-}
+// The parent-group taxonomy is owned by the backend and fetched via
+// useSettingGroups(); see internal/storage/admin/settings_groups.go. The UI
+// renders whatever the server returns, so a new category can never silently
+// vanish from this page.
 
-interface ParentGroup {
-  id: string;
-  label: string;
-  description?: string;
-  // Hide the entire parent (and its sub-sections) when enrichment is
-  // unavailable. Read-path tuning stays visible regardless.
-  requiresEnrichment?: boolean;
-  // Hide the entire parent unless the active database backend is in this
-  // list. Used for storage-bound knobs (HNSW only matters on SQLite).
-  requiresBackend?: string[];
-  subSections: SubSection[];
-}
-
-const PARENT_GROUPS: ParentGroup[] = [
-  {
-    id: "memory",
-    label: "Memory",
-    description: "Defaults applied to new memories and how long deleted ones are retained.",
-    subSections: [{ category: "memory" }],
-  },
-  {
-    id: "enrichment",
-    label: "Enrichment",
-    description: "Background pipeline that pulls facts and entities out of new memories.",
-    requiresEnrichment: true,
-    subSections: [
-      {
-        category: "enrichment",
-        label: "General",
-        description: "Master switches and basic batch sizing for the enrichment pipeline.",
-      },
-      {
-        category: "enrichment_ingestion",
-        label: "Ingestion Decision",
-        description:
-          "When a new memory looks like a near-duplicate, the model decides whether to add, update, delete, or skip. Off by default. Turn shadow mode on first to observe the decisions before acting on them.",
-      },
-      {
-        category: "enrichment_performance",
-        label: "Worker Performance",
-        description:
-          "Throughput and concurrency for the enrichment worker pool, plus the model parameters used for fact and entity extraction. Also covers gone-worker recovery: heartbeat interval, stuck-job sweep cadence, and the staleness threshold past which an in-flight job is auto-requeued. Most fields hot-reload; the worker count, poll interval, heartbeat interval, and sweep interval need a restart.",
-      },
-      {
-        category: "enrichment_query_augment",
-        label: "Query Augmentation",
-        description:
-          "Off by default. When enabled, the enrichment worker asks the LLM for N paraphrased queries per memory and prepends them to the content before embedding so a single vector captures both the fact and the ways someone would ask about it. After flipping the switch, use the Backfill Augmentation button to re-embed memories whose vector pre-dates the flag.",
-      },
-    ],
-  },
-  {
-    id: "dreaming",
-    label: "Dreaming",
-    description: "Background consolidation that audits syntheses, reinforces confidence, and merges related memories.",
-    requiresEnrichment: true,
-    subSections: [
-      {
-        category: "dreaming",
-        label: "General",
-        description: "Scheduler, token budgets, and the confidence floor for new syntheses.",
-      },
-      {
-        category: "dreaming_novelty",
-        label: "Novelty Audit",
-        description:
-          "Discards syntheses that don't actually add anything new compared to the memories they were built from.",
-      },
-      {
-        category: "dreaming_phase_budget",
-        label: "Phase Budget Allocation",
-        description:
-          "Reserve a fraction of the per-cycle token budget for each phase. Without reservations, an LLM-heavy phase running early can consume the entire envelope and starve later phases. SQL-only phases default to 0 (share the root); LLM phases default to a share that protects downstream synthesis.",
-      },
-      {
-        category: "dreaming_consolidation",
-        label: "Consolidation Budget",
-        description:
-          "How the per-cycle token budget is split across the audit, reinforce, and consolidate sub-phases so none can starve the others.",
-      },
-      {
-        category: "dreaming_contradiction",
-        label: "Contradiction Detection",
-        description:
-          "Per-cycle cap on the model calls used to find contradicting memory pairs, plus the confidence haircuts applied to winners, losers, and ties.",
-      },
-      {
-        category: "dreaming_paraphrase",
-        label: "Paraphrase Sweep",
-        description:
-          "Catches near-duplicate memories the contradiction phase misses by running a vector similarity sweep directly on every eligible memory.",
-      },
-      {
-        category: "dreaming_embedding_backfill",
-        label: "Embedding Backfill",
-        description:
-          "Repairs memories whose embedding row is missing. Re-embeds when the embedder is healthy; otherwise clears the orphan dimension marker.",
-      },
-      {
-        category: "dreaming_performance",
-        label: "Performance",
-        description:
-          "How many neighbors to consider, how similar two entities must be to merge, and how often the scheduler wakes up.",
-      },
-    ],
-  },
-  {
-    id: "recall",
-    label: "Recall & Ranking",
-    description: "How memories are scored, fused, and reinforced at retrieval time.",
-    subSections: [
-      {
-        category: "reconsolidation",
-        label: "Reconsolidation",
-        description:
-          "Each recall reinforces a memory's confidence; idle memories slowly decay during dream cycles.",
-      },
-      {
-        category: "recall_fusion",
-        label: "Hybrid Fusion",
-        description:
-          "Run vector and lexical (BM25) search side by side and merge the results with Reciprocal Rank Fusion. Off by default. Turn on after migration 18 has been applied.",
-      },
-      {
-        category: "ranking",
-        label: "Ranking",
-        description:
-          "Weights for the recall ranking formula: similarity, recency, importance, frequency, graph relevance, and confidence.",
-      },
-    ],
-  },
-  {
-    id: "api",
-    label: "API",
-    description: "Public API rate limits, per-request caps, and graph defaults.",
-    subSections: [
-      {
-        category: "api",
-        label: "General",
-        description: "Per-user rate limit and burst size for the public API.",
-      },
-      {
-        category: "api_performance",
-        label: "Performance",
-        description:
-          "Rate-limiter cleanup cadence, batch-store item cap, and the default minimum edge weight for the graph endpoint. Advanced.",
-      },
-    ],
-  },
-  {
-    id: "graph_visualization",
-    label: "Graph Visualization",
-    description:
-      "System-default d3-force parameters for the 3D entity graph (gravity, repulsion, link distance). Each project can override these from the Layout panel on the graph page; values here apply when no override is stored.",
-    subSections: [{ category: "graph_visualization" }],
-  },
-  {
-    id: "auth",
-    label: "Auth",
-    description: "Authentication and authorization.",
-    subSections: [{ category: "auth" }],
-  },
-  {
-    id: "vector_db",
-    label: "Vector Database",
-    description: "Connection settings for the Qdrant vector database.",
-    requiresBackend: ["postgres"],
-    subSections: [{ category: "qdrant" }],
-  },
-  {
-    id: "hnsw",
-    label: "Vector Index (HNSW)",
-    description:
-      "Pure-Go HNSW index used for semantic search when the database backend is SQLite. M and ef_construction are baked into each index at build time, so changes apply only to newly-built indexes; ef_search and the cache size apply at next boot.",
-    requiresBackend: ["sqlite"],
-    subSections: [{ category: "hnsw" }],
-  },
-  {
-    id: "lifecycle",
-    label: "Lifecycle Sweep",
-    description:
-      "Background sweep that expires time-to-live (TTL) memories, hard-purges soft-deleted ones past their retention window, and prunes orphaned graph data.",
-    subSections: [{ category: "lifecycle" }],
-  },
-  {
-    id: "events",
-    label: "Events & Streaming",
-    description:
-      "Buffer sizes and keepalive timing for server-sent events (SSE) and the in-process event bus. Advanced: incorrect values can stall subscribers or grow memory unboundedly.",
-    subSections: [{ category: "events" }],
-  },
-  {
-    id: "caches",
-    label: "Service Caches",
-    description:
-      "Cache lifetimes for the cascade resolver and settings service, plus the export pagination size.",
-    subSections: [{ category: "performance" }],
-  },
-];
 
 // Prompt-typed schema entries. Surfaced on the dedicated Prompt Templates page;
 // filtered out of the Settings page entirely so they cannot be edited in two
@@ -817,7 +614,7 @@ function ParentGroupCard({
   saving,
   resetting,
 }: {
-  group: ParentGroup;
+  group: SettingGroup;
   itemsByCategory: Map<string, SettingWithSchema[]>;
   onSave: (key: string, value: unknown) => void;
   onReset: (key: string) => void;
@@ -828,10 +625,10 @@ function ParentGroupCard({
   // with nothing under it.
   const populated = useMemo(
     () =>
-      group.subSections
+      group.subsections
         .map((sub) => ({ sub, items: itemsByCategory.get(sub.category) ?? [] }))
         .filter((entry) => entry.items.length > 0),
-    [group.subSections, itemsByCategory],
+    [group.subsections, itemsByCategory],
   );
 
   if (populated.length === 0) return null;
@@ -919,9 +716,16 @@ function ParentGroupCard({
 function SettingsEditor() {
   const settingsQuery = useSettings();
   const schemaQuery = useSettingsSchema();
+  const groupsQuery = useSettingGroups();
   const updateMutation = useUpdateSetting();
   const resetMutation = useResetSettings();
   const { available: enrichmentAvailable } = useEnrichmentAvailable();
+
+  // Active tab lives in the URL (?group=…) so it is deep-linkable and survives
+  // a reload, matching the app's useSearchParams convention (MemoryBrowser,
+  // Login). Search is ephemeral component state.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [search, setSearch] = useState("");
 
   const [toast, setToast] = useState<{
     message: string;
@@ -986,11 +790,14 @@ function SettingsEditor() {
     setConfirmingResetAll(false);
   }, [resetMutation, showToast]);
 
-  const isLoading = settingsQuery.isLoading || schemaQuery.isLoading;
-  const isError = settingsQuery.isError || schemaQuery.isError;
+  const isLoading =
+    settingsQuery.isLoading || schemaQuery.isLoading || groupsQuery.isLoading;
+  const isError =
+    settingsQuery.isError || schemaQuery.isError || groupsQuery.isError;
 
   const schemas = schemaQuery.data?.data ?? [];
   const settings = settingsQuery.data?.data ?? [];
+  const serverGroups = groupsQuery.data?.data ?? [];
 
   // Group settings by their backend category. Prompt keys live on the Prompt
   // Templates page; provider-config keys live on the Provider Configuration
@@ -1024,22 +831,74 @@ function SettingsEditor() {
   const { data: setupStatus } = useSetupStatus();
   const activeBackend = setupStatus?.backend ?? "";
 
+  // The full group set is the server taxonomy plus a synthetic "Other" group
+  // for any category the server did not place (should never happen — the
+  // backend test enforces total coverage — but it keeps a setting from ever
+  // silently vanishing).
+  const allGroups = useMemo(() => {
+    const fallback = buildFallbackGroup(serverGroups, [...itemsByCategory.keys()]);
+    return fallback ? [...serverGroups, fallback] : serverGroups;
+  }, [serverGroups, itemsByCategory]);
+
+  // category -> {groupLabel, subLabel}, used so search matches group/section
+  // names as well as setting keys and descriptions.
+  const categoryIndex = useMemo(() => buildCategoryIndex(allGroups), [allGroups]);
+
   const visibleGroups = useMemo(
     () =>
-      PARENT_GROUPS.filter((g) => {
-        if (g.requiresEnrichment && !enrichmentAvailable) return false;
-        if (g.requiresBackend && activeBackend && !g.requiresBackend.includes(activeBackend)) {
+      allGroups.filter((g) => {
+        if (g.requires_enrichment && !enrichmentAvailable) return false;
+        if (
+          g.requires_backend &&
+          activeBackend &&
+          !g.requires_backend.includes(activeBackend)
+        ) {
           return false;
         }
         return true;
       }),
-    [enrichmentAvailable, activeBackend],
+    [allGroups, enrichmentAvailable, activeBackend],
   );
+
+  const trimmedSearch = search.trim();
+  const searching = trimmedSearch !== "";
+
+  // The active tab, self-healing: falls back to the first visible group when
+  // the requested one is hidden by gating or names a stale/unknown group.
+  const activeGroup = resolveActiveGroup(visibleGroups, searchParams.get("group"));
+
+  const selectGroup = useCallback(
+    (id: string) => {
+      const next = new URLSearchParams(searchParams);
+      next.set("group", id);
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
+  // When searching, filter every category's items to those matching the query
+  // and count the survivors in the same pass. Categories with no surviving
+  // items are dropped (ParentGroupCard then renders nothing for them).
+  const { filteredByCategory, matchCount } = useMemo(() => {
+    if (!searching) return { filteredByCategory: itemsByCategory, matchCount: 0 };
+    const out = new Map<string, SettingWithSchema[]>();
+    let count = 0;
+    for (const [cat, list] of itemsByCategory) {
+      const ctx = categoryIndex.get(cat);
+      const kept = list.filter((it) => matchesQuery(it, ctx, trimmedSearch));
+      if (kept.length > 0) {
+        out.set(cat, kept);
+        count += kept.length;
+      }
+    }
+    return { filteredByCategory: out, matchCount: count };
+  }, [searching, itemsByCategory, categoryIndex, trimmedSearch]);
 
   return (
     <div>
       {/* Page header */}
-      <div className="mb-6 flex items-start justify-between gap-4">
+      <div className="mb-6 space-y-4">
+      <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="font-display text-3xl text-foreground">Settings</h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -1081,6 +940,61 @@ function SettingsEditor() {
         </div>
       </div>
 
+      {/* Search box: filters across all groups by key/description/section. */}
+      {!isLoading && !isError && schemas.length > 0 && (
+        <div className="relative">
+          <FontAwesomeIcon
+            icon={faMagnifyingGlass}
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search settings by name or description…"
+            aria-label="Search settings"
+            className="w-full rounded-md border border-input bg-background py-2 pl-9 pr-9 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          {search && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => setSearch("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <FontAwesomeIcon icon={faXmark} className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Tab bar: one pill per visible group. Hidden while searching, since
+          search shows matches across every group at once. */}
+      {!isLoading && !isError && !searching && visibleGroups.length > 0 && (
+        <div role="tablist" aria-label="Setting groups" className="flex flex-wrap gap-2">
+          {visibleGroups.map((g) => {
+            const active = g.id === activeGroup?.id;
+            return (
+              <button
+                key={g.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => selectGroup(g.id)}
+                className={
+                  active
+                    ? "rounded-full bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground shadow-sm"
+                    : "rounded-full border border-input px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted"
+                }
+              >
+                {g.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      </div>
+
       {/* Loading state */}
       {isLoading && (
         <div className="flex items-center justify-center py-16">
@@ -1110,18 +1024,42 @@ function SettingsEditor() {
             </div>
           )}
 
-          {/* Parent group cards */}
-          {visibleGroups.map((group) => (
-            <ParentGroupCard
-              key={group.id}
-              group={group}
-              itemsByCategory={itemsByCategory}
-              onSave={handleSave}
-              onReset={handleReset}
-              saving={updateMutation.isPending}
-              resetting={resetMutation.isPending}
-            />
-          ))}
+          {searching ? (
+            <>
+              <p className="text-sm text-muted-foreground" aria-live="polite">
+                {matchCount === 0
+                  ? `No settings match "${trimmedSearch}".`
+                  : `${matchCount} setting${matchCount === 1 ? "" : "s"} match "${trimmedSearch}".`}
+              </p>
+              {/* Every visible group, filtered to matching items. Groups with
+                  no matches render nothing. */}
+              {visibleGroups.map((group) => (
+                <ParentGroupCard
+                  key={group.id}
+                  group={group}
+                  itemsByCategory={filteredByCategory}
+                  onSave={handleSave}
+                  onReset={handleReset}
+                  saving={updateMutation.isPending}
+                  resetting={resetMutation.isPending}
+                />
+              ))}
+            </>
+          ) : (
+            activeGroup && (
+              <div role="tabpanel">
+                <ParentGroupCard
+                  key={activeGroup.id}
+                  group={activeGroup}
+                  itemsByCategory={itemsByCategory}
+                  onSave={handleSave}
+                  onReset={handleReset}
+                  saving={updateMutation.isPending}
+                  resetting={resetMutation.isPending}
+                />
+              </div>
+            )
+          )}
         </div>
       )}
 

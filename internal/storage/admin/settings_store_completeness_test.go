@@ -85,3 +85,63 @@ func TestNumericSchemasHaveRange(t *testing.T) {
 		}
 	}
 }
+
+// TestEverySettingCategoryMapsToGroup asserts that the parent-group taxonomy
+// (settingsGroups, served to the admin UI) is a total, non-overlapping cover of
+// every non-prompt setting. Without this, a setting whose category is not
+// referenced by any group silently never renders on the Settings page — the
+// exact drift that left recall/usage/export/mcp settings unreachable while the
+// grouping lived hardcoded in the frontend.
+//
+// Prompt-typed entries (enrichment_prompts, dreaming_prompts) are exempt: they
+// are edited on the Prompt Templates page, not the Settings page, and are
+// deliberately absent from settingsGroups.
+func TestEverySettingCategoryMapsToGroup(t *testing.T) {
+	// category -> number of sub-sections referencing it.
+	referenced := make(map[string]int)
+	for _, g := range settingsGroups {
+		for _, sub := range g.SubSections {
+			referenced[sub.Category]++
+		}
+	}
+
+	// A category claimed by more than one sub-section would render the same
+	// settings in two places.
+	for cat, n := range referenced {
+		if n > 1 {
+			t.Errorf("category %q is referenced by %d sub-sections; each "+
+				"category must map to exactly one", cat, n)
+		}
+	}
+
+	// Count non-prompt schema entries per category.
+	schemaByCategory := make(map[string]int)
+	for _, entry := range settingsSchemas {
+		if entry.Type == "prompt" {
+			continue
+		}
+		schemaByCategory[entry.Category]++
+	}
+
+	// Every non-prompt setting category must be claimed by a group.
+	unmapped := []string{}
+	for cat := range schemaByCategory {
+		if referenced[cat] == 0 {
+			unmapped = append(unmapped, cat)
+		}
+	}
+	if len(unmapped) > 0 {
+		t.Errorf("%d setting categor(ies) map to no parent group in "+
+			"settingsGroups: %v — add them or they never render on the "+
+			"Settings page", len(unmapped), unmapped)
+	}
+
+	// Every sub-section must point at a category that actually has settings,
+	// so a typo in settingsGroups surfaces as an empty tab is caught here.
+	for cat := range referenced {
+		if schemaByCategory[cat] == 0 {
+			t.Errorf("group sub-section category %q has no non-prompt schema "+
+				"entries; remove the dangling sub-section or fix the typo", cat)
+		}
+	}
+}

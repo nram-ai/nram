@@ -26,6 +26,8 @@ type mockSettingsAdminStore struct {
 	updateErr error
 	schemas   []SettingSchema
 	schemaErr error
+	groups    []SettingGroup
+	groupsErr error
 	resetErr  error
 
 	// capture args
@@ -78,6 +80,10 @@ func (m *mockSettingsAdminStore) UpdateSetting(_ context.Context, key string, va
 
 func (m *mockSettingsAdminStore) GetSettingsSchema(_ context.Context) ([]SettingSchema, error) {
 	return m.schemas, m.schemaErr
+}
+
+func (m *mockSettingsAdminStore) GetSettingsGroups(_ context.Context) ([]SettingGroup, error) {
+	return m.groups, m.groupsErr
 }
 
 func (m *mockSettingsAdminStore) ResetSetting(_ context.Context, key, scope string, updatedBy *uuid.UUID) error {
@@ -238,6 +244,56 @@ func TestAdminSettingsGetSchema(t *testing.T) {
 	}
 	if resp.Data[1].Key != "enrichment.auto_extract" {
 		t.Errorf("expected key enrichment.auto_extract, got %q", resp.Data[1].Key)
+	}
+}
+
+func TestAdminSettingsGetGroups(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		groups: []SettingGroup{
+			{
+				ID:          "memory",
+				Label:       "Memory",
+				Description: "Defaults for new memories.",
+				SubSections: []SettingSubSection{{Category: "memory"}},
+			},
+			{
+				ID:                 "enrichment",
+				Label:              "Enrichment",
+				RequiresEnrichment: true,
+				SubSections: []SettingSubSection{
+					{Category: "enrichment", Label: "General"},
+				},
+			},
+		},
+	}
+
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/settings?groups=true", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp struct {
+		Data []SettingGroup `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(resp.Data) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(resp.Data))
+	}
+	if resp.Data[0].ID != "memory" || resp.Data[0].SubSections[0].Category != "memory" {
+		t.Errorf("unexpected first group: %+v", resp.Data[0])
+	}
+	if !resp.Data[1].RequiresEnrichment {
+		t.Errorf("expected enrichment group to carry requires_enrichment")
+	}
+	if resp.Data[1].SubSections[0].Label != "General" {
+		t.Errorf("expected sub-section label General, got %q", resp.Data[1].SubSections[0].Label)
 	}
 }
 

@@ -34,6 +34,7 @@ type SettingsAdminStore interface {
 	GetSetting(ctx context.Context, key, scope string) (*model.Setting, error)
 	UpdateSetting(ctx context.Context, key string, value json.RawMessage, scope string, updatedBy *uuid.UUID) error
 	GetSettingsSchema(ctx context.Context) ([]SettingSchema, error)
+	GetSettingsGroups(ctx context.Context) ([]SettingGroup, error)
 
 	// ResetSetting reverts a single setting at (key, scope) to its registered
 	// default. At scope=="global", performs an upsert with the canonical default
@@ -81,6 +82,32 @@ type SettingSchema struct {
 	OmitFromResetAll bool `json:"omit_from_reset_all,omitempty"`
 }
 
+// SettingGroup is one tab/card in the admin Settings UI: an ordered set of
+// sub-sections, each bound to a setting category. This taxonomy is the single
+// source of truth for how the UI organizes settings — the React page renders
+// it generically rather than hardcoding the structure. RequiresEnrichment and
+// RequiresBackend let the UI hide a whole group when it does not apply to the
+// running deployment (enrichment off, or a backend the group is not relevant
+// to). Served by GET /admin/settings?groups=true.
+type SettingGroup struct {
+	ID                 string              `json:"id"`
+	Label              string              `json:"label"`
+	Description        string              `json:"description,omitempty"`
+	RequiresEnrichment bool                `json:"requires_enrichment,omitempty"`
+	RequiresBackend    []string            `json:"requires_backend,omitempty"`
+	SubSections        []SettingSubSection `json:"subsections"`
+}
+
+// SettingSubSection binds one setting category to a heading within a group.
+// Label/Description are optional: when a group has a single sub-section whose
+// label and description are empty, the UI renders the items flat under the
+// group header.
+type SettingSubSection struct {
+	Category    string `json:"category"`
+	Label       string `json:"label,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
 // settingUpdateRequest is the request body for PUT /settings.
 type settingUpdateRequest struct {
 	Key   string          `json:"key"`
@@ -107,9 +134,12 @@ func NewAdminSettingsHandler(cfg SettingsAdminConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			if r.URL.Query().Get("schema") == "true" {
+			switch {
+			case r.URL.Query().Get("schema") == "true":
 				handleSettingsSchema(w, r, cfg)
-			} else {
+			case r.URL.Query().Get("groups") == "true":
+				handleSettingsGroups(w, r, cfg)
+			default:
 				handleListSettings(w, r, cfg)
 			}
 		case http.MethodPut:
@@ -292,6 +322,18 @@ func handleSettingsSchema(w http.ResponseWriter, r *http.Request, cfg SettingsAd
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"data": schemas})
+}
+
+// handleSettingsGroups handles GET /settings?groups=true — returns the parent-
+// group taxonomy the admin UI renders settings into.
+func handleSettingsGroups(w http.ResponseWriter, r *http.Request, cfg SettingsAdminConfig) {
+	groups, err := cfg.Store.GetSettingsGroups(r.Context())
+	if err != nil {
+		WriteError(w, mapSettingsError(err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"data": groups})
 }
 
 // handleUpdateSetting handles PUT /settings — updates a setting by key.

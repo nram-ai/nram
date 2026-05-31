@@ -489,6 +489,15 @@ export function useSettingsSchema() {
   });
 }
 
+export function useSettingGroups() {
+  const { isAdmin } = useAuth();
+  return useQuery({
+    queryKey: ["admin", "settings-groups"],
+    queryFn: adminAPI.getSettingGroups,
+    enabled: isAdmin,
+  });
+}
+
 // useSystemRankingWeights resolves the ranking.weight.* settings into a
 // fully-populated baseline view. Used by the project edit panel to show
 // system defaults as input placeholders and to compute the effective merged

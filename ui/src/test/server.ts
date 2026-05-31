@@ -396,28 +396,62 @@ const handlers = [
   }),
 
   // --- Admin: Providers ---
+  // GET /admin/providers returns an ordered ARRAY of provider slot statuses
+  // (api.ProviderConfigResponse = []ProviderSlotStatus), one entry per slot.
   http.get(`${BASE}/admin/providers`, () => {
-    return HttpResponse.json({
-      embedding: {
+    return HttpResponse.json([
+      {
+        slot: "embedding",
+        label: "Embedding",
+        description: "Vector embedding model.",
+        required: true,
         configured: true,
         type: "ollama",
         url: "http://localhost:11434",
         model: "nomic-embed-text",
         dimensions: 768,
       },
-      fact: {
+      {
+        slot: "fact",
+        label: "Fact extraction",
+        description: "Extracts facts from memories.",
+        required: true,
         configured: true,
         type: "ollama",
         url: "http://localhost:11434",
         model: "llama3",
       },
-      entity: {
+      {
+        slot: "entity",
+        label: "Entity extraction",
+        description: "Extracts entities and relationships.",
+        required: true,
         configured: true,
         type: "ollama",
         url: "http://localhost:11434",
         model: "llama3",
       },
-    });
+      {
+        slot: "query_augment",
+        label: "Query augmentation",
+        description: "Generates paraphrased queries for embedding.",
+        required: false,
+        configured: false,
+        type: "",
+        url: "",
+        model: "",
+      },
+      {
+        slot: "ingestion_decision",
+        label: "Ingestion decision",
+        description: "Decides add/update/delete/skip for near-duplicates.",
+        required: false,
+        configured: false,
+        type: "",
+        url: "",
+        model: "",
+      },
+    ]);
   }),
 
   http.put(`${BASE}/admin/providers/:slot`, () => {
@@ -532,6 +566,31 @@ const handlers = [
             min: 0,
             max: 1,
             step: 0.01,
+          },
+        ],
+      });
+    }
+    if (url.searchParams.get("groups") === "true") {
+      // Group taxonomy mirroring internal/storage/admin/settings_groups.go,
+      // covering every category present in the schema mock above so no
+      // synthetic "Other" group appears in tests.
+      return HttpResponse.json({
+        data: [
+          {
+            id: "enrichment",
+            label: "Enrichment",
+            description: "Background extraction pipeline.",
+            requires_enrichment: true,
+            subsections: [
+              { category: "enrichment", label: "General" },
+              { category: "enrichment_ingestion", label: "Ingestion Decision" },
+            ],
+          },
+          {
+            id: "recall",
+            label: "Recall & Ranking",
+            description: "How memories are scored and ranked.",
+            subsections: [{ category: "ranking", label: "Ranking" }],
           },
         ],
       });
