@@ -43,16 +43,13 @@ type EnrichmentAdminConfig struct {
 	// error like the other prompt resolvers.
 	IngestionPromptDefault func(ctx context.Context) string
 
-	// QueryAugmentModelDefault and IngestionModelDefault resolve the
-	// per-feature model overrides (enrichment.query_augment.model /
-	// enrichment.ingestion_decision.model). Both phases reuse the Fact
-	// provider at runtime and swap only the model name; the test surface must
-	// resolve the same override so "Test" runs against the model the live
-	// pipeline would use, not the Fact slot's default. Nil (or an empty
-	// resolved value) leaves the request model empty, so the provider falls
-	// back to its configured default — exactly matching the runtime fallback.
-	QueryAugmentModelDefault func(ctx context.Context) string
-	IngestionModelDefault    func(ctx context.Context) string
+	// QueryAugmentProvider and IngestionProvider resolve the providers for the
+	// query-augmentation and ingestion-decision phases. Each returns the
+	// dedicated slot's provider, falling back to the fact provider when the
+	// slot is unconfigured (Registry.GetQueryAugment / GetIngestionDecision),
+	// so "Test" runs against exactly the provider+model the live pipeline uses.
+	QueryAugmentProvider func() provider.LLMProvider
+	IngestionProvider    func() provider.LLMProvider
 
 	// BackfillAugmentation runs the query-augmentation backfill against memories
 	// whose vector pre-dates the feature flip. Nil disables the backfill
@@ -350,10 +347,10 @@ type enrichmentTestPromptRequest struct {
 type enrichmentTestPromptResponse struct {
 	Output string `json:"output"` // raw LLM output
 	Parsed any    `json:"parsed"` // parsed structured data (facts or entities)
-	// Model is the model the test actually ran against — the resolved
-	// per-feature override for augment/ingestion, or the provider's default
-	// for fact/entity (and for augment/ingestion when no override is set). Lets
-	// the UI confirm that a configured model override took effect.
+	// Model is the model the test actually ran against, as reported by the
+	// provider — the resolved provider slot supplies it (for augment/ingestion
+	// the dedicated slot, falling back to fact when unconfigured). Lets the UI
+	// surface which model answered.
 	Model     string `json:"model,omitempty"`
 	Error     string `json:"error,omitempty"`
 	LatencyMs int64  `json:"latency_ms"`
@@ -393,11 +390,6 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 
 	var llmProvider provider.LLMProvider
 	var promptTemplate string
-	// modelOverride is the resolved per-feature model name for augment and
-	// ingestion (both reuse the Fact provider and swap only the model). Empty
-	// for fact/entity, and empty when no override is configured — in which case
-	// the provider falls back to its default model, matching the runtime phase.
-	var modelOverride string
 
 	switch body.Type {
 	case "fact":
@@ -431,18 +423,17 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			promptTemplate = cfg.EntityPromptDefault(r.Context())
 		}
 	case "augment":
-		// Augmentation reuses the fact-extraction provider but honors the
-		// enrichment.query_augment.model override, exactly as the runtime
-		// phase does (internal/enrichment/phase_query_augment.go). Resolving
-		// the override here is what makes the Test button reflect the live
-		// model instead of always running on the Fact slot's default.
-		if cfg.FactProvider == nil {
-			WriteError(w, ErrBadRequest("no fact extraction provider configured"))
+		// Augmentation runs against the query-augment provider slot (which
+		// falls back to the fact provider when unconfigured), exactly as the
+		// runtime phase does (internal/enrichment/phase_query_augment.go), so
+		// the Test button reflects the live provider and model.
+		if cfg.QueryAugmentProvider == nil {
+			WriteError(w, ErrBadRequest("no query-augmentation provider configured"))
 			return
 		}
-		llmProvider = cfg.FactProvider()
+		llmProvider = cfg.QueryAugmentProvider()
 		if llmProvider == nil {
-			WriteError(w, ErrBadRequest("fact extraction provider is not available"))
+			WriteError(w, ErrBadRequest("query-augmentation provider is not available"))
 			return
 		}
 		if strings.TrimSpace(body.Prompt) != "" {
@@ -450,31 +441,26 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		} else if cfg.QueryAugmentPromptDef != nil {
 			promptTemplate = cfg.QueryAugmentPromptDef(r.Context())
 		}
-		if cfg.QueryAugmentModelDefault != nil {
-			modelOverride = strings.TrimSpace(cfg.QueryAugmentModelDefault(r.Context()))
-		}
 	case "ingestion":
-		// The ingestion-decision phase reuses the fact-extraction provider and
-		// honors the enrichment.ingestion_decision.model override
+		// The ingestion-decision phase runs against the ingestion-decision
+		// provider slot (which falls back to the fact provider when
+		// unconfigured), as the runtime phase does
 		// (internal/enrichment/phase_ingestion.go). The test runs the prompt
-		// with an empty candidate list, so it exercises the prompt + model
-		// override without a real near-neighbour search.
-		if cfg.FactProvider == nil {
-			WriteError(w, ErrBadRequest("no fact extraction provider configured"))
+		// with an empty candidate list, exercising the prompt without a real
+		// near-neighbour search.
+		if cfg.IngestionProvider == nil {
+			WriteError(w, ErrBadRequest("no ingestion-decision provider configured"))
 			return
 		}
-		llmProvider = cfg.FactProvider()
+		llmProvider = cfg.IngestionProvider()
 		if llmProvider == nil {
-			WriteError(w, ErrBadRequest("fact extraction provider is not available"))
+			WriteError(w, ErrBadRequest("ingestion-decision provider is not available"))
 			return
 		}
 		if strings.TrimSpace(body.Prompt) != "" {
 			promptTemplate = body.Prompt
 		} else if cfg.IngestionPromptDefault != nil {
 			promptTemplate = cfg.IngestionPromptDefault(r.Context())
-		}
-		if cfg.IngestionModelDefault != nil {
-			modelOverride = strings.TrimSpace(cfg.IngestionModelDefault(r.Context()))
 		}
 	}
 
@@ -507,7 +493,7 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		Messages: []provider.Message{
 			{Role: "user", Content: rendered},
 		},
-		Model:       modelOverride,
+		// Model left empty: the resolved provider slot supplies its own model.
 		MaxTokens:   2048,
 		Temperature: 0.1,
 		// Augmentation and ingestion both expect a JSON response. The runtime

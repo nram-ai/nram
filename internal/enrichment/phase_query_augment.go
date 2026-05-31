@@ -26,7 +26,6 @@ const QueryAugmentSeparator = "\n---\n"
 type queryAugmentSettings struct {
 	enabled       bool
 	count         int
-	model         string
 	prompt        string
 	maxInputChars int
 	maxTokens     int
@@ -71,7 +70,6 @@ func (wp *WorkerPool) resolveQueryAugmentSettings(ctx context.Context) queryAugm
 		}
 		cfg.count = v
 	}
-	cfg.model, _ = wp.settings.Resolve(ctx, service.SettingQueryAugmentModel, "global")
 	cfg.prompt, _ = wp.settings.Resolve(ctx, service.SettingQueryAugmentPrompt, "global")
 	if cfg.prompt == "" {
 		cfg.prompt, _ = service.GetDefault(service.SettingQueryAugmentPrompt)
@@ -374,9 +372,11 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	// — keys-as-queries — and degenerating into a loop until max_tokens
 	// truncates. The prompt itself is already strict about array output;
 	// ParseQueryAugmentResponse strips prose preambles via brackets.
+	// Model is left empty: the query-augment provider slot supplies the model
+	// (falling back to the fact provider's model when no dedicated slot is set,
+	// per Registry.GetQueryAugment).
 	req := &provider.CompletionRequest{
 		Messages:  []provider.Message{{Role: "user", Content: prompt}},
-		Model:     cfg.model,
 		MaxTokens: cfg.maxTokens,
 	}
 
@@ -438,77 +438,3 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	}, ""
 }
 
-// runQueryAugmentPreview runs the same phase the worker runs, but against
-// arbitrary content with overrides for prompt/count, and never touches the DB
-// or usage middleware (the preview endpoint records its own latency). Used by
-// the Prompt Templates "Test" button and the memory-detail Preview button.
-// When the LLM call or parse fails, the error is returned to the caller so the
-// UI can surface it inline; the worker phase is fail-soft for the same paths.
-type QueryAugmentPreview struct {
-	Queries          []string
-	AugmentedContent string
-	RenderedPrompt   string
-	Model            string
-	LatencyMS        int64
-	Truncated        int
-}
-
-func (wp *WorkerPool) RunQueryAugmentPreview(ctx context.Context, content, promptOverride, modelOverride string, count, maxInputChars int) (*QueryAugmentPreview, error) {
-	cfg := wp.resolveQueryAugmentSettings(ctx)
-	if promptOverride != "" {
-		cfg.prompt = promptOverride
-	}
-	if modelOverride != "" {
-		cfg.model = modelOverride
-	}
-	if count > 0 {
-		cfg.count = count
-	}
-	if maxInputChars >= 0 {
-		cfg.maxInputChars = maxInputChars
-	}
-	if wp.factProvider == nil {
-		return nil, fmt.Errorf("fact provider not configured")
-	}
-	llm := wp.factProvider()
-	if llm == nil {
-		return nil, fmt.Errorf("fact provider returned nil")
-	}
-	prompt := RenderQueryAugmentPrompt(cfg.prompt, content, cfg.count)
-	// JSONMode deliberately omitted; see runQueryAugment comment for why
-	// response_format=json_object is harmful for the array-output contract.
-	req := &provider.CompletionRequest{
-		Messages:  []provider.Message{{Role: "user", Content: prompt}},
-		Model:     cfg.model,
-		MaxTokens: cfg.maxTokens,
-	}
-	start := time.Now()
-	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationQueryAugment), req)
-	latency := time.Since(start)
-	if err != nil {
-		return nil, fmt.Errorf("llm complete: %w", err)
-	}
-	queries, perr := ParseQueryAugmentResponse(resp.Content)
-	if perr != nil {
-		// Mirror the worker phase's diagnostic log; same finish_reason +
-		// raw-body shape so operators triage live and preview parse failures
-		// from a single grep target.
-		slog.Warn("enrichment: query_augment preview parse",
-			"err", perr,
-			"raw_len", len(resp.Content),
-			"finish_reason", resp.FinishReason,
-			"model", resp.Model,
-			"raw", resp.Content,
-			"llm_latency_ms", latency.Milliseconds())
-		return nil, perr
-	}
-	augmented, trimmed := BuildAugmentedInput(queries, content, cfg.maxInputChars)
-	return &QueryAugmentPreview{
-		Queries:          queries,
-		AugmentedContent: augmented,
-		RenderedPrompt:   prompt,
-		Model:            resp.Model,
-		LatencyMS:        latency.Milliseconds(),
-		Truncated:        trimmed,
-	}, nil
-}

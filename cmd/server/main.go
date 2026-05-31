@@ -791,10 +791,10 @@ func main() {
 		Export:     api.NewExportHandler(exportSvc),
 		Import:     api.NewImportHandler(importSvc),
 		PreviewAugment: api.NewMemoryPreviewAugmentHandler(api.MemoryPreviewAugmentConfig{
-			Memories:     memoryRepo,
-			Projects:     projectRepo,
-			FactProvider: factProvider,
-			Settings:     settingsSvc,
+			Memories:             memoryRepo,
+			Projects:             projectRepo,
+			QueryAugmentProvider: queryAugmentProvider,
+			Settings:             settingsSvc,
 		}),
 
 		// User-scoped handlers
@@ -933,16 +933,11 @@ func main() {
 			IngestionPromptDefault: func(ctx context.Context) string {
 				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingIngestionDecisionPrompt, "global")
 			},
-			// Resolve the per-feature model overrides the same way the runtime
-			// phases do (plain Resolve, empty when unset → provider default).
-			QueryAugmentModelDefault: func(ctx context.Context) string {
-				m, _ := settingsSvc.Resolve(ctx, service.SettingQueryAugmentModel, "global")
-				return m
-			},
-			IngestionModelDefault: func(ctx context.Context) string {
-				m, _ := settingsSvc.Resolve(ctx, service.SettingIngestionDecisionModel, "global")
-				return m
-			},
+			// The augment/ingestion test surface runs against the dedicated
+			// provider slots (falling back to fact when unconfigured), matching
+			// the runtime phases.
+			QueryAugmentProvider: queryAugmentProvider,
+			IngestionProvider:    ingestionProvider,
 			BackfillAugmentation: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
 				resp, err := enrichSvc.BackfillAugmentation(ctx, &service.BackfillAugmentationRequest{
 					ProjectID: projectID,

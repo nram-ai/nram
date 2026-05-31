@@ -854,9 +854,9 @@ export default function PromptTemplates() {
                   fact and entity extraction. The ingestion-decision prompt
                   drives the ADD/UPDATE/DELETE/NONE judgment on near-duplicate
                   matches at write time. The test runs the prompt with an empty
-                  candidate list, so it exercises the prompt and the configured
-                  model override (Provider Configuration → Fact → Ingestion
-                  Decision Model Override).
+                  candidate list against the ingestion-decision provider slot
+                  (configured under Provider Configuration), so it exercises the
+                  prompt and the model that slot resolves to.
                 </p>
               </div>
 

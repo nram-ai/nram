@@ -39,10 +39,13 @@ type QueryAugmentPromptResolver interface {
 // dependencies are required; nil checks in the handler surface a 503 rather
 // than a panic so deployments without augmentation wired report cleanly.
 type MemoryPreviewAugmentConfig struct {
-	Memories     MemoryLister
-	Projects     ProjectGetter
-	FactProvider func() provider.LLMProvider
-	Settings     QueryAugmentPromptResolver
+	Memories MemoryLister
+	Projects ProjectGetter
+	// QueryAugmentProvider returns the query-augmentation provider slot
+	// (falling back to the fact provider when unconfigured), so the preview
+	// runs against exactly the provider+model the runtime phase uses.
+	QueryAugmentProvider func() provider.LLMProvider
+	Settings             QueryAugmentPromptResolver
 }
 
 // MemoryPreviewAugmentResponse is the JSON envelope for the preview endpoint.
@@ -69,7 +72,7 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 			WriteError(w, ErrBadRequest("method not allowed"))
 			return
 		}
-		if cfg.Memories == nil || cfg.Projects == nil || cfg.FactProvider == nil || cfg.Settings == nil {
+		if cfg.Memories == nil || cfg.Projects == nil || cfg.QueryAugmentProvider == nil || cfg.Settings == nil {
 			http.Error(w, "preview-augmentation not available in this deployment", http.StatusServiceUnavailable)
 			return
 		}
@@ -131,10 +134,6 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		if count > enrichment.QueryAugmentMaxCount {
 			count = enrichment.QueryAugmentMaxCount
 		}
-		// Resolve the optional per-feature model override so preview matches
-		// what the runtime phase would emit. Empty falls back to whatever
-		// model the fact provider was registered with.
-		modelOverride, _ := cfg.Settings.Resolve(r.Context(), service.SettingQueryAugmentModel, "global")
 
 		// Resolve the completion-token cap from the same settings key the
 		// worker phase reads, so the preview matches what the live ingestion
@@ -147,9 +146,9 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 			}
 		}
 
-		llm := cfg.FactProvider()
+		llm := cfg.QueryAugmentProvider()
 		if llm == nil {
-			http.Error(w, "fact provider not available", http.StatusServiceUnavailable)
+			http.Error(w, "query-augmentation provider not available", http.StatusServiceUnavailable)
 			return
 		}
 
@@ -161,8 +160,8 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		// into a degenerate keys-as-queries loop until max_tokens truncates.
 		// See enrichment.runQueryAugment for the full diagnosis.
 		resp, err := llm.Complete(provider.WithOperation(r.Context(), provider.OperationQueryAugment), &provider.CompletionRequest{
-			Messages:  []provider.Message{{Role: "user", Content: rendered}},
-			Model:     modelOverride,
+			Messages: []provider.Message{{Role: "user", Content: rendered}},
+			// Model left empty: the query-augmentation provider slot supplies it.
 			MaxTokens: maxTokens,
 		})
 		latency := time.Since(start).Milliseconds()

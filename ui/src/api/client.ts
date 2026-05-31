@@ -1251,9 +1251,9 @@ export interface EnrichmentPauseResponse {
 export interface ExtractionTestResult {
   output: string;
   parsed: unknown;
-  // model is the model the test actually ran against — the resolved per-feature
-  // override for augment/ingestion, or the provider default otherwise. Lets the
-  // UI confirm a configured model override took effect.
+  // model is the model the test actually ran against, as reported by the
+  // provider — the resolved provider slot supplies it (the dedicated slot for
+  // augment/ingestion, falling back to fact when unconfigured).
   model?: string;
   error?: string;
   latency_ms: number;

@@ -25,7 +25,6 @@ type ingestionSettings struct {
 	threshold float64
 	topK      int
 	shadow    bool
-	model     string
 	prompt    string
 }
 
@@ -134,9 +133,11 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 		return res
 	}
 
+	// Model is left empty: the ingestion-decision provider slot supplies the
+	// model (falling back to the fact provider's model when no dedicated slot
+	// is set, per Registry.GetIngestionDecision).
 	req := &provider.CompletionRequest{
 		Messages:    []provider.Message{{Role: "user", Content: renderIngestionPrompt(cfg.prompt, cfg.topK, mem.Content, matches)}},
-		Model:       cfg.model,
 		MaxTokens:   512,
 		Temperature: wp.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentIngestionDecisionTemperature, "global"),
 		JSONMode:    true,
@@ -228,7 +229,6 @@ func (wp *WorkerPool) resolveIngestionSettings(ctx context.Context, namespaceID 
 		cfg.topK = v
 	}
 	cfg.shadow = wp.settings.ResolveBool(ctx, service.SettingIngestionDecisionShadow, "global")
-	cfg.model, _ = wp.settings.Resolve(ctx, service.SettingIngestionDecisionModel, "global")
 	cfg.prompt, _ = wp.settings.Resolve(ctx, service.SettingIngestionDecisionPrompt, "global")
 	if cfg.prompt == "" {
 		cfg.prompt, _ = service.GetDefault(service.SettingIngestionDecisionPrompt)

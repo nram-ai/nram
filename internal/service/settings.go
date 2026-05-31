@@ -209,7 +209,6 @@ const (
 	SettingIngestionDecisionShadow    = "enrichment.ingestion_decision.shadow_mode"
 	SettingIngestionDecisionThreshold = "enrichment.ingestion_decision.threshold"
 	SettingIngestionDecisionTopK      = "enrichment.ingestion_decision.top_k"
-	SettingIngestionDecisionModel     = "enrichment.ingestion_decision.model"
 	SettingIngestionDecisionPrompt    = "enrichment.ingestion_decision.prompt"
 
 	// Query augmentation. When enabled, the enrichment worker generates N
@@ -218,11 +217,11 @@ const (
 	// the fact and the ways someone might phrase a query for it. Off by
 	// default; flip only after the canned recall regression set shows no
 	// contamination-probe regressions plus measurable improvement on 3 or
-	// more of 7 stress angles. Empty model falls back to the fact-extraction
-	// provider. Prompt accepts {content} and {N} as named placeholders.
+	// more of 7 stress angles. The model comes from the query_augment provider
+	// slot (which falls back to the fact provider). Prompt accepts {content}
+	// and {N} as named placeholders.
 	SettingQueryAugmentEnabled       = "enrichment.query_augment.enabled"
 	SettingQueryAugmentCount         = "enrichment.query_augment.count"
-	SettingQueryAugmentModel         = "enrichment.query_augment.model"
 	SettingQueryAugmentPrompt        = "enrichment.query_augment.prompt"
 	SettingQueryAugmentMaxInputChars = "enrichment.query_augment.max_input_chars"
 	SettingQueryAugmentMaxTokens     = "enrichment.query_augment.max_tokens"
@@ -720,7 +719,6 @@ Text:
 	SettingIngestionDecisionShadow:    "false",
 	SettingIngestionDecisionThreshold: "0.92",
 	SettingIngestionDecisionTopK:      "5",
-	SettingIngestionDecisionModel:     "",
 	SettingIngestionDecisionPrompt: `You are an ingestion decision engine. You do NOT converse. You output JSON only.
 
 A new memory has just arrived. Below is its content, followed by up to %d candidate near-neighbour memories that already exist (with their IDs and creation times). Decide what to do with the new memory.
@@ -757,7 +755,6 @@ or
 
 	SettingQueryAugmentEnabled:       "true",
 	SettingQueryAugmentCount:         "4",
-	SettingQueryAugmentModel:         "",
 	SettingQueryAugmentMaxInputChars: "0",
 	SettingQueryAugmentMaxTokens:     "2048",
 	SettingQueryAugmentPrompt: `You are a query augmentation engine. You do NOT converse. You output JSON only.

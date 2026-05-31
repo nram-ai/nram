@@ -329,13 +329,6 @@ const PROMPT_KEYS = new Set([
   "dreaming.novelty.judge_prompt",
 ]);
 
-// Settings now surfaced on the Provider Configuration page. Filtered out so
-// the Settings page does not double-surface them.
-const MOVED_TO_PROVIDER_CONFIG = new Set([
-  "enrichment.ingestion_decision.model",
-  "enrichment.query_augment.model",
-]);
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1008,7 +1001,6 @@ function SettingsEditor() {
     const out = new Map<string, SettingWithSchema[]>();
     for (const schema of schemas) {
       if (isPromptKey(schema.key)) continue;
-      if (MOVED_TO_PROVIDER_CONFIG.has(schema.key)) continue;
       const cat = schema.category || "other";
       const merged: SettingWithSchema = {
         schema,
