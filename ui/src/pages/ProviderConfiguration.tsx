@@ -330,6 +330,10 @@ function ProviderSlotEditForm({
   onSave,
   onCancel,
   saving,
+  pendingConfirm,
+  onConfirm,
+  onCancelConfirm,
+  confirmPending,
 }: {
   slotName: string;
   initial: EditFormState;
@@ -338,6 +342,10 @@ function ProviderSlotEditForm({
   onSave: (data: UpdateProviderSlotRequest) => void;
   onCancel: (() => void) | null;
   saving: boolean;
+  pendingConfirm: { result: UpdateProviderSlotResult } | null;
+  onConfirm: () => void;
+  onCancelConfirm: () => void;
+  confirmPending: boolean;
 }) {
   const [form, setForm] = useState<EditFormState>(initial);
   const modelPlaceholder = MODEL_HINTS[form.type]?.[slotName] || "e.g. model-name";
@@ -489,33 +497,86 @@ function ProviderSlotEditForm({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={!form.type || !form.url || !form.model || saving}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {saving ? (
-            <span className="flex items-center gap-1.5">
-              <FontAwesomeIcon icon={faSpinner} spin className="h-3.5 w-3.5" />
-              Saving...
-            </span>
-          ) : (
-            "Save"
-          )}
-        </button>
-        {onCancel && (
+      {/* Actions — replaced in-place by the destructive-action confirmation
+          when the server gates an embedding-model swap on confirm_invalidate.
+          Rendering it here (rather than at the top of the card) keeps the
+          warning at the same scroll position as the Save button the user
+          just clicked. */}
+      {pendingConfirm ? (
+        <div className="rounded-md border-2 border-destructive/40 bg-destructive/10 p-3">
+          <p className="text-sm font-semibold text-destructive">
+            Confirm embedding model switch
+          </p>
+          <p className="mt-1 text-sm text-destructive">
+            Switching from{" "}
+            <span className="font-mono text-xs">{pendingConfirm.result.old_model}</span>{" "}
+            to{" "}
+            <span className="font-mono text-xs">{pendingConfirm.result.new_model}</span>{" "}
+            will:
+          </p>
+          <ul className="mt-1 ml-5 list-disc text-xs text-destructive">
+            <li>
+              Clear all memory and entity vectors across every dimension table
+            </li>
+            <li>
+              Invalidate {pendingConfirm.result.memories_affected ?? 0} memory
+              vectors and {pendingConfirm.result.entities_affected ?? 0} entity
+              vectors
+            </li>
+            <li>
+              Queue every memory and entity for re-embedding under the new model
+            </li>
+          </ul>
+          <p className="mt-2 text-xs text-destructive">
+            Recall returns no results for unprocessed rows during the re-embed
+            window (typically 5–15 minutes).
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={confirmPending}
+              className="rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-white hover:bg-destructive disabled:opacity-50"
+            >
+              {confirmPending ? "Switching..." : "Confirm Switch & Re-embed"}
+            </button>
+            <button
+              type="button"
+              onClick={onCancelConfirm}
+              className="rounded-md border border-destructive/40 px-3 py-1.5 text-sm font-medium text-destructive hover:bg-destructive/20"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex gap-2">
           <button
             type="button"
-            onClick={onCancel}
-            className="rounded-md border border-input px-4 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-muted"
+            onClick={handleSave}
+            disabled={!form.type || !form.url || !form.model || saving}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Cancel
+            {saving ? (
+              <span className="flex items-center gap-1.5">
+                <FontAwesomeIcon icon={faSpinner} spin className="h-3.5 w-3.5" />
+                Saving...
+              </span>
+            ) : (
+              "Save"
+            )}
           </button>
-        )}
-      </div>
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-md border border-input px-4 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-muted"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -694,60 +755,6 @@ function ProviderSlotCard({
           </div>
         )}
 
-        {/* Destructive-action confirmation modal: server-driven. Pops up
-            only when an embedding-model change was attempted and the
-            server gated the cascade on confirm_invalidate. */}
-        {pendingConfirm && (
-          <div className="mb-4 rounded-md border-2 border-destructive/40 bg-destructive/10 p-3">
-            <p className="text-sm font-semibold text-destructive">
-              Confirm embedding model switch
-            </p>
-            <p className="mt-1 text-sm text-destructive">
-              Switching from{" "}
-              <span className="font-mono text-xs">{pendingConfirm.result.old_model}</span>{" "}
-              to{" "}
-              <span className="font-mono text-xs">{pendingConfirm.result.new_model}</span>{" "}
-              will:
-            </p>
-            <ul className="mt-1 ml-5 list-disc text-xs text-destructive">
-              <li>
-                Clear all memory and entity vectors across every dimension
-                table
-              </li>
-              <li>
-                Invalidate {pendingConfirm.result.memories_affected ?? 0} memory
-                vectors and {pendingConfirm.result.entities_affected ?? 0} entity
-                vectors
-              </li>
-              <li>
-                Queue every memory and entity for re-embedding under the new
-                model
-              </li>
-            </ul>
-            <p className="mt-2 text-xs text-destructive">
-              Recall returns no results for unprocessed rows during the
-              re-embed window (typically 5–15 minutes).
-            </p>
-            <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                onClick={confirmSwitch}
-                disabled={updateMutation.isPending}
-                className="rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-white hover:bg-destructive disabled:opacity-50"
-              >
-                {updateMutation.isPending ? "Switching..." : "Confirm Switch & Re-embed"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setPendingConfirm(null)}
-                className="rounded-md border border-destructive/40 px-3 py-1.5 text-sm font-medium text-destructive hover:bg-destructive/20"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
         {editing || !slot.configured ? (
           <ProviderSlotEditForm
             slotName={slot.slot}
@@ -757,6 +764,10 @@ function ProviderSlotCard({
             onSave={handleSave}
             onCancel={slot.configured ? () => setEditing(false) : null}
             saving={updateMutation.isPending}
+            pendingConfirm={pendingConfirm}
+            onConfirm={confirmSwitch}
+            onCancelConfirm={() => setPendingConfirm(null)}
+            confirmPending={updateMutation.isPending}
           />
         ) : (
           <div className="space-y-3">
