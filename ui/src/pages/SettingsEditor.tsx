@@ -437,6 +437,13 @@ function InlineSettingEditor({
   );
 
   const requiresRestart = schema.requires_restart === true;
+  // Reserve the 2px left border + left padding in both states so a row does
+  // not shift horizontally when its value flips between default and modified.
+  const rowAccent = `border-l-2 pl-3 ${
+    differsFromDefault
+      ? "border-accent bg-accent/10 rounded-r"
+      : "border-transparent"
+  }`;
   const headerRow = (
     <>
       <div className="flex items-center gap-2">
@@ -446,6 +453,11 @@ function InlineSettingEditor({
         <HelpTooltip text={schema.description ?? ""} />
         {isDefault && (
           <span className="text-xs text-muted-foreground">(default)</span>
+        )}
+        {differsFromDefault && (
+          <span className="inline-flex items-center rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
+            Modified
+          </span>
         )}
         {requiresRestart && (
           <span className="inline-flex items-center rounded-full bg-warning/20 px-2 py-0.5 text-xs font-medium text-warning">
@@ -463,7 +475,7 @@ function InlineSettingEditor({
   if ((schema.type === "bool" || schema.type === "boolean") && !editing) {
     const boolVal = currentValue === true || currentValue === "true";
     return (
-      <div className="flex items-center justify-between py-3">
+      <div className={`flex items-center justify-between py-3 ${rowAccent}`}>
         <div className="flex-1 min-w-0">{headerRow}</div>
         <Switch
           checked={boolVal}
@@ -477,7 +489,7 @@ function InlineSettingEditor({
   // Display mode
   if (!editing) {
     return (
-      <div className="flex items-start justify-between py-3 gap-4">
+      <div className={`flex items-start justify-between py-3 gap-4 ${rowAccent}`}>
         <div className="flex-1 min-w-0">
           {headerRow}
           {!isDefault && (
@@ -552,7 +564,10 @@ function InlineSettingEditor({
     );
   }
 
-  // Edit mode
+  // Edit mode. The modified-state rowAccent and "Modified" pill are
+  // intentionally not applied here: this is the transient active-edit state,
+  // which has its own header and primary border/tint. The marker reappears on
+  // the display/toggle rows (via the shared headerRow) once editing ends.
   return (
     <div className="rounded-md border border-primary/30 bg-primary/5 p-3 my-1">
       <div className="mb-2">

@@ -174,4 +174,34 @@ describe("SettingsEditor tabs + search", () => {
     expect(screen.queryByText("usage.cost_rates")).not.toBeInTheDocument();
     expect(screen.getByText(/No settings match/i)).toBeInTheDocument();
   });
+
+  it("marks a row 'Modified' only when its value differs from the default", () => {
+    // enrichment.batch_size (default 32) is overridden to 64; enrichment.enabled
+    // has no stored override and stays at its default.
+    useSettingsMock.mockReturnValue(
+      loaded({
+        data: [
+          {
+            key: "enrichment.batch_size",
+            value: 64,
+            scope: "global",
+            updated_at: "2026-06-01T00:00:00Z",
+          },
+        ],
+      }),
+    );
+    renderPage();
+
+    // Exactly one row is marked Modified, and it is the overridden one.
+    const badges = screen.getAllByText("Modified");
+    expect(badges).toHaveLength(1);
+
+    const overriddenRow = screen.getByText("enrichment.batch_size").closest("div");
+    expect(overriddenRow).toHaveTextContent("Modified");
+
+    // The untouched boolean row still reads "(default)" and is not Modified.
+    const defaultRow = screen.getByText("enrichment.enabled").closest("div");
+    expect(defaultRow).toHaveTextContent("(default)");
+    expect(defaultRow).not.toHaveTextContent("Modified");
+  });
 });
