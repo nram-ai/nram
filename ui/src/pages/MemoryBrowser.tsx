@@ -14,7 +14,7 @@ import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import { useDebounce } from "../hooks/useDebounce";
 import { useAuth } from "../context/AuthContext";
 import { downloadJson } from "../lib/download";
-import { useSelectedProject } from "../context/ProjectContext";
+import { useSelectedProject, useEnsureValidSelectedProject } from "../context/ProjectContext";
 import {
   memoryAPI,
   downloadProjectExport,
@@ -1017,12 +1017,8 @@ function MemoryBrowser() {
   const projects = projectsQuery.data ?? [];
   const { selectedProjectId, setSelectedProjectId } = useSelectedProject();
 
-  // Auto-select first project
-  useEffect(() => {
-    if (!selectedProjectId && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [projects, selectedProjectId, setSelectedProjectId]);
+  // Default to global / self-heal a stale selection against the loaded list.
+  useEnsureValidSelectedProject(projects);
 
   const [searchParams, setSearchParams] = useSearchParams();
 

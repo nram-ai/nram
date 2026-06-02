@@ -8,7 +8,7 @@ import {
   useSchemaRange,
 } from "../hooks/useApi";
 import { useDebounce } from "../hooks/useDebounce";
-import { useSelectedProject } from "../context/ProjectContext";
+import { useSelectedProject, useEnsureValidSelectedProject } from "../context/ProjectContext";
 import type { GraphEntity, Project, ProjectSettings } from "../api/client";
 
 // Must stay in sync with the backend defaults registered in
@@ -550,11 +550,7 @@ function GraphVisualization() {
     observerRef.current.observe(el);
   }, []);
 
-  useEffect(() => {
-    if (!selectedProjectId && projects && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [projects, selectedProjectId, setSelectedProjectId]);
+  useEnsureValidSelectedProject(projects);
 
   const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 

@@ -1,7 +1,7 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMeProjects, useGraph } from "../hooks/useApi";
-import { useSelectedProject } from "../context/ProjectContext";
+import { useSelectedProject, useEnsureValidSelectedProject } from "../context/ProjectContext";
 import { useTheme } from "../context/ThemeContext";
 import type { GraphEntity } from "../api/client";
 
@@ -171,11 +171,7 @@ function EntityBrowser() {
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
   const colorMap = useGraphColorMap();
 
-  useEffect(() => {
-    if (!selectedProjectId && projects && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [projects, selectedProjectId, setSelectedProjectId]);
+  useEnsureValidSelectedProject(projects);
 
   const { data: graphData, isLoading: graphLoading, isError: graphError } = useGraph(selectedProjectId);
 
