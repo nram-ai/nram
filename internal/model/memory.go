@@ -53,6 +53,14 @@ type Memory struct {
 	Children []Memory `json:"children,omitempty"`
 }
 
+// IsLiveProvenance reports whether this memory can still serve as graph
+// provenance: it is neither soft-deleted nor superseded. Knowledge-graph edges
+// whose source memory is not live-provenance are reaped by the lifecycle sweep
+// and hidden by the graph read paths (admin graph endpoint, MCP graph tool).
+func (m *Memory) IsLiveProvenance() bool {
+	return m.SupersededBy == nil && m.DeletedAt == nil
+}
+
 type SystemMeta struct {
 	Key       string    `json:"key"`
 	Value     string    `json:"value"`

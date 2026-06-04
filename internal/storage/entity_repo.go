@@ -822,6 +822,52 @@ func (r *EntityRepo) DeleteOrphaned(ctx context.Context, olderThan time.Time) ([
 	return scanReturnedUUIDs(rows, "entity delete orphaned")
 }
 
+// RecomputeMentionCounts (re)derives mention_count as the number of distinct
+// live (non-deleted, non-superseded) memories that source an edge touching the
+// entity. This REDEFINES mention_count as a live-edge-provenance count rather
+// than reproducing the enrichment +1 counter: an entity that was mentioned but
+// never produced a relationship edge resolves to 0 here, where the enrichment
+// path would have counted the mention. That loss is intentional and accepted —
+// the derived count is decrementable on delete without a per-memory mention
+// table, and for ranking (ORDER BY mention_count DESC) a count that drops when
+// a sourcing memory is reaped is more honest than a monotonic counter. Run
+// AFTER reaping lost-provenance edges so the surviving edge set reflects only
+// live provenance.
+//
+// ids scopes the recompute (the delete/supersede path passes the reaped edges'
+// endpoints); a nil/empty slice recomputes every entity (the repair pass and
+// the self-healing sweep). Entities with no surviving live-sourced edge resolve
+// to 0 and are removed by the orphan sweep. Returns rows updated.
+func (r *EntityRepo) RecomputeMentionCounts(ctx context.Context, ids []uuid.UUID) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	const sub = `(SELECT COUNT(DISTINCT rel.source_memory) FROM relationships rel ` +
+		`JOIN memories m ON m.id = rel.source_memory ` +
+		`WHERE (rel.source_id = entities.id OR rel.target_id = entities.id) ` +
+		`AND m.deleted_at IS NULL AND m.superseded_by IS NULL)`
+
+	tsPlaceholder := "?"
+	if r.db.Backend() == BackendPostgres {
+		tsPlaceholder = "$1"
+	}
+	query := "UPDATE entities SET mention_count = " + sub + ", updated_at = " + tsPlaceholder
+	args := []any{now}
+	if len(ids) > 0 {
+		// IN-list placeholders start at $2 (after the updated_at bind).
+		placeholders, idArgs := uuidInPlaceholders(r.db, ids, 2)
+		query += " WHERE id IN (" + strings.Join(placeholders, ", ") + ")"
+		args = append(args, idArgs...)
+	}
+	result, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("entity recompute mention counts: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("entity recompute mention counts rows: %w", err)
+	}
+	return n, nil
+}
+
 // reload fetches the entity by ID and populates the struct in place.
 func (r *EntityRepo) reload(ctx context.Context, entity *model.Entity) error {
 	fetched, err := r.GetByID(ctx, entity.ID)

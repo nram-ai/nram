@@ -390,14 +390,19 @@ func main() {
 		vectorStore, entityRepo,
 		relationshipRepo, embedProvider,
 	).WithMetrics(promMetrics)
+	// graphReaper removes knowledge-graph data whose sourcing memory is gone
+	// (hard-deleted, soft-deleted, or superseded) and keeps entity
+	// mention_count consistent with surviving provenance. Shared by the
+	// forget, update (supersede), and lifecycle services.
+	graphReaper := service.NewGraphReaper(relationshipRepo, entityRepo)
 	updateSvc := service.NewUpdateService(
 		memoryRepo, projectRepo,
 		vectorStore, embedProvider, enrichmentQueueRepo,
-	)
+	).WithGraphReaper(graphReaper)
 	forgetSvc := service.NewForgetService(
 		memoryRepo, projectRepo, vectorStore,
 		lineageRepo,
-	).WithMetrics(promMetrics)
+	).WithMetrics(promMetrics).WithGraphReaper(graphReaper)
 	batchGetSvc := service.NewBatchGetService(memoryRepo, projectRepo)
 	batchStoreSvc := service.NewBatchStoreService(
 		memoryRepo, projectRepo, namespaceRepo,
@@ -478,7 +483,8 @@ func main() {
 	// iteration, so operators can tune them from the admin UI without
 	// restarting.
 	graphPruner := service.NewGraphPruner(entityRepo, relationshipRepo)
-	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, service.LifecycleConfig{}, settingsSvc)
+	lifecycleSvc := service.NewLifecycleService(memoryRepo, vectorStore, graphPruner, service.LifecycleConfig{}, settingsSvc).
+		WithGraphReaper(graphReaper)
 	lifecycleSvc.Start()
 	defer lifecycleSvc.Stop()
 
@@ -982,6 +988,10 @@ func main() {
 			Namespaces:    namespaceRepo,
 			Orgs:          orgRepo,
 			Settings:      settingsSvc,
+			Memories:      memoryRepo,
+		}),
+		AdminGraphMaintenance: api.NewAdminGraphMaintenanceHandler(api.GraphMaintenanceConfig{
+			Maintainer: lifecycleSvc,
 		}),
 		AdminDreaming: api.NewAdminDreamingHandler(api.DreamAdminConfig{
 			Store:    dreamAdminStore,

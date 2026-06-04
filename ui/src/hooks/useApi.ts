@@ -38,6 +38,8 @@ import {
   type TestProviderResult,
   type ExtractionTestResult,
   type AugmentationBackfillResponse,
+  type GraphHealth,
+  type GraphRepairResult,
   type MemoryAugmentPreviewResponse,
   type OAuthClientCreated,
   type CreateOAuthClientRequest,
@@ -1127,6 +1129,25 @@ export function useTestExtractionPrompt() {
   >({
     mutationFn: ({ type, prompt, sampleInput, count }) =>
       adminAPI.testExtractionPrompt(type, prompt, sampleInput, count),
+  });
+}
+
+export function useGraphHealth() {
+  return useQuery<GraphHealth, Error>({
+    queryKey: ["admin", "graph", "health"],
+    queryFn: () => adminAPI.getGraphHealth(),
+  });
+}
+
+export function useRepairGraph() {
+  const qc = useQueryClient();
+  return useMutation<GraphRepairResult, Error, void>({
+    mutationFn: () => adminAPI.repairGraph(),
+    onSuccess: () => {
+      // Refresh the health count after a repair so the block reflects the
+      // reaped backlog.
+      qc.invalidateQueries({ queryKey: ["admin", "graph", "health"] });
+    },
   });
 }
 

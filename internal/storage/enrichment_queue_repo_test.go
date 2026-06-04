@@ -37,6 +37,7 @@ func TestEnrichmentQueueRepo_Enqueue(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -87,6 +88,7 @@ func TestEnrichmentQueueRepo_Enqueue_GeneratesID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -103,6 +105,7 @@ func TestEnrichmentQueueRepo_Enqueue_WithExplicitID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		explicitID := uuid.New()
@@ -124,6 +127,7 @@ func TestEnrichmentQueueRepo_Enqueue_WithPriority(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := &model.EnrichmentJob{
@@ -144,6 +148,7 @@ func TestEnrichmentQueueRepo_GetByID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -172,6 +177,7 @@ func TestEnrichmentQueueRepo_GetByID_NotFound(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 
 		_, err := repo.GetByID(ctx, uuid.New())
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -184,6 +190,7 @@ func TestEnrichmentQueueRepo_ClaimNext(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -221,6 +228,7 @@ func TestEnrichmentQueueRepo_ClaimNext_Empty(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 
 		// In a shared Postgres DB, the queue may not be empty.
 		// For SQLite (fresh DB), we expect ErrNoRows.
@@ -242,6 +250,7 @@ func TestEnrichmentQueueRepo_ClaimNext_PriorityOrder(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		// Enqueue low priority first
@@ -290,6 +299,7 @@ func TestEnrichmentQueueRepo_ClaimNext_SkipsProcessing(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -323,6 +333,7 @@ func TestEnrichmentQueueRepo_Complete(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -359,6 +370,7 @@ func TestEnrichmentQueueRepo_Complete_NotFound(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 
 		err := repo.Complete(ctx, uuid.New(), "")
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -371,6 +383,7 @@ func TestEnrichmentQueueRepo_Fail(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -421,6 +434,7 @@ func TestEnrichmentQueueRepo_Fail_StructuredPayload(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -481,6 +495,7 @@ func TestEnrichmentQueueRepo_CompleteWithWarning(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -527,6 +542,7 @@ func TestEnrichmentQueueRepo_Fail_NotFound(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 
 		err := repo.Fail(ctx, uuid.New(), "", "error")
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -539,6 +555,7 @@ func TestEnrichmentQueueRepo_Retry(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -587,6 +604,7 @@ func TestEnrichmentQueueRepo_Retry_NotFound(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 
 		err := repo.Retry(ctx, uuid.New())
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -599,6 +617,7 @@ func TestEnrichmentQueueRepo_Retry_CanBeClaimedAgain(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -635,6 +654,7 @@ func TestEnrichmentQueueRepo_FullLifecycle(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		// Enqueue
@@ -688,6 +708,7 @@ func TestEnrichmentQueueRepo_ListRecent(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
@@ -713,6 +734,7 @@ func TestEnrichmentQueueRepo_RetryAllFailed(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
@@ -755,6 +777,7 @@ func TestEnrichmentQueueRepo_MarkStepCompleted(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -820,6 +843,7 @@ func TestEnrichmentQueueRepo_RequeueStaleIdempotent(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -867,6 +891,7 @@ func TestEnrichmentQueueRepo_RequeueStaleBumpsAttempts(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -935,6 +960,7 @@ func TestEnrichmentQueueRepo_CompleteOwnedRefusesStaleClaim(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -998,6 +1024,7 @@ func TestEnrichmentQueueRepo_TickHeartbeatAdvancesUpdatedAt(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		item := newTestEnrichmentItem(nsID, memID)
@@ -1086,6 +1113,7 @@ func TestEnrichmentQueueRepo_ListStaleClaimed(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 
 		items := make([]*model.EnrichmentJob, 3)
 		for i := range items {
@@ -1154,6 +1182,7 @@ func TestEnrichmentQueueRepo_CountStaleClaimed(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 
 		baseline, err := repo.CountStaleClaimed(ctx, 5*time.Minute, 1*time.Hour)
 		if err != nil {

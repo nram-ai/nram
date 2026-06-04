@@ -458,6 +458,108 @@ func (r *RelationshipRepo) DeleteDangling(ctx context.Context) (int64, error) {
 	return rows, nil
 }
 
+// lostProvenancePredicate matches relationships whose provenance is gone: the
+// source_memory pointer is NULL (the sourcing memory was hard-deleted, firing
+// the ON DELETE SET NULL FK action — or a dream phase inherited an
+// already-null parent) or it points at a memory that is soft-deleted or
+// superseded. No legitimate insert leaves source_memory NULL, and verified on
+// live data, every non-null pointer resolves to an existing memory — so the
+// predicate never matches a live-sourced edge.
+const lostProvenancePredicate = `source_memory IS NULL OR source_memory IN (` +
+	`SELECT id FROM memories WHERE deleted_at IS NOT NULL OR superseded_by IS NOT NULL)`
+
+// DeleteBySourceMemory removes every relationship whose provenance points at
+// the given memory and returns the distinct entity IDs that were endpoints of
+// the deleted edges, so the caller can recompute their mention_count and
+// orphan-sweep entities that drop to zero edges. The forget and supersede
+// paths call this to reap a memory's exclusively-sourced graph footprint
+// before the FK ON DELETE SET NULL would erase the provenance link.
+func (r *RelationshipRepo) DeleteBySourceMemory(ctx context.Context, namespaceID, memoryID uuid.UUID) ([]uuid.UUID, error) {
+	query := `DELETE FROM relationships WHERE namespace_id = ? AND source_memory = ? RETURNING source_id, target_id`
+	if r.db.Backend() == BackendPostgres {
+		query = `DELETE FROM relationships WHERE namespace_id = $1 AND source_memory = $2 RETURNING source_id, target_id`
+	}
+	rows, err := r.db.WriteQuery(ctx, query, namespaceID.String(), memoryID.String())
+	if err != nil {
+		return nil, fmt.Errorf("relationship delete by source memory: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanEndpointIDs(rows, "relationship delete by source memory")
+}
+
+// DeleteByLostProvenance removes relationships matching lostProvenancePredicate.
+// Such an edge can never be tied back to a live memory and every read path now
+// drops it; reaping converges the stored graph and stops dream phases from
+// breeding more null-provenance edges off it.
+//
+// limit > 0 bounds one batch via an id subquery (neither backend supports
+// DELETE ... LIMIT portably); callers loop until 0 is returned. limit <= 0
+// deletes all matching rows in one statement.
+func (r *RelationshipRepo) DeleteByLostProvenance(ctx context.Context, limit int) (int64, error) {
+	var query string
+	var args []any
+	if limit > 0 {
+		ph := "?"
+		if r.db.Backend() == BackendPostgres {
+			ph = "$1"
+		}
+		query = `DELETE FROM relationships WHERE id IN (` +
+			`SELECT id FROM relationships WHERE ` + lostProvenancePredicate + ` LIMIT ` + ph + `)`
+		args = []any{limit}
+	} else {
+		query = `DELETE FROM relationships WHERE ` + lostProvenancePredicate
+	}
+	result, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("relationship delete by lost provenance: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("relationship delete by lost provenance rows: %w", err)
+	}
+	return rows, nil
+}
+
+// CountLostProvenance returns the number of relationships matching
+// lostProvenancePredicate. Surfaced in the admin graph-health endpoint so the
+// console can show how many orphaned edges a repair would reap.
+func (r *RelationshipRepo) CountLostProvenance(ctx context.Context) (int64, error) {
+	const query = `SELECT COUNT(*) FROM relationships WHERE ` + lostProvenancePredicate
+	var n int64
+	if err := r.db.QueryRow(ctx, query).Scan(&n); err != nil {
+		return 0, fmt.Errorf("relationship count lost provenance: %w", err)
+	}
+	return n, nil
+}
+
+// scanEndpointIDs drains a *sql.Rows of (source_id, target_id) pairs and
+// returns the distinct entity IDs across both columns, preserving first-seen
+// order. Unparseable IDs are skipped rather than failing the whole reap.
+func scanEndpointIDs(rows *sql.Rows, errPrefix string) ([]uuid.UUID, error) {
+	seen := make(map[uuid.UUID]struct{})
+	var out []uuid.UUID
+	for rows.Next() {
+		var srcStr, tgtStr string
+		if err := rows.Scan(&srcStr, &tgtStr); err != nil {
+			return nil, fmt.Errorf("%s scan: %w", errPrefix, err)
+		}
+		for _, s := range [2]string{srcStr, tgtStr} {
+			id, err := uuid.Parse(s)
+			if err != nil {
+				continue
+			}
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				out = append(out, id)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s rows: %w", errPrefix, err)
+	}
+	return out, nil
+}
+
 // BatchCreate inserts (or upserts) the given relationships in one
 // transaction with multi-row INSERTs chunked at relationshipBatchChunkSize.
 // Per-chunk savepoints absorb tolerable per-row constraint failures (FK

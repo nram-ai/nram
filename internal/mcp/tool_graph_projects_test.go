@@ -192,14 +192,16 @@ func TestHandleMemoryGraph_EntitySearch(t *testing.T) {
 		// into entities[] when the relationship references it.
 		{ID: targetID, NamespaceID: nsID, Name: "Bob", EntityType: "person", Canonical: "bob"},
 	}
+	memID := uuid.New()
 	rels := []model.Relationship{
 		{
-			ID:        relID,
-			SourceID:  entityID,
-			TargetID:  targetID,
-			Relation:  "knows",
-			Weight:    1.0,
-			ValidFrom: time.Now(),
+			ID:           relID,
+			SourceID:     entityID,
+			TargetID:     targetID,
+			Relation:     "knows",
+			Weight:       1.0,
+			ValidFrom:    time.Now(),
+			SourceMemory: &memID,
 		},
 	}
 
@@ -210,6 +212,7 @@ func TestHandleMemoryGraph_EntitySearch(t *testing.T) {
 		ProjectRepo:  &mockProjectRepoStore{getErr: nil, project: nil},
 		EntityReader: &mockEntityReader{entities: entities},
 		Traverser:    traverser,
+		MemoryLister: &aliveMemoryLister{mems: []model.Memory{{ID: memID, NamespaceID: nsID}}},
 	}
 	srv := newTestServer(deps)
 

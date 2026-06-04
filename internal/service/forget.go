@@ -58,6 +58,7 @@ type ForgetService struct {
 	projects       ProjectRepository
 	vectorStore    VectorDeleter
 	lineageQuerier LineageQuerier
+	graphReaper    GraphReaper // nil disables go-forward graph reaping
 	metrics        *metrics.Metrics
 }
 
@@ -80,6 +81,14 @@ func NewForgetService(
 // for chaining at construction time.
 func (s *ForgetService) WithMetrics(m *metrics.Metrics) *ForgetService {
 	s.metrics = m
+	return s
+}
+
+// WithGraphReaper attaches the graph reaper so that permanently deleting a
+// memory also reaps the entities/relationships it exclusively sourced and
+// recomputes affected mention counts. Returns the same service for chaining.
+func (s *ForgetService) WithGraphReaper(r GraphReaper) *ForgetService {
+	s.graphReaper = r
 	return s
 }
 
@@ -253,6 +262,16 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 	}
 
 	if hard {
+		// Reap the memory's exclusively-sourced graph footprint BEFORE the
+		// hard delete, while relationships.source_memory still equals id — the
+		// FK ON DELETE SET NULL would otherwise null it and strand the edges.
+		// Best-effort: a reap failure must not block the memory delete.
+		if s.graphReaper != nil {
+			if _, err := s.graphReaper.ReapMemoryFootprint(ctx, namespaceID, id); err != nil {
+				log.Printf("forget: reap graph footprint for %s: %v", id, err)
+			}
+		}
+
 		if s.vectorStore != nil {
 			_ = s.vectorStore.Delete(ctx, storage.VectorKindMemory, id)
 		}

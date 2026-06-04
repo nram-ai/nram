@@ -65,6 +65,15 @@ type UpdateService struct {
 	vectorStore     VectorStoreWriter
 	embedProvider   func() provider.EmbeddingProvider
 	enrichmentQueue EnrichmentQueueRepository
+	graphReaper     GraphReaper // nil disables reaping the superseded loser's footprint
+}
+
+// WithGraphReaper attaches the graph reaper so that superseding a memory also
+// reaps the entities/relationships the old version exclusively sourced and
+// recomputes affected mention counts. Returns the same service for chaining.
+func (s *UpdateService) WithGraphReaper(r GraphReaper) *UpdateService {
+	s.graphReaper = r
+	return s
 }
 
 // NewUpdateService creates a new UpdateService with the given dependencies.
@@ -196,10 +205,11 @@ func (s *UpdateService) updateInPlace(
 // updateSupersede handles a content change. It creates a new memory row,
 // marks the old row superseded, writes the supersedes lineage edge in one
 // transaction, embeds the new content, upserts the new vector, and queues
-// fresh enrichment for the new ID. The old vector, entities, and
-// relationships stay attached to the old row (frozen with the old
-// content) until phase_pruning sweeps superseded rows after their grace
-// window.
+// fresh enrichment for the new ID. The old vector stays attached to the old
+// row (frozen with the old content) until phase_pruning sweeps superseded
+// rows after their grace window. The old row's entities/relationships are
+// reaped immediately (the new content's enrichment rebuilds them), with the
+// lifecycle sweep as the backstop.
 func (s *UpdateService) updateSupersede(
 	ctx context.Context,
 	req *UpdateRequest,
@@ -296,6 +306,21 @@ func (s *UpdateService) updateSupersede(
 
 	if err := s.memories.SupersedeReplacing(ctx, mem.ID, newMem, lineage); err != nil {
 		return nil, fmt.Errorf("failed to supersede memory: %w", err)
+	}
+
+	// Reap the superseded loser's exclusively-sourced graph footprint and
+	// recompute affected entity mention counts: the new memory's enrichment
+	// (queued below) rebuilds entities/relationships against the new content,
+	// so the old edges are stale provenance. The lifecycle sweep also reaps
+	// superseded-sourced edges as a backstop (covering dream-driven
+	// supersession that does not pass through this path), but doing it inline
+	// keeps the user-facing update responsive. Best-effort — a reap failure
+	// must not undo the committed supersede.
+	if s.graphReaper != nil {
+		if _, err := s.graphReaper.ReapMemoryFootprint(ctx, mem.NamespaceID, mem.ID); err != nil {
+			slog.Warn("memory update: reap superseded graph footprint failed; lifecycle sweep will retry",
+				"old_memory", mem.ID, "err", err)
+		}
 	}
 
 	// Best-effort vector upsert at the new ID. The transaction has

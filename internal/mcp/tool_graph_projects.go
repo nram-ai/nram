@@ -312,42 +312,53 @@ seeds:
 		rels = filtered
 	}
 
-	// Drop relationships extracted from a memory that has since been
-	// superseded so the graph stays consistent with memory_list/memory_recall.
-	// One GetBatch over the distinct source-memory IDs; superseded rows are
-	// dropped in Go.
-	if !includeSuperseded && len(rels) > 0 {
-		idSet := make(map[uuid.UUID]struct{})
-		for _, rel := range rels {
-			if rel.SourceMemory != nil {
-				idSet[*rel.SourceMemory] = struct{}{}
+	// Drop relationships whose provenance is gone. A NULL source_memory means
+	// the sourcing memory was hard-deleted (the FK ON DELETE SET NULL nulled
+	// the pointer) — it is permanently gone, so these edges are ALWAYS dropped,
+	// even under includeSuperseded (there is no "include deleted"). The
+	// lifecycle sweep reaps them from the store; this keeps the graph
+	// consistent in the meantime. Additionally, unless includeSuperseded is
+	// set, drop edges whose source memory is now soft-deleted or superseded so
+	// the graph stays consistent with memory_list/memory_recall.
+	if len(rels) > 0 {
+		alive := make(map[uuid.UUID]struct{})
+		if !includeSuperseded {
+			idSet := make(map[uuid.UUID]struct{})
+			for _, rel := range rels {
+				if rel.SourceMemory != nil {
+					idSet[*rel.SourceMemory] = struct{}{}
+				}
 			}
-		}
-		if len(idSet) > 0 {
-			ids := make([]uuid.UUID, 0, len(idSet))
-			for id := range idSet {
-				ids = append(ids, id)
-			}
-			alive := make(map[uuid.UUID]struct{})
-			if mems, err := deps.MemoryLister.GetBatch(ctx, ids); err == nil {
-				for _, m := range mems {
-					if m.SupersededBy == nil && m.DeletedAt == nil {
-						alive[m.ID] = struct{}{}
+			if len(idSet) > 0 {
+				ids := make([]uuid.UUID, 0, len(idSet))
+				for id := range idSet {
+					ids = append(ids, id)
+				}
+				if mems, err := deps.MemoryLister.GetBatch(ctx, ids); err == nil {
+					for _, m := range mems {
+						if m.IsLiveProvenance() {
+							alive[m.ID] = struct{}{}
+						}
 					}
 				}
 			}
-			filtered := rels[:0]
-			for _, rel := range rels {
-				if rel.SourceMemory == nil {
-					filtered = append(filtered, rel)
+		}
+		filtered := rels[:0]
+		for _, rel := range rels {
+			// Lost-provenance edge (source memory hard-deleted): always drop.
+			if rel.SourceMemory == nil {
+				continue
+			}
+			// When not including superseded, require the source memory to be
+			// present, not soft-deleted, and not superseded.
+			if !includeSuperseded {
+				if _, ok := alive[*rel.SourceMemory]; !ok {
 					continue
 				}
-				if _, ok := alive[*rel.SourceMemory]; ok {
-					filtered = append(filtered, rel)
-				}
 			}
-			rels = filtered
+			filtered = append(filtered, rel)
 		}
+		rels = filtered
 	}
 
 	// Project to JSON shape; orphan resolution runs on the projection so the

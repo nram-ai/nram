@@ -20,6 +20,7 @@ import {
 import Switch from "../components/Switch";
 import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
 import { QueryAugmentBackfillBlock } from "../components/QueryAugmentBackfillBlock";
+import { GraphMaintenanceBlock } from "../components/GraphMaintenanceBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheck, faXmark, faCircleQuestion, faSpinner, faMagnifyingGlass } from "../lib/icons";
 
@@ -729,6 +730,7 @@ function ParentGroupCard({
                 {sub.category === "enrichment_query_augment" && (
                   <QueryAugmentBackfillBlock />
                 )}
+                {sub.category === "lifecycle" && <GraphMaintenanceBlock />}
               </section>
             );
           })}

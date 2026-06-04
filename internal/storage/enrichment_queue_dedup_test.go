@@ -7,6 +7,21 @@ import (
 	"github.com/google/uuid"
 )
 
+// cleanEnrichmentQueue empties the enrichment_queue so a test's own job is the
+// only pending row, making the global ClaimNext deterministic. ClaimNext claims
+// the oldest pending job across the whole shared Postgres schema, so a row left
+// behind by another test would be claimed instead of the job under test. SQLite
+// gets a fresh DB per test, so this is a no-op there.
+func cleanEnrichmentQueue(t *testing.T, ctx context.Context, db DB) {
+	t.Helper()
+	if db.Backend() != BackendPostgres {
+		return
+	}
+	if _, err := db.Exec(ctx, "TRUNCATE TABLE enrichment_queue"); err != nil {
+		t.Fatalf("clean enrichment_queue: %v", err)
+	}
+}
+
 // countQueueStatus returns how many enrichment_queue rows a memory has in the
 // given status.
 func countQueueStatus(t *testing.T, ctx context.Context, db DB, memID uuid.UUID, status string) int {
@@ -29,6 +44,7 @@ func TestEnrichmentQueueRepo_PendingDedup(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		ins1, err := repo.Enqueue(ctx, newTestEnrichmentItem(nsID, memID))
@@ -91,6 +107,7 @@ func TestEnrichmentQueueRepo_ReleaseDropsRedundantPending(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		if _, err := repo.Enqueue(ctx, newTestEnrichmentItem(nsID, memID)); err != nil {
@@ -126,6 +143,7 @@ func TestEnrichmentQueueRepo_RetryDropsRedundantPending(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		if _, err := repo.Enqueue(ctx, newTestEnrichmentItem(nsID, memID)); err != nil {
@@ -161,6 +179,7 @@ func TestEnrichmentQueueRepo_RequeueStaleDropsRedundantPending(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
 		nsID, memID := createTestMemoryForQueue(t, ctx, db)
 
 		if _, err := repo.Enqueue(ctx, newTestEnrichmentItem(nsID, memID)); err != nil {

@@ -85,10 +85,19 @@ type LifecycleService struct {
 	store       LifecycleStore
 	vectorStore VectorDeleter
 	graphPruner GraphPruner // nil on SQLite
+	graphReaper GraphReaper // nil disables lost-provenance reaping + repair
 	settings    *SettingsService
 	config      LifecycleConfig
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
+}
+
+// WithGraphReaper attaches the graph reaper, enabling the Phase-2 per-memory
+// footprint reap, the Phase-3 lost-provenance sweep, and the console
+// RepairGraph/GraphHealth operations. Returns the same service for chaining.
+func (s *LifecycleService) WithGraphReaper(r GraphReaper) *LifecycleService {
+	s.graphReaper = r
+	return s
 }
 
 // NewLifecycleService creates a new LifecycleService. The vectorStore parameter
@@ -229,6 +238,13 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 		return expired, 0, err
 	}
 	for _, mem := range purgeableMemories {
+		// Reap the memory's exclusively-sourced graph footprint before the hard
+		// delete fires the FK ON DELETE SET NULL that would strand its edges.
+		if s.graphReaper != nil {
+			if _, err := s.graphReaper.ReapMemoryFootprint(ctx, mem.NamespaceID, mem.ID); err != nil {
+				log.Printf("lifecycle: reap graph footprint for %s: %v", mem.ID, err)
+			}
+		}
 		if err := s.store.HardDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
 			continue
 		}
@@ -238,23 +254,60 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 		purged++
 	}
 
-	// Phase 3: Prune orphaned graph data (wired for both SQLite and Postgres).
-	// Order matters: delete dangling relationships first, then orphaned
-	// entities. The entity sweep is age-gated against in-flight enrichment;
-	// see SettingLifecycleOrphanGraceSeconds.
+	// Phase 3: Reap lost-provenance edges, then prune the dangling relationships
+	// and orphaned entities they leave behind. Shared with the on-demand
+	// RepairGraph via reapAndPrune so the two cannot diverge.
+	res, err := s.reapAndPrune(ctx, now.Add(-orphanGrace))
+	if err != nil {
+		log.Printf("lifecycle: graph cleanup: %v", err)
+	}
+	if res.RelationshipsReaped > 0 || res.DanglingDeleted > 0 || res.OrphanedEntities > 0 {
+		log.Printf("lifecycle: graph cleanup reaped %d lost-provenance, %d dangling, %d orphaned entities (orphan grace %s)",
+			res.RelationshipsReaped, res.DanglingDeleted, res.OrphanedEntities, orphanGrace)
+	}
+
+	return expired, purged, nil
+}
+
+// reapAndPrune runs the shared graph-cleanup sequence used by both the periodic
+// sweep and the on-demand RepairGraph: reap lost-provenance edges (recomputing
+// mention counts inside ReapLostProvenance), then prune dangling relationships
+// and orphaned entities (age-gated by orphanCutoff), cleaning up entity vectors
+// for reaped orphans. Order matters — reaping first strands entities the orphan
+// pass then collects in the same run. It is best-effort: every step is attempted
+// even if an earlier one errors; it returns the aggregate counts plus the first
+// error encountered.
+func (s *LifecycleService) reapAndPrune(ctx context.Context, orphanCutoff time.Time) (GraphRepairResult, error) {
+	var res GraphRepairResult
+	var firstErr error
+	note := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	if s.graphReaper != nil {
+		reaped, err := s.graphReaper.ReapLostProvenance(ctx)
+		if err != nil {
+			note(err)
+		} else {
+			res.RelationshipsReaped = reaped
+		}
+	}
+
 	if s.graphPruner != nil {
-		danglingRels, relErr := s.graphPruner.DeleteDanglingRelationships(ctx)
-		if relErr != nil {
-			log.Printf("lifecycle: failed to delete dangling relationships: %v", relErr)
-		} else if danglingRels > 0 {
-			log.Printf("lifecycle: deleted %d dangling relationships", danglingRels)
+		danglingRels, err := s.graphPruner.DeleteDanglingRelationships(ctx)
+		if err != nil {
+			note(err)
+		} else {
+			res.DanglingDeleted = danglingRels
 		}
 
-		orphanCutoff := now.Add(-orphanGrace)
-		orphanedIDs, entErr := s.graphPruner.DeleteOrphanedEntities(ctx, orphanCutoff)
-		if entErr != nil {
-			log.Printf("lifecycle: failed to delete orphaned entities: %v", entErr)
-		} else if len(orphanedIDs) > 0 {
+		orphanedIDs, err := s.graphPruner.DeleteOrphanedEntities(ctx, orphanCutoff)
+		if err != nil {
+			note(err)
+		} else {
+			res.OrphanedEntities = len(orphanedIDs)
 			// Best-effort vector cleanup. SQL-backed stores cascade on the
 			// entity row delete (entity_vectors_* FK); only Qdrant needs the
 			// explicit per-ID delete to avoid leaking points.
@@ -263,10 +316,45 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 					_ = s.vectorStore.Delete(ctx, storage.VectorKindEntity, id)
 				}
 			}
-			log.Printf("lifecycle: deleted %d orphaned entities (older than %s)",
-				len(orphanedIDs), orphanGrace)
 		}
 	}
 
-	return expired, purged, nil
+	return res, firstErr
+}
+
+// GraphHealth reports the number of lost-provenance relationships currently in
+// the graph — edges whose sourcing memory is gone — so the console can show
+// how much a repair would reap. Returns a zero result when no graph reaper is
+// wired (e.g. graph features disabled).
+type GraphHealth struct {
+	LostProvenanceEdges int64 `json:"lost_provenance_edges"`
+}
+
+// GraphHealthStatus returns the current graph-health counts.
+func (s *LifecycleService) GraphHealthStatus(ctx context.Context) (GraphHealth, error) {
+	if s.graphReaper == nil {
+		return GraphHealth{}, nil
+	}
+	n, err := s.graphReaper.CountLostProvenance(ctx)
+	if err != nil {
+		return GraphHealth{}, err
+	}
+	return GraphHealth{LostProvenanceEdges: n}, nil
+}
+
+// GraphRepairResult summarizes an operator-triggered graph repair.
+type GraphRepairResult struct {
+	RelationshipsReaped int64 `json:"relationships_reaped"`
+	DanglingDeleted     int64 `json:"dangling_relationships_deleted"`
+	OrphanedEntities    int   `json:"orphaned_entities_deleted"`
+}
+
+// RepairGraph runs the full on-demand graph cleanup the console exposes:
+// reap every lost-provenance edge (and recompute mention counts), then prune
+// dangling relationships and orphaned entities. The orphan sweep stays
+// age-gated by SettingLifecycleOrphanGraceSeconds so a repair cannot race
+// in-flight enrichment. Idempotent — a second run reaps nothing. Shares its
+// implementation with the periodic sweep via reapAndPrune.
+func (s *LifecycleService) RepairGraph(ctx context.Context) (GraphRepairResult, error) {
+	return s.reapAndPrune(ctx, time.Now().Add(-s.resolveOrphanGrace(ctx)))
 }

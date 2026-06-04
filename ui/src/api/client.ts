@@ -1394,6 +1394,19 @@ export interface GraphData {
   returned_edges?: number;
 }
 
+// GraphHealth reports the lost-provenance edge backlog — relationships whose
+// sourcing memory has been deleted or superseded — that a repair would reap.
+export interface GraphHealth {
+  lost_provenance_edges: number;
+}
+
+// GraphRepairResult summarizes an operator-triggered graph repair.
+export interface GraphRepairResult {
+  relationships_reaped: number;
+  dangling_relationships_deleted: number;
+  orphaned_entities_deleted: number;
+}
+
 export interface PaginatedResponse<T> {
   data: T[];
   pagination: {
@@ -1658,6 +1671,15 @@ export const adminAPI = {
   // Graph
   getGraph: (projectId: string) =>
     request<GraphData>("GET", `/graph?project=${encodeURIComponent(projectId)}`),
+
+  // Graph maintenance (system-wide, admin-only). getGraphHealth reports how
+  // many lost-provenance edges — relationships whose sourcing memory is gone —
+  // remain in the store; repairGraph reaps them, recomputes entity mention
+  // counts, and prunes the orphaned entities they leave behind.
+  getGraphHealth: () =>
+    request<GraphHealth>("GET", "/admin/graph/health"),
+  repairGraph: () =>
+    request<GraphRepairResult>("POST", "/admin/graph/repair"),
 
   // Namespaces
   getNamespaceTree: () =>

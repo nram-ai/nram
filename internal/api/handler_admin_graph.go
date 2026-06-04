@@ -76,6 +76,14 @@ type GraphAliasStore interface {
 	ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.EntityAlias, error)
 }
 
+// GraphMemoryStore batch-fetches memories so the handler can drop edges whose
+// sourcing memory is gone. GetBatch already excludes soft-deleted rows, so a
+// soft-deleted source simply does not come back; superseded rows do come back
+// and are filtered on SupersededBy.
+type GraphMemoryStore interface {
+	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
+}
+
 // GraphNamespaceLookup retrieves a namespace by ID to check path ancestry.
 type GraphNamespaceLookup interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Namespace, error)
@@ -95,6 +103,10 @@ type GraphAdminConfig struct {
 	Namespaces    GraphNamespaceLookup
 	Orgs          GraphOrgLookup
 	Settings      GraphSettingsResolver
+	// Memories is used to drop edges whose sourcing memory is gone
+	// (lost-provenance). When nil, provenance filtering is skipped and every
+	// edge is shown (legacy behavior).
+	Memories GraphMemoryStore
 }
 
 // NewAdminGraphHandler returns an http.HandlerFunc that serves graph data
@@ -218,33 +230,28 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 			return
 		}
 
-		// Build entity ID set for filtering relationships to only those
-		// connecting entities in this namespace.
-		entityIDs := make(map[string]bool, len(entities))
-		graphEntities := make([]GraphEntity, 0, len(entities))
+		// Resolve which edges still have live provenance. An edge whose
+		// source memory is NULL (the memory was hard-deleted, firing
+		// ON DELETE SET NULL) or points at a soft-deleted/superseded memory is
+		// stale graph data the lifecycle sweep reaps; hide it here so the
+		// console graph stays consistent with recall and the reaped store.
+		// GetBatch omits soft-deleted rows, so a soft-deleted source never
+		// lands in liveProvenance; superseded rows are filtered explicitly.
+		liveProvenance := resolveLiveProvenance(r.Context(), cfg.Memories, relationships)
+		// filterProvenance is true only when a memory store is wired AND the
+		// lookup succeeded; a nil map (no store, or a lookup error) falls open
+		// to legacy show-all behavior rather than blanking the graph.
+		filterProvenance := liveProvenance != nil
 
+		// Namespace entity set: relationships only connect entities here.
+		namespaceEntityIDs := make(map[string]bool, len(entities))
 		for _, e := range entities {
-			eid := e.ID.String()
-			entityIDs[eid] = true
-
-			aliases, _ := cfg.Aliases.ListByEntity(r.Context(), e.ID)
-			aliasNames := make([]string, 0, len(aliases))
-			for _, a := range aliases {
-				aliasNames = append(aliasNames, a.Alias)
-			}
-
-			graphEntities = append(graphEntities, GraphEntity{
-				ID:           eid,
-				Name:         e.Name,
-				Canonical:    e.Canonical,
-				EntityType:   e.EntityType,
-				MentionCount: e.MentionCount,
-				Aliases:      aliasNames,
-				CreatedAt:    e.CreatedAt.Format("2006-01-02T15:04:05Z"),
-				UpdatedAt:    e.UpdatedAt.Format("2006-01-02T15:04:05Z"),
-			})
+			namespaceEntityIDs[e.ID.String()] = true
 		}
 
+		// Filter edges (validity, weight, namespace, provenance) and record
+		// which entities survive via at least one live edge.
+		referencedEntityIDs := make(map[string]bool)
 		graphRelationships := make([]GraphRelationship, 0, len(relationships))
 		for _, rel := range relationships {
 			// Skip expired relationships.
@@ -255,10 +262,16 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 			if rel.Weight < minWeight {
 				continue
 			}
+			// Drop lost-provenance edges when provenance filtering is active.
+			if filterProvenance {
+				if rel.SourceMemory == nil || !liveProvenance[*rel.SourceMemory] {
+					continue
+				}
+			}
 			srcID := rel.SourceID.String()
 			tgtID := rel.TargetID.String()
 			// Only include relationships where both ends are in the entity set.
-			if entityIDs[srcID] && entityIDs[tgtID] {
+			if namespaceEntityIDs[srcID] && namespaceEntityIDs[tgtID] {
 				graphRelationships = append(graphRelationships, GraphRelationship{
 					ID:       rel.ID.String(),
 					SourceID: srcID,
@@ -266,13 +279,81 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 					Relation: rel.Relation,
 					Weight:   rel.Weight,
 				})
+				referencedEntityIDs[srcID] = true
+				referencedEntityIDs[tgtID] = true
 			}
+		}
+
+		// Emit entities. With provenance filtering on, hide entities not
+		// connected by any surviving edge — these are orphan-only nodes
+		// (referenced solely by reaped edges) or rare edgeless mention-only
+		// entities; both are graph pollution once their provenance is gone.
+		graphEntities := make([]GraphEntity, 0, len(entities))
+		for _, e := range entities {
+			if filterProvenance && !referencedEntityIDs[e.ID.String()] {
+				continue
+			}
+
+			aliases, _ := cfg.Aliases.ListByEntity(r.Context(), e.ID)
+			aliasNames := make([]string, 0, len(aliases))
+			for _, a := range aliases {
+				aliasNames = append(aliasNames, a.Alias)
+			}
+
+			graphEntities = append(graphEntities, GraphEntity{
+				ID:           e.ID.String(),
+				Name:         e.Name,
+				Canonical:    e.Canonical,
+				EntityType:   e.EntityType,
+				MentionCount: e.MentionCount,
+				Aliases:      aliasNames,
+				CreatedAt:    e.CreatedAt.Format("2006-01-02T15:04:05Z"),
+				UpdatedAt:    e.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+			})
 		}
 
 		maxEdges := cfg.Settings.ResolveIntWithDefault(r.Context(),
 			service.SettingGraphMaxEdges, "global")
 		writeJSON(w, http.StatusOK, applyEdgeCap(graphEntities, graphRelationships, maxEdges))
 	}
+}
+
+// resolveLiveProvenance returns the set of source-memory IDs that are still
+// live (present and not superseded) among the given relationships. A nil store
+// yields a nil map; callers treat that as "provenance filtering disabled".
+// GetBatch already excludes soft-deleted memories, so they never appear in the
+// result and their edges are correctly treated as lost-provenance.
+func resolveLiveProvenance(ctx context.Context, store GraphMemoryStore, relationships []model.Relationship) map[uuid.UUID]bool {
+	if store == nil {
+		return nil
+	}
+	idSet := make(map[uuid.UUID]struct{})
+	for _, rel := range relationships {
+		if rel.SourceMemory != nil {
+			idSet[*rel.SourceMemory] = struct{}{}
+		}
+	}
+	if len(idSet) == 0 {
+		return map[uuid.UUID]bool{}
+	}
+	ids := make([]uuid.UUID, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	live := make(map[uuid.UUID]bool, len(ids))
+	mems, err := store.GetBatch(ctx, ids)
+	if err != nil {
+		// On a lookup error, fail open to the prior behavior (show edges)
+		// rather than blanking the graph; a non-nil map with no entries would
+		// drop every edge.
+		return nil
+	}
+	for _, m := range mems {
+		if m.IsLiveProvenance() {
+			live[m.ID] = true
+		}
+	}
+	return live
 }
 
 // applyEdgeCap enforces the graph.max_edges ceiling on a response payload.

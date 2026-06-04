@@ -50,6 +50,30 @@ func (m *splitEntityReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]mode
 	return out, nil
 }
 
+// aliveMemoryLister implements MemoryLister, returning the configured memories
+// as "alive" (not deleted, not superseded) from GetBatch so the graph tool's
+// provenance filter keeps their edges. The list/count methods are unused by the
+// graph tool and return empty.
+type aliveMemoryLister struct{ mems []model.Memory }
+
+func (m *aliveMemoryLister) ListByNamespaceFiltered(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters, _, _ int) ([]model.Memory, error) {
+	return nil, nil
+}
+func (m *aliveMemoryLister) CountByNamespaceFiltered(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters) (int, error) {
+	return 0, nil
+}
+func (m *aliveMemoryLister) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+	out := make([]model.Memory, 0, len(ids))
+	for _, id := range ids {
+		for i := range m.mems {
+			if m.mems[i].ID == id {
+				out = append(out, m.mems[i])
+			}
+		}
+	}
+	return out, nil
+}
+
 // These tests exercise the REAL recall projection wiring (buildMCPRecallResponse
 // -> seed capture -> dedupGraphRelationships -> rankGraphSlice), not the ranking
 // helpers in isolation, so they cover the plan's "live recall observation"
@@ -177,13 +201,16 @@ func TestHandleMemoryGraph_ProximityAndDedup(t *testing.T) {
 			{ID: b, NamespaceID: nsID, Name: "HubB", EntityType: "concept", Canonical: "hubb", MentionCount: 500},
 		},
 	}
-	// Chain s -> a -> b, with a duplicate variant edge on s -> a. SourceMemory is
-	// nil so the superseded-filter path (MemoryLister) is skipped.
+	// Chain s -> a -> b, with a duplicate variant edge on s -> a. Each edge is
+	// sourced from a live memory so the provenance filter keeps it (production
+	// enrichment always sets source_memory; a nil pointer means the memory was
+	// deleted and the edge is now dropped).
 	now := time.Now()
+	memID := uuid.New()
 	traverser := &mockTraverser{rels: []model.Relationship{
-		{ID: uuid.New(), SourceID: s, TargetID: a, Relation: "related_to", Weight: 1, ValidFrom: now},
-		{ID: uuid.New(), SourceID: s, TargetID: a, Relation: "related to", Weight: 1, ValidFrom: now},
-		{ID: uuid.New(), SourceID: a, TargetID: b, Relation: "rel", Weight: 1, ValidFrom: now},
+		{ID: uuid.New(), SourceID: s, TargetID: a, Relation: "related_to", Weight: 1, ValidFrom: now, SourceMemory: &memID},
+		{ID: uuid.New(), SourceID: s, TargetID: a, Relation: "related to", Weight: 1, ValidFrom: now, SourceMemory: &memID},
+		{ID: uuid.New(), SourceID: a, TargetID: b, Relation: "rel", Weight: 1, ValidFrom: now, SourceMemory: &memID},
 	}}
 
 	deps := Dependencies{
@@ -192,6 +219,7 @@ func TestHandleMemoryGraph_ProximityAndDedup(t *testing.T) {
 		ProjectRepo:  &mockProjectRepoStore{},
 		EntityReader: reader,
 		Traverser:    traverser,
+		MemoryLister: &aliveMemoryLister{mems: []model.Memory{{ID: memID, NamespaceID: nsID}}},
 	}
 	srv := newTestServer(deps)
 
