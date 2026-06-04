@@ -329,6 +329,15 @@ const (
 	// above any expected runtime.
 	SettingEnrichmentClaimMaxAge = "enrichment.claim_max_age_seconds"
 
+	// Retention for permanently-failed enrichment jobs. The StuckJobSweeper
+	// hard-deletes rows in status='failed' whose updated_at is older than this
+	// many days so the failed backlog cannot grow without bound — a single-GPU
+	// local provider routinely accumulates tens of thousands of failed jobs
+	// that nothing else ever reaps. 0 disables pruning. Default 7 days: after a
+	// week a failed job is stale — its memory's content has almost certainly
+	// moved on — so reaping it keeps the queue lean.
+	SettingEnrichmentFailedRetentionDays = "enrichment.failed_retention_days"
+
 	// Fact and entity extraction LLM-call tunables. Resolved per call by both
 	// ExtractionService (sync HTTP path) and WorkerPool (async queue worker)
 	// so changes hot-reload within the cascade cache TTL. max_tokens caps
@@ -861,6 +870,7 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingEnrichmentStuckThreshold:               "1800",
 	SettingEnrichmentStuckSweep:                   "300",
 	SettingEnrichmentClaimMaxAge:                  "7200",
+	SettingEnrichmentFailedRetentionDays:          "7",
 
 	SettingFactExtractionMaxTokens:          "4096",
 	SettingEntityExtractionMaxTokens:        "4096",

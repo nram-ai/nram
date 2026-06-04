@@ -18,6 +18,7 @@ import (
 type stuckJobStore interface {
 	ListStaleClaimed(ctx context.Context, updatedThreshold, claimedAtMaxAge time.Duration, limit int) ([]*model.EnrichmentJob, error)
 	RequeueStale(ctx context.Context, id uuid.UUID, reason string) (bool, error)
+	DeleteFailedBefore(ctx context.Context, cutoff time.Time, limit int) (int, error)
 }
 
 // sweeperSettingsResolver is the slice of *service.SettingsService the
@@ -125,7 +126,14 @@ func (s *StuckJobSweeper) run(ctx context.Context) {
 // Failures on individual rows are logged and the loop continues — one bad
 // row should not block recovery of the rest of the batch. A failure to even
 // list the stale rows is returned as an error so the run loop can log it.
+//
+// Each sweep also prunes permanently-failed jobs past their retention window
+// (pruneFailedRetention), so the failed backlog cannot grow without bound.
+// That pass runs first and independently of the stale-claim recovery so an
+// empty stale set (the common case) does not skip it.
 func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
+	s.pruneFailedRetention(ctx)
+
 	threshold := s.settings.ResolveDurationSecondsWithDefault(ctx,
 		service.SettingEnrichmentStuckThreshold, "global")
 	if threshold < time.Second {
@@ -229,6 +237,33 @@ func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// pruneFailedRetention hard-deletes failed enrichment jobs whose updated_at is
+// older than enrichment.failed_retention_days, bounded to stuck_scan_limit rows
+// per sweep so a large backlog drains over several ticks rather than locking
+// the writer in one statement. A retention of 0 (or below) disables pruning.
+// Errors are logged, not returned: retention is best-effort and must not block
+// the stale-claim recovery that follows it in Sweep.
+func (s *StuckJobSweeper) pruneFailedRetention(ctx context.Context) {
+	days := s.settings.ResolveIntWithDefault(ctx,
+		service.SettingEnrichmentFailedRetentionDays, "global")
+	if days <= 0 {
+		return
+	}
+	limit := s.settings.ResolveIntWithDefault(ctx,
+		service.SettingEnrichmentStuckScanLimit, "global")
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+
+	deleted, err := s.queueRepo.DeleteFailedBefore(ctx, cutoff, limit)
+	if err != nil {
+		slog.Warn("enrichment: failed-job retention prune failed", "err", err)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("enrichment: pruned failed jobs past retention",
+			"count", deleted, "retention_days", days)
+	}
 }
 
 func claimedByOrUnknown(claimedBy *string) string {

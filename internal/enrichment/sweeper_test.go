@@ -18,6 +18,13 @@ type fakeSweeperSettings struct {
 	stuckThreshold time.Duration
 	sweepInterval  time.Duration
 	claimMaxAge    time.Duration
+
+	// failedRetentionDays overrides enrichment.failed_retention_days when
+	// failedRetentionDaysSet is true (so a test can assert the 0=disabled
+	// path); otherwise ResolveIntWithDefault falls through to the registered
+	// default.
+	failedRetentionDays    int
+	failedRetentionDaysSet bool
 }
 
 func (f *fakeSweeperSettings) ResolveDurationSecondsWithDefault(_ context.Context, key, _ string) time.Duration {
@@ -41,6 +48,9 @@ func (f *fakeSweeperSettings) ResolveDurationSecondsWithDefault(_ context.Contex
 }
 
 func (f *fakeSweeperSettings) ResolveIntWithDefault(_ context.Context, key, _ string) int {
+	if key == service.SettingEnrichmentFailedRetentionDays && f.failedRetentionDaysSet {
+		return f.failedRetentionDays
+	}
 	return service.GetDefaultInt(key)
 }
 
@@ -55,6 +65,13 @@ type fakeStuckJobStore struct {
 	listErr         error
 	lastUpdatedArg  time.Duration
 	lastClaimAgeArg time.Duration
+
+	// Retention prune capture.
+	deleteFailedReturn int
+	deleteFailedErr    error
+	deleteFailedCalls  int
+	lastDeleteCutoff   time.Time
+	lastDeleteLimit    int
 }
 
 func (s *fakeStuckJobStore) ListStaleClaimed(_ context.Context, updatedThreshold, claimedAtMaxAge time.Duration, _ int) ([]*model.EnrichmentJob, error) {
@@ -85,6 +102,18 @@ func (s *fakeStuckJobStore) RequeueStale(_ context.Context, id uuid.UUID, reason
 	}
 	s.requeueReasons[id] = reason
 	return true, nil
+}
+
+func (s *fakeStuckJobStore) DeleteFailedBefore(_ context.Context, cutoff time.Time, limit int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteFailedCalls++
+	s.lastDeleteCutoff = cutoff
+	s.lastDeleteLimit = limit
+	if s.deleteFailedErr != nil {
+		return 0, s.deleteFailedErr
+	}
+	return s.deleteFailedReturn, nil
 }
 
 // stuckJob constructs a stale-looking *model.EnrichmentJob for the fake store.
@@ -383,5 +412,71 @@ func TestStuckJobSweeper_StalenessReasonString(t *testing.T) {
 	}
 	if strings.Contains(reason, "backstop") {
 		t.Errorf("reason = %q, should NOT cite backstop when the updated_at signal fired", reason)
+	}
+}
+
+func TestStuckJobSweeper_PrunesFailedRetention(t *testing.T) {
+	store := &fakeStuckJobStore{deleteFailedReturn: 5}
+	// Default retention (7 days) and default scan limit, no stale jobs — the
+	// prune still runs because it precedes the empty-stale early return.
+	sweeper := newTestSweeper(store, events.NewMemoryBus(8, 8))
+
+	if err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.deleteFailedCalls != 1 {
+		t.Fatalf("DeleteFailedBefore calls = %d, want 1", store.deleteFailedCalls)
+	}
+	if store.lastDeleteLimit != service.GetDefaultInt(service.SettingEnrichmentStuckScanLimit) {
+		t.Errorf("delete limit = %d, want stuck_scan_limit default %d",
+			store.lastDeleteLimit, service.GetDefaultInt(service.SettingEnrichmentStuckScanLimit))
+	}
+	wantAge := time.Duration(service.GetDefaultInt(service.SettingEnrichmentFailedRetentionDays)) * 24 * time.Hour
+	gotAge := time.Now().UTC().Sub(store.lastDeleteCutoff)
+	if diff := gotAge - wantAge; diff < -time.Minute || diff > time.Minute {
+		t.Errorf("cutoff age = %s, want ~%s (retention default)", gotAge, wantAge)
+	}
+}
+
+func TestStuckJobSweeper_RetentionDisabled(t *testing.T) {
+	store := &fakeStuckJobStore{deleteFailedReturn: 5}
+	settings := &fakeSweeperSettings{
+		stuckThreshold:         30 * time.Minute,
+		failedRetentionDays:    0,
+		failedRetentionDaysSet: true,
+	}
+	sweeper := NewStuckJobSweeper(store, settings, events.NewMemoryBus(8, 8))
+
+	if err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.deleteFailedCalls != 0 {
+		t.Fatalf("DeleteFailedBefore calls = %d, want 0 when retention disabled", store.deleteFailedCalls)
+	}
+}
+
+func TestStuckJobSweeper_RetentionErrorDoesNotBlockRequeue(t *testing.T) {
+	id := uuid.New()
+	store := &fakeStuckJobStore{
+		stale:           []*model.EnrichmentJob{stuckJob(id, "worker-0", 35*time.Minute)},
+		requeueOK:       true,
+		deleteFailedErr: errors.New("boom"),
+	}
+	sweeper := newTestSweeper(store, events.NewMemoryBus(8, 8))
+
+	if err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatalf("sweep returned error, but a retention-prune failure should be logged not returned: %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.requeued) != 1 || store.requeued[0] != id {
+		t.Fatalf("expected stale job %s to still be requeued after a prune error, got %v", id, store.requeued)
 	}
 }

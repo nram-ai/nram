@@ -770,6 +770,248 @@ func TestEnrichmentQueueRepo_RetryAllFailed(t *testing.T) {
 	})
 }
 
+// setQueueUpdatedAt backdates a queue row's updated_at for retention tests.
+func setQueueUpdatedAt(t *testing.T, ctx context.Context, db DB, id uuid.UUID, ts time.Time) {
+	t.Helper()
+	q := "UPDATE enrichment_queue SET updated_at = ? WHERE id = ?"
+	if db.Backend() == BackendPostgres {
+		q = postgresPlaceholders(q)
+	}
+	if _, err := db.Exec(ctx, q, ts.UTC().Format(time.RFC3339), id.String()); err != nil {
+		t.Fatalf("backdate updated_at: %v", err)
+	}
+}
+
+// TestEnrichmentQueueRepo_RetryAllFailedScoped_DedupAndAttempts verifies the
+// set-based bulk retry: it dedups to satisfy the partial unique index (so no
+// UNIQUE violation), keeps one pending row per memory, resets attempts to 0 and
+// clears last_error on the survivors, and resets the enriched flag only on the
+// memories actually retried.
+func TestEnrichmentQueueRepo_RetryAllFailedScoped_DedupAndAttempts(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		memRepo := NewMemoryRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
+
+		now := time.Now().UTC()
+
+		// Memory A: two failed rows (older + newer), no pending sibling. The
+		// older must be dropped and the newer flipped to pending.
+		nsA, memA := createTestMemoryForQueue(t, ctx, db)
+		older := &model.EnrichmentJob{MemoryID: memA, NamespaceID: nsA, CreatedAt: now.Add(-2 * time.Hour)}
+		if _, err := repo.Enqueue(ctx, older); err != nil {
+			t.Fatalf("enqueue A older: %v", err)
+		}
+		if err := repo.Fail(ctx, older.ID, "", "boom-old"); err != nil {
+			t.Fatalf("fail A older: %v", err)
+		}
+		newer := &model.EnrichmentJob{MemoryID: memA, NamespaceID: nsA, CreatedAt: now.Add(-1 * time.Hour), Attempts: 2}
+		if _, err := repo.Enqueue(ctx, newer); err != nil {
+			t.Fatalf("enqueue A newer: %v", err)
+		}
+		if err := repo.Fail(ctx, newer.ID, "", "boom-new"); err != nil {
+			t.Fatalf("fail A newer: %v", err)
+		}
+		if err := memRepo.MarkEnriched(ctx, memA, nsA, nil, nil, nil, nil); err != nil {
+			t.Fatalf("mark A enriched: %v", err)
+		}
+
+		// Memory B: one failed row plus a live pending sibling. The failed row
+		// is redundant (pending already covers the memory) and must be dropped,
+		// the pending row left untouched, and B's enriched flag NOT reset.
+		nsB, memB := createTestMemoryForQueue(t, ctx, db)
+		failedB := &model.EnrichmentJob{MemoryID: memB, NamespaceID: nsB, CreatedAt: now.Add(-2 * time.Hour)}
+		if _, err := repo.Enqueue(ctx, failedB); err != nil {
+			t.Fatalf("enqueue B failed: %v", err)
+		}
+		if err := repo.Fail(ctx, failedB.ID, "", "boom-b"); err != nil {
+			t.Fatalf("fail B: %v", err)
+		}
+		pendingB := &model.EnrichmentJob{MemoryID: memB, NamespaceID: nsB, CreatedAt: now.Add(-1 * time.Hour)}
+		if _, err := repo.Enqueue(ctx, pendingB); err != nil {
+			t.Fatalf("enqueue B pending: %v", err)
+		}
+		if err := memRepo.MarkEnriched(ctx, memB, nsB, nil, nil, nil, nil); err != nil {
+			t.Fatalf("mark B enriched: %v", err)
+		}
+
+		count, err := repo.RetryAllFailedScoped(ctx, "")
+		if err != nil {
+			t.Fatalf("RetryAllFailedScoped: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("flipped count = %d, want 1 (only memory A's surviving failed row)", count)
+		}
+
+		// Memory A: exactly one row, the newer, now pending with a clean slate.
+		if n := countQueueStatus(t, ctx, db, memA, ""); n != 1 {
+			t.Fatalf("memory A row count = %d, want 1 (older deduped away)", n)
+		}
+		if _, err := repo.GetByID(ctx, older.ID); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("expected older A row deleted (sql.ErrNoRows), got %v", err)
+		}
+		gotA, err := repo.GetByID(ctx, newer.ID)
+		if err != nil {
+			t.Fatalf("get A newer: %v", err)
+		}
+		if gotA.Status != "pending" {
+			t.Errorf("A newer status = %s, want pending", gotA.Status)
+		}
+		if gotA.Attempts != 0 {
+			t.Errorf("A newer attempts = %d, want 0 (reset on operator retry)", gotA.Attempts)
+		}
+		if gotA.LastError != nil && string(gotA.LastError) != "null" && string(gotA.LastError) != "" {
+			t.Errorf("A newer last_error = %q, want cleared", string(gotA.LastError))
+		}
+
+		// Memory B: failed row dropped, pending sibling untouched.
+		if n := countQueueStatus(t, ctx, db, memB, ""); n != 1 {
+			t.Fatalf("memory B row count = %d, want 1 (failed deduped away, pending kept)", n)
+		}
+		if _, err := repo.GetByID(ctx, failedB.ID); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("expected B failed row deleted (sql.ErrNoRows), got %v", err)
+		}
+		gotPendingB, err := repo.GetByID(ctx, pendingB.ID)
+		if err != nil {
+			t.Fatalf("get B pending: %v", err)
+		}
+		if gotPendingB.Status != "pending" {
+			t.Errorf("B pending status = %s, want pending (untouched)", gotPendingB.Status)
+		}
+
+		// enriched reset only on the retried memory (A), not B.
+		mA, err := memRepo.GetByID(ctx, memA)
+		if err != nil {
+			t.Fatalf("get memory A: %v", err)
+		}
+		if mA.Enriched {
+			t.Errorf("memory A enriched = true, want false (reset for retry)")
+		}
+		mB, err := memRepo.GetByID(ctx, memB)
+		if err != nil {
+			t.Fatalf("get memory B: %v", err)
+		}
+		if !mB.Enriched {
+			t.Errorf("memory B enriched = false, want true (not retried, must not be over-reset)")
+		}
+	})
+}
+
+// TestEnrichmentQueueRepo_RetryAllFailedScoped_NamespaceScope verifies the
+// prefix scopes the flip to one namespace and leaves others' failed jobs alone.
+func TestEnrichmentQueueRepo_RetryAllFailedScoped_NamespaceScope(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
+
+		ns1, mem1 := createTestMemoryForQueue(t, ctx, db)
+		ns2, mem2 := createTestMemoryForQueue(t, ctx, db)
+
+		j1 := &model.EnrichmentJob{MemoryID: mem1, NamespaceID: ns1}
+		if _, err := repo.Enqueue(ctx, j1); err != nil {
+			t.Fatalf("enqueue ns1: %v", err)
+		}
+		if err := repo.Fail(ctx, j1.ID, "", "boom1"); err != nil {
+			t.Fatalf("fail ns1: %v", err)
+		}
+		j2 := &model.EnrichmentJob{MemoryID: mem2, NamespaceID: ns2}
+		if _, err := repo.Enqueue(ctx, j2); err != nil {
+			t.Fatalf("enqueue ns2: %v", err)
+		}
+		if err := repo.Fail(ctx, j2.ID, "", "boom2"); err != nil {
+			t.Fatalf("fail ns2: %v", err)
+		}
+
+		// createTestNamespace sets path = nsID.String().
+		count, err := repo.RetryAllFailedScoped(ctx, ns1.String())
+		if err != nil {
+			t.Fatalf("RetryAllFailedScoped(ns1): %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("flipped count = %d, want 1 (only ns1)", count)
+		}
+
+		got1, err := repo.GetByID(ctx, j1.ID)
+		if err != nil {
+			t.Fatalf("get ns1 job: %v", err)
+		}
+		if got1.Status != "pending" {
+			t.Errorf("ns1 job status = %s, want pending", got1.Status)
+		}
+		got2, err := repo.GetByID(ctx, j2.ID)
+		if err != nil {
+			t.Fatalf("get ns2 job: %v", err)
+		}
+		if got2.Status != "failed" {
+			t.Errorf("ns2 job status = %s, want failed (out of scope)", got2.Status)
+		}
+	})
+}
+
+// TestEnrichmentQueueRepo_DeleteFailedBefore verifies retention pruning deletes
+// only failed rows older than the cutoff, bounded by limit, leaving recent
+// failed rows and non-failed rows in place.
+func TestEnrichmentQueueRepo_DeleteFailedBefore(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
+
+		now := time.Now().UTC()
+
+		// Old failed row — should be deleted.
+		nsOld, memOld := createTestMemoryForQueue(t, ctx, db)
+		oldFailed := &model.EnrichmentJob{MemoryID: memOld, NamespaceID: nsOld}
+		if _, err := repo.Enqueue(ctx, oldFailed); err != nil {
+			t.Fatalf("enqueue old: %v", err)
+		}
+		if err := repo.Fail(ctx, oldFailed.ID, "", "old"); err != nil {
+			t.Fatalf("fail old: %v", err)
+		}
+		setQueueUpdatedAt(t, ctx, db, oldFailed.ID, now.Add(-10*24*time.Hour))
+
+		// Recent failed row — newer than cutoff, must survive.
+		nsNew, memNew := createTestMemoryForQueue(t, ctx, db)
+		recentFailed := &model.EnrichmentJob{MemoryID: memNew, NamespaceID: nsNew}
+		if _, err := repo.Enqueue(ctx, recentFailed); err != nil {
+			t.Fatalf("enqueue recent: %v", err)
+		}
+		if err := repo.Fail(ctx, recentFailed.ID, "", "recent"); err != nil {
+			t.Fatalf("fail recent: %v", err)
+		}
+		setQueueUpdatedAt(t, ctx, db, recentFailed.ID, now.Add(-1*time.Hour))
+
+		// Old pending row — old but not failed, must survive.
+		nsPend, memPend := createTestMemoryForQueue(t, ctx, db)
+		oldPending := &model.EnrichmentJob{MemoryID: memPend, NamespaceID: nsPend}
+		if _, err := repo.Enqueue(ctx, oldPending); err != nil {
+			t.Fatalf("enqueue pending: %v", err)
+		}
+		setQueueUpdatedAt(t, ctx, db, oldPending.ID, now.Add(-10*24*time.Hour))
+
+		cutoff := now.Add(-7 * 24 * time.Hour)
+		deleted, err := repo.DeleteFailedBefore(ctx, cutoff, 100)
+		if err != nil {
+			t.Fatalf("DeleteFailedBefore: %v", err)
+		}
+		if deleted != 1 {
+			t.Fatalf("deleted = %d, want 1 (only the old failed row)", deleted)
+		}
+
+		if _, err := repo.GetByID(ctx, oldFailed.ID); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("old failed row should be deleted, got err=%v", err)
+		}
+		if _, err := repo.GetByID(ctx, recentFailed.ID); err != nil {
+			t.Errorf("recent failed row should survive, got err=%v", err)
+		}
+		if _, err := repo.GetByID(ctx, oldPending.ID); err != nil {
+			t.Errorf("old pending row should survive, got err=%v", err)
+		}
+	})
+}
+
 // TestEnrichmentQueueRepo_MarkStepCompleted exercises the per-step
 // progress marker the worker writes between phases. Idempotent across
 // repeats, preserves prior contents, and survives the round-trip.

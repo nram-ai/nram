@@ -548,36 +548,22 @@ func (s *EnrichmentAdminStore) jobInNamespacePrefix(ctx context.Context, prefix 
 // retryFailedInNamespacePath retries failed enrichment jobs whose memory
 // namespace matches or is descended from prefix. Empty ids retries every
 // failed job in scope; non-empty ids are filtered against the prefix and
-// silently skipped if out-of-scope.
+// silently skipped if out-of-scope. An empty prefix means global (no scope
+// filter), the admin path that retries any job.
 func (s *EnrichmentAdminStore) retryFailedInNamespacePath(ctx context.Context, prefix string, ids []uuid.UUID) (int, error) {
 	if len(ids) == 0 {
-		q := `SELECT eq.id FROM enrichment_queue eq
-			JOIN memories m ON eq.memory_id = m.id
-			JOIN namespaces n ON m.namespace_id = n.id
-			WHERE eq.status = ? AND (n.path = ? OR n.path LIKE ?)`
-		if s.db.Backend() == storage.BackendPostgres {
-			q = `SELECT eq.id FROM enrichment_queue eq
-				JOIN memories m ON eq.memory_id = m.id
-				JOIN namespaces n ON m.namespace_id = n.id
-				WHERE eq.status = $1 AND (n.path = $2 OR n.path LIKE $3)`
-		}
-		rows, err := s.db.Query(ctx, q, model.EnrichmentStatusFailed, prefix, prefix+"/%")
-		if err != nil {
-			return 0, fmt.Errorf("retry list by namespace: %w", err)
-		}
-		defer func() { _ = rows.Close() }()
-		var scoped []uuid.UUID
-		for rows.Next() {
-			var idStr string
-			if err := rows.Scan(&idStr); err != nil {
-				return 0, err
-			}
-			if id, perr := uuid.Parse(idStr); perr == nil {
-				scoped = append(scoped, id)
-			}
-		}
-		ids = scoped
-	} else {
+		// Retry-all in scope: one set-based bulk reset rather than selecting
+		// every failed id and looping a per-row Retry. That loop was an N+1
+		// that, on SQLite, serializes tens of thousands of single-row UPDATEs
+		// against the worker pool and effectively hangs the request for a large
+		// failed backlog.
+		return s.queueRepo.RetryAllFailedScoped(ctx, prefix)
+	}
+
+	// Explicit, user-selected ids: filter to the caller's namespace (skipped
+	// when global) and retry per row. These sets are small and the per-row
+	// Retry's redundant-pending drop handling is correct here.
+	if prefix != "" {
 		filtered := ids[:0:0]
 		for _, id := range ids {
 			if s.jobInNamespacePrefix(ctx, prefix, id) {
@@ -586,7 +572,6 @@ func (s *EnrichmentAdminStore) retryFailedInNamespacePath(ctx context.Context, p
 		}
 		ids = filtered
 	}
-
 	count := 0
 	for _, id := range ids {
 		if err := s.queueRepo.Retry(ctx, id); err == nil {
@@ -611,18 +596,12 @@ func (s *EnrichmentAdminStore) SelfRetryFailed(ctx context.Context, userNamespac
 	return s.retryFailedInNamespacePath(ctx, userNamespacePath, ids)
 }
 
+// RetryFailed retries failed enrichment jobs globally (the system/admin path):
+// empty ids retries every failed job, explicit ids retry those rows unscoped.
+// Shares the one set-based mechanism with the org/self paths via an empty
+// prefix rather than maintaining a parallel global variant.
 func (s *EnrichmentAdminStore) RetryFailed(ctx context.Context, ids []uuid.UUID) (int, error) {
-	if len(ids) == 0 {
-		return s.queueRepo.RetryAllFailed(ctx)
-	}
-
-	count := 0
-	for _, id := range ids {
-		if err := s.queueRepo.Retry(ctx, id); err == nil {
-			count++
-		}
-	}
-	return count, nil
+	return s.retryFailedInNamespacePath(ctx, "", ids)
 }
 
 func (s *EnrichmentAdminStore) SetPaused(ctx context.Context, paused bool) error {

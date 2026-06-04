@@ -24,14 +24,21 @@ func cleanEnrichmentQueue(t *testing.T, ctx context.Context, db DB) {
 
 // countQueueStatus returns how many enrichment_queue rows a memory has in the
 // given status.
+// countQueueStatus counts enrichment_queue rows for a memory; an empty status
+// counts rows of any status.
 func countQueueStatus(t *testing.T, ctx context.Context, db DB, memID uuid.UUID, status string) int {
 	t.Helper()
-	q := "SELECT COUNT(*) FROM enrichment_queue WHERE memory_id = ? AND status = ?"
+	q := "SELECT COUNT(*) FROM enrichment_queue WHERE memory_id = ?"
+	args := []any{memID.String()}
+	if status != "" {
+		q += " AND status = ?"
+		args = append(args, status)
+	}
 	if db.Backend() == BackendPostgres {
-		q = "SELECT COUNT(*) FROM enrichment_queue WHERE memory_id = $1 AND status = $2"
+		q = postgresPlaceholders(q)
 	}
 	var n int
-	if err := db.QueryRow(ctx, q, memID.String(), status).Scan(&n); err != nil {
+	if err := db.QueryRow(ctx, q, args...).Scan(&n); err != nil {
 		t.Fatalf("count %q rows: %v", status, err)
 	}
 	return n

@@ -1079,36 +1079,177 @@ func (r *EnrichmentQueueRepo) ListRecent(ctx context.Context, limit int) ([]mode
 	return result, nil
 }
 
-// RetryAllFailed resets all failed items back to pending status. Returns the number of items retried.
+// RetryAllFailed resets all failed items back to pending status (global, no
+// namespace scoping). Thin wrapper over RetryAllFailedScoped. Returns the
+// number of items flipped back to pending.
 func (r *EnrichmentQueueRepo) RetryAllFailed(ctx context.Context) (int, error) {
+	return r.RetryAllFailedScoped(ctx, "")
+}
+
+// RetryAllFailedScoped resets failed enrichment jobs back to pending in a
+// single set-based transaction, optionally scoped to a namespace prefix (path
+// == prefix OR descended from it). An empty prefix means global.
+//
+// This is done as three statements inside one transaction rather than a
+// per-row loop so a large failed backlog (tens of thousands of rows) is
+// retried in one shot. The partial unique index
+// idx_enrichment_queue_pending_memory permits at most one pending row per
+// memory, so a blanket failed->pending flip would collide whenever a memory
+// has several failed rows or already has a pending sibling. The transaction
+// first DELETEs the redundant failed rows (the per-row dropRedundantPending
+// semantics expressed in set form), leaving at most one failed row per memory
+// and none colliding with an existing pending row, so the subsequent flip
+// cannot violate the index.
+//
+// attempts is reset to 0: an explicit operator retry is a clean slate, distinct
+// from the sweeper's automatic requeue (RequeueStale) which bumps attempts so
+// genuine poison-pill memories still converge to max_attempts and stop looping.
+func (r *EnrichmentQueueRepo) RetryAllFailedScoped(ctx context.Context, namespacePrefix string) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL, last_requeue_reason = NULL, completed_at = NULL, updated_at = ?
-		WHERE status = 'failed'`
+	// Scope fragment restricting enrichment_queue rows to the namespace prefix
+	// and its descendants. All rows for one memory share a namespace, so
+	// applying it to the target table alone is sufficient.
+	scopeClause := ""
+	var scopeArgs []any
+	if namespacePrefix != "" {
+		scopeClause = ` AND memory_id IN (
+			SELECT m.id FROM memories m
+			JOIN namespaces n ON m.namespace_id = n.id
+			WHERE n.path = ? OR n.path LIKE ?)`
+		scopeArgs = []any{namespacePrefix, namespacePrefix + "/%"}
+	}
+
+	boolFalse, boolTrue := "0", "1"
 	if r.db.Backend() == BackendPostgres {
-		query = `UPDATE enrichment_queue SET status = 'pending', claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL, last_requeue_reason = NULL, completed_at = NULL, updated_at = $1
-			WHERE status = 'failed'`
+		boolFalse, boolTrue = "false", "true"
 	}
 
-	result, err := r.db.Exec(ctx, query, now)
+	// Step A: delete failed rows that would collide on the unique index — those
+	// whose memory already holds a pending sibling, and all-but-the-newest
+	// failed row per memory (by created_at, then id). The outer table is
+	// referenced by name (not an alias) so the correlated subqueries are
+	// portable to SQLite, which cannot alias a DELETE target.
+	deleteQuery := `DELETE FROM enrichment_queue
+		WHERE status = 'failed'` + scopeClause + `
+		  AND (
+		    EXISTS (SELECT 1 FROM enrichment_queue p
+		            WHERE p.memory_id = enrichment_queue.memory_id AND p.status = 'pending')
+		    OR EXISTS (SELECT 1 FROM enrichment_queue o
+		            WHERE o.memory_id = enrichment_queue.memory_id AND o.status = 'failed'
+		              AND (o.created_at > enrichment_queue.created_at
+		                   OR (o.created_at = enrichment_queue.created_at AND o.id > enrichment_queue.id)))
+		  )`
+	deleteArgs := scopeArgs
+
+	// Step B: reset the enriched flag on the memories of the surviving failed
+	// rows so they get re-enriched. Run before the flip, while the survivors are
+	// still status='failed', so only the memories actually being retried are
+	// touched (the old global query reset every pending memory, over-resetting
+	// a pre-existing pending set).
+	memQuery := `UPDATE memories SET enriched = ` + boolFalse + `, updated_at = ?
+		WHERE enriched = ` + boolTrue + `
+		  AND id IN (SELECT memory_id FROM enrichment_queue WHERE status = 'failed'` + scopeClause + `)`
+	memArgs := append([]any{now}, scopeArgs...)
+
+	// Step C: flip the surviving failed rows to pending with a clean slate.
+	// After Step A this cannot violate the partial unique index.
+	updateQuery := `UPDATE enrichment_queue
+		SET status = 'pending', attempts = 0, claimed_by = NULL, claimed_at = NULL,
+		    heartbeat_at = NULL, last_error = NULL, last_requeue_reason = NULL,
+		    completed_at = NULL, updated_at = ?
+		WHERE status = 'failed'` + scopeClause
+	updateArgs := append([]any{now}, scopeArgs...)
+
+	if r.db.Backend() == BackendPostgres {
+		deleteQuery = postgresPlaceholders(deleteQuery)
+		memQuery = postgresPlaceholders(memQuery)
+		updateQuery = postgresPlaceholders(updateQuery)
+	}
+
+	// Retry the whole transaction on SQLITE_BUSY: the write pool serializes
+	// writes but the busy_timeout may be insufficient under heavy worker
+	// contention. Each attempt rolls back cleanly before retrying, so the
+	// dedup + flip is safe to repeat. Mirrors ClaimNext's busy-retry shape.
+	var n int
+	var err error
+	for attempt := range 3 {
+		n, err = r.retryAllFailedTx(ctx,
+			deleteQuery, deleteArgs, memQuery, memArgs, updateQuery, updateArgs)
+		if err == nil || !isSQLiteBusy(err) {
+			break
+		}
+		time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // 50ms, 100ms, 200ms
+	}
 	if err != nil {
-		return 0, fmt.Errorf("enrichment queue retry all: %w", err)
+		return 0, err
 	}
+	return n, nil
+}
 
-	rows, err := result.RowsAffected()
+// retryAllFailedTx runs the three retry-all statements in one transaction and
+// returns the rows-affected of the final flip (the count of jobs returned to
+// pending).
+func (r *EnrichmentQueueRepo) retryAllFailedTx(ctx context.Context,
+	deleteQuery string, deleteArgs []any,
+	memQuery string, memArgs []any,
+	updateQuery string, updateArgs []any,
+) (int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue retry all begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, deleteQuery, deleteArgs...); err != nil {
+		return 0, fmt.Errorf("enrichment queue retry all dedup: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, memQuery, memArgs...); err != nil {
+		return 0, fmt.Errorf("enrichment queue retry all reset enriched: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, updateQuery, updateArgs...)
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue retry all flip: %w", err)
+	}
+	rows, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("enrichment queue retry all rows affected: %w", err)
 	}
-
-	// Also reset the enriched flag on memories whose jobs are being retried,
-	// so they get properly re-enriched.
-	memQuery := `UPDATE memories SET enriched = 0, updated_at = ?
-		WHERE enriched = 1 AND id IN (SELECT memory_id FROM enrichment_queue WHERE status = 'pending')`
-	if r.db.Backend() == BackendPostgres {
-		memQuery = `UPDATE memories SET enriched = false, updated_at = $1
-			WHERE enriched = true AND id IN (SELECT memory_id FROM enrichment_queue WHERE status = 'pending')`
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("enrichment queue retry all commit: %w", err)
 	}
-	_, _ = r.db.Exec(ctx, memQuery, now)
+	return int(rows), nil
+}
 
+// DeleteFailedBefore hard-deletes failed enrichment_queue rows whose updated_at
+// is older than cutoff, up to limit rows (0 or negative falls through to
+// stuckScanLimit). Used by the retention sweep to keep the failed backlog from
+// accumulating without bound. Returns the number of rows deleted. The
+// (status, updated_at) index covers the predicate.
+func (r *EnrichmentQueueRepo) DeleteFailedBefore(ctx context.Context, cutoff time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		limit = stuckScanLimit
+	}
+	cutoffStr := cutoff.UTC().Format(time.RFC3339)
+
+	// Bound the delete via a subselect of ids: Postgres does not support LIMIT
+	// on DELETE, and SQLite only does so when compiled with a non-default flag.
+	// DELETE ... WHERE id IN (SELECT ... LIMIT n) is portable to both.
+	query := `DELETE FROM enrichment_queue WHERE id IN (
+		SELECT id FROM enrichment_queue
+		WHERE status = 'failed' AND updated_at < ?
+		ORDER BY updated_at ASC LIMIT ?)`
+	if r.db.Backend() == BackendPostgres {
+		query = postgresPlaceholders(query)
+	}
+
+	res, err := r.db.Exec(ctx, query, cutoffStr, limit)
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue delete failed before: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue delete failed before rows affected: %w", err)
+	}
 	return int(rows), nil
 }
