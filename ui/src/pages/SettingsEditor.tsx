@@ -636,6 +636,19 @@ function InlineSettingEditor({
 // Parent Group Card
 // ---------------------------------------------------------------------------
 
+// Some categories carry an operator action block beneath their setting rows.
+// This is rendered in both ParentGroupCard render paths (flat and sectioned) so
+// the block never depends on whether the group happened to flatten — a group
+// with a single unlabeled subsection takes the flat path, and omitting the
+// block there is what hid GraphMaintenanceBlock under Lifecycle Sweep.
+const TRAILING_BLOCK_CATEGORIES = new Set(["enrichment_query_augment", "lifecycle"]);
+
+function CategoryTrailingBlock({ category }: { category: string }) {
+  if (category === "enrichment_query_augment") return <QueryAugmentBackfillBlock />;
+  if (category === "lifecycle") return <GraphMaintenanceBlock />;
+  return null;
+}
+
 function ParentGroupCard({
   group,
   itemsByCategory,
@@ -678,18 +691,25 @@ function ParentGroupCard({
         )}
       </div>
       {flatten ? (
-        <div className="divide-y divide-border px-5">
-          {populated[0].items.map((item) => (
-            <InlineSettingEditor
-              key={item.schema.key}
-              item={item}
-              onSave={onSave}
-              onReset={onReset}
-              saving={saving}
-              resetting={resetting}
-            />
-          ))}
-        </div>
+        <>
+          <div className="divide-y divide-border px-5">
+            {populated[0].items.map((item) => (
+              <InlineSettingEditor
+                key={item.schema.key}
+                item={item}
+                onSave={onSave}
+                onReset={onReset}
+                saving={saving}
+                resetting={resetting}
+              />
+            ))}
+          </div>
+          {TRAILING_BLOCK_CATEGORIES.has(populated[0].sub.category) && (
+            <div className="px-5 pb-4">
+              <CategoryTrailingBlock category={populated[0].sub.category} />
+            </div>
+          )}
+        </>
       ) : (
         <div className="divide-y divide-border">
           {populated.map(({ sub, items }) => {
@@ -727,10 +747,7 @@ function ParentGroupCard({
                     />
                   ))}
                 </div>
-                {sub.category === "enrichment_query_augment" && (
-                  <QueryAugmentBackfillBlock />
-                )}
-                {sub.category === "lifecycle" && <GraphMaintenanceBlock />}
+                <CategoryTrailingBlock category={sub.category} />
               </section>
             );
           })}

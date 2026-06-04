@@ -26,6 +26,9 @@ vi.mock("../../hooks/useApi", async () => {
     useUpdateSetting: vi.fn(),
     useResetSettings: vi.fn(),
     useSetupStatus: vi.fn(),
+    useGraphHealth: vi.fn(),
+    useRepairGraph: vi.fn(),
+    useBackfillAugmentation: vi.fn(),
   };
 });
 
@@ -39,6 +42,9 @@ const useSettingGroupsMock = vi.mocked(useApi.useSettingGroups);
 const useUpdateSettingMock = vi.mocked(useApi.useUpdateSetting);
 const useResetSettingsMock = vi.mocked(useApi.useResetSettings);
 const useSetupStatusMock = vi.mocked(useApi.useSetupStatus);
+const useGraphHealthMock = vi.mocked(useApi.useGraphHealth);
+const useRepairGraphMock = vi.mocked(useApi.useRepairGraph);
+const useBackfillAugmentationMock = vi.mocked(useApi.useBackfillAugmentation);
 const useEnrichmentAvailableMock = vi.mocked(useEnrichment.useEnrichmentAvailable);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -96,6 +102,9 @@ describe("SettingsEditor tabs + search", () => {
     useSetupStatusMock.mockReturnValue(loaded({ backend: "sqlite" }));
     useUpdateSettingMock.mockReturnValue({ mutate: vi.fn(), isPending: false } as never);
     useResetSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false } as never);
+    useGraphHealthMock.mockReturnValue(loaded({ lost_provenance_edges: 0 }));
+    useRepairGraphMock.mockReturnValue({ mutate: vi.fn(), isPending: false } as never);
+    useBackfillAugmentationMock.mockReturnValue({ mutate: vi.fn(), isPending: false } as never);
     useEnrichmentAvailableMock.mockReturnValue({ available: true } as never);
   });
 
@@ -203,5 +212,86 @@ describe("SettingsEditor tabs + search", () => {
     const defaultRow = screen.getByText("enrichment.enabled").closest("div");
     expect(defaultRow).toHaveTextContent("(default)");
     expect(defaultRow).not.toHaveTextContent("Modified");
+  });
+
+  // A category can carry an operator action block beneath its setting rows
+  // (GraphMaintenanceBlock under lifecycle, QueryAugmentBackfillBlock under
+  // enrichment_query_augment). These must render regardless of which
+  // ParentGroupCard path the group takes: a group with a single unlabeled
+  // subsection renders "flat" (no h3), and the lifecycle group is exactly that
+  // shape, so its block only appears if the flat path renders trailing blocks.
+  it("renders GraphMaintenanceBlock under the flattened Lifecycle Sweep group", () => {
+    useSettingsSchemaMock.mockReturnValue(
+      loaded({
+        data: [
+          {
+            key: "lifecycle.sweep_interval_seconds",
+            type: "number",
+            default_value: 3600,
+            description: "Sweep interval",
+            category: "lifecycle",
+            min: 1,
+            max: 86400,
+            step: 1,
+          },
+        ],
+      }),
+    );
+    useSettingGroupsMock.mockReturnValue(
+      loaded({
+        data: [
+          {
+            id: "lifecycle",
+            label: "Lifecycle Sweep",
+            // Single subsection with no label/description => flatten path.
+            subsections: [{ category: "lifecycle" }],
+          },
+        ],
+      }),
+    );
+
+    renderPage("/settings?group=lifecycle");
+
+    // The setting row renders flat (no sub-heading) ...
+    expect(screen.getByText("lifecycle.sweep_interval_seconds")).toBeInTheDocument();
+    // ... and the operator action block renders beneath it.
+    expect(screen.getByText("Graph Maintenance")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Repair now" })).toBeInTheDocument();
+    expect(screen.getByText(/No orphaned edges found/i)).toBeInTheDocument();
+  });
+
+  it("renders QueryAugmentBackfillBlock under the sectioned Enrichment group", () => {
+    useSettingsSchemaMock.mockReturnValue(
+      loaded({
+        data: [
+          { key: "enrichment.enabled", type: "boolean", default_value: true, description: "Enable enrichment", category: "enrichment" },
+          { key: "enrichment.query_augment_enabled", type: "boolean", default_value: true, description: "Augment queries", category: "enrichment_query_augment" },
+        ],
+      }),
+    );
+    useSettingGroupsMock.mockReturnValue(
+      loaded({
+        data: [
+          {
+            id: "enrichment",
+            label: "Enrichment",
+            // Multiple labeled subsections => sectioned (non-flatten) path.
+            subsections: [
+              { category: "enrichment", label: "General" },
+              { category: "enrichment_query_augment", label: "Query Augmentation" },
+            ],
+          },
+        ],
+      }),
+    );
+
+    renderPage("/settings?group=enrichment");
+
+    expect(screen.getByText("enrichment.query_augment_enabled")).toBeInTheDocument();
+    // The backfill block renders under the sectioned (non-flatten) path.
+    expect(screen.getByText("Backfill Augmentation")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Check candidates/i }),
+    ).toBeInTheDocument();
   });
 });
