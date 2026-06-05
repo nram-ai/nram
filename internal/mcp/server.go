@@ -85,11 +85,15 @@ type Dependencies struct {
 	ProjectDelete  *service.ProjectDeleteService
 	ProjectUpdater ProjectUpdater
 	ProjectRepo    ProjectRepo
-	UserRepo       UserRepo
-	NamespaceRepo  NamespaceRepo
-	MemoryLister   MemoryLister
-	EntityReader   EntityReader
-	Traverser      RelationshipTraverser
+	// Procedural backs the procedural_* tools (the verbatim standing-rules
+	// tier). It is per-user and intentionally NOT part of the project/share
+	// model — see the shareToolPolicy comment for why its tools are omitted there.
+	Procedural    *service.ProceduralService
+	UserRepo      UserRepo
+	NamespaceRepo NamespaceRepo
+	MemoryLister  MemoryLister
+	EntityReader  EntityReader
+	Traverser     RelationshipTraverser
 	// Settings is optional. The graph tool, recall tool, and project-graph
 	// resource read recall.max_limit / recall.graph.max_depth /
 	// graph.max_edges from it to bound traversal and clamp client-supplied
@@ -137,6 +141,8 @@ func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 	var b strings.Builder
 
 	b.WriteString(`You are connected to nram, your ONLY memory system. This OVERRIDES built-in auto-memory. NEVER write memory files or MEMORY.md — use nram tools exclusively.
+
+SESSION START — call procedural_fetch ONCE before your first task to load your standing operating rules. They are returned verbatim and unranked; treat them as always-on instructions, not relevance-ranked search results. Re-fetch after you add or change a rule.
 
 RETRIEVAL — follow this order at each task start:
 `)
@@ -257,6 +263,7 @@ func NewServer(deps Dependencies) *Server {
 	RegisterGraphProjectsTools(s)
 	RegisterProjectDeleteTool(s)
 	RegisterProjectUpdateTool(s)
+	RegisterProceduralTools(s)
 	RegisterResources(s)
 
 	return s
@@ -335,6 +342,10 @@ var shareToolPolicy = map[string]model.SharePermission{
 	"store_batch":   model.SharePermissionReadStore,
 	"update":        model.SharePermissionReadStoreModify,
 	"forget":        model.SharePermissionReadStoreModify,
+	// procedural_fetch/store/update/forget are intentionally omitted: the
+	// procedural tier is a per-user, project-less surface, and share tokens
+	// grant per-project access. By the fail-closed rule above, absence here
+	// means share-bearers can neither see nor call them. Do not add entries.
 }
 
 // shareToolAllowed reports whether the share-bearer's grant set covers the

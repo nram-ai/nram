@@ -616,6 +616,41 @@ export interface AdminCreateProjectRequest {
   settings?: Partial<ProjectSettings>;
 }
 
+// ProceduralEntry is a verbatim standing-rule in the procedural memory tier.
+// It is not a project and not a memory; it is fetched whole and never enriched
+// or surfaced by recall.
+export interface ProceduralEntry {
+  id: string;
+  namespace_id?: string;
+  content: string;
+  title: string;
+  category: string;
+  tags: string[];
+  priority: number;
+  enabled: boolean;
+  origin?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateProceduralRequest {
+  content: string;
+  title?: string;
+  category?: string;
+  tags?: string[];
+  priority?: number;
+  enabled?: boolean;
+}
+
+export interface UpdateProceduralRequest {
+  content?: string;
+  title?: string;
+  category?: string;
+  tags?: string[];
+  priority?: number;
+  enabled?: boolean;
+}
+
 export interface WebhookCreateRequest {
   url: string;
   events: string[];
@@ -2004,6 +2039,18 @@ export const meAPI = {
     request<Project>("PUT", `/me/projects/${id}`, data),
   deleteProject: (id: string) =>
     request<void>("DELETE", `/me/projects/${id}`),
+
+  // Procedural memory tier — verbatim standing rules, per-user, fetch-only.
+  listProcedural: () =>
+    request<{ data: ProceduralEntry[] }>("GET", "/me/procedural").then((r) => r.data),
+  getProcedural: (id: string) =>
+    request<ProceduralEntry>("GET", `/me/procedural/${id}`),
+  createProcedural: (data: CreateProceduralRequest) =>
+    request<ProceduralEntry>("POST", "/me/procedural", data),
+  updateProcedural: (id: string, data: UpdateProceduralRequest) =>
+    request<ProceduralEntry>("PUT", `/me/procedural/${id}`, data),
+  deleteProcedural: (id: string) =>
+    request<void>("DELETE", `/me/procedural/${id}`),
 
   listAPIKeys: () =>
     request<{ data: APIKey[] }>("GET", "/me/api-keys").then((r) => r.data),

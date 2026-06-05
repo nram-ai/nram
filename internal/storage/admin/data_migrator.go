@@ -312,6 +312,7 @@ var migratedTables = []string{
 	"settings",
 	"system_meta",
 	"memories",
+	"procedural_entries",
 	"entities",
 	"entity_aliases",
 	"relationships",
@@ -347,6 +348,7 @@ func (m *DataMigrator) Run(ctx context.Context) error {
 		{"settings", m.migrateSettings},
 		{"system_meta", m.migrateSystemMeta},
 		{"memories", m.migrateMemories},
+		{"procedural_entries", m.migrateProceduralEntries},
 		{"memory_vectors", m.migrateMemoryVectors},
 		{"entities", m.migrateEntities},
 		{"entity_aliases", m.migrateEntityAliases},
@@ -766,6 +768,71 @@ func (m *DataMigrator) migrateProjects(ctx context.Context) error {
 			return fmt.Errorf("insert project %s: %w", id, err)
 		}
 		m.markInserted("projects", id)
+	}
+	return tx.Commit()
+}
+
+func (m *DataMigrator) migrateProceduralEntries(ctx context.Context) error {
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT id, namespace_id, content, title, category, tags, priority,
+		       enabled, origin, metadata, created_at, updated_at, deleted_at
+		FROM procedural_entries
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	tx, err := m.dst.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO procedural_entries (id, namespace_id, content, title, category, tags,
+		                                priority, enabled, origin, metadata, created_at, updated_at, deleted_at)
+		VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, $9, $10, $11, $12, $13)
+		ON CONFLICT DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for rows.Next() {
+		var (
+			id, nsID                 string
+			content, title, category string
+			tagsJSON                 string
+			priority                 int
+			enabledInt               int
+			origin, metadata         string
+			createdAt, updatedAt     string
+			deletedAt                sql.NullString
+		)
+		if err := rows.Scan(&id, &nsID, &content, &title, &category, &tagsJSON,
+			&priority, &enabledInt, &origin, &metadata, &createdAt, &updatedAt, &deletedAt); err != nil {
+			return err
+		}
+		pgTags, err := jsonArrayToPostgresTextArray(tagsJSON)
+		if err != nil {
+			return fmt.Errorf("convert tags for procedural_entry %s: %w", id, err)
+		}
+		if !m.hasInserted("namespaces", nsID) {
+			m.skipOrphan("procedural_entries", "namespace_id")
+			continue
+		}
+		var deletedAtVal any
+		if deletedAt.Valid {
+			deletedAtVal = deletedAt.String
+		}
+		if _, err := stmt.ExecContext(ctx, id, nsID, content, title, category, pgTags,
+			priority, enabledInt != 0, origin, sanitizeJSONB(metadata, "{}"),
+			createdAt, updatedAt, deletedAtVal); err != nil {
+			return fmt.Errorf("insert procedural_entry %s: %w", id, err)
+		}
+		m.markInserted("procedural_entries", id)
 	}
 	return tx.Commit()
 }

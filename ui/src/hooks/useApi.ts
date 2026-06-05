@@ -48,6 +48,8 @@ import {
   type UpdateIdPConfigRequest,
   type WebhookTestResult,
   type MeCreateProjectRequest,
+  type CreateProceduralRequest,
+  type UpdateProceduralRequest,
   type MeCreateAPIKeyRequest,
   type MeCreateAPIKeyResponse,
   type OrgCreateUserRequest,
@@ -407,6 +409,48 @@ export function useDeleteProject() {
       qc.invalidateQueries({ queryKey: ["admin", "projects"] });
       qc.invalidateQueries({ queryKey: ["me", "projects"] });
       qc.invalidateQueries({ queryKey: ["me", "projects", id] });
+    },
+  });
+}
+
+// --- Procedural memory ---
+
+const PROCEDURAL_KEY = ["self", "procedural"];
+
+export function useProcedural() {
+  return useQuery({
+    queryKey: PROCEDURAL_KEY,
+    queryFn: meAPI.listProcedural,
+  });
+}
+
+export function useCreateProcedural() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateProceduralRequest) => meAPI.createProcedural(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: PROCEDURAL_KEY });
+    },
+  });
+}
+
+export function useUpdateProcedural() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateProceduralRequest }) =>
+      meAPI.updateProcedural(id, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: PROCEDURAL_KEY });
+    },
+  });
+}
+
+export function useDeleteProcedural() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => meAPI.deleteProcedural(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: PROCEDURAL_KEY });
     },
   });
 }

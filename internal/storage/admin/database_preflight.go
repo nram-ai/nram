@@ -58,6 +58,8 @@ var preflightTables = []string{
 	"settings",
 	"entities",
 	"memories",
+	// procedural_entries references namespaces only; list before that parent.
+	"procedural_entries",
 	// export_jobs holds FKs to both users (ON DELETE CASCADE) and projects
 	// (ON DELETE CASCADE). Listed before its parents so the dependency-aware
 	// truncate path orders it correctly.

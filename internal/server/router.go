@@ -54,6 +54,9 @@ type Handlers struct {
 	MeProjects          http.HandlerFunc // GET + POST
 	MeProjectItem       http.HandlerFunc // GET + PUT /v1/me/projects/{id}
 	MeProjectDelete     http.HandlerFunc // DELETE /v1/me/projects/{id}
+	MeProcedural        http.HandlerFunc // GET + POST /v1/me/procedural
+	MeProceduralItem    http.HandlerFunc // GET + PUT /v1/me/procedural/{id}
+	MeProceduralDelete  http.HandlerFunc // DELETE /v1/me/procedural/{id}
 	MeAPIKeys           http.HandlerFunc // GET + POST
 	MeAPIKeyRevoke      http.HandlerFunc
 	MeOAuthClients      http.HandlerFunc
@@ -150,23 +153,23 @@ type Handlers struct {
 	// Mounted at /v1/dashboard, /v1/activity, /v1/analytics, /v1/usage,
 	// /v1/graph, /v1/namespaces/tree. Self-scoped to caller (post-2026-04-30
 	// leak fix); admin sees own data only on these surfaces.
-	AdminSetupStatus   http.HandlerFunc
-	AdminSetup         http.HandlerFunc
-	AdminDashboard     http.HandlerFunc
-	AdminActivity      http.HandlerFunc
-	AdminOrgs          http.HandlerFunc
-	AdminUsers         http.HandlerFunc
-	AdminProjects      http.HandlerFunc
-	AdminProviders     http.HandlerFunc
-	AdminSettings      http.HandlerFunc
-	AdminSettingsReset http.HandlerFunc
-	AdminEnrichment    http.HandlerFunc
-	AdminOAuth         http.HandlerFunc
-	AdminWebhooks      http.HandlerFunc
-	AdminAnalytics     http.HandlerFunc
-	AdminUsage         http.HandlerFunc
-	UsageCostRates     http.HandlerFunc
-	AdminNamespaces    http.HandlerFunc
+	AdminSetupStatus      http.HandlerFunc
+	AdminSetup            http.HandlerFunc
+	AdminDashboard        http.HandlerFunc
+	AdminActivity         http.HandlerFunc
+	AdminOrgs             http.HandlerFunc
+	AdminUsers            http.HandlerFunc
+	AdminProjects         http.HandlerFunc
+	AdminProviders        http.HandlerFunc
+	AdminSettings         http.HandlerFunc
+	AdminSettingsReset    http.HandlerFunc
+	AdminEnrichment       http.HandlerFunc
+	AdminOAuth            http.HandlerFunc
+	AdminWebhooks         http.HandlerFunc
+	AdminAnalytics        http.HandlerFunc
+	AdminUsage            http.HandlerFunc
+	UsageCostRates        http.HandlerFunc
+	AdminNamespaces       http.HandlerFunc
 	AdminDatabase         http.HandlerFunc
 	AdminGraph            http.HandlerFunc
 	AdminGraphMaintenance http.HandlerFunc
@@ -383,6 +386,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Get("/projects/{id}", handler(handlers.MeProjectItem))
 			r.Put("/projects/{id}", handler(handlers.MeProjectItem))
 			r.Delete("/projects/{id}", handler(handlers.MeProjectDelete))
+			r.HandleFunc("/procedural", handler(handlers.MeProcedural))
+			r.Get("/procedural/{id}", handler(handlers.MeProceduralItem))
+			r.Put("/procedural/{id}", handler(handlers.MeProceduralItem))
+			r.Delete("/procedural/{id}", handler(handlers.MeProceduralDelete))
 			r.HandleFunc("/api-keys", handler(handlers.MeAPIKeys))
 			r.Delete("/api-keys/{id}", handler(handlers.MeAPIKeyRevoke))
 			r.HandleFunc("/oauth-clients", handler(handlers.MeOAuthClients))

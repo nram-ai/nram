@@ -235,6 +235,7 @@ func TestEveryToolHasOutputSchema(t *testing.T) {
 		"list", "store", "store_batch", "recall", "forget",
 		"update", "get", "graph", "list_projects",
 		"delete_project", "update_project",
+		"procedural_fetch", "procedural_store", "procedural_update", "procedural_forget",
 	}
 	exempt := map[string]bool{} // export was the sole exemption; tool withdrawn 2026-05-27
 
@@ -388,6 +389,14 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 				if strings.Contains(result, s) {
 					t.Errorf("expected instructions NOT to contain %q", s)
 				}
+			}
+			// The procedural session-start guidance is provider-independent and
+			// must appear in every variant.
+			if !strings.Contains(result, "procedural_fetch") {
+				t.Errorf("expected instructions to contain procedural_fetch session-start guidance")
+			}
+			if !strings.Contains(result, "SESSION START") {
+				t.Errorf("expected instructions to contain SESSION START guidance")
 			}
 		})
 	}

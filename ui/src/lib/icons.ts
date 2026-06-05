@@ -56,6 +56,7 @@ export {
   faPuzzlePiece,
   faDatabase,
   faListCheck,
+  faScroll,
   faCloudMoon,
   faChartLine,
   faFileImport,

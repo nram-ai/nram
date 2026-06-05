@@ -169,6 +169,7 @@ func main() {
 	memoryRepo := storage.NewMemoryRepo(db)
 	projectRepo := storage.NewProjectRepo(db)
 	namespaceRepo := storage.NewNamespaceRepo(db)
+	proceduralRepo := storage.NewProceduralRepo(db)
 
 	// Populate content_hash for legacy rows synchronously so MemoryRepo.Create
 	// can rely on the column from the first request.
@@ -422,6 +423,9 @@ func main() {
 	)
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)
 	enrichSvc.AttachAugmentationLister(memoryRepo)
+	// Procedural tier: verbatim standing instructions. Holds no enrichment,
+	// embedder, or dream dependency by design — that absence keeps it verbatim.
+	proceduralSvc := service.NewProceduralService(proceduralRepo)
 	enrichSvc.AttachParaphraseCandidateLister(memoryRepo)
 	exportSvc := service.NewExportService(
 		memoryRepo, entityRepo, relationshipRepo, lineageRepo, projectRepo,
@@ -506,6 +510,7 @@ func main() {
 		ProjectDelete:  projectDeleteSvc,
 		ProjectUpdater: projectRepo,
 		ProjectRepo:    projectRepo,
+		Procedural:     proceduralSvc,
 		UserRepo:       userRepo,
 		NamespaceRepo:  namespaceRepo,
 		MemoryLister:   memoryRepo,
@@ -814,6 +819,9 @@ func main() {
 		MeProjects:          api.NewMeProjectsHandler(projectRepo, userRepo, namespaceRepo),
 		MeProjectItem:       api.NewMeProjectItemHandler(projectRepo, userRepo),
 		MeProjectDelete:     api.NewMeProjectDeleteHandler(projectDeleteSvc, projectRepo, userRepo),
+		MeProcedural:        api.NewMeProceduralHandler(proceduralSvc, userRepo),
+		MeProceduralItem:    api.NewMeProceduralItemHandler(proceduralSvc, userRepo),
+		MeProceduralDelete:  api.NewMeProceduralDeleteHandler(proceduralSvc, userRepo),
 		MeAPIKeys:           api.NewMeAPIKeysHandler(apiKeyRepo, auditStore),
 		MeAPIKeyRevoke:      api.NewMeAPIKeyRevokeHandler(apiKeyRepo, auditStore),
 		MeOAuthClients:      api.NewMeOAuthClientsHandler(oauthRepo),

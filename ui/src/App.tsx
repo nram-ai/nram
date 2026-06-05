@@ -31,6 +31,7 @@ import {
   faPuzzlePiece,
   faDatabase,
   faListCheck,
+  faScroll,
   faCloudMoon,
   faChartLine,
   faFileImport,
@@ -62,6 +63,7 @@ const Authorize = React.lazy(() => import("./pages/Authorize"));
 const ShareAccept = React.lazy(() => import("./pages/ShareAccept"));
 
 const MemoryBrowser = React.lazy(() => import("./pages/MemoryBrowser"));
+const ProceduralMemory = React.lazy(() => import("./pages/ProceduralMemory"));
 const ProjectManagement = React.lazy(() => import("./pages/ProjectManagement"));
 const OrganizationManagement = React.lazy(() => import("./pages/OrganizationManagement"));
 const UserManagement = React.lazy(() => import("./pages/UserManagement"));
@@ -156,6 +158,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { path: "/", label: "Dashboard", section: "Overview", icon: faGauge },
   { path: "/memories", label: "Memory Browser", section: "Data", icon: faBrain },
+  { path: "/procedural", label: "Procedural Memory", section: "Data", icon: faScroll },
   { path: "/entities", label: "Entity Browser", section: "Data", icon: faCubes },
   { path: "/graph", label: "Graph Visualization", section: "Data", icon: faDiagramProject },
   { path: "/projects", label: "Projects", section: "Management", icon: faFolderTree },
@@ -386,6 +389,7 @@ function AppLayout() {
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/memories" element={<MemoryBrowser />} />
+                  <Route path="/procedural" element={<ProceduralMemory />} />
                   <Route path="/projects" element={<ProjectManagement />} />
                   <Route path="/organizations" element={<RequireRole minRole="administrator"><OrganizationManagement /></RequireRole>} />
                   <Route path="/users" element={<RequireRole minRole="org_owner"><UserManagement /></RequireRole>} />

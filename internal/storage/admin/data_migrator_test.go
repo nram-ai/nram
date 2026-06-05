@@ -204,6 +204,24 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 	mustExec(`UPDATE memories SET superseded_by = 'ffffffff-0000-0000-0000-000000000001'
 		WHERE id = 'ffffffff-0000-0000-0000-000000000003'`)
 
+	// ── procedural_entries ─────────────────────────────────────────────────
+	// Verbatim entry exercising tags (TEXT[]), JSON metadata, the enabled bool,
+	// and an em dash that must survive the SQLite→Postgres copy unchanged.
+	mustExec(`INSERT INTO procedural_entries (id, namespace_id, content, title, category, tags,
+	                                          priority, enabled, origin, metadata, created_at, updated_at)
+		VALUES ('cccccccc-0000-0000-0000-000000000001',
+		        'aaaaaaaa-0000-0000-0000-000000000002',
+		        'Never ship em dashes — verbatim hard stop.', 'Em-dash rule', 'failure-mode',
+		        '["non-negotiable","em-dash"]', 10, 1, 'user',
+		        '{"severity":"high"}',
+		        '2025-04-01T09:00:00Z', '2025-04-01T09:00:00Z')`)
+	// Disabled entry, empty tags, default priority.
+	mustExec(`INSERT INTO procedural_entries (id, namespace_id, content, tags, priority, enabled, origin, metadata, created_at, updated_at)
+		VALUES ('cccccccc-0000-0000-0000-000000000002',
+		        'aaaaaaaa-0000-0000-0000-000000000002',
+		        'Parked rule.', '[]', 0, 0, 'user', '{}',
+		        '2025-04-02T09:00:00Z', '2025-04-02T09:00:00Z')`)
+
 	// ── entities ───────────────────────────────────────────────────────────
 	// Entity 1: with properties and metadata
 	mustExec(`INSERT INTO entities (id, namespace_id, name, canonical, entity_type, properties, metadata,
@@ -514,6 +532,7 @@ func cleanPostgres(t *testing.T, db *sql.DB) {
 		"relationships",
 		"entity_aliases",
 		"entities",
+		"procedural_entries",
 		"memories",
 		"system_meta",
 		"settings",
