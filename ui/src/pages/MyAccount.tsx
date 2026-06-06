@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import {
   useMeProfile,
@@ -16,6 +16,7 @@ import {
 import type { APIKey, ExportJob, ExportJobStatus, Passkey } from "../api/client";
 import { downloadExportJobArtifact } from "../api/client";
 import { formatBytes } from "../lib/formatters";
+import { CopyButton } from "../components/CopyButton";
 import { isWebAuthnAvailable } from "../api/webauthn";
 
 // ---------------------------------------------------------------------------
@@ -626,7 +627,6 @@ function MyAccount() {
   const revokeMut = useRevokeMeAPIKey();
 
   const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   // Hydrate profile from the server. The JWT-derived AuthContext.user is
   // a fast initial render; once the /v1/me/profile fetch returns we push
@@ -646,13 +646,6 @@ function MyAccount() {
   const deletePasskeyMut = useDeletePasskey();
 
   const apiKeys: APIKey[] = apiKeysQuery.data ?? [];
-
-  const handleCopy = useCallback((text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }, []);
 
   function handleRevoke(id: string) {
     revokeMut.mutate(id);
@@ -792,13 +785,10 @@ function MyAccount() {
                 <code className="flex-1 rounded-md border border-warning/40 bg-white px-3 py-2 text-sm font-mono break-all dark:bg-warning/15">
                   {newKeyValue}
                 </code>
-                <button
-                  type="button"
+                <CopyButton
+                  text={newKeyValue}
                   className="shrink-0 rounded border px-3 py-1.5 text-xs font-medium hover:bg-warning/25"
-                  onClick={() => handleCopy(newKeyValue)}
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
+                />
               </div>
               <button
                 type="button"

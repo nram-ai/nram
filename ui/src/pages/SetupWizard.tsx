@@ -1,48 +1,22 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSetupStatus, useCompleteSetup } from "../hooks/useApi";
 import type { SetupResponse } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCheck, faCircleInfo, faTriangleExclamation, faCircleCheck, faCopy } from "../lib/icons";
+import { faCircleInfo, faTriangleExclamation, faCircleCheck } from "../lib/icons";
+import { CopyButton } from "../components/CopyButton";
 
-function CopyButton({ text, label }: { text: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }, [text]);
-
-  return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-    >
-      {copied ? (
-        <>
-          <FontAwesomeIcon icon={faCheck} className="h-3.5 w-3.5" />
-          Copied
-        </>
-      ) : (
-        <>
-          <FontAwesomeIcon icon={faCopy} className="h-3.5 w-3.5" />
-          {label ?? "Copy"}
-        </>
-      )}
-    </button>
-  );
-}
+// Shared styling for the wizard's copy buttons (icon + label card style).
+const WIZARD_COPY_CLASS =
+  "inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2";
 
 function CodeBlock({ code, label }: { code: string; label?: string }) {
   return (
     <div className="rounded-lg border border-border bg-muted/50">
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
         {label && <span className="text-xs font-medium text-muted-foreground">{label}</span>}
-        <CopyButton text={code} />
+        <CopyButton text={code} withIcon className={WIZARD_COPY_CLASS} />
       </div>
       <pre className="overflow-x-auto p-4 text-sm leading-relaxed text-foreground">
         <code>{code}</code>
@@ -162,7 +136,7 @@ function CompletionScreen({
               <code className="flex-1 rounded-md border border-warning/40 bg-white px-3 py-2 text-sm font-mono break-all dark:bg-warning/15">
                 {result.api_key}
               </code>
-              <CopyButton text={result.api_key} label="Copy Key" />
+              <CopyButton text={result.api_key} label="Copy Key" withIcon className={WIZARD_COPY_CLASS} />
             </div>
           </div>
         </div>

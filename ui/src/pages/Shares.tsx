@@ -15,6 +15,7 @@ import type {
   ShareCreatedResponse,
 } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
+import { CopyButton } from "../components/CopyButton";
 import { faShareNodes } from "../lib/icons";
 
 function formatDate(iso?: string | null): string {
@@ -44,10 +45,6 @@ function permissionLabel(p: SharePermission): string {
     case "read_store_modify":
       return "Read + Store + Modify";
   }
-}
-
-function copyToClipboard(text: string): void {
-  navigator.clipboard.writeText(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -175,30 +172,24 @@ function CreateSharePanel({
                 <p className="mb-2 text-xs text-muted-foreground">
                   One-shot shares can only be redeemed through the OAuth consent flow. The bearer-token URL is intentionally not offered; paste the magic link to the recipient.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(`${window.location.origin}/share/accept?token=${created.secret}`)}
+                <CopyButton
+                  text={`${window.location.origin}/share/accept?token=${created.secret}`}
+                  label="Copy magic link"
                   className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                >
-                  Copy magic link
-                </button>
+                />
               </div>
             ) : (
               <div className="mb-4 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(created.secret)}
+                <CopyButton
+                  text={created.secret}
+                  label="Copy token"
                   className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                >
-                  Copy token
-                </button>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(`${window.location.origin}/share/accept?token=${created.secret}`)}
+                />
+                <CopyButton
+                  text={`${window.location.origin}/share/accept?token=${created.secret}`}
+                  label="Copy magic link"
                   className="rounded border border-input bg-background px-4 py-2 text-sm hover:bg-muted"
-                >
-                  Copy magic link
-                </button>
+                />
               </div>
             )}
             <button

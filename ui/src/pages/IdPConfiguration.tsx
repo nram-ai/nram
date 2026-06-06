@@ -11,6 +11,7 @@ import {
   useUpdateOrgIdPConfig,
 } from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
+import { CopyButton } from "../components/CopyButton";
 import type {
   CreateIdPConfigRequest,
   UpdateIdPConfigRequest,
@@ -494,15 +495,6 @@ function CreateOrgIdPDialog({
 // ---------------------------------------------------------------------------
 
 function CallbackUrlField() {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(IDP_CALLBACK_URL).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }, []);
-
   return (
     <div className="rounded-md border border-info/40 bg-info/10 p-3">
       <label className="text-xs font-medium text-info">
@@ -512,13 +504,10 @@ function CallbackUrlField() {
         <code className="flex-1 rounded bg-white px-2 py-1 text-xs text-info dark:bg-info/40">
           {IDP_CALLBACK_URL}
         </code>
-        <button
-          type="button"
-          onClick={handleCopy}
+        <CopyButton
+          text={IDP_CALLBACK_URL}
           className="shrink-0 rounded-md border border-info/40 bg-white px-2 py-1 text-xs font-medium text-info hover:bg-info/20 dark:bg-info/40"
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
+        />
       </div>
     </div>
   );

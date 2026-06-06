@@ -27,6 +27,7 @@ import type {
   Organization,
 } from "../api/client";
 import Switch from "../components/Switch";
+import { CopyButton } from "../components/CopyButton";
 import {
   buildUserSettingsPayload,
   fromTriState,
@@ -336,7 +337,6 @@ function GenerateAPIKeyDialog({
   const [scopes, setScopes] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   function handleGenerate() {
     if (!label.trim()) return;
@@ -371,14 +371,6 @@ function GenerateAPIKeyDialog({
     }
   }
 
-  function handleCopy() {
-    if (!generatedKey) return;
-    navigator.clipboard.writeText(generatedKey).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
   if (generatedKey) {
     return (
       <div className="fixed inset-0 z-50 flex justify-end">
@@ -394,13 +386,10 @@ function GenerateAPIKeyDialog({
                 <code className="flex-1 break-all rounded bg-white px-3 py-2 font-mono text-sm dark:bg-black">
                   {generatedKey}
                 </code>
-                <button
-                  type="button"
+                <CopyButton
+                  text={generatedKey}
                   className="shrink-0 rounded bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                  onClick={handleCopy}
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
+                />
               </div>
             </div>
             <div className="flex justify-end">

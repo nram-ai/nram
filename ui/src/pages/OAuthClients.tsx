@@ -9,6 +9,11 @@ import type {
   OAuthClientCreated,
   CreateOAuthClientRequest,
 } from "../api/client";
+import { CopyButton } from "../components/CopyButton";
+
+// Small bordered copy button styling used inline next to client credentials.
+const OAUTH_COPY_CLASS =
+  "ml-1.5 rounded border border-input bg-background px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,10 +28,6 @@ function formatDate(iso?: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function copyToClipboard(text: string): void {
-  navigator.clipboard.writeText(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -68,27 +69,6 @@ const PRESETS: Preset[] = [
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = useCallback(() => {
-    copyToClipboard(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [text]);
-
-  return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      className="ml-1.5 rounded border border-input bg-background px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted"
-      title="Copy to clipboard"
-    >
-      {copied ? "Copied" : "Copy"}
-    </button>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Create Client Dialog
@@ -173,7 +153,7 @@ function CreateClientDialog({
                   <code className="rounded bg-muted px-2 py-1 text-sm break-all">
                     {createdClient.client_id}
                   </code>
-                  <CopyButton text={createdClient.client_id} />
+                  <CopyButton text={createdClient.client_id} className={OAUTH_COPY_CLASS} title="Copy to clipboard" />
                 </div>
               </div>
               {createdClient.client_secret && (
@@ -186,7 +166,7 @@ function CreateClientDialog({
                       <code className="text-sm break-all">
                         {createdClient.client_secret}
                       </code>
-                      <CopyButton text={createdClient.client_secret} />
+                      <CopyButton text={createdClient.client_secret} className={OAUTH_COPY_CLASS} title="Copy to clipboard" />
                     </div>
                     <p className="mt-1 text-xs text-warning">
                       This secret will not be shown again. Copy it now.
@@ -426,7 +406,7 @@ function OAuthClientsSection() {
                           ? `${client.client_id.slice(0, 20)}...`
                           : client.client_id}
                       </code>
-                      <CopyButton text={client.client_id} />
+                      <CopyButton text={client.client_id} className={OAUTH_COPY_CLASS} title="Copy to clipboard" />
                     </span>
                   </td>
                   <td className="px-4 py-2">

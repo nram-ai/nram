@@ -16,6 +16,7 @@ import type {
   SystemRankingWeights,
 } from "../api/client";
 import { downloadProjectExport } from "../api/client";
+import { CopyButton } from "../components/CopyButton";
 import {
   buildProjectSettingsPayload,
   fromTriState,
@@ -290,8 +291,6 @@ function ProjectExportButton({ projectId, projectSlug }: { projectId: string; pr
 // ---------------------------------------------------------------------------
 
 function MCPConfigSnippet({ slug }: { slug: string }) {
-  const [copied, setCopied] = useState(false);
-
   const config = JSON.stringify(
     {
       mcpServers: {
@@ -308,26 +307,16 @@ function MCPConfigSnippet({ slug }: { slug: string }) {
     2,
   );
 
-  function handleCopy() {
-    navigator.clipboard.writeText(config).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-medium text-muted-foreground">
           MCP Config Snippet
         </h3>
-        <button
-          type="button"
+        <CopyButton
+          text={config}
           className="rounded border px-2 py-1 text-xs hover:bg-muted"
-          onClick={handleCopy}
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
+        />
       </div>
       <pre className="overflow-auto rounded border bg-muted/50 p-3 text-xs font-mono">
         {config}

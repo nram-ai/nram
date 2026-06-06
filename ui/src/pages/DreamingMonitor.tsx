@@ -21,6 +21,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner, faChevronDown, faChevronRight } from "../lib/icons";
 import type { DreamCycle, DreamLog, DreamPhaseSummary } from "../api/client";
 import { formatNumber, truncateId } from "../lib/formatters";
+import { copyToClipboard } from "../lib/clipboard";
 import {
   PHASE_LABELS,
   SUB_PHASE_LABELS,
@@ -1279,9 +1280,10 @@ function FactChip({ projectId, fact: f }: { projectId: string; fact: Fact }) {
     return (
       <button
         type="button"
-        onClick={(e) => {
+        onClick={async (e) => {
           e.stopPropagation();
-          navigator.clipboard?.writeText(value);
+          const ok = await copyToClipboard(value);
+          if (!ok) return;
           setCopied(true);
           window.setTimeout(() => setCopied(false), 1200);
         }}

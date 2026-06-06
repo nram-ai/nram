@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useMemo } from "react";
+import { CopyButton } from "../components/CopyButton";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -6,34 +7,13 @@ import { useState, useCallback, useMemo } from "react";
 
 type ToolTab = "claude-code" | "claude-desktop" | "cursor" | "codex" | "opencode" | "chatgpt" | "api-key";
 
-interface CopyButtonProps {
-  text: string;
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function CopyButton({ text }: CopyButtonProps) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }, [text]);
-
-  return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      className="bg-primary text-primary-foreground px-3 py-1.5 rounded-md text-sm hover:bg-primary/90"
-    >
-      {copied ? "Copied!" : "Copy"}
-    </button>
-  );
-}
+// Primary-styled copy button used throughout the MCP config page.
+const MCP_COPY_CLASS =
+  "bg-primary text-primary-foreground px-3 py-1.5 rounded-md text-sm hover:bg-primary/90";
 
 function CodeBlock({ code, label }: { code: string; label?: string }) {
   return (
@@ -46,7 +26,7 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
           {code}
         </pre>
         <div className="absolute top-2 right-2">
-          <CopyButton text={code} />
+          <CopyButton text={code} copiedLabel="Copied!" className={MCP_COPY_CLASS} />
         </div>
       </div>
     </div>

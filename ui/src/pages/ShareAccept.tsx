@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { shareAcceptAPI, type APIError, type ShareAcceptResponse } from "../api/client";
+import { copyToClipboard } from "../lib/clipboard";
 
 type ShareAcceptState =
   | { status: "loading" }
@@ -27,14 +28,12 @@ function ShareUnavailable({ message }: { message: string }) {
 function CopyBlock({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // clipboard write can fail on insecure contexts; the value is still
-      // visible in the surrounding block so the user can copy by hand.
-    }
+    // copyToClipboard falls back to execCommand on insecure contexts; if even
+    // that fails, the value is still visible in the block for manual copy.
+    const ok = await copyToClipboard(value);
+    if (!ok) return;
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
   }
   return (
     <div className="flex items-stretch gap-2">
