@@ -1166,6 +1166,54 @@ func TestHNSWStoreUpsertBatch_SkipsForeignKeyViolation(t *testing.T) {
 	}
 }
 
+// TestHNSWStoreEntityKindSearch is the backend-parity test for the recall
+// cross-namespace vector activation path: it exercises VectorKindEntity through
+// Search on the pure-Go HNSW/SQLite store (the kind the recall graph block now
+// calls), confirming entity kNN returns the queried entity as its own nearest
+// neighbor with the right namespace stamp.
+func TestHNSWStoreEntityKindSearch(t *testing.T) {
+	db := setupEntityVectorsTestDB(t)
+	cfg := storage.DefaultHNSWConfig()
+	cfg.SnapshotInterval = 1<<63 - 1
+	store := storage.NewHNSWStore(db, db, cfg)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	nsID := uuid.New()
+	dim := 384
+
+	ids := make([]uuid.UUID, 5)
+	vecs := make([][]float32, 5)
+	for i := range ids {
+		ids[i] = uuid.New()
+		if _, err := db.Exec(`INSERT INTO entities (id, namespace_id) VALUES (?, ?)`,
+			ids[i].String(), nsID.String()); err != nil {
+			t.Fatalf("insert entity %d: %v", i, err)
+		}
+		vecs[i] = normalizeVector(randomVector(dim, int64(i+1)))
+		if err := store.Upsert(ctx, storage.VectorKindEntity, ids[i], nsID, vecs[i], dim); err != nil {
+			t.Fatalf("upsert entity vector %d: %v", i, err)
+		}
+	}
+
+	results, err := store.Search(ctx, storage.VectorKindEntity, vecs[0], nsID, dim, 3)
+	if err != nil {
+		t.Fatalf("entity-kind search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one entity-kind search result")
+	}
+	if results[0].ID != ids[0] {
+		t.Errorf("expected top entity result %s, got %s", ids[0], results[0].ID)
+	}
+	if results[0].Score < 0.99 {
+		t.Errorf("expected top entity score >= 0.99, got %f", results[0].Score)
+	}
+	if results[0].NamespaceID != nsID {
+		t.Errorf("expected namespace_id %s, got %s", nsID, results[0].NamespaceID)
+	}
+}
+
 func TestHNSWStoreGetByIDs_WrongDimension(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()

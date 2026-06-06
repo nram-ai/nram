@@ -466,16 +466,25 @@ const (
 	// graph_depth. overfetch_multiplier widens the candidate pool the
 	// score-and-rerank pass selects from (limit * mul); overfetch_min
 	// floors the result so small limits still get a workable pool.
-	SettingRankingRecencyDecayPerHour     = "ranking.recency.decay_per_hour"
-	SettingRankingGraphHopMultiplier      = "ranking.graph.hop_multiplier"
-	SettingRecallDefaultLimit             = "recall.default_limit"
-	SettingRecallMaxLimit                 = "recall.max_limit"
-	SettingRecallGraphDefaultDepth        = "recall.graph.default_depth"
-	SettingRecallGraphMaxDepth            = "recall.graph.max_depth"
-	SettingRecallGraphReserveFraction     = "recall.graph.reserve_fraction"
-	SettingRecallOverfetchMultiplier      = "recall.overfetch_multiplier"
-	SettingRecallOverfetchMin             = "recall.overfetch_min"
-	SettingRecallNamespaceQuotaProjectMin = "recall.namespace_quota.project_min"
+	SettingRankingRecencyDecayPerHour = "ranking.recency.decay_per_hour"
+	SettingRankingGraphHopMultiplier  = "ranking.graph.hop_multiplier"
+	SettingRecallDefaultLimit         = "recall.default_limit"
+	SettingRecallMaxLimit             = "recall.max_limit"
+	SettingRecallGraphDefaultDepth    = "recall.graph.default_depth"
+	SettingRecallGraphMaxDepth        = "recall.graph.max_depth"
+	SettingRecallGraphReserveFraction = "recall.graph.reserve_fraction"
+	SettingRecallOverfetchMultiplier  = "recall.overfetch_multiplier"
+	SettingRecallOverfetchMin         = "recall.overfetch_min"
+	// Cross-namespace vector-channel entity activation: recall activates
+	// graph entities by vector similarity across the [project, global]
+	// aperture (in addition to the lexical name match) and boosts their
+	// connected memories. topk sizes the per-namespace entity fetch.
+	SettingRecallGraphVectorActivationEnabled = "recall.graph.vector_activation.enabled"
+	SettingRecallGraphVectorActivationTopK    = "recall.graph.vector_activation.topk"
+	// SettingRecallGraphMaxEdges is the per-recall graph traversal edge
+	// budget, decoupled from SettingGraphMaxEdges (the visualization-endpoint
+	// renderer cap). Split fairly per seed inside the recall graph block.
+	SettingRecallGraphMaxEdges = "recall.graph.max_edges"
 
 	// Pruning thresholds. relationship_weight_threshold gates the active
 	// relationship expiry pass AND the mid-cycle expiry inside the weight
@@ -598,7 +607,6 @@ var settingDefaults = map[string]string{
 	SettingRecallFusionVecW:                 "0.60",
 	SettingRecallFusionLexW:                 "0.40",
 	SettingRecallFusionNormalizePerChan:     "false",
-	SettingRecallNamespaceQuotaProjectMin:   "0",
 	SettingTokenRetention:                   "365",
 	SettingTokenCostRates:                   "[]",
 	SettingDreamingEnabled:                  "true",
@@ -927,15 +935,18 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	// previous topK := limit*3 literal; overfetch_min floors result for
 	// small limits. default_limit and default_depth match the previous
 	// caller-not-specified fallbacks.
-	SettingRankingRecencyDecayPerHour: "0.01",
-	SettingRankingGraphHopMultiplier:  "0.5",
-	SettingRecallDefaultLimit:         "10",
-	SettingRecallMaxLimit:             "50",
-	SettingRecallGraphDefaultDepth:    "2",
-	SettingRecallGraphMaxDepth:        "5",
-	SettingRecallGraphReserveFraction: "0.15",
-	SettingRecallOverfetchMultiplier:  "3",
-	SettingRecallOverfetchMin:         "10",
+	SettingRankingRecencyDecayPerHour:         "0.01",
+	SettingRankingGraphHopMultiplier:          "0.5",
+	SettingRecallDefaultLimit:                 "10",
+	SettingRecallMaxLimit:                     "50",
+	SettingRecallGraphDefaultDepth:            "2",
+	SettingRecallGraphMaxDepth:                "5",
+	SettingRecallGraphReserveFraction:         "0.15",
+	SettingRecallOverfetchMultiplier:          "3",
+	SettingRecallOverfetchMin:                 "10",
+	SettingRecallGraphVectorActivationEnabled: "true",
+	SettingRecallGraphVectorActivationTopK:    "5",
+	SettingRecallGraphMaxEdges:                "2000",
 
 	SettingDreamPruningRelationshipWeightThreshold: "0.05",
 	SettingDreamPruningEffectivelyZero:             "0.001",
@@ -1240,12 +1251,37 @@ func (s *SettingsService) ResolveInt(ctx context.Context, key string, scope stri
 // ResolveBool resolves a setting and interprets it as a boolean. "true" and
 // "1" are treated as true; every other value (including empty and errors) is
 // false. Matches the precedent set by the dream scheduler's enable check.
+// boolish is the single truthy contract for settings values: "true" or "1".
+func boolish(v string) bool {
+	return v == "true" || v == "1"
+}
+
 func (s *SettingsService) ResolveBool(ctx context.Context, key string, scope string) bool {
 	val, err := s.Resolve(ctx, key, scope)
 	if err != nil {
 		return false
 	}
-	return val == "true" || val == "1"
+	return boolish(val)
+}
+
+// ResolveBoolWithDefault resolves a boolean setting, falling back to the value
+// registered in settingDefaults when the service is nil (test-only constructor
+// path) or the resolve fails. Mirrors ResolveIntWithDefault's nil-safety so a
+// default-true setting (e.g. recall.graph.vector_activation.enabled) is not
+// silently flipped to false by ResolveBool's error-is-false contract when
+// s.settings is unset. The init-time consistency check guarantees a registered
+// default exists; a missing one is a programmer error and panics.
+func (s *SettingsService) ResolveBoolWithDefault(ctx context.Context, key, scope string) bool {
+	if s != nil {
+		if v, err := s.Resolve(ctx, key, scope); err == nil {
+			return boolish(v)
+		}
+	}
+	def, ok := settingDefaults[key]
+	if !ok {
+		panic("settings: ResolveBoolWithDefault called for key with no registered default: " + key)
+	}
+	return boolish(def)
 }
 
 // ResolveIntWithDefault resolves an int setting, falling back to the value

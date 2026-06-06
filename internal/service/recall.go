@@ -58,6 +58,11 @@ type VectorHydrator interface {
 type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
 	FindByAlias(ctx context.Context, namespaceID uuid.UUID, alias string) ([]model.Entity, error)
+	// GetBatch hydrates entities by ID. The cross-namespace vector-channel
+	// activation in recall's graph block surfaces entity IDs from the vector
+	// store and needs their name/type to populate the response graph and seed
+	// traversal. Missing IDs are silently dropped; order is not preserved.
+	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Entity, error)
 }
 
 // RelationshipTraverser provides graph traversal from entities. maxEdges <= 0
@@ -116,10 +121,6 @@ type RecallRequest struct {
 	// prefix-matching tag are excluded from the diversified output. Vector
 	// search and graph traversal are unchanged — this is a pure rerank step.
 	DiversifyByTagPrefix string `json:"diversify_by_tag_prefix,omitempty"`
-	// NamespaceQuotaProjectMin reserves N slots for primary-project candidates.
-	// Zero inherits the configured default; mutually exclusive with
-	// DiversifyByTagPrefix (the latter already controls truncation).
-	NamespaceQuotaProjectMin int `json:"namespace_quota_project_min,omitempty"`
 	// Caller context
 	UserID   *uuid.UUID `json:"-"`
 	APIKeyID *uuid.UUID `json:"-"`
@@ -149,9 +150,6 @@ type RecallResult struct {
 	CreatedAt   time.Time          `json:"created_at"`
 	UpdatedAt   time.Time          `json:"updated_at"`
 
-	// Unexported so JSON serialization drops it; threaded through to the
-	// post-sort namespace-quota truncation.
-	isPrimary bool
 	// embedding carries the candidate's hydrated embedding through to the
 	// MMR rerank stage. Unexported so JSON serialization drops it. Nil for
 	// candidates whose embedding was absent at hydration (e.g. backfill not
@@ -550,12 +548,22 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		// seeded above (primary + global). All known candidate-builder
 		// paths stay within that set, so this branch should not fire;
 		// stamping such a row with the primary project's slug but
-		// IsPrimary=false keeps quota and origin treating it as non-primary
-		// rather than corrupting the primary count.
+		// IsPrimary=false keeps origin weighting treating it as
+		// non-primary rather than corrupting the primary count.
 		return projectAttribution{ProjectID: projectID, ProjectSlug: projectSlug}
 	}
 
 	candidates := []scoredMemory{}
+
+	// searchNamespaces is the recall aperture: the primary project namespace
+	// plus the global namespace when it is set and distinct. Lifted to
+	// function scope so both the memory vector-search branch and the graph
+	// block's cross-namespace vector-channel entity activation share one
+	// definition of the [project, global] aperture.
+	searchNamespaces := []uuid.UUID{namespaceID}
+	if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
+		searchNamespaces = append(searchNamespaces, *req.GlobalNamespaceID)
+	}
 
 	// queryEmbeddingDim is the actual embedding dimension produced for the
 	// query, lifted out of the vector-search block so the post-tag-filter
@@ -610,12 +618,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				// resolved once at Recall entry from the registry knobs.
 				topK := overfetchLimit
 
-				// Search primary namespace.
-				searchNamespaces := []uuid.UUID{namespaceID}
-				// Also search the global namespace if set and different from primary.
-				if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
-					searchNamespaces = append(searchNamespaces, *req.GlobalNamespaceID)
-				}
+				// searchNamespaces (the [project, global] aperture) is now
+				// lifted to function scope above so the graph block can reuse
+				// it for vector-channel entity activation.
 
 				// rawCosineFloor is the raw-cosine cutoff applied inside the
 				// vector channel before RRF / simMap insertion. Active only
@@ -856,12 +861,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 		// Strategy 1: full query match
 		if ents, err := s.entityReader.FindBySimilarity(ctx, namespaceID, req.Query, "", 10); err == nil {
-			for _, e := range ents {
-				if !seenEntityIDs[e.ID] {
-					seenEntityIDs[e.ID] = true
-					foundEntities = append(foundEntities, e)
-				}
-			}
+			foundEntities = addNewEntities(seenEntityIDs, foundEntities, ents)
 		}
 
 		// Strategy 2: search by individual words (3+ chars, skip common words)
@@ -874,14 +874,54 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				if err != nil {
 					continue
 				}
-				for _, e := range ents {
-					if !seenEntityIDs[e.ID] {
-						seenEntityIDs[e.ID] = true
-						foundEntities = append(foundEntities, e)
-					}
-				}
+				foundEntities = addNewEntities(seenEntityIDs, foundEntities, ents)
 			}
 		}
+
+		// Strategy 3 (vector channel): activate entities by vector similarity
+		// across the [project, global] aperture, in addition to the lexical
+		// name match scoped to the primary namespace above. This is the
+		// cross-namespace association layer: the same entity embeds
+		// near-identically across namespaces, so an entity surfaced here can
+		// boost a connected memory in a different tier even when no lexical
+		// match existed. Tracked separately from the lexical hits so the two
+		// channels interleave fairly into the edge budget below. Fail-soft at
+		// every step — a vector or hydration error drops back to lexical-only
+		// activation and never fails the recall. seenEntityIDs dedups against
+		// the lexical hits so an entity found by both channels is seeded once.
+		// The enabled switch is nil-safe (test constructors that leave
+		// s.settings unset fall through to the registered default of true);
+		// topk is resolved at point of use inside the channel.
+		var vectorEntities []model.Entity
+		if s.settings.ResolveBoolWithDefault(ctx, SettingRecallGraphVectorActivationEnabled, "global") &&
+			embeddingUsed && queryEmbeddingDim > 0 && s.vectorSearch != nil {
+			vecActTopK := s.settings.ResolveIntWithDefault(ctx, SettingRecallGraphVectorActivationTopK, "global")
+			for _, nsID := range searchNamespaces {
+				res, err := s.vectorSearch.Search(ctx, storage.VectorKindEntity, queryEmbedding, nsID, queryEmbeddingDim, vecActTopK)
+				if err != nil {
+					continue // fail-soft: skip this namespace, keep lexical hits
+				}
+				ids := make([]uuid.UUID, 0, len(res))
+				for _, r := range res {
+					if !seenEntityIDs[r.ID] {
+						ids = append(ids, r.ID)
+					}
+				}
+				if len(ids) == 0 {
+					continue
+				}
+				ents, err := s.entityReader.GetBatch(ctx, ids)
+				if err != nil {
+					continue // fail-soft: skip this namespace, keep lexical hits
+				}
+				vectorEntities = addNewEntities(seenEntityIDs, vectorEntities, ents)
+			}
+		}
+
+		// Interleave lexical and vector hits (both already deduped via
+		// seenEntityIDs) so neither channel monopolizes the per-seed edge
+		// budget: seed order alternates lexical, vector, lexical, vector, ...
+		foundEntities = interleaveEntities(foundEntities, vectorEntities)
 
 		if len(foundEntities) > 0 {
 			// Build set of memory IDs connected via graph.
@@ -889,14 +929,21 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			// Dedup; also the per-recall throttle for relationship reinforcement.
 			seenRels := make(map[uuid.UUID]struct{})
 
-			// Bound the per-recall graph block by graph.max_edges so a
-			// hot anchor entity cannot pull the entire neighborhood into
-			// the response (the byte-budget reducer would later drop the
-			// whole graph block, but only after the BFS, dedup, and
-			// relevance work already ran). ResolveIntWithDefault is
-			// nil-safe; uncovered tests that leave s.settings unset fall
-			// through to the registered default.
-			maxGraphEdges := s.settings.ResolveIntWithDefault(ctx, SettingGraphMaxEdges, "global")
+			// Per-recall traversal edge budget, decoupled from graph.max_edges
+			// (the visualization-endpoint cap). Resolved here at point of use;
+			// nil-safe (test constructors that leave s.settings unset fall
+			// through to the registered default). Split into per-seed fair
+			// shares so a hot first seed cannot drain the whole budget before
+			// later seeds (e.g. a cross-tier entity surfaced by the vector
+			// channel) get to traverse — the starvation the all-remaining cap
+			// allowed. The aggregate break below is kept as the belt-and-
+			// suspenders ceiling so a single hot anchor still cannot blow past
+			// recallMaxEdges in total.
+			recallMaxEdges := s.settings.ResolveIntWithDefault(ctx, SettingRecallGraphMaxEdges, "global")
+			perSeed := recallMaxEdges
+			if recallMaxEdges > 0 {
+				perSeed = max(1, ceilDiv(recallMaxEdges, len(foundEntities)))
+			}
 
 		recallSeeds:
 			for _, ent := range foundEntities {
@@ -906,15 +953,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					EntityType: ent.EntityType,
 				})
 
-				seedCap := maxGraphEdges
-				if maxGraphEdges > 0 {
-					seedCap = maxGraphEdges - len(graphRelationships)
-					if seedCap <= 0 {
-						break
-					}
-				}
-
-				tr, err := s.traverser.TraverseFromEntity(ctx, ent.ID, graphDepth, seedCap)
+				tr, err := s.traverser.TraverseFromEntity(ctx, ent.ID, graphDepth, perSeed)
 				if err == nil {
 					for _, rel := range tr.Relationships {
 						if _, seen := seenRels[rel.ID]; !seen {
@@ -941,7 +980,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 								graphMemoryRelevance[*rel.SourceMemory] = relevance
 							}
 						}
-						if maxGraphEdges > 0 && len(graphRelationships) >= maxGraphEdges {
+						if recallMaxEdges > 0 && len(graphRelationships) >= recallMaxEdges {
 							break recallSeeds
 						}
 					}
@@ -1078,37 +1117,24 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			Metadata:    c.memory.Metadata,
 			CreatedAt:   c.memory.CreatedAt,
 			UpdatedAt:   c.memory.UpdatedAt,
-			isPrimary:   c.isPrimary,
 			embedding:   c.embedding,
 		})
 	}
 
-	// Caller override beats the registered default; clamp negatives so a
-	// misconfigured client can't disable the configured floor.
-	projectMin := req.NamespaceQuotaProjectMin
-	if projectMin <= 0 {
-		projectMin = s.recallNamespaceQuotaProjectMin(ctx)
-	}
-	if projectMin < 0 {
-		projectMin = 0
-	}
-
 	// MMR redundancy-aware rerank between threshold filtering and final-select.
 	// Reorders passing without truncating: final-select (tag-prefix round-
-	// robin, namespace-quota, or plain slice) is the truncation stage and
-	// needs every candidate available for its own logic (e.g. namespace-quota
-	// scans passing for primary-stamped rows; truncating before quota would
-	// hide primaries that should have been reserved). Missing-embedding rows
-	// stay anchored to their composite-rank position inside mmrSelect, so a
-	// high-composite lexical-only or unbackfilled hit is not demoted; only
-	// the embedded subset gets reordered. Because no candidate is dropped,
-	// the set of tag-prefix groups is preserved across this stage — no
-	// post-MMR coverage_gaps attribution is required. Fast paths bypass when
-	// lambda is at the disabling edges (>= 1.0 or <= 0.0) or fewer than two
-	// embedded candidates exist; see mmrSelect. Lambda is taken from the
-	// primary project's effective ranking weights so cross-project recalls
-	// apply one trade-off across the whole result set rather than mixing
-	// per-candidate weights.
+	// robin or plain slice) is the truncation stage and needs every candidate
+	// available for its own logic. Missing-embedding rows stay anchored to
+	// their composite-rank position inside mmrSelect, so a high-composite
+	// lexical-only or unbackfilled hit is not demoted; only the embedded
+	// subset gets reordered. Because no candidate is dropped, the set of
+	// tag-prefix groups is preserved across this stage — no post-MMR
+	// coverage_gaps attribution is required. Fast paths bypass when lambda is
+	// at the disabling edges (>= 1.0 or <= 0.0) or fewer than two embedded
+	// candidates exist; see mmrSelect. Lambda is taken from the primary
+	// project's effective ranking weights so cross-project recalls apply one
+	// trade-off across the whole result set rather than mixing per-candidate
+	// weights.
 	mmrLambda := weightsForProject(projectID).MmrLambda
 	passing = mmrSelect(passing, queryEmbedding, mmrLambda, len(passing))
 
@@ -1119,8 +1145,6 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		results = diversifyByTagPrefix(passing, req.DiversifyByTagPrefix, limit)
 		returnedGroups := prefixGroups(results, recallResultTags, req.DiversifyByTagPrefix)
 		coverageGaps = computeCoverageGaps(rawGroups, postTagGroups, passingGroups, returnedGroups)
-	} else if projectMin > 0 && len(passing) > limit {
-		results = applyNamespaceQuota(passing, limit, projectMin)
 	} else if len(passing) > limit {
 		results = passing[:limit]
 	} else {
@@ -1341,6 +1365,48 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	return simMap, vecIDs
 }
 
+// addNewEntities appends entities from src to dst, skipping any whose ID is
+// already in seen (and marking newly-added IDs in seen). Shared by the three
+// recall entity-discovery channels (full-query lexical, per-word lexical, and
+// the cross-namespace vector channel) so dedup semantics live in one place.
+func addNewEntities(seen map[uuid.UUID]bool, dst, src []model.Entity) []model.Entity {
+	for _, e := range src {
+		if !seen[e.ID] {
+			seen[e.ID] = true
+			dst = append(dst, e)
+		}
+	}
+	return dst
+}
+
+// ceilDiv returns ceil(a/b) for positive integers. Used to split the recall
+// edge budget into per-seed fair shares; b is guarded > 0 by the caller.
+func ceilDiv(a, b int) int {
+	return (a + b - 1) / b
+}
+
+// interleaveEntities alternates two already-deduped entity slices (lexical
+// hits first at each round) so neither channel monopolizes the per-seed edge
+// budget. Order within each slice is preserved. Either slice may be empty.
+func interleaveEntities(lexical, vector []model.Entity) []model.Entity {
+	if len(vector) == 0 {
+		return lexical
+	}
+	if len(lexical) == 0 {
+		return vector
+	}
+	out := make([]model.Entity, 0, len(lexical)+len(vector))
+	for i := 0; i < len(lexical) || i < len(vector); i++ {
+		if i < len(lexical) {
+			out = append(out, lexical[i])
+		}
+		if i < len(vector) {
+			out = append(out, vector[i])
+		}
+	}
+	return out
+}
+
 // computeScore calculates the composite ranking score for a candidate.
 // recencyDecayPerHour drives the exp(-rate * hours_since_creation) term;
 // the registered default is 0.01 (~69h half-life).
@@ -1401,14 +1467,6 @@ func (s *RecallService) recallGraphHopMultiplier(ctx context.Context) float64 {
 		return GetDefaultFloat(SettingRankingGraphHopMultiplier)
 	}
 	return s.settings.ResolveFloatWithDefault(ctx, SettingRankingGraphHopMultiplier, "global")
-}
-
-// recallNamespaceQuotaProjectMin resolves the configured project floor.
-func (s *RecallService) recallNamespaceQuotaProjectMin(ctx context.Context) int {
-	if s.settings == nil {
-		return GetDefaultInt(SettingRecallNamespaceQuotaProjectMin)
-	}
-	return s.settings.ResolveIntWithDefault(ctx, SettingRecallNamespaceQuotaProjectMin, "global")
 }
 
 // recallOverfetch sizes the candidate pool the score-and-rerank pass
@@ -1596,50 +1654,6 @@ func diversifyByTagPrefix(passing []RecallResult, prefix string, limit int) []Re
 		if !picked {
 			break
 		}
-	}
-	return out
-}
-
-// applyNamespaceQuota truncates passing to limit while reserving projectMin
-// slots for primary-project candidates. passing is expected in the order the
-// upstream pipeline produced: composite-rank for missing-embedding rows,
-// MMR-rank for the embedded subset (interleaved at the embedded slots'
-// composite positions; see mmrSelect). The fill loop walks this order
-// directly, so globals that earned a high slot under composite ranking still
-// surface near the top of the non-primary tail except where MMR demoted them
-// for redundancy with an earlier primary.
-func applyNamespaceQuota(passing []RecallResult, limit, projectMin int) []RecallResult {
-	if limit <= 0 || len(passing) == 0 {
-		return []RecallResult{}
-	}
-	if projectMin <= 0 {
-		if len(passing) > limit {
-			return passing[:limit]
-		}
-		return passing
-	}
-
-	floor := min(projectMin, limit)
-	out := make([]RecallResult, 0, limit)
-	claimed := make(map[uuid.UUID]struct{}, limit)
-	for _, r := range passing {
-		if len(out) >= floor {
-			break
-		}
-		if r.isPrimary {
-			out = append(out, r)
-			claimed[r.ID] = struct{}{}
-		}
-	}
-	for _, r := range passing {
-		if len(out) >= limit {
-			break
-		}
-		if _, taken := claimed[r.ID]; taken {
-			continue
-		}
-		out = append(out, r)
-		claimed[r.ID] = struct{}{}
 	}
 	return out
 }

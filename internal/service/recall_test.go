@@ -62,9 +62,33 @@ func (m *mockMemoryReader) ListByNamespaceFiltered(ctx context.Context, ns uuid.
 type mockVectorSearcher struct {
 	results []storage.VectorSearchResult
 	err     error
+	// entityResults backs VectorKindEntity searches (the cross-namespace
+	// vector-channel activation path). Results are filtered to the queried
+	// namespace by NamespaceID so a test can place an entity in only the
+	// global tier. entityErr forces the entity search to fail, exercising the
+	// fail-soft fallback to lexical-only activation. Memory-kind search keeps
+	// its prior kind/namespace-agnostic behavior so existing tests are
+	// unaffected.
+	entityResults []storage.VectorSearchResult
+	entityErr     error
 }
 
-func (m *mockVectorSearcher) Search(_ context.Context, _ storage.VectorKind, _ []float32, _ uuid.UUID, _ int, topK int) ([]storage.VectorSearchResult, error) {
+func (m *mockVectorSearcher) Search(_ context.Context, kind storage.VectorKind, _ []float32, namespaceID uuid.UUID, _ int, topK int) ([]storage.VectorSearchResult, error) {
+	if kind == storage.VectorKindEntity {
+		if m.entityErr != nil {
+			return nil, m.entityErr
+		}
+		out := make([]storage.VectorSearchResult, 0, len(m.entityResults))
+		for _, r := range m.entityResults {
+			if r.NamespaceID == namespaceID {
+				out = append(out, r)
+			}
+		}
+		if topK < len(out) {
+			out = out[:topK]
+		}
+		return out, nil
+	}
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -78,6 +102,13 @@ type mockEntityReader struct {
 	entities []model.Entity
 	aliases  []model.Entity
 	err      error
+	// byID backs GetBatch (the vector-channel activation hydration path).
+	// When nil, GetBatch returns the matching subset of entities/aliases by ID
+	// so existing tests that only populate entities keep working.
+	byID map[uuid.UUID]model.Entity
+	// getBatchErr forces GetBatch to fail, exercising the fail-soft fallback
+	// to lexical-only activation.
+	getBatchErr error
 }
 
 func (m *mockEntityReader) FindBySimilarity(_ context.Context, _ uuid.UUID, _ string, _ string, _ int) ([]model.Entity, error) {
@@ -89,6 +120,29 @@ func (m *mockEntityReader) FindBySimilarity(_ context.Context, _ uuid.UUID, _ st
 
 func (m *mockEntityReader) FindByAlias(_ context.Context, _ uuid.UUID, _ string) ([]model.Entity, error) {
 	return m.aliases, nil
+}
+
+func (m *mockEntityReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Entity, error) {
+	if m.getBatchErr != nil {
+		return nil, m.getBatchErr
+	}
+	lookup := m.byID
+	if lookup == nil {
+		lookup = make(map[uuid.UUID]model.Entity, len(m.entities)+len(m.aliases))
+		for _, e := range m.entities {
+			lookup[e.ID] = e
+		}
+		for _, e := range m.aliases {
+			lookup[e.ID] = e
+		}
+	}
+	out := make([]model.Entity, 0, len(ids))
+	for _, id := range ids {
+		if e, ok := lookup[id]; ok {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 type mockRelTraverser struct {
@@ -1662,7 +1716,7 @@ func TestRecall_PerProjectOverrideLegacyShape(t *testing.T) {
 	}
 }
 
-// --- Origin weight + namespace-quota + per-channel-normalize tests ---
+// --- Origin weight + cross-namespace truncation + per-channel-normalize tests ---
 
 // setupPrimaryGlobalFixtures builds the standard primary+global namespace
 // pair used by every test in this group. Both projects exist in the
@@ -1847,126 +1901,12 @@ func TestRecall_OriginWeightOverrideDoesNotLeakAcrossProjects(t *testing.T) {
 	}
 }
 
-// TestRecall_NamespaceQuotaReservesProjectSlots covers the quota path: when
-// project_min > 0 and the project has at least that many passing candidates,
-// the final result contains exactly that many primary-stamped memories even
-// when the score-only truncation would have included fewer.
-func TestRecall_NamespaceQuotaReservesProjectSlots(t *testing.T) {
-	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
-
-	now := time.Now()
-	// 3 project memories (low similarity) + 10 global memories (high
-	// similarity). Without quota, all 10 globals rank above all 3
-	// project memories. With quota=2, the top-5 result holds 2 project
-	// + 3 global.
-	memMap := map[uuid.UUID]*model.Memory{}
-	var vecResults []storage.VectorSearchResult
-	var projectIDs []uuid.UUID
-	for range 3 {
-		id := uuid.New()
-		projectIDs = append(projectIDs, id)
-		memMap[id] = makeTestMemory(id, primaryNs, "project content", nil, 0.5, 0, now)
-		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.30, NamespaceID: primaryNs})
-	}
-	for range 10 {
-		id := uuid.New()
-		memMap[id] = makeTestMemory(id, globalNs, "global content", nil, 0.5, 0, now)
-		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.90, NamespaceID: globalNs})
-	}
-	memReader := &mockMemoryReader{memories: memMap}
-	vectorSearcher := &mockVectorSearcher{results: vecResults}
-	embProvider := &mockEmbeddingProvider{
-		name: "test-embed", dimensions: []int{128},
-		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
-	}
-
-	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
-
-	resp, err := svc.Recall(context.Background(), &RecallRequest{
-		ProjectID:                primaryID,
-		GlobalNamespaceID:        &globalNs,
-		Query:                    "anything",
-		Limit:                    5,
-		NamespaceQuotaProjectMin: 2,
-	})
-	if err != nil {
-		t.Fatalf("recall failed: %v", err)
-	}
-	if len(resp.Memories) != 5 {
-		t.Fatalf("expected 5 memories (limit), got %d", len(resp.Memories))
-	}
-	projectSet := map[uuid.UUID]struct{}{}
-	for _, id := range projectIDs {
-		projectSet[id] = struct{}{}
-	}
-	projectInTop := 0
-	for _, m := range resp.Memories {
-		if _, ok := projectSet[m.ID]; ok {
-			projectInTop++
-		}
-	}
-	if projectInTop < 2 {
-		t.Errorf("quota=2 should guarantee >=2 primary candidates in top-5, got %d", projectInTop)
-	}
-}
-
-// TestRecall_NamespaceQuotaRespectsAvailability protects against the quota
-// padding the result with phantom rows. If the project has 1 passing
-// candidate but the quota asks for 5, the final result has 1 primary and
-// (limit-1) other candidates — no duplication, no synthetic fill.
-func TestRecall_NamespaceQuotaRespectsAvailability(t *testing.T) {
-	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
-
-	now := time.Now()
-	memMap := map[uuid.UUID]*model.Memory{}
-	var vecResults []storage.VectorSearchResult
-
-	projectMemID := uuid.New()
-	memMap[projectMemID] = makeTestMemory(projectMemID, primaryNs, "only project mem", nil, 0.5, 0, now)
-	vecResults = append(vecResults, storage.VectorSearchResult{ID: projectMemID, Score: 0.40, NamespaceID: primaryNs})
-
-	for range 8 {
-		id := uuid.New()
-		memMap[id] = makeTestMemory(id, globalNs, "global content", nil, 0.5, 0, now)
-		vecResults = append(vecResults, storage.VectorSearchResult{ID: id, Score: 0.90, NamespaceID: globalNs})
-	}
-
-	memReader := &mockMemoryReader{memories: memMap}
-	vectorSearcher := &mockVectorSearcher{results: vecResults}
-	embProvider := &mockEmbeddingProvider{
-		name: "test-embed", dimensions: []int{128},
-		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
-	}
-
-	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
-
-	resp, err := svc.Recall(context.Background(), &RecallRequest{
-		ProjectID:                primaryID,
-		GlobalNamespaceID:        &globalNs,
-		Query:                    "anything",
-		Limit:                    5,
-		NamespaceQuotaProjectMin: 5,
-	})
-	if err != nil {
-		t.Fatalf("recall failed: %v", err)
-	}
-	if len(resp.Memories) != 5 {
-		t.Fatalf("expected 5 memories (limit), got %d", len(resp.Memories))
-	}
-	seen := map[uuid.UUID]int{}
-	for _, m := range resp.Memories {
-		seen[m.ID]++
-		if seen[m.ID] > 1 {
-			t.Errorf("memory %v appears %d times — quota over-asked must not duplicate", m.ID, seen[m.ID])
-		}
-	}
-}
-
-// TestRecall_NamespaceQuotaDefaultZero_BehaviorUnchanged verifies the
-// shipped default (project_min=0) preserves the pre-feature truncation.
-// When the quota is zero, the top-N is whatever the unified sort produced
-// — globals included.
-func TestRecall_NamespaceQuotaDefaultZero_BehaviorUnchanged(t *testing.T) {
+// TestRecall_CrossNamespaceTruncation_GlobalsWin verifies that with the
+// namespace-quota balancer removed, final truncation is pure relevance order:
+// strong global hits fill the top-N and a weak primary hit does NOT get a
+// reserved slot. This is the load-bearing post-removal property — recall
+// trusts relevance and no longer pads primary slots.
+func TestRecall_CrossNamespaceTruncation_GlobalsWin(t *testing.T) {
 	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
 
 	now := time.Now()
@@ -1990,8 +1930,6 @@ func TestRecall_NamespaceQuotaDefaultZero_BehaviorUnchanged(t *testing.T) {
 
 	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
 
-	// No NamespaceQuotaProjectMin in the request → falls through to
-	// the registered default (0).
 	resp, err := svc.Recall(context.Background(), &RecallRequest{
 		ProjectID:         primaryID,
 		GlobalNamespaceID: &globalNs,
@@ -2004,10 +1942,10 @@ func TestRecall_NamespaceQuotaDefaultZero_BehaviorUnchanged(t *testing.T) {
 	if len(resp.Memories) != 3 {
 		t.Fatalf("expected 3 memories, got %d", len(resp.Memories))
 	}
-	// All three slots are globals — the pre-feature behavior.
+	// All three slots are globals — pure relevance order, no primary floor.
 	for i, m := range resp.Memories {
 		if m.ID == projectMemID {
-			t.Errorf("default quota=0 should not lift the weak project hit (pos %d)", i)
+			t.Errorf("removed balancer should not lift the weak project hit (pos %d)", i)
 		}
 	}
 }

@@ -128,7 +128,7 @@ var settingsGroups = []api.SettingGroup{
 			{
 				Category:    "recall",
 				Label:       "Retrieval Limits",
-				Description: "Default and maximum result counts, graph traversal depth and reserve, and the overfetch multipliers the recall endpoints use before ranking trims the set.",
+				Description: "Default and maximum result counts, graph traversal depth/reserve and per-recall edge budget, cross-namespace vector-channel entity activation, and the overfetch multipliers the recall endpoints use before ranking trims the set.",
 			},
 		},
 	},
