@@ -838,6 +838,8 @@ func main() {
 		MeProcedural:        api.NewMeProceduralHandler(proceduralSvc, userRepo),
 		MeProceduralItem:    api.NewMeProceduralItemHandler(proceduralSvc, userRepo),
 		MeProceduralDelete:  api.NewMeProceduralDeleteHandler(proceduralSvc, userRepo),
+		MeProceduralExport:  api.NewMeProceduralExportHandler(proceduralSvc, userRepo),
+		MeProceduralImport:  api.NewMeProceduralImportHandler(proceduralSvc, userRepo),
 		MeAPIKeys:           api.NewMeAPIKeysHandler(apiKeyRepo, auditStore),
 		MeAPIKeyRevoke:      api.NewMeAPIKeyRevokeHandler(apiKeyRepo, auditStore),
 		MeOAuthClients:      api.NewMeOAuthClientsHandler(oauthRepo),

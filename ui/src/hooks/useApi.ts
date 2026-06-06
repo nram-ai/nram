@@ -50,6 +50,8 @@ import {
   type MeCreateProjectRequest,
   type CreateProceduralRequest,
   type UpdateProceduralRequest,
+  type ProceduralExportData,
+  type ProceduralExportEntry,
   type MeCreateAPIKeyRequest,
   type MeCreateAPIKeyResponse,
   type OrgCreateUserRequest,
@@ -420,7 +422,7 @@ const PROCEDURAL_KEY = ["self", "procedural"];
 export function useProcedural() {
   return useQuery({
     queryKey: PROCEDURAL_KEY,
-    queryFn: meAPI.listProcedural,
+    queryFn: () => meAPI.listProcedural(),
   });
 }
 
@@ -449,6 +451,17 @@ export function useDeleteProcedural() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => meAPI.deleteProcedural(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: PROCEDURAL_KEY });
+    },
+  });
+}
+
+export function useImportProcedural() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: ProceduralExportData | ProceduralExportEntry[]) =>
+      meAPI.importProcedural(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: PROCEDURAL_KEY });
     },

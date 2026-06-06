@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // mockProceduralServicer is an in-memory ProceduralServicer for handler tests.
@@ -62,6 +63,59 @@ func (m *mockProceduralServicer) Delete(_ context.Context, id, ns uuid.UUID) err
 	}
 	delete(m.rows, id)
 	return nil
+}
+
+func (m *mockProceduralServicer) Export(_ context.Context, ns uuid.UUID) (*service.ProceduralExportData, error) {
+	entries := []service.ProceduralExportEntry{}
+	for _, e := range m.rows {
+		if e.NamespaceID != ns {
+			continue
+		}
+		entries = append(entries, service.ProceduralExportEntry{
+			ID:       e.ID,
+			Content:  e.Content,
+			Title:    e.Title,
+			Category: e.Category,
+			Tags:     e.Tags,
+			Priority: e.Priority,
+			Enabled:  e.Enabled,
+		})
+	}
+	return &service.ProceduralExportData{
+		Version: "1.0",
+		Entries: entries,
+		Stats:   service.ProceduralExportStats{Count: len(entries)},
+	}, nil
+}
+
+func (m *mockProceduralServicer) Import(_ context.Context, ns uuid.UUID, entries []service.ProceduralExportEntry) (*service.ProceduralImportResult, error) {
+	res := &service.ProceduralImportResult{Errors: []service.ProceduralImportErr{}}
+	for i, in := range entries {
+		if in.Content == "" {
+			res.Skipped++
+			res.Errors = append(res.Errors, service.ProceduralImportErr{Index: i, Message: "content is required"})
+			continue
+		}
+		if in.ID != uuid.Nil {
+			if e, ok := m.rows[in.ID]; ok && e.NamespaceID == ns {
+				e.Content = in.Content
+				e.Title = in.Title
+				e.Category = in.Category
+				e.Tags = in.Tags
+				e.Priority = in.Priority
+				e.Enabled = in.Enabled
+				res.Updated++
+				continue
+			}
+		}
+		id := uuid.New()
+		m.rows[id] = &model.ProceduralEntry{
+			ID: id, NamespaceID: ns, Content: in.Content, Title: in.Title,
+			Category: in.Category, Tags: in.Tags, Priority: in.Priority, Enabled: in.Enabled,
+		}
+		res.Imported++
+	}
+	return res, nil
 }
 
 func doProceduralRequest(handler http.HandlerFunc, method, target string, body any, ac *auth.AuthContext) *httptest.ResponseRecorder {
@@ -150,5 +204,83 @@ func TestMeProcedural_DeleteForeignReturns404(t *testing.T) {
 	w := doProceduralRequestID(h, http.MethodDelete, "/v1/me/procedural/"+foreign.ID.String(), nil, ac, foreign.ID.String())
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 deleting foreign entry, got %d", w.Code)
+	}
+}
+
+func TestMeProcedural_Export(t *testing.T) {
+	ns := uuid.New()
+	user := &model.User{ID: uuid.New(), NamespaceID: ns}
+	svc := newMockProceduralServicer()
+	svc.rows[uuid.New()] = &model.ProceduralEntry{ID: uuid.New(), NamespaceID: ns, Content: "a", Enabled: true}
+	svc.rows[uuid.New()] = &model.ProceduralEntry{ID: uuid.New(), NamespaceID: ns, Content: "b", Enabled: false}
+
+	h := NewMeProceduralExportHandler(svc, &mockUserGetter{user: user})
+	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
+	w := doProceduralRequest(h, http.MethodGet, "/v1/me/procedural/export", nil, ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("export: expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var data service.ProceduralExportData
+	if err := json.Unmarshal(w.Body.Bytes(), &data); err != nil {
+		t.Fatalf("unmarshal export: %v", err)
+	}
+	if data.Stats.Count != 2 || len(data.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got count=%d len=%d", data.Stats.Count, len(data.Entries))
+	}
+}
+
+func TestMeProcedural_ImportEnvelopeAndBareArray(t *testing.T) {
+	ns := uuid.New()
+	user := &model.User{ID: uuid.New(), NamespaceID: ns}
+	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
+
+	// Envelope form.
+	svc := newMockProceduralServicer()
+	h := NewMeProceduralImportHandler(svc, &mockUserGetter{user: user})
+	envelope := service.ProceduralExportData{
+		Version: "1.0",
+		Entries: []service.ProceduralExportEntry{{Content: "one"}, {Content: "two"}},
+	}
+	w := doProceduralRequest(h, http.MethodPost, "/v1/me/procedural/import", envelope, ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("import envelope: expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var res service.ProceduralImportResult
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if res.Imported != 2 {
+		t.Fatalf("envelope import: expected 2 imported, got %d", res.Imported)
+	}
+
+	// Bare array form.
+	svc2 := newMockProceduralServicer()
+	h2 := NewMeProceduralImportHandler(svc2, &mockUserGetter{user: user})
+	bare := []service.ProceduralExportEntry{{Content: "x"}}
+	w2 := doProceduralRequest(h2, http.MethodPost, "/v1/me/procedural/import", bare, ac)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("import bare: expected 200, got %d (%s)", w2.Code, w2.Body.String())
+	}
+	var res2 service.ProceduralImportResult
+	if err := json.Unmarshal(w2.Body.Bytes(), &res2); err != nil {
+		t.Fatalf("unmarshal bare result: %v", err)
+	}
+	if res2.Imported != 1 {
+		t.Fatalf("bare import: expected 1 imported, got %d", res2.Imported)
+	}
+}
+
+func TestMeProcedural_ImportMalformedReturns400(t *testing.T) {
+	user := &model.User{ID: uuid.New(), NamespaceID: uuid.New()}
+	svc := newMockProceduralServicer()
+	h := NewMeProceduralImportHandler(svc, &mockUserGetter{user: user})
+	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/me/procedural/import", bytes.NewBufferString("{not json"))
+	req = req.WithContext(auth.WithContext(req.Context(), ac))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for malformed body, got %d", w.Code)
 	}
 }

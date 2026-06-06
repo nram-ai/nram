@@ -666,6 +666,37 @@ export interface UpdateProceduralRequest {
   enabled?: boolean;
 }
 
+// ProceduralExportEntry is one entry in an export/import payload. It mirrors the
+// Go service.ProceduralExportEntry struct.
+export interface ProceduralExportEntry {
+  id: string;
+  content: string;
+  title: string;
+  category: string;
+  tags: string[];
+  priority: number;
+  enabled: boolean;
+  metadata?: unknown;
+  created_at: string;
+}
+
+// ProceduralExportData is the versioned envelope returned by the export endpoint
+// and accepted by the import endpoint.
+export interface ProceduralExportData {
+  version: string;
+  exported_at: string;
+  entries: ProceduralExportEntry[];
+  stats: { count: number };
+}
+
+// ProceduralImportResult summarizes an import run.
+export interface ProceduralImportResult {
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: { index: number; message: string }[];
+}
+
 export interface WebhookCreateRequest {
   url: string;
   events: string[];
@@ -2069,8 +2100,12 @@ export const meAPI = {
     request<void>("DELETE", `/me/projects/${id}`),
 
   // Procedural memory tier: verbatim standing rules, per-user, fetch-only.
-  listProcedural: () =>
-    request<{ data: ProceduralEntry[] }>("GET", "/me/procedural").then((r) => r.data),
+  // limit defaults high so the whole (small) set loads once for client-side
+  // search and sort; the server caps it at 500.
+  listProcedural: (limit = 500) =>
+    request<{ data: ProceduralEntry[] }>("GET", `/me/procedural?limit=${limit}`).then(
+      (r) => r.data,
+    ),
   getProcedural: (id: string) =>
     request<ProceduralEntry>("GET", `/me/procedural/${id}`),
   createProcedural: (data: CreateProceduralRequest) =>
@@ -2079,6 +2114,10 @@ export const meAPI = {
     request<ProceduralEntry>("PUT", `/me/procedural/${id}`, data),
   deleteProcedural: (id: string) =>
     request<void>("DELETE", `/me/procedural/${id}`),
+  exportProcedural: () =>
+    request<ProceduralExportData>("GET", "/me/procedural/export"),
+  importProcedural: (data: ProceduralExportData | ProceduralExportEntry[]) =>
+    request<ProceduralImportResult>("POST", "/me/procedural/import", data),
 
   listAPIKeys: () =>
     request<{ data: APIKey[] }>("GET", "/me/api-keys").then((r) => r.data),

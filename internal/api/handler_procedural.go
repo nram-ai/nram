@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // ProceduralServicer is the procedural tier surface needed by the self-service
@@ -22,6 +24,8 @@ type ProceduralServicer interface {
 	Create(ctx context.Context, e *model.ProceduralEntry) (*model.ProceduralEntry, error)
 	Update(ctx context.Context, e *model.ProceduralEntry) (*model.ProceduralEntry, error)
 	Delete(ctx context.Context, id, namespaceID uuid.UUID) error
+	Export(ctx context.Context, namespaceID uuid.UUID) (*service.ProceduralExportData, error)
+	Import(ctx context.Context, namespaceID uuid.UUID, entries []service.ProceduralExportEntry) (*service.ProceduralImportResult, error)
 }
 
 // createProceduralRequest is the JSON body for POST /v1/me/procedural.
@@ -63,14 +67,8 @@ func NewMeProceduralHandler(proc ProceduralServicer, users UserGetter) http.Hand
 }
 
 func handleListProcedural(w http.ResponseWriter, r *http.Request, proc ProceduralServicer, users UserGetter) {
-	ac := auth.FromContext(r.Context())
-	if ac == nil {
-		WriteError(w, ErrUnauthorized("authentication required"))
-		return
-	}
-	user, err := users.GetByID(r.Context(), ac.UserID)
-	if err != nil {
-		WriteError(w, ErrInternal("failed to resolve user"))
+	user, ok := resolveProceduralUser(w, r, users)
+	if !ok {
 		return
 	}
 
@@ -107,14 +105,8 @@ func handleListProcedural(w http.ResponseWriter, r *http.Request, proc Procedura
 }
 
 func handleCreateProcedural(w http.ResponseWriter, r *http.Request, proc ProceduralServicer, users UserGetter) {
-	ac := auth.FromContext(r.Context())
-	if ac == nil {
-		WriteError(w, ErrUnauthorized("authentication required"))
-		return
-	}
-	user, err := users.GetByID(r.Context(), ac.UserID)
-	if err != nil {
-		WriteError(w, ErrInternal("failed to resolve user"))
+	user, ok := resolveProceduralUser(w, r, users)
+	if !ok {
 		return
 	}
 
@@ -174,19 +166,13 @@ func proceduralPathID(r *http.Request) (uuid.UUID, error) {
 }
 
 func handleGetProcedural(w http.ResponseWriter, r *http.Request, proc ProceduralServicer, users UserGetter) {
-	ac := auth.FromContext(r.Context())
-	if ac == nil {
-		WriteError(w, ErrUnauthorized("authentication required"))
+	user, ok := resolveProceduralUser(w, r, users)
+	if !ok {
 		return
 	}
 	id, err := proceduralPathID(r)
 	if err != nil {
 		WriteError(w, ErrBadRequest("invalid entry id"))
-		return
-	}
-	user, err := users.GetByID(r.Context(), ac.UserID)
-	if err != nil {
-		WriteError(w, ErrInternal("failed to resolve user"))
 		return
 	}
 	entry, err := proc.Get(r.Context(), id, user.NamespaceID)
@@ -198,19 +184,13 @@ func handleGetProcedural(w http.ResponseWriter, r *http.Request, proc Procedural
 }
 
 func handleUpdateProcedural(w http.ResponseWriter, r *http.Request, proc ProceduralServicer, users UserGetter) {
-	ac := auth.FromContext(r.Context())
-	if ac == nil {
-		WriteError(w, ErrUnauthorized("authentication required"))
+	user, ok := resolveProceduralUser(w, r, users)
+	if !ok {
 		return
 	}
 	id, err := proceduralPathID(r)
 	if err != nil {
 		WriteError(w, ErrBadRequest("invalid entry id"))
-		return
-	}
-	user, err := users.GetByID(r.Context(), ac.UserID)
-	if err != nil {
-		WriteError(w, ErrInternal("failed to resolve user"))
 		return
 	}
 	entry, err := proc.Get(r.Context(), id, user.NamespaceID)
@@ -263,19 +243,13 @@ func NewMeProceduralDeleteHandler(proc ProceduralServicer, users UserGetter) htt
 			WriteError(w, &APIError{Code: "method_not_allowed", Message: "method not allowed", Status: http.StatusMethodNotAllowed})
 			return
 		}
-		ac := auth.FromContext(r.Context())
-		if ac == nil {
-			WriteError(w, ErrUnauthorized("authentication required"))
+		user, ok := resolveProceduralUser(w, r, users)
+		if !ok {
 			return
 		}
 		id, err := proceduralPathID(r)
 		if err != nil {
 			WriteError(w, ErrBadRequest("invalid entry id"))
-			return
-		}
-		user, err := users.GetByID(r.Context(), ac.UserID)
-		if err != nil {
-			WriteError(w, ErrInternal("failed to resolve user"))
 			return
 		}
 		if err := proc.Delete(r.Context(), id, user.NamespaceID); err != nil {
@@ -288,4 +262,95 @@ func NewMeProceduralDeleteHandler(proc ProceduralServicer, users UserGetter) htt
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// resolveProceduralUser resolves the authenticated user for the procedural
+// self-service handlers, writing the appropriate error and returning ok=false
+// when authentication or lookup fails.
+func resolveProceduralUser(w http.ResponseWriter, r *http.Request, users UserGetter) (*model.User, bool) {
+	ac := auth.FromContext(r.Context())
+	if ac == nil {
+		WriteError(w, ErrUnauthorized("authentication required"))
+		return nil, false
+	}
+	user, err := users.GetByID(r.Context(), ac.UserID)
+	if err != nil {
+		WriteError(w, ErrInternal("failed to resolve user"))
+		return nil, false
+	}
+	return user, true
+}
+
+// NewMeProceduralExportHandler handles GET /v1/me/procedural/export. It returns
+// every entry (enabled and disabled) in a versioned JSON envelope the UI turns
+// into a downloadable, shareable file.
+func NewMeProceduralExportHandler(proc ProceduralServicer, users UserGetter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			WriteError(w, &APIError{Code: "method_not_allowed", Message: "method not allowed", Status: http.StatusMethodNotAllowed})
+			return
+		}
+		user, ok := resolveProceduralUser(w, r, users)
+		if !ok {
+			return
+		}
+		data, err := proc.Export(r.Context(), user.NamespaceID)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to export procedural entries"))
+			return
+		}
+		writeJSON(w, http.StatusOK, data)
+	}
+}
+
+// NewMeProceduralImportHandler handles POST /v1/me/procedural/import. The body
+// is either the export envelope ({"entries": [...]}) or a bare array of
+// entries. Each entry upserts by ownership: an id that belongs to the caller's
+// namespace updates in place, any other id (or none) creates a new row.
+func NewMeProceduralImportHandler(proc ProceduralServicer, users UserGetter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			WriteError(w, &APIError{Code: "method_not_allowed", Message: "method not allowed", Status: http.StatusMethodNotAllowed})
+			return
+		}
+		user, ok := resolveProceduralUser(w, r, users)
+		if !ok {
+			return
+		}
+
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			WriteError(w, ErrBadRequest("failed to read request body: "+err.Error()))
+			return
+		}
+
+		entries, err := parseProceduralImport(raw)
+		if err != nil {
+			WriteError(w, ErrBadRequest("invalid request body: "+err.Error()))
+			return
+		}
+
+		result, err := proc.Import(r.Context(), user.NamespaceID, entries)
+		if err != nil {
+			WriteError(w, ErrInternal("failed to import procedural entries"))
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+// parseProceduralImport accepts either the export envelope or a bare array of
+// entries and normalizes both to a slice.
+func parseProceduralImport(raw []byte) ([]service.ProceduralExportEntry, error) {
+	var envelope service.ProceduralExportData
+	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Entries != nil {
+		return envelope.Entries, nil
+	}
+	var bare []service.ProceduralExportEntry
+	if err := json.Unmarshal(raw, &bare); err != nil {
+		return nil, err
+	}
+	return bare, nil
 }

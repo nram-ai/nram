@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -104,4 +107,152 @@ func (s *ProceduralService) Update(ctx context.Context, e *model.ProceduralEntry
 // Delete soft-deletes an entry scoped to the namespace.
 func (s *ProceduralService) Delete(ctx context.Context, id, namespaceID uuid.UUID) error {
 	return s.repo.Delete(ctx, id, namespaceID)
+}
+
+// proceduralExportVersion is the schema version stamped on exported payloads.
+const proceduralExportVersion = "1.0"
+
+// ProceduralExportEntry is one entry in an export/import payload. It carries the
+// originating id so a user re-importing their own export updates in place; an id
+// that does not belong to the importing namespace is treated as a new entry (see
+// Import).
+type ProceduralExportEntry struct {
+	ID        uuid.UUID       `json:"id"`
+	Content   string          `json:"content"`
+	Title     string          `json:"title"`
+	Category  string          `json:"category"`
+	Tags      []string        `json:"tags"`
+	Priority  int             `json:"priority"`
+	Enabled   bool            `json:"enabled"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// ProceduralExportData is the JSON envelope returned by Export and accepted by
+// Import. Shaped after service.ExportData for consistency with the memory
+// export.
+type ProceduralExportData struct {
+	Version    string                  `json:"version"`
+	ExportedAt time.Time               `json:"exported_at"`
+	Entries    []ProceduralExportEntry `json:"entries"`
+	Stats      ProceduralExportStats   `json:"stats"`
+}
+
+// ProceduralExportStats holds aggregate counts for an export.
+type ProceduralExportStats struct {
+	Count int `json:"count"`
+}
+
+// ProceduralImportResult summarizes the outcome of an import.
+type ProceduralImportResult struct {
+	Imported int                   `json:"imported"` // new rows created
+	Updated  int                   `json:"updated"`  // own rows updated in place
+	Skipped  int                   `json:"skipped"`
+	Errors   []ProceduralImportErr `json:"errors"`
+}
+
+// ProceduralImportErr describes a per-entry failure during import.
+type ProceduralImportErr struct {
+	Index   int    `json:"index"`
+	Message string `json:"message"`
+}
+
+// Export returns every live entry in the namespace (enabled and disabled),
+// ordered by priority then recency, wrapped in a versioned envelope.
+func (s *ProceduralService) Export(ctx context.Context, namespaceID uuid.UUID) (*ProceduralExportData, error) {
+	all, err := s.repo.ListByNamespace(ctx, namespaceID)
+	if err != nil {
+		return nil, fmt.Errorf("procedural export: %w", err)
+	}
+	entries := make([]ProceduralExportEntry, 0, len(all))
+	for _, e := range all {
+		tags := e.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		entries = append(entries, ProceduralExportEntry{
+			ID:        e.ID,
+			Content:   e.Content,
+			Title:     e.Title,
+			Category:  e.Category,
+			Tags:      tags,
+			Priority:  e.Priority,
+			Enabled:   e.Enabled,
+			Metadata:  e.Metadata,
+			CreatedAt: e.CreatedAt,
+		})
+	}
+	return &ProceduralExportData{
+		Version:    proceduralExportVersion,
+		ExportedAt: time.Now(),
+		Entries:    entries,
+		Stats:      ProceduralExportStats{Count: len(entries)},
+	}, nil
+}
+
+// Import upserts entries into the namespace, keyed on ownership rather than the
+// global id. An incoming id that resolves to a live row in this namespace is
+// updated in place; any other id (foreign, soft-deleted, or absent) becomes a
+// new row with a server-generated id. This is required because
+// procedural_entries.id is a global primary key: reusing an incoming id across
+// namespaces would collide. Per-entry failures are recorded and skipped; the
+// import never aborts on a single bad entry.
+func (s *ProceduralService) Import(ctx context.Context, namespaceID uuid.UUID, entries []ProceduralExportEntry) (*ProceduralImportResult, error) {
+	result := &ProceduralImportResult{Errors: []ProceduralImportErr{}}
+	for i, in := range entries {
+		if strings.TrimSpace(in.Content) == "" {
+			result.Skipped++
+			result.Errors = append(result.Errors, ProceduralImportErr{Index: i, Message: "content is required"})
+			continue
+		}
+
+		// Update in place only when the id belongs to this namespace.
+		if in.ID != uuid.Nil {
+			existing, err := s.Get(ctx, in.ID, namespaceID)
+			switch {
+			case err == nil:
+				existing.Content = in.Content
+				existing.Title = in.Title
+				existing.Category = in.Category
+				existing.Tags = in.Tags
+				existing.Priority = in.Priority
+				existing.Enabled = in.Enabled
+				if in.Metadata != nil {
+					existing.Metadata = in.Metadata
+				}
+				if _, uerr := s.Update(ctx, existing); uerr != nil {
+					result.Skipped++
+					result.Errors = append(result.Errors, ProceduralImportErr{Index: i, Message: uerr.Error()})
+					continue
+				}
+				result.Updated++
+				continue
+			case errors.Is(err, sql.ErrNoRows):
+				// Not ours: fall through to create with a fresh id.
+			default:
+				result.Skipped++
+				result.Errors = append(result.Errors, ProceduralImportErr{Index: i, Message: err.Error()})
+				continue
+			}
+		}
+
+		entry := &model.ProceduralEntry{
+			NamespaceID: namespaceID,
+			Content:     in.Content,
+			Title:       in.Title,
+			Category:    in.Category,
+			Tags:        in.Tags,
+			Priority:    in.Priority,
+			Enabled:     in.Enabled,
+			Origin:      string(model.OriginImport),
+			Metadata:    in.Metadata,
+		}
+		if _, cerr := s.Create(ctx, entry); cerr != nil {
+			result.Skipped++
+			result.Errors = append(result.Errors, ProceduralImportErr{Index: i, Message: cerr.Error()})
+			continue
+		}
+		result.Imported++
+	}
+	return result, nil
 }

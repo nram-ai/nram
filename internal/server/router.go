@@ -59,6 +59,8 @@ type Handlers struct {
 	MeProcedural        http.HandlerFunc // GET + POST /v1/me/procedural
 	MeProceduralItem    http.HandlerFunc // GET + PUT /v1/me/procedural/{id}
 	MeProceduralDelete  http.HandlerFunc // DELETE /v1/me/procedural/{id}
+	MeProceduralExport  http.HandlerFunc // GET /v1/me/procedural/export
+	MeProceduralImport  http.HandlerFunc // POST /v1/me/procedural/import
 	MeAPIKeys           http.HandlerFunc // GET + POST
 	MeAPIKeyRevoke      http.HandlerFunc
 	MeOAuthClients      http.HandlerFunc
@@ -394,6 +396,9 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Put("/projects/{id}", handler(handlers.MeProjectItem))
 			r.Delete("/projects/{id}", handler(handlers.MeProjectDelete))
 			r.HandleFunc("/procedural", handler(handlers.MeProcedural))
+			// Static segments registered before the {id} param routes so they win.
+			r.Get("/procedural/export", handler(handlers.MeProceduralExport))
+			r.Post("/procedural/import", handler(handlers.MeProceduralImport))
 			r.Get("/procedural/{id}", handler(handlers.MeProceduralItem))
 			r.Put("/procedural/{id}", handler(handlers.MeProceduralItem))
 			r.Delete("/procedural/{id}", handler(handlers.MeProceduralDelete))
