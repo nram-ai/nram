@@ -914,6 +914,9 @@ func main() {
 		// Embedded admin UI
 		UI: ui.Handler(),
 
+		// Standalone public API reference page.
+		Docs: ui.DocsHandler(),
+
 		// Auth handlers
 		AuthLogin:         api.NewLoginHandler(authCfg),
 		AuthLookup:        api.NewLookupHandler(authCfg),

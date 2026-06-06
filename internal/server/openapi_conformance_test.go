@@ -36,6 +36,8 @@ var concreteExclusions = map[string]bool{
 	"GET /v1/events":    true, // SSE stream
 	"GET /authorize":    true, // OAuth consent HTML shell (POST /authorize is documented)
 	"GET /share/accept": true, // share-accept HTML shell (GET /v1/share/accept is documented)
+	"GET /docs":         true, // rendered API reference HTML page (the raw spec is at GET /openapi.yaml)
+	"GET /docs/":        true, // trailing-slash form of the same page
 }
 
 // prefixExclusions are all-method (HandleFunc/Handle) transport prefixes

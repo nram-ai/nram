@@ -29,6 +29,7 @@ import {
   faFingerprint,
   faShareNodes,
   faPuzzlePiece,
+  faBookOpen,
   faDatabase,
   faListCheck,
   faScroll,
@@ -153,6 +154,8 @@ interface NavItem {
   minRole?: string;
   writeOnly?: boolean;
   requiresEnrichment?: boolean;
+  // External links to a server-served (non-SPA) route, opened in a new tab.
+  external?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -172,6 +175,7 @@ const navItems: NavItem[] = [
   { path: "/idp", label: "Identity Providers", section: "Configuration", icon: faFingerprint, minRole: "org_owner" },
   { path: "/shares", label: "Shares", section: "Configuration", icon: faShareNodes },
   { path: "/mcp-config", label: "MCP Config", section: "Configuration", icon: faPuzzlePiece },
+  { path: "/docs", label: "API Docs", section: "Configuration", icon: faBookOpen, external: true },
   { path: "/database", label: "Database", section: "System", icon: faDatabase, minRole: "administrator" },
   { path: "/enrichment", label: "Enrichment Queue", section: "System", icon: faListCheck, requiresEnrichment: true },
   { path: "/dreaming", label: "Dreaming", section: "System", icon: faCloudMoon, requiresEnrichment: true },
@@ -333,27 +337,47 @@ function AppLayout() {
                 {section}
               </h2>
               <ul className="space-y-0.5">
-                {items.map((item) => (
-                  <li key={item.path}>
-                    <NavLink
-                      to={item.path}
-                      end={item.path === "/"}
-                      className={({ isActive }) =>
-                        `relative flex items-center gap-2.5 rounded-md px-2 py-2.5 md:py-1.5 text-sm transition-colors ${
-                          isActive
-                            ? "bg-accent text-accent-foreground font-medium shadow-[0_0_24px_-12px_hsl(var(--ring))] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-r before:bg-primary"
-                            : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                        }`
-                      }
-                    >
+                {items.map((item) => {
+                  const content = (
+                    <>
                       <FontAwesomeIcon
                         icon={item.icon}
                         className="h-4 w-4 opacity-80"
                       />
                       <span>{item.label}</span>
-                    </NavLink>
-                  </li>
-                ))}
+                    </>
+                  );
+                  return (
+                    <li key={item.path}>
+                      {item.external ? (
+                        // Server-served (non-SPA) route: a full-page anchor
+                        // opened in a new tab rather than a client-side NavLink.
+                        <a
+                          href={item.path}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="relative flex items-center gap-2.5 rounded-md px-2 py-2.5 md:py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                        >
+                          {content}
+                        </a>
+                      ) : (
+                        <NavLink
+                          to={item.path}
+                          end={item.path === "/"}
+                          className={({ isActive }) =>
+                            `relative flex items-center gap-2.5 rounded-md px-2 py-2.5 md:py-1.5 text-sm transition-colors ${
+                              isActive
+                                ? "bg-accent text-accent-foreground font-medium shadow-[0_0_24px_-12px_hsl(var(--ring))] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-r before:bg-primary"
+                                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                            }`
+                          }
+                        >
+                          {content}
+                        </NavLink>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ))}

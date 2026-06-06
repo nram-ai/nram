@@ -20,16 +20,41 @@ export default defineConfig({
         target: "http://localhost:8674",
         changeOrigin: true,
       },
+      // The /docs page fetches the OpenAPI spec from the backend.
+      "/openapi.yaml": {
+        target: "http://localhost:8674",
+        changeOrigin: true,
+      },
     },
   },
   build: {
     outDir: "dist",
     sourcemap: false,
     rollupOptions: {
+      // Two entries: the console SPA (index.html) and the standalone public
+      // API reference (docs/index.html -> dist/docs/index.html, served at /docs).
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        docs: path.resolve(__dirname, "docs/index.html"),
+      },
       output: {
         manualChunks(id) {
+          // Tiny low-level helpers shared between two otherwise independent
+          // entry graphs: the console SPA and the standalone /docs Scalar page.
+          // Without isolating them, Rollup glues each into a big SPA feature
+          // chunk (commonjsHelpers -> vendor, clsx -> charts), which then makes
+          // the public docs page statically import vendor/charts and transitively
+          // preload react, recharts, d3 and three. Pulling them into their own
+          // chunks keeps both entries lean. The commonjsHelpers check sits above
+          // the node_modules guard because it is a Rollup-generated virtual module.
+          if (id.includes("commonjsHelpers")) {
+            return "cjs-helpers";
+          }
           if (!id.includes("node_modules")) {
             return undefined;
+          }
+          if (/[\\/]node_modules[\\/]clsx[\\/]/.test(id)) {
+            return "clsx";
           }
           // Shared d3 modules used by both the 3D graph stack and recharts.
           // Pulled into their own chunk so neither `three` nor `charts` ends

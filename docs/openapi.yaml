@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
-  title: nram API
+  title: Neural Ram API
   description: |
-    Neural RAM, persistent memory layer for AI agents.
+    Neural Ram, persistent memory layer for AI agents.
 
     This document covers the HTTP/JSON REST surface. The following non-JSON
     transports are served by the same binary but intentionally not modeled

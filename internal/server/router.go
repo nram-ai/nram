@@ -111,6 +111,9 @@ type Handlers struct {
 	// Embedded admin UI
 	UI http.Handler
 
+	// Standalone public API reference page (rendered OpenAPI spec).
+	Docs http.Handler
+
 	// Health
 	Health http.HandlerFunc
 
@@ -264,6 +267,14 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	// Serve the OpenAPI spec publicly so tooling can fetch the contract
 	// without auth and before initial setup completes.
 	r.Get("/openapi.yaml", handler(handlers.OpenAPISpec))
+
+	// Serve the rendered API reference page publicly at /docs (and /docs/),
+	// alongside the raw spec. Its hashed assets under /assets are served by
+	// the SPA NotFound handler.
+	if handlers.Docs != nil {
+		r.Get("/docs", handlers.Docs.ServeHTTP)
+		r.Get("/docs/", handlers.Docs.ServeHTTP)
+	}
 
 	// Setup endpoints are public: must be accessible before first user exists.
 	r.Get("/v1/admin/setup/status", handler(handlers.AdminSetupStatus))

@@ -37,6 +37,7 @@ export {
   faEye,
   faEyeSlash,
   faArrowUpRightFromSquare,
+  faBookOpen,
 
   // Nav route icons (one per page).
   faGauge,
