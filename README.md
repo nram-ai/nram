@@ -1,8 +1,10 @@
 <p align="center">
-  <img src="ui/public/brand.png" alt="nram" width="150" />
+  <img src="ui/public/brand.png" alt="Neural Ram" width="150" />
 </p>
 
-<h1 align="center">nram: Neural RAM</h1>
+<h1 align="center">Neural Ram</h1>
+
+<p align="center"><sub><code>nram</code> for short</sub></p>
 
 <p align="center">
   <strong>The continuity layer for everything you do with AI.</strong><br />
@@ -26,7 +28,7 @@
 
 > Work in progress: under active development. Expect rough edges, and feedback is welcome.
 
-## What is nram?
+## What is Neural Ram?
 
 Right now, you are the continuity layer between your AI tools. You copy context from Claude into ChatGPT, write handoff docs, re-explain the same decisions, and lose a little more each time you switch tools or machines.
 
