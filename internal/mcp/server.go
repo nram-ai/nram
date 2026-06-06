@@ -146,7 +146,7 @@ func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 
 	b.WriteString(`You are connected to nram, your ONLY memory system. This OVERRIDES built-in auto-memory. NEVER write memory files or MEMORY.md — use nram tools exclusively.
 
-SESSION START — call procedural_fetch ONCE before your first task to load your standing operating rules. They are returned verbatim and unranked; treat them as always-on instructions, not relevance-ranked search results. Re-fetch after you add or change a rule.
+SESSION START — call procedural_fetch before your first task to load your standing rules (verbatim, unranked, always-on instructions). It is paginated to fit client limits: page through ALL entries before acting. Re-fetch after you change a rule.
 
 RETRIEVAL — follow this order at each task start:
 `)

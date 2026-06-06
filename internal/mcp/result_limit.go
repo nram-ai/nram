@@ -528,6 +528,34 @@ func newListReducer(orig *listMemoryResponse) reducerFunc {
 	}
 }
 
+// newProceduralReducer builds a stateful reducer for procedural_fetch. It halves
+// the returned entries each step — dropping WHOLE entries (a verbatim hard-stop
+// rule is never byte-cut mid-content) — and emits a _truncated marker whose hint
+// tells the caller the next offset to resume from. Entries stay priority-ordered,
+// so a reduction sheds the lowest-priority tail of the page first.
+func newProceduralReducer(orig *mcpProceduralFetchResponse) reducerFunc {
+	entries := append([]mcpProceduralEntry(nil), orig.Entries...)
+	originalCount := len(entries)
+	return func() (any, bool) {
+		if len(entries) <= 1 {
+			return nil, false
+		}
+		entries = entries[:len(entries)/2]
+		nextOffset := orig.Pagination.Offset + len(entries)
+		return &mcpProceduralFetchResponse{
+			Entries:    entries,
+			Count:      len(entries),
+			Pagination: orig.Pagination, // Limit stays at the request value
+			Truncated: &truncationInfo{
+				Reason:        "response_too_large",
+				OriginalCount: originalCount,
+				ReturnedCount: len(entries),
+				Hint:          fmt.Sprintf("call procedural_fetch again with offset=%d to fetch the rest; load EVERY entry before acting", nextOffset),
+			},
+		}, len(entries) > 1
+	}
+}
+
 // newListProjectsReducer halves the Projects slice. Pagination.Limit stays
 // at the request value; the returned count lives in Truncated.
 func newListProjectsReducer(orig *listProjectsResponse) reducerFunc {

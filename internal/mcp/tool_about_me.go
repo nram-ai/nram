@@ -87,5 +87,5 @@ func handleAboutMe(ctx context.Context, s *Server, request mcp.CallToolRequest) 
 			Offset: offset,
 		},
 	}
-	return wrapToolResult(s.deps.Metrics, "about_me", mcpBudgetBytes(ctx, s.deps.Settings), resp, nil)
+	return wrapToolResult(s.deps.Metrics, "about_me", mcpBudgetBytes(ctx, s.deps.Settings), resp, newListReducer(resp))
 }

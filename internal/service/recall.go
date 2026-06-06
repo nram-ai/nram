@@ -959,8 +959,24 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				perSeed = max(1, ceilDiv(recallMaxEdges, len(foundEntities)))
 			}
 
+			// Aperture bound (defense-in-depth): constrain the graph output to the
+			// recall aperture (searchNamespaces) so foreign-namespace entities,
+			// relationships, and their source memories can never surface — even if
+			// a cross-namespace edge is ever created (the traversal query itself is
+			// not namespace-scoped; see relationship_repo ListByEntity). For a
+			// share-bearer the aperture is the single granted project; for an owner
+			// it is [project, global, about_me], so legitimate cross-tier graph is
+			// unaffected.
+			apertureSet := make(map[uuid.UUID]bool, len(searchNamespaces))
+			for _, ns := range searchNamespaces {
+				apertureSet[ns] = true
+			}
+
 		recallSeeds:
 			for _, ent := range foundEntities {
+				if !apertureSet[ent.NamespaceID] {
+					continue // never expose or traverse a foreign-namespace seed
+				}
 				graphEntities = append(graphEntities, RecallEntity{
 					ID:         ent.ID,
 					Name:       ent.Name,
@@ -970,6 +986,9 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				tr, err := s.traverser.TraverseFromEntity(ctx, ent.ID, graphDepth, perSeed)
 				if err == nil {
 					for _, rel := range tr.Relationships {
+						if !apertureSet[rel.NamespaceID] {
+							continue // never expose or boost a foreign-namespace edge
+						}
 						if _, seen := seenRels[rel.ID]; !seen {
 							seenRels[rel.ID] = struct{}{}
 							graphRelationships = append(graphRelationships, RecallRelationship{

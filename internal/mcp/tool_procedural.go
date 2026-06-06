@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -43,9 +44,14 @@ func buildMCPProceduralEntry(e *model.ProceduralEntry) mcpProceduralEntry {
 }
 
 // mcpProceduralFetchResponse is the typed response for procedural_fetch.
+// Count is the number of entries in this page; Pagination.Total is the full
+// enabled count so the caller knows to keep paging (offset+count < total).
+// Truncated is set only when the per-page byte budget forced a reduction.
 type mcpProceduralFetchResponse struct {
-	Entries []mcpProceduralEntry `json:"entries"`
-	Count   int                  `json:"count"`
+	Entries    []mcpProceduralEntry `json:"entries"`
+	Count      int                  `json:"count"`
+	Pagination model.Pagination     `json:"pagination"`
+	Truncated  *truncationInfo      `json:"_truncated,omitempty"`
 }
 
 // mcpProceduralForgetResponse is the typed response for procedural_forget.
@@ -72,7 +78,9 @@ func registerProceduralFetch(s *Server) {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithRawOutputSchema(schemaFor[mcpProceduralFetchResponse]()),
-		mcp.WithDescription("Return all of your enabled procedural memory entries, verbatim, ordered by priority then recency. These are stored standing rules; nram returns the exact wording and never summarizes, embeds, or ranks them by relevance, and they never surface through recall. How you apply what is returned is up to you. Takes no arguments."),
+		mcp.WithDescription("Return your enabled procedural memory entries, verbatim, ordered by priority then recency (strongest first). These are MANDATORY standing rules — nram returns the exact wording and never summarizes, embeds, or ranks them by relevance, and they never surface through recall. They are paginated only because client result limits force it: you MUST page through ALL of them — keep calling with offset = (previous offset + count) until count+offset reaches pagination.total (and whenever a _truncated marker is present). Do not act until you have loaded every entry. Defaults return the first page (up to 200 entries)."),
+		mcp.WithNumber("limit", mcp.Description("Maximum entries to return in this page (default 200, max 200).")),
+		mcp.WithNumber("offset", mcp.Description("Number of entries to skip; page with offset = previous offset + count until you reach pagination.total.")),
 	)
 
 	s.MCPServer().AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -167,21 +175,37 @@ func proceduralNamespace(ctx context.Context, s *Server) (uuid.UUID, *mcp.CallTo
 	return user.NamespaceID, nil
 }
 
-func handleProceduralFetch(ctx context.Context, s *Server, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleProceduralFetch(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ns, denied := proceduralNamespace(ctx, s)
 	if denied != nil {
 		return denied, nil
 	}
+	args := request.GetArguments()
+	limit := parseIntArg(args, "limit", listMaxLimit, 1, listMaxLimit)
+	offset := parseIntArg(args, "offset", 0, 0, math.MaxInt32)
+
+	// FetchActive returns ALL enabled entries already ordered priority DESC,
+	// created_at DESC. Page in memory (the tier is dozens of entries, not
+	// millions); total lets the caller know to keep paging.
 	entries, err := s.Deps().Procedural.FetchActive(ctx, ns)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("procedural fetch failed: %v", err)), nil
 	}
-	out := make([]mcpProceduralEntry, 0, len(entries))
-	for i := range entries {
-		out = append(out, buildMCPProceduralEntry(&entries[i]))
+	total := len(entries)
+	lo := min(offset, total)
+	hi := min(offset+limit, total)
+	page := entries[lo:hi]
+
+	out := make([]mcpProceduralEntry, 0, len(page))
+	for i := range page {
+		out = append(out, buildMCPProceduralEntry(&page[i]))
 	}
-	resp := &mcpProceduralFetchResponse{Entries: out, Count: len(out)}
-	return wrapToolResult(s.deps.Metrics, "procedural_fetch", mcpBudgetBytes(ctx, s.deps.Settings), resp, nil)
+	resp := &mcpProceduralFetchResponse{
+		Entries:    out,
+		Count:      len(out),
+		Pagination: model.Pagination{Total: total, Limit: limit, Offset: offset},
+	}
+	return wrapToolResult(s.deps.Metrics, "procedural_fetch", mcpBudgetBytes(ctx, s.deps.Settings), resp, newProceduralReducer(resp))
 }
 
 func handleProceduralStore(ctx context.Context, s *Server, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
