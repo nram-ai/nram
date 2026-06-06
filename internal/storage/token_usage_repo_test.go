@@ -213,8 +213,8 @@ func TestTokenUsageRepo_GetByID_NotFound(t *testing.T) {
 }
 
 // TestTokenUsageRepo_ObservabilityColumns verifies that the columns added
-// in migration 000022 (sqlite) / 000019 (postgres) — success, error_code,
-// request_id — round-trip cleanly through Record + GetByID. This is the
+// in migration 000022 (sqlite) / 000019 (postgres) (success, error_code,
+// request_id) round-trip cleanly through Record + GetByID. This is the
 // migration smoke per step 11 of the audit plan: it proves the migration
 // applied AND that the repo writes/reads the new dimensions correctly on
 // both backends.

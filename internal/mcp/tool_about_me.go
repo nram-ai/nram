@@ -11,7 +11,7 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
-// aboutMeDefaultLimit is the framing-fetch default page size — larger than the
+// aboutMeDefaultLimit is the framing-fetch default page size, larger than the
 // generic list default because "load who the user is" wants the whole persona,
 // still capped at listMaxLimit.
 const aboutMeDefaultLimit = 100
@@ -19,7 +19,7 @@ const aboutMeDefaultLimit = 100
 // RegisterAboutMeTool registers the about_me framing-fetch tool: a per-user
 // read that returns the persona tier (the reserved about_me project) ordered
 // most-defining first. Like the procedural tools, it is intentionally NOT in
-// shareToolPolicy, so share-bearer connections can neither see nor call it —
+// shareToolPolicy, so share-bearer connections can neither see nor call it:
 // self-knowledge is never exposed through a per-project share grant.
 func RegisterAboutMeTool(s *Server) {
 	tool := mcp.NewTool("about_me",
@@ -28,7 +28,7 @@ func RegisterAboutMeTool(s *Server) {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithRawOutputSchema(schemaFor[listMemoryResponse]()),
-		mcp.WithDescription("Return what nram knows about who the user is — their persona / self-knowledge (identity, background, preferences, relationships, ongoing personal context) — ordered most-defining first (by how central each fact's entities are, then how often it has surfaced, then recency). Call this on demand when you need to understand the user — before personalizing work, making assumptions about them, or when the task hinges on their preferences or background. You do NOT need to load it every session: ordinary recall already surfaces relevant about_me facts by association."),
+		mcp.WithDescription("Return what nram knows about who the user is: their persona / self-knowledge (identity, background, preferences, relationships, ongoing personal context), ordered most-defining first (by how central each fact's entities are, then how often it has surfaced, then recency). Call this on demand when you need to understand the user, before personalizing work, making assumptions about them, or when the task hinges on their preferences or background. You do NOT need to load it every session: ordinary recall already surfaces relevant about_me facts by association."),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of entries to return (default 100, max 200).")),
 		mcp.WithNumber("offset", mcp.Description("Number of entries to skip for pagination (default 0).")),
 	)

@@ -213,7 +213,7 @@ func TestReinforceRels_PersistMode_WritesAndEmits(t *testing.T) {
 	refs := makeRefs(3)
 	svc.reinforceRels(context.Background(), refs)
 
-	// One call per ref — the per-relationship throttle is enforced upstream
+	// One call per ref, the per-relationship throttle is enforced upstream
 	// (seenRels in Recall and handleMemoryGraph), so reinforceRels itself
 	// writes every ref it receives.
 	if got := writer.callCount(); got != len(refs) {
@@ -314,7 +314,7 @@ func TestReinforceRels_EmptyRefs_NoOp(t *testing.T) {
 
 func TestReinforceRels_DisabledWhenNotWired(t *testing.T) {
 	svc := &RecallService{}
-	// No SetReinforcement call — must not panic, must not touch anything.
+	// No SetReinforcement call: must not panic, must not touch anything.
 	svc.reinforceRels(context.Background(), makeRefs(2))
 }
 
@@ -377,8 +377,8 @@ func TestReinforceRels_EventCapTruncatesPayload(t *testing.T) {
 func TestReinforceRels_FallsBackToRegisteredDelta(t *testing.T) {
 	// When the settings reader has no value for the delta key, the function
 	// should fall through to settingDefaults (0.05). Pinning this guards
-	// against drift between the runtime fallback and the registered default
-	// — the same drift that motivated the explicit fallback in the memory
+	// against drift between the runtime fallback and the registered default,
+	// the same drift that motivated the explicit fallback in the memory
 	// side's reinforce().
 	writer := &recordingRelReinforcer{}
 	bus := &collectingBus{}

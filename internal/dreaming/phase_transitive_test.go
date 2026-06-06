@@ -113,7 +113,7 @@ func (w *transitiveFakeRelationshipWriter) BatchDeleteByID(context.Context, uuid
 
 // transitiveTestFixture wires a small A→B→C→D chain (3 entities, 2 edges)
 // with the supplied weights. Every Execute on it can yield up to 1 new
-// transitive edge (A→C) before considering D — the second edge B→C plus a
+// transitive edge (A→C) before considering D; the second edge B→C plus a
 // C→D edge yields A→D after that. Callers add as many entities and edges
 // as the test needs.
 func transitiveTestFixture(weight float64) ([]model.Entity, []model.Relationship) {
@@ -213,7 +213,7 @@ func TestTransitive_HeadroomBindingDoesNotResidual(t *testing.T) {
 	if len(writer.created) != 1 {
 		t.Errorf("created = %d, want exactly 1 (headroom=1)", len(writer.created))
 	}
-	// ResidualDetail is informational only — assert it carries the active/
+	// ResidualDetail is informational only; assert it carries the active/
 	// hard_cap values that the operator needs to diagnose the saturation.
 	if result.ResidualDetail == nil {
 		t.Fatalf("ResidualDetail = nil, want populated detail map")

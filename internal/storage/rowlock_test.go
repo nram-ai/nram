@@ -18,7 +18,7 @@ import (
 // TestWithMemoryLock_SerializesSameID asserts that two concurrent
 // WithMemoryLock holders on the same memory id observe sequential
 // execution: while one body is in flight, the other must wait. The
-// test exercises both backends — on Postgres the serialization is
+// test exercises both backends; on Postgres the serialization is
 // pg_advisory_xact_lock; on SQlite it is the in-process sync.Mutex
 // map on the sqliteDB receiver.
 func TestWithMemoryLock_SerializesSameID(t *testing.T) {
@@ -68,7 +68,7 @@ func TestWithMemoryLock_SerializesSameID(t *testing.T) {
 }
 
 // TestWithMemoryLock_DistinctIDsRunParallel asserts that locks on
-// different memory ids do NOT serialize against each other — a row
+// different memory ids do NOT serialize against each other; a row
 // lock on memory A must not block work on memory B.
 //
 // Skipped on SQLite because the write pool has MaxOpenConns=1, so any

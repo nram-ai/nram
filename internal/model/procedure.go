@@ -11,7 +11,7 @@ import (
 // instruction or operating rule scoped to a user's root namespace.
 //
 // It is deliberately NOT a Memory and NOT a Project. Unlike Memory it is never
-// embedded, enriched, consolidated, or surfaced by recall — it is fetched whole
+// embedded, enriched, consolidated, or surfaced by recall; it is fetched whole
 // and verbatim by procedural_fetch. The tier is implicit (no container row): a
 // user "has" the tier the moment the table exists, and it cannot be deleted as
 // a whole; only individual entries are CRUD-able.

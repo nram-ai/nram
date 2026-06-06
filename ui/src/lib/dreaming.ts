@@ -19,7 +19,7 @@ export const SUB_PHASE_LABELS: Record<string, string> = {
 };
 
 // Raw hex (not Tailwind classes): the inline `style={{ background }}` path
-// on dynamic-width segments is JIT-safe — Tailwind's purge can't see
+// on dynamic-width segments is JIT-safe, Tailwind's purge can't see
 // runtime-composed class names.
 export const PHASE_COLORS: Record<string, string> = {
   entity_dedup: "#94a3b8",
@@ -53,7 +53,7 @@ export type FactKind =
   | "memory_id_superseded"
   // memory_id_deleted: the target row is soft-deleted (deleted_at is set) and
   // the public detail handler has no include_deleted flag. Renders as a
-  // non-clickable monospace short-id chip — visually consistent with other
+  // non-clickable monospace short-id chip, visually consistent with other
   // memory chips but signals dead-end.
   | "memory_id_deleted"
   | "entity_id"
@@ -76,7 +76,7 @@ export interface Fact {
 
 export interface FormattedLog {
   // Single sentence describing what happened. Plain string with
-  // {placeholders} — the renderer substitutes Fact-rendered chips by name.
+  // {placeholders}; the renderer substitutes Fact-rendered chips by name.
   narrative: string;
   // Facts referenced by the narrative AND any that should appear in the
   // key-fact strip below the narrative.
@@ -84,7 +84,7 @@ export interface FormattedLog {
   // Optional inline metric strip for phase_summary / aggregate rows
   // (rendered on the collapsed row, no expand needed).
   metrics?: Fact[];
-  // True for phase_summary entries — the renderer hides the expand chevron.
+  // True for phase_summary entries; the renderer hides the expand chevron.
   isSummary?: boolean;
   // True when the operation shape was unrecognized; the renderer falls back
   // to raw JSON for the body in this case.
@@ -306,7 +306,7 @@ function formatRelationshipExpired(log: DreamLog): FormattedLog {
   if (newWeight !== undefined) facts.newWeight = fact("New weight", newWeight, "weight");
   if (reason) facts.reason = fact("Reason", reason, "reason");
   return {
-    narrative: "Expired {relId} — weight decayed to {newWeight}",
+    narrative: "Expired {relId}: weight decayed to {newWeight}",
     facts,
   };
 }
@@ -321,7 +321,7 @@ function formatEntityUpdated(log: DreamLog): FormattedLog {
   return {
     narrative:
       mentions !== undefined
-        ? "Updated entity {entityId} — mention count now {mentions}"
+        ? "Updated entity {entityId}: mention count now {mentions}"
         : "Updated entity {entityId}",
     facts,
   };
@@ -342,7 +342,7 @@ function formatParaphraseSuperseded(log: DreamLog): FormattedLog {
   if (reason) facts.reason = fact("Reason", reason, "reason");
   const narrative =
     cosine !== undefined
-      ? "Merged paraphrase {loser} into {winner} — {cosine} similar"
+      ? "Merged paraphrase {loser} into {winner}, {cosine} similar"
       : "Merged paraphrase {loser} into {winner}";
   return { narrative, facts };
 }
@@ -360,7 +360,7 @@ function formatContradictionDetected(log: DreamLog): FormattedLog {
   };
   const kept = keptByWinner[winnerSide] ?? { value: "", kind: "memory_id" };
   // The loser side may be marked superseded by the haircut path (when the
-  // winner's pre-haircut confidence cleared the supersede threshold —
+  // winner's pre-haircut confidence cleared the supersede threshold,
   // phase_contradictions.go:325). Tag the loser chip so the deep-link can
   // still load the row; live losers tolerate include_superseded=1 fine.
   const aKind: FactKind = winnerSide === WinnerSideB ? "memory_id_superseded" : "memory_id";
@@ -380,7 +380,7 @@ function formatContradictionDetected(log: DreamLog): FormattedLog {
   if (explanation) facts.explanation = fact("Explanation", explanation, "text");
   const suffix = winnerSide === WinnerTie ? "tie" : "kept {winner}";
   return {
-    narrative: `Resolved contradiction between {a} and {b} — ${suffix}`,
+    narrative: `Resolved contradiction between {a} and {b}, ${suffix}`,
     facts,
   };
 }
@@ -399,7 +399,7 @@ function formatConfidenceAdjusted(log: DreamLog): FormattedLog {
   if (alignment !== undefined) facts.alignment = fact("Alignment", alignment, "alignment");
   return {
     narrative:
-      "Reinforced synthesis {memId} — confidence {oldConf} → {newConf} (alignment {alignment})",
+      "Reinforced synthesis {memId}: confidence {oldConf} → {newConf} (alignment {alignment})",
     facts,
   };
 }
@@ -422,7 +422,7 @@ function formatMemoryDemoted(log: DreamLog): FormattedLog {
   const oldConf = pickNumber(before.confidence);
   const reason = pickString(after.reason);
   // The demoted row's confidence/embedding are cleared in place, but the same
-  // row may already carry superseded_by from an earlier cycle — backfill audit
+  // row may already carry superseded_by from an earlier cycle; backfill audit
   // pulls from ListByNamespaceStale which does not filter superseded. Tag the
   // chip so the deep-link adds include_superseded=1; harmless when the row is
   // actually live.
@@ -434,8 +434,8 @@ function formatMemoryDemoted(log: DreamLog): FormattedLog {
   return {
     narrative:
       oldConf !== undefined
-        ? "Demoted memory {memId} — low novelty (confidence {oldConf} → 0)"
-        : "Demoted memory {memId} — low novelty",
+        ? "Demoted memory {memId}: low novelty (confidence {oldConf} → 0)"
+        : "Demoted memory {memId}: low novelty",
     facts,
   };
 }
@@ -451,7 +451,7 @@ function formatMemoryRejected(log: DreamLog): FormattedLog {
   return {
     narrative:
       reason
-        ? "Rejected synthesis candidate — {reason} ({sourceCount} sources)"
+        ? "Rejected synthesis candidate: {reason} ({sourceCount} sources)"
         : "Rejected synthesis candidate ({sourceCount} sources)",
     facts,
   };
@@ -494,7 +494,7 @@ function formatMemoryDeleted(log: DreamLog): FormattedLog {
   if (createdAt) facts.createdAt = fact("Created", createdAt, "text");
   if (content) facts.content = fact("Content", content, "text");
   return {
-    narrative: reason ? "Deleted memory {memId} — {reason}" : "Deleted memory {memId}",
+    narrative: reason ? "Deleted memory {memId}: {reason}" : "Deleted memory {memId}",
     facts,
   };
 }
@@ -690,8 +690,8 @@ const PHASE_SUMMARY_OP = "phase_summary";
 // own embedded sub_phase value when present.
 //
 // pendingStart tracks the contiguous run of empty consolidation rows whose
-// sub_phase is still unknown. Any explicit value at row i — whether on a
-// regular op or a phase_summary — closes the pending range: the lookahead
+// sub_phase is still unknown. Any explicit value at row i (whether on a
+// regular op or a phase_summary) closes the pending range: the lookahead
 // only backfills rows whose true sub_phase is unambiguously the same as the
 // boundary marker (i.e., contiguous empty rows immediately before it). An
 // explicit row mid-stream signals a sub-phase boundary we cannot inherit

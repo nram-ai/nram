@@ -87,7 +87,7 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projec
 		out.ClaimedAt = item.ClaimedAt
 		ageMs := max(now.Sub(*item.ClaimedAt).Milliseconds(), 0)
 		out.ClaimedAtAgeMs = &ageMs
-		// Half-threshold is the early-warning point — same intent as
+		// Half-threshold is the early-warning point, same intent as
 		// dreaming's is_stale_diagnostic.
 		if staleThresholdMs > 0 && ageMs > staleThresholdMs/2 {
 			out.IsStaleDiagnostic = true
@@ -114,7 +114,7 @@ func (s *EnrichmentAdminStore) staleThresholdMs(ctx context.Context) int64 {
 // (with p.name), OrgQueueStatus (without), and QueueStatus (without). When
 // withName is true the SELECT adds `p.name` so self-tier callers see
 // project names; org and system paths leave it off and surface project_id
-// only — org-tier views must not leak other users' project names to an
+// only; org-tier views must not leak other users' project names to an
 // org_owner, matching the system-tier privacy posture. The trailing
 // m.augmented_queries and m.augmented_embedding_at columns are always
 // included so the enrichment-monitor "Augmentation" panel can render the
@@ -234,7 +234,7 @@ func placeholderFn(pg bool) func() string {
 
 // queueOrderClause renders the ORDER BY tail for a queue list query from
 // pre-normalized params (see api.QueueListParams.Normalize). The Sort column
-// and Dir are whitelisted literals — never bound parameters. A deterministic
+// and Dir are whitelisted literals, never bound parameters. A deterministic
 // (eq.created_at DESC, eq.id) tiebreaker is always appended so rows that share
 // the primary sort key keep a stable order across refetches; without it,
 // batch-enqueued rows with identical created_at shuffle between polls and the
@@ -259,8 +259,8 @@ func queueOrderClause(params api.QueueListParams) string {
 // (immediately following the column list); where is the scope predicate
 // already built with leading placeholders from ph (empty for the system-wide
 // view, which has no namespace scope); args holds the values bound to those
-// placeholders. It appends the optional status filter — choosing WHERE vs AND
-// based on whether a scope predicate exists — then the deterministic ORDER BY
+// placeholders. It appends the optional status filter (choosing WHERE vs AND
+// based on whether a scope predicate exists), then the deterministic ORDER BY
 // and LIMIT/OFFSET, returning the finished query and complete args. ph must be
 // the same generator used to build where so placeholder numbering stays
 // contiguous. params must already be Normalized by the caller.
@@ -380,7 +380,7 @@ func parseQueueTime(s string) (t time.Time, err error) {
 }
 
 // QueueStatus returns the system-wide queue. Items carry project_id (no
-// project_name) so cross-tenant admins see UUIDs only — matching the
+// project_name) so cross-tenant admins see UUIDs only, matching the
 // privacy posture for system-tier dreaming cycles.
 func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context, params api.QueueListParams) (*api.EnrichmentQueueStatus, error) {
 	stats, err := s.queueRepo.CountByStatus(ctx)
@@ -448,7 +448,7 @@ func (s *EnrichmentAdminStore) orgNamespacePath(ctx context.Context, orgID uuid.
 // OrgQueueStatus returns the queue items whose memory.namespace_id is
 // descended from the given org's root namespace. Counts are scoped to the
 // same subtree. Items carry project_id (no project_name) so an org_owner
-// sees UUIDs only for projects owned by other users in the org — matching
+// sees UUIDs only for projects owned by other users in the org, matching
 // the privacy posture for system-tier views. Used by
 // /v1/orgs/{orgId}/enrichment.
 func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UUID, params api.QueueListParams) (*api.EnrichmentQueueStatus, error) {

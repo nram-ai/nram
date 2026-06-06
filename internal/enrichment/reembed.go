@@ -31,7 +31,7 @@ type ReembedEntitiesResult struct {
 }
 
 // ReembedAllEntities re-embeds every entity's canonical name and writes
-// the new vector. Used by the embedding-model switch cascade — entities
+// the new vector. Used by the embedding-model switch cascade; entities
 // don't go through the enrichment_queue. Per-batch embed/upsert errors
 // are accumulated in the result and the loop continues; a non-nil error
 // return means infrastructure failure (db unreachable mid-walk).

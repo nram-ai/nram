@@ -151,7 +151,7 @@ function DeleteIdPDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Create IdP Dialog (Admin — with org selector)
+// Create IdP Dialog (Admin, with org selector)
 // ---------------------------------------------------------------------------
 
 function CreateIdPDialog({
@@ -332,7 +332,7 @@ function CreateIdPDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Create IdP Dialog (Org Owner — no org selector, uses own org_id)
+// Create IdP Dialog (Org Owner, no org selector, uses own org_id)
 // ---------------------------------------------------------------------------
 
 function CreateOrgIdPDialog({
@@ -1300,7 +1300,7 @@ function IdPConfiguration() {
     return <AdminIdPView />;
   }
 
-  // Org owner view — use the user's own org_id.
+  // Org owner view: use the user's own org_id.
   const orgId = user?.org_id ?? "";
   if (!orgId) {
     return (

@@ -100,8 +100,8 @@ type staleMemory struct {
 }
 
 // mirrorToStale propagates the latest writable fields from mem back into the
-// stale-index entry so the post-loop stamp Update — which serializes every
-// column from stale[i].Mem — does not clobber haircut confidence or
+// stale-index entry so the post-loop stamp Update (which serializes every
+// column from stale[i].Mem) does not clobber haircut confidence or
 // supersession markers written earlier in the cycle.
 func mirrorToStale(staleByID map[uuid.UUID]*model.Memory, mem *model.Memory) {
 	s, ok := staleByID[mem.ID]
@@ -211,7 +211,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			break
 		}
 
-		// Skip the LLM judge for near-duplicate paraphrases — the strict
+		// Skip the LLM judge for near-duplicate paraphrases; the strict
 		// contradiction prompt is intentionally blind to them.
 		if paraphraseEnabled && vectorsByID != nil {
 			va, okA := vectorsByID[pair[0].ID]
@@ -426,7 +426,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	}
 
 	// Phase swallows ErrBudgetExhausted (and pre-flight CanAfford rejections),
-	// so runner-level reason override does not fire — attribution is ours.
+	// so runner-level reason override does not fire; attribution is ours.
 	// Budget-stopped beats dispatch-cap when both apply: it is the actionable
 	// diagnostic.
 	switch {
@@ -483,7 +483,7 @@ func (p *ContradictionPhase) collectStale(memories []model.Memory) []staleMemory
 // isStale reports whether a memory needs a contradiction pass. A memory is
 // stale when it has no stamp at all, the stamp is malformed, or the stamp
 // time is strictly before the memory's UpdatedAt. Equal stamp and UpdatedAt
-// are considered fresh — the stamping path sets both to the same instant
+// are considered fresh; the stamping path sets both to the same instant
 // and we don't want a just-stamped memory to look stale on the next cycle.
 func isStale(mem *model.Memory, meta map[string]any) bool {
 	raw, ok := meta[ContradictionsCheckedStampKey]
@@ -581,7 +581,7 @@ func (p *ContradictionPhase) selectNeighborPairs(
 
 	// Phase 2: identify misses (memories with no stored vector at this dim)
 	// and embed them in one batch. On embedder-only-path (no store), all
-	// memories are misses — preserves the legacy behavior.
+	// memories are misses; preserves the legacy behavior.
 	missIdx := make([]int, 0)
 	for i := range allMemories {
 		if _, ok := stored[allMemories[i].ID]; !ok {
@@ -678,11 +678,11 @@ func (p *ContradictionPhase) selectNeighborPairs(
 // candidatesFor returns the K nearest-neighbour candidate indices for an
 // anchor, in priority order:
 //  1. VectorStore.Search if both the store and the anchor's vector are
-//     available — this is the cheap path that scales with the index.
-//  2. In-process top-K over the loaded `stored` map — used when Search is
+//     available: this is the cheap path that scales with the index.
+//  2. In-process top-K over the loaded `stored` map: used when Search is
 //     unavailable or returns an error so we still benefit from the work
 //     spent loading vectors.
-//  3. ID-ordered walk — final degradation when no vector data exists at all.
+//  3. ID-ordered walk: final degradation when no vector data exists at all.
 func (p *ContradictionPhase) candidatesFor(
 	ctx context.Context,
 	anchor model.Memory,
@@ -716,7 +716,7 @@ func (p *ContradictionPhase) candidatesFor(
 				return out
 			}
 			// Search returned nothing usable (e.g. empty index right after
-			// a snapshot rebuild) — fall through to the next tier.
+			// a snapshot rebuild), fall through to the next tier.
 		} else {
 			slog.Warn("dreaming: vector-store Search failed; degrading to in-process top-K",
 				"anchor", anchor.ID, "err", err)
@@ -814,7 +814,7 @@ func dispatchCandidates(
 
 // paraphraseSupersede picks the lower-confidence side of a near-duplicate
 // pair and supersedes it without invoking the LLM judge. Tiebreak when the
-// confidences are equal: the older CreatedAt survives — older memories are
+// confidences are equal: the older CreatedAt survives; older memories are
 // more likely to have downstream lineage edges, so preserving them avoids
 // orphaning history.
 //

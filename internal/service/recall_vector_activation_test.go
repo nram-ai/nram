@@ -159,7 +159,7 @@ func TestRecall_VectorActivationOn_BoostsCrossNamespaceConnectedMemory(t *testin
 
 // TestRecall_VectorActivationOff_NoBoost is the OFF case: with the switch off,
 // the vector channel does not run, no entity is found (lexical returns none),
-// and pure similarity order stands — unconnected outranks connected.
+// and pure similarity order stands: unconnected outranks connected.
 func TestRecall_VectorActivationOff_NoBoost(t *testing.T) {
 	svc, repo, settings, connectedID, unconnectedID, primaryID, globalNs := activationFixture(t, false)
 	repo.put(SettingRecallGraphVectorActivationEnabled, "global", "false")

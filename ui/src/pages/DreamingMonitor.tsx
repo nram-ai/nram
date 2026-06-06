@@ -166,11 +166,11 @@ function formatTokensWithCap(ps: DreamPhaseSummary): string {
   return used;
 }
 
-// "—" when has_residual is undefined: legacy rows can't claim no residual when
+// "-" when has_residual is undefined: legacy rows can't claim no residual when
 // the field was never written.
 function ResidualCell({ ps }: { ps: DreamPhaseSummary }) {
   if (ps.has_residual === undefined) {
-    return <span className="text-xs text-muted-foreground">—</span>;
+    return <span className="text-xs text-muted-foreground">-</span>;
   }
   if (!ps.has_residual) {
     return <span className="text-xs text-muted-foreground">no</span>;
@@ -204,7 +204,7 @@ function PhaseSummaryRowExpandable({
   group?: PhaseLogGroup;
   // pending=true for rows synthesized from logGroups for phases that haven't
   // yet been written to cycle.phase_summary (in-flight or aborted cycles).
-  // The row collapses tokens/time/residual to "—" and labels status as
+  // The row collapses tokens/time/residual to "-" and labels status as
   // "in flight" so the user can still drill into the ops.
   pending?: boolean;
   expandedPhases: Set<string>;
@@ -235,7 +235,7 @@ function PhaseSummaryRowExpandable({
   const flatLogs = group?.logsFlat ?? [];
   // Render sub-phase rows for any phase that EITHER produced sub-phase-tagged
   // logs OR carries a sub-phase breakdown in its phase summary (the latter
-  // covers cycles that completed with zero ops in every sub-phase — the
+  // covers cycles that completed with zero ops in every sub-phase; the
   // accordion would otherwise collapse to a misleading "no operations" line
   // while the budget bar advertises three sub-phases above it).
   const hasSubPhases = !!group?.hasSubPhases || hasSubPhaseData;
@@ -295,18 +295,18 @@ function PhaseSummaryRowExpandable({
           </button>
         </td>
         <td className="px-3 py-2 font-mono text-xs">
-          {pending ? <span className="text-muted-foreground">—</span> : formatTokensWithCap(ps)}
+          {pending ? <span className="text-muted-foreground">-</span> : formatTokensWithCap(ps)}
         </td>
         <td className="px-3 py-2 font-mono text-xs">{ps.operations}</td>
         <td className="px-3 py-2 text-muted-foreground">
           {pending
-            ? "—"
+            ? "-"
             : ps.duration_ms < 1000
               ? `${ps.duration_ms}ms`
               : `${(ps.duration_ms / 1000).toFixed(1)}s`}
         </td>
         <td className="px-3 py-2">
-          {pending ? <span className="text-xs text-muted-foreground">—</span> : <ResidualCell ps={ps} />}
+          {pending ? <span className="text-xs text-muted-foreground">-</span> : <ResidualCell ps={ps} />}
         </td>
         <td className="px-3 py-2">
           {pending ? (
@@ -541,7 +541,7 @@ function useDreamingLiveState(orgId?: string) {
                 tokensUsed:
                   typeof data.tokens_used === "number" ? data.tokens_used : cur.tokensUsed,
                 lastActivityAt: new Date().toISOString(),
-                // Reset progress on phase boundary — a fresh phase starts at 0/0.
+                // Reset progress on phase boundary: a fresh phase starts at 0/0.
                 phaseProgress: undefined,
               },
             };
@@ -649,7 +649,7 @@ function StaleDiagnosticPill() {
   return (
     <span
       className="inline-flex items-center rounded-full bg-warning/70 px-2 py-0.5 text-[10px] font-medium text-warning"
-      title="Heartbeat is stale — the worker may have stopped making progress."
+      title="Heartbeat is stale, the worker may have stopped making progress."
     >
       no recent activity
     </span>
@@ -1095,7 +1095,7 @@ function CycleDetail({
 
       {cycle.error && <ExtractionErrorView value={cycle.error} variant="block" />}
 
-      {/* Phase Summary — also surfaces orphan-phase rows for logs whose
+      {/* Phase Summary: also surfaces orphan-phase rows for logs whose
           phase hasn't been written to cycle.phase_summary yet (in-flight or
           aborted cycles). */}
       {allPhaseRows.length > 0 && (
@@ -1243,7 +1243,7 @@ function LiveActivitySection({ state }: { state?: LiveCycleState }) {
 function FactChip({ projectId, fact: f }: { projectId: string; fact: Fact }) {
   const [copied, setCopied] = useState(false);
   const value = String(f.value ?? "");
-  if (!value) return <span className="text-muted-foreground">{"\u2014"}</span>;
+  if (!value) return <span className="text-muted-foreground">{"-"}</span>;
 
   if (f.kind === "memory_id" || f.kind === "memory_id_superseded") {
     const superseded = f.kind === "memory_id_superseded";
@@ -1432,7 +1432,7 @@ function LogEntry({
           <p className="text-sm leading-relaxed">
             {formatted.unknown ? (
               <span className="text-muted-foreground">
-                Unknown operation \u2014 see raw payload below.
+                Unknown operation, see raw payload below.
               </span>
             ) : (
               renderNarrative(formatted.narrative, formatted.facts, projectId)
@@ -1496,7 +1496,7 @@ export default function DreamingMonitor() {
   const [tier, setTier] = useState<Tier>("self");
 
   // System-tier (admin only): live system status + system-wide cycles list.
-  // Both queries are gated by `enabled` rather than just refetchInterval —
+  // Both queries are gated by `enabled` rather than just refetchInterval:
   // refetchInterval=0 only stops polling, the initial fetch still fires.
   const systemStatusQuery = useDreamingStatus({
     intervalMs: statusIntervalMs,
@@ -1598,7 +1598,7 @@ export default function DreamingMonitor() {
 
   // Tier-normalized view: self has no dirty/stuck counters in its response
   // shape, so derive them from the aggregate dirty boolean and the cycles
-  // list. enabledFlag is system-only — self/org render an aggregate dirty
+  // list. enabledFlag is system-only; self/org render an aggregate dirty
   // pill instead and read their own status query directly.
   const view = (() => {
     if (tier === "system") {
@@ -1693,7 +1693,7 @@ export default function DreamingMonitor() {
       {/* Content */}
       {!isLoading && !isError && (
         <>
-          {/* Controls — system tier renders the enable/disable toggle; */}
+          {/* Controls: system tier renders the enable/disable toggle; */}
           {/* self tier shows the rolled-up "any-of-mine-dirty" badge plus */}
           {/* the count of caller-owned projects. */}
           <div className="flex items-center justify-between rounded-lg border bg-card p-4">

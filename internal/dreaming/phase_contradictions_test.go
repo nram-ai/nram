@@ -28,7 +28,7 @@ func (z *zeroUsageLLM) Complete(_ context.Context, _ *provider.CompletionRequest
 	return &provider.CompletionResponse{
 		Content: `{"contradicts": false, "explanation": ""}`,
 		Model:   "local-model",
-		// Intentionally zero usage — mimics Ollama's OpenAI-compat endpoint.
+		// Intentionally zero usage: mimics Ollama's OpenAI-compat endpoint.
 		Usage: provider.TokenUsage{},
 	}, nil
 }
@@ -56,7 +56,7 @@ func (stubLineageWriter) FindParentIDsByRelation(_ context.Context, _, _ uuid.UU
 }
 
 // stubSettings is the default zero-config stub used by most tests. cap and
-// neighbors fall through to their package defaults (2000 and 4) — matching
+// neighbors fall through to their package defaults (2000 and 4), matching
 // what production cascade resolution would produce on a fresh deployment.
 type stubSettings struct{}
 
@@ -192,7 +192,7 @@ type malformedResponseLLM struct {
 func (m *malformedResponseLLM) Complete(_ context.Context, _ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
 	m.calls.Add(1)
 	return &provider.CompletionResponse{
-		Content: "sure thing boss — not json",
+		Content: "sure thing boss, not json",
 		Model:   "local-model",
 		Usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
 	}, nil
@@ -270,7 +270,7 @@ func TestContradictionPhase_PreflightStopsWhenBudgetTooSmall(t *testing.T) {
 		stubSettings{},
 	)
 
-	// PerCallCap alone exceeds total budget — every pre-flight check fails.
+	// PerCallCap alone exceeds total budget: every pre-flight check fails.
 	budget := NewTokenBudget(10, 100)
 	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: memories[0].NamespaceID}
 	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
@@ -433,7 +433,7 @@ func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
 // TestContradictionPhase_StampingIsIdempotent is the forward-progress
 // acceptance criterion: once the phase drains to residual=false, a
 // subsequent pass on the same input must be a complete no-op. Drains may
-// take multiple passes when the stale set exceeds cap*K — the invariant
+// take multiple passes when the stale set exceeds cap*K; the invariant
 // is that stability, once reached, is preserved.
 func TestContradictionPhase_StampingIsIdempotent(t *testing.T) {
 	llm := &zeroUsageLLM{}
@@ -756,7 +756,7 @@ func (m *mutableMemoryStore) UpdateMetadata(_ context.Context, id, _ uuid.UUID, 
 		if m.memories[i].ID == id {
 			cp := append(json.RawMessage(nil), metadata...)
 			m.memories[i].Metadata = cp
-			// Deliberately do NOT bump UpdatedAt — that's the contract
+			// Deliberately do NOT bump UpdatedAt; that's the contract
 			// the production UpdateMetadata enforces. Cross-cycle
 			// staleness tests rely on this.
 			m.metadataUpdates++
@@ -910,8 +910,8 @@ func haircutMemories(n int) []model.Memory {
 func runContradictionCycle(t *testing.T, llm provider.LLMProvider, mems []model.Memory, lineage LineageWriter) *updatingMemoryWriter {
 	t.Helper()
 	reader := &fakeMemoryReader{list: mems}
-	// seed mirrors the reader so MutateInLock — used by the haircut path
-	// — can re-read each memory under its row lock without a separate store.
+	// seed mirrors the reader so MutateInLock (used by the haircut path)
+	// can re-read each memory under its row lock without a separate store.
 	writer := &updatingMemoryWriter{seed: mems}
 	phase := NewContradictionPhase(
 		reader,
@@ -1216,7 +1216,7 @@ func TestContradictionPhase_VectorStoreHitsAvoidEmbedding(t *testing.T) {
 		stubLineageWriter{},
 		func() provider.LLMProvider { return llm },
 		func() provider.EmbeddingProvider { return emb },
-		paraphraseSettings(false, 0.97), // disabled — exercise only the read path
+		paraphraseSettings(false, 0.97), // disabled, exercise only the read path
 	)
 	phase.AttachVectorStore(vs)
 
@@ -1325,7 +1325,7 @@ func TestContradictionPhase_VectorStoreErrorFallsBackToFullEmbed(t *testing.T) {
 		t.Error("expected embedder to be called when GetByIDs errors (full re-embed fallback)")
 	}
 	if llm.calls.Load() == 0 {
-		t.Error("expected LLM calls — phase must still emit pairs after store failure")
+		t.Error("expected LLM calls: phase must still emit pairs after store failure")
 	}
 }
 

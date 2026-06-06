@@ -94,7 +94,7 @@ func MemorySource(m *Memory) string {
 //
 // HeartbeatAt is updated by the runner during phase execution (independent
 // of phase-boundary writes that touch UpdatedAt). IsStaleDiagnostic,
-// IsAbandonable, and ProjectName are NOT persisted — they're computed at
+// IsAbandonable, and ProjectName are NOT persisted; they're computed at
 // read time and remain zero/empty on direct repo scans. ProjectName is
 // populated only by self-tier read paths that JOIN projects (the caller
 // owns every returned project, so the name is theirs to see); org and

@@ -80,12 +80,12 @@ func canonicalize(name string) string {
 // was created, and any error encountered.
 //
 // Resolution order:
-//  1. Canonical name match — search by similarity for the name+type, check for
+//  1. Canonical name match: search by similarity for the name+type, check for
 //     an exact canonical match.
-//  2. Alias lookup — check the alias table for a matching alias.
-//  3. Name similarity — re-use FindBySimilarity results to find a fuzzy match,
+//  2. Alias lookup: check the alias table for a matching alias.
+//  3. Name similarity: re-use FindBySimilarity results to find a fuzzy match,
 //     then register the name as an alias.
-//  4. Create new — upsert a brand-new entity.
+//  4. Create new: upsert a brand-new entity.
 func (r *EntityResolver) Resolve(
 	ctx context.Context,
 	namespaceID uuid.UUID,
@@ -104,7 +104,7 @@ func (r *EntityResolver) Resolve(
 
 	for i := range similar {
 		if similar[i].Canonical == canonical {
-			// Exact canonical match — increment mention count and upsert.
+			// Exact canonical match; increment mention count and upsert.
 			similar[i].MentionCount++
 			similar[i].UpdatedAt = time.Now().UTC()
 			if err := r.entities.Upsert(ctx, &similar[i]); err != nil {
@@ -120,7 +120,7 @@ func (r *EntityResolver) Resolve(
 		return nil, false, fmt.Errorf("entity resolution: alias lookup: %w", err)
 	}
 	if len(aliases) > 0 {
-		// Found via alias — look up the linked entity through FindBySimilarity
+		// Found via alias; look up the linked entity through FindBySimilarity
 		// using the alias's entity. Use FindByAlias on the entity finder which
 		// returns full Entity records.
 		entities, err := r.entities.FindByAlias(ctx, namespaceID, name)
@@ -137,7 +137,7 @@ func (r *EntityResolver) Resolve(
 		}
 	}
 
-	// Step 3: Name similarity fallback — we already have the results from step
+	// Step 3: Name similarity fallback; we already have the results from step
 	// 1. If any entity of the same type was returned by FindBySimilarity (but
 	// was not an exact canonical match), treat the first one as a fuzzy match.
 	if len(similar) > 0 {

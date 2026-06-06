@@ -75,7 +75,7 @@ func TestPostgresBus_NotificationSkipsSelf(t *testing.T) {
 		t.Errorf("got instanceID %s, want %s", decoded.InstanceID, instanceID)
 	}
 
-	// Same instance — should be skipped
+	// Same instance, should be skipped
 	if decoded.InstanceID == instanceID {
 		return // correctly identified as self
 	}

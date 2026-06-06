@@ -11,7 +11,7 @@ import (
 // shared engine behind three call sites: the forget hard-delete path and the
 // supersede path (which reap one memory's exclusively-sourced footprint), and
 // the lifecycle sweep / console repair (which reap the accumulated backlog of
-// lost-provenance edges). All operations are safe to run repeatedly — a
+// lost-provenance edges). All operations are safe to run repeatedly: a
 // lost-provenance edge can never be tied back to a live memory, so reaping it
 // never destroys live-sourced data.
 type GraphReaper interface {

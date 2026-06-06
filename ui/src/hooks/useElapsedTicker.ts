@@ -5,8 +5,8 @@ import { useEffect, useState } from "react";
  * Pairs with elapsedSeconds() / formatElapsed() so live "Xs ago" counters
  * update once per second without state plumbing from the parent.
  *
- * Pass the gating condition as `active` rather than calling unconditionally
- * — an idle hook still installs a setInterval and wakes the page every
+ * Pass the gating condition as `active` rather than calling unconditionally:
+ * an idle hook still installs a setInterval and wakes the page every
  * second.
  */
 export function useElapsedTicker(active: boolean): number {

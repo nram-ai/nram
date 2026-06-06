@@ -27,8 +27,8 @@ type GraphMaintenanceConfig struct {
 // NewAdminGraphMaintenanceHandler dispatches the admin graph-maintenance
 // routes. Mounted under /v1/admin, which the router gates on
 // RoleAdministrator, so no per-handler role check is needed:
-//   - GET  /v1/admin/graph/health  — current lost-provenance edge count
-//   - POST /v1/admin/graph/repair  — reap lost-provenance edges, recompute
+//   - GET  /v1/admin/graph/health:  current lost-provenance edge count
+//   - POST /v1/admin/graph/repair:  reap lost-provenance edges, recompute
 //     mention counts, and prune dangling/orphaned graph rows
 func NewAdminGraphMaintenanceHandler(cfg GraphMaintenanceConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

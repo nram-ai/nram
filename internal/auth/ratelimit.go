@@ -79,7 +79,7 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ac := FromContext(r.Context())
 		if ac == nil {
-			// No auth context — skip rate limiting.
+			// No auth context; skip rate limiting.
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -97,7 +97,7 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 		// Calculate reservation to determine remaining tokens and reset time.
 		res := lim.ReserveN(now, 1)
 		if !res.OK() {
-			// Burst is zero — should not happen with valid config, but handle gracefully.
+			// Burst is zero; should not happen with valid config, but handle gracefully.
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -108,7 +108,7 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", rl.burst))
 
 		if delay > 0 {
-			// Over limit — cancel reservation and return 429.
+			// Over limit; cancel reservation and return 429.
 			res.CancelAt(now)
 
 			retryAfter := math.Ceil(delay.Seconds())
@@ -126,7 +126,7 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 			return
 		}
 
-		// Within limit — compute approximate remaining tokens.
+		// Within limit; compute approximate remaining tokens.
 		remaining := max(int(lim.TokensAt(now))-1, 0)
 
 		// Reset time is when the bucket will be full again.

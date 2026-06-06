@@ -89,12 +89,12 @@ func seedSecondUserWithProject(t *testing.T, db storage.DB, ctx context.Context,
 // dashboard's per-project breakdown returns only the caller's own
 // projects, with names populated. A second user in the same org has a
 // distinctively-named project that must NOT appear in the caller's
-// response — the regression this test guards against is the 2026-05-25
+// response. The regression this test guards against is the 2026-05-25
 // cross-user project-name leak that prompted the dashboard fix.
 //
 // When orgID is set but userID is nil (the legacy call shape), names
 // must be omitted from the response so an org-aggregate consumer does
-// not learn cross-user names. The third case (both nil — global) is
+// not learn cross-user names. The third case (both nil, global) is
 // covered implicitly by the existing global counts path; not re-tested
 // here because the production handler always passes orgID for an
 // authenticated caller.

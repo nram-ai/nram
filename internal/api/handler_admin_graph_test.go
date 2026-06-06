@@ -29,7 +29,7 @@ func TestApplyEdgeCap_NoTruncationUnderCap(t *testing.T) {
 func TestApplyEdgeCap_TopByWeightPreservesAllEntities(t *testing.T) {
 	// Five edges across four entities. Cap at 2 keeps the two highest-weight
 	// edges. Entities are passed through unchanged regardless of edge
-	// truncation — isolated nodes stay visible so namespace inventory views
+	// truncation; isolated nodes stay visible so namespace inventory views
 	// don't silently change shape at the cap boundary.
 	entities := []GraphEntity{
 		{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"},

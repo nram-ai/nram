@@ -724,7 +724,7 @@ function MemoryDetailPanel({
       { projectId, memoryId, targetProjectId },
       {
         onSuccess: () => {
-          // The memory left this project — drop it from selection and close.
+          // The memory left this project; drop it from selection and close.
           onDeleted();
           onClose();
         },
@@ -849,7 +849,7 @@ function MemoryDetailPanel({
               persistedAt={memory.augmented_embedding_at}
             />
 
-            {/* Info row — Confidence, Importance, AccessCount, and
+            {/* Info row: Confidence, Importance, AccessCount, and
              * LastAccessed are surfaced so operators can verify recall-time
              * reinforcement is actually moving the values. Without these the
              * reinforcement / decay loop is invisible from the UI. */}
@@ -871,7 +871,7 @@ function MemoryDetailPanel({
                 <span className="font-mono">
                   {typeof memory.confidence === "number"
                     ? memory.confidence.toFixed(3)
-                    : "—"}
+                    : "-"}
                 </span>
               </div>
               <div>
@@ -879,7 +879,7 @@ function MemoryDetailPanel({
                 <span className="font-mono">
                   {typeof memory.importance === "number"
                     ? memory.importance.toFixed(3)
-                    : "—"}
+                    : "-"}
                 </span>
               </div>
               <div>
@@ -893,7 +893,7 @@ function MemoryDetailPanel({
               <div>
                 <span className="text-muted-foreground">Last accessed: </span>
                 <span>
-                  {memory.last_accessed ? formatDate(memory.last_accessed) : "—"}
+                  {memory.last_accessed ? formatDate(memory.last_accessed) : "-"}
                 </span>
               </div>
               <div>
@@ -906,7 +906,7 @@ function MemoryDetailPanel({
               </div>
             </div>
 
-            {/* Actions — only show for users with write access */}
+            {/* Actions: only show for users with write access */}
             {canWrite && (
               <div className="space-y-3 border-t pt-4">
                 {/* Move to another project (e.g. fixing a misfiled memory).
@@ -1171,7 +1171,7 @@ function MemoryBrowser() {
     typeof window !== "undefined" && window.innerWidth < 768,
   );
 
-  // When search/filters/project change, the matching set changes — drop
+  // When search/filters/project change, the matching set changes; drop
   // stale selections so bulk ops don't act on rows the user can no longer
   // see. Infinite scroll drives offset internally; we only need to reset
   // user-visible state here.
@@ -1214,7 +1214,7 @@ function MemoryBrowser() {
   // "page" because the matching set has changed.
   const [selectionScope, setSelectionScope] = useState<"page" | "all-matching">("page");
   const [detailMemoryId, setDetailMemoryId] = useState<string | null>(null);
-  // True when the detail target may be a soft-deleted (superseded) memory —
+  // True when the detail target may be a soft-deleted (superseded) memory:
   // the deep-link from a Merged-paraphrase or Memory-superseded dream-log
   // chip carries ?include_superseded=1 so the detail fetch can still load it.
   // List-row clicks never set this because the list endpoint already hides
@@ -1248,7 +1248,7 @@ function MemoryBrowser() {
   const isSemanticSearch = searchMode === "semantic" && debouncedSearch.length > 0;
 
   // Server-side filter shape. Independent of pagination so it stays stable
-  // across page navigation — important because it's the cache key for
+  // across page navigation; important because it's the cache key for
   // "select all matching".
   const filterOnlyParams: MemoryListParams = useMemo(() => {
     return {
@@ -1274,7 +1274,7 @@ function MemoryBrowser() {
     };
   }, [filters, debouncedSearch, isSemanticSearch]);
 
-  // In browse mode we always pull parent-anchored — the server sends each
+  // In browse mode we always pull parent-anchored: the server sends each
   // parent with its enrichment children inline so a family is never split.
   const groupedListParams: Omit<MemoryListParams, "limit" | "offset"> = useMemo(
     () => ({ ...filterOnlyParams, group_by_parent: true }),
@@ -1310,7 +1310,7 @@ function MemoryBrowser() {
 
   const { available: enrichmentAvailable } = useEnrichmentAvailable();
 
-  // "Select all matching" — fetched directly on user click rather than via a
+  // "Select all matching": fetched directly on user click rather than via a
   // gated useQuery, since the result is consumed once and stored in
   // selectedIds. Tracks fetch-in-progress + truncation info for the UI.
   const [selectingAllMatching, setSelectingAllMatching] = useState(false);
@@ -1336,7 +1336,7 @@ function MemoryBrowser() {
     }
   }
 
-  // Derived data — in browse mode this is the flat list of parents (each may
+  // Derived data: in browse mode this is the flat list of parents (each may
   // carry .children inline). Semantic search stays a flat scored list and
   // ignores the parent-anchored shape.
   const memories: Memory[] = useMemo(() => {
@@ -1433,7 +1433,7 @@ function MemoryBrowser() {
   const hasNextPage = !isSemanticSearch && (listQuery.hasNextPage ?? false);
   const isFetchingNextPage = !isSemanticSearch && (listQuery.isFetchingNextPage ?? false);
 
-  // IntersectionObserver sentinel — fires fetchNextPage as the user scrolls
+  // IntersectionObserver sentinel: fires fetchNextPage as the user scrolls
   // near the end of the list. Only active in infinite-scroll (browse) mode.
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -1454,7 +1454,7 @@ function MemoryBrowser() {
     return () => observer.disconnect();
   }, [isSemanticSearch, hasNextPage, isFetchingNextPage, listQuery]);
 
-  // Available tags — pulled from parents AND any inline children so the
+  // Available tags: pulled from parents AND any inline children so the
   // sidebar surfaces tags that only live on extracted facts.
   const availableTags = useMemo(() => {
     const tagSet = new Set<string>();
@@ -1586,7 +1586,7 @@ function MemoryBrowser() {
       downloadJson(items, "memories-export.json");
       return;
     }
-    // Walk parents and inline children — selection may span both.
+    // Walk parents and inline children: selection may span both.
     const selected: Memory[] = [];
     for (const m of filteredMemories) {
       if (selectedIds.has(m.id)) selected.push(m);
@@ -2012,7 +2012,7 @@ function MemoryBrowser() {
         />
       </div>
 
-      {/* Bulk actions bar — only show write actions if canWrite */}
+      {/* Bulk actions bar: only show write actions if canWrite */}
       {selectedIds.size > 0 && (
         <BulkActionsBar
           selectedCount={selectedIds.size}

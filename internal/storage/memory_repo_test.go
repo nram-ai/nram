@@ -888,7 +888,7 @@ func TestMemoryRepo_ListIDsByNamespaceFiltered_RespectsCap(t *testing.T) {
 		nsID := createTestMemoryNamespace(t, ctx, db)
 		seedFilterMemories(t, ctx, repo, nsID)
 
-		// Cap below total — should truncate.
+		// Cap below total; should truncate.
 		ids, err := repo.ListIDsByNamespaceFiltered(ctx, nsID, MemoryListFilters{}, 2)
 		if err != nil {
 			t.Fatalf("list ids: %v", err)
@@ -897,7 +897,7 @@ func TestMemoryRepo_ListIDsByNamespaceFiltered_RespectsCap(t *testing.T) {
 			t.Fatalf("expected 2 ids capped, got %d", len(ids))
 		}
 
-		// Cap above total — should return everything.
+		// Cap above total; should return everything.
 		ids, err = repo.ListIDsByNamespaceFiltered(ctx, nsID, MemoryListFilters{}, 100)
 		if err != nil {
 			t.Fatalf("list ids unbounded: %v", err)
@@ -1663,7 +1663,7 @@ func TestMemoryRepo_ListByNamespaceStale(t *testing.T) {
 }
 
 // TestMemoryRepo_ListByNamespaceStale_AllStamped covers the convergence
-// state where every memory has a fresh stamp — the result must be empty.
+// state where every memory has a fresh stamp; the result must be empty.
 // This is the steady-state shape of a fully-drained namespace.
 func TestMemoryRepo_ListByNamespaceStale_AllStamped(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
@@ -1702,7 +1702,7 @@ func TestMemoryRepo_ListByNamespaceStale_AllStamped(t *testing.T) {
 }
 
 // TestMemoryRepo_ListByNamespaceStale_EmptyNamespace asserts the trivial
-// boundary — listing stale rows in a namespace that has none returns
+// boundary: listing stale rows in a namespace that has none returns
 // an empty (non-nil) slice.
 func TestMemoryRepo_ListByNamespaceStale_EmptyNamespace(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {

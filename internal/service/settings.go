@@ -119,7 +119,7 @@ const (
 	// interpreted relative to the cycle TOTAL (not Remaining at phase entry),
 	// so reservations are stable across cycles and operator-tunable.
 	// SQL-only phases default to 0.0, which means "no per-phase slice; share
-	// the root budget" — they run normally because they don't call WrapLLMCall
+	// the root budget": they run normally because they don't call WrapLLMCall
 	// and therefore don't consume the budget. Hot-reloadable per cycle.
 	SettingDreamEntityDedupFraction          = "dreaming.entity_dedup.budget_fraction"
 	SettingDreamEmbeddingBackfillFraction    = "dreaming.embedding_backfill.budget_fraction"
@@ -187,7 +187,7 @@ const (
 
 	// Augmentation-backfill phase. Enqueues query-augmentation enrichment jobs
 	// for live memories whose embedding was never built from augmented queries
-	// (augmented_embedding_at IS NULL) — e.g. dream syntheses or stores whose
+	// (augmented_embedding_at IS NULL), e.g. dream syntheses or stores whose
 	// augmentation step was skipped because the augment provider was briefly
 	// unavailable. Automates what the admin "backfill augmentation" button does,
 	// so stranded rows self-heal each cycle. Enqueue-only (no LLM calls in the
@@ -247,7 +247,7 @@ const (
 	// HNSW (pure-Go SQLite-backed vector index) tuning. All four are read
 	// once at boot when the HNSW cache is constructed, so changes require a
 	// server restart. M and EfConstruction additionally only affect newly-
-	// built indexes — existing indexes carry their construction-time values
+	// built indexes: existing indexes carry their construction-time values
 	// in their on-disk snapshot.
 	SettingHNSWM                = "hnsw.m"
 	SettingHNSWEfConstruction   = "hnsw.ef_construction"
@@ -311,7 +311,7 @@ const (
 	// Mirror the dreaming.stuck_* / dreaming.heartbeat_interval_seconds
 	// design: workers tick heartbeat_at every HeartbeatSeconds while a job
 	// is claimed; the StuckJobSweeper triggers on updated_at staleness past
-	// StuckThreshold (the safer signal — heartbeat is for diagnostics) and
+	// StuckThreshold (the safer signal, heartbeat is for diagnostics) and
 	// requeues stuck rows on a SweepSeconds cadence. Threshold must exceed
 	// the longest legitimate batch runtime so a slow LLM is not mistaken
 	// for a dead worker.
@@ -331,17 +331,17 @@ const (
 
 	// Retention for permanently-failed enrichment jobs. The StuckJobSweeper
 	// hard-deletes rows in status='failed' whose updated_at is older than this
-	// many days so the failed backlog cannot grow without bound — a single-GPU
+	// many days so the failed backlog cannot grow without bound: a single-GPU
 	// local provider routinely accumulates tens of thousands of failed jobs
 	// that nothing else ever reaps. 0 disables pruning. Default 7 days: after a
-	// week a failed job is stale — its memory's content has almost certainly
-	// moved on — so reaping it keeps the queue lean.
+	// week a failed job is stale (its memory's content has almost certainly
+	// moved on), so reaping it keeps the queue lean.
 	SettingEnrichmentFailedRetentionDays = "enrichment.failed_retention_days"
 
 	// Fact and entity extraction LLM-call tunables. Resolved per call by both
 	// ExtractionService (sync HTTP path) and WorkerPool (async queue worker)
 	// so changes hot-reload within the cascade cache TTL. max_tokens caps
-	// completion tokens — raise when high-density inputs hit
+	// completion tokens; raise when high-density inputs hit
 	// finish_reason=length. repeat_penalty / top_k / min_p are Ollama
 	// extensions, gated by the provider type at the OpenAIProvider layer
 	// (strict OpenAI never sees them). Temperature is split sync vs async
@@ -370,7 +370,7 @@ const (
 	// "no recent activity" when now() - heartbeat_at > HeartbeatStale. The
 	// abandon button (and the StuckCycleSweeper) fire only when
 	// now() - updated_at > StuckThreshold, which is intentionally
-	// conservative — it must exceed the longest legitimate single-phase
+	// conservative: it must exceed the longest legitimate single-phase
 	// runtime so we never abandon a cycle that might still complete.
 	SettingDreamHeartbeatInterval = "dreaming.heartbeat_interval_seconds"
 	SettingDreamHeartbeatStale    = "dreaming.heartbeat_stale_seconds"
@@ -393,7 +393,7 @@ const (
 	// WebAuthn, setup). refresh_threshold is how stale an in-flight session
 	// JWT must be before the auth middleware silently reissues it via the
 	// X-Refreshed-Token response header. Both hot-reload via the settings
-	// cache. The threshold should be less than the TTL — otherwise refresh
+	// cache. The threshold should be less than the TTL; otherwise refresh
 	// will never fire and the session collapses back to the fixed-TTL
 	// (force-relogin) behavior.
 	SettingAuthSessionTokenTTLSeconds         = "auth.session_token_ttl_seconds"
@@ -401,8 +401,8 @@ const (
 
 	// In-process event bus. subscriber_buffer_size is the per-subscriber
 	// channel buffer (drops events on full); replay_capacity is the ring
-	// buffer for SSE Last-Event-ID reconnection. Both read once at startup
-	// — wrong values can stall subscribers or balloon memory, so both are
+	// buffer for SSE Last-Event-ID reconnection. Both read once at startup:
+	// wrong values can stall subscribers or balloon memory, so both are
 	// restart-required and flagged as advanced in their descriptions.
 	SettingEventsSubscriberBufferSize = "events.subscriber_buffer_size"
 	SettingEventsReplayCapacity       = "events.replay_capacity"
@@ -425,7 +425,7 @@ const (
 	// Graph visualization d3-force parameters. System defaults are used when a
 	// project has not stored its own override. center_gravity is the centering
 	// force strength (forceCenter); charge_strength is the many-body repulsion
-	// (negative values repel — d3 convention; the UI exposes this as a positive
+	// (negative values repel, d3 convention; the UI exposes this as a positive
 	// "repulsion" knob and flips the sign at the boundary); link_distance is
 	// the target edge length passed to forceLink. Per-project overrides ship
 	// through the project settings JSON; per-cycle reads happen client-side, so
@@ -448,7 +448,7 @@ const (
 	// so the default works in dev without operator setup. TTLHours bounds how
 	// long a completed artifact survives before the cleanup sweep deletes it
 	// and flips the row to status='expired'. MaxPerUserPerDay caps how many
-	// exports a single user can enqueue in a rolling 24h window — prevents one
+	// exports a single user can enqueue in a rolling 24h window, which prevents one
 	// account from queueing hundreds of large zips.
 	SettingExportArtifactDir      = "export.artifact_dir"
 	SettingExportTTLHours         = "export.ttl_hours"
@@ -488,7 +488,7 @@ const (
 
 	// Pruning thresholds. relationship_weight_threshold gates the active
 	// relationship expiry pass AND the mid-cycle expiry inside the weight
-	// adjustment phase — both must read the same key so they cannot drift.
+	// adjustment phase: both must read the same key so they cannot drift.
 	// effectively_zero is the upper bound for the zero-confidence prune
 	// branch (catches contradiction-haircut underflow that an exact `== 0`
 	// check would miss).
@@ -517,7 +517,7 @@ const (
 	// edge floors at decay_factor^max_periods (~0.60 with defaults).
 	// dead_source_multiplier is the halving applied when an edge's recorded
 	// singular source memory is soft-deleted AND no live memory still attests
-	// the edge. ceiling clamps recomputed weights — informational only for
+	// the edge. ceiling clamps recomputed weights: informational only for
 	// existing rows above the cap until they're naturally rewritten.
 	SettingDreamWeightTier2Multiplier      = "dreaming.weight.tier2_multiplier"
 	SettingDreamWeightDecayWindowDays      = "dreaming.weight.decay_window_days"
@@ -554,7 +554,7 @@ const (
 
 	// Stuck-scan caps. Bounds a single ListStale / ListStaleClaimed call so
 	// a flood doesn't lock the writer. Distinct keys for dreaming and
-	// enrichment so the two can be tuned independently — the workloads have
+	// enrichment so the two can be tuned independently: the workloads have
 	// different stuck-job cardinalities under load.
 	SettingDreamStuckScanLimit      = "dreaming.stuck_scan_limit"
 	SettingEnrichmentStuckScanLimit = "enrichment.stuck_scan_limit"
@@ -758,7 +758,7 @@ A new memory has just arrived. Below is its content, followed by up to %d candid
 Choose exactly one operation:
 - "ADD": the new memory is genuinely distinct from every candidate; keep it as a separate row.
 - "UPDATE": the new memory is an updated, more specific, more recent, or otherwise improved version of one specific candidate. The old candidate should be marked superseded by the new memory.
-- "DELETE": the new memory is itself redundant — every fact it states is already present in one of the candidates, which remains the canonical record. Discard the new memory.
+- "DELETE": the new memory is itself redundant: every fact it states is already present in one of the candidates, which remains the canonical record. Discard the new memory.
 - "NONE": the new memory overlaps with one or more candidates but is not a clean update or duplicate (e.g. partial overlap, different aspect of the same topic). Keep the new memory but do not record any lineage edge.
 
 Hard rules:
@@ -793,7 +793,7 @@ or
 
 Given the memory content below, generate {N} short, distinct natural-language questions or phrases a user might use to retrieve this memory. Vary the phrasings: cover synonyms, partial-fact lookups, and the most likely way the information would be asked about. Keep each query under 120 characters and avoid restating the memory verbatim.
 
-OUTPUT FORMAT — read carefully:
+OUTPUT FORMAT, read carefully:
 - Output ONLY a JSON array of strings.
 - EVERY element MUST be wrapped in DOUBLE QUOTES ("..."). Not single quotes. Not backticks. Not bare words.
 - No prose before or after the array. No markdown fences (no ` + "```" + `). No trailing commas. No comments.
@@ -858,7 +858,7 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 
 	// Concurrency-shaped defaults are intentionally set to 1 ("safe-for-Ollama").
 	// A 1-GPU local provider (Ollama on a workstation, llama.cpp, etc.) is the
-	// most common nram backend and the easiest to overload — concurrent calls
+	// most common nram backend and the easiest to overload: concurrent calls
 	// queue at the model level and look like deadlocks to the operator. The
 	// startup load-warning helper (internal/service/load_warnings.go) flags
 	// any of these knobs raised above 1 so an operator who is intentionally
@@ -1011,7 +1011,7 @@ func GetDefault(key string) (string, bool) {
 
 // GetDefaultFloat returns the registered float default for key. Panics if
 // the key has no registered default or its default is not parseable as a
-// float — both are programmer errors, surfaced eagerly so a typo cannot
+// float: both are programmer errors, surfaced eagerly so a typo cannot
 // silently fall through to a zero value at runtime.
 func GetDefaultFloat(key string) float64 {
 	def, ok := settingDefaults[key]
@@ -1040,7 +1040,7 @@ func GetDefaultInt(key string) int {
 }
 
 // ResolveOrDefault returns the configured value for key, treating an empty
-// stored value as "use the default" — appropriate for prompt-shaped settings
+// stored value as "use the default", appropriate for prompt-shaped settings
 // where "" is never a valid configuration. A nil settings pointer routes
 // straight to GetDefault, so test callers can pass a typed nil without a
 // guard. A *SettingsService parameter (rather than an interface) sidesteps
@@ -1091,7 +1091,7 @@ type SettingsService struct {
 // NewSettingsService creates a new SettingsService with the given repository.
 // The cache TTL is bootstrapped from the registered default for
 // SettingSettingsCacheTTLSeconds because the service itself is the resolver
-// for that key — using the resolver before it has a TTL would self-reference.
+// for that key: using the resolver before it has a TTL would self-reference.
 // Operators wanting to change the cache TTL must update the setting and
 // restart.
 func NewSettingsService(repo SettingsRepository) *SettingsService {
@@ -1105,7 +1105,7 @@ func NewSettingsService(repo SettingsRepository) *SettingsService {
 		cache:    make(map[string]settingsCacheEntry),
 		cacheTTL: time.Duration(secs) * time.Second,
 	}
-	// Promote a stored value if present — Resolve goes through the repo,
+	// Promote a stored value if present: Resolve goes through the repo,
 	// not through s.cache, so this lookup is safe even before cacheTTL is
 	// finalized.
 	if repo != nil {
@@ -1207,7 +1207,7 @@ func (s *SettingsService) InvalidateAllCache() {
 // range filter, returning fallback when the configured value is missing,
 // unparseable, or outside [min, max]. Used for boot-time hydration helpers
 // where the caller wants a single guaranteed-valid float and an explicit
-// default — collapses the common `if v, err := ResolveFloat(...); err == nil
+// default: collapses the common `if v, err := ResolveFloat(...); err == nil
 // && v >= min && v <= max { dst = v }` block.
 func (s *SettingsService) ResolveFloatInRange(ctx context.Context, key, scope string, min, max, fallback float64) float64 {
 	if v, err := s.ResolveFloat(ctx, key, scope); err == nil && v >= min && v <= max {

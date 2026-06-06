@@ -34,11 +34,11 @@ type sweeperSettingsResolver interface {
 // auto-requeues them via Retry semantics (attempts++ so a genuine
 // poison-pill memory still hits max_attempts and stops looping):
 //
-//   - updated_at staleness past enrichment.stuck_threshold_seconds — the
+//   - updated_at staleness past enrichment.stuck_threshold_seconds: the
 //     usual signal; a live worker advances updated_at every
 //     enrichment.worker.heartbeat_seconds so a slow LLM call is not
 //     mistaken for a dead worker.
-//   - claimed_at age past enrichment.claim_max_age_seconds — the backstop;
+//   - claimed_at age past enrichment.claim_max_age_seconds: the backstop;
 //     fires regardless of updated_at to recover claims that have outlived
 //     every plausible batch runtime (a wedged provider call still ticking
 //     heartbeats, a sibling instance refreshing under a colliding
@@ -123,7 +123,7 @@ func (s *StuckJobSweeper) run(ctx context.Context) {
 // ensures a row already requeued by another instance returns (false, nil)
 // and is skipped here.
 //
-// Failures on individual rows are logged and the loop continues — one bad
+// Failures on individual rows are logged and the loop continues; one bad
 // row should not block recovery of the rest of the batch. A failure to even
 // list the stale rows is returned as an error so the run loop can log it.
 //
@@ -143,7 +143,7 @@ func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
 	// claimMaxAge is the backstop signal. An operator may explicitly set it
 	// to 0 (or below) to disable the cap and rely solely on updated_at
 	// staleness; ListStaleClaimed's predicate has `(? > 0 AND ...)` gating
-	// for exactly this case. Only normalize negatives to 0 — leave zero
+	// for exactly this case. Only normalize negatives to 0; leave zero
 	// alone so it reaches the predicate as "disabled".
 	claimMaxAge := max(s.settings.ResolveDurationSecondsWithDefault(ctx,
 		service.SettingEnrichmentClaimMaxAge, "global"), 0)

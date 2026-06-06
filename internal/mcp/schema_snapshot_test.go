@@ -59,8 +59,8 @@ func TestGraphResponseSchemaSnapshot(t *testing.T) {
 // time via schemaFor[mcpRecallResponse]() and shipped in tools/list, where
 // strict clients (Claude.ai, Cursor) may validate tool results against it.
 // The per-memory element type is recallview.Memory (aliased as
-// mcpRecallMemory), so any change to the recalled-memory wire shape —
-// confidence, low_novelty, derived_from, the dropped internal fields — must be
+// mcpRecallMemory), so any change to the recalled-memory wire shape
+// (confidence, low_novelty, derived_from, the dropped internal fields) must be
 // reflected here, or it is a silent contract change.
 //
 // Run with -update-schema-snapshots after an intentional change to

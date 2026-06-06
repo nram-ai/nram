@@ -141,7 +141,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 
 	// Collect namespaces to query: always the specified project, plus global
 	// when a non-global project is specified (consistent with memory_recall).
-	// Share-bearer callers stay project-only — the owner's global namespace
+	// Share-bearer callers stay project-only; the owner's global namespace
 	// is not implicitly part of any share.
 	namespaces := []uuid.UUID{project.NamespaceID}
 	nsIDToSlug := map[uuid.UUID]string{project.NamespaceID: projectSlug}

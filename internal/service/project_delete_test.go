@@ -87,7 +87,7 @@ func seedProject(t *testing.T) *fixtures {
 	// Owner namespace (kind=user); target and global project namespaces hang
 	// off it. Migrations seed the root (zero-UUID) namespace, so the org slot
 	// would be the parent of the owner; for cascade purposes a flat layout is
-	// enough — the cascade only deletes the target project's own namespace.
+	// enough: the cascade only deletes the target project's own namespace.
 	rootID := uuid.MustParse("00000000-0000-0000-0000-000000000000")
 	ownerID := uuid.New()
 	owner := &model.Namespace{
@@ -319,7 +319,7 @@ func TestProjectDelete_TokenUsageReassigned(t *testing.T) {
 	}
 }
 
-// TestProjectDelete_CascadeWithDreamCycleTokenUsage — the project-delete
+// TestProjectDelete_CascadeWithDreamCycleTokenUsage: the project-delete
 // cascade drops the project row, which CASCADE-deletes any dream_cycles
 // rows. Without ON DELETE SET NULL on token_usage.cycle_id, that
 // CASCADE-delete fails when token_usage rows still reference the cycle,
@@ -518,7 +518,7 @@ func TestProjectDelete_CascadeWithEntityAliases(t *testing.T) {
 	}
 }
 
-// TestProjectDelete_RejectsGlobal — deleting the global project itself is
+// TestProjectDelete_RejectsGlobal: deleting the global project itself is
 // always refused, since the cascade redirects token_usage to global.
 func TestProjectDelete_RejectsGlobal(t *testing.T) {
 	ctx := context.Background()
@@ -538,7 +538,7 @@ func TestProjectDelete_RejectsGlobal(t *testing.T) {
 	}
 }
 
-// TestProjectDelete_RejectsAboutMe — the reserved about_me persona project is
+// TestProjectDelete_RejectsAboutMe: the reserved about_me persona project is
 // undeletable for the same reason as global, via the shared reserved-slug guard.
 func TestProjectDelete_RejectsAboutMe(t *testing.T) {
 	ctx := context.Background()
@@ -578,7 +578,7 @@ func TestProjectDelete_RejectsAboutMe(t *testing.T) {
 	}
 }
 
-// TestProjectDelete_NoGlobalProject — if the owner has no global project
+// TestProjectDelete_NoGlobalProject: if the owner has no global project
 // to receive reassigned token_usage, the cascade refuses up front rather
 // than orphaning billing data.
 func TestProjectDelete_NoGlobalProject(t *testing.T) {
@@ -610,7 +610,7 @@ func TestProjectDelete_NoGlobalProject(t *testing.T) {
 	}
 }
 
-// TestProjectDelete_ProjectNotFound — bogus project ID returns an error
+// TestProjectDelete_ProjectNotFound: bogus project ID returns an error
 // without touching any rows.
 func TestProjectDelete_ProjectNotFound(t *testing.T) {
 	ctx := context.Background()
@@ -622,7 +622,7 @@ func TestProjectDelete_ProjectNotFound(t *testing.T) {
 	}
 }
 
-// TestProjectDelete_TxRollsBackOnFailure — when a deleter inside the cascade
+// TestProjectDelete_TxRollsBackOnFailure: when a deleter inside the cascade
 // errors, the transaction must roll back. Nothing the cascade touched should
 // remain in a half-deleted state.
 func TestProjectDelete_TxRollsBackOnFailure(t *testing.T) {

@@ -34,7 +34,7 @@ const (
 )
 
 // ExportJob represents a queued or completed export request. One row per
-// user request. Memory content never leaves this row — the worker writes
+// user request. Memory content never leaves this row; the worker writes
 // it to a filesystem artifact whose path is captured in ArtifactPath.
 type ExportJob struct {
 	ID                uuid.UUID  `json:"id"`

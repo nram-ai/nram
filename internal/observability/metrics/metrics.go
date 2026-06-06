@@ -28,15 +28,15 @@ type Metrics struct {
 
 	// MCPToolResultTruncations counts how often a tool response did not
 	// arrive naturally at Tier 1. Tier values:
-	//   "tier1_reduced"  — fit the structured budget but only after the
+	//   "tier1_reduced":   fit the structured budget but only after the
 	//                      reducer discarded data. Structurally Tier 1,
 	//                      but the caller received less than they asked
 	//                      for. Operators watch this to spot tools whose
 	//                      callers consistently exceed budget.
-	//   "text_only"      — fit the full text budget but not the halved
+	//   "text_only":       fit the full text budget but not the halved
 	//                      structured budget. Data is complete; only the
 	//                      structured wire copy was dropped.
-	//   "hard_truncate"  — even the reduced text exceeded budget; body
+	//   "hard_truncate":   even the reduced text exceeded budget; body
 	//                      byte-cut with a sentinel suffix. Alert on this.
 	// Natural Tier 1 (no reducer iteration) is the no-truncation baseline
 	// and does not increment the counter.
@@ -97,7 +97,7 @@ func New() *Metrics {
 
 		MemoriesForgotten: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "nram_memories_forgotten_total",
-			Help: "Total number of individual memories forgotten (one increment per deleted row, not per forget request — a bulk-forget request deleting N memories increments by N).",
+			Help: "Total number of individual memories forgotten (one increment per deleted row, not per forget request: a bulk-forget request deleting N memories increments by N).",
 		}),
 
 		EnrichmentsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -129,7 +129,7 @@ func New() *Metrics {
 
 		MCPToolResultTruncations: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "nram_mcp_tool_result_truncation_total",
-			Help: "MCP tool responses that did not arrive at natural Tier 1. tier=tier1_reduced|text_only|hard_truncate. tier1_reduced: the reducer ran at least one iteration and the result still fit the structured tier. text_only: result fits the text budget but not the halved structured budget — the response body MAY carry a populated `_truncated` envelope (i.e. the reducer also dropped data); inspect the response to distinguish 'fit naturally as text' from 'fit only after reducer'. hard_truncate: even the reduced payload exceeded the text budget and was byte-cut with the sentinel suffix. Operators alert on hard_truncate; tier1_reduced is the early signal that a tool's callers exceed budget.",
+			Help: "MCP tool responses that did not arrive at natural Tier 1. tier=tier1_reduced|text_only|hard_truncate. tier1_reduced: the reducer ran at least one iteration and the result still fit the structured tier. text_only: result fits the text budget but not the halved structured budget; the response body MAY carry a populated `_truncated` envelope (i.e. the reducer also dropped data); inspect the response to distinguish 'fit naturally as text' from 'fit only after reducer'. hard_truncate: even the reduced payload exceeded the text budget and was byte-cut with the sentinel suffix. Operators alert on hard_truncate; tier1_reduced is the early signal that a tool's callers exceed budget.",
 		}, []string{"tool", "tier"}),
 
 		memoriesRecalledLegacy: prometheus.NewCounter(prometheus.CounterOpts{
@@ -185,7 +185,7 @@ func (m *Metrics) AddMemoriesForgotten(n float64) {
 // RecordMCPToolResultTier increments the MCP tool-result truncation
 // counter. tool is the wire-level tool name ("list", "recall", etc.);
 // tier is "text_only" (Tier 2) or "hard_truncate" (Tier 3). Tier 1
-// (schema-conforming) responses do not increment — only degradations
+// (schema-conforming) responses do not increment; only degradations
 // are counted. Nil-safe for tests that wire a zero-value Metrics.
 func (m *Metrics) RecordMCPToolResultTier(tool, tier string) {
 	if m == nil || m.MCPToolResultTruncations == nil {
@@ -196,7 +196,7 @@ func (m *Metrics) RecordMCPToolResultTier(tool, tier string) {
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.
 // Flush/Hijack/Unwrap delegate so streaming handlers (SSE, MCP) keep
-// working through this middleware — without them, w.(http.Flusher) fails
+// working through this middleware; without them, w.(http.Flusher) fails
 // and the endpoint 500s.
 type statusRecorder struct {
 	http.ResponseWriter

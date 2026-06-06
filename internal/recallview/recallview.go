@@ -1,6 +1,6 @@
 // Package recallview holds the canonical per-memory shape for the recall
-// response and the single projection that produces it. Both transports — the
-// REST recall handlers (internal/api) and the MCP recall tool (internal/mcp) —
+// response and the single projection that produces it. Both transports (the
+// REST recall handlers (internal/api) and the MCP recall tool (internal/mcp))
 // serialize this exact type, so a recalled memory is byte-identical across the
 // wire regardless of which surface returned it.
 //
@@ -8,7 +8,7 @@
 // stamp-key constants from internal/dreaming, but internal/dreaming imports
 // internal/service (so service cannot host this), and internal/api must not
 // import internal/mcp (so mcp cannot host it for REST's use). recallview imports
-// only service, dreaming, and model — no cycle, importable by both transports.
+// only service, dreaming, and model: no cycle, importable by both transports.
 package recallview
 
 import (
@@ -143,8 +143,8 @@ func Project(m service.RecallResult, opts Options) Memory {
 
 // splitMetadata hoists source_memory_ids into DerivedFrom and low_novelty into
 // the typed bool, then returns the metadata residual after stripping the
-// bookkeeping keys per opts. A malformed metadata blob yields (nil, false, nil)
-// — the projector drops it rather than passing UUIDs or noise the agent cannot
+// bookkeeping keys per opts. A malformed metadata blob yields (nil, false, nil);
+// the projector drops it rather than passing UUIDs or noise the agent cannot
 // use. The residual is re-marshaled from a map, so its keys serialize in a
 // deterministic (sorted) order, which is what makes the two transports
 // byte-identical.

@@ -37,8 +37,8 @@ func TestEmit_NilSliceSanitized(t *testing.T) {
 	payload := memoryPayload{
 		ID:      "mem-1",
 		Content: "hello",
-		Tags:    nil, // nil slice — must become []
-		Meta:    nil, // nil json.RawMessage — must become {}
+		Tags:    nil, // nil slice: must become []
+		Meta:    nil, // nil json.RawMessage: must become {}
 	}
 
 	Emit(context.Background(), bus, MemoryCreated, "project:abc", payload)

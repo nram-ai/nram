@@ -8,7 +8,7 @@ import (
 // DreamingEnabledOverride captures a sparse per-namespace override for
 // whether dreaming runs on a project. A nil Enabled means "fall through to
 // the system-level dreaming.enabled setting." Mirrors EnrichmentEnabledOverride
-// — same parse/merge contract — so cascade resolution composes uniformly.
+// (same parse/merge contract), so cascade resolution composes uniformly.
 type DreamingEnabledOverride struct {
 	Enabled *bool
 }

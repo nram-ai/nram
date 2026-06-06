@@ -75,7 +75,7 @@ func TestParseFacts_RecoverArrayPrefix(t *testing.T) {
 
 func TestParseFacts_DegenerateLoopDeduped(t *testing.T) {
 	// Clean parse, but the array contains the degenerate-loop pattern. The
-	// current contract dedupes only on recovery — clean parses preserve
+	// current contract dedupes only on recovery: clean parses preserve
 	// duplicates so an operator can see the pattern. Verify that contract.
 	facts, partial, err := parseFacts(degenerateLoopFactArray)
 	if err != nil {

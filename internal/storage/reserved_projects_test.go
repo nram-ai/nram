@@ -131,7 +131,7 @@ func TestListByNamespaceFramingOrder_CompositeOrder(t *testing.T) {
 		}
 
 		// A: top mention. B,C: equal mid mention (B has more recalls than C).
-		// D: no linked entities (mention 0) but the highest access_count — must
+		// D: no linked entities (mention 0) but the highest access_count; must
 		// still sort last because mention dominates.
 		memA := mk("A high mention", 0, 4*time.Minute)
 		memB := mk("B mid mention, more recalls", 5, 3*time.Minute)

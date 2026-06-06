@@ -124,7 +124,7 @@ func TestPrivacy_SelfTierWideningIgnored(t *testing.T) {
 		"/v1/namespaces/tree",
 	} {
 		t.Run(path, func(t *testing.T) {
-			// Admin with widening params — must still succeed (200), and
+			// Admin with widening params, must still succeed (200), and
 			// the handler internally pins to admin's own scope. We can't
 			// observe the scope from outside without a mock, but the
 			// per-handler unit tests in internal/api cover that.
@@ -138,7 +138,7 @@ func TestPrivacy_SelfTierWideningIgnored(t *testing.T) {
 
 // TestPrivacy_TenancyListsAreMetadataOnly verifies the response shapes
 // of /v1/admin/orgs and /v1/admin/users carry no per-row memory/usage/
-// content fields — only tenancy metadata. Recursive JSON walk asserts
+// content fields, only tenancy metadata. Recursive JSON walk asserts
 // no key named "content" or "summary" appears anywhere in the response.
 func TestPrivacy_TenancyListsAreMetadataOnly(t *testing.T) {
 	env := newRRTestEnv(t)

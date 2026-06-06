@@ -12,7 +12,7 @@ ALTER TABLE memories ADD COLUMN origin TEXT NOT NULL DEFAULT 'user';
 --            preserves each item's ORIGINAL source on the memory row (the
 --            '<format>-import' label only lands in ingestion_log.source), so
 --            historical nram imports carry no row-level marker and cannot be
---            reclassified here — they remain 'user'. New imports of every format
+--            reclassified here: they remain 'user'. New imports of every format
 --            are tagged Origin=OriginImport at write time.
 UPDATE memories SET origin = 'dream'  WHERE source = 'dream';
 UPDATE memories SET origin = 'import' WHERE source IN ('mem0-import', 'zep-import');

@@ -11,7 +11,7 @@ import (
 )
 
 // OpenRouter routes inference through the OpenAI-compatible adapter, but its
-// /api/v1/models endpoint exposes a richer schema than vanilla OpenAI —
+// /api/v1/models endpoint exposes a richer schema than vanilla OpenAI:
 // notably context_length per model, which lets the admin UI display the
 // runtime limit alongside the model name.
 
@@ -31,7 +31,7 @@ type openRouterModel struct {
 // OpenRouterContextLength looks up the configured model in OpenRouter's
 // public /models catalog and returns its context_length. Returns 0 (no
 // error) when the response decodes successfully but the model id is not
-// present in the catalog — the caller treats that as "unknown."
+// present in the catalog; the caller treats that as "unknown."
 //
 // baseURL is the slot's configured URL; it is normalized to strip the
 // trailing /chat/completions or similar so the /models endpoint is reachable

@@ -80,7 +80,7 @@ func TestTokenBudget_SubSliceCanAffordRespectsBothLevels(t *testing.T) {
 		t.Error("CanAfford(60) should be false because parent cannot afford it")
 	}
 	if !child.CanAfford(50) {
-		t.Error("CanAfford(50) should be true — fits both parent and child")
+		t.Error("CanAfford(50) should be true: fits both parent and child")
 	}
 }
 

@@ -23,7 +23,7 @@ func extractSubPath(path, marker string) string {
 
 // Three explicit scope helpers, one per data-visibility tier. Each handler
 // reads exactly one of these at construction or invocation time. There is
-// no "widening" primitive — the path itself encodes which tier the handler
+// no "widening" primitive; the path itself encodes which tier the handler
 // belongs to (see plan: tier A self / tier B org-aggregate / tier C system).
 //
 // Removed in 2026-04-30 leak fix:
@@ -34,7 +34,7 @@ func extractSubPath(path, marker string) string {
 //
 // Tier-A handlers (caller's own data) call SelfScope.
 // Tier-B handlers (org aggregate) call OrgScope and gate on requireOrgOwner.
-// Tier-C handlers (system aggregate) need no helper — admin gate at router
+// Tier-C handlers (system aggregate) need no helper; admin gate at router
 // level pins the visibility, and the response shape carries no per-tenant
 // row-level data.
 
@@ -54,7 +54,7 @@ func SelfScope(ac *auth.AuthContext) (orgID, userID *uuid.UUID) {
 // OrgScope reads the {org_id} URL param for tier-B handlers. Returns
 // (nil, false) if absent or malformed. Caller must already have passed
 // OrgAccessMiddleware (membership/admin check) AND requireOrgOwner before
-// trusting this scope — OrgAccessMiddleware alone lets members through,
+// trusting this scope; OrgAccessMiddleware alone lets members through,
 // which is too permissive for org-aggregate views.
 func OrgScope(r *http.Request) (orgID *uuid.UUID, ok bool) {
 	raw := chi.URLParam(r, "org_id")

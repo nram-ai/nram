@@ -44,7 +44,7 @@ const (
 )
 
 // classifyError maps a provider error to a bounded enum code. Keep the set
-// small — analytics consumers should be able to enumerate it.
+// small; analytics consumers should be able to enumerate it.
 func classifyError(err error) string {
 	if err == nil {
 		return ""
@@ -138,7 +138,7 @@ func (u *UsageRecordingLLM) record(
 
 	// Fire the Prometheus counter BEFORE the synchronous DB write. A
 	// panic or hang in u.recorder.Record must not drop the in-process
-	// metric — the counter is the always-on observability signal; the DB
+	// metric; the counter is the always-on observability signal; the DB
 	// row is the durable best-effort audit.
 	if u.counter != nil {
 		u.counter(u.inner.Name(), string(op), float64(promptTokens+completionTokens))
@@ -228,7 +228,7 @@ func (u *UsageRecordingEmbedding) record(
 		}
 	}
 
-	// Counter before Record — see UsageRecordingLLM.record for rationale.
+	// Counter before Record; see UsageRecordingLLM.record for rationale.
 	if u.counter != nil {
 		u.counter(u.inner.Name(), string(op), float64(promptTokens))
 	}
@@ -258,7 +258,7 @@ func recordingContext(ctx context.Context) (context.Context, context.CancelFunc)
 }
 
 // operationOrUnknown returns the operation stamped on ctx, or
-// OperationUnknown — and warns with a stack trace when one is missing so the
+// OperationUnknown, and warns with a stack trace when one is missing so the
 // gap can be tracked back to the call site.
 func operationOrUnknown(ctx context.Context, providerName string) Operation {
 	if op, ok := OperationFromContext(ctx); ok && op != "" {

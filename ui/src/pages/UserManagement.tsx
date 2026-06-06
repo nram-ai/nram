@@ -688,7 +688,7 @@ function UserDetailPanel({
   const [editRole, setEditRole] = useState("");
   const [editDisabled, setEditDisabled] = useState(false);
   // Sparse user-scope overrides: undefined = "inherit system default."
-  // ranking_weights is intentionally absent — the cascade for weights lands
+  // ranking_weights is intentionally absent: the cascade for weights lands
   // at project, not user, and the API rejects user-scope ranking_weights
   // with a 400. Migration 000026/000023 strips the dead field from
   // existing rows; the parser here ignores it on read for safety.
@@ -897,7 +897,7 @@ function UserDetailPanel({
               <span>{formatDate(user.last_login)}</span>
             </div>
 
-            {/* Per-user settings — sparse overrides for the user's personal
+            {/* Per-user settings: sparse overrides for the user's personal
              * namespace. Apply only when memories live in the user's own
              * namespace (project memories use project-scope overrides).
              * Ranking weight preferences moved to project settings. */}

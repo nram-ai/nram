@@ -483,7 +483,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		AdminUsage:     api.NewAdminUsageHandler(api.UsageConfig{Store: &rrUsageStore{}}),
 
 		// Tier-B (org-aggregate) and tier-C (system-aggregate) stub
-		// handlers for test purposes — return empty 200. Real wiring is
+		// handlers for test purposes: return empty 200. Real wiring is
 		// in cmd/server/main.go.
 		OrgDashboard:    rrEmptyOK,
 		OrgActivity:     rrEmptyOK,
@@ -554,7 +554,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 1 — Admin-only routes (/v1/admin/*)
+// Test: Tier 1, Admin-only routes (/v1/admin/*)
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier1_AdminOnly(t *testing.T) {
@@ -593,7 +593,7 @@ func TestRouteRestructure_Tier1_AdminOnly(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 2 — Scoped data-viewing routes (readonly+)
+// Test: Tier 2, Scoped data-viewing routes (readonly+)
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier2_ScopedDataViewing(t *testing.T) {
@@ -633,7 +633,7 @@ func TestRouteRestructure_Tier2_ScopedDataViewing(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 3 — Enrichment (read=all, write=admin only)
+// Test: Tier 3, Enrichment (read=all, write=admin only)
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier3_Enrichment(t *testing.T) {
@@ -651,7 +651,7 @@ func TestRouteRestructure_Tier3_Enrichment(t *testing.T) {
 		{"service", env.OrgAService.JWT, auth.RoleService},
 	}
 
-	// GET /v1/admin/enrichment — admin=200, all others=403 (admin-only ops surface).
+	// GET /v1/admin/enrichment: admin=200, all others=403 (admin-only ops surface).
 	// 2026-04-30 leak fix moved this from /v1/enrichment (any-auth) to admin-only.
 	t.Run("GET_enrichment_read", func(t *testing.T) {
 		for _, u := range users {
@@ -666,7 +666,7 @@ func TestRouteRestructure_Tier3_Enrichment(t *testing.T) {
 		}
 	})
 
-	// POST /v1/enrichment/retry — admin=200, all others=403
+	// POST /v1/enrichment/retry: admin=200, all others=403
 	t.Run("POST_enrichment_retry", func(t *testing.T) {
 		for _, u := range users {
 			t.Run(u.name, func(t *testing.T) {
@@ -681,7 +681,7 @@ func TestRouteRestructure_Tier3_Enrichment(t *testing.T) {
 		}
 	})
 
-	// POST /v1/enrichment/pause — admin=200, all others=403
+	// POST /v1/enrichment/pause: admin=200, all others=403
 	t.Run("POST_enrichment_pause", func(t *testing.T) {
 		for _, u := range users {
 			t.Run(u.name, func(t *testing.T) {
@@ -698,7 +698,7 @@ func TestRouteRestructure_Tier3_Enrichment(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 4 — Org-scoped management (org_owner+)
+// Test: Tier 4, Org-scoped management (org_owner+)
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier4_OrgManagement(t *testing.T) {
@@ -741,7 +741,7 @@ func TestRouteRestructure_Tier4_OrgManagement(t *testing.T) {
 		})
 	}
 
-	// POST /v1/orgs/{org_id}/users — create user
+	// POST /v1/orgs/{org_id}/users: create user
 	t.Run("POST_orgs_orgA_users", func(t *testing.T) {
 		cases := []struct {
 			name   string
@@ -773,7 +773,7 @@ func TestRouteRestructure_Tier4_OrgManagement(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 5 — Org-scoped data (member+)
+// Test: Tier 5, Org-scoped data (member+)
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier5_OrgData(t *testing.T) {
@@ -826,7 +826,7 @@ func TestRouteRestructure_Tier5_OrgData(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 6 — Role escalation prevention
+// Test: Tier 6, Role escalation prevention
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier6_RoleEscalation(t *testing.T) {
@@ -834,7 +834,7 @@ func TestRouteRestructure_Tier6_RoleEscalation(t *testing.T) {
 
 	orgAID := env.OrgA.ID
 
-	// org_owner tries to create a user with administrator role — should be 403
+	// org_owner tries to create a user with administrator role: should be 403
 	t.Run("org_owner_cannot_create_administrator", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users", env.Server.URL, orgAID)
 		body := map[string]any{
@@ -847,7 +847,7 @@ func TestRouteRestructure_Tier6_RoleEscalation(t *testing.T) {
 		rbacExpectStatus(t, resp, http.StatusForbidden)
 	})
 
-	// administrator CAN create a user with administrator role — should be 201
+	// administrator CAN create a user with administrator role: should be 201
 	t.Run("admin_can_create_administrator", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users", env.Server.URL, orgAID)
 		body := map[string]any{
@@ -862,7 +862,7 @@ func TestRouteRestructure_Tier6_RoleEscalation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 6b — Role escalation on UPDATE (not just create)
+// Test: Tier 6b, Role escalation on UPDATE (not just create)
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier6b_UpdateRoleEscalation(t *testing.T) {
@@ -871,7 +871,7 @@ func TestRouteRestructure_Tier6b_UpdateRoleEscalation(t *testing.T) {
 	orgAID := env.OrgA.ID
 	targetUserID := env.OrgAMember.User.ID
 
-	// org_owner tries to UPDATE a user's role to administrator — should be 403
+	// org_owner tries to UPDATE a user's role to administrator: should be 403
 	t.Run("org_owner_cannot_update_to_administrator", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, targetUserID)
 		body := map[string]any{
@@ -893,7 +893,7 @@ func TestRouteRestructure_Tier6b_UpdateRoleEscalation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 6c — Org user GET/DELETE individual user
+// Test: Tier 6c, Org user GET/DELETE individual user
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier6c_OrgUserOperations(t *testing.T) {
@@ -903,14 +903,14 @@ func TestRouteRestructure_Tier6c_OrgUserOperations(t *testing.T) {
 	orgAMemberID := env.OrgAMember.User.ID
 	orgBOwnerID := env.OrgBOwner.User.ID
 
-	// GET specific user in own org — org_owner should succeed
+	// GET specific user in own org: org_owner should succeed
 	t.Run("get_own_org_user", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, orgAMemberID)
 		resp := rbacDoRequest(t, "GET", url, env.OrgAOwner.JWT, nil)
 		rbacExpectStatus(t, resp, http.StatusOK)
 	})
 
-	// GET user from other org via own org endpoint — should return not found
+	// GET user from other org via own org endpoint: should return not found
 	t.Run("get_cross_org_user_via_own_org", func(t *testing.T) {
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, orgBOwnerID)
 		resp := rbacDoRequest(t, "GET", url, env.OrgAOwner.JWT, nil)
@@ -924,7 +924,7 @@ func TestRouteRestructure_Tier6c_OrgUserOperations(t *testing.T) {
 		rbacExpectStatus(t, resp, http.StatusForbidden)
 	})
 
-	// DELETE user — org_owner can delete user in own org
+	// DELETE user: org_owner can delete user in own org
 	// Create a dedicated user to delete so we don't break other tests.
 	t.Run("org_owner_delete_own_org_user", func(t *testing.T) {
 		// First, create a user to delete via the API
@@ -951,7 +951,7 @@ func TestRouteRestructure_Tier6c_OrgUserOperations(t *testing.T) {
 		rbacExpectStatus(t, resp, http.StatusNoContent)
 	})
 
-	// DELETE user — member cannot delete (behind org_owner middleware)
+	// DELETE user: member cannot delete (behind org_owner middleware)
 	t.Run("member_cannot_delete_user", func(t *testing.T) {
 		deleteURL := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, orgAMemberID)
 		resp := rbacDoRequest(t, "DELETE", deleteURL, env.OrgAMember.JWT, nil)
@@ -960,20 +960,20 @@ func TestRouteRestructure_Tier6c_OrgUserOperations(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 7 — Removed admin routes return 404/405 for admin users
+// Test: Tier 7, Removed admin routes return 404/405 for admin users
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier7_RemovedAdminRoutes(t *testing.T) {
 	env := newRRTestEnv(t)
 
-	// Routes that remain unregistered under /v1/admin/* — these are tier-A
+	// Routes that remain unregistered under /v1/admin/*; these are tier-A
 	// self-data surfaces (live at /v1/dashboard, /v1/activity, /v1/analytics,
 	// /v1/usage, /v1/namespaces/tree, /v1/graph) and never had an admin
 	// prefix variant.
 	//
 	// Note: /v1/admin/enrichment and /v1/admin/dreaming WERE added in the
 	// 2026-04-30 leak fix (admin-only system-ops surface) and are NOT
-	// expected to 404 — they live elsewhere in the test suite.
+	// expected to 404; they live elsewhere in the test suite.
 	removedRoutes := []string{
 		"/v1/admin/dashboard",
 		"/v1/admin/activity",
@@ -986,7 +986,7 @@ func TestRouteRestructure_Tier7_RemovedAdminRoutes(t *testing.T) {
 	for _, path := range removedRoutes {
 		t.Run("admin_"+path, func(t *testing.T) {
 			resp := rbacDoRequest(t, "GET", env.Server.URL+path, env.Admin.JWT, nil)
-			// These routes are no longer registered under /v1/admin —
+			// These routes are no longer registered under /v1/admin;
 			// admin passes RequireRole but gets 404/405 from chi (no matching handler).
 			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusForbidden {
 				t.Fatalf("expected 404 or 405 for removed route %s, got %d", path, resp.StatusCode)
@@ -1002,7 +1002,7 @@ func TestRouteRestructure_Tier7_RemovedAdminRoutes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 9 — API key auth on scoped and org routes
+// Test: Tier 9, API key auth on scoped and org routes
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier9_APIKeyAuth(t *testing.T) {
@@ -1030,7 +1030,7 @@ func TestRouteRestructure_Tier9_APIKeyAuth(t *testing.T) {
 		rbacExpectStatus(t, resp, http.StatusForbidden)
 	})
 
-	// Enrichment write via API key — admin only
+	// Enrichment write via API key: admin only
 	t.Run("api_key_enrichment_write_admin", func(t *testing.T) {
 		body := map[string]any{"ids": []string{}}
 		resp := rbacDoRequest(t, "POST", env.Server.URL+"/v1/admin/enrichment/retry", env.Admin.APIKey, body)
@@ -1045,7 +1045,7 @@ func TestRouteRestructure_Tier9_APIKeyAuth(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 10 — Admin accessing other org's scoped routes
+// Test: Tier 10, Admin accessing other org's scoped routes
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Tier10_AdminCrossOrgAccess(t *testing.T) {
@@ -1075,7 +1075,7 @@ func TestRouteRestructure_Tier10_AdminCrossOrgAccess(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Org Users — Update user with display_name change
+// Test: Org Users, Update user with display_name change
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_OrgUsers_UpdateUser(t *testing.T) {
@@ -1111,7 +1111,7 @@ func TestRouteRestructure_OrgUsers_UpdateUser(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Org Users — Validation errors
+// Test: Org Users, Validation errors
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_OrgUsers_Validation(t *testing.T) {
@@ -1174,7 +1174,7 @@ func TestRouteRestructure_OrgUsers_Validation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Org Users — API Key operations
+// Test: Org Users, API Key operations
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_OrgUsers_APIKeys(t *testing.T) {
@@ -1237,7 +1237,7 @@ func TestRouteRestructure_OrgUsers_APIKeys(t *testing.T) {
 
 	// Revoke API key for user in different org returns 404 (authorization check)
 	t.Run("revoke_api_key_cross_org_user", func(t *testing.T) {
-		// Try to revoke OrgA member's key via OrgB user path — should be blocked
+		// Try to revoke OrgA member's key via OrgB user path: should be blocked
 		url := fmt.Sprintf("%s/v1/orgs/%s/users/%s/api-keys/%s",
 			env.Server.URL, orgAID, env.OrgBOwner.User.ID, uuid.New())
 		resp := rbacDoRequest(t, "DELETE", url, env.OrgAOwner.JWT, nil)
@@ -1246,7 +1246,7 @@ func TestRouteRestructure_OrgUsers_APIKeys(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Org Users — Method not allowed
+// Test: Org Users, Method not allowed
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_OrgUsers_MethodNotAllowed(t *testing.T) {
@@ -1262,7 +1262,7 @@ func TestRouteRestructure_OrgUsers_MethodNotAllowed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Org IdP — Non-GET methods return 501
+// Test: Org IdP, Non-GET methods return 501
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_OrgIdP_Implemented(t *testing.T) {
@@ -1284,7 +1284,7 @@ func TestRouteRestructure_OrgIdP_Implemented(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: OrgAccessMiddleware — Invalid org_id
+// Test: OrgAccessMiddleware, Invalid org_id
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_OrgAccess_InvalidOrgID(t *testing.T) {
@@ -1334,14 +1334,14 @@ func TestRouteRestructure_LastAdminProtection(t *testing.T) {
 		t.Fatalf("decode second admin: %v", err)
 	}
 
-	// Delete the second admin — should succeed because env.Admin still exists
+	// Delete the second admin: should succeed because env.Admin still exists
 	t.Run("delete_non_last_admin_succeeds", func(t *testing.T) {
 		deleteURL := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, secondAdmin.ID)
 		resp := rbacDoRequest(t, "DELETE", deleteURL, env.Admin.JWT, nil)
 		rbacExpectStatus(t, resp, http.StatusNoContent)
 	})
 
-	// Now try to delete the only remaining admin — should be blocked with 409
+	// Now try to delete the only remaining admin: should be blocked with 409
 	t.Run("delete_last_admin_blocked", func(t *testing.T) {
 		deleteURL := fmt.Sprintf("%s/v1/orgs/%s/users/%s", env.Server.URL, orgAID, env.Admin.User.ID)
 		resp := rbacDoRequest(t, "DELETE", deleteURL, env.Admin.JWT, nil)
@@ -1350,7 +1350,7 @@ func TestRouteRestructure_LastAdminProtection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 11 — Graph handler (/v1/graph)
+// Test: Tier 11, Graph handler (/v1/graph)
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_Graph(t *testing.T) {
@@ -1460,7 +1460,7 @@ func TestRouteRestructure_Graph(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Tier 12 — Enrichment test-prompt endpoint (/v1/enrichment/test-prompt)
+// Test: Tier 12, Enrichment test-prompt endpoint (/v1/enrichment/test-prompt)
 // ---------------------------------------------------------------------------
 
 func TestRouteRestructure_EnrichmentTestPrompt(t *testing.T) {
@@ -1597,7 +1597,7 @@ func TestRouteRestructure_UsageQueryParamScopeOverride(t *testing.T) {
 	env := newRRTestEnv(t)
 
 	// Non-admin user tries to access another org's usage via ?org= query param.
-	// This MUST be blocked — the query param should be ignored for non-admins.
+	// This MUST be blocked: the query param should be ignored for non-admins.
 	t.Run("member_cannot_override_org_scope", func(t *testing.T) {
 		// OrgA member tries to see OrgB's usage
 		url := fmt.Sprintf("%s/v1/usage?org=%s", env.Server.URL, env.OrgB.ID)
@@ -1605,7 +1605,7 @@ func TestRouteRestructure_UsageQueryParamScopeOverride(t *testing.T) {
 		rbacExpectStatus(t, resp, http.StatusOK)
 
 		// The response should contain OrgA's data (the user's own org),
-		// not OrgB's data. We verify by checking it doesn't error —
+		// not OrgB's data. We verify by checking it doesn't error;
 		// the key assertion is that it returns 200 (not leaked data).
 		// The mock store returns empty data regardless, but the security
 		// fix ensures filter.OrgID is set to the user's org, not the param.

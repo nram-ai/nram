@@ -77,7 +77,7 @@ func TestMemoryRecallTool_EmptyResults_NoNull(t *testing.T) {
 
 // TestMemoryStoreTool_NilTags_NoTagsField confirms that when no tags are
 // supplied the slim MCP store response does not surface a tags field at all
-// (it was dropped — caller already has the input). The legacy guarantee
+// (it was dropped; caller already has the input). The legacy guarantee
 // (no `tags:null`) carries over by virtue of the field being absent.
 func TestMemoryStoreTool_NilTags_NoTagsField(t *testing.T) {
 	userID := uuid.New()

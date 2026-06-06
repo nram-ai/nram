@@ -157,7 +157,7 @@ func TestRankGraphSlice_PrefixIsProximal(t *testing.T) {
 	for _, r := range rels {
 		tt := info.tierOf(r)
 		if tt < prev {
-			t.Errorf("tier %d edge followed a tier %d edge — prefix not proximity-ordered", tt, prev)
+			t.Errorf("tier %d edge followed a tier %d edge, prefix not proximity-ordered", tt, prev)
 		}
 		prev = tt
 	}

@@ -615,7 +615,7 @@ func TestHandler_JWT_WithShareTokenID_PopulatesShareGrants(t *testing.T) {
 		t.Fatal("no AuthContext captured")
 	}
 	if captured.ShareTokenID == nil {
-		t.Fatal("middleware did not populate ShareTokenID from stid claim — share-scoped JWTs would be silently treated as plain user JWTs")
+		t.Fatal("middleware did not populate ShareTokenID from stid claim; share-scoped JWTs would be silently treated as plain user JWTs")
 	}
 	if *captured.ShareTokenID != shareID {
 		t.Fatalf("ShareTokenID = %s, want %s", *captured.ShareTokenID, shareID)
@@ -697,7 +697,7 @@ func TestHandler_JWT_WithShareTokenID_ZeroGrantsRejected(t *testing.T) {
 		OwnerUserID: userID,
 		ExpiresAt:   time.Now().Add(24 * time.Hour),
 	}
-	// Empty grants — simulates the FK cascade emptying share_token_grants.
+	// Empty grants; simulates the FK cascade emptying share_token_grants.
 	lookup := &mockShareTokenLookup{share: share, grants: nil}
 
 	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
@@ -744,7 +744,7 @@ func TestHandler_NramSPrefix_ZeroGrantsRejected(t *testing.T) {
 }
 
 // TestHandler_JWT_WithShareTokenID_RevokedShareRejected verifies that an
-// access JWT carrying a stid for a revoked share returns 401 — share
+// access JWT carrying a stid for a revoked share returns 401; share
 // revocation must take effect on the next request, not wait for JWT expiry.
 func TestHandler_JWT_WithShareTokenID_RevokedShareRejected(t *testing.T) {
 	userID := uuid.New()

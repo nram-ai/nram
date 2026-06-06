@@ -361,7 +361,7 @@ func TestHandleMemoryList_GlobalProjectDoesNotDoubleInclude(t *testing.T) {
 	}
 	srv := newTestServer(deps)
 
-	// Explicitly request "global" — should NOT double-include global.
+	// Explicitly request "global"; should NOT double-include global.
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"project": "global",
@@ -693,7 +693,7 @@ func TestHandleMemoryList_NoGlobalProjectGraceful(t *testing.T) {
 		Tags: []string{}, CreatedAt: now, UpdatedAt: now,
 	}
 
-	// No "global" project exists — should still work with just the project.
+	// No "global" project exists; should still work with just the project.
 	deps := Dependencies{
 		Backend:  storage.BackendSQLite,
 		UserRepo: &mockUserRepoStore{user: user},

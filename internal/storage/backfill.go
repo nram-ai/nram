@@ -105,7 +105,7 @@ func hasUncoveredMemory(ctx context.Context, db DB) (bool, error) {
 // NormalizeMemoryTags rewrites the tags array on every live memory whose
 // stored tags differ from tags.Normalize(stored). Idempotent: a second
 // pass over a clean table reports zero rows changed. Safe to run
-// concurrently with writes — a writer that lands between the SELECT and
+// concurrently with writes: a writer that lands between the SELECT and
 // UPDATE wins, and writers already pass through tags.Normalize at the
 // repo boundary, so the result is still clean.
 func NormalizeMemoryTags(ctx context.Context, db DB) (int64, error) {

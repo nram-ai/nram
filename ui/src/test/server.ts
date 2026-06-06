@@ -493,7 +493,7 @@ const handlers = [
             description: "Enable enrichment",
             category: "enrichment",
           },
-          // Ranking weight schema entries — required by the
+          // Ranking weight schema entries, required by the
           // useSystemRankingWeights contract test. min/max/step mirror
           // the production schema_store.go registration so the contract
           // test asserts both presence and the operator-tunable range.

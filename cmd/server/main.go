@@ -35,7 +35,7 @@ import (
 // admin credentials when the database is empty. Returns true when setup is
 // complete after the call (either it already was, or this call just made it
 // so), letting the caller seed the cached SetupChecker without re-querying
-// the DB. Idempotent — re-running with the same credentials is safe.
+// the DB. Idempotent: re-running with the same credentials is safe.
 func runHeadlessBootstrap(ctx context.Context, store *adminstore.SetupStore, adminCfg config.AdminConfig) bool {
 	complete, err := store.IsSetupComplete(ctx)
 	if err != nil {
@@ -50,7 +50,7 @@ func runHeadlessBootstrap(ctx context.Context, store *adminstore.SetupStore, adm
 	case adminCfg.Email == "" && adminCfg.Password == "":
 		return false
 	case adminCfg.Email == "" || adminCfg.Password == "":
-		log.Printf("headless bootstrap: skipping — both admin.email and admin.password (or NRAM_ADMIN_EMAIL/NRAM_ADMIN_PASS) must be set")
+		log.Printf("headless bootstrap: skipping: both admin.email and admin.password (or NRAM_ADMIN_EMAIL/NRAM_ADMIN_PASS) must be set")
 		return false
 	}
 
@@ -192,7 +192,7 @@ func main() {
 	}
 
 	// Ensure every user has the reserved projects (global + about_me) and that
-	// their canonical Name/Description are healed. This is idempotent — existing
+	// their canonical Name/Description are healed. This is idempotent: existing
 	// reserved projects are reused and only repaired if drifted. Handles upgrades
 	// from versions before about_me, and before global carried a description.
 	{
@@ -231,8 +231,8 @@ func main() {
 	}
 
 	// One-time canonicalization of existing relationships.relation values so rows
-	// written before write-time canonicalization — and the admin graph viz, which
-	// reads stored relations verbatim — are clean and merged. Guarded by a marker
+	// written before write-time canonicalization (and the admin graph viz, which
+	// reads stored relations verbatim) are clean and merged. Guarded by a marker
 	// setting so the table is scanned at most once; the pass is idempotent and not
 	// load-bearing (read-time dedup covers responses), so a failure logs and
 	// retries next boot rather than blocking startup.
@@ -428,7 +428,7 @@ func main() {
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)
 	enrichSvc.AttachAugmentationLister(memoryRepo)
 	// Procedural tier: verbatim standing instructions. Holds no enrichment,
-	// embedder, or dream dependency by design — that absence keeps it verbatim.
+	// embedder, or dream dependency by design; that absence keeps it verbatim.
 	proceduralSvc := service.NewProceduralService(proceduralRepo)
 	enrichSvc.AttachParaphraseCandidateLister(memoryRepo)
 	exportSvc := service.NewExportService(
@@ -441,7 +441,7 @@ func main() {
 	)
 
 	// Self-service export job worker. Replaces the truncation-bound MCP
-	// export tool — large multi-project exports run asynchronously, land
+	// export tool: large multi-project exports run asynchronously, land
 	// on disk under SettingExportArtifactDir (default <cwd>/exports), and
 	// the caller downloads them through /v1/me/exports/{job_id}/download.
 	// workerID is a per-process UUID so claim-loss detection can
@@ -544,7 +544,7 @@ func main() {
 
 	// Headless administrator bootstrap. When admin.email and admin.password
 	// are both supplied via config.yaml or NRAM_ADMIN_EMAIL/NRAM_ADMIN_PASS,
-	// the first administrator is created automatically — bypassing the setup
+	// the first administrator is created automatically, bypassing the setup
 	// wizard. After setup is complete the call is a no-op so re-running with
 	// the same env vars is safe across restarts.
 	if runHeadlessBootstrap(context.Background(), setupStore, cfg.Admin) {
@@ -606,7 +606,7 @@ func main() {
 	// uuid.Nil namespace) and per-job (memory.namespace_id) layers.
 	cascadeResolver := service.NewCascadeResolver(settingsSvc, projectRepo, userRepo)
 
-	// Start enrichment worker pool — needs providers for LLM extraction.
+	// Start enrichment worker pool: needs providers for LLM extraction.
 	workerPool := enrichment.NewWorkerPool(
 		enrichment.WorkerConfig{Backend: db.Backend()},
 		memoryRepo, memoryRepo, memoryRepo, memoryRepo, enrichmentQueueRepo,
@@ -723,7 +723,7 @@ func main() {
 	)
 
 	// Create auth config for login/lookup handlers.
-	// JWT secret is loaded later, but we need it here — load it early.
+	// JWT secret is loaded later, but we need it here; load it early.
 	jwtSecret, err := storage.LoadOrCreateJWTSecret(context.Background(), db)
 	if err != nil {
 		log.Fatalf("failed to load jwt secret: %v", err)
@@ -744,7 +744,7 @@ func main() {
 	projectDeleteSvc.WithShareSweeper(shareTokenSvc, userRepo)
 
 	// Create OAuth server. Base URL for metadata, JWT audience, etc. is derived
-	// from the request Host header automatically — no configuration needed.
+	// from the request Host header automatically, no configuration needed.
 	// Share-paste consent + magic-link landing depend on the share-token
 	// service and a project lookup for the grants display.
 	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret).
@@ -752,7 +752,7 @@ func main() {
 
 	// Session-JWT TTL and refresh threshold are runtime-configurable via
 	// the settings registry (auth.session_token_ttl_seconds /
-	// auth.session_refresh_threshold_seconds). Single shared instance —
+	// auth.session_refresh_threshold_seconds). Single shared instance:
 	// every issuance and refresh path resolves through the same cache.
 	sessionTimings := service.NewSettingsBackedSessionTimings(settingsSvc)
 
@@ -782,11 +782,11 @@ func main() {
 		Timings:    sessionTimings,
 	})
 
-	// Build the /v1/me/exports handler trio once — one factory, three named
+	// Build the /v1/me/exports handler trio once: one factory, three named
 	// fields the server.Handlers struct points to.
 	meExportHandlers := api.NewMeExportHandlers(exportJobSvc)
 
-	// Project access config — used both by the move handlers (to authorize the
+	// Project access config, used both by the move handlers (to authorize the
 	// destination project supplied in the request body) and by the route-level
 	// ProjectAccessMiddleware below.
 	projectAccessCfg := api.ProjectAccessConfig{
@@ -848,7 +848,7 @@ func main() {
 		MeProfile:           api.NewMeProfileHandler(userRepo),
 		MeProfilePatch:      api.NewMeProfilePatchHandler(userRepo),
 
-		// Self-tier system-pipeline observability — read-only views of the
+		// Self-tier system-pipeline observability: read-only views of the
 		// caller's own dream cycles + enrichment queue items. Write
 		// operations (enable/abandon/rollback for dreaming, retry/pause
 		// for enrichment) remain admin-only at /v1/admin/*.
@@ -873,7 +873,7 @@ func main() {
 			Store: settingsAdminStore,
 		}),
 
-		// Self-service exports — caller-only. No admin equivalent (the
+		// Self-service exports: caller-only. No admin equivalent (the
 		// codebase's privacy invariant test in internal/server keeps
 		// memory content off admin surfaces). Authentication is enforced
 		// by the parent /v1/me group; per-row ownership is enforced
@@ -1022,7 +1022,7 @@ func main() {
 			Rollback: dreamRollback,
 		}),
 
-		// Tier-B (org-aggregate) handlers — caller must be RoleOrgOwner+
+		// Tier-B (org-aggregate) handlers: caller must be RoleOrgOwner+
 		// of the org passed in {org_id}. Aggregate counts + distributions
 		// only.
 		OrgDashboard: api.NewOrgDashboardHandler(api.OrgDashboardConfig{
@@ -1045,7 +1045,7 @@ func main() {
 			Store: enrichmentAdminStore,
 		}),
 
-		// Tier-C (system-aggregate) handlers — RoleAdministrator only via
+		// Tier-C (system-aggregate) handlers: RoleAdministrator only via
 		// the /v1/admin route group gate. System totals + per-org rows;
 		// no per-user, no per-memory, no content.
 		SystemDashboard: api.NewSystemDashboardHandler(api.SystemDashboardConfig{
@@ -1118,7 +1118,7 @@ func main() {
 
 // seedRegisteredSettings inserts one row per registered schema entry, using
 // INSERT ... ON CONFLICT DO NOTHING so operator-set values survive untouched.
-// Idempotent on every boot — every key the admin UI surfaces has a row.
+// Idempotent on every boot: every key the admin UI surfaces has a row.
 func seedRegisteredSettings(ctx context.Context, repo *storage.SettingsRepo) error {
 	schemas := adminstore.SettingsSchemas()
 	defaults := make(map[string]string, len(schemas))

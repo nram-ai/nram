@@ -166,14 +166,14 @@ func (r *NamespaceRepo) CreateIfNotExists(ctx context.Context, ns *model.Namespa
 	}
 
 	if affected == 1 {
-		// Row was inserted — reload to get DB-set timestamps.
+		// Row was inserted; reload to get DB-set timestamps.
 		if err := r.reload(ctx, ns); err != nil {
 			return nil, false, err
 		}
 		return ns, true, nil
 	}
 
-	// Row already existed — fetch the existing one.
+	// Row already existed; fetch the existing one.
 	existing, err := r.FindBySlugUnderParent(ctx, *ns.ParentID, ns.Slug)
 	if err != nil {
 		return nil, false, fmt.Errorf("namespace create if not exists fetch existing: %w", err)

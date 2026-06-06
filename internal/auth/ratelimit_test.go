@@ -145,7 +145,7 @@ func TestRateLimitUnauthenticatedPassThrough(t *testing.T) {
 
 	handler := rl.Handler(rateLimitOKHandler)
 
-	// Make requests without auth context — they should all pass through.
+	// Make requests without auth context; they should all pass through.
 	for i := range 10 {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/", nil)

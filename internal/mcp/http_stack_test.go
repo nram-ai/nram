@@ -48,7 +48,7 @@ type jsonrpcError struct {
 }
 
 // ---------------------------------------------------------------------------
-// API key validator stub (always rejects — we use JWT for these tests)
+// API key validator stub (always rejects; we use JWT for these tests)
 // ---------------------------------------------------------------------------
 
 type testAPIKeyValidator struct{}
@@ -1165,7 +1165,7 @@ func extractToolResultText(t *testing.T, rpcResp *jsonrpcResponse) string {
 }
 
 // extractToolResultTextRaw extracts the text content from a JSON-RPC tool call
-// result without failing on isError — returns (text, isError).
+// result without failing on isError; returns (text, isError).
 func extractToolResultTextRaw(t *testing.T, rpcResp *jsonrpcResponse) (string, bool) {
 	t.Helper()
 
@@ -1689,7 +1689,7 @@ func TestHTTPStack_MCP_TwoUsers_SeparateStores(t *testing.T) {
 		t.Fatalf("User B store failed: %v", storeRPC)
 	}
 
-	// User A recalls "secret" — must only get Alice's.
+	// User A recalls "secret"; must only get Alice's.
 	_, recallRPC := sessA.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -1712,7 +1712,7 @@ func TestHTTPStack_MCP_TwoUsers_SeparateStores(t *testing.T) {
 		t.Errorf("User A recall: expected Alice's content, got %q", recallResp.Memories[0].Content)
 	}
 
-	// User B recalls "secret" — must only get Bob's.
+	// User B recalls "secret"; must only get Bob's.
 	_, recallRPC = sessB.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -1780,7 +1780,7 @@ func TestHTTPStack_MCP_TwoUsers_SeparateProjects(t *testing.T) {
 		t.Fatalf("User B store failed")
 	}
 
-	// User A lists projects — should only see "alpha".
+	// User A lists projects; should only see "alpha".
 	_, projRPC := sessA.call(t, 3, "tools/call", map[string]any{
 		"name":      "list_projects",
 		"arguments": map[string]any{},
@@ -1800,7 +1800,7 @@ func TestHTTPStack_MCP_TwoUsers_SeparateProjects(t *testing.T) {
 		t.Errorf("User A: expected project slug 'alpha', got %q", projectsA.Projects[0].Slug)
 	}
 
-	// User B lists projects — should only see "beta".
+	// User B lists projects; should only see "beta".
 	_, projRPC = sessB.call(t, 3, "tools/call", map[string]any{
 		"name":      "list_projects",
 		"arguments": map[string]any{},
@@ -1854,7 +1854,7 @@ func TestHTTPStack_MCP_UserCannotAccessOtherUserProject(t *testing.T) {
 		t.Fatalf("User A store failed")
 	}
 
-	// User B tries to recall from "private" — should get error (project not found for User B).
+	// User B tries to recall from "private"; should get error (project not found for User B).
 	_, recallRPC := sessB.call(t, 2, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -1875,9 +1875,9 @@ func TestHTTPStack_MCP_UserCannotAccessOtherUserProject(t *testing.T) {
 		if len(resp.Memories) > 0 {
 			t.Fatalf("User B should NOT see User A's private memories, but got %d", len(resp.Memories))
 		}
-		// Getting zero results is acceptable — project not found for User B.
+		// Getting zero results is acceptable; project not found for User B.
 	}
-	// If isErr is true, that's also acceptable — means "project not found".
+	// If isErr is true, that's also acceptable; means "project not found".
 }
 
 // ---------------------------------------------------------------------------
@@ -1925,7 +1925,7 @@ func TestHTTPStack_MCP_BatchStoreAndRecall(t *testing.T) {
 		t.Errorf("expected memories_created=5, got %d", batchResp.MemoriesCreated)
 	}
 
-	// Recall with tag filter ["concurrency"] — should get 3 items.
+	// Recall with tag filter ["concurrency"]; should get 3 items.
 	_, recallRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -1953,7 +1953,7 @@ func TestHTTPStack_MCP_BatchStoreAndRecall(t *testing.T) {
 		}
 	}
 
-	// Recall without tag filter — should get all 5.
+	// Recall without tag filter; should get all 5.
 	_, recallRPC = sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -2087,7 +2087,7 @@ func TestHTTPStack_MCP_StoreInMultipleProjects(t *testing.T) {
 		t.Fatalf("store in backend failed")
 	}
 
-	// Recall from "frontend" — only frontend memories.
+	// Recall from "frontend"; only frontend memories.
 	_, recallRPC := sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -2118,7 +2118,7 @@ func TestHTTPStack_MCP_StoreInMultipleProjects(t *testing.T) {
 		t.Error("frontend recall should contain React memory")
 	}
 
-	// Recall from "backend" — only backend memories.
+	// Recall from "backend"; only backend memories.
 	_, recallRPC = sess.call(t, 5, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -2157,7 +2157,7 @@ func TestHTTPStack_MCP_ProjectAutoCreate(t *testing.T) {
 	userA := uuid.New()
 	nsA := uuid.New()
 
-	// Do NOT pre-create any project — the store call should auto-create it.
+	// Do NOT pre-create any project; the store call should auto-create it.
 	env := newMultiUserHTTPStackEnv(t, []multiUserEnvConfig{
 		{userID: userA, nsID: nsA, nsPath: "/users/alice"},
 	})
@@ -2165,7 +2165,7 @@ func TestHTTPStack_MCP_ProjectAutoCreate(t *testing.T) {
 
 	sess := env.sessionFor(t, 0)
 
-	// Store to a project that doesn't exist — should auto-create.
+	// Store to a project that doesn't exist; should auto-create.
 	_, storeRPC := sess.call(t, 2, "tools/call", map[string]any{
 		"name": "store",
 		"arguments": map[string]any{
@@ -2186,7 +2186,7 @@ func TestHTTPStack_MCP_ProjectAutoCreate(t *testing.T) {
 		t.Error("expected non-nil memory ID")
 	}
 
-	// List projects — should see "brand-new".
+	// List projects; should see "brand-new".
 	_, projRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name":      "list_projects",
 		"arguments": map[string]any{},
@@ -2251,7 +2251,7 @@ func TestHTTPStack_MCP_RecallAcrossAllProjects(t *testing.T) {
 		t.Fatalf("store project-b failed")
 	}
 
-	// Recall WITHOUT specifying a project — user-scoped recall.
+	// Recall WITHOUT specifying a project; user-scoped recall.
 	// This searches the user's root namespace. In the multi-user env,
 	// the recall service uses ListByNamespace with the user's nsID.
 	// Since the memories are stored in child namespaces (project namespaces),
@@ -2266,7 +2266,7 @@ func TestHTTPStack_MCP_RecallAcrossAllProjects(t *testing.T) {
 	if recallRPC == nil || recallRPC.Error != nil {
 		t.Fatalf("user-scoped recall failed")
 	}
-	// The call should succeed (no error) even if results are empty —
+	// The call should succeed (no error) even if results are empty;
 	// validates the user-scoped recall code path.
 	recallText := extractToolResultText(t, recallRPC)
 	var recallResp service.RecallResponse
@@ -2371,7 +2371,7 @@ func TestHTTPStack_MCP_ForgetThenRecall(t *testing.T) {
 		t.Errorf("expected deleted=1, got %d", forgetResp.Deleted)
 	}
 
-	// Recall — forgotten memory should NOT appear.
+	// Recall; forgotten memory should NOT appear.
 	_, recallRPC := sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -2487,7 +2487,7 @@ func TestHTTPStack_MCP_DoubleForget(t *testing.T) {
 		t.Errorf("first forget: expected deleted=1, got %d", forgetResp.Deleted)
 	}
 
-	// Second forget — should not crash, deleted=0 (already soft-deleted).
+	// Second forget; should not crash, deleted=0 (already soft-deleted).
 	_, forgetRPC = sess.call(t, 4, "tools/call", map[string]any{
 		"name": "forget",
 		"arguments": map[string]any{
@@ -2503,7 +2503,7 @@ func TestHTTPStack_MCP_DoubleForget(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	// The second forget should either return deleted=0 (already soft-deleted)
-	// or deleted=1 (re-soft-deletes). Both are acceptable — the key is no crash.
+	// or deleted=1 (re-soft-deletes). Both are acceptable; the key is no crash.
 	t.Logf("second forget returned deleted=%d", forgetResp.Deleted)
 }
 
@@ -2933,7 +2933,7 @@ func TestHTTPStack_MCP_ConcurrentStoresFromSameUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Recall all memories — expect 10.
+	// Recall all memories; expect 10.
 	sess := env.sessionFor(t, 0)
 	_, recallRPC := sess.call(t, 200, "tools/call", map[string]any{
 		"name": "recall",
@@ -3018,7 +3018,7 @@ func TestHTTPStack_MCP_ConcurrentStoresFromDifferentUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// User A recalls — should see exactly 5.
+	// User A recalls; should see exactly 5.
 	sessA := env.sessionFor(t, 0)
 	_, recallRPC := sessA.call(t, 300, "tools/call", map[string]any{
 		"name": "recall",
@@ -3045,7 +3045,7 @@ func TestHTTPStack_MCP_ConcurrentStoresFromDifferentUsers(t *testing.T) {
 		}
 	}
 
-	// User B recalls — should see exactly 5.
+	// User B recalls; should see exactly 5.
 	sessB := env.sessionFor(t, 1)
 	_, recallRPC = sessB.call(t, 300, "tools/call", map[string]any{
 		"name": "recall",
@@ -3229,7 +3229,7 @@ func TestHTTPStack_MCP_SpecialCharsInProjectSlug(t *testing.T) {
 		t.Error("expected non-nil memory ID for special slug project")
 	}
 
-	// Store to a project with spaces — should either error or normalize.
+	// Store to a project with spaces; should either error or normalize.
 	_, spaceRPC := sess.call(t, 3, "tools/call", map[string]any{
 		"name": "store",
 		"arguments": map[string]any{
@@ -3247,7 +3247,7 @@ func TestHTTPStack_MCP_SpecialCharsInProjectSlug(t *testing.T) {
 		// Tool-level error is acceptable.
 		t.Logf("store to project with spaces: tool error (acceptable): %s", text)
 	} else {
-		// If it succeeded, the slug was normalized — that is also acceptable.
+		// If it succeeded, the slug was normalized; that is also acceptable.
 		t.Logf("store to project with spaces: succeeded (slug normalized)")
 	}
 }
@@ -3603,7 +3603,7 @@ func TestHTTPStack_MCP_InvalidJSONRPCVersion(t *testing.T) {
 		return
 	}
 
-	// Some SDKs might accept 1.0 and upgrade — that is also acceptable behavior.
+	// Some SDKs might accept 1.0 and upgrade; that is also acceptable behavior.
 	t.Logf("invalid jsonrpc version: server accepted request (SDK tolerant behavior), status=%d", resp.StatusCode)
 }
 
@@ -3870,7 +3870,7 @@ func TestHTTPStack_MCP_RecallMultipleTagFilter(t *testing.T) {
 		t.Fatalf("store 3 failed")
 	}
 
-	// Recall with tags [alpha, beta] — only memory 1 has BOTH.
+	// Recall with tags [alpha, beta]; only memory 1 has BOTH.
 	_, recallRPC := sess.call(t, 5, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -3955,7 +3955,7 @@ func TestHTTPStack_MCP_StoreDuplicateContent(t *testing.T) {
 		t.Errorf("expected dedup to return same ID, got %s and %s", storeResp1.ID, storeResp2.ID)
 	}
 
-	// Recall — only one row exists, so only one result.
+	// Recall; only one row exists, so only one result.
 	_, recallRPC := sess.call(t, 4, "tools/call", map[string]any{
 		"name": "recall",
 		"arguments": map[string]any{
@@ -4051,7 +4051,7 @@ func TestHTTPStack_MCP_ToolCallBeforeInitialize(t *testing.T) {
 		}
 	}
 
-	// Some SDKs may accept tool calls without initialize — that is tolerable.
+	// Some SDKs may accept tool calls without initialize; that is tolerable.
 	t.Logf("tool call before initialize: server accepted (SDK may not enforce init order), status=%d", resp.StatusCode)
 }
 
@@ -4091,7 +4091,7 @@ func TestHTTPStack_MCP_DoubleInitialize(t *testing.T) {
 	}
 	sessionID := resp1.Header.Get("Mcp-Session-Id")
 
-	// Second initialize (same session or new — both should not crash).
+	// Second initialize (same session or new; both should not crash).
 	initReq2 := jsonrpcRequest{
 		JSONRPC: "2.0",
 		ID:      2,

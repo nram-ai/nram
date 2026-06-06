@@ -23,7 +23,7 @@ func NewSystemUsageHandler(cfg UsageConfig) http.HandlerFunc {
 			WriteError(w, apiErr)
 			return
 		}
-		// System tier: no OrgID, no UserID — query is unscoped.
+		// System tier: no OrgID, no UserID; query is unscoped.
 
 		report, err := cfg.Store.QueryUsage(r.Context(), filter)
 		if err != nil {
@@ -40,7 +40,7 @@ func NewSystemUsageHandler(cfg UsageConfig) http.HandlerFunc {
 }
 
 // parseUsageQueryParams reads project/from/to/group_by/success_only from the
-// query string into a UsageFilter. It does NOT set OrgID/UserID — each tier
+// query string into a UsageFilter. It does NOT set OrgID/UserID; each tier
 // handler applies its own scope after calling this.
 func parseUsageQueryParams(r *http.Request) (UsageFilter, *APIError) {
 	q := r.URL.Query()

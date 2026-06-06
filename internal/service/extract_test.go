@@ -108,7 +108,7 @@ func newExtractTestService(
 
 	// Wrap test provider stubs in the UsageRecordingProvider middleware so
 	// the middleware writes token_usage rows to deps.tokenUsage on every
-	// Complete/Embed call — matches production wiring (registry wrap)
+	// Complete/Embed call, matches production wiring (registry wrap)
 	// without spinning up a registry in unit tests.
 	wrappedFact := provider.WrapLLMForTest(factProvider, deps.tokenUsage)
 	wrappedEntity := provider.WrapLLMForTest(entityProvider, deps.tokenUsage)

@@ -161,7 +161,7 @@ func (r *EntityRepo) promoteStub(ctx context.Context, entity *model.Entity) erro
 	row := r.db.QueryRow(ctx, stubQuery, entity.NamespaceID.String(), entity.Canonical)
 	stub, err := r.scanEntity(row)
 	if err != nil {
-		// No stub exists — nothing to do.
+		// No stub exists; nothing to do.
 		return nil
 	}
 
@@ -176,7 +176,7 @@ func (r *EntityRepo) promoteStub(ctx context.Context, entity *model.Entity) erro
 	real, realErr := r.scanEntity(row)
 
 	if realErr != nil {
-		// Real entity doesn't exist — promote the stub in place.
+		// Real entity doesn't exist; promote the stub in place.
 		now := time.Now().UTC().Format(time.RFC3339)
 		updateQuery := `UPDATE entities SET entity_type = ?, name = ?, updated_at = ?
 			WHERE id = ?`
@@ -193,7 +193,7 @@ func (r *EntityRepo) promoteStub(ctx context.Context, entity *model.Entity) erro
 		return nil
 	}
 
-	// Both stub and real entity exist — merge stub into the real entity.
+	// Both stub and real entity exist; merge stub into the real entity.
 	stubID := stub.ID.String()
 	realID := real.ID.String()
 
@@ -410,7 +410,7 @@ func (r *EntityRepo) mergeRelationshipsByEndpoint(ctx context.Context, endpoint,
 		}
 	}
 
-	// Step 3: reassign the remaining stub rows to real — no conflicts possible now.
+	// Step 3: reassign the remaining stub rows to real; no conflicts possible now.
 	reassignQuery := fmt.Sprintf(`UPDATE relationships SET %s = ? WHERE %s = ?`, endpoint, endpoint)
 	if r.db.Backend() == BackendPostgres {
 		reassignQuery = fmt.Sprintf(`UPDATE relationships SET %s = $1 WHERE %s = $2`, endpoint, endpoint)
@@ -454,7 +454,7 @@ func (r *EntityRepo) mergeAliasesToEntity(ctx context.Context, stubID, realID st
 // mention_count DESC, created_at DESC.
 //
 // **Semantics are literal substring.** A multi-word query like "John Doe"
-// matches only entities whose name literally contains "John Doe" — it
+// matches only entities whose name literally contains "John Doe"; it
 // does NOT split into tokens. This is the contract every internal caller
 // (enrichment dedup, recall context build, dreaming) was written against:
 // canonical names are pre-normalised (`canonicalize` in
@@ -505,7 +505,7 @@ func (r *EntityRepo) FindBySimilarity(ctx context.Context, namespaceID uuid.UUID
 // `entities.name` AND `entity_aliases.alias`, ranking rows by the number
 // of distinct name-token matches. Single-token (or empty) queries fall
 // through to `FindBySimilarity` so the result set is identical to a
-// literal call — there's no token-OR to do.
+// literal call; there's no token-OR to do.
 //
 // Use this for agent-supplied queries (e.g. the MCP `graph` tool's
 // `entity` argument). Do NOT use it from programmatic / canonical paths
@@ -516,7 +516,7 @@ func (r *EntityRepo) FindBySimilarity(ctx context.Context, namespaceID uuid.UUID
 //
 // Scoring rule for the multi-token branch: ORDER BY name-token-match-count
 // DESC, mention_count DESC, created_at DESC. Alias matches surface a row
-// but do not contribute to the score axis — name matches are higher
+// but do not contribute to the score axis; name matches are higher
 // signal than alias matches, so an entity matched only via alias loses
 // the score-tier tiebreak to one matched via name and falls back to
 // mention_count ordering. This avoids a second per-row EXISTS subquery
@@ -639,7 +639,7 @@ func (r *EntityRepo) searchEntitiesMultiToken(ctx context.Context, namespaceID u
 	sb.WriteString(`) ORDER BY (`)
 
 	// Score: sum of name-LIKE CASE WHEN per token. Alias matches are NOT
-	// scored — they surface via WHERE but tiebreak via mention_count.
+	// scored; they surface via WHERE but tiebreak via mention_count.
 	for i, pat := range patterns {
 		args = append(args, pat)
 		if i > 0 {
@@ -686,7 +686,7 @@ func (r *EntityRepo) FindByAlias(ctx context.Context, namespaceID uuid.UUID, ali
 }
 
 // GetBatch returns multiple entities by their UUIDs in a single query. Missing
-// IDs are silently dropped — callers are responsible for diffing the result
+// IDs are silently dropped; callers are responsible for diffing the result
 // against the input list if they need to detect them. Order is not preserved.
 func (r *EntityRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Entity, error) {
 	if len(ids) == 0 {
@@ -827,7 +827,7 @@ func (r *EntityRepo) DeleteOrphaned(ctx context.Context, olderThan time.Time) ([
 // entity. This REDEFINES mention_count as a live-edge-provenance count rather
 // than reproducing the enrichment +1 counter: an entity that was mentioned but
 // never produced a relationship edge resolves to 0 here, where the enrichment
-// path would have counted the mention. That loss is intentional and accepted —
+// path would have counted the mention. That loss is intentional and accepted:
 // the derived count is decrementable on delete without a per-memory mention
 // table, and for ranking (ORDER BY mention_count DESC) a count that drops when
 // a sourcing memory is reaped is more honest than a monotonic counter. Run

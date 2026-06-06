@@ -200,7 +200,7 @@ func newRecallService(
 ) (*RecallService, *mockTokenUsageRepo) {
 	tokenUsage := &mockTokenUsageRepo{}
 	// Wrap embedFn so the middleware writes token_usage rows on every
-	// Embed call — matches production wiring.
+	// Embed call, matches production wiring.
 	wrapped := provider.WrapEmbeddingForTest(embedFn, tokenUsage)
 	svc := NewRecallService(memories, projects, namespaces, vectorSearch, entityReader, traverser, wrapped)
 	return svc, tokenUsage
@@ -384,7 +384,7 @@ func TestRecall_ThresholdFiltering(t *testing.T) {
 		return embProvider
 	})
 
-	// Set a high threshold — should filter out the low-scoring result.
+	// Set a high threshold: should filter out the low-scoring result.
 	resp, err := svc.Recall(context.Background(), &RecallRequest{
 		ProjectID: projectID,
 		Query:     "search",
@@ -727,7 +727,7 @@ func TestRecall_NamespaceIDOverride(t *testing.T) {
 
 	svc, _ := newRecallService(memReader, projects, namespaces, nil, nil, nil, nil)
 
-	// Use NamespaceID override — project_id can be nil.
+	// Use NamespaceID override: project_id can be nil.
 	resp, err := svc.Recall(context.Background(), &RecallRequest{
 		NamespaceID: &overrideNsID,
 		Query:       "override search",
@@ -962,8 +962,8 @@ func TestRecall_DiversifyByTagPrefix_ThresholdCausesGap(t *testing.T) {
 
 	a0 := uuid.New()
 	b0 := uuid.New()
-	// a0 at 0.99 will produce a composite score well above 0.5. b0 at 0.02 —
-	// with Similarity weight 0.5 contributing 0.01 — will be below even the
+	// a0 at 0.99 will produce a composite score well above 0.5. b0 at 0.02
+	// (with Similarity weight 0.5 contributing 0.01) will be below even the
 	// recency/importance floor. Confirm: b0 composite ≤ 0.5*0.02 + 0.15*~1 +
 	// 0.10*0.5 + 0 + 0 ≈ 0.21, comfortably below threshold=0.5.
 	seeds := []diversifySeed{
@@ -1327,13 +1327,13 @@ func TestRecall_FusionDisabled_NoBehaviorChange(t *testing.T) {
 	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
 
 	// Wire a lexical searcher that would rank mem2 first if it were
-	// consulted — fusion-off must ignore it.
+	// consulted: fusion-off must ignore it.
 	svc.SetLexical(&mockLexicalSearcher{
 		results: map[uuid.UUID][]storage.MemoryRank{
 			nsID: {{ID: mem2ID, Rank: 1}, {ID: mem1ID, Rank: 0.5}},
 		},
 	})
-	// Default FusionConfig has Enabled=false — leave it.
+	// Default FusionConfig has Enabled=false. Leave it.
 
 	resp, err := svc.Recall(context.Background(), &RecallRequest{ProjectID: projectID, Query: "find something", Limit: 10})
 	if err != nil {
@@ -1363,7 +1363,7 @@ func TestRecall_FusionEnabled_LexicalOnlyHit(t *testing.T) {
 			lexHitID: makeTestMemory(lexHitID, nsID, "retatrutide-2.4mg dosing protocol", nil, 0.5, 0, now),
 		},
 	}
-	// Vector returns nothing — embedder cannot resolve the lexical query.
+	// Vector returns nothing: embedder cannot resolve the lexical query.
 	vectorSearcher := &mockVectorSearcher{results: nil}
 	embProvider := &mockEmbeddingProvider{
 		name:       "test-embed",
@@ -1396,7 +1396,7 @@ func TestRecall_FusionEnabled_LexicalOnlyHit(t *testing.T) {
 
 // TestRecall_FusionEnabled_EmptyLexicalMatchesVectorOnly guards against
 // fusion-on regressing queries the vector channel already handles when
-// the lexical channel produces nothing — the realistic case where the
+// the lexical channel produces nothing, the realistic case where the
 // user's query has no exact-token matches in the corpus.
 func TestRecall_FusionEnabled_EmptyLexicalMatchesVectorOnly(t *testing.T) {
 	projectID, nsID, projects, namespaces := setupTestFixtures()
@@ -1427,7 +1427,7 @@ func TestRecall_FusionEnabled_EmptyLexicalMatchesVectorOnly(t *testing.T) {
 	}
 
 	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
-	// Lexical returns no rows — the realistic case where the user's query
+	// Lexical returns no rows, the realistic case where the user's query
 	// has no exact-token matches in the corpus.
 	svc.SetLexical(&mockLexicalSearcher{results: map[uuid.UUID][]storage.MemoryRank{}})
 	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.70, LexicalWeight: 0.30})
@@ -1449,7 +1449,7 @@ func TestRecall_FusionEnabled_EmptyLexicalMatchesVectorOnly(t *testing.T) {
 
 // TestRecall_FusionEnabled_BothChannelsBoost verifies that a memory which
 // surfaces in both rankings ranks above one that appears in only the
-// vector channel — the documents-with-multi-channel-evidence-win property
+// vector channel, the documents-with-multi-channel-evidence-win property
 // is what makes RRF worth the engineering.
 func TestRecall_FusionEnabled_BothChannelsBoost(t *testing.T) {
 	projectID, nsID, projects, namespaces := setupTestFixtures()
@@ -1464,7 +1464,7 @@ func TestRecall_FusionEnabled_BothChannelsBoost(t *testing.T) {
 			vecOnlyID: makeTestMemory(vecOnlyID, nsID, "memory in vector only", nil, 0.5, 0, now),
 		},
 	}
-	// Both vector positions roughly equivalent — RRF should pick the doc
+	// Both vector positions roughly equivalent: RRF should pick the doc
 	// with cross-channel evidence.
 	vectorSearcher := &mockVectorSearcher{
 		results: []storage.VectorSearchResult{
@@ -1497,7 +1497,7 @@ func TestRecall_FusionEnabled_BothChannelsBoost(t *testing.T) {
 		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
 	}
 	// bothID: vec rank 2 (1/62) + lex rank 1 (1/61); vecOnlyID: vec rank 1 (1/61).
-	// 1/62 + 1/61 ≈ 0.0325 vs 1/61 ≈ 0.0164 — bothID wins.
+	// 1/62 + 1/61 ≈ 0.0325 vs 1/61 ≈ 0.0164: bothID wins.
 	if resp.Memories[0].ID != bothID {
 		t.Errorf("expected cross-channel memory to rank first; got %v", resp.Memories[0].ID)
 	}
@@ -1685,7 +1685,7 @@ func TestRecall_PerProjectOverrideMerges(t *testing.T) {
 		t.Errorf("expected high-confidence memory to rank first, got %v", resp.Memories[0].ID)
 	}
 	// Override pumps Confidence weight to 0.50, so the delta should be
-	// ~0.50 * 0.5 = 0.25 — much larger than the default-weight delta of
+	// ~0.50 * 0.5 = 0.25, much larger than the default-weight delta of
 	// ~0.025 from the previous test.
 	delta := resp.Memories[0].Score - resp.Memories[1].Score
 	if delta < 0.20 || delta > 0.30 {
@@ -1818,14 +1818,14 @@ func TestRecall_OriginWeightZero_GlobalBeatsProjectOnCosine(t *testing.T) {
 // the large primary namespace's own ranking. Before the fix, RRF ranked each
 // namespace's list independently by position, so a global memory at cosine 0.35
 // (rank 1 of its 1-row list) outscored a primary memory at cosine 0.62 (rank 4
-// of the primary list) — inverting true similarity order and letting tiny tiers
+// of the primary list), inverting true similarity order and letting tiny tiers
 // (about_me, global) dominate project-scoped recall.
 func TestRecall_FusionPoolsVectorRanksGlobally(t *testing.T) {
 	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
 
 	p1, p2, p3 := uuid.New(), uuid.New(), uuid.New()
-	target := uuid.New() // primary, cosine 0.62 — only 4th in the primary list
-	decoy := uuid.New()  // global, cosine 0.35 — 1st in its 1-row list
+	target := uuid.New() // primary, cosine 0.62, only 4th in the primary list
+	decoy := uuid.New()  // global, cosine 0.35, 1st in its 1-row list
 	now := time.Now()
 
 	memReader := &mockMemoryReader{memories: map[uuid.UUID]*model.Memory{
@@ -1853,7 +1853,7 @@ func TestRecall_FusionPoolsVectorRanksGlobally(t *testing.T) {
 	svc.SetLexical(&mockLexicalSearcher{}) // no lexical hits: isolate the vector-channel pooling
 	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.70, LexicalWeight: 0.30})
 	// Pin Origin to 0 so the project-affinity boost does not also lift the
-	// primary target — the ordering under test must come from fused similarity.
+	// primary target: the ordering under test must come from fused similarity.
 	setOriginZero(svc)
 
 	resp, err := svc.Recall(context.Background(), &RecallRequest{
@@ -1912,7 +1912,7 @@ func TestRecall_OriginWeightFlipsTie(t *testing.T) {
 	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
 	// Boost the project-affinity term. Default DefaultRankingWeights has
 	// Similarity 0.50, so a 0.05 cosine gap contributes 0.025 to the
-	// score. Origin 0.10 contributes 0.10 — flips the comparison.
+	// score. Origin 0.10 contributes 0.10, which flips the comparison.
 	w := DefaultRankingWeights
 	w.Origin = 0.10
 	svc.SetWeights(w)
@@ -1979,7 +1979,7 @@ func TestRecall_OriginWeightOverrideDoesNotLeakAcrossProjects(t *testing.T) {
 	if len(resp.Memories) != 2 {
 		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
 	}
-	// Verify the global memory is still attributed to "global" — the
+	// Verify the global memory is still attributed to "global": the
 	// per-project Origin override applies only to primary-stamped
 	// candidates. The primary candidate's score: 0.50*Sim(0.50) + Origin*1
 	// (0.30) = 0.55. Global's: 0.95*0.50 + Origin*0 = 0.475. Primary wins
@@ -2001,7 +2001,7 @@ func TestRecall_OriginWeightOverrideDoesNotLeakAcrossProjects(t *testing.T) {
 // TestRecall_CrossNamespaceTruncation_GlobalsWin verifies that with the
 // namespace-quota balancer removed, final truncation is pure relevance order:
 // strong global hits fill the top-N and a weak primary hit does NOT get a
-// reserved slot. This is the load-bearing post-removal property — recall
+// reserved slot. This is the load-bearing post-removal property: recall
 // trusts relevance and no longer pads primary slots.
 func TestRecall_CrossNamespaceTruncation_GlobalsWin(t *testing.T) {
 	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
@@ -2039,7 +2039,7 @@ func TestRecall_CrossNamespaceTruncation_GlobalsWin(t *testing.T) {
 	if len(resp.Memories) != 3 {
 		t.Fatalf("expected 3 memories, got %d", len(resp.Memories))
 	}
-	// All three slots are globals — pure relevance order, no primary floor.
+	// All three slots are globals: pure relevance order, no primary floor.
 	for i, m := range resp.Memories {
 		if m.ID == projectMemID {
 			t.Errorf("removed balancer should not lift the weak project hit (pos %d)", i)
@@ -2050,7 +2050,7 @@ func TestRecall_CrossNamespaceTruncation_GlobalsWin(t *testing.T) {
 // TestRecall_FusionNormalizePerChannel_BalancesUnevenCorpora verifies the
 // flag wiring: with NormalizePerChannel on, the per-channel weights are
 // divided by channel length, so a deep ranking does not dominate the
-// fused output. We do not assert a specific ordering — the property under
+// fused output. We do not assert a specific ordering: the property under
 // test is that the flag is observed during fusion. Two channels with
 // very different lengths must produce a different score distribution
 // from the same channels with the flag off.
@@ -2110,7 +2110,7 @@ func TestRecall_FusionNormalizePerChannel_BalancesUnevenCorpora(t *testing.T) {
 	if len(resp.Memories) == 0 {
 		t.Fatalf("expected memories from fusion with normalize-per-channel on, got 0")
 	}
-	// The project hit must appear in the response — it appeared in both
+	// The project hit must appear in the response: it appeared in both
 	// primary's vector and lexical channels, so even after normalization
 	// it has a non-zero fused score.
 	found := false

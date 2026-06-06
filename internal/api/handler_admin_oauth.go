@@ -89,12 +89,12 @@ type oauthCreateClientRequest struct {
 // admin requests based on method and sub-path under /oauth.
 //
 // Routes:
-//   - GET    /oauth/clients       — list all OAuth clients
-//   - POST   /oauth/clients       — create client
-//   - DELETE  /oauth/clients/{id}  — delete client by PK
-//   - GET    /oauth/idp           — list IdP configs
-//   - POST   /oauth/idp           — create IdP config
-//   - DELETE  /oauth/idp/{id}      — delete IdP config
+//   - GET    /oauth/clients:       list all OAuth clients
+//   - POST   /oauth/clients:       create client
+//   - DELETE  /oauth/clients/{id}:  delete client by PK
+//   - GET    /oauth/idp:           list IdP configs
+//   - POST   /oauth/idp:           create IdP config
+//   - DELETE  /oauth/idp/{id}:      delete IdP config
 func NewAdminOAuthHandler(cfg OAuthAdminConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		resource, id := extractOAuthSubPath(r.URL.Path)

@@ -293,7 +293,7 @@ function EnrichmentPoolBanner({
   const live = Object.values(liveJobs);
   const inFlight = tick?.inFlight ?? live.length;
   const visible = inFlight > 0 || fallbackInFlightCount > 0;
-  // Tick once a second only while the banner is visible — avoids a 1Hz
+  // Tick once a second only while the banner is visible; avoids a 1Hz
   // wake on the page when the pool is idle.
   useElapsedTicker(visible);
   if (!visible) return null;
@@ -340,7 +340,7 @@ function EnrichmentPoolBanner({
           <StatusNode kind="paused" label="paused" />
         )}
         {tickStale && (
-          <span className="text-muted-foreground">(tick stale — using polled fallback)</span>
+          <span className="text-muted-foreground">(tick stale, using polled fallback)</span>
         )}
       </div>
     </div>
@@ -369,7 +369,7 @@ function StatCard({
 }
 
 // ---------------------------------------------------------------------------
-// Expandable Error Cell — delegates to the shared ExtractionErrorView so
+// Expandable Error Cell: delegates to the shared ExtractionErrorView so
 // failed-job and partial-recovery JSON envelopes render structured headlines
 // with click-to-expand diagnostics, while plain-string errors fall through
 // to a line-clamped destructive cell.
@@ -714,7 +714,7 @@ function QueueTable({
   // learn the names of other users' projects.
   showProjectName?: boolean;
   // linkMemoryIds renders the Memory ID cell as a Link to the MemoryBrowser
-  // detail panel. Self tier only — org/system viewers may see jobs for
+  // detail panel. Self tier only; org/system viewers may see jobs for
   // memories they cannot open in the standard browser.
   linkMemoryIds?: boolean;
 }) {
@@ -905,7 +905,7 @@ function QueueTable({
                     ? item.project_name
                     : item.project_id
                       ? truncateId(item.project_id)
-                      : "—"}
+                      : "-"}
                 </td>
                 <td className="px-3 py-2.5">
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -929,7 +929,7 @@ function QueueTable({
                         // Anchor the elapsed timer to the current claim, not
                         // to original queue insertion. Retry/RequeueStale
                         // null out claimed_at on the backend, so item.claimed_at
-                        // reflects only the active attempt — that's what the
+                        // reflects only the active attempt; that's what the
                         // user thinks of as "how long has this been running."
                         const startedIso =
                           lj?.startedAt ?? item.claimed_at ?? item.created_at;
@@ -1215,7 +1215,7 @@ function EnrichmentMonitor() {
             />
           </div>
 
-          {/* Controls bar — retry is enabled wherever showWriteActions
+          {/* Controls bar: retry is enabled wherever showWriteActions
               applies (self/org/system per role). Pause/Resume is system-tier
               admin-only because the worker pool is global. */}
           {showWriteActions && (
@@ -1253,7 +1253,7 @@ function EnrichmentMonitor() {
               </>
             )}
 
-            {/* On non-system tiers the paused flag is informational only —
+            {/* On non-system tiers the paused flag is informational only;
                 surface it without exposing the pause/resume control. */}
             {tier !== "system" && isPaused && (
               <StatusNode kind="paused" label="Workers paused" />

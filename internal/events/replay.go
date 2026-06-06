@@ -66,6 +66,6 @@ func (rb *ReplayBuffer) Since(lastEventID string) []Event {
 		}
 	}
 
-	// ID not found — return all buffered events.
+	// ID not found; return all buffered events.
 	return all
 }

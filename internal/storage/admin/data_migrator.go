@@ -26,7 +26,7 @@ import (
 // the parent row but retained a child reference with FKs disabled).
 //
 // For each FK relationship, rows that reference a missing parent are recorded
-// in `skipped` (keyed as "table.column") rather than aborting the migration —
+// in `skipped` (keyed as "table.column") rather than aborting the migration,
 // matching the user-approved policy to drop orphans while preserving rich
 // history. The full skip breakdown is returned alongside a successful run so
 // the operator can see exactly what was dropped.
@@ -47,7 +47,7 @@ type DataMigrator struct {
 	skipped map[string]int
 
 	// skippedUpdates["table.column"] = count of column-level UPDATEs skipped
-	// due to an orphan FK. Does not change row counts — the row was already
+	// due to an orphan FK. Does not change row counts; the row was already
 	// inserted with a NULL/blank value on the first pass.
 	skippedUpdates map[string]int
 
@@ -206,7 +206,7 @@ func (m *DataMigrator) sourceColumnExists(ctx context.Context, table, column str
 }
 
 // skipOrphan records that one row was skipped because its FK parent is missing.
-// The key is "childTable.childColumn" — callers use the column that would have
+// The key is "childTable.childColumn"; callers use the column that would have
 // produced the FK failure (e.g. "relationships.source_memory").
 func (m *DataMigrator) skipOrphan(table, column string) {
 	m.skipped[table+"."+column]++
@@ -1003,7 +1003,7 @@ func (m *DataMigrator) migrateMemories(ctx context.Context) error {
 		if enriched != 0 {
 			pgEnriched = true
 		}
-		// Note: superseded_by is deliberately omitted here — populated in pass 2.
+		// Note: superseded_by is deliberately omitted here; populated in pass 2.
 		if _, err := stmt.ExecContext(ctx,
 			id, nsID, content,
 			nullInt64ToInterface(embeddingDim),

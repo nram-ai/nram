@@ -229,7 +229,7 @@ func newMeExportDownload(svc MeExportService) http.HandlerFunc {
 		// Stream the artifact. Errors after the header has been written
 		// cannot be converted into a JSON error; the client sees a
 		// truncated body, and io.Copy reports the partial-write count
-		// which we ignore — the caller can retry on a non-200 status
+		// which we ignore; the caller can retry on a non-200 status
 		// only, which is too late here.
 		_, _ = io.Copy(w, f)
 	}

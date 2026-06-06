@@ -106,7 +106,7 @@ func TestOriginValidation_NoOrigin_Allowed(t *testing.T) {
 	h := srv.Handler()
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
-	// No Origin header — should pass through to the MCP handler.
+	// No Origin header; should pass through to the MCP handler.
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -244,7 +244,7 @@ func TestEveryToolHasOutputSchema(t *testing.T) {
 		// delete_project is gated on a non-nil ProjectDelete service
 		// (RegisterProjectDeleteTool early-returns otherwise). Inject a
 		// non-nil sentinel so the test exercises the fully-configured
-		// surface — the handler is never invoked in this test.
+		// surface; the handler is never invoked in this test.
 		deps := Dependencies{
 			Backend:       backend,
 			ProjectDelete: &service.ProjectDeleteService{},

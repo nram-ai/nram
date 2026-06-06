@@ -2,8 +2,8 @@
 //
 // This package is deliberately minimal: it carries only settings that must be
 // available before the database is open and the runtime settings registry
-// (internal/service.SettingsService) is reachable. Everything else —
-// providers, vector backends, dreaming, ranking, retention, etc. — is managed
+// (internal/service.SettingsService) is reachable. Everything else
+// (providers, vector backends, dreaming, ranking, retention, etc.) is managed
 // at runtime through the admin UI / DB-backed settings table.
 //
 // Bootstrap surface:

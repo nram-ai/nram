@@ -78,7 +78,7 @@ func TestMetricsScrape_EndToEnd(t *testing.T) {
 	// CounterVecs with no recorded label combinations
 	// (nram_enrichments_total, nram_tokens_used_total, nram_embeddings_total)
 	// intentionally do NOT appear in the exposition until the first
-	// .WithLabelValues(...).Inc() — that is the documented Prometheus
+	// .WithLabelValues(...).Inc(); that is the documented Prometheus
 	// client behavior and matches how Grafana absent() detection reads
 	// them. The live-server verification step in the plan exercises all
 	// three, so absence in this no-traffic test is correct.
@@ -102,7 +102,7 @@ func TestMetricsScrape_EndToEnd(t *testing.T) {
 	// should appear exactly once for the three POSTs.
 	for _, pid := range projectIDs {
 		if strings.Contains(body, pid.String()) {
-			t.Errorf("metrics exposition leaked raw UUID %q — cardinality fix regressed", pid.String())
+			t.Errorf("metrics exposition leaked raw UUID %q; cardinality fix regressed", pid.String())
 		}
 	}
 
@@ -119,6 +119,6 @@ func TestMetricsScrape_EndToEnd(t *testing.T) {
 	// an empty-string pattern (a single series), not contribute a unique
 	// series per random unmatched URL.
 	if strings.Contains(body, "/does/not/exist") {
-		t.Errorf("metrics exposition leaked unmatched raw path /does/not/exist — cardinality fix regressed")
+		t.Errorf("metrics exposition leaked unmatched raw path /does/not/exist; cardinality fix regressed")
 	}
 }

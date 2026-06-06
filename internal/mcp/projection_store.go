@@ -99,7 +99,7 @@ type mcpBatchGetResponse struct {
 }
 
 // buildMCPBatchGetResponse stamps every result with projectSlug because
-// memory_get is project-scoped — BatchGet filters to a single namespace, so
+// memory_get is project-scoped; BatchGet filters to a single namespace, so
 // all returned memories share the request's project.
 func buildMCPBatchGetResponse(resp *service.BatchGetResponse, projectSlug string, opts projectionOpts) *mcpBatchGetResponse {
 	found := make([]mcpMemoryDetail, 0, len(resp.Found))

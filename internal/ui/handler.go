@@ -18,7 +18,7 @@ func Handler() http.Handler {
 	fileServer := http.FileServer(http.FS(distRoot))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Clean the path — strip leading slash for fs lookup.
+		// Clean the path: strip leading slash for fs lookup.
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"

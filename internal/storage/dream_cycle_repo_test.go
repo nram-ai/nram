@@ -87,7 +87,7 @@ func TestDreamCycleRepo_TickProgress_OnlyRunningRows(t *testing.T) {
 			t.Fatalf("expected heartbeat_at to be set on running cycle")
 		}
 
-		// Transition to failed, then attempt TickProgress — must be a no-op.
+		// Transition to failed, then attempt TickProgress; must be a no-op.
 		if err := repo.Fail(ctx, running.ID, "test"); err != nil {
 			t.Fatalf("fail: %v", err)
 		}
@@ -229,7 +229,7 @@ func TestDreamCycleRepo_ListStale(t *testing.T) {
 		// because status guard requires running.
 		setCycleTimestamps(t, ctx, db, completed.ID, time.Now().Add(-30*time.Minute), nil)
 
-		// Threshold 10 minutes — old qualifies, fresh does not.
+		// Threshold 10 minutes: old qualifies, fresh does not.
 		stale, err := repo.ListStale(ctx, 10*time.Minute, 0)
 		if err != nil {
 			t.Fatalf("list stale: %v", err)
@@ -245,7 +245,7 @@ func TestDreamCycleRepo_ListStale(t *testing.T) {
 			t.Fatalf("expected only old cycle to be stale, got %v", got)
 		}
 
-		// Threshold 5 minutes — both old and fresh would be stale once we
+		// Threshold 5 minutes: both old and fresh would be stale once we
 		// park fresh too. Verify the boundary.
 		setCycleTimestamps(t, ctx, db, fresh.ID, time.Now().Add(-6*time.Minute), nil)
 		stale, _ = repo.ListStale(ctx, 5*time.Minute, 0)
@@ -399,7 +399,7 @@ func TestDreamCycleRepo_ListByNamespacePathPrefix(t *testing.T) {
 		mine, _ := createTestProject(t, ctx, db, "mine-"+uuid.New().String()[:8])
 		theirs, _ := createTestProject(t, ctx, db, "theirs-"+uuid.New().String()[:8])
 
-		// Resolve caller's user namespace path — that's the prefix passed to
+		// Resolve caller's user namespace path; that's the prefix passed to
 		// the new method. createTestProject creates the project under a fresh
 		// user, with parent_id pointing at the user namespace.
 		mineNS, err := nsRepo.GetByID(ctx, mine.NamespaceID)

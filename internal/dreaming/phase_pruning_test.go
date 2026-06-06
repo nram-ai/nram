@@ -40,7 +40,7 @@ func TestShouldPrune_EffectivelyZeroConfidenceCohort(t *testing.T) {
 }
 
 // TestShouldPrune_FloorPinnedMemoryNotPruned verifies the threshold leaves
-// memories sitting at the decay floor (default 0.05) alone — they are
+// memories sitting at the decay floor (default 0.05) alone; they are
 // load-bearing for the eventual recall-reinforcement rollout.
 func TestShouldPrune_FloorPinnedMemoryNotPruned(t *testing.T) {
 	now := time.Now().UTC()

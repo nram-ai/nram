@@ -30,7 +30,7 @@ const (
 // ShareTokenResolver is the subset of *service.ShareTokenService needed by
 // the consent flow and the token-refresh re-validation. Defined as an
 // interface so the auth package does not depend on internal/service (which
-// depends on storage, which depends on auth — a direct import would cycle).
+// depends on storage, which depends on auth; a direct import would cycle).
 type ShareTokenResolver interface {
 	Resolve(ctx context.Context, rawSecret string) (*model.ShareToken, []model.ShareTokenGrant, error)
 	MarkConsumed(ctx context.Context, shareID uuid.UUID) error

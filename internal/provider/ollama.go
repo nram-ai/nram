@@ -26,7 +26,7 @@ type OllamaConfig struct {
 }
 
 // OllamaClient is a discovery and management client for Ollama. It is not a
-// provider itself — actual LLM and embedding calls go through the OpenAI-compatible
+// provider itself; actual LLM and embedding calls go through the OpenAI-compatible
 // adapter pointed at the Ollama server. This client handles model listing,
 // pulling, and health probing.
 type OllamaClient struct {
@@ -78,7 +78,7 @@ type ollamaShowResponse struct {
 	Parameters string         `json:"parameters"`
 }
 
-// ollamaPSResponse is the response body from GET /api/ps — the list of
+// ollamaPSResponse is the response body from GET /api/ps: the list of
 // currently-loaded models. We use the per-model context_length field as
 // the most authoritative signal of the context Ollama actually serves
 // the model with (Modelfile defaults can be overridden at load time).
@@ -230,19 +230,19 @@ func (c *OllamaClient) PullModel(ctx context.Context, name string, progress func
 // /api/show's model_info.<arch>.context_length. The architecture prefix
 // varies per family (llama, qwen2, bert, gemma, ...) so we scan for any
 // entry whose key ends in ".context_length" rather than hard-coding a
-// per-arch list — keeps the surface working for new model families.
+// per-arch list; keeps the surface working for new model families.
 //
 // effective is min(modelMax, configured) when both are known, otherwise
 // whichever side is known. configured is resolved in priority order:
-//  1. /api/ps — the actual context the runner allocated for the
+//  1. /api/ps: the actual context the runner allocated for the
 //     currently-loaded model. Authoritative because the loader can
 //     override the Modelfile default at load time.
-//  2. /api/show parameters — the Modelfile PARAMETER num_ctx (the
+//  2. /api/show parameters: the Modelfile PARAMETER num_ctx (the
 //     default Ollama would use to load the model). Used as a fallback
 //     when /api/ps has no entry for the model (model not loaded).
 //
-// Returns 0 for both values when Ollama responds but advertises nothing
-// — the caller treats that as "unknown" and the UI shows the muted
+// Returns 0 for both values when Ollama responds but advertises nothing;
+// the caller treats that as "unknown" and the UI shows the muted
 // fallback. A non-nil error means the /api/show HTTP call itself
 // failed; /api/ps failures are non-fatal and only suppress the
 // runtime-context signal.
@@ -364,7 +364,7 @@ func scanModelInfoContextLength(modelInfo map[string]any) int {
 // parseNumCtxFromParameters scans Ollama's /api/show parameters string
 // (Modelfile PARAMETER lines, one per line, whitespace-separated) for a
 // num_ctx entry and returns its integer value. Returns 0 when the
-// parameter is absent or the value cannot be parsed — the caller treats
+// parameter is absent or the value cannot be parsed; the caller treats
 // 0 as "unknown" and continues down the fallback chain.
 func parseNumCtxFromParameters(s string) int {
 	if s == "" {
@@ -385,7 +385,7 @@ func parseNumCtxFromParameters(s string) int {
 
 // lookupRunningContext returns the loaded context_length for the named
 // model from a /api/ps response, or 0 when no entry matches. Match is
-// against either the name or the model field — Ollama populates both
+// against either the name or the model field; Ollama populates both
 // with the same tag today, but we accept either to stay defensive.
 func lookupRunningContext(running []ollamaPSModel, modelName string) int {
 	for _, m := range running {

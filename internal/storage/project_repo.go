@@ -479,7 +479,7 @@ func (r *ProjectRepo) populateProject(
 		return nil, fmt.Errorf("project parse updated_at: %w", err)
 	}
 
-	// Reserved is derived from the slug, not stored — every load reflects the
+	// Reserved is derived from the slug, not stored; every load reflects the
 	// current reserved-slug registry.
 	project.Reserved = model.IsReservedProjectSlug(project.Slug)
 

@@ -106,7 +106,7 @@ func TestProject_IncludeLowNoveltyKeepsReasonNotKey(t *testing.T) {
 	if residual["low_novelty_reason"] != "orphan_no_sources" {
 		t.Errorf("expected low_novelty_reason preserved under IncludeLowNovelty, got %v", residual["low_novelty_reason"])
 	}
-	// Audit stamps stay stripped — only include_audit un-strips those.
+	// Audit stamps stay stripped; only include_audit un-strips those.
 	for _, k := range []string{"novelty_audited_at", "contradictions_checked_at", "paraphrase_checked_at", "ingestion_decision"} {
 		if _, ok := residual[k]; ok {
 			t.Errorf("audit key %s leaked under IncludeLowNovelty (that is include_audit's job)", k)

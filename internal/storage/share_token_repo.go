@@ -241,7 +241,7 @@ func (r *ShareTokenRepo) ListByOwner(ctx context.Context, ownerUserID uuid.UUID)
 }
 
 // ListGrantsByOwner returns all share_token_grants for shares owned by the
-// given user, indexed by share id. One query instead of N — handlers
+// given user, indexed by share id. One query instead of N; handlers
 // rendering the owner's share list use this to avoid 1+N round trips.
 func (r *ShareTokenRepo) ListGrantsByOwner(ctx context.Context, ownerUserID uuid.UUID) (map[uuid.UUID][]model.ShareTokenGrant, error) {
 	query := `SELECT g.share_token_id, g.project_id, g.permission
@@ -367,7 +367,7 @@ func (r *ShareTokenRepo) SetGrants(ctx context.Context, shareID uuid.UUID, grant
 	return nil
 }
 
-// Revoke sets revoked_at on the share. Idempotent — re-revoking a revoked
+// Revoke sets revoked_at on the share. Idempotent: re-revoking a revoked
 // share is a no-op. Returns ErrShareTokenNotFound if the share does not
 // exist. Callers must separately RevokeRefreshTokensByShareToken on the
 // OAuth repo to kill derived bearer access on the recipient's next refresh.

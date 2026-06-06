@@ -13,7 +13,7 @@ import (
 // TestRepairGraph_LiveData runs the actual production RepairGraph path against a
 // restored copy of a real database, proving the repair on real data. It is
 // skipped unless REPRO_DATABASE_URL points at a throwaway restore (NEVER a live
-// system — RepairGraph permanently deletes lost-provenance rows). Usage:
+// system: RepairGraph permanently deletes lost-provenance rows). Usage:
 //
 //	REPRO_DATABASE_URL='postgres://user@127.0.0.1:5432/nram_liverepro?sslmode=disable' \
 //	  go test ./internal/service/ -run TestRepairGraph_LiveData -count=1 -v

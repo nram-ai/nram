@@ -5,8 +5,8 @@ package model
 // user's behalf (its identity fields are locked against edits), and cannot be
 // deleted. The two tiers differ only by subject:
 //
-//   - global   — world-knowledge that spans projects (the cross-cutting tier).
-//   - about_me — self-knowledge about the user (the persona tier).
+//   - global:   world-knowledge that spans projects (the cross-cutting tier).
+//   - about_me: self-knowledge about the user (the persona tier).
 //
 // This file is the single source of truth for which slugs are reserved and the
 // canonical copy each one carries. It lives in the bottom (model) layer so the
@@ -33,21 +33,21 @@ var ReservedProjects = []ReservedProject{
 	{
 		Slug: ReservedProjectSlugGlobal,
 		Name: ReservedProjectSlugGlobal,
-		Description: "Reserved cross-cutting tier — world-knowledge that spans projects: " +
+		Description: "Reserved cross-cutting tier: world-knowledge that spans projects: " +
 			"facts, tools, references, and context not specific to any single project. " +
 			"Auto-created for every user, searched on every recall alongside the active " +
-			"project, and cannot be deleted. World-knowledge, not self-knowledge — " +
+			"project, and cannot be deleted. World-knowledge, not self-knowledge; " +
 			"biography and identity belong in about_me.",
 	},
 	{
 		Slug: ReservedProjectSlugAboutMe,
 		Name: ReservedProjectSlugAboutMe,
-		Description: "Reserved persona tier — self-knowledge about the user you're assisting: " +
+		Description: "Reserved persona tier: self-knowledge about the user you're assisting: " +
 			"identity, background, preferences, relationships, and ongoing personal context. " +
 			"Fully indexed (embedding, enrichment, dream synthesis) and surfaced on every " +
 			"recall by association; load it directly with the about_me tool for a session-start " +
 			"sense of who this person is. Auto-created for every user and cannot be deleted. " +
-			"Self-knowledge, not world-knowledge — cross-cutting facts belong in global.",
+			"Self-knowledge, not world-knowledge; cross-cutting facts belong in global.",
 	},
 }
 

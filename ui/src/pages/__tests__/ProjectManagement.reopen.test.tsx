@@ -3,7 +3,7 @@
  *
  * Regression test for the detail-panel "renders empty on re-open" race.
  *
- * The bug: ProjectDetailPanel initialized its edit form with two effects —
+ * The bug: ProjectDetailPanel initialized its edit form with two effects:
  * an initializer `if (project && !initialized) { ...; setInitialized(true) }`
  * keyed on `[project, initialized]`, and a reset `setInitialized(false)`
  * keyed on `[projectId]`. When `useProject` returns cached data
@@ -12,7 +12,7 @@
  * commit. The reset, declared second, clobbers the initializer's
  * `setInitialized(true)` within the batch, so `initialized` settles false
  * and the render guard `{project && initialized && (...)}` renders an empty
- * body — no form, no skeleton, no error.
+ * body: no form, no skeleton, no error.
  *
  * Mounting the panel with `useProject` returning data synchronously
  * reproduces the cached-at-mount condition exactly. With the bug present the
@@ -112,7 +112,7 @@ beforeEach(() => {
   useMeProjectsMock.mockReturnValue(
     queryStub([project()]) as ReturnType<typeof useApi.useMeProjects>,
   );
-  // The detail query returns its data synchronously — this is precisely the
+  // The detail query returns its data synchronously; this is precisely the
   // "already cached at mount" condition that triggers the race on re-open.
   useProjectMock.mockReturnValue(
     queryStub(project()) as ReturnType<typeof useApi.useProject>,
@@ -137,13 +137,13 @@ beforeEach(() => {
   });
 });
 
-describe("ProjectManagement detail panel — cached-at-mount re-open", () => {
+describe("ProjectManagement detail panel, cached-at-mount re-open", () => {
   it("renders the populated edit form when the project query is already cached at mount", async () => {
     render(<ProjectManagement />);
 
     // Open the panel by clicking the project row. The detail query already
     // has data (mocked synchronous), so the panel mounts with `project`
-    // defined on its very first render — the re-open condition.
+    // defined on its very first render: the re-open condition.
     fireEvent.click(screen.getByText("Reopen Test Project"));
 
     // The form body must render. Pre-fix, the reset effect clobbered

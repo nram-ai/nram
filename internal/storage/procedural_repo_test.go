@@ -69,7 +69,7 @@ func TestProceduralRepo_ListOrderedByPriorityThenRecency(t *testing.T) {
 		if err := repo.Create(ctx, low); err != nil {
 			t.Fatalf("create low: %v", err)
 		}
-		// Higher priority, created second — must sort first.
+		// Higher priority, created second; must sort first.
 		high := &model.ProceduralEntry{NamespaceID: user.NamespaceID, Content: "high", Priority: 5, Enabled: true}
 		if err := repo.Create(ctx, high); err != nil {
 			t.Fatalf("create high: %v", err)

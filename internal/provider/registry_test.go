@@ -241,7 +241,7 @@ func TestRegistryReloadError(t *testing.T) {
 		t.Fatalf("NewRegistry() error: %v", err)
 	}
 
-	// Attempt reload with invalid config — original state should be preserved.
+	// Attempt reload with invalid config; original state should be preserved.
 	badCfg := RegistryConfig{
 		Embedding: SlotConfig{Type: "invalid"},
 	}
@@ -515,8 +515,8 @@ func TestRegistryEmbeddingDim_ReloadInvalidatesCache(t *testing.T) {
 }
 
 // TestRegistryProbe_StampsSystemProbeOperation verifies that every probe
-// path — including the lazy EmbeddingDim hit triggered by the admin
-// providers handler — stamps OperationProbe so the recorder middleware
+// path (including the lazy EmbeddingDim hit triggered by the admin
+// providers handler) stamps OperationProbe so the recorder middleware
 // neither logs a missing-operation stack trace nor records the row as
 // "unknown".
 func TestRegistryProbe_StampsSystemProbeOperation(t *testing.T) {
@@ -540,7 +540,7 @@ func TestRegistryProbe_StampsSystemProbeOperation(t *testing.T) {
 // burst of EmbeddingDim callers racing the eager prewarm coalesces into
 // a single network probe. The embedder sleeps 100ms inside Embed so the
 // leader stays in flight long enough for every follower to reach DoChan
-// and join the singleflight entry — observing that opaque arrival is
+// and join the singleflight entry; observing that opaque arrival is
 // not possible, so we widen the window instead.
 func TestRegistryProbe_SingleflightCollapsesConcurrent(t *testing.T) {
 	emb := &probeEmbedder{dim: 1024, delay: 100 * time.Millisecond}

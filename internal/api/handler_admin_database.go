@@ -140,7 +140,7 @@ type OrphanCount struct {
 }
 
 // AuditError records a FK relationship that could not be audited (e.g. because
-// an expected table does not exist on the source). Not fatal — reported alongside
+// an expected table does not exist on the source). Not fatal; reported alongside
 // the orphan counts so the operator can decide.
 type AuditError struct {
 	Table   string `json:"table"`
@@ -163,11 +163,11 @@ type resetRequest struct {
 // admin requests based on method and sub-path.
 //
 // Routes:
-//   - GET  /database           — current backend info and stats
-//   - POST /database/test      — test a Postgres connection URL
-//   - POST /database/migrate   — trigger SQLite-to-Postgres migration
-//   - POST /database/preflight — preflight checks against a target Postgres URL
-//   - POST /database/reset     — reset a target Postgres DB's nram tables
+//   - GET  /database:           current backend info and stats
+//   - POST /database/test:      test a Postgres connection URL
+//   - POST /database/migrate:   trigger SQLite-to-Postgres migration
+//   - POST /database/preflight: preflight checks against a target Postgres URL
+//   - POST /database/reset:     reset a target Postgres DB's nram tables
 func NewAdminDatabaseHandler(cfg DatabaseAdminConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Extract sub-path after "/database".
@@ -208,7 +208,7 @@ func extractDatabaseSubPath(path string) string {
 	return strings.Trim(sub, "/")
 }
 
-// handleGetDatabaseInfo handles GET /database — returns current backend info and statistics.
+// handleGetDatabaseInfo handles GET /database: returns current backend info and statistics.
 func handleGetDatabaseInfo(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminConfig) {
 	info, err := cfg.Store.GetDatabaseInfo(r.Context())
 	if err != nil {
@@ -219,7 +219,7 @@ func handleGetDatabaseInfo(w http.ResponseWriter, r *http.Request, cfg DatabaseA
 	writeJSON(w, http.StatusOK, info)
 }
 
-// handleTestConnection handles POST /database/test — tests a Postgres connection URL.
+// handleTestConnection handles POST /database/test: tests a Postgres connection URL.
 func handleTestConnection(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminConfig) {
 	var body databaseURLRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -242,7 +242,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request, cfg DatabaseAd
 	writeJSON(w, http.StatusOK, result)
 }
 
-// handleTriggerMigration handles POST /database/migrate — triggers SQLite-to-Postgres migration.
+// handleTriggerMigration handles POST /database/migrate: triggers SQLite-to-Postgres migration.
 func handleTriggerMigration(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminConfig) {
 	var body databaseURLRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -265,7 +265,7 @@ func handleTriggerMigration(w http.ResponseWriter, r *http.Request, cfg Database
 	writeJSON(w, http.StatusAccepted, status)
 }
 
-// handlePreflight handles POST /database/preflight — runs pre-migration checks against a target URL.
+// handlePreflight handles POST /database/preflight: runs pre-migration checks against a target URL.
 func handlePreflight(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminConfig) {
 	var body databaseURLRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -288,7 +288,7 @@ func handlePreflight(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminCo
 	writeJSON(w, http.StatusOK, report)
 }
 
-// handleReset handles POST /database/reset — wipes nram tables from the target DB.
+// handleReset handles POST /database/reset: wipes nram tables from the target DB.
 // Mode must be explicitly supplied (no default) so the caller makes the choice each time.
 func handleReset(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminConfig) {
 	var body resetRequest
@@ -317,7 +317,7 @@ func handleReset(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminConfig
 	writeJSON(w, http.StatusOK, result)
 }
 
-// handleMigrationAudit handles GET /database/migration-audit — scans the SQLite
+// handleMigrationAudit handles GET /database/migration-audit: scans the SQLite
 // source for orphan FK rows that would break a Postgres migration.
 func handleMigrationAudit(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminConfig) {
 	audit, err := cfg.Store.MigrationAudit(r.Context())

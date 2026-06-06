@@ -123,7 +123,7 @@ WHERE json_extract(settings, '$.ranking_weights.relevance') IS NOT NULL`); err !
 
 // TestProjectRankingWeightsCanonical_SimilarityWinsTie verifies that when
 // both `similarity` and `relevance` are set on a legacy row, similarity is
-// preserved and relevance is dropped — matching the parser's tie-break.
+// preserved and relevance is dropped, matching the parser's tie-break.
 func TestProjectRankingWeightsCanonical_SimilarityWinsTie(t *testing.T) {
 	db := runEmbeddedSQLiteMigrations(t)
 
@@ -300,7 +300,7 @@ func TestLegacyZeroConfidenceRestore_RespectsLog(t *testing.T) {
 }
 
 // TestLegacyZeroConfidenceRestore_Idempotent confirms running the migration
-// twice produces no further changes — restored rows are no longer 0, so
+// twice produces no further changes: restored rows are no longer 0, so
 // the WHERE clause matches nothing on the second pass.
 func TestLegacyZeroConfidenceRestore_Idempotent(t *testing.T) {
 	db := runEmbeddedSQLiteMigrations(t)

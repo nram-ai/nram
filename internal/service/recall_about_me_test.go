@@ -15,7 +15,7 @@ import (
 // RecallRequest.AboutMeNamespaceID brings the about_me namespace into the recall
 // aperture and that memories from it are attributed to the about_me project
 // (not mis-stamped with the primary project's slug). When the field is unset,
-// the same memory falls back to the primary attribution — proving the wiring,
+// the same memory falls back to the primary attribution, proving the wiring,
 // not the mock, drives the behavior.
 func TestRecall_AboutMeAperture_AttributesPersonaNamespace(t *testing.T) {
 	primaryID, primaryNs, _, _, projects, namespaces := setupPrimaryGlobalFixtures()

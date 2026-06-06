@@ -129,7 +129,7 @@ func loadYAML(path string, cfg *Config) error {
 }
 
 // warnDeprecatedYAML logs one WARN line per deprecated top-level key found
-// in the parsed YAML map. Walks only the top level — nested deprecated
+// in the parsed YAML map. Walks only the top level; nested deprecated
 // fields (e.g. `embed.url`) are reported via their containing block.
 func warnDeprecatedYAML(path string, raw map[string]any) {
 	for _, key := range deprecatedYAMLKeys {
@@ -176,7 +176,7 @@ func interpolateEnvVars(s string) string {
 
 // applyEnv overlays environment variables on top of the current config.
 // Environment variables always take precedence over YAML values. The set is
-// limited to the bootstrap surface — provider, vector backend, and tuning
+// limited to the bootstrap surface: provider, vector backend, and tuning
 // envs were removed; warnDeprecatedEnv reports any that remain set.
 func applyEnv(cfg *Config) {
 	if v := os.Getenv("PORT"); v != "" {

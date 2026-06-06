@@ -15,7 +15,7 @@ import (
 //  1. Memories with no enrichment job at all get one enqueued.
 //  2. Memories whose only existing job is already pending or in-flight
 //     (processing) are NOT double-enqueued.
-//  3. Memories whose only existing job is completed DO get re-enqueued —
+//  3. Memories whose only existing job is completed DO get re-enqueued;
 //     those are the rows that may have the old worker's fact-as-parent-vector
 //     bug, and re-embedding is the only way to fix it.
 //  4. Running the backfill twice is a no-op the second time (idempotent).
@@ -76,7 +76,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 			t.Fatalf("soft-delete memory: %v", err)
 		}
 
-		// e. Memory with an in-flight (processing) job — already covered, so it
+		// e. Memory with an in-flight (processing) job, already covered, so it
 		//    must be skipped. Regression guard for the dedup predicate: the
 		//    claimed status is 'processing', not 'running'.
 		memE := newTestMemory(nsID)
@@ -164,7 +164,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 			t.Errorf("plainA: expected priority=-1 status=pending, got %+v", got[0])
 		}
 
-		// withPending: still exactly one job — the original priority-0
+		// withPending: still exactly one job, the original priority-0
 		// pending one. Backfill MUST NOT have added a duplicate.
 		if got := byMem[ids.withPending]; len(got) != 1 {
 			t.Errorf("withPending: expected 1 job (no duplicate), got %d (%v)", len(got), got)
@@ -172,7 +172,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 			t.Errorf("withPending: expected original priority=0 status=pending, got %+v", got[0])
 		}
 
-		// completed: now has 2 jobs — the original completed one and the
+		// completed: now has 2 jobs, the original completed one and the
 		// new backfill one at priority -1.
 		if got := byMem[ids.completed]; len(got) != 2 {
 			t.Errorf("completed: expected 2 jobs (original + backfill), got %d (%v)", len(got), got)
@@ -195,7 +195,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 			}
 		}
 
-		// processing: still exactly one job — the in-flight one. Backfill MUST
+		// processing: still exactly one job, the in-flight one. Backfill MUST
 		// NOT add a duplicate for a memory that already has a live job.
 		if got := byMem[ids.processing]; len(got) != 1 {
 			t.Errorf("processing: expected 1 job (no duplicate), got %d (%v)", len(got), got)
@@ -344,7 +344,7 @@ func TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory(t *testing.T) {
 				t.Fatalf("create memory: %v", err)
 			}
 		}
-		// Pre-existing pending job on memB — backfill must still enqueue.
+		// Pre-existing pending job on memB; backfill must still enqueue.
 		if _, err := queueRepo.Enqueue(ctx, &model.EnrichmentJob{MemoryID: memB.ID, NamespaceID: nsID}); err != nil {
 			t.Fatalf("seed pending: %v", err)
 		}

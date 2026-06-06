@@ -102,7 +102,7 @@ func TestResolveFromDatabase(t *testing.T) {
 
 // TestMarkerFlagRoundTrip pins the boot-guard mechanism used by the one-time
 // relation-canonicalization backfill in cmd/server/main.go: an unregistered
-// marker key reads false (no panic — ResolveBool tolerates unset/unregistered
+// marker key reads false (no panic: ResolveBool tolerates unset/unregistered
 // keys), and reads true after Set. This is what makes the backfill run exactly
 // once.
 func TestMarkerFlagRoundTrip(t *testing.T) {
@@ -458,7 +458,7 @@ func TestDeleteInvalidatesCache(t *testing.T) {
 // error (anything other than sql.ErrNoRows) used to propagate to the
 // caller, where helpers like ResolveBool silently coerced it to false,
 // flipping behavior of consumers like recall.fusion.enabled. The fix is
-// stale-while-revalidate — if the cache still holds the prior value
+// stale-while-revalidate: if the cache still holds the prior value
 // (just expired), serve it instead of failing.
 func TestResolveServesStaleOnDBError(t *testing.T) {
 	repo := newMockSettingsRepo()

@@ -61,7 +61,7 @@ type fakeStuckJobStore struct {
 	requeued        []uuid.UUID
 	requeueReasons  map[uuid.UUID]string
 	requeueErr      error
-	requeueOK       bool // when false, RequeueStale returns (false, nil) — race path
+	requeueOK       bool // when false, RequeueStale returns (false, nil), race path
 	listErr         error
 	lastUpdatedArg  time.Duration
 	lastClaimAgeArg time.Duration
@@ -117,7 +117,7 @@ func (s *fakeStuckJobStore) DeleteFailedBefore(_ context.Context, cutoff time.Ti
 }
 
 // stuckJob constructs a stale-looking *model.EnrichmentJob for the fake store.
-// Both claimed_at and updated_at are seeded at `ageSinceUpdate` ago — the
+// Both claimed_at and updated_at are seeded at `ageSinceUpdate` ago, the
 // common case where a dead worker stopped advancing both columns.
 func stuckJob(id uuid.UUID, claimedBy string, ageSinceUpdate time.Duration) *model.EnrichmentJob {
 	worker := claimedBy
@@ -149,7 +149,7 @@ func wedgedJob(id uuid.UUID, claimedBy string, claimAge time.Duration) *model.En
 		Status:      "processing",
 		ClaimedBy:   &worker,
 		ClaimedAt:   &claimedAt,
-		UpdatedAt:   now, // fresh — sweeper's updated_at signal would NOT fire
+		UpdatedAt:   now, // fresh, sweeper's updated_at signal would NOT fire
 		Attempts:    1,
 		MaxAttempts: 3,
 	}
@@ -276,7 +276,7 @@ func TestStuckJobSweeper_PerRowFailureContinues(t *testing.T) {
 	}
 	sweeper := newTestSweeper(store, events.NewMemoryBus(8, 8))
 
-	// A repo error per row should NOT propagate out of Sweep — the sweeper
+	// A repo error per row should NOT propagate out of Sweep; the sweeper
 	// logs and continues so a single bad row doesn't poison the batch.
 	if err := sweeper.Sweep(context.Background()); err != nil {
 		t.Fatalf("sweep returned error despite per-row RequeueStale failures: %v", err)
@@ -417,7 +417,7 @@ func TestStuckJobSweeper_StalenessReasonString(t *testing.T) {
 
 func TestStuckJobSweeper_PrunesFailedRetention(t *testing.T) {
 	store := &fakeStuckJobStore{deleteFailedReturn: 5}
-	// Default retention (7 days) and default scan limit, no stale jobs — the
+	// Default retention (7 days) and default scan limit, no stale jobs, the
 	// prune still runs because it precedes the empty-stale early return.
 	sweeper := newTestSweeper(store, events.NewMemoryBus(8, 8))
 

@@ -140,7 +140,7 @@ function EntryForm({
         <span className="text-sm text-muted-foreground">
           {draft.enabled
             ? "Returned by procedural_fetch"
-            : "Excluded from fetch — kept for reference"}
+            : "Excluded from fetch, kept for reference"}
         </span>
       </div>
       <div className="flex items-center justify-end gap-2">
@@ -266,7 +266,7 @@ export default function ProceduralMemory() {
       <PageHeader
         icon={faListCheck}
         title="Procedural Memory"
-        subtitle="Standing rules for your agents. Stored exactly as written and returned whole by procedural_fetch — never summarized, embedded, or surfaced by recall. How they're applied is up to the agent."
+        subtitle="Standing rules for your agents. Stored exactly as written and returned whole by procedural_fetch, never summarized, embedded, or surfaced by recall. How they're applied is up to the agent."
         actions={
           !creating && (
             <button type="button" className={primaryBtn} onClick={() => setCreating(true)}>

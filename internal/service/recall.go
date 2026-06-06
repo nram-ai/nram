@@ -32,7 +32,7 @@ type MemoryReader interface {
 // LexicalSearcher runs a backend-native full-text query (FTS5 on SQLite,
 // to_tsvector on Postgres) and returns rows in best-first order. The recall
 // path uses it as a second retrieval channel that gets fused with vector
-// search via Reciprocal Rank Fusion. Implementations must fail soft — a
+// search via Reciprocal Rank Fusion. Implementations must fail soft: a
 // malformed query should yield an empty result, not an error, so recall is
 // never gated on lexical input parsing.
 type LexicalSearcher interface {
@@ -120,7 +120,7 @@ type RecallRequest struct {
 	// set by grouping results by the first tag matching this prefix and
 	// round-robin-picking across groups up to Limit. Candidates with no
 	// prefix-matching tag are excluded from the diversified output. Vector
-	// search and graph traversal are unchanged — this is a pure rerank step.
+	// search and graph traversal are unchanged: this is a pure rerank step.
 	DiversifyByTagPrefix string `json:"diversify_by_tag_prefix,omitempty"`
 	// Caller context
 	UserID   *uuid.UUID `json:"-"`
@@ -260,8 +260,8 @@ type RankingWeights struct {
 // once the cross-namespace vector fusion was pooled into a single cosine-ordered
 // ranking (so a small tier's best-of-N hit no longer takes RRF rank 1 over a
 // far-more-similar primary memory), 0.25 is the value that surfaces the relevant
-// primary memory first on technical project queries — overcoming the residual
-// freshness edge that recently-written persona/global memories carry — while
+// primary memory first on technical project queries (overcoming the residual
+// freshness edge that recently-written persona/global memories carry) while
 // still leaving genuine cross-tier hits (e.g. an identity question answered from
 // about_me) on top. The measured safe window was [0.20, 0.35]; 0.25 centers it
 // with ~0.1 margin against embedding-similarity noise on both sides.
@@ -278,7 +278,7 @@ var DefaultRankingWeights = RankingWeights{
 
 // FusionConfig governs candidate retrieval (parallel vector + lexical,
 // fused via RRF). The fused score lands in scoredMemory.similarity, so
-// RankingWeights.Similarity still controls its weight in computeScore —
+// RankingWeights.Similarity still controls its weight in computeScore:
 // that's why this is a separate struct from RankingWeights.
 type FusionConfig struct {
 	Enabled       bool    // off by default; flip via /v1/admin/settings
@@ -290,7 +290,7 @@ type FusionConfig struct {
 	NormalizePerChannel bool
 }
 
-// DefaultFusionConfig ships with the feature dark — operators flip
+// DefaultFusionConfig ships with the feature dark: operators flip
 // recall.fusion.enabled in admin settings after migration + smoke test.
 // VectorWeight/LexicalWeight default to 0.60/0.40 per a synthetic controlled
 // experiment (internal/service/testdata/recall_contamination/results.md,
@@ -329,7 +329,7 @@ type RecallService struct {
 	// reinforcement is optional. When nil (the default, matching all existing
 	// callers), recall has no read-path write. When wired via SetReinforcement,
 	// every successful recall asynchronously bumps access_count, last_accessed,
-	// and confidence on the surfaced memories — the reconsolidation hook.
+	// and confidence on the surfaced memories, the reconsolidation hook.
 	reinforcement *ReinforcementDeps
 	// metrics is optional. When non-nil, a successful Recall increments the
 	// nram_memories_recalled_total counter.
@@ -375,7 +375,7 @@ func (s *RecallService) SetWeights(w RankingWeights) {
 
 // SetSettings wires the settings service so recall scoring knobs (recency
 // decay, graph hop multiplier, over-fetch shape, default limit/depth)
-// resolve through the registry. Optional — when nil, the registered
+// resolve through the registry. Optional: when nil, the registered
 // defaults apply via service.GetDefault*.
 func (s *RecallService) SetSettings(svc *SettingsService) {
 	s.settings = svc
@@ -496,7 +496,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	}
 
 	// Apply defaults from the registry (with in-code fallback when settings
-	// hasn't been wired — preserves the test-only constructor path).
+	// hasn't been wired, preserves the test-only constructor path).
 	limit := req.Limit
 	if limit <= 0 {
 		limit = s.recallDefaultLimit(ctx)
@@ -545,7 +545,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 	// projectByNamespace maps each namespace this recall touches to the project
 	// that owns it. Without this, every candidate gets stamped with the primary
-	// project's slug — globals fetched alongside primary results would be
+	// project's slug: globals fetched alongside primary results would be
 	// mis-attributed to the search-target project. The map covers primary and
 	// global namespaces. Falls back to the primary stamp when a namespace has
 	// no owning project.
@@ -913,7 +913,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		// boost a connected memory in a different tier even when no lexical
 		// match existed. Tracked separately from the lexical hits so the two
 		// channels interleave fairly into the edge budget below. Fail-soft at
-		// every step — a vector or hydration error drops back to lexical-only
+		// every step: a vector or hydration error drops back to lexical-only
 		// activation and never fails the recall. seenEntityIDs dedups against
 		// the lexical hits so an entity found by both channels is seeded once.
 		// The enabled switch is nil-safe (test constructors that leave
@@ -962,7 +962,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			// through to the registered default). Split into per-seed fair
 			// shares so a hot first seed cannot drain the whole budget before
 			// later seeds (e.g. a cross-tier entity surfaced by the vector
-			// channel) get to traverse — the starvation the all-remaining cap
+			// channel) get to traverse, the starvation the all-remaining cap
 			// allowed. The aggregate break below is kept as the belt-and-
 			// suspenders ceiling so a single hot anchor still cannot blow past
 			// recallMaxEdges in total.
@@ -974,7 +974,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 
 			// Aperture bound (defense-in-depth): constrain the graph output to the
 			// recall aperture (searchNamespaces) so foreign-namespace entities,
-			// relationships, and their source memories can never surface — even if
+			// relationships, and their source memories can never surface, even if
 			// a cross-namespace edge is ever created (the traversal query itself is
 			// not namespace-scoped; see relationship_repo ListByEntity). For a
 			// share-bearer the aperture is the single granted project; for an owner
@@ -1019,7 +1019,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 						if rel.SourceMemory != nil {
 							// Graph relevance: clamp(hop_multiplier * weight) into
 							// [0,1], the same bound every other computeScore input
-							// carries (similarity, recency, confidence) — the graph
+							// carries (similarity, recency, confidence): the graph
 							// term was previously the only unbounded score input.
 							// hop_multiplier defaults to 0.5 (the historical
 							// 1.0/2.0 = "approximate hops as 1") and is
@@ -1104,7 +1104,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	})
 
 	// Apply threshold filter to build the post-threshold ranked list. Limit is
-	// applied later — diversification needs the full passing set to group over.
+	// applied later: diversification needs the full passing set to group over.
 	var passing []RecallResult
 	for _, c := range candidates {
 		// Confidence-zero is the explicit kill signal regardless of source. The
@@ -1177,7 +1177,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// their composite-rank position inside mmrSelect, so a high-composite
 	// lexical-only or unbackfilled hit is not demoted; only the embedded
 	// subset gets reordered. Because no candidate is dropped, the set of
-	// tag-prefix groups is preserved across this stage — no post-MMR
+	// tag-prefix groups is preserved across this stage: no post-MMR
 	// coverage_gaps attribution is required. Fast paths bypass when lambda is
 	// at the disabling edges (>= 1.0 or <= 0.0) or fewer than two embedded
 	// candidates exist; see mmrSelect. Lambda is taken from the primary
@@ -1205,7 +1205,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	}
 
 	// Reconsolidation hook. Fire-and-forget goroutine that cannot panic or
-	// error its way back into the recall response — this is a read-path write
+	// error its way back into the recall response: this is a read-path write
 	// and must never affect the caller's outcome. Gated by SetReinforcement;
 	// when reinforcement is not wired, reinforce returns immediately.
 	if s.reinforcement != nil && len(results) > 0 {
@@ -1220,7 +1220,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	}
 
 	// seenRels above guarantees graphRelRefs holds one entry per edge
-	// surfaced in this call — the per-relationship throttle.
+	// surfaced in this call, the per-relationship throttle.
 	if s.reinforcement != nil && len(graphRelRefs) > 0 {
 		refs := make([]RelationshipRef, len(graphRelRefs))
 		copy(refs, graphRelRefs)
@@ -1262,7 +1262,7 @@ type runHybridArgs struct {
 	// is below the floor before they enter RRF. Lexical-channel rows are
 	// not touched. Zero disables the filter.
 	RawCosineFloor float64
-	// Fusion carries the resolved FusionConfig for this recall — passed in
+	// Fusion carries the resolved FusionConfig for this recall, passed in
 	// rather than read from s.fusion inside runHybridSearch so the caller
 	// can resolve once per Recall and feed the same value into every
 	// downstream consumer. Live admin-UI edits to recall.fusion.* therefore
@@ -1335,7 +1335,7 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	// Pool the per-namespace vector rankings into ONE global ranking ordered by
 	// absolute cosine before RRF. RRF ranks by list POSITION, so a per-namespace
 	// vector list lets the top hit of a tiny tier (e.g. a 4-memory about_me whose
-	// best match has cosine 0.24) take position 0 — the same rank-1 RRF weight as
+	// best match has cosine 0.24) take position 0, the same rank-1 RRF weight as
 	// the top hit of the large primary tier (cosine 0.62). That inverts true
 	// similarity order and lets small tiers dominate the fused score regardless of
 	// how weakly they match. Merging every namespace's results and sorting by
@@ -1346,11 +1346,11 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	// Only the vector channel is pooled: cosine is globally comparable, and this is
 	// the channel that carried the inversion. The lexical channel stays per-
 	// namespace because its ts_rank/bm25 score is backend-dependent in direction and
-	// not globally normalized, and it cannot cause the cross-tier inversion — a
+	// not globally normalized, and it cannot cause the cross-tier inversion: a
 	// memory only enters the lexical channel when the query text actually matches it.
 	// Tie-break by raw UUID bytes (not ID.String(), which would allocate per
 	// comparison) so the order is total and deterministic; that makes sort.Slice
-	// sufficient — there are no equal elements left for stability to preserve.
+	// sufficient: there are no equal elements left for stability to preserve.
 	pooledVec := channelResult{}
 	for _, cr := range vecRankings {
 		pooledVec.ranks = append(pooledVec.ranks, cr.ranks...)
@@ -1368,7 +1368,7 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	// is now a single pooled list; the lexical channel is still one list per
 	// namespace. The shared loops below apply each list's channel weight
 	// uniformly (NormalizePerChannel divides by that list's own length, so the
-	// pooled vector list normalizes against its summed length — one channel, one
+	// pooled vector list normalizes against its summed length, one channel, one
 	// divisor). A memory in both primary's vector list and global's lexical list
 	// still accumulates both contributions.
 	allRankings := make([][]storage.MemoryRank, 0, len(vecRankings)+len(lexRankings))

@@ -155,14 +155,14 @@ function WarningsDiagnostics({ value }: { value: PartialRecoveryWarning }) {
                     : null,
                 ]
                   .filter(Boolean)
-                  .join(", ") || "—"}
+                  .join(", ") || "-"}
               </td>
               <td className="px-2 py-1 font-mono">
-                {leg.finish_reason ?? "—"}
+                {leg.finish_reason ?? "-"}
               </td>
-              <td className="px-2 py-1 font-mono">{leg.model ?? "—"}</td>
+              <td className="px-2 py-1 font-mono">{leg.model ?? "-"}</td>
               <td className="px-2 py-1 font-mono">
-                {leg.prompt_tokens ?? "—"} / {leg.completion_tokens ?? "—"}
+                {leg.prompt_tokens ?? "-"} / {leg.completion_tokens ?? "-"}
               </td>
             </tr>
           ))}
@@ -182,7 +182,7 @@ export function ExtractionErrorView({
   const [expanded, setExpanded] = useState(false);
   if (!value) {
     return variant === "cell" ? (
-      <span className="text-xs text-muted-foreground">&mdash;</span>
+      <span className="text-xs text-muted-foreground">-</span>
     ) : null;
   }
 

@@ -1,7 +1,7 @@
 package model
 
 // MemoryOrigin is the coarse, server-assigned provenance category for a memory.
-// It is the authoritative discriminator that internal logic branches on —
+// It is the authoritative discriminator that internal logic branches on,
 // replacing the historical practice of overloading the free-form Source string
 // (which carried the literal "dream" value). Origin is assigned on the write
 // path and is never accepted from request input.
@@ -22,7 +22,7 @@ const (
 
 // OrDefault returns o, or OriginUser when o is empty. The storage boundary
 // uses it so a Memory built without an explicit origin persists and reads back
-// as user rather than as an empty (invalid) enum value — the column's
+// as user rather than as an empty (invalid) enum value; the column's
 // DEFAULT 'user' only applies when the column is omitted from the INSERT, and
 // the repo always writes it explicitly.
 func (o MemoryOrigin) OrDefault() MemoryOrigin {

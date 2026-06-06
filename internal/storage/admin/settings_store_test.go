@@ -70,7 +70,7 @@ func TestGetSettingsSchemaContainsQdrantEntries(t *testing.T) {
 // fall back to "" both at the UI and at service.Resolve (which returns "" for
 // any unregistered key); the others have no runtime call site outside the
 // schema registry. Adding a runtime default for any of these without removing
-// the key from this allowlist will fail the consistency check below — the
+// the key from this allowlist will fail the consistency check below; the
 // inverse drift this test also locks down.
 var uiOnlySchemaKeys = map[string]struct{}{
 	"qdrant.addr":    {},
@@ -147,7 +147,7 @@ func TestSettingsSchemaRequiresRestart(t *testing.T) {
 // TestSettingsSchemaDefaultsMatchRuntime asserts that every UI schema entry's
 // DefaultValue matches the runtime default returned by service.GetDefault.
 // This catches the class of bug where a setting is registered in the UI and
-// consumed at runtime, but settingDefaults is never updated — Resolve then
+// consumed at runtime, but settingDefaults is never updated; Resolve then
 // returns "", ResolveBool returns false, and the feature silently disables
 // itself on a fresh install.
 func TestSettingsSchemaDefaultsMatchRuntime(t *testing.T) {
@@ -232,7 +232,7 @@ func TestSettingsSchemaDefaultsMatchRuntime(t *testing.T) {
 // TestResetSetting_GlobalUpsertsDefault asserts that ResetSetting at scope
 // "global" writes the schema's canonical default back to (key, "global").
 // updated_by is intentionally nil here so the test does not depend on a
-// users row existing — production callers pass the admin UUID, and the FK
+// users row existing; production callers pass the admin UUID, and the FK
 // constraint on settings.updated_by ensures only real users land in the
 // column.
 func TestResetSetting_GlobalUpsertsDefault(t *testing.T) {
@@ -349,7 +349,7 @@ func TestResetAllSettings_SkipsOmitFromResetAll(t *testing.T) {
 					string(operatorValue), string(got.Value))
 			}
 
-			// Per-key reset on a protected key still works — the operator has
+			// Per-key reset on a protected key still works; the operator has
 			// to explicitly target it.
 			if err := store.ResetSetting(ctx, protectedKey, "global", nil); err != nil {
 				t.Fatalf("explicit ResetSetting on protected key: %v", err)

@@ -137,7 +137,7 @@ func newUpdateService(
 	vectors := &mockVectorStore{}
 
 	// Wrap embedFn so the middleware writes token_usage rows on every
-	// Embed call — matches production wiring.
+	// Embed call, matches production wiring.
 	wrapped := provider.WrapEmbeddingForTest(embedFn, tokenUsage)
 
 	svc := NewUpdateService(memories, projects, vectors, wrapped, enrichmentQueue)
@@ -706,7 +706,7 @@ func TestUpdate_SameContentNoReEmbed(t *testing.T) {
 		return embProvider
 	})
 
-	// Set content to the same value — should not trigger re-embed
+	// Set content to the same value: should not trigger re-embed
 	// nor a supersede chain link; tags-only path runs in place.
 	sameContent := "original content"
 	newTags := []string{"new-tag"}
@@ -876,7 +876,7 @@ func TestUpdate_ContentChange_OldRowFrozen(t *testing.T) {
 	if frozen.Content != "original content" {
 		t.Errorf("old row Content = %q, want unchanged", frozen.Content)
 	}
-	// Old row IS marked superseded (that's the whole point) — but the
+	// Old row IS marked superseded (that's the whole point), but the
 	// "frozen" semantic is: enrichment-derived state stays put.
 	if frozen.SupersededBy == nil || *frozen.SupersededBy != resp.ID {
 		t.Errorf("old row SupersededBy = %v, want %s", frozen.SupersededBy, resp.ID)

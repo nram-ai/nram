@@ -44,7 +44,7 @@ type recordingRelWriter struct {
 	expireLowWeightN  []int
 	expireTransitiveN []int
 	// transitiveResult lets a test inject the int64 returned from
-	// ExpireLowestNTransitive — defaults to the int(n) requested.
+	// ExpireLowestNTransitive; defaults to the int(n) requested.
 	transitiveResult *int64
 }
 
@@ -60,7 +60,7 @@ func (w *recordingRelWriter) UpdateWeight(context.Context, uuid.UUID, uuid.UUID,
 func (w *recordingRelWriter) ExpireLowWeight(_ context.Context, _ uuid.UUID, threshold float64) (int64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	// Stash the requested threshold via a sentinel int — tests on this
+	// Stash the requested threshold via a sentinel int; tests on this
 	// branch do not exercise the threshold value, only call presence.
 	w.expireLowWeightN = append(w.expireLowWeightN, int(threshold*100))
 	return 0, nil
@@ -189,7 +189,7 @@ func TestPruning_TransitivePressure_AtBoundary(t *testing.T) {
 func TestPruning_TransitivePressure_Misconfigured(t *testing.T) {
 	reader := &pressureFakeRelationshipReader{active: 9700}
 	writer := &recordingRelWriter{}
-	// low_water 0.99 >= high_water 0.95 — invalid pair.
+	// low_water 0.99 >= high_water 0.95: invalid pair.
 	phase := NewPruningPhase(&fakeMemoryReader{}, &recordingMemoryWriter{}, reader, writer,
 		pressureSettings(10000, 0.95, 0.99))
 	logger := NewDreamLogWriter(nil, uuid.New(), uuid.New())

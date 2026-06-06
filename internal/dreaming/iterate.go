@@ -13,14 +13,14 @@ import (
 // reader.ListByNamespace(limit=batchSize, offset=N*batchSize); termination is
 // triggered when a batch returns fewer rows than batchSize (or zero rows).
 //
-// Memory footprint is bounded to one batch — used by phases that visit every
+// Memory footprint is bounded to one batch, used by phases that visit every
 // memory each cycle but do not need the full namespace resident
 // simultaneously (pruning's confidence-decay-and-prune pass is the canonical
 // case: O(N) per cycle is the design intent, but holding the full N in
 // memory is not).
 //
 // Idempotency requirement: pagination is offset-based, so concurrent
-// inserts/deletes on the underlying table can shift rows between batches —
+// inserts/deletes on the underlying table can shift rows between batches;
 // the iterator may skip a row or surface it twice across consecutive
 // batches. Callers MUST be idempotent on a per-row basis. Pruning's three
 // row operations (DecayConfidence clamps to floor, the supersede-with-

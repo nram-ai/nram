@@ -60,7 +60,7 @@ describe("buildProjectSettingsPayload", () => {
   });
 
   it("preserves zero values (zero is a valid weight)", () => {
-    // Operators can deliberately zero out a term — the override must travel.
+    // Operators can deliberately zero out a term; the override must travel.
     const payload = buildProjectSettingsPayload({
       ...emptyProjectState,
       frequency: 0,
@@ -180,14 +180,14 @@ describe("buildUserSettingsPayload", () => {
     // The type system enforces the shape, but if a future refactor adds
     // ranking_weights state to UserManagement and forgets to remove this
     // helper from the user save path, the type check at the call site is
-    // the safety net — verify the helper itself does not silently let a
+    // the safety net: verify the helper itself does not silently let a
     // ranking_weights key through. Cast to bypass the type and confirm
     // runtime omission.
     const payload = buildUserSettingsPayload({
       dedup_threshold: 0.85,
       enrichment_enabled: true,
       dreaming_enabled: undefined,
-      // @ts-expect-error — UserFormState forbids this field.
+      // @ts-expect-error: UserFormState forbids this field.
       ranking_weights: { similarity: 0.5 },
     });
     expect(payload).not.toHaveProperty("ranking_weights");

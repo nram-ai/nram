@@ -205,7 +205,7 @@ func TestAdminProjects_CreateProject_MissingOwnerNamespaceID(t *testing.T) {
 
 func TestAdminProjects_ItemRoutes_NotAllowed(t *testing.T) {
 	// All item routes (GET, PUT, DELETE on /projects/{id}) are no longer served
-	// by the admin handler — they return 400 method not allowed.
+	// by the admin handler; they return 400 method not allowed.
 	projectID := uuid.New()
 	store := &mockProjectAdminStore{}
 

@@ -28,7 +28,7 @@ const transitivePropertySource = "transitive"
 // When the per-cycle creation count is bounded by the hard-cap headroom
 // rather than by max_per_cycle, the phase emits an informational
 // ResidualReasonTransitiveHardCapApproach in the phase summary but does
-// not set HasResidual=true — the pruning phase's pressure-driven prune
+// not set HasResidual=true; the pruning phase's pressure-driven prune
 // is the right loop to make progress, and signalling residual would keep
 // the project dirty and trigger an unproductive re-cycle.
 //
@@ -82,7 +82,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	}
 
 	// Hard cap: if namespace already has too many relationships, skip entirely.
-	// Treat this as a no-residual condition — more cycles won't help, only
+	// Treat this as a no-residual condition; more cycles won't help, only
 	// pruning the graph or raising the cap will unstick it.
 	totalActive, err := p.relationships.CountActiveByNamespace(ctx, cycle.NamespaceID)
 	if err != nil {
@@ -112,7 +112,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		relation       string
 	}
 	edges := make(map[edgeKey]*model.Relationship, len(allRels))
-	// Outgoing edges per entity — only from non-transitive, non-expired relationships.
+	// Outgoing edges per entity, only from non-transitive, non-expired relationships.
 	outgoing := make(map[uuid.UUID][]model.Relationship)
 
 	for i := range allRels {

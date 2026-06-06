@@ -26,9 +26,9 @@ type MeEnrichmentConfig struct {
 // NewSelfEnrichmentHandler returns the self-tier enrichment handler at
 // /v1/me/enrichment. Sub-paths:
 //
-//	GET  /            — queue status (counts + items) scoped to caller
-//	GET  /queue       — alias for /
-//	POST /retry       — retry failed jobs the caller owns
+//	GET  /:            queue status (counts + items) scoped to caller
+//	GET  /queue:       alias for /
+//	POST /retry:       retry failed jobs the caller owns
 //
 // Pause/resume remain admin-only at /v1/admin/enrichment.
 func NewSelfEnrichmentHandler(cfg MeEnrichmentConfig) http.HandlerFunc {

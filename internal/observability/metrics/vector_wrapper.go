@@ -11,7 +11,7 @@ import (
 
 // instrumentedVectorStore wraps storage.VectorStore so every Search call
 // records nram_vector_search_duration_seconds. Failed searches are still
-// observed — the histogram captures latency for both outcomes, which is
+// observed; the histogram captures latency for both outcomes, which is
 // what an operator wants when diagnosing a slow backend. Upsert, Get,
 // Delete, Truncate, and Ping are not instrumented at the storage layer:
 // vector writes are already covered by the embedding metric upstream, and

@@ -575,7 +575,7 @@ func NewMeProfilePatchHandler(repo MeProfileUpdater) http.HandlerFunc {
 
 // MeCapabilitiesResponse is the body of GET /v1/me/capabilities.
 //
-// Booleans only — the goal is to give the SPA enough signal to decide which
+// Booleans only: the goal is to give the SPA enough signal to decide which
 // nav entries and feature affordances to render, without leaking any
 // provider config, secrets, or admin-only state. enrichment_available
 // mirrors the EnrichmentGate signal (all three slots configured); dreaming

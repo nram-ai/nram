@@ -310,7 +310,7 @@ func TestErrorResponse_NoNullDetails(t *testing.T) {
 
 	body := w.Body.String()
 
-	// The error response should not contain "details":null — it should either
+	// The error response should not contain "details":null; it should either
 	// be omitted entirely (omitempty) or be an empty object/array.
 	if strings.Contains(body, `"details":null`) {
 		t.Error("error response contains \"details\":null, expected omission or empty value")
@@ -646,7 +646,7 @@ func TestErrorResponses_NoNullFields(t *testing.T) {
 
 			body := w.Body.String()
 
-			// Error responses should never have "details":null — it should be
+			// Error responses should never have "details":null; it should be
 			// omitted via omitempty.
 			if strings.Contains(body, `"details":null`) {
 				t.Error("error response contains \"details\":null, expected omission")

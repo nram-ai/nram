@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// clearEnv unsets every environment variable the loader touches — both the
-// supported bootstrap variables and the deprecated ones — so each test starts
+// clearEnv unsets every environment variable the loader touches (both the
+// supported bootstrap variables and the deprecated ones) so each test starts
 // from a clean baseline regardless of what the developer's shell exports.
 func clearEnv(t *testing.T) {
 	t.Helper()

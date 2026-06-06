@@ -384,7 +384,7 @@ func (r *RelationshipRepo) ExpireLowWeight(ctx context.Context, namespaceID uuid
 // (inferred) relationships in a namespace. Transitive rows are identified
 // by the properties.source = "transitive" marker that the transitive
 // discovery phase writes at creation time (source-of-truth constant:
-// dreaming.transitivePropertySource — kept in sync with the SQL literal
+// dreaming.transitivePropertySource, kept in sync with the SQL literal
 // below). Ties broken by oldest first. User-asserted relationships are
 // never touched. Returns the count expired.
 func (r *RelationshipRepo) ExpireLowestNTransitive(ctx context.Context, namespaceID uuid.UUID, n int) (int64, error) {
@@ -460,10 +460,10 @@ func (r *RelationshipRepo) DeleteDangling(ctx context.Context) (int64, error) {
 
 // lostProvenancePredicate matches relationships whose provenance is gone: the
 // source_memory pointer is NULL (the sourcing memory was hard-deleted, firing
-// the ON DELETE SET NULL FK action — or a dream phase inherited an
+// the ON DELETE SET NULL FK action, or a dream phase inherited an
 // already-null parent) or it points at a memory that is soft-deleted or
 // superseded. No legitimate insert leaves source_memory NULL, and verified on
-// live data, every non-null pointer resolves to an existing memory — so the
+// live data, every non-null pointer resolves to an existing memory, so the
 // predicate never matches a live-sourced edge.
 const lostProvenancePredicate = `source_memory IS NULL OR source_memory IN (` +
 	`SELECT id FROM memories WHERE deleted_at IS NOT NULL OR superseded_by IS NOT NULL)`

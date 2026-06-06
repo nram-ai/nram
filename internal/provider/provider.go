@@ -15,7 +15,7 @@ type Message struct {
 // RepeatPenalty, TopK, and MinP are Ollama-extension fields. Strict OpenAI
 // rejects unknown fields, so OpenAIProvider gates them behind
 // OpenAIConfig.ProviderType == ProviderTypeOllama. nil means "omit from the
-// request" — providers that do not support these knobs see a clean request.
+// request"; providers that do not support these knobs see a clean request.
 type CompletionRequest struct {
 	Messages    []Message
 	Model       string

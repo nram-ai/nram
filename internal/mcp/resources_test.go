@@ -131,7 +131,7 @@ func TestProjectsResource_ListSuccess(t *testing.T) {
 	// Pagination must be populated honestly. The resource is unpaginated,
 	// so Total/Limit equal the full count and Offset is 0. A zero-value
 	// Pagination here would mislead clients reading pagination.total into
-	// "showing N of 0" — that was the pre-pass-4 bug.
+	// "showing N of 0"; that was the pre-pass-4 bug.
 	if resp.Pagination.Total != 2 {
 		t.Errorf("Pagination.Total=%d, want 2 (regression: zero-value bug)", resp.Pagination.Total)
 	}

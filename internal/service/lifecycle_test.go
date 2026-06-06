@@ -270,7 +270,7 @@ func TestConfigCustom(t *testing.T) {
 		DefaultPurgeDelay: 7 * 24 * time.Hour,
 	}, nil)
 
-	// Operator-pinned values short-circuit the per-sweep resolver — same
+	// Operator-pinned values short-circuit the per-sweep resolver, same
 	// contract as BatchSize and DefaultPurgeDelay.
 	if got := svc.resolveSweepInterval(context.Background()); got != 10*time.Minute {
 		t.Fatalf("expected resolveSweepInterval 10m, got %v", got)
@@ -516,7 +516,7 @@ func TestSweep_OrphanedEntityCascadeAndVectorCleanup(t *testing.T) {
 // real Qdrant instance to prove the cleanup call actually removes the point.
 // Pre-fix, the SQL CASCADE on entity_vectors_* would have handled SQLite /
 // pgvector deployments (no leak), but Qdrant deployments would silently
-// accumulate dead points keyed by deleted entity UUIDs — that's the leak this
+// accumulate dead points keyed by deleted entity UUIDs: that's the leak this
 // test pins.
 func TestSweep_OrphanedEntityVectorCleanup_Qdrant(t *testing.T) {
 	addr := os.Getenv("QDRANT_TEST_ADDR")

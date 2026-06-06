@@ -7,7 +7,7 @@ import (
 
 // TestParseIntArgOverflowProtection pins the float→int safety contract.
 // JSON decoders hand numerics back as float64, and int(1e30) on amd64 is
-// implementation-defined garbage (typically MinInt64) — a value that passes
+// implementation-defined garbage (typically MinInt64), a value that passes
 // naive ">= 0" checks downstream and then underflows in slice expressions
 // to panic. parseIntArg clamps to math.MaxInt32 BEFORE the int() cast so
 // the resulting value is always in a safe range.

@@ -25,9 +25,9 @@ type OrgEnrichmentConfig struct {
 // /v1/orgs/{org_id}/enrichment. Authorization: caller must be administrator
 // or org_owner of {org_id}. Sub-paths:
 //
-//	GET  /          — queue status (counts + items) scoped to org
-//	GET  /queue     — alias for /
-//	POST /retry     — retry failed jobs in the org (all or by ids)
+//	GET  /:          queue status (counts + items) scoped to org
+//	GET  /queue:     alias for /
+//	POST /retry:     retry failed jobs in the org (all or by ids)
 func NewOrgEnrichmentHandler(cfg OrgEnrichmentConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID, ok := OrgScope(r)

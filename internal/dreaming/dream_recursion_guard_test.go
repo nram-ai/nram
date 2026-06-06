@@ -23,10 +23,10 @@ import (
 // referenced comments at:
 //
 //   - internal/dreaming/phase_consolidation.go (synthMemory creation;
-//     "DREAM-RECURSION GUARD — first prong"; sets Origin=OriginDream and
+//     "DREAM-RECURSION GUARD: first prong"; sets Origin=OriginDream and
 //     Enriched=true)
 //   - internal/dreaming/phase_consolidation.go (consolidate() candidate
-//     filter; "DREAM-RECURSION GUARD — second prong")
+//     filter; "DREAM-RECURSION GUARD: second prong")
 //   - internal/enrichment/worker.go (WorkerPool.runPreEmbed skipFact /
 //     skipEntity gate)
 //   - internal/enrichment/phase_ingestion.go (runIngestionDecision
@@ -48,13 +48,13 @@ import (
 // contract holds on the actual database rows.
 //
 // To fail loudly when the guard breaks, the mock fact and entity LLM
-// providers return VALID extraction JSON if called — so a dropped guard
+// providers return VALID extraction JSON if called, so a dropped guard
 // produces real extracted-fact children that show up in the lineage table
 // and trip the assertions. The mock providers also record their call
 // counts so a partial failure (one guard removed, the other still
 // standing) is diagnosable from the test output.
 //
-// The test is table-driven across two seed shapes — Enriched=true (the
+// The test is table-driven across two seed shapes: Enriched=true (the
 // production path that ConsolidationPhase produces) and Enriched=false
 // (synthetic case that proves the source check is independently load-
 // bearing). If only one clause were sufficient, removing the OTHER one
@@ -68,7 +68,7 @@ func TestDreamRecursionGuard_EndToEnd(t *testing.T) {
 		// Production shape: ConsolidationPhase sets Enriched=true at
 		// synthesis-creation time. Both guards (source check and the
 		// Enriched flag) are present, so removing either alone still
-		// passes this sub-test — the COMBINATION is what protects
+		// passes this sub-test; the COMBINATION is what protects
 		// production. The Enriched=false case below pins the source
 		// check on its own.
 		{"enriched=true (production shape)", true},
@@ -146,7 +146,7 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 	}
 
 	// Scripted mocks. Any call into fact or entity providers is a contract
-	// violation — record it and use the recorded count to diagnose which
+	// violation; record it and use the recorded count to diagnose which
 	// guard slipped. The response payloads are real-shaped JSON so that, if
 	// the guard breaks, the worker proceeds to write extracted_fact
 	// children rather than failing earlier on a parse error.
@@ -200,7 +200,7 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 		func() provider.LLMProvider { return augmentLLM },
 		nil, // deduplicator unused when ingestion-decision is off
 		settingsSvc,
-		nil, // cascade resolver — nil means "use settings only"
+		nil, // cascade resolver: nil means "use settings only"
 		nil, // event bus
 	)
 
@@ -319,7 +319,7 @@ func setupRecursionGuardDB(t *testing.T) storage.DB {
 
 // waitUntilDrained blocks until the worker pool reports idle AND the
 // enrichment queue has no pending jobs left, or returns an error on
-// timeout. Polling at the pool's PollInterval would be wasteful — we
+// timeout. Polling at the pool's PollInterval would be wasteful; we
 // poll faster here so the test stays snappy.
 func waitUntilDrained(ctx context.Context, pool *enrichment.WorkerPool, queue *storage.EnrichmentQueueRepo, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

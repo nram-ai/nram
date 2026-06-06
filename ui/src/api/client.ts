@@ -65,13 +65,13 @@ export async function request<T>(
   }
 
   if (!res.ok) {
-    // On 401, the token is invalid or expired — clear it and redirect to login.
+    // On 401, the token is invalid or expired; clear it and redirect to login.
     if (res.status === 401) {
       localStorage.removeItem("nram_token");
       localStorage.removeItem("nram_user");
       if (window.location.pathname !== "/login" && window.location.pathname !== "/setup") {
         window.location.href = "/login";
-        return new Promise<T>(() => {}); // never resolves — page is navigating
+        return new Promise<T>(() => {}); // never resolves; page is navigating
       }
     }
     // On 403, the token is valid but role is insufficient.
@@ -294,7 +294,7 @@ export interface RecallRequest {
 export interface MemoryListParams {
   limit?: number;
   offset?: number;
-  /** AND semantics — memory must contain all listed tags */
+  /** AND semantics: memory must contain all listed tags */
   tags?: string[];
   /** RFC3339 or YYYY-MM-DD */
   date_from?: string;
@@ -495,7 +495,7 @@ export interface UpdateUserRequest {
   // Settings stays loosely typed (Record<string, unknown>) because the
   // org-update path shares this request type and tolerates any JSON shape;
   // the server validates the actual fields it cares about. Forms should
-  // construct payloads matching UserSettings — see that interface for the
+  // construct payloads matching UserSettings; see that interface for the
   // accepted keys (ranking_weights at user scope is rejected with 400).
   settings?: Record<string, unknown>;
 }
@@ -705,7 +705,7 @@ export interface ProviderSlot {
   model: string;
   dimensions?: number | null;
   /**
-   * Effective context window in tokens — the actual budget the pipeline
+   * Effective context window in tokens: the actual budget the pipeline
    * can spend. For Ollama slots this is min(model GGUF max, runtime
    * num_ctx); for OpenRouter it equals the model's reported
    * context_length. Populated only for providers that report it via API
@@ -856,7 +856,7 @@ export interface MemoryRankItem {
 
 // Aggregate types for tier-B (org) and tier-C (system) responses. See
 // internal/api/aggregate_types.go for the Go-side authoritative shapes.
-// These intentionally carry NO content fields — only counts, distributions,
+// These intentionally carry NO content fields: only counts, distributions,
 // and tenancy-metadata labels (org name, project name, type label).
 
 export interface HistogramBucket {
@@ -1143,7 +1143,7 @@ export interface DreamCycle {
   created_at: string;
   updated_at: string;
   // Computed server-side. is_stale_diagnostic flags running cycles whose
-  // heartbeat hasn't ticked recently — diagnostic only. is_abandonable
+  // heartbeat hasn't ticked recently, diagnostic only. is_abandonable
   // flags running cycles whose updated_at is past the conservative stuck
   // threshold; only these are eligible for the Abandon action.
   is_stale_diagnostic: boolean;
@@ -1325,7 +1325,7 @@ export interface ExtractionTestResult {
   output: string;
   parsed: unknown;
   // model is the model the test actually ran against, as reported by the
-  // provider — the resolved provider slot supplies it (the dedicated slot for
+  // provider; the resolved provider slot supplies it (the dedicated slot for
   // augment/ingestion, falling back to fact when unconfigured).
   model?: string;
   error?: string;
@@ -1444,8 +1444,8 @@ export interface GraphData {
   returned_edges?: number;
 }
 
-// GraphHealth reports the lost-provenance edge backlog — relationships whose
-// sourcing memory has been deleted or superseded — that a repair would reap.
+// GraphHealth reports the lost-provenance edge backlog (relationships whose
+// sourcing memory has been deleted or superseded) that a repair would reap.
 export interface GraphHealth {
   lost_provenance_edges: number;
 }
@@ -1558,14 +1558,14 @@ export const adminAPI = {
   revokeAPIKey: (userId: string, keyId: string) =>
     request<void>("DELETE", `/admin/users/${userId}/api-keys/${keyId}`),
 
-  // Projects — repointed from /admin/projects (deleted) to /me/projects in
+  // Projects: repointed from /admin/projects (deleted) to /me/projects in
   // the 2026-04-30 leak fix. Cross-tenant project listings exposed
   // user-authored project names + descriptions and were a privacy leak;
   // admins now see and manage their own projects like every other role.
   listProjects: () => request<{ data: Project[] }>("GET", "/me/projects").then(r => r.data),
   createProject: (data: AdminCreateProjectRequest) =>
     request<Project>("POST", "/me/projects", data),
-  // Provider slots — backend returns the ordered canonical slot list, each
+  // Provider slots: backend returns the ordered canonical slot list, each
   // entry carrying its own slot/label/description/required plus live status.
   getProviderSlots: () =>
     request<ProviderConfigResponse>("GET", "/admin/providers"),
@@ -1615,7 +1615,7 @@ export const adminAPI = {
       `/admin/webhooks/${id}/test`,
     ),
 
-  // Analytics — tier-A self-scoped. The pre-fix `org` and `user` widening
+  // Analytics: tier-A self-scoped. The pre-fix `org` and `user` widening
   // params were removed; the server ignores them now (resolveAdminScope is
   // gone). Use orgAPI.getAnalytics(orgId) or systemAPI.getAnalytics() for
   // wider tiers. Org/user filters in the UI must drive tier selection,
@@ -1723,7 +1723,7 @@ export const adminAPI = {
     request<GraphData>("GET", `/graph?project=${encodeURIComponent(projectId)}`),
 
   // Graph maintenance (system-wide, admin-only). getGraphHealth reports how
-  // many lost-provenance edges — relationships whose sourcing memory is gone —
+  // many lost-provenance edges (relationships whose sourcing memory is gone)
   // remain in the store; repairGraph reaps them, recomputes entity mention
   // counts, and prunes the orphaned entities they leave behind.
   getGraphHealth: () =>
@@ -2033,7 +2033,7 @@ export const meAPI = {
   updateProfile: (data: MeProfilePatchRequest) =>
     request<MeProfile>("PATCH", "/me/profile", data),
 
-  // Self-tier capability flags. Callable by any authenticated user — the
+  // Self-tier capability flags. Callable by any authenticated user; the
   // sidebar nav uses this to decide whether to render Enrichment Queue and
   // Dreaming entries without paying the admin-only /admin/providers probe.
   getCapabilities: () =>
@@ -2068,7 +2068,7 @@ export const meAPI = {
   deleteProject: (id: string) =>
     request<void>("DELETE", `/me/projects/${id}`),
 
-  // Procedural memory tier — verbatim standing rules, per-user, fetch-only.
+  // Procedural memory tier: verbatim standing rules, per-user, fetch-only.
   listProcedural: () =>
     request<{ data: ProceduralEntry[] }>("GET", "/me/procedural").then((r) => r.data),
   getProcedural: (id: string) =>
@@ -2097,7 +2097,7 @@ export const meAPI = {
   recall: (body: RecallRequest) =>
     request<RecallResponse>("POST", "/me/memories/recall", body),
 
-  // Self-tier dreaming observability. Read-only — write operations remain
+  // Self-tier dreaming observability. Read-only; write operations remain
   // admin-only at /admin/dreaming/*. Status returns per-project state when
   // a project_id is supplied, otherwise the aggregate any-dirty indicator.
   // Cycles list filters to one project when project_id is supplied,
@@ -2137,7 +2137,7 @@ export const meAPI = {
   // truncation-bound MCP export tool withdrawn 2026-05-27. List/create at
   // the root; status + delete at {job_id}; artifact download under
   // /download. Per-project synchronous exports remain at
-  // /v1/projects/{id}/memories/export — see exportProjectURL below.
+  // /v1/projects/{id}/memories/export; see exportProjectURL below.
   listExportJobs: () =>
     request<{ data: ExportJob[] }>("GET", "/me/exports").then((r) => r.data ?? []),
   createExportJob: (data: CreateExportJobRequest) =>

@@ -130,7 +130,7 @@ func TestParseQueryAugmentResponse_NestedObjectStillFails(t *testing.T) {
 // Lenient pass: small models (qwen3:8b observed) periodically emit the array
 // brackets but drop the per-element double quotes, even when the prompt
 // explicitly says QUOTED. The parser must recover rather than fail-soft to
-// zero queries — otherwise the operator's enable-flag silently no-ops.
+// zero queries; otherwise the operator's enable-flag silently no-ops.
 func TestParseQueryAugmentResponse_LenientUnquotedElements(t *testing.T) {
 	cases := map[string]struct {
 		body string
@@ -426,7 +426,7 @@ func TestQueryAugment_PrecedenceOverridesIngestionDecisionPreEmbed(t *testing.T)
 
 	// Near-match seeds the dedup vector store so the ingestion-decision phase
 	// runs an embed call against raw content and stamps parentEmbedding onto
-	// the pendingJob — the exact precondition that makes runEmbedBatch skip
+	// the pendingJob, the exact precondition that makes runEmbedBatch skip
 	// the parent slot below.
 	target := testMemory()
 	target.Content = "existing fact"
@@ -464,7 +464,7 @@ func TestQueryAugment_PrecedenceOverridesIngestionDecisionPreEmbed(t *testing.T)
 	}
 	mark := h.updater.enrichedMarks[0]
 	if mark.augmentedQueries == nil || mark.augmentedEmbeddingAt == nil {
-		t.Fatalf("augmented marker MUST be written when augmentation produced queries — ingestion-decision pre-embed must not suppress it; got queries=%v at=%v",
+		t.Fatalf("augmented marker MUST be written when augmentation produced queries; ingestion-decision pre-embed must not suppress it; got queries=%v at=%v",
 			mark.augmentedQueries, mark.augmentedEmbeddingAt)
 	}
 	if want := []string{"q1", "q2", "q3"}; !reflect.DeepEqual(mark.augmentedQueries, want) {
@@ -476,7 +476,7 @@ func TestQueryAugment_PrecedenceOverridesIngestionDecisionPreEmbed(t *testing.T)
 }
 
 // Complement to the regression above: with ingestion-decision OFF and only
-// query-augment ON, the marker MUST be written — confirms the gate is not
+// query-augment ON, the marker MUST be written; confirms the gate is not
 // over-restrictive and that the happy path still records augmentation.
 func TestQueryAugment_MarkerWrittenWhenAugmentedEmbedActuallyLanded(t *testing.T) {
 	augLLM := &mockLLMProvider{

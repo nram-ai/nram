@@ -77,7 +77,7 @@ func main() {
 	settingsRepo := storage.NewSettingsRepo(db)
 	settingsSvc := service.NewSettingsService(settingsRepo)
 
-	// Build providers from the runtime settings registry — the same source
+	// Build providers from the runtime settings registry, the same source
 	// the admin UI writes to.
 	regCfg := adminstore.LoadProviderRegistryConfig(context.Background(), settingsRepo)
 	registry, err := provider.NewRegistry(regCfg, nil, nil)
@@ -106,7 +106,7 @@ func main() {
 		return
 	}
 
-	// nil enrichmentQueue — this CLI only drives AuditExistingDreams,
+	// nil enrichmentQueue: this CLI only drives AuditExistingDreams,
 	// which never creates new synthesis memories. consolidate() (the path
 	// that enqueues for augmentation) is not exercised here.
 	consolidationPhase := dreaming.NewConsolidationPhase(

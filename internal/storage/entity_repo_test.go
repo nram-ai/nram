@@ -366,7 +366,7 @@ func TestEntityRepo_FindBySimilarity_CaseInsensitive(t *testing.T) {
 //
 // Assertion: against ["John Doe", "Jane Smith"], the multi-word query
 // "John Smith" matches NEITHER (no entity name literally contains the
-// phrase) — token-OR would return both as fuzzy hits.
+// phrase); token-OR would return both as fuzzy hits.
 func TestEntityRepo_FindBySimilarity_MultiWordIsLiteral(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
@@ -392,7 +392,7 @@ func TestEntityRepo_FindBySimilarity_MultiWordIsLiteral(t *testing.T) {
 			for i, r := range results {
 				gotNames[i] = r.Name
 			}
-			t.Fatalf("FindBySimilarity('John Smith') must be literal — expected 0 results, got %d: %v (token-OR semantics belong on SearchEntities, not here)", len(results), gotNames)
+			t.Fatalf("FindBySimilarity('John Smith') must be literal, expected 0 results, got %d: %v (token-OR semantics belong on SearchEntities, not here)", len(results), gotNames)
 		}
 	})
 }
@@ -404,7 +404,7 @@ func TestEntityRepo_FindBySimilarity_MultiWordIsLiteral(t *testing.T) {
 // Assertions:
 //  1. A query "John Doe" returns BOTH "John Doe" and "John Smith" (each
 //     matches at least one token) plus "Jane Doe" (matches "Doe").
-//  2. "John Doe" returns "John Doe" first (matches 2 tokens — name AND
+//  2. "John Doe" returns "John Doe" first (matches 2 tokens: name AND
 //     surname) before "John Smith" / "Jane Doe" (1 token each).
 //  3. mention_count breaks the tie within an equal-score bucket.
 func TestEntityRepo_SearchEntities_MultiToken(t *testing.T) {
@@ -708,7 +708,7 @@ func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
 		aliasRepo := NewEntityAliasRepo(db)
 		nsID := createTestNamespace(t, ctx, db)
 
-		// Stub entity for "apple" — created as type=unknown.
+		// Stub entity for "apple", created as type=unknown.
 		stub := &model.Entity{
 			NamespaceID: nsID,
 			Name:        "apple",
@@ -749,7 +749,7 @@ func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
 
 		// Conflicting relationship: microsoft --acquired--> apple, both as
 		// stub-target and real-target, same valid_from. Stub has the
-		// larger weight — the merge must preserve it, not regress.
+		// larger weight; the merge must preserve it, not regress.
 		if err := relRepo.Create(ctx, &model.Relationship{
 			NamespaceID: nsID, SourceID: acquirer.ID, TargetID: stub.ID,
 			Relation: "acquired", Weight: 0.95, ValidFrom: validFrom,
@@ -764,7 +764,7 @@ func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
 		}
 
 		// Stub-only relationship: apple --competes_with--> microsoft.
-		// No conflict on real side — must migrate cleanly.
+		// No conflict on real side; must migrate cleanly.
 		if err := relRepo.Create(ctx, &model.Relationship{
 			NamespaceID: nsID, SourceID: stub.ID, TargetID: acquirer.ID,
 			Relation: "competes_with", Weight: 0.40, ValidFrom: validFrom,
@@ -772,7 +772,7 @@ func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
 			t.Fatalf("seed stub-source rel: %v", err)
 		}
 
-		// Overlapping alias — both hold "Apple". Plus a stub-only alias.
+		// Overlapping alias: both hold "Apple". Plus a stub-only alias.
 		if err := aliasRepo.Create(ctx, &model.EntityAlias{
 			NamespaceID: nsID, EntityID: stub.ID, Alias: "Apple", AliasType: "variant",
 		}); err != nil {
@@ -909,7 +909,7 @@ func TestEntityRepo_ListAll(t *testing.T) {
 			}
 		}
 
-		// First page covers all 5 — pageSize default is 500.
+		// First page covers all 5; pageSize default is 500.
 		page, err := repo.ListAll(ctx, 0, 0)
 		if err != nil {
 			t.Fatalf("list all: %v", err)

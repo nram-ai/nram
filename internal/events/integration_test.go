@@ -1,6 +1,6 @@
 package events
 
-// integration_test.go — comprehensive black-box tests for the SSE event
+// integration_test.go: comprehensive black-box tests for the SSE event
 // system.  Tests are written with zero trust toward the implementation:
 // every field, ordering, boundary condition, and concurrent behaviour is
 // verified explicitly.
@@ -290,7 +290,7 @@ func TestMemoryBus_CancelSubscription(t *testing.T) {
 		t.Error("channel not closed within 1s after cancel")
 	}
 
-	// Publish after cancel — event must not appear (channel already closed).
+	// Publish after cancel: event must not appear (channel already closed).
 	// We verify this is panic-free and does not block.
 	_ = bus.Publish(ctx, newEvt("after-cancel", MemoryCreated, "test"))
 
@@ -405,7 +405,7 @@ func TestMemoryBus_FullChannelDropsEvents(t *testing.T) {
 		}
 	}
 
-	// Overflow events — must not block and must return nil.
+	// Overflow events: must not block and must return nil.
 	for i := range 5 {
 		e := newEvt(fmt.Sprintf("overflow-%d", i), MemoryCreated, "test")
 		if err := bus.Publish(ctx, e); err != nil {
@@ -1023,7 +1023,7 @@ func TestWebhookDeliverer_EventTypeFiltering(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Stop() })
 
-	// Publish MemoryDeleted — must not trigger the webhook.
+	// Publish MemoryDeleted: must not trigger the webhook.
 	publishToNS(t, bus, uuid.New().String(), MemoryDeleted, nsID)
 
 	time.Sleep(300 * time.Millisecond)
@@ -1173,7 +1173,7 @@ func TestMatchesScope(t *testing.T) {
 		{"project:", "other:abc", false},
 		{"ns:", "project:abc", false},
 
-		// Subscriber scope longer than event scope — no match.
+		// Subscriber scope longer than event scope: no match.
 		{"project:abc:extra", "project:abc", false},
 	}
 
@@ -1214,7 +1214,7 @@ func TestComputeHMACSHA256_Properties(t *testing.T) {
 		t.Error("different bodies must produce different signatures")
 	}
 
-	// Empty body is valid — must not panic and must produce a fixed value.
+	// Empty body is valid; must not panic and must produce a fixed value.
 	sigEmpty := ComputeHMACSHA256(secret, []byte{})
 	if sigEmpty == "" {
 		t.Error("HMAC of empty body must not be empty")

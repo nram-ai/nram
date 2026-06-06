@@ -554,7 +554,7 @@ func TestNamespaceRepo_ResolvePathPrefix(t *testing.T) {
 			t.Fatalf("failed to create project: %v", err)
 		}
 
-		// Resolve with org path prefix — should match org, user1, user2, project.
+		// Resolve with org path prefix; should match org, user1, user2, project.
 		ids, err := repo.ResolvePathPrefix(ctx, orgID.String())
 		if err != nil {
 			t.Fatalf("failed to resolve path prefix: %v", err)
@@ -575,7 +575,7 @@ func TestNamespaceRepo_ResolvePathPrefix(t *testing.T) {
 			}
 		}
 
-		// Resolve with user1 path prefix — should match user1 and project.
+		// Resolve with user1 path prefix; should match user1 and project.
 		user1Path := orgID.String() + "/" + user1ID.String()
 		ids2, err := repo.ResolvePathPrefix(ctx, user1Path)
 		if err != nil {

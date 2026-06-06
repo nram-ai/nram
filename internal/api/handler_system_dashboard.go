@@ -20,7 +20,7 @@ type SystemDashboardAggregator interface {
 // SystemDashboardConfig wires NewSystemDashboardHandler.
 type SystemDashboardConfig struct {
 	Store SystemDashboardAggregator
-	Audit OrgDashboardAuditQuery // reused — same Query signature
+	Audit OrgDashboardAuditQuery // reused: same Query signature
 }
 
 // NewSystemDashboardHandler returns the tier-C dashboard handler at

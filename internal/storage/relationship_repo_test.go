@@ -385,7 +385,7 @@ func TestRelationshipRepo_ListByEntity(t *testing.T) {
 			t.Fatalf("failed to create r3: %v", err)
 		}
 
-		// List for alice — should include r1 (source) and r2 (target)
+		// List for alice; should include r1 (source) and r2 (target)
 		results, err := repo.ListByEntity(ctx, alice)
 		if err != nil {
 			t.Fatalf("failed to list by entity: %v", err)
@@ -394,7 +394,7 @@ func TestRelationshipRepo_ListByEntity(t *testing.T) {
 			t.Fatalf("expected 2 relationships for alice, got %d", len(results))
 		}
 
-		// List for bob — should include r1 (target) and r3 (source)
+		// List for bob; should include r1 (target) and r3 (source)
 		results, err = repo.ListByEntity(ctx, bob)
 		if err != nil {
 			t.Fatalf("failed to list by entity for bob: %v", err)
@@ -447,7 +447,7 @@ func TestRelationshipRepo_TraverseFromEntity_SingleHop(t *testing.T) {
 			t.Fatalf("failed to create r2: %v", err)
 		}
 
-		// Traverse 1 hop from alice — should only get r1
+		// Traverse 1 hop from alice; should only get r1
 		tr, err := repo.TraverseFromEntity(ctx, alice, 1, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse: %v", err)
@@ -491,7 +491,7 @@ func TestRelationshipRepo_TraverseFromEntity_MultiHop(t *testing.T) {
 			t.Fatalf("failed to create r2: %v", err)
 		}
 
-		// Traverse 2 hops from alice — should get r1 and r2
+		// Traverse 2 hops from alice; should get r1 and r2
 		tr, err := repo.TraverseFromEntity(ctx, alice, 2, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse: %v", err)
@@ -531,7 +531,7 @@ func TestRelationshipRepo_TraverseFromEntity_Cycle(t *testing.T) {
 			t.Fatalf("failed to create r2: %v", err)
 		}
 
-		// Traverse many hops — should not loop infinitely
+		// Traverse many hops; should not loop infinitely
 		tr, err := repo.TraverseFromEntity(ctx, alice, 10, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse with cycle: %v", err)
@@ -714,7 +714,7 @@ func TestRelationshipRepo_TraverseFromEntity_EdgeCap_NotReached(t *testing.T) {
 
 // TestRelationshipRepo_TraverseFromEntity_EdgeCap_Zero pins the invariant
 // that maxEdges <= 0 disables the short-circuit and behaves identically
-// to the pre-cap implementation — regression guard for the interface
+// to the pre-cap implementation; regression guard for the interface
 // migration so existing callers passing 0 keep their unbounded semantics.
 func TestRelationshipRepo_TraverseFromEntity_EdgeCap_Zero(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
@@ -888,7 +888,7 @@ func TestRelationshipRepo_ExpireLowestNTransitive(t *testing.T) {
 		// Ask to expire 2 lowest-weight transitive rows. The pre-expired t1
 		// must be skipped; t2 (weight 0.40) and t3 (weight 0.60) should land.
 		// Importantly, u1 (weight 0.05) must NOT be touched even though it is
-		// the lowest weight overall — it is user-asserted, not transitive.
+		// the lowest weight overall; it is user-asserted, not transitive.
 		expired, err := repo.ExpireLowestNTransitive(ctx, nsID, 2)
 		if err != nil {
 			t.Fatalf("ExpireLowestNTransitive: %v", err)

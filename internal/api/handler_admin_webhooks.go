@@ -57,12 +57,12 @@ type webhookUpdateRequest struct {
 // admin requests based on method and sub-path under /webhooks.
 //
 // Routes:
-//   - GET    /webhooks           — list all webhooks
-//   - POST   /webhooks           — create a webhook
-//   - GET    /webhooks/{id}      — get webhook detail
-//   - PUT    /webhooks/{id}      — update a webhook
-//   - DELETE /webhooks/{id}      — delete a webhook
-//   - POST   /webhooks/{id}/test — fire a test event to a webhook
+//   - GET    /webhooks:           list all webhooks
+//   - POST   /webhooks:           create a webhook
+//   - GET    /webhooks/{id}:      get webhook detail
+//   - PUT    /webhooks/{id}:      update a webhook
+//   - DELETE /webhooks/{id}:      delete a webhook
+//   - POST   /webhooks/{id}/test: fire a test event to a webhook
 func NewAdminWebhooksHandler(cfg WebhookAdminConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, action := extractWebhookSubPath(r.URL.Path)

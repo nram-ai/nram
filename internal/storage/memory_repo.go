@@ -312,7 +312,7 @@ func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Mem
 
 // MemoryListFilters narrows a memory listing. All fields are optional; the
 // zero value means "no filter on this dimension". Tag matching uses AND
-// semantics — a memory must contain ALL listed tags. Source and Search are
+// semantics: a memory must contain ALL listed tags. Source and Search are
 // case-insensitive substring matches against the source and content columns
 // respectively. Tag SQL is backend-specific because SQLite stores tags as a
 // JSON-encoded TEXT column and Postgres stores them as TEXT[].
@@ -323,7 +323,7 @@ func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Mem
 //     family when the parent OR any enrichment descendant matches. Emitted by
 //     contentFilterClauses.
 //   - Per-row status (Enriched, Origin, Augmented): a property of the displayed
-//     row itself, matched against the parent only — never via a descendant, or
+//     row itself, matched against the parent only, never via a descendant, or
 //     a non-matching parent leaks in through a matching child. Emitted by
 //     statusFilterClauses.
 //
@@ -404,7 +404,7 @@ func (r *MemoryRepo) buildFilterWhere(namespaceID uuid.UUID, filters MemoryListF
 		wb.clauses = append(wb.clauses, "superseded_by IS NULL")
 	}
 
-	// Tag filter — AND semantics.
+	// Tag filter: AND semantics.
 	if len(filters.Tags) > 0 {
 		if wb.postgres {
 			// Build ARRAY[$n, $n+1, ...]::text[] and use the @> contains operator.
@@ -461,19 +461,19 @@ func (r *MemoryRepo) buildFilterWhere(namespaceID uuid.UUID, filters MemoryListF
 	if filters.StaleStampKey != "" {
 		// Row is stale when the stamp is absent OR strictly predates
 		// updated_at. The same staleness rule the in-memory isStale helpers
-		// implement (phase_paraphrase_dedup.go isParaphraseStale, etc.) —
+		// implement (phase_paraphrase_dedup.go isParaphraseStale, etc.) are
 		// pushed into SQL so phases load only stale candidates.
 		//
 		// Postgres: metadata is JSONB. metadata->>$key returns text; cast to
 		// timestamptz for comparison. If a value is malformed the cast will
-		// abort the query — phases write stamps via time.RFC3339Nano so this
+		// abort the query; phases write stamps via time.RFC3339Nano so this
 		// requires manual metadata corruption to trigger; phases retain
 		// in-memory collectStale as belt-and-suspenders for that case.
 		//
 		// SQLite: metadata is TEXT. json_extract returns NULL for missing
 		// keys; datetime() returns NULL on unparseable strings, so a
 		// malformed stamp falls through the comparison as NULL (treated as
-		// false by < and OR), which would mark the row as fresh — defensive
+		// false by < and OR), which would mark the row as fresh; defensive
 		// in-memory collectStale catches that edge case.
 		if wb.postgres {
 			ph1 := wb.bindOnly(filters.StaleStampKey)
@@ -538,11 +538,11 @@ func (r *MemoryRepo) ListByNamespaceFiltered(ctx context.Context, namespaceID uu
 
 // ListByNamespaceFramingOrder returns live (non-deleted, non-superseded)
 // memories in a namespace ordered for the about_me persona "framing" load:
-//  1. identity-centrality — the MAX mention_count over the entities a memory's
+//  1. identity-centrality: the MAX mention_count over the entities a memory's
 //     relationships link to (memories anchoring the most-mentioned entities in
 //     the namespace come first; a memory with no linked entities ranks at 0),
-//  2. recall-count — access_count (how often the memory has surfaced),
-//  3. recency — created_at.
+//  2. recall-count: access_count (how often the memory has surfaced),
+//  3. recency: created_at.
 //
 // Implemented as an ordered-id query (the join/aggregate) followed by a batch
 // hydrate, so it reuses the canonical memory scan without re-listing columns.
@@ -742,7 +742,7 @@ var FactExtractionRelations = []string{
 
 // bindOnly claims a placeholder against the builder and binds the value,
 // returning the placeholder string. Unlike add(), it does not append to
-// clauses — the caller is responsible for placing the placeholder inside a
+// clauses; the caller is responsible for placing the placeholder inside a
 // larger SQL fragment.
 func (w *whereBuilder) bindOnly(value any) string {
 	ph := w.placeholder()
@@ -769,7 +769,7 @@ func aliasQualifier(alias string) func(string) string {
 // match either the parent or any enrichment descendant: a family is surfaced
 // when any member matches. Args are claimed against wb so placeholders are
 // unique within the surrounding query. Anchors that always apply (namespace,
-// deleted_at, hide-superseded) are NOT emitted by this helper — callers add
+// deleted_at, hide-superseded) are NOT emitted by this helper; callers add
 // them separately so the filter can be reused inside an OR-EXISTS subquery.
 func (r *MemoryRepo) contentFilterClauses(wb *whereBuilder, filters MemoryListFilters, alias string) []string {
 	qualify := aliasQualifier(alias)
@@ -812,7 +812,7 @@ func (r *MemoryRepo) contentFilterClauses(wb *whereBuilder, filters MemoryListFi
 // dimensions (enriched, origin, augmented), qualified by the given table
 // alias. Unlike contentFilterClauses these describe a property of an
 // individual row, so in parent-anchored listing they must constrain the
-// displayed parent directly — never a descendant. Matching them family-wide
+// displayed parent directly, never a descendant. Matching them family-wide
 // would surface a parent that does not itself satisfy the filter (e.g. an
 // augmented parent leaking into a "not augmented" view via a not-augmented
 // child). Args are claimed against wb so placeholders stay unique.
@@ -883,7 +883,7 @@ func (r *MemoryRepo) buildParentListWhere(namespaceID uuid.UUID, filters MemoryL
 
 	// Per-row status filters (enriched, origin, augmented) describe the
 	// displayed parent row itself, so they constrain m directly and are never
-	// routed through the descendant subquery — otherwise a parent that does
+	// routed through the descendant subquery; otherwise a parent that does
 	// not match (e.g. an augmented parent) would leak in via a matching child.
 	wb.clauses = append(wb.clauses, r.statusFilterClauses(wb, filters, "m")...)
 
@@ -1272,7 +1272,7 @@ func (r *MemoryRepo) UpdateTx(ctx context.Context, tx *sql.Tx, mem *model.Memory
 // Returns the post-write (or post-read, on no-write) memory, or nil with
 // the error if any step fails.
 //
-// Use this for any read-modify-write on a memory row — the alternative,
+// Use this for any read-modify-write on a memory row; the alternative,
 // GetByID + mutate in Go + Update, has a lost-update window between
 // concurrent workers (or processes) that this helper closes via
 // pg_advisory_xact_lock on Postgres and an in-process mutex on SQLite.
@@ -1480,7 +1480,7 @@ func (r *MemoryRepo) UpdateConfidence(ctx context.Context, id, namespaceID uuid.
 // Demote zeroes confidence, drops embedding_dim, replaces metadata, and
 // bumps updated_at in a single statement. Used by the novelty audit
 // when it demotes a low-novelty dream-source memory. Composite partial
-// write — atomic at the row level so the demote can never partially
+// write, atomic at the row level so the demote can never partially
 // land. Other columns (including superseded_by) are not touched, so a
 // concurrent memory_update that supersedes the row keeps its chain
 // pointer intact.
@@ -1505,7 +1505,7 @@ func (r *MemoryRepo) Demote(ctx context.Context, id, namespaceID uuid.UUID, meta
 // stamps superseded_at and updated_at, and clears embedding_dim because
 // the caller is about to purge the vector. The WHERE clause includes
 // "AND superseded_by IS NULL" so two concurrent supersede writers
-// cannot both win — the loser gets ErrConcurrentSupersede and rolls
+// cannot both win; the loser gets ErrConcurrentSupersede and rolls
 // back. Used by the consolidation phase's supersedeOriginals and the
 // worker's ingestion-decision UPDATE path; SupersedeReplacing is the
 // fork that also creates the new memory atomically.
@@ -1682,7 +1682,7 @@ func (r *MemoryRepo) BumpReinforcement(ctx context.Context, ids []uuid.UUID, now
 }
 
 // DecayConfidence multiplicatively scales confidence for the given memory IDs,
-// clamped to the given floor. multiplier should be in (0, 1] — values less
+// clamped to the given floor. multiplier should be in (0, 1]; values less
 // than 1 shrink confidence, 1 is a no-op. Soft-deleted rows are skipped.
 // Returns rows updated.
 //
@@ -1728,7 +1728,7 @@ func (r *MemoryRepo) DecayConfidence(ctx context.Context, ids []uuid.UUID, multi
 // associated vector from the attached vector store (if any). The SQL row
 // is retained so rollback and retention windows remain intact, but it is
 // excluded from recall via the deleted_at IS NULL filter everywhere. Vector
-// purge errors are not propagated — the row-level state change is the
+// purge errors are not propagated; the row-level state change is the
 // load-bearing invariant; a stale vector will cost some HNSW/pgvector
 // search cycles until the next retention sweep at worst.
 func (r *MemoryRepo) SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error {
@@ -1775,7 +1775,7 @@ func (r *MemoryRepo) HardDelete(ctx context.Context, id uuid.UUID, namespaceID u
 // purgeVector asks the attached vector store to drop the row-level vector
 // and the in-memory HNSW graph node (if any). No-op when no vector store
 // is attached. Errors are swallowed so they cannot stall the row-level
-// lifecycle — the vector store is an index, not the source of truth.
+// lifecycle; the vector store is an index, not the source of truth.
 func (r *MemoryRepo) purgeVector(ctx context.Context, id uuid.UUID) {
 	if r.vectorStore == nil {
 		return
@@ -2141,7 +2141,7 @@ func (r *MemoryRepo) ListPurgeable(ctx context.Context, before time.Time, limit 
 }
 
 // MemoryRank is one (id, score) pair from a lexical search. The Rank value
-// is raw and unitless — sign and magnitude differ between backends (BM25 is
+// is raw and unitless; sign and magnitude differ between backends (BM25 is
 // lower-is-better, ts_rank_cd is higher-is-better). RRF only consumes the
 // ordinal position of each row in the returned slice, so callers should
 // treat Rank as opaque.

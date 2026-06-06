@@ -84,7 +84,7 @@ func TestMemoryRepo_ListParentsByNamespaceFiltered_ExcludesChildren(t *testing.T
 		_, _ = seedParentFamily(t, ctx, memRepo, lineageRepo, nsID, "alpha", []string{"topic-a"}, 3)
 		_, _ = seedParentFamily(t, ctx, memRepo, lineageRepo, nsID, "beta", []string{"topic-b"}, 0)
 
-		// Without group_by_parent semantics — flat list returns 2 parents + 3
+		// Without group_by_parent semantics, flat list returns 2 parents + 3
 		// children = 5 rows.
 		flat, err := memRepo.ListByNamespaceFiltered(ctx, nsID, MemoryListFilters{}, 100, 0)
 		if err != nil {
@@ -141,7 +141,7 @@ func TestMemoryRepo_ListParentsByNamespaceFiltered_DescendantTagSurfacesParent(t
 			t.Fatalf("expected alpha parent %s, got %s", parent.ID, parents[0].ID)
 		}
 
-		// Filter by a tag on the parent itself — also matches.
+		// Filter by a tag on the parent itself; also matches.
 		parents, err = memRepo.ListParentsByNamespaceFiltered(ctx, nsID, MemoryListFilters{
 			Tags: []string{"topic-a"},
 		}, 100, 0)
@@ -225,7 +225,7 @@ func TestMemoryRepo_FindChildrenByParents_BatchAndOrder(t *testing.T) {
 		if got := buckets[beta.ID]; len(got) != 1 {
 			t.Fatalf("beta bucket expected 1, got %d", len(got))
 		}
-		// Gamma has no children — bucket absent (caller treats as zero).
+		// Gamma has no children; bucket absent (caller treats as zero).
 		if _, ok := buckets[gamma.ID]; ok {
 			t.Fatalf("gamma should have no children bucket")
 		}
@@ -408,7 +408,7 @@ func TestMemoryRepo_ListParentsByNamespaceFiltered_HidesSoftDeletedChildren(t *t
 			t.Fatalf("soft delete child: %v", err)
 		}
 
-		// Filter by content unique to the surviving children — parent should
+		// Filter by content unique to the surviving children; parent should
 		// still surface because at least one child still matches.
 		parents, err := memRepo.ListParentsByNamespaceFiltered(ctx, nsID, MemoryListFilters{
 			Search: "extracted-text",

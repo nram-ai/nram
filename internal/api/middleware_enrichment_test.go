@@ -63,7 +63,7 @@ func TestEnrichmentGateMiddleware_Closed(t *testing.T) {
 }
 
 func TestEnrichmentGateMiddleware_NilAvailableFunc(t *testing.T) {
-	// A nil available func is treated as "gate closed" — defensive default.
+	// A nil available func is treated as "gate closed": defensive default.
 	called := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true

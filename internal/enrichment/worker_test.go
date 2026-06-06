@@ -163,7 +163,7 @@ func (m *mockMemoryUpdater) MutateInLock(ctx context.Context, id uuid.UUID, muta
 	}
 	// Hold m.mu across the entire lookup-mutate-write so two concurrent
 	// MutateInLock callers on the same id cannot both read the same
-	// baseline and clobber each other — the same invariant the production
+	// baseline and clobber each other, the same invariant the production
 	// WithMemoryLock provides. Mutators in this codebase never re-enter
 	// the stub, so the long hold cannot deadlock.
 	m.mu.Lock()
@@ -289,8 +289,8 @@ func (m *mockQueueClaimer) Complete(_ context.Context, id uuid.UUID, _ string) e
 	return nil
 }
 
-// CompleteWithWarning encodes the payload to JSON before storing — same
-// wire form admin views render — so tests can string-match against
+// CompleteWithWarning encodes the payload to JSON before storing (same
+// wire form admin views render) so tests can string-match against
 // m.failed regardless of whether the job took the clean or partial path.
 func (m *mockQueueClaimer) CompleteWithWarning(_ context.Context, id uuid.UUID, _ string, payload any) error {
 	m.mu.Lock()
@@ -714,7 +714,7 @@ func newTestHarness(
 	h.updater.reader = h.reader
 
 	// Wrap test provider stubs so the middleware writes token_usage rows
-	// to h.tokens on every wrapped call — matches production wiring
+	// to h.tokens on every wrapped call, matches production wiring
 	// (registry wrap) without spinning up a registry in unit tests.
 	factFn := provider.WrapLLMForTest(constLLM(factLLM), h.tokens)
 	entityFn := provider.WrapLLMForTest(constLLM(entityLLM), h.tokens)
@@ -722,7 +722,7 @@ func newTestHarness(
 
 	// Dedicated query-augmentation provider. Query augmentation defaults on,
 	// so the worker calls it for every non-empty memory (including dream and
-	// already-enriched ones — only fact/entity extraction skip those). Giving
+	// already-enriched ones; only fact/entity extraction skip those). Giving
 	// it its own provider keeps augment calls off the fact counter so the
 	// skip-extraction tests measure fact extraction alone. Returns a valid
 	// JSON query array so the phase succeeds rather than failing soft.
@@ -992,7 +992,7 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 
 	// Parent's enriched flag, dim, and metadata land in one MarkEnriched
 	// call. Children are no longer embedded inline, so the parent job issues
-	// no child UpdateEmbeddingDim calls — each child's own enrichment job
+	// no child UpdateEmbeddingDim calls; each child's own enrichment job
 	// stamps its dim via MarkEnriched.
 	if len(h.updater.enrichedMarks) != 1 {
 		t.Errorf("expected 1 parent MarkEnriched, got %d", len(h.updater.enrichedMarks))
@@ -1084,7 +1084,7 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 	if len(h.vectors.vectors) != 3 {
 		t.Errorf("expected 3 vector upserts (parent + 2 entities), got %d", len(h.vectors.vectors))
 	}
-	// First upsert must be the parent memory itself, not a fact — guards
+	// First upsert must be the parent memory itself, not a fact, guards
 	// against the old bug where the first fact's embedding was stored under
 	// the parent's ID.
 	if len(h.vectors.vectors) > 0 && h.vectors.vectors[0].ID != mem.ID {
@@ -1317,8 +1317,8 @@ func TestProcessJob_SkipsLLMWhenAlreadyEnriched(t *testing.T) {
 // with Source=DreamSource MUST skip fact and entity extraction even when
 // Enriched=false, because the source check (not the Enriched flag) is the
 // readable expression of the recursion-prevention contract. Removing the
-// Source==DreamSource clause from worker.go skipFact/skipEntity makes this test fail
-// — that is the entire point. Sibling site: phase_ingestion.go (the
+// Source==DreamSource clause from worker.go skipFact/skipEntity makes this test fail;
+// that is the entire point. Sibling site: phase_ingestion.go (the
 // runIngestionDecision source-check early-return covered by
 // TestIngestion_SkipsWhenSourceIsDream).
 func TestProcessJob_SkipsLLMWhenSourceIsDream(t *testing.T) {
@@ -1419,7 +1419,7 @@ func TestProcessJob_BackfillSkipsFactsWhenLineagePresent(t *testing.T) {
 	}
 }
 
-// TestProcessJob_BackfillSkipsEntitiesWhenRelationshipsPresent — symmetric
+// TestProcessJob_BackfillSkipsEntitiesWhenRelationshipsPresent: symmetric
 // case for entity extraction. A memory with relationship rows already
 // present (source_memory = mem.ID) triggers the relationship probe and
 // skips the entity LLM call.
@@ -1452,7 +1452,7 @@ func TestProcessJob_BackfillSkipsEntitiesWhenRelationshipsPresent(t *testing.T) 
 	}
 }
 
-// TestProcessJob_BackfillRunsBothWhenNothingPresent — control case. A
+// TestProcessJob_BackfillRunsBothWhenNothingPresent: control case. A
 // historical memory with mem.Enriched=false, empty steps_completed, and
 // no lineage/relationship rows should run both extractions normally.
 func TestProcessJob_BackfillRunsBothWhenNothingPresent(t *testing.T) {
@@ -1483,7 +1483,7 @@ func TestProcessJob_BackfillRunsBothWhenNothingPresent(t *testing.T) {
 	}
 }
 
-// TestProcessJob_BackfillSkipsByStepsCompleted — covers the in-flight
+// TestProcessJob_BackfillSkipsByStepsCompleted: covers the in-flight
 // retry case. job.StepsCompleted carries "fact_extraction" from a
 // partially-successful prior run; the gate skips fact extraction without
 // consulting the lineage probe.
@@ -1606,7 +1606,7 @@ func TestProcessJob_FactExtractionOnly(t *testing.T) {
 	}
 }
 
-// guardedTestHarness is now a no-op alias for newTestHarness — the default
+// guardedTestHarness is now a no-op alias for newTestHarness; the default
 // harness already inherits the production-on default for the paraphrase
 // guard. Kept for callers that want the explicit, self-documenting name
 // when their test exercises the guard. Removing the explicit Set call also
@@ -1872,7 +1872,7 @@ type statefulMemoryStore struct {
 	mu      sync.Mutex
 	byID    map[uuid.UUID]*model.Memory
 	writes  int
-	idLocks sync.Map // map[uuid.UUID]*sync.Mutex — mirrors WithMemoryLock per-id serialization
+	idLocks sync.Map // map[uuid.UUID]*sync.Mutex, mirrors WithMemoryLock per-id serialization
 }
 
 func newStatefulMemoryStore() *statefulMemoryStore {
@@ -2260,7 +2260,7 @@ func TestProcessJob_NoProviders(t *testing.T) {
 }
 
 // TestProcessJob_PartialProviders verifies the gate is closed when ANY of
-// embedding, fact, or entity is unconfigured — not just all three. This is
+// embedding, fact, or entity is unconfigured, not just all three. This is
 // the new behavior; the old worker only failed when all three were nil.
 func TestProcessJob_PartialProviders(t *testing.T) {
 	cases := []struct {
@@ -2630,7 +2630,7 @@ func TestProcessBatch_VectorUpsertFailure_FailsJobs(t *testing.T) {
 		}
 	}
 
-	// No memory persistence should have happened — finalizeJob is the
+	// No memory persistence should have happened; finalizeJob is the
 	// only thing that persists enriched/embedding_dim, and it must be
 	// skipped on the vectorWriteFailed flag. That covers MarkEnriched
 	// (enriched flag), UpdateEmbeddingDim (parent + child dims), and the

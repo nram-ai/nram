@@ -86,7 +86,7 @@ type ProjectGrant struct {
 // Active reports whether the share is currently usable: not revoked, not
 // expired, and (for one-shot) not consumed.
 //
-// One-shot consumption is checked separately from the OAuth-binding path —
+// One-shot consumption is checked separately from the OAuth-binding path:
 // callers that mint a binding via the consent flow set ConsumedAt as part of
 // that mint; bearer-direct paths reject one-shot tokens unconditionally after
 // consumption.

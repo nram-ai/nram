@@ -60,7 +60,7 @@ func NewAdminProjectsHandler(cfg ProjectAdminConfig) http.HandlerFunc {
 			return
 		}
 
-		// Item routes are no longer served here — GET and PUT are self-service
+		// Item routes are no longer served here; GET and PUT are self-service
 		// via /v1/me/projects/{id}. Admin delete was removed previously.
 		WriteError(w, ErrBadRequest("method not allowed"))
 	}

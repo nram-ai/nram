@@ -12,7 +12,7 @@ import type { Webhook, WebhookCreateRequest, WebhookUpdateRequest, WebhookTestRe
 // Types
 // ---------------------------------------------------------------------------
 
-// Alias for Webhook — the API never returns secret in list responses.
+// Alias for Webhook: the API never returns secret in list responses.
 type WebhookFull = Webhook;
 
 interface WebhookFormData {

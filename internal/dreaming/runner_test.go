@@ -123,7 +123,7 @@ func TestHeartbeatTicksAndFeedsTokensUsedToSSE(t *testing.T) {
 		if !ok {
 			t.Fatalf("heartbeat tokens_used missing or wrong type: %+v", data)
 		}
-		// Returned values are 100, 200, 300, ... — must never be zero.
+		// Returned values are 100, 200, 300, ...; must never be zero.
 		if int(tu) == 0 {
 			t.Errorf("heartbeat carried tokens_used=0; expected SUM-derived value")
 		}
@@ -189,7 +189,7 @@ func TestHeartbeatFallbackOnTickError(t *testing.T) {
 		heartbeatInterval: 30 * time.Millisecond,
 	}
 	budget := NewTokenBudget(1000, 100)
-	// Pre-spend so budget.Used() is non-zero — this is what the SSE fallback
+	// Pre-spend so budget.Used() is non-zero: this is what the SSE fallback
 	// is supposed to surface when TickProgress errors.
 	_ = budget.Spend(444)
 
@@ -265,7 +265,7 @@ func (p *recordingPhase) Execute(_ context.Context, _ *model.DreamCycle, b *Toke
 	return p.result, p.err
 }
 
-// noopRepo is a cycleProgressRepo that does nothing — the runner's writes are
+// noopRepo is a cycleProgressRepo that does nothing; the runner's writes are
 // not the unit under test here.
 type noopRepo struct{}
 
@@ -326,7 +326,7 @@ func TestRunner_PerPhaseSliceLimitsLLMPhase(t *testing.T) {
 		t.Errorf("first phase received slice cap=%d, want 500 (1000 * 0.40 / 0.80)", first.gotCap)
 	}
 	if second.got == nil {
-		t.Fatal("second phase never ran — the runner broke the loop on slice exhaustion")
+		t.Fatal("second phase never ran: the runner broke the loop on slice exhaustion")
 	}
 	// Second phase: sum_remaining collapses to its own 0.40, so cap = Remaining * 0.40 / 0.40 = Remaining.
 	// Root used after first phase = 600, so Remaining = 400, cap = 400.
@@ -660,7 +660,7 @@ func TestRunner_RunnerLevelReasonOverridesPhaseSupplied(t *testing.T) {
 	}}
 	// Phase spends past its 500 cap → b.Spend returns ErrBudgetExhausted.
 	// recordingPhase returns (PhaseResult{}, err) on Spend error so any
-	// PhaseResult.ResidualReason a real phase tried to set is moot — the
+	// PhaseResult.ResidualReason a real phase tried to set is moot; the
 	// runner-level reason path takes over.
 	first := &recordingPhase{
 		name:  model.DreamPhaseContradictions,
@@ -701,7 +701,7 @@ func TestRunner_RunnerLevelReasonOverridesPhaseSupplied(t *testing.T) {
 
 // TestRunner_PropagatesSubPhasesToEntry pins the runner-level contract that
 // PhaseResult.SubPhases survives the JSON round-trip into the persisted
-// PhaseSummaryEntry. The UI relies on this — without it, the nested
+// PhaseSummaryEntry. The UI relies on this; without it, the nested
 // sub-phase bar in the cycle report has nothing to render.
 func TestRunner_PropagatesSubPhasesToEntry(t *testing.T) {
 	settings := fractionSettings{values: map[string]float64{

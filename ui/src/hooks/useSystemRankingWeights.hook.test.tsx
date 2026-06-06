@@ -4,7 +4,7 @@
  * Hook-level test for useSystemRankingWeights covering the
  * loading-vs-missing distinction. Pure-resolver semantics live in
  * useSystemRankingWeights.test.ts; this file exercises the React Query
- * wrapper's isLoading / isError plumbing — the bug that motivated the
+ * wrapper's isLoading / isError plumbing; the bug that motivated the
  * change is the consumer rendering "schema unavailable" during the normal
  * initial-load window. The wrapper must return isLoading: true with an
  * empty missingKeys list until the underlying query has resolved.
@@ -53,7 +53,7 @@ function fullPayload() {
   }));
 }
 
-describe("useSystemRankingWeights — loading semantics", () => {
+describe("useSystemRankingWeights: loading semantics", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -73,7 +73,7 @@ describe("useSystemRankingWeights — loading semantics", () => {
       wrapper: wrapperFactory(),
     });
 
-    // First synchronous render — query undefined.
+    // First synchronous render, query undefined.
     expect(result.current.isLoading).toBe(true);
     expect(result.current.weights).toBeNull();
     // Crucially: missingKeys is empty while loading, so the consumer can

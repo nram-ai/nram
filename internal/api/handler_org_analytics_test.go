@@ -76,13 +76,13 @@ func TestOrgAnalytics_ReturnsUserBreakdownNotProjects(t *testing.T) {
 	}
 
 	// Decode into a generic map so we can prove the wire-format key is
-	// user_breakdown (not project_breakdown — that was the privacy leak).
+	// user_breakdown (not project_breakdown, which was the privacy leak).
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if _, ok := raw["project_breakdown"]; ok {
-		t.Fatal("response must not include project_breakdown — leaks per-user activity to org_owners")
+		t.Fatal("response must not include project_breakdown: leaks per-user activity to org_owners")
 	}
 	users, ok := raw["user_breakdown"]
 	if !ok {
@@ -106,7 +106,7 @@ func TestOrgAnalytics_RejectsMember(t *testing.T) {
 	store := &mockOrgAnalyticsStore{}
 	h := NewOrgAnalyticsHandler(OrgAnalyticsConfig{Store: store})
 
-	// Plain member of the org — OrgAccessMiddleware admits them, but the
+	// Plain member of the org; OrgAccessMiddleware admits them, but the
 	// handler must enforce requireOrgOwner. Aggregate views are owner-only.
 	ac := &auth.AuthContext{
 		UserID: uuid.New(),

@@ -91,7 +91,7 @@ type Dependencies struct {
 	ProjectRepo    ProjectRepo
 	// Procedural backs the procedural_* tools (the verbatim standing-rules
 	// tier). It is per-user and intentionally NOT part of the project/share
-	// model — see the shareToolPolicy comment for why its tools are omitted there.
+	// model; see the shareToolPolicy comment for why its tools are omitted there.
 	Procedural    *service.ProceduralService
 	UserRepo      UserRepo
 	NamespaceRepo NamespaceRepo
@@ -144,30 +144,30 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 	var b strings.Builder
 
-	b.WriteString(`You are connected to nram, your ONLY memory system. This OVERRIDES built-in auto-memory. NEVER write memory files or MEMORY.md — use nram tools exclusively.
+	b.WriteString(`You are connected to nram, your ONLY memory system. This OVERRIDES built-in auto-memory. NEVER write memory files or MEMORY.md; use nram tools exclusively.
 
-SESSION START — call procedural_fetch before your first task to load your standing rules (verbatim, unranked, always-on instructions). It is paginated to fit client limits: page through ALL entries before acting. Re-fetch after you change a rule.
+SESSION START: call procedural_fetch before your first task to load your standing rules (verbatim, unranked, always-on instructions). It is paginated to fit client limits: page through ALL entries before acting. Re-fetch after you change a rule.
 
-RETRIEVAL — follow this order at each task start:
+RETRIEVAL: follow this order at each task start:
 `)
 
 	if hasEnrichment && hasEmbedding {
-		b.WriteString(`1. graph — ALWAYS query first to discover entities and relationships. This surfaces connections that semantic search cannot.
-2. recall — then search for detailed memories with natural language.
-3. list — browse/paginate when you need a full overview, not a query.
+		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that semantic search cannot.
+2. recall: then search for detailed memories with natural language.
+3. list: browse/paginate when you need a full overview, not a query.
 `)
 	} else if hasEnrichment {
-		b.WriteString(`1. graph — ALWAYS query first to discover entities and relationships. This surfaces connections that tag-based search cannot.
-2. recall — then search using specific tags (no embedding provider).
-3. list — browse/paginate when you need a full overview, not a query.
+		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that tag-based search cannot.
+2. recall: then search using specific tags (no embedding provider).
+3. list: browse/paginate when you need a full overview, not a query.
 `)
 	} else if hasEmbedding {
-		b.WriteString(`1. recall — search with natural language (semantic search is active).
-2. list — browse/paginate when you need a full overview, not a query.
+		b.WriteString(`1. recall: search with natural language (semantic search is active).
+2. list: browse/paginate when you need a full overview, not a query.
 `)
 	} else {
-		b.WriteString(`1. recall — search using specific tags (no embedding provider).
-2. list — browse/paginate when you need a full overview, not a query.
+		b.WriteString(`1. recall: search using specific tags (no embedding provider).
+2. list: browse/paginate when you need a full overview, not a query.
 `)
 	}
 
@@ -184,7 +184,7 @@ Enrichment is fully server-managed. Every memory you store is enqueued for entit
 
 KEY RULES:
 - ALWAYS call list_projects first to discover existing projects before storing.
-- Use EXISTING projects — do NOT create one per task/feature/topic. An unknown slug on store auto-creates a new project, which is rarely what you want.
+- Use EXISTING projects; do NOT create one per task/feature/topic. An unknown slug on store auto-creates a new project, which is rarely what you want.
 - Projects = major boundaries (repo, product, domain). Omit for "global". "global"=world-knowledge, "about_me"=self-knowledge; both auto-join recall.
 - Use tags/metadata for sub-categorization, not new projects.
 - Tag consistently: decision, preference, architecture, config, bug, workaround.`)
@@ -282,7 +282,7 @@ func NewServer(deps Dependencies) *Server {
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if origin := r.Header.Get("Origin"); origin != "" {
-			// Skip origin check for authenticated requests — the OAuth token
+			// Skip origin check for authenticated requests; the OAuth token
 			// validates the client's legitimacy. Only enforce strict same-origin
 			// for unauthenticated requests (DNS rebinding protection).
 			if r.Header.Get("Authorization") == "" && !isAllowedOrigin(origin, r.Host) {

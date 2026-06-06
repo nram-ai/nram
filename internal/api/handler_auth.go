@@ -195,7 +195,7 @@ func NewLookupHandler(cfg AuthConfig) http.HandlerFunc {
 		idpID := resolveIdPForEmail(r.Context(), cfg, user, req.Email)
 
 		if idpID != "" {
-			// An IdP is configured — it is authoritative for the org.
+			// An IdP is configured; it is authoritative for the org.
 			// Org owners and admins get a password fallback for break-glass access.
 			resp := lookupResponse{Method: "idp", IdPID: &idpID}
 			if user != nil && user.PasswordHash != nil {
@@ -224,7 +224,7 @@ func NewLookupHandler(cfg AuthConfig) http.HandlerFunc {
 			return
 		}
 
-		// Known user without password and no IdP — broken state.
+		// Known user without password and no IdP: broken state.
 		if user != nil {
 			writeJSON(w, http.StatusOK, lookupResponse{Method: "idp"})
 			return

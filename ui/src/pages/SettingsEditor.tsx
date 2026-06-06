@@ -24,7 +24,7 @@ import { GraphMaintenanceBlock } from "../components/GraphMaintenanceBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheck, faXmark, faCircleQuestion, faSpinner, faMagnifyingGlass } from "../lib/icons";
 
-// Setting keys are not always literal phase names — e.g. `dreaming.transitive.*`
+// Setting keys are not always literal phase names; e.g. `dreaming.transitive.*`
 // drives the `transitive_discovery` phase. The bar needs the phase key to
 // look up color and label.
 const SETTING_KEY_TO_PHASE: Record<string, string> = {
@@ -298,7 +298,7 @@ function renderValueInput({
   if (schema.type === "int" || schema.type === "float" || schema.type === "number") {
     // Schema-driven range. min/max/step on SettingSchema are pointer-typed
     // on the server (omitted vs. zero distinguishable in JSON), so undefined
-    // here means "no constraint" — fall back to the legacy heuristic step.
+    // here means "no constraint": fall back to the legacy heuristic step.
     const fallbackStep = schema.type === "float" ? 0.01 : 1;
     const step =
       typeof schema.step === "number" && Number.isFinite(schema.step) && schema.step > 0
@@ -638,7 +638,7 @@ function InlineSettingEditor({
 
 // Some categories carry an operator action block beneath their setting rows.
 // This is rendered in both ParentGroupCard render paths (flat and sectioned) so
-// the block never depends on whether the group happened to flatten — a group
+// the block never depends on whether the group happened to flatten; a group
 // with a single unlabeled subsection takes the flat path, and omitting the
 // block there is what hid GraphMaintenanceBlock under Lifecycle Sweep.
 const TRAILING_BLOCK_CATEGORIES = new Set(["enrichment_query_augment", "lifecycle"]);
@@ -849,7 +849,7 @@ function SettingsEditor() {
 
   // Group settings by their backend category. Prompt keys live on the Prompt
   // Templates page, provider-config keys on the Provider Configuration page,
-  // and usage.cost_rates on Analytics — all filtered out so the Settings page
+  // and usage.cost_rates on Analytics, all filtered out so the Settings page
   // does not edit them in two places.
   const itemsByCategory = useMemo(() => {
     const settingsMap = new Map(settings.map((s) => [s.key, s]));
@@ -874,14 +874,14 @@ function SettingsEditor() {
   // The active database backend gates groups that only matter for one
   // storage path (HNSW is SQLite-only, for instance). useSetupStatus already
   // exposes backend and is queried elsewhere in the app, so this reuses the
-  // react-query cache. While the lookup is in flight we default to permissive
-  // — the alternative is a brief flash where applicable groups disappear.
+  // react-query cache. While the lookup is in flight we default to permissive;
+  // the alternative is a brief flash where applicable groups disappear.
   const { data: setupStatus } = useSetupStatus();
   const activeBackend = setupStatus?.backend ?? "";
 
   // The full group set is the server taxonomy plus a synthetic "Other" group
-  // for any category the server did not place (should never happen — the
-  // backend test enforces total coverage — but it keeps a setting from ever
+  // for any category the server did not place (should never happen, the
+  // backend test enforces total coverage, but it keeps a setting from ever
   // silently vanishing).
   const allGroups = useMemo(() => {
     const fallback = buildFallbackGroup(serverGroups, [...itemsByCategory.keys()]);

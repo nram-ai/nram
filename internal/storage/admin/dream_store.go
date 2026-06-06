@@ -147,7 +147,7 @@ func (s *DreamAdminStore) Status(ctx context.Context) (*api.DreamStatusResponse,
 		cycles = []model.DreamCycle{}
 	}
 
-	// Resolve once — the UI polls Status every 10 seconds, so we avoid a
+	// Resolve once; the UI polls Status every 10 seconds, so we avoid a
 	// second settings cache lookup and (more importantly) a second query
 	// just to count stuck rows that the recent-cycles preview already
 	// covers in the typical case.
@@ -170,8 +170,8 @@ func (s *DreamAdminStore) Status(ctx context.Context) (*api.DreamStatusResponse,
 // ProjectStatus returns the dream status for a specific project. The
 // Enabled flag mirrors what the scheduler sees (cascade resolver: global
 // dreaming.enabled merged with the project's own Settings.dreaming_enabled
-// override). If the project lookup fails — e.g. the row was deleted between
-// the caller's request and this query — Enabled is reported as false rather
+// override). If the project lookup fails (e.g. the row was deleted between
+// the caller's request and this query), Enabled is reported as false rather
 // than synthesized from a partial cascade.
 func (s *DreamAdminStore) ProjectStatus(ctx context.Context, projectID uuid.UUID) (*api.DreamProjectStatusResponse, error) {
 	dirty, _ := s.dirtyRepo.IsDirty(ctx, projectID)

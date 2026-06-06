@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: nram API
-  description: Neural RAM — persistent memory layer for AI agents.
+  description: Neural RAM, persistent memory layer for AI agents.
   version: 0.1.0
   license:
     name: MIT
@@ -24,7 +24,7 @@ tags:
   - name: User
     description: User-scoped (self-service) endpoints
   - name: Dashboard
-    description: "Dashboard and activity — scoped by role"
+    description: "Dashboard and activity, scoped by role"
   - name: Admin - Organizations
     description: Admin organization management
   - name: Admin - Users
@@ -38,17 +38,17 @@ tags:
   - name: Admin - Webhooks
     description: Webhook management
   - name: Enrichment
-    description: "Enrichment queue — read for all, writes admin-only"
+    description: "Enrichment queue: read for all, writes admin-only"
   - name: Analytics
-    description: "Memory analytics — scoped by role"
+    description: "Memory analytics, scoped by role"
   - name: Usage
-    description: "Token usage reporting — scoped by role"
+    description: "Token usage reporting, scoped by role"
   - name: Namespaces
-    description: "Namespace hierarchy — scoped by role"
+    description: "Namespace hierarchy, scoped by role"
   - name: Admin - Database
     description: Database info and migration
   - name: Graph
-    description: "Knowledge graph visualization — scoped by role"
+    description: "Knowledge graph visualization, scoped by role"
   - name: Admin - OAuth
     description: OAuth client and IdP management
   - name: Org - Users
@@ -2373,7 +2373,7 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     Forbidden:
-      description: "Forbidden — insufficient role or org membership"
+      description: "Forbidden: insufficient role or org membership"
       content:
         application/json:
           schema:

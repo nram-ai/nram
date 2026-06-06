@@ -64,12 +64,12 @@ type DreamAdminConfig struct {
 // admin requests based on method and sub-path.
 //
 // Routes:
-//   - GET  /dreaming                       — system status
-//   - GET  /dreaming/cycles                — list cycles (optional ?project_id=)
-//   - GET  /dreaming/cycles/{id}           — cycle detail with logs
-//   - POST /dreaming/cycles/{id}/abandon   — abandon a stuck/running cycle
-//   - POST /dreaming/enable                — {"enabled": bool}
-//   - POST /dreaming/rollback              — {"cycle_id": "..."}
+//   - GET  /dreaming:                       system status
+//   - GET  /dreaming/cycles:                list cycles (optional ?project_id=)
+//   - GET  /dreaming/cycles/{id}:           cycle detail with logs
+//   - POST /dreaming/cycles/{id}/abandon:   abandon a stuck/running cycle
+//   - POST /dreaming/enable:                {"enabled": bool}
+//   - POST /dreaming/rollback:              {"cycle_id": "..."}
 //
 // Per-project dreaming is now a Settings JSON override
 // (project.settings.dreaming_enabled) saved through the project-update PATCH.

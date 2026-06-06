@@ -29,7 +29,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// JWT helpers (mirror router_test.go — cannot import server package from here)
+// JWT helpers (mirror router_test.go, cannot import server package from here)
 // ---------------------------------------------------------------------------
 
 var integrationJWTSecret = []byte("integration-test-jwt-secret-key-32b")
@@ -50,7 +50,7 @@ func (v *integrationAPIKeyValidator) Validate(_ context.Context, _ string) (*mod
 	return nil, fmt.Errorf("invalid key")
 }
 
-// integrationUserIdentityLookup always returns "member" — only used if API key auth
+// integrationUserIdentityLookup always returns "member"; only used if API key auth
 // succeeds, which it never does in integration tests.
 type integrationUserIdentityLookup struct{}
 
@@ -1117,7 +1117,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 			body:       nil,
 			token:      "", // no token
 			wantStatus: http.StatusUnauthorized,
-			wantCode:   "", // auth middleware uses http.Error, not JSON — skip code check
+			wantCode:   "", // auth middleware uses http.Error, not JSON; skip code check
 			list:       NewListHandler(&mockMemoryLister{}, &mockProjectGetter{}, nil),
 		},
 		{
@@ -1154,7 +1154,7 @@ func TestHTTP_ErrorFormat_Consistent(t *testing.T) {
 				t.Errorf("status: got %d, want %d (body: %s)", w.Code, tc.wantStatus, w.Body.String())
 			}
 
-			// Auth middleware returns plain text errors, not JSON — only assert
+			// Auth middleware returns plain text errors, not JSON; only assert
 			// envelope shape for cases that go through a handler.
 			if tc.wantCode == "" {
 				return

@@ -201,7 +201,7 @@ func TestPgVectorStore_UpsertAndSearch(t *testing.T) {
 		t.Fatalf("Upsert 2: %v", err)
 	}
 
-	// Search — query vector identical to emb1 should rank memID1 first.
+	// Search: query vector identical to emb1 should rank memID1 first.
 	results, err := store.Search(ctx, VectorKindMemory, emb1, nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -219,7 +219,7 @@ func TestPgVectorStore_UpsertAndSearch(t *testing.T) {
 		t.Errorf("first result namespace_id = %s, want %s", results[0].NamespaceID, nsID)
 	}
 
-	// Upsert update — change emb1 to match emb2 and verify search changes.
+	// Upsert update: change emb1 to match emb2 and verify search changes.
 	if err := store.Upsert(ctx, VectorKindMemory, memID1, nsID, emb2, dim); err != nil {
 		t.Fatalf("Upsert update: %v", err)
 	}

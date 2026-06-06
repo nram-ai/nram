@@ -77,7 +77,7 @@ var sqliteFKRelations = []fkRelation{
 }
 
 // MigrationAudit scans the SQLite source DB and reports orphan-row counts per
-// FK relationship. It is a read-only operation — SQLite is never mutated.
+// FK relationship. It is a read-only operation; SQLite is never mutated.
 // Rejects the request if the current backend is not SQLite, since orphans only
 // matter for a SQLite→Postgres migration.
 func (s *DatabaseAdminStore) MigrationAudit(ctx context.Context) (*api.MigrationAudit, error) {
@@ -98,7 +98,7 @@ func (s *DatabaseAdminStore) MigrationAudit(ctx context.Context) (*api.Migration
 			audit.Errors = append(audit.Errors, api.AuditError{
 				Table:   rel.ChildTable,
 				Column:  rel.ChildColumn,
-				Message: "source table missing — skipped",
+				Message: "source table missing; skipped",
 			})
 			continue
 		}
@@ -106,7 +106,7 @@ func (s *DatabaseAdminStore) MigrationAudit(ctx context.Context) (*api.Migration
 			audit.Errors = append(audit.Errors, api.AuditError{
 				Table:   rel.ChildTable,
 				Column:  rel.ChildColumn,
-				Message: fmt.Sprintf("parent table %q missing — skipped", rel.ParentTable),
+				Message: fmt.Sprintf("parent table %q missing; skipped", rel.ParentTable),
 			})
 			continue
 		}
@@ -149,7 +149,7 @@ func (s *DatabaseAdminStore) MigrationAudit(ctx context.Context) (*api.Migration
 // countOrphans returns the number of rows in rel.ChildTable whose rel.ChildColumn
 // is non-null but does not match any rel.ParentCol value in rel.ParentTable.
 //
-// Identifiers come from the static sqliteFKRelations list — never from user input —
+// Identifiers come from the static sqliteFKRelations list (never from user input),
 // so direct interpolation is safe. We still sanitize via identQuoteSQLite for clarity.
 func countOrphans(ctx context.Context, db *sql.DB, rel fkRelation) (int, error) {
 	query := fmt.Sprintf(`

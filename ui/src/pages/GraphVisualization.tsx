@@ -530,7 +530,7 @@ function GraphVisualization() {
     });
   }, [currentProject, projectSettings, updateProjectMut]);
 
-  // Callback ref — fires when the container div mounts/unmounts
+  // Callback ref, fires when the container div mounts/unmounts
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     // Clean up previous observer
     if (observerRef.current) {
@@ -615,7 +615,7 @@ function GraphVisualization() {
     return { nodes, links };
   }, [graphData]);
 
-  // Custom node rendering — glowing sphere with label
+  // Custom node rendering: glowing sphere with label
   const nodeThreeObject = useCallback((node: GraphNode) => {
     const colors = getTypeColor(node.entityType);
     const size = 3 + Math.min(node.mentionCount, 10) * 0.5;

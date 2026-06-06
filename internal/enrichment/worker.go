@@ -42,7 +42,7 @@ const (
 
 // Worker tunables (batch claim size, pre-embed concurrency, embed input cap,
 // embed timeout, breaker escalation window, max backoff) are resolved through
-// the SettingsService cascade — see service.SettingEnrichmentWorker* keys in
+// the SettingsService cascade: see service.SettingEnrichmentWorker* keys in
 // internal/service/settings.go. Defaults live in service.settingDefaults.
 
 // asCircuitOpen extracts the *provider.CircuitOpenError from an error chain
@@ -57,7 +57,7 @@ func asCircuitOpen(err error) (*provider.CircuitOpenError, bool) {
 
 // logBreakerOrError logs a job-level error. Breaker-open errors print at INFO
 // during the first SettingEnrichmentWorkerBreakerEscalateSeconds of an open
-// window (a fresh trip is not a code bug — Ollama warming up, provider rate
+// window (a fresh trip is not a code bug: Ollama warming up, provider rate
 // limit, brief network blip). Sustained breaker-open trips and all other
 // errors print at ERROR.
 func (wp *WorkerPool) logBreakerOrError(ctx context.Context, msg string, err error, attrs ...any) {
@@ -165,7 +165,7 @@ type MemoryReader interface {
 
 // MemoryUpdater persists changes to an existing memory. The partial
 // setters are how the finalize path avoids clobbering a concurrent
-// supersede with a stale full-row write — each touches only the
+// supersede with a stale full-row write; each touches only the
 // columns it intentionally mutates. MutateInLock is the only safe path
 // for any read-modify-write merge on Tags or Metadata, since full-row
 // Update without the lock has a lost-update window between workers.
@@ -185,7 +185,7 @@ type MemoryCreator interface {
 // QueueClaimer manages enrichment job lifecycle in the queue.
 // MarkStepCompleted appends a step name to the job's steps_completed array
 // (idempotent) so retries skip phases that already ran. Release resets a
-// claimed job to pending without bumping attempts — used when the worker
+// claimed job to pending without bumping attempts, used when the worker
 // defers a job (e.g., the enrichment-available gate is closed) rather than
 // failing it.
 type QueueClaimer interface {
@@ -276,7 +276,7 @@ type MemorySoftDeleter interface {
 }
 
 // ---------------------------------------------------------------------------
-// Parsed extraction types — aliased to the canonical service types so
+// Parsed extraction types: aliased to the canonical service types so
 // the worker and the synchronous HTTP path share one definition. All
 // extraction parsing and LLM-call logic now lives in
 // internal/service/extraction_llm.go.
@@ -296,12 +296,12 @@ type (
 // WorkerConfig controls the behavior of the enrichment worker pool. Workers
 // and PollInterval are read once at construction; changing them at runtime
 // requires a server restart (the pool is sized by the goroutine count
-// spawned in Start). Defaults come from the SettingsService cascade —
+// spawned in Start). Defaults come from the SettingsService cascade:
 // SettingEnrichmentWorkerCountSQLite / *CountPostgres / *PollIntervalSeconds.
 type WorkerConfig struct {
 	Workers      int           // number of concurrent workers; 0 → resolve from settings
 	PollInterval time.Duration // how often idle workers poll for jobs; 0 → resolve from settings
-	Backend      string        // "sqlite" or "postgres" — selects which worker-count setting applies
+	Backend      string        // "sqlite" or "postgres", selects which worker-count setting applies
 }
 
 func (c WorkerConfig) withDefaults(ctx context.Context, settings *service.SettingsService) WorkerConfig {
@@ -389,7 +389,7 @@ func NewWorkerPool(
 	bus events.EventBus,
 ) *WorkerPool {
 	if settings == nil {
-		// Many call sites depend on Resolve*WithDefault — passing nil settings
+		// Many call sites depend on Resolve*WithDefault; passing nil settings
 		// would panic deep inside the pool's run loop. Fail at construction so
 		// the offender is obvious; tests use service.NewNoopSettingsService().
 		panic("enrichment: NewWorkerPool requires non-nil settings")
@@ -438,7 +438,7 @@ const heartbeatTickTimeout = 10 * time.Second
 // (e.g. "b3f1a2c8-worker-0"). The nonce is required for correctness, not
 // readability: heartbeats only refresh updated_at for rows whose claimed_by
 // matches a live worker, so a stable name like "worker-0" would let a new
-// process — or a horizontally-scaled sibling instance — refresh claims it
+// process (or a horizontally-scaled sibling instance) refresh claims it
 // does not own, masking dead-worker recovery indefinitely.
 func (wp *WorkerPool) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -564,7 +564,7 @@ func (wp *WorkerPool) WorkerIDsSnapshot() []string {
 func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 	defer wp.wg.Done()
 
-	// Consecutive empty polls — used for backoff.
+	// Consecutive empty polls, used for backoff.
 	emptyPolls := 0
 
 	for {
@@ -637,7 +637,7 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 		// the breaker is allowed to probe again (its RetryAt). Without this
 		// pause the worker would immediately re-claim the same jobs, run
 		// them straight into the still-open breaker, Release them, and burn
-		// CPU until the breaker recovers — exactly the "needs a restart"
+		// CPU until the breaker recovers, exactly the "needs a restart"
 		// symptom users were seeing.
 		if !cooldown.IsZero() {
 			wp.idleWorkers.Add(1)
@@ -694,7 +694,7 @@ func (wp *WorkerPool) sleepWithBackoff(ctx context.Context, emptyPolls, maxBacko
 }
 
 // ---------------------------------------------------------------------------
-// processJob / processBatch — the enrichment pipeline
+// processJob / processBatch: the enrichment pipeline
 // ---------------------------------------------------------------------------
 
 // entityFact is the per-job entity record carried into the shared embed call
@@ -711,14 +711,14 @@ type entityFact struct {
 // finalize phases. embedStart indexes into the shared batched embed response
 // for the parent memory; embedEntStart marks where this job's entity
 // canonicals begin in the same batch. Extracted-fact children are not
-// embedded here — each carries its own enrichment job enqueued in
+// embedded here; each carries its own enrichment job enqueued in
 // runPreEmbed. Ingestion-decision fields are populated by runIngestionDecision
 // when the phase is enabled; parentEmbedFromPhase / shortCircuitDelete are
 // derived from them.
 type pendingJob struct {
 	job           *model.EnrichmentJob
 	mem           *model.Memory
-	workerID      string // owner of the claim — passed to *Owned write methods so a sweeper-requeued row is not silently overwritten by this worker.
+	workerID      string // owner of the claim, passed to *Owned write methods so a sweeper-requeued row is not silently overwritten by this worker.
 	entities      []entityFact
 	factUsage     *provider.TokenUsage
 	factModel     string
@@ -791,7 +791,7 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 	// runPreEmbed returns (nil, nil) when a per-namespace gate skipped the
 	// job; the queue entry is already Complete-marked, so there is nothing
 	// further to do for this caller. Cooperative skips are intentionally
-	// NOT counted as completed or failed — they did not produce
+	// NOT counted as completed or failed; they did not produce
 	// enrichment, but they also are not a failure operators should alert
 	// on. Recording them under either status would distort both rates.
 	if p == nil {
@@ -806,7 +806,7 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 
 // recordEnrichmentOutcome bumps the enrichment outcome counter once per
 // terminated job. status="completed" only when finalizeJob returned nil
-// AND the vector write succeeded — runEmbedBatch failures already marked
+// AND the vector write succeeded; runEmbedBatch failures already marked
 // the queue row failed but cause finalizeJob to return nil via the
 // vectorWriteFailed early-return, so the err alone is not sufficient.
 // Pass p==nil for failure paths that happened before pendingJob construction
@@ -1067,26 +1067,26 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		return nil, fmt.Errorf("enrichment gate closed mid-batch; job released")
 	}
 
-	// Per-step skip gates. mem.Enriched is the cheap signal — finalizeJob
+	// Per-step skip gates. mem.Enriched is the cheap signal; finalizeJob
 	// sets it only after every phase persisted, so it covers fully-enriched
 	// memories without any extra DB round-trips. job.StepsCompleted catches
 	// retries of a job that partially advanced before failing. The lineage
 	// and relationship probes catch historical memories whose extraction
 	// predates step tracking (e.g. memories enriched before steps_completed
 	// was wired into the worker, or before mem.Enriched was set on the
-	// synchronous write path). Probe errors fail open — run the step rather
+	// synchronous write path). Probe errors fail open: run the step rather
 	// than skip on a transient DB hiccup.
 	//
-	// DREAM-RECURSION GUARD — worker-side enforcement of the dream-of-dream
+	// DREAM-RECURSION GUARD: worker-side enforcement of the dream-of-dream
 	// cascade prevention contract. isDream is the explicit signal so the
 	// guard is readable here regardless of whether Enriched ever decouples
 	// from "skip memory-creating phases" in the future. Both clauses are
-	// load-bearing — either alone is sufficient. Symmetric sites:
+	// load-bearing; either alone is sufficient. Symmetric sites:
 	//
 	//   - internal/dreaming/phase_consolidation.go (synthMemory creation,
-	//       "DREAM-RECURSION GUARD — first prong")
+	//       "DREAM-RECURSION GUARD: first prong")
 	//   - internal/dreaming/phase_consolidation.go (consolidate() candidate
-	//       filter, "DREAM-RECURSION GUARD — second prong")
+	//       filter, "DREAM-RECURSION GUARD: second prong")
 	//   - internal/enrichment/phase_ingestion.go (runIngestionDecision
 	//       Enriched/origin early-return)
 	//
@@ -1298,7 +1298,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		//
 		// Enqueue failure is non-fatal: the child row already exists, and
 		// EnrichService.BackfillAugmentation is the operator recovery route
-		// for any child stranded without a vector — the same guarantee the
+		// for any child stranded without a vector, the same guarantee the
 		// dream path relies on.
 		now := time.Now().UTC()
 		childJob := &model.EnrichmentJob{
@@ -1323,7 +1323,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 			"job", job.ID, "memory", mem.ID, "children", childCount)
 	}
 
-	// Mark fact_extraction as completed when the LLM call succeeded —
+	// Mark fact_extraction as completed when the LLM call succeeded,
 	// even if 0 facts came back. The signal is "the step ran", not "the
 	// step produced output", so a legitimate 0-fact memory does not
 	// re-extract on the next claim.
@@ -1416,7 +1416,7 @@ func buildPartialRecoveryWarning(factEnv *service.FactExtractionEnvelope, entEnv
 
 // stepDoneSet parses an EnrichmentJob.StepsCompleted JSON payload into a
 // presence set. Tolerates NULL, empty, or malformed inputs by returning an
-// empty set — the worker will then re-run the step rather than skip on
+// empty set; the worker will then re-run the step rather than skip on
 // bad data.
 func stepDoneSet(raw json.RawMessage) map[string]bool {
 	out := map[string]bool{}
@@ -1906,14 +1906,14 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 	if p.partialRecoveryWarning != nil {
 		if err := wp.queue.CompleteWithWarning(ctx, p.job.ID, p.workerID, p.partialRecoveryWarning); err != nil {
 			if errors.Is(err, storage.ErrClaimLost) {
-				slog.Info("enrichment: complete-with-warning dropped — claim lost", "job", p.job.ID, "worker", p.workerID)
+				slog.Info("enrichment: complete-with-warning dropped: claim lost", "job", p.job.ID, "worker", p.workerID)
 				return nil
 			}
 			return fmt.Errorf("complete job (with warning): %w", err)
 		}
 	} else if err := wp.queue.Complete(ctx, p.job.ID, p.workerID); err != nil {
 		if errors.Is(err, storage.ErrClaimLost) {
-			slog.Info("enrichment: complete dropped — claim lost", "job", p.job.ID, "worker", p.workerID)
+			slog.Info("enrichment: complete dropped: claim lost", "job", p.job.ID, "worker", p.workerID)
 			return nil
 		}
 		return fmt.Errorf("complete job: %w", err)
@@ -1937,7 +1937,7 @@ func (wp *WorkerPool) resolveOrCreateEntity(ctx context.Context, namespaceID uui
 		}
 	}
 
-	// Entity doesn't exist — create it so the relationship is preserved.
+	// Entity doesn't exist; create it so the relationship is preserved.
 	now := time.Now().UTC()
 	entity := &model.Entity{
 		ID:           uuid.New(),
@@ -1990,9 +1990,9 @@ func mergeTags(parent, child []string) []string {
 // parent memory and writes a LineageExtractedFactSuppressed audit row.
 // The inMemoryParent argument is the live in-memory parent struct the
 // caller holds; on a real tag delta this function mutates it in place
-// (Tags + Metadata) so that downstream code paths in the same job —
-// notably finalizeJob's MarkEnriched(stampedMetadata) at worker.go ~1794,
-// which is a partial-column write of metadata — do not clobber the
+// (Tags + Metadata) so that downstream code paths in the same job
+// (notably finalizeJob's MarkEnriched(stampedMetadata) at worker.go ~1794,
+// which is a partial-column write of metadata) do not clobber the
 // freshly-written suppression stamp with a stale snapshot. childMemoryID
 // is non-nil only on the backfill sweep path (a real child memory exists
 // to reference in the audit JSON); the pre-insert guard passes nil because
@@ -2003,7 +2003,7 @@ func mergeTags(parent, child []string) []string {
 // on Postgres, in-process mutex on SQLite). Without that lock, two
 // concurrent enrichment jobs targeting the same parent would each read
 // the same baseline, compute their tag unions independently, and the
-// second write would clobber the first — silently losing absorbed tags.
+// second write would clobber the first, silently losing absorbed tags.
 func (wp *WorkerPool) mergeTagsIntoParent(
 	ctx context.Context,
 	inMemoryParent *model.Memory,

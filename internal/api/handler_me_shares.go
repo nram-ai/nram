@@ -31,7 +31,7 @@ type ShareTokenManager interface {
 
 // ProjectOwnership resolves the owning namespace of a project. The share
 // handlers use it to verify that every grant in a create/edit request points
-// at a project the caller actually owns — without this check, a user could
+// at a project the caller actually owns; without this check, a user could
 // mint shares listing arbitrary project UUIDs (foreign tenants, deleted
 // projects, random UUIDs) and pollute their own UI / leak project IDs.
 type ProjectOwnership interface {

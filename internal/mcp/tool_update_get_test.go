@@ -289,7 +289,7 @@ func TestHandleMemoryUpdate_Success(t *testing.T) {
 	}
 
 	text := extractText(result)
-	// MCP update response is the slim mcpUpdateResponse — content and
+	// MCP update response is the slim mcpUpdateResponse; content and
 	// previous_content echoes are no longer surfaced. Content change
 	// returns a NEW memory ID (the supersede path); the input ID is
 	// echoed back as previous_memory_id for caller correlation.

@@ -86,7 +86,7 @@ func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, bud
 		}
 		pruned += batchPruned
 
-		// No "of" — iterateMemoriesByNamespace streams via cursor and the
+		// No "of": iterateMemoriesByNamespace streams via cursor and the
 		// namespace total is not known upfront.
 		slog.Info("dreaming: pruning progress",
 			"cycle", cycle.ID, "batch_size", len(batch),
@@ -218,7 +218,7 @@ func (p *PruningPhase) pruneMemories(ctx context.Context, cycle *model.DreamCycl
 
 	for i, mem := range memories {
 		// Emit at the top so the UI sees motion regardless of how many rows
-		// the shouldPrune/DeletedAt continues skip — most pruning passes
+		// the shouldPrune/DeletedAt continues skip; most pruning passes
 		// touch a small fraction of the working set.
 		if tracker != nil && shouldEmitProgress(i, len(memories), progressStep) {
 			tracker.EmitPhaseProgress(ctx, i+1, len(memories), "memories")
@@ -274,7 +274,7 @@ func (p *PruningPhase) pruneRelationships(ctx context.Context, cycle *model.Drea
 
 // resolveRelationshipWeightThreshold returns the threshold below which an
 // active relationship is expired. Shared with WeightAdjustmentPhase via the
-// SettingDreamPruningRelationshipWeightThreshold key — both paths must read
+// SettingDreamPruningRelationshipWeightThreshold key; both paths must read
 // the same registry-backed value or they will drift.
 func (p *PruningPhase) resolveRelationshipWeightThreshold(ctx context.Context) float64 {
 	if p.settings == nil {
@@ -333,7 +333,7 @@ func (p *PruningPhase) pruneTransitiveUnderPressure(ctx context.Context, cycle *
 
 	// Per-cycle drain ceiling: reuse the streaming pruning batch size so a
 	// single cycle cannot issue an unbounded UPDATE (at the 1M hard_cap
-	// default, raw target can be 150k). Pressure relief is incremental —
+	// default, raw target can be 150k). Pressure relief is incremental;
 	// successive cycles drain further toward low_water. The trigger fires
 	// every cycle until totalActive falls below high_water, so cap'd cycles
 	// just take more wall-clock to converge rather than dropping work.

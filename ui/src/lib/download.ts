@@ -2,7 +2,7 @@
 // constructing an object URL, dispatching a synthetic click on an anchor,
 // and then revoking the URL after the click hook has fired. Safari races
 // the revoke against the click when revocation is synchronous, so the
-// revoke is deferred to the next task tick — the synchronous form leaks
+// revoke is deferred to the next task tick; the synchronous form leaks
 // the URL until the page unloads, which is the more common failure mode
 // in production.
 export function triggerBlobDownload(blob: Blob, filename: string): void {
@@ -18,7 +18,7 @@ export function triggerBlobDownload(blob: Blob, filename: string): void {
 
 // downloadJson serializes a value as pretty-printed JSON and triggers a
 // browser download. Used by the memory browser's "Export selected" and
-// "Export all" actions. Pure client-side — no network round-trip.
+// "Export all" actions. Pure client-side, no network round-trip.
 export function downloadJson(data: unknown, filename: string): void {
   const blob = new Blob([JSON.stringify(data, null, 2)], {
     type: "application/json",

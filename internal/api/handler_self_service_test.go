@@ -598,7 +598,7 @@ func TestMeCapabilities_MethodNotAllowed(t *testing.T) {
 
 func TestMeCapabilities_NilDependenciesAreSafe(t *testing.T) {
 	// A misconfigured handler (nil EnrichmentAvailable, nil Settings) should
-	// still return 200 with both flags false rather than panic — the SPA
+	// still return 200 with both flags false rather than panic; the SPA
 	// renders the closed-gate state gracefully.
 	handler := NewMeCapabilitiesHandler(MeCapabilitiesConfig{})
 

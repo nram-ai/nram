@@ -117,13 +117,13 @@ beforeEach(() => {
   useUpdateSettingMock.mockReturnValue({ mutate: vi.fn() } as any);
 });
 
-describe("Analytics page — role-aware tier picker", () => {
+describe("Analytics page, role-aware tier picker", () => {
   it("administrator: defaults to Mine, shows Mine/Org/System tabs", () => {
     useAuthMock.mockReturnValue(authStub("administrator"));
 
     render(<Analytics />);
 
-    // Default tier is "self" for everyone — admin's "Mine" view shows
+    // Default tier is "self" for everyone; admin's "Mine" view shows
     // their own analytics, not system-wide (post-2026-04-30 leak fix).
     expect(screen.getByRole("heading", { level: 1, name: /My Analytics/i })).toBeInTheDocument();
 

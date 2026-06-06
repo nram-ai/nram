@@ -15,7 +15,7 @@ import (
 var ErrEmptyContent = errors.New("procedural content is required")
 
 // ProceduralRepository is the persistence contract for the procedural tier.
-// It deliberately exposes no embedding, enrichment, or consolidation hooks —
+// It deliberately exposes no embedding, enrichment, or consolidation hooks:
 // that absence is what guarantees procedural content stays verbatim.
 type ProceduralRepository interface {
 	Create(ctx context.Context, e *model.ProceduralEntry) error

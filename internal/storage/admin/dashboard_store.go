@@ -28,7 +28,7 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID, userID *uuid
 	}
 
 	if orgID == nil {
-		// Global counts — no org filter.
+		// Global counts; no org filter.
 		counts := []struct {
 			table string
 			dest  *int
@@ -85,7 +85,7 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID, userID *uuid
 	//     project, so the name is theirs to see). This is what powers the
 	//     self-tier /v1/dashboard chart.
 	//
-	//   userID == nil && orgID != nil: org-wide breakdown WITHOUT names —
+	//   userID == nil && orgID != nil: org-wide breakdown WITHOUT names,
 	//     project_id only. An org_owner or admin browsing an org-aggregate
 	//     view must not learn the names of projects owned by other users.
 	//     This matches the privacy posture for org-tier dreaming and
@@ -156,7 +156,7 @@ func (s *DashboardStore) DashboardStats(ctx context.Context, orgID, userID *uuid
 }
 
 func (s *DashboardStore) RecentActivity(ctx context.Context, limit int, orgID, userID *uuid.UUID) ([]api.ActivityEvent, error) {
-	// Privacy: only the self-tier (userID != nil — caller's own memories,
+	// Privacy: only the self-tier (userID != nil, caller's own memories,
 	// scoped via the user's namespace prefix) selects a content preview.
 	// Org-scoped (orgID set, userID nil) and global (both nil) keep the
 	// length-only shape so cross-tenant feeds never carry content.
@@ -284,7 +284,7 @@ func (s *DashboardStore) orgEntityCountQuery() string {
 // orgMemoriesByProjectQueryNoName returns the per-project breakdown for
 // every project in the given org's subtree, with project_id but NOT
 // project_name. Used when the caller is not a single user (no userID) but
-// is scoped to an org — i.e. a future tier-B/system-tier consumer that
+// is scoped to an org, i.e. a future tier-B/system-tier consumer that
 // needs the chart shape but must not learn cross-user project names. The
 // previous version of this method (orgMemoriesByProjectQuery) selected
 // p.name and was the source of the cross-user name leak on /v1/dashboard
@@ -312,7 +312,7 @@ func (s *DashboardStore) orgMemoriesByProjectQueryNoName() string {
 
 // userMemoriesByProjectQuery returns the per-project breakdown for
 // projects owned by the given user, with project_id AND project_name.
-// Self-tier only — the caller owns every returned project, so the name is
+// Self-tier only; the caller owns every returned project, so the name is
 // theirs to see. The filter is on projects.owner_namespace_id, joined to
 // users.namespace_id via the subquery, so the path is independent of any
 // namespace-path scoping (a user could in principle own projects under
@@ -350,7 +350,7 @@ func (s *DashboardStore) orgRecentActivityQuery() string {
 }
 
 // userRecentActivityQuery selects memories owned by a single user (filtered
-// on the user's namespace prefix). Self-tier only — callers are looking at
+// on the user's namespace prefix). Self-tier only; callers are looking at
 // their own data.
 //
 // Content is selected raw (no text-aware function and no bytea cast) so a

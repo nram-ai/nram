@@ -73,7 +73,7 @@ func isTolerableRowError(err error) bool {
 // isOnConflictCardinalityError detects the Postgres cardinality violation raised
 // when one INSERT ... ON CONFLICT DO UPDATE statement carries two VALUES rows
 // that map to the same conflict key (SQLSTATE 21000, "cannot affect row a
-// second time") — e.g. two relation-formatting variants that canonicalize to
+// second time"); e.g. two relation-formatting variants that canonicalize to
 // the same (namespace_id, source_id, target_id, relation, valid_from). Treating
 // it as tolerable lets the batch fall back to per-row inserts, where the second
 // row conflicts with the first (now in the table) and merges via ON CONFLICT.
@@ -286,8 +286,8 @@ func (s *HNSWStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem) e
 					// Parent row (memories or entities) was deleted between
 					// the producer (enrichment / dream) creating the parent
 					// and this vector insert. With ON DELETE CASCADE on the
-					// vector tables, the resulting state — no parent row, no
-					// vector row — is the intended steady state. Skip this
+					// vector tables, the resulting state (no parent row, no
+					// vector row) is the intended steady state. Skip this
 					// item and move on; the rest of the batch is still
 					// healthy and committable.
 					slog.Warn("hnsw: skipping vector with missing parent row",
@@ -375,7 +375,7 @@ func (s *HNSWStore) Search(ctx context.Context, kind VectorKind, embedding []flo
 }
 
 // GetByIDs resolves namespace_id from the kind's vector table first, then
-// copies vectors out of each loaded graph — the HNSW index is partitioned by
+// copies vectors out of each loaded graph; the HNSW index is partitioned by
 // (kind, namespace_id, dimension) but callers pass a flat ID list.
 func (s *HNSWStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error) {
 	if len(ids) == 0 {
@@ -489,7 +489,7 @@ func (s *HNSWStore) Delete(ctx context.Context, kind VectorKind, id uuid.UUID) e
 	}
 
 	// Remove from the HNSW index if it's loaded in cache.
-	// We use GetOrCreate to check — if the graph is loaded it's a fast cache hit.
+	// We use GetOrCreate to check: if the graph is loaded it's a fast cache hit.
 	// If it's not loaded, we load it (which will reflect the deletion from SQLite).
 	graph, err := s.cache.GetOrCreate(ctx, spec.cacheKind, nsID, dimension)
 	if err != nil {

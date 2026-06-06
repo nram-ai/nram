@@ -111,7 +111,7 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 	}
 
 	// Validate: memory_ids must not be an empty slice if provided as non-nil.
-	// (len check above already handles this — if provided but empty, hasMemoryIDs is false,
+	// (len check above already handles this: if provided but empty, hasMemoryIDs is false,
 	// so this case falls through to the "no filter" error above if nothing else is set.)
 
 	// Look up project to verify it exists.
@@ -229,7 +229,7 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 	cascaded := 0
 
 	// Cascade: walk the supersede chain and delete older versions of this
-	// memory thread. Forgetting the active head forgets the whole thread —
+	// memory thread. Forgetting the active head forgets the whole thread,
 	// brain-like, since the older versions are the same logical memory at
 	// earlier points in time. The default soft-delete path needs an
 	// explicit walk because the FK ON DELETE SET NULL on
@@ -263,7 +263,7 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 
 	if hard {
 		// Reap the memory's exclusively-sourced graph footprint BEFORE the
-		// hard delete, while relationships.source_memory still equals id — the
+		// hard delete, while relationships.source_memory still equals id: the
 		// FK ON DELETE SET NULL would otherwise null it and strand the edges.
 		// Best-effort: a reap failure must not block the memory delete.
 		if s.graphReaper != nil {

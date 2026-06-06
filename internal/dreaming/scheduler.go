@@ -106,7 +106,7 @@ func NewScheduler(
 // CancelCycle cancels the in-flight ctx for a cycle owned by this instance.
 // Returns true if the cycle was registered locally (and thus actually canceled),
 // false if the cycle is owned by a different instance or has already completed.
-// The caller must still write the DB row's terminal state separately —
+// The caller must still write the DB row's terminal state separately;
 // canceling the ctx alone does not transition the cycle's status.
 func (s *Scheduler) CancelCycle(id uuid.UUID) bool {
 	s.activeCyclesMu.Lock()
@@ -147,7 +147,7 @@ func (s *Scheduler) Start() {
 // stuck sweeper on the next instance to catch 30 minutes later. SIGKILL
 // bypasses this path; the sweeper still backs it up.
 func (s *Scheduler) Stop() {
-	// Capture before cancel — the runCycle goroutine's defer unregisters its
+	// Capture before cancel: the runCycle goroutine's defer unregisters its
 	// own entry as it exits, so reading after wg.Wait() always finds the map
 	// empty.
 	inflight := s.snapshotActiveCycles()
@@ -226,7 +226,7 @@ func (s *Scheduler) poll(ctx context.Context) {
 	}
 
 	// Resolve timing constraints. ResolveIntWithDefault keeps the missing-key
-	// case in lockstep with settingDefaults — hardcoded literals here would
+	// case in lockstep with settingDefaults; hardcoded literals here would
 	// drift the moment defaults change in service.settings. The explicit
 	// floor-on-zero preserves the pre-refactor behavior for deployments that
 	// have a stored value of 0 (the schema's Min=0 makes that a legal write):
@@ -380,7 +380,7 @@ func (s *Scheduler) runCycle(ctx context.Context, project *model.Project) {
 
 func (s *Scheduler) isProjectDreamingEnabled(ctx context.Context, project *model.Project) bool {
 	// Cascade composes global dreaming.enabled with the project's
-	// settings.dreaming_enabled override. nil-cascade is a test path —
+	// settings.dreaming_enabled override. nil-cascade is a test path:
 	// fall back to the global flag rather than the opt-out default.
 	if s.cascade != nil {
 		return s.cascade.ResolveDreamingEnabled(ctx, project.NamespaceID)

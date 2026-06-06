@@ -216,15 +216,15 @@ func TestCheckBatch_MixedResults(t *testing.T) {
 		searchFn: func(_ context.Context, _ storage.VectorKind, emb []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
 			defer func() { callCount++ }()
 			switch callCount {
-			case 0: // first content — duplicate
+			case 0: // first content: duplicate
 				return []storage.VectorSearchResult{
 					{ID: dupID, Score: 0.96, NamespaceID: nsID},
 				}, nil
-			case 1: // second content — unique
+			case 1: // second content: unique
 				return []storage.VectorSearchResult{
 					{ID: uniqueID, Score: 0.50, NamespaceID: nsID},
 				}, nil
-			case 2: // third content — no results
+			case 2: // third content: no results
 				return nil, nil
 			default:
 				return nil, nil

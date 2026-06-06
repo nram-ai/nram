@@ -77,7 +77,7 @@ func TestShouldMerge_VectorSimilarityBelowThreshold(t *testing.T) {
 	}
 }
 
-// TestShouldMerge_DimMismatchReturnsFalse — a deployment in the middle of an
+// TestShouldMerge_DimMismatchReturnsFalse: a deployment in the middle of an
 // embed-provider switch may have entities at different dims. The fallback
 // must refuse to compare across dims rather than panic on length-mismatched
 // dot products.

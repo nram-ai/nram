@@ -119,7 +119,7 @@ func TestPreflight_EmptyTarget(t *testing.T) {
 	}
 	pgv := findCheck(t, report, "pgvector")
 	if pgv.Status == api.PreflightStatusError {
-		t.Logf("pgvector check: %s (%s) — embedded postgres ships without pgvector, which is expected in tests", pgv.Status, pgv.Message)
+		t.Logf("pgvector check: %s (%s); embedded postgres ships without pgvector, which is expected in tests", pgv.Status, pgv.Message)
 		if pgv.Remediation == "" {
 			t.Error("pgvector error should include remediation text")
 		}
@@ -194,7 +194,7 @@ func TestResetTarget_TruncateKeepsSchema(t *testing.T) {
 		t.Errorf("expected mode=truncate, got %q", result.Mode)
 	}
 
-	// Schema should still exist — probe one table.
+	// Schema should still exist; probe one table.
 	var n int
 	if err := db.QueryRow("SELECT COUNT(*) FROM system_meta").Scan(&n); err != nil {
 		t.Fatalf("truncate left schema broken: %v", err)

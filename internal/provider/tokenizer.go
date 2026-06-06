@@ -11,11 +11,11 @@ import (
 // model's encoding. It is intended as a *fallback* for providers that do not
 // return token usage in their response (notably Ollama embeddings, sometimes
 // the Ollama OpenAI-compat endpoint). The provider's reported count is the
-// source of truth — the estimator only runs when the provider returns 0/0.
+// source of truth; the estimator only runs when the provider returns 0/0.
 //
 // Encoding selection: o200k_base for GPT-4o / text-embedding-3-* / o1*; default
 // cl100k_base for GPT-3.5/4. Non-OpenAI families (Anthropic, Gemini,
-// Ollama-hosted Llama/Qwen/Mistral, etc.) are estimated under cl100k_base —
+// Ollama-hosted Llama/Qwen/Mistral, etc.) are estimated under cl100k_base;
 // numbers are approximate but sufficient for analytics rollups.
 //
 // On any tokenizer error, falls back to a len(text)/4 character heuristic.
@@ -79,7 +79,7 @@ func roughTokenCount(text string) int {
 // tiktoken-go fetches BPE files lazily on first use; without pre-warming
 // the very first provider call that hits the zero-token fallback would pay
 // a synchronous network download. Calling this at registry construction
-// pushes that cost outside the request hot path. Errors are silent — the
+// pushes that cost outside the request hot path. Errors are silent; the
 // estimator already falls back to len(text)/4 on encoding load failure.
 func PrewarmTokenizers() {
 	for _, enc := range []string{"cl100k_base", "o200k_base"} {

@@ -66,7 +66,7 @@ type Handlers struct {
 	MeChangePassword    http.HandlerFunc
 	MeProfile           http.HandlerFunc
 	MeProfilePatch      http.HandlerFunc
-	// Self-tier system-pipeline observability — added 2026-04-30 so project
+	// Self-tier system-pipeline observability: added 2026-04-30 so project
 	// owners can see their own dream cycles + enrichment queue items after
 	// the cross-tenant /v1/dreaming and /v1/enrichment routes moved under
 	// /v1/admin/.
@@ -83,7 +83,7 @@ type Handlers struct {
 	MeRankingWeightsDefaults http.HandlerFunc
 
 	// Self-tier export job pipeline. Replaced the truncation-bound MCP
-	// export tool — large multi-project exports run asynchronously, the
+	// export tool: large multi-project exports run asynchronously, the
 	// artifact lands on disk, and the caller downloads it through these
 	// handlers. See internal/service/export_job.go.
 	MeExports        http.HandlerFunc // GET (list) + POST (create) /v1/me/exports
@@ -146,11 +146,11 @@ type Handlers struct {
 	// client.
 	ShareAccept http.HandlerFunc
 
-	// IdP SSO handlers (public — no auth required)
+	// IdP SSO handlers (public: no auth required)
 	IdPLogin    http.HandlerFunc
 	IdPCallback http.HandlerFunc
 
-	// Admin handlers — tier-A "self" for AdminDashboard / AdminActivity /
+	// Admin handlers: tier-A "self" for AdminDashboard / AdminActivity /
 	// AdminAnalytics / AdminUsage / AdminGraph / AdminNamespaces.
 	// Mounted at /v1/dashboard, /v1/activity, /v1/analytics, /v1/usage,
 	// /v1/graph, /v1/namespaces/tree. Self-scoped to caller (post-2026-04-30
@@ -257,11 +257,11 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	}
 	r.Get("/v1/health", handler(handlers.Health))
 
-	// Setup endpoints are public — must be accessible before first user exists.
+	// Setup endpoints are public: must be accessible before first user exists.
 	r.Get("/v1/admin/setup/status", handler(handlers.AdminSetupStatus))
 	r.Post("/v1/admin/setup", handler(handlers.AdminSetup))
 
-	// OAuth discovery and flow endpoints (public — no auth, no setup guard).
+	// OAuth discovery and flow endpoints (public: no auth, no setup guard).
 	// Paths follow MCP spec fallback defaults: /authorize, /token, /register.
 	// CORS middleware is applied so browser-based MCP clients can reach these.
 	// Routes use HandleFunc (all methods) so OPTIONS preflight reaches the
@@ -303,11 +303,11 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Post("/v1/auth/login", handler(handlers.AuthLogin))
 		r.Post("/v1/auth/lookup", handler(handlers.AuthLookup))
 
-		// Passkey login flow (public — user is not yet authenticated).
+		// Passkey login flow (public: user is not yet authenticated).
 		r.Post("/v1/auth/passkey/begin", handler(handlers.AuthPasskeyBegin))
 		r.Post("/v1/auth/passkey/finish", handler(handlers.AuthPasskeyFinish))
 
-		// IdP SSO flow (public — user is not yet authenticated).
+		// IdP SSO flow (public: user is not yet authenticated).
 		r.Get("/auth/idp/login", handler(handlers.IdPLogin))
 		r.Get("/auth/idp/callback", handler(handlers.IdPCallback))
 	})
@@ -347,7 +347,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				r.Use(config.ProjectAccess)
 			}
 
-			// Read operations — accessible to all authenticated roles including readonly.
+			// Read operations: accessible to all authenticated roles including readonly.
 			r.Get("/", handler(handlers.List))
 			r.Get("/ids", handler(handlers.ListIDs))
 			r.Get("/{id}", handler(handlers.Detail))
@@ -355,7 +355,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Post("/recall", handler(handlers.Recall))
 			r.Get("/export", handler(handlers.Export))
 
-			// Write operations — blocked for readonly users.
+			// Write operations: blocked for readonly users.
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireWriteAccess())
 				r.Post("/", handler(handlers.Store))
@@ -369,13 +369,13 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				r.Post("/{id}/move", handler(handlers.Move))
 				r.Post("/move", handler(handlers.BulkMove))
 				r.Post("/import", handler(handlers.Import))
-				// Preview-augmentation runs an LLM call — cost-incurring, so
+				// Preview-augmentation runs an LLM call, cost-incurring, so
 				// gated to write-tier users even though it does not persist.
 				// Otherwise any readonly API key could rack up an LLM bill by
 				// spamming the preview surface.
 				r.Post("/{id}/preview-augmentation", handler(handlers.PreviewAugment))
 
-				// /enrich is gated behind the enrichment-available signal —
+				// /enrich is gated behind the enrichment-available signal:
 				// returns 503 unless all three provider slots are configured.
 				r.Group(func(r chi.Router) {
 					if config.EnrichmentGate != nil {
@@ -422,7 +422,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				r.HandleFunc("/enrichment/*", handler(handlers.MeEnrichment))
 			})
 
-			// Self-tier capability flags. Two booleans — no provider config,
+			// Self-tier capability flags. Two booleans: no provider config,
 			// no slot details, no secrets. Sidebar nav reads this to decide
 			// whether to show Enrichment Queue / Dreaming entries.
 			r.Get("/capabilities", handler(handlers.MeCapabilities))
@@ -436,7 +436,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 
 			// Self-tier export jobs. List/create at the root; per-job
 			// status and delete at {job_id}; artifact download under
-			// /download. No admin equivalent — the codebase's privacy
+			// /download. No admin equivalent: the codebase's privacy
 			// invariant deliberately keeps memory content off admin
 			// surfaces, so an admin cannot trigger an export against
 			// another user's data.
@@ -451,8 +451,8 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/shares/{id}", handler(handlers.MeShareItem))
 		})
 
-		// Scoped data-viewing routes (all authenticated users — scope auto-applied).
-		// Tier-A self-data routes. Each handler self-scopes via SelfScope —
+		// Scoped data-viewing routes (all authenticated users: scope auto-applied).
+		// Tier-A self-data routes. Each handler self-scopes via SelfScope:
 		// admin sees admin's own data here, not system-wide. Cross-tenant
 		// drill-down moved to /v1/admin/system/* and /v1/orgs/{id}/* (the
 		// per-tier handler split is staged for follow-up; today these still
@@ -469,7 +469,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Route("/v1/orgs/{org_id}", func(r chi.Router) {
 			r.Use(api.OrgAccessMiddleware())
 
-			// Tier-B aggregate data viewing — handlers gate on
+			// Tier-B aggregate data viewing: handlers gate on
 			// requireOrgOwner internally; admin passes via the
 			// OrgAccessMiddleware admin short-circuit. Each handler
 			// returns aggregate counts + distributions; no row-level
@@ -520,7 +520,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		//     can be removed cleanly.
 		//   - /v1/dreaming + /v1/enrichment moved here from the authenticated-
 		//     public group. Today they were callable by any authenticated
-		//     user and returned system-wide cycle/queue data — admin-gated
+		//     user and returned system-wide cycle/queue data, admin-gated
 		//     now, since these are system-ops surfaces (admin sees full
 		//     pipeline visibility for debugging, no other role does).
 		r.Route("/v1/admin", func(r chi.Router) {
@@ -541,7 +541,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/database/*", handler(handlers.AdminDatabase))
 			r.HandleFunc("/graph/*", handler(handlers.AdminGraphMaintenance))
 
-			// Tier-C (system-aggregate) data views — admin-only by virtue
+			// Tier-C (system-aggregate) data views: admin-only by virtue
 			// of being inside this /v1/admin route group. System totals +
 			// per-org breakdown rows; no per-user, no per-memory, no
 			// content.

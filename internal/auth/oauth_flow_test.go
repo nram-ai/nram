@@ -181,7 +181,7 @@ func buildOAuthRouter(oauthSrv *OAuthServer, secret []byte) http.Handler {
 	r.Post("/register", oauthSrv.RegisterClientHandler())
 	r.Get("/userinfo", oauthSrv.UserInfoHandler())
 
-	// Protected MCP stub — returns 200 when authenticated
+	// Protected MCP stub; returns 200 when authenticated
 	r.With(mw.Handler).Get("/mcp", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -1123,7 +1123,7 @@ func TestOAuthFlow_RefreshToken(t *testing.T) {
 		t.Fatal("refresh token was not rotated: old and new tokens are identical")
 	}
 
-	// Attempt to reuse the OLD refresh token — must be rejected (it was revoked)
+	// Attempt to reuse the OLD refresh token; must be rejected (it was revoked)
 	oldRefreshParams := url.Values{}
 	oldRefreshParams.Set("grant_type", "refresh_token")
 	oldRefreshParams.Set("refresh_token", firstTokens.RefreshToken) // the old one
@@ -1246,7 +1246,7 @@ func TestOAuthFlow_WWWAuthenticate_Header(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 
-		// Should not be 401 — either 200 (found in DB) or some other status but not 401
+		// Should not be 401; either 200 (found in DB) or some other status but not 401
 		if resp.StatusCode == http.StatusUnauthorized {
 			t.Fatal("expected valid JWT to not get 401")
 		}
@@ -1328,7 +1328,7 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 		t.Fatalf("no code in redirect: %s", resp.Header.Get("Location"))
 	}
 
-	// Step 2: Token exchange with a DIFFERENT resource — must be rejected
+	// Step 2: Token exchange with a DIFFERENT resource; must be rejected
 	tokenParams := url.Values{}
 	tokenParams.Set("grant_type", "authorization_code")
 	tokenParams.Set("code", authCode)
@@ -1358,7 +1358,7 @@ func TestOAuthFlow_ResourceParameter_Mismatch(t *testing.T) {
 	if errResp.Error != "invalid_grant" {
 		t.Fatalf("expected error=invalid_grant, got %q", errResp.Error)
 	}
-	t.Logf("resource mismatch correctly rejected with: %s — %s", errResp.Error, errResp.ErrorDescription)
+	t.Logf("resource mismatch correctly rejected with: %s: %s", errResp.Error, errResp.ErrorDescription)
 }
 
 // TestOAuthFlow_ResourceParameter_InJWT verifies that when a resource parameter
@@ -1430,7 +1430,7 @@ func TestOAuthFlow_ResourceParameter_InJWT(t *testing.T) {
 		t.Fatalf("no code in redirect: %s", resp.Header.Get("Location"))
 	}
 
-	// Token exchange — supply matching resource
+	// Token exchange; supply matching resource
 	tokenParams := url.Values{}
 	tokenParams.Set("grant_type", "authorization_code")
 	tokenParams.Set("code", authCode)

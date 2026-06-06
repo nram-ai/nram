@@ -188,7 +188,7 @@ func TestUsageRecordingE2E_ProviderErrorRecordsFailureRow(t *testing.T) {
 
 // TestUsageRecordingE2E_NoIncomingRequestIDStampsGenerated verifies that
 // when the client does not provide X-Request-ID, the middleware generates
-// a UUID and that ID lands on the token_usage row — so every provider call
+// a UUID and that ID lands on the token_usage row; so every provider call
 // is correlatable to an inbound request even for unmodified clients.
 func TestUsageRecordingE2E_NoIncomingRequestIDStampsGenerated(t *testing.T) {
 	rec := &captureRecorder{}

@@ -3,7 +3,7 @@
 -- then strip dreaming_enabled from the project Settings JSON. The down
 -- direction restores enough state for the pre-cascade scheduler to keep
 -- honoring the per-project flag, but cannot recover the original
--- updated_by/updated_at attribution columns — those default to current user
+-- updated_by/updated_at attribution columns: those default to current user
 -- (NULL) and current time.
 
 INSERT OR REPLACE INTO settings (key, value, scope)

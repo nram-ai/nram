@@ -97,7 +97,7 @@ func (b *TokenBudget) PerCallCap() int {
 // CanAfford returns true if the estimated total spend fits within the
 // remaining budget at this level and at every ancestor level (for
 // sub-slices). The per-call cap is a response-MaxTokens concern, not a
-// per-call total-cost ceiling — callers compose the two themselves via
+// per-call total-cost ceiling; callers compose the two themselves via
 // EstimateTokens(prompt) + PerCallCap() before passing to CanAfford.
 func (b *TokenBudget) CanAfford(estimated int) bool {
 	b.mu.Lock()

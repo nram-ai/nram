@@ -19,7 +19,7 @@ type ProjectUpdater interface {
 
 // updateProjectResponse is the typed response returned by the update_project
 // MCP tool. default_tags is echoed (with omitempty) so callers can verify
-// the new tag set after an update — the input surface accepts default_tags
+// the new tag set after an update; the input surface accepts default_tags
 // but the historical inline map did not echo them back, breaking the
 // write-then-verify pattern. Keep the json tags in lockstep with the
 // handler so the outputSchema and the wire stay aligned.

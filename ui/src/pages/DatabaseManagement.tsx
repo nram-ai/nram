@@ -89,7 +89,7 @@ type MigrationStep =
   | "complete";
 
 // ---------------------------------------------------------------------------
-// Migration error display — translates raw backend errors into actionable messages
+// Migration error display: translates raw backend errors into actionable messages
 // ---------------------------------------------------------------------------
 
 interface FriendlyError {
@@ -295,7 +295,7 @@ function SQLiteView({
         !window.confirm(
           mode === "truncate"
             ? "Truncate all nram tables in the target database? Existing data will be wiped but the schema and pgvector extension will be preserved."
-            : "Drop all nram tables in the target database? The schema will be recreated on the next migration. This is destructive — continue?",
+            : "Drop all nram tables in the target database? The schema will be recreated on the next migration. This is destructive. Continue?",
         )
       ) {
         return;
@@ -411,7 +411,7 @@ function SQLiteView({
               Single-Instance Backend
             </p>
             <p className="mt-1 text-sm text-warning">
-              SQLite supports the full feature set — vector search (pure-Go
+              SQLite supports the full feature set: vector search (pure-Go
               HNSW), hybrid recall (FTS5), enrichment, dreaming, knowledge
               graph, and every MCP tool. Upgrade to PostgreSQL only if you
               need to run multiple nram instances against one database, with
@@ -799,7 +799,7 @@ function ResetOptions({
         </button>
       </div>
       <p className="mt-2 text-xs text-warning">
-        TRUNCATE is usually what you want — fast, keeps pgvector enabled, owner
+        TRUNCATE is usually what you want: fast, keeps pgvector enabled, owner
         privileges are sufficient. DROP TABLES is heavier and requires the
         migration to recreate the schema on the next run.
       </p>

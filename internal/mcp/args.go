@@ -16,16 +16,16 @@ import (
 // JSON unmarshal hands numerics back as float64, so this helper:
 //
 //  1. Returns defaultVal when the key is absent or not numeric.
-//  2. Rejects NaN, +Inf, -Inf, and values below minVal — these are treated
+//  2. Rejects NaN, +Inf, -Inf, and values below minVal; these are treated
 //     as "missing/invalid" and yield defaultVal rather than poisoning the
 //     downstream slice math with a negative or impossibly-large int.
 //  3. Clamps to math.MaxInt32 BEFORE the int() cast on 64-bit platforms,
 //     because int(1e30) is implementation-defined and frequently yields
-//     MinInt64 on amd64 — a value that passes "> 0" / ">= 0" checks
+//     MinInt64 on amd64, a value that passes "> 0" / ">= 0" checks
 //     downstream and then underflows in slice expressions to panic.
 //  4. Clamps the resulting int to [minVal, maxVal].
 //
-// Use minVal=0 (and check separately) for "must be > 0" semantics — callers
+// Use minVal=0 (and check separately) for "must be > 0" semantics; callers
 // that need a strict positive can pass minVal=1 directly.
 func parseIntArg(args map[string]any, key string, defaultVal, minVal, maxVal int) int {
 	raw, ok := args[key].(float64)
@@ -52,9 +52,9 @@ func parseIntArg(args map[string]any, key string, defaultVal, minVal, maxVal int
 }
 
 // resolvePositiveCapInt resolves an integer cap setting and returns a value
-// guaranteed to be > 0. If the resolved value is ≤0 — which the admin
+// guaranteed to be > 0. If the resolved value is ≤0 (which the admin
 // settings schema rejects at write time but a stale row or hand-edited
-// override can still produce — it falls back to the registered default in
+// override can still produce) it falls back to the registered default in
 // settingDefaults rather than silently disabling the cap. Callers use this
 // for MCP-side limits (recall.max_limit, recall.graph.max_depth) where a
 // zero is never the intended "no cap" knob.

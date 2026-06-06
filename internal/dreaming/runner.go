@@ -149,7 +149,7 @@ type Runner struct {
 // window than phase-boundary updated_at can give.
 //
 // bus is the event bus used to publish per-phase, per-LLM-call, and
-// heartbeat events for live UI updates. May be nil — phases bind a
+// heartbeat events for live UI updates. May be nil; phases bind a
 // nil-bus tracker to ctx in that case, so emits become no-ops and the
 // rest of the pipeline is unaffected. Test fixtures rely on this.
 //
@@ -219,7 +219,7 @@ func (r *Runner) phaseFraction(ctx context.Context, phaseName string) float64 {
 // completion (no break on budget exhaustion, no error). hasResidual is true
 // if any phase signaled residual work (a bounded-batch phase hit its cap
 // with more candidates pending). A cycle can complete all phases yet still
-// carry residual — the scheduler uses both signals to decide whether the
+// carry residual; the scheduler uses both signals to decide whether the
 // project dirty flag is safe to clear.
 func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget) (bool, bool, error) {
 	if err := r.cycleRepo.Start(ctx, cycle.ID); err != nil {
@@ -350,7 +350,7 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 		if err != nil {
 			if errors.Is(err, ErrBudgetExhausted) {
 				// A phase reporting ErrBudgetExhausted means its budget ran
-				// out — but with per-phase slicing that may be the slice's
+				// out, but with per-phase slicing that may be the slice's
 				// local cap, not the root cap. Only break the cycle when the
 				// root is genuinely drained; otherwise let the next phase
 				// claim its own slice and proceed.
@@ -422,7 +422,7 @@ func (r *Runner) Execute(ctx context.Context, cycle *model.DreamCycle, budget *T
 }
 
 // persistPartialSummary best-effort writes the running slice between phases so
-// the UI sees breakdowns mid-cycle. Marshal/write errors are swallowed —
+// the UI sees breakdowns mid-cycle. Marshal/write errors are swallowed;
 // stalling a cycle on a transient DB blip is worse than missing one tick.
 func (r *Runner) persistPartialSummary(ctx context.Context, cycleID uuid.UUID, summaries []PhaseSummaryEntry) {
 	partial, err := json.Marshal(summaries)
@@ -439,7 +439,7 @@ func (r *Runner) persistPartialSummary(ctx context.Context, cycleID uuid.UUID, s
 
 // heartbeat ticks dream_cycles.{heartbeat_at, updated_at, tokens_used} every
 // heartbeatInterval and publishes dream.cycle.heartbeat. The loop must
-// survive a single bad tick (panic, DB lock, slow SUM) — losing it is what
+// survive a single bad tick (panic, DB lock, slow SUM); losing it is what
 // makes long phases look stalled to the sweeper. Defenses:
 //
 //  1. defer recover() so a panicked tick doesn't kill the goroutine.

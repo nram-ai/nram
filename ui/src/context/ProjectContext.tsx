@@ -61,8 +61,8 @@ export function useSelectedProject(): ProjectContextValue {
 // useEnsureValidSelectedProject keeps the shared selection pointed at a project
 // that actually exists in the given list. It defaults an empty selection to the
 // "global" project (auto-created for every user; falls back to the first
-// project) and, critically, re-defaults a stale/invalid persisted id — one left
-// over from a prior login, a deleted project, or another tenant — which would
+// project) and, critically, re-defaults a stale/invalid persisted id (one left
+// over from a prior login, a deleted project, or another tenant) which would
 // otherwise drive the project-scoped views into a failed fetch. Pass the list
 // from useMeProjects; it no-ops while the list is still loading so a valid
 // persisted selection is never clobbered mid-load.

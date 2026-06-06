@@ -84,7 +84,7 @@ func (dt *DirtyTracker) handleEvent(ctx context.Context, event events.Event) {
 	// Skip dream-originated changes to prevent feedback loops. The dream cycle
 	// emits no lifecycle events today, so this is the forward-looking contract:
 	// any future dream-path emit must carry origin=OriginDream. (Deletes omit
-	// origin — a user deleting any memory is a legitimate dirty trigger.)
+	// origin: a user deleting any memory is a legitimate dirty trigger.)
 	if data["origin"] == string(model.OriginDream) {
 		return
 	}

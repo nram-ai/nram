@@ -92,7 +92,7 @@ describe("primitive formatters", () => {
     expect(memoryFocusHref(PROJECT, A, { includeSuperseded: true })).toBe(
       `/memories?project=${PROJECT}&focus=${A}&include_superseded=1`,
     );
-    // Default (no opts and explicit false) does not include the flag — the
+    // Default (no opts and explicit false) does not include the flag; the
     // detail endpoint hides superseded rows unless this is set.
     expect(memoryFocusHref(PROJECT, A, { includeSuperseded: false })).toBe(
       `/memories?project=${PROJECT}&focus=${A}`,
@@ -204,10 +204,10 @@ describe("formatDreamLog: paraphrase_dedup", () => {
       }),
     );
     expect(out.narrative).toBe(
-      "Merged paraphrase {loser} into {winner} — {cosine} similar",
+      "Merged paraphrase {loser} into {winner}, {cosine} similar",
     );
     // The loser row is soft-deleted (superseded_by set), so the chip needs
-    // to carry the include_superseded flag — kind="memory_id_superseded"
+    // to carry the include_superseded flag; kind="memory_id_superseded"
     // routes through the FactChip branch that adds it to the deep-link.
     expect(out.facts.loser).toEqual({
       label: "Loser",
@@ -261,7 +261,7 @@ describe("formatDreamLog: contradiction_detection", () => {
       }),
     );
     expect(out.narrative).toBe(
-      "Resolved contradiction between {a} and {b} — kept {winner}",
+      "Resolved contradiction between {a} and {b}, kept {winner}",
     );
     expect(out.facts.a.value).toBe(A);
     expect(out.facts.b.value).toBe(B);
@@ -314,7 +314,7 @@ describe("formatDreamLog: contradiction_detection", () => {
         },
       }),
     );
-    expect(out.narrative).toBe("Resolved contradiction between {a} and {b} — tie");
+    expect(out.narrative).toBe("Resolved contradiction between {a} and {b}, tie");
     expect(out.facts.winner.kind).toBe("text");
     expect(out.facts.winner.value).toBe("tie");
     // Ties take symmetric haircuts and neither side is superseded; both
@@ -337,7 +337,7 @@ describe("formatDreamLog: consolidation", () => {
       }),
     );
     expect(out.narrative).toBe(
-      "Reinforced synthesis {memId} — confidence {oldConf} → {newConf} (alignment {alignment})",
+      "Reinforced synthesis {memId}: confidence {oldConf} → {newConf} (alignment {alignment})",
     );
     expect(out.facts.oldConf.value).toBe(0.5);
     expect(out.facts.newConf.value).toBe(0.81);
@@ -360,7 +360,7 @@ describe("formatDreamLog: consolidation", () => {
       }),
     );
     expect(out.narrative).toBe("Superseded source memory {memId} by synthesis {synthesis}");
-    // memId points at the soft-deleted source memory — same superseded-link
+    // memId points at the soft-deleted source memory, same superseded-link
     // treatment as the paraphrase-merge loser.
     expect(out.facts.memId).toEqual({
       label: "Memory",
@@ -383,7 +383,7 @@ describe("formatDreamLog: consolidation", () => {
       }),
     );
     expect(out.narrative).toBe(
-      "Demoted memory {memId} — low novelty (confidence {oldConf} → 0)",
+      "Demoted memory {memId}: low novelty (confidence {oldConf} → 0)",
     );
     expect(out.facts.oldConf.value).toBe(0.42);
     expect(out.facts.reason).toEqual({
@@ -413,7 +413,7 @@ describe("formatDreamLog: consolidation", () => {
       }),
     );
     expect(out.narrative).toBe(
-      "Rejected synthesis candidate — {reason} ({sourceCount} sources)",
+      "Rejected synthesis candidate: {reason} ({sourceCount} sources)",
     );
     expect(out.facts.sourceCount.value).toBe(3);
     expect(out.facts.reason.value).toBe("low_novelty");
@@ -456,7 +456,7 @@ describe("formatDreamLog: pruning", () => {
         after_state: { reason: "expired_low_confidence" },
       }),
     );
-    expect(out.narrative).toBe("Deleted memory {memId} — {reason}");
+    expect(out.narrative).toBe("Deleted memory {memId}: {reason}");
     expect(out.facts.reason.value).toBe("expired_low_confidence");
     expect(out.facts.createdAt.value).toBe("2025-01-01T00:00:00Z");
     // The target row is soft-deleted and unreachable through the public
@@ -499,7 +499,7 @@ describe("formatDreamLog: weight_adjustment", () => {
         after_state: { weight: 0.02, reason: "decayed_below_threshold" },
       }),
     );
-    expect(out.narrative).toBe("Expired {relId} — weight decayed to {newWeight}");
+    expect(out.narrative).toBe("Expired {relId}: weight decayed to {newWeight}");
     expect(out.facts.oldWeight.value).toBe(0.06);
     expect(out.facts.newWeight.value).toBe(0.02);
   });
@@ -529,7 +529,7 @@ describe("formatDreamLog: weight_adjustment", () => {
         after_state: { mention_count: 9 },
       }),
     );
-    expect(out.narrative).toBe("Updated entity {entityId} — mention count now {mentions}");
+    expect(out.narrative).toBe("Updated entity {entityId}: mention count now {mentions}");
     expect(out.facts.mentions.value).toBe(9);
   });
 });
@@ -783,7 +783,7 @@ describe("groupLogsByPhase", () => {
     const c = groupLogsByPhase(logs).get("consolidation");
     expect(c).toBeDefined();
     // Legacy row 50 must NOT be labeled "consolidate" by the trailing
-    // phase_summary — that summary's scope started after row 51.
+    // phase_summary; that summary's scope started after row 51.
     const reinforce = c!.subGroups.find((sg) => sg.subPhase === "reinforce");
     const consolidate = c!.subGroups.find((sg) => sg.subPhase === "consolidate");
     const unattributed = c!.subGroups.find((sg) => sg.subPhase === "");

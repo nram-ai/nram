@@ -33,7 +33,7 @@ func (m *mockEntityFinder) Upsert(_ context.Context, entity *model.Entity) error
 			e.Canonical == entity.Canonical &&
 			e.EntityType == entity.EntityType &&
 			e.ID != entity.ID {
-			// Conflict — update existing record.
+			// Conflict; update existing record.
 			e.Name = entity.Name
 			e.MentionCount = entity.MentionCount
 			e.Properties = entity.Properties
@@ -89,7 +89,7 @@ func indexOf(s, substr string) int {
 
 func (m *mockEntityFinder) FindByAlias(_ context.Context, _ uuid.UUID, _ string) ([]model.Entity, error) {
 	// The real implementation joins entity_aliases with entities. We delegate
-	// alias resolution to the AliasManager mock — this method returns no
+	// alias resolution to the AliasManager mock; this method returns no
 	// results by default but can be overridden via aliasEntityMap below.
 	return nil, nil
 }
@@ -292,7 +292,7 @@ func TestResolve_ExistingBySimilarity(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Resolve "Business Machines" — should match via similarity (substring).
+	// Resolve "Business Machines", should match via similarity (substring).
 	entity2, isNew, err := resolver.Resolve(ctx, nsID, "Business Machines", "organization", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

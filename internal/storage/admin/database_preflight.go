@@ -127,7 +127,7 @@ func (s *DatabaseAdminStore) Preflight(ctx context.Context, url string) (*api.Pr
 	// Check 4: privileges (CREATE on current schema).
 	report.Checks = append(report.Checks, checkPrivileges(ctx, db))
 
-	// Check 5: target_state — row counts for every nram table that exists.
+	// Check 5: target_state, row counts for every nram table that exists.
 	report.Checks = append(report.Checks, checkTargetState(ctx, db))
 
 	for _, c := range report.Checks {
@@ -447,7 +447,7 @@ func resetDropTables(ctx context.Context, db *sql.DB, tables []string) (*api.Res
 
 // quoteIdent wraps an identifier in double quotes per Postgres syntax, escaping
 // embedded double quotes. Used on table names from preflightTables (a static,
-// known list) before interpolation into DDL — we never accept user identifiers.
+// known list) before interpolation into DDL; we never accept user identifiers.
 func quoteIdent(ident string) string {
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }

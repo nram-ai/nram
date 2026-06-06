@@ -34,7 +34,7 @@ type stuckCycleStore interface {
 // status='running' with no one to finalize them; without this sweep, the
 // monitor stat counts are wrong forever and rollback is unavailable.
 //
-// The threshold is intentionally conservative — abandoning earlier could
+// The threshold is intentionally conservative; abandoning earlier could
 // discard a cycle that's still making real progress on a long single phase.
 // The admin UI uses heartbeat_at (a tighter signal) for diagnostic display
 // only; the abandon trigger here uses updated_at so the sweep stays safe
@@ -136,7 +136,7 @@ func (s *StuckCycleSweeper) Sweep(ctx context.Context) error {
 
 		// Same-instance fast path: cancel the in-flight ctx so the runner
 		// exits at the next ctx-aware checkpoint instead of finishing the
-		// current phase. Best-effort — false return means a different
+		// current phase. Best-effort: false return means a different
 		// instance owns the cycle, in which case the DB write below is
 		// the only signal that propagates.
 		if s.canceller != nil {

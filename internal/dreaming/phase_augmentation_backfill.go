@@ -13,9 +13,9 @@ import (
 // AugmentationBackfillPhase enqueues a query-augmentation enrichment job for
 // every live memory whose vector was built from raw content rather than from
 // augmented queries (augmented_embedding_at IS NULL). Such rows arise when the
-// enrichment worker's augmentation step is skipped — most often because the
+// enrichment worker's augmentation step is skipped (most often because the
 // dedicated query-augment provider was briefly unavailable while a dream cycle
-// synthesized a burst of memories — and the job completes anyway, embedding the
+// synthesized a burst of memories) and the job completes anyway, embedding the
 // raw content and leaving the row stranded with no automatic recovery.
 //
 // This phase automates the admin "backfill augmentation" path so stranded rows

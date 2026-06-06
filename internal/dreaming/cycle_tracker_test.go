@@ -145,7 +145,7 @@ func TestCycleTrackerEmitsCompletedOnError(t *testing.T) {
 }
 
 func TestWrapLLMCallNoOpsWithoutTracker(t *testing.T) {
-	// No tracker bound to context — fn should still run, no events, no panic.
+	// No tracker bound to context: fn should still run, no events, no panic.
 	got, _, err := WrapLLMCall(context.Background(), nil, "synthesis", "model-x", "",
 		func(ctx context.Context) (int, *provider.TokenUsage, error) {
 			return 42, nil, nil

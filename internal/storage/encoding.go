@@ -11,8 +11,8 @@ import (
 // encodeStringArray converts a string slice for storage.
 // SQLite: JSON string. Postgres: TEXT[] literal {a,b,c} with elements
 // quoted and escaped per the Postgres array input grammar so values
-// containing whitespace, commas, quotes, backslashes, or braces — or the
-// literal text "NULL" — round-trip cleanly through the SQL TEXT[] type.
+// containing whitespace, commas, quotes, backslashes, or braces (or the
+// literal text "NULL") round-trip cleanly through the SQL TEXT[] type.
 func encodeStringArray(backend string, arr []string) string {
 	if backend == BackendPostgres {
 		if len(arr) == 0 {

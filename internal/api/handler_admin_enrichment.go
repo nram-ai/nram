@@ -223,10 +223,10 @@ type enrichmentPauseRequest struct {
 // admin requests based on method and sub-path under /enrichment.
 //
 // Routes:
-//   - GET  /enrichment         — queue status (convenience alias)
-//   - GET  /enrichment/queue   — queue status with counts and recent items
-//   - POST /enrichment/retry   — retry failed jobs (all or specific IDs)
-//   - POST /enrichment/pause   — pause or resume enrichment workers
+//   - GET  /enrichment:         queue status (convenience alias)
+//   - GET  /enrichment/queue:   queue status with counts and recent items
+//   - POST /enrichment/retry:   retry failed jobs (all or specific IDs)
+//   - POST /enrichment/pause:   pause or resume enrichment workers
 func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sub := extractEnrichmentSubPath(r.URL.Path)
@@ -348,7 +348,7 @@ type enrichmentTestPromptResponse struct {
 	Output string `json:"output"` // raw LLM output
 	Parsed any    `json:"parsed"` // parsed structured data (facts or entities)
 	// Model is the model the test actually ran against, as reported by the
-	// provider — the resolved provider slot supplies it (for augment/ingestion
+	// provider; the resolved provider slot supplies it (for augment/ingestion
 	// the dedicated slot, falling back to fact when unconfigured). Lets the UI
 	// surface which model answered.
 	Model     string `json:"model,omitempty"`

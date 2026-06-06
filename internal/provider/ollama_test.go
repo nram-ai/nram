@@ -387,7 +387,7 @@ func TestOllamaContextLength_ParsesQwen2Family(t *testing.T) {
 }
 
 func TestOllamaContextLength_ParsesAnyArchKey(t *testing.T) {
-	// Different model families use different architecture prefixes — the
+	// Different model families use different architecture prefixes; the
 	// detector must scan for any *.context_length key, not hard-code the
 	// list.
 	cases := map[string]int{
@@ -560,7 +560,7 @@ func TestOllamaContextLength_ParametersOnlyMatchesNumCtx(t *testing.T) {
 }
 
 // TestOllamaContextLength_PSFailureIsNonFatal verifies that a /api/ps
-// error doesn't fail the whole call — we still report what /api/show
+// error doesn't fail the whole call; we still report what /api/show
 // gave us.
 func TestOllamaContextLength_PSFailureIsNonFatal(t *testing.T) {
 	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
@@ -589,7 +589,7 @@ func TestOllamaContextLength_PSFailureIsNonFatal(t *testing.T) {
 
 // TestOllamaContextLength_ConfiguredAboveMaxIgnored verifies that a
 // configured num_ctx larger than the model's hard ceiling does not
-// inflate the effective value — the model's GGUF max is the final cap.
+// inflate the effective value; the model's GGUF max is the final cap.
 func TestOllamaContextLength_ConfiguredAboveMaxIgnored(t *testing.T) {
 	srv := newOllamaTestServer(t, map[string]http.HandlerFunc{
 		"/api/show": func(w http.ResponseWriter, r *http.Request) {

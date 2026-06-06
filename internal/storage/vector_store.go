@@ -85,7 +85,7 @@ type VectorStore interface {
 	// Missing IDs (no stored vector at this dimension) are simply absent
 	// from the returned map; this is not an error. Callers treat the absence
 	// as a miss and re-embed at the current dim. Vectors stored at other
-	// dimensions are also absent — there is no cross-dim retrieval, so a
+	// dimensions are also absent; there is no cross-dim retrieval, so a
 	// provider switch self-heals on the next pass that runs at the new dim.
 	GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error)
 

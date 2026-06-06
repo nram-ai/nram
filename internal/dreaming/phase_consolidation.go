@@ -81,7 +81,7 @@ type ConsolidationPhase struct {
 // AttachVectorPurger wires a VectorPurger so dream-side state transitions
 // that hide a memory from recall (demotion, supersession) also drop the
 // associated vector from the active store. Nil is safe and disables the
-// purge hook — behaviour reverts to leaving stale vectors indexed.
+// purge hook; behaviour reverts to leaving stale vectors indexed.
 func (p *ConsolidationPhase) AttachVectorPurger(vp VectorPurger) {
 	p.vectorPurger = vp
 }
@@ -401,7 +401,7 @@ func (p *ConsolidationPhase) reinforce(
 			continue
 		}
 
-		// Write first, then log — ensures log matches actual state.
+		// Write first, then log: ensures log matches actual state.
 		synthesis.Confidence = newConfidence
 		synthesis.UpdatedAt = time.Now().UTC()
 		if err := p.memWriter.UpdateConfidence(ctx, synthesis.ID, synthesis.NamespaceID, newConfidence); err != nil {
@@ -545,7 +545,7 @@ func (p *ConsolidationPhase) purgeVector(ctx context.Context, id uuid.UUID) {
 // that were created before the audit existed (or before the user enabled it).
 // Bounded by SettingDreamNoveltyBackfillPerCycle so the work drains across
 // cycles rather than torching a single cycle's token budget on a large
-// backlog. Idempotency comes from the metadata.novelty_audited_at marker —
+// backlog. Idempotency comes from the metadata.novelty_audited_at marker;
 // once audited, a memory is never reconsidered.
 //
 // On audit failure the memory is demoted in place: Confidence is set to 0 and
@@ -815,7 +815,7 @@ func (p *ConsolidationPhase) demoteDream(ctx context.Context, logger *DreamLogWr
 // writeAuditDecision is the shared write path for stampAudited and demoteDream.
 // demote=false uses UpdateMetadata so the audit stamp survives the next cycle;
 // demote=true takes the full Update path because Confidence/low_novelty/
-// EmbeddingDim are real state changes — a stale stamp on demote is harmless
+// EmbeddingDim are real state changes; a stale stamp on demote is harmless
 // since low_novelty filtering keeps the row out of future audit eligibility.
 //
 // All call sites originate in the backfill_audit sub-phase, so the log entry
@@ -895,7 +895,7 @@ type staleSynthesis struct {
 // synthesis that cannot possibly be fresh; meta is always decoded from
 // mem.Metadata so the downstream stamp writer has the row's full field set
 // to merge over (UpdateMetadata is a full-column overwrite, not a JSONB
-// merge — passing a partial map drops any field not in it).
+// merge: passing a partial map drops any field not in it).
 func collectReinforceStale(syntheses []model.Memory) []staleSynthesis {
 	stampMarker := []byte(ReinforceCheckedStampKey)
 	stale := make([]staleSynthesis, 0, len(syntheses))
@@ -915,7 +915,7 @@ func collectReinforceStale(syntheses []model.Memory) []staleSynthesis {
 
 // parseStampTime returns the time recorded under key in meta. ok is false
 // when the key is absent, the value is non-string/empty, or the timestamp
-// fails both RFC3339Nano and RFC3339 parses — in every case the caller
+// fails both RFC3339Nano and RFC3339 parses; in every case the caller
 // should treat the row as stale. RFC3339 fallback covers stamps written by
 // older versions that did not use the nano variant.
 func parseStampTime(meta map[string]any, key string) (time.Time, bool) {
@@ -938,7 +938,7 @@ func parseStampTime(meta map[string]any, key string) (time.Time, bool) {
 
 // isReinforceStale mirrors isStale (contradiction phase) and isParaphraseStale:
 // no stamp, malformed stamp, or stamp strictly before UpdatedAt → eligible.
-// Equal stamp and UpdatedAt is fresh — the stamp path writes
+// Equal stamp and UpdatedAt is fresh; the stamp path writes
 // mem.UpdatedAt.UTC() through UpdateMetadata, which does not bump updated_at,
 // so a just-stamped row reports stamp == updated_at and stays fresh next cycle.
 func isReinforceStale(mem *model.Memory, meta map[string]any) bool {
@@ -952,7 +952,7 @@ func isReinforceStale(mem *model.Memory, meta map[string]any) bool {
 // stampReinforce records the visit stamp anchored to mem.UpdatedAt via
 // UpdateMetadata so the staleness check (stamp < UpdatedAt) does not
 // self-invalidate next cycle. Mirrors stampParaphrase and the non-demote
-// half of writeAuditDecision: persist failures are logged, never returned —
+// half of writeAuditDecision: persist failures are logged, never returned;
 // a failed stamp leaves the row stale so the next cycle retries.
 //
 // The merge through encodeStampWrite is the defensive backstop: even if a
@@ -1002,7 +1002,7 @@ func clusterFingerprint(cluster []model.Memory) string {
 // collectConsolidateStale returns the eligible-cluster count alongside the
 // subset that needs a re-visit. A cluster is stale when ANY member is
 // missing the stamp marker, has a stamp before its own UpdatedAt, or
-// carries a fingerprint different from the cluster's current fingerprint —
+// carries a fingerprint different from the cluster's current fingerprint;
 // the last condition catches survivor-only reshapes that timestamp checks
 // alone miss.
 func collectConsolidateStale(clusters [][]model.Memory) (stale []staleCluster, eligible int) {
@@ -1050,7 +1050,7 @@ func isClusterMemberStale(mem *model.Memory, meta map[string]any, currentFingerp
 // every cluster member via UpdateMetadata so the staleness check does not
 // self-invalidate next cycle. Mirrors stampReinforce / stampParaphrase /
 // the non-demote half of writeAuditDecision: persist failures are logged,
-// never returned — a failed stamp leaves that row stale so the next cycle
+// never returned; a failed stamp leaves that row stale so the next cycle
 // retries the cluster (which is fine; the cluster's other members will
 // still appear stale due to the failed member, surfacing the cluster).
 func (p *ConsolidationPhase) stampConsolidateCluster(
@@ -1085,7 +1085,7 @@ func (p *ConsolidationPhase) stampConsolidateCluster(
 // row's own UpdatedAt and persisted via UpdateMetadata (which deliberately
 // does not bump updated_at), so the staleness check stamp < updated_at
 // does not self-invalidate next cycle. Persist failures are logged, never
-// returned — a failed stamp leaves that row stale, which simply reschedules
+// returned; a failed stamp leaves that row stale, which simply reschedules
 // it for the next cycle. Independent of the per-cluster stamp written by
 // stampConsolidateCluster: a memory may participate in clustering and
 // receive both stamps, or end up unclustered and receive only this one.
@@ -1126,14 +1126,14 @@ func decodeMetadata(raw json.RawMessage) map[string]any {
 
 // encodeStampWrite returns the bytes of mem.Metadata with the caller's
 // updates merged on top. UpdateMetadata is a full-column overwrite (see
-// storage/memory_repo.go UpdateMetadata) — not a JSONB merge — so a stamp
+// storage/memory_repo.go UpdateMetadata), not a JSONB merge, so a stamp
 // writer that marshals only its own keys silently drops every other field
 // on the row. This helper makes the writer the safety net: even if the
 // caller's `updates` map is empty or partial, every on-disk field survives.
 //
 // Precedence: caller's `updates` keys win over on-disk keys (the caller is
 // the one mutating state). To delete a field, the caller must explicitly
-// set it to nil in `updates` — missing keys are preserved as-is.
+// set it to nil in `updates`; missing keys are preserved as-is.
 func encodeStampWrite(onDisk json.RawMessage, updates map[string]any) ([]byte, error) {
 	merged := decodeMetadata(onDisk)
 	maps.Copy(merged, updates)
@@ -1145,13 +1145,13 @@ func encodeStampWrite(onDisk json.RawMessage, updates map[string]any) ([]byte, e
 // memory_lineage table (relation = synthesized_from) when metadata is
 // missing or empty. When the lineage fallback fires, the recovered IDs
 // are also merged back into the row's metadata so the next cycle takes
-// the fast path — this is the runtime self-heal that complements the
+// the fast path; this is the runtime self-heal that complements the
 // historical-damage migration.
 //
 // meta is mutated in place to mirror the metadata write so callers that
 // reuse the map further down the cycle see the recovered IDs without
 // re-decoding. Returns nil with nil error when neither source has any
-// parents (true orphan — caller should demote).
+// parents (true orphan, caller should demote).
 func (p *ConsolidationPhase) resolveSourceMemoryIDs(
 	ctx context.Context,
 	mem *model.Memory,
@@ -1237,13 +1237,13 @@ func (p *ConsolidationPhase) consolidate(
 	allMemories []model.Memory,
 ) (bool, error) {
 	const subPhase = model.DreamSubPhaseConsolidate
-	// DREAM-RECURSION GUARD — second prong (consolidation side).
+	// DREAM-RECURSION GUARD: second prong (consolidation side).
 	//
 	// The Origin==OriginDream filter below is load-bearing: without it the
 	// next consolidation pass would cluster existing dream syntheses into
 	// new dreams, producing dream-of-dream-of-dream cascades. This is the
 	// counterpart to the first prong at the synthMemory creation site
-	// below (search for "DREAM-RECURSION GUARD — first prong") and to the
+	// below (search for "DREAM-RECURSION GUARD: first prong") and to the
 	// worker-side skip gates in:
 	//
 	//   - internal/enrichment/worker.go (WorkerPool.runPreEmbed skipFact / skipEntity)
@@ -1251,7 +1251,7 @@ func (p *ConsolidationPhase) consolidate(
 	//
 	// Contract enforcer: internal/dreaming/dream_recursion_guard_test.go.
 	//
-	// Also filters non-deleted, non-superseded — those are independent of
+	// Also filters non-deleted, non-superseded; those are independent of
 	// the recursion guard but share the same "candidates the next cluster
 	// can pull from" predicate.
 	var candidates []model.Memory
@@ -1445,7 +1445,7 @@ func (p *ConsolidationPhase) consolidate(
 			model.DreamMetaSourceMemoryIDs: sourceIDs,
 		})
 
-		// DREAM-RECURSION GUARD — first prong (creation side).
+		// DREAM-RECURSION GUARD: first prong (creation side).
 		//
 		// Origin=OriginDream and Enriched=true are both load-bearing for the
 		// dream-of-dream-of-dream cascade prevention contract. The enrichment
@@ -1503,7 +1503,7 @@ func (p *ConsolidationPhase) consolidate(
 		// Enqueue for augmentation + embedding. The dream-recursion-guard
 		// comment above explains why this is safe: every phase that could
 		// create derivative rows short-circuits on Source=DreamSource or
-		// Enriched=true. Enqueue failure is non-fatal — the memory still
+		// Enriched=true. Enqueue failure is non-fatal; the memory still
 		// exists; the admin BackfillAugmentation path in
 		// service.EnrichService remains the recovery route. The cycle
 		// stats counter lets operators distinguish "synthesis created

@@ -20,7 +20,7 @@ const RequestIDHeader = "X-Request-ID"
 // shape of common request-tracing middleware.
 //
 // Wire this OUTSIDE auth so unauthenticated requests (login, OAuth probes)
-// still get a correlation ID — useful for tying together token_usage rows
+// still get a correlation ID, useful for tying together token_usage rows
 // emitted by setup-time provider probes.
 func RequestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

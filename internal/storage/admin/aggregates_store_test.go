@@ -183,7 +183,7 @@ func TestAggregates_UserBreakdown_OrgScoped(t *testing.T) {
 	orgID, _, userANsID, _, userBNsID := seedOrgWithTwoUsers(t, db, ctx)
 
 	// Both UserBreakdown and the production OrgBreakdown use the same
-	// "<path>/%" prefix subquery, which counts strict descendants only —
+	// "<path>/%" prefix subquery, which counts strict descendants only;
 	// rows at the user's own namespace_id do NOT match. Production user
 	// data lives in project sub-namespaces, so we seed the same shape.
 
@@ -207,7 +207,7 @@ func TestAggregates_UserBreakdown_OrgScoped(t *testing.T) {
 		"INSERT INTO entities (id, namespace_id, name, canonical, entity_type) VALUES (?, ?, ?, ?, ?)",
 		uuid.New().String(), projANsID.String(), "Carol", "carol", "person")
 
-	// User B: 1 project, 1 memory, no entities. Confirms per-user scoping —
+	// User B: 1 project, 1 memory, no entities. Confirms per-user scoping;
 	// user B's counts must not bleed into user A's row.
 	projBNsID := uuid.New()
 	execSeed(t, db, ctx,

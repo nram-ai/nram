@@ -84,7 +84,7 @@ func handleProjectsResource(ctx context.Context, s *Server, _ mcp.ReadResourceRe
 	// Wire shape matches the list_projects tool's outputSchema-conforming
 	// envelope so the resource and the tool serialize the same data the same
 	// way. The resource is unpaginated, so populate Pagination honestly:
-	// Total/Limit equal the full item count and Offset is 0 — a client that
+	// Total/Limit equal the full item count and Offset is 0; a client that
 	// reads pagination.total to render "showing X of Y" sees an accurate
 	// "showing N of N" rather than the misleading "showing N of 0" the
 	// zero-value Pagination would produce.
@@ -261,7 +261,7 @@ func handleProjectGraphResource(ctx context.Context, s *Server, request mcp.Read
 		return nil, fmt.Errorf("failed to list entities: %w", err)
 	}
 
-	// Same edge cap as the memory_graph tool — this resource is the
+	// Same edge cap as the memory_graph tool; this resource is the
 	// project-scoped quick-view backed by the same traverser, so it shares
 	// the graph.max_edges knob to short-circuit traversal on large
 	// namespaces. The cap is applied per-seed AND cumulatively across

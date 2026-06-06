@@ -173,7 +173,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 
 		contradicts, explanation, err := parseConflictResponse(resp.Content)
 		if err != nil {
-			// Malformed response — skip this candidate.
+			// Malformed response; skip this candidate.
 			continue
 		}
 

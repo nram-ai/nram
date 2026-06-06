@@ -23,7 +23,7 @@ type mcpRecallMemory = recallview.Memory
 // diversify_by_tag_prefix wire contract is shared with REST clients.
 //
 // CoverageGaps participates in the memory reducer's lockstep halving with
-// memories — when coverage_gaps alone would dominate the budget on a
+// memories; when coverage_gaps alone would dominate the budget on a
 // diversified query, the reducer trims the tail and records a frame-
 // independent kept/original ratio in Truncated.Dropped (e.g.
 // "coverage_gaps_kept:5/20" meaning 5 of the original 20 gaps remain on
@@ -51,8 +51,8 @@ type mcpRecallResponse struct {
 
 // The strip-key sets and extractDerivedFrom below now serve only the list
 // (tool_list.go) and get/detail (projection_store.go) MCP tools. The recall
-// path moved to internal/recallview, which keeps its own — deliberately
-// broader — strip set; these are intentionally left at their prior coverage so
+// path moved to internal/recallview, which keeps its own (deliberately
+// broader) strip set; these are intentionally left at their prior coverage so
 // list/get behavior is unchanged.
 
 // alwaysStrippedKeys are removed from emitted metadata regardless of caller
@@ -76,7 +76,7 @@ var lowNoveltyKeys = map[string]struct{}{
 // auditStampKeys are surfaced when include_audit=true on the REST get path.
 // These are per-phase bookkeeping timestamps and reasons; they don't add value
 // to recall callers but are useful for inspecting a specific memory's audit
-// history. include_low_novelty does NOT un-strip these — it only un-strips
+// history. include_low_novelty does NOT un-strip these; it only un-strips
 // the demotion markers themselves. The MCP get tool no longer exposes the
 // include_audit flag; on that path the projection always strips these keys.
 //
@@ -100,7 +100,7 @@ type projectionOpts struct {
 
 // extractDerivedFrom plucks source_memory_ids into a typed slice and returns
 // the metadata residual after stripping bookkeeping keys. Invalid blobs return
-// (nil, nil) — the projector drops them rather than passing UUIDs the agent
+// (nil, nil); the projector drops them rather than passing UUIDs the agent
 // can't resolve. opts controls which key subsets survive the strip.
 func extractDerivedFrom(raw json.RawMessage, opts projectionOpts) (derived []uuid.UUID, residual json.RawMessage) {
 	if len(raw) == 0 {
@@ -160,7 +160,7 @@ func projectMemory(m service.RecallResult, opts projectionOpts) mcpRecallMemory 
 // buildMCPRecallResponse projects a service.RecallResponse into the MCP shape,
 // hoisting dream lineage and routing the graph through resolveGraphOrphans so
 // the response never contains an edge whose endpoint isn't in entities[].
-// opts controls which bookkeeping keys survive the strip — caller passes the
+// opts controls which bookkeeping keys survive the strip; caller passes the
 // parsed include_low_novelty flag through.
 func buildMCPRecallResponse(
 	ctx context.Context,

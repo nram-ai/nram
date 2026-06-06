@@ -122,7 +122,7 @@ func (r *OAuthRepo) ListClientsByUser(ctx context.Context, userID uuid.UUID) ([]
 
 	args := []any{userID.String()}
 	if r.db.Backend() != BackendPostgres {
-		// SQLite uses positional ? — need two params for the two ?
+		// SQLite uses positional ?; need two params for the two ?
 		args = append(args, userID.String())
 	}
 
@@ -684,7 +684,7 @@ func (r *OAuthRepo) populateRefreshToken(
 // refresh-token rows can inherit the binding, and so share revocation
 // cascades through to delete the client (via the FK ON DELETE CASCADE).
 //
-// Fails if the client is already bound to a different share — re-pasting a
+// Fails if the client is already bound to a different share; re-pasting a
 // different share against the same client_id is rejected to keep
 // one-share-per-client semantics. Rebinding to the same share is idempotent.
 //

@@ -68,7 +68,7 @@ func TestSchemaDefaultsMatchRuntime(t *testing.T) {
 // hook reads those values; a missing Min/Max/Step would silently
 // re-introduce hardcoded form input increments.
 //
-// New numeric keys must populate Min/Max/Step at registration time —
+// New numeric keys must populate Min/Max/Step at registration time;
 // there is no allow-list. If a key truly has no operator-meaningful
 // range, the test failure is the cue to push back on whether it should
 // be operator-tunable at all (vs. a code-internal constant).
@@ -89,7 +89,7 @@ func TestNumericSchemasHaveRange(t *testing.T) {
 // TestEverySettingCategoryMapsToGroup asserts that the parent-group taxonomy
 // (settingsGroups, served to the admin UI) is a total, non-overlapping cover of
 // every non-prompt setting. Without this, a setting whose category is not
-// referenced by any group silently never renders on the Settings page — the
+// referenced by any group silently never renders on the Settings page; the
 // exact drift that left recall/usage/export/mcp settings unreachable while the
 // grouping lived hardcoded in the frontend.
 //
@@ -132,7 +132,7 @@ func TestEverySettingCategoryMapsToGroup(t *testing.T) {
 	}
 	if len(unmapped) > 0 {
 		t.Errorf("%d setting categor(ies) map to no parent group in "+
-			"settingsGroups: %v — add them or they never render on the "+
+			"settingsGroups: %v; add them or they never render on the "+
 			"Settings page", len(unmapped), unmapped)
 	}
 

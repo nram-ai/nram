@@ -112,7 +112,7 @@ func TestHNSWStoreUpsertAndSearch(t *testing.T) {
 		}
 	}
 
-	// Search for the nearest neighbor of vectors[0] — it should be vectors[0] itself.
+	// Search for the nearest neighbor of vectors[0]; it should be vectors[0] itself.
 	results, err := store.Search(ctx, storage.VectorKindMemory, vectors[0], nsID, dim, 3)
 	if err != nil {
 		t.Fatalf("search: %v", err)
@@ -206,7 +206,7 @@ func TestHNSWStoreDelete(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	// Search again — should be empty.
+	// Search again; should be empty.
 	results, err = store.Search(ctx, storage.VectorKindMemory, vec, nsID, dim, 1)
 	if err != nil {
 		t.Fatalf("search after delete: %v", err)
@@ -215,7 +215,7 @@ func TestHNSWStoreDelete(t *testing.T) {
 		t.Fatalf("expected 0 results after delete, got %d", len(results))
 	}
 
-	// Delete again — should be a no-op.
+	// Delete again; should be a no-op.
 	if err := store.Delete(ctx, storage.VectorKindMemory, id); err != nil {
 		t.Fatalf("double delete: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestHNSWStoreNamespaceIsolation(t *testing.T) {
 		t.Fatalf("upsert ns2: %v", err)
 	}
 
-	// Search in ns1 — should only find id1.
+	// Search in ns1; should only find id1.
 	results, err := store.Search(ctx, storage.VectorKindMemory, vec1, ns1, dim, 10)
 	if err != nil {
 		t.Fatalf("search ns1: %v", err)
@@ -258,7 +258,7 @@ func TestHNSWStoreNamespaceIsolation(t *testing.T) {
 		t.Errorf("expected ns1 result ID %s, got %s", id1, results[0].ID)
 	}
 
-	// Search in ns2 — should only find id2.
+	// Search in ns2; should only find id2.
 	results, err = store.Search(ctx, storage.VectorKindMemory, vec2, ns2, dim, 10)
 	if err != nil {
 		t.Fatalf("search ns2: %v", err)
@@ -296,7 +296,7 @@ func TestHNSWStoreUpsertUpdate(t *testing.T) {
 		t.Fatalf("upsert vec2: %v", err)
 	}
 
-	// Search for vec2 — should find id with high score.
+	// Search for vec2; should find id with high score.
 	results, err := store.Search(ctx, storage.VectorKindMemory, vec2, nsID, dim, 1)
 	if err != nil {
 		t.Fatalf("search: %v", err)
@@ -700,7 +700,7 @@ func TestHNSWStoreDeleteAndSearchConsistency(t *testing.T) {
 		}
 	}
 
-	// Search again — none of the deleted vectors should appear.
+	// Search again; none of the deleted vectors should appear.
 	afterResults, err := store.Search(ctx, storage.VectorKindMemory, query, nsID, dim, 20)
 	if err != nil {
 		t.Fatalf("search after delete: %v", err)
@@ -886,7 +886,7 @@ func TestHNSWStoreRebuildFromVectors(t *testing.T) {
 		t.Fatalf("expected 10 vectors in memory_vectors, got %d", vecCount)
 	}
 
-	// Phase 3: Create a new store — it should rebuild from memory_vectors.
+	// Phase 3: Create a new store; it should rebuild from memory_vectors.
 	store2 := storage.NewHNSWStore(db, db, cfg)
 	defer func() { _ = store2.Close() }()
 
@@ -1049,8 +1049,8 @@ func TestHNSWStoreGetByIDs_EmptyInput(t *testing.T) {
 
 // setupEntityVectorsTestDB creates an in-memory SQLite DB with the entities,
 // entity_vectors, and entity_hnsw_snapshots tables wired the way the
-// production migrations wire them — entity_vectors.entity_id REFERENCES
-// entities(id) ON DELETE CASCADE — with PRAGMA foreign_keys=ON. Used to
+// production migrations wire them (entity_vectors.entity_id REFERENCES
+// entities(id) ON DELETE CASCADE) with PRAGMA foreign_keys=ON. Used to
 // reproduce the lifecycle/enrichment race the FK-skip behaviour must tolerate.
 func setupEntityVectorsTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -1115,7 +1115,7 @@ func TestHNSWStoreUpsertBatch_SkipsForeignKeyViolation(t *testing.T) {
 	nsID := uuid.New()
 	dim := 384
 
-	// Create 3 entities — but only insert 2 of their parent rows so the third
+	// Create 3 entities, but only insert 2 of their parent rows so the third
 	// triggers a FK violation when its vector tries to land.
 	live1 := uuid.New()
 	live2 := uuid.New()
@@ -1228,7 +1228,7 @@ func TestHNSWStoreGetByIDs_WrongDimension(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	// Stored at 384, query at 768 — must return empty without error.
+	// Stored at 384, query at 768; must return empty without error.
 	got, err := store.GetByIDs(ctx, storage.VectorKindMemory, []uuid.UUID{id}, 768)
 	if err != nil {
 		t.Fatalf("GetByIDs at wrong dim: %v", err)

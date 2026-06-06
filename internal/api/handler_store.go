@@ -19,8 +19,8 @@ import (
 // time; Confidence is deliberately not accepted because it is an internal
 // signal driven by reinforcement, decay, and contradiction haircuts. A
 // client-supplied confidence would let callers game ranking. Fields that
-// look like Confidence in the request body are silently ignored — same as
-// any other unknown JSON key — which preserves the contract.
+// look like Confidence in the request body are silently ignored (same as
+// any other unknown JSON key), which preserves the contract.
 type storeRequestBody struct {
 	Content    string          `json:"content"`
 	Source     string          `json:"source"`

@@ -27,7 +27,7 @@ type CascadeUserReader interface {
 // job, every recall fallback to system weights), so without a cache a
 // worker draining 16 jobs from one namespace pays 16 project lookups.
 // Operator changes to project/user settings hit eventual consistency
-// within the TTL window — same model as SettingsService. Read once at
+// within the TTL window, same model as SettingsService. Read once at
 // resolver construction; runtime changes require server restart. See
 // service.SettingCascadeCacheTTLSeconds.
 
@@ -139,7 +139,7 @@ func (r *CascadeResolver) InvalidateNamespace(namespaceID uuid.UUID) {
 
 // ResolveEnrichmentEnabled returns the effective enrichment_enabled value for
 // the given namespace. Bad JSON in a project/user Settings blob is treated
-// as "no override," not an error — write-time validation is the right place
+// as "no override," not an error: write-time validation is the right place
 // to reject malformed payloads.
 func (r *CascadeResolver) ResolveEnrichmentEnabled(ctx context.Context, namespaceID uuid.UUID) bool {
 	base := true

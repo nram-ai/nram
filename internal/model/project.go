@@ -8,26 +8,26 @@ import (
 )
 
 type Project struct {
-	ID                uuid.UUID       `json:"id"`
-	NamespaceID       uuid.UUID       `json:"namespace_id"`
-	OwnerNamespaceID  uuid.UUID       `json:"owner_namespace_id"`
-	Name              string          `json:"name"`
-	Slug              string          `json:"slug"`
-	Path              string          `json:"path"`
-	Description       string          `json:"description"`
-	DefaultTags       []string        `json:"default_tags"`
-	Settings          json.RawMessage `json:"settings"`
+	ID               uuid.UUID       `json:"id"`
+	NamespaceID      uuid.UUID       `json:"namespace_id"`
+	OwnerNamespaceID uuid.UUID       `json:"owner_namespace_id"`
+	Name             string          `json:"name"`
+	Slug             string          `json:"slug"`
+	Path             string          `json:"path"`
+	Description      string          `json:"description"`
+	DefaultTags      []string        `json:"default_tags"`
+	Settings         json.RawMessage `json:"settings"`
 	// Reserved is a computed, read-only flag (true when Slug names a reserved
-	// per-user tier — see IsReservedProjectSlug). It is populated at scan time,
+	// per-user tier; see IsReservedProjectSlug). It is populated at scan time,
 	// surfaced to the UI, and never persisted as its own column.
-	Reserved bool `json:"reserved"`
-	MemoryCount       int             `json:"memory_count"`
-	EntityCount       int             `json:"entity_count"`
-	RelationshipCount int             `json:"relationship_count"`
-	Owner             *ProjectOwner   `json:"owner,omitempty"`
-	Organization      *ProjectOrg     `json:"organization,omitempty"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
+	Reserved          bool          `json:"reserved"`
+	MemoryCount       int           `json:"memory_count"`
+	EntityCount       int           `json:"entity_count"`
+	RelationshipCount int           `json:"relationship_count"`
+	Owner             *ProjectOwner `json:"owner,omitempty"`
+	Organization      *ProjectOrg   `json:"organization,omitempty"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 // ProjectOwner is the embedded owner info in project responses.

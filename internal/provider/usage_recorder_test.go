@@ -322,7 +322,7 @@ func TestUsageRecordingLLM_FallbackResolver(t *testing.T) {
 	ns := uuid.New()
 	ctx := WithOperation(context.Background(), OperationFactExtraction)
 	ctx = WithNamespaceID(ctx, ns)
-	// No WithUsageContext — middleware must fall back to resolver lookup.
+	// No WithUsageContext; middleware must fall back to resolver lookup.
 
 	_, _ = w.Complete(ctx, &CompletionRequest{Model: "gpt-4o"})
 
@@ -335,7 +335,7 @@ func TestUsageRecordingLLM_FallbackResolver(t *testing.T) {
 	}
 }
 
-// recordCtxSnapshot is what ctxCaptureRecorder records — a snapshot of
+// recordCtxSnapshot is what ctxCaptureRecorder records: a snapshot of
 // the recording context taken inline at Record time, since the caller's
 // deferred cancel() fires the moment record() returns.
 type recordCtxSnapshot struct {
@@ -401,7 +401,7 @@ func TestUsageRecordingEmbedding_RecordSurvivesExpiredCallerCtx(t *testing.T) {
 	if !got.hasDdl {
 		t.Errorf("recording context should carry its own bounded deadline (5s)")
 	}
-	// WithoutCancel preserves Value lookups — the operation must survive.
+	// WithoutCancel preserves Value lookups; the operation must survive.
 	if got.op != OperationEmbedding {
 		t.Errorf("recording context lost stamped operation; got op=%q", got.op)
 	}

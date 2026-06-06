@@ -1,7 +1,7 @@
 // Share-token typed client. Capability-bearer credentials let owners delegate
 // scoped access to curated projects without the recipient having an nram
 // account. The raw secret (nram_s_<hex>) is returned exactly once on create
-// and is never recoverable afterward — callers must capture it on the
+// and is never recoverable afterward; callers must capture it on the
 // response.
 //
 // All endpoints live under /v1/me/shares because share creation is a self-

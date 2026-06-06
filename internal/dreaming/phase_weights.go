@@ -13,9 +13,9 @@ import (
 // WeightAdjustmentPhase recalibrates relationship weights and entity mention
 // counts based on the current state of the knowledge graph. Relationship
 // weights rise when supported by multiple non-deleted, high-confidence
-// memories — either direct lineage (memories whose enrichment produced an
+// memories, either direct lineage (memories whose enrichment produced an
 // edge between the same endpoints) or co-mention (memories that produced
-// rows touching both endpoints separately) — and decay otherwise. Recall
+// rows touching both endpoints separately), and decay otherwise. Recall
 // traffic raises weight via the recall-side reinforcement hook in
 // internal/service/recall_reinforce.go (RecallService.reinforceRels);
 // this phase is the sleep-side complement that reflects the supporting
@@ -104,7 +104,7 @@ func buildSupportIndex(rels []model.Relationship) (supportIndex, map[uuid.UUID]b
 // relationship. Tier 1 (direct lineage) memories contribute mem.Confidence;
 // Tier 2 (co-mention only, not in Tier 1) contribute tier2Multiplier *
 // mem.Confidence. Soft-deleted and zero-confidence memories are filtered
-// out at sum time — they contribute neither support nor a tier count.
+// out at sum time; they contribute neither support nor a tier count.
 func supportSums(
 	rel *model.Relationship,
 	idx supportIndex,
@@ -354,7 +354,7 @@ func (p *WeightAdjustmentPhase) calculateWeight(
 	// the edge AND the row's recorded singular source is soft-deleted,
 	// scale the weight by deadSourceMultiplier (default 0.5) so dead-source
 	// rows fall through to the pruning floor faster. Missing-source rows
-	// (source row not loaded) get no extra penalty — decay alone removes
+	// (source row not loaded) get no extra penalty; decay alone removes
 	// them.
 	if support <= 0 && rel.SourceMemory != nil {
 		if mem, ok := sourceMemories[*rel.SourceMemory]; ok && mem != nil && mem.DeletedAt != nil {

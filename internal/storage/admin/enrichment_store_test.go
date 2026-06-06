@@ -89,7 +89,7 @@ func TestEnrichment_SelfQueueStatus_PopulatesProjectFields(t *testing.T) {
 }
 
 // TestEnrichment_QueueStatus_AdminEmitsProjectIDOnly asserts the admin
-// (system-tier) path populates project_id but leaves project_name empty —
+// (system-tier) path populates project_id but leaves project_name empty,
 // matching the privacy posture: cross-tenant admin views show UUIDs only.
 func TestEnrichment_QueueStatus_AdminEmitsProjectIDOnly(t *testing.T) {
 	db := setupAdminTestDB(t)
@@ -229,7 +229,7 @@ func TestEnrichment_OrgQueueStatus_EmitsProjectIDOnly(t *testing.T) {
 					t.Errorf("orgA item[%d].ProjectID: got %s want %s", i, *item.ProjectID, orgAProjectID)
 				}
 				if item.ProjectName != "" {
-					t.Errorf("orgA item[%d].ProjectName: got %q, expected empty (org tier emits UUID only — fixture name was %q)", i, item.ProjectName, orgAProjectName)
+					t.Errorf("orgA item[%d].ProjectName: got %q, expected empty (org tier emits UUID only; fixture name was %q)", i, item.ProjectName, orgAProjectName)
 				}
 			}
 
@@ -275,7 +275,7 @@ func TestEnrichment_OrgQueueStatus_EmitsProjectIDOnly(t *testing.T) {
 
 // TestEnrichment_SelfQueueStatus_Pagination exercises the limit/offset/sort/
 // status params and the deterministic ordering tiebreaker. The 5 pending rows
-// share one created_at — the exact case where, before the (created_at, id)
+// share one created_at: the exact case where, before the (created_at, id)
 // tiebreaker, the DB was free to return tied rows in a different order on each
 // query, making the UI table jump. The test asserts paging covers every row
 // without overlap and that repeated identical queries return an identical

@@ -35,7 +35,7 @@ type CircuitOpenError struct {
 	// the breaker was constructed without a name.
 	Provider string
 	// Cause is the most recent underlying error that contributed to opening
-	// the circuit. nil if the breaker has never recorded a real failure (rare —
+	// the circuit. nil if the breaker has never recorded a real failure (rare:
 	// only possible if Execute is called before any failure in tests).
 	Cause error
 	// OpenSince is when the breaker last entered the open state. Used by callers
@@ -239,7 +239,7 @@ func (cb *CircuitBreaker) recordFailureWithCause(cause error) {
 
 	cb.consecutiveFailures++
 	if cause != nil {
-		// Don't record an open-state rejection as the "cause" — that would mask
+		// Don't record an open-state rejection as the "cause"; that would mask
 		// the real upstream error.
 		if !errors.Is(cause, ErrCircuitOpen) {
 			cb.lastError = cause

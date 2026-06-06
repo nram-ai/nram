@@ -500,7 +500,7 @@ func TestOpenAIComplete_OllamaExtensionsGated_Ollama(t *testing.T) {
 }
 
 // TestOpenAIComplete_OllamaExtensionsGated_OpenAI verifies that the same
-// pointer fields are stripped when ProviderType is "openai" — strict OpenAI
+// pointer fields are stripped when ProviderType is "openai"; strict OpenAI
 // endpoints reject unknown fields, so leaking these would break operator
 // installs that point at api.openai.com.
 func TestOpenAIComplete_OllamaExtensionsGated_OpenAI(t *testing.T) {

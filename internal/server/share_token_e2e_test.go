@@ -472,7 +472,7 @@ func TestShareE2E_GrantEditTakesEffectImmediately(t *testing.T) {
 		t.Fatalf("set grants: %v", err)
 	}
 
-	// The SAME access token (no refresh) should now succeed on beta — the
+	// The SAME access token (no refresh) should now succeed on beta: the
 	// middleware re-resolves grants on every request, so edits take effect
 	// without a token rotation.
 	if ok, msg := callRecall(t, env, accessToken, env.ProjectB.Slug); !ok {
@@ -542,7 +542,7 @@ func TestShareE2E_RevokeKillsActiveToken(t *testing.T) {
 
 // TestShareE2E_BearerDirect_ScopingMatchesOAuth verifies that pasting
 // nram_s_<secret> directly as Bearer enforces the SAME per-project scoping
-// as the OAuth-bound chain — the design promises identical behavior.
+// as the OAuth-bound chain: the design promises identical behavior.
 func TestShareE2E_BearerDirect_ScopingMatchesOAuth(t *testing.T) {
 	env := newShareE2EEnv(t)
 	result, err := env.ShareSvc.Create(context.Background(), service.CreateShareRequest{
@@ -596,7 +596,7 @@ func TestShareE2E_BearerDirect_OneShotConsumedRejected(t *testing.T) {
 		t.Fatalf("create one-shot share: %v", err)
 	}
 
-	// Drive the consent flow — that path consumes the one-shot.
+	// Drive the consent flow: that path consumes the one-shot.
 	_ = driveShareConsent(t, env, result.RawSecret)
 
 	// Now try bearer-direct with the same secret. Must reject (one-shot is
@@ -697,7 +697,7 @@ func TestShareE2E_SweepRevokesZeroGrantShares(t *testing.T) {
 	}
 
 	// Delete projectA's grant directly (simulates the FK cascade outcome
-	// without invoking the full project-delete tx — which fails in this
+	// without invoking the full project-delete tx, which fails in this
 	// minimal e2e env because it expects a "global" project for token-usage
 	// reassignment that this fixture does not stand up).
 	if _, err := env.DB.Exec(ctx,
@@ -706,7 +706,7 @@ func TestShareE2E_SweepRevokesZeroGrantShares(t *testing.T) {
 		t.Fatalf("delete grants: %v", err)
 	}
 
-	// Invoke the sweep directly — same call the project-delete service
+	// Invoke the sweep directly: same call the project-delete service
 	// would make post-commit.
 	n, err := env.ShareSvc.SweepZeroGrantShares(ctx, env.User.ID)
 	if err != nil {

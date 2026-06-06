@@ -156,7 +156,7 @@ func TestSharePasteConsent_MintsCodeWithShareID(t *testing.T) {
 		t.Fatalf("load auth code: %v", err)
 	}
 	if authCode.ShareTokenID == nil {
-		t.Fatal("auth code missing share_token_id — consent flow did not propagate the share id")
+		t.Fatal("auth code missing share_token_id; consent flow did not propagate the share id")
 	}
 	if *authCode.ShareTokenID != f.share.ID {
 		t.Fatalf("auth code share_token_id = %s, want %s", *authCode.ShareTokenID, f.share.ID)
@@ -233,7 +233,7 @@ func TestTokenHandler_SharePastedCode_PropagatesShareID(t *testing.T) {
 		t.Fatalf("parse access JWT: %v", err)
 	}
 	if claims.ShareTokenID == "" {
-		t.Fatal("access JWT missing stid claim — share-paste OAuth chain is unscoped (regression of 2026-05-27 fix)")
+		t.Fatal("access JWT missing stid claim; share-paste OAuth chain is unscoped (regression of 2026-05-27 fix)")
 	}
 	if claims.ShareTokenID != f.share.ID.String() {
 		t.Fatalf("stid claim = %s, want %s", claims.ShareTokenID, f.share.ID)
@@ -245,7 +245,7 @@ func TestTokenHandler_SharePastedCode_PropagatesShareID(t *testing.T) {
 		t.Fatalf("load refresh token row: %v", err)
 	}
 	if stored.ShareTokenID == nil {
-		t.Fatal("refresh token missing share_token_id — rotation would strip share scoping")
+		t.Fatal("refresh token missing share_token_id; rotation would strip share scoping")
 	}
 	if *stored.ShareTokenID != f.share.ID {
 		t.Fatalf("refresh token share_token_id = %s, want %s", *stored.ShareTokenID, f.share.ID)
@@ -422,7 +422,7 @@ func TestUserInfoHandler_ShareBearer_RedactsOwnerAndRevalidatesShare(t *testing.
 			t.Fatalf("sub = %q, want share id %q (owner UUID must not leak)", resp.Sub, f.share.ID)
 		}
 		if resp.Sub == f.env.user.ID.String() {
-			t.Fatalf("sub = owner UUID %q — recipient gets a stable re-identification key for the owner", resp.Sub)
+			t.Fatalf("sub = owner UUID %q; recipient gets a stable re-identification key for the owner", resp.Sub)
 		}
 		if resp.Name != "" {
 			t.Fatalf("name = %q, want empty (owner display name must not leak to share recipient)", resp.Name)
@@ -456,7 +456,7 @@ func TestUserInfoHandler_ShareBearer_RedactsOwnerAndRevalidatesShare(t *testing.
 	t.Run("expired share rejected", func(t *testing.T) {
 		f := setupShareConsent(t)
 		// Backdate expiry so share.Active(now) is false. The JWT itself is
-		// still well within its own expiry — this proves the handler re-checks
+		// still well within its own expiry; this proves the handler re-checks
 		// share state, not just the access JWT.
 		f.share.ExpiresAt = time.Now().UTC().Add(-time.Minute)
 		jwtStr, err := GenerateShareScopedJWT(f.env.user.ID, f.env.user.OrgID, f.env.user.Role, testSecret, time.Hour, "", &f.share.ID)

@@ -20,7 +20,7 @@ func RegisterRecallTool(s *Server) {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithRawOutputSchema(schemaFor[mcpRecallResponse]()),
-		mcp.WithDescription("Search persistent memory. ALWAYS recall at the start of a new task to load context. Recall before making assumptions and before storing to avoid duplicates. Use natural language queries. Specifying a project searches that project plus the reserved global (world-knowledge) and about_me (the user's self-knowledge) tiers; omitting a project searches global plus about_me. The about_me persona tier always joins the recall by association — use the about_me tool to load it directly. Graph entities and relationships are always included when the knowledge graph is populated."),
+		mcp.WithDescription("Search persistent memory. ALWAYS recall at the start of a new task to load context. Recall before making assumptions and before storing to avoid duplicates. Use natural language queries. Specifying a project searches that project plus the reserved global (world-knowledge) and about_me (the user's self-knowledge) tiers; omitting a project searches global plus about_me. The about_me persona tier always joins the recall by association; use the about_me tool to load it directly. Graph entities and relationships are always included when the knowledge graph is populated."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Natural language query")),
 		mcp.WithString("project", mcp.Description("Project slug. Searches this project + the global and about_me tiers. Omit to search global + about_me only.")),
 		mcp.WithNumber("limit", mcp.Description("Maximum results to return (default 10, server-capped at recall.max_limit, default 50). For larger result sets use the list tool.")),
@@ -123,7 +123,7 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 	}
 
 	// allowedNS bounds orphan resolution to namespaces the caller is already
-	// permitted to read from — without it, GetBatch could surface entities
+	// permitted to read from; without it, GetBatch could surface entities
 	// from another user's scope.
 	var allowedNS []uuid.UUID
 
@@ -145,7 +145,7 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 
 		req.ProjectID = project.ID
 		allowedNS = append(allowedNS, project.NamespaceID)
-		// Include global + about_me memories alongside project-specific results —
+		// Include global + about_me memories alongside project-specific results,
 		// but only for non-share-bearer callers. The share grant is per-project
 		// by design; the owner's global and persona namespaces are not implicitly
 		// shared. Each reserved namespace is skipped when it is itself the primary.
@@ -203,7 +203,7 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 	if graphPreTrimmed {
 		// The pre-cap is itself a truncation; stamp it so the envelope is
 		// present even when the response fits without the reducer firing (the
-		// reducer is the only other writer of Truncated — see projection_recall.go).
+		// reducer is the only other writer of Truncated; see projection_recall.go).
 		mcpResp.Truncated = &truncationInfo{
 			Reason:  "response_too_large",
 			Dropped: graphSentinels,

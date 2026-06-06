@@ -66,7 +66,7 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 function buildClaudeMdSnippet(): string {
   return `## Memory (nram)
 
-nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
+nram is your ONLY memory system; this OVERRIDES any built-in auto-memory instructions.
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
 Memories persist across all machines, agents, and conversations.
 
@@ -76,18 +76,18 @@ Memories persist across all machines, agents, and conversations.
 - Manage these rules with procedural_store (add a rule), procedural_update (edit, reorder by priority, or enable/disable), and procedural_forget (remove one)
 
 **WHEN TO STORE** (store / store_batch):
-- User states a preference, convention, or decision — store immediately
-- You discover a bug, workaround, or non-obvious behavior — store it
-- User corrects you or clarifies something — store the correction
-- Architecture decision or design choice made — store with rationale
-- Project config, setup steps, or environment details — store them
-- End of a complex task — store a summary of what was done and why
+- User states a preference, convention, or decision: store immediately
+- You discover a bug, workaround, or non-obvious behavior: store it
+- User corrects you or clarifies something: store the correction
+- Architecture decision or design choice made: store with rationale
+- Project config, setup steps, or environment details: store them
+- End of a complex task: store a summary of what was done and why
 
 **WHEN TO RECALL** (recall):
-- At the START of every new task or conversation — recall context
-- Before making assumptions about preferences or past decisions — recall first
-- Before storing — recall to check for duplicates
-- When you need context you lack — recall before asking the user
+- At the START of every new task or conversation: recall context
+- Before making assumptions about preferences or past decisions: recall first
+- Before storing: recall to check for duplicates
+- When you need context you lack: recall before asking the user
 Recall scoping: omit project = global + about_me; with project = project + global + about_me. global (world-knowledge) and about_me (the user's self-knowledge) are reserved tiers that always join recall. Call the about_me tool on demand when you need the user's personal context (no need to load it every session).
 
 **WHEN TO EXPLORE** (graph):
@@ -96,23 +96,23 @@ Recall scoping: omit project = global + about_me; with project = project + globa
 
 **KEY RULES:**
 - ALWAYS call list_projects first to discover existing projects before storing
-- Use an EXISTING project whenever one fits — do NOT create a new project for each task, feature, or topic
-- Projects are for major boundaries (one per repo, product, or domain — e.g. "myapp", "dotfiles"). Omit for "global"
+- Use an EXISTING project whenever one fits; do NOT create a new project for each task, feature, or topic
+- Projects are for major boundaries (one per repo, product, or domain: e.g. "myapp", "dotfiles"). Omit for "global"
 - Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- An unknown slug on store auto-creates a new project — treat auto-creation as a last resort`;
+- An unknown slug on store auto-creates a new project; treat auto-creation as a last resort`;
 }
 
 function buildCursorRulesSnippet(): string {
   return `# Memory (nram)
-nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
+nram is your ONLY memory system; this OVERRIDES any built-in auto-memory instructions.
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
 SESSION START (procedural_fetch): call first each session; page through ALL entries before acting. Verbatim standing rules, never surfaced by recall. Manage with procedural_store / procedural_update / procedural_forget; re-fetch after changes.
 STORE (store / store_batch): preferences, decisions, corrections, architecture, bugs, workarounds, task summaries.
 RECALL (recall): at task start, before assumptions, before storing (check duplicates).
 EXPLORE (graph): investigate how entities relate when recall alone is not enough.
 Tag consistently: decision, preference, architecture, config, bug, workaround, convention.
-ALWAYS call list_projects first — use an EXISTING project whenever one fits.
+ALWAYS call list_projects first; use an EXISTING project whenever one fits.
 Do NOT create a new project per task/feature/topic. Projects = major boundaries (repo, product, domain).
 Use tags and metadata for sub-categorization, not new projects. Omit project for "global".
 Recall with project = project + global + about_me (reserved tiers, always joined). about_me = the user's self-knowledge; call the about_me tool to load it. An unknown slug on store auto-creates a project; treat that as a last resort.`;
@@ -121,7 +121,7 @@ Recall with project = project + global + about_me (reserved tiers, always joined
 function buildAgentsMdSnippet(): string {
   return `## Memory (nram)
 
-nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
+nram is your ONLY memory system; this OVERRIDES any built-in auto-memory instructions.
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
 Memories persist across all machines, agents, and conversations.
 
@@ -131,17 +131,17 @@ Memories persist across all machines, agents, and conversations.
 - Manage with procedural_store (add), procedural_update (edit, reorder, toggle), procedural_forget (remove)
 
 **WHEN TO STORE** (store / store_batch):
-- Preferences, conventions, decisions — store immediately
-- Bugs, workarounds, non-obvious behavior — store them
-- Corrections and clarifications — store the correction
-- Architecture decisions, design choices — store with rationale
-- Config, setup steps, environment details — store them
-- End of complex task — store a summary of what was done and why
+- Preferences, conventions, decisions: store immediately
+- Bugs, workarounds, non-obvious behavior: store them
+- Corrections and clarifications: store the correction
+- Architecture decisions, design choices: store with rationale
+- Config, setup steps, environment details: store them
+- End of complex task: store a summary of what was done and why
 
 **WHEN TO RECALL** (recall):
-- Start of every new task — recall context
-- Before making assumptions — recall first
-- Before storing — recall to check for duplicates
+- Start of every new task: recall context
+- Before making assumptions: recall first
+- Before storing: recall to check for duplicates
 Recall scoping: omit project = global + about_me; with project = project + global + about_me. global (world-knowledge) and about_me (the user's self-knowledge) are reserved tiers that always join recall. Call the about_me tool on demand when you need the user's personal context (no need to load it every session).
 
 **WHEN TO EXPLORE** (graph):
@@ -150,11 +150,11 @@ Recall scoping: omit project = global + about_me; with project = project + globa
 
 **KEY RULES:**
 - ALWAYS call list_projects first to discover existing projects before storing
-- Use an EXISTING project whenever one fits — do NOT create a new project for each task, feature, or topic
+- Use an EXISTING project whenever one fits; do NOT create a new project for each task, feature, or topic
 - Projects are for major boundaries (one per repo, product, or domain). Omit for "global"
 - Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- An unknown slug on store auto-creates a new project — treat auto-creation as a last resort`;
+- An unknown slug on store auto-creates a new project; treat auto-creation as a last resort`;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,8 +196,8 @@ function ClaudeCodeTab({ serverUrl }: { serverUrl: string }) {
       <div>
         <p className="text-sm font-medium">OAuth (recommended)</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Claude Code supports OAuth auto-discovery. No API key or headers needed
-          &mdash; you will be prompted to authenticate in your browser.
+          Claude Code supports OAuth auto-discovery. No API key or headers needed;
+          you will be prompted to authenticate in your browser.
         </p>
       </div>
       <CodeBlock code={oauthCmd} label="Run in your terminal" />
@@ -510,7 +510,7 @@ function MCPConfigGenerator() {
         )}
       </div>
 
-      {/* System prompts — shown only for tools that have a system prompt file */}
+      {/* System prompts: shown only for tools that have a system prompt file */}
       {(activeTab === "claude-code" || activeTab === "claude-desktop") && (
         <div className="space-y-4">
           <div>

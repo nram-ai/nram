@@ -86,8 +86,8 @@ func TestQdrantStore_UpsertAndSearch(t *testing.T) {
 	dim := 384
 
 	// Create vectors that point in different directions (not just scaled versions).
-	// emb1: [1, 0, 0, 0, ...] — first element dominant
-	// emb2: [0, 1, 0, 0, ...] — second element dominant
+	// emb1: [1, 0, 0, 0, ...], first element dominant
+	// emb2: [0, 1, 0, 0, ...], second element dominant
 	emb1 := make([]float32, dim)
 	emb1[0] = 1.0
 	for i := 1; i < dim; i++ {
@@ -109,7 +109,7 @@ func TestQdrantStore_UpsertAndSearch(t *testing.T) {
 		t.Fatalf("Upsert 2: %v", err)
 	}
 
-	// Search — query vector identical to emb1 should rank memID1 first.
+	// Search: query vector identical to emb1 should rank memID1 first.
 	results, err := store.Search(ctx, VectorKindMemory, emb1, nsID, dim, 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -127,7 +127,7 @@ func TestQdrantStore_UpsertAndSearch(t *testing.T) {
 		t.Errorf("first result namespace_id = %s, want %s", results[0].NamespaceID, nsID)
 	}
 
-	// Upsert update — change emb1 to match emb2 and verify search changes.
+	// Upsert update: change emb1 to match emb2 and verify search changes.
 	if err := store.Upsert(ctx, VectorKindMemory, memID1, nsID, emb2, dim); err != nil {
 		t.Fatalf("Upsert update: %v", err)
 	}

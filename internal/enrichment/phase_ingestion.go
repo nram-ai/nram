@@ -66,16 +66,16 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	// Re-judging an already-enriched memory would write a duplicate lineage
 	// edge. Backfill jobs should never run through this phase.
 	//
-	// DREAM-RECURSION GUARD — the Origin==OriginDream clause is the
+	// DREAM-RECURSION GUARD: the Origin==OriginDream clause is the
 	// ingestion-side enforcement of the dream-of-dream cascade prevention
-	// contract. Both clauses are load-bearing — either alone is sufficient.
+	// contract. Both clauses are load-bearing; either alone is sufficient.
 	// Symmetric sites:
 	//
 	//   - internal/dreaming/phase_consolidation.go (synthMemory creation,
-	//       "DREAM-RECURSION GUARD — first prong"; sets Origin=OriginDream
+	//       "DREAM-RECURSION GUARD: first prong"; sets Origin=OriginDream
 	//       and Enriched=true)
 	//   - internal/dreaming/phase_consolidation.go (consolidate() candidate
-	//       filter, "DREAM-RECURSION GUARD — second prong")
+	//       filter, "DREAM-RECURSION GUARD: second prong")
 	//   - internal/enrichment/worker.go (WorkerPool.runPreEmbed skipFact /
 	//       skipEntity)
 	//
@@ -398,7 +398,7 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 		// wrapped Complete/Embed call.
 		if err := wp.queue.Complete(ctx, p.job.ID, p.workerID); err != nil {
 			if errors.Is(err, storage.ErrClaimLost) {
-				slog.Info("enrichment: complete dropped — claim lost", "job", p.job.ID, "worker", p.workerID)
+				slog.Info("enrichment: complete dropped: claim lost", "job", p.job.ID, "worker", p.workerID)
 				return nil
 			}
 			return err
@@ -432,7 +432,7 @@ func (wp *WorkerPool) finalizeShortCircuitDelete(ctx context.Context, p *pending
 
 	if err := wp.queue.Complete(ctx, p.job.ID, p.workerID); err != nil {
 		if errors.Is(err, storage.ErrClaimLost) {
-			slog.Info("enrichment: complete dropped — claim lost", "job", p.job.ID, "worker", p.workerID)
+			slog.Info("enrichment: complete dropped: claim lost", "job", p.job.ID, "worker", p.workerID)
 			return nil
 		}
 		return fmt.Errorf("complete job: %w", err)
@@ -474,7 +474,7 @@ func (wp *WorkerPool) applyIngestionUpdate(ctx context.Context, p *pendingJob) {
 	}
 
 	// MarkSupersededBy's WHERE clause guards on existence, deleted_at,
-	// and superseded_by — a missing or already-superseded target
+	// and superseded_by; a missing or already-superseded target
 	// surfaces as ErrConcurrentSupersede with no extra round-trip.
 	if err := wp.memUpdater.MarkSupersededBy(ctx, target, p.mem.NamespaceID, p.mem.ID); err != nil {
 		slog.Error("enrichment: ingestion update target", "job", p.job.ID, "target", target, "err", err)

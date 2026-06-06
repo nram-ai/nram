@@ -339,7 +339,7 @@ func TestAnthropicCompleteDefaultMaxTokens(t *testing.T) {
 
 	_, err := p.Complete(context.Background(), &CompletionRequest{
 		Messages: []Message{{Role: "user", Content: "test"}},
-		// MaxTokens not specified — should default to 4096.
+		// MaxTokens not specified; should default to 4096.
 	})
 	if err != nil {
 		t.Fatalf("Complete() error: %v", err)
@@ -532,7 +532,7 @@ func TestAnthropicCompleteNoModel(t *testing.T) {
 func TestAnthropicContextCancellation(t *testing.T) {
 	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
 		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
-			// Simulate slow response — the context should cancel before this completes.
+			// Simulate slow response; the context should cancel before this completes.
 			<-r.Context().Done()
 		},
 	})

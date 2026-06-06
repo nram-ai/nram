@@ -152,7 +152,7 @@ func TestEventsHandler_SSE_ReplayedEventSanitized(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
 	defer func() { _ = bus.Close() }()
 
-	// Publish events before connecting — they go into the replay buffer.
+	// Publish events before connecting; they go into the replay buffer.
 	// Use Emit so nil slices are sanitized.
 	type payload struct {
 		Items []string `json:"items"`
@@ -221,7 +221,7 @@ func TestEventsHandler_SSE_ReplayedEventSanitized(t *testing.T) {
 		}
 	}
 
-	// If no items event found in replay, that's ok — the replay buffer
+	// If no items event found in replay, that's ok; the replay buffer
 	// assigns its own IDs and may not contain the emit'd event after evt-replay-a.
 	// This is acceptable since the core sanitization is tested above.
 }

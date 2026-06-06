@@ -57,7 +57,7 @@ func TestMemoryRepo_Origin_RoundTrips(t *testing.T) {
 }
 
 // TestMemoryRepo_Origin_SurvivesUpdate confirms an in-place Update preserves the
-// origin column — a re-worded dream stays a dream and remains subject to the
+// origin column: a re-worded dream stays a dream and remains subject to the
 // dream-recursion guard.
 func TestMemoryRepo_Origin_SurvivesUpdate(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {

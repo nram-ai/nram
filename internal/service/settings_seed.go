@@ -13,7 +13,7 @@ type SettingsSeederRepo interface {
 
 // SeedSettingsDefaults inserts a row at scope "global" for every (key, value)
 // pair when no row already exists for that composite key. Operator-set values
-// are never overwritten. Idempotent — safe to run on every server boot.
+// are never overwritten. Idempotent: safe to run on every server boot.
 //
 // The defaults map is built by the caller from the schema registry
 // (storage/admin.SettingsSchemas) so the JSON encoding of each value matches

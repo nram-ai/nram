@@ -91,7 +91,7 @@ func TestBuildMCPRecallResponse_SurfacesOrigin(t *testing.T) {
 
 // TestBuildMCPRecallResponse_PopulatesMentionCount confirms the projection
 // backfills MentionCount onto the originally-discovered graph entities (the
-// service layer drops it) so sortGraphBySignal can rank by it — and that the
+// service layer drops it) so sortGraphBySignal can rank by it, and that the
 // backfill is namespace-scoped: an entity whose record lives outside the
 // allowed namespaces does not pick up a mention signal.
 func TestBuildMCPRecallResponse_PopulatesMentionCount(t *testing.T) {
@@ -196,7 +196,7 @@ func TestBuildMCPRecallResponse_PrunesUnresolvableOrphans(t *testing.T) {
 		},
 	}
 
-	// Target exists but lives outside the allowed namespace set — must be
+	// Target exists but lives outside the allowed namespace set; must be
 	// filtered out by the projector and the relationship pruned.
 	reader := &mockEntityReader{entities: []model.Entity{
 		{ID: target, NamespaceID: otherNS, Name: "Bob", EntityType: "person"},
@@ -363,13 +363,13 @@ func TestBuildMCPRecallResponse_IncludeLowNovelty(t *testing.T) {
 // TestBuildMCPRecallResponse_FixtureShape pins the structural improvements
 // the projection makes on a fixture sized like the recall that motivated this
 // work (10 memories, a small anchor entity set, and a relationship set that
-// references several unseen endpoints — the orphan case).
+// references several unseen endpoints (the orphan case).
 //
 // The byte reduction is intentionally not asserted as a strict percentage:
 // when orphans are fully resolvable the projector trades freed bytes back to
 // surface useful entity rows, which is the explicit goal ("preserve valuable
 // data"). We log the delta for visibility and assert the invariants that
-// matter — no orphans, no internal fields, derived_from hoisted.
+// matter: no orphans, no internal fields, derived_from hoisted.
 func TestBuildMCPRecallResponse_FixtureShape(t *testing.T) {
 	nsID := uuid.New()
 	mems := make([]service.RecallResult, 10)
@@ -436,7 +436,7 @@ func TestBuildMCPRecallResponse_FixtureShape(t *testing.T) {
 		len(rawBefore), len(rawAfter), len(rawAfter)-len(rawBefore),
 		100*(1.0-float64(len(rawAfter))/float64(len(rawBefore))))
 
-	// Invariants — these are the actual goals.
+	// Invariants: these are the actual goals.
 	assertNoOrphanRelationships(t, out.Graph)
 	for _, m := range out.Memories {
 		if len(m.DerivedFrom) == 0 {
@@ -444,7 +444,7 @@ func TestBuildMCPRecallResponse_FixtureShape(t *testing.T) {
 		}
 	}
 	// Internal-only fields and audit bookkeeping must not appear in the
-	// serialized JSON. confidence and low_novelty are NOT banned — they are
+	// serialized JSON. confidence and low_novelty are NOT banned; they are
 	// surfaced decision signals (typed top-level fields). The remaining
 	// internal carrier fields (path/project_id/similarity/access_count/
 	// enriched) are dropped from the wire, and the dreaming/enrichment audit
@@ -502,7 +502,7 @@ func TestBuildMCPRecallResponse_FixtureShape_PrunedFallback(t *testing.T) {
 	}
 
 	rawBefore, _ := json.Marshal(resp)
-	// EntityReader returns no rows — orphans are pruned.
+	// EntityReader returns no rows; orphans are pruned.
 	out := buildMCPRecallResponse(context.Background(), &mockEntityReader{}, resp, []uuid.UUID{uuid.New()}, projectionOpts{})
 	rawAfter, _ := json.Marshal(out)
 
@@ -854,7 +854,7 @@ func TestHandleMemoryRecall_ProjectNotFound(t *testing.T) {
 // decision: a recalled memory must be byte-identical across the REST and MCP
 // transports. The MCP tool projects via buildMCPRecallResponse; the REST
 // handler (internal/api/handler_recall.go) projects each memory via
-// recallview.Project(m, opts) — the exact call replayed here. Asserting the
+// recallview.Project(m, opts), the exact call replayed here. Asserting the
 // two marshaled per-memory objects are byte-equal proves the transports share
 // one canonical shape and cannot drift apart.
 func TestRecallTransportSymmetry(t *testing.T) {

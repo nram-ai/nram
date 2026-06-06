@@ -474,7 +474,7 @@ func TestSearchResultOrder(t *testing.T) {
 // snapshot (Export -> Import) and then a batch of fresh ids is inserted via
 // individual Add calls (one lock acquisition per node, matching
 // HNSWStore.UpsertBatch). The test asserts no panic and that the friends-list
-// invariant holds throughout — every entry in any node's friends[L] has
+// invariant holds throughout: every entry in any node's friends[L] has
 // level >= L.
 func TestSnapshotRoundTripThenPerCallAdd(t *testing.T) {
 	if testing.Short() {

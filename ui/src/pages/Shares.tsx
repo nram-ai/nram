@@ -53,7 +53,7 @@ function copyToClipboard(text: string): void {
 // ---------------------------------------------------------------------------
 // CreateSharePanel: inline create form rendered above the share list when
 // the user opens the create flow. Renders the one-time secret in the same
-// surface after creation. Inline rather than modal — matches the rest of
+// surface after creation. Inline rather than modal: matches the rest of
 // the codebase's preference for in-flow panels over overlays.
 // ---------------------------------------------------------------------------
 
@@ -173,7 +173,7 @@ function CreateSharePanel({
             {created.share.is_one_shot ? (
               <div className="mb-4">
                 <p className="mb-2 text-xs text-muted-foreground">
-                  One-shot shares can only be redeemed through the OAuth consent flow. The bearer-token URL is intentionally not offered — paste the magic link to the recipient.
+                  One-shot shares can only be redeemed through the OAuth consent flow. The bearer-token URL is intentionally not offered; paste the magic link to the recipient.
                 </p>
                 <button
                   type="button"

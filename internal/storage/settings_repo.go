@@ -97,7 +97,7 @@ func (r *SettingsRepo) Set(ctx context.Context, setting *model.Setting) error {
 // distinguishable from operator-modified ones. Idempotent.
 //
 // All inserts run inside a single transaction so the commit cost amortizes
-// across the registry — important on SQLite, where every commit fsyncs.
+// across the registry; important on SQLite, where every commit fsyncs.
 func (r *SettingsRepo) InsertManyIfMissing(ctx context.Context, scope string, kv map[string]string) error {
 	if len(kv) == 0 {
 		return nil

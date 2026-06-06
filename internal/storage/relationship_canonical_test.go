@@ -190,7 +190,7 @@ func TestRelationshipRepo_BatchCreate_MergesIntraBatchVariants(t *testing.T) {
 		b := newTestRelationship(nsID, srcID, tgtID)
 		b.Relation, b.Weight, b.ValidFrom = "related to", 0.7, vf
 
-		// Both variants in ONE batch — they collide on the unique key once
+		// Both variants in ONE batch; they collide on the unique key once
 		// canonicalized.
 		if _, err := repo.BatchCreate(ctx, []*model.Relationship{a, b}); err != nil {
 			t.Fatalf("BatchCreate with intra-batch variants: %v", err)

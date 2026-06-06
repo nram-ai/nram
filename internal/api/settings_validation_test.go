@@ -22,7 +22,7 @@ func TestValidateProjectSettingsJSON_AcceptsCanonical(t *testing.T) {
 }
 
 func TestValidateProjectSettingsJSON_AcceptsLegacyRankingShape(t *testing.T) {
-	// Legacy shape pre-migration — must not error so existing rows stay loadable.
+	// Legacy shape pre-migration: must not error so existing rows stay loadable.
 	raw := json.RawMessage(`{"ranking_weights":{"recency":0.3,"relevance":0.5,"importance":0.2}}`)
 	if err := ValidateProjectSettingsJSON(raw); err != nil {
 		t.Errorf("legacy shape should pass: %v", err)
@@ -112,7 +112,7 @@ func TestValidateUserSettingsJSON_RejectsBadDedup(t *testing.T) {
 }
 
 func TestValidateUserSettingsJSON_NullRankingWeightsAllowed(t *testing.T) {
-	// Explicit null is treated as "not set" — does not trigger the
+	// Explicit null is treated as "not set"; does not trigger the
 	// not-supported-at-user-scope rejection.
 	raw := json.RawMessage(`{"ranking_weights":null,"dedup_threshold":0.85}`)
 	if err := ValidateUserSettingsJSON(raw); err != nil {

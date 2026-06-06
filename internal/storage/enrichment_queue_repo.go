@@ -372,7 +372,7 @@ func (r *EnrichmentQueueRepo) setStatus(ctx context.Context, id uuid.UUID, statu
 
 // lastErrorArg returns the SQL value for last_error: untyped nil clears the
 // column, otherwise the string is bound directly. Both backends accept the
-// JSON-encoded string — SQLite stores in TEXT, Postgres parses into JSONB.
+// JSON-encoded string: SQLite stores in TEXT, Postgres parses into JSONB.
 func lastErrorArg(s *string) any {
 	if s == nil {
 		return nil
@@ -465,7 +465,7 @@ func (r *EnrichmentQueueRepo) MarkStepCompleted(ctx context.Context, id uuid.UUI
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if r.db.Backend() == BackendPostgres {
-		// jsonb append guarded by NOT containment — atomic in one round-trip.
+		// jsonb append guarded by NOT containment; atomic in one round-trip.
 		query := `UPDATE enrichment_queue
 			SET steps_completed = COALESCE(steps_completed, '[]'::jsonb) || to_jsonb($1::text),
 			    updated_at = $2
@@ -641,7 +641,7 @@ func (r *EnrichmentQueueRepo) Release(ctx context.Context, id uuid.UUID, workerI
 // worker_id, claimed_at, heartbeat_at, last_requeue_reason, and any stale
 // last_error from the prior attempt (so admin views show a clean slate while
 // the new attempt is in flight), and increments the attempts counter.
-// Operator-initiated retry — unguarded.
+// Operator-initiated retry; unguarded.
 func (r *EnrichmentQueueRepo) Retry(ctx context.Context, id uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -665,7 +665,7 @@ func (r *EnrichmentQueueRepo) Retry(ctx context.Context, id uuid.UUID) error {
 
 // TickHeartbeat updates heartbeat_at AND updated_at to now() for every row
 // currently held by workerID. One write per tick covers every job this
-// worker holds — heartbeat is per-worker because in-flight rows for the same
+// worker holds; heartbeat is per-worker because in-flight rows for the same
 // worker share the same liveness signal: if the worker is alive, all its
 // rows are.
 func (r *EnrichmentQueueRepo) TickHeartbeat(ctx context.Context, workerID string) (int, error) {
@@ -692,11 +692,11 @@ func (r *EnrichmentQueueRepo) TickHeartbeat(ctx context.Context, workerID string
 // ListStaleClaimed returns enrichment_queue rows in status='processing'
 // matched by either of two stale-claim signals:
 //   - updatedThreshold: rows whose updated_at has fallen behind by more than
-//     this duration — the heartbeat goroutine is no longer ticking for the
+//     this duration: the heartbeat goroutine is no longer ticking for the
 //     claimed_by worker, so the claiming process is presumed gone (crash,
 //     OOM, host reboot mid-batch).
 //   - claimedAtMaxAge: rows whose claimed_at exceeds this hard cap,
-//     regardless of updated_at — the heartbeat may still be ticking (e.g.
+//     regardless of updated_at: the heartbeat may still be ticking (e.g.
 //     same process is wedged in a long LLM call, or a sibling instance is
 //     refreshing under a colliding claimed_by) but the claim has lived past
 //     any plausible batch runtime and is treated as wedged.
@@ -1125,7 +1125,7 @@ func (r *EnrichmentQueueRepo) RetryAllFailedScoped(ctx context.Context, namespac
 		boolFalse, boolTrue = "false", "true"
 	}
 
-	// Step A: delete failed rows that would collide on the unique index — those
+	// Step A: delete failed rows that would collide on the unique index; those
 	// whose memory already holds a pending sibling, and all-but-the-newest
 	// failed row per memory (by created_at, then id). The outer table is
 	// referenced by name (not an alias) so the correlated subqueries are

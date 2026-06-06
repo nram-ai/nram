@@ -233,7 +233,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 		insertTestVector(t, db, nsID, dim, ids[i], randomVector(rng, dim))
 	}
 
-	// Create cache and load — should rebuild from memory_vectors.
+	// Create cache and load: should rebuild from memory_vectors.
 	cache := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,
@@ -262,7 +262,7 @@ func TestCacheSnapshotReload(t *testing.T) {
 		t.Fatalf("FlushAll: %v", err)
 	}
 
-	// Create a new cache — should load from snapshot this time.
+	// Create a new cache: should load from snapshot this time.
 	cache2 := NewIndexCache(db, db, CacheConfig{
 		MaxIndexes:       8,
 		SnapshotInterval: time.Hour,

@@ -425,7 +425,7 @@ function CreatePasskeyForm({ onCreated }: { onCreated: () => void }) {
 // ---------------------------------------------------------------------------
 // Data Export Card
 //
-// Renders the asynchronous export-job pipeline at /v1/me/exports — kicks off
+// Renders the asynchronous export-job pipeline at /v1/me/exports: kicks off
 // an account-wide zip, lists the caller's recent jobs, polls in-flight rows
 // at 3s via useMeExportJobs's refetchInterval, downloads succeeded
 // artifacts through an auth-attached fetch+blob path.
@@ -563,7 +563,7 @@ function DataExportCard() {
             className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             onClick={handleStart}
             disabled={createMut.isPending || hasInflight}
-            title={hasInflight ? "An export is already in flight — wait for it to finish before starting another." : undefined}
+            title={hasInflight ? "An export is already in flight; wait for it to finish before starting another." : undefined}
           >
             {createMut.isPending ? "Starting..." : "Start account export"}
           </button>
@@ -631,7 +631,7 @@ function MyAccount() {
   // Hydrate profile from the server. The JWT-derived AuthContext.user is
   // a fast initial render; once the /v1/me/profile fetch returns we push
   // the fresh values into AuthContext so the sidebar / role-gating reads
-  // them too — not just this page.
+  // them too, not just this page.
   const profileQuery = useMeProfile();
   useEffect(() => {
     if (profileQuery.data) {
@@ -786,7 +786,7 @@ function MyAccount() {
           {newKeyValue && (
             <div className="rounded-lg border-2 border-warning/40 bg-warning/10 p-4">
               <p className="text-sm font-semibold text-warning">
-                New API Key — save this now, it will not be shown again
+                New API Key: save this now, it will not be shown again
               </p>
               <div className="mt-2 flex items-center gap-2">
                 <code className="flex-1 rounded-md border border-warning/40 bg-white px-3 py-2 text-sm font-mono break-all dark:bg-warning/15">
@@ -854,9 +854,9 @@ function MyAccount() {
         </div>
       </div>
 
-      {/* Data Export — async job pipeline at /v1/me/exports. Self-service
+      {/* Data Export: async job pipeline at /v1/me/exports. Self-service
           only; admins do NOT get an equivalent surface elsewhere in the
-          UI (per the codebase's privacy invariant — admins cannot read
+          UI (per the codebase's privacy invariant: admins cannot read
           other users' memory content). */}
       <DataExportCard />
 

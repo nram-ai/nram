@@ -113,7 +113,7 @@ func backfillSettings(enabled bool, capPerCycle int) *staticDreamSettings {
 }
 
 // memWithDim builds a memory whose recorded embedding_dim matches the
-// per-dim find query but whose vector is missing — exactly the shape the
+// per-dim find query but whose vector is missing, exactly the shape the
 // backfill phase repairs.
 func memWithDim(content string, dim int, ns uuid.UUID) model.Memory {
 	d := dim

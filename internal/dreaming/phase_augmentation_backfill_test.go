@@ -92,7 +92,7 @@ func TestAugmentationBackfillPhase_EnqueuesCandidates(t *testing.T) {
 	}
 }
 
-// Disabled flag: the phase is a no-op — it never lists or enqueues.
+// Disabled flag: the phase is a no-op; it never lists or enqueues.
 func TestAugmentationBackfillPhase_DisabledNoop(t *testing.T) {
 	lister := &fakeAugLister{ids: []uuid.UUID{uuid.New()}}
 	queue := &enqueueRecorder{}

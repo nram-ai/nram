@@ -10,7 +10,7 @@ import (
 // RejectShareTokenMiddleware blocks any request that authenticated via a
 // share token (ShareTokenID != nil on AuthContext) from reaching REST or
 // userinfo endpoints. Share-token credentials are scoped strictly to the
-// MCP tool surface — admin/owner REST endpoints expose tenant management,
+// MCP tool surface; admin/owner REST endpoints expose tenant management,
 // audit views, and other operations the recipient must never reach.
 //
 // The middleware checks the path so /mcp and /mcp/* pass through, and so

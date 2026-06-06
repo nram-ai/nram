@@ -573,7 +573,7 @@ func extractText(result *mcp.CallToolResult) string {
 }
 
 // assertNoOrphanRelationships verifies that every relationship's source_id
-// and target_id appear in entities[] — the structural guarantee of the
+// and target_id appear in entities[]: the structural guarantee of the
 // orphan-resolution layer.
 func assertNoOrphanRelationships(t *testing.T, g graphResponse) {
 	t.Helper()

@@ -8,7 +8,7 @@
 -- stampConsolidateCluster, stampContradictionsChecked, stampParaphrase,
 -- writeAuditDecision) marshalled that empty-plus-stamp map and persisted it
 -- via MemoryRepo.UpdateMetadata, which is `UPDATE memories SET metadata = $1`
--- — full-column overwrite, not a JSONB merge. The first time any of those
+-- a full-column overwrite, not a JSONB merge. The first time any of those
 -- phases visited a freshly-created dream synthesis, source_memory_ids and
 -- dream_cycle_id were wiped. The next novelty audit then read empty source
 -- IDs, fired `orphan_no_sources`, and demoted. Paraphrase dedup chained
@@ -54,7 +54,7 @@ WHERE m.id = p.memory_id
 -- live parent. Strips the audit decision (so the next cycle re-evaluates),
 -- restores confidence to a neutral mid-band value, and bumps updated_at so
 -- the staleness predicate picks the row up next cycle. Supersession chains
--- (superseded_by) are deliberately left alone — if the rehabilitated memory
+-- (superseded_by) are deliberately left alone: if the rehabilitated memory
 -- is genuinely a paraphrase of its successor, the next contradiction cycle
 -- re-supersedes correctly; if not, the chain self-clears via the same
 -- machinery that created it.

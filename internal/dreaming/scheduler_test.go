@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// newSchedulerForCancelTests returns a Scheduler with no DB or runner — only
+// newSchedulerForCancelTests returns a Scheduler with no DB or runner, only
 // the activeCycles registry is exercised. NewScheduler does the wiring we
 // need (initializes the registry map), so we tolerate the nil dependencies.
 func newSchedulerForCancelTests() *Scheduler {

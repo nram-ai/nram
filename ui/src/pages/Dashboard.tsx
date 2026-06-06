@@ -195,7 +195,7 @@ function MemoryCountsTable({
 }
 
 // OrgBreakdownTable renders the per-org rows from a SystemDashboardData
-// response. Counts only — no content fields, no per-user data.
+// response. Counts only: no content fields, no per-user data.
 function OrgBreakdownTable({
   rows,
   isLoading,
@@ -243,7 +243,7 @@ function OrgBreakdownTable({
 }
 
 // UserBreakdownTable renders the per-user rows from an OrgDashboardData
-// response. Counts only — no content, no per-project rows. Email is the
+// response. Counts only: no content, no per-project rows. Email is the
 // only identity field shown.
 function UserBreakdownTable({
   rows,
@@ -777,7 +777,7 @@ function Dashboard() {
 
   // Normalize the dashboard data shape across tiers. Self-tier returns
   // DashboardData (with memories_by_project), org-tier returns
-  // OrgDashboardData (with user_breakdown — per-user, not per-project),
+  // OrgDashboardData (with user_breakdown: per-user, not per-project),
   // system-tier returns SystemDashboardData (with org_breakdown).
   const totalMemories = activeDash.data?.total_memories ?? 0;
   const totalProjects = activeDash.data?.total_projects ?? 0;
@@ -868,7 +868,7 @@ function Dashboard() {
         )}
       </div>
 
-      {/* Quick store — only show for users with write access on the self tab */}
+      {/* Quick store: only show for users with write access on the self tab */}
       {auth.canWrite && tier === "self" && (
         <QuickStore
           projects={projectList}

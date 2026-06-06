@@ -21,7 +21,7 @@ type CostRatesConfig struct {
 }
 
 // NewUsageCostRatesHandler serves GET /v1/usage/cost_rates. A missing
-// row collapses to an empty list rather than 404 — fresh deployments
+// row collapses to an empty list rather than 404; fresh deployments
 // haven't run the bootstrap seeder yet, and the SPA must never have to
 // special-case "no rates configured."
 func NewUsageCostRatesHandler(cfg CostRatesConfig) http.HandlerFunc {

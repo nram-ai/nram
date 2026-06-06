@@ -122,7 +122,7 @@ type StoreService struct {
 // NewStoreService creates a new StoreService with the given dependencies.
 // settings may be nil; the importance/confidence defaults fall back to the
 // values registered in service.settingDefaults. Prometheus metrics are
-// opt-in via WithMetrics — production wires them in main; tests leave them off.
+// opt-in via WithMetrics: production wires them in main; tests leave them off.
 func NewStoreService(
 	memories MemoryRepository,
 	projects ProjectRepository,

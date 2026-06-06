@@ -43,7 +43,7 @@ func TestStatusRecorder_FlushDelegates(t *testing.T) {
 	// The wrapper must satisfy http.Flusher.
 	f, ok := any(sr).(http.Flusher)
 	if !ok {
-		t.Fatal("statusRecorder does not implement http.Flusher — SSE handlers will 500")
+		t.Fatal("statusRecorder does not implement http.Flusher; SSE handlers will 500")
 	}
 	f.Flush()
 	if !inner.flushed {
@@ -58,7 +58,7 @@ func TestStatusRecorder_HijackDelegates(t *testing.T) {
 	// The wrapper must satisfy http.Hijacker.
 	h, ok := any(sr).(http.Hijacker)
 	if !ok {
-		t.Fatal("statusRecorder does not implement http.Hijacker — hijack-based transports will fail")
+		t.Fatal("statusRecorder does not implement http.Hijacker; hijack-based transports will fail")
 	}
 	_, _, err := h.Hijack()
 	if !inner.hijacked {
@@ -94,7 +94,7 @@ func TestStatusRecorder_UnwrapExposesInnerWriter(t *testing.T) {
 	}
 	u, ok := any(sr).(unwrapper)
 	if !ok {
-		t.Fatal("statusRecorder does not expose Unwrap() — http.ResponseController callers will not reach the inner writer")
+		t.Fatal("statusRecorder does not expose Unwrap(); http.ResponseController callers will not reach the inner writer")
 	}
 	if u.Unwrap() != inner {
 		t.Error("statusRecorder.Unwrap did not return the inner writer")

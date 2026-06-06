@@ -170,7 +170,7 @@ func TestMiddleware_RoutePatternCardinality(t *testing.T) {
 	body := metricsRR.Body.String()
 	for _, id := range []string{"alpha", "bravo", "charlie", "delta"} {
 		if strings.Contains(body, "/v1/projects/"+id+"/memories") {
-			t.Errorf("metrics exposition contains raw path with id %q — cardinality fix regressed", id)
+			t.Errorf("metrics exposition contains raw path with id %q; cardinality fix regressed", id)
 		}
 	}
 }

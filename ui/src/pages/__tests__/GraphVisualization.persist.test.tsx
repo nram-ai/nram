@@ -285,7 +285,7 @@ describe("GraphVisualization layout persistence", () => {
     // Click Reset before the debounce would fire.
     fireEvent.click(screen.getByRole("button", { name: /Reset to system defaults/i }));
 
-    // The reset mutation itself is a single direct call — that is
+    // The reset mutation itself is a single direct call; that is
     // expected and not the regression we are guarding against.
     const resetCalls = mutate.mock.calls.length;
     expect(resetCalls).toBe(1);

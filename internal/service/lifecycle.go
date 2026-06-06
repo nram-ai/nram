@@ -23,7 +23,7 @@ type LifecycleStore interface {
 // Postgres: an entity created by enrichment but whose relationships are never
 // written is otherwise leaked. The orphan filter is age-gated so in-flight
 // enrichment (which writes the entity row before its relationships) cannot
-// race the sweep — see EntityRepo.DeleteOrphaned.
+// race the sweep, see EntityRepo.DeleteOrphaned.
 //
 // DeleteOrphanedEntities returns the IDs of deleted rows so the lifecycle
 // worker can clean up out-of-band vector storage (Qdrant) for them. The
@@ -273,7 +273,7 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 // sweep and the on-demand RepairGraph: reap lost-provenance edges (recomputing
 // mention counts inside ReapLostProvenance), then prune dangling relationships
 // and orphaned entities (age-gated by orphanCutoff), cleaning up entity vectors
-// for reaped orphans. Order matters — reaping first strands entities the orphan
+// for reaped orphans. Order matters: reaping first strands entities the orphan
 // pass then collects in the same run. It is best-effort: every step is attempted
 // even if an earlier one errors; it returns the aggregate counts plus the first
 // error encountered.
@@ -323,7 +323,7 @@ func (s *LifecycleService) reapAndPrune(ctx context.Context, orphanCutoff time.T
 }
 
 // GraphHealth reports the number of lost-provenance relationships currently in
-// the graph — edges whose sourcing memory is gone — so the console can show
+// the graph (edges whose sourcing memory is gone), so the console can show
 // how much a repair would reap. Returns a zero result when no graph reaper is
 // wired (e.g. graph features disabled).
 type GraphHealth struct {
@@ -353,7 +353,7 @@ type GraphRepairResult struct {
 // reap every lost-provenance edge (and recompute mention counts), then prune
 // dangling relationships and orphaned entities. The orphan sweep stays
 // age-gated by SettingLifecycleOrphanGraceSeconds so a repair cannot race
-// in-flight enrichment. Idempotent — a second run reaps nothing. Shares its
+// in-flight enrichment. Idempotent: a second run reaps nothing. Shares its
 // implementation with the periodic sweep via reapAndPrune.
 func (s *LifecycleService) RepairGraph(ctx context.Context) (GraphRepairResult, error) {
 	return s.reapAndPrune(ctx, time.Now().Add(-s.resolveOrphanGrace(ctx)))

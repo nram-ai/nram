@@ -150,7 +150,7 @@ func NewAdminSetupHandler(cfg SetupConfig) http.HandlerFunc {
 			User:    user,
 			APIKey:  apiKey,
 			Token:   token,
-			Message: "Setup complete. Store this API key — it will not be shown again.",
+			Message: "Setup complete. Store this API key; it will not be shown again.",
 		})
 	}
 }

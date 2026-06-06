@@ -129,7 +129,7 @@ func TestBatchStore_SuccessThreeItems(t *testing.T) {
 	}
 
 	// Every memory must produce an enrichment job regardless of the Enrich
-	// flag — embedding, vector upsert, and token usage are the worker's job.
+	// flag: embedding, vector upsert, and token usage are the worker's job.
 	if len(enrichment.jobs) != 3 {
 		t.Errorf("expected 3 enrichment jobs, got %d", len(enrichment.jobs))
 	}

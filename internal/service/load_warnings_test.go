@@ -24,7 +24,7 @@ func captureSlog(t *testing.T, fn func()) string {
 }
 
 // putInt persists an int-valued setting in the mock repo. settingsService
-// resolves these back as strings so Atoi sees the digit form directly —
+// resolves these back as strings so Atoi sees the digit form directly:
 // matches how settingDefaults stores everything.
 func (m *mockSettingsRepo) putInt(key, scope string, v int) {
 	if m.settings[key] == nil {
@@ -102,7 +102,7 @@ func TestCheckProviderLoadDefaults_WarnsWhenRaised(t *testing.T) {
 
 func TestCheckProviderLoadDefaults_QuietWhenLoweredBelowSafe(t *testing.T) {
 	repo := newMockSettingsRepo()
-	// Setting below default is fine — operator deliberately chose 0/1 for
+	// Setting below default is fine: operator deliberately chose 0/1 for
 	// a constrained environment, no need to nag.
 	repo.putInt(SettingEnrichmentWorkerCountPostgres, "global", 0)
 	svc := NewSettingsService(repo)

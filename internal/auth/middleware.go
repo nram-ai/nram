@@ -20,7 +20,7 @@ const SessionRefreshHeader = "X-Refreshed-Token"
 
 // APIKeyBearerPrefix and ShareTokenBearerPrefix are the wire-format prefixes
 // the middleware uses to dispatch Bearer credentials. The share-token storage
-// layer exposes ShareTokenWirePrefix; both must stay in lockstep — if the
+// layer exposes ShareTokenWirePrefix; both must stay in lockstep: if the
 // wire format changes, update both constants.
 const (
 	APIKeyBearerPrefix     = "nram_k_"
@@ -46,7 +46,7 @@ const DefaultSessionRefreshThreshold = DefaultSessionTokenTTL / 2
 // service.SettingAuthSessionTokenTTLSeconds and
 // service.SettingAuthSessionRefreshThresholdSeconds.
 //
-// Both methods are called per request — implementations should cache reads
+// Both methods are called per request; implementations should cache reads
 // (the settings service has its own short-TTL cache, so a thin pass-through
 // is fine).
 type SessionTimings interface {
@@ -279,7 +279,7 @@ func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*Au
 
 	role, orgID, err := m.userIdentityLookup.GetIdentityByID(ctx, key.UserID)
 	if err != nil {
-		// User is disabled or not found — treat as unauthorized.
+		// User is disabled or not found; treat as unauthorized.
 		return nil, fmt.Errorf("api key user unavailable: %w", err)
 	}
 
@@ -440,7 +440,7 @@ func (m *AuthMiddleware) validateJWT(r *http.Request, tokenStr string) (*AuthCon
 
 	refreshed, err := m.maybeRefreshSessionJWT(r.Context(), claims, userID, orgID)
 	if err != nil {
-		// A refresh-side error never invalidates the request — return an
+		// A refresh-side error never invalidates the request; return an
 		// empty hint. The original token is still valid; the next request
 		// will simply try to refresh again.
 		return ac, "", nil
@@ -455,7 +455,7 @@ func (m *AuthMiddleware) validateJWT(r *http.Request, tokenStr string) (*AuthCon
 // A SPA session JWT is identified by: no audience claim (audience-bound
 // tokens are OAuth/MCP access tokens with their own refresh-token grant)
 // AND populated Email + DisplayName claims (only GenerateSessionJWT writes
-// these — GenerateJWT does not).
+// these; GenerateJWT does not).
 func (m *AuthMiddleware) maybeRefreshSessionJWT(ctx context.Context, claims *Claims, userID, orgID uuid.UUID) (string, error) {
 	// Refresh is opt-in: callers that don't wire SessionTimings (tests,
 	// ad-hoc handlers) get the legacy fixed-TTL behavior.

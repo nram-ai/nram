@@ -227,7 +227,7 @@ describe("API Client E2E", () => {
     // suite. Every dreaming/enrichment route is wrapped in EnrichmentGate
     // which returns 503 until all three slots (embedding, fact, entity)
     // have a provider. We don't need the providers to actually work for
-    // the e2e tests — only the gate-passing record.
+    // the e2e tests: only the gate-passing record.
     for (const slot of ["embedding", "fact", "entity"]) {
       try {
         await adminAPI.updateProviderSlot(slot, {
@@ -236,7 +236,7 @@ describe("API Client E2E", () => {
           model: slot === "embedding" ? "nomic-embed-text" : "llama3",
         });
       } catch {
-        // Suite tolerates unconfigured providers — the gate-dependent tests
+        // Suite tolerates unconfigured providers; the gate-dependent tests
         // will surface their own failure if this stub setup didn't take.
       }
     }

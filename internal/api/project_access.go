@@ -115,21 +115,21 @@ func ProjectAccessMiddleware(cfg ProjectAccessConfig) func(http.Handler) http.Ha
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			projectIDStr := chi.URLParam(r, "project_id")
 			if projectIDStr == "" {
-				// No project_id in this route — pass through.
+				// No project_id in this route, pass through.
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			projectID, err := uuid.Parse(projectIDStr)
 			if err != nil {
-				// Bad UUID — let the handler return its own 400.
+				// Bad UUID, let the handler return its own 400.
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			ac := auth.FromContext(r.Context())
 			if ac == nil {
-				// No auth context — auth middleware would have already rejected.
+				// No auth context; auth middleware would have already rejected.
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

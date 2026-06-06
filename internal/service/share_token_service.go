@@ -97,7 +97,7 @@ func (s *ShareTokenService) Create(ctx context.Context, req CreateShareRequest) 
 // rejected (the credential is dead on bearer-direct, and the consent path
 // must not mint a second OAuth chain). The OAuth-issued chain from the
 // original redemption remains valid because refresh-token exchange does not
-// re-call Resolve — the middleware re-resolves grants by share_token_id from
+// re-call Resolve: the middleware re-resolves grants by share_token_id from
 // the JWT/refresh row.
 func (s *ShareTokenService) Resolve(ctx context.Context, rawSecret string) (*model.ShareToken, []model.ShareTokenGrant, error) {
 	return s.shareRepo.ValidateBySecret(ctx, rawSecret)
@@ -149,7 +149,7 @@ func (s *ShareTokenService) ListGrants(ctx context.Context, shareID uuid.UUID) (
 }
 
 // ListGrantsByOwner returns all grants for shares owned by the user, indexed
-// by share id. One query — used by the share-list endpoint to avoid 1+N.
+// by share id. One query, used by the share-list endpoint to avoid 1+N.
 func (s *ShareTokenService) ListGrantsByOwner(ctx context.Context, ownerUserID uuid.UUID) (map[uuid.UUID][]model.ShareTokenGrant, error) {
 	return s.shareRepo.ListGrantsByOwner(ctx, ownerUserID)
 }
@@ -169,7 +169,7 @@ func (s *ShareTokenService) MarkConsumed(ctx context.Context, shareID uuid.UUID)
 }
 
 // GetByID returns a share by primary key. The owner-only check is the
-// caller's responsibility — this is the lookup primitive consumed by the
+// caller's responsibility: this is the lookup primitive consumed by the
 // REST handlers and the consent flow.
 func (s *ShareTokenService) GetByID(ctx context.Context, id uuid.UUID) (*model.ShareToken, error) {
 	return s.shareRepo.GetByID(ctx, id)
@@ -179,7 +179,7 @@ func (s *ShareTokenService) GetByID(ctx context.Context, id uuid.UUID) (*model.S
 // whose grant set has gone empty (typically because every referenced
 // project was deleted and the FK cascade dropped the grant rows). Called
 // from the project-delete cascade post-commit. Refresh-token revocation
-// runs against the freshly-revoked shares only — historical revokes are
+// runs against the freshly-revoked shares only; historical revokes are
 // already cascaded and re-walking them on every project delete would scale
 // with the owner's lifetime revoke history.
 func (s *ShareTokenService) SweepZeroGrantShares(ctx context.Context, ownerUserID uuid.UUID) (int, error) {

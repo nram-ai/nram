@@ -82,7 +82,7 @@ func (s *scriptedJudgeLLM) Models() []string { return []string{"test-model"} }
 // recorded separately so tests can distinguish stamp-only writes (which
 // must not bump updated_at) from full Updates.
 //
-// createErr, when non-nil, is returned from Create instead of recording —
+// createErr, when non-nil, is returned from Create instead of recording:
 // used by the consolidate error-path table test to exercise the
 // post-audit Create-failure branch.
 type updatingMemoryWriter struct {
@@ -814,7 +814,7 @@ func TestAuditExistingDreams_DemotePurgesVector(t *testing.T) {
 }
 
 // TestAuditExistingDreams_PassDoesNotPurgeVector asserts that a dream that
-// passes the novelty audit retains its vector — stamping only, no purge.
+// passes the novelty audit retains its vector, stamping only, no purge.
 func TestAuditExistingDreams_PassDoesNotPurgeVector(t *testing.T) {
 	srcA := model.Memory{ID: uuid.New(), Content: "source A content"}
 	novelDream := dreamMemory("genuinely new content", []uuid.UUID{srcA.ID})
@@ -1351,7 +1351,7 @@ func TestReinforce_StampsPersistAcrossCycles(t *testing.T) {
 	}
 
 	// Apply the metadata update to the in-memory copy so cycle 2 sees the
-	// stamp. updated_at is intentionally NOT bumped — that's the whole
+	// stamp. updated_at is intentionally NOT bumped; that's the whole
 	// point of UpdateMetadata.
 	synth.Metadata = writer.metadataUpdates[0].Metadata
 
@@ -2122,7 +2122,7 @@ func TestCollectConsolidateStale_SkipsBelowFloor(t *testing.T) {
 }
 
 // TestClusterFingerprint_Stable asserts iteration order does not affect
-// the fingerprint — clusterMemories' anchor-order is unstable across
+// the fingerprint; clusterMemories' anchor-order is unstable across
 // cycles when one member is removed, so the stamp must be order-blind.
 func TestClusterFingerprint_Stable(t *testing.T) {
 	ns := uuid.New()

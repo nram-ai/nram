@@ -489,7 +489,7 @@ function UsageBreakdownTable({
                       g.avg_latency_ms === 0 ? "text-muted-foreground" : ""
                     }`}
                   >
-                    {g.avg_latency_ms === 0 ? "—" : `${Math.round(g.avg_latency_ms)} ms`}
+                    {g.avg_latency_ms === 0 ? "-" : `${Math.round(g.avg_latency_ms)} ms`}
                   </td>
                   <td className="py-2 text-right font-mono">
                     {rate ? formatCost(cost) : "-"}
@@ -571,7 +571,7 @@ function UsageBarChart({
 }
 
 // ---------------------------------------------------------------------------
-// Usage Controls — group_by, success filter, date range
+// Usage Controls: group_by, success filter, date range
 // ---------------------------------------------------------------------------
 
 const ALL_GROUP_BY_OPTIONS: { value: UsageGroupBy; label: string }[] = [
@@ -1305,7 +1305,7 @@ function Analytics() {
   );
 
   // Self-tier analytics carry the legacy AnalyticsData shape (with ranked
-  // memory lists). Org/system tiers carry aggregate shapes — different
+  // memory lists). Org/system tiers carry aggregate shapes; different
   // fields entirely. Branch the renderer by tier.
   const selfAnalyticsData =
     tier === "self" ? (analytics.data as AnalyticsData | undefined) : undefined;
@@ -1342,7 +1342,7 @@ function Analytics() {
         ? "Aggregate memory analytics, recall distribution, and token usage for your organization."
         : "Your memory analytics and token usage.";
 
-  // Memory counts shape varies by tier — self uses memory_counts, system
+  // Memory counts shape varies by tier: self uses memory_counts, system
   // uses total_memory_counts. Normalize to the self-tier shape for the
   // existing MemoryCountCards renderer.
   const counts =

@@ -205,7 +205,7 @@ func TestAdminRouteAdminReturns200(t *testing.T) {
 }
 
 func TestNotImplementedHandler(t *testing.T) {
-	// Leave all handlers nil — they should return 501.
+	// Leave all handlers nil; they should return 501.
 	r := newTestRouter(t, Handlers{})
 	userID := uuid.New()
 	token := generateTestJWT(t, userID, auth.RoleMember)
@@ -254,6 +254,6 @@ func newTestRouter(t *testing.T, handlers Handlers) http.Handler {
 	return NewRouter(cfg, handlers)
 }
 
-// Ensure unused import suppression is not needed — verify jwt and model are used.
+// Ensure unused import suppression is not needed: verify jwt and model are used.
 var _ jwt.Claims
 var _ *model.APIKey

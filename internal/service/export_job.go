@@ -251,7 +251,7 @@ func (s *ExportJobService) Run(ctx context.Context) {
 
 // tickClaim attempts one claim. On hit, the job is processed inline so the
 // worker can't be tricked into accumulating in-flight claims under heavy
-// queue depth — slow but predictable.
+// queue depth, slow but predictable.
 func (s *ExportJobService) tickClaim(ctx context.Context) {
 	job, err := s.repo.ClaimNext(ctx, s.workerID)
 	if err != nil {
@@ -375,7 +375,7 @@ func (s *ExportJobService) writeArtifactBody(ctx context.Context, job *model.Exp
 			return fmt.Errorf("user lookup: %w", err)
 		}
 		// ListByUser returns projects whose OwnerNamespaceID matches the
-		// user's namespace — the user's owned set. Memories in the shared
+		// user's namespace, the user's owned set. Memories in the shared
 		// global namespace are NOT included here; the global project is
 		// shared across many users and emitting its full namespace would
 		// leak others' content. A user-filtered global export is a
@@ -454,7 +454,7 @@ func (s *ExportJobService) writeArtifactBody(ctx context.Context, job *model.Exp
 }
 
 // sweepOnce expires stale artifacts. Read-list, remove on disk, mark
-// expired. The DB transition runs unconditionally — a transient rm
+// expired. The DB transition runs unconditionally: a transient rm
 // failure (permissions, disk glitch) is logged but cannot pin the row in
 // 'succeeded' forever and trigger re-sweeps. MarkExpired clears the
 // artifact_path column, so the next reconciliation cycle is responsible
@@ -470,7 +470,7 @@ func (s *ExportJobService) sweepOnce(ctx context.Context) {
 		if job.ArtifactPath != nil && *job.ArtifactPath != "" {
 			if err := os.Remove(*job.ArtifactPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 				s.logger.Warn("export sweep remove failed", "job_id", job.ID, "path", *job.ArtifactPath, "error", err)
-				// Fall through to MarkExpired anyway — leaving the row
+				// Fall through to MarkExpired anyway: leaving the row
 				// in 'succeeded' would cause every subsequent sweep to
 				// re-attempt the same rm forever.
 			}
@@ -483,7 +483,7 @@ func (s *ExportJobService) sweepOnce(ctx context.Context) {
 
 // OpenArtifact returns the caller's artifact as an io.ReadCloser plus the
 // job row. sql.ErrNoRows when the job is missing, not owned, or has no
-// artifact (still pending/failed/expired) — the second return value is
+// artifact (still pending/failed/expired): the second return value is
 // non-nil in the non-terminal cases so the handler can surface "job not
 // ready" distinctly from "job not found."
 func (s *ExportJobService) OpenArtifact(ctx context.Context, userID, jobID uuid.UUID) (io.ReadCloser, *model.ExportJob, error) {

@@ -24,7 +24,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// rbacTestEnv — multi-org, multi-user test environment with real production router
+// rbacTestEnv: multi-org, multi-user test environment with real production router
 // ---------------------------------------------------------------------------
 
 type rbacUser struct {
@@ -1076,7 +1076,7 @@ func TestRBAC_CrossOrg_MemberCannotSeeOtherOrgMemories(t *testing.T) {
 	env := newRBACTestEnv(t)
 	// Org A member stores
 	rbacStoreMemory(t, env.Server.URL, env.OrgAMember.JWT, env.ProjectA.ID)
-	// Org B member tries to recall from Org A's project — should be forbidden
+	// Org B member tries to recall from Org A's project: should be forbidden
 	resp := rbacDoRequest(t, http.MethodPost, rbacRecallURL(env.Server.URL, env.ProjectA.ID), env.OrgBMember.JWT, map[string]any{
 		"query": "test",
 	})
@@ -1130,7 +1130,7 @@ func TestRBAC_MCP_MemberCannotStoreInOtherOrg(t *testing.T) {
 			IsError bool `json:"isError"`
 		}
 		if err := json.Unmarshal(rpc.Result, &toolResult); err == nil && toolResult.IsError {
-			// Good — MCP tool returned an error
+			// Good: MCP tool returned an error
 			return
 		}
 		// The tool may have failed to find the project since it's under a different user's namespace
@@ -1150,7 +1150,7 @@ func TestRBAC_MCP_MemberCannotStoreInOtherOrg(t *testing.T) {
 			}
 		}
 	}
-	// Either JSON-RPC error or tool error is fine — cross-org store should not succeed silently
+	// Either JSON-RPC error or tool error is fine: cross-org store should not succeed silently
 }
 
 func TestRBAC_MCP_APIKeyMember_CanStore(t *testing.T) {
@@ -1191,7 +1191,7 @@ func TestRBAC_DisabledUser_JWT_Rejected(t *testing.T) {
 		"query": "test",
 	})
 	// JWT still works because the middleware trusts the JWT claims without re-checking the DB.
-	// This is expected behavior — short-lived JWTs trade real-time revocation for performance.
+	// This is expected behavior: short-lived JWTs trade real-time revocation for performance.
 	// To force revocation, the JWT must expire or the user must be denied via ProjectAccessMiddleware.
 	body := rbacReadBody(t, resp)
 	t.Logf("FINDING: Disabled user's JWT still authenticates (status=%d). "+
@@ -1223,26 +1223,26 @@ func TestRBAC_DisabledUser_APIKey_Rejected(t *testing.T) {
 func TestRBAC_NoAuth_PublicRoutes(t *testing.T) {
 	env := newRBACTestEnv(t)
 
-	// /v1/health — no auth
+	// /v1/health: no auth
 	resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/health", "", nil)
 	rbacExpectStatus(t, resp, http.StatusOK)
 
-	// /.well-known/oauth-authorization-server — no auth (501 if not wired, but route exists)
+	// /.well-known/oauth-authorization-server: no auth (501 if not wired, but route exists)
 	resp = rbacDoRequest(t, http.MethodGet, env.Server.URL+"/.well-known/oauth-authorization-server", "", nil)
-	// This is a public route — should not be 401
+	// This is a public route: should not be 401
 	body := rbacReadBody(t, resp)
 	if resp.StatusCode == http.StatusUnauthorized {
 		t.Fatalf("public route returned 401: %s", body)
 	}
 
-	// /.well-known/oauth-protected-resource — no auth (501 if not wired)
+	// /.well-known/oauth-protected-resource: no auth (501 if not wired)
 	resp = rbacDoRequest(t, http.MethodGet, env.Server.URL+"/.well-known/oauth-protected-resource", "", nil)
 	body = rbacReadBody(t, resp)
 	if resp.StatusCode == http.StatusUnauthorized {
 		t.Fatalf("public route returned 401: %s", body)
 	}
 
-	// /v1/admin/setup/status — no auth
+	// /v1/admin/setup/status: no auth
 	resp = rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/admin/setup/status", "", nil)
 	rbacExpectStatus(t, resp, http.StatusOK)
 }
@@ -1250,21 +1250,21 @@ func TestRBAC_NoAuth_PublicRoutes(t *testing.T) {
 func TestRBAC_NoAuth_ProtectedRoutes(t *testing.T) {
 	env := newRBACTestEnv(t)
 
-	// /v1/me/projects — requires auth
+	// /v1/me/projects: requires auth
 	resp := rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/me/projects", "", nil)
 	rbacExpectStatus(t, resp, http.StatusUnauthorized)
 
-	// /v1/projects/*/memories — requires auth
+	// /v1/projects/*/memories: requires auth
 	resp = rbacDoRequest(t, http.MethodPost, rbacStoreURL(env.Server.URL, env.ProjectA.ID), "", map[string]any{
 		"content": "no auth",
 	})
 	rbacExpectStatus(t, resp, http.StatusUnauthorized)
 
-	// /v1/admin/dashboard — requires auth
+	// /v1/admin/dashboard: requires auth
 	resp = rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/admin/dashboard", "", nil)
 	rbacExpectStatus(t, resp, http.StatusUnauthorized)
 
-	// /v1/admin/users — requires auth
+	// /v1/admin/users: requires auth
 	resp = rbacDoRequest(t, http.MethodGet, env.Server.URL+"/v1/admin/users", "", nil)
 	rbacExpectStatus(t, resp, http.StatusUnauthorized)
 }
@@ -1857,7 +1857,7 @@ func TestRBAC_AllRoles_SingleDelete(t *testing.T) {
 			if tt.wantStatus != http.StatusForbidden {
 				memID = rbacStoreMemoryFull(t, env, tt.projectID)
 			} else {
-				// For forbidden cases, use a dummy — we won't even reach deletion.
+				// For forbidden cases, use a dummy; we won't even reach deletion.
 				// Store in the target project as admin so the ID exists.
 				memID = rbacStoreMemoryFull(t, env, tt.projectID)
 			}
@@ -2224,7 +2224,7 @@ func rbacMCPIsError(rpc *e2eJSONRPCResponse) bool {
 type rbacMCPRoleCase struct {
 	name      string
 	token     string
-	project   string // project slug — for MCP, this is user-scoped (each user has their own project namespace)
+	project   string // project slug; for MCP, this is user-scoped (each user has their own project namespace)
 	wantError bool   // true if we expect the MCP tool call to return an error
 }
 
@@ -2313,7 +2313,7 @@ func rbacMCPSeedProject(t *testing.T, env *rbacTestEnv) map[string]string {
 		env.Admin.JWT,
 		env.OrgAOwner.JWT,
 		env.OrgAMember.JWT,
-		// readonly skipped — cannot write
+		// readonly skipped: cannot write
 		env.OrgAService.JWT,
 	}
 	memIDs := make(map[string]string, len(tokens))

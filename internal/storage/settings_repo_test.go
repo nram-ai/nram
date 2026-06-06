@@ -167,7 +167,7 @@ func TestSettingsRepo_Get_CascadeToGlobal(t *testing.T) {
 			t.Fatalf("failed to set global: %v", err)
 		}
 
-		// Request from project scope — should cascade to global.
+		// Request from project scope; should cascade to global.
 		fetched, err := repo.Get(ctx, "max_retries", "project:proj-1")
 		if err != nil {
 			t.Fatalf("failed to get with cascade: %v", err)
@@ -206,7 +206,7 @@ func TestSettingsRepo_Get_CascadeStopsAtFirstMatch(t *testing.T) {
 			t.Fatalf("failed to set org: %v", err)
 		}
 
-		// Request from user scope — should find org before global.
+		// Request from user scope; should find org before global.
 		fetched, err := repo.Get(ctx, "log_level", "user:user-1")
 		if err != nil {
 			t.Fatalf("failed to get with cascade: %v", err)
@@ -236,7 +236,7 @@ func TestSettingsRepo_Get_CascadeFromProjectToUser(t *testing.T) {
 			t.Fatalf("failed to set user: %v", err)
 		}
 
-		// Request from project scope — should cascade to user.
+		// Request from project scope; should cascade to user.
 		fetched, err := repo.Get(ctx, "editor", "project:proj-1")
 		if err != nil {
 			t.Fatalf("failed to get with cascade: %v", err)
@@ -317,7 +317,7 @@ func TestSettingsRepo_ListByScope(t *testing.T) {
 			Value: json.RawMessage(`false`),
 			Scope: "org:test-org",
 		}
-		// Different scope — should not appear.
+		// Different scope; should not appear.
 		s3 := &model.Setting{
 			Key:   "gamma_feature",
 			Value: json.RawMessage(`true`),

@@ -73,7 +73,7 @@ func TestProceduralFetch_Pagination(t *testing.T) {
 }
 
 // TestNewProceduralReducer halves whole entries and emits a _truncated marker
-// with a next-offset hint — never a mid-content byte cut.
+// with a next-offset hint, never a mid-content byte cut.
 func TestNewProceduralReducer(t *testing.T) {
 	orig := &mcpProceduralFetchResponse{
 		Entries: []mcpProceduralEntry{

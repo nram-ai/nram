@@ -808,7 +808,7 @@ func TestListHandler_GroupByParent_NoChildrenReturnsEmptySlice(t *testing.T) {
 	}
 
 	// Children field may be absent or empty for parents with no enrichment
-	// children — both forms are equivalent on the client.
+	// children; both forms are equivalent on the client.
 	var resp model.PaginatedResponse[model.Memory]
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)

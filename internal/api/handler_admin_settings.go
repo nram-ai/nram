@@ -69,7 +69,7 @@ type SettingSchema struct {
 	AppliesToBackend []string `json:"applies_to_backend,omitempty"`
 	// Min and Max are enforced on PUT /admin/settings: values outside the
 	// range are rejected with 400 regardless of caller. Step is advisory
-	// only — operators may save values between steps. Pointer-typed so
+	// only; operators may save values between steps. Pointer-typed so
 	// omitted (nil) is distinguishable from `Min: 0` in JSON.
 	Min  *float64 `json:"min,omitempty"`
 	Max  *float64 `json:"max,omitempty"`
@@ -77,14 +77,14 @@ type SettingSchema struct {
 	// OmitFromResetAll excludes this entry from the bulk "reset all to
 	// defaults" path so credentials and connection strings (Qdrant address,
 	// API keys, provider URLs) are not wiped to their empty schema default
-	// when an operator clicks Reset all. Per-key reset still works — the
+	// when an operator clicks Reset all. Per-key reset still works; the
 	// operator has to explicitly target the key. The PUT path is unaffected.
 	OmitFromResetAll bool `json:"omit_from_reset_all,omitempty"`
 }
 
 // SettingGroup is one tab/card in the admin Settings UI: an ordered set of
 // sub-sections, each bound to a setting category. This taxonomy is the single
-// source of truth for how the UI organizes settings — the React page renders
+// source of truth for how the UI organizes settings; the React page renders
 // it generically rather than hardcoding the structure. RequiresEnrichment and
 // RequiresBackend let the UI hide a whole group when it does not apply to the
 // running deployment (enrichment off, or a backend the group is not relevant
@@ -127,9 +127,9 @@ type settingResetRequest struct {
 // admin requests based on method and query parameters.
 //
 // Routes:
-//   - GET  /settings              — list settings (optional ?scope= filter)
-//   - GET  /settings?schema=true  — return setting definitions with types/defaults
-//   - PUT  /settings              — update a setting (key, value, scope in body)
+//   - GET  /settings:              list settings (optional ?scope= filter)
+//   - GET  /settings?schema=true:  return setting definitions with types/defaults
+//   - PUT  /settings:              update a setting (key, value, scope in body)
 func NewAdminSettingsHandler(cfg SettingsAdminConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -167,8 +167,8 @@ func NewAdminSettingsResetHandler(cfg SettingsAdminConfig) http.HandlerFunc {
 
 // requireGlobalScope rejects any scope other than "global", writing a 400 and
 // returning true when it does (matching requireValidProjectSettings et al.).
-// Every admin-managed setting — prompt templates, provider config, ranking
-// weights, cost rates, and the rest of the registry — is resolved exclusively
+// Every admin-managed setting (prompt templates, provider config, ranking
+// weights, cost rates, and the rest of the registry) is resolved exclusively
 // at global scope. The settings table's cascade machinery (project/user/org) is
 // not wired to any of these keys, so a non-global write would persist an orphan
 // row that is never read. Genuine per-project/user overrides live in
@@ -261,14 +261,14 @@ func handleResetSetting(w http.ResponseWriter, r *http.Request, cfg SettingsAdmi
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "reset": count})
 }
 
-// handleListSettings handles GET /settings — returns settings optionally filtered by scope.
+// handleListSettings handles GET /settings: returns settings optionally filtered by scope.
 func handleListSettings(w http.ResponseWriter, r *http.Request, cfg SettingsAdminConfig) {
 	scope := r.URL.Query().Get("scope")
 
 	// The settings registry is bounded compile-time data (~170 entries today)
 	// and conceptually a 1:1 companion to GET /settings?schema=true, which is
 	// unpaginated. The default page size must comfortably cover the whole
-	// registry — otherwise the bootstrap seeder writes rows the UI never
+	// registry; otherwise the bootstrap seeder writes rows the UI never
 	// reads, and operator changes to keys past the page boundary appear lost
 	// even though the PUT succeeded.
 	limit := settingsListMaxLimit
@@ -313,7 +313,7 @@ func handleListSettings(w http.ResponseWriter, r *http.Request, cfg SettingsAdmi
 	})
 }
 
-// handleSettingsSchema handles GET /settings?schema=true — returns setting definitions.
+// handleSettingsSchema handles GET /settings?schema=true: returns setting definitions.
 func handleSettingsSchema(w http.ResponseWriter, r *http.Request, cfg SettingsAdminConfig) {
 	schemas, err := cfg.Store.GetSettingsSchema(r.Context())
 	if err != nil {
@@ -324,7 +324,7 @@ func handleSettingsSchema(w http.ResponseWriter, r *http.Request, cfg SettingsAd
 	writeJSON(w, http.StatusOK, map[string]any{"data": schemas})
 }
 
-// handleSettingsGroups handles GET /settings?groups=true — returns the parent-
+// handleSettingsGroups handles GET /settings?groups=true: returns the parent-
 // group taxonomy the admin UI renders settings into.
 func handleSettingsGroups(w http.ResponseWriter, r *http.Request, cfg SettingsAdminConfig) {
 	groups, err := cfg.Store.GetSettingsGroups(r.Context())
@@ -336,7 +336,7 @@ func handleSettingsGroups(w http.ResponseWriter, r *http.Request, cfg SettingsAd
 	writeJSON(w, http.StatusOK, map[string]any{"data": groups})
 }
 
-// handleUpdateSetting handles PUT /settings — updates a setting by key.
+// handleUpdateSetting handles PUT /settings: updates a setting by key.
 func handleUpdateSetting(w http.ResponseWriter, r *http.Request, cfg SettingsAdminConfig) {
 	var body settingUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -382,23 +382,23 @@ func handleUpdateSetting(w http.ResponseWriter, r *http.Request, cfg SettingsAdm
 
 // validateValueAgainstSchema enforces the schema's Min/Max range on PUT.
 // Numeric values outside [Min, Max] are rejected with a 400. The check
-// applies regardless of caller — UI, MCP tool, curl, or direct API.
+// applies regardless of caller: UI, MCP tool, curl, or direct API.
 //
 // Validation is skipped when:
 //   - the key has no schema entry (forward-compat for runtime-only keys
 //     that haven't been registered yet);
 //   - the schema entry is non-numeric (string, secret, enum, prompt,
-//     boolean — those have their own well-formedness checks elsewhere);
+//     boolean); those have their own well-formedness checks elsewhere;
 //   - neither Min nor Max is set on the schema (treat as unbounded).
 //
 // String-encoded numeric values (e.g. `"0.5"` instead of `0.5`) are
-// accepted and parsed — some HTTP clients round-trip JSON numbers as
+// accepted and parsed; some HTTP clients round-trip JSON numbers as
 // strings, and the runtime resolver tolerates both shapes already.
 func validateValueAgainstSchema(ctx context.Context, store SettingsAdminStore, key string, value json.RawMessage) error {
 	schemas, err := store.GetSettingsSchema(ctx)
 	if err != nil {
 		// Schema lookup itself failed. The in-process schema slice cannot
-		// realistically error — but if a future store implementation can,
+		// realistically error, but if a future store implementation can,
 		// fail closed: a write we cannot validate is a write we should not
 		// accept.
 		return fmt.Errorf("schema lookup failed: %w", err)

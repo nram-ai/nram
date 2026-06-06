@@ -45,7 +45,7 @@ func sortGraphBySignal(entities []graphEntity, rels []graphRelationship) {
 			return a.Name < b.Name
 		}
 		// Two distinct entities can share a display name (different sources,
-		// same canonical) — final tiebreak on ID guarantees a total order.
+		// same canonical); final tiebreak on ID guarantees a total order.
 		return a.ID.String() < b.ID.String()
 	})
 }
@@ -187,7 +187,7 @@ func TestWrapToolResultUsesReducer(t *testing.T) {
 // to the slim payload's Tier-1 structured boundary (budget/2):
 //   - slim ships Tier 1 with its graph intact and no _truncated marker
 //     (reclaimed budget -> fits naturally);
-//   - leaky overflows, so the reducer fires — but with the recall-graph
+//   - leaky overflows, so the reducer fires, but with the recall-graph
 //     rebalance the graph is no longer dropped first. The reducer trims
 //     memories and the graph survives, so an over-budget recall still surfaces
 //     graph context.
@@ -280,7 +280,7 @@ func TestRecallReducerGraphSurvivesAfterAuditStrip(t *testing.T) {
 	}
 
 	// Leaky: the audit bloat pushes it past the Tier-1 boundary so the reducer
-	// fires — but the graph is NO LONGER the first casualty. The reducer trims
+	// fires, but the graph is NO LONGER the first casualty. The reducer trims
 	// memories first (here: halves the list, since the bloat is in metadata, not
 	// content) and the graph rides along untouched. This is the headline
 	// invariant of the recall-graph rebalance: an over-budget recall still
@@ -314,7 +314,7 @@ func TestRecallReducerGraphSurvivesAfterAuditStrip(t *testing.T) {
 }
 
 // TestRecallReducerPreservesCoverageGapsThroughStages1To3 pins that
-// coverage_gaps is NOT trimmed during the content-truncation stages (1-2) —
+// coverage_gaps is NOT trimmed during the content-truncation stages (1-2);
 // only the later halving stages shed it in lockstep with memories. Callers
 // relying on the diversify diagnostic should always see it when the reducer was
 // able to fit by trimming content rather than the diagnostic.
@@ -495,7 +495,7 @@ func TestGraphReducerPreservesEdgeCapReason(t *testing.T) {
 }
 
 // TestGraphReducerWithoutEdgeCapUsesDefaultReason confirms the
-// preservation logic is gated on orig.Truncated being set — when the
+// preservation logic is gated on orig.Truncated being set; when the
 // traversal did not short-circuit, the reducer emits its standard
 // response_too_large envelope as before.
 func TestGraphReducerWithoutEdgeCapUsesDefaultReason(t *testing.T) {
@@ -675,7 +675,7 @@ func newSettingsServiceWithMCPBudget(tokens int) *service.SettingsService {
 
 // newTestServer wraps mcp.NewServer with a stub MetricsRecorder so tests
 // don't have to wire one explicitly. Production code constructs the server
-// via NewServer directly; that path still panics on nil Metrics — the panic
+// via NewServer directly; that path still panics on nil Metrics; the panic
 // catches wiring drift in main.go and any other binary, exactly as designed.
 func newTestServer(deps Dependencies) *Server {
 	if deps.Metrics == nil {
@@ -1294,7 +1294,7 @@ func TestWrapToolResultJSONTextContractProperty(t *testing.T) {
 
 // TestRecallReducerFlagToHintFaithfulness fuzzes the recall reducer across
 // random fixtures and asserts the composed Hint reflects exactly the
-// reductions that actually happened — no claim without action, no silent
+// reductions that actually happened: no claim without action, no silent
 // action without claim. Compares final reduced state against the original.
 func TestRecallReducerFlagToHintFaithfulness(t *testing.T) {
 	r := rand.New(rand.NewSource(42))
@@ -1366,7 +1366,7 @@ func TestRecallReducerFlagToHintFaithfulness(t *testing.T) {
 		coverageGapsActuallyTrimmed := len(last.CoverageGaps) < gapCount
 		// Content-trim detection: the reducer always runs the content stages
 		// (1-2) before halving (the reducer is driven to exhaustion here). If any
-		// memory originally had content > 200 chars, stage 2 trimmed it — even if
+		// memory originally had content > 200 chars, stage 2 trimmed it; even if
 		// that memory was later halved away by the halving stages, the flag was
 		// set legitimately at the time of the trim.
 		contentActuallyTrimmed := anyLongContent
@@ -1488,7 +1488,7 @@ func TestTruncationCounterIncrements(t *testing.T) {
 // TestTier1AfterReducerRecordsTelemetry pins that when wrapToolResult reaches
 // Tier 1 via the in-loop short-circuit (the reducer ran at least once and
 // happened to land at structured-fit), the counter increments with the
-// tier1_reduced label — distinguishing "fit naturally" from "fit only
+// tier1_reduced label, distinguishing "fit naturally" from "fit only
 // because the reducer discarded data".
 func TestTier1AfterReducerRecordsTelemetry(t *testing.T) {
 	// Budget chosen so the original recall response overflows the
@@ -1529,7 +1529,7 @@ func TestRecallReducerNoopStageReturnsOriginal(t *testing.T) {
 	for i := range mems {
 		mems[i] = mcpRecallMemory{
 			ID:        uuid.New(),
-			Content:   "short", // well under 200 chars — stages 1-2 are no-ops
+			Content:   "short", // well under 200 chars; stages 1-2 are no-ops
 			Tags:      []string{"a"},
 			Score:     float64(3 - i),
 			CreatedAt: time.Now(),
@@ -1541,7 +1541,7 @@ func TestRecallReducerNoopStageReturnsOriginal(t *testing.T) {
 		Graph:    graphResponse{Entities: []graphEntity{}, Relationships: []graphRelationship{}},
 	}
 	reducer := newRecallReducer(resp, false)
-	// Drive the content stages (1, 2) — both no-ops. Each must return the
+	// Drive the content stages (1, 2); both no-ops. Each must return the
 	// original pointer with Truncated == nil.
 	for stage := 1; stage <= 2; stage++ {
 		out, more := reducer()
@@ -1719,7 +1719,7 @@ func TestRecallReducerPreservesSingleMemoryAtStage4(t *testing.T) {
 // skips schema validation, so a caller (test, migration, future internal
 // setter) can persist a tiny value. Without this floor, hardTruncate would
 // compute keep = budget - len(truncationSuffix) < 0, clamp keep to 0, and
-// emit the full 108-byte sentinel — violating its own budget contract.
+// emit the full 108-byte sentinel, violating its own budget contract.
 func TestMCPBudgetBytesFloorsAtSentinelSize(t *testing.T) {
 	// Stub a SettingsService that resolves a value far below the schema
 	// minimum, simulating a Set() that bypassed validation.
@@ -1728,7 +1728,7 @@ func TestMCPBudgetBytesFloorsAtSentinelSize(t *testing.T) {
 	if got < len(truncationSuffix) {
 		t.Fatalf("mcpBudgetBytes returned %d, want >= %d (len(truncationSuffix))", got, len(truncationSuffix))
 	}
-	// hardTruncate at this floor must honor the budget — sentinel fits exactly.
+	// hardTruncate at this floor must honor the budget; sentinel fits exactly.
 	out := []byte(strings.Repeat("x", 5000))
 	text := hardTruncate(out, got)
 	if len(text) > got {
@@ -1743,7 +1743,7 @@ func TestMCPBudgetBytesFloorsAtSentinelSize(t *testing.T) {
 // rebalanced graph reducer: when oversized, BOTH entities and relationships
 // shrink on each iteration (parallel halving) instead of one axis being
 // drained to zero before the other is touched. The prior algorithm halved
-// relationships first via a switch — for a typical dense graph
+// relationships first via a switch; for a typical dense graph
 // (graph.max_edges=2000), all 2000 edges drained to 0 in 11 iterations
 // before a single entity was trimmed, producing a node-list-with-no-edges
 // payload that defeated the graph tool's purpose.
@@ -2133,7 +2133,7 @@ func TestRecallReducerNeverDropsGraphWholesaleUnderTypicalBudget(t *testing.T) {
 }
 
 // TestRecallReducerDropsGraphOnlyAsLastResort pins the inverse: when memories
-// are at floor and the payload still overflows, the graph is dropped — but only
+// are at floor and the payload still overflows, the graph is dropped, but only
 // AFTER it survived every earlier stage. Drives the reducer directly so the
 // last-resort stage is observed without depending on tier classification.
 func TestRecallReducerDropsGraphOnlyAsLastResort(t *testing.T) {

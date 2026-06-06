@@ -408,14 +408,14 @@ func TestExecute_DirectionTriad_AppearsInOpCount(t *testing.T) {
 		t.Error("weight_adjustment must never report residual")
 	}
 
-	// Rising edge (rels[0] and rels[1]) — each got an UpdateWeight call.
+	// Rising edge (rels[0] and rels[1]): each got an UpdateWeight call.
 	w1Up, ok1 := relWriter.weightOf(rels[0].ID)
 	if !ok1 {
 		t.Error("rising rel[0] should have produced an UpdateWeight call")
 	} else if w1Up <= 0.5 {
 		t.Errorf("rising rel[0] weight: want > 0.5, got %f", w1Up)
 	}
-	// Falling edge (rels[2]) — deleted-source guard halves 0.6 → 0.3.
+	// Falling edge (rels[2]): deleted-source guard halves 0.6 → 0.3.
 	wDown, okDown := relWriter.weightOf(rels[2].ID)
 	if !okDown {
 		t.Error("falling rel[2] should have produced an UpdateWeight call")

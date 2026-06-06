@@ -94,7 +94,7 @@ func TestRecall_RankingWeightsLiveReload(t *testing.T) {
 		t.Fatalf("phase 1: expected importance to dominate, got %s first", resp.Memories[0].ID)
 	}
 
-	// Phase 2: flip to similarity-dominant. No setter, no restart — only
+	// Phase 2: flip to similarity-dominant. No setter, no restart: only
 	// the registry value changes. The cached settings cache is invalidated
 	// to match what the admin PUT handler does on a real edit.
 	repo.put(SettingRankWeightSim, "global", "1")
@@ -157,7 +157,7 @@ func TestRecall_FusionConfigLiveReload(t *testing.T) {
 	settings := NewSettingsService(repo)
 	svc.SetSettings(settings)
 
-	// Phase 1: fusion off (set explicitly — the registered default is now on).
+	// Phase 1: fusion off (set explicitly, the registered default is now on).
 	// fused_combined with a non-zero threshold must be rejected.
 	repo.put(SettingRecallFusionEnabled, "global", "false")
 	settings.InvalidateAllCache()

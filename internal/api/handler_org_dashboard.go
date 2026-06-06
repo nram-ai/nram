@@ -77,7 +77,7 @@ func NewOrgDashboardHandler(cfg OrgDashboardConfig) http.HandlerFunc {
 
 		// Org-level totals are derivable from the per-user breakdown:
 		// projects/entities are user-owned, so summing per-user counts gives
-		// the org total. Memory counts come from OrgMemoryCounts above —
+		// the org total. Memory counts come from OrgMemoryCounts above;
 		// it's authoritative across the whole org subtree (not just under
 		// users).
 		var projCount, entityCount int

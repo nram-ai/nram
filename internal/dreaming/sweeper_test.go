@@ -152,7 +152,7 @@ func TestStuckCycleSweeper_AbandonErrorContinues(t *testing.T) {
 	}
 	sweeper := newSweeperWithStub(store, nil)
 
-	// A repo error per row should NOT propagate out of Sweep — the sweeper
+	// A repo error per row should NOT propagate out of Sweep; the sweeper
 	// logs and continues so a single bad row doesn't poison the batch.
 	if err := sweeper.Sweep(context.Background()); err != nil {
 		t.Fatalf("sweep returned error despite per-row Abandon failures: %v", err)

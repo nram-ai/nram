@@ -152,7 +152,7 @@ func (s *AnalyticsStore) GetAnalytics(ctx context.Context, orgID *uuid.UUID, use
 }
 
 func (s *AnalyticsStore) queryRankedMemories(ctx context.Context, orderClause string, limit int, orgID *uuid.UUID, userID *uuid.UUID) ([]api.MemoryRankItem, error) {
-	// Privacy: only the self-tier (userID set — caller's own memories) selects
+	// Privacy: only the self-tier (userID set, caller's own memories) selects
 	// a 100-char preview. Org-scoped and global queries keep the length-only
 	// shape so cross-tenant ranked lists stay content-free.
 	var query string

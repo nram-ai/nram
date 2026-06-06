@@ -15,7 +15,7 @@ import (
 )
 
 // graphResponse is the JSON envelope returned by the memory_graph tool.
-// Argument echoes (query, depth, include_history) are deliberately omitted —
+// Argument echoes (query, depth, include_history) are deliberately omitted;
 // the caller already has them. Truncated carries an edge-cap signal when the
 // traverser short-circuited at graph.max_edges; the byte-budget reducer in
 // result_limit.go writes its own truncationInfo into a map payload when it
@@ -65,7 +65,7 @@ type projectItem struct {
 // (mirrors listMemoryResponse). The object root is required because mcp-go's
 // outputSchema must declare type=object; a bare slice would mis-advertise.
 //
-// Truncated is RESERVED for newListProjectsReducer (result_limit.go) — same
+// Truncated is RESERVED for newListProjectsReducer (result_limit.go): same
 // invariant as listMemoryResponse.Truncated; handlers MUST NOT set it.
 type listProjectsResponse struct {
 	Projects   []projectItem    `json:"projects"`
@@ -91,7 +91,7 @@ func registerMemoryGraph(s *Server) {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithRawOutputSchema(schemaFor[graphResponse]()),
-		mcp.WithDescription("Explore entity relationships in the knowledge graph. Use to discover how people, technologies, and concepts connect — especially when recall alone does not surface enough context."),
+		mcp.WithDescription("Explore entity relationships in the knowledge graph. Use to discover how people, technologies, and concepts connect, especially when recall alone does not surface enough context."),
 		mcp.WithString("entity", mcp.Required(), mcp.Description("Entity name or search query")),
 		mcp.WithString("project", mcp.Description("Project slug to scope the search")),
 		mcp.WithNumber("depth", mcp.Description("Graph traversal depth (default recall.graph.default_depth=2, server-capped at recall.graph.max_depth, default 5).")),
@@ -110,7 +110,7 @@ func registerMemoryProjects(s *Server) {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithRawOutputSchema(schemaFor[listProjectsResponse]()),
-		mcp.WithDescription("List all available projects with slugs and descriptions, paginated (default limit 50, max 200). ALWAYS call this before store to check for an existing project — an unknown slug on store auto-creates a new project. The reserved projects 'global' (world-knowledge) and 'about_me' (the user's self-knowledge) are auto-created for every user, carry nram-managed descriptions, and cannot be deleted."),
+		mcp.WithDescription("List all available projects with slugs and descriptions, paginated (default limit 50, max 200). ALWAYS call this before store to check for an existing project; an unknown slug on store auto-creates a new project. The reserved projects 'global' (world-knowledge) and 'about_me' (the user's self-knowledge) are auto-created for every user, carry nram-managed descriptions, and cannot be deleted."),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of projects to return (default 50, max 200)")),
 		mcp.WithNumber("offset", mcp.Description("Number of projects to skip for pagination (default 0)")),
 	)
@@ -171,7 +171,7 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	}
 
 	// Collect namespaces to search: project-scoped + global (consistent with
-	// memory_recall). Share-bearer callers stay project-only — the owner's
+	// memory_recall). Share-bearer callers stay project-only; the owner's
 	// global namespace is never part of an implicit share.
 	var namespaces []uuid.UUID
 	if projectSlug != "" {
@@ -196,7 +196,7 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	// agent-facing matcher: tokenizes on whitespace and ORs LIKE clauses
 	// against name AND alias. The literal-substring FindBySimilarity is
 	// reserved for canonical/programmatic callers (enrichment dedup,
-	// dreaming) — using it here would mean multi-word agent queries like
+	// dreaming); using it here would mean multi-word agent queries like
 	// "OAuth client" only match entities literally named that phrase.
 	var entities []model.Entity
 	for _, nsID := range namespaces {
@@ -209,7 +209,7 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 
 	// No-match diagnostic for multi-token queries. SearchEntities tokenizes
 	// via strings.Fields (any Unicode whitespace), so the gate here must use
-	// the same rule — checking for ASCII space/tab only would let a query
+	// the same rule; checking for ASCII space/tab only would let a query
 	// like "OAuth\nclient" take the multi-token matcher path and then fall
 	// through to a silently-empty response if every token missed. Surface
 	// the miss explicitly so the agent has a signal to retry rather than
@@ -232,7 +232,7 @@ func handleMemoryGraph(ctx context.Context, s *Server, request mcp.CallToolReque
 	// consume. ResolveIntWithDefault is nil-safe; if Settings was never
 	// wired, the registered default in settingDefaults applies. The cap
 	// is applied both per-seed (inside TraverseFromEntity) AND
-	// cumulatively across seeds in the loop below — without the
+	// cumulatively across seeds in the loop below; without the
 	// cumulative check, N seeds each returning < cap edges to disjoint
 	// neighborhoods could still produce an N×cap deduped union and force
 	// the post-traversal filter / orphan-resolve / marshal pipeline to
@@ -314,7 +314,7 @@ seeds:
 
 	// Drop relationships whose provenance is gone. A NULL source_memory means
 	// the sourcing memory was hard-deleted (the FK ON DELETE SET NULL nulled
-	// the pointer) — it is permanently gone, so these edges are ALWAYS dropped,
+	// the pointer); it is permanently gone, so these edges are ALWAYS dropped,
 	// even under includeSuperseded (there is no "include deleted"). The
 	// lifecycle sweep reaps them from the store; this keeps the graph
 	// consistent in the meantime. Additionally, unless includeSuperseded is
@@ -533,7 +533,7 @@ func resolveGraphOrphans(
 // guard resolveGraphOrphans applies, so a caller cannot pull mention signal
 // from a namespace it lacks read access to). Entities not returned by the batch
 // (or outside the allowed namespaces) keep their existing count. A GetBatch
-// error leaves all counts unchanged — mention signal is best-effort ranking
+// error leaves all counts unchanged; mention signal is best-effort ranking
 // input, never a correctness gate.
 func backfillMentionCounts(ctx context.Context, entityReader EntityReader, entities []graphEntity, allowedNamespaces []uuid.UUID) {
 	if entityReader == nil || len(entities) == 0 {

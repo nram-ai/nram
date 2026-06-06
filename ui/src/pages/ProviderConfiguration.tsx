@@ -62,7 +62,7 @@ const MODEL_HINTS: Record<string, Record<string, string>> = {
     entity: "e.g. gpt-4o-mini",
   },
   ollama: {
-    embedding: "e.g. qwen3-embedding:0.6b — avoid nomic-embed-text (2048-tok ctx silently truncates long memories). See README → Recommended Models.",
+    embedding: "e.g. qwen3-embedding:0.6b, avoid nomic-embed-text (2048-tok ctx silently truncates long memories). See README → Recommended Models.",
     fact: "e.g. qwen3:8b, llama3.1, gemma2",
     entity: "e.g. qwen3:8b, llama3.1, gemma2",
   },
@@ -72,7 +72,7 @@ const MODEL_HINTS: Record<string, Record<string, string>> = {
     entity: "e.g. gemini-2.0-flash",
   },
   anthropic: {
-    embedding: "Not supported — use OpenAI or Ollama",
+    embedding: "Not supported; use OpenAI or Ollama",
     fact: "e.g. claude-sonnet-4-6-20250514",
     entity: "e.g. claude-haiku-4-5-20251001",
   },
@@ -497,7 +497,7 @@ function ProviderSlotEditForm({
         )}
       </div>
 
-      {/* Actions — replaced in-place by the destructive-action confirmation
+      {/* Actions: replaced in-place by the destructive-action confirmation
           when the server gates an embedding-model swap on confirm_invalidate.
           Rendering it here (rather than at the top of the card) keeps the
           warning at the same scroll position as the Save button the user
@@ -796,7 +796,7 @@ function ProviderSlotCard({
                   className="text-muted-foreground"
                   title={
                     (isEmbedding
-                      ? "Maximum input length the model can encode in a single request. Memory content longer than this is silently truncated by the provider — small windows (e.g. 2048) are a frequent cause of degraded recall on long memories."
+                      ? "Maximum input length the model can encode in a single request. Memory content longer than this is silently truncated by the provider; small windows (e.g. 2048) are a frequent cause of degraded recall on long memories."
                       : "Maximum input + output tokens the model can process in a single request. Caps the prompt the enrichment pipeline can build (recall hits + memory content) plus the model's response.") +
                     " For Ollama slots this is the lesser of the model's GGUF max and Ollama's configured num_ctx; the model max is shown beneath it when num_ctx is the binding constraint."
                   }

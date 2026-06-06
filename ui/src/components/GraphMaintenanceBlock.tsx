@@ -29,8 +29,8 @@ export function GraphMaintenanceBlock() {
         Graph Maintenance
       </h4>
       <p className="mt-1 text-xs text-muted-foreground">
-        Reap orphaned knowledge-graph data — relationships whose sourcing memory
-        has been deleted or superseded, plus the entities they leave stranded —
+        Reap orphaned knowledge-graph data (relationships whose sourcing memory
+        has been deleted or superseded, plus the entities they leave stranded)
         and recompute entity mention counts from surviving provenance. The
         lifecycle sweep does this automatically; this runs it on demand to clear
         the backlog immediately.

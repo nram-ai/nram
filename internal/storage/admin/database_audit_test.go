@@ -32,7 +32,7 @@ func TestMigrationAudit_DetectsOrphans(t *testing.T) {
 	sqliteDB := openSQLiteInMemory(t)
 	defer func() { _ = sqliteDB.Close() }()
 
-	// Disable FK enforcement to seed deliberate orphans — mimics production SQLite
+	// Disable FK enforcement to seed deliberate orphans; mimics production SQLite
 	// accumulating orphans over time with PRAGMA foreign_keys=OFF.
 	if _, err := sqliteDB.Exec("PRAGMA foreign_keys=OFF"); err != nil {
 		t.Fatalf("disable FK: %v", err)

@@ -35,7 +35,7 @@ type callOptionKeys struct {
 // FactCallOptionKeys / EntityCallOptionKeys return the keys for the named
 // extraction phase. sync==true selects the sync-HTTP-path temperature key;
 // false selects the async-worker-path key. Reading separate temperature
-// keys per path preserves the pre-refactor 0.1/0.2 split — operators
+// keys per path preserves the pre-refactor 0.1/0.2 split; operators
 // converge by setting both keys equal.
 func FactCallOptionKeys(sync bool) callOptionKeys {
 	tmp := SettingFactExtractionAsyncTemperature
@@ -323,7 +323,7 @@ func parseFacts(raw string) (facts []ExtractedFact, partialRecovery bool, err er
 		return nil, false, fmt.Errorf("failed to parse fact extraction response as JSON: %w", recErr)
 	}
 	if len(recovered) == 0 {
-		// Empty recovery — surface as failure so the caller can decide
+		// Empty recovery: surface as failure so the caller can decide
 		// whether to mark length_no_recovery.
 		return nil, true, nil
 	}
@@ -334,7 +334,7 @@ func parseFacts(raw string) (facts []ExtractedFact, partialRecovery bool, err er
 // parseEntities parses an entity/relationship extraction response. Clean
 // parses go through json.Unmarshal; truncated responses fall through to
 // per-array longest-valid-prefix recovery on the "entities" and
-// "relationships" keys independently — a truncation that severs the
+// "relationships" keys independently: a truncation that severs the
 // "relationships" array still recovers all complete "entities" entries.
 func parseEntities(raw string) (result *EntityExtractionResult, partialRecovery bool, err error) {
 	raw = strings.TrimSpace(raw)
@@ -490,7 +490,7 @@ func recoverEntitiesObjectPrefix(raw string) (*EntityExtractionResult, error) {
 	for dec.More() {
 		keyTok, err := dec.Token()
 		if err != nil {
-			// Truncated key — return what we have.
+			// Truncated key: return what we have.
 			return out, nil
 		}
 		key, ok := keyTok.(string)

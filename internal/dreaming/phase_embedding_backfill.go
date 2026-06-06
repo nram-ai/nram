@@ -201,7 +201,7 @@ func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memor
 
 	// If the embedder picked a different dim than the row recorded
 	// (model swap, dim renegotiation), sync the row's embedding_dim.
-	// Otherwise the row is already consistent — no Update needed.
+	// Otherwise the row is already consistent; no Update needed.
 	if mem.EmbeddingDim == nil || *mem.EmbeddingDim != actualDim {
 		d := actualDim
 		mem.EmbeddingDim = &d

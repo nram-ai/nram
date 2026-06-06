@@ -143,7 +143,7 @@ func TestParaphraseDedupPhase_SupersedesNearDuplicate(t *testing.T) {
 	}
 
 	// Supersede now lands via MarkSupersededBy (partial-column UPDATE)
-	// instead of a full-row Update — the partial path avoids the
+	// instead of a full-row Update; the partial path avoids the
 	// lost-update window that the row lock guards against on the merge
 	// paths. The behavioral assertions are unchanged: a supersede mark
 	// against the loser, pointing at the older as winner.
@@ -317,7 +317,7 @@ func TestParaphraseDedupPhase_StampsPersistAcrossCycles(t *testing.T) {
 	}
 
 	// Apply the metadata update to the reader's view so cycle 2 sees the
-	// stamp. updated_at is intentionally NOT bumped — that's the whole
+	// stamp. updated_at is intentionally NOT bumped; that's the whole
 	// point of UpdateMetadata.
 	stamp := writer.metadataUpdates[0]
 	reader.list[0].Metadata = stamp.Metadata
@@ -347,7 +347,7 @@ func TestParaphraseDedupPhase_SkipsDemotedMemories(t *testing.T) {
 
 	reader := &fakeMemoryReader{list: []model.Memory{demoted, live}}
 	writer := &updatingMemoryWriter{}
-	// Demoted memory deliberately not in vectorsByID — vector was purged.
+	// Demoted memory deliberately not in vectorsByID; vector was purged.
 	vs := &paraphraseTestVectorStore{
 		vectorsByID: map[uuid.UUID][]float32{live.ID: vec},
 		searchResults: map[uuid.UUID][]storage.VectorSearchResult{
@@ -378,7 +378,7 @@ func TestParaphraseDedupPhase_SkipsDemotedMemories(t *testing.T) {
 }
 
 // TestParaphraseDedupPhase_SkipsUnembeddedMemories asserts that memories
-// without an embedding_dim are filtered before the no_vector path —
+// without an embedding_dim are filtered before the no_vector path;
 // vector search would always miss them anyway.
 func TestParaphraseDedupPhase_SkipsUnembeddedMemories(t *testing.T) {
 	ns := uuid.New()

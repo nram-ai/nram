@@ -18,7 +18,7 @@ import (
 // The bug these tests guard: four "stale collector" optimizers passed an
 // empty meta map downstream when a row's stamp marker was absent in the
 // raw bytes. Five matching stamp writers marshalled `empty + new_stamp`
-// and persisted via UpdateMetadata, which is full-column overwrite — not
+// and persisted via UpdateMetadata, which is full-column overwrite, not
 // JSONB merge. Result: the first stamp write on a freshly-created
 // synthesis wiped source_memory_ids and dream_cycle_id, and the next
 // novelty audit demoted the row as `orphan_no_sources`. Cluster
@@ -182,7 +182,7 @@ func TestCollectReinforceStale_DecodesFreshSynthesisMetadata(t *testing.T) {
 	}
 	gotIDs, ok := stale[0].meta["source_memory_ids"]
 	if !ok {
-		t.Fatalf("stale.meta is missing source_memory_ids — collectReinforceStale dropped on-disk fields by passing an empty map")
+		t.Fatalf("stale.meta is missing source_memory_ids: collectReinforceStale dropped on-disk fields by passing an empty map")
 	}
 	arr, _ := gotIDs.([]any)
 	if len(arr) != len(sourceIDs) {

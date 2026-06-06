@@ -213,7 +213,7 @@ func (r *MemoryLineageRepo) FindChildIDsByRelation(ctx context.Context, namespac
 // memory, restricted to a single lineage relation. Used by the consolidation
 // audit's lineage fallback (phase_consolidation.go) to recover the source
 // memory ids of a synthesis whose metadata.source_memory_ids field is
-// missing or empty — lineage rows are written transactionally with the
+// missing or empty; lineage rows are written transactionally with the
 // synthesis at create time, so an intact lineage table is the authoritative
 // source even when metadata has been clobbered by an out-of-merge writer.
 //

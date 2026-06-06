@@ -19,7 +19,7 @@ import (
 // ---------------------------------------------------------------------------
 // New mock types used only in integration tests.
 // Types that already exist in other _test.go files in this package are reused
-// directly — they are accessible because all files share the package "mcp".
+// directly; they are accessible because all files share the package "mcp".
 // ---------------------------------------------------------------------------
 
 // mockMemoryRepoWithContent stores memories in a map so tests can verify
@@ -77,7 +77,7 @@ func (m *mockMemoryRepoWithContent) LookupByContentHash(_ context.Context, names
 // IDs were soft-deleted and which were hard-deleted, so tests can assert on
 // the distinction. The existing mockMemoryDeleter (in tool_forget_enrich_test.go)
 // uses delete(m.memories, id) for both paths which makes the distinction
-// unobservable — hence this separate type.
+// unobservable; hence this separate type.
 type trackingMemoryDeleter struct {
 	memories    map[uuid.UUID]*model.Memory
 	hardDeleted []uuid.UUID
@@ -356,7 +356,7 @@ func TestMCP_StoreAutoCreatesProject(t *testing.T) {
 	user := &model.User{ID: userID, NamespaceID: nsID}
 	ns := &model.Namespace{ID: nsID, Path: "/users/testuser", Depth: 2}
 
-	// Project not found — triggers auto-create path.
+	// Project not found; triggers auto-create path.
 	projectRepo := &mockProjectRepoStore{getErr: errors.New("not found")}
 	memRepo := newMockMemoryRepoWithContent()
 
@@ -493,7 +493,7 @@ func TestMCP_StoreBatch_PartialFailure(t *testing.T) {
 		"project": "test-project",
 		"items": []any{
 			map[string]any{"content": "item A"},
-			map[string]any{"content": "item B — will fail"},
+			map[string]any{"content": "item B, will fail"},
 			map[string]any{"content": "item C"},
 		},
 	}

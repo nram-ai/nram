@@ -21,8 +21,8 @@ type providerLoadKnob struct {
 }
 
 // providerLoadKnobs is the canonical list of "could overload your provider"
-// settings. Adding a knob here lights up the startup warning automatically
-// — keep it in sync as new concurrency-shaped knobs land. The set is
+// settings. Adding a knob here lights up the startup warning automatically;
+// keep it in sync as new concurrency-shaped knobs land. The set is
 // intentionally small so the warning stays actionable and is not noise.
 var providerLoadKnobs = []providerLoadKnob{
 	{
@@ -61,7 +61,7 @@ var providerLoadKnobs = []providerLoadKnob{
 // its safe default and emits a single aggregated WARN log line listing those
 // the operator has raised. Designed to run once at server start, after the
 // settings cache is initialized, so an operator who has tuned these knobs
-// for a beefy provider sees a one-time reminder of the trade-off — and an
+// for a beefy provider sees a one-time reminder of the trade-off, and an
 // operator who hasn't tuned them sees nothing.
 //
 // The warning is intentionally a soft signal, not an error: there are
@@ -84,7 +84,7 @@ func CheckProviderLoadDefaults(ctx context.Context, settings *SettingsService) {
 	for _, knob := range providerLoadKnobs {
 		current, err := settings.ResolveInt(ctx, knob.Key, "global")
 		if err != nil {
-			// No setting persisted means the default is in effect — nothing
+			// No setting persisted means the default is in effect: nothing
 			// to warn about. Other errors (db unreachable, malformed value)
 			// are quiet here because the worker pool startup will fail
 			// noisily on its own resolves moments later.
@@ -107,10 +107,10 @@ func CheckProviderLoadDefaults(ctx context.Context, settings *SettingsService) {
 
 	var lines []string
 	lines = append(lines,
-		"provider-load knobs raised above the safe defaults — concurrent calls to a single-GPU local provider (Ollama, llama.cpp) can queue at the model level and look like deadlocks; if you see provider timeouts or apparent hangs, consider returning these to defaults via /admin/settings:")
+		"provider-load knobs raised above the safe defaults: concurrent calls to a single-GPU local provider (Ollama, llama.cpp) can queue at the model level and look like deadlocks; if you see provider timeouts or apparent hangs, consider returning these to defaults via /admin/settings:")
 	for _, h := range hits {
 		lines = append(lines,
-			fmt.Sprintf("  • %s = %s (default %s) — %s",
+			fmt.Sprintf("  • %s = %s (default %s): %s",
 				h.key, strconv.Itoa(h.current), strconv.Itoa(h.safe), h.why))
 	}
 

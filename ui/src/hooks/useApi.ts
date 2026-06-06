@@ -132,7 +132,7 @@ export function useActivity(limit = 20) {
 // --- Tier-B (org-aggregate) hooks ---
 //
 // Caller must be RoleOrgOwner+ of the org. Aggregate counts + distributions
-// only — no row-level user/memory data, no content fields.
+// only: no row-level user/memory data, no content fields.
 
 export function useOrgDashboard(orgId: string | undefined) {
   return useQuery({
@@ -583,7 +583,7 @@ export interface SystemRankingWeightsResolution {
   // the schema query has resolved.
   missingKeys: string[];
   // isLoading is true only while the SCHEMA query is still in flight.
-  // The settings (operator overrides) query is best-effort — a slow or
+  // The settings (operator overrides) query is best-effort; a slow or
   // failed settings load does not block rendering because the resolver
   // can fall back to schema defaults per-key. Pivoting on schema alone
   // prevents the regression where a transient settings 5xx hides the
@@ -598,7 +598,7 @@ export interface SystemRankingWeightsResolution {
 
 // resolveSystemRankingWeights is the pure resolution logic. Exposed for
 // unit testing without spinning up React Query infrastructure. Returns
-// null weights when any key is missing — the schema endpoint is the
+// null weights when any key is missing; the schema endpoint is the
 // authoritative source, no client-side fallback.
 export function resolveSystemRankingWeights(
   configured: Iterable<{ key: string; value: unknown }>,
@@ -678,7 +678,7 @@ export function useSchemaRange(key: string, fallback: SchemaRange): SchemaRange 
 // While the query is in flight isLoading is true and missingKeys is empty so
 // the consumer can render a loading state instead of the deploy-incident
 // banner. Consumers MUST handle the null case (typically a red banner)
-// instead of silently rendering stale defaults — that is the "AC6 contract"
+// instead of silently rendering stale defaults; that is the "AC6 contract"
 // the contract test enforces.
 export function useSystemRankingWeights(): SystemRankingWeightsResolution {
   const query = useQuery({
@@ -686,11 +686,11 @@ export function useSystemRankingWeights(): SystemRankingWeightsResolution {
     queryFn: meAPI.getRankingWeightDefaults,
   });
   // useMemo gives the consumer (ProjectManagement edit panel) a stable
-  // reference between unrelated re-renders — without it every keystroke
+  // reference between unrelated re-renders; without it every keystroke
   // in any form input rebuilds the resolution Maps.
   return useMemo(() => {
     if (query.isPending) {
-      // Defer the missing-keys verdict — the response array is just not in
+      // Defer the missing-keys verdict; the response array is just not in
       // memory yet, not actually missing keys.
       return { weights: null, missingKeys: [], isLoading: true, isError: false };
     }
@@ -810,7 +810,7 @@ export function useTestWebhook() {
 // views use useOrgAnalytics(orgId) or useSystemAnalytics() instead.
 //
 // The optional `params` argument is preserved for source-compat with
-// callers that still pass `{ org, user }` — the values are now silently
+// callers that still pass `{ org, user }`; the values are now silently
 // ignored by both the client (no params attached to the request URL)
 // and the server (the widening primitive is gone). Callers should
 // migrate to the tier-specific hook for their visibility intent.

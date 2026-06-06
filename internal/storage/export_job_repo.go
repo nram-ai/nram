@@ -14,12 +14,12 @@ import (
 
 // ErrExportJobClaimLost is returned by Complete / Fail when a non-empty
 // workerID was passed and no longer matches the row's claimed_by. Callers
-// should log and drop — another worker (or operator action) took over.
+// should log and drop; another worker (or operator action) took over.
 var ErrExportJobClaimLost = errors.New("export job: claim lost")
 
 // ExportJobRepo provides operations for the export_jobs table. Every
 // user-scoped method takes userID uuid.UUID so the privacy invariant in
-// privacy_invariant_test.go remains satisfied — admins cannot read another
+// privacy_invariant_test.go remains satisfied: admins cannot read another
 // user's export rows by addressing a job ID they do not own.
 type ExportJobRepo struct {
 	db DB
@@ -230,7 +230,7 @@ func (r *ExportJobRepo) Fail(ctx context.Context, jobID uuid.UUID, workerID stri
 
 // GetByID returns a single job scoped to the calling user. Returns
 // sql.ErrNoRows when the job either does not exist or belongs to a
-// different user — the two cases are indistinguishable to the caller so an
+// different user; the two cases are indistinguishable to the caller so an
 // attacker cannot probe other users' job IDs.
 func (r *ExportJobRepo) GetByID(ctx context.Context, userID, jobID uuid.UUID) (*model.ExportJob, error) {
 	query := selectExportJobColumns + ` FROM export_jobs WHERE id = ? AND user_id = ?`
@@ -241,7 +241,7 @@ func (r *ExportJobRepo) GetByID(ctx context.Context, userID, jobID uuid.UUID) (*
 	return r.scanRow(row)
 }
 
-// getByIDInternal is the worker-only lookup used after claim — the
+// getByIDInternal is the worker-only lookup used after claim; the
 // claim-by-worker proof obviates the user_id filter.
 func (r *ExportJobRepo) getByIDInternal(ctx context.Context, jobID uuid.UUID) (*model.ExportJob, error) {
 	query := selectExportJobColumns + ` FROM export_jobs WHERE id = ?`
@@ -322,7 +322,7 @@ func (r *ExportJobRepo) CountInFlightByUser(ctx context.Context, userID uuid.UUI
 // DeleteByUserAndID removes a job row scoped to the calling user. Returns
 // sql.ErrNoRows when the job either does not exist or belongs to someone
 // else. The caller is responsible for removing the on-disk artifact before
-// (or after) invoking this — best-effort: a stale file is reclaimed by the
+// (or after) invoking this; best-effort: a stale file is reclaimed by the
 // expiry sweep regardless.
 func (r *ExportJobRepo) DeleteByUserAndID(ctx context.Context, userID, jobID uuid.UUID) error {
 	query := `DELETE FROM export_jobs WHERE id = ? AND user_id = ?`

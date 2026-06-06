@@ -108,7 +108,7 @@ type Registry struct {
 	llm    map[string]LLMProvider
 	config RegistryConfig
 
-	// Wrapping infrastructure. Both may be nil — when nil, providers are
+	// Wrapping infrastructure. Both may be nil; when nil, providers are
 	// returned without the usage-recording middleware (e.g., in tests that
 	// don't care about token_usage rows). Captured at construction time and
 	// reused across Reload.
@@ -119,7 +119,7 @@ type Registry struct {
 	// nil pointer disables the metric emission while keeping DB recording
 	// intact. Atomic so WithTokenCounter is safe to call from any
 	// goroutine, and so the indirect closures inside wrapLLM/wrapEmbedding
-	// always read the latest value installed on this Registry — including
+	// always read the latest value installed on this Registry, including
 	// when Reload re-wraps providers under the existing receiver.
 	tokenCounter atomic.Pointer[TokenCounter]
 	// embedWrapper applies a caller-provided middleware (typically the
@@ -160,7 +160,7 @@ func NewRegistry(config RegistryConfig, recorder UsageRecorder, resolver UsageCo
 	// download.
 	PrewarmTokenizers()
 	// Eagerly probe the embedder dim so the first downstream caller does
-	// not pay the round-trip latency. Failures are non-fatal — the cache
+	// not pay the round-trip latency. Failures are non-fatal; the cache
 	// stays empty and EmbeddingDim retries on demand. Operation stamping
 	// is done inside probeAndCache so every probe call site is covered.
 	if r.embedding != nil {
@@ -228,7 +228,7 @@ func (r *Registry) SlotConfigured(name string) bool {
 // atomically under the write lock. Invalidates the cached embedding
 // dimension and immediately re-probes the new embedder so the first
 // downstream EmbeddingDim caller does not pay the round-trip latency.
-// Probe failures are non-fatal — the cache stays empty and a later
+// Probe failures are non-fatal; the cache stays empty and a later
 // EmbeddingDim call will retry.
 //
 // Wrapping uses the live receiver r so the indirect tokenCounter /
@@ -260,8 +260,8 @@ func (r *Registry) Reload(config RegistryConfig) error {
 }
 
 // EmbeddingDim returns the embedding provider's native output dimension.
-// Discovered by sending Embed("probe") and reading len(resp.Embeddings[0])
-// — works identically across every provider because it measures the
+// Discovered by sending Embed("probe") and reading len(resp.Embeddings[0]);
+// works identically across every provider because it measures the
 // response rather than asking the provider what it supports. Cached;
 // Reload invalidates and re-probes eagerly. Probe errors are not cached.
 func (r *Registry) EmbeddingDim(ctx context.Context) (int, error) {
@@ -284,7 +284,7 @@ func (r *Registry) EmbeddingDim(ctx context.Context) (int, error) {
 // probeAndCache coalesces concurrent probes through singleflight so the
 // eager prewarm and a racing lazy hit share one network round-trip. The
 // probe runs on a bg-derived context with its own 10s budget so a caller
-// bailing early does not cancel the work — the result still populates
+// bailing early does not cancel the work; the result still populates
 // the cache for the next caller. If Reload swapped the embedder
 // mid-probe, the measured dim is discarded by the identity check.
 func (r *Registry) probeAndCache(ctx context.Context, embedder EmbeddingProvider, group *singleflight.Group) (int, error) {

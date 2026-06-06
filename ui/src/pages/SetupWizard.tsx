@@ -55,7 +55,7 @@ function BackendBanners({ backend }: { backend: string }) {
   const backendLabel = backend === "sqlite" ? "SQLite" : "Postgres";
   const backendBlurb =
     backend === "sqlite"
-      ? "SQLite supports the full feature set — vector search (pure-Go HNSW), hybrid recall (FTS5), enrichment, dreaming, knowledge graph, and every MCP tool. Upgrade to Postgres only if you need multiple nram instances against one database with cross-instance event propagation."
+      ? "SQLite supports the full feature set: vector search (pure-Go HNSW), hybrid recall (FTS5), enrichment, dreaming, knowledge graph, and every MCP tool. Upgrade to Postgres only if you need multiple nram instances against one database with cross-instance event propagation."
       : "Vector search via pgvector, hybrid recall, multi-instance event propagation via LISTEN/NOTIFY, and the full feature set are active.";
 
   return (
@@ -78,7 +78,7 @@ function BackendBanners({ backend }: { backend: string }) {
           <div>
             <p className="text-sm font-medium text-warning">LLM providers not configured</p>
             <p className="mt-1 text-sm text-warning">
-              Memories are stored as raw text only. Configure an <strong>embedding</strong> provider for semantic recall and a <strong>fact</strong> + <strong>entity</strong> provider for enrichment, dreaming, and the knowledge graph. Provider changes hot-reload — no restart. <strong>New users:</strong> see the project README's <em>Recommended Models</em> section for a 60-second starter pick (and to avoid the <code>nomic-embed-text</code> 2048-token-context truncation trap).
+              Memories are stored as raw text only. Configure an <strong>embedding</strong> provider for semantic recall and a <strong>fact</strong> + <strong>entity</strong> provider for enrichment, dreaming, and the knowledge graph. Provider changes hot-reload, no restart. <strong>New users:</strong> see the project README's <em>Recommended Models</em> section for a 60-second starter pick (and to avoid the <code>nomic-embed-text</code> 2048-token-context truncation trap).
             </p>
             <a href="/providers" className="mt-1 inline-block text-sm font-medium text-warning underline hover:no-underline">
               Settings &rarr; Providers
@@ -129,7 +129,7 @@ function CompletionScreen({
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Connect an MCP Client</h2>
         <p className="text-sm text-muted-foreground">
-          nram supports OAuth auto-discovery. Most MCP clients connect with just the server URL &mdash; no API key needed.
+          nram supports OAuth auto-discovery. Most MCP clients connect with just the server URL, no API key needed.
         </p>
         <CodeBlock code={claudeCodeCmd} label="Claude Code" />
         <div className="rounded-lg border border-border bg-card p-4 space-y-2">
@@ -153,7 +153,7 @@ function CompletionScreen({
           <FontAwesomeIcon icon={faTriangleExclamation} className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
           <div className="flex-1">
             <p className="text-sm font-semibold text-warning">
-              API Key (fallback) &mdash; save this now, it will not be shown again
+              API Key (fallback): save this now, it will not be shown again
             </p>
             <p className="mt-1 text-xs text-warning">
               Use this for tools that don&apos;t support OAuth, or for direct API access.

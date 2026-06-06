@@ -13,8 +13,8 @@ import (
 // (namespace_id, source_id, target_id, relation, valid_from) once canonicalized,
 // keeping the max weight. It is the one-time existing-data counterpart to the
 // repo's write-time canonicalization: new writes are already canonical; this
-// fixes rows written before that change so every consumer — including the admin
-// graph visualization, which reads stored rows verbatim — sees clean, merged
+// fixes rows written before that change so every consumer (including the admin
+// graph visualization, which reads stored rows verbatim) sees clean, merged
 // edges.
 //
 // It calls model.CanonicalRelation directly so the stored form is byte-identical

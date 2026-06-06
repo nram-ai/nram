@@ -32,7 +32,7 @@ type MemoryWriter interface {
 	// MutateInLock acquires the cross-process memory row lock, re-reads
 	// the row inside the lock, and writes mutate's changes back under the
 	// same lock. Required for any read-modify-write on a memory row that
-	// could race with concurrent workers — full-row Update without the
+	// could race with concurrent workers; full-row Update without the
 	// lock has a lost-update window the helper closes.
 	MutateInLock(ctx context.Context, id uuid.UUID, mutate func(*model.Memory) (write bool, err error)) (*model.Memory, error)
 	// UpdateMetadata writes only the metadata column without bumping
@@ -162,7 +162,7 @@ type CascadeResolver interface {
 // VectorPurger removes a vector from the active vector store. The dreaming
 // system calls it whenever a memory or entity transitions to a state in which
 // it should no longer surface via vector search: soft-delete, novelty-audit
-// demotion, or supersession. Implementations should be idempotent — calling
+// demotion, or supersession. Implementations should be idempotent; calling
 // Delete on an already-absent id is a no-op. Kind selects the table family.
 type VectorPurger interface {
 	Delete(ctx context.Context, kind storage.VectorKind, id uuid.UUID) error

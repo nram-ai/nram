@@ -61,11 +61,11 @@ type MoveResponse struct {
 // memory into the destination project and then hard-deleting the source. It
 // composes the existing store and forget paths so the entity graph is rebuilt
 // in the destination namespace and the source footprint is reaped via the
-// forget cascade — no schema change and no denormalized-namespace_id bookkeeping.
+// forget cascade, no schema change and no denormalized-namespace_id bookkeeping.
 //
 // Ordering matters: each memory is STORED in the destination first and only then
 // deleted from the source. A failure between the two steps therefore never loses
-// data — at worst it leaves a transient duplicate that dedup or the user can
+// data: at worst it leaves a transient duplicate that dedup or the user can
 // reconcile, never an empty hole.
 type MoveService struct {
 	memories MemoryByIDReader
@@ -119,7 +119,7 @@ func (s *MoveService) Move(ctx context.Context, req *MoveRequest) (*MoveResponse
 	for _, id := range req.MemoryIDs {
 		mem, err := s.memories.GetByID(ctx, id)
 		if err != nil {
-			// Not found / unreadable — skip this ID rather than abort the batch.
+			// Not found / unreadable: skip this ID rather than abort the batch.
 			continue
 		}
 
@@ -155,7 +155,7 @@ func (s *MoveService) Move(ctx context.Context, req *MoveRequest) (*MoveResponse
 			APIKeyID:   req.APIKeyID,
 		})
 		if err != nil {
-			// Store failed — leave the source intact (no data loss) and skip.
+			// Store failed: leave the source intact (no data loss) and skip.
 			continue
 		}
 

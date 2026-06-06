@@ -17,7 +17,7 @@ import (
 // ParaphraseCheckedStampKey marks a memory as visited by the paraphrase
 // dedup sweep. Survivors carry this stamp so the sweep skips them next
 // cycle. Re-checking happens when memory.UpdatedAt advances past the
-// stamp (content edits, supersession, contradiction haircuts) — the
+// stamp (content edits, supersession, contradiction haircuts); the
 // staleness check is `stamp < UpdatedAt`.
 const ParaphraseCheckedStampKey = "paraphrase_checked_at"
 
@@ -30,7 +30,7 @@ const ParaphraseCheckedStampKey = "paraphrase_checked_at"
 // so two duplicates only need to be top-K of EACH OTHER (not of every
 // other anchor) to get paired.
 //
-// Pure vector ops — no LLM calls, so token budget is not consumed.
+// Pure vector ops: no LLM calls, so token budget is not consumed.
 type ParaphraseDedupPhase struct {
 	memories     MemoryReader
 	memWriter    MemoryWriter
@@ -132,7 +132,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 			continue
 		}
 		if m.Confidence == 0 {
-			// Demoted by the audit phase — vector already purged.
+			// Demoted by the audit phase: vector already purged.
 			stats["filtered_demoted"] = stats["filtered_demoted"].(int) + 1
 			continue
 		}
@@ -221,7 +221,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 		}
 		anchor := &eligible[i].mem
 		if supersededInCycle[anchor.ID] {
-			// Already lost a paraphrase round earlier this cycle — skip;
+			// Already lost a paraphrase round earlier this cycle, skip;
 			// the survivor will carry the stamp.
 			continue
 		}
@@ -289,7 +289,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 				break
 			}
 			// Loser was the neighbour. Anchor is still live and may have
-			// more matches further down the result list — continue.
+			// more matches further down the result list, continue.
 		}
 
 		if !anchorBecameLoser {
@@ -338,7 +338,7 @@ func (p *ParaphraseDedupPhase) applySupersede(
 	cosine float64,
 ) error {
 	// MarkSupersededBy is a partial-column UPDATE that touches only
-	// superseded_by, superseded_at, embedding_dim, updated_at — the exact
+	// superseded_by, superseded_at, embedding_dim, updated_at, the exact
 	// fields this path assigns. Using it instead of full-row Update means
 	// no read-modify-write window and no lock needed; the WHERE clause
 	// also guards on superseded_by IS NULL so a concurrent supersede

@@ -110,7 +110,7 @@ type ExtractionService struct {
 // NewExtractionService creates a new ExtractionService with the given
 // dependencies. token_usage recording is handled by the
 // UsageRecordingProvider middleware wrapping the registry-issued
-// providers — callers do not need to pass a TokenUsageRepository.
+// providers: callers do not need to pass a TokenUsageRepository.
 // settings may be nil; in that case extraction prompts always come from
 // service.GetDefault.
 func NewExtractionService(

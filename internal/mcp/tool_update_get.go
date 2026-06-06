@@ -94,7 +94,7 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		projectSlug = "global"
 	}
 
-	// Build optional fields — only set pointers when args are present.
+	// Build optional fields: only set pointers when args are present.
 	var contentPtr *string
 	if v, ok := args["content"].(string); ok {
 		contentPtr = &v

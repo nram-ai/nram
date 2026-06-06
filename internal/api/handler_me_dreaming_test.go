@@ -107,7 +107,7 @@ func TestMeDreaming_AggregateStatus_ExposesDirtyCount(t *testing.T) {
 		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
 	}
 
-	// Decode into a generic map so we can assert on raw keys — guards
+	// Decode into a generic map so we can assert on raw keys; guards
 	// against a regression that re-introduces the old `any_dirty` bool.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {

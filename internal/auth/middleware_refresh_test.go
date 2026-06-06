@@ -111,7 +111,7 @@ func TestMiddleware_DoesNotRefreshFreshSessionJWT(t *testing.T) {
 	timings := fixedTimings{ttl: time.Hour, threshold: 30 * time.Minute}
 	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "org_owner"}, testSecret, timings)
 
-	// Just-issued token — nowhere near the threshold.
+	// Just-issued token; nowhere near the threshold.
 	token := signSessionJWTAged(t, testSecret, 0, time.Hour)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard", nil)

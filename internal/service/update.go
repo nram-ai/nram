@@ -38,7 +38,7 @@ type UpdateRequest struct {
 
 // UpdateResponse contains the result of a memory update operation.
 //
-// On a content change the response ID is the NEW (active) memory ID — the
+// On a content change the response ID is the NEW (active) memory ID; the
 // old row is superseded and reachable only via include_superseded reads.
 // On a tags/metadata-only update the ID is unchanged. PreviousMemoryID
 // echoes the request's MemoryID so callers correlating events or webhooks
@@ -222,7 +222,7 @@ func (s *UpdateService) updateSupersede(
 	newID := uuid.New()
 
 	// Inherit policy fields (Source, Origin, Importance, ExpiresAt, PurgeAfter)
-	// because the logical memory is the same — only the content moved. Origin
+	// because the logical memory is the same: only the content moved. Origin
 	// in particular must survive supersession: a re-worded dream synthesis is
 	// still a dream and must stay subject to the dream-recursion guard.
 	// Reset access metrics (AccessCount, LastAccessed, Confidence) and
@@ -262,7 +262,7 @@ func (s *UpdateService) updateSupersede(
 	// Embed the new content. If the embed succeeds we set EmbeddingDim
 	// and try the vector upsert; if the vector upsert fails we drop the
 	// dim so the row stays honest. Failures here do not block the
-	// supersede write — the embedding-backfill phase will repair on the
+	// supersede write: the embedding-backfill phase will repair on the
 	// next dream cycle and the queued enrichment job runs the embed too.
 	reEmbedded := false
 	var newEmbedding []float32
@@ -314,7 +314,7 @@ func (s *UpdateService) updateSupersede(
 	// so the old edges are stale provenance. The lifecycle sweep also reaps
 	// superseded-sourced edges as a backstop (covering dream-driven
 	// supersession that does not pass through this path), but doing it inline
-	// keeps the user-facing update responsive. Best-effort — a reap failure
+	// keeps the user-facing update responsive. Best-effort: a reap failure
 	// must not undo the committed supersede.
 	if s.graphReaper != nil {
 		if _, err := s.graphReaper.ReapMemoryFootprint(ctx, mem.NamespaceID, mem.ID); err != nil {

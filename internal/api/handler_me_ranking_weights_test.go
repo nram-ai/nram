@@ -110,7 +110,7 @@ func TestMeRankingWeightsDefaults_NoAuthContextRejected(t *testing.T) {
 	}
 	h := NewMeRankingWeightsDefaultsHandler(MeRankingWeightsDefaultsConfig{Store: store})
 
-	// Pass nil auth context — the AuthMiddleware would normally reject the
+	// Pass nil auth context; the AuthMiddleware would normally reject the
 	// request before it reaches the handler, but the handler defends in depth.
 	w := doSelfServiceRequest(h, http.MethodGet, "/v1/me/ranking-weights/defaults", nil, nil)
 

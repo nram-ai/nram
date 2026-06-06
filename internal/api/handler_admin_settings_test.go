@@ -552,7 +552,7 @@ func TestAdminSettingsUpdateNotFoundError(t *testing.T) {
 }
 
 // rangeSchemas returns a fixture with a numeric setting bounded to [0, 1]
-// step 0.05 — used by the range-enforcement tests below.
+// step 0.05, used by the range-enforcement tests below.
 func rangeSchemas() []SettingSchema {
 	min0 := 0.0
 	max1 := 1.0
@@ -570,7 +570,7 @@ func rangeSchemas() []SettingSchema {
 			Key:          "memory.max_facts",
 			Type:         "number",
 			DefaultValue: json.RawMessage(`1000`),
-			// No Min/Max — unbounded numeric, validation is a no-op.
+			// No Min/Max: unbounded numeric, validation is a no-op.
 		},
 		{
 			Key:          "enrichment.enabled",
@@ -678,7 +678,7 @@ func TestAdminSettingsUpdate_RejectsNonNumericForNumericKey(t *testing.T) {
 }
 
 func TestAdminSettingsUpdate_SkipsValidationForUnboundedNumeric(t *testing.T) {
-	// memory.max_facts in rangeSchemas() has no Min/Max — any numeric
+	// memory.max_facts in rangeSchemas() has no Min/Max; any numeric
 	// value should pass through.
 	store := &mockSettingsAdminStore{schemas: rangeSchemas()}
 	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
@@ -893,7 +893,7 @@ func TestAdminSettingsListSettingsDefaultLimitCoversRegistry(t *testing.T) {
 }
 
 // TestAdminSettingsListSettingsExplicitLimitHonored pins the contract that
-// an explicit ?limit= is respected — the no-arg default is a floor, not a
+// an explicit ?limit= is respected; the no-arg default is a floor, not a
 // minimum, so external callers that paginate deliberately keep working.
 func TestAdminSettingsListSettingsExplicitLimitHonored(t *testing.T) {
 	store := &mockSettingsAdminStore{}

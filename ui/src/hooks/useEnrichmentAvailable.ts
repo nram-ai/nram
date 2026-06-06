@@ -6,7 +6,7 @@ import { meAPI, type MeCapabilities } from "../api/client";
 //
 // The signal historically came from /admin/providers (was the user able to
 // see provider slots and were all three configured?). After the
-// 2026-04-30 admin-tier-split, that endpoint is administrator-only — non-
+// 2026-04-30 admin-tier-split, that endpoint is administrator-only; non-
 // admins got 403, the hook returned available=false, and the Enrichment
 // Queue / Dreaming nav entries disappeared for project owners. The new
 // /me/capabilities endpoint exposes the same enrichment_available signal

@@ -20,7 +20,7 @@ import (
 // Semantic equivalence is deliberately OUT OF SCOPE: "maps_to_architecture"
 // (-> "maps to architecture") and "maps to architecture of" differ by a
 // trailing token, not by separators, so they stay distinct. The function only
-// merges pure formatting variants — it never stems, drops words, or reorders.
+// merges pure formatting variants; it never stems, drops words, or reorders.
 //
 // CanonicalRelation is the single source of truth for relation normalization
 // across the write path (RelationshipRepo), the read path (graph slice dedup),

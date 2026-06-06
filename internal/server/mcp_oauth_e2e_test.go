@@ -491,7 +491,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	}
 	mcpSrv := mcp.NewServer(mcpDeps)
 
-	// Build Handlers struct — same wiring as production
+	// Build Handlers struct: same wiring as production
 	handlers := Handlers{
 		MCP: mcpSrv.Handler(),
 
@@ -517,7 +517,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		AuthMiddleware: authMw,
 		RateLimiter:    rl,
 		Metrics:        promMetrics,
-		// No setup guard — setup is "complete"
+		// No setup guard: setup is "complete"
 	}
 
 	router := NewRouter(cfg, handlers)
@@ -723,7 +723,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	baseURL := env.Server.URL
 
 	// -----------------------------------------------------------------------
-	// Step 1: Hit POST /mcp with no auth — expect 401 + WWW-Authenticate
+	// Step 1: Hit POST /mcp with no auth, expect 401 + WWW-Authenticate
 	// -----------------------------------------------------------------------
 	t.Log("Step 1: POST /mcp with no auth")
 	initBody, _ := json.Marshal(e2eJSONRPCRequest{
@@ -987,7 +987,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	}
 
 	// -----------------------------------------------------------------------
-	// Step 8: POST /mcp with Bearer access_token — JSON-RPC initialize
+	// Step 8: POST /mcp with Bearer access_token, JSON-RPC initialize
 	// -----------------------------------------------------------------------
 	t.Log("Step 8: POST /mcp initialize")
 	mcpResp := e2eMCPPost(t, baseURL, tokenResp.AccessToken, e2eJSONRPCRequest{
@@ -1028,7 +1028,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	t.Logf("step 8: Mcp-Session-Id: %s", sessionID)
 
 	// -----------------------------------------------------------------------
-	// Step 9: POST /mcp — initialized notification
+	// Step 9: POST /mcp, initialized notification
 	// -----------------------------------------------------------------------
 	t.Log("Step 9: POST /mcp notifications/initialized")
 	notifResp := e2eMCPPost(t, baseURL, tokenResp.AccessToken, e2eJSONRPCRequest{
@@ -1043,7 +1043,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	}
 
 	// -----------------------------------------------------------------------
-	// Step 10: POST /mcp — tools/list
+	// Step 10: POST /mcp, tools/list
 	// -----------------------------------------------------------------------
 	t.Log("Step 10: POST /mcp tools/list")
 	toolsListResp := e2eMCPPost(t, baseURL, tokenResp.AccessToken, e2eJSONRPCRequest{
@@ -1088,7 +1088,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	}
 
 	// -----------------------------------------------------------------------
-	// Step 11: POST /mcp — tools/call memory_store
+	// Step 11: POST /mcp, tools/call memory_store
 	// -----------------------------------------------------------------------
 	t.Log("Step 11: POST /mcp tools/call memory_store")
 	storeCallResp := e2eMCPPost(t, baseURL, tokenResp.AccessToken, e2eJSONRPCRequest{
@@ -1130,7 +1130,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	t.Logf("step 11: stored memory ID: %s", storeResult.ID)
 
 	// -----------------------------------------------------------------------
-	// Step 12: POST /mcp — tools/call memory_recall
+	// Step 12: POST /mcp, tools/call memory_recall
 	// -----------------------------------------------------------------------
 	t.Log("Step 12: POST /mcp tools/call memory_recall")
 	recallCallResp := e2eMCPPost(t, baseURL, tokenResp.AccessToken, e2eJSONRPCRequest{
@@ -1233,7 +1233,7 @@ func TestE2E_ClaudeCode_OAuthToMCPToolCall(t *testing.T) {
 	}
 
 	// -----------------------------------------------------------------------
-	// Step 14: POST /mcp with NEW access_token — verify it works
+	// Step 14: POST /mcp with NEW access_token, verify it works
 	// -----------------------------------------------------------------------
 	t.Log("Step 14: POST /mcp with refreshed token")
 	recallResp2 := e2eMCPPost(t, baseURL, refreshResp.AccessToken, e2eJSONRPCRequest{
@@ -1280,7 +1280,7 @@ func TestE2E_ClaudeDesktop_OAuthToMCPToolCall(t *testing.T) {
 	client := e2eNoRedirectClient()
 	baseURL := env.Server.URL
 
-	// Step 1: Hit POST /mcp with no auth — 401
+	// Step 1: Hit POST /mcp with no auth, 401
 	initBody, _ := json.Marshal(e2eJSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      1,
@@ -1537,7 +1537,7 @@ func TestE2E_APIKey_DirectMCPAccess(t *testing.T) {
 		t.Fatalf("API key doesn't have nram_k_ prefix: %s", rawKey[:15])
 	}
 
-	// Step 1: POST /mcp with API key — initialize
+	// Step 1: POST /mcp with API key, initialize
 	t.Log("Step 1: Initialize with API key")
 	initResp := e2eMCPPost(t, baseURL, rawKey, e2eJSONRPCRequest{
 		JSONRPC: "2.0",
@@ -2412,7 +2412,7 @@ func TestE2E_OAuth_WrongRedirectURI(t *testing.T) {
 	body, _ = io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 
-	// Should be rejected — either as a 400 error or a redirect with error param
+	// Should be rejected: either as a 400 error or a redirect with error param
 	switch resp.StatusCode {
 	case http.StatusFound:
 		location := resp.Header.Get("Location")
@@ -2494,7 +2494,7 @@ func TestE2E_OAuth_CodeReuse(t *testing.T) {
 	// Get an auth code
 	parts := e2eGetAuthCode(t, env, "Code Reuse Test", "http://localhost:3000/callback")
 
-	// First exchange — should succeed
+	// First exchange: should succeed
 	t.Log("first code exchange (should succeed)")
 	tokenForm := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -2514,8 +2514,8 @@ func TestE2E_OAuth_CodeReuse(t *testing.T) {
 		t.Fatalf("first exchange: expected 200, got %d; body: %s", resp.StatusCode, body)
 	}
 
-	// Second exchange — same code, should fail
-	t.Log("second code exchange (should fail — code reuse)")
+	// Second exchange: same code, should fail
+	t.Log("second code exchange (should fail: code reuse)")
 	resp2, err := client.PostForm(parts.TokenEndpoint, tokenForm)
 	if err != nil {
 		t.Fatalf("second exchange: %v", err)
@@ -2582,7 +2582,7 @@ func TestE2E_OAuth_UnregisteredClientID(t *testing.T) {
 	body, _ = io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 
-	// Should get an error — either 400 directly or a redirect with error
+	// Should get an error: either 400 directly or a redirect with error
 	switch resp.StatusCode {
 	case http.StatusFound:
 		location := resp.Header.Get("Location")
@@ -2659,7 +2659,7 @@ func TestE2E_OAuth_MissingPKCE(t *testing.T) {
 	body, _ = io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 
-	// Should be rejected — PKCE is required per MCP spec
+	// Should be rejected: PKCE is required per MCP spec
 	switch resp.StatusCode {
 	case http.StatusFound:
 		location := resp.Header.Get("Location")
@@ -3002,7 +3002,7 @@ func TestE2E_OAuth_OriginValidation(t *testing.T) {
 	_, _ = io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 
-	// Authenticated requests with any Origin are allowed — the OAuth token
+	// Authenticated requests with any Origin are allowed: the OAuth token
 	// proves legitimacy, enabling browser-based clients like Claude.ai.
 	if resp.StatusCode == http.StatusForbidden {
 		t.Fatalf("bad Origin with valid token: should be allowed, got 403")

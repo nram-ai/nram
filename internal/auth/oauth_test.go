@@ -976,7 +976,7 @@ func TestTokenHandler_RefreshTokenGrant_OldTokenRevoked(t *testing.T) {
 		t.Fatalf("refresh: expected 200, got %d", rec2.Code)
 	}
 
-	// Try to use the old refresh token again — should fail because it was revoked
+	// Try to use the old refresh token again; should fail because it was revoked
 	req3 := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(refreshForm.Encode()))
 	req3.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec3 := httptest.NewRecorder()

@@ -21,7 +21,7 @@ type ProviderAdminStore interface {
 
 // UpdateProviderSlotOpts carries request-only options for an update that
 // must not be persisted into the settings JSON. ConfirmInvalidate gates
-// the destructive embedding-model switch cascade — without it the store
+// the destructive embedding-model switch cascade; without it the store
 // returns a "needs confirmation" response and persists nothing.
 type UpdateProviderSlotOpts struct {
 	ConfirmInvalidate bool
@@ -58,7 +58,7 @@ type ProviderConfigResponse []ProviderSlotStatus
 // (Registry.EmbeddingDim); nil for non-embedding slots and on probe
 // failure.
 //
-// ContextWindow is the *effective* input length in tokens — for Ollama
+// ContextWindow is the *effective* input length in tokens: for Ollama
 // slots that means min(model GGUF max, runtime num_ctx); for OpenRouter
 // it equals the model's reported context_length. Populated only for
 // providers that expose it via API (Ollama via /api/show + /api/ps,
@@ -96,7 +96,7 @@ type ProviderTestRequest struct {
 }
 
 // ProviderSlotConfig is the desired configuration for a provider slot.
-// Dimensions is intentionally absent — it's discovered by Registry.EmbeddingDim,
+// Dimensions is intentionally absent; it's discovered by Registry.EmbeddingDim,
 // not user-configurable (a mismatched dim sends vectors to the wrong
 // per-dim table and recall silently breaks).
 type ProviderSlotConfig struct {
@@ -161,7 +161,7 @@ func extractProviderSubPath(path string) string {
 	return rest
 }
 
-// handleProviderConfig handles GET /providers — returns current provider config.
+// handleProviderConfig handles GET /providers: returns current provider config.
 func handleProviderConfig(w http.ResponseWriter, r *http.Request, cfg ProviderAdminConfig) {
 	if r.Method != http.MethodGet {
 		WriteError(w, ErrBadRequest("method not allowed"))
@@ -177,7 +177,7 @@ func handleProviderConfig(w http.ResponseWriter, r *http.Request, cfg ProviderAd
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleProviderTest handles POST /providers/test — tests a provider connection.
+// handleProviderTest handles POST /providers/test: tests a provider connection.
 func handleProviderTest(w http.ResponseWriter, r *http.Request, cfg ProviderAdminConfig) {
 	if r.Method != http.MethodPost {
 		WriteError(w, ErrBadRequest("method not allowed"))
@@ -251,7 +251,7 @@ func handleProviderSlotUpdate(w http.ResponseWriter, r *http.Request, cfg Provid
 	writeJSON(w, http.StatusOK, result)
 }
 
-// handleOllamaModels handles GET /providers/ollama/models — lists Ollama models.
+// handleOllamaModels handles GET /providers/ollama/models: lists Ollama models.
 func handleOllamaModels(w http.ResponseWriter, r *http.Request, cfg ProviderAdminConfig) {
 	if r.Method != http.MethodGet {
 		WriteError(w, ErrBadRequest("method not allowed"))
@@ -274,7 +274,7 @@ func handleOllamaModels(w http.ResponseWriter, r *http.Request, cfg ProviderAdmi
 	writeJSON(w, http.StatusOK, models)
 }
 
-// handleOllamaPull handles POST /providers/ollama/pull — pulls a model on Ollama.
+// handleOllamaPull handles POST /providers/ollama/pull: pulls a model on Ollama.
 func handleOllamaPull(w http.ResponseWriter, r *http.Request, cfg ProviderAdminConfig) {
 	if r.Method != http.MethodPost {
 		WriteError(w, ErrBadRequest("method not allowed"))

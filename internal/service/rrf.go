@@ -20,7 +20,7 @@ const DefaultRRFConstant = 60
 // Documents present in only some rankings receive contributions only from
 // those rankings (unranked == omitted, not == ranked-last). The returned map
 // is keyed by uuid.UUID; the absolute magnitudes are unitless and only
-// meaningful for ordering — callers needing a [0, 1] score should normalize
+// meaningful for ordering; callers needing a [0, 1] score should normalize
 // by the map's max value.
 //
 // k <= 0 is coerced to DefaultRRFConstant. weights with len != len(rankings)
@@ -41,7 +41,7 @@ func ReciprocalRankFusion(rankings [][]storage.MemoryRank, k int, weights []floa
 		w := weights[i]
 		for pos, row := range ranking {
 			// 1-based rank position so the head of the list contributes
-			// 1/(k+1) — the canonical RRF formulation.
+			// 1/(k+1), the canonical RRF formulation.
 			scores[row.ID] += w / float64(k+pos+1)
 		}
 	}

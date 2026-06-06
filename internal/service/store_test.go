@@ -250,7 +250,7 @@ func TestStore_Success(t *testing.T) {
 		t.Errorf("expected importance 0.5, got %f", mem.Importance)
 	}
 	if mem.EmbeddingDim != nil {
-		t.Error("expected nil EmbeddingDim — service layer no longer embeds")
+		t.Error("expected nil EmbeddingDim: service layer no longer embeds")
 	}
 
 	if len(ingestion.logs) != 1 {
@@ -297,7 +297,7 @@ func TestStore_ImportanceOverride(t *testing.T) {
 	if memories.created[0].Importance != 0.9 {
 		t.Errorf("expected stored importance 0.9, got %v", memories.created[0].Importance)
 	}
-	// Confidence stays at the hardcoded internal default — clients cannot seed it.
+	// Confidence stays at the hardcoded internal default: clients cannot seed it.
 	if memories.created[0].Confidence != 1.0 {
 		t.Errorf("expected confidence 1.0 (internal default), got %v", memories.created[0].Confidence)
 	}

@@ -25,7 +25,7 @@ import (
 //     validators accept whatever JSON shape the field actually holds. Using
 //     {type:"object"} would falsely reject legitimate non-object payloads.
 //
-// Marshal failures degrade to nil — mcp.WithRawOutputSchema(nil) is a no-op
+// Marshal failures degrade to nil; mcp.WithRawOutputSchema(nil) is a no-op
 // in mcp-go v0.45.0, so a tool with reflection trouble registers without an
 // outputSchema rather than crashing the entire server at NewServer time. The
 // failure is logged so operators can fix the offending T; other tools keep
@@ -35,7 +35,7 @@ import (
 // mcp.WithOutputSchema[T]() so the Mapper takes effect.
 func schemaFor[T any]() json.RawMessage {
 	var zero T
-	// MCP spec mandates the root be an object — the force-set below assumes
+	// MCP spec mandates the root be an object; the force-set below assumes
 	// T's reflected schema is already object-shaped. A non-struct T (slice,
 	// map at the top level, scalar) would produce an inconsistent schema
 	// (e.g. type:object with items:{}, which is invalid). Degrade rather

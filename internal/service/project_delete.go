@@ -97,7 +97,7 @@ type NamespaceDeleter interface {
 
 // ShareTokenSweeper revokes any share-tokens that have been orphaned (zero
 // grants) as a side effect of project deletion. Optional dependency on
-// ProjectDeleteService — when nil, the share-revoke sweep is skipped and
+// ProjectDeleteService: when nil, the share-revoke sweep is skipped and
 // the share-token middleware's per-request zero-grants check still gates
 // access; the sweep just keeps the owner's UI consistent.
 type ShareTokenSweeper interface {
@@ -105,7 +105,7 @@ type ShareTokenSweeper interface {
 }
 
 // ProjectOwnerLookup resolves the user who owns a given owner_namespace_id.
-// Required by the share-token sweep — the share belongs to a user, not a
+// Required by the share-token sweep: the share belongs to a user, not a
 // namespace, so we need the user record to scope the sweep query. Satisfied
 // directly by *storage.UserRepo.
 type ProjectOwnerLookup interface {
@@ -280,7 +280,7 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 	// such shares; this revoke keeps the owner's UI honest by flipping the
 	// status from "active" to "revoked" and triggers refresh-token cleanup.
 	// Log every skip path so a missing sweep is diagnosable rather than
-	// silent — the owner's UI showing "active but unusable" shares is a
+	// silent: the owner's UI showing "active but unusable" shares is a
 	// confusing failure mode we want to alert on.
 	if s.shareSweeper != nil && s.projectOwnerLookup != nil {
 		owner, err := s.projectOwnerLookup.GetByNamespaceID(ctx, project.OwnerNamespaceID)

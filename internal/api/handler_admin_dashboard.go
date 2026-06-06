@@ -59,7 +59,7 @@ type DashboardQueueStats struct {
 // ActivityEvent represents a single recent activity entry.
 //
 // Privacy: Preview is populated only on the self-tier (caller's own
-// memories) — that is, when the store is called with both orgID and userID
+// memories), that is, when the store is called with both orgID and userID
 // set to the caller's IDs. Org and system tiers (userID nil) leave Preview
 // nil so cross-tenant feeds remain content-free.
 type ActivityEvent struct {
@@ -86,7 +86,7 @@ func NewAdminDashboardHandler(cfg DashboardConfig) http.HandlerFunc {
 		// admin's own data, not the system-wide view. Cross-tenant dashboards
 		// move to /v1/admin/system/dashboard and /v1/orgs/{org_id}/dashboard.
 		// userID is passed through so the per-project breakdown can scope to
-		// the caller's own projects — without it, MemoriesByProject would
+		// the caller's own projects; without it, MemoriesByProject would
 		// emit every project name in the org (including other users'), which
 		// is the cross-tenant name leak the org-tier dreaming/enrichment fix
 		// closed at the same time.

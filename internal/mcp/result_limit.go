@@ -43,14 +43,14 @@ const (
 // mcpBudgetBytes resolves the per-tool MCP result budget through the
 // SettingsService cascade and returns the byte budget (tokens *
 // charsPerTokenEstimate). ResolveIntWithDefault panics if the setting is not
-// registered in settingDefaults — that is the codebase's eager-failure
+// registered in settingDefaults; that is the codebase's eager-failure
 // convention for missing-key programmer errors. A nil SettingsService falls
 // through to the registered default so tests that construct a stub MCP
 // server without wiring SettingsService still get a sensible budget.
 //
 // The admin schema enforces Min=100 (200 bytes at charsPerTokenEstimate=2)
 // at the HTTP write path, but service.SettingsService.Set bypasses schema
-// validation — direct callers (tests, migrations, future internal setters)
+// validation; direct callers (tests, migrations, future internal setters)
 // can persist a smaller value. We floor at len(truncationSuffix) here so
 // hardTruncate's contract ("returns at most budget bytes") holds for every
 // caller, regardless of how the persisted value got there.
@@ -77,11 +77,11 @@ func mcpBudgetBytes(ctx context.Context, s *service.SettingsService) int {
 //
 // Dropped sentinel formats (kept consistent across reducers so an agent
 // parser handles them uniformly):
-//   - "graph.entities", "graph.relationships" — recall reducer, signals the
+//   - "graph.entities", "graph.relationships": recall reducer, signals the
 //     entire graph was dropped (stage 1).
-//   - "coverage_gaps_kept:N/M" — recall reducer, frame-independent kept/total
+//   - "coverage_gaps_kept:N/M": recall reducer, frame-independent kept/total
 //     ratio for the diversification diagnostic.
-//   - "entities_kept:N/M", "relationships_kept:N/M" — graph reducer, same
+//   - "entities_kept:N/M", "relationships_kept:N/M": graph reducer, same
 //     frame-independent ratio applied symmetrically to both axes.
 //
 // Future reducers SHOULD reuse the `<axis>_kept:N/M` pattern rather than
@@ -122,7 +122,7 @@ const (
 // wrapToolResultText enforces the size budget on a pre-formatted text result
 // (for example NDJSON exports). The text is emitted verbatim if it fits;
 // otherwise it is hard-truncated and the sentinel suffix is appended. No
-// structuredContent is attached — callers using this helper opted out of the
+// structuredContent is attached; callers using this helper opted out of the
 // structured surface. Records to the truncation counter if the body is cut.
 // budget is the byte budget resolved by the caller via mcpBudgetBytes.
 func wrapToolResultText(rec MetricsRecorder, toolName string, budget int, text string) (*mcp.CallToolResult, error) {
@@ -136,7 +136,7 @@ func wrapToolResultText(rec MetricsRecorder, toolName string, budget int, text s
 // wrapToolResultJSONText marshals a payload, runs the reducer to keep the
 // result under maxResultBytes(), and emits TEXT ONLY (no structuredContent).
 // Use this for tools whose outputSchema is not declared (e.g. the export tool
-// has two output shapes) — without an advertised schema, shipping
+// has two output shapes); without an advertised schema, shipping
 // structuredContent is half-honored and wastes wire bytes. Full budget is
 // available because the wire only carries the payload once. Records to the
 // truncation counter when the reducer fires (any text-only emission below
@@ -204,7 +204,7 @@ func wrapToolResultJSONText(rec MetricsRecorder, toolName string, budget int, pa
 // far. If the loop ends without ever fitting tier 1, we ship the tier-2
 // candidate; only when no marshaled output ever fit the text budget do we
 // fall to tier 3. This guarantees: tier 3 only fires when even the smallest
-// reduced output exceeds the full text budget — a rare, true-overflow case.
+// reduced output exceeds the full text budget, a rare, true-overflow case.
 //
 // Mutation: tier-1 structuredContent is detached from the caller's pointer
 // by copying the marshaled bytes into a fresh json.RawMessage. mcp-go would
@@ -220,14 +220,14 @@ func wrapToolResult(rec MetricsRecorder, toolName string, budget int, payload an
 	}
 
 	// Natural Tier 1: structured fits before any reducer call. Counter is
-	// not incremented — this is the no-truncation baseline.
+	// not incremented; this is the no-truncation baseline.
 	if len(out) <= structuredBudget {
 		return tier1Result(out), nil
 	}
 
 	// Track the FIRST tier-2 candidate (most data preserved). The reducer
 	// emits monotonically-smaller payloads; the first one to fit the text
-	// budget retains the most data — subsequent shrinks lose data
+	// budget retains the most data; subsequent shrinks lose data
 	// unnecessarily for the tier-2 outcome.
 	var tier2Out []byte
 	if len(out) <= budget {
@@ -293,12 +293,12 @@ func recordTier(rec MetricsRecorder, tool, tier string) {
 // followed by the truncation sentinel.
 //
 // Callers via mcpBudgetBytes are guaranteed budget >= len(truncationSuffix)
-// by the floor in that function — the admin schema's Min=100 alone is
+// by the floor in that function; the admin schema's Min=100 alone is
 // insufficient because SettingsService.Set bypasses schema validation. The
 // floor in mcpBudgetBytes is the actual invariant that keeps the sentinel
 // path well-formed; this function trusts that. Direct callers passing
 // budget < len(truncationSuffix) get a zero-length prefix + full sentinel
-// (which exceeds budget) — that path is owned by the caller.
+// (which exceeds budget); that path is owned by the caller.
 func hardTruncate(out []byte, budget int) string {
 	if budget <= 0 {
 		return ""
@@ -309,7 +309,7 @@ func hardTruncate(out []byte, budget int) string {
 
 // recallReductions tracks which actual reductions the recall reducer has
 // applied across its iterations. Each flag is set ONLY when the
-// corresponding reduction modified the response — e.g. graphDropped is set
+// corresponding reduction modified the response; e.g. graphDropped is set
 // only when the original graph was non-empty, contentTrimmed is set only
 // when at least one memory's content was actually shortened. This means the
 // composed hint and Dropped list never claim a reduction that did not
@@ -317,7 +317,7 @@ func hardTruncate(out []byte, budget int) string {
 type recallReductions struct {
 	// graphPreTrimmed records that the handler balance-trimmed the graph to its
 	// reserved byte slice (packGraphToByteBudget) before the reducer ran. Unlike
-	// the other flags it is set at construction, not by a reducer stage — it is
+	// the other flags it is set at construction, not by a reducer stage; it is
 	// carried so the reduced response re-emits the pre-cap kept/total sentinels
 	// and hint. It is deliberately NOT part of any(): the pre-cap envelope is
 	// already stamped on orig by the handler, so a no-op reducer stage returning
@@ -362,7 +362,7 @@ func (r recallReductions) hint() string {
 }
 
 // newRecallReducer builds a stateful reducer for recall responses. The graph
-// is NOT touched first — the handler has already balance-trimmed it to its
+// is NOT touched first; the handler has already balance-trimmed it to its
 // reserved byte slice (packGraphToByteBudget) so it occupies at most ~15% of
 // the budget. graphPreTrimmed records whether that pre-cap fired, so the
 // reduced response can re-emit the pre-cap kept/total sentinels and hint.
@@ -529,8 +529,8 @@ func newListReducer(orig *listMemoryResponse) reducerFunc {
 }
 
 // newProceduralReducer builds a stateful reducer for procedural_fetch. It halves
-// the returned entries each step — dropping WHOLE entries (a verbatim hard-stop
-// rule is never byte-cut mid-content) — and emits a _truncated marker whose hint
+// the returned entries each step (dropping WHOLE entries; a verbatim hard-stop
+// rule is never byte-cut mid-content) and emits a _truncated marker whose hint
 // tells the caller the next offset to resume from. Entries stay priority-ordered,
 // so a reduction sheds the lowest-priority tail of the page first.
 func newProceduralReducer(orig *mcpProceduralFetchResponse) reducerFunc {
@@ -588,7 +588,7 @@ func newListProjectsReducer(orig *listProjectsResponse) reducerFunc {
 //
 // Unlike list/list_projects/recall reducers, this one drains Found all the
 // way to empty on its final iteration. The DroppedIDs envelope IS the
-// useful payload — a caller that retains an empty Found plus
+// useful payload; a caller that retains an empty Found plus
 // DroppedIDs=[...] can re-issue get(id) per id and recover precisely. The
 // alternative (refusing to shrink at len==1 when a single oversized memory
 // still busts budget) would force tier-3 to byte-cut mid-content,
@@ -769,7 +769,7 @@ func (g graphHopInfo) tierOf(r graphRelationship) int {
 // computeGraphHops runs an undirected BFS over rels from seedIDs, mirroring
 // TraverseFromEntity's "the other endpoint" neighbour rule, to assign every
 // reachable node a hop distance (seeds = 0). seedConn[n] is the max weight of an
-// edge connecting n to a strictly lower-hop node — its strongest tether toward
+// edge connecting n to a strictly lower-hop node, its strongest tether toward
 // the seed, the resolution within a hop ring that hop distance is too blunt to
 // provide. Lateral (equal-hop) edges contribute to neither endpoint's seedConn.
 func computeGraphHops(seedIDs map[uuid.UUID]struct{}, rels []graphRelationship) graphHopInfo {
@@ -821,7 +821,7 @@ func computeGraphHops(seedIDs map[uuid.UUID]struct{}, rels []graphRelationship) 
 }
 
 // rankGraphSlice reorders both graph axes in place so a prefix of either slice
-// is a valid proximity-prioritized, source-diversified subset — the byte-budget
+// is a valid proximity-prioritized, source-diversified subset; the byte-budget
 // prefix trim (packGraphToByteBudget / newGraphReducer) stays dumb. seedIDs is
 // the seed entity set captured BEFORE resolveGraphOrphans ran (hop 0); rels must
 // already be normalized+deduped (dedupGraphRelationships). It supersedes
@@ -845,7 +845,7 @@ func rankGraphSlice(seedIDs map[uuid.UUID]struct{}, entities []graphEntity, rels
 }
 
 // sortGraphEntitiesByProximity orders entities by (hop ASC, seedConn DESC,
-// MentionCount DESC, Name ASC, ID ASC). Entities do not round-robin — there is
+// MentionCount DESC, Name ASC, ID ASC). Entities do not round-robin; there is
 // no source axis on a node. The chain is a total order, so the surviving prefix
 // is deterministic.
 func sortGraphEntitiesByProximity(entities []graphEntity, info graphHopInfo) {
@@ -940,8 +940,8 @@ func orderGraphRelsByProximity(rels []graphRelationship, info graphHopInfo) []gr
 
 // packGraphToByteBudget trims an already-signal-sorted graph so its marshaled
 // JSON fits reserveBytes, halving BOTH axes per iteration (halveWithFloor) so
-// neither entities nor relationships is driven to zero unless it started empty
-// — the same balance newGraphReducer applies for the graph tool. It is a
+// neither entities nor relationships is driven to zero unless it started empty;
+// the same balance newGraphReducer applies for the graph tool. It is a
 // one-shot pack (not a reducerFunc): the recall handler calls it once before
 // the memory-focused newRecallReducer runs, guaranteeing the graph occupies at
 // most its reserved slice of the overall budget so memories get the rest.

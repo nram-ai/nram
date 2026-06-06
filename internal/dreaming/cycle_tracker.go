@@ -168,7 +168,7 @@ func usageOrEstimateEmbed(resp *provider.EmbeddingResponse, inputs []string) *pr
 }
 
 // SSE call-operation labels. These are the dream.call.{started,completed}
-// "operation" payload field — they classify each LLM/embedder round trip in
+// "operation" payload field; they classify each LLM/embedder round trip in
 // the admin UI's live timeline and are referenced from the phase code below
 // and from the React handler. Adding a new wrapped call site means adding a
 // constant here so typos fail at compile time.
@@ -188,7 +188,7 @@ const (
 // should emit dream.phase.progress. Caps total ticks at ≤ 40 per phase
 // regardless of work size so the SSE stream stays readable on cycles with
 // millions of items. Uses ceiling division so total / step is bounded above
-// by 40 — floor division would overshoot when total is not a multiple of 40.
+// by 40; floor division would overshoot when total is not a multiple of 40.
 func progressEmitStep(total int) int {
 	if total <= 40 {
 		return 1
@@ -199,7 +199,7 @@ func progressEmitStep(total int) int {
 // shouldEmitProgress returns true when the i'th iteration (0-indexed) of a
 // total-element loop should emit dream.phase.progress. Always fires at the
 // final iteration so the UI sees the boundary, plus every step iterations
-// in between. Place at the top of the silent-phase loop — emitting after
+// in between. Place at the top of the silent-phase loop; emitting after
 // continue branches starves progress on phases that skip most rows.
 func shouldEmitProgress(i, total, step int) bool {
 	if total <= 0 {
@@ -284,7 +284,7 @@ func CycleTrackerFromContext(ctx context.Context) *CycleTracker {
 // WrapLLMCall is the single LLM/embedder call path the dreaming pipeline
 // knows about. It instruments the call (emits dream.call.{started,completed}
 // when a tracker is bound) AND charges the cycle's TokenBudget when usage is
-// returned. Phases never call budget.Spend directly — wrapping is the only
+// returned. Phases never call budget.Spend directly; wrapping is the only
 // way LLM/embedder tokens reach the budget, which guarantees that every
 // wrapped call site charges and the budget can never be silently bypassed
 // by a future phase author.
@@ -297,7 +297,7 @@ func CycleTrackerFromContext(ctx context.Context) *CycleTracker {
 //	        return p.scoreAlignment(ctx, llm, prompt)
 //	    })
 //
-// budget may be nil (unit tests, embedder probes outside a cycle) — the
+// budget may be nil (unit tests, embedder probes outside a cycle); the
 // Spend step is skipped. usage may be non-nil even on call error (the LLM
 // call already happened); the budget is still charged in that case so
 // reporting reflects real spend. If budget.Spend returns ErrBudgetExhausted

@@ -9,7 +9,7 @@ import (
 
 // instrumentedEmbeddingProvider wraps a provider.EmbeddingProvider so every
 // embedding call increments nram_embeddings_total and records its duration
-// into nram_embedding_duration_seconds. Failed calls are still recorded —
+// into nram_embedding_duration_seconds. Failed calls are still recorded;
 // duration covers the latency of both successes and failures, and the
 // counter increments on attempt so a stuck provider is visible in the rate.
 type instrumentedEmbeddingProvider struct {

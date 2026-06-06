@@ -185,7 +185,7 @@ func decodeQueryCandidates(body []byte) ([]string, error) {
 		}
 	}
 
-	// Pass 4: lenient — bracketed list with missing or mixed quoting. See
+	// Pass 4: lenient, bracketed list with missing or mixed quoting. See
 	// ParseQueryAugmentResponse docstring for the failure mode this rescues.
 	if out, ok := lenientSplitArray(body); ok {
 		return out, nil
@@ -246,7 +246,7 @@ func recoverStringArrayPrefix(body []byte) ([]string, bool) {
 }
 
 // lenientSplitArray rescues a bracketed list whose elements are not
-// (consistently) double-quoted JSON strings. Requires brackets — without them
+// (consistently) double-quoted JSON strings. Requires brackets; without them
 // there is no list structure to extract. Splits the interior on commas
 // (preferred) or newlines (fallback when no comma is present), trims
 // whitespace, and strips a single layer of wrapping ASCII single, double, or
@@ -369,7 +369,7 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	// OpenAI-compatible providers (including Ollama's compat shim) forces
 	// the model to emit an object, not an array. qwen3:8b-extract observed
 	// satisfying that constraint by emitting {"query 1":"", "query 2":"", ...}
-	// — keys-as-queries — and degenerating into a loop until max_tokens
+	// (keys-as-queries) and degenerating into a loop until max_tokens
 	// truncates. The prompt itself is already strict about array output;
 	// ParseQueryAugmentResponse strips prose preambles via brackets.
 	// Model is left empty: the query-augment provider slot supplies the model

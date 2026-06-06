@@ -113,7 +113,7 @@ func TestDream_OrgListCycles_EmitsProjectIDOnly(t *testing.T) {
 				}
 			}
 			if c.ProjectName != "" {
-				t.Errorf("orgA ProjectName: got %q, expected empty (org tier emits UUID only — fixture name was %q)", c.ProjectName, orgAProjectName)
+				t.Errorf("orgA ProjectName: got %q, expected empty (org tier emits UUID only; fixture name was %q)", c.ProjectName, orgAProjectName)
 			}
 		})
 	}

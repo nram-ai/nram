@@ -157,7 +157,7 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 		// Verify the requesting user has access to this project's namespace.
 		// Privacy: the previous implementation allowed administrators to
 		// bypass this check, exposing every tenant's entity names and
-		// relationship labels through /v1/graph. The bypass is removed —
+		// relationship labels through /v1/graph. The bypass is removed;
 		// admin views only their own org's project graphs through this
 		// endpoint, like any other role. Cross-tenant graph aggregates
 		// (entity-type / relationship-type histograms) are exposed via the
@@ -285,7 +285,7 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 		}
 
 		// Emit entities. With provenance filtering on, hide entities not
-		// connected by any surviving edge — these are orphan-only nodes
+		// connected by any surviving edge; these are orphan-only nodes
 		// (referenced solely by reaped edges) or rare edgeless mention-only
 		// entities; both are graph pollution once their provenance is gone.
 		graphEntities := make([]GraphEntity, 0, len(entities))
@@ -370,7 +370,7 @@ func resolveLiveProvenance(ctx context.Context, store GraphMemoryStore, relation
 // Entities are returned unchanged regardless of whether truncation fires.
 // Filtering entities to only those touched by retained edges would silently
 // drop isolated nodes from large namespaces and change the response shape
-// at the cap boundary — operators investigating namespace inventory rely on
+// at the cap boundary; operators investigating namespace inventory rely on
 // the entity set being a stable view of "what exists," independent of edge
 // rendering. The cap is an edge concern; entities pass through.
 //

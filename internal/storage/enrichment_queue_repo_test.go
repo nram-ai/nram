@@ -472,7 +472,7 @@ func TestEnrichmentQueueRepo_Fail_StructuredPayload(t *testing.T) {
 
 		var decoded map[string]any
 		if err := json.Unmarshal(fetched.LastError, &decoded); err != nil {
-			t.Fatalf("last_error must round-trip as JSON object on both backends; got %s — err: %v",
+			t.Fatalf("last_error must round-trip as JSON object on both backends; got %s, err: %v",
 				string(fetched.LastError), err)
 		}
 		if decoded["phase"] != "fact_extraction" {
@@ -961,7 +961,7 @@ func TestEnrichmentQueueRepo_DeleteFailedBefore(t *testing.T) {
 
 		now := time.Now().UTC()
 
-		// Old failed row — should be deleted.
+		// Old failed row: should be deleted.
 		nsOld, memOld := createTestMemoryForQueue(t, ctx, db)
 		oldFailed := &model.EnrichmentJob{MemoryID: memOld, NamespaceID: nsOld}
 		if _, err := repo.Enqueue(ctx, oldFailed); err != nil {
@@ -972,7 +972,7 @@ func TestEnrichmentQueueRepo_DeleteFailedBefore(t *testing.T) {
 		}
 		setQueueUpdatedAt(t, ctx, db, oldFailed.ID, now.Add(-10*24*time.Hour))
 
-		// Recent failed row — newer than cutoff, must survive.
+		// Recent failed row: newer than cutoff, must survive.
 		nsNew, memNew := createTestMemoryForQueue(t, ctx, db)
 		recentFailed := &model.EnrichmentJob{MemoryID: memNew, NamespaceID: nsNew}
 		if _, err := repo.Enqueue(ctx, recentFailed); err != nil {
@@ -983,7 +983,7 @@ func TestEnrichmentQueueRepo_DeleteFailedBefore(t *testing.T) {
 		}
 		setQueueUpdatedAt(t, ctx, db, recentFailed.ID, now.Add(-1*time.Hour))
 
-		// Old pending row — old but not failed, must survive.
+		// Old pending row: old but not failed, must survive.
 		nsPend, memPend := createTestMemoryForQueue(t, ctx, db)
 		oldPending := &model.EnrichmentJob{MemoryID: memPend, NamespaceID: nsPend}
 		if _, err := repo.Enqueue(ctx, oldPending); err != nil {
@@ -1078,7 +1078,7 @@ func TestEnrichmentQueueRepo_MarkStepCompleted(t *testing.T) {
 }
 
 // TestEnrichmentQueueRepo_RequeueStaleIdempotent verifies that calling
-// RequeueStale twice on the same row is safe — the second call returns
+// RequeueStale twice on the same row is safe; the second call returns
 // (false, nil) because the row's status is no longer 'processing' after
 // the first call. This is the multi-instance sweep race guard.
 func TestEnrichmentQueueRepo_RequeueStaleIdempotent(t *testing.T) {
@@ -1197,7 +1197,7 @@ func TestEnrichmentQueueRepo_RequeueStaleBumpsAttempts(t *testing.T) {
 // TestEnrichmentQueueRepo_CompleteOwnedRefusesStaleClaim verifies the core
 // stale-write guard: if a sweeper requeues a row out from under a worker,
 // the worker's eventual CompleteOwned MUST NOT silently overwrite the new
-// claimant's outcome — it returns ErrClaimLost instead.
+// claimant's outcome; it returns ErrClaimLost instead.
 func TestEnrichmentQueueRepo_CompleteOwnedRefusesStaleClaim(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
@@ -1287,7 +1287,7 @@ func TestEnrichmentQueueRepo_TickHeartbeatAdvancesUpdatedAt(t *testing.T) {
 		// Wait long enough that updated_at moves forward when we tick.
 		// RFC3339 has 1-second resolution so we need at least a 1.1s sleep.
 		baseline, _ := repo.GetByID(ctx, item.ID)
-		// Scoped wait — fine in test, harmless in CI.
+		// Scoped wait: fine in test, harmless in CI.
 		for range 12 {
 			n, err := repo.TickHeartbeat(ctx, "worker-X")
 			if err != nil {

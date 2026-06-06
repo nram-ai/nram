@@ -23,7 +23,7 @@ type OrgDreamStore interface {
 }
 
 // OrgDreamStatusResponse is the org-tier dream status payload. The system-
-// wide enabled flag is intentionally omitted — toggling dreaming is admin-
+// wide enabled flag is intentionally omitted; toggling dreaming is admin-
 // only and lives on the System tab.
 type OrgDreamStatusResponse struct {
 	DirtyCount   int                `json:"dirty_count"`
@@ -41,11 +41,11 @@ type OrgDreamingConfig struct {
 // /v1/orgs/{org_id}/dreaming. Authorization: caller must be administrator
 // or org_owner of {org_id}. Sub-paths:
 //
-//	GET  /                       — org-scoped status (dirty/stuck/recent)
-//	GET  /cycles                 — cycles list scoped to org
-//	GET  /cycles/{id}            — cycle detail (404 if not in org)
-//	POST /cycles/{id}/abandon    — abandon a stuck cycle in the org
-//	POST /cycles/{id}/rollback   — rollback a completed cycle in the org
+//	GET  /:                       org-scoped status (dirty/stuck/recent)
+//	GET  /cycles:                 cycles list scoped to org
+//	GET  /cycles/{id}:            cycle detail (404 if not in org)
+//	POST /cycles/{id}/abandon:    abandon a stuck cycle in the org
+//	POST /cycles/{id}/rollback:   rollback a completed cycle in the org
 func NewOrgDreamingHandler(cfg OrgDreamingConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID, ok := OrgScope(r)

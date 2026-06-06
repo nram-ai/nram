@@ -13,7 +13,7 @@ import (
 
 // AggregatesStore implements the aggregate-shape methods consumed by tier-B
 // (org-aggregate) and tier-C (system-aggregate) handlers. These methods
-// return only counts, distributions, and tenancy-metadata labels — never
+// return only counts, distributions, and tenancy-metadata labels, never
 // memory content, entity names, or relationship labels.
 type AggregatesStore struct {
 	db storage.DB
@@ -438,7 +438,7 @@ func (s *AggregatesStore) OrgMemoryCounts(ctx context.Context, orgID uuid.UUID) 
 }
 
 // SystemEnrichmentStats returns enrichment-queue success/failure rates
-// across the system. Tier-C only — enrichment_queue lacks per-org
+// across the system. Tier-C only; enrichment_queue lacks per-org
 // attribution.
 func (s *AggregatesStore) SystemEnrichmentStats(ctx context.Context) (api.EnrichmentStatsData, error) {
 	var stats api.EnrichmentStatsData

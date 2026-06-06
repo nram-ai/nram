@@ -371,7 +371,7 @@ func TestHandleMemoryGraph_EdgeCapTruncated(t *testing.T) {
 // would never fire.
 func TestHandleMemoryGraph_CumulativeCapAcrossSeeds(t *testing.T) {
 	// Stub a SettingsService that resolves mcp.max_result_tokens to a
-	// generous value so the byte-budget reducer cannot fire — that lets us
+	// generous value so the byte-budget reducer cannot fire; that lets us
 	// observe the cumulative edge-cap signal directly. The previous
 	// NRAM_MCP_MAX_RESULT_TOKENS env override was removed in the
 	// SettingsService cascade migration.
@@ -551,8 +551,8 @@ func TestHandleMemoryProjects_EmptyList(t *testing.T) {
 // TestExportToolNotRegistered guards against a future re-registration of the
 // MCP export tool: the tool was withdrawn because its payload travelled
 // inline through the MCP transport, which truncates anything beyond the
-// configured byte budget. If a regression brings it back, this test fails
-// — re-add the test only after replacing the response-payload pattern with
+// configured byte budget. If a regression brings it back, this test fails;
+// re-add the test only after replacing the response-payload pattern with
 // an async tool that returns a job ID and a separate poll/download tool.
 func TestExportToolNotRegistered(t *testing.T) {
 	for _, backend := range []string{storage.BackendSQLite, storage.BackendPostgres} {
@@ -560,7 +560,7 @@ func TestExportToolNotRegistered(t *testing.T) {
 			srv := newTestServer(Dependencies{Backend: backend})
 			tools := srv.MCPServer().ListTools()
 			if _, ok := tools["export"]; ok {
-				t.Fatal("export MCP tool re-registered; was deliberately withdrawn — use /v1/me/exports instead")
+				t.Fatal("export MCP tool re-registered; was deliberately withdrawn; use /v1/me/exports instead")
 			}
 		})
 	}
@@ -645,7 +645,7 @@ func TestHandleMemoryGraph_AlwaysFiltersSupersededSourceMemory(t *testing.T) {
 // against the same set of equal-weight edges produce byte-identical
 // responses regardless of upstream input order. The prior sort used
 // Weight as the sole comparator, leaving tiebreaks to sort.SliceStable's
-// preservation of input order — which itself depended on BFS traversal +
+// preservation of input order, which itself depended on BFS traversal +
 // `seenRels` map iteration (Go-randomized). The fix added a full
 // tiebreak chain (Weight DESC, SourceID, TargetID, Relation) so the
 // surviving prefix after byte-budget reducer truncation is reproducible.
@@ -659,8 +659,8 @@ func TestGraphSortIsDeterministicOnEqualWeights(t *testing.T) {
 	anchor := uuid.New()
 	user := &model.User{ID: userID, NamespaceID: nsID}
 
-	// Anchor entity + 6 neighbours, all known to the anchor with Weight=1.0
-	// — the classic "extractor doesn't differentiate" case where the
+	// Anchor entity + 6 neighbours, all known to the anchor with Weight=1.0,
+	// the classic "extractor doesn't differentiate" case where the
 	// tiebreak chain has to do all the work.
 	neighbours := make([]uuid.UUID, 6)
 	for i := range neighbours {

@@ -49,7 +49,7 @@ func sanitizeValue(v reflect.Value) reflect.Value {
 		return v
 	}
 
-	// Skip types that implement json.Marshaler — they control their own encoding.
+	// Skip types that implement json.Marshaler; they control their own encoding.
 	if v.Type().Implements(jsonMarshalerType) || reflect.PointerTo(v.Type()).Implements(jsonMarshalerType) {
 		return v
 	}

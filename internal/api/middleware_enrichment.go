@@ -4,7 +4,7 @@ import "net/http"
 
 // EnrichmentGateMiddleware returns middleware that rejects requests with 503
 // when the enrichment + dreaming gate is closed. The gate is closed whenever
-// any of the three LLM provider slots — embedding, fact, entity — is
+// any of the three LLM provider slots (embedding, fact, entity) is
 // unconfigured. The available function is called per request so a live
 // provider reload (PUT /admin/providers/{slot}) opens or closes the gate
 // without restarting the process.

@@ -13,7 +13,7 @@ import (
 // MemoryReinforcer is the narrow write-capability RecallService needs to
 // reinforce memories after a successful recall. It is deliberately separate
 // from MemoryReader because recall is a read operation from the caller's
-// perspective — the reinforcement write is a side effect, and mixing the
+// perspective: the reinforcement write is a side effect, and mixing the
 // interfaces would force every mock reader in the codebase to grow a
 // method it does not use.
 type MemoryReinforcer interface {
@@ -58,7 +58,7 @@ type SettingsReader interface {
 // ReinforcementDeps carries the optional dependencies that activate the
 // reconsolidation hook. When any is nil the hook is effectively off.
 //
-// RelWriter is optional alongside Writer — wiring only the memory side keeps
+// RelWriter is optional alongside Writer: wiring only the memory side keeps
 // the historical behavior; wiring only the relationship side enables graph
 // reinforcement without touching memory confidence. Both null = both off.
 type ReinforcementDeps struct {
@@ -167,7 +167,7 @@ func (s *RecallService) reinforce(ctx context.Context, ids []uuid.UUID) {
 
 // reinforceRels applies graph-edge reinforcement to the given relationships.
 // Recall side is additive (delta), dream side is multiplicative
-// (support_gain) — independent signals composing at the SQL-layer 2.0 cap.
+// (support_gain), independent signals composing at the SQL-layer 2.0 cap.
 // Gated by SettingReconsolidationMode so the whole reconsolidation pathway
 // has one kill switch.
 func (s *RecallService) reinforceRels(ctx context.Context, refs []RelationshipRef) {

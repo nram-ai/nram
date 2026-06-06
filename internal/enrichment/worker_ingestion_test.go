@@ -119,7 +119,7 @@ func newIngestionHarness(
 	)
 
 	// Wrap test provider stubs so the middleware writes token_usage rows
-	// to h.tokens — matches production registry wiring.
+	// to h.tokens, matches production registry wiring.
 	factFn := provider.WrapLLMForTest(constLLM(factLLM), h.tokens)
 	entityFn := provider.WrapLLMForTest(constLLM(entityLLM), h.tokens)
 	ingestionFn := provider.WrapLLMForTest(constLLM(ingestionLLM), h.tokens)
@@ -224,7 +224,7 @@ func TestIngestion_Disabled_PhaseSkipped(t *testing.T) {
 // is enabled, because the source check (not the Enriched flag) is the
 // readable expression of the recursion-prevention contract. Removing the
 // Source==DreamSource clause from phase_ingestion.go runIngestionDecision makes this test
-// fail — that is the entire point. Sibling test: worker_test.go
+// fail; that is the entire point. Sibling test: worker_test.go
 // TestProcessJob_SkipsLLMWhenSourceIsDream.
 func TestIngestion_SkipsWhenSourceIsDream(t *testing.T) {
 	ingestCalls := 0
@@ -426,7 +426,7 @@ func TestIngestion_Delete_SoftDeletesNewMemoryShortCircuits(t *testing.T) {
 	}
 	deleteBody := fmt.Sprintf(`{"operation":"DELETE","target_id":"%s","rationale":"duplicate"}`, target.ID)
 
-	// Fact LLM that would error if called — proves short-circuit skipped it.
+	// Fact LLM that would error if called, proves short-circuit skipped it.
 	failingFact := &mockLLMProvider{
 		name: "fact",
 		respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {

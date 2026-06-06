@@ -66,10 +66,10 @@ func newReapFixture(t *testing.T, ctx context.Context, db DB) reapFixture {
 			t.Fatalf("create relationship: %v", err)
 		}
 	}
-	mkEdge(a, b, "knows", &live)     // live provenance — kept
-	mkEdge(a, c, "knows", &deleted)  // soft-deleted source — lost
-	mkEdge(b, c, "knows", &loser)    // superseded source — lost
-	mkEdge(a, c, "likes", nil)       // NULL provenance (hard-deleted) — lost
+	mkEdge(a, b, "knows", &live)    // live provenance: kept
+	mkEdge(a, c, "knows", &deleted) // soft-deleted source: lost
+	mkEdge(b, c, "knows", &loser)   // superseded source: lost
+	mkEdge(a, c, "likes", nil)      // NULL provenance (hard-deleted): lost
 
 	return reapFixture{
 		nsID: nsID, mrepo: mrepo, erepo: erepo, rrepo: rrepo,
@@ -81,7 +81,7 @@ func newReapFixture(t *testing.T, ctx context.Context, db DB) reapFixture {
 // cleanLostProvenance reaps any orphaned edges left by earlier tests in the
 // shared Postgres schema, using the method under test itself. It removes only
 // garbage (edges whose sourcing memory is already gone), never live-sourced
-// data, so it cannot perturb another test's own rows — and it makes the global
+// data, so it cannot perturb another test's own rows, and it makes the global
 // counts below exact and deterministic. SQLite starts from a fresh DB per test,
 // so this is effectively a no-op there.
 func cleanLostProvenance(t *testing.T, ctx context.Context, db DB) {

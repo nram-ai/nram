@@ -63,7 +63,7 @@ func (r *DreamCycleRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Drea
 }
 
 // UpdateStatus updates the status and current phase of a dream cycle and
-// stamps updated_at. tokens_used is no longer written here — it is derived
+// stamps updated_at. tokens_used is no longer written here; it is derived
 // live from token_usage by TickProgress / Complete / Fail / Abandon.
 //
 // Guarded on status IN ('pending','running') so a phase-boundary write that
@@ -142,7 +142,7 @@ func (r *DreamCycleRepo) TickProgress(ctx context.Context, id uuid.UUID) (int, e
 	var tokensUsed int
 	if err := row.Scan(&tokensUsed); err != nil {
 		if err == sql.ErrNoRows {
-			// Row was already terminal — UPDATE matched nothing.
+			// Row was already terminal; UPDATE matched nothing.
 			return 0, nil
 		}
 		return 0, fmt.Errorf("dream cycle tick progress: %w", err)
@@ -318,7 +318,7 @@ func (r *DreamCycleRepo) ListStale(ctx context.Context, threshold time.Duration,
 
 // CountStale returns the number of running cycles whose updated_at is older
 // than the given threshold. The admin status endpoint calls this at every
-// poll (10s) — using COUNT avoids the per-poll allocation of a slice that's
+// poll (10s); using COUNT avoids the per-poll allocation of a slice that's
 // only used for its length.
 func (r *DreamCycleRepo) CountStale(ctx context.Context, threshold time.Duration) (int, error) {
 	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
@@ -339,7 +339,7 @@ func (r *DreamCycleRepo) CountStale(ctx context.Context, threshold time.Duration
 // CountStaleByNamespacePathPrefix returns the number of running cycles
 // whose project namespace path is equal to or descended from prefix and
 // whose updated_at is older than threshold. Mirrors CountStale but scoped
-// by namespace subtree — used by the org-tier dreaming status endpoint.
+// by namespace subtree; used by the org-tier dreaming status endpoint.
 func (r *DreamCycleRepo) CountStaleByNamespacePathPrefix(ctx context.Context, prefix string, threshold time.Duration) (int, error) {
 	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
 	likePattern := prefix + "/%"

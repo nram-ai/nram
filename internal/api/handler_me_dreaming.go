@@ -56,7 +56,7 @@ type MeDreamingConfig struct {
 // payloads, since the caller owns the data).
 //
 // Write operations (enable, abandon, rollback, project/enable) are NOT
-// exposed here — those remain on /v1/admin/dreaming.
+// exposed here; those remain on /v1/admin/dreaming.
 func NewSelfDreamingHandler(cfg MeDreamingConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ac := auth.FromContext(r.Context())
@@ -174,7 +174,7 @@ func extractMeDreamSubPath(path string) string {
 // resolveOwnedProjectNS resolves the project's namespace if and only if its
 // path is descended from callerNS.Path (or equal to it). Returns nil when
 // the project doesn't exist, its namespace can't be resolved, or it is not
-// owned by the caller — callers treat nil as a uniform "deny" without
+// owned by the caller; callers treat nil as a uniform "deny" without
 // distinguishing the three cases (matching the pre-existing security
 // posture of the bool-returning projectOwnedByCaller helper this replaces).
 // Returning the namespace lets the cycles-list path reuse it as the JOIN
@@ -267,7 +267,7 @@ func handleMeDreamCyclesList(w http.ResponseWriter, r *http.Request, cfg MeDream
 		// Route the single-project branch through ListSelfCycles scoped to
 		// the project's namespace (a strict subtree of callerNS). This
 		// shares the JOIN-based ProjectName population with the
-		// multi-project branch below — there is no separate
+		// multi-project branch below; there is no separate
 		// Projects.GetByID lookup whose failure could silently emit empty
 		// names, and the privacy contract (self tier → ProjectName
 		// populated) is enforced by a single code path.

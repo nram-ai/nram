@@ -6,9 +6,9 @@
 #
 # History: this file previously enabled only a forbidigo "naked float
 # literal" guard intended to keep operator-tunable magic numbers out of
-# the dreaming/recall hot paths. That rule never fired — forbidigo matches
+# the dreaming/recall hot paths. That rule never fired; forbidigo matches
 # identifiers and call expressions, not numeric literals, so it flagged
-# e.g. uuid.New() while ignoring an adjacent 0.5 literal — and its path
+# e.g. uuid.New() while ignoring an adjacent 0.5 literal, and its path
 # scoping used an invalid `issues.include-rules` key. Both were removed in
 # the v2 migration. If the naked-float invariant needs real enforcement,
 # the `mnd` (magic-number) linter scoped to internal/dreaming/phase_*.go

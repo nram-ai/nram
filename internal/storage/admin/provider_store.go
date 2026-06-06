@@ -56,7 +56,7 @@ type ProviderAdminStore struct {
 type contextWindowCacheEntry struct {
 	// effective is the smaller of the model's GGUF ceiling and any
 	// Ollama-side num_ctx (Modelfile PARAMETER or runtime override). This
-	// is what gets propagated as slot.context_window — the actual budget
+	// is what gets propagated as slot.context_window, the actual budget
 	// the pipeline can spend. OpenRouter has no dual concept; effective
 	// equals modelMax there.
 	effective int
@@ -73,7 +73,7 @@ func NewProviderAdminStore(deps ProviderAdminDeps) *ProviderAdminStore {
 }
 
 func (s *ProviderAdminStore) GetProviderConfig(ctx context.Context) (api.ProviderConfigResponse, error) {
-	// Probe every slot concurrently — each call may issue an HTTP request to
+	// Probe every slot concurrently; each call may issue an HTTP request to
 	// Ollama (/api/show) or OpenRouter (/models) on a cache miss, so a serial
 	// sweep would cost len(Slots) × probe-timeout. errgroup caps it at one
 	// probe-timeout regardless of slot count. Results are written into a
@@ -138,7 +138,7 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 
 	// Best-effort context-window detection. Only providers that expose it
 	// via API are queried; the rest get nil and the UI renders the muted
-	// "see provider docs" placeholder. Failures are swallowed — a flaky
+	// "see provider docs" placeholder. Failures are swallowed; a flaky
 	// Ollama instance must not break the whole providers page.
 	//
 	// effective is the actual ceiling the pipeline can spend (min of
@@ -190,7 +190,7 @@ func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.
 	if slot == nil || slot.Model == "" {
 		return 0, 0
 	}
-	// Skip providers that don't expose context_length via API — avoids the
+	// Skip providers that don't expose context_length via API; avoids the
 	// per-render cache lookup and write for OpenAI / Anthropic / Gemini /
 	// Custom slots.
 	if slot.Type != provider.ProviderTypeOllama && slot.Type != provider.ProviderTypeOpenRouter {
@@ -322,7 +322,7 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 	return nil, nil
 }
 
-// currentEmbeddingModel returns "" when no embedding slot is persisted —
+// currentEmbeddingModel returns "" when no embedding slot is persisted;
 // callers treat that as a fresh setup, not a model swap.
 func (s *ProviderAdminStore) currentEmbeddingModel(ctx context.Context) string {
 	if s.deps.SettingsRepo == nil {
@@ -394,7 +394,7 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 		}, nil
 	}
 
-	// Serialize destructive cascades — concurrent swaps would race on
+	// Serialize destructive cascades; concurrent swaps would race on
 	// UpdateEmbeddingDimBatch and the goroutine launches below.
 	if !s.cascadeMu.TryLock() {
 		return nil, fmt.Errorf("an embedding-model switch is already in progress")
@@ -457,7 +457,7 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 // LoadProviderRegistryConfig reads every provider slot setting from the
 // database (iterating the canonical provider.Slots) and assembles a
 // RegistryConfig. Errors fetching or decoding any slot are swallowed so a
-// malformed row in one slot doesn't poison the others — the affected slot
+// malformed row in one slot doesn't poison the others; the affected slot
 // stays empty (treated as unconfigured) and its provider will report
 // unavailable until it's repaired through the admin UI.
 func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.SettingsRepo) provider.RegistryConfig {
@@ -512,7 +512,7 @@ func (s *ProviderAdminStore) ListOllamaModels(ctx context.Context, ollamaURL str
 func (s *ProviderAdminStore) PullOllamaModel(_ context.Context, modelName string, ollamaURL string) error {
 	url := s.resolveOllamaURL(ollamaURL)
 	client := provider.NewOllamaClient(provider.OllamaConfig{BaseURL: url})
-	// Use a detached context — model pulls can take minutes and must not be
+	// Use a detached context; model pulls can take minutes and must not be
 	// cancelled when the HTTP request completes.
 	return client.PullModel(context.Background(), modelName, nil)
 }

@@ -77,7 +77,7 @@ func TestOrgUsage_AdminCanQueryAnyOrg(t *testing.T) {
 	store := &mockUsageStore{report: defaultUsageReport()}
 	h := NewOrgUsageHandler(UsageConfig{Store: store})
 
-	// Administrator reads someone else's org — requireOrgOwner short-circuits
+	// Administrator reads someone else's org; requireOrgOwner short-circuits
 	// admins through.
 	ac := &auth.AuthContext{
 		UserID: uuid.New(),

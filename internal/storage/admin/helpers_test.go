@@ -47,7 +47,7 @@ func setupAdminTestDB(t *testing.T) storage.DB {
 
 // insertTestNamespace creates a single org-kind namespace and returns its ID.
 // Many child rows (token_usage, memories, projects) require namespace_id
-// NOT NULL — this is the cheapest fixture that satisfies the FK.
+// NOT NULL; this is the cheapest fixture that satisfies the FK.
 func insertTestNamespace(t *testing.T, db storage.DB, ctx context.Context) uuid.UUID {
 	t.Helper()
 	nsID := uuid.New()

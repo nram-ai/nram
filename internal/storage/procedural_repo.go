@@ -13,7 +13,7 @@ import (
 
 // ProceduralRepo provides CRUD operations for the procedural_entries table:
 // the verbatim procedural memory tier. It deliberately has no coupling to the
-// enrichment queue, embedder, or vector store — procedural entries are stored
+// enrichment queue, embedder, or vector store: procedural entries are stored
 // and read back byte-for-byte, never embedded or consolidated.
 type ProceduralRepo struct {
 	db DB

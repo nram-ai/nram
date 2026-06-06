@@ -40,7 +40,7 @@ export function buildCategoryIndex(
 
 // matchesQuery reports whether a setting matches a search query (case
 // insensitive), checking the key, description, and the group/sub-section names
-// it lives under. An empty or whitespace-only query never matches — callers
+// it lives under. An empty or whitespace-only query never matches; callers
 // treat an empty query as "not searching" and show the active tab instead.
 export function matchesQuery(
   item: SettingWithSchema,

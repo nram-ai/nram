@@ -242,7 +242,7 @@ function AddTagInput({ onAdd }: { onAdd: (tag: string) => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// ProjectExportButton — per-row Export action that hits the synchronous
+// ProjectExportButton: per-row Export action that hits the synchronous
 // REST endpoint at /v1/projects/{id}/memories/export and streams a JSON
 // download. stopPropagation keeps the row-click detail-panel toggle
 // inactive while the button handles its own click.
@@ -489,7 +489,7 @@ function ProjectDetailPanel({
         mmr_lambda: editMmrLambda ?? systemWeights.mmr_lambda,
       }
     : null;
-  // Origin is excluded — additive offset, not a convex combination member.
+  // Origin is excluded: additive offset, not a convex combination member.
   const weightSum = effectiveWeights
     ? effectiveWeights.similarity +
       effectiveWeights.recency +
@@ -507,7 +507,7 @@ function ProjectDetailPanel({
   function handleSave() {
     if (!project) return;
     // Build sparse payload: only include fields the operator actually set.
-    // Empty inputs roundtrip back to "inherit system default" — the cascade
+    // Empty inputs roundtrip back to "inherit system default"; the cascade
     // resolver picks them up from the system layer at recall time.
     const settings = buildProjectSettingsPayload({
       similarity: editSimilarity,
@@ -694,7 +694,7 @@ function ProjectDetailPanel({
               </div>
             </div>
 
-            {/* Settings Overrides — sparse: leave a field empty to inherit
+            {/* Settings Overrides, sparse: leave a field empty to inherit
              * the system-level setting. Numeric inputs show the current
              * effective system default as placeholder text so operators see
              * what the cascade will resolve to without typing anything. */}
@@ -725,7 +725,7 @@ function ProjectDetailPanel({
                 />
               </div>
 
-              {/* Enrichment enabled — three-state: inherit / on / off */}
+              {/* Enrichment enabled, three-state: inherit / on / off */}
               <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">
                   Enrichment Enabled
@@ -741,7 +741,7 @@ function ProjectDetailPanel({
                 </select>
               </div>
 
-              {/* Dreaming enabled — three-state, mirrors the enrichment toggle. */}
+              {/* Dreaming enabled: three-state, mirrors the enrichment toggle. */}
               <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">
                   Dreaming Enabled
@@ -757,7 +757,7 @@ function ProjectDetailPanel({
                 </select>
               </div>
 
-              {/* Ranking weights — sparse inputs. Each placeholder shows
+              {/* Ranking weights: sparse inputs. Each placeholder shows
                * the effective system value so operators can see the
                * baseline before deciding whether to override. When the
                * schema endpoint is missing one or more ranking.weight.*
@@ -830,7 +830,7 @@ function ProjectDetailPanel({
                       />
                     </div>
 
-                    {/* Effective weights — read-only summary so operators see
+                    {/* Effective weights: read-only summary so operators see
                      * exactly what recall will use after merging the override
                      * with the system layer. */}
                     <div className="mt-3 rounded border bg-muted/30 p-3 text-xs">
@@ -1231,7 +1231,7 @@ function ProjectManagement() {
         </table>
       </div>
 
-      {/* Detail Panel — writable users get full edit/delete, readonly gets read-only view */}
+      {/* Detail Panel: writable users get full edit/delete, readonly gets read-only view */}
       {detailProjectId && auth.canWrite && (
         // key remounts the panel per project so its edit form re-initializes
         // from a fresh instance; without it, re-opening a cached project races
