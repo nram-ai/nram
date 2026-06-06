@@ -553,7 +553,6 @@ func main() {
 
 	orgAdminStore := adminstore.NewOrgAdminStore(orgRepo, namespaceRepo)
 	userAdminStore := adminstore.NewUserAdminStore(userRepo, apiKeyRepo, namespaceRepo, orgRepo, projectRepo)
-	projectAdminStore := adminstore.NewProjectAdminStore(db, projectRepo, namespaceRepo)
 	webhookAdminStore := adminstore.NewWebhookAdminStore(webhookRepo)
 	settingsAdminStore := adminstore.NewSettingsAdminStore(settingsRepo, settingsSvc)
 	dashboardStore := adminstore.NewDashboardStore(db, enrichmentQueueRepo)
@@ -807,6 +806,9 @@ func main() {
 			StartTime: startTime,
 		}),
 
+		// OpenAPI spec served at GET /openapi.yaml
+		OpenAPISpec: api.NewOpenAPIHandler(),
+
 		// Project-scoped memory handlers
 		Store:      api.NewStoreHandler(storeSvc, eventBus),
 		List:       api.NewListHandler(memoryRepo, projectRepo, lineageRepo),
@@ -951,7 +953,6 @@ func main() {
 		AdminActivity:      api.NewAdminActivityHandler(api.DashboardConfig{Store: dashboardStore}),
 		AdminOrgs:          api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore, Audit: auditStore}),
 		AdminUsers:         api.NewAdminUsersHandler(api.UserAdminConfig{Store: userAdminStore, Audit: auditStore}),
-		AdminProjects:      api.NewAdminProjectsHandler(api.ProjectAdminConfig{Store: projectAdminStore}),
 		AdminProviders:     api.NewAdminProvidersHandler(api.ProviderAdminConfig{Store: providerAdminStore}),
 		AdminSettings:      api.NewAdminSettingsHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),
 		AdminSettingsReset: api.NewAdminSettingsResetHandler(api.SettingsAdminConfig{Store: settingsAdminStore}),

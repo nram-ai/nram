@@ -144,7 +144,7 @@ The deep reference is split out to keep this page approachable:
 - **[docs/models.md](docs/models.md)**: recommended models per slot, VRAM sizing for local models, Ollama `num_ctx` and keep-alive tuning.
 - **[docs/configuration.md](docs/configuration.md)**: bootstrap vs runtime config, environment variables, databases (SQLite, Postgres, Qdrant), migrations, and operator flags.
 - **[docs/operations.md](docs/operations.md)**: troubleshooting and the dreaming / backfill operations guide.
-- **[docs/openapi.yaml](docs/openapi.yaml)**: OpenAPI 3.1 specification (may lag the code; the API doc reflects the router).
+- **[docs/openapi.yaml](docs/openapi.yaml)**: OpenAPI 3.1 specification, also served by the running server at `GET /openapi.yaml`. A conformance test keeps it in sync with the router.
 
 ## Development
 

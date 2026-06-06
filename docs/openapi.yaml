@@ -1,7 +1,15 @@
 openapi: 3.1.0
 info:
   title: nram API
-  description: Neural RAM, persistent memory layer for AI agents.
+  description: |
+    Neural RAM, persistent memory layer for AI agents.
+
+    This document covers the HTTP/JSON REST surface. The following non-JSON
+    transports are served by the same binary but intentionally not modeled
+    here: the MCP Streamable HTTP endpoint at `/mcp`, the Server-Sent Events
+    stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
+    consent/landing shells served by `GET /authorize` and `GET /share/accept`.
+    See docs/api.md for those.
   version: 0.1.0
   license:
     name: MIT
@@ -29,8 +37,6 @@ tags:
     description: Admin organization management
   - name: Admin - Users
     description: Admin user management
-  - name: Admin - Projects
-    description: Admin project management
   - name: Admin - Providers
     description: LLM/embedding provider configuration
   - name: Admin - Settings
@@ -53,12 +59,26 @@ tags:
     description: OAuth client and IdP management
   - name: Org - Users
     description: "Org-scoped user management (org_owner+)"
-  - name: Org - Projects
-    description: "Org-scoped project listing (member+)"
   - name: Org - IdP
     description: "Org-scoped IdP configuration (org_owner+)"
-  - name: Events
-    description: Server-Sent Events
+  - name: Org - Dashboard
+    description: "Org-scoped dashboard, activity, dreaming and enrichment (org_owner+)"
+  - name: Procedural
+    description: User-scoped procedural (standing-instruction) entries
+  - name: Account
+    description: "Self-service profile, password, passkeys, capabilities"
+  - name: Exports
+    description: User-scoped asynchronous export jobs
+  - name: Shares
+    description: User-scoped share-token management
+  - name: Dreaming
+    description: "Dreaming (memory consolidation) pipeline, scoped by role"
+  - name: Admin - System
+    description: "System-aggregate dashboards (administrator only)"
+  - name: Admin - Graph
+    description: "Knowledge-graph maintenance (administrator only)"
+  - name: Meta
+    description: API metadata
 
 security:
   - BearerAuth: []
@@ -79,15 +99,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
 
-  /metrics:
+  /openapi.yaml:
     get:
-      operationId: getMetrics
-      tags: [Health]
-      summary: Prometheus metrics (optional)
+      operationId: getOpenAPISpec
+      tags: [Meta]
+      summary: This OpenAPI specification (served from the binary)
       security: []
       responses:
         "200":
-          description: Prometheus text format
+          description: OpenAPI 3.1 document
+          content:
+            application/yaml:
+              schema:
+                type: string
 
   # ── Setup ───────────────────────────────────────────────────────────────
   /v1/admin/setup/status:
@@ -216,10 +240,60 @@ paths:
                 $ref: "#/components/schemas/OAuthProtectedResourceMetadata"
 
   /authorize:
-    get:
-      operationId: oauthAuthorize
+    post:
+      operationId: oauthAuthorizeDecision
       tags: [OAuth]
-      summary: OAuth authorization endpoint (redirects)
+      summary: Submit the OAuth consent decision
+      description: |
+        Receives the user's approve/deny decision from the consent page and
+        redirects back to the client with an authorization code (on approve)
+        or an error. `GET /authorize` serves the consent HTML shell and is not
+        modeled here; the page reads its render context from
+        `GET /v1/oauth/authorize/context`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [client_id, redirect_uri, decision]
+              properties:
+                client_id:
+                  type: string
+                redirect_uri:
+                  type: string
+                  format: uri
+                response_type:
+                  type: string
+                  enum: [code]
+                code_challenge:
+                  type: string
+                code_challenge_method:
+                  type: string
+                  enum: [S256]
+                scope:
+                  type: string
+                state:
+                  type: string
+                decision:
+                  type: string
+                  enum: [approve, deny]
+                auth_mode:
+                  type: string
+                share_token:
+                  type: string
+      responses:
+        "302":
+          description: Redirect to redirect_uri with authorization code or error
+        "400":
+          description: OAuth error response
+
+  /v1/oauth/authorize/context:
+    get:
+      operationId: getAuthorizeContext
+      tags: [OAuth]
+      summary: Render context for the OAuth consent page
       security: []
       parameters:
         - name: client_id
@@ -235,22 +309,154 @@ paths:
             format: uri
         - name: response_type
           in: query
-          required: true
           schema:
             type: string
-            enum: [code]
         - name: code_challenge
           in: query
-          required: true
           schema:
             type: string
         - name: code_challenge_method
           in: query
           schema:
             type: string
-            enum: [S256]
-            default: S256
         - name: scope
+          in: query
+          schema:
+            type: string
+        - name: resource
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Authorization request context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthorizeContextResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/oauth/share/preview:
+    post:
+      operationId: previewShare
+      tags: [OAuth]
+      summary: Preview a pasted share secret without consuming it
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SharePreviewRequest"
+      responses:
+        "200":
+          description: Share preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SharePreviewResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/share/accept:
+    get:
+      operationId: acceptShare
+      tags: [OAuth]
+      summary: Resolve a share magic-link token into its grants
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Share details and MCP server URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareAcceptResponse"
+
+  /v1/auth/passkey/begin:
+    post:
+      operationId: passkeyLoginBegin
+      tags: [Auth]
+      summary: Begin a passkey (WebAuthn) login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: WebAuthn assertion request options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebAuthnOptions"
+
+  /v1/auth/passkey/finish:
+    post:
+      operationId: passkeyLoginFinish
+      tags: [Auth]
+      summary: Finish a passkey (WebAuthn) login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebAuthnAssertion"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/idp/login:
+    get:
+      operationId: idpLogin
+      tags: [Auth]
+      summary: Begin an IdP (OIDC SSO) login
+      security: []
+      parameters:
+        - name: idp_id
+          in: query
+          schema:
+            type: string
+        - name: redirect_to
+          in: query
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to the identity provider
+
+  /auth/idp/callback:
+    get:
+      operationId: idpCallback
+      tags: [Auth]
+      summary: IdP (OIDC SSO) callback
+      security: []
+      parameters:
+        - name: code
           in: query
           schema:
             type: string
@@ -260,9 +466,7 @@ paths:
             type: string
       responses:
         "302":
-          description: Redirect to redirect_uri with authorization code
-        "400":
-          description: OAuth error response
+          description: Redirect back to the app with a session
 
   /token:
     post:
@@ -353,30 +557,6 @@ paths:
           $ref: "#/components/responses/Unauthorized"
 
   # ── Events (SSE) ───────────────────────────────────────────────────────
-  /v1/events:
-    get:
-      operationId: streamEvents
-      tags: [Events]
-      summary: Server-Sent Events stream
-      parameters:
-        - name: scope
-          in: query
-          description: Prefix filter for event scope (e.g. "project:<uuid>")
-          schema:
-            type: string
-        - name: Last-Event-ID
-          in: header
-          description: Resume from this event ID
-          schema:
-            type: string
-      responses:
-        "200":
-          description: SSE event stream
-          content:
-            text/event-stream:
-              schema:
-                type: string
-
   # ── Project-Scoped Memories ─────────────────────────────────────────────
   /v1/projects/{project_id}/memories:
     post:
@@ -1112,113 +1292,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/NamespaceTreeResponse"
 
-  /v1/enrichment:
-    get:
-      operationId: getEnrichmentStatus
-      tags: [Enrichment]
-      summary: Enrichment queue status (all authenticated users)
-      responses:
-        "200":
-          description: Queue status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EnrichmentQueueStatus"
-
-  /v1/enrichment/queue:
-    get:
-      operationId: getEnrichmentQueue
-      tags: [Enrichment]
-      summary: Enrichment queue with items (all authenticated users)
-      responses:
-        "200":
-          description: Queue status with items
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EnrichmentQueueStatus"
-
-  /v1/enrichment/retry:
-    post:
-      operationId: retryEnrichment
-      tags: [Enrichment]
-      summary: Retry failed enrichment jobs (administrator only)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                ids:
-                  type: array
-                  items:
-                    type: string
-                    format: uuid
-      responses:
-        "200":
-          description: Retry result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  retried:
-                    type: integer
-        "403":
-          $ref: "#/components/responses/Forbidden"
-
-  /v1/enrichment/pause:
-    post:
-      operationId: pauseEnrichment
-      tags: [Enrichment]
-      summary: Pause or resume enrichment workers (administrator only)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [paused]
-              properties:
-                paused:
-                  type: boolean
-      responses:
-        "200":
-          description: Pause state
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  paused:
-                    type: boolean
-        "403":
-          $ref: "#/components/responses/Forbidden"
-
-  /v1/enrichment/test-prompt:
-    post:
-      operationId: testEnrichmentPrompt
-      tags: [Enrichment]
-      summary: Test an enrichment prompt against an LLM (administrator only)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/EnrichmentTestPromptRequest"
-      responses:
-        "200":
-          description: Test result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EnrichmentTestPromptResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-
   # ── Org-Scoped Routes ──────────────────────────────────────────────────
   /v1/orgs/{org_id}/users:
     get:
@@ -1436,8 +1509,8 @@ paths:
   /v1/orgs/{org_id}/analytics:
     get:
       operationId: orgGetAnalytics
-      tags: [Org - Projects]
-      summary: Memory analytics for organization (member+)
+      tags: [Org - Dashboard]
+      summary: Memory analytics for organization (org_owner+)
       parameters:
         - $ref: "#/components/parameters/OrgId"
       responses:
@@ -1446,14 +1519,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AnalyticsData"
+                $ref: "#/components/schemas/OrgAnalyticsData"
         "403":
           $ref: "#/components/responses/Forbidden"
 
   /v1/orgs/{org_id}/usage:
     get:
       operationId: orgGetUsage
-      tags: [Org - Projects]
+      tags: [Org - Dashboard]
       summary: Token usage for organization (member+)
       parameters:
         - $ref: "#/components/parameters/OrgId"
@@ -1811,50 +1884,6 @@ paths:
           description: API key revoked
         "404":
           $ref: "#/components/responses/NotFound"
-
-  # ── Admin: Projects ────────────────────────────────────────────────────
-  /v1/admin/projects:
-    get:
-      operationId: adminListProjects
-      tags: [Admin - Projects]
-      summary: List all projects
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-      responses:
-        "200":
-          description: Project list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Project"
-                  pagination:
-                    $ref: "#/components/schemas/Pagination"
-
-    post:
-      operationId: adminCreateProject
-      tags: [Admin - Projects]
-      summary: Create a project
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AdminCreateProjectRequest"
-      responses:
-        "201":
-          description: Project created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Project"
-        "400":
-          $ref: "#/components/responses/BadRequest"
 
   # ── Admin: Providers ───────────────────────────────────────────────────
   /v1/admin/providers:
@@ -2296,6 +2325,27 @@ paths:
                 $ref: "#/components/schemas/OAuthIdPConfig"
 
   /v1/admin/oauth/idp/{id}:
+    put:
+      operationId: adminUpdateIdP
+      tags: [Admin - OAuth]
+      summary: Update an identity provider
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIdPRequest"
+      responses:
+        "200":
+          description: IdP updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthIdPConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
     delete:
       operationId: adminDeleteIdP
       tags: [Admin - OAuth]
@@ -2307,6 +2357,1353 @@ paths:
           description: IdP deleted
         "404":
           $ref: "#/components/responses/NotFound"
+
+  # ── Memory: ids / move / preview-augmentation ───────────────────────────
+  /v1/projects/{project_id}/memories/ids:
+    get:
+      operationId: listMemoryIDs
+      tags: [Memories]
+      summary: List matching memory IDs (for bulk selection)
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Matching IDs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListIDsResponse"
+
+  /v1/projects/{project_id}/memories/{id}/move:
+    post:
+      operationId: moveMemory
+      tags: [Memories]
+      summary: Move one memory to another project the caller owns
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/MemoryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoveRequest"
+      responses:
+        "200":
+          description: Move result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoveResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/projects/{project_id}/memories/move:
+    post:
+      operationId: bulkMoveMemories
+      tags: [Memories]
+      summary: Move selected memories to another project the caller owns
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoveRequest"
+      responses:
+        "200":
+          description: Move result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoveResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/projects/{project_id}/memories/{id}/preview-augmentation:
+    post:
+      operationId: previewMemoryAugmentation
+      tags: [Memories]
+      summary: Preview the query-augmentation for a memory without persisting
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/MemoryId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+      responses:
+        "200":
+          description: Augmentation preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryPreviewAugmentResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  # ── User: Procedural ────────────────────────────────────────────────────
+  /v1/me/procedural:
+    get:
+      operationId: listProcedural
+      tags: [Procedural]
+      summary: List the caller's procedural entries
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Paginated procedural entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedProcedural"
+    post:
+      operationId: createProcedural
+      tags: [Procedural]
+      summary: Create a procedural entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProceduralRequest"
+      responses:
+        "201":
+          description: Procedural entry created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProceduralEntry"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/me/procedural/export:
+    get:
+      operationId: exportProcedural
+      tags: [Procedural]
+      summary: Export all of the caller's procedural entries
+      responses:
+        "200":
+          description: Export payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProceduralExportData"
+
+  /v1/me/procedural/import:
+    post:
+      operationId: importProcedural
+      tags: [Procedural]
+      summary: Import procedural entries (merge into the caller's set)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProceduralExportData"
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProceduralImportResult"
+
+  /v1/me/procedural/{id}:
+    get:
+      operationId: getProcedural
+      tags: [Procedural]
+      summary: Get a procedural entry
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Procedural entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProceduralEntry"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      operationId: updateProcedural
+      tags: [Procedural]
+      summary: Update a procedural entry
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProceduralRequest"
+      responses:
+        "200":
+          description: Updated procedural entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProceduralEntry"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteProcedural
+      tags: [Procedural]
+      summary: Delete a procedural entry
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── User: Account (profile / password / capabilities / ranking) ─────────
+  /v1/me/profile:
+    get:
+      operationId: getProfile
+      tags: [Account]
+      summary: Get the caller's profile
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionUser"
+    patch:
+      operationId: updateProfile
+      tags: [Account]
+      summary: Update the caller's profile (theme)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MeProfilePatchRequest"
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionUser"
+
+  /v1/me/password:
+    post:
+      operationId: changePassword
+      tags: [Account]
+      summary: Change the caller's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  changed:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/me/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [Account]
+      summary: Self-tier capability flags
+      responses:
+        "200":
+          description: Capability flags
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeCapabilitiesResponse"
+
+  /v1/me/ranking-weights/defaults:
+    get:
+      operationId: getRankingWeightDefaults
+      tags: [Account]
+      summary: Ranking-weight schema and effective global defaults
+      responses:
+        "200":
+          description: Ranking-weight defaults
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MeRankingWeightDefault"
+
+  # ── User: Passkeys ──────────────────────────────────────────────────────
+  /v1/me/passkeys:
+    get:
+      operationId: listPasskeys
+      tags: [Account]
+      summary: List the caller's passkeys
+      responses:
+        "200":
+          description: Passkeys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Passkey"
+
+  /v1/me/passkeys/register/begin:
+    post:
+      operationId: passkeyRegisterBegin
+      tags: [Account]
+      summary: Begin registering a new passkey
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        "200":
+          description: WebAuthn credential creation options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebAuthnOptions"
+
+  /v1/me/passkeys/register/finish:
+    post:
+      operationId: passkeyRegisterFinish
+      tags: [Account]
+      summary: Finish registering a new passkey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebAuthnAssertion"
+      responses:
+        "201":
+          description: Passkey registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Passkey"
+
+  /v1/me/passkeys/{id}:
+    delete:
+      operationId: deletePasskey
+      tags: [Account]
+      summary: Delete a passkey
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── User: Exports ───────────────────────────────────────────────────────
+  /v1/me/exports:
+    get:
+      operationId: listExports
+      tags: [Exports]
+      summary: List the caller's export jobs
+      responses:
+        "200":
+          description: Export jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ExportJob"
+    post:
+      operationId: createExport
+      tags: [Exports]
+      summary: Create an asynchronous export job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExportRequest"
+      responses:
+        "201":
+          description: Export job created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportJob"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/me/exports/{job_id}:
+    get:
+      operationId: getExport
+      tags: [Exports]
+      summary: Get an export job
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Export job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportJob"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteExport
+      tags: [Exports]
+      summary: Delete an export job and its artifact
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/me/exports/{job_id}/download:
+    get:
+      operationId: downloadExport
+      tags: [Exports]
+      summary: Download a completed export artifact
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Export artifact (ZIP)
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── User: Shares ────────────────────────────────────────────────────────
+  /v1/me/shares:
+    get:
+      operationId: listShares
+      tags: [Shares]
+      summary: List the caller's share tokens
+      responses:
+        "200":
+          description: Share tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shares:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ShareDetail"
+    post:
+      operationId: createShare
+      tags: [Shares]
+      summary: Create a share token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShareCreateRequest"
+      responses:
+        "201":
+          description: Share token created (secret returned once)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareCreateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/me/shares/{id}:
+    get:
+      operationId: getShare
+      tags: [Shares]
+      summary: Get a share token
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Share token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateShare
+      tags: [Shares]
+      summary: Replace a share token's grants
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grants:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ShareGrantInput"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    type: boolean
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: revokeShare
+      tags: [Shares]
+      summary: Revoke a share token
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:
+                    type: boolean
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── User: Dreaming + Enrichment (self-tier) ─────────────────────────────
+  /v1/me/dreaming:
+    get:
+      operationId: meGetDreaming
+      tags: [Dreaming]
+      summary: Self-tier dreaming status (aggregate, or per-project)
+      parameters:
+        - name: project_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Dreaming status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeDreamingAggregateStatus"
+
+  /v1/me/dreaming/cycles:
+    get:
+      operationId: meListDreamCycles
+      tags: [Dreaming]
+      summary: Self-tier dream cycles
+      parameters:
+        - name: project_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Dream cycles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DreamCycle"
+
+  /v1/me/dreaming/cycles/{id}:
+    get:
+      operationId: meGetDreamCycle
+      tags: [Dreaming]
+      summary: Self-tier dream cycle detail with logs
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Dream cycle detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamCycleDetail"
+
+  /v1/me/dreaming/cycles/{id}/abandon:
+    post:
+      operationId: meAbandonDreamCycle
+      tags: [Dreaming]
+      summary: Abandon a stuck self-owned dream cycle
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Abandon result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamCycleActionResult"
+
+  /v1/me/dreaming/cycles/{id}/rollback:
+    post:
+      operationId: meRollbackDreamCycle
+      tags: [Dreaming]
+      summary: Roll back a self-owned dream cycle
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Rollback result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamCycleActionResult"
+
+  /v1/me/enrichment:
+    get:
+      operationId: meGetEnrichment
+      tags: [Enrichment]
+      summary: Self-tier enrichment queue status
+      responses:
+        "200":
+          description: Queue status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/me/enrichment/queue:
+    get:
+      operationId: meGetEnrichmentQueue
+      tags: [Enrichment]
+      summary: Self-tier enrichment queue with items
+      responses:
+        "200":
+          description: Queue status with items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/me/enrichment/retry:
+    post:
+      operationId: meRetryEnrichment
+      tags: [Enrichment]
+      summary: Retry the caller's failed enrichment jobs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentRetryRequest"
+      responses:
+        "200":
+          description: Retry result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentRetryResponse"
+
+  # ── Tier-A: usage cost rates ────────────────────────────────────────────
+  /v1/usage/cost_rates:
+    get:
+      operationId: getUsageCostRates
+      tags: [Usage]
+      summary: Token cost-rate table (readable by any authenticated user)
+      responses:
+        "200":
+          description: Cost rates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    description: Cost-rate blob (array or object of per-operation rates)
+                    type: object
+                    additionalProperties: true
+
+  # ── Org: dashboard / activity / dreaming / enrichment / idp item ────────
+  /v1/orgs/{org_id}/dashboard:
+    get:
+      operationId: orgGetDashboard
+      tags: [Org - Dashboard]
+      summary: Org-aggregate dashboard (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: Org dashboard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgDashboardData"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/orgs/{org_id}/activity:
+    get:
+      operationId: orgGetActivity
+      tags: [Org - Dashboard]
+      summary: Org activity feed (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: days
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Org activity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgActivityResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/orgs/{org_id}/dreaming:
+    get:
+      operationId: orgGetDreaming
+      tags: [Org - Dashboard]
+      summary: Org dreaming status (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: Dreaming status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgDreamStatusResponse"
+
+  /v1/orgs/{org_id}/dreaming/cycles:
+    get:
+      operationId: orgListDreamCycles
+      tags: [Org - Dashboard]
+      summary: Org dream cycles (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: Dream cycles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DreamCycle"
+
+  /v1/orgs/{org_id}/dreaming/cycles/{id}:
+    get:
+      operationId: orgGetDreamCycle
+      tags: [Org - Dashboard]
+      summary: Org dream cycle detail with logs (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Dream cycle detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamCycleDetail"
+
+  /v1/orgs/{org_id}/dreaming/cycles/{id}/abandon:
+    post:
+      operationId: orgAbandonDreamCycle
+      tags: [Org - Dashboard]
+      summary: Abandon a stuck org dream cycle (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Abandon result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamCycleActionResult"
+
+  /v1/orgs/{org_id}/dreaming/cycles/{id}/rollback:
+    post:
+      operationId: orgRollbackDreamCycle
+      tags: [Org - Dashboard]
+      summary: Roll back an org dream cycle (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Rollback result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamCycleActionResult"
+
+  /v1/orgs/{org_id}/enrichment:
+    get:
+      operationId: orgGetEnrichment
+      tags: [Enrichment]
+      summary: Org enrichment queue status (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: Queue status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/orgs/{org_id}/enrichment/queue:
+    get:
+      operationId: orgGetEnrichmentQueue
+      tags: [Enrichment]
+      summary: Org enrichment queue with items (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: Queue status with items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/orgs/{org_id}/enrichment/retry:
+    post:
+      operationId: orgRetryEnrichment
+      tags: [Enrichment]
+      summary: Retry failed org enrichment jobs (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentRetryRequest"
+      responses:
+        "200":
+          description: Retry result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentRetryResponse"
+
+  /v1/orgs/{org_id}/idp/{id}:
+    put:
+      operationId: orgUpdateIdP
+      tags: [Org - IdP]
+      summary: Update an org identity provider (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIdPRequest"
+      responses:
+        "200":
+          description: IdP updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthIdPConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: orgDeleteIdP
+      tags: [Org - IdP]
+      summary: Delete an org identity provider (org_owner+)
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: IdP deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Admin: settings reset ───────────────────────────────────────────────
+  /v1/admin/settings/reset:
+    post:
+      operationId: adminResetSettings
+      tags: [Admin - Settings]
+      summary: Reset one or all settings to their defaults
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingResetRequest"
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  reset:
+                    type: integer
+
+  # ── Admin: database extras ──────────────────────────────────────────────
+  /v1/admin/database/preflight:
+    post:
+      operationId: adminDatabasePreflight
+      tags: [Admin - Database]
+      summary: Run pre-migration checks against a target Postgres URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DatabaseURLRequest"
+      responses:
+        "200":
+          description: Preflight report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreflightReport"
+
+  /v1/admin/database/reset:
+    post:
+      operationId: adminDatabaseReset
+      tags: [Admin - Database]
+      summary: Reset (drop/truncate) database tables
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetRequest"
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetResult"
+
+  /v1/admin/database/migration-audit:
+    get:
+      operationId: adminDatabaseMigrationAudit
+      tags: [Admin - Database]
+      summary: Audit for orphaned rows after a migration
+      responses:
+        "200":
+          description: Migration audit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationAudit"
+
+  # ── Admin: graph maintenance ────────────────────────────────────────────
+  /v1/admin/graph/health:
+    get:
+      operationId: adminGraphHealth
+      tags: [Admin - Graph]
+      summary: Knowledge-graph health counters
+      responses:
+        "200":
+          description: Graph health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphHealth"
+
+  /v1/admin/graph/repair:
+    post:
+      operationId: adminGraphRepair
+      tags: [Admin - Graph]
+      summary: Repair the knowledge graph (reap dangling edges/entities)
+      responses:
+        "200":
+          description: Repair result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphRepairResult"
+
+  # ── Admin: system aggregates ────────────────────────────────────────────
+  /v1/admin/system/dashboard:
+    get:
+      operationId: systemGetDashboard
+      tags: [Admin - System]
+      summary: System-wide dashboard with per-org breakdown
+      responses:
+        "200":
+          description: System dashboard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemDashboardData"
+
+  /v1/admin/system/activity:
+    get:
+      operationId: systemGetActivity
+      tags: [Admin - System]
+      summary: System-wide activity feed
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: System activity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemActivityResponse"
+
+  /v1/admin/system/analytics:
+    get:
+      operationId: systemGetAnalytics
+      tags: [Admin - System]
+      summary: System-wide analytics
+      responses:
+        "200":
+          description: System analytics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemAnalyticsData"
+
+  /v1/admin/system/usage:
+    get:
+      operationId: systemGetUsage
+      tags: [Admin - System]
+      summary: System-wide token usage
+      parameters:
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [org, user, project, operation, model]
+      responses:
+        "200":
+          description: Usage report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageReport"
+
+  # ── Admin: enrichment (system-ops) ──────────────────────────────────────
+  /v1/admin/enrichment:
+    get:
+      operationId: adminGetEnrichment
+      tags: [Enrichment]
+      summary: Cross-tenant enrichment queue status (administrator only)
+      responses:
+        "200":
+          description: Queue status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/admin/enrichment/queue:
+    get:
+      operationId: adminGetEnrichmentQueue
+      tags: [Enrichment]
+      summary: Cross-tenant enrichment queue with items (administrator only)
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Queue status with items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentQueueStatus"
+
+  /v1/admin/enrichment/retry:
+    post:
+      operationId: adminRetryEnrichment
+      tags: [Enrichment]
+      summary: Retry failed enrichment jobs (administrator only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentRetryRequest"
+      responses:
+        "200":
+          description: Retry result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentRetryResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/enrichment/pause:
+    post:
+      operationId: adminPauseEnrichment
+      tags: [Enrichment]
+      summary: Pause or resume enrichment workers (administrator only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paused]
+              properties:
+                paused:
+                  type: boolean
+      responses:
+        "200":
+          description: Pause state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  paused:
+                    type: boolean
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/enrichment/test-prompt:
+    post:
+      operationId: adminTestEnrichmentPrompt
+      tags: [Enrichment]
+      summary: Test an enrichment prompt against an LLM (administrator only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentTestPromptRequest"
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentTestPromptResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/enrichment/backfill-augmentation:
+    post:
+      operationId: adminBackfillAugmentation
+      tags: [Enrichment]
+      summary: Backfill query-augmentation for older memories (administrator only)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentBackfillRequest"
+      responses:
+        "200":
+          description: Backfill result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentBackfillResponse"
+
+  /v1/admin/enrichment/backfill-extracted-fact-paraphrase:
+    post:
+      operationId: adminBackfillFactParaphrase
+      tags: [Enrichment]
+      summary: Backfill extracted-fact paraphrases (administrator only)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentBackfillRequest"
+      responses:
+        "200":
+          description: Backfill result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentBackfillResponse"
+
+  # ── Admin: dreaming (system-ops) ────────────────────────────────────────
+  /v1/admin/dreaming:
+    get:
+      operationId: adminGetDreaming
+      tags: [Dreaming]
+      summary: Cross-tenant dreaming status (administrator only)
+      responses:
+        "200":
+          description: Dreaming status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamStatusResponse"
+
+  /v1/admin/dreaming/cycles:
+    get:
+      operationId: adminListDreamCycles
+      tags: [Dreaming]
+      summary: Cross-tenant dream cycles (administrator only)
+      parameters:
+        - name: project_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Dream cycles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DreamCycle"
+
+  /v1/admin/dreaming/cycles/{id}:
+    get:
+      operationId: adminGetDreamCycle
+      tags: [Dreaming]
+      summary: Cross-tenant dream cycle detail with logs (administrator only)
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Dream cycle detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamCycleDetail"
+
+  /v1/admin/dreaming/cycles/{id}/abandon:
+    post:
+      operationId: adminAbandonDreamCycle
+      tags: [Dreaming]
+      summary: Abandon a stuck dream cycle (administrator only)
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Abandon result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamCycleActionResult"
+
+  /v1/admin/dreaming/enable:
+    post:
+      operationId: adminEnableDreaming
+      tags: [Dreaming]
+      summary: Enable or disable the dreaming pipeline (administrator only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        "200":
+          description: Enable state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+
+  /v1/admin/dreaming/rollback:
+    post:
+      operationId: adminRollbackDreaming
+      tags: [Dreaming]
+      summary: Roll back a dream cycle by ID (administrator only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cycle_id]
+              properties:
+                cycle_id:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Rollback result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DreamCycleActionResult"
 
 components:
   securitySchemes:
@@ -2345,6 +3742,14 @@ components:
         type: string
         format: uuid
       description: Organization ID
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Export job ID
     Limit:
       name: limit
       in: query
@@ -2414,11 +3819,9 @@ components:
         content:
           type: string
         embedding_dim:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
         source:
-          type: string
-          nullable: true
+          type: [string, "null"]
         origin:
           type: string
           enum: [user, dream, import]
@@ -2439,17 +3842,14 @@ components:
         access_count:
           type: integer
         last_accessed:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         expires_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         superseded_by:
-          type: string
+          type: [string, "null"]
           format: uuid
-          nullable: true
         enriched:
           type: boolean
         metadata:
@@ -2461,13 +3861,11 @@ components:
           type: string
           format: date-time
         deleted_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         purge_after:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
 
     User:
       type: object
@@ -2497,13 +3895,11 @@ components:
           type: string
           format: date-time
         last_login:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         disabled_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
 
     UserRole:
       type: string
@@ -2581,13 +3977,11 @@ components:
             type: string
             format: uuid
         last_used:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         expires_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         created_at:
           type: string
           format: date-time
@@ -2611,13 +4005,11 @@ components:
           items:
             type: string
         org_id:
-          type: string
+          type: [string, "null"]
           format: uuid
-          nullable: true
         user_id:
-          type: string
+          type: [string, "null"]
           format: uuid
-          nullable: true
         auto_registered:
           type: boolean
         created_at:
@@ -2631,16 +4023,14 @@ components:
           type: string
           format: uuid
         org_id:
-          type: string
+          type: [string, "null"]
           format: uuid
-          nullable: true
         provider_type:
           type: string
         client_id:
           type: string
         issuer_url:
-          type: string
-          nullable: true
+          type: [string, "null"]
         allowed_domains:
           type: array
           items:
@@ -2674,12 +4064,10 @@ components:
         active:
           type: boolean
         last_fired:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         last_status:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
         failure_count:
           type: integer
         created_at:
@@ -2698,9 +4086,8 @@ components:
         scope:
           type: string
         updated_by:
-          type: string
+          type: [string, "null"]
           format: uuid
-          nullable: true
         updated_at:
           type: string
           format: date-time
@@ -2746,8 +4133,7 @@ components:
             entity_extraction:
               $ref: "#/components/schemas/HealthProviderStatus"
         enrichment_queue:
-          type: object
-          nullable: true
+          type: [object, "null"]
           properties:
             pending:
               type: integer
@@ -2769,9 +4155,8 @@ components:
         model:
           type: string
         latency_ms:
-          type: integer
+          type: [integer, "null"]
           format: int64
-          nullable: true
 
     # ── Setup ──────────────────────────────────────────────────────────
     SetupStatusResponse:
@@ -3171,8 +4556,7 @@ components:
           items:
             type: string
         source:
-          type: string
-          nullable: true
+          type: [string, "null"]
         origin:
           type: string
           enum: [user, dream, import]
@@ -3314,8 +4698,7 @@ components:
           items:
             type: string
         source:
-          type: string
-          nullable: true
+          type: [string, "null"]
         origin:
           type: string
           enum: [user, dream, import]
@@ -3445,8 +4828,7 @@ components:
                 items:
                   type: string
               source:
-                type: string
-                nullable: true
+                type: [string, "null"]
               origin:
                 type: string
                 enum: [user, dream, import]
@@ -3469,9 +4851,8 @@ components:
                   type: object
                   properties:
                     parent_id:
-                      type: string
+                      type: [string, "null"]
                       format: uuid
-                      nullable: true
                     relation:
                       type: string
               created_at:
@@ -3518,9 +4899,8 @@ components:
                 type: string
                 format: date-time
               valid_until:
-                type: string
+                type: [string, "null"]
                 format: date-time
-                nullable: true
         stats:
           type: object
           properties:
@@ -3674,8 +5054,7 @@ components:
         client_id:
           type: string
         client_secret:
-          type: string
-          nullable: true
+          type: [string, "null"]
         name:
           type: string
         created_at:
@@ -3736,8 +5115,7 @@ components:
           items:
             type: string
         expires_at:
-          type: string
-          nullable: true
+          type: [string, "null"]
         created_at:
           type: string
 
@@ -3760,26 +5138,6 @@ components:
           type: string
           format: uuid
 
-    AdminCreateProjectRequest:
-      type: object
-      required: [name, slug, owner_namespace_id]
-      properties:
-        name:
-          type: string
-        slug:
-          type: string
-        description:
-          type: string
-        owner_namespace_id:
-          type: string
-          format: uuid
-        default_tags:
-          type: array
-          items:
-            type: string
-        settings:
-          type: object
-
     AdminGenerateAPIKeyResponse:
       type: object
       properties:
@@ -3796,8 +5154,7 @@ components:
           items:
             type: string
         expires_at:
-          type: string
-          nullable: true
+          type: [string, "null"]
         created_at:
           type: string
 
@@ -3831,8 +5188,7 @@ components:
         - type: object
           properties:
             client_secret:
-              type: string
-              nullable: true
+              type: [string, "null"]
 
     CreateIdPRequest:
       type: object
@@ -3847,8 +5203,7 @@ components:
         client_secret:
           type: string
         issuer_url:
-          type: string
-          nullable: true
+          type: [string, "null"]
         allowed_domains:
           type: array
           items:
@@ -3883,8 +5238,7 @@ components:
               count:
                 type: integer
         enrichment_queue:
-          type: object
-          nullable: true
+          type: [object, "null"]
           properties:
             pending:
               type: integer
@@ -3903,13 +5257,11 @@ components:
         summary:
           type: string
         project_id:
-          type: string
+          type: [string, "null"]
           format: uuid
-          nullable: true
         user_id:
-          type: string
+          type: [string, "null"]
           format: uuid
-          nullable: true
         timestamp:
           type: string
           format: date-time
@@ -3937,14 +5289,12 @@ components:
         model:
           type: string
         dimensions:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
         status:
           type: string
         latency_ms:
-          type: integer
+          type: [integer, "null"]
           format: int64
-          nullable: true
 
     ProviderTestRequest:
       type: object
@@ -4024,8 +5374,7 @@ components:
             type: string
           minItems: 1
         secret:
-          type: string
-          nullable: true
+          type: [string, "null"]
         active:
           type: boolean
           default: true
@@ -4045,8 +5394,7 @@ components:
             type: string
           minItems: 1
         secret:
-          type: string
-          nullable: true
+          type: [string, "null"]
         active:
           type: boolean
 
@@ -4179,9 +5527,8 @@ components:
         access_count:
           type: integer
         project_id:
-          type: string
+          type: [string, "null"]
           format: uuid
-          nullable: true
         created_at:
           type: string
           format: date-time
@@ -4251,8 +5598,7 @@ components:
         version:
           type: string
         sqlite:
-          type: object
-          nullable: true
+          type: [object, "null"]
           properties:
             file_path:
               type: string
@@ -4260,8 +5606,7 @@ components:
               type: integer
               format: int64
         postgres:
-          type: object
-          nullable: true
+          type: [object, "null"]
           properties:
             host:
               type: string
@@ -4354,28 +5699,1145 @@ components:
                 type: number
                 format: double
 
-    # ── SSE Event ─────────────────────────────────────────────────────
-    Event:
+    # ── Memory extras ──────────────────────────────────────────────────
+    ListIDsResponse:
+      type: object
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        truncated:
+          type: boolean
+        total_matching:
+          type: integer
+
+    MoveRequest:
+      type: object
+      required: [target_project_id]
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        target_project_id:
+          type: string
+          format: uuid
+
+    MoveResult:
+      type: object
+      properties:
+        old_id:
+          type: string
+          format: uuid
+        new_id:
+          type: string
+          format: uuid
+
+    MoveResponse:
+      type: object
+      properties:
+        moved:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/MoveResult"
+        latency_ms:
+          type: integer
+          format: int64
+
+    MemoryPreviewAugmentResponse:
+      type: object
+      properties:
+        queries:
+          type: array
+          items:
+            type: string
+        augmented_content:
+          type: string
+        rendered_prompt:
+          type: string
+        model:
+          type: string
+        latency_ms:
+          type: integer
+          format: int64
+        truncated_bytes:
+          type: integer
+        error:
+          type: string
+
+    # ── Procedural ─────────────────────────────────────────────────────
+    ProceduralEntry:
       type: object
       properties:
         id:
           type: string
-        type:
+          format: uuid
+        namespace_id:
           type: string
-          enum:
-            - memory.created
-            - memory.enriched
-            - memory.updated
-            - memory.deleted
-            - entity.created
-            - relationship.created
-            - relationship.expired
-            - conflict.detected
-            - enrichment.failed
-        scope:
+          format: uuid
+        content:
           type: string
-        data:
+        title:
+          type: string
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        priority:
+          type: integer
+        enabled:
+          type: boolean
+        origin:
+          type: string
+        metadata:
           type: object
-        timestamp:
+        created_at:
           type: string
           format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+
+    CreateProceduralRequest:
+      type: object
+      required: [content, title, category]
+      properties:
+        content:
+          type: string
+        title:
+          type: string
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        priority:
+          type: integer
+        enabled:
+          type: boolean
+
+    UpdateProceduralRequest:
+      type: object
+      properties:
+        content:
+          type: string
+        title:
+          type: string
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        priority:
+          type: integer
+        enabled:
+          type: boolean
+
+    PaginatedProcedural:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProceduralEntry"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    ProceduralExportEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        title:
+          type: string
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        priority:
+          type: integer
+        enabled:
+          type: boolean
+        metadata:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+
+    ProceduralExportData:
+      type: object
+      properties:
+        version:
+          type: string
+        exported_at:
+          type: string
+          format: date-time
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProceduralExportEntry"
+        stats:
+          type: object
+
+    ProceduralImportResult:
+      type: object
+      properties:
+        imported:
+          type: integer
+        updated:
+          type: integer
+        skipped:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: object
+
+    # ── Account ────────────────────────────────────────────────────────
+    SessionUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        role:
+          type: string
+        org_id:
+          type: string
+          format: uuid
+        theme:
+          type: string
+
+    MeProfilePatchRequest:
+      type: object
+      properties:
+        theme:
+          type: string
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+        new_password:
+          type: string
+
+    MeCapabilitiesResponse:
+      type: object
+      properties:
+        enrichment_available:
+          type: boolean
+        dreaming_enabled:
+          type: boolean
+
+    MeRankingWeightDefault:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: number
+        default_value:
+          type: number
+        min:
+          type: number
+        max:
+          type: number
+        step:
+          type: number
+
+    Passkey:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        credential_id:
+          type: string
+        aaguid:
+          type: string
+        sign_count:
+          type: integer
+        transports:
+          type: array
+          items:
+            type: string
+        user_verified:
+          type: boolean
+        backup_eligible:
+          type: boolean
+        backup_state:
+          type: boolean
+        attestation_type:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: [string, "null"]
+          format: date-time
+
+    WebAuthnOptions:
+      type: object
+      description: |
+        Opaque WebAuthn options object (PublicKeyCredentialCreationOptions or
+        PublicKeyCredentialRequestOptions) per the W3C WebAuthn specification.
+      additionalProperties: true
+
+    WebAuthnAssertion:
+      type: object
+      description: |
+        Opaque WebAuthn attestation/assertion response per the W3C WebAuthn
+        specification, as produced by the browser navigator.credentials API.
+      additionalProperties: true
+
+    # ── Exports ────────────────────────────────────────────────────────
+    CreateExportRequest:
+      type: object
+      properties:
+        scope:
+          type: string
+        project_id:
+          type: string
+          format: uuid
+        format:
+          type: string
+        include_superseded:
+          type: boolean
+
+    ExportJob:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        scope:
+          type: string
+        project_id:
+          type: [string, "null"]
+          format: uuid
+        format:
+          type: string
+        include_superseded:
+          type: boolean
+        status:
+          type: string
+        artifact_path:
+          type: [string, "null"]
+        artifact_bytes:
+          type: [integer, "null"]
+          format: int64
+        artifact_sha256:
+          type: [string, "null"]
+        error:
+          type: [string, "null"]
+        claimed_by:
+          type: [string, "null"]
+        claimed_at:
+          type: [string, "null"]
+          format: date-time
+        started_at:
+          type: [string, "null"]
+          format: date-time
+        completed_at:
+          type: [string, "null"]
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # ── Shares ─────────────────────────────────────────────────────────
+    ShareGrantInput:
+      type: object
+      required: [project_id, permission]
+      properties:
+        project_id:
+          type: string
+          format: uuid
+        permission:
+          type: string
+          enum: [read, write]
+
+    ShareTokenGrant:
+      type: object
+      properties:
+        share_token_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        permission:
+          type: string
+
+    ShareBinding:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        client_id:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ShareDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        token_prefix:
+          type: string
+        is_one_shot:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+        consumed_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: [string, "null"]
+          format: date-time
+        use_count:
+          type: integer
+        revoked_at:
+          type: [string, "null"]
+          format: date-time
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShareTokenGrant"
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShareBinding"
+
+    ShareCreateRequest:
+      type: object
+      required: [name, expires_at, grants]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        is_one_shot:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShareGrantInput"
+
+    ShareCreateResponse:
+      type: object
+      properties:
+        share:
+          $ref: "#/components/schemas/ShareDetail"
+        secret:
+          type: string
+
+    ShareGrantInfo:
+      type: object
+      properties:
+        project_name:
+          type: string
+        project_slug:
+          type: string
+        permission:
+          type: string
+
+    SharePreviewRequest:
+      type: object
+      properties:
+        client_id:
+          type: string
+        redirect_uri:
+          type: string
+        response_type:
+          type: string
+        code_challenge:
+          type: string
+        code_challenge_method:
+          type: string
+        scope:
+          type: string
+        resource:
+          type: string
+        state:
+          type: string
+        share_token:
+          type: string
+
+    SharePreviewResponse:
+      type: object
+      properties:
+        owner_name:
+          type: string
+        share_name:
+          type: string
+        description:
+          type: string
+        expires_at:
+          type: string
+        is_one_shot:
+          type: boolean
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShareGrantInfo"
+
+    ShareAcceptResponse:
+      type: object
+      properties:
+        owner_name:
+          type: string
+        share_name:
+          type: string
+        description:
+          type: string
+        expires_at:
+          type: string
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShareGrantInfo"
+        mcp_server_url:
+          type: string
+        share_token:
+          type: string
+        error:
+          type: string
+
+    AccountUser:
+      type: object
+      properties:
+        display_name:
+          type: string
+        email:
+          type: string
+          format: email
+
+    AuthorizeContextResponse:
+      type: object
+      properties:
+        client_id:
+          type: string
+        client_name:
+          type: string
+        redirect_uri:
+          type: string
+        response_type:
+          type: string
+        code_challenge:
+          type: string
+        code_challenge_method:
+          type: string
+        scope:
+          type: string
+        resource:
+          type: string
+        state:
+          type: string
+        account_user:
+          anyOf:
+            - $ref: "#/components/schemas/AccountUser"
+            - type: "null"
+        share_token_supported:
+          type: boolean
+
+    # ── Dreaming ───────────────────────────────────────────────────────
+    DreamCycle:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        namespace_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        phase:
+          type: string
+        tokens_used:
+          type: integer
+        token_budget:
+          type: integer
+        phase_summary:
+          type: object
+        error:
+          type: [string, "null"]
+        started_at:
+          type: [string, "null"]
+          format: date-time
+        completed_at:
+          type: [string, "null"]
+          format: date-time
+        heartbeat_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        is_stale_diagnostic:
+          type: boolean
+        is_abandonable:
+          type: boolean
+        project_name:
+          type: string
+
+    DreamLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        cycle_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        phase:
+          type: string
+        sub_phase:
+          type: string
+        operation:
+          type: string
+        target_type:
+          type: string
+        target_id:
+          type: string
+          format: uuid
+        before_state:
+          type: object
+        after_state:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+
+    DreamCycleDetail:
+      type: object
+      properties:
+        cycle:
+          $ref: "#/components/schemas/DreamCycle"
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/DreamLog"
+
+    DreamCycleActionResult:
+      type: object
+      properties:
+        status:
+          type: string
+        cycle_id:
+          type: string
+          format: uuid
+
+    DreamStatusResponse:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        dirty_count:
+          type: integer
+        stuck_count:
+          type: integer
+        recent_cycles:
+          type: array
+          items:
+            $ref: "#/components/schemas/DreamCycle"
+
+    MeDreamingAggregateStatus:
+      type: object
+      properties:
+        dirty_count:
+          type: integer
+        project_count:
+          type: integer
+
+    OrgDreamStatusResponse:
+      type: object
+      properties:
+        dirty_count:
+          type: integer
+        stuck_count:
+          type: integer
+        recent_cycles:
+          type: array
+          items:
+            $ref: "#/components/schemas/DreamCycle"
+
+    # ── Enrichment extras ──────────────────────────────────────────────
+    EnrichmentRetryRequest:
+      type: object
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    EnrichmentRetryResponse:
+      type: object
+      properties:
+        retried:
+          type: integer
+
+    EnrichmentBackfillRequest:
+      type: object
+      properties:
+        project_id:
+          type: string
+          format: uuid
+        dry_run:
+          type: boolean
+        limit:
+          type: integer
+
+    EnrichmentBackfillResponse:
+      type: object
+      properties:
+        candidate_count:
+          type: integer
+        enqueued:
+          type: integer
+        dry_run:
+          type: boolean
+
+    # ── Aggregate dashboards / analytics ───────────────────────────────
+    DashboardQueueStats:
+      type: object
+      properties:
+        pending:
+          type: integer
+        processing:
+          type: integer
+        failed:
+          type: integer
+
+    UserAggregate:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        total_memories:
+          type: integer
+        total_projects:
+          type: integer
+        total_entities:
+          type: integer
+
+    OrgAggregate:
+      type: object
+      properties:
+        org_id:
+          type: string
+          format: uuid
+        org_name:
+          type: string
+        total_memories:
+          type: integer
+        total_users:
+          type: integer
+        total_projects:
+          type: integer
+        total_entities:
+          type: integer
+
+    DailyBucket:
+      type: object
+      properties:
+        date:
+          type: string
+        count:
+          type: integer
+
+    AuditEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        occurred_at:
+          type: string
+          format: date-time
+        actor_user_id:
+          type: [string, "null"]
+          format: uuid
+        actor_role:
+          type: string
+        action:
+          type: string
+        target_type:
+          type: string
+        target_id:
+          type: [string, "null"]
+          format: uuid
+        target_org_id:
+          type: [string, "null"]
+          format: uuid
+        source_ip:
+          type: string
+        user_agent:
+          type: string
+        details:
+          type: object
+
+    MemoryCountsData:
+      type: object
+      properties:
+        total:
+          type: integer
+        active:
+          type: integer
+        deleted:
+          type: integer
+        enriched:
+          type: integer
+
+    HistogramBucket:
+      type: object
+      properties:
+        range:
+          type: string
+        count:
+          type: integer
+
+    TypeBucket:
+      type: object
+      properties:
+        type:
+          type: string
+        count:
+          type: integer
+
+    EnrichmentStatsData:
+      type: object
+      properties:
+        total_processed:
+          type: integer
+        success_rate:
+          type: number
+        failure_rate:
+          type: number
+        avg_latency_ms:
+          type: integer
+          format: int64
+
+    OrgDashboardData:
+      type: object
+      properties:
+        total_memories:
+          type: integer
+        total_projects:
+          type: integer
+        total_users:
+          type: integer
+        total_entities:
+          type: integer
+        user_breakdown:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserAggregate"
+        enrichment_queue:
+          $ref: "#/components/schemas/DashboardQueueStats"
+
+    OrgActivityResponse:
+      type: object
+      properties:
+        daily_creation:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailyBucket"
+        audit_events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+
+    OrgAnalyticsData:
+      type: object
+      properties:
+        memory_counts:
+          $ref: "#/components/schemas/MemoryCountsData"
+        recall_distribution:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistogramBucket"
+        enrichment_stats:
+          $ref: "#/components/schemas/EnrichmentStatsData"
+        user_breakdown:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserAggregate"
+        entity_type_histogram:
+          type: array
+          items:
+            $ref: "#/components/schemas/TypeBucket"
+        relationship_type_histogram:
+          type: array
+          items:
+            $ref: "#/components/schemas/TypeBucket"
+
+    SystemDashboardData:
+      type: object
+      properties:
+        total_memories:
+          type: integer
+        total_projects:
+          type: integer
+        total_users:
+          type: integer
+        total_entities:
+          type: integer
+        total_organizations:
+          type: integer
+        org_breakdown:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrgAggregate"
+        enrichment_queue:
+          $ref: "#/components/schemas/DashboardQueueStats"
+
+    SystemActivityResponse:
+      type: object
+      properties:
+        daily_creation:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailyBucket"
+        audit_events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+
+    SystemAnalyticsData:
+      type: object
+      properties:
+        total_memory_counts:
+          $ref: "#/components/schemas/MemoryCountsData"
+        recall_distribution:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistogramBucket"
+        enrichment_stats:
+          $ref: "#/components/schemas/EnrichmentStatsData"
+        org_breakdown:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrgAggregate"
+        entity_type_histogram:
+          type: array
+          items:
+            $ref: "#/components/schemas/TypeBucket"
+        relationship_type_histogram:
+          type: array
+          items:
+            $ref: "#/components/schemas/TypeBucket"
+
+    # ── Admin: settings / idp / database / graph ───────────────────────
+    SettingResetRequest:
+      type: object
+      properties:
+        key:
+          type: string
+        scope:
+          type: string
+
+    UpdateIdPRequest:
+      type: object
+      properties:
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        issuer_url:
+          type: string
+        authorize_url:
+          type: string
+        token_url:
+          type: string
+        userinfo_url:
+          type: string
+        allowed_domains:
+          type: array
+          items:
+            type: string
+        auto_provision:
+          type: boolean
+        default_role:
+          type: string
+
+    DatabaseURLRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+
+    PreflightCheck:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+        message:
+          type: string
+        remediation:
+          type: string
+        table_counts:
+          type: object
+          additionalProperties:
+            type: integer
+
+    PreflightReport:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/PreflightCheck"
+
+    ResetRequest:
+      type: object
+      properties:
+        url:
+          type: string
+        mode:
+          type: string
+
+    ResetResult:
+      type: object
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+        mode:
+          type: string
+        tables_dropped:
+          type: array
+          items:
+            type: string
+
+    OrphanCount:
+      type: object
+      properties:
+        table:
+          type: string
+        column:
+          type: string
+        references:
+          type: string
+        count:
+          type: integer
+
+    AuditError:
+      type: object
+      properties:
+        table:
+          type: string
+        column:
+          type: string
+        message:
+          type: string
+
+    MigrationAudit:
+      type: object
+      properties:
+        backend:
+          type: string
+        total_orphans:
+          type: integer
+        orphans:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrphanCount"
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditError"
+
+    GraphHealth:
+      type: object
+      properties:
+        lost_provenance_edges:
+          type: integer
+          format: int64
+
+    GraphRepairResult:
+      type: object
+      properties:
+        relationships_reaped:
+          type: integer
+          format: int64
+        dangling_relationships_deleted:
+          type: integer
+          format: int64
+        orphaned_entities_deleted:
+          type: integer

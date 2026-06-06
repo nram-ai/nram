@@ -1,6 +1,6 @@
 # API Reference
 
-REST and MCP surfaces for nram. An OpenAPI 3.1 specification also lives at [openapi.yaml](openapi.yaml); it may lag the code, so the tables below reflect the current router source of truth (`internal/server/router.go`).
+REST and MCP surfaces for nram. An OpenAPI 3.1 specification also lives at [openapi.yaml](openapi.yaml), is served by the running server at `GET /openapi.yaml`, and is kept in sync with the router (`internal/server/router.go`) by a conformance test. The tables below remain the human-readable reference and additionally cover the MCP surface.
 
 Back to the [README](../README.md).
 

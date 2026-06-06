@@ -114,6 +114,9 @@ type Handlers struct {
 	// Health
 	Health http.HandlerFunc
 
+	// OpenAPISpec serves the embedded OpenAPI spec at GET /openapi.yaml.
+	OpenAPISpec http.HandlerFunc
+
 	// User-scoped passkey management
 	MePasskeysList          http.HandlerFunc
 	MePasskeyRegisterBegin  http.HandlerFunc
@@ -163,7 +166,6 @@ type Handlers struct {
 	AdminActivity         http.HandlerFunc
 	AdminOrgs             http.HandlerFunc
 	AdminUsers            http.HandlerFunc
-	AdminProjects         http.HandlerFunc
 	AdminProviders        http.HandlerFunc
 	AdminSettings         http.HandlerFunc
 	AdminSettingsReset    http.HandlerFunc
@@ -258,6 +260,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Handle("/metrics", metrics.Handler(config.Metrics))
 	}
 	r.Get("/v1/health", handler(handlers.Health))
+
+	// Serve the OpenAPI spec publicly so tooling can fetch the contract
+	// without auth and before initial setup completes.
+	r.Get("/openapi.yaml", handler(handlers.OpenAPISpec))
 
 	// Setup endpoints are public: must be accessible before first user exists.
 	r.Get("/v1/admin/setup/status", handler(handlers.AdminSetupStatus))
