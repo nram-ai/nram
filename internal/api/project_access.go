@@ -39,6 +39,66 @@ type ProjectAccessConfig struct {
 	Users      UserByIDLookup
 }
 
+// CheckProjectOrgAccess enforces the org-level ownership rule for a single
+// project: administrators are always allowed; every other role is allowed only
+// when the project's namespace path begins with the caller's org namespace path
+// (i.e. the project belongs to the same org). It returns nil on success, an
+// *APIError (ErrNotFound when the project is missing, ErrForbidden otherwise)
+// on failure.
+//
+// This is the single source of truth for project ownership. ProjectAccessMiddleware
+// applies it to the {project_id} URL parameter; handlers that touch a SECOND
+// project not covered by the middleware (e.g. the move destination) call it
+// directly so the check can never be weakened or skipped.
+func CheckProjectOrgAccess(ctx context.Context, cfg ProjectAccessConfig, ac *auth.AuthContext, projectID uuid.UUID) *APIError {
+	if ac == nil {
+		return ErrForbidden("unauthorized")
+	}
+
+	// Administrators have global access.
+	if ac.Role == auth.RoleAdministrator {
+		return nil
+	}
+
+	// Look up the project.
+	project, err := cfg.Projects.GetByID(ctx, projectID)
+	if err != nil {
+		return ErrNotFound("project not found")
+	}
+
+	// Look up the user to find their org.
+	user, err := cfg.Users.GetByID(ctx, ac.UserID)
+	if err != nil {
+		return ErrForbidden("user not found")
+	}
+
+	// Look up the org to find its namespace.
+	org, err := cfg.Orgs.GetByID(ctx, user.OrgID)
+	if err != nil {
+		return ErrForbidden("org not found")
+	}
+
+	// Look up the org namespace to get its path.
+	orgNS, err := cfg.Namespaces.GetByID(ctx, org.NamespaceID)
+	if err != nil {
+		return ErrForbidden("org namespace not found")
+	}
+
+	// Look up the project namespace to get its path.
+	projectNS, err := cfg.Namespaces.GetByID(ctx, project.NamespaceID)
+	if err != nil {
+		return ErrForbidden("project namespace not found")
+	}
+
+	// The project is in the user's org if the project's namespace path
+	// starts with the org's namespace path.
+	if !strings.HasPrefix(projectNS.Path, orgNS.Path) {
+		return ErrForbidden("access denied: project belongs to a different organization")
+	}
+
+	return nil
+}
+
 // ProjectAccessMiddleware returns a chi middleware that enforces project-level
 // access control. It must be used on route groups that expose {project_id} as a
 // chi URL parameter.
@@ -74,51 +134,8 @@ func ProjectAccessMiddleware(cfg ProjectAccessConfig) func(http.Handler) http.Ha
 				return
 			}
 
-			// Administrators have global access.
-			if ac.Role == auth.RoleAdministrator {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			// Look up the project.
-			project, err := cfg.Projects.GetByID(r.Context(), projectID)
-			if err != nil {
-				WriteError(w, ErrNotFound("project not found"))
-				return
-			}
-
-			// Look up the user to find their org.
-			user, err := cfg.Users.GetByID(r.Context(), ac.UserID)
-			if err != nil {
-				WriteError(w, ErrForbidden("user not found"))
-				return
-			}
-
-			// Look up the org to find its namespace.
-			org, err := cfg.Orgs.GetByID(r.Context(), user.OrgID)
-			if err != nil {
-				WriteError(w, ErrForbidden("org not found"))
-				return
-			}
-
-			// Look up the org namespace to get its path.
-			orgNS, err := cfg.Namespaces.GetByID(r.Context(), org.NamespaceID)
-			if err != nil {
-				WriteError(w, ErrForbidden("org namespace not found"))
-				return
-			}
-
-			// Look up the project namespace to get its path.
-			projectNS, err := cfg.Namespaces.GetByID(r.Context(), project.NamespaceID)
-			if err != nil {
-				WriteError(w, ErrForbidden("project namespace not found"))
-				return
-			}
-
-			// The project is in the user's org if the project's namespace path
-			// starts with the org's namespace path.
-			if !strings.HasPrefix(projectNS.Path, orgNS.Path) {
-				WriteError(w, ErrForbidden("access denied: project belongs to a different organization"))
+			if err := CheckProjectOrgAccess(r.Context(), cfg, ac, projectID); err != nil {
+				WriteError(w, err)
 				return
 			}
 

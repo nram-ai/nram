@@ -1382,6 +1382,54 @@ export function useForgetMemories() {
   });
 }
 
+// invalidateMoveQueries refreshes the lists of BOTH the source and destination
+// projects after a move, plus the project list (memory counts changed).
+function invalidateMoveQueries(
+  qc: ReturnType<typeof useQueryClient>,
+  sourceProjectId: string,
+  targetProjectId: string,
+) {
+  for (const pid of [sourceProjectId, targetProjectId]) {
+    qc.invalidateQueries({ queryKey: ["memories", "list-infinite", pid] });
+    qc.invalidateQueries({ queryKey: ["memories", "recall", pid] });
+  }
+  qc.invalidateQueries({ queryKey: ["me", "projects"] });
+}
+
+export function useMoveMemory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      memoryId,
+      targetProjectId,
+    }: {
+      projectId: string;
+      memoryId: string;
+      targetProjectId: string;
+    }) => memoryAPI.move(projectId, memoryId, targetProjectId),
+    onSuccess: (_data, vars) =>
+      invalidateMoveQueries(qc, vars.projectId, vars.targetProjectId),
+  });
+}
+
+export function useBulkMoveMemories() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      ids,
+      targetProjectId,
+    }: {
+      projectId: string;
+      ids: string[];
+      targetProjectId: string;
+    }) => memoryAPI.bulkMove(projectId, ids, targetProjectId),
+    onSuccess: (_data, vars) =>
+      invalidateMoveQueries(qc, vars.projectId, vars.targetProjectId),
+  });
+}
+
 export function useEnrichMemories() {
   const qc = useQueryClient();
   return useMutation({

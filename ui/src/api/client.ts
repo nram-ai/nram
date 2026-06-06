@@ -352,6 +352,17 @@ export interface ForgetResponse {
   latency_ms: number;
 }
 
+export interface MoveResult {
+  old_id: string;
+  new_id: string;
+}
+
+export interface MoveResponse {
+  moved: number;
+  results: MoveResult[];
+  latency_ms: number;
+}
+
 export interface EnrichResponse {
   queued: number;
   skipped: number;
@@ -1850,6 +1861,19 @@ export const memoryAPI = {
 
   forget: (projectId: string, body: ForgetRequest) =>
     request<ForgetResponse>("POST", `/projects/${projectId}/memories/forget`, body),
+
+  move: (projectId: string, memoryId: string, targetProjectId: string) =>
+    request<MoveResponse>(
+      "POST",
+      `/projects/${projectId}/memories/${memoryId}/move`,
+      { target_project_id: targetProjectId },
+    ),
+
+  bulkMove: (projectId: string, ids: string[], targetProjectId: string) =>
+    request<MoveResponse>("POST", `/projects/${projectId}/memories/move`, {
+      ids,
+      target_project_id: targetProjectId,
+    }),
 
   enrich: (projectId: string, body: EnrichRequest) =>
     request<EnrichResponse>("POST", `/projects/${projectId}/memories/enrich`, body),

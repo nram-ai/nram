@@ -407,6 +407,7 @@ func main() {
 		memoryRepo, projectRepo, vectorStore,
 		lineageRepo,
 	).WithMetrics(promMetrics).WithGraphReaper(graphReaper)
+	moveSvc := service.NewMoveService(memoryRepo, projectRepo, storeSvc, forgetSvc)
 	batchGetSvc := service.NewBatchGetService(memoryRepo, projectRepo)
 	batchStoreSvc := service.NewBatchStoreService(
 		memoryRepo, projectRepo, namespaceRepo,
@@ -785,6 +786,16 @@ func main() {
 	// fields the server.Handlers struct points to.
 	meExportHandlers := api.NewMeExportHandlers(exportJobSvc)
 
+	// Project access config — used both by the move handlers (to authorize the
+	// destination project supplied in the request body) and by the route-level
+	// ProjectAccessMiddleware below.
+	projectAccessCfg := api.ProjectAccessConfig{
+		Projects:   projectRepo,
+		Namespaces: namespaceRepo,
+		Orgs:       orgRepo,
+		Users:      userRepo,
+	}
+
 	// Assemble handlers.
 	handlers := server.Handlers{
 		// Health
@@ -807,6 +818,8 @@ func main() {
 		BatchGet:   api.NewBatchGetHandler(batchGetSvc),
 		Recall:     api.NewRecallHandler(recallSvc),
 		BulkForget: api.NewBulkForgetHandler(forgetSvc, eventBus),
+		Move:       api.NewMoveHandler(moveSvc, projectAccessCfg, eventBus),
+		BulkMove:   api.NewBulkMoveHandler(moveSvc, projectAccessCfg, eventBus),
 		Enrich:     api.NewEnrichHandler(enrichSvc, eventBus),
 		Export:     api.NewExportHandler(exportSvc),
 		Import:     api.NewImportHandler(importSvc),
@@ -1063,13 +1076,6 @@ func main() {
 
 	// Project access middleware enforces org-membership checks on all
 	// /v1/projects/{project_id}/memories/* routes.
-	projectAccessCfg := api.ProjectAccessConfig{
-		Projects:   projectRepo,
-		Namespaces: namespaceRepo,
-		Orgs:       orgRepo,
-		Users:      userRepo,
-	}
-
 	routerCfg := server.RouterConfig{
 		Metrics:        promMetrics,
 		AuthMiddleware: authMiddleware,

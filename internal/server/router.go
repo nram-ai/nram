@@ -42,6 +42,8 @@ type Handlers struct {
 	BatchGet   http.HandlerFunc
 	Recall     http.HandlerFunc
 	BulkForget http.HandlerFunc
+	Move       http.HandlerFunc
+	BulkMove   http.HandlerFunc
 	Enrich     http.HandlerFunc
 	Export     http.HandlerFunc
 	Import     http.HandlerFunc
@@ -361,6 +363,11 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 				r.Delete("/{id}", handler(handlers.Delete))
 				r.Post("/batch", handler(handlers.BatchStore))
 				r.Post("/forget", handler(handlers.BulkForget))
+				// Move relocates a memory (or a selected set) to another project
+				// the caller owns. The destination project is in the body and is
+				// authorized inside the handler, not by ProjectAccessMiddleware.
+				r.Post("/{id}/move", handler(handlers.Move))
+				r.Post("/move", handler(handlers.BulkMove))
 				r.Post("/import", handler(handlers.Import))
 				// Preview-augmentation runs an LLM call — cost-incurring, so
 				// gated to write-tier users even though it does not persist.

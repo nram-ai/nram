@@ -9,6 +9,8 @@ import {
   useDeleteMemory,
   useForgetMemories,
   useEnrichMemories,
+  useMoveMemory,
+  useBulkMoveMemories,
 } from "../hooks/useApi";
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import { useDebounce } from "../hooks/useDebounce";
@@ -603,15 +605,71 @@ function MemoryCard({
 // Memory Detail Panel
 // ---------------------------------------------------------------------------
 
+// MoveToProjectControl renders a destination-project picker plus confirm/cancel
+// buttons. The current project is excluded from the options so a move always
+// changes the owning project. Shared by the single-memory detail panel and the
+// bulk-actions bar.
+function MoveToProjectControl({
+  projects,
+  currentProjectId,
+  onMove,
+  onCancel,
+  isPending,
+  actionLabel,
+}: {
+  projects: { id: string; name: string }[];
+  currentProjectId: string;
+  onMove: (targetProjectId: string) => void;
+  onCancel: () => void;
+  isPending: boolean;
+  actionLabel: string;
+}) {
+  const options = projects.filter((p) => p.id !== currentProjectId);
+  const [target, setTarget] = useState(options[0]?.id ?? "");
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <select
+        className="rounded border bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+        value={target}
+        onChange={(e) => setTarget(e.target.value)}
+        aria-label="Destination project"
+      >
+        {options.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="rounded bg-primary px-3 py-1 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50"
+        onClick={() => target && onMove(target)}
+        disabled={isPending || !target}
+      >
+        {isPending ? `${actionLabel}...` : actionLabel}
+      </button>
+      <button
+        type="button"
+        className="rounded border px-3 py-1 text-sm hover:bg-muted"
+        onClick={onCancel}
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 function MemoryDetailPanel({
   projectId,
   memoryId,
+  projects,
   includeSuperseded,
   onClose,
   onDeleted,
 }: {
   projectId: string;
   memoryId: string;
+  projects: { id: string; name: string }[];
   includeSuperseded?: boolean;
   onClose: () => void;
   onDeleted: () => void;
@@ -620,8 +678,11 @@ function MemoryDetailPanel({
   const detail = useMemoryDetail(projectId, memoryId, { includeSuperseded });
   const updateMut = useUpdateMemory();
   const deleteMut = useDeleteMemory();
+  const moveMut = useMoveMemory();
   const [addingTag, setAddingTag] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const moveTargets = projects.filter((p) => p.id !== projectId);
 
   const memory = detail.data;
 
@@ -651,6 +712,19 @@ function MemoryDetailPanel({
       { projectId, memoryId },
       {
         onSuccess: () => {
+          onDeleted();
+          onClose();
+        },
+      },
+    );
+  }
+
+  function handleMove(targetProjectId: string) {
+    moveMut.mutate(
+      { projectId, memoryId, targetProjectId },
+      {
+        onSuccess: () => {
+          // The memory left this project — drop it from selection and close.
           onDeleted();
           onClose();
         },
@@ -832,39 +906,66 @@ function MemoryDetailPanel({
               </div>
             </div>
 
-            {/* Actions — only show delete for users with write access */}
+            {/* Actions — only show for users with write access */}
             {canWrite && (
-              <div className="flex items-center gap-3 border-t pt-4">
-                {confirmDelete ? (
-                  <>
-                    <span className="text-sm text-destructive">
-                      Confirm delete?
-                    </span>
-                    <button
-                      type="button"
-                      className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
-                      onClick={handleDelete}
-                      disabled={deleteMut.isPending}
-                    >
-                      {deleteMut.isPending ? "Deleting..." : "Yes, Delete"}
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
-                      onClick={() => setConfirmDelete(false)}
-                    >
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
-                    onClick={() => setConfirmDelete(true)}
-                  >
-                    Delete Memory
-                  </button>
+              <div className="space-y-3 border-t pt-4">
+                {/* Move to another project (e.g. fixing a misfiled memory).
+                    Hidden when the user has no other project to move into. */}
+                {moveTargets.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    {moving ? (
+                      <MoveToProjectControl
+                        projects={projects}
+                        currentProjectId={projectId}
+                        isPending={moveMut.isPending}
+                        actionLabel="Move"
+                        onCancel={() => setMoving(false)}
+                        onMove={handleMove}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
+                        onClick={() => setMoving(true)}
+                      >
+                        Move to project…
+                      </button>
+                    )}
+                  </div>
                 )}
+
+                <div className="flex items-center gap-3">
+                  {confirmDelete ? (
+                    <>
+                      <span className="text-sm text-destructive">
+                        Confirm delete?
+                      </span>
+                      <button
+                        type="button"
+                        className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
+                        onClick={handleDelete}
+                        disabled={deleteMut.isPending}
+                      >
+                        {deleteMut.isPending ? "Deleting..." : "Yes, Delete"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
+                        onClick={() => setConfirmDelete(false)}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      Delete Memory
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -880,25 +981,35 @@ function MemoryDetailPanel({
 
 function BulkActionsBar({
   selectedCount,
+  projects,
+  currentProjectId,
   onDelete,
   onEnrich,
   onAddTags,
+  onMove,
   onExport,
   onClear,
   isDeleting,
   isEnriching,
+  isMoving,
 }: {
   selectedCount: number;
+  projects: { id: string; name: string }[];
+  currentProjectId: string;
   onDelete?: () => void;
   onEnrich?: () => void;
   onAddTags?: (tags: string[]) => void;
+  onMove?: (targetProjectId: string) => void;
   onExport: () => void;
   onClear: () => void;
   isDeleting: boolean;
   isEnriching: boolean;
+  isMoving: boolean;
 }) {
   const [tagInput, setTagInput] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const moveTargets = projects.filter((p) => p.id !== currentProjectId);
 
   function handleAddTags() {
     const tags = tagInput
@@ -942,6 +1053,20 @@ function BulkActionsBar({
             Cancel
           </button>
         </>
+      ) : moving && onMove ? (
+        <>
+          <span className="text-sm text-muted-foreground">
+            Move {selectedCount} to
+          </span>
+          <MoveToProjectControl
+            projects={projects}
+            currentProjectId={currentProjectId}
+            isPending={isMoving}
+            actionLabel="Move"
+            onCancel={() => setMoving(false)}
+            onMove={onMove}
+          />
+        </>
       ) : (
         <>
           {onDelete && (
@@ -983,6 +1108,15 @@ function BulkActionsBar({
                 Add Tags
               </button>
             </div>
+          )}
+          {onMove && moveTargets.length > 0 && (
+            <button
+              type="button"
+              className="rounded border px-3 py-1 text-sm hover:bg-muted"
+              onClick={() => setMoving(true)}
+            >
+              Move to project…
+            </button>
           )}
           <button
             type="button"
@@ -1171,6 +1305,7 @@ function MemoryBrowser() {
   // Mutations
   const forgetMut = useForgetMemories();
   const enrichMut = useEnrichMemories();
+  const bulkMoveMut = useBulkMoveMemories();
   const updateMut = useUpdateMemory();
 
   const { available: enrichmentAvailable } = useEnrichmentAvailable();
@@ -1382,6 +1517,18 @@ function MemoryBrowser() {
       {
         projectId: selectedProjectId,
         body: { ids: Array.from(selectedIds) },
+      },
+      { onSuccess: () => clearSelection() },
+    );
+  }
+
+  function handleBulkMove(targetProjectId: string) {
+    if (!selectedProjectId || selectedIds.size === 0) return;
+    bulkMoveMut.mutate(
+      {
+        projectId: selectedProjectId,
+        ids: Array.from(selectedIds),
+        targetProjectId,
       },
       { onSuccess: () => clearSelection() },
     );
@@ -1869,13 +2016,17 @@ function MemoryBrowser() {
       {selectedIds.size > 0 && (
         <BulkActionsBar
           selectedCount={selectedIds.size}
+          projects={projects}
+          currentProjectId={selectedProjectId}
           onDelete={canWrite ? handleBulkDelete : undefined}
           onEnrich={canWrite && enrichmentAvailable ? handleBulkEnrich : undefined}
           onAddTags={canWrite ? handleBulkAddTags : undefined}
+          onMove={canWrite ? handleBulkMove : undefined}
           onExport={handleBulkExport}
           onClear={clearSelection}
           isDeleting={forgetMut.isPending}
           isEnriching={enrichMut.isPending}
+          isMoving={bulkMoveMut.isPending}
         />
       )}
 
@@ -1884,6 +2035,7 @@ function MemoryBrowser() {
         <MemoryDetailPanel
           projectId={selectedProjectId}
           memoryId={detailMemoryId}
+          projects={projects}
           includeSuperseded={detailIncludeSuperseded}
           onClose={() => {
             setDetailMemoryId(null);

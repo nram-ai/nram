@@ -104,6 +104,51 @@ func TestAuthenticatedProjectRoute(t *testing.T) {
 	}
 }
 
+// TestMoveRoutesDispatch proves the two move routes registered under the same
+// memories subrouter resolve to distinct handlers without colliding: the
+// single-segment POST .../memories/move hits BulkMove, while the two-segment
+// POST .../memories/{id}/move hits Move.
+func TestMoveRoutesDispatch(t *testing.T) {
+	moveCalled, bulkMoveCalled := false, false
+	handlers := Handlers{
+		Move: func(w http.ResponseWriter, _ *http.Request) {
+			moveCalled = true
+			w.WriteHeader(http.StatusOK)
+		},
+		BulkMove: func(w http.ResponseWriter, _ *http.Request) {
+			bulkMoveCalled = true
+			w.WriteHeader(http.StatusOK)
+		},
+	}
+
+	r := newTestRouter(t, handlers)
+	token := generateTestJWT(t, uuid.New(), auth.RoleMember)
+	projectID := uuid.New().String()
+
+	// Single move: two segments after /memories.
+	memoryID := uuid.New().String()
+	reqSingle := httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/memories/"+memoryID+"/move", nil)
+	reqSingle.Header.Set("Authorization", "Bearer "+token)
+	recSingle := httptest.NewRecorder()
+	r.ServeHTTP(recSingle, reqSingle)
+	if recSingle.Code != http.StatusOK || !moveCalled {
+		t.Errorf("single move route did not dispatch to Move (code=%d, called=%v)", recSingle.Code, moveCalled)
+	}
+	if bulkMoveCalled {
+		t.Error("single move route incorrectly hit BulkMove")
+	}
+
+	// Bulk move: one segment after /memories.
+	bulkMoveCalled = false
+	reqBulk := httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/memories/move", nil)
+	reqBulk.Header.Set("Authorization", "Bearer "+token)
+	recBulk := httptest.NewRecorder()
+	r.ServeHTTP(recBulk, reqBulk)
+	if recBulk.Code != http.StatusOK || !bulkMoveCalled {
+		t.Errorf("bulk move route did not dispatch to BulkMove (code=%d, called=%v)", recBulk.Code, bulkMoveCalled)
+	}
+}
+
 func TestUnauthenticatedRequestReturns401(t *testing.T) {
 	r := newTestRouter(t, Handlers{})
 
