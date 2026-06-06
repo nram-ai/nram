@@ -536,6 +536,81 @@ func (r *MemoryRepo) ListByNamespaceFiltered(ctx context.Context, namespaceID uu
 	return result, nil
 }
 
+// ListByNamespaceFramingOrder returns live (non-deleted, non-superseded)
+// memories in a namespace ordered for the about_me persona "framing" load:
+//  1. identity-centrality — the MAX mention_count over the entities a memory's
+//     relationships link to (memories anchoring the most-mentioned entities in
+//     the namespace come first; a memory with no linked entities ranks at 0),
+//  2. recall-count — access_count (how often the memory has surfaced),
+//  3. recency — created_at.
+//
+// Implemented as an ordered-id query (the join/aggregate) followed by a batch
+// hydrate, so it reuses the canonical memory scan without re-listing columns.
+func (r *MemoryRepo) ListByNamespaceFramingOrder(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error) {
+	query := `SELECT m.id
+		FROM memories m
+		LEFT JOIN relationships rel ON rel.source_memory = m.id
+		LEFT JOIN entities e ON e.id = rel.source_id OR e.id = rel.target_id
+		WHERE m.namespace_id = ? AND m.deleted_at IS NULL AND m.superseded_by IS NULL
+		GROUP BY m.id, m.access_count, m.created_at
+		ORDER BY COALESCE(MAX(e.mention_count), 0) DESC, m.access_count DESC, m.created_at DESC
+		LIMIT ? OFFSET ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `SELECT m.id
+		FROM memories m
+		LEFT JOIN relationships rel ON rel.source_memory = m.id
+		LEFT JOIN entities e ON e.id = rel.source_id OR e.id = rel.target_id
+		WHERE m.namespace_id = $1 AND m.deleted_at IS NULL AND m.superseded_by IS NULL
+		GROUP BY m.id, m.access_count, m.created_at
+		ORDER BY COALESCE(MAX(e.mention_count), 0) DESC, m.access_count DESC, m.created_at DESC
+		LIMIT $2 OFFSET $3`
+	}
+
+	rows, err := r.db.Query(ctx, query, namespaceID.String(), limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("memory framing-order list: %w", err)
+	}
+	orderedIDs := []uuid.UUID{}
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("memory framing-order scan: %w", err)
+		}
+		id, perr := uuid.Parse(idStr)
+		if perr != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("memory framing-order parse id: %w", perr)
+		}
+		orderedIDs = append(orderedIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("memory framing-order iteration: %w", err)
+	}
+	_ = rows.Close()
+
+	if len(orderedIDs) == 0 {
+		return []model.Memory{}, nil
+	}
+
+	batch, err := r.GetBatch(ctx, orderedIDs)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[uuid.UUID]model.Memory, len(batch))
+	for i := range batch {
+		byID[batch[i].ID] = batch[i]
+	}
+	result := make([]model.Memory, 0, len(orderedIDs))
+	for _, id := range orderedIDs {
+		if mem, ok := byID[id]; ok {
+			result = append(result, mem)
+		}
+	}
+	return result, nil
+}
+
 // ListByNamespaceStale returns up to limit non-deleted memories whose
 // metadata stamp at stampKey is missing or strictly predates updated_at,
 // ordered oldest-updated_at first so the older tail drains before fresher

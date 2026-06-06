@@ -439,6 +439,9 @@ function ProjectDetailPanel({
   const [initialized, setInitialized] = useState(false);
 
   const project = detailQuery.data;
+  // Reserved tiers (global, about_me) have nram-managed name/description and
+  // cannot be deleted: lock those inputs and hide the delete affordance.
+  const isReserved = !!project?.reserved;
 
   // Initialize form when project loads. The legacy `relevance` key (mapped
   // by migrations 000025/000022 to `similarity`) is read via a defensive
@@ -597,30 +600,40 @@ function ProjectDetailPanel({
 
         {project && initialized && (
           <div className="flex-1 space-y-6 p-6">
-            {/* Name (editable) */}
+            {isReserved && (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                This is a reserved tier. Its name and description are managed by nram and it cannot be deleted.
+              </div>
+            )}
+
+            {/* Name (editable; locked for reserved tiers) */}
             <div>
               <label className="mb-1 block text-sm font-medium text-muted-foreground">
                 Name
               </label>
               <input
                 type="text"
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
+                readOnly={isReserved}
+                disabled={isReserved}
               />
             </div>
 
-            {/* Description (editable) */}
+            {/* Description (editable; locked for reserved tiers) */}
             <div>
               <label className="mb-1 block text-sm font-medium text-muted-foreground">
                 Description
               </label>
               <textarea
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
                 rows={3}
                 value={editDescription}
                 onChange={(e) => setEditDescription(e.target.value)}
                 placeholder="Project description..."
+                readOnly={isReserved}
+                disabled={isReserved}
               />
             </div>
 
@@ -883,36 +896,37 @@ function ProjectDetailPanel({
 
               <div className="flex-1" />
 
-              {confirmDelete ? (
-                <>
-                  <span className="text-sm text-destructive">
-                    This will permanently delete all memories, vectors, entities, and relationships in this project. This action cannot be undone. Continue?
-                  </span>
+              {!isReserved &&
+                (confirmDelete ? (
+                  <>
+                    <span className="text-sm text-destructive">
+                      This will permanently delete all memories, vectors, entities, and relationships in this project. This action cannot be undone. Continue?
+                    </span>
+                    <button
+                      type="button"
+                      className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
+                      onClick={handleDelete}
+                      disabled={deleteMut.isPending}
+                    >
+                      {deleteMut.isPending ? "Deleting..." : "Yes, Delete"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
+                      onClick={() => setConfirmDelete(false)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
                   <button
                     type="button"
-                    className="rounded bg-destructive px-3 py-1.5 text-sm text-white hover:bg-destructive disabled:opacity-50"
-                    onClick={handleDelete}
-                    disabled={deleteMut.isPending}
+                    className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
+                    onClick={() => setConfirmDelete(true)}
                   >
-                    {deleteMut.isPending ? "Deleting..." : "Yes, Delete"}
+                    Delete Project
                   </button>
-                  <button
-                    type="button"
-                    className="rounded border px-3 py-1.5 text-sm hover:bg-muted"
-                    onClick={() => setConfirmDelete(false)}
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="rounded border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  Delete Project
-                </button>
-              )}
+                ))}
             </div>
 
             {deleteMut.isError && (
@@ -1277,7 +1291,7 @@ function ProjectReadOnlyPanel({
     });
   }
 
-  const canDelete = canWrite && project.slug !== "global";
+  const canDelete = canWrite && !project.reserved;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">

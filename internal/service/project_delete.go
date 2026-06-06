@@ -130,6 +130,11 @@ type ProjectDeleteResponse struct {
 // action and would block the project row delete anyway).
 var ErrNoGlobalProject = errors.New("project delete: owner has no global project to receive reassigned token usage")
 
+// ErrReservedProjectUndeletable is returned when a delete targets a reserved
+// per-user project (see model.IsReservedProjectSlug). Callers map this to a
+// client error; the project is never touched.
+var ErrReservedProjectUndeletable = errors.New("project delete: reserved projects cannot be deleted")
+
 // ProjectDeleteService orchestrates recursive deletion of a project and all
 // associated data. Project deletion is strictly self-service: only the project
 // owner can delete their own projects.
@@ -225,8 +230,8 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 	if err != nil {
 		return nil, fmt.Errorf("project not found: %w", err)
 	}
-	if project.Slug == "global" {
-		return nil, fmt.Errorf("the global project cannot be deleted")
+	if model.IsReservedProjectSlug(project.Slug) {
+		return nil, fmt.Errorf("%w: %q", ErrReservedProjectUndeletable, project.Slug)
 	}
 
 	// Resolve the owner's global project up front. token_usage.project_id has

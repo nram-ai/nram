@@ -110,7 +110,7 @@ func registerMemoryProjects(s *Server) {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithRawOutputSchema(schemaFor[listProjectsResponse]()),
-		mcp.WithDescription("List all available projects with slugs and descriptions, paginated (default limit 50, max 200). ALWAYS call this before store to check for an existing project — an unknown slug on store auto-creates a new project."),
+		mcp.WithDescription("List all available projects with slugs and descriptions, paginated (default limit 50, max 200). ALWAYS call this before store to check for an existing project — an unknown slug on store auto-creates a new project. The reserved projects 'global' (world-knowledge) and 'about_me' (the user's self-knowledge) are auto-created for every user, carry nram-managed descriptions, and cannot be deleted."),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of projects to return (default 50, max 200)")),
 		mcp.WithNumber("offset", mcp.Description("Number of projects to skip for pagination (default 0)")),
 	)

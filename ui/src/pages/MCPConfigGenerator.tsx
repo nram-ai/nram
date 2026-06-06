@@ -83,7 +83,7 @@ Memories persist across all machines, agents, and conversations.
 - Before making assumptions about preferences or past decisions — recall first
 - Before storing — recall to check for duplicates
 - When you need context you lack — recall before asking the user
-Recall scoping: omit project = global only; with project = project + global.
+Recall scoping: omit project = global + about_me; with project = project + global + about_me. global (world-knowledge) and about_me (the user's self-knowledge) are reserved tiers that always join recall. Call the about_me tool on demand when you need the user's personal context (no need to load it every session).
 
 **WHEN TO EXPLORE** (graph):
 - When investigating how concepts, people, or components relate
@@ -109,7 +109,7 @@ Tag consistently: decision, preference, architecture, config, bug, workaround, c
 ALWAYS call list_projects first — use an EXISTING project whenever one fits.
 Do NOT create a new project per task/feature/topic. Projects = major boundaries (repo, product, domain).
 Use tags and metadata for sub-categorization, not new projects. Omit project for "global".
-Recall with project = project + global. An unknown slug on store auto-creates a project; treat that as a last resort.`;
+Recall with project = project + global + about_me (reserved tiers, always joined). about_me = the user's self-knowledge; call the about_me tool to load it. An unknown slug on store auto-creates a project; treat that as a last resort.`;
 }
 
 function buildAgentsMdSnippet(): string {
@@ -131,7 +131,7 @@ Memories persist across all machines, agents, and conversations.
 - Start of every new task — recall context
 - Before making assumptions — recall first
 - Before storing — recall to check for duplicates
-Recall scoping: omit project = global only; with project = project + global.
+Recall scoping: omit project = global + about_me; with project = project + global + about_me. global (world-knowledge) and about_me (the user's self-knowledge) are reserved tiers that always join recall. Call the about_me tool on demand when you need the user's personal context (no need to load it every session).
 
 **WHEN TO EXPLORE** (graph):
 - Investigating how concepts, people, or components relate

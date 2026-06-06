@@ -595,6 +595,10 @@ export interface Project {
   owner?: ProjectOwner;
   organization?: ProjectOrganization;
   org_id?: string;
+  // reserved is a computed, read-only flag set by the backend for the reserved
+  // per-user tiers (global, about_me): they cannot be deleted and their
+  // name/description are managed by nram.
+  reserved?: boolean;
   created_at: string;
   updated_at: string;
 }

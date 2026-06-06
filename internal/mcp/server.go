@@ -40,6 +40,10 @@ type MemoryLister interface {
 	ListByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
 	CountByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters) (int, error)
 	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
+	// ListByNamespaceFramingOrder backs the about_me framing fetch: live
+	// memories ordered by identity-centrality (max linked-entity mention_count),
+	// then recall-count, then recency.
+	ListByNamespaceFramingOrder(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
 }
 
 // MetricsRecorder is the subset of *metrics.Metrics that wrapToolResult uses.
@@ -181,7 +185,7 @@ Enrichment is fully server-managed. Every memory you store is enqueued for entit
 KEY RULES:
 - ALWAYS call list_projects first to discover existing projects before storing.
 - Use EXISTING projects — do NOT create one per task/feature/topic. An unknown slug on store auto-creates a new project, which is rarely what you want.
-- Projects = major boundaries (per repo, product, or domain). Omit for "global".
+- Projects = major boundaries (repo, product, domain). Omit for "global". "global"=world-knowledge, "about_me"=self-knowledge; both auto-join recall.
 - Use tags/metadata for sub-categorization, not new projects.
 - Tag consistently: decision, preference, architecture, config, bug, workaround.`)
 
@@ -264,6 +268,7 @@ func NewServer(deps Dependencies) *Server {
 	RegisterProjectDeleteTool(s)
 	RegisterProjectUpdateTool(s)
 	RegisterProceduralTools(s)
+	RegisterAboutMeTool(s)
 	RegisterResources(s)
 
 	return s

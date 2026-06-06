@@ -73,6 +73,9 @@ func (m *aliveMemoryLister) GetBatch(_ context.Context, ids []uuid.UUID) ([]mode
 	}
 	return out, nil
 }
+func (m *aliveMemoryLister) ListByNamespaceFramingOrder(_ context.Context, _ uuid.UUID, _, _ int) ([]model.Memory, error) {
+	return m.mems, nil
+}
 
 // These tests exercise the REAL recall projection wiring (buildMCPRecallResponse
 // -> seed capture -> dedupGraphRelationships -> rankGraphSlice), not the ranking

@@ -528,13 +528,53 @@ func TestProjectDelete_RejectsGlobal(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for global project")
 	}
-	if err.Error() != "the global project cannot be deleted" {
+	if !errors.Is(err, ErrReservedProjectUndeletable) {
 		t.Errorf("unexpected error: %v", err)
 	}
 	// Both projects must still exist.
 	if n := countRows(t, fx.db, "SELECT COUNT(*) FROM projects WHERE id IN (?, ?)",
 		fx.target.ID.String(), fx.global.ID.String()); n != 2 {
 		t.Errorf("expected both projects intact, found %d rows", n)
+	}
+}
+
+// TestProjectDelete_RejectsAboutMe — the reserved about_me persona project is
+// undeletable for the same reason as global, via the shared reserved-slug guard.
+func TestProjectDelete_RejectsAboutMe(t *testing.T) {
+	ctx := context.Background()
+	fx := seedProject(t)
+
+	// Seed an about_me project under the same owner.
+	aboutNSID := uuid.New()
+	aboutNS := &model.Namespace{
+		ID:       aboutNSID,
+		Name:     "about_me",
+		Slug:     "about_me-" + uuid.NewString()[:8],
+		Kind:     "project",
+		ParentID: &fx.global.OwnerNamespaceID,
+		Path:     fx.global.OwnerNamespaceID.String() + "/" + aboutNSID.String(),
+		Depth:    2,
+	}
+	if err := fx.nsRepo.Create(ctx, aboutNS); err != nil {
+		t.Fatalf("create about_me ns: %v", err)
+	}
+	about := &model.Project{
+		ID:               uuid.New(),
+		NamespaceID:      aboutNSID,
+		OwnerNamespaceID: fx.global.OwnerNamespaceID,
+		Slug:             model.ReservedProjectSlugAboutMe,
+		Name:             "about_me",
+	}
+	if err := fx.projectRepo.Create(ctx, about); err != nil {
+		t.Fatalf("create about_me project: %v", err)
+	}
+
+	_, err := fx.svc.Delete(ctx, &ProjectDeleteRequest{ProjectID: about.ID})
+	if !errors.Is(err, ErrReservedProjectUndeletable) {
+		t.Errorf("expected ErrReservedProjectUndeletable, got %v", err)
+	}
+	if n := countRows(t, fx.db, "SELECT COUNT(*) FROM projects WHERE id = ?", about.ID.String()); n != 1 {
+		t.Errorf("expected about_me intact, found %d rows", n)
 	}
 }
 

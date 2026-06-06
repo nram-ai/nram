@@ -91,6 +91,18 @@ func handleProjectUpdate(ctx context.Context, s *Server, request mcp.CallToolReq
 		return mcp.NewToolResultError("you can only update your own projects"), nil
 	}
 
+	// Reserved projects carry nram-managed canonical name/description; only
+	// default_tags is editable. Reject attempts to change the locked identity
+	// fields rather than silently dropping them.
+	if model.IsReservedProjectSlug(project.Slug) {
+		if _, ok := args["name"]; ok {
+			return mcp.NewToolResultError(fmt.Sprintf("the %s project is reserved; its name is managed by nram and cannot be changed", project.Slug)), nil
+		}
+		if _, ok := args["description"]; ok {
+			return mcp.NewToolResultError(fmt.Sprintf("the %s project is reserved; its description is managed by nram and cannot be changed", project.Slug)), nil
+		}
+	}
+
 	changed := false
 
 	if name, ok := args["name"].(string); ok && strings.TrimSpace(name) != "" {

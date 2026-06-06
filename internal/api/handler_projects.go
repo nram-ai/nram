@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"regexp"
@@ -314,13 +315,29 @@ func handleMeUpdateProject(w http.ResponseWriter, r *http.Request, projects Proj
 		return
 	}
 
-	if body.Name != "" {
-		project.Name = body.Name
+	// Reserved projects carry nram-managed canonical name/slug/description. A
+	// round-trip PUT that echoes the canonical values is allowed; a genuine
+	// change to a locked field is rejected. settings and default_tags remain
+	// editable. The locked fields are never re-assigned from the body below.
+	reserved := model.IsReservedProjectSlug(project.Slug)
+	if reserved {
+		if (body.Name != "" && body.Name != project.Name) ||
+			(body.Slug != "" && body.Slug != project.Slug) ||
+			body.Description != project.Description {
+			WriteError(w, ErrBadRequest("this project is reserved; its name, slug, and description are managed by nram and cannot be changed"))
+			return
+		}
 	}
-	if body.Slug != "" {
-		project.Slug = body.Slug
+
+	if !reserved {
+		if body.Name != "" {
+			project.Name = body.Name
+		}
+		if body.Slug != "" {
+			project.Slug = body.Slug
+		}
+		project.Description = body.Description
 	}
-	project.Description = body.Description
 	if body.DefaultTags != nil {
 		project.DefaultTags = body.DefaultTags
 	}
@@ -410,7 +427,7 @@ func NewMeProjectDeleteHandler(deleteSvc ProjectDeleteServicer, projects Project
 			ProjectID: projectID,
 		})
 		if err != nil {
-			if strings.Contains(err.Error(), "global") {
+			if errors.Is(err, service.ErrReservedProjectUndeletable) {
 				WriteError(w, ErrBadRequest(err.Error()))
 				return
 			}

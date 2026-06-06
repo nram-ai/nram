@@ -191,15 +191,18 @@ func main() {
 		}
 	}
 
-	// Ensure every user has a "global" project. This is idempotent — existing
-	// global projects are skipped. Handles upgrades from versions before the
-	// global project was introduced.
+	// Ensure every user has the reserved projects (global + about_me) and that
+	// their canonical Name/Description are healed. This is idempotent — existing
+	// reserved projects are reused and only repaired if drifted. Handles upgrades
+	// from versions before about_me, and before global carried a description.
 	{
 		tmpUserRepo := storage.NewUserRepo(db)
 		users, err := tmpUserRepo.ListAll(context.Background())
 		if err == nil {
 			for _, u := range users {
-				_, _ = projectRepo.AutoCreateUnderUser(context.Background(), namespaceRepo, u.NamespaceID, "global")
+				if err := projectRepo.EnsureReservedUnderUser(context.Background(), namespaceRepo, u.NamespaceID); err != nil {
+					log.Printf("ensure reserved projects for user %s: %v", u.ID, err)
+				}
 			}
 		}
 	}

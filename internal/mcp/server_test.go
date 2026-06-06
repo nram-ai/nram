@@ -236,6 +236,7 @@ func TestEveryToolHasOutputSchema(t *testing.T) {
 		"update", "get", "graph", "list_projects",
 		"delete_project", "update_project",
 		"procedural_fetch", "procedural_store", "procedural_update", "procedural_forget",
+		"about_me",
 	}
 	exempt := map[string]bool{} // export was the sole exemption; tool withdrawn 2026-05-27
 

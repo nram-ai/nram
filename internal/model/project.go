@@ -17,6 +17,10 @@ type Project struct {
 	Description       string          `json:"description"`
 	DefaultTags       []string        `json:"default_tags"`
 	Settings          json.RawMessage `json:"settings"`
+	// Reserved is a computed, read-only flag (true when Slug names a reserved
+	// per-user tier — see IsReservedProjectSlug). It is populated at scan time,
+	// surfaced to the UI, and never persisted as its own column.
+	Reserved bool `json:"reserved"`
 	MemoryCount       int             `json:"memory_count"`
 	EntityCount       int             `json:"entity_count"`
 	RelationshipCount int             `json:"relationship_count"`

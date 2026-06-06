@@ -129,6 +129,10 @@ type RecallRequest struct {
 	// GlobalNamespaceID, when set, causes the recall to also search the global
 	// project's namespace and merge results with the primary project's results.
 	GlobalNamespaceID *uuid.UUID `json:"-"`
+	// AboutMeNamespaceID, when set, adds the per-user about_me (persona) namespace
+	// to the recall aperture alongside the primary and global namespaces, so
+	// self-knowledge surfaces by association. Mirrors GlobalNamespaceID.
+	AboutMeNamespaceID *uuid.UUID `json:"-"`
 }
 
 // RecallResult holds a single recalled memory with its computed score.
@@ -535,9 +539,12 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	projectByNamespace := map[uuid.UUID]projectAttribution{
 		namespaceID: {ProjectID: projectID, ProjectSlug: projectSlug, IsPrimary: true},
 	}
-	if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
-		if gp, err := s.projects.GetByNamespaceID(ctx, *req.GlobalNamespaceID); err == nil && gp != nil {
-			projectByNamespace[*req.GlobalNamespaceID] = projectAttribution{ProjectID: gp.ID, ProjectSlug: gp.Slug}
+	for _, extraNS := range []*uuid.UUID{req.GlobalNamespaceID, req.AboutMeNamespaceID} {
+		if extraNS == nil || *extraNS == namespaceID {
+			continue
+		}
+		if p, err := s.projects.GetByNamespaceID(ctx, *extraNS); err == nil && p != nil {
+			projectByNamespace[*extraNS] = projectAttribution{ProjectID: p.ID, ProjectSlug: p.Slug}
 		}
 	}
 	attribute := func(memNs uuid.UUID) projectAttribution {
@@ -556,13 +563,15 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	candidates := []scoredMemory{}
 
 	// searchNamespaces is the recall aperture: the primary project namespace
-	// plus the global namespace when it is set and distinct. Lifted to
+	// plus the global and about_me namespaces when set and distinct. Lifted to
 	// function scope so both the memory vector-search branch and the graph
 	// block's cross-namespace vector-channel entity activation share one
-	// definition of the [project, global] aperture.
+	// definition of the [project, global, about_me] aperture.
 	searchNamespaces := []uuid.UUID{namespaceID}
-	if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
-		searchNamespaces = append(searchNamespaces, *req.GlobalNamespaceID)
+	for _, extraNS := range []*uuid.UUID{req.GlobalNamespaceID, req.AboutMeNamespaceID} {
+		if extraNS != nil && *extraNS != namespaceID {
+			searchNamespaces = append(searchNamespaces, *extraNS)
+		}
 	}
 
 	// queryEmbeddingDim is the actual embedding dimension produced for the
@@ -757,21 +766,26 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				})
 			}
 		}
-		// Also include global namespace memories in text fallback.
-		if req.GlobalNamespaceID != nil && *req.GlobalNamespaceID != namespaceID {
-			globalMems, err := s.memories.ListByNamespace(ctx, *req.GlobalNamespaceID, overfetchLimit, 0)
-			if err == nil {
-				for _, mem := range globalMems {
-					if !seenIDs[mem.ID] {
-						attr := attribute(mem.NamespaceID)
-						candidates = append(candidates, scoredMemory{
-							memory:        mem,
-							projectID:     attr.ProjectID,
-							projectSlug:   attr.ProjectSlug,
-							namespacePath: namespacePath,
-							isPrimary:     attr.IsPrimary,
-						})
-					}
+		// Also include global and about_me namespace memories in text fallback.
+		for _, extraNS := range []*uuid.UUID{req.GlobalNamespaceID, req.AboutMeNamespaceID} {
+			if extraNS == nil || *extraNS == namespaceID {
+				continue
+			}
+			extraMems, err := s.memories.ListByNamespace(ctx, *extraNS, overfetchLimit, 0)
+			if err != nil {
+				continue
+			}
+			for _, mem := range extraMems {
+				if !seenIDs[mem.ID] {
+					seenIDs[mem.ID] = true
+					attr := attribute(mem.NamespaceID)
+					candidates = append(candidates, scoredMemory{
+						memory:        mem,
+						projectID:     attr.ProjectID,
+						projectSlug:   attr.ProjectSlug,
+						namespacePath: namespacePath,
+						isPrimary:     attr.IsPrimary,
+					})
 				}
 			}
 		}

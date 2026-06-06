@@ -79,6 +79,20 @@ func (m *mockMemoryListerByNs) GetBatch(_ context.Context, ids []uuid.UUID) ([]m
 	return out, nil
 }
 
+func (m *mockMemoryListerByNs) ListByNamespaceFramingOrder(_ context.Context, nsID uuid.UUID, _, _ int) ([]model.Memory, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	out := make([]model.Memory, 0)
+	for _, mem := range m.memoriesByNs[nsID] {
+		if mem.SupersededBy != nil {
+			continue
+		}
+		out = append(out, mem)
+	}
+	return out, nil
+}
+
 // slugProjectRepo returns different projects per slug.
 type slugProjectRepo struct {
 	projects   map[string]*model.Project

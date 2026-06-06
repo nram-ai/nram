@@ -7,6 +7,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -59,8 +60,8 @@ func handleProjectDelete(ctx context.Context, s *Server, request mcp.CallToolReq
 	if projectSlug == "" {
 		return mcp.NewToolResultError("project slug is required"), nil
 	}
-	if projectSlug == "global" {
-		return mcp.NewToolResultError("the global project cannot be deleted"), nil
+	if model.IsReservedProjectSlug(projectSlug) {
+		return mcp.NewToolResultError(fmt.Sprintf("the %s project is reserved and cannot be deleted", projectSlug)), nil
 	}
 
 	deps := s.Deps()

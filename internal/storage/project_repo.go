@@ -296,13 +296,19 @@ func (r *ProjectRepo) AutoCreateUnderUser(ctx context.Context, nsRepo *Namespace
 		return nil, fmt.Errorf("project auto create namespace: %w", err)
 	}
 
-	// Create the project.
+	// Create the project. Reserved slugs are stamped with their canonical
+	// Name/Description on create; everything else gets the slug as its name and
+	// an empty description.
+	name, description := slug, ""
+	if rp := model.ReservedProjectBySlug(slug); rp != nil {
+		name, description = rp.Name, rp.Description
+	}
 	project := &model.Project{
 		NamespaceID:      projectNSID,
 		OwnerNamespaceID: userNamespaceID,
-		Name:             slug,
+		Name:             name,
 		Slug:             slug,
-		Description:      "",
+		Description:      description,
 		DefaultTags:      []string{},
 		Settings:         json.RawMessage(`{}`),
 	}
@@ -311,6 +317,33 @@ func (r *ProjectRepo) AutoCreateUnderUser(ctx context.Context, nsRepo *Namespace
 	}
 
 	return project, nil
+}
+
+// EnsureReservedUnderUser provisions every reserved project (model.ReservedProjects)
+// under a user's namespace and heals each one's canonical Name/Description. It is
+// idempotent: missing reserved projects are created (via AutoCreateUnderUser),
+// and pre-existing rows whose Name/Description have drifted from the canonical
+// copy are repaired in place. This is the single entry point for both new-user
+// provisioning and the boot-time backfill of existing users.
+func (r *ProjectRepo) EnsureReservedUnderUser(ctx context.Context, nsRepo *NamespaceRepo, userNamespaceID uuid.UUID) error {
+	for i := range model.ReservedProjects {
+		rp := model.ReservedProjects[i]
+		project, err := r.AutoCreateUnderUser(ctx, nsRepo, userNamespaceID, rp.Slug)
+		if err != nil {
+			return fmt.Errorf("ensure reserved project %q: %w", rp.Slug, err)
+		}
+		// Heal canonical copy on pre-existing rows. AutoCreateUnderUser stamps
+		// the canonical values on create, so this only fires when an older row
+		// (e.g. a global created before it carried a description) has drifted.
+		if project.Name != rp.Name || project.Description != rp.Description {
+			project.Name = rp.Name
+			project.Description = rp.Description
+			if err := r.Update(ctx, project); err != nil {
+				return fmt.Errorf("heal reserved project %q: %w", rp.Slug, err)
+			}
+		}
+	}
+	return nil
 }
 
 // reload fetches the project by ID and populates the struct in place.
@@ -445,6 +478,10 @@ func (r *ProjectRepo) populateProject(
 	if err != nil {
 		return nil, fmt.Errorf("project parse updated_at: %w", err)
 	}
+
+	// Reserved is derived from the slug, not stored — every load reflects the
+	// current reserved-slug registry.
+	project.Reserved = model.IsReservedProjectSlug(project.Slug)
 
 	return project, nil
 }

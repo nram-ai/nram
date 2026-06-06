@@ -88,11 +88,12 @@ func (r *UserRepo) Create(ctx context.Context, user *model.User, nsRepo *Namespa
 		return fmt.Errorf("user create: %w", err)
 	}
 
-	// Auto-create a "global" project so the user has one ready immediately.
-	// This serves as the implicit scope when MCP tools omit the project parameter.
+	// Auto-create the reserved projects (global + about_me) so the user has them
+	// ready immediately. "global" serves as the implicit scope when MCP tools
+	// omit the project parameter; "about_me" is the per-user persona tier.
 	if projectRepo != nil {
-		if _, err := projectRepo.AutoCreateUnderUser(ctx, nsRepo, userNSID, "global"); err != nil {
-			return fmt.Errorf("user create global project: %w", err)
+		if err := projectRepo.EnsureReservedUnderUser(ctx, nsRepo, userNSID); err != nil {
+			return fmt.Errorf("user create reserved projects: %w", err)
 		}
 	}
 

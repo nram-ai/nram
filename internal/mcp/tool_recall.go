@@ -20,9 +20,9 @@ func RegisterRecallTool(s *Server) {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithRawOutputSchema(schemaFor[mcpRecallResponse]()),
-		mcp.WithDescription("Search persistent memory. ALWAYS recall at the start of a new task to load context. Recall before making assumptions and before storing to avoid duplicates. Use natural language queries. Specifying a project searches that project plus global; omitting searches global only. Graph entities and relationships are always included when the knowledge graph is populated."),
+		mcp.WithDescription("Search persistent memory. ALWAYS recall at the start of a new task to load context. Recall before making assumptions and before storing to avoid duplicates. Use natural language queries. Specifying a project searches that project plus the reserved global (world-knowledge) and about_me (the user's self-knowledge) tiers; omitting a project searches global plus about_me. The about_me persona tier always joins the recall by association — use the about_me tool to load it directly. Graph entities and relationships are always included when the knowledge graph is populated."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Natural language query")),
-		mcp.WithString("project", mcp.Description("Project slug. Searches this project + global. Omit to search only the global project")),
+		mcp.WithString("project", mcp.Description("Project slug. Searches this project + the global and about_me tiers. Omit to search global + about_me only.")),
 		mcp.WithNumber("limit", mcp.Description("Maximum results to return (default 10, server-capped at recall.max_limit, default 50). For larger result sets use the list tool.")),
 		mcp.WithArray("tags", mcp.Description("Filter by tags (intersection: memory must have ALL)")),
 		mcp.WithNumber("graph_depth", mcp.Description("Graph traversal depth (default recall.graph.default_depth=2, server-capped at recall.graph.max_depth, default 5).")),
@@ -107,10 +107,19 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 	// Look up the global project to get its namespace.
 	var globalNsID *uuid.UUID
 	var globalProject *model.Project
-	if gp, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, "global"); err == nil && gp != nil {
+	if gp, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, model.ReservedProjectSlugGlobal); err == nil && gp != nil {
 		globalProject = gp
 		nsID := gp.NamespaceID
 		globalNsID = &nsID
+	}
+
+	// Look up the about_me (persona) project to join its namespace to the recall
+	// aperture alongside global. Self-knowledge is per-user and, like global, is
+	// never exposed to share-bearer callers.
+	var aboutMeNsID *uuid.UUID
+	if ap, err := deps.ProjectRepo.GetBySlug(ctx, user.NamespaceID, model.ReservedProjectSlugAboutMe); err == nil && ap != nil {
+		nsID := ap.NamespaceID
+		aboutMeNsID = &nsID
 	}
 
 	// allowedNS bounds orphan resolution to namespaces the caller is already
@@ -136,20 +145,30 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 
 		req.ProjectID = project.ID
 		allowedNS = append(allowedNS, project.NamespaceID)
-		// Include global memories alongside project-specific results — but
-		// only for non-share-bearer callers. The share grant is per-project
-		// by design; the owner's global namespace is not implicitly shared.
-		if !isShareBearer && projectSlug != "global" {
-			req.GlobalNamespaceID = globalNsID
-			if globalNsID != nil {
-				allowedNS = append(allowedNS, *globalNsID)
+		// Include global + about_me memories alongside project-specific results —
+		// but only for non-share-bearer callers. The share grant is per-project
+		// by design; the owner's global and persona namespaces are not implicitly
+		// shared. Each reserved namespace is skipped when it is itself the primary.
+		if !isShareBearer {
+			if projectSlug != model.ReservedProjectSlugGlobal {
+				req.GlobalNamespaceID = globalNsID
+				if globalNsID != nil {
+					allowedNS = append(allowedNS, *globalNsID)
+				}
+			}
+			if projectSlug != model.ReservedProjectSlugAboutMe {
+				req.AboutMeNamespaceID = aboutMeNsID
+				if aboutMeNsID != nil {
+					allowedNS = append(allowedNS, *aboutMeNsID)
+				}
 			}
 		}
 	} else {
 		if isShareBearer {
 			return mcp.NewToolResultError("share-bearer requests must specify project; the global fan-out is not available"), nil
 		}
-		// No project specified: search only the global project.
+		// No project specified: primary is the global project, and about_me joins
+		// the aperture by association.
 		if globalProject != nil {
 			req.ProjectID = globalProject.ID
 			allowedNS = append(allowedNS, globalProject.NamespaceID)
@@ -157,6 +176,10 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 			// Fallback: no global project exists, search all user projects.
 			req.NamespaceID = &user.NamespaceID
 			allowedNS = append(allowedNS, user.NamespaceID)
+		}
+		req.AboutMeNamespaceID = aboutMeNsID
+		if aboutMeNsID != nil {
+			allowedNS = append(allowedNS, *aboutMeNsID)
 		}
 	}
 

@@ -37,6 +37,29 @@ type listMemoryItem struct {
 	UpdatedAt   time.Time          `json:"updated_at"`
 }
 
+// buildListMemoryItems projects memories into the wire shape shared by the
+// list and about_me tools. slugFor resolves each memory's project slug (the
+// list tool maps by namespace; about_me stamps a constant).
+func buildListMemoryItems(memories []model.Memory, slugFor func(model.Memory) string) []listMemoryItem {
+	items := make([]listMemoryItem, 0, len(memories))
+	for _, m := range memories {
+		derived, meta := extractDerivedFrom(m.Metadata, projectionOpts{})
+		items = append(items, listMemoryItem{
+			ID:          m.ID,
+			ProjectSlug: slugFor(m),
+			Content:     m.Content,
+			Source:      m.Source,
+			Origin:      m.Origin,
+			Tags:        m.Tags,
+			DerivedFrom: derived,
+			Metadata:    meta,
+			CreatedAt:   m.CreatedAt,
+			UpdatedAt:   m.UpdatedAt,
+		})
+	}
+	return items
+}
+
 // listMemoryResponse is the paginated response envelope for memory_list.
 //
 // Truncated is RESERVED for newListReducer (result_limit.go) and MUST NOT be
@@ -163,22 +186,7 @@ func handleMemoryList(ctx context.Context, s *Server, request mcp.CallToolReques
 		currentOffset = 0
 	}
 
-	items := make([]listMemoryItem, 0, len(memories))
-	for _, m := range memories {
-		derived, meta := extractDerivedFrom(m.Metadata, projectionOpts{})
-		items = append(items, listMemoryItem{
-			ID:          m.ID,
-			ProjectSlug: nsIDToSlug[m.NamespaceID],
-			Content:     m.Content,
-			Source:      m.Source,
-			Origin:      m.Origin,
-			Tags:        m.Tags,
-			DerivedFrom: derived,
-			Metadata:    meta,
-			CreatedAt:   m.CreatedAt,
-			UpdatedAt:   m.UpdatedAt,
-		})
-	}
+	items := buildListMemoryItems(memories, func(m model.Memory) string { return nsIDToSlug[m.NamespaceID] })
 
 	resp := &listMemoryResponse{
 		Data: items,
