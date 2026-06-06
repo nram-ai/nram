@@ -59,4 +59,4 @@ If one phase is starved of budget by the others, the `dreaming.<phase>.budget_fr
 
 ### Restoring after a drain
 
-Restore every dreaming setting you touched back to its default. The defaults are tuned for steady-state load, not first-pass backfill; leaving them elevated keeps token spend permanently higher than it needs to be. The Settings page shows the default value inline beside each field, and the per-cycle counters in the Dreaming admin page plateau once the residual clears, which is the signal to restore.
+Restore every dreaming setting you touched back to its default. The defaults are tuned for steady-state load, not first-pass backfill; leaving them elevated keeps token spend permanently higher than it needs to be. The Settings page shows the default value inline beside each field, and the per-cycle counters on the Dreaming page plateau once the residual clears, which is the signal to restore.

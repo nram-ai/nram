@@ -52,7 +52,7 @@ nram is not another memory tool bolted onto one app. It is the layer underneath 
 
 - **MCP** is how Claude, ChatGPT, Cursor, or a custom agent connects. Streamable HTTP transport at `/mcp`, with OAuth discovery published at the well-known paths.
 - **REST API** lets any code that can speak HTTP store and recall. See [docs/api.md](docs/api.md).
-- **Web UI** is the admin dashboard for organizations, projects, providers, the knowledge graph, and the dreaming cycle.
+- **Web Console** is the dashboard for organizations, projects, providers, the knowledge graph, and the dreaming cycle.
 
 ## Features
 
@@ -66,7 +66,7 @@ nram is not another memory tool bolted onto one app. It is the layer underneath 
 
 **Access and multi-tenancy.** Authentication via JWT, per-user API keys, WebAuthn passkeys, and per-organization OIDC SSO. Full OAuth 2.0 (Authorization Code + PKCE, dynamic client registration, resource indicators, discovery metadata). Five RBAC roles across REST and MCP. Organizations, hierarchical namespaces, and projects for isolation, plus share tokens for granting scoped external access without an account.
 
-**Operability.** A React admin UI manages providers, settings, the graph, dreaming, the enrichment queue, and analytics. Run on SQLite (zero-config) or PostgreSQL, with SQLite-to-Postgres migration tooling. Provider-agnostic across OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, and any OpenAI-compatible endpoint, with per-call token accounting. Real-time updates over SSE, HMAC-signed webhooks, Prometheus metrics at `/metrics`, and JSON / NDJSON import/export.
+**Operability.** The Web Console, a React app, manages providers, settings, the graph, dreaming, the enrichment queue, and analytics. Run on SQLite (zero-config) or PostgreSQL, with SQLite-to-Postgres migration tooling. Provider-agnostic across OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, and any OpenAI-compatible endpoint, with per-call token accounting. Real-time updates over SSE, HMAC-signed webhooks, Prometheus metrics at `/metrics`, and JSON / NDJSON import/export.
 
 A full feature-by-feature reference lives across the [docs](#reference).
 
@@ -90,7 +90,7 @@ git clone <repo-url> nram && cd nram
 make build
 ```
 
-Output is a single `./nram` binary with the React UI embedded.
+Output is a single `./nram` binary with the Web Console embedded.
 
 ### 3. Run
 
@@ -173,9 +173,9 @@ internal/
   server/          HTTP router setup
   service/         Business logic (recall, store, fusion, settings, lifecycle, export jobs)
   storage/         Database repositories (incl. HNSW, pgvector, Qdrant adapters)
-  ui/              Embedded React UI assets
+  ui/              Embedded Web Console assets
 migrations/        SQLite and PostgreSQL migration SQL
-ui/                React admin UI source (TypeScript, Tailwind)
+ui/                React Web Console source (TypeScript, Tailwind)
 docs/              Reference docs and the OpenAPI spec
 ```
 

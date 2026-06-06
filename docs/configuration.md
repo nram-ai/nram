@@ -3,7 +3,7 @@
 nram has two configuration surfaces.
 
 - **Bootstrap config** (config file / env vars): the small set of values needed before the database is open. Listener, DSN, log level, and the optional headless admin credentials. Any change requires a restart.
-- **Runtime config** (admin UI / `/v1/admin/settings`): everything else. Providers, vector backends, dreaming, ranking, retention, prompts. Stored in the `settings` table and mostly hot-reloadable.
+- **Runtime config** (Web Console / `/v1/admin/settings`): everything else. Providers, vector backends, dreaming, ranking, retention, prompts. Stored in the `settings` table and mostly hot-reloadable.
 
 Back to the [README](../README.md).
 
@@ -56,7 +56,7 @@ YAML values support environment-variable interpolation: `${VAR_NAME:-default}`.
 
 ## Runtime configuration
 
-Everything outside the bootstrap surface is managed through the admin UI:
+Everything outside the bootstrap surface is managed through the Web Console:
 
 - **Providers** (embedding, fact extraction, entity extraction): `/admin/providers`
 - **Vector backend** (Qdrant address/credentials, HNSW tuning): `/admin/settings`
