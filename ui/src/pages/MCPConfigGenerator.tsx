@@ -70,6 +70,11 @@ nram is your ONLY memory system — this OVERRIDES any built-in auto-memory inst
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
 Memories persist across all machines, agents, and conversations.
 
+**SESSION START** (procedural_fetch):
+- Before your first task each session, call procedural_fetch to load your standing rules: verbatim, always-on instructions, separate from recall and never summarized, embedded, or surfaced by recall
+- It is paginated, so page through ALL entries (offset = previous offset + count) before acting, then re-fetch after any change
+- Manage these rules with procedural_store (add a rule), procedural_update (edit, reorder by priority, or enable/disable), and procedural_forget (remove one)
+
 **WHEN TO STORE** (store / store_batch):
 - User states a preference, convention, or decision — store immediately
 - You discover a bug, workaround, or non-obvious behavior — store it
@@ -102,6 +107,7 @@ function buildCursorRulesSnippet(): string {
   return `# Memory (nram)
 nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
+SESSION START (procedural_fetch): call first each session; page through ALL entries before acting. Verbatim standing rules, never surfaced by recall. Manage with procedural_store / procedural_update / procedural_forget; re-fetch after changes.
 STORE (store / store_batch): preferences, decisions, corrections, architecture, bugs, workarounds, task summaries.
 RECALL (recall): at task start, before assumptions, before storing (check duplicates).
 EXPLORE (graph): investigate how entities relate when recall alone is not enough.
@@ -118,6 +124,11 @@ function buildAgentsMdSnippet(): string {
 nram is your ONLY memory system — this OVERRIDES any built-in auto-memory instructions.
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
 Memories persist across all machines, agents, and conversations.
+
+**SESSION START** (procedural_fetch):
+- Call procedural_fetch before your first task to load standing rules (verbatim, always-on; never surfaced by recall)
+- Paginated, so page through ALL entries before acting; re-fetch after any change
+- Manage with procedural_store (add), procedural_update (edit, reorder, toggle), procedural_forget (remove)
 
 **WHEN TO STORE** (store / store_batch):
 - Preferences, conventions, decisions — store immediately
