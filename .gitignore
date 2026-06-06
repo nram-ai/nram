@@ -28,3 +28,7 @@ internal/ui/dist/*
 /internal/service/recall_regression_test.go
 /internal/service/recall_regression_helpers_test.go
 /internal/service/testdata/recall_regression/
+
+# Local-only live recall tuning harness: connects to a live backend and embeds
+# owner-specific identity probes; kept for our own re-runs, never committed.
+/internal/service/recall_tuning_livedata_test.go

@@ -600,7 +600,7 @@ var settingDefaults = map[string]string{
 	SettingRankWeightFreq:                   "0.00",
 	SettingRankWeightGraph:                  "0.20",
 	SettingRankWeightConf:                   "0.05",
-	SettingRankWeightOrigin:                 "0.00",
+	SettingRankWeightOrigin:                 "0.25",
 	SettingRankWeightMmr:                    "0.75",
 	SettingRecallFusionEnabled:              "true",
 	SettingRecallFusionK:                    "60",

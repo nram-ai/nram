@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -248,10 +249,22 @@ type RankingWeights struct {
 
 // DefaultRankingWeights provides sensible defaults for ranking. Frequency is
 // 0 because access_count already drives Confidence reinforcement; weighting
-// both double-counts the same signal. Origin is 0 so upgrades preserve
-// pre-origin ranking output. MmrLambda 0.75 is the conservative mild-nudge
-// value (literature standard 0.7-0.8): demotes near-identical siblings without
-// regressing single-fact lookups where there is no sibling to demote against.
+// both double-counts the same signal. MmrLambda 0.75 is the conservative
+// mild-nudge value (literature standard 0.7-0.8): demotes near-identical
+// siblings without regressing single-fact lookups where there is no sibling to
+// demote against.
+//
+// Origin 0.25 is the project-affinity boost added to candidates whose home
+// namespace is the recall's primary project. It was derived from a live sweep
+// against the production corpus (internal/service/recall_tuning_livedata_test.go):
+// once the cross-namespace vector fusion was pooled into a single cosine-ordered
+// ranking (so a small tier's best-of-N hit no longer takes RRF rank 1 over a
+// far-more-similar primary memory), 0.25 is the value that surfaces the relevant
+// primary memory first on technical project queries — overcoming the residual
+// freshness edge that recently-written persona/global memories carry — while
+// still leaving genuine cross-tier hits (e.g. an identity question answered from
+// about_me) on top. The measured safe window was [0.20, 0.35]; 0.25 centers it
+// with ~0.1 margin against embedding-similarity noise on both sides.
 var DefaultRankingWeights = RankingWeights{
 	Similarity:     0.50,
 	Recency:        0.15,
@@ -259,7 +272,7 @@ var DefaultRankingWeights = RankingWeights{
 	Frequency:      0.00,
 	GraphRelevance: 0.20,
 	Confidence:     0.05,
-	Origin:         0.00,
+	Origin:         0.25,
 	MmrLambda:      0.75,
 }
 
@@ -1004,11 +1017,14 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							})
 						}
 						if rel.SourceMemory != nil {
-							// Compute graph relevance: hop_multiplier * weight.
+							// Graph relevance: clamp(hop_multiplier * weight) into
+							// [0,1], the same bound every other computeScore input
+							// carries (similarity, recency, confidence) — the graph
+							// term was previously the only unbounded score input.
 							// hop_multiplier defaults to 0.5 (the historical
 							// 1.0/2.0 = "approximate hops as 1") and is
 							// operator-tunable via ranking.graph.hop_multiplier.
-							relevance := graphHopMultiplier * rel.Weight
+							relevance := clampScore(graphHopMultiplier * rel.Weight)
 							if existing, ok := graphMemoryRelevance[*rel.SourceMemory]; !ok || relevance > existing {
 								graphMemoryRelevance[*rel.SourceMemory] = relevance
 							}
@@ -1316,10 +1332,45 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	}
 	_ = g.Wait()
 
-	// Compose the ranking list and per-list weights for RRF. Each
-	// per-namespace list contributes independently: if a memory shows up
-	// in primary's vector list and global's lexical list, both
-	// contributions accumulate.
+	// Pool the per-namespace vector rankings into ONE global ranking ordered by
+	// absolute cosine before RRF. RRF ranks by list POSITION, so a per-namespace
+	// vector list lets the top hit of a tiny tier (e.g. a 4-memory about_me whose
+	// best match has cosine 0.24) take position 0 — the same rank-1 RRF weight as
+	// the top hit of the large primary tier (cosine 0.62). That inverts true
+	// similarity order and lets small tiers dominate the fused score regardless of
+	// how weakly they match. Merging every namespace's results and sorting by
+	// cosine makes RRF position reflect cross-aperture similarity, so a memory the
+	// embedder ranks far below the on-topic results lands deep in the list and
+	// contributes a correspondingly small RRF score.
+	//
+	// Only the vector channel is pooled: cosine is globally comparable, and this is
+	// the channel that carried the inversion. The lexical channel stays per-
+	// namespace because its ts_rank/bm25 score is backend-dependent in direction and
+	// not globally normalized, and it cannot cause the cross-tier inversion — a
+	// memory only enters the lexical channel when the query text actually matches it.
+	// Tie-break by raw UUID bytes (not ID.String(), which would allocate per
+	// comparison) so the order is total and deterministic; that makes sort.Slice
+	// sufficient — there are no equal elements left for stability to preserve.
+	pooledVec := channelResult{}
+	for _, cr := range vecRankings {
+		pooledVec.ranks = append(pooledVec.ranks, cr.ranks...)
+		pooledVec.preLen += cr.preLen
+	}
+	sort.Slice(pooledVec.ranks, func(i, j int) bool {
+		if pooledVec.ranks[i].Rank != pooledVec.ranks[j].Rank {
+			return pooledVec.ranks[i].Rank > pooledVec.ranks[j].Rank
+		}
+		return bytes.Compare(pooledVec.ranks[i].ID[:], pooledVec.ranks[j].ID[:]) < 0
+	})
+	vecRankings = []channelResult{pooledVec}
+
+	// Compose the ranking list and per-list weights for RRF. The vector channel
+	// is now a single pooled list; the lexical channel is still one list per
+	// namespace. The shared loops below apply each list's channel weight
+	// uniformly (NormalizePerChannel divides by that list's own length, so the
+	// pooled vector list normalizes against its summed length — one channel, one
+	// divisor). A memory in both primary's vector list and global's lexical list
+	// still accumulates both contributions.
 	allRankings := make([][]storage.MemoryRank, 0, len(vecRankings)+len(lexRankings))
 	allWeights := make([]float64, 0, len(vecRankings)+len(lexRankings))
 	var vecCount, lexCount int

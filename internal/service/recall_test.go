@@ -61,7 +61,11 @@ func (m *mockMemoryReader) ListByNamespaceFiltered(ctx context.Context, ns uuid.
 
 type mockVectorSearcher struct {
 	results []storage.VectorSearchResult
-	err     error
+	// resultsByNS, when non-nil, returns per-namespace memory-kind results so a
+	// test can model the real store (each memory lives in exactly one
+	// namespace). Falls back to the namespace-agnostic results slice when nil.
+	resultsByNS map[uuid.UUID][]storage.VectorSearchResult
+	err         error
 	// entityResults backs VectorKindEntity searches (the cross-namespace
 	// vector-channel activation path). Results are filtered to the queried
 	// namespace by NamespaceID so a test can place an entity in only the
@@ -91,6 +95,13 @@ func (m *mockVectorSearcher) Search(_ context.Context, kind storage.VectorKind, 
 	}
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.resultsByNS != nil {
+		out := m.resultsByNS[namespaceID]
+		if topK < len(out) {
+			out = out[:topK]
+		}
+		return out, nil
 	}
 	if topK > len(m.results) {
 		return m.results, nil
@@ -193,6 +204,15 @@ func newRecallService(
 	wrapped := provider.WrapEmbeddingForTest(embedFn, tokenUsage)
 	svc := NewRecallService(memories, projects, namespaces, vectorSearch, entityReader, traverser, wrapped)
 	return svc, tokenUsage
+}
+
+// setOriginZero pins the project-affinity term to 0 on svc, overriding the
+// shipped default (0.25). Tests that exercise origin-independent ranking
+// mechanics use it so the default boost does not perturb their fixtures.
+func setOriginZero(svc *RecallService) {
+	w := DefaultRankingWeights
+	w.Origin = 0
+	svc.SetWeights(w)
 }
 
 // --- Tests ---
@@ -951,6 +971,9 @@ func TestRecall_DiversifyByTagPrefix_ThresholdCausesGap(t *testing.T) {
 		{b0, []string{"category-b"}, 0.02},
 	}
 	svc, _ := buildDiversifyService(t, projects, namespaces, nsID, seeds)
+	// The threshold→coverage-gap mechanic is origin-independent; the shipped
+	// default Origin (0.25) would lift b0 over the threshold and defeat the gap.
+	setOriginZero(svc)
 
 	resp, err := svc.Recall(context.Background(), &RecallRequest{
 		ProjectID:            projectID,
@@ -1738,10 +1761,11 @@ func setupPrimaryGlobalFixtures() (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, *
 }
 
 // TestRecall_OriginWeightZero_GlobalBeatsProjectOnCosine establishes the
-// baseline: with Origin=0 (the shipped default), a global memory with
-// strictly higher cosine similarity ranks above a project memory. This is
-// the symptom the origin weight was added to address — locking the default
-// in a test guards against an upgrade-time behavioral surprise.
+// baseline: with Origin pinned to 0, a global memory with strictly higher
+// cosine similarity ranks above a project memory. This is the symptom the
+// origin weight addresses; the shipped default is now 0.25 (see
+// DefaultRankingWeights), so this test sets Origin=0 explicitly to document the
+// no-affinity semantics rather than relying on the default.
 func TestRecall_OriginWeightZero_GlobalBeatsProjectOnCosine(t *testing.T) {
 	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
 
@@ -1767,6 +1791,9 @@ func TestRecall_OriginWeightZero_GlobalBeatsProjectOnCosine(t *testing.T) {
 	}
 
 	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	// Pin Origin to 0 to document the no-affinity baseline (the shipped default
+	// is now 0.25, which would correctly let the project memory win).
+	setOriginZero(svc)
 
 	resp, err := svc.Recall(context.Background(), &RecallRequest{
 		ProjectID:         primaryID,
@@ -1780,7 +1807,77 @@ func TestRecall_OriginWeightZero_GlobalBeatsProjectOnCosine(t *testing.T) {
 		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
 	}
 	if resp.Memories[0].ID != globalMemID {
-		t.Errorf("default Origin=0 should let the higher-cosine global rank first; got %v first", resp.Memories[0].ID)
+		t.Errorf("Origin=0 should let the higher-cosine global rank first; got %v first", resp.Memories[0].ID)
+	}
+}
+
+// TestRecall_FusionPoolsVectorRanksGlobally guards the cross-namespace fusion
+// fix: vector results from every namespace in the aperture are pooled into one
+// cosine-ordered ranking before RRF, so a small tier's best-of-N hit cannot take
+// RRF rank 1 over a far-more-similar primary memory that merely sits deeper in
+// the large primary namespace's own ranking. Before the fix, RRF ranked each
+// namespace's list independently by position, so a global memory at cosine 0.35
+// (rank 1 of its 1-row list) outscored a primary memory at cosine 0.62 (rank 4
+// of the primary list) — inverting true similarity order and letting tiny tiers
+// (about_me, global) dominate project-scoped recall.
+func TestRecall_FusionPoolsVectorRanksGlobally(t *testing.T) {
+	primaryID, primaryNs, _, globalNs, projects, namespaces := setupPrimaryGlobalFixtures()
+
+	p1, p2, p3 := uuid.New(), uuid.New(), uuid.New()
+	target := uuid.New() // primary, cosine 0.62 — only 4th in the primary list
+	decoy := uuid.New()  // global, cosine 0.35 — 1st in its 1-row list
+	now := time.Now()
+
+	memReader := &mockMemoryReader{memories: map[uuid.UUID]*model.Memory{
+		p1:     makeTestMemory(p1, primaryNs, "p1", nil, 0.5, 0, now),
+		p2:     makeTestMemory(p2, primaryNs, "p2", nil, 0.5, 0, now),
+		p3:     makeTestMemory(p3, primaryNs, "p3", nil, 0.5, 0, now),
+		target: makeTestMemory(target, primaryNs, "target", nil, 0.5, 0, now),
+		decoy:  makeTestMemory(decoy, globalNs, "decoy", nil, 0.5, 0, now),
+	}}
+	vectorSearcher := &mockVectorSearcher{resultsByNS: map[uuid.UUID][]storage.VectorSearchResult{
+		primaryNs: {
+			{ID: p1, Score: 0.90, NamespaceID: primaryNs},
+			{ID: p2, Score: 0.85, NamespaceID: primaryNs},
+			{ID: p3, Score: 0.80, NamespaceID: primaryNs},
+			{ID: target, Score: 0.62, NamespaceID: primaryNs},
+		},
+		globalNs: {{ID: decoy, Score: 0.35, NamespaceID: globalNs}},
+	}}
+	embProvider := &mockEmbeddingProvider{
+		name: "test-embed", dimensions: []int{128},
+		resp: &provider.EmbeddingResponse{Embeddings: [][]float32{make([]float32, 128)}, Model: "m"},
+	}
+
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+	svc.SetLexical(&mockLexicalSearcher{}) // no lexical hits: isolate the vector-channel pooling
+	svc.SetFusion(FusionConfig{Enabled: true, RRFConstant: 60, VectorWeight: 0.70, LexicalWeight: 0.30})
+	// Pin Origin to 0 so the project-affinity boost does not also lift the
+	// primary target — the ordering under test must come from fused similarity.
+	setOriginZero(svc)
+
+	resp, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID:         primaryID,
+		GlobalNamespaceID: &globalNs,
+		Query:             "anything",
+	})
+	if err != nil {
+		t.Fatalf("recall failed: %v", err)
+	}
+	posOf := func(id uuid.UUID) int {
+		for i, m := range resp.Memories {
+			if m.ID == id {
+				return i
+			}
+		}
+		return -1
+	}
+	tp, dp := posOf(target), posOf(decoy)
+	if tp < 0 || dp < 0 {
+		t.Fatalf("expected both target and decoy in results; got target_pos=%d decoy_pos=%d (%d memories)", tp, dp, len(resp.Memories))
+	}
+	if tp >= dp {
+		t.Errorf("pooled cosine ranking should place the higher-cosine primary target (0.62) above the small-tier decoy (0.35); got target at %d, decoy at %d", tp, dp)
 	}
 }
 
