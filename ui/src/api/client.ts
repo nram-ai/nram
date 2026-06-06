@@ -96,6 +96,21 @@ export async function request<T>(
   return res.json() as Promise<T>;
 }
 
+/**
+ * Fetch the server's Prometheus metrics as raw exposition text.
+ *
+ * Unlike request(), this hits the root-level public /metrics endpoint (not
+ * under the /v1 BASE_URL) and returns text rather than JSON. The auth header is
+ * sent but harmless: /metrics is unauthenticated and ignores it.
+ */
+export async function fetchMetricsText(): Promise<string> {
+  const res = await fetch("/metrics", { headers: getAuthHeaders() });
+  if (!res.ok) {
+    throw new APIError(res.status, await res.text());
+  }
+  return res.text();
+}
+
 // --- Type definitions ---
 
 export interface SetupStatus {

@@ -35,6 +35,7 @@ import {
   faScroll,
   faCloudMoon,
   faChartLine,
+  faBolt,
   faFileImport,
   faUserAstronaut,
   faStar,
@@ -83,6 +84,7 @@ const MCPConfigGenerator = React.lazy(() => import("./pages/MCPConfigGenerator")
 const Shares = React.lazy(() => import("./pages/Shares"));
 const PromptTemplates = React.lazy(() => import("./pages/PromptTemplates"));
 const DreamingMonitor = React.lazy(() => import("./pages/DreamingMonitor"));
+const Metrics = React.lazy(() => import("./pages/Metrics"));
 const MyAccount = React.lazy(() => import("./pages/MyAccount"));
 
 function RouteFallback({ fullScreen = false }: { fullScreen?: boolean }) {
@@ -180,6 +182,7 @@ const navItems: NavItem[] = [
   { path: "/enrichment", label: "Enrichment Queue", section: "System", icon: faListCheck, requiresEnrichment: true },
   { path: "/dreaming", label: "Dreaming", section: "System", icon: faCloudMoon, requiresEnrichment: true },
   { path: "/analytics", label: "Analytics", section: "System", icon: faChartLine },
+  { path: "/observability", label: "Metrics", section: "System", icon: faBolt, minRole: "administrator" },
   { path: "/import", label: "Bulk Import", section: "System", icon: faFileImport, writeOnly: true },
   { path: "/account", label: "My Account", section: "Account", icon: faUserAstronaut },
 ];
@@ -195,7 +198,7 @@ const SECTION_ICONS: Record<string, IconDefinition> = {
 
 // Routes where the neural-network backdrop fades back so foreground
 // data-visualizations own the visual budget.
-const DIM_BACKDROP_ROUTES = ["/graph", "/entities", "/analytics"];
+const DIM_BACKDROP_ROUTES = ["/graph", "/entities", "/analytics", "/observability"];
 
 function groupBySection(items: NavItem[]): Record<string, NavItem[]> {
   const groups: Record<string, NavItem[]> = {};
@@ -427,6 +430,7 @@ function AppLayout() {
                   <Route path="/graph" element={<GraphVisualization />} />
                   <Route path="/entities" element={<EntityBrowser />} />
                   <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/observability" element={<RequireRole minRole="administrator"><Metrics /></RequireRole>} />
                   <Route path="/import" element={<BulkImport />} />
                   <Route path="/webhooks" element={<RequireRole minRole="administrator"><WebhookManagement /></RequireRole>} />
                   <Route path="/oauth" element={<OAuthClients />} />

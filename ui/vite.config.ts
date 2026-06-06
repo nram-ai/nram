@@ -25,6 +25,11 @@ export default defineConfig({
         target: "http://localhost:8674",
         changeOrigin: true,
       },
+      // The Metrics console page parses the server's Prometheus /metrics text.
+      "/metrics": {
+        target: "http://localhost:8674",
+        changeOrigin: true,
+      },
     },
   },
   build: {
