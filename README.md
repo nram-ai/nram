@@ -24,17 +24,21 @@ How things connect: **MCP** is the standard way Claude, ChatGPT, Cursor, or a cu
 ## Features
 
 - **Persistent Memory**: store, retrieve, update, and soft-delete memories with tags, metadata, TTL, content-hash dedup-on-ingest, and supersession tracking. Superseded memories are hidden from list/recall/MCP results by default.
+- **Procedural Memory**: a per-user verbatim tier for standing rules, conventions, named failure modes, and mandatory protocols an assistant loads at session start. Entries are stored byte-for-byte and returned in priority order; they are NOT embedded, enriched, consolidated, or surfaced by recall, so nothing rewrites or paraphrases them. Scoped to the user's root namespace; share-token callers are denied. Managed via the `procedural_*` MCP tools and `/v1/me/procedural`.
+- **Persona Tier (`about_me`)**: a reserved per-user project that holds self-knowledge (identity, background, preferences, ongoing personal context). Unlike procedural memory it is fully indexed (embedding, enrichment, dream synthesis), and its namespace is joined into the recall aperture alongside the primary and global namespaces, so relevant self-knowledge surfaces by association on every recall. Read in most-defining-first order via the `about_me` MCP tool; share-token callers are denied.
+- **Reserved Projects**: `global` and `about_me` are auto-provisioned for every user and treated as managed tiers. They cannot be deleted, and their name/description are locked (only `default_tags` is editable), so the persona and global tiers always exist with their canonical identity.
 - **Hybrid Recall**: parallel vector + lexical retrieval (FTS5 on SQLite, `tsvector`/`ts_rank_cd` on Postgres) fused with Reciprocal Rank Fusion. Off by default; flip `recall.fusion.enabled` once embeddings are populated.
 - **Semantic Search**: vector embedding support via pgvector (PostgreSQL), pure-Go HNSW (SQLite), or Qdrant. Embedding runs off the write path in the enrichment worker, so stores stay fast.
-- **Enrichment Pipeline**: background workers extract facts, entities, and relationships using configurable LLM providers. The first phase is an optional context-aware ingestion judge that decides ADD / UPDATE / DELETE / NONE on near-duplicate matches before extraction runs (shadow mode by default).
+- **Enrichment Pipeline**: background workers extract facts, entities, and relationships using configurable LLM providers. The first phase is an optional context-aware ingestion judge that decides ADD / UPDATE / DELETE / NONE on near-duplicate matches before extraction runs (shadow mode by default). The queue holds at most one unclaimed-pending job per memory (a partial unique index), so repeated enqueues from manual backfill, dream cycles, and rapid re-stores never pile up duplicates; an in-flight (claimed) job can still coexist with a fresh pending row when content is edited mid-flight. Operators can bulk "Retry All Failed" as a single set-based reset, and stale failed jobs are reaped after `enrichment.failed_retention_days` (default 7, 0 disables).
 - **Query Augmentation**: optional enrichment phase that paraphrases each memory into a small set of short retrieval queries via the configured LLM and embeds them upstream of the original content, so natural-language recall matches the way users actually ask. On by default via `enrichment.query_augment.enabled`; tunable count, prompt, and input cap, with the model supplied by the dedicated query-augmentation provider slot (which falls back to the fact provider); standalone backfill against existing memories via the admin endpoint `POST /enrichment/backfill-augmentation`.
-- **Knowledge Graph**: automatically constructed from enriched entities and relationships with multi-hop traversal and entity-vector lookup.
-- **Dreaming**: offline background consolidation cycle with eight phases. Entity dedup, embedding backfill (repairs rows whose `embedding_dim` is recorded but whose vector row is missing; re-embeds when the provider is healthy, clears `embedding_dim` otherwise), paraphrase dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation.
+- **Knowledge Graph**: automatically constructed from enriched entities and relationships with multi-hop traversal and entity-vector lookup. During recall, graph seeds are activated both lexically (entities matching the query string) and by vector similarity across the full `[project, global, about_me]` aperture, so a relevant entity in the global or persona tier can boost connected memories even when no keyword matched. Cross-namespace activation is gated by `recall.graph.vector_activation.enabled` (default true) and falls back to lexical-only on any vector error. This replaced the former namespace-quota balancer, so recall is now pure relevance truncation with each candidate scored under its owning project's weights, rather than reserving a fixed slot count for primary-project rows.
+- **Graph Maintenance**: when a sourcing memory is deleted or superseded, the relationships it exclusively sourced are reaped and affected entity mention counts are recomputed, so the graph does not bloat with dead links. A lifecycle sweep reaps lost-provenance edges in bulk; operators see the orphaned-edge count and trigger a repair from the admin API (`/v1/admin/graph/health`, `/v1/admin/graph/repair`) and UI.
+- **Dreaming**: offline background consolidation cycle with nine phases. Entity dedup, embedding backfill (repairs rows whose `embedding_dim` is recorded but whose vector row is missing; re-embeds when the provider is healthy, clears `embedding_dim` otherwise), augmentation backfill (re-enqueues live memories whose embedding fell back to raw content because the query-augment provider was briefly unavailable, with no LLM cost in the phase itself), paraphrase dedup, transitive-relationship inference, contradiction detection, consolidation, pruning (with optional confidence decay), and weight recalculation.
 - **Novelty Audit**: LLM-judged audit on dream syntheses; low-novelty consolidations are demoted, vectors are purged, and surfacing in recall is suppressed unless explicitly opted in.
 - **Adaptive Confidence**: optional reconsolidation hook on recall nudges `access_count`, `last_accessed`, and `confidence` on surfaced memories; pruning applies a complementary confidence decay so unused memories fade over time. Shadow mode by default for observable-only rollout. `confidence` is one of six terms in the recall ranking score (similarity, recency, importance, frequency, graph relevance, confidence), each operator-tunable.
 - **MMR Rerank**: Maximal Marginal Relevance reorder of recall candidates after composite scoring, so near-duplicate clusters that paraphrase the same fact get demoted in favor of orthogonal results. Cosine-redundancy aware via upstream vector hydration (`VectorHydrator` interface backed by HNSW, pgvector, and Qdrant); per-project `mmr_lambda` (default 0.75) through the same ranking-weights cascade; edge values short-circuit to composite-order truncation; lexical-only and unbackfilled rows stay anchored to their composite-rank position.
 - **Per-Project Tuning**: system-level ranking weights, `dedup_threshold`, and `enrichment_enabled` cascade through optional per-user and per-project JSON overrides. Recall scores each candidate under its owning project's effective weights, so cross-project results (globals, shared namespaces) honor each row's owner's tuning. Sparse: unset fields fall through to system defaults.
-- **Model Context Protocol (MCP)**: full MCP server at `/mcp` (Streamable HTTP) with 13 tools covering store, recall (including tag-axis diversification), update, get, list, forget, enrich, graph traversal, project management, and export.
+- **Model Context Protocol (MCP)**: full MCP server at `/mcp` (Streamable HTTP) with 16 tools covering store, recall (including tag-axis diversification), update, get, list, forget, graph traversal, project management, export, the verbatim procedural tier (`procedural_*`), and the persona tier (`about_me`).
 - **Authentication**: JWT (password login), per-user API keys, WebAuthn passkeys, and per-organization OIDC single sign-on.
 - **OAuth 2.0**: Authorization Code + PKCE, dynamic client registration (RFC 7591), resource indicators (RFC 8707), discovery metadata (RFC 8414, RFC 9728).
 - **RBAC**: five roles (administrator, org_owner, member, readonly, service) enforced across REST and MCP.
@@ -535,6 +539,10 @@ All under `/v1/projects/{project_id}/memories`. Read operations are available to
 | `POST` | `/forget` | Bulk soft-delete |
 | `POST` | `/enrich` | Trigger enrichment |
 | `POST` | `/import` | Import a project snapshot |
+| `POST` | `/{id}/move` | Move a memory to another project |
+| `POST` | `/move` | Bulk-move memories to another project |
+
+Move re-stores each memory into the destination project and hard-deletes the source only after the store succeeds, so a failure between the two steps leaves at most a transient duplicate, never a hole. The caller must own both the source and the target project, and the target must differ from the source.
 
 #### Update semantics: in-place vs. supersede chain
 
@@ -554,6 +562,9 @@ All under `/v1/me`.
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/memories/recall` | Cross-project recall for the current user |
+| `GET` / `POST` | `/procedural` | List (paginated, includes disabled) or create verbatim procedural entries |
+| `GET` / `PUT` | `/procedural/{id}` | Get or partial-update a procedural entry |
+| `DELETE` | `/procedural/{id}` | Soft-delete a procedural entry |
 | `GET` / `POST` | `/projects` | List or create projects owned by the user |
 | `GET` / `PUT` / `DELETE` | `/projects/{id}` | Manage a specific project |
 | `GET` / `POST` | `/api-keys` | List or mint API keys |
@@ -602,6 +613,7 @@ All under `/v1/admin`, gated by `administrator` role.
 | `*` | `/oauth/...` | OAuth client administration |
 | `*` | `/webhooks/...` | Webhook registration and delivery audit |
 | `*` | `/database/...` | Database info, test, preflight, migration audit, reset |
+| `*` | `/graph/...` | Knowledge-graph maintenance: lost-provenance health count (`/graph/health`) and orphan reap/repair (`/graph/repair`) |
 
 ### MCP (Model Context Protocol)
 
@@ -620,9 +632,14 @@ The MCP server is available at `POST /mcp` using Streamable HTTP transport.
 | `forget` | Soft-delete a memory; cascades restricted to extraction lineage. Set `hard: true` for an unrecoverable hard delete. |
 | `graph` | Knowledge graph traversal. `depth` is server-capped at `recall.graph.max_depth` (default 5). |
 | `list_projects` | List projects |
-| `update_project` | Update a project |
-| `delete_project` | Delete a project |
+| `update_project` | Update a project. Reserved projects (`global`, `about_me`) reject name/description changes; only `default_tags` is editable. |
+| `delete_project` | Delete a project. Reserved projects (`global`, `about_me`) cannot be deleted. |
 | `export` | Export project data |
+| `about_me` | Read the per-user persona tier (`about_me` project), ordered most-defining-first by entity centrality, surfacing frequency, and recency. Paginated; an over-budget page emits a `_truncated` marker with a paging hint instead of silently dropping persona facts. Share-token callers are denied. |
+| `procedural_fetch` | Return all enabled procedural entries verbatim, ordered by priority then recency. Mandatory pagination; an over-budget page drops whole low-priority entries and emits a `_truncated` marker so the caller pages until every entry is loaded. Share-token callers are denied. |
+| `procedural_store` | Create a verbatim procedural entry (optional title, category, tags, priority, enabled, metadata). Never embedded or enriched. |
+| `procedural_update` | Partial-update a procedural entry's mutable fields (content, title, category, tags, priority, enabled, metadata). |
+| `procedural_forget` | Soft-delete a procedural entry by id. |
 
 Admin-only operations (paraphrase backfill, settings cascade, provider health, etc.) are exposed via the REST admin API, not through MCP. Diagnostic flags such as `include_superseded`, `include_audit`, and `include_low_novelty` are likewise REST-only. Enrichment is fully server-managed: every store auto-enqueues, every content-changing update re-enqueues, and operators trigger backfills via REST `POST /v1/projects/{id}/memories/enrich`. The MCP tool surface is intentionally narrow.
 
@@ -645,10 +662,11 @@ The embedded web UI is served at the root path (`/`). It provides:
 - Settings editor (ranking weights, recall fusion weights, ingestion decision, novelty audit, reconsolidation mode and decay, dreaming budgets and retention, prompts)
 - Project edit panel with sparse per-project override editor (six ranking weights, dedup threshold, enrichment toggle); empty fields inherit system defaults, effective merged weights and sum displayed inline
 - Memory detail panel surfaces `confidence`, `importance`, `access_count`, and `last_accessed` so operators can verify reinforcement and decay are moving the values
-- Enrichment queue monitoring and retry; ingestion-decision shadow vs persist toggle
+- Enrichment queue monitoring and retry (including bulk "Retry All Failed"); ingestion-decision shadow vs persist toggle
 - Dreaming cycle inspection, log replay, manual triggers, and rollback
-- Memory browser with parent / enrichment-child grouping
-- Knowledge graph visualization
+- Procedural memory editor for the verbatim per-user tier (priority, enable/disable, tags)
+- Memory browser with parent / enrichment-child grouping and move-to-project control (single and bulk)
+- Knowledge graph visualization, plus a graph-maintenance block showing the lost-provenance edge count with an operator repair action
 - OAuth client management, webhook management, per-org OIDC SSO configuration
 - Passkey management (per-user registration and removal)
 - Database management (info, test, preflight, migration audit, reset)
@@ -729,6 +747,7 @@ Each LLM-spending phase has a per-cycle cap that operators can raise during a ba
 - `dreaming.paraphrase.cap_per_cycle` (default `5000`) for the paraphrase-dedup sweep
 - `dreaming.contradiction.cap_per_cycle` (default `2000`) for LLM pair-contradiction checks
 - `dreaming.embedding_backfill.cap_per_cycle` (default `1000`) for repairing rows whose vector is missing
+- `dreaming.augmentation_backfill.cap_per_cycle` (default `1000`) for re-enqueuing memories whose embedding fell back to raw content (gated by `dreaming.augmentation_backfill.enabled`, default `true`; the phase issues no LLM calls itself)
 - `dreaming.pruning.batch_size` (default `5000`) for the streaming prune sweep
 
 If one phase is being starved of token budget by the others, the `dreaming.<phase>.budget_fraction` settings rebalance the cycle envelope. Default split: `dreaming.contradiction.budget_fraction = 0.40`, `dreaming.consolidation.budget_fraction = 0.40`, `dreaming.embedding_backfill.budget_fraction = 0.10`, `dreaming.paraphrase_dedup.budget_fraction = 0.05`. SQL-only phases (`entity_dedup`, `transitive`, `pruning`, `weight_adjustment`) default to `0.0` so they share the root budget without a per-phase slice.
