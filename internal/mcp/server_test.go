@@ -399,6 +399,9 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			if !strings.Contains(result, "SESSION START") {
 				t.Errorf("expected instructions to contain SESSION START guidance")
 			}
+			if !strings.Contains(result, "your first action MUST be to call procedural_fetch") {
+				t.Errorf("expected instructions to contain the blocking session-start directive")
+			}
 		})
 	}
 }
