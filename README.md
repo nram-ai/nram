@@ -12,6 +12,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/nram-ai/nram/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nram-ai/nram/ci.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=CI" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7FCFFA?style=flat-square" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.26+" />
   <img src="https://img.shields.io/badge/MCP-Streamable_HTTP-7FCFFA?style=flat-square" alt="MCP over Streamable HTTP" />
