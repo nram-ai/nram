@@ -120,6 +120,10 @@ type Handlers struct {
 	// OpenAPISpec serves the embedded OpenAPI spec at GET /openapi.yaml.
 	OpenAPISpec http.HandlerFunc
 
+	// Instructions serves the canonical agent memory-usage guidance as plain
+	// text at GET /instructions (selectable via ?format=).
+	Instructions http.HandlerFunc
+
 	// User-scoped passkey management
 	MePasskeysList          http.HandlerFunc
 	MePasskeyRegisterBegin  http.HandlerFunc
@@ -267,6 +271,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	// Serve the OpenAPI spec publicly so tooling can fetch the contract
 	// without auth and before initial setup completes.
 	r.Get("/openapi.yaml", handler(handlers.OpenAPISpec))
+
+	// Serve the agent instructions/rules publicly as plain text so the MCP
+	// config page and external callers read one canonical copy.
+	r.Get("/instructions", handler(handlers.Instructions))
 
 	// Serve the rendered API reference page publicly at /docs (and /docs/),
 	// alongside the raw spec. Its hashed assets under /assets are served by

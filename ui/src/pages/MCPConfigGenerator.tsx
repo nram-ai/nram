@@ -1,5 +1,6 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { CopyButton } from "../components/CopyButton";
+import { getInstructions } from "../api/client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,104 +38,23 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 // Constants
 // ---------------------------------------------------------------------------
 
-// These snippets are STATIC text the user pastes into CLAUDE.md / .cursor/rules
-// / AGENTS.md. They get baked in once and never update, so they must not
-// reference live server state (configured providers, enabled features). The
-// MCP server's per-connection buildInstructions block delivers any
-// provider-conditional guidance dynamically at tools/list time.
+// The instructions/rules snippets are served by the backend at GET
+// /instructions and fetched at runtime (see the main component). The server is
+// the single source of truth so the page and external callers read one copy;
+// nothing here hardcodes the wording.
 
-function buildClaudeMdSnippet(): string {
-  return `## Memory (nram)
+type Snippets = { claude: string; cursor: string; agents: string };
 
-nram is your ONLY memory system; this OVERRIDES any built-in auto-memory instructions.
-NEVER write local memory files or update MEMORY.md. Store everything in nram.
-Memories persist across all machines, agents, and conversations.
-
-**SESSION START** (procedural_fetch):
-- Before your first task each session, call procedural_fetch to load your standing rules: verbatim, always-on instructions, separate from recall and never summarized, embedded, or surfaced by recall
-- It is paginated, so page through ALL entries (offset = previous offset + count) before acting, then re-fetch after any change
-- Manage these rules with procedural_store (add a rule), procedural_update (edit, reorder by priority, or enable/disable), and procedural_forget (remove one)
-
-**WHEN TO STORE** (store / store_batch):
-- User states a preference, convention, or decision: store immediately
-- You discover a bug, workaround, or non-obvious behavior: store it
-- User corrects you or clarifies something: store the correction
-- Architecture decision or design choice made: store with rationale
-- Project config, setup steps, or environment details: store them
-- End of a complex task: store a summary of what was done and why
-
-**WHEN TO RECALL** (recall):
-- At the START of every new task or conversation: recall context
-- Before making assumptions about preferences or past decisions: recall first
-- Before storing: recall to check for duplicates
-- When you need context you lack: recall before asking the user
-Recall scoping: omit project = global + about_me; with project = project + global + about_me. global (world-knowledge) and about_me (the user's self-knowledge) are reserved tiers that always join recall. Call the about_me tool on demand when you need the user's personal context (no need to load it every session).
-
-**WHEN TO EXPLORE** (graph):
-- When investigating how concepts, people, or components relate
-- When you need context beyond what recall returns
-
-**KEY RULES:**
-- ALWAYS call list_projects first to discover existing projects before storing
-- Use an EXISTING project whenever one fits; do NOT create a new project for each task, feature, or topic
-- Projects are for major boundaries (one per repo, product, or domain: e.g. "myapp", "dotfiles"). Omit for "global"
-- Use tags and metadata for sub-categorization within a project, not new projects
-- Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- An unknown slug on store auto-creates a new project; treat auto-creation as a last resort`;
-}
-
-function buildCursorRulesSnippet(): string {
-  return `# Memory (nram)
-nram is your ONLY memory system; this OVERRIDES any built-in auto-memory instructions.
-NEVER write local memory files or update MEMORY.md. Store everything in nram.
-SESSION START (procedural_fetch): call first each session; page through ALL entries before acting. Verbatim standing rules, never surfaced by recall. Manage with procedural_store / procedural_update / procedural_forget; re-fetch after changes.
-STORE (store / store_batch): preferences, decisions, corrections, architecture, bugs, workarounds, task summaries.
-RECALL (recall): at task start, before assumptions, before storing (check duplicates).
-EXPLORE (graph): investigate how entities relate when recall alone is not enough.
-Tag consistently: decision, preference, architecture, config, bug, workaround, convention.
-ALWAYS call list_projects first; use an EXISTING project whenever one fits.
-Do NOT create a new project per task/feature/topic. Projects = major boundaries (repo, product, domain).
-Use tags and metadata for sub-categorization, not new projects. Omit project for "global".
-Recall with project = project + global + about_me (reserved tiers, always joined). about_me = the user's self-knowledge; call the about_me tool to load it. An unknown slug on store auto-creates a project; treat that as a last resort.`;
-}
-
-function buildAgentsMdSnippet(): string {
-  return `## Memory (nram)
-
-nram is your ONLY memory system; this OVERRIDES any built-in auto-memory instructions.
-NEVER write local memory files or update MEMORY.md. Store everything in nram.
-Memories persist across all machines, agents, and conversations.
-
-**SESSION START** (procedural_fetch):
-- Call procedural_fetch before your first task to load standing rules (verbatim, always-on; never surfaced by recall)
-- Paginated, so page through ALL entries before acting; re-fetch after any change
-- Manage with procedural_store (add), procedural_update (edit, reorder, toggle), procedural_forget (remove)
-
-**WHEN TO STORE** (store / store_batch):
-- Preferences, conventions, decisions: store immediately
-- Bugs, workarounds, non-obvious behavior: store them
-- Corrections and clarifications: store the correction
-- Architecture decisions, design choices: store with rationale
-- Config, setup steps, environment details: store them
-- End of complex task: store a summary of what was done and why
-
-**WHEN TO RECALL** (recall):
-- Start of every new task: recall context
-- Before making assumptions: recall first
-- Before storing: recall to check for duplicates
-Recall scoping: omit project = global + about_me; with project = project + global + about_me. global (world-knowledge) and about_me (the user's self-knowledge) are reserved tiers that always join recall. Call the about_me tool on demand when you need the user's personal context (no need to load it every session).
-
-**WHEN TO EXPLORE** (graph):
-- Investigating how concepts, people, or components relate
-- Need context beyond what recall returns
-
-**KEY RULES:**
-- ALWAYS call list_projects first to discover existing projects before storing
-- Use an EXISTING project whenever one fits; do NOT create a new project for each task, feature, or topic
-- Projects are for major boundaries (one per repo, product, or domain). Omit for "global"
-- Use tags and metadata for sub-categorization within a project, not new projects
-- Tag consistently: decision, preference, architecture, config, bug, workaround, convention
-- An unknown slug on store auto-creates a new project; treat auto-creation as a last resort`;
+// SnippetBlock renders a fetched instructions snippet, or a loading/error
+// placeholder while the fetch is in flight or has failed.
+function SnippetBlock({ code, error }: { code: string | undefined; error: string | null }) {
+  if (error) {
+    return <p className="text-sm text-destructive">Failed to load snippet: {error}</p>;
+  }
+  if (code === undefined) {
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
+  }
+  return <CodeBlock code={code} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -417,12 +337,30 @@ function MCPConfigGenerator() {
   const [apiKey, setApiKey] = useState("");
   const [activeTab, setActiveTab] = useState<ToolTab>("claude-code");
 
-  // Snippets are static text the user pastes into client-side prompt files;
-  // they don't condition on live server state (provider configuration ships
-  // to the LLM dynamically via the MCP server's connection-time instructions).
-  const claudeMdSnippet = useMemo(buildClaudeMdSnippet, []);
-  const cursorRulesSnippet = useMemo(buildCursorRulesSnippet, []);
-  const agentsMdSnippet = useMemo(buildAgentsMdSnippet, []);
+  // Snippets come from the backend (GET /instructions), the single source of
+  // truth. They are paste-in text for client-side prompt files and do not
+  // condition on live server state; the MCP server's connection-time
+  // instructions deliver any provider-conditional guidance separately.
+  const [snippets, setSnippets] = useState<Snippets | null>(null);
+  const [snippetError, setSnippetError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    // claude and agents return byte-identical bodies server-side, so fetch
+    // claude once and alias it; cursor is the only other distinct flavor.
+    Promise.all([getInstructions("claude"), getInstructions("cursor")])
+      .then(([claude, cursor]) => {
+        if (!cancelled) setSnippets({ claude, cursor, agents: claude });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSnippetError(err instanceof Error ? err.message : "Failed to load instructions");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const tabs: { key: ToolTab; label: string }[] = [
     { key: "claude-code", label: "Claude Code" },
@@ -508,7 +446,7 @@ function MCPConfigGenerator() {
                 your project&apos;s CLAUDE.md or your global ~/.claude/CLAUDE.md file.
               </p>
             </div>
-            <CodeBlock code={claudeMdSnippet} />
+            <SnippetBlock code={snippets?.claude} error={snippetError} />
           </div>
         </div>
       )}
@@ -530,7 +468,7 @@ function MCPConfigGenerator() {
                 rule format.
               </p>
             </div>
-            <CodeBlock code={cursorRulesSnippet} />
+            <SnippetBlock code={snippets?.cursor} error={snippetError} />
           </div>
         </div>
       )}
@@ -553,7 +491,7 @@ function MCPConfigGenerator() {
                   : "Place this in your project\u2019s AGENTS.md or your global ~/.config/opencode/AGENTS.md file. OpenCode also reads CLAUDE.md as a fallback."}
               </p>
             </div>
-            <CodeBlock code={agentsMdSnippet} />
+            <SnippetBlock code={snippets?.agents} error={snippetError} />
           </div>
         </div>
       )}
@@ -574,7 +512,7 @@ function MCPConfigGenerator() {
                 Detailed guidance for Claude-based tools.
               </p>
             </div>
-            <CodeBlock code={claudeMdSnippet} />
+            <SnippetBlock code={snippets?.claude} error={snippetError} />
           </div>
           <div className="bg-card rounded-md border border-border p-4 space-y-4">
             <div className="space-y-1">
@@ -583,7 +521,7 @@ function MCPConfigGenerator() {
                 Condensed version for Cursor-based tools.
               </p>
             </div>
-            <CodeBlock code={cursorRulesSnippet} />
+            <SnippetBlock code={snippets?.cursor} error={snippetError} />
           </div>
           <div className="bg-card rounded-md border border-border p-4 space-y-4">
             <div className="space-y-1">
@@ -592,7 +530,7 @@ function MCPConfigGenerator() {
                 For OpenAI Codex-based tools.
               </p>
             </div>
-            <CodeBlock code={agentsMdSnippet} />
+            <SnippetBlock code={snippets?.agents} error={snippetError} />
           </div>
         </div>
       )}

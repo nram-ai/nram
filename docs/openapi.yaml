@@ -113,6 +113,42 @@ paths:
               schema:
                 type: string
 
+  /instructions:
+    get:
+      operationId: getInstructions
+      tags: [Meta]
+      summary: Canonical agent memory-usage instructions/rules (plain text)
+      description: >
+        Returns the nram memory-usage guidance as plain text. This is the
+        single source of truth rendered on the MCP config page and consumed by
+        external callers. The format query selects the flavor.
+      security: []
+      parameters:
+        - name: format
+          in: query
+          required: false
+          description: >
+            Flavor of the guidance. "claude" and "agents" return the same full
+            markdown body; "cursor" returns the condensed rules copy. Defaults
+            to the full body.
+          schema:
+            type: string
+            enum: [claude, agents, cursor]
+            default: claude
+      responses:
+        "200":
+          description: Instructions body
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          description: Unknown format
+          content:
+            text/plain:
+              schema:
+                type: string
+
   # ── Setup ───────────────────────────────────────────────────────────────
   /v1/admin/setup/status:
     get:

@@ -809,6 +809,9 @@ func main() {
 		// OpenAPI spec served at GET /openapi.yaml
 		OpenAPISpec: api.NewOpenAPIHandler(),
 
+		// Agent instructions/rules served as plain text at GET /instructions
+		Instructions: api.NewInstructionsHandler(),
+
 		// Project-scoped memory handlers
 		Store:      api.NewStoreHandler(storeSvc, eventBus),
 		List:       api.NewListHandler(memoryRepo, projectRepo, lineageRepo),

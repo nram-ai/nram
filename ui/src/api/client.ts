@@ -97,18 +97,37 @@ export async function request<T>(
 }
 
 /**
- * Fetch the server's Prometheus metrics as raw exposition text.
- *
- * Unlike request(), this hits the root-level public /metrics endpoint (not
- * under the /v1 BASE_URL) and returns text rather than JSON. The auth header is
- * sent but harmless: /metrics is unauthenticated and ignores it.
+ * Fetch a root-level public endpoint as raw text. Unlike request(), it does not
+ * force application/json or JSON-parse the body, and it hits paths outside the
+ * /v1 BASE_URL.
  */
-export async function fetchMetricsText(): Promise<string> {
-  const res = await fetch("/metrics", { headers: getAuthHeaders() });
+async function fetchText(path: string, init?: RequestInit): Promise<string> {
+  const res = await fetch(path, init);
   if (!res.ok) {
     throw new APIError(res.status, await res.text());
   }
   return res.text();
+}
+
+/**
+ * Fetch the server's Prometheus metrics as raw exposition text from the public
+ * /metrics endpoint. The auth header is sent but harmless: /metrics is
+ * unauthenticated and ignores it.
+ */
+export function fetchMetricsText(): Promise<string> {
+  return fetchText("/metrics", { headers: getAuthHeaders() });
+}
+
+/** Flavor of the agent instructions/rules served at /instructions. */
+export type InstructionsFormat = "claude" | "agents" | "cursor";
+
+/**
+ * Fetch the canonical agent instructions/rules as plain text from the public
+ * /instructions endpoint. This is the single source of truth for the snippets
+ * shown on the MCP config page; the backend owns the wording.
+ */
+export function getInstructions(format: InstructionsFormat): Promise<string> {
+  return fetchText(`/instructions?format=${format}`);
 }
 
 // --- Type definitions ---
