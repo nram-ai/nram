@@ -4160,13 +4160,20 @@ components:
               type: integer
               format: int64
         providers:
+          # Keyed by canonical provider-slot name (internal/provider/slots.go).
+          # One entry per slot; optional slots report their fallback-resolved
+          # status. Kept in sync with provider.Slots by an automated test.
           type: object
           properties:
             embedding:
               $ref: "#/components/schemas/HealthProviderStatus"
-            fact_extraction:
+            fact:
               $ref: "#/components/schemas/HealthProviderStatus"
-            entity_extraction:
+            entity:
+              $ref: "#/components/schemas/HealthProviderStatus"
+            query_augment:
+              $ref: "#/components/schemas/HealthProviderStatus"
+            ingestion_decision:
               $ref: "#/components/schemas/HealthProviderStatus"
         enrichment_queue:
           type: [object, "null"]

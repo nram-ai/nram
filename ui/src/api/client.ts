@@ -2332,10 +2332,16 @@ export interface HealthResponse {
   version: string;
   backend: "sqlite" | "postgres";
   database: { status: "ok" | "error"; latency_ms: number };
+  // Keyed by canonical provider-slot name (see internal/provider/slots.go).
+  // The optional slots (query_augment, ingestion_decision) report their
+  // fallback-resolved status. Indexed to tolerate future slots.
   providers: {
     embedding: HealthProviderStatus;
-    fact_extraction: HealthProviderStatus;
-    entity_extraction: HealthProviderStatus;
+    fact: HealthProviderStatus;
+    entity: HealthProviderStatus;
+    query_augment: HealthProviderStatus;
+    ingestion_decision: HealthProviderStatus;
+    [slot: string]: HealthProviderStatus;
   };
   enrichment_queue?: { pending: number; processing: number; failed: number } | null;
   uptime_seconds: number;

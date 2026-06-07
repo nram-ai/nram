@@ -15,11 +15,13 @@ type DatabasePinger interface {
 	Ping(ctx context.Context) error
 }
 
-// ProviderRegistry abstracts access to provider slots.
+// ProviderRegistry abstracts access to provider slots. GetLLM resolves any LLM
+// slot by name and applies the slot's fallback (e.g. query_augment falls back to
+// fact), so the health surface reports a slot as operational whenever it can
+// actually serve.
 type ProviderRegistry interface {
 	GetEmbedding() provider.EmbeddingProvider
-	GetFact() provider.LLMProvider
-	GetEntity() provider.LLMProvider
+	GetLLM(name string) provider.LLMProvider
 }
 
 // QueueStatter abstracts enrichment queue statistics retrieval.
@@ -37,24 +39,18 @@ type HealthConfig struct {
 }
 
 type healthResponse struct {
-	Status          string                 `json:"status"`
-	Version         string                 `json:"version"`
-	Backend         string                 `json:"backend"`
-	Database        healthDatabase         `json:"database"`
-	Providers       healthProviders        `json:"providers"`
-	EnrichmentQueue *healthEnrichmentQueue `json:"enrichment_queue,omitempty"`
-	UptimeSeconds   int64                  `json:"uptime_seconds"`
+	Status          string                          `json:"status"`
+	Version         string                          `json:"version"`
+	Backend         string                          `json:"backend"`
+	Database        healthDatabase                  `json:"database"`
+	Providers       map[string]healthProviderStatus `json:"providers"`
+	EnrichmentQueue *healthEnrichmentQueue          `json:"enrichment_queue,omitempty"`
+	UptimeSeconds   int64                           `json:"uptime_seconds"`
 }
 
 type healthDatabase struct {
 	Status    string `json:"status"`
 	LatencyMs int64  `json:"latency_ms"`
-}
-
-type healthProviders struct {
-	Embedding        healthProviderStatus `json:"embedding"`
-	FactExtraction   healthProviderStatus `json:"fact_extraction"`
-	EntityExtraction healthProviderStatus `json:"entity_extraction"`
 }
 
 type healthProviderStatus struct {
@@ -90,7 +86,7 @@ func NewHealthHandler(cfg HealthConfig) http.HandlerFunc {
 		dbStatus.LatencyMs = time.Since(start).Milliseconds()
 
 		// Check provider health.
-		providers := buildProviderHealth(ctx, backend, cfg.Providers)
+		providers := buildProviderHealth(ctx, cfg.Providers)
 
 		// Build response.
 		resp := healthResponse{
@@ -118,13 +114,24 @@ func NewHealthHandler(cfg HealthConfig) http.HandlerFunc {
 	}
 }
 
-// buildProviderHealth checks each provider slot and returns health statuses.
-func buildProviderHealth(ctx context.Context, _ string, reg ProviderRegistry) healthProviders {
-	return healthProviders{
-		Embedding:        checkEmbeddingProvider(ctx, reg),
-		FactExtraction:   checkLLMProvider(ctx, reg, "fact"),
-		EntityExtraction: checkLLMProvider(ctx, reg, "entity"),
+// buildProviderHealth checks every provider slot and returns health statuses
+// keyed by canonical slot name. It iterates provider.Slots, the single source of
+// truth, so a newly added slot is reported without touching this function.
+//
+// LLM status is cached by the underlying provider instance: when a provider is
+// shared across slots (fact also serves query_augment and ingestion_decision via
+// fallback) it is pinged once per health check, not once per slot.
+func buildProviderHealth(ctx context.Context, reg ProviderRegistry) map[string]healthProviderStatus {
+	out := make(map[string]healthProviderStatus, len(provider.Slots))
+	seen := make(map[provider.LLMProvider]healthProviderStatus)
+	for _, slot := range provider.Slots {
+		if slot.Kind == provider.KindEmbedding {
+			out[slot.Name] = checkEmbeddingProvider(ctx, reg)
+			continue
+		}
+		out[slot.Name] = checkLLMProvider(ctx, reg, slot.Name, seen)
 	}
+	return out
 }
 
 // checkEmbeddingProvider checks the embedding provider slot.
@@ -156,22 +163,22 @@ func checkEmbeddingProvider(ctx context.Context, reg ProviderRegistry) healthPro
 	return status
 }
 
-// checkLLMProvider checks a fact or entity extraction provider slot.
-func checkLLMProvider(ctx context.Context, reg ProviderRegistry, slot string) healthProviderStatus {
+// checkLLMProvider checks an LLM provider slot by name. Resolution is
+// fallback-aware (via reg.GetLLM), so an optional slot backed only by its
+// fallback still reports as operational with the serving provider. The seen map
+// memoizes status per underlying provider so a shared provider is pinged once.
+func checkLLMProvider(ctx context.Context, reg ProviderRegistry, slot string, seen map[provider.LLMProvider]healthProviderStatus) healthProviderStatus {
 	if reg == nil {
 		return healthProviderStatus{Status: "not_configured"}
 	}
 
-	var lp provider.LLMProvider
-	switch slot {
-	case "fact":
-		lp = reg.GetFact()
-	case "entity":
-		lp = reg.GetEntity()
-	}
-
+	lp := reg.GetLLM(slot)
 	if lp == nil {
 		return healthProviderStatus{Status: "not_configured"}
+	}
+
+	if st, ok := seen[lp]; ok {
+		return st
 	}
 
 	status := healthProviderStatus{
@@ -194,5 +201,6 @@ func checkLLMProvider(ctx context.Context, reg ProviderRegistry, slot string) he
 		status.LatencyMs = &latency
 	}
 
+	seen[lp] = status
 	return status
 }

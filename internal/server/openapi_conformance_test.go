@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/nram-ai/nram/docs"
 	"github.com/nram-ai/nram/internal/observability/metrics"
+	"github.com/nram-ai/nram/internal/provider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -237,4 +238,48 @@ func TestOpenAPIForward_RouterRoutesAreDocumented(t *testing.T) {
 	// dispatch handlers whose concrete sub-paths/methods are verified by the
 	// reverse check, not enumerated here.
 	t.Logf("prefix-verified dispatch handlers (sub-paths checked via reverse test only): %d", prefixVerified)
+}
+
+// TestOpenAPIHealthProvidersMatchSlots keeps the documented HealthResponse
+// provider set in lockstep with the canonical provider slots. The /v1/health
+// providers object is keyed by slot name; this asserts the spec documents every
+// slot in provider.Slots and no others. A slot added to internal/provider/slots.go
+// without updating openapi.yaml (or vice versa) fails here. The schema-level
+// drift is invisible to the path/method conformance tests above, so this is its
+// own guard.
+func TestOpenAPIHealthProvidersMatchSlots(t *testing.T) {
+	var doc struct {
+		Components struct {
+			Schemas struct {
+				HealthResponse struct {
+					Properties struct {
+						Providers struct {
+							Properties map[string]yaml.Node `yaml:"properties"`
+						} `yaml:"providers"`
+					} `yaml:"properties"`
+				} `yaml:"HealthResponse"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(docs.OpenAPISpec, &doc); err != nil {
+		t.Fatalf("parse openapi.yaml: %v", err)
+	}
+
+	documented := doc.Components.Schemas.HealthResponse.Properties.Providers.Properties
+	if len(documented) == 0 {
+		t.Fatal("HealthResponse.providers.properties is empty or unparsed in openapi.yaml")
+	}
+
+	want := make(map[string]bool, len(provider.Slots))
+	for _, slot := range provider.Slots {
+		want[slot.Name] = true
+		if _, ok := documented[slot.Name]; !ok {
+			t.Errorf("openapi.yaml HealthResponse.providers missing slot %q", slot.Name)
+		}
+	}
+	for key := range documented {
+		if !want[key] {
+			t.Errorf("openapi.yaml HealthResponse.providers documents unknown slot %q (not in provider.Slots)", key)
+		}
+	}
 }

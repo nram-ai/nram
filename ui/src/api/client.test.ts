@@ -289,8 +289,10 @@ describe("API Client E2E", () => {
       expect(typeof h.database.latency_ms).toBe("number");
       expect(h.providers).toBeDefined();
       expect(h.providers.embedding).toBeDefined();
-      expect(h.providers.fact_extraction).toBeDefined();
-      expect(h.providers.entity_extraction).toBeDefined();
+      expect(h.providers.fact).toBeDefined();
+      expect(h.providers.entity).toBeDefined();
+      expect(h.providers.query_augment).toBeDefined();
+      expect(h.providers.ingestion_decision).toBeDefined();
       expect(typeof h.uptime_seconds).toBe("number");
     });
   });
