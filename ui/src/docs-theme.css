@@ -1,0 +1,114 @@
+/* Themes the Scalar-rendered /docs API reference to the Neural Ram Web Console
+   palette and typography. Self-contained on purpose: the color values mirror
+   the console's design tokens (ui/src/index.css) but are inlined here so this
+   change is confined entirely to the /docs entry and touches no console or
+   shared files. Un-layered so it wins over Scalar's own @layer-scoped theme
+   defaults (theme: "none" in docs.ts ships no preset to fight).
+
+   Light/dark follows the console: the inline script in docs/index.html sets the
+   `.dark` class on <html> from localStorage["nram_theme"] before paint, and
+   docs.ts pins Scalar's body mode class (.light-mode/.dark-mode) to match. */
+
+:root {
+  --scalar-font: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --scalar-font-code: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --scalar-radius: 0.5rem;
+  --scalar-radius-lg: 0.625rem;
+  --scalar-radius-xl: 0.75rem;
+}
+
+/* Page background, so there is no white flash before Scalar paints. */
+html {
+  background-color: hsl(215 40% 97%);
+}
+html.dark {
+  background-color: hsl(215 49% 8%);
+}
+
+/* Dark mode (console dark tokens). */
+.dark-mode {
+  --scalar-background-1: hsl(215 49% 8%);
+  --scalar-background-2: hsl(215 53% 12%);
+  --scalar-background-3: hsl(217 47% 15%);
+  --scalar-background-accent: hsl(218 44% 17%);
+
+  --scalar-color-1: hsl(214 25% 93%);
+  --scalar-color-2: hsl(215 22% 62%);
+  --scalar-color-3: hsl(215 22% 62% / 0.7);
+  --scalar-color-accent: hsl(201 92% 74%);
+
+  --scalar-border-color: hsl(218 39% 20%);
+
+  --scalar-link-color: hsl(201 92% 74%);
+  --scalar-link-color-hover: hsl(201 92% 74%);
+
+  --scalar-button-1: hsl(201 92% 74%);
+  --scalar-button-1-hover: hsl(201 92% 74% / 0.85);
+  --scalar-button-1-color: hsl(215 49% 8%);
+
+  --scalar-color-green: hsl(158 64% 52%);
+  --scalar-color-red: hsl(350 85% 65%);
+  --scalar-color-yellow: hsl(38 95% 64%);
+  --scalar-color-blue: hsl(201 92% 74%);
+  --scalar-color-orange: hsl(38 95% 64%);
+  --scalar-color-purple: hsl(280 75% 72%);
+
+  --scalar-scrollbar-color: hsl(215 22% 62% / 0.4);
+  --scalar-scrollbar-color-active: hsl(215 22% 62% / 0.7);
+
+  --scalar-sidebar-background-1: hsl(215 53% 12%);
+  --scalar-sidebar-color-1: hsl(214 25% 93%);
+  --scalar-sidebar-color-2: hsl(215 22% 62%);
+  --scalar-sidebar-border-color: hsl(218 39% 20%);
+  --scalar-sidebar-item-hover-background: hsl(218 44% 17%);
+  --scalar-sidebar-item-hover-color: hsl(214 25% 93%);
+  --scalar-sidebar-item-active-background: hsl(201 92% 74% / 0.12);
+  --scalar-sidebar-color-active: hsl(201 92% 74%);
+  --scalar-sidebar-search-background: hsl(215 53% 12%);
+  --scalar-sidebar-search-border-color: hsl(218 39% 20%);
+  --scalar-sidebar-search-color: hsl(214 25% 93%);
+}
+
+/* Light mode (console light tokens). */
+.light-mode {
+  --scalar-background-1: hsl(215 40% 97%);
+  --scalar-background-2: hsl(215 35% 100%);
+  --scalar-background-3: hsl(218 30% 90%);
+  --scalar-background-accent: hsl(201 85% 92%);
+
+  --scalar-color-1: hsl(215 49% 10%);
+  --scalar-color-2: hsl(215 18% 38%);
+  --scalar-color-3: hsl(215 18% 38% / 0.7);
+  --scalar-color-accent: hsl(201 75% 38%);
+
+  --scalar-border-color: hsl(218 25% 84%);
+
+  --scalar-link-color: hsl(201 75% 38%);
+  --scalar-link-color-hover: hsl(201 75% 38%);
+
+  --scalar-button-1: hsl(201 75% 38%);
+  --scalar-button-1-hover: hsl(201 75% 38% / 0.85);
+  --scalar-button-1-color: hsl(215 35% 100%);
+
+  --scalar-color-green: hsl(158 60% 38%);
+  --scalar-color-red: hsl(350 75% 50%);
+  --scalar-color-yellow: hsl(30 90% 48%);
+  --scalar-color-blue: hsl(201 75% 38%);
+  --scalar-color-orange: hsl(30 90% 48%);
+  --scalar-color-purple: hsl(270 60% 55%);
+
+  --scalar-scrollbar-color: hsl(215 18% 38% / 0.4);
+  --scalar-scrollbar-color-active: hsl(215 18% 38% / 0.7);
+
+  --scalar-sidebar-background-1: hsl(215 35% 100%);
+  --scalar-sidebar-color-1: hsl(215 49% 10%);
+  --scalar-sidebar-color-2: hsl(215 18% 38%);
+  --scalar-sidebar-border-color: hsl(218 25% 84%);
+  --scalar-sidebar-item-hover-background: hsl(201 85% 92%);
+  --scalar-sidebar-item-hover-color: hsl(215 49% 10%);
+  --scalar-sidebar-item-active-background: hsl(201 75% 38% / 0.12);
+  --scalar-sidebar-color-active: hsl(201 75% 38%);
+  --scalar-sidebar-search-background: hsl(215 35% 100%);
+  --scalar-sidebar-search-border-color: hsl(218 25% 84%);
+  --scalar-sidebar-search-color: hsl(215 49% 10%);
+}

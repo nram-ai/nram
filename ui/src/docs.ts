@@ -6,18 +6,38 @@
 import { createApiReference } from "@scalar/api-reference";
 import "@scalar/api-reference/style.css";
 
-// The inline script in docs/index.html sets `.dark` from the stored theme
-// before paint; mirror that into Scalar's own dark-mode flag.
+// Themes Scalar to the Web Console palette/typography. Self-contained; touches
+// no console or shared files.
+import "./docs-theme.css";
+
+// Self-hosted to match the console's typography and keep the embedded Go binary
+// fully offline (Scalar's bundled default fonts are disabled below to avoid the
+// external font request).
+import "@fontsource-variable/geist/wght.css";
+import "@fontsource/jetbrains-mono/latin-400.css";
+import "@fontsource/jetbrains-mono/latin-500.css";
+
+// The inline script in docs/index.html sets `.dark` on <html> from the stored
+// theme before paint; mirror that into Scalar. theme: "none" ships no preset so
+// the variable map in docs-theme.css is the only theme. forceDarkModeState +
+// hideDarkModeToggle pin Scalar's mode to the console's choice (and override
+// Scalar's own colorMode storage), so /docs can never drift from the console.
+const dark = document.documentElement.classList.contains("dark");
+
 createApiReference("#app", {
   url: "/openapi.yaml",
-  darkMode: document.documentElement.classList.contains("dark"),
+  theme: "none",
+  darkMode: dark,
+  forceDarkModeState: dark ? "dark" : "light",
+  hideDarkModeToggle: true,
+  withDefaultFonts: false,
 });
 
 // The console persists the theme to localStorage["nram_theme"] and the browser
 // broadcasts a `storage` event to other same-origin tabs. Scalar resolves its
-// dark-mode flag only at mount, so the cleanest way to follow a theme change
-// the user made in the console while /docs is open is to re-run this entry's
-// init path — reload, and the inline script re-seeds the correct mode.
+// mode only at mount, so the cleanest way to follow a theme change the user made
+// in the console while /docs is open is to re-run this entry's init path —
+// reload, and the inline script re-seeds the correct mode.
 window.addEventListener("storage", (event) => {
   if (event.key === "nram_theme") {
     location.reload();
