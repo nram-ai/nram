@@ -1,7 +1,6 @@
 package migration
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -14,29 +13,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// migrationTables is the ordered list of tables to copy during SQLite-to-Postgres migration.
-var migrationTables = []string{
-	"namespaces",
-	"organizations",
-	"users",
-	"api_keys",
-	"projects",
-	"settings",
-	"memories",
-	"entities",
-	"relationships",
-	"entity_aliases",
-	"memory_lineage",
-	"ingestion_log",
-	"enrichment_queue",
-	"webhooks",
-	"oauth_clients",
-	"oauth_authorization_codes",
-	"oauth_refresh_tokens",
-	"oauth_idp_configs",
-	"system_meta",
-}
-
 // RunCLI processes migration CLI commands.
 // Returns true if a CLI command was handled (caller should exit), false if not a migration command.
 func RunCLI(args []string, db *sql.DB, backend string) (bool, error) {
@@ -47,8 +23,6 @@ func RunCLI(args []string, db *sql.DB, backend string) (bool, error) {
 	switch args[1] {
 	case "migrate":
 		return handleMigrate(args, db, backend)
-	case "migrate-to-postgres":
-		return true, handleMigrateToPostgres(args, db)
 	case "migrate-vectors":
 		return true, handleMigrateVectors(args, db)
 	case "migrate-vectors-reverse":
@@ -180,181 +154,6 @@ func findNextMigrationNumber(dirs ...string) (int, error) {
 	}
 
 	return maxNum + 1, nil
-}
-
-func handleMigrateToPostgres(args []string, sqliteDB *sql.DB) error {
-	var pgURL string
-	for i, arg := range args {
-		if arg == "--database-url" && i+1 < len(args) {
-			pgURL = args[i+1]
-			break
-		}
-	}
-	if pgURL == "" {
-		return fmt.Errorf("usage: nram migrate-to-postgres --database-url <url>")
-	}
-
-	// Open Postgres connection.
-	pgDB, err := sql.Open("pgx", pgURL)
-	if err != nil {
-		return fmt.Errorf("failed to open postgres database: %w", err)
-	}
-	defer func() { _ = pgDB.Close() }()
-
-	if err := pgDB.Ping(); err != nil {
-		return fmt.Errorf("failed to connect to postgres: %w", err)
-	}
-
-	fmt.Println("connected to postgres, running migrations...")
-
-	// Run Postgres migrations.
-	m, err := NewMigrator(pgDB, "postgres")
-	if err != nil {
-		return fmt.Errorf("failed to create postgres migrator: %w", err)
-	}
-	if err := m.Up(); err != nil {
-		_ = m.Close()
-		return fmt.Errorf("postgres migration failed: %w", err)
-	}
-	_ = m.Close()
-
-	fmt.Println("postgres migrations applied, copying data...")
-
-	// Copy data table by table.
-	for _, table := range migrationTables {
-		if err := copyTable(sqliteDB, pgDB, table); err != nil {
-			return fmt.Errorf("failed to copy table %s: %w", table, err)
-		}
-	}
-
-	// Validate row counts.
-	fmt.Println("validating row counts...")
-	for _, table := range migrationTables {
-		if err := validateRowCount(sqliteDB, pgDB, table); err != nil {
-			return fmt.Errorf("row count validation failed for table %s: %w", table, err)
-		}
-	}
-
-	// Update system_meta to indicate postgres backend.
-	_, err = pgDB.Exec("UPDATE system_meta SET value = 'postgres' WHERE key = 'storage_backend'")
-	if err != nil {
-		// Try insert if the key doesn't exist.
-		_, err = pgDB.Exec("INSERT INTO system_meta (key, value) VALUES ('storage_backend', 'postgres')")
-		if err != nil {
-			return fmt.Errorf("failed to update system_meta storage_backend: %w", err)
-		}
-	}
-
-	fmt.Println("migration to postgres completed successfully")
-	return nil
-}
-
-// copyTable copies all rows from a SQLite table to the same Postgres table.
-func copyTable(srcDB, dstDB *sql.DB, table string) error {
-	ctx := context.Background()
-
-	// Get column names from source.
-	rows, err := srcDB.QueryContext(ctx, fmt.Sprintf("SELECT * FROM %s LIMIT 0", table))
-	if err != nil {
-		// Table might not exist in source; skip silently.
-		fmt.Printf("  skipping %s (not found in source)\n", table)
-		return nil
-	}
-	columns, err := rows.Columns()
-	_ = rows.Close()
-	if err != nil {
-		return fmt.Errorf("failed to get columns: %w", err)
-	}
-
-	if len(columns) == 0 {
-		fmt.Printf("  skipping %s (no columns)\n", table)
-		return nil
-	}
-
-	// Read all rows from source.
-	dataRows, err := srcDB.QueryContext(ctx, fmt.Sprintf("SELECT * FROM %s", table))
-	if err != nil {
-		return fmt.Errorf("failed to query source: %w", err)
-	}
-	defer func() { _ = dataRows.Close() }()
-
-	// Build insert statement with positional parameters.
-	placeholders := make([]string, len(columns))
-	for i := range placeholders {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-	}
-	insertSQL := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		table,
-		strings.Join(columns, ", "),
-		strings.Join(placeholders, ", "),
-	)
-
-	// Begin transaction on destination.
-	tx, err := dstDB.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	stmt, err := tx.PrepareContext(ctx, insertSQL)
-	if err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("failed to prepare insert: %w", err)
-	}
-	defer func() { _ = stmt.Close() }()
-
-	rowCount := 0
-	for dataRows.Next() {
-		values := make([]any, len(columns))
-		valuePtrs := make([]any, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := dataRows.Scan(valuePtrs...); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("failed to insert row: %w", err)
-		}
-		rowCount++
-	}
-
-	if err := dataRows.Err(); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("error reading source rows: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	fmt.Printf("  copied %d rows from %s\n", rowCount, table)
-	return nil
-}
-
-// validateRowCount checks that the row count matches between source and destination.
-func validateRowCount(srcDB, dstDB *sql.DB, table string) error {
-	var srcCount, dstCount int64
-
-	err := srcDB.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&srcCount)
-	if err != nil {
-		// Source table might not exist; treat as 0 rows.
-		srcCount = 0
-	}
-
-	err = dstDB.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&dstCount)
-	if err != nil {
-		return fmt.Errorf("failed to count destination rows: %w", err)
-	}
-
-	if srcCount != dstCount {
-		return fmt.Errorf("count mismatch: source=%d, destination=%d", srcCount, dstCount)
-	}
-
-	return nil
 }
 
 // ParseMigrateArgs is exported for testing CLI argument parsing.

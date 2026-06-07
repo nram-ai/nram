@@ -33,6 +33,9 @@ linters:
       - third_party$
       - builtin$
       - examples$
+      # Vendored JS dependencies ship Go sources (e.g. flatted) that are not
+      # part of this module; never lint them.
+      - ui/node_modules
 
 issues:
   max-issues-per-linter: 0

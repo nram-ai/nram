@@ -1,0 +1,42 @@
+name: Release
+
+# Build packaged, checksummed binaries for every supported OS/arch and attach
+# them to the GitHub Release that triggered this run. Day-to-day cross-platform
+# build verification (unpackaged artifacts on every push/PR) lives in ci.yml's
+# cross-build job; this workflow runs only when a release is published and
+# reuses the same scripts/ci/build_cross.sh with PACKAGE=1.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # required to upload assets onto the release
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  release-binaries:
+    name: Build and attach release binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build and package all targets
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+          PACKAGE: "1"
+        run: scripts/ci/build_cross.sh
+      - name: Upload archives + checksums to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber

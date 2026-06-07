@@ -109,6 +109,28 @@ func main() {
 
 	log.Printf("database backend: %s", db.Backend())
 
+	// Handle the SQLite-to-Postgres data migration before starting the server.
+	// It lives here, not in internal/migration, because it delegates to the
+	// adminstore DataMigrator (conflict-safe, type-aware, copies every table
+	// including vectors and the graph). internal/storage/admin imports
+	// internal/migration, so internal/migration cannot import it back; main is
+	// the seam that can reach both.
+	if len(os.Args) > 1 && os.Args[1] == "migrate-to-postgres" {
+		_, targetURL, perr := migration.ParseMigrateArgs(os.Args)
+		if perr != nil || targetURL == "" {
+			log.Fatalf("usage: nram migrate-to-postgres --database-url <url>")
+		}
+		status, merr := adminstore.NewDatabaseAdminStore(db).TriggerMigration(context.Background(), targetURL)
+		if merr != nil {
+			log.Fatalf("migrate-to-postgres failed: %v", merr)
+		}
+		if status.Status != "complete" {
+			log.Fatalf("migrate-to-postgres: %s", status.Message)
+		}
+		log.Printf("migrate-to-postgres: %s", status.Message)
+		return
+	}
+
 	// Handle migration CLI commands before starting the server.
 	handled, err := migration.RunCLI(os.Args, db.WriteDB(), db.Backend())
 	if err != nil {

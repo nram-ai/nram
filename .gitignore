@@ -2,6 +2,8 @@ bin/
 /server
 /nram
 /nram-server
+# Cross-platform release build output (scripts/ci/build_cross.sh default dir).
+/dist/
 *.db
 *.db-shm
 *.db-wal

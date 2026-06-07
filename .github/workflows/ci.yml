@@ -1,0 +1,284 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (gofmt + golangci-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+
+  # Cross-platform build + test of the OS-portable surface (no external
+  # services). Proves the Go code compiles and the SQLite/HNSW/unit paths (plus
+  # the embedded-postgres migration test, which supports Linux/macOS/Windows)
+  # pass on all three OSes. The Postgres/pgvector/Qdrant tests gate on env vars
+  # and skip here; they run in the Linux-only integration jobs below, because
+  # GitHub-hosted macOS/Windows runners cannot run Docker service containers.
+  go-build-test:
+    name: Go build + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go build
+        run: go build ./...
+      - name: go test
+        run: go test -count=1 ./...
+
+  # Cross-platform UI build + typecheck (tsc -b && vite build). The
+  # server-spawning vitest e2e is Linux-only and lives in the ui-e2e job.
+  ui-build:
+    name: UI build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: npm ci
+        run: npm ci
+        working-directory: ui
+      - name: build (tsc + vite)
+        run: npm run build
+        working-directory: ui
+
+  # Cross-compile distributable binaries for every supported OS/arch from a
+  # single Linux runner. The build is pure-Go (CGO disabled; modernc.org/sqlite)
+  # and the UI is embedded (go:embed), so no per-OS runner or C toolchain is
+  # needed. This proves every release target builds on every push/PR; the
+  # binaries are uploaded as workflow artifacts (not a Release — see release.yml,
+  # which reuses the same script with PACKAGE=1 on published releases).
+  cross-build:
+    name: Cross-platform binaries (all targets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Cross-compile all targets
+        run: scripts/ci/build_cross.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nram-binaries
+          path: dist/*
+          if-no-files-found: error
+
+  # ----------------------------------------------------------------------------
+  # Linux-only integration jobs. These require Docker service containers, which
+  # GitHub-hosted runners support only on Linux, so they cannot be matrixed onto
+  # macOS/Windows. The OS-portable build/test coverage for those platforms is
+  # provided by go-build-test and ui-build above.
+  # ----------------------------------------------------------------------------
+
+  go-test-integration:
+    name: Go integration tests (Postgres + pgvector + Qdrant, Linux)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: nram
+          POSTGRES_PASSWORD: nram
+          POSTGRES_DB: nram
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nram -d nram"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      qdrant:
+        image: qdrant/qdrant
+        ports:
+          - 6333:6333
+          - 6334:6334
+    env:
+      DATABASE_URL: postgres://nram:nram@localhost:5432/nram?sslmode=disable
+      PGVECTOR_TEST_DSN: postgres://nram:nram@localhost:5432/nram?sslmode=disable
+      QDRANT_TEST_ADDR: localhost:6334
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Wait for Qdrant
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:6333/readyz >/dev/null 2>&1; then
+              echo "qdrant ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "qdrant did not become ready within 60s"
+          exit 1
+      - name: Enable pgvector extension
+        # The pgvector image makes the extension *available*, so migration 000006
+        # enters its vector branch and needs the type created first. The service's
+        # POSTGRES_USER is a superuser, so it can create the extension.
+        run: psql "$DATABASE_URL" -c 'CREATE EXTENSION IF NOT EXISTS vector'
+      - name: go test
+        run: go test -count=1 ./...
+
+  migration-e2e:
+    name: Migration e2e (CLI + admin endpoint, SQLite -> Postgres, Linux)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: nram
+          POSTGRES_PASSWORD: nram
+          POSTGRES_DB: nram
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nram -d nram"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Destination DSNs. Deliberately NOT named DATABASE_URL: the
+      # migrate-to-postgres process and the admin-endpoint server must boot with
+      # DATABASE_URL unset so their local nram.db is the migration *source*.
+      # PG_DSN (default db) is the CLI target; PG_ADMIN_DSN is a separate empty
+      # db for the admin-endpoint path so the two migrations don't share state.
+      PG_DSN: postgres://nram:nram@localhost:5432/nram?sslmode=disable
+      PG_ADMIN_DSN: postgres://nram:nram@localhost:5432/nram_admin?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build server
+        run: go build -o bin/nram ./cmd/server
+      - name: Prepare destination databases (pgvector + a fresh admin db)
+        run: |
+          psql "$PG_DSN" -c 'CREATE EXTENSION IF NOT EXISTS vector'
+          psql "$PG_DSN" -c 'CREATE DATABASE nram_admin'
+          psql "$PG_ADMIN_DSN" -c 'CREATE EXTENSION IF NOT EXISTS vector'
+      # --- CLI path: `nram migrate-to-postgres` (routes through DataMigrator) ---
+      - name: Seed a real SQLite database (boots binary, stores a memory)
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/seed"
+          SMOKE_WORKDIR="$GITHUB_WORKSPACE/seed" SMOKE_PORT=18676 \
+            scripts/ci/smoke.sh
+      - name: CLI migrate-to-postgres
+        run: |
+          cd "$GITHUB_WORKSPACE/seed"
+          "$GITHUB_WORKSPACE/bin/nram" migrate-to-postgres --database-url "$PG_DSN"
+      - name: Verify CLI-migrated rows
+        run: |
+          count="$(psql "$PG_DSN" -tAc "SELECT count(*) FROM memories")"
+          echo "CLI-migrated memories: $count"
+          [ "${count:-0}" -ge 1 ] || { echo "expected at least 1 migrated memory"; exit 1; }
+      # --- Admin endpoint path: POST /v1/admin/database/migrate ---
+      - name: Admin-endpoint migration e2e
+        run: MIGRATE_TARGET_URL="$PG_ADMIN_DSN" SMOKE_PORT=18686 scripts/ci/migrate_admin_e2e.sh
+      - name: Verify admin-migrated rows
+        run: |
+          count="$(psql "$PG_ADMIN_DSN" -tAc "SELECT count(*) FROM memories")"
+          echo "admin-migrated memories: $count"
+          [ "${count:-0}" -ge 1 ] || { echo "expected at least 1 migrated memory"; exit 1; }
+
+  e2e-http:
+    name: HTTP smoke (binary over HTTP, Postgres, no providers, Linux)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: nram
+          POSTGRES_PASSWORD: nram
+          POSTGRES_DB: nram
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nram -d nram"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://nram:nram@localhost:5432/nram?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build server
+        run: go build -o bin/nram ./cmd/server
+      - name: Enable pgvector extension
+        run: psql "$DATABASE_URL" -c 'CREATE EXTENSION IF NOT EXISTS vector'
+      - name: HTTP smoke against Postgres
+        run: SMOKE_PORT=18675 scripts/ci/smoke.sh
+
+  ui-e2e:
+    name: UI e2e (make build + vitest, Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build UI and embedded server binary
+        run: make build
+      - name: Stage binary for vitest e2e
+        run: |
+          mkdir -p bin
+          cp nram bin/nram
+      - name: Run UI tests
+        run: npm run test
+        working-directory: ui
