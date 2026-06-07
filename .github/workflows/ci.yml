@@ -204,7 +204,9 @@ jobs:
       - name: Build (UI + server)
         run: make build
       - name: Stage binary
-        run: cp nram bin/nram
+        run: |
+          mkdir -p bin
+          cp nram bin/nram
       - name: Prepare destination databases (pgvector + a fresh admin db)
         run: |
           psql "$PG_DSN" -c 'CREATE EXTENSION IF NOT EXISTS vector'
@@ -267,7 +269,9 @@ jobs:
       - name: Build (UI + server)
         run: make build
       - name: Stage binary
-        run: cp nram bin/nram
+        run: |
+          mkdir -p bin
+          cp nram bin/nram
       - name: Enable pgvector extension
         run: psql "$DATABASE_URL" -c 'CREATE EXTENSION IF NOT EXISTS vector'
       - name: HTTP smoke against Postgres
