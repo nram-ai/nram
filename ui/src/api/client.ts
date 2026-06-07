@@ -2330,6 +2330,9 @@ export interface HealthProviderStatus {
 export interface HealthResponse {
   status: "ok" | "degraded";
   version: string;
+  // VCS build provenance stamped at build time. commit is "unknown" for builds
+  // without a VCS stamp.
+  build: { commit: string; dirty: boolean; time: string; go: string };
   backend: "sqlite" | "postgres";
   database: { status: "ok" | "error"; latency_ms: number };
   // Keyed by canonical provider-slot name (see internal/provider/slots.go).

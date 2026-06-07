@@ -4147,6 +4147,20 @@ components:
           enum: [ok, degraded]
         version:
           type: string
+        build:
+          # VCS build provenance, stamped by the Go toolchain at build time.
+          # commit is "unknown" for builds without a VCS stamp.
+          type: object
+          properties:
+            commit:
+              type: string
+            dirty:
+              type: boolean
+            time:
+              type: string
+              format: date-time
+            go:
+              type: string
         backend:
           type: string
           enum: [sqlite, postgres]

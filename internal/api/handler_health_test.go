@@ -12,6 +12,7 @@ import (
 
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/storage"
+	"github.com/nram-ai/nram/internal/version"
 )
 
 // --- mock dependencies ---
@@ -286,9 +287,17 @@ func TestHealthDatabaseFailure(t *testing.T) {
 
 func TestHealthUptimeAndVersion(t *testing.T) {
 	startTime := time.Now().Add(-84392 * time.Second)
+	build := version.BuildInfo{
+		Version: "1.2.3",
+		Commit:  "deadbee",
+		Dirty:   true,
+		Time:    "2026-06-07T12:00:00Z",
+		Go:      "go1.26.1",
+	}
 	h := NewHealthHandler(HealthConfig{
 		DB:        &mockDatabasePinger{backend: "sqlite"},
 		Version:   "1.2.3",
+		Build:     build,
 		StartTime: startTime,
 	})
 
@@ -303,6 +312,20 @@ func TestHealthUptimeAndVersion(t *testing.T) {
 
 	if resp.Version != "1.2.3" {
 		t.Errorf("expected version 1.2.3, got %q", resp.Version)
+	}
+
+	// The build object should surface the injected VCS provenance verbatim.
+	if resp.Build.Commit != build.Commit {
+		t.Errorf("expected build commit %q, got %q", build.Commit, resp.Build.Commit)
+	}
+	if !resp.Build.Dirty {
+		t.Error("expected build dirty=true")
+	}
+	if resp.Build.Time != build.Time {
+		t.Errorf("expected build time %q, got %q", build.Time, resp.Build.Time)
+	}
+	if resp.Build.Go != build.Go {
+		t.Errorf("expected build go %q, got %q", build.Go, resp.Build.Go)
 	}
 
 	// Uptime should be approximately 84392 seconds (allow small delta for test execution).

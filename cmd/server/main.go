@@ -29,6 +29,7 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 	adminstore "github.com/nram-ai/nram/internal/storage/admin"
 	"github.com/nram-ai/nram/internal/ui"
+	"github.com/nram-ai/nram/internal/version"
 )
 
 // runHeadlessBootstrap creates the first administrator from the bootstrap
@@ -802,7 +803,8 @@ func main() {
 			DB:        db,
 			Providers: registry,
 			Queue:     enrichmentQueueRepo,
-			Version:   "0.1.0",
+			Version:   version.Version,
+			Build:     version.Get(),
 			StartTime: startTime,
 		}),
 

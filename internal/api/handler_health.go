@@ -7,6 +7,7 @@ import (
 
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/storage"
+	"github.com/nram-ai/nram/internal/version"
 )
 
 // DatabasePinger abstracts database connectivity checking.
@@ -35,17 +36,29 @@ type HealthConfig struct {
 	Providers ProviderRegistry // may be nil (no registry configured)
 	Queue     QueueStatter     // may be nil (SQLite mode)
 	Version   string
+	Build     version.BuildInfo
 	StartTime time.Time
 }
 
 type healthResponse struct {
 	Status          string                          `json:"status"`
 	Version         string                          `json:"version"`
+	Build           healthBuild                     `json:"build"`
 	Backend         string                          `json:"backend"`
 	Database        healthDatabase                  `json:"database"`
 	Providers       map[string]healthProviderStatus `json:"providers"`
 	EnrichmentQueue *healthEnrichmentQueue          `json:"enrichment_queue,omitempty"`
 	UptimeSeconds   int64                           `json:"uptime_seconds"`
+}
+
+// healthBuild reports the VCS build identity of the running binary. The
+// semantic version lives in the top-level Version field; this object carries
+// only the build-time provenance.
+type healthBuild struct {
+	Commit string `json:"commit"`
+	Dirty  bool   `json:"dirty"`
+	Time   string `json:"time"`
+	Go     string `json:"go"`
 }
 
 type healthDatabase struct {
@@ -90,8 +103,14 @@ func NewHealthHandler(cfg HealthConfig) http.HandlerFunc {
 
 		// Build response.
 		resp := healthResponse{
-			Status:        overallStatus,
-			Version:       cfg.Version,
+			Status:  overallStatus,
+			Version: cfg.Version,
+			Build: healthBuild{
+				Commit: cfg.Build.Commit,
+				Dirty:  cfg.Build.Dirty,
+				Time:   cfg.Build.Time,
+				Go:     cfg.Build.Go,
+			},
 			Backend:       backend,
 			Database:      dbStatus,
 			Providers:     providers,

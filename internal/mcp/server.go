@@ -14,6 +14,7 @@ import (
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
+	"github.com/nram-ai/nram/internal/version"
 )
 
 // ProjectRepo defines the project lookup operations needed by MCP tool handlers.
@@ -226,7 +227,7 @@ func NewServer(deps Dependencies) *Server {
 
 	mcpSrv := server.NewMCPServer(
 		"nram",
-		"1.0.0",
+		version.Version,
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(false, true), // subscribe=false, listChanged=true
 		server.WithRecovery(),                        // recover from panics in tool handlers

@@ -1,7 +1,7 @@
 import React, { Suspense, useState, useEffect } from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
-import { useSetupStatus } from "./hooks/useApi";
+import { useSetupStatus, useHealth } from "./hooks/useApi";
 import { useEnrichmentAvailable } from "./hooks/useEnrichmentAvailable";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ProjectProvider } from "./context/ProjectContext";
@@ -45,6 +45,7 @@ import {
   faServer,
   faUser,
 } from "./lib/icons";
+import { formatCommit } from "./lib/formatters";
 import { useTheme } from "./context/ThemeContext";
 import RequireRole from "./components/RequireRole";
 import { NeuralNetwork } from "./components/NeuralNetwork/NeuralNetwork";
@@ -244,6 +245,8 @@ function AppLayout() {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { available: enrichmentAvailable } = useEnrichmentAvailable();
+  const { data: health } = useHealth();
+  const buildCommit = health ? formatCommit(health.build) : null;
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -406,6 +409,19 @@ function AppLayout() {
             <FontAwesomeIcon icon={faRightFromBracket} className="h-4 w-4" />
             <span>Logout</span>
           </button>
+          {health && (
+            <p
+              className="px-2 pt-1 font-mono text-[11px] leading-tight text-muted-foreground/70"
+              title={
+                health.build.time
+                  ? `Built ${health.build.time} · ${health.build.go}`
+                  : health.build.go
+              }
+            >
+              v{health.version}
+              {buildCommit && ` · ${buildCommit}`}
+            </p>
+          )}
         </div>
       </aside>
       <main className="flex-1 overflow-y-auto pt-14 md:pt-0">

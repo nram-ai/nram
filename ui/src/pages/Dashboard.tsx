@@ -10,6 +10,7 @@ import {
   useProviderSlots,
   useStoreMemory,
   useDreamingStatus,
+  useHealth,
 } from "../hooks/useApi";
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
 import { useAuth, type Tier } from "../context/AuthContext";
@@ -18,6 +19,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Shimmer } from "../components/Shimmer";
 import { StatusNode } from "../components/StatusNode/StatusNode";
 import { faGauge } from "../lib/icons";
+import { formatCommit } from "../lib/formatters";
 import {
   memoryRowLabel,
   type ProjectMemoryCount,
@@ -25,6 +27,7 @@ import {
   type ProviderSlot,
   type OrgAggregate,
   type UserAggregate,
+  type HealthResponse,
 } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -471,6 +474,46 @@ function ProviderHealthCards({
   );
 }
 
+function BuildInfoCard({
+  health,
+  isLoading,
+}: {
+  health: HealthResponse | undefined;
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return <SkeletonCard />;
+  }
+  if (!health) {
+    return null;
+  }
+
+  const { build } = health;
+  const rows: { label: string; value: string }[] = [
+    { label: "Version", value: `v${health.version}` },
+    { label: "Commit", value: formatCommit(build) ?? "unknown" },
+    ...(build.time ? [{ label: "Built", value: build.time }] : []),
+    ...(build.go ? [{ label: "Go", value: build.go }] : []),
+    { label: "Backend", value: health.backend },
+  ];
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="border-b px-4 py-3">
+        <h2 className="text-sm font-semibold">Build</h2>
+      </div>
+      <dl className="divide-y">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-center justify-between gap-3 px-4 py-2.5">
+            <dt className="text-xs text-muted-foreground">{r.label}</dt>
+            <dd className="truncate font-mono text-xs">{r.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 function EnrichmentQueueCard({
   queue,
   isLoading,
@@ -739,6 +782,7 @@ function Dashboard() {
 
   const projects = useMeProjects();
   const providerSlots = useProviderSlots();
+  const health = useHealth();
 
   const projectList = Array.isArray(projects.data) ? projects.data : [];
   const slotList = Array.isArray(providerSlots.data) ? providerSlots.data : [];
@@ -855,6 +899,7 @@ function Dashboard() {
               slots={slotList}
               isLoading={providerSlots.isLoading}
             />
+            <BuildInfoCard health={health.data} isLoading={health.isLoading} />
             {enrichmentAvailable && (
               <>
                 <EnrichmentQueueCard

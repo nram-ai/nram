@@ -283,3 +283,46 @@ func TestOpenAPIHealthProvidersMatchSlots(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenAPIHealthDocumentsBuild keeps the documented HealthResponse.build
+// object in lockstep with the healthBuild struct served at /v1/health. The
+// build object carries the VCS provenance (commit, dirty, time, go); a field
+// added or renamed on one side without the other fails here. Like the provider
+// guard above, this schema-level drift is invisible to the path/method
+// conformance tests.
+func TestOpenAPIHealthDocumentsBuild(t *testing.T) {
+	var doc struct {
+		Components struct {
+			Schemas struct {
+				HealthResponse struct {
+					Properties struct {
+						Build struct {
+							Properties map[string]yaml.Node `yaml:"properties"`
+						} `yaml:"build"`
+					} `yaml:"properties"`
+				} `yaml:"HealthResponse"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(docs.OpenAPISpec, &doc); err != nil {
+		t.Fatalf("parse openapi.yaml: %v", err)
+	}
+
+	documented := doc.Components.Schemas.HealthResponse.Properties.Build.Properties
+	if len(documented) == 0 {
+		t.Fatal("HealthResponse.build.properties is empty or unparsed in openapi.yaml")
+	}
+
+	// Mirrors the JSON tags on api.healthBuild.
+	want := map[string]bool{"commit": true, "dirty": true, "time": true, "go": true}
+	for field := range want {
+		if _, ok := documented[field]; !ok {
+			t.Errorf("openapi.yaml HealthResponse.build missing field %q", field)
+		}
+	}
+	for key := range documented {
+		if !want[key] {
+			t.Errorf("openapi.yaml HealthResponse.build documents unknown field %q", key)
+		}
+	}
+}

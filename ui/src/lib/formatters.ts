@@ -26,3 +26,14 @@ export function truncateId(id: string): string {
   if (id.length <= 12) return id;
   return id.slice(0, 8) + "...";
 }
+
+// formatCommit renders the VCS commit identity from /v1/health's build object
+// as a short hash with a trailing "+" when the working tree was dirty at build
+// time. Returns null when the build carries no VCS stamp (the backend reports
+// the commit as empty or the "unknown" sentinel), so callers can omit the
+// commit entirely or fall back to their own placeholder. Owning the sentinel
+// check here keeps every consumer from re-encoding it.
+export function formatCommit(build: { commit: string; dirty: boolean }): string | null {
+  if (!build.commit || build.commit === "unknown") return null;
+  return `${build.commit}${build.dirty ? "+" : ""}`;
+}

@@ -1,0 +1,2 @@
+# Force every issue through a template so reports carry the version/build field.
+blank_issues_enabled: false

@@ -27,6 +27,12 @@ const handlers = [
     return HttpResponse.json({
       status: "ok",
       version: "1.0.0",
+      build: {
+        commit: "abc1234",
+        dirty: false,
+        time: "2026-06-07T12:00:00Z",
+        go: "go1.26.1",
+      },
       backend: "sqlite",
       database: { status: "ok", latency_ms: 1 },
       providers: {
