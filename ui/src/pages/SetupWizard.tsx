@@ -108,7 +108,7 @@ function CompletionScreen({
         <CodeBlock code={claudeCodeCmd} label="Claude Code" />
         <div className="rounded-lg border border-border bg-card p-4 space-y-2">
           <p className="text-sm font-medium">Claude Desktop / Claude.ai</p>
-          <p className="text-sm text-muted-foreground">Settings &rarr; Connectors &rarr; Add URL:</p>
+          <p className="text-sm text-muted-foreground">Customize &rarr; Connectors &rarr; Add custom connector:</p>
           <code className="block rounded-md bg-muted px-3 py-2 text-sm font-mono">{origin}/mcp</code>
         </div>
         <div className="rounded-lg border border-border bg-card p-4 space-y-2">

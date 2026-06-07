@@ -57,6 +57,32 @@ function SnippetBlock({ code, error }: { code: string | undefined; error: string
   return <CodeBlock code={code} />;
 }
 
+// HostedWebHttpsNote explains why the hosted web clients (ChatGPT, claude.ai, and
+// the Claude desktop/mobile apps) need a public HTTPS URL. The wording is kept in
+// sync with the same callout in README.md so the page and the README read as one
+// message. Only the hosted-web tabs render this; local clients (Claude Code, Cursor,
+// Codex, OpenCode) reach nram directly and do not need it.
+function HostedWebHttpsNote() {
+  return (
+    <div className="bg-muted rounded-md p-3 text-sm space-y-2">
+      <p>
+        <span className="font-medium">Hosted web tools need a public HTTPS URL.</span>{" "}
+        ChatGPT, Claude on the web (claude.ai), and the Claude desktop and mobile apps
+        reach your server from the vendor&apos;s cloud, not from your machine, so{" "}
+        <span className="font-mono text-xs">http://localhost</span> will not work. They
+        require a real, publicly resolvable hostname served over HTTPS with a valid (not
+        self-signed) TLS certificate.
+      </p>
+      <p>
+        nram serves plain HTTP and does not terminate TLS itself, so put it behind a
+        reverse proxy that handles TLS (Caddy, nginx, Traefik) or expose it through a
+        tunnel (Cloudflare Tunnel, ngrok, Tailscale Funnel), then point the connector at
+        your public <span className="font-mono text-xs">https://your-host/mcp</span> URL.
+      </p>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tab button
 // ---------------------------------------------------------------------------
@@ -116,21 +142,24 @@ function ClaudeCodeTab({ serverUrl }: { serverUrl: string }) {
 }
 
 function ClaudeDesktopTab({ serverUrl }: { serverUrl: string }) {
-  const url = serverUrl;
-
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
+      <HostedWebHttpsNote />
       <div>
         <p className="text-sm font-medium">OAuth (recommended)</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Go to <span className="font-medium">Settings &rarr; Connectors &rarr; Add URL</span>,
-          then enter the URL below.
+          Go to <span className="font-medium">Customize &rarr; Connectors</span>, click{" "}
+          <span className="font-medium">Add custom connector</span>, then enter the URL
+          below. You can optionally open <span className="font-medium">Advanced settings</span>{" "}
+          to supply an OAuth Client ID and Secret; otherwise leave them blank and finish
+          with <span className="font-medium">Add</span>.
         </p>
       </div>
-      <CodeBlock code={url} label="Server URL" />
+      <CodeBlock code={serverUrl} label="Server URL" />
       <p className="text-sm text-muted-foreground">
-        Claude Desktop and claude.ai support OAuth auto-discovery. You will be
-        prompted to authenticate in your browser when connecting.
+        Claude Desktop and claude.ai support OAuth auto-discovery, so you will be
+        prompted to authenticate in your browser when connecting. Free-plan accounts are
+        limited to one custom connector.
       </p>
     </div>
   );
@@ -230,21 +259,30 @@ function ChatGPTTab({ serverUrl }: { serverUrl: string }) {
 
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
-      <div className="bg-muted rounded-md p-3 text-sm">
-        <span className="font-medium">Note:</span> ChatGPT requires HTTPS. If
-        you are running nram locally, use a tunnel service (such as ngrok) or
-        deploy to a server with TLS.
-      </div>
+      <HostedWebHttpsNote />
       <div>
-        <p className="text-sm font-medium">Add MCP Server</p>
+        <p className="text-sm font-medium">1. Enable Developer mode</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          In ChatGPT settings, add a new MCP server with the URL below.
+          Custom MCP servers that are not registered ChatGPT apps are only available
+          through Developer mode, which you must turn on first. Go to{" "}
+          <span className="font-medium">Settings &rarr; Apps &amp; Connectors &rarr; Advanced settings</span>,
+          enable <span className="font-medium">Developer mode</span>, and accept the
+          warning about running third-party code. Developer mode is available on the
+          Plus, Pro, Business/Team, Enterprise, and Edu plans on the web; it is not
+          available on Free.
+        </p>
+      </div>
+      <div className="border-t border-border pt-4">
+        <p className="text-sm font-medium">2. Add a custom connector</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          With Developer mode on, add a custom connector pointing at the HTTPS URL
+          below and authenticate via the OAuth flow when prompted.
         </p>
       </div>
       <CodeBlock code={url} label="Server URL (HTTPS required)" />
       <p className="text-sm text-muted-foreground">
-        ChatGPT uses RFC 9728 OAuth discovery. Ensure your server is accessible
-        over HTTPS.
+        ChatGPT uses RFC 9728 OAuth discovery, so an OAuth-capable connection
+        negotiates a token automatically once the server is reachable over HTTPS.
       </p>
     </div>
   );
