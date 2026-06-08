@@ -399,6 +399,38 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
+  /v1/oauth/authorize/complete:
+    post:
+      operationId: completeAuthorize
+      tags: [OAuth]
+      summary: Complete an OAuth approve for a loopback redirect_uri
+      description: >
+        Loopback-only JSON counterpart to the native form POST /authorize.
+        When redirect_uri is a loopback address, the React consent page calls
+        this on approve and receives the minted code plus the assembled
+        callback URL, then probes the loopback callback server for
+        reachability before either forwarding to it or showing a manual
+        paste-back screen. Refuses any non-loopback redirect_uri so the code
+        is never returned in a readable body to a public web client.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthorizeCompleteRequest"
+      responses:
+        "200":
+          description: Minted code and callback URL, or an access_denied body on deny
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthorizeCompleteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /v1/share/accept:
     get:
       operationId: acceptShare
@@ -2755,6 +2787,24 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/MeRankingWeightDefault"
+
+  /v1/me/setting-defaults:
+    get:
+      operationId: getSettingDefaults
+      tags: [Account]
+      summary: Allow-listed numeric setting schema and effective global defaults
+      responses:
+        "200":
+          description: Setting defaults
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MeSettingDefault"
 
   # ── User: Passkeys ──────────────────────────────────────────────────────
   /v1/me/passkeys:
@@ -6083,6 +6133,22 @@ components:
         step:
           type: number
 
+    MeSettingDefault:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: number
+        default_value:
+          type: number
+        min:
+          type: number
+        max:
+          type: number
+        step:
+          type: number
+
     Passkey:
       type: object
       properties:
@@ -6409,6 +6475,50 @@ components:
             - type: "null"
         share_token_supported:
           type: boolean
+
+    AuthorizeCompleteRequest:
+      type: object
+      properties:
+        client_id:
+          type: string
+        redirect_uri:
+          type: string
+        response_type:
+          type: string
+        code_challenge:
+          type: string
+        code_challenge_method:
+          type: string
+        scope:
+          type: string
+        resource:
+          type: string
+        state:
+          type: string
+        auth_mode:
+          type: string
+          enum: [account, share]
+        decision:
+          type: string
+          enum: [approve, deny]
+        share_token:
+          type: string
+
+    AuthorizeCompleteResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        state:
+          type: string
+        callback_url:
+          type: string
+          format: uri
+        redirect_uri:
+          type: string
+          format: uri
+        error:
+          type: string
 
     # ── Dreaming ───────────────────────────────────────────────────────
     DreamCycle:

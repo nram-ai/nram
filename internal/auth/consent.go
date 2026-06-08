@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,6 +30,50 @@ type authorizeRequestParams struct {
 	Scope               string
 	Resource            string
 	State               string
+}
+
+// authorizeOutcome is the result of a successful approve decision: the
+// minted authorization code and the assembled callback URL (redirect_uri
+// with code + state). Both the form flow (302 to callbackURL) and the
+// loopback JSON flow (returns these fields to the SPA) consume it.
+type authorizeOutcome struct {
+	code        string
+	callbackURL string
+}
+
+// errAuthorizeNeedsLogin signals that the account-holder approve path found
+// no active session. The form flow routes the user to /login; the loopback
+// JSON flow returns a login_required error.
+var errAuthorizeNeedsLogin = errors.New("login required")
+
+// redirectError is an approve failure that occurs after redirect_uri has
+// been trusted. In the form flow it becomes a redirect-with-error to the
+// client (RFC 6749 §4.1.2.1); in the loopback JSON flow it becomes a JSON
+// error body carrying the same OAuth error code.
+type redirectError struct {
+	Code        string
+	Description string
+}
+
+func (e *redirectError) Error() string { return e.Description }
+
+// isLoopbackRedirectURI reports whether redirectURI targets the loopback
+// interface (RFC 8252 §7.3): host "localhost", the IPv6 loopback ::1, or any
+// IPv4 in 127.0.0.0/8. Native / CLI OAuth clients use a loopback redirect
+// because they cannot register a public callback URL; those are the only
+// clients the JSON completion endpoint serves, so the authorization code is
+// never returned in a readable body to a public web client.
+func isLoopbackRedirectURI(redirectURI string) bool {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // authorizeContextResponse is the JSON payload served at
@@ -67,7 +112,13 @@ type accountUserResponse struct {
 // All OAuth params travel with the secret so the server re-validates the
 // authorization request alongside the share, even though preview itself
 // does not consume the share.
-type sharePreviewRequest struct {
+// oauthAuthorizeFields holds the standard OAuth authorize parameters carried by
+// the JSON request bodies (share preview and loopback complete). Its get method
+// exposes them through the func(string) string accessor that
+// parseAuthorizeClientAndRedirect / parseAuthorizeRest expect, so both handlers
+// validate through the same pipeline without re-declaring the fields or the
+// key switch.
+type oauthAuthorizeFields struct {
 	ClientID            string `json:"client_id"`
 	RedirectURI         string `json:"redirect_uri"`
 	ResponseType        string `json:"response_type"`
@@ -76,7 +127,33 @@ type sharePreviewRequest struct {
 	Scope               string `json:"scope"`
 	Resource            string `json:"resource"`
 	State               string `json:"state"`
-	ShareToken          string `json:"share_token"`
+}
+
+func (f oauthAuthorizeFields) get(key string) string {
+	switch key {
+	case "client_id":
+		return f.ClientID
+	case "redirect_uri":
+		return f.RedirectURI
+	case "response_type":
+		return f.ResponseType
+	case "code_challenge":
+		return f.CodeChallenge
+	case "code_challenge_method":
+		return f.CodeChallengeMethod
+	case "scope":
+		return f.Scope
+	case "resource":
+		return f.Resource
+	case "state":
+		return f.State
+	}
+	return ""
+}
+
+type sharePreviewRequest struct {
+	oauthAuthorizeFields
+	ShareToken string `json:"share_token"`
 }
 
 // sharePreviewResponse is the JSON payload returned to the React consent
@@ -334,27 +411,7 @@ func (s *OAuthServer) SharePreviewHandler() http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 			return
 		}
-		get := func(key string) string {
-			switch key {
-			case "client_id":
-				return req.ClientID
-			case "redirect_uri":
-				return req.RedirectURI
-			case "response_type":
-				return req.ResponseType
-			case "code_challenge":
-				return req.CodeChallenge
-			case "code_challenge_method":
-				return req.CodeChallengeMethod
-			case "scope":
-				return req.Scope
-			case "resource":
-				return req.Resource
-			case "state":
-				return req.State
-			}
-			return ""
-		}
+		get := req.get
 
 		params, paramErr := parseAuthorizeClientAndRedirect(get)
 		if paramErr != "" {
@@ -464,66 +521,210 @@ func (s *OAuthServer) handleAuthorizePOST(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	mode := r.PostFormValue("auth_mode")
-	switch mode {
+	var outcome authorizeOutcome
+	var cerr error
+	switch r.PostFormValue("auth_mode") {
 	case "account":
-		s.completeAccountAuthorize(w, r, params)
+		outcome, cerr = s.completeAccountAuthorize(r, params)
 	case "share":
-		s.completeShareAuthorize(w, r, params)
+		outcome, cerr = s.completeShareAuthorize(r, params, r.PostFormValue("share_token"))
 	default:
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "unknown auth_mode")
+		return
 	}
+	s.emitFormResult(w, r, params, outcome, cerr)
 }
 
-func (s *OAuthServer) completeAccountAuthorize(w http.ResponseWriter, r *http.Request, params authorizeRequestParams) {
-	uid := s.resolveUserIDFromRequest(r)
-	if uid == uuid.Nil {
+// emitFormResult writes the HTTP response for the native-form approve flow:
+// a 302 to the callback on success, a redirect to /login when no session is
+// present, or a redirect-with-error to the client on a post-trust failure.
+func (s *OAuthServer) emitFormResult(w http.ResponseWriter, r *http.Request, params authorizeRequestParams, outcome authorizeOutcome, err error) {
+	switch {
+	case errors.Is(err, errAuthorizeNeedsLogin):
 		loginURL := "/login?redirect=" + url.QueryEscape("/authorize?"+preservedQuery(params))
 		http.Redirect(w, r, loginURL, http.StatusFound)
-		return
+	case err != nil:
+		var re *redirectError
+		if errors.As(err, &re) {
+			redirectWithError(w, r, params.RedirectURI, re.Code, re.Description, params.State)
+			return
+		}
+		redirectWithError(w, r, params.RedirectURI, "server_error", "failed to create authorization code", params.State)
+	default:
+		clearSessionCookie(w)
+		http.Redirect(w, r, outcome.callbackURL, http.StatusFound)
 	}
-	s.mintCodeAndRedirect(w, r, params, uid, nil)
 }
 
-func (s *OAuthServer) completeShareAuthorize(w http.ResponseWriter, r *http.Request, params authorizeRequestParams) {
-	if s.shareTokens == nil {
-		redirectWithError(w, r, params.RedirectURI, "access_denied", "share-token authorization is not configured on this server", params.State)
+// authorizeCompleteRequest is the JSON body for
+// POST /v1/oauth/authorize/complete. It mirrors the fields the native
+// approve form posts to /authorize, plus the decision and (for share mode)
+// the pasted secret. Used only by the React consent page when the
+// redirect_uri is a loopback address.
+type authorizeCompleteRequest struct {
+	oauthAuthorizeFields
+	AuthMode   string `json:"auth_mode"`
+	Decision   string `json:"decision"`
+	ShareToken string `json:"share_token"`
+}
+
+// authorizeCompleteResponse is the JSON payload returned to the React consent
+// page after a successful loopback approve. The SPA preflights the loopback
+// origin and, if reachable, navigates to callback_url; otherwise it renders
+// the manual-completion screen from code + state.
+type authorizeCompleteResponse struct {
+	Code        string `json:"code"`
+	State       string `json:"state,omitempty"`
+	CallbackURL string `json:"callback_url"`
+	RedirectURI string `json:"redirect_uri"`
+}
+
+// AuthorizeCompleteHandler serves POST /v1/oauth/authorize/complete. It is
+// the loopback-only counterpart to the native-form POST /authorize: instead
+// of a 302 it returns the minted code, state, and callback URL as JSON so
+// the React consent page can probe the loopback callback server and either
+// forward to it or present a manual paste-back screen.
+//
+// Security: this handler returns the authorization code in a readable body,
+// so it refuses any non-loopback redirect_uri (the check runs after the
+// standard validation pipeline). Public web clients always use the 302 form
+// flow, where the code is only ever exposed via the redirect Location.
+func (s *OAuthServer) AuthorizeCompleteHandler() http.HandlerFunc {
+	return s.handleAuthorizeComplete
+}
+
+func (s *OAuthServer) handleAuthorizeComplete(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	var req authorizeCompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	secret := strings.TrimSpace(r.PostFormValue("share_token"))
-	if secret == "" {
-		redirectWithError(w, r, params.RedirectURI, "invalid_request", "share token is required", params.State)
+	get := req.get
+
+	params, paramErr := parseAuthorizeClientAndRedirect(get)
+	if paramErr != "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", paramErr)
 		return
+	}
+	if _, err := s.validateClientAndRedirect(r.Context(), params); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if restErr := parseAuthorizeRest(get, &params); restErr != "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", restErr)
+		return
+	}
+	if msg, ok := s.validateResource(r, params.Resource); !ok {
+		writeJSONError(w, http.StatusBadRequest, "invalid_target", msg)
+		return
+	}
+
+	// This endpoint exists only for loopback redirect URIs; refuse anything
+	// else so an authorization code is never returned in a readable body to
+	// a public web client.
+	if !isLoopbackRedirectURI(params.RedirectURI) {
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", "redirect_uri is not a loopback address")
+		return
+	}
+
+	switch req.Decision {
+	case "deny":
+		writeJSON(w, http.StatusOK, map[string]string{"error": "access_denied"})
+		return
+	case "approve":
+		// fall through to the approve handling below
+	default:
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", "missing decision")
+		return
+	}
+
+	var outcome authorizeOutcome
+	var err error
+	switch req.AuthMode {
+	case "account":
+		outcome, err = s.completeAccountAuthorize(r, params)
+	case "share":
+		outcome, err = s.completeShareAuthorize(r, params, req.ShareToken)
+	default:
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", "unknown auth_mode")
+		return
+	}
+	if err != nil {
+		if errors.Is(err, errAuthorizeNeedsLogin) {
+			writeJSONError(w, http.StatusUnauthorized, "login_required", "no active session")
+			return
+		}
+		var re *redirectError
+		if errors.As(err, &re) {
+			writeJSONError(w, http.StatusBadRequest, re.Code, re.Description)
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "server_error", "failed to create authorization code")
+		return
+	}
+
+	clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, authorizeCompleteResponse{
+		Code:        outcome.code,
+		State:       params.State,
+		CallbackURL: outcome.callbackURL,
+		RedirectURI: params.RedirectURI,
+	})
+}
+
+// completeAccountAuthorize mints a code for the account-holder path. It
+// writes no HTTP response; on a missing session it returns
+// errAuthorizeNeedsLogin so the caller can route to login (form) or return a
+// login_required error (loopback JSON).
+func (s *OAuthServer) completeAccountAuthorize(r *http.Request, params authorizeRequestParams) (authorizeOutcome, error) {
+	uid := s.resolveUserIDFromRequest(r)
+	if uid == uuid.Nil {
+		return authorizeOutcome{}, errAuthorizeNeedsLogin
+	}
+	return s.mintCode(r.Context(), params, uid, nil)
+}
+
+// completeShareAuthorize validates the pasted share secret, binds the client
+// to the share, consumes one-shot shares, and mints a code bound to the
+// share owner. It writes no HTTP response; post-trust failures are returned
+// as *redirectError.
+func (s *OAuthServer) completeShareAuthorize(r *http.Request, params authorizeRequestParams, shareToken string) (authorizeOutcome, error) {
+	if s.shareTokens == nil {
+		return authorizeOutcome{}, &redirectError{Code: "access_denied", Description: "share-token authorization is not configured on this server"}
+	}
+	secret := strings.TrimSpace(shareToken)
+	if secret == "" {
+		return authorizeOutcome{}, &redirectError{Code: "invalid_request", Description: "share token is required"}
 	}
 
 	// The consent flow consumes one-shot shares as part of the mint
 	// (MarkConsumed below); Resolve rejects any already-consumed one-shot.
 	share, _, err := s.shareTokens.Resolve(r.Context(), secret)
 	if err != nil {
-		redirectWithError(w, r, params.RedirectURI, "access_denied", fmt.Sprintf("share token rejected: %v", err), params.State)
-		return
+		return authorizeOutcome{}, &redirectError{Code: "access_denied", Description: fmt.Sprintf("share token rejected: %v", err)}
 	}
 
 	if err := s.oauthRepo.BindClientToShare(r.Context(), params.ClientID, share.ID); err != nil {
-		redirectWithError(w, r, params.RedirectURI, "server_error", fmt.Sprintf("share binding failed: %v", err), params.State)
-		return
+		return authorizeOutcome{}, &redirectError{Code: "server_error", Description: fmt.Sprintf("share binding failed: %v", err)}
 	}
 
 	if share.IsOneShot {
 		if err := s.shareTokens.MarkConsumed(r.Context(), share.ID); err != nil {
-			redirectWithError(w, r, params.RedirectURI, "server_error", fmt.Sprintf("one-shot consume failed: %v", err), params.State)
-			return
+			return authorizeOutcome{}, &redirectError{Code: "server_error", Description: fmt.Sprintf("one-shot consume failed: %v", err)}
 		}
 	}
 
 	shareID := share.ID
-	s.mintCodeAndRedirect(w, r, params, share.OwnerUserID, &shareID)
+	return s.mintCode(r.Context(), params, share.OwnerUserID, &shareID)
 }
 
-// mintCodeAndRedirect creates the OAuth authorization code, optionally
-// records share_token_id on it, and redirects to the recipient's MCP client
-// with code + state.
-func (s *OAuthServer) mintCodeAndRedirect(w http.ResponseWriter, r *http.Request, params authorizeRequestParams, userID uuid.UUID, shareTokenID *uuid.UUID) {
+// mintCode creates and persists the OAuth authorization code, optionally
+// recording share_token_id on it, and returns the code with the assembled
+// callback URL (redirect_uri carrying code + state). It writes no HTTP
+// response so both the 302 form flow and the loopback JSON flow can reuse it.
+func (s *OAuthServer) mintCode(ctx context.Context, params authorizeRequestParams, userID uuid.UUID, shareTokenID *uuid.UUID) (authorizeOutcome, error) {
 	code := generateAuthCode()
 	codeChallenge := params.CodeChallenge
 	authCode := &model.OAuthAuthorizationCode{
@@ -538,15 +739,13 @@ func (s *OAuthServer) mintCodeAndRedirect(w http.ResponseWriter, r *http.Request
 		ShareTokenID:        shareTokenID,
 		ExpiresAt:           time.Now().UTC().Add(authCodeExpiry),
 	}
-	if err := s.oauthRepo.CreateAuthCode(r.Context(), authCode); err != nil {
-		redirectWithError(w, r, params.RedirectURI, "server_error", "failed to create authorization code", params.State)
-		return
+	if err := s.oauthRepo.CreateAuthCode(ctx, authCode); err != nil {
+		return authorizeOutcome{}, err
 	}
 
 	redirectURL, err := url.Parse(params.RedirectURI)
 	if err != nil {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "invalid redirect_uri")
-		return
+		return authorizeOutcome{}, err
 	}
 	q := redirectURL.Query()
 	q.Set("code", code)
@@ -554,7 +753,12 @@ func (s *OAuthServer) mintCodeAndRedirect(w http.ResponseWriter, r *http.Request
 		q.Set("state", params.State)
 	}
 	redirectURL.RawQuery = q.Encode()
+	return authorizeOutcome{code: code, callbackURL: redirectURL.String()}, nil
+}
 
+// clearSessionCookie expires the short-lived nram_session consent cookie.
+// Called once a code is minted on either completion path.
+func clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "nram_session",
 		Value:    "",
@@ -563,7 +767,6 @@ func (s *OAuthServer) mintCodeAndRedirect(w http.ResponseWriter, r *http.Request
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 }
 
 // validateClientAndRedirect verifies the client exists and the redirect_uri

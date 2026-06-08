@@ -2,12 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   oauthAPI,
+  isLoopbackRedirectUri,
   type APIError,
+  type AuthorizeCompleteResponse,
   type AuthorizeContextResponse,
   type OAuthAuthorizeParams,
   type SharePreviewResponse,
 } from "../api/client";
 import { AuthBrand } from "../components/AuthBrand";
+import { CopyButton } from "../components/CopyButton";
+import { probeReachable } from "../lib/loopbackProbe";
 
 type AuthorizeContextState =
   | { status: "loading" }
@@ -160,11 +164,111 @@ function Authorize() {
   return <AuthorizeReady context={state.context} />;
 }
 
+// AuthPageShell is the centered card layout shared by every consent state
+// (the loopback manual / denied screens reuse it so branding and spacing stay
+// identical to the main consent card).
+function AuthPageShell({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="app-shell flex min-h-screen items-center justify-center p-6">
+      <div className="w-full max-w-xl">
+        <div className="text-center">
+          <AuthBrand />
+          <h1 className="mt-6 font-display text-4xl text-foreground">{title}</h1>
+          {subtitle && <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// CopyRow renders a labeled, monospace, read-only value with a copy button.
+// Used on the loopback manual-completion screen for the callback URL, code,
+// and state.
+function CopyRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+        <CopyButton
+          text={value}
+          withIcon
+          className="inline-flex items-center gap-1.5 rounded border border-input bg-background px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
+        />
+      </div>
+      <div className="surface-opaque mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-border px-3 py-2 font-mono text-xs text-foreground">
+        {value}
+      </div>
+      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
+
+// ManualCompletion is shown for loopback redirect URIs when the callback
+// server is not reachable from this browser (the headless / remote case): the
+// browser's localhost is not the machine running the callback listener, so we
+// surface the values for the user to paste back to their agent.
+function ManualCompletion({
+  result,
+  clientName,
+}: {
+  result: AuthorizeCompleteResponse;
+  clientName: string;
+}) {
+  return (
+    <AuthPageShell
+      title="Finish in your terminal"
+      subtitle={
+        <>
+          {clientName} is listening on another machine, so this browser cannot
+          reach its callback. Paste the values below back to the agent or
+          harness when it asks for them.
+        </>
+      }
+    >
+      <div className="surface-elevated mt-8 space-y-4 rounded-lg p-6 shadow-lg shadow-black/10">
+        <CopyRow
+          label="Callback URL"
+          value={result.callback_url}
+          hint="Most agents accept the whole URL; the code and state below are the same values broken out."
+        />
+        <CopyRow label="Authorization code" value={result.code} />
+        {result.state ? <CopyRow label="State" value={result.state} /> : null}
+      </div>
+    </AuthPageShell>
+  );
+}
+
+type Completion =
+  | { kind: "idle" }
+  | { kind: "submitting" }
+  | { kind: "manual"; result: AuthorizeCompleteResponse }
+  | { kind: "denied" }
+  | { kind: "error"; message: string };
+
 function AuthorizeReady({ context }: { context: AuthorizeContextResponse }) {
   const [shareSecret, setShareSecret] = useState("");
   const [preview, setPreview] = useState<SharePreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [completion, setCompletion] = useState<Completion>({ kind: "idle" });
+
+  const loopback = useMemo(
+    () => isLoopbackRedirectUri(context.redirect_uri),
+    [context.redirect_uri],
+  );
+  const busy = completion.kind === "submitting";
+  const displayName = context.client_name?.trim() || "this application";
 
   async function handlePreview(e: React.FormEvent) {
     e.preventDefault();
@@ -196,7 +300,119 @@ function AuthorizeReady({ context }: { context: AuthorizeContextResponse }) {
     }
   }
 
-  const displayName = context.client_name?.trim() || "this application";
+  // buildCompleteRequest assembles the loopback complete-authorize body from
+  // the consent context plus the user's decision, so the approve and deny
+  // handlers share one source of truth for the OAuth params.
+  function buildCompleteRequest(
+    mode: "account" | "share",
+    decision: "approve" | "deny",
+    shareToken?: string,
+  ) {
+    return {
+      client_id: context.client_id,
+      redirect_uri: context.redirect_uri,
+      response_type: context.response_type,
+      code_challenge: context.code_challenge,
+      code_challenge_method: context.code_challenge_method,
+      scope: context.scope,
+      resource: context.resource,
+      state: context.state,
+      auth_mode: mode,
+      decision,
+      share_token: shareToken,
+    };
+  }
+
+  // Loopback approve: mint the code via the JSON endpoint, probe whether the
+  // callback server is reachable from this browser, then either forward to it
+  // or fall back to the manual paste-back screen.
+  async function handleLoopbackApprove(mode: "account" | "share", shareToken?: string) {
+    setCompletion({ kind: "submitting" });
+    try {
+      const result = await oauthAPI.completeAuthorize(
+        buildCompleteRequest(mode, "approve", shareToken),
+      );
+      let origin = "";
+      try {
+        origin = new URL(result.callback_url).origin;
+      } catch {
+        origin = "";
+      }
+      const reachable = origin ? await probeReachable(origin) : false;
+      if (reachable) {
+        window.location.assign(result.callback_url);
+        return;
+      }
+      setCompletion({ kind: "manual", result });
+    } catch (err) {
+      const apiErr = err as APIError;
+      const body = apiErr.body as { error_description?: string; error?: string } | undefined;
+      setCompletion({
+        kind: "error",
+        message:
+          body?.error_description ?? body?.error ?? apiErr.message ?? "Authorization failed.",
+      });
+    }
+  }
+
+  async function handleLoopbackDeny() {
+    setCompletion({ kind: "submitting" });
+    try {
+      await oauthAPI.completeAuthorize(buildCompleteRequest("account", "deny"));
+    } catch {
+      // Deny is best-effort: the code was never minted, so show the denied
+      // confirmation regardless of how the call resolved.
+    }
+    setCompletion({ kind: "denied" });
+  }
+
+  if (completion.kind === "manual") {
+    return <ManualCompletion result={completion.result} clientName={displayName} />;
+  }
+
+  if (completion.kind === "denied") {
+    return (
+      <AuthPageShell
+        title="Authorization denied"
+        subtitle={<>No access was granted to {displayName}. You can close this window.</>}
+      >
+        <div className="surface-elevated mt-8 rounded-lg p-6 shadow-lg shadow-black/10">
+          <p className="text-sm text-muted-foreground">
+            If this was a mistake, restart the authorization from your client.
+          </p>
+        </div>
+      </AuthPageShell>
+    );
+  }
+
+  const previewBody = preview && (
+    <>
+      <h2 className="text-base font-semibold text-foreground">You are about to authorize</h2>
+      <p className="mt-2 text-sm text-foreground">
+        {preview.owner_name ? (
+          <>
+            <strong>{preview.owner_name}</strong> shared
+          </>
+        ) : (
+          <>You have been granted</>
+        )}{" "}
+        access to <strong>{preview.share_name}</strong>.
+      </p>
+      {preview.description && (
+        <p className="mt-1 text-sm text-muted-foreground">{preview.description}</p>
+      )}
+      <p className="mt-1 text-sm text-muted-foreground">
+        Access expires {preview.expires_at}.
+        {preview.is_one_shot && (
+          <>
+            {" "}
+            <strong className="text-foreground">One-shot:</strong> once approved, this share cannot be redeemed again.
+          </>
+        )}
+      </p>
+      <GrantsTable grants={preview.grants} />
+    </>
+  );
 
   return (
     <div className="app-shell flex min-h-screen items-center justify-center p-6">
@@ -216,21 +432,46 @@ function AuthorizeReady({ context }: { context: AuthorizeContextResponse }) {
         </div>
 
         <div className="surface-elevated mt-8 space-y-4 rounded-lg p-6 shadow-lg shadow-black/10">
+          {completion.kind === "error" && (
+            <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3">
+              <p className="text-sm text-destructive">{completion.message}</p>
+            </div>
+          )}
+
           {context.account_user ? (
-            <form method="POST" action="/authorize" className="rounded-md border border-border p-4">
-              <h2 className="text-base font-semibold text-foreground">
-                Continue as {context.account_user.display_name}
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Authorize this client to access your full account ({context.account_user.email}).
-              </p>
-              <HiddenOAuthFields context={context} />
-              <input type="hidden" name="auth_mode" value="account" />
-              <input type="hidden" name="decision" value="approve" />
-              <button type="submit" className={`${primaryButtonClass} mt-4`}>
-                Approve
-              </button>
-            </form>
+            loopback ? (
+              <div className="rounded-md border border-border p-4">
+                <h2 className="text-base font-semibold text-foreground">
+                  Continue as {context.account_user.display_name}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Authorize this client to access your full account ({context.account_user.email}).
+                </p>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => handleLoopbackApprove("account")}
+                  className={`${primaryButtonClass} mt-4`}
+                >
+                  {busy ? "Authorizing..." : "Approve"}
+                </button>
+              </div>
+            ) : (
+              <form method="POST" action="/authorize" className="rounded-md border border-border p-4">
+                <h2 className="text-base font-semibold text-foreground">
+                  Continue as {context.account_user.display_name}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Authorize this client to access your full account ({context.account_user.email}).
+                </p>
+                <HiddenOAuthFields context={context} />
+                <input type="hidden" name="auth_mode" value="account" />
+                <input type="hidden" name="decision" value="approve" />
+                <button type="submit" className={`${primaryButtonClass} mt-4`}>
+                  Approve
+                </button>
+              </form>
+            )
           ) : (
             <div className="rounded-md border border-border p-4">
               <h2 className="text-base font-semibold text-foreground">Log in to your Neural Ram account</h2>
@@ -248,48 +489,49 @@ function AuthorizeReady({ context }: { context: AuthorizeContextResponse }) {
 
           {context.share_token_supported &&
             (preview ? (
-              <form method="POST" action="/authorize" className="rounded-md border border-border p-4">
-                <h2 className="text-base font-semibold text-foreground">You are about to authorize</h2>
-                <p className="mt-2 text-sm text-foreground">
-                  {preview.owner_name ? (
-                    <>
-                      <strong>{preview.owner_name}</strong> shared
-                    </>
-                  ) : (
-                    <>You have been granted</>
-                  )}{" "}
-                  access to <strong>{preview.share_name}</strong>.
-                </p>
-                {preview.description && (
-                  <p className="mt-1 text-sm text-muted-foreground">{preview.description}</p>
-                )}
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Access expires {preview.expires_at}.
-                  {preview.is_one_shot && (
-                    <>
-                      {" "}
-                      <strong className="text-foreground">One-shot:</strong> once approved, this share cannot be redeemed again.
-                    </>
-                  )}
-                </p>
-                <GrantsTable grants={preview.grants} />
-                <HiddenOAuthFields context={context} />
-                <input type="hidden" name="auth_mode" value="share" />
-                <input type="hidden" name="decision" value="approve" />
-                <input type="hidden" name="share_token" value={shareSecret.trim()} />
-                <div className="mt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPreview(null)}
-                    className={`${secondaryButtonClass} flex-1`}
-                  >
-                    Back
-                  </button>
-                  <button type="submit" className={`${primaryButtonClass} flex-1`}>
-                    Approve
-                  </button>
+              loopback ? (
+                <div className="rounded-md border border-border p-4">
+                  {previewBody}
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setPreview(null)}
+                      className={`${secondaryButtonClass} flex-1`}
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => handleLoopbackApprove("share", shareSecret.trim())}
+                      className={`${primaryButtonClass} flex-1`}
+                    >
+                      {busy ? "Authorizing..." : "Approve"}
+                    </button>
+                  </div>
                 </div>
-              </form>
+              ) : (
+                <form method="POST" action="/authorize" className="rounded-md border border-border p-4">
+                  {previewBody}
+                  <HiddenOAuthFields context={context} />
+                  <input type="hidden" name="auth_mode" value="share" />
+                  <input type="hidden" name="decision" value="approve" />
+                  <input type="hidden" name="share_token" value={shareSecret.trim()} />
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPreview(null)}
+                      className={`${secondaryButtonClass} flex-1`}
+                    >
+                      Back
+                    </button>
+                    <button type="submit" className={`${primaryButtonClass} flex-1`}>
+                      Approve
+                    </button>
+                  </div>
+                </form>
+              )
             ) : (
               <form onSubmit={handlePreview} className="rounded-md border border-border p-4">
                 <h2 className="text-base font-semibold text-foreground">I have a share link</h2>
@@ -320,13 +562,24 @@ function AuthorizeReady({ context }: { context: AuthorizeContextResponse }) {
               </form>
             ))}
 
-          <form method="POST" action="/authorize">
-            <HiddenOAuthFields context={context} />
-            <input type="hidden" name="decision" value="deny" />
-            <button type="submit" className={secondaryButtonClass}>
+          {loopback ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleLoopbackDeny}
+              className={secondaryButtonClass}
+            >
               Deny
             </button>
-          </form>
+          ) : (
+            <form method="POST" action="/authorize">
+              <HiddenOAuthFields context={context} />
+              <input type="hidden" name="decision" value="deny" />
+              <button type="submit" className={secondaryButtonClass}>
+                Deny
+              </button>
+            </form>
+          )}
         </div>
       </div>
     </div>

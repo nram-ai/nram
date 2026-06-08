@@ -2535,6 +2535,38 @@ export interface ShareAcceptResponse {
   error?: string;
 }
 
+export interface AuthorizeCompleteRequest extends OAuthAuthorizeParams {
+  auth_mode: "account" | "share";
+  decision: "approve" | "deny";
+  share_token?: string;
+}
+
+export interface AuthorizeCompleteResponse {
+  code: string;
+  state?: string;
+  callback_url: string;
+  redirect_uri: string;
+  // Present (set to "access_denied") when the user denied on the loopback path.
+  error?: string;
+}
+
+// isLoopbackRedirectUri mirrors the server's isLoopbackRedirectURI
+// (RFC 8252 §7.3): host "localhost", IPv6 ::1, or any IPv4 in 127.0.0.0/8.
+// The consent page uses it to decide whether to complete via the loopback
+// JSON flow (probe + manual fallback) instead of the standard 302 redirect.
+export function isLoopbackRedirectUri(uri: string): boolean {
+  let host: string;
+  try {
+    host = new URL(uri).hostname;
+  } catch {
+    return false;
+  }
+  if (host === "localhost") return true;
+  // URL.hostname wraps IPv6 in brackets; strip them before comparing.
+  if (host === "[::1]" || host === "::1") return true;
+  return /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+
 function oauthQueryString(params: OAuthAuthorizeParams): string {
   const sp = new URLSearchParams();
   sp.set("client_id", params.client_id);
@@ -2556,6 +2588,8 @@ export const oauthAPI = {
     ),
   previewShare: (params: OAuthAuthorizeParams & { share_token: string }) =>
     request<SharePreviewResponse>("POST", "/oauth/share/preview", params),
+  completeAuthorize: (body: AuthorizeCompleteRequest) =>
+    request<AuthorizeCompleteResponse>("POST", "/oauth/authorize/complete", body),
 };
 
 export const shareAcceptAPI = {

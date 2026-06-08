@@ -158,6 +158,12 @@ type Handlers struct {
 	// consuming it, so the React consent page can show the recipient
 	// what they are about to authorize before the final approve POST.
 	OAuthSharePreview http.HandlerFunc
+	// OAuthAuthorizeComplete serves POST /v1/oauth/authorize/complete. The
+	// loopback-only JSON counterpart to the native-form POST /authorize:
+	// it returns the minted code + callback URL so the React consent page
+	// can probe the loopback callback server and either forward to it or
+	// show a manual paste-back screen.
+	OAuthAuthorizeComplete http.HandlerFunc
 	// ShareAccept serves GET /v1/share/accept?token=<secret>. The React
 	// landing page at /share/accept calls this to render the share's
 	// grants and the MCP server URL to configure in the recipient's
@@ -324,6 +330,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		// /share/accept.
 		r.Get("/v1/oauth/authorize/context", handler(handlers.OAuthAuthorizeContext))
 		r.Post("/v1/oauth/share/preview", handler(handlers.OAuthSharePreview))
+		// Loopback-only JSON approve. The React /authorize page calls this
+		// instead of the native form POST when redirect_uri is a loopback
+		// address, then probes the callback server for reachability.
+		r.Post("/v1/oauth/authorize/complete", handler(handlers.OAuthAuthorizeComplete))
 		r.Get("/v1/share/accept", handler(handlers.ShareAccept))
 		r.HandleFunc("/token", handler(handlers.OAuthToken))
 		r.HandleFunc("/register", handler(handlers.OAuthRegister))

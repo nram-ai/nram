@@ -1000,6 +1000,7 @@ func main() {
 		OAuthProtectedResource: oauthServer.ProtectedResourceHandler(),
 		OAuthAuthorizeContext:  oauthServer.AuthorizeContextHandler(),
 		OAuthSharePreview:      oauthServer.SharePreviewHandler(),
+		OAuthAuthorizeComplete: oauthServer.AuthorizeCompleteHandler(),
 		ShareAccept:            oauthServer.ShareAcceptHandler(),
 
 		// IdP SSO handlers
