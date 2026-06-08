@@ -7,6 +7,7 @@ import {
   type OAuthAuthorizeParams,
   type SharePreviewResponse,
 } from "../api/client";
+import { AuthBrand } from "../components/AuthBrand";
 
 type AuthorizeContextState =
   | { status: "loading" }
@@ -143,7 +144,8 @@ function Authorize() {
       <div className="app-shell flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-md">
           <div className="text-center">
-            <h1 className="font-display text-4xl text-foreground">Authorize access</h1>
+            <AuthBrand />
+            <h1 className="mt-6 font-display text-4xl text-foreground">Authorize access</h1>
           </div>
           <div className="surface-elevated mt-8 rounded-lg p-6 shadow-lg shadow-black/10">
             <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
@@ -200,9 +202,13 @@ function AuthorizeReady({ context }: { context: AuthorizeContextResponse }) {
     <div className="app-shell flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-xl">
         <div className="text-center">
-          <h1 className="font-display text-4xl text-foreground">Authorize {displayName}</h1>
+          <AuthBrand />
+          <h1 className="mt-6 font-display text-4xl text-foreground">Authorize {displayName}</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            This application is requesting access to your nram memory. Choose how to authorize.
+            This application is requesting access to your Neural Ram memory.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Choose how to authorize.
           </p>
           <p className="mt-1 font-mono text-xs text-muted-foreground/70">
             client_id: {context.client_id}
@@ -227,7 +233,7 @@ function AuthorizeReady({ context }: { context: AuthorizeContextResponse }) {
             </form>
           ) : (
             <div className="rounded-md border border-border p-4">
-              <h2 className="text-base font-semibold text-foreground">Log in to your nram account</h2>
+              <h2 className="text-base font-semibold text-foreground">Log in to your Neural Ram account</h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 Authorize this client with your own account credentials.
               </p>
@@ -288,7 +294,7 @@ function AuthorizeReady({ context }: { context: AuthorizeContextResponse }) {
               <form onSubmit={handlePreview} className="rounded-md border border-border p-4">
                 <h2 className="text-base font-semibold text-foreground">I have a share link</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Paste a share token you received from another nram user. You will see what projects it covers before approving.
+                  Paste a share token you received from another Neural Ram user. You will see what projects it covers before approving.
                 </p>
                 {previewError && (
                   <div className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3">

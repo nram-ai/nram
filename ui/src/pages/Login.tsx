@@ -5,6 +5,7 @@ import type { APIError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { usePasskeyLogin } from "../hooks/useApi";
 import { isWebAuthnAvailable } from "../api/webauthn";
+import { AuthBrand } from "../components/AuthBrand";
 
 type Step = "email" | "password" | "idp-redirect" | "passkey-or-password";
 
@@ -131,7 +132,8 @@ function Login() {
     <div className="app-shell flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-md">
         <div className="text-center">
-          <h1 className="font-display text-4xl text-foreground">Sign in to Neural Ram</h1>
+          <AuthBrand />
+          <h1 className="mt-6 font-display text-4xl text-foreground">Sign in to Neural Ram</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {step === "email" && "Enter your email address to continue."}
             {step === "password" && "Enter your password to sign in."}

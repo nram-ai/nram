@@ -3,7 +3,7 @@
 // field baked in (the white "n" only reads on dark), so the rounded tile
 // renders correctly on both the light and dark console themes.
 
-type LogoSize = "sm" | "md" | "lg";
+type LogoSize = "sm" | "md" | "lg" | "xl";
 
 type Props = {
   size?: LogoSize;
@@ -16,12 +16,14 @@ const WORDMARK_PX: Record<LogoSize, string> = {
   sm: "0.95rem",
   md: "1.1rem",
   lg: "1.25rem",
+  xl: "1.5rem",
 };
 
 const TILE_PX: Record<LogoSize, number> = {
   sm: 24,
   md: 28,
   lg: 32,
+  xl: 56,
 };
 
 export function Logo({ size = "md", showWordmark = true, className }: Props) {
