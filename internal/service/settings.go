@@ -42,8 +42,8 @@ const (
 	// ResolveBool returns false (unpaused) when it is unset.
 	SettingEnrichmentPaused = "enrichment.paused"
 	SettingDedupThreshold   = "enrichment.dedup_threshold"
-	SettingFactPrompt        = "enrichment.fact_prompt"
-	SettingEntityPrompt      = "enrichment.entity_prompt"
+	SettingFactPrompt       = "enrichment.fact_prompt"
+	SettingEntityPrompt     = "enrichment.entity_prompt"
 
 	// Pre-insert paraphrase guard run on each extracted-fact child during
 	// enrichment. When a fact's cosine to its parent (or a previously-accepted
