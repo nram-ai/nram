@@ -192,7 +192,7 @@ func TestMutateInLock_NoLostUpdate(t *testing.T) {
 			tag := want[i]
 			go func() {
 				defer wg.Done()
-				_, err := repo.MutateInLock(ctx, id, func(mem *model.Memory) (bool, error) {
+				_, err := repo.MutateInLock(ctx, id, namespaceID, func(mem *model.Memory) (bool, error) {
 					mem.Tags = append(mem.Tags, tag)
 					return true, nil
 				})
@@ -203,7 +203,7 @@ func TestMutateInLock_NoLostUpdate(t *testing.T) {
 		}
 		wg.Wait()
 
-		final, err := repo.GetByID(ctx, id)
+		final, err := repo.GetByID(ctx, id, namespaceID)
 		if err != nil {
 			t.Fatalf("GetByID: %v", err)
 		}
@@ -236,7 +236,7 @@ func TestMutateInLock_SkipWriteReturnsFresh(t *testing.T) {
 		id := uuid.New()
 		seedRowForLockTest(t, db, namespaceID, id, "no-change-test")
 
-		before, err := repo.GetByID(ctx, id)
+		before, err := repo.GetByID(ctx, id, namespaceID)
 		if err != nil {
 			t.Fatalf("GetByID before: %v", err)
 		}
@@ -247,7 +247,7 @@ func TestMutateInLock_SkipWriteReturnsFresh(t *testing.T) {
 		// unchanged across the call.
 		time.Sleep(1100 * time.Millisecond)
 
-		result, err := repo.MutateInLock(ctx, id, func(mem *model.Memory) (bool, error) {
+		result, err := repo.MutateInLock(ctx, id, namespaceID, func(mem *model.Memory) (bool, error) {
 			if mem.ID != id {
 				t.Errorf("mutator saw wrong id: %s vs %s", mem.ID, id)
 			}
@@ -260,7 +260,7 @@ func TestMutateInLock_SkipWriteReturnsFresh(t *testing.T) {
 			t.Fatal("expected non-nil fresh memory when skipping write")
 		}
 
-		after, err := repo.GetByID(ctx, id)
+		after, err := repo.GetByID(ctx, id, namespaceID)
 		if err != nil {
 			t.Fatalf("GetByID after: %v", err)
 		}

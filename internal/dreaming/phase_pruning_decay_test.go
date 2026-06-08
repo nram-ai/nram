@@ -25,7 +25,7 @@ type fakeMemoryReader struct {
 	listCalls []listCall
 }
 
-func (f *fakeMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (f *fakeMemoryReader) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	for i := range f.list {
 		if f.list[i].ID == id {
 			return &f.list[i], nil
@@ -33,7 +33,7 @@ func (f *fakeMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memo
 	}
 	return nil, fmt.Errorf("not found")
 }
-func (f *fakeMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (f *fakeMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	want := make(map[uuid.UUID]struct{}, len(ids))
 	for _, id := range ids {
 		want[id] = struct{}{}
@@ -110,7 +110,7 @@ func (r *recordingMemoryWriter) Demote(_ context.Context, _, _ uuid.UUID, _ json
 func (r *recordingMemoryWriter) MarkSupersededBy(_ context.Context, _, _, _ uuid.UUID) error {
 	return nil
 }
-func (r *recordingMemoryWriter) MutateInLock(_ context.Context, _ uuid.UUID, _ func(*model.Memory) (bool, error)) (*model.Memory, error) {
+func (r *recordingMemoryWriter) MutateInLock(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ func(*model.Memory) (bool, error)) (*model.Memory, error) {
 	return nil, nil
 }
 

@@ -151,7 +151,7 @@ func TestMemoryRepo_Create_NormalizesQuotedTags(t *testing.T) {
 			t.Fatalf("in-memory tags: got %v, want %v", mem.Tags, want)
 		}
 
-		reloaded, err := repo.GetByID(ctx, mem.ID)
+		reloaded, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}
@@ -184,7 +184,7 @@ func TestMemoryRepo_Update_NormalizesQuotedTags(t *testing.T) {
 		}
 
 		want := []string{"updated tag", "plain"}
-		reloaded, err := repo.GetByID(ctx, mem.ID)
+		reloaded, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}
@@ -235,7 +235,7 @@ func TestMemoryRepo_GetByID(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, mem.ID)
+		fetched, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get by id: %v", err)
 		}
@@ -257,7 +257,7 @@ func TestMemoryRepo_GetByID_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewMemoryRepo(db)
 
-		_, err := repo.GetByID(ctx, uuid.New())
+		_, err := repo.GetByID(ctx, uuid.New(), uuid.New())
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}
@@ -279,7 +279,7 @@ func TestMemoryRepo_GetByID_ExcludesSoftDeleted(t *testing.T) {
 			t.Fatalf("failed to soft delete: %v", err)
 		}
 
-		_, err := repo.GetByID(ctx, mem.ID)
+		_, err := repo.GetByID(ctx, mem.ID, nsID)
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows for soft-deleted, got %v", err)
 		}
@@ -302,7 +302,7 @@ func TestMemoryRepo_GetBatch(t *testing.T) {
 		}
 
 		// Fetch all three
-		results, err := repo.GetBatch(ctx, ids)
+		results, err := repo.GetBatch(ctx, ids, []uuid.UUID{nsID})
 		if err != nil {
 			t.Fatalf("failed to get batch: %v", err)
 		}
@@ -317,7 +317,7 @@ func TestMemoryRepo_GetBatch_Empty(t *testing.T) {
 		ctx := context.Background()
 		repo := NewMemoryRepo(db)
 
-		results, err := repo.GetBatch(ctx, nil)
+		results, err := repo.GetBatch(ctx, nil, []uuid.UUID{uuid.New()})
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -347,7 +347,7 @@ func TestMemoryRepo_GetBatch_ExcludesSoftDeleted(t *testing.T) {
 			t.Fatalf("failed to soft delete: %v", err)
 		}
 
-		results, err := repo.GetBatch(ctx, []uuid.UUID{mem1.ID, mem2.ID})
+		results, err := repo.GetBatch(ctx, []uuid.UUID{mem1.ID, mem2.ID}, []uuid.UUID{nsID})
 		if err != nil {
 			t.Fatalf("failed to get batch: %v", err)
 		}
@@ -974,7 +974,7 @@ func TestMemoryRepo_Update(t *testing.T) {
 		}
 
 		// Verify via fresh fetch
-		fetched, err := repo.GetByID(ctx, mem.ID)
+		fetched, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get after update: %v", err)
 		}
@@ -1025,13 +1025,13 @@ func TestMemoryRepo_SoftDelete(t *testing.T) {
 		}
 
 		// Verify it's not returned by GetByID
-		_, err := repo.GetByID(ctx, mem.ID)
+		_, err := repo.GetByID(ctx, mem.ID, nsID)
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows after soft delete, got %v", err)
 		}
 
 		// Verify deleted_at was set by reading directly
-		fetched, err := repo.getByIDIncludeDeleted(ctx, mem.ID)
+		fetched, err := repo.getByIDIncludeDeleted(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get include deleted: %v", err)
 		}
@@ -1095,7 +1095,7 @@ func TestMemoryRepo_HardDelete(t *testing.T) {
 		}
 
 		// Verify completely gone (not even with include deleted)
-		_, err := repo.getByIDIncludeDeleted(ctx, mem.ID)
+		_, err := repo.getByIDIncludeDeleted(ctx, mem.ID, nsID)
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows after hard delete, got %v", err)
 		}
@@ -1258,17 +1258,17 @@ func TestMemoryRepo_HardDeleteSoftDeletedBefore_RetentionSweep(t *testing.T) {
 
 		// The old memory is fully gone; the recent one is still soft-deleted;
 		// the live one is unchanged.
-		if _, err := repo.getByIDIncludeDeleted(ctx, old.ID); !errors.Is(err, sql.ErrNoRows) {
+		if _, err := repo.getByIDIncludeDeleted(ctx, old.ID, nsID); !errors.Is(err, sql.ErrNoRows) {
 			t.Errorf("expected old to be hard-deleted, got err=%v", err)
 		}
-		fetchedRecent, err := repo.getByIDIncludeDeleted(ctx, recent.ID)
+		fetchedRecent, err := repo.getByIDIncludeDeleted(ctx, recent.ID, nsID)
 		if err != nil {
 			t.Fatalf("recent should still exist (soft-deleted): %v", err)
 		}
 		if fetchedRecent.DeletedAt == nil {
 			t.Error("recent should still be soft-deleted")
 		}
-		if _, err := repo.GetByID(ctx, live.ID); err != nil {
+		if _, err := repo.GetByID(ctx, live.ID, nsID); err != nil {
 			t.Errorf("live memory should still be readable: %v", err)
 		}
 	})
@@ -1293,7 +1293,7 @@ func TestMemoryRepo_HardDelete_SoftDeletedFirst(t *testing.T) {
 			t.Fatalf("failed to hard delete after soft delete: %v", err)
 		}
 
-		_, err := repo.getByIDIncludeDeleted(ctx, mem.ID)
+		_, err := repo.getByIDIncludeDeleted(ctx, mem.ID, nsID)
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows after hard delete, got %v", err)
 		}
@@ -1326,7 +1326,7 @@ func TestMemoryRepo_Create_WithOptionalFields(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, mem.ID)
+		fetched, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get: %v", err)
 		}
@@ -1452,7 +1452,7 @@ func TestMemoryRepo_ClearAllEmbeddingDims(t *testing.T) {
 
 		// Each live row now has NULL embedding_dim.
 		for _, id := range liveDimIDs {
-			got, err := repo.GetByID(ctx, id)
+			got, err := repo.GetByID(ctx, id, nsID)
 			if err != nil {
 				t.Fatalf("get %s: %v", id, err)
 			}
@@ -1871,7 +1871,7 @@ func TestMemoryRepo_SupersedeReplacing(t *testing.T) {
 		}
 
 		// Old row should now be superseded.
-		reloadedOld, err := repo.GetByID(ctx, old.ID)
+		reloadedOld, err := repo.GetByID(ctx, old.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload old: %v", err)
 		}
@@ -1891,7 +1891,7 @@ func TestMemoryRepo_SupersedeReplacing(t *testing.T) {
 		}
 
 		// New row should exist with fresh content and Enriched=false.
-		newReloaded, err := repo.GetByID(ctx, newMem.ID)
+		newReloaded, err := repo.GetByID(ctx, newMem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload new: %v", err)
 		}
@@ -1949,7 +1949,7 @@ func TestMemoryRepo_SupersedeReplacing_ConcurrentReturnsSentinel(t *testing.T) {
 		}
 
 		// The whole transaction must roll back: no new memory, no lineage row.
-		if _, err := repo.GetByID(ctx, newMem.ID); err == nil {
+		if _, err := repo.GetByID(ctx, newMem.ID, nsID); err == nil {
 			t.Fatal("expected new memory not to exist after rollback")
 		}
 	})
@@ -2018,7 +2018,7 @@ func TestMemoryRepo_ClearEmbeddingDim(t *testing.T) {
 			t.Fatalf("ClearEmbeddingDim: %v", err)
 		}
 
-		got, err := repo.getByIDIncludeDeleted(ctx, mem.ID)
+		got, err := repo.getByIDIncludeDeleted(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}
@@ -2043,7 +2043,7 @@ func TestMemoryRepo_UpdateConfidence(t *testing.T) {
 			t.Fatalf("UpdateConfidence: %v", err)
 		}
 
-		got, err := repo.getByIDIncludeDeleted(ctx, mem.ID)
+		got, err := repo.getByIDIncludeDeleted(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}
@@ -2075,7 +2075,7 @@ func TestMemoryRepo_Demote(t *testing.T) {
 			t.Fatalf("Demote: %v", err)
 		}
 
-		got, err := repo.getByIDIncludeDeleted(ctx, mem.ID)
+		got, err := repo.getByIDIncludeDeleted(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}
@@ -2116,7 +2116,7 @@ func TestMemoryRepo_MarkSupersededBy(t *testing.T) {
 			t.Fatalf("MarkSupersededBy: %v", err)
 		}
 
-		got, err := repo.GetByID(ctx, old.ID)
+		got, err := repo.GetByID(ctx, old.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}

@@ -25,7 +25,7 @@ type MemoryLister interface {
 	ListParentsByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
 	CountParentsByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters) (int, error)
 	FindChildrenByParents(ctx context.Context, namespaceID uuid.UUID, parentIDs []uuid.UUID, relations []string) (map[uuid.UUID][]model.Memory, error)
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error)
 }
 
 // ProjectGetter abstracts project lookup for the list and detail handlers.
@@ -280,18 +280,15 @@ func NewDetailHandler(memRepo MemoryLister, projRepo ProjectGetter, lineage Pare
 			return
 		}
 
-		mem, err := memRepo.GetByID(r.Context(), memoryID)
+		// Bounded read: a memory outside the project's namespace reads as
+		// not-found, so existence is not leaked across the tenant boundary.
+		mem, err := memRepo.GetByID(r.Context(), memoryID, project.NamespaceID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				WriteError(w, ErrNotFound("memory not found"))
 				return
 			}
 			WriteError(w, ErrInternal("failed to look up memory"))
-			return
-		}
-
-		if mem.NamespaceID != project.NamespaceID {
-			WriteError(w, ErrNotFound("memory not found"))
 			return
 		}
 

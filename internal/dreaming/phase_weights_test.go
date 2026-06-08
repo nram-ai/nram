@@ -24,10 +24,10 @@ func (f *fakeRelationshipReader) ListByNamespace(_ context.Context, _ uuid.UUID)
 	copy(out, f.rels)
 	return out, nil
 }
-func (f *fakeRelationshipReader) ListByEntity(_ context.Context, _ uuid.UUID) ([]model.Relationship, error) {
+func (f *fakeRelationshipReader) ListByEntity(_ context.Context, _ uuid.UUID, _ []uuid.UUID) ([]model.Relationship, error) {
 	return nil, nil
 }
-func (f *fakeRelationshipReader) TraverseFromEntity(_ context.Context, _ uuid.UUID, _, _ int) (storage.TraversalResult, error) {
+func (f *fakeRelationshipReader) TraverseFromEntity(_ context.Context, _ uuid.UUID, _ []uuid.UUID, _, _ int) (storage.TraversalResult, error) {
 	return storage.TraversalResult{}, nil
 }
 func (f *fakeRelationshipReader) FindActiveByTriple(_ context.Context, _, _, _ uuid.UUID, _ string) (*model.Relationship, error) {
@@ -148,7 +148,7 @@ type fakeEntityReader struct {
 	entities []model.Entity
 }
 
-func (f *fakeEntityReader) GetByID(_ context.Context, id uuid.UUID) (*model.Entity, error) {
+func (f *fakeEntityReader) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Entity, error) {
 	for i := range f.entities {
 		if f.entities[i].ID == id {
 			return &f.entities[i], nil

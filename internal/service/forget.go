@@ -18,7 +18,7 @@ import (
 type MemoryDeleter interface {
 	SoftDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
 	HardDelete(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID) error
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
 	// FindBySupersededBy returns the IDs of live memories whose
 	// superseded_by column equals id. Used by the forget cascade to walk
@@ -211,19 +211,17 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 	}
 	visited[id] = struct{}{}
 
-	mem, err := s.memories.GetByID(ctx, id)
+	// Bounded read: a memory outside namespaceID reads as sql.ErrNoRows, so a
+	// body-supplied id cannot reach another project's memory. The lookup is an
+	// existence/ownership gate; the row itself is not needed past this point.
+	_, err := s.memories.GetByID(ctx, id, namespaceID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, nil // genuinely not found
+			return 0, nil // genuinely not found (or not in this namespace)
 		}
 		// Propagate real errors (SQLITE_BUSY, network, etc.) instead of
 		// silently treating them as "not found".
 		return 0, fmt.Errorf("forget lookup %s: %w", id, err)
-	}
-
-	// Verify memory belongs to the project's namespace.
-	if mem.NamespaceID != namespaceID {
-		return 0, nil
 	}
 
 	cascaded := 0

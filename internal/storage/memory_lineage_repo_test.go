@@ -154,7 +154,7 @@ func TestMemoryLineageRepo_GetByID(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, lineage.ID)
+		fetched, err := repo.GetByID(ctx, lineage.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get by id: %v", err)
 		}
@@ -179,7 +179,7 @@ func TestMemoryLineageRepo_GetByID_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewMemoryLineageRepo(db)
 
-		_, err := repo.GetByID(ctx, uuid.New())
+		_, err := repo.GetByID(ctx, uuid.New(), uuid.New())
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}
@@ -398,7 +398,7 @@ func TestMemoryLineageRepo_NilParentID(t *testing.T) {
 			t.Fatalf("failed to create with nil parent: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, lineage.ID)
+		fetched, err := repo.GetByID(ctx, lineage.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get: %v", err)
 		}

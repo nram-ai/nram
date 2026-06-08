@@ -33,7 +33,7 @@ func (m *mockMemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 	return nil
 }
 
-func (m *mockMemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryRepo) GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error) {
 	if m.getFn != nil {
 		return m.getFn(ctx, id)
 	}

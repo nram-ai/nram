@@ -233,18 +233,17 @@ func (p *EntityDedupPhase) mergeEntities(
 	primary, candidate *model.Entity,
 	logger *DreamLogWriter,
 ) error {
-	rels, err := p.relationships.ListByEntity(ctx, candidate.ID)
+	// candidate and primary are duplicates within one namespace, so the
+	// candidate's edges all live in candidate.NamespaceID; the bounded read
+	// returns exactly those. Retargeted rels keep their source namespace_id,
+	// which equals candidate.NamespaceID, so a single per-namespace expire
+	// covers the merge.
+	rels, err := p.relationships.ListByEntity(ctx, candidate.ID, []uuid.UUID{candidate.NamespaceID})
 	if err != nil {
 		return err
 	}
 
-	// Group expires by their own NamespaceID. ListByEntity has no
-	// namespace filter, so a candidate referenced by a cross-namespace
-	// shared edge would otherwise have that edge silently survive the
-	// merge (BatchExpire filters by namespace_id and would not match).
-	// Retargeted rels keep their source rel's namespace_id, so
-	// BatchCreate's per-row namespace_id handles them without grouping.
-	expireByNS := map[uuid.UUID][]uuid.UUID{}
+	expireIDs := make([]uuid.UUID, 0, len(rels))
 	newRels := make([]*model.Relationship, 0, len(rels))
 	for _, rel := range rels {
 		newRel := rel
@@ -255,19 +254,17 @@ func (p *EntityDedupPhase) mergeEntities(
 			newRel.TargetID = primary.ID
 		}
 
+		expireIDs = append(expireIDs, rel.ID)
 		if newRel.SourceID == newRel.TargetID {
-			expireByNS[rel.NamespaceID] = append(expireByNS[rel.NamespaceID], rel.ID)
 			continue
 		}
-
-		expireByNS[rel.NamespaceID] = append(expireByNS[rel.NamespaceID], rel.ID)
 		newRel.ID = uuid.New()
 		newRels = append(newRels, &newRel)
 	}
 
-	for ns, ids := range expireByNS {
-		if _, err := p.relWriter.BatchExpire(ctx, ns, ids); err != nil {
-			slog.Warn("dreaming: batch expire relationships failed", "candidate", candidate.ID, "ns", ns, "err", err)
+	if len(expireIDs) > 0 {
+		if _, err := p.relWriter.BatchExpire(ctx, candidate.NamespaceID, expireIDs); err != nil {
+			slog.Warn("dreaming: batch expire relationships failed", "candidate", candidate.ID, "ns", candidate.NamespaceID, "err", err)
 			return fmt.Errorf("entity dedup batch expire: %w", err)
 		}
 	}

@@ -881,14 +881,14 @@ func TestEnrichmentQueueRepo_RetryAllFailedScoped_DedupAndAttempts(t *testing.T)
 		}
 
 		// enriched reset only on the retried memory (A), not B.
-		mA, err := memRepo.GetByID(ctx, memA)
+		mA, err := memRepo.GetByID(ctx, memA, nsA)
 		if err != nil {
 			t.Fatalf("get memory A: %v", err)
 		}
 		if mA.Enriched {
 			t.Errorf("memory A enriched = true, want false (reset for retry)")
 		}
-		mB, err := memRepo.GetByID(ctx, memB)
+		mB, err := memRepo.GetByID(ctx, memB, nsB)
 		if err != nil {
 			t.Fatalf("get memory B: %v", err)
 		}

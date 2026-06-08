@@ -165,7 +165,7 @@ func (m *e2eMemoryRepo) Create(_ context.Context, mem *model.Memory) error {
 	return nil
 }
 
-func (m *e2eMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *e2eMemoryRepo) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	mem, ok := m.memories[id]
@@ -195,7 +195,7 @@ func (m *e2eMemoryRepo) LookupByContentHash(_ context.Context, namespaceID uuid.
 	return nil, sql.ErrNoRows
 }
 
-func (m *e2eMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *e2eMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []model.Memory

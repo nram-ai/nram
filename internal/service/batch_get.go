@@ -75,8 +75,9 @@ func (s *BatchGetService) BatchGet(ctx context.Context, req *BatchGetRequest) (*
 		return nil, fmt.Errorf("project not found: %w", err)
 	}
 
-	// Fetch all requested memories in a single batch call.
-	memories, err := s.memories.GetBatch(ctx, req.IDs)
+	// Fetch all requested memories in a single batch call, bounded to the
+	// project's namespace by the query itself.
+	memories, err := s.memories.GetBatch(ctx, req.IDs, []uuid.UUID{project.NamespaceID})
 	if err != nil {
 		return nil, fmt.Errorf("batch get failed: %w", err)
 	}
@@ -86,10 +87,6 @@ func (s *BatchGetService) BatchGet(ctx context.Context, req *BatchGetRequest) (*
 
 	var found []MemoryDetail
 	for _, mem := range memories {
-		// Exclude memories not in the project's namespace.
-		if mem.NamespaceID != project.NamespaceID {
-			continue
-		}
 		// Exclude soft-deleted memories.
 		if mem.DeletedAt != nil {
 			continue

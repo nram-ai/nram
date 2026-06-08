@@ -36,7 +36,7 @@ func (m *splitEntityReader) FindByAlias(_ context.Context, _ uuid.UUID, _ string
 func (m *splitEntityReader) ListByNamespace(_ context.Context, _ uuid.UUID) ([]model.Entity, error) {
 	return m.all, nil
 }
-func (m *splitEntityReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Entity, error) {
+func (m *splitEntityReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Entity, error) {
 	want := make(map[uuid.UUID]struct{}, len(ids))
 	for _, id := range ids {
 		want[id] = struct{}{}
@@ -62,7 +62,7 @@ func (m *aliveMemoryLister) ListByNamespaceFiltered(_ context.Context, _ uuid.UU
 func (m *aliveMemoryLister) CountByNamespaceFiltered(_ context.Context, _ uuid.UUID, _ storage.MemoryListFilters) (int, error) {
 	return 0, nil
 }
-func (m *aliveMemoryLister) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *aliveMemoryLister) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	out := make([]model.Memory, 0, len(ids))
 	for _, id := range ids {
 		for i := range m.mems {

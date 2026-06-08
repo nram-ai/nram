@@ -30,7 +30,7 @@ func TestProceduralRepo_NoEnrichmentEnqueueAndVerbatim(t *testing.T) {
 			Content:     content,
 			Enabled:     true,
 		}
-		if _, err := repo.GetByID(ctx, e.ID); err == nil {
+		if _, err := repo.GetByID(ctx, e.ID, user.NamespaceID); err == nil {
 			t.Fatal("expected unsaved entry to be absent")
 		}
 		if err := repo.Create(ctx, e); err != nil {
@@ -45,7 +45,7 @@ func TestProceduralRepo_NoEnrichmentEnqueueAndVerbatim(t *testing.T) {
 			t.Fatalf("procedural store enqueued enrichment work: before=%d after=%d", before, after)
 		}
 
-		got, err := repo.GetByID(ctx, e.ID)
+		got, err := repo.GetByID(ctx, e.ID, user.NamespaceID)
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}

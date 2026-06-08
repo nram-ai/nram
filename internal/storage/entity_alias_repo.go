@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,18 +79,31 @@ func (r *EntityAliasRepo) FindByAlias(ctx context.Context, namespaceID uuid.UUID
 	return r.scanAliases(rows)
 }
 
-// ListByEntity returns all aliases for a given entity, ordered by created_at DESC.
-func (r *EntityAliasRepo) ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.EntityAlias, error) {
-	query := selectEntityAliasColumns + ` FROM entity_aliases ea
-		WHERE ea.entity_id = ?
-		ORDER BY ea.created_at DESC`
+// ListByEntity returns aliases for a given entity, bounded to the supplied
+// namespaces, ordered by created_at DESC. Fail-closed: an empty namespaces slice
+// returns no rows, so an alias can never be read across the tenant boundary.
+func (r *EntityAliasRepo) ListByEntity(ctx context.Context, entityID uuid.UUID, namespaces []uuid.UUID) ([]model.EntityAlias, error) {
+	if len(namespaces) == 0 {
+		return []model.EntityAlias{}, nil
+	}
+
+	// entity_id occupies $1; namespace placeholders start at $2.
+	nsPlaceholders, nsArgs := uuidInPlaceholders(r.db, namespaces, 2)
+	nsIn := strings.Join(nsPlaceholders, ", ")
+
+	var query string
 	if r.db.Backend() == BackendPostgres {
 		query = selectEntityAliasColumns + ` FROM entity_aliases ea
-			WHERE ea.entity_id = $1
+			WHERE ea.entity_id = $1 AND ea.namespace_id IN (` + nsIn + `)
+			ORDER BY ea.created_at DESC`
+	} else {
+		query = selectEntityAliasColumns + ` FROM entity_aliases ea
+			WHERE ea.entity_id = ? AND ea.namespace_id IN (` + nsIn + `)
 			ORDER BY ea.created_at DESC`
 	}
 
-	rows, err := r.db.Query(ctx, query, entityID.String())
+	args := append([]any{entityID.String()}, nsArgs...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("entity alias list by entity: %w", err)
 	}

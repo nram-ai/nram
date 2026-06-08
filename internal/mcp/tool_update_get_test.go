@@ -24,7 +24,7 @@ type mockMemoryUpdater struct {
 	updateErr error
 }
 
-func (m *mockMemoryUpdater) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryUpdater) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
@@ -65,7 +65,7 @@ type mockMemoryBatchReader struct {
 	err      error
 }
 
-func (m *mockMemoryBatchReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryBatchReader) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	for _, mem := range m.memories {
 		if mem.ID == id {
 			return &mem, nil
@@ -74,7 +74,7 @@ func (m *mockMemoryBatchReader) GetByID(_ context.Context, id uuid.UUID) (*model
 	return nil, nil
 }
 
-func (m *mockMemoryBatchReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *mockMemoryBatchReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	if m.err != nil {
 		return nil, m.err
 	}

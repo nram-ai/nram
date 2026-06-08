@@ -45,7 +45,7 @@ func (m *mockMemoryRepo) Create(_ context.Context, mem *model.Memory) error {
 	return nil
 }
 
-func (m *mockMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryRepo) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
 	}

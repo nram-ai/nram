@@ -262,7 +262,7 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 	//    dream memory's ID. Without this assertion, a future change that
 	//    over-broadens the skip predicate to embedding (silently breaking
 	//    dream-memory recall) would not fail this test.
-	reloaded, err := memoryRepo.GetByID(ctx, dreamMem.ID)
+	reloaded, err := memoryRepo.GetByID(ctx, dreamMem.ID, dreamMem.NamespaceID)
 	if err != nil {
 		t.Fatalf("reload dream memory: %v", err)
 	}

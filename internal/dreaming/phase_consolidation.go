@@ -503,7 +503,7 @@ func (p *ConsolidationPhase) supersedeOriginals(
 	// even after reaching the supersession confidence threshold.
 	meta := decodeMetadata(synthesis.Metadata)
 	for _, memID := range p.resolveSourceMemoryIDs(ctx, synthesis, meta) {
-		original, err := p.memories.GetByID(ctx, memID)
+		original, err := p.memories.GetByID(ctx, memID, synthesis.NamespaceID)
 		if err != nil || original.SupersededBy != nil {
 			continue
 		}
@@ -675,7 +675,7 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			continue
 		}
 
-		fetched, err := p.memories.GetBatch(ctx, sourceIDs)
+		fetched, err := p.memories.GetBatch(ctx, sourceIDs, []uuid.UUID{cycle.NamespaceID})
 		if err != nil {
 			slog.Warn("dreaming: backfill source fetch failed",
 				"memory", mem.ID, "err", err)

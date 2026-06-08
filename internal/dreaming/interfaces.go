@@ -13,8 +13,8 @@ import (
 
 // MemoryReader retrieves memories.
 type MemoryReader interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
-	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error)
+	GetBatch(ctx context.Context, ids, namespaces []uuid.UUID) ([]model.Memory, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
 	// ListByNamespaceStale returns up to limit non-deleted memories whose
 	// metadata stamp at stampKey is missing or strictly predates updated_at,
@@ -34,7 +34,7 @@ type MemoryWriter interface {
 	// same lock. Required for any read-modify-write on a memory row that
 	// could race with concurrent workers; full-row Update without the
 	// lock has a lost-update window the helper closes.
-	MutateInLock(ctx context.Context, id uuid.UUID, mutate func(*model.Memory) (write bool, err error)) (*model.Memory, error)
+	MutateInLock(ctx context.Context, id, namespaceID uuid.UUID, mutate func(*model.Memory) (write bool, err error)) (*model.Memory, error)
 	// UpdateMetadata writes only the metadata column without bumping
 	// updated_at. Phases use it to record visit stamps so the staleness
 	// check (stamp < updated_at) does not immediately re-invalidate the
@@ -58,7 +58,7 @@ type MemoryWriter interface {
 
 // EntityReader reads entity data.
 type EntityReader interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Entity, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Entity, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.Entity, error)
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
 }
@@ -76,8 +76,8 @@ type EntityAliasWriter interface {
 // RelationshipReader reads relationship data.
 type RelationshipReader interface {
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.Relationship, error)
-	ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.Relationship, error)
-	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
+	ListByEntity(ctx context.Context, entityID uuid.UUID, namespaces []uuid.UUID) ([]model.Relationship, error)
+	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, namespaces []uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
 	FindActiveByTriple(ctx context.Context, namespaceID, sourceID, targetID uuid.UUID, relation string) (*model.Relationship, error)
 	CountActiveByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
 }
@@ -190,5 +190,5 @@ type MemoryDimRepairer interface {
 // enqueues a query-augmentation enrichment job for each. Satisfied by
 // *storage.MemoryRepo.ListAugmentationBackfillCandidates.
 type AugmentationBacklogLister interface {
-	ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error)
+	ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 }

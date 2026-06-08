@@ -18,21 +18,25 @@ type mockBatchMemoryReader struct {
 	batchErr error
 }
 
-func (m *mockBatchMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockBatchMemoryReader) GetByID(_ context.Context, id uuid.UUID, namespaceID uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memories[id]
-	if !ok {
+	if !ok || mem.NamespaceID != namespaceID {
 		return nil, fmt.Errorf("not found")
 	}
 	return mem, nil
 }
 
-func (m *mockBatchMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *mockBatchMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID, namespaces []uuid.UUID) ([]model.Memory, error) {
 	if m.batchErr != nil {
 		return nil, m.batchErr
 	}
+	allowed := make(map[uuid.UUID]bool, len(namespaces))
+	for _, ns := range namespaces {
+		allowed[ns] = true
+	}
 	var result []model.Memory
 	for _, id := range ids {
-		if mem, ok := m.memories[id]; ok {
+		if mem, ok := m.memories[id]; ok && allowed[mem.NamespaceID] {
 			result = append(result, *mem)
 		}
 	}

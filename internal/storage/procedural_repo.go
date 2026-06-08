@@ -65,14 +65,16 @@ func (r *ProceduralRepo) Create(ctx context.Context, e *model.ProceduralEntry) e
 	return r.reload(ctx, e)
 }
 
-// GetByID returns a live (non-deleted) procedural entry by its UUID.
-func (r *ProceduralRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.ProceduralEntry, error) {
-	query := selectProceduralColumns + ` FROM procedural_entries WHERE id = ? AND deleted_at IS NULL`
+// GetByID returns a live (non-deleted) procedural entry by its UUID, bounded to
+// namespaceID. An entry in a different namespace reads as sql.ErrNoRows, so
+// existence is never leaked across the tenant boundary.
+func (r *ProceduralRepo) GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.ProceduralEntry, error) {
+	query := selectProceduralColumns + ` FROM procedural_entries WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
 	if r.db.Backend() == BackendPostgres {
-		query = selectProceduralColumns + ` FROM procedural_entries WHERE id = $1 AND deleted_at IS NULL`
+		query = selectProceduralColumns + ` FROM procedural_entries WHERE id = $1 AND namespace_id = $2 AND deleted_at IS NULL`
 	}
 
-	row := r.db.QueryRow(ctx, query, id.String())
+	row := r.db.QueryRow(ctx, query, id.String(), namespaceID.String())
 	return r.scanEntry(row)
 }
 
@@ -180,7 +182,7 @@ func (r *ProceduralRepo) Delete(ctx context.Context, id, namespaceID uuid.UUID) 
 
 // reload fetches the entry by ID and populates the struct in place.
 func (r *ProceduralRepo) reload(ctx context.Context, e *model.ProceduralEntry) error {
-	fetched, err := r.GetByID(ctx, e.ID)
+	fetched, err := r.GetByID(ctx, e.ID, e.NamespaceID)
 	if err != nil {
 		return fmt.Errorf("procedural reload: %w", err)
 	}

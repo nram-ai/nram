@@ -28,7 +28,7 @@ func bestEmbeddingDimension(providerDims []int) int {
 // MemoryRepository defines the memory persistence operations needed by the store service.
 type MemoryRepository interface {
 	Create(ctx context.Context, mem *model.Memory) error
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error)
 	LookupByContentHash(ctx context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error)
 }
 

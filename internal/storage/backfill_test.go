@@ -289,7 +289,7 @@ func TestNormalizeMemoryTags(t *testing.T) {
 
 		// Verify each row's stored tags.
 		repo := NewMemoryRepo(db)
-		dirtyMem, err := repo.GetByID(ctx, dirtyID)
+		dirtyMem, err := repo.GetByID(ctx, dirtyID, nsID)
 		if err != nil {
 			t.Fatalf("reload dirty: %v", err)
 		}
@@ -297,7 +297,7 @@ func TestNormalizeMemoryTags(t *testing.T) {
 			t.Errorf("dirty tags: got %v, want [behavioral contract, failure modes]", dirtyMem.Tags)
 		}
 
-		cleanMem, err := repo.GetByID(ctx, cleanID)
+		cleanMem, err := repo.GetByID(ctx, cleanID, nsID)
 		if err != nil {
 			t.Fatalf("reload clean: %v", err)
 		}
@@ -305,7 +305,7 @@ func TestNormalizeMemoryTags(t *testing.T) {
 			t.Errorf("clean tags: got %v, want [alpha, beta]", cleanMem.Tags)
 		}
 
-		mixedMem, err := repo.GetByID(ctx, mixedID)
+		mixedMem, err := repo.GetByID(ctx, mixedID, nsID)
 		if err != nil {
 			t.Fatalf("reload mixed: %v", err)
 		}

@@ -112,13 +112,13 @@ func TestMove_RealSQL(t *testing.T) {
 	}
 
 	// 1. Source memory is hard-deleted.
-	if _, err := memRepo.GetByID(ctx, original.ID); err == nil {
+	if _, err := memRepo.GetByID(ctx, original.ID, srcProj.NamespaceID); err == nil {
 		t.Errorf("source memory %s should be hard-deleted after move", original.ID)
 	}
 
 	// 2 + 3. New memory lives in the DESTINATION namespace, not the source, with
 	// fields preserved.
-	moved, err := memRepo.GetByID(ctx, newID)
+	moved, err := memRepo.GetByID(ctx, newID, dstProj.NamespaceID)
 	if err != nil {
 		t.Fatalf("reload moved memory: %v", err)
 	}

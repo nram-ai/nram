@@ -297,7 +297,7 @@ seeds:
 			}
 		}
 
-		tr, tErr := deps.Traverser.TraverseFromEntity(ctx, ent.ID, 1, seedCap)
+		tr, tErr := deps.Traverser.TraverseFromEntity(ctx, ent.ID, []uuid.UUID{project.NamespaceID}, 1, seedCap)
 		if tErr != nil {
 			continue
 		}

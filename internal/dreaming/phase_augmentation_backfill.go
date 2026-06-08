@@ -98,10 +98,10 @@ func (p *AugmentationBackfillPhase) Execute(ctx context.Context, cycle *model.Dr
 	enqueued := 0
 	errCount := 0
 	now := time.Now().UTC()
-	for _, memID := range toProcess {
+	for _, cand := range toProcess {
 		job := &model.EnrichmentJob{
 			ID:          uuid.New(),
-			MemoryID:    memID,
+			MemoryID:    cand.ID,
 			NamespaceID: cycle.NamespaceID,
 			Status:      model.EnrichmentStatusPending,
 			Priority:    0,
@@ -116,7 +116,7 @@ func (p *AugmentationBackfillPhase) Execute(ctx context.Context, cycle *model.Dr
 		inserted, enqErr := p.queue.Enqueue(ctx, job)
 		if enqErr != nil {
 			slog.Warn("dreaming: augmentation backfill enqueue failed",
-				"cycle", cycle.ID, "memory", memID, "err", enqErr)
+				"cycle", cycle.ID, "memory", cand.ID, "err", enqErr)
 			errCount++
 			continue
 		}

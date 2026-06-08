@@ -162,7 +162,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 	}
 	sourceMemories := make(map[uuid.UUID]*model.Memory, len(memIDs))
 	if len(memIDs) > 0 {
-		batch, err := p.memories.GetBatch(ctx, memIDs)
+		batch, err := p.memories.GetBatch(ctx, memIDs, []uuid.UUID{cycle.NamespaceID})
 		if err != nil {
 			slog.Warn("dreaming: weight_adjustment source-memory batch failed",
 				"err", err, "count", len(memIDs), "cycle", cycle.ID)

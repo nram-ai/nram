@@ -159,8 +159,8 @@ func logClaimLostOr(err error, msg string, attrs ...any) {
 // batch path is the read used by FindNearMatches to hydrate near-neighbour
 // content in a single round-trip rather than topK sequential lookups.
 type MemoryReader interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
-	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error)
+	GetBatch(ctx context.Context, ids, namespaces []uuid.UUID) ([]model.Memory, error)
 }
 
 // MemoryUpdater persists changes to an existing memory. The partial
@@ -171,7 +171,7 @@ type MemoryReader interface {
 // Update without the lock has a lost-update window between workers.
 type MemoryUpdater interface {
 	Update(ctx context.Context, mem *model.Memory) error
-	MutateInLock(ctx context.Context, id uuid.UUID, mutate func(*model.Memory) (write bool, err error)) (*model.Memory, error)
+	MutateInLock(ctx context.Context, id, namespaceID uuid.UUID, mutate func(*model.Memory) (write bool, err error)) (*model.Memory, error)
 	UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error
 	MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage, augmentedQueries []string, augmentedEmbeddingAt *time.Time) error
 	MarkSupersededBy(ctx context.Context, oldID, namespaceID, newID uuid.UUID) error
@@ -988,7 +988,7 @@ func earliestBreakerRetry(errs []error) time.Time {
 // job failed and returns an error; on success returns a pendingJob with
 // parent+children ready for the shared embed step.
 func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *model.EnrichmentJob) (*pendingJob, error) {
-	mem, err := wp.memories.GetByID(ctx, job.MemoryID)
+	mem, err := wp.memories.GetByID(ctx, job.MemoryID, job.NamespaceID)
 	if err != nil {
 		failErr := wp.queue.Fail(ctx, job.ID, workerID, fmt.Sprintf("memory lookup: %v", err))
 		if failErr != nil {
@@ -2016,7 +2016,7 @@ func (wp *WorkerPool) mergeTagsIntoParent(
 ) error {
 	var delta []string
 	now := time.Now().UTC()
-	fresh, err := wp.memUpdater.MutateInLock(ctx, inMemoryParent.ID, func(mem *model.Memory) (bool, error) {
+	fresh, err := wp.memUpdater.MutateInLock(ctx, inMemoryParent.ID, inMemoryParent.NamespaceID, func(mem *model.Memory) (bool, error) {
 		merged := mergeTags(mem.Tags, newTags)
 		delta = tagDelta(mem.Tags, merged)
 		if len(delta) == 0 {
@@ -2131,7 +2131,7 @@ func (wp *WorkerPool) runExtractedFactParaphraseGuardSweep(ctx context.Context, 
 			}
 		}
 
-		child, err := wp.memories.GetByID(ctx, cid)
+		child, err := wp.memories.GetByID(ctx, cid, job.NamespaceID)
 		if err != nil {
 			slog.Warn("enrichment: paraphrase backfill child lookup",
 				"job", job.ID, "child", cid, "err", err)

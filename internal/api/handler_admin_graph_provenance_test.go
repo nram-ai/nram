@@ -17,7 +17,7 @@ type fakeGraphMemStore struct {
 	err  error
 }
 
-func (f *fakeGraphMemStore) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (f *fakeGraphMemStore) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -38,7 +38,7 @@ func relWithSource(mem *uuid.UUID) model.Relationship {
 
 func TestResolveLiveProvenance_NilStoreDisablesFilter(t *testing.T) {
 	m := uuid.New()
-	got := resolveLiveProvenance(context.Background(), nil, []model.Relationship{relWithSource(&m)})
+	got := resolveLiveProvenance(context.Background(), nil, uuid.Nil, []model.Relationship{relWithSource(&m)})
 	if got != nil {
 		t.Fatalf("nil store must yield nil (filter disabled), got %v", got)
 	}
@@ -47,7 +47,7 @@ func TestResolveLiveProvenance_NilStoreDisablesFilter(t *testing.T) {
 func TestResolveLiveProvenance_ErrorFailsOpen(t *testing.T) {
 	m := uuid.New()
 	store := &fakeGraphMemStore{err: errors.New("boom")}
-	got := resolveLiveProvenance(context.Background(), store, []model.Relationship{relWithSource(&m)})
+	got := resolveLiveProvenance(context.Background(), store, uuid.Nil, []model.Relationship{relWithSource(&m)})
 	if got != nil {
 		t.Fatalf("lookup error must fail open (nil map), got %v", got)
 	}
@@ -55,7 +55,7 @@ func TestResolveLiveProvenance_ErrorFailsOpen(t *testing.T) {
 
 func TestResolveLiveProvenance_OnlyNullSources(t *testing.T) {
 	store := &fakeGraphMemStore{}
-	got := resolveLiveProvenance(context.Background(), store,
+	got := resolveLiveProvenance(context.Background(), store, uuid.Nil,
 		[]model.Relationship{relWithSource(nil), relWithSource(nil)})
 	if got == nil {
 		t.Fatalf("expected a non-nil (empty) map when filtering is active")
@@ -82,7 +82,7 @@ func TestResolveLiveProvenance_LiveSupersededDeleted(t *testing.T) {
 		relWithSource(&deleted),
 		relWithSource(nil),
 	}
-	got := resolveLiveProvenance(context.Background(), store, rels)
+	got := resolveLiveProvenance(context.Background(), store, uuid.Nil, rels)
 
 	if !got[live] {
 		t.Fatalf("live memory should be present in the live set")

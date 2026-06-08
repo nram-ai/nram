@@ -150,7 +150,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 		}
 
 		// Fetch the candidate memory.
-		candidate, err := cd.memories.GetByID(ctx, result.ID)
+		candidate, err := cd.memories.GetByID(ctx, result.ID, memory.NamespaceID)
 		if err != nil {
 			// Skip candidates we cannot retrieve.
 			continue

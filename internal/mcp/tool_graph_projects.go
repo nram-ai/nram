@@ -274,7 +274,7 @@ seeds:
 			}
 		}
 
-		tr, err := deps.Traverser.TraverseFromEntity(ctx, ent.ID, depth, seedCap)
+		tr, err := deps.Traverser.TraverseFromEntity(ctx, ent.ID, namespaces, depth, seedCap)
 		if err != nil {
 			continue
 		}
@@ -334,7 +334,7 @@ seeds:
 				for id := range idSet {
 					ids = append(ids, id)
 				}
-				if mems, err := deps.MemoryLister.GetBatch(ctx, ids); err == nil {
+				if mems, err := deps.MemoryLister.GetBatch(ctx, ids, namespaces); err == nil {
 					for _, m := range mems {
 						if m.IsLiveProvenance() {
 							alive[m.ID] = struct{}{}
@@ -442,17 +442,6 @@ type graphEdgeKey struct {
 	rel      string
 }
 
-// namespaceSet builds a set of the allowed namespace IDs for O(1) membership
-// tests. Used by every graph-entity path that must drop rows the caller cannot
-// read (resolveGraphOrphans, backfillMentionCounts).
-func namespaceSet(allowedNamespaces []uuid.UUID) map[uuid.UUID]struct{} {
-	allowed := make(map[uuid.UUID]struct{}, len(allowedNamespaces))
-	for _, ns := range allowedNamespaces {
-		allowed[ns] = struct{}{}
-	}
-	return allowed
-}
-
 // graphEntityIDSet builds a set of the entities' IDs. Both graph-slice surfaces
 // use it to capture the seed set (the pre-orphan-resolution entities) for
 // proximity ranking.
@@ -495,12 +484,10 @@ func resolveGraphOrphans(
 		for id := range missing {
 			ids = append(ids, id)
 		}
-		if fetched, err := entityReader.GetBatch(ctx, ids); err == nil {
-			allowed := namespaceSet(allowedNamespaces)
+		// GetBatch is bounded to allowedNamespaces, so orphan endpoints outside
+		// the aperture are dropped at the query; no post-filter needed.
+		if fetched, err := entityReader.GetBatch(ctx, ids, allowedNamespaces); err == nil {
 			for _, ent := range fetched {
-				if _, ok := allowed[ent.NamespaceID]; !ok {
-					continue
-				}
 				if _, ok := known[ent.ID]; ok {
 					continue
 				}
@@ -543,16 +530,14 @@ func backfillMentionCounts(ctx context.Context, entityReader EntityReader, entit
 	for _, e := range entities {
 		ids = append(ids, e.ID)
 	}
-	fetched, err := entityReader.GetBatch(ctx, ids)
+	// GetBatch is bounded to allowedNamespaces, so mention signal from outside
+	// the aperture is dropped at the query; no post-filter needed.
+	fetched, err := entityReader.GetBatch(ctx, ids, allowedNamespaces)
 	if err != nil {
 		return
 	}
-	allowed := namespaceSet(allowedNamespaces)
 	counts := make(map[uuid.UUID]int, len(fetched))
 	for _, ent := range fetched {
-		if _, ok := allowed[ent.NamespaceID]; !ok {
-			continue
-		}
 		counts[ent.ID] = ent.MentionCount
 	}
 	for i := range entities {

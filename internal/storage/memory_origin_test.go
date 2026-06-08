@@ -41,7 +41,7 @@ func TestMemoryRepo_Origin_RoundTrips(t *testing.T) {
 				if err := repo.Create(ctx, mem); err != nil {
 					t.Fatalf("create: %v", err)
 				}
-				fetched, err := repo.GetByID(ctx, mem.ID)
+				fetched, err := repo.GetByID(ctx, mem.ID, nsID)
 				if err != nil {
 					t.Fatalf("get: %v", err)
 				}
@@ -85,7 +85,7 @@ func TestMemoryRepo_Origin_SurvivesUpdate(t *testing.T) {
 		if mem.Origin != model.OriginDream {
 			t.Errorf("origin after update: want %q, got %q", model.OriginDream, mem.Origin)
 		}
-		fetched, err := repo.GetByID(ctx, mem.ID)
+		fetched, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}

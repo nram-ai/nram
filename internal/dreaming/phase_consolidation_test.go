@@ -191,7 +191,7 @@ func (w *updatingMemoryWriter) MarkSupersededBy(_ context.Context, oldID, namesp
 	})
 	return nil
 }
-func (w *updatingMemoryWriter) MutateInLock(_ context.Context, id uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
+func (w *updatingMemoryWriter) MutateInLock(_ context.Context, id uuid.UUID, _ uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
 	var current *model.Memory
 	for i := len(w.updates) - 1; i >= 0; i-- {
 		if w.updates[i].ID == id {

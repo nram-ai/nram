@@ -231,7 +231,7 @@ func TestEntityRepo_RecomputeMentionCounts(t *testing.T) {
 		}
 
 		assertCount := func(id uuid.UUID, name string, want int) {
-			e, err := f.erepo.GetByID(ctx, id)
+			e, err := f.erepo.GetByID(ctx, id, f.nsID)
 			if err != nil {
 				t.Fatalf("get entity %s: %v", name, err)
 			}

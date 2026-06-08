@@ -29,7 +29,7 @@ func (m *mockMemoryDeleter) HardDelete(_ context.Context, id uuid.UUID, _ uuid.U
 	return nil
 }
 
-func (m *mockMemoryDeleter) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryDeleter) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memories[id]
 	if !ok {
 		return nil, errNotFound

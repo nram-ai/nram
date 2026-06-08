@@ -101,7 +101,7 @@ func TestRelationshipRepo_Create_CanonicalizesRelation(t *testing.T) {
 		if rel.Relation != "related to" {
 			t.Errorf("in-memory relation = %q, want %q", rel.Relation, "related to")
 		}
-		got, err := repo.GetByID(ctx, rel.ID)
+		got, err := repo.GetByID(ctx, rel.ID, nsID)
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}

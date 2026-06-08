@@ -22,7 +22,7 @@ var ErrEmptyContent = errors.New("procedural content is required")
 // that absence is what guarantees procedural content stays verbatim.
 type ProceduralRepository interface {
 	Create(ctx context.Context, e *model.ProceduralEntry) error
-	GetByID(ctx context.Context, id uuid.UUID) (*model.ProceduralEntry, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.ProceduralEntry, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.ProceduralEntry, error)
 	Update(ctx context.Context, e *model.ProceduralEntry) error
 	Delete(ctx context.Context, id, namespaceID uuid.UUID) error
@@ -66,14 +66,9 @@ func (s *ProceduralService) FetchActive(ctx context.Context, namespaceID uuid.UU
 // Get returns a single entry scoped to the namespace. A foreign or missing
 // entry reads as sql.ErrNoRows (existence is not leaked across namespaces).
 func (s *ProceduralService) Get(ctx context.Context, id, namespaceID uuid.UUID) (*model.ProceduralEntry, error) {
-	e, err := s.repo.GetByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if e.NamespaceID != namespaceID {
-		return nil, sql.ErrNoRows
-	}
-	return e, nil
+	// The bounded read returns sql.ErrNoRows for a foreign or missing entry, so
+	// existence is not leaked across namespaces.
+	return s.repo.GetByID(ctx, id, namespaceID)
 }
 
 // Create persists a new entry. NamespaceID must already be set to the owning

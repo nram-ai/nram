@@ -33,7 +33,7 @@ func newMockMemoryReader() *mockMemoryReader {
 	return &mockMemoryReader{byID: make(map[uuid.UUID]*model.Memory)}
 }
 
-func (m *mockMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryReader) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
@@ -47,7 +47,7 @@ func (m *mockMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memo
 	return &cp, nil
 }
 
-func (m *mockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *mockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
@@ -157,7 +157,7 @@ func (m *mockMemoryUpdater) MarkSupersededBy(_ context.Context, oldID, namespace
 	return nil
 }
 
-func (m *mockMemoryUpdater) MutateInLock(ctx context.Context, id uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
+func (m *mockMemoryUpdater) MutateInLock(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
 	if m.reader == nil {
 		return nil, fmt.Errorf("mockMemoryUpdater.MutateInLock: no reader wired (set updater.reader in the test harness)")
 	}
@@ -180,7 +180,7 @@ func (m *mockMemoryUpdater) MutateInLock(ctx context.Context, id uuid.UUID, muta
 		}
 	}
 	if current == nil {
-		fresh, err := m.reader.GetByID(ctx, id)
+		fresh, err := m.reader.GetByID(ctx, id, namespaceID)
 		if err != nil {
 			return nil, err
 		}
@@ -1886,7 +1886,7 @@ func (s *statefulMemoryStore) put(mem *model.Memory) {
 	s.byID[mem.ID] = &cp
 }
 
-func (s *statefulMemoryStore) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (s *statefulMemoryStore) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	mem, ok := s.byID[id]
@@ -1899,7 +1899,7 @@ func (s *statefulMemoryStore) GetByID(_ context.Context, id uuid.UUID) (*model.M
 	return &cp, nil
 }
 
-func (s *statefulMemoryStore) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (s *statefulMemoryStore) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]model.Memory, 0, len(ids))
@@ -1934,13 +1934,13 @@ func (s *statefulMemoryStore) MarkSupersededBy(_ context.Context, _, _, _ uuid.U
 	return nil
 }
 
-func (s *statefulMemoryStore) MutateInLock(ctx context.Context, id uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
+func (s *statefulMemoryStore) MutateInLock(ctx context.Context, id uuid.UUID, namespaceID uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
 	mxAny, _ := s.idLocks.LoadOrStore(id, &sync.Mutex{})
 	mx := mxAny.(*sync.Mutex)
 	mx.Lock()
 	defer mx.Unlock()
 
-	fresh, err := s.GetByID(ctx, id)
+	fresh, err := s.GetByID(ctx, id, namespaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -2005,7 +2005,7 @@ func TestMergeTagsIntoParent_ConcurrentMergesAreSerialized(t *testing.T) {
 	}
 	wg.Wait()
 
-	got, err := store.GetByID(context.Background(), parent.ID)
+	got, err := store.GetByID(context.Background(), parent.ID, parent.NamespaceID)
 	if err != nil {
 		t.Fatalf("final read: %v", err)
 	}

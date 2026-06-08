@@ -18,7 +18,7 @@ import (
 // SupersedeReplacing atomically inserts a new memory row, marks the old row
 // superseded, and writes the supersedes lineage edge in one transaction.
 type MemoryUpdater interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error)
 	Update(ctx context.Context, mem *model.Memory) error
 	SupersedeReplacing(ctx context.Context, oldID uuid.UUID, newMem *model.Memory, lineage *model.MemoryLineage) error
 }
@@ -131,15 +131,11 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 		return nil, fmt.Errorf("project not found: %w", err)
 	}
 
-	// Get existing memory.
-	mem, err := s.memories.GetByID(ctx, req.MemoryID)
+	// Get existing memory, bounded to the project's namespace: a memory in
+	// another namespace reads as not-found rather than leaking existence.
+	mem, err := s.memories.GetByID(ctx, req.MemoryID, project.NamespaceID)
 	if err != nil {
 		return nil, fmt.Errorf("memory not found: %w", err)
-	}
-
-	// Verify memory belongs to the project's namespace.
-	if mem.NamespaceID != project.NamespaceID {
-		return nil, fmt.Errorf("memory does not belong to project namespace")
 	}
 
 	// Reject edits to a paraphrase-dedup or contradiction loser. Updating the

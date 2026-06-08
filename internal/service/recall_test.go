@@ -24,7 +24,7 @@ type mockMemoryReader struct {
 	batchErr error
 }
 
-func (m *mockMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryReader) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memories[id]
 	if !ok {
 		return nil, fmt.Errorf("not found")
@@ -32,7 +32,7 @@ func (m *mockMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memo
 	return mem, nil
 }
 
-func (m *mockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *mockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	if m.batchErr != nil {
 		return nil, m.batchErr
 	}
@@ -133,7 +133,7 @@ func (m *mockEntityReader) FindByAlias(_ context.Context, _ uuid.UUID, _ string)
 	return m.aliases, nil
 }
 
-func (m *mockEntityReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Entity, error) {
+func (m *mockEntityReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Entity, error) {
 	if m.getBatchErr != nil {
 		return nil, m.getBatchErr
 	}
@@ -165,12 +165,24 @@ type mockRelTraverser struct {
 	maxEdgesByCall []int
 }
 
-func (m *mockRelTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, _, maxEdges int) (storage.TraversalResult, error) {
+func (m *mockRelTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, namespaces []uuid.UUID, _, maxEdges int) (storage.TraversalResult, error) {
 	m.maxEdgesByCall = append(m.maxEdgesByCall, maxEdges)
 	if m.err != nil {
 		return storage.TraversalResult{}, m.err
 	}
-	return storage.TraversalResult{Relationships: m.rels}, nil
+	// Mirror the real bounded primitive: only return edges in the passed
+	// namespaces, so the recall aperture is enforced at the traverser.
+	allowed := make(map[uuid.UUID]bool, len(namespaces))
+	for _, ns := range namespaces {
+		allowed[ns] = true
+	}
+	var out []model.Relationship
+	for _, r := range m.rels {
+		if allowed[r.NamespaceID] {
+			out = append(out, r)
+		}
+	}
+	return storage.TraversalResult{Relationships: out}, nil
 }
 
 // --- Recall test helpers ---

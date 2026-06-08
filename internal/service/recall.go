@@ -23,8 +23,8 @@ import (
 
 // MemoryReader provides read access to stored memories.
 type MemoryReader interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
-	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error)
+	GetBatch(ctx context.Context, ids, namespaces []uuid.UUID) ([]model.Memory, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID, limit, offset int) ([]model.Memory, error)
 	ListByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
 }
@@ -63,13 +63,13 @@ type EntityReader interface {
 	// activation in recall's graph block surfaces entity IDs from the vector
 	// store and needs their name/type to populate the response graph and seed
 	// traversal. Missing IDs are silently dropped; order is not preserved.
-	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Entity, error)
+	GetBatch(ctx context.Context, ids, namespaces []uuid.UUID) ([]model.Entity, error)
 }
 
 // RelationshipTraverser provides graph traversal from entities. maxEdges <= 0
 // disables the short-circuit cap.
 type RelationshipTraverser interface {
-	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
+	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, namespaces []uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
 }
 
 // RecallRequest contains all parameters needed to recall memories.
@@ -730,7 +730,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 					ids = append(ids, id)
 				}
 				if len(ids) > 0 {
-					memories, err := s.memories.GetBatch(ctx, ids)
+					memories, err := s.memories.GetBatch(ctx, ids, searchNamespaces)
 					if err == nil {
 						for _, mem := range memories {
 							sim := simMap[mem.ID]
@@ -937,7 +937,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				if len(ids) == 0 {
 					continue
 				}
-				ents, err := s.entityReader.GetBatch(ctx, ids)
+				ents, err := s.entityReader.GetBatch(ctx, ids, []uuid.UUID{nsID})
 				if err != nil {
 					continue // fail-soft: skip this namespace, keep lexical hits
 				}
@@ -972,36 +972,24 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				perSeed = max(1, ceilDiv(recallMaxEdges, len(foundEntities)))
 			}
 
-			// Aperture bound (defense-in-depth): constrain the graph output to the
-			// recall aperture (searchNamespaces) so foreign-namespace entities,
-			// relationships, and their source memories can never surface, even if
-			// a cross-namespace edge is ever created (the traversal query itself is
-			// not namespace-scoped; see relationship_repo ListByEntity). For a
-			// share-bearer the aperture is the single granted project; for an owner
-			// it is [project, global, about_me], so legitimate cross-tier graph is
-			// unaffected.
-			apertureSet := make(map[uuid.UUID]bool, len(searchNamespaces))
-			for _, ns := range searchNamespaces {
-				apertureSet[ns] = true
-			}
-
+			// The aperture bound now lives in the storage primitive: seeds come
+			// from namespace-scoped entity activation (lexical SearchEntities and
+			// the per-namespace vector channel above), and TraverseFromEntity is
+			// passed searchNamespaces so it can never return a foreign-namespace
+			// edge. searchNamespaces is the recall aperture: a single granted
+			// project for a share-bearer, or [project, global, about_me] for an
+			// owner, so legitimate cross-tier graph is unaffected.
 		recallSeeds:
 			for _, ent := range foundEntities {
-				if !apertureSet[ent.NamespaceID] {
-					continue // never expose or traverse a foreign-namespace seed
-				}
 				graphEntities = append(graphEntities, RecallEntity{
 					ID:         ent.ID,
 					Name:       ent.Name,
 					EntityType: ent.EntityType,
 				})
 
-				tr, err := s.traverser.TraverseFromEntity(ctx, ent.ID, graphDepth, perSeed)
+				tr, err := s.traverser.TraverseFromEntity(ctx, ent.ID, searchNamespaces, graphDepth, perSeed)
 				if err == nil {
 					for _, rel := range tr.Relationships {
-						if !apertureSet[rel.NamespaceID] {
-							continue // never expose or boost a foreign-namespace edge
-						}
 						if _, seen := seenRels[rel.ID]; !seen {
 							seenRels[rel.ID] = struct{}{}
 							graphRelationships = append(graphRelationships, RecallRelationship{

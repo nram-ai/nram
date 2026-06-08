@@ -13,7 +13,7 @@ import (
 // the source row so its content/tags/source/metadata/importance can be re-stored
 // in the destination project.
 type MemoryByIDReader interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error)
 }
 
 // StoreServicer is the subset of *StoreService the move path needs. Declared as
@@ -117,17 +117,14 @@ func (s *MoveService) Move(ctx context.Context, req *MoveRequest) (*MoveResponse
 	resp := &MoveResponse{Results: make([]MoveResult, 0, len(req.MemoryIDs))}
 
 	for _, id := range req.MemoryIDs {
-		mem, err := s.memories.GetByID(ctx, id)
-		if err != nil {
-			// Not found / unreadable: skip this ID rather than abort the batch.
-			continue
-		}
-
-		// Ownership guard: the memory must live in the source project's
-		// namespace. Mirrors the ForgetService guard so a body-supplied ID
+		// Bounded read enforces the ownership guard: a memory outside the source
+		// project's namespace reads as sql.ErrNoRows, so a body-supplied id
 		// cannot relocate a memory out of a project the caller named but does
-		// not actually contain it.
-		if mem.NamespaceID != srcProject.NamespaceID {
+		// not actually contain.
+		mem, err := s.memories.GetByID(ctx, id, srcProject.NamespaceID)
+		if err != nil {
+			// Not found / unreadable / not in source namespace: skip this ID
+			// rather than abort the batch.
 			continue
 		}
 

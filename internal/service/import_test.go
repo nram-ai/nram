@@ -31,7 +31,7 @@ func (m *mockMemoryRepoForImport) Create(_ context.Context, mem *model.Memory) e
 	return nil
 }
 
-func (m *mockMemoryRepoForImport) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryRepoForImport) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	for _, mem := range m.created {
 		if mem.ID == id {
 			return mem, nil

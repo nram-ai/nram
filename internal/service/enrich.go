@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,7 +45,7 @@ type LineageQuerier interface {
 // Kept as a tiny interface so the backfill code path can be wired without
 // touching the broad MemoryReader interface, which has many implementors.
 type AugmentationCandidateLister interface {
-	ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error)
+	ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 }
 
 // ParaphraseCandidateLister returns the IDs of enriched parent memories with
@@ -55,7 +54,7 @@ type AugmentationCandidateLister interface {
 // children should be swept for paraphrase suppression. Same tiny-interface
 // pattern as AugmentationCandidateLister.
 type ParaphraseCandidateLister interface {
-	ListEnrichedParentsWithExtractedChildren(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error)
+	ListEnrichedParentsWithExtractedChildren(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 }
 
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.
@@ -158,19 +157,11 @@ func (s *EnrichService) BackfillExtractedFactParaphrase(ctx context.Context, req
 	}
 
 	now := time.Now()
-	skipped := 0
-	for _, id := range candidates {
-		mem, err := s.memories.GetByID(ctx, id)
-		if err != nil {
-			slog.Warn("paraphrase backfill: candidate skipped",
-				"memory", id, "err", err)
-			skipped++
-			continue
-		}
+	for _, cand := range candidates {
 		job := &model.EnrichmentJob{
 			ID:             uuid.New(),
-			MemoryID:       mem.ID,
-			NamespaceID:    mem.NamespaceID,
+			MemoryID:       cand.ID,
+			NamespaceID:    cand.NamespaceID,
 			Status:         model.EnrichmentStatusPending,
 			Priority:       0,
 			Attempts:       0,
@@ -181,17 +172,11 @@ func (s *EnrichService) BackfillExtractedFactParaphrase(ctx context.Context, req
 		}
 		inserted, err := s.enrichmentQueue.Enqueue(ctx, job)
 		if err != nil {
-			return nil, fmt.Errorf("enqueue paraphrase backfill for memory %s: %w", mem.ID, err)
+			return nil, fmt.Errorf("enqueue paraphrase backfill for memory %s: %w", cand.ID, err)
 		}
 		if inserted {
 			resp.Enqueued++
 		}
-	}
-	if skipped > 0 {
-		slog.Warn("paraphrase backfill: completed with skipped candidates",
-			"candidate_count", resp.CandidateCount,
-			"enqueued", resp.Enqueued,
-			"skipped", skipped)
 	}
 	resp.LatencyMs = time.Since(start).Milliseconds()
 	return resp, nil
@@ -255,25 +240,15 @@ func (s *EnrichService) BackfillAugmentation(ctx context.Context, req *BackfillA
 		return resp, nil
 	}
 
-	// Pull each candidate to learn its namespace; the lister already filters
-	// to live, non-superseded rows, so any GetByID miss here is an unexpected
-	// race and we log+skip rather than fail the whole batch. The skip is
-	// surfaced via slog.Warn so an operator who sees CandidateCount > Enqueued
-	// can find the dropped IDs in the worker log instead of guessing.
+	// The lister returns each candidate's namespace, so the job can be
+	// enqueued directly without a per-id read (which would have to cross
+	// namespaces for the whole-deployment admin sweep).
 	now := time.Now()
-	skipped := 0
-	for _, id := range candidates {
-		mem, err := s.memories.GetByID(ctx, id)
-		if err != nil {
-			slog.Warn("backfill: candidate skipped",
-				"memory", id, "err", err)
-			skipped++
-			continue
-		}
+	for _, cand := range candidates {
 		job := &model.EnrichmentJob{
 			ID:          uuid.New(),
-			MemoryID:    mem.ID,
-			NamespaceID: mem.NamespaceID,
+			MemoryID:    cand.ID,
+			NamespaceID: cand.NamespaceID,
 			Status:      "pending",
 			Priority:    0,
 			Attempts:    0,
@@ -283,17 +258,11 @@ func (s *EnrichService) BackfillAugmentation(ctx context.Context, req *BackfillA
 		}
 		inserted, err := s.enrichmentQueue.Enqueue(ctx, job)
 		if err != nil {
-			return nil, fmt.Errorf("enqueue augmentation backfill for memory %s: %w", mem.ID, err)
+			return nil, fmt.Errorf("enqueue augmentation backfill for memory %s: %w", cand.ID, err)
 		}
 		if inserted {
 			resp.Enqueued++
 		}
-	}
-	if skipped > 0 {
-		slog.Warn("backfill: completed with skipped candidates",
-			"candidate_count", resp.CandidateCount,
-			"enqueued", resp.Enqueued,
-			"skipped", skipped)
 	}
 	resp.LatencyMs = time.Since(start).Milliseconds()
 	return resp, nil
@@ -324,16 +293,13 @@ func (s *EnrichService) Enrich(ctx context.Context, req *EnrichRequest) (*Enrich
 	var memories []model.Memory
 
 	if len(req.MemoryIDs) > 0 {
-		// Fetch specific memories.
-		batch, err := s.memories.GetBatch(ctx, req.MemoryIDs)
+		// Fetch specific memories, bounded to the project's namespace by the
+		// query itself (GetBatch drops ids outside the namespace).
+		batch, err := s.memories.GetBatch(ctx, req.MemoryIDs, []uuid.UUID{namespaceID})
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch memories: %w", err)
 		}
-		// Filter to only memories in the project's namespace.
 		for _, mem := range batch {
-			if mem.NamespaceID != namespaceID {
-				continue
-			}
 			if mem.SupersededBy != nil && !req.IncludeSuperseded {
 				continue
 			}

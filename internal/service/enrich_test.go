@@ -19,7 +19,7 @@ type enrichMemoryReader struct {
 	nsList   []model.Memory
 }
 
-func (m *enrichMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *enrichMemoryReader) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memories[id]
 	if !ok {
 		return nil, fmt.Errorf("not found")
@@ -27,10 +27,14 @@ func (m *enrichMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Me
 	return mem, nil
 }
 
-func (m *enrichMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *enrichMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID, namespaces []uuid.UUID) ([]model.Memory, error) {
+	allowed := make(map[uuid.UUID]bool, len(namespaces))
+	for _, ns := range namespaces {
+		allowed[ns] = true
+	}
 	var result []model.Memory
 	for _, id := range ids {
-		if mem, ok := m.memories[id]; ok {
+		if mem, ok := m.memories[id]; ok && allowed[mem.NamespaceID] {
 			result = append(result, *mem)
 		}
 	}
@@ -467,8 +471,12 @@ type stubAugLister struct {
 	ids []uuid.UUID
 }
 
-func (s *stubAugLister) ListAugmentationBackfillCandidates(_ context.Context, _ []uuid.UUID, _ int) ([]uuid.UUID, error) {
-	return s.ids, nil
+func (s *stubAugLister) ListAugmentationBackfillCandidates(_ context.Context, _ []uuid.UUID, _ int) ([]storage.BackfillCandidate, error) {
+	cands := make([]storage.BackfillCandidate, len(s.ids))
+	for i, id := range s.ids {
+		cands[i] = storage.BackfillCandidate{ID: id}
+	}
+	return cands, nil
 }
 
 func TestBackfillAugmentation_DryRunDoesNotEnqueue(t *testing.T) {
@@ -546,8 +554,12 @@ type stubParaphraseLister struct {
 	ids []uuid.UUID
 }
 
-func (s *stubParaphraseLister) ListEnrichedParentsWithExtractedChildren(_ context.Context, _ []uuid.UUID, _ int) ([]uuid.UUID, error) {
-	return s.ids, nil
+func (s *stubParaphraseLister) ListEnrichedParentsWithExtractedChildren(_ context.Context, _ []uuid.UUID, _ int) ([]storage.BackfillCandidate, error) {
+	cands := make([]storage.BackfillCandidate, len(s.ids))
+	for i, id := range s.ids {
+		cands[i] = storage.BackfillCandidate{ID: id}
+	}
+	return cands, nil
 }
 
 func TestBackfillExtractedFactParaphrase_DryRunDoesNotEnqueue(t *testing.T) {

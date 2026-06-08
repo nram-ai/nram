@@ -36,7 +36,7 @@ func TestProceduralRepo_CreateAndGet(t *testing.T) {
 			t.Fatalf("expected origin %q, got %q", model.OriginUser, e.Origin)
 		}
 
-		got, err := repo.GetByID(ctx, e.ID)
+		got, err := repo.GetByID(ctx, e.ID, user.NamespaceID)
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}
@@ -106,7 +106,7 @@ func TestProceduralRepo_UpdateAndDelete(t *testing.T) {
 		if err := repo.Update(ctx, e); err != nil {
 			t.Fatalf("update: %v", err)
 		}
-		got, err := repo.GetByID(ctx, e.ID)
+		got, err := repo.GetByID(ctx, e.ID, user.NamespaceID)
 		if err != nil {
 			t.Fatalf("get after update: %v", err)
 		}
@@ -121,7 +121,7 @@ func TestProceduralRepo_UpdateAndDelete(t *testing.T) {
 		if err := repo.Delete(ctx, e.ID, user.NamespaceID); err != nil {
 			t.Fatalf("delete: %v", err)
 		}
-		if _, err := repo.GetByID(ctx, e.ID); !errors.Is(err, sql.ErrNoRows) {
+		if _, err := repo.GetByID(ctx, e.ID, user.NamespaceID); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected ErrNoRows after delete, got %v", err)
 		}
 

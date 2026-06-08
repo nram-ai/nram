@@ -33,9 +33,9 @@ func (m *memProceduralRepo) Create(_ context.Context, e *model.ProceduralEntry) 
 	return nil
 }
 
-func (m *memProceduralRepo) GetByID(_ context.Context, id uuid.UUID) (*model.ProceduralEntry, error) {
+func (m *memProceduralRepo) GetByID(_ context.Context, id uuid.UUID, namespaceID uuid.UUID) (*model.ProceduralEntry, error) {
 	e, ok := m.rows[id]
-	if !ok {
+	if !ok || e.NamespaceID != namespaceID {
 		return nil, sql.ErrNoRows
 	}
 	cp := *e

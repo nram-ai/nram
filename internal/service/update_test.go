@@ -32,12 +32,12 @@ type supersedeCall struct {
 	lineage *model.MemoryLineage
 }
 
-func (m *mockMemoryUpdater) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryUpdater) GetByID(_ context.Context, id uuid.UUID, namespaceID uuid.UUID) (*model.Memory, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
 	mem, ok := m.memories[id]
-	if !ok {
+	if !ok || mem.NamespaceID != namespaceID {
 		return nil, fmt.Errorf("not found")
 	}
 	// Return a copy to avoid test aliasing issues.

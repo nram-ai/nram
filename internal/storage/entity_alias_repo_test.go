@@ -281,7 +281,7 @@ func TestEntityAliasRepo_ListByEntity(t *testing.T) {
 			}
 		}
 
-		results, err := repo.ListByEntity(ctx, entity.ID)
+		results, err := repo.ListByEntity(ctx, entity.ID, []uuid.UUID{nsID})
 		if err != nil {
 			t.Fatalf("failed to list by entity: %v", err)
 		}
@@ -303,7 +303,7 @@ func TestEntityAliasRepo_ListByEntity_Empty(t *testing.T) {
 		ctx := context.Background()
 		repo := NewEntityAliasRepo(db)
 
-		results, err := repo.ListByEntity(ctx, uuid.New())
+		results, err := repo.ListByEntity(ctx, uuid.New(), []uuid.UUID{uuid.New()})
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -334,7 +334,7 @@ func TestEntityAliasRepo_ListByEntity_Isolation(t *testing.T) {
 		}
 
 		// List entity1 should only see its aliases
-		results, err := repo.ListByEntity(ctx, entity1.ID)
+		results, err := repo.ListByEntity(ctx, entity1.ID, []uuid.UUID{nsID})
 		if err != nil {
 			t.Fatalf("failed to list: %v", err)
 		}
@@ -346,7 +346,7 @@ func TestEntityAliasRepo_ListByEntity_Isolation(t *testing.T) {
 		}
 
 		// List entity2 should only see its aliases
-		results, err = repo.ListByEntity(ctx, entity2.ID)
+		results, err = repo.ListByEntity(ctx, entity2.ID, []uuid.UUID{nsID})
 		if err != nil {
 			t.Fatalf("failed to list: %v", err)
 		}
@@ -389,7 +389,7 @@ func TestEntityAliasRepo_Create_IdempotentOnDuplicate(t *testing.T) {
 			t.Fatalf("duplicate create must not error: %v", err)
 		}
 
-		results, err := repo.ListByEntity(ctx, entity.ID)
+		results, err := repo.ListByEntity(ctx, entity.ID, []uuid.UUID{nsID})
 		if err != nil {
 			t.Fatalf("list aliases: %v", err)
 		}

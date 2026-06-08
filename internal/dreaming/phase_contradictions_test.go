@@ -663,7 +663,7 @@ type mutableMemoryStore struct {
 // confirm the phase actually wrote anything during the drain.
 func (m *mutableMemoryStore) updateCount() int { return m.updates + m.metadataUpdates }
 
-func (m *mutableMemoryStore) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mutableMemoryStore) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	for i := range m.memories {
 		if m.memories[i].ID == id {
 			return &m.memories[i], nil
@@ -671,7 +671,7 @@ func (m *mutableMemoryStore) GetByID(_ context.Context, id uuid.UUID) (*model.Me
 	}
 	return nil, errors.New("not found")
 }
-func (m *mutableMemoryStore) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *mutableMemoryStore) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	want := map[uuid.UUID]struct{}{}
 	for _, id := range ids {
 		want[id] = struct{}{}
@@ -834,7 +834,7 @@ func (m *mutableMemoryStore) MarkSupersededBy(_ context.Context, oldID, _, newID
 	return errors.New("not found")
 }
 
-func (m *mutableMemoryStore) MutateInLock(_ context.Context, id uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
+func (m *mutableMemoryStore) MutateInLock(_ context.Context, id uuid.UUID, _ uuid.UUID, mutate func(*model.Memory) (bool, error)) (*model.Memory, error) {
 	for i := range m.memories {
 		if m.memories[i].ID == id {
 			fresh := m.memories[i]

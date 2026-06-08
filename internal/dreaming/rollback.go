@@ -137,13 +137,13 @@ func (s *RollbackService) reverseOperation(ctx context.Context, namespaceID uuid
 		return s.restoreMemory(ctx, entry.BeforeState)
 
 	case model.DreamOpMemorySuperseded, model.DreamOpConfidenceAdjusted:
-		return s.restoreMemoryFields(ctx, entry.TargetID, entry.BeforeState)
+		return s.restoreMemoryFields(ctx, entry.TargetID, namespaceID, entry.BeforeState)
 
 	case model.DreamOpEntityMerged:
-		return s.reverseEntityMerge(ctx, entry)
+		return s.reverseEntityMerge(ctx, namespaceID, entry)
 
 	case model.DreamOpEntityUpdated:
-		return s.reverseEntityUpdate(ctx, entry)
+		return s.reverseEntityUpdate(ctx, namespaceID, entry)
 
 	case model.DreamOpContradictionDetected:
 		// Contradiction detection creates lineage entries but doesn't
@@ -157,7 +157,7 @@ func (s *RollbackService) reverseOperation(ctx context.Context, namespaceID uuid
 
 // reverseEntityMerge restores a consumed entity from its before_state snapshot.
 // before_state = the consumed entity, after_state = the primary entity.
-func (s *RollbackService) reverseEntityMerge(ctx context.Context, entry *model.DreamLog) error {
+func (s *RollbackService) reverseEntityMerge(ctx context.Context, namespaceID uuid.UUID, entry *model.DreamLog) error {
 	var consumed model.Entity
 	if err := json.Unmarshal(entry.BeforeState, &consumed); err != nil {
 		return fmt.Errorf("unmarshal consumed entity: %w", err)
@@ -175,7 +175,7 @@ func (s *RollbackService) reverseEntityMerge(ctx context.Context, entry *model.D
 	}
 
 	// Read current state of primary to avoid overwriting other changes.
-	currentPrimary, err := s.entityReader.GetByID(ctx, primary.ID)
+	currentPrimary, err := s.entityReader.GetByID(ctx, primary.ID, namespaceID)
 	if err != nil {
 		return fmt.Errorf("read primary entity: %w", err)
 	}
@@ -209,7 +209,7 @@ func parseRelationshipBeforeWeight(beforeState json.RawMessage) (float64, error)
 
 // reverseEntityUpdate restores an entity's mention count from before_state.
 // before_state = {"mention_count": <old_count>}
-func (s *RollbackService) reverseEntityUpdate(ctx context.Context, entry *model.DreamLog) error {
+func (s *RollbackService) reverseEntityUpdate(ctx context.Context, namespaceID uuid.UUID, entry *model.DreamLog) error {
 	var fields map[string]any
 	if err := json.Unmarshal(entry.BeforeState, &fields); err != nil {
 		return fmt.Errorf("unmarshal entity before state: %w", err)
@@ -226,7 +226,7 @@ func (s *RollbackService) reverseEntityUpdate(ctx context.Context, entry *model.
 	}
 
 	// Read the current entity, set the old mention count, and upsert.
-	entity, err := s.entityReader.GetByID(ctx, entry.TargetID)
+	entity, err := s.entityReader.GetByID(ctx, entry.TargetID, namespaceID)
 	if err != nil {
 		return fmt.Errorf("read entity for rollback: %w", err)
 	}
@@ -247,8 +247,8 @@ func (s *RollbackService) restoreMemory(ctx context.Context, beforeState json.Ra
 	return s.memWriter.Create(ctx, &mem)
 }
 
-func (s *RollbackService) restoreMemoryFields(ctx context.Context, memID uuid.UUID, beforeState json.RawMessage) error {
-	mem, err := s.memories.GetByID(ctx, memID)
+func (s *RollbackService) restoreMemoryFields(ctx context.Context, memID, namespaceID uuid.UUID, beforeState json.RawMessage) error {
+	mem, err := s.memories.GetByID(ctx, memID, namespaceID)
 	if err != nil {
 		return fmt.Errorf("get memory for restore: %w", err)
 	}

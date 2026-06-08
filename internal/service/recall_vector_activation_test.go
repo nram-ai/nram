@@ -232,7 +232,7 @@ type traverseCall struct {
 	maxEdges int
 }
 
-func (t *perEntityTraverser) TraverseFromEntity(_ context.Context, entityID uuid.UUID, _, maxEdges int) (storage.TraversalResult, error) {
+func (t *perEntityTraverser) TraverseFromEntity(_ context.Context, entityID uuid.UUID, _ []uuid.UUID, _, maxEdges int) (storage.TraversalResult, error) {
 	t.calls = append(t.calls, traverseCall{entity: entityID, maxEdges: maxEdges})
 	rels := t.relsByEntity[entityID]
 	if maxEdges > 0 && len(rels) > maxEdges {

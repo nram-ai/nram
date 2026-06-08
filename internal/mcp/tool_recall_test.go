@@ -35,11 +35,11 @@ func newMockRecallSvc() *service.RecallService {
 
 type mockMemoryReaderRecall struct{}
 
-func (m *mockMemoryReaderRecall) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryReaderRecall) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	return &model.Memory{ID: id}, nil
 }
 
-func (m *mockMemoryReaderRecall) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *mockMemoryReaderRecall) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	var mems []model.Memory
 	for _, id := range ids {
 		mems = append(mems, model.Memory{ID: id})

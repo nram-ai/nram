@@ -19,7 +19,7 @@ type mockExportMemoryReader struct {
 	memories map[uuid.UUID][]model.Memory // keyed by namespaceID
 }
 
-func (m *mockExportMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockExportMemoryReader) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	for _, mems := range m.memories {
 		for i := range mems {
 			if mems[i].ID == id {
@@ -30,7 +30,7 @@ func (m *mockExportMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*mode
 	return nil, fmt.Errorf("memory not found")
 }
 
-func (m *mockExportMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *mockExportMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	var result []model.Memory
 	idSet := make(map[uuid.UUID]struct{}, len(ids))
 	for _, id := range ids {
@@ -86,8 +86,19 @@ type mockRelationshipLister struct {
 	relationships map[uuid.UUID][]model.Relationship // keyed by entityID
 }
 
-func (m *mockRelationshipLister) ListByEntity(_ context.Context, entityID uuid.UUID) ([]model.Relationship, error) {
-	return m.relationships[entityID], nil
+func (m *mockRelationshipLister) ListByEntity(_ context.Context, entityID uuid.UUID, namespaces []uuid.UUID) ([]model.Relationship, error) {
+	// Mirror the real bounded primitive: only edges in the passed namespaces.
+	allowed := make(map[uuid.UUID]bool, len(namespaces))
+	for _, ns := range namespaces {
+		allowed[ns] = true
+	}
+	var out []model.Relationship
+	for _, r := range m.relationships[entityID] {
+		if allowed[r.NamespaceID] {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 type mockLineageReader struct {
@@ -218,27 +229,29 @@ func newExportTestFixtures() (
 		relationships: map[uuid.UUID][]model.Relationship{
 			ent1ID: {
 				{
-					ID:         rel1ID,
-					SourceID:   ent1ID,
-					TargetID:   ent2ID,
-					Relation:   "works_at",
-					Weight:     0.9,
-					ValidFrom:  now,
-					ValidUntil: nil,
-					CreatedAt:  now,
+					ID:          rel1ID,
+					NamespaceID: nsID,
+					SourceID:    ent1ID,
+					TargetID:    ent2ID,
+					Relation:    "works_at",
+					Weight:      0.9,
+					ValidFrom:   now,
+					ValidUntil:  nil,
+					CreatedAt:   now,
 				},
 			},
 			ent2ID: {
 				// Same relationship returned from the other side.
 				{
-					ID:         rel1ID,
-					SourceID:   ent1ID,
-					TargetID:   ent2ID,
-					Relation:   "works_at",
-					Weight:     0.9,
-					ValidFrom:  now,
-					ValidUntil: nil,
-					CreatedAt:  now,
+					ID:          rel1ID,
+					NamespaceID: nsID,
+					SourceID:    ent1ID,
+					TargetID:    ent2ID,
+					Relation:    "works_at",
+					Weight:      0.9,
+					ValidFrom:   now,
+					ValidUntil:  nil,
+					CreatedAt:   now,
 				},
 			},
 		},
@@ -259,6 +272,54 @@ func newExportTestFixtures() (
 	}
 
 	return projectID, nsID, mem1ID, mem2ID, ent1ID, ent2ID, rel1ID, projects, memories, entities, relationships, lineageReader
+}
+
+// TestExport_ExcludesForeignNamespaceEdges is the regression test for the export
+// leak: an in-scope entity is referenced by an edge in another namespace, and the
+// export must contain only the project's own edges (the bounded ListByEntity
+// drops the foreign one).
+func TestExport_ExcludesForeignNamespaceEdges(t *testing.T) {
+	projectID := uuid.New()
+	nsID := uuid.New()
+	otherNS := uuid.New()
+	ent1 := uuid.New()
+	localRel := uuid.New()
+	foreignRel := uuid.New()
+	now := time.Now()
+
+	projects := &mockExportProjectRepo{projects: map[uuid.UUID]*model.Project{
+		projectID: {ID: projectID, NamespaceID: nsID, Name: "P", Slug: "p"},
+	}}
+	memories := &mockExportMemoryReader{memories: map[uuid.UUID][]model.Memory{}}
+	entities := &mockEntityLister{entities: map[uuid.UUID][]model.Entity{
+		nsID: {{ID: ent1, NamespaceID: nsID, Name: "Shared", EntityType: "concept"}},
+	}}
+	relationships := &mockRelationshipLister{relationships: map[uuid.UUID][]model.Relationship{
+		ent1: {
+			{ID: localRel, NamespaceID: nsID, SourceID: ent1, TargetID: uuid.New(), Relation: "in_scope", Weight: 1, ValidFrom: now, CreatedAt: now},
+			{ID: foreignRel, NamespaceID: otherNS, SourceID: ent1, TargetID: uuid.New(), Relation: "leaked", Weight: 1, ValidFrom: now, CreatedAt: now},
+		},
+	}}
+	lineage := &mockLineageReader{lineage: map[uuid.UUID][]model.MemoryLineage{}}
+
+	svc := NewExportService(memories, entities, relationships, lineage, projects, nil)
+	data, err := svc.Export(context.Background(), &ExportRequest{ProjectID: projectID, Format: ExportFormatJSON})
+	if err != nil {
+		t.Fatalf("Export failed: %v", err)
+	}
+
+	foundLocal := false
+	for _, r := range data.Relationships {
+		if r.ID == foreignRel {
+			t.Fatalf("export leaked a foreign-namespace relationship %s", foreignRel)
+		}
+		if r.ID == localRel {
+			foundLocal = true
+		}
+	}
+	if !foundLocal {
+		t.Fatalf("export dropped the in-scope relationship %s", localRel)
+	}
 }
 
 func TestExport_JSONFormat_WithData(t *testing.T) {

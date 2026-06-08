@@ -273,7 +273,7 @@ func (d *Deduplicator) FindNearMatches(
 		for i, r := range kept {
 			ids[i] = r.ID
 		}
-		mems, err := d.memories.GetBatch(ctx, ids)
+		mems, err := d.memories.GetBatch(ctx, ids, []uuid.UUID{namespaceID})
 		if err != nil {
 			return nil, fmt.Errorf("dedup: hydrate matches: %w", err)
 		}

@@ -163,7 +163,7 @@ func TestEntityRepo_GetByID(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, entity.ID)
+		fetched, err := repo.GetByID(ctx, entity.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get by id: %v", err)
 		}
@@ -185,7 +185,7 @@ func TestEntityRepo_GetByID_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewEntityRepo(db)
 
-		_, err := repo.GetByID(ctx, uuid.New())
+		_, err := repo.GetByID(ctx, uuid.New(), uuid.New())
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}
@@ -683,7 +683,7 @@ func TestEntityRepo_Create_WithEmbeddingDim(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, entity.ID)
+		fetched, err := repo.GetByID(ctx, entity.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get: %v", err)
 		}
@@ -801,7 +801,7 @@ func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
 		}
 
 		// Stub must be gone.
-		if _, err := repo.GetByID(ctx, stub.ID); err == nil {
+		if _, err := repo.GetByID(ctx, stub.ID, nsID); err == nil {
 			t.Errorf("expected stub %s deleted after promote, still exists", stub.ID)
 		}
 
@@ -862,7 +862,7 @@ func TestEntityRepo_Upsert_PromoteStub_MergesConflicts(t *testing.T) {
 		}
 
 		// Aliases on real: "Apple" (deduped) + "AAPL" (migrated). Exactly 2.
-		aliases, err := aliasRepo.ListByEntity(ctx, real.ID)
+		aliases, err := aliasRepo.ListByEntity(ctx, real.ID, []uuid.UUID{nsID})
 		if err != nil {
 			t.Fatalf("list real aliases: %v", err)
 		}
@@ -1040,7 +1040,7 @@ func TestEntityRepo_DeleteOrphaned_ReturnsIDsAndCascadesAliases(t *testing.T) {
 			t.Fatalf("expected returned IDs to include %s, got %v", entityID, ids)
 		}
 
-		if _, err := repo.GetByID(ctx, entityID); err == nil {
+		if _, err := repo.GetByID(ctx, entityID, nsID); err == nil {
 			t.Errorf("entity %s still exists after orphan sweep", entityID)
 		}
 
@@ -1092,10 +1092,10 @@ func TestEntityRepo_DeleteOrphaned_SkipsEntitiesWithRelationships(t *testing.T) 
 			}
 		}
 
-		if _, err := repo.GetByID(ctx, srcID); err != nil {
+		if _, err := repo.GetByID(ctx, srcID, nsID); err != nil {
 			t.Errorf("source entity unexpectedly deleted: %v", err)
 		}
-		if _, err := repo.GetByID(ctx, tgtID); err != nil {
+		if _, err := repo.GetByID(ctx, tgtID, nsID); err != nil {
 			t.Errorf("target entity unexpectedly deleted: %v", err)
 		}
 	})

@@ -69,9 +69,17 @@ func (m *mockMemoryLister) ListIDsByNamespaceFiltered(ctx context.Context, nsID 
 	return nil, nil
 }
 
-func (m *mockMemoryLister) GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryLister) GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error) {
 	if m.getFn != nil {
-		return m.getFn(ctx, id)
+		mem, err := m.getFn(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		// Mirror the bounded primitive: a row outside namespaceID is not found.
+		if mem.NamespaceID != namespaceID {
+			return nil, sql.ErrNoRows
+		}
+		return mem, nil
 	}
 	return nil, sql.ErrNoRows
 }

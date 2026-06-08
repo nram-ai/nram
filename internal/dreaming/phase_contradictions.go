@@ -334,7 +334,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		// haircuts on the same memory could read the same baseline and one
 		// of the factors would be silently dropped by the second writer.
 		applyHaircut := func(mem *model.Memory, factor float64, supersededBy *uuid.UUID) {
-			fresh, err := p.memWriter.MutateInLock(ctx, mem.ID, func(row *model.Memory) (bool, error) {
+			fresh, err := p.memWriter.MutateInLock(ctx, mem.ID, mem.NamespaceID, func(row *model.Memory) (bool, error) {
 				row.Confidence = math.Max(0.0, row.Confidence*factor)
 				row.UpdatedAt = now
 				if supersededBy != nil {

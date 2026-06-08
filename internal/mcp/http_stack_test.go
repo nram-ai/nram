@@ -186,7 +186,7 @@ type memRepoListAdapter struct {
 	memRepo *mockMemoryRepoWithContent
 }
 
-func (m *memRepoListAdapter) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *memRepoListAdapter) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memRepo.memories[id]
 	if !ok {
 		return nil, fmt.Errorf("not found")
@@ -194,7 +194,7 @@ func (m *memRepoListAdapter) GetByID(_ context.Context, id uuid.UUID) (*model.Me
 	return mem, nil
 }
 
-func (m *memRepoListAdapter) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *memRepoListAdapter) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	var out []model.Memory
 	for _, id := range ids {
 		if mem, ok := m.memRepo.memories[id]; ok {
@@ -224,7 +224,7 @@ type memRepoUpdater struct {
 	memRepo *mockMemoryRepoWithContent
 }
 
-func (m *memRepoUpdater) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *memRepoUpdater) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memRepo.memories[id]
 	if !ok {
 		return nil, fmt.Errorf("not found")
@@ -1267,7 +1267,7 @@ func (m *nsAwareMemoryRepo) Create(_ context.Context, mem *model.Memory) error {
 	return nil
 }
 
-func (m *nsAwareMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *nsAwareMemoryRepo) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	mem, ok := m.memories[id]
@@ -1296,7 +1296,7 @@ func (m *nsAwareMemoryRepo) LookupByContentHash(_ context.Context, namespaceID u
 	return nil, sql.ErrNoRows
 }
 
-func (m *nsAwareMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *nsAwareMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []model.Memory
@@ -1601,8 +1601,8 @@ type nsAwareMemRepoUpdater struct {
 	memRepo *nsAwareMemoryRepo
 }
 
-func (m *nsAwareMemRepoUpdater) GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error) {
-	mem, err := m.memRepo.GetByID(ctx, id)
+func (m *nsAwareMemRepoUpdater) GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error) {
+	mem, err := m.memRepo.GetByID(ctx, id, namespaceID)
 	if err != nil {
 		return nil, err
 	}

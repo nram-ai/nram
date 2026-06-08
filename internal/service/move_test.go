@@ -15,9 +15,9 @@ type fakeMoveMemReader struct {
 	memories map[uuid.UUID]*model.Memory
 }
 
-func (f *fakeMoveMemReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (f *fakeMoveMemReader) GetByID(_ context.Context, id uuid.UUID, namespaceID uuid.UUID) (*model.Memory, error) {
 	m, ok := f.memories[id]
-	if !ok {
+	if !ok || m.NamespaceID != namespaceID {
 		return nil, fmt.Errorf("not found")
 	}
 	return m, nil

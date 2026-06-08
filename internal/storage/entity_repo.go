@@ -69,14 +69,16 @@ func (r *EntityRepo) Create(ctx context.Context, entity *model.Entity) error {
 	return r.reload(ctx, entity)
 }
 
-// GetByID returns an entity by its UUID.
-func (r *EntityRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Entity, error) {
-	query := selectEntityColumns + ` FROM entities WHERE id = ?`
+// GetByID returns an entity by its UUID, bounded to namespaceID. A row in a
+// different namespace reads as sql.ErrNoRows; existence is never leaked across
+// the tenant boundary.
+func (r *EntityRepo) GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Entity, error) {
+	query := selectEntityColumns + ` FROM entities WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = selectEntityColumns + ` FROM entities WHERE id = $1`
+		query = selectEntityColumns + ` FROM entities WHERE id = $1 AND namespace_id = $2`
 	}
 
-	row := r.db.QueryRow(ctx, query, id.String())
+	row := r.db.QueryRow(ctx, query, id.String(), namespaceID.String())
 	return r.scanEntity(row)
 }
 
@@ -685,18 +687,23 @@ func (r *EntityRepo) FindByAlias(ctx context.Context, namespaceID uuid.UUID, ali
 	return r.scanEntities(rows)
 }
 
-// GetBatch returns multiple entities by their UUIDs in a single query. Missing
-// IDs are silently dropped; callers are responsible for diffing the result
-// against the input list if they need to detect them. Order is not preserved.
-func (r *EntityRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Entity, error) {
-	if len(ids) == 0 {
+// GetBatch returns multiple entities by their UUIDs in a single query, bounded
+// to the supplied namespaces. Missing IDs and IDs outside the namespaces are
+// silently dropped; callers diff against the input list if they need to detect
+// them. Order is not preserved. Fail-closed: an empty namespaces slice returns
+// no rows, so a caller can never hydrate a cross-namespace entity by id.
+func (r *EntityRepo) GetBatch(ctx context.Context, ids, namespaces []uuid.UUID) ([]model.Entity, error) {
+	if len(ids) == 0 || len(namespaces) == 0 {
 		return []model.Entity{}, nil
 	}
 
-	placeholders, args := uuidInPlaceholders(r.db, ids, 1)
+	idPlaceholders, idArgs := uuidInPlaceholders(r.db, ids, 1)
+	nsPlaceholders, nsArgs := uuidInPlaceholders(r.db, namespaces, len(ids)+1)
 	query := selectEntityColumns + ` FROM entities WHERE id IN (` +
-		strings.Join(placeholders, ", ") + `)`
+		strings.Join(idPlaceholders, ", ") + `) AND namespace_id IN (` +
+		strings.Join(nsPlaceholders, ", ") + `)`
 
+	args := append(idArgs, nsArgs...)
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("entity get batch: %w", err)
@@ -870,7 +877,7 @@ func (r *EntityRepo) RecomputeMentionCounts(ctx context.Context, ids []uuid.UUID
 
 // reload fetches the entity by ID and populates the struct in place.
 func (r *EntityRepo) reload(ctx context.Context, entity *model.Entity) error {
-	fetched, err := r.GetByID(ctx, entity.ID)
+	fetched, err := r.GetByID(ctx, entity.ID, entity.NamespaceID)
 	if err != nil {
 		return fmt.Errorf("entity reload: %w", err)
 	}

@@ -135,41 +135,43 @@ func (r *MemoryRepo) Create(ctx context.Context, mem *model.Memory) error {
 	return nil
 }
 
-// GetByID returns a memory by its UUID. Soft-deleted records are excluded.
-func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Memory, error) {
-	return r.getByIDExec(ctx, dbExec{r.db}, id)
+// GetByID returns a memory by its UUID, bounded to namespaceID. Soft-deleted
+// records are excluded. A row in a different namespace reads as sql.ErrNoRows;
+// existence is never leaked across the tenant boundary.
+func (r *MemoryRepo) GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error) {
+	return r.getByIDExec(ctx, dbExec{r.db}, id, namespaceID)
 }
 
 // GetByIDTx is the transactional variant of GetByID. Used by callers that
 // pair Get with a subsequent Update inside a WithMemoryLock body so the
 // read sees the locked row's committed state.
-func (r *MemoryRepo) GetByIDTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*model.Memory, error) {
-	return r.getByIDExec(ctx, tx, id)
+func (r *MemoryRepo) GetByIDTx(ctx context.Context, tx *sql.Tx, id, namespaceID uuid.UUID) (*model.Memory, error) {
+	return r.getByIDExec(ctx, tx, id, namespaceID)
 }
 
-func (r *MemoryRepo) getByIDExec(ctx context.Context, exec sqlExecer, id uuid.UUID) (*model.Memory, error) {
-	query := selectMemoryColumns + ` FROM memories WHERE id = ? AND deleted_at IS NULL`
+func (r *MemoryRepo) getByIDExec(ctx context.Context, exec sqlExecer, id, namespaceID uuid.UUID) (*model.Memory, error) {
+	query := selectMemoryColumns + ` FROM memories WHERE id = ? AND namespace_id = ? AND deleted_at IS NULL`
 	if r.db.Backend() == BackendPostgres {
-		query = selectMemoryColumns + ` FROM memories WHERE id = $1 AND deleted_at IS NULL`
+		query = selectMemoryColumns + ` FROM memories WHERE id = $1 AND namespace_id = $2 AND deleted_at IS NULL`
 	}
 
-	row := exec.QueryRowContext(ctx, query, id.String())
+	row := exec.QueryRowContext(ctx, query, id.String(), namespaceID.String())
 	return r.scanMemory(row)
 }
 
-// getByIDIncludeDeleted returns a memory by its UUID including soft-deleted records.
-// Used internally for reload after create.
-func (r *MemoryRepo) getByIDIncludeDeleted(ctx context.Context, id uuid.UUID) (*model.Memory, error) {
-	return r.getByIDIncludeDeletedExec(ctx, dbExec{r.db}, id)
+// getByIDIncludeDeleted returns a memory by its UUID (bounded to namespaceID)
+// including soft-deleted records. Used internally for reload after create.
+func (r *MemoryRepo) getByIDIncludeDeleted(ctx context.Context, id, namespaceID uuid.UUID) (*model.Memory, error) {
+	return r.getByIDIncludeDeletedExec(ctx, dbExec{r.db}, id, namespaceID)
 }
 
-func (r *MemoryRepo) getByIDIncludeDeletedExec(ctx context.Context, exec sqlExecer, id uuid.UUID) (*model.Memory, error) {
-	query := selectMemoryColumns + ` FROM memories WHERE id = ?`
+func (r *MemoryRepo) getByIDIncludeDeletedExec(ctx context.Context, exec sqlExecer, id, namespaceID uuid.UUID) (*model.Memory, error) {
+	query := selectMemoryColumns + ` FROM memories WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = selectMemoryColumns + ` FROM memories WHERE id = $1`
+		query = selectMemoryColumns + ` FROM memories WHERE id = $1 AND namespace_id = $2`
 	}
 
-	row := exec.QueryRowContext(ctx, query, id.String())
+	row := exec.QueryRowContext(ctx, query, id.String(), namespaceID.String())
 	return r.scanMemory(row)
 }
 
@@ -279,17 +281,23 @@ func uuidInPlaceholders(db DB, ids []uuid.UUID, startIndex int) ([]string, []any
 	return placeholders, args
 }
 
-// GetBatch returns multiple memories by their UUIDs. Soft-deleted records are excluded.
-func (r *MemoryRepo) GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error) {
-	if len(ids) == 0 {
+// GetBatch returns multiple memories by their UUIDs, bounded to the supplied
+// namespaces. Soft-deleted records are excluded. Fail-closed: an empty
+// namespaces slice returns no rows, so a caller can never hydrate a
+// cross-namespace memory by id.
+func (r *MemoryRepo) GetBatch(ctx context.Context, ids, namespaces []uuid.UUID) ([]model.Memory, error) {
+	if len(ids) == 0 || len(namespaces) == 0 {
 		return []model.Memory{}, nil
 	}
 
-	placeholders, args := uuidInPlaceholders(r.db, ids, 1)
+	idPlaceholders, idArgs := uuidInPlaceholders(r.db, ids, 1)
+	nsPlaceholders, nsArgs := uuidInPlaceholders(r.db, namespaces, len(ids)+1)
 
 	query := selectMemoryColumns + ` FROM memories WHERE id IN (` +
-		strings.Join(placeholders, ", ") + `) AND deleted_at IS NULL`
+		strings.Join(idPlaceholders, ", ") + `) AND namespace_id IN (` +
+		strings.Join(nsPlaceholders, ", ") + `) AND deleted_at IS NULL`
 
+	args := append(idArgs, nsArgs...)
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("memory get batch: %w", err)
@@ -594,7 +602,7 @@ func (r *MemoryRepo) ListByNamespaceFramingOrder(ctx context.Context, namespaceI
 		return []model.Memory{}, nil
 	}
 
-	batch, err := r.GetBatch(ctx, orderedIDs)
+	batch, err := r.GetBatch(ctx, orderedIDs, []uuid.UUID{namespaceID})
 	if err != nil {
 		return nil, err
 	}
@@ -1096,12 +1104,46 @@ func (r *MemoryRepo) ClearAllEmbeddingDims(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// ListAugmentationBackfillCandidates returns memory IDs that still need an
-// augmented embedding (augmented_embedding_at IS NULL) within the given
-// namespace scope. namespaceIDs == nil scans the whole deployment. Soft-deleted
-// and superseded rows are excluded so the backfill never re-embeds rows the
-// runtime ignores anyway. limit == 0 returns all matches.
-func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error) {
+// BackfillCandidate is a memory id paired with its namespace, returned by the
+// admin backfill candidate listers. Carrying the namespace lets the caller
+// enqueue jobs for candidates spanning many namespaces (the whole-deployment
+// admin sweep) without an unbounded per-id read to learn each one's namespace.
+type BackfillCandidate struct {
+	ID          uuid.UUID
+	NamespaceID uuid.UUID
+}
+
+// scanBackfillCandidates drains a (id, namespace_id) result set into
+// BackfillCandidate values.
+func scanBackfillCandidates(rows *sql.Rows) ([]BackfillCandidate, error) {
+	out := []BackfillCandidate{}
+	for rows.Next() {
+		var idStr, nsStr string
+		if err := rows.Scan(&idStr, &nsStr); err != nil {
+			return nil, fmt.Errorf("scan backfill candidate: %w", err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("parse backfill candidate id %s: %w", idStr, err)
+		}
+		ns, err := uuid.Parse(nsStr)
+		if err != nil {
+			return nil, fmt.Errorf("parse backfill candidate namespace %s: %w", nsStr, err)
+		}
+		out = append(out, BackfillCandidate{ID: id, NamespaceID: ns})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iter backfill candidates: %w", err)
+	}
+	return out, nil
+}
+
+// ListAugmentationBackfillCandidates returns memories (id + namespace) that
+// still need an augmented embedding (augmented_embedding_at IS NULL) within the
+// given namespace scope. namespaceIDs == nil scans the whole deployment.
+// Soft-deleted and superseded rows are excluded so the backfill never re-embeds
+// rows the runtime ignores anyway. limit == 0 returns all matches.
+func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
 	pg := r.db.Backend() == BackendPostgres
 	args := []any{}
 	where := []string{
@@ -1121,7 +1163,7 @@ func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, nam
 		}
 		where = append(where, "namespace_id IN ("+strings.Join(placeholders, ", ")+")")
 	}
-	query := "SELECT id FROM memories WHERE " + strings.Join(where, " AND ") + " ORDER BY created_at ASC"
+	query := "SELECT id, namespace_id FROM memories WHERE " + strings.Join(where, " AND ") + " ORDER BY created_at ASC"
 	if limit > 0 {
 		if pg {
 			query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
@@ -1137,22 +1179,7 @@ func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, nam
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := []uuid.UUID{}
-	for rows.Next() {
-		var idStr string
-		if err := rows.Scan(&idStr); err != nil {
-			return nil, fmt.Errorf("scan candidate id: %w", err)
-		}
-		id, err := uuid.Parse(idStr)
-		if err != nil {
-			return nil, fmt.Errorf("parse candidate id %s: %w", idStr, err)
-		}
-		out = append(out, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iter backfill candidates: %w", err)
-	}
-	return out, nil
+	return scanBackfillCandidates(rows)
 }
 
 // ListEnrichedParentsWithExtractedChildren returns the IDs of enriched,
@@ -1162,7 +1189,7 @@ func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, nam
 // swept by the paraphrase-guard backfill job. Children are filtered by the
 // ExtractedChildRelations set and exclude soft-deleted and superseded rows
 // so the candidate count matches what the worker can actually act on.
-func (r *MemoryRepo) ListEnrichedParentsWithExtractedChildren(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]uuid.UUID, error) {
+func (r *MemoryRepo) ListEnrichedParentsWithExtractedChildren(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
 	pg := r.db.Backend() == BackendPostgres
 	args := []any{}
 	args = append(args, EncodeBool(r.db.Backend(), true))
@@ -1195,7 +1222,7 @@ func (r *MemoryRepo) ListEnrichedParentsWithExtractedChildren(ctx context.Contex
 		nsClause = " AND m.namespace_id IN (" + strings.Join(placeholders, ", ") + ")"
 	}
 
-	query := `SELECT DISTINCT m.id
+	query := `SELECT DISTINCT m.id, m.namespace_id
 FROM memories m
 JOIN memory_lineage l ON l.parent_id = m.id AND l.namespace_id = m.namespace_id
 JOIN memories c ON c.id = l.memory_id
@@ -1221,22 +1248,7 @@ ORDER BY m.id ASC`
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := []uuid.UUID{}
-	for rows.Next() {
-		var idStr string
-		if err := rows.Scan(&idStr); err != nil {
-			return nil, fmt.Errorf("scan paraphrase candidate id: %w", err)
-		}
-		id, err := uuid.Parse(idStr)
-		if err != nil {
-			return nil, fmt.Errorf("parse paraphrase candidate id %s: %w", idStr, err)
-		}
-		out = append(out, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iter paraphrase candidates: %w", err)
-	}
-	return out, nil
+	return scanBackfillCandidates(rows)
 }
 
 // UpdateEmbeddingDim sets a memory's embedding_dim without rewriting every
@@ -1278,12 +1290,14 @@ func (r *MemoryRepo) UpdateTx(ctx context.Context, tx *sql.Tx, mem *model.Memory
 // pg_advisory_xact_lock on Postgres and an in-process mutex on SQLite.
 func (r *MemoryRepo) MutateInLock(
 	ctx context.Context,
-	id uuid.UUID,
+	id, namespaceID uuid.UUID,
 	mutate func(*model.Memory) (write bool, err error),
 ) (*model.Memory, error) {
 	var result *model.Memory
 	err := r.db.WithMemoryLock(ctx, id, func(ctx context.Context, tx *sql.Tx) error {
-		fresh, err := r.getByIDExec(ctx, tx, id)
+		// Bounded read: a row outside namespaceID reads as sql.ErrNoRows, so a
+		// caller cannot lock-and-mutate another tenant's memory by id.
+		fresh, err := r.getByIDExec(ctx, tx, id, namespaceID)
 		if err != nil {
 			return err
 		}
@@ -1404,7 +1418,7 @@ func (r *MemoryRepo) updateExec(ctx context.Context, exec sqlExecer, mem *model.
 
 	// Reload through the same exec so a transactional Update sees its own
 	// uncommitted write.
-	fetched, err := r.getByIDIncludeDeletedExec(ctx, exec, mem.ID)
+	fetched, err := r.getByIDIncludeDeletedExec(ctx, exec, mem.ID, mem.NamespaceID)
 	if err != nil {
 		return fmt.Errorf("memory reload: %w", err)
 	}

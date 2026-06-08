@@ -99,14 +99,16 @@ func (r *RelationshipRepo) Create(ctx context.Context, rel *model.Relationship) 
 	return nil
 }
 
-// GetByID returns a relationship by its UUID.
-func (r *RelationshipRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Relationship, error) {
-	query := selectRelationshipColumns + ` FROM relationships WHERE id = ?`
+// GetByID returns a relationship by its UUID, bounded to namespaceID. A row in
+// a different namespace reads as sql.ErrNoRows: existence is never leaked across
+// the tenant boundary.
+func (r *RelationshipRepo) GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Relationship, error) {
+	query := selectRelationshipColumns + ` FROM relationships WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = selectRelationshipColumns + ` FROM relationships WHERE id = $1`
+		query = selectRelationshipColumns + ` FROM relationships WHERE id = $1 AND namespace_id = $2`
 	}
 
-	row := r.db.QueryRow(ctx, query, id.String())
+	row := r.db.QueryRow(ctx, query, id.String(), namespaceID.String())
 	return r.scanRelationship(row)
 }
 
@@ -181,8 +183,10 @@ type TraversalResult struct {
 // relationships have been collected, sparing the unbounded ListByEntity loop
 // and the downstream marshal/filter work that follows on large neighborhoods.
 // maxEdges <= 0 disables the cap.
-func (r *RelationshipRepo) TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops, maxEdges int) (TraversalResult, error) {
-	if maxHops <= 0 {
+func (r *RelationshipRepo) TraverseFromEntity(ctx context.Context, entityID uuid.UUID, namespaces []uuid.UUID, maxHops, maxEdges int) (TraversalResult, error) {
+	// Fail-closed: with no namespace bound the traversal returns nothing rather
+	// than crossing the tenant boundary. ListByEntity below enforces the same.
+	if maxHops <= 0 || len(namespaces) == 0 {
 		return TraversalResult{Cap: maxEdges}, nil
 	}
 
@@ -197,7 +201,7 @@ hops:
 		var nextFrontier []uuid.UUID
 
 		for _, eid := range frontier {
-			rels, err := r.ListByEntity(ctx, eid)
+			rels, err := r.ListByEntity(ctx, eid, namespaces)
 			if err != nil {
 				return TraversalResult{Cap: maxEdges}, fmt.Errorf("relationship traverse hop %d: %w", hop, err)
 			}
@@ -251,19 +255,34 @@ func (r *RelationshipRepo) ListByNamespace(ctx context.Context, namespaceID uuid
 	return r.scanRelationships(rows)
 }
 
-// ListByEntity returns all relationships where the given entity is either
-// the source or the target, ordered by created_at DESC.
-func (r *RelationshipRepo) ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.Relationship, error) {
-	query := selectRelationshipColumns + ` FROM relationships
-		WHERE source_id = ? OR target_id = ?
-		ORDER BY created_at DESC`
+// ListByEntity returns relationships where the given entity is the source or
+// the target, bounded to the supplied namespaces and ordered by created_at
+// DESC. The namespace bound lives in the query (not in callers): this is the
+// single tenant-isolation choke point for graph traversal, so no caller can
+// surface a cross-namespace edge by forgetting to re-filter. Fail-closed: an
+// empty namespaces slice returns no rows.
+func (r *RelationshipRepo) ListByEntity(ctx context.Context, entityID uuid.UUID, namespaces []uuid.UUID) ([]model.Relationship, error) {
+	if len(namespaces) == 0 {
+		return []model.Relationship{}, nil
+	}
+
+	// source_id/target_id occupy $1/$2; namespace placeholders start at $3.
+	nsPlaceholders, nsArgs := uuidInPlaceholders(r.db, namespaces, 3)
+	nsIn := strings.Join(nsPlaceholders, ", ")
+
+	var query string
 	if r.db.Backend() == BackendPostgres {
 		query = selectRelationshipColumns + ` FROM relationships
-			WHERE source_id = $1 OR target_id = $2
+			WHERE (source_id = $1 OR target_id = $2) AND namespace_id IN (` + nsIn + `)
+			ORDER BY created_at DESC`
+	} else {
+		query = selectRelationshipColumns + ` FROM relationships
+			WHERE (source_id = ? OR target_id = ?) AND namespace_id IN (` + nsIn + `)
 			ORDER BY created_at DESC`
 	}
 
-	rows, err := r.db.Query(ctx, query, entityID.String(), entityID.String())
+	args := append([]any{entityID.String(), entityID.String()}, nsArgs...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("relationship list by entity: %w", err)
 	}

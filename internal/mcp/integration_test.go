@@ -49,7 +49,7 @@ func (m *mockMemoryRepoWithContent) Create(_ context.Context, mem *model.Memory)
 	return nil
 }
 
-func (m *mockMemoryRepoWithContent) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryRepoWithContent) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memories[id]
 	if !ok {
 		return nil, errors.New("not found")
@@ -91,7 +91,7 @@ func newTrackingMemoryDeleter(memories map[uuid.UUID]*model.Memory) *trackingMem
 	return &trackingMemoryDeleter{memories: memories}
 }
 
-func (m *trackingMemoryDeleter) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *trackingMemoryDeleter) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memories[id]
 	if !ok {
 		return nil, errors.New("not found")
@@ -215,7 +215,7 @@ type mockListByNsReader struct {
 	memories []model.Memory
 }
 
-func (m *mockListByNsReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockListByNsReader) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	for i := range m.memories {
 		if m.memories[i].ID == id {
 			return &m.memories[i], nil
@@ -224,7 +224,7 @@ func (m *mockListByNsReader) GetByID(_ context.Context, id uuid.UUID) (*model.Me
 	return nil, errors.New("not found")
 }
 
-func (m *mockListByNsReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *mockListByNsReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	var out []model.Memory
 	for _, id := range ids {
 		for i := range m.memories {

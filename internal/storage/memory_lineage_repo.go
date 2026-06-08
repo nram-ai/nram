@@ -55,14 +55,15 @@ func (r *MemoryLineageRepo) Create(ctx context.Context, lineage *model.MemoryLin
 	return r.reload(ctx, lineage)
 }
 
-// GetByID returns a memory lineage record by its UUID.
-func (r *MemoryLineageRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.MemoryLineage, error) {
-	query := selectLineageColumns + ` FROM memory_lineage WHERE id = ?`
+// GetByID returns a memory lineage record by its UUID, bounded to namespaceID.
+// A row in a different namespace reads as sql.ErrNoRows.
+func (r *MemoryLineageRepo) GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.MemoryLineage, error) {
+	query := selectLineageColumns + ` FROM memory_lineage WHERE id = ? AND namespace_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = selectLineageColumns + ` FROM memory_lineage WHERE id = $1`
+		query = selectLineageColumns + ` FROM memory_lineage WHERE id = $1 AND namespace_id = $2`
 	}
 
-	row := r.db.QueryRow(ctx, query, id.String())
+	row := r.db.QueryRow(ctx, query, id.String(), namespaceID.String())
 	return r.scanLineage(row)
 }
 
@@ -332,7 +333,7 @@ func (r *MemoryLineageRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx,
 
 // reload fetches the lineage by ID and populates the struct in place.
 func (r *MemoryLineageRepo) reload(ctx context.Context, lineage *model.MemoryLineage) error {
-	fetched, err := r.GetByID(ctx, lineage.ID)
+	fetched, err := r.GetByID(ctx, lineage.ID, lineage.NamespaceID)
 	if err != nil {
 		return fmt.Errorf("memory lineage reload: %w", err)
 	}

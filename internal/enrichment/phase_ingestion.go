@@ -494,7 +494,7 @@ func (wp *WorkerPool) applyIngestionUpdate(ctx context.Context, p *pendingJob) {
 // p.mem so downstream code in the same job sees the post-write state.
 // Returns the error verbatim on failure (and leaves p.mem untouched).
 func (wp *WorkerPool) stampIngestionUnderLock(ctx context.Context, p *pendingJob) error {
-	fresh, err := wp.memUpdater.MutateInLock(ctx, p.mem.ID, func(mem *model.Memory) (bool, error) {
+	fresh, err := wp.memUpdater.MutateInLock(ctx, p.mem.ID, p.mem.NamespaceID, func(mem *model.Memory) (bool, error) {
 		stampIngestionMetadataOn(mem, p)
 		mem.UpdatedAt = time.Now().UTC()
 		return true, nil

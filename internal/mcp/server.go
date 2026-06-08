@@ -40,7 +40,7 @@ type NamespaceRepo interface {
 type MemoryLister interface {
 	ListByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
 	CountByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters) (int, error)
-	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
+	GetBatch(ctx context.Context, ids, namespaces []uuid.UUID) ([]model.Memory, error)
 	// ListByNamespaceFramingOrder backs the about_me framing fetch: live
 	// memories ordered by identity-centrality (max linked-entity mention_count),
 	// then recall-count, then recency.
@@ -69,13 +69,13 @@ type EntityReader interface {
 	SearchEntities(ctx context.Context, namespaceID uuid.UUID, query string, kind string, limit int) ([]model.Entity, error)
 	FindByAlias(ctx context.Context, namespaceID uuid.UUID, alias string) ([]model.Entity, error)
 	ListByNamespace(ctx context.Context, namespaceID uuid.UUID) ([]model.Entity, error)
-	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Entity, error)
+	GetBatch(ctx context.Context, ids, namespaces []uuid.UUID) ([]model.Entity, error)
 }
 
 // RelationshipTraverser provides graph traversal for MCP tool handlers.
 // maxEdges <= 0 disables the short-circuit cap.
 type RelationshipTraverser interface {
-	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
+	TraverseFromEntity(ctx context.Context, entityID uuid.UUID, namespaces []uuid.UUID, maxHops, maxEdges int) (storage.TraversalResult, error)
 }
 
 // Dependencies holds all service and repository references that MCP tool handlers require.

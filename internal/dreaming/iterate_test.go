@@ -41,11 +41,11 @@ func (s *stubReader) ListByNamespaceStale(_ context.Context, _ uuid.UUID, _ stri
 	return s.memories, nil
 }
 
-func (s *stubReader) GetByID(_ context.Context, _ uuid.UUID) (*model.Memory, error) {
+func (s *stubReader) GetByID(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (s *stubReader) GetBatch(_ context.Context, _ []uuid.UUID) ([]model.Memory, error) {
+func (s *stubReader) GetBatch(_ context.Context, _ []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	return nil, errors.New("not implemented")
 }
 

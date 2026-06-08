@@ -63,7 +63,7 @@ func (m *mockMemoryListerByNs) CountByNamespaceFiltered(_ context.Context, nsID 
 	return c, nil
 }
 
-func (m *mockMemoryListerByNs) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *mockMemoryListerByNs) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	idSet := make(map[uuid.UUID]struct{}, len(ids))
 	for _, id := range ids {
 		idSet[id] = struct{}{}

@@ -18,7 +18,7 @@ type transitiveFakeEntityReader struct {
 	entities []model.Entity
 }
 
-func (f *transitiveFakeEntityReader) GetByID(context.Context, uuid.UUID) (*model.Entity, error) {
+func (f *transitiveFakeEntityReader) GetByID(context.Context, uuid.UUID, uuid.UUID) (*model.Entity, error) {
 	return nil, errors.New("not used by transitive phase")
 }
 func (f *transitiveFakeEntityReader) ListByNamespace(_ context.Context, _ uuid.UUID) ([]model.Entity, error) {
@@ -38,10 +38,10 @@ type transitiveFakeRelationshipReader struct {
 func (f *transitiveFakeRelationshipReader) ListByNamespace(_ context.Context, _ uuid.UUID) ([]model.Relationship, error) {
 	return f.rels, nil
 }
-func (f *transitiveFakeRelationshipReader) ListByEntity(context.Context, uuid.UUID) ([]model.Relationship, error) {
+func (f *transitiveFakeRelationshipReader) ListByEntity(context.Context, uuid.UUID, []uuid.UUID) ([]model.Relationship, error) {
 	return nil, errors.New("not used by transitive phase")
 }
-func (f *transitiveFakeRelationshipReader) TraverseFromEntity(context.Context, uuid.UUID, int, int) (storage.TraversalResult, error) {
+func (f *transitiveFakeRelationshipReader) TraverseFromEntity(context.Context, uuid.UUID, []uuid.UUID, int, int) (storage.TraversalResult, error) {
 	return storage.TraversalResult{}, errors.New("not used by transitive phase")
 }
 func (f *transitiveFakeRelationshipReader) FindActiveByTriple(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) (*model.Relationship, error) {

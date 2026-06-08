@@ -176,7 +176,7 @@ func TestRelationshipRepo_GetByID(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, rel.ID)
+		fetched, err := repo.GetByID(ctx, rel.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get by id: %v", err)
 		}
@@ -198,7 +198,7 @@ func TestRelationshipRepo_GetByID_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewRelationshipRepo(db)
 
-		_, err := repo.GetByID(ctx, uuid.New())
+		_, err := repo.GetByID(ctx, uuid.New(), uuid.New())
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}
@@ -226,7 +226,7 @@ func TestRelationshipRepo_Expire(t *testing.T) {
 			t.Fatalf("failed to expire: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, rel.ID)
+		fetched, err := repo.GetByID(ctx, rel.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get after expire: %v", err)
 		}
@@ -267,7 +267,7 @@ func TestRelationshipRepo_Reinforce(t *testing.T) {
 			t.Fatalf("failed to reinforce: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, rel.ID)
+		fetched, err := repo.GetByID(ctx, rel.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get after reinforce: %v", err)
 		}
@@ -281,7 +281,7 @@ func TestRelationshipRepo_Reinforce(t *testing.T) {
 			t.Fatalf("failed to reinforce second time: %v", err)
 		}
 
-		fetched, err = repo.GetByID(ctx, rel.ID)
+		fetched, err = repo.GetByID(ctx, rel.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get after second reinforce: %v", err)
 		}
@@ -315,7 +315,7 @@ func TestRelationshipRepo_Reinforce_ClampsAt2(t *testing.T) {
 			t.Fatalf("failed to reinforce: %v", err)
 		}
 
-		fetched, err := repo.GetByID(ctx, rel.ID)
+		fetched, err := repo.GetByID(ctx, rel.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get after reinforce: %v", err)
 		}
@@ -327,7 +327,7 @@ func TestRelationshipRepo_Reinforce_ClampsAt2(t *testing.T) {
 		if err := repo.Reinforce(ctx, rel.ID, nsID, 0.50); err != nil {
 			t.Fatalf("failed to reinforce again: %v", err)
 		}
-		fetched, err = repo.GetByID(ctx, rel.ID)
+		fetched, err = repo.GetByID(ctx, rel.ID, nsID)
 		if err != nil {
 			t.Fatalf("failed to get after saturated reinforce: %v", err)
 		}
@@ -386,7 +386,7 @@ func TestRelationshipRepo_ListByEntity(t *testing.T) {
 		}
 
 		// List for alice; should include r1 (source) and r2 (target)
-		results, err := repo.ListByEntity(ctx, alice)
+		results, err := repo.ListByEntity(ctx, alice, []uuid.UUID{nsID})
 		if err != nil {
 			t.Fatalf("failed to list by entity: %v", err)
 		}
@@ -395,7 +395,7 @@ func TestRelationshipRepo_ListByEntity(t *testing.T) {
 		}
 
 		// List for bob; should include r1 (target) and r3 (source)
-		results, err = repo.ListByEntity(ctx, bob)
+		results, err = repo.ListByEntity(ctx, bob, []uuid.UUID{nsID})
 		if err != nil {
 			t.Fatalf("failed to list by entity for bob: %v", err)
 		}
@@ -410,7 +410,7 @@ func TestRelationshipRepo_ListByEntity_Empty(t *testing.T) {
 		ctx := context.Background()
 		repo := NewRelationshipRepo(db)
 
-		results, err := repo.ListByEntity(ctx, uuid.New())
+		results, err := repo.ListByEntity(ctx, uuid.New(), []uuid.UUID{uuid.New()})
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -448,7 +448,7 @@ func TestRelationshipRepo_TraverseFromEntity_SingleHop(t *testing.T) {
 		}
 
 		// Traverse 1 hop from alice; should only get r1
-		tr, err := repo.TraverseFromEntity(ctx, alice, 1, 0)
+		tr, err := repo.TraverseFromEntity(ctx, alice, []uuid.UUID{nsID}, 1, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse: %v", err)
 		}
@@ -492,7 +492,7 @@ func TestRelationshipRepo_TraverseFromEntity_MultiHop(t *testing.T) {
 		}
 
 		// Traverse 2 hops from alice; should get r1 and r2
-		tr, err := repo.TraverseFromEntity(ctx, alice, 2, 0)
+		tr, err := repo.TraverseFromEntity(ctx, alice, []uuid.UUID{nsID}, 2, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse: %v", err)
 		}
@@ -532,7 +532,7 @@ func TestRelationshipRepo_TraverseFromEntity_Cycle(t *testing.T) {
 		}
 
 		// Traverse many hops; should not loop infinitely
-		tr, err := repo.TraverseFromEntity(ctx, alice, 10, 0)
+		tr, err := repo.TraverseFromEntity(ctx, alice, []uuid.UUID{nsID}, 10, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse with cycle: %v", err)
 		}
@@ -552,7 +552,7 @@ func TestRelationshipRepo_TraverseFromEntity_ZeroHops(t *testing.T) {
 		ctx := context.Background()
 		repo := NewRelationshipRepo(db)
 
-		tr, err := repo.TraverseFromEntity(ctx, uuid.New(), 0, 0)
+		tr, err := repo.TraverseFromEntity(ctx, uuid.New(), []uuid.UUID{uuid.New()}, 0, 0)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -569,7 +569,7 @@ func TestRelationshipRepo_TraverseFromEntity_NoRelationships(t *testing.T) {
 		nsID := createTestNamespace(t, ctx, db)
 		alice := createTestEntity(t, ctx, db, nsID, "alice")
 
-		tr, err := repo.TraverseFromEntity(ctx, alice, 3, 0)
+		tr, err := repo.TraverseFromEntity(ctx, alice, []uuid.UUID{nsID}, 3, 0)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -605,7 +605,7 @@ func TestRelationshipRepo_TraverseFromEntity_EdgeCap_StopsAtCap(t *testing.T) {
 		}
 
 		const cap = totalNeighbors / 2
-		tr, err := repo.TraverseFromEntity(ctx, alice, 1, cap)
+		tr, err := repo.TraverseFromEntity(ctx, alice, []uuid.UUID{nsID}, 1, cap)
 		if err != nil {
 			t.Fatalf("failed to traverse with cap: %v", err)
 		}
@@ -662,7 +662,7 @@ func TestRelationshipRepo_TraverseFromEntity_EdgeCap_PartialHop(t *testing.T) {
 		}
 
 		const cap = 5
-		tr, err := repo.TraverseFromEntity(ctx, alice, 2, cap)
+		tr, err := repo.TraverseFromEntity(ctx, alice, []uuid.UUID{nsID}, 2, cap)
 		if err != nil {
 			t.Fatalf("failed to traverse: %v", err)
 		}
@@ -699,7 +699,7 @@ func TestRelationshipRepo_TraverseFromEntity_EdgeCap_NotReached(t *testing.T) {
 			t.Fatalf("failed to create rel: %v", err)
 		}
 
-		tr, err := repo.TraverseFromEntity(ctx, alice, 1, 100)
+		tr, err := repo.TraverseFromEntity(ctx, alice, []uuid.UUID{nsID}, 1, 100)
 		if err != nil {
 			t.Fatalf("failed to traverse: %v", err)
 		}
@@ -735,7 +735,7 @@ func TestRelationshipRepo_TraverseFromEntity_EdgeCap_Zero(t *testing.T) {
 			}
 		}
 
-		tr, err := repo.TraverseFromEntity(ctx, alice, 1, 0)
+		tr, err := repo.TraverseFromEntity(ctx, alice, []uuid.UUID{nsID}, 1, 0)
 		if err != nil {
 			t.Fatalf("failed to traverse: %v", err)
 		}
@@ -898,14 +898,14 @@ func TestRelationshipRepo_ExpireLowestNTransitive(t *testing.T) {
 		}
 
 		// Verify t2 and t3 are now expired.
-		t2, err := repo.GetByID(ctx, rels[1].ID)
+		t2, err := repo.GetByID(ctx, rels[1].ID, nsID)
 		if err != nil {
 			t.Fatalf("get t2: %v", err)
 		}
 		if t2.ValidUntil == nil {
 			t.Errorf("t2 (transitive, mid weight) should be expired, valid_until is nil")
 		}
-		t3, err := repo.GetByID(ctx, rels[2].ID)
+		t3, err := repo.GetByID(ctx, rels[2].ID, nsID)
 		if err != nil {
 			t.Fatalf("get t3: %v", err)
 		}
@@ -914,14 +914,14 @@ func TestRelationshipRepo_ExpireLowestNTransitive(t *testing.T) {
 		}
 
 		// User-asserted rows MUST be untouched.
-		u1, err := repo.GetByID(ctx, rels[3].ID)
+		u1, err := repo.GetByID(ctx, rels[3].ID, nsID)
 		if err != nil {
 			t.Fatalf("get u1: %v", err)
 		}
 		if u1.ValidUntil != nil {
 			t.Errorf("u1 (user-asserted, lowest weight) must not be expired by transitive-only branch")
 		}
-		u2, err := repo.GetByID(ctx, rels[4].ID)
+		u2, err := repo.GetByID(ctx, rels[4].ID, nsID)
 		if err != nil {
 			t.Fatalf("get u2: %v", err)
 		}
@@ -1018,7 +1018,7 @@ func TestRelationshipRepo_BatchCreate_HappyPath(t *testing.T) {
 			if rel.ID == uuid.Nil {
 				t.Fatalf("row %d: ID not assigned", i)
 			}
-			fetched, err := repo.GetByID(ctx, rel.ID)
+			fetched, err := repo.GetByID(ctx, rel.ID, nsID)
 			if err != nil {
 				t.Fatalf("row %d: GetByID: %v", i, err)
 			}
@@ -1063,7 +1063,7 @@ func TestRelationshipRepo_BatchCreate_UpsertMaxWeight(t *testing.T) {
 			t.Fatalf("Affected = %d, want 2", res.Affected)
 		}
 
-		fetched, err := repo.GetByID(ctx, seed.ID)
+		fetched, err := repo.GetByID(ctx, seed.ID, nsID)
 		if err != nil {
 			t.Fatalf("re-read conflict row: %v", err)
 		}
@@ -1101,10 +1101,10 @@ func TestRelationshipRepo_BatchCreate_FKViolationFallback(t *testing.T) {
 		if res.Skipped != 1 {
 			t.Errorf("Skipped = %d, want 1", res.Skipped)
 		}
-		if _, err := repo.GetByID(ctx, rels[0].ID); err != nil {
+		if _, err := repo.GetByID(ctx, rels[0].ID, nsID); err != nil {
 			t.Errorf("row 0 should have committed: %v", err)
 		}
-		if _, err := repo.GetByID(ctx, rels[2].ID); err != nil {
+		if _, err := repo.GetByID(ctx, rels[2].ID, nsID); err != nil {
 			t.Errorf("row 2 should have committed: %v", err)
 		}
 	})
@@ -1243,7 +1243,7 @@ func TestRelationshipRepo_BatchExpire(t *testing.T) {
 			t.Errorf("Affected = %d, want 3", n)
 		}
 		for i := range 3 {
-			fetched, err := repo.GetByID(ctx, ids[i])
+			fetched, err := repo.GetByID(ctx, ids[i], nsID)
 			if err != nil {
 				t.Fatalf("re-read %d: %v", i, err)
 			}
@@ -1251,7 +1251,7 @@ func TestRelationshipRepo_BatchExpire(t *testing.T) {
 				t.Errorf("row %d: ValidUntil unset", i)
 			}
 		}
-		fetched, err := repo.GetByID(ctx, ids[3])
+		fetched, err := repo.GetByID(ctx, ids[3], nsID)
 		if err != nil {
 			t.Fatalf("re-read 3: %v", err)
 		}
@@ -1311,7 +1311,7 @@ func TestRelationshipRepo_BatchReinforce(t *testing.T) {
 
 		want := []float64{0.6, 2.0, 0.3}
 		for i := range seeds {
-			fetched, err := repo.GetByID(ctx, seeds[i].ID)
+			fetched, err := repo.GetByID(ctx, seeds[i].ID, nsID)
 			if err != nil {
 				t.Fatalf("re-read %d: %v", i, err)
 			}
@@ -1355,7 +1355,7 @@ func TestRelationshipRepo_BatchUpdateWeight(t *testing.T) {
 		}
 		want := []float64{0.25, 1.5, 0.75}
 		for i := range seeds {
-			fetched, err := repo.GetByID(ctx, seeds[i].ID)
+			fetched, err := repo.GetByID(ctx, seeds[i].ID, nsID)
 			if err != nil {
 				t.Fatalf("re-read %d: %v", i, err)
 			}
@@ -1390,13 +1390,13 @@ func TestRelationshipRepo_BatchDeleteByID(t *testing.T) {
 		if n != 2 {
 			t.Errorf("Affected = %d, want 2", n)
 		}
-		if _, err := repo.GetByID(ctx, ids[0]); !errors.Is(err, sql.ErrNoRows) {
+		if _, err := repo.GetByID(ctx, ids[0], nsID); !errors.Is(err, sql.ErrNoRows) {
 			t.Errorf("row 0 should be deleted, got err=%v", err)
 		}
-		if _, err := repo.GetByID(ctx, ids[1]); err != nil {
+		if _, err := repo.GetByID(ctx, ids[1], nsID); err != nil {
 			t.Errorf("row 1 should remain: %v", err)
 		}
-		if _, err := repo.GetByID(ctx, ids[2]); !errors.Is(err, sql.ErrNoRows) {
+		if _, err := repo.GetByID(ctx, ids[2], nsID); !errors.Is(err, sql.ErrNoRows) {
 			t.Errorf("row 2 should be deleted, got err=%v", err)
 		}
 	})
@@ -1434,6 +1434,115 @@ func absDiff(a, b float64) float64 {
 		return -d
 	}
 	return d
+}
+
+// TestRelationshipRepo_ListByEntity_NamespaceBounded is the regression test for
+// the cross-project/cross-tenant graph leak: a shared entity id participates in
+// edges in two namespaces, and ListByEntity must return only edges in the
+// caller's namespace aperture. The query is the single isolation choke point, so
+// this proves no caller can surface a foreign edge.
+func TestRelationshipRepo_ListByEntity_NamespaceBounded(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+
+		nsA := createTestNamespace(t, ctx, db)
+		nsB := createTestNamespace(t, ctx, db)
+
+		// x lives in nsA but is referenced by an edge in nsB too (the corrupt
+		// cross-namespace shape that produced the leak).
+		x := createTestEntity(t, ctx, db, nsA, "shared")
+		yA := createTestEntity(t, ctx, db, nsA, "a-neighbor")
+		yB := createTestEntity(t, ctx, db, nsB, "b-neighbor")
+
+		relA := newTestRelationship(nsA, x, yA)
+		if err := repo.Create(ctx, relA); err != nil {
+			t.Fatalf("create relA: %v", err)
+		}
+		relB := newTestRelationship(nsB, x, yB)
+		if err := repo.Create(ctx, relB); err != nil {
+			t.Fatalf("create relB: %v", err)
+		}
+
+		// Scoped to nsA: only the nsA edge.
+		got, err := repo.ListByEntity(ctx, x, []uuid.UUID{nsA})
+		if err != nil {
+			t.Fatalf("ListByEntity nsA: %v", err)
+		}
+		if len(got) != 1 || got[0].ID != relA.ID {
+			t.Fatalf("nsA scope: want only relA, got %d rels", len(got))
+		}
+
+		// Scoped to nsB: only the nsB edge (reachable when in aperture).
+		got, err = repo.ListByEntity(ctx, x, []uuid.UUID{nsB})
+		if err != nil {
+			t.Fatalf("ListByEntity nsB: %v", err)
+		}
+		if len(got) != 1 || got[0].ID != relB.ID {
+			t.Fatalf("nsB scope: want only relB, got %d rels", len(got))
+		}
+
+		// Multi-namespace aperture (project + global + about_me shape): both.
+		got, err = repo.ListByEntity(ctx, x, []uuid.UUID{nsA, nsB})
+		if err != nil {
+			t.Fatalf("ListByEntity nsA+nsB: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("nsA+nsB scope: want 2 rels, got %d", len(got))
+		}
+
+		// Fail-closed: an empty aperture returns nothing rather than everything.
+		got, err = repo.ListByEntity(ctx, x, nil)
+		if err != nil {
+			t.Fatalf("ListByEntity empty: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("empty scope must be fail-closed, got %d rels", len(got))
+		}
+	})
+}
+
+// TestRelationshipRepo_TraverseFromEntity_NamespaceBounded proves the BFS stays
+// inside the passed namespaces and is fail-closed on an empty aperture.
+func TestRelationshipRepo_TraverseFromEntity_NamespaceBounded(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewRelationshipRepo(db)
+
+		nsA := createTestNamespace(t, ctx, db)
+		nsB := createTestNamespace(t, ctx, db)
+		x := createTestEntity(t, ctx, db, nsA, "shared")
+		yA := createTestEntity(t, ctx, db, nsA, "a-neighbor")
+		yB := createTestEntity(t, ctx, db, nsB, "b-neighbor")
+		if err := repo.Create(ctx, newTestRelationship(nsA, x, yA)); err != nil {
+			t.Fatalf("create nsA edge: %v", err)
+		}
+		if err := repo.Create(ctx, newTestRelationship(nsB, x, yB)); err != nil {
+			t.Fatalf("create nsB edge: %v", err)
+		}
+
+		tr, err := repo.TraverseFromEntity(ctx, x, []uuid.UUID{nsA}, 2, 0)
+		if err != nil {
+			t.Fatalf("traverse nsA: %v", err)
+		}
+		if len(tr.Relationships) != 1 {
+			t.Fatalf("nsA traverse: want 1 edge, got %d", len(tr.Relationships))
+		}
+		for _, r := range tr.Relationships {
+			if r.NamespaceID != nsA {
+				t.Fatalf("traversal leaked a %s edge under nsA scope", r.NamespaceID)
+			}
+		}
+
+		// Fail-closed: empty aperture yields no edges.
+		tr, err = repo.TraverseFromEntity(ctx, x, nil, 2, 0)
+		if err != nil {
+			t.Fatalf("traverse empty: %v", err)
+		}
+		if len(tr.Relationships) != 0 {
+			t.Fatalf("empty scope must be fail-closed, got %d", len(tr.Relationships))
+		}
+	})
 }
 
 // avoid "imported and not used" warnings when only some tests reference these.

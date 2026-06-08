@@ -73,7 +73,7 @@ type GraphRelationshipStore interface {
 
 // GraphAliasStore retrieves aliases for an entity.
 type GraphAliasStore interface {
-	ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.EntityAlias, error)
+	ListByEntity(ctx context.Context, entityID uuid.UUID, namespaces []uuid.UUID) ([]model.EntityAlias, error)
 }
 
 // GraphMemoryStore batch-fetches memories so the handler can drop edges whose
@@ -81,7 +81,7 @@ type GraphAliasStore interface {
 // soft-deleted source simply does not come back; superseded rows do come back
 // and are filtered on SupersededBy.
 type GraphMemoryStore interface {
-	GetBatch(ctx context.Context, ids []uuid.UUID) ([]model.Memory, error)
+	GetBatch(ctx context.Context, ids, namespaces []uuid.UUID) ([]model.Memory, error)
 }
 
 // GraphNamespaceLookup retrieves a namespace by ID to check path ancestry.
@@ -237,7 +237,7 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 		// console graph stays consistent with recall and the reaped store.
 		// GetBatch omits soft-deleted rows, so a soft-deleted source never
 		// lands in liveProvenance; superseded rows are filtered explicitly.
-		liveProvenance := resolveLiveProvenance(r.Context(), cfg.Memories, relationships)
+		liveProvenance := resolveLiveProvenance(r.Context(), cfg.Memories, project.NamespaceID, relationships)
 		// filterProvenance is true only when a memory store is wired AND the
 		// lookup succeeded; a nil map (no store, or a lookup error) falls open
 		// to legacy show-all behavior rather than blanking the graph.
@@ -294,7 +294,7 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 				continue
 			}
 
-			aliases, _ := cfg.Aliases.ListByEntity(r.Context(), e.ID)
+			aliases, _ := cfg.Aliases.ListByEntity(r.Context(), e.ID, []uuid.UUID{project.NamespaceID})
 			aliasNames := make([]string, 0, len(aliases))
 			for _, a := range aliases {
 				aliasNames = append(aliasNames, a.Alias)
@@ -323,7 +323,7 @@ func NewAdminGraphHandler(cfg GraphAdminConfig) http.HandlerFunc {
 // yields a nil map; callers treat that as "provenance filtering disabled".
 // GetBatch already excludes soft-deleted memories, so they never appear in the
 // result and their edges are correctly treated as lost-provenance.
-func resolveLiveProvenance(ctx context.Context, store GraphMemoryStore, relationships []model.Relationship) map[uuid.UUID]bool {
+func resolveLiveProvenance(ctx context.Context, store GraphMemoryStore, namespaceID uuid.UUID, relationships []model.Relationship) map[uuid.UUID]bool {
 	if store == nil {
 		return nil
 	}
@@ -341,7 +341,7 @@ func resolveLiveProvenance(ctx context.Context, store GraphMemoryStore, relation
 		ids = append(ids, id)
 	}
 	live := make(map[uuid.UUID]bool, len(ids))
-	mems, err := store.GetBatch(ctx, ids)
+	mems, err := store.GetBatch(ctx, ids, []uuid.UUID{namespaceID})
 	if err != nil {
 		// On a lookup error, fail open to the prior behavior (show edges)
 		// rather than blanking the graph; a non-nil map with no entries would

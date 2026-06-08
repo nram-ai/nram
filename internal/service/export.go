@@ -27,7 +27,7 @@ type EntityLister interface {
 
 // RelationshipLister provides listing of relationships for an entity.
 type RelationshipLister interface {
-	ListByEntity(ctx context.Context, entityID uuid.UUID) ([]model.Relationship, error)
+	ListByEntity(ctx context.Context, entityID uuid.UUID, namespaces []uuid.UUID) ([]model.Relationship, error)
 }
 
 // LineageReader provides listing of lineage records for a memory.
@@ -196,7 +196,7 @@ func (s *ExportService) Export(ctx context.Context, req *ExportRequest) (*Export
 	seenRels := make(map[uuid.UUID]struct{})
 	var exportRels []ExportRelationship
 	for _, ent := range allEntities {
-		rels, err := s.relationships.ListByEntity(ctx, ent.ID)
+		rels, err := s.relationships.ListByEntity(ctx, ent.ID, []uuid.UUID{project.NamespaceID})
 		if err != nil {
 			continue
 		}
@@ -308,7 +308,7 @@ func (s *ExportService) ExportNDJSON(ctx context.Context, req *ExportRequest, w 
 	// Stream relationships (deduplicated).
 	seenRels := make(map[uuid.UUID]struct{})
 	for _, ent := range allEntities {
-		rels, rErr := s.relationships.ListByEntity(ctx, ent.ID)
+		rels, rErr := s.relationships.ListByEntity(ctx, ent.ID, []uuid.UUID{project.NamespaceID})
 		if rErr != nil {
 			continue
 		}

@@ -80,7 +80,7 @@ func (m *rbacMemoryRepo) Create(_ context.Context, mem *model.Memory) error {
 	return nil
 }
 
-func (m *rbacMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *rbacMemoryRepo) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	mem, ok := m.memories[id]
@@ -110,7 +110,7 @@ func (m *rbacMemoryRepo) LookupByContentHash(_ context.Context, namespaceID uuid
 	return nil, sql.ErrNoRows
 }
 
-func (m *rbacMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *rbacMemoryRepo) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []model.Memory
@@ -1331,7 +1331,7 @@ func (m *rbacEntityLister) ListByNamespace(_ context.Context, _ uuid.UUID) ([]mo
 // rbacRelationshipLister is a no-op relationship lister for export.
 type rbacRelationshipLister struct{}
 
-func (m *rbacRelationshipLister) ListByEntity(_ context.Context, _ uuid.UUID) ([]model.Relationship, error) {
+func (m *rbacRelationshipLister) ListByEntity(_ context.Context, _ uuid.UUID, _ []uuid.UUID) ([]model.Relationship, error) {
 	return nil, nil
 }
 

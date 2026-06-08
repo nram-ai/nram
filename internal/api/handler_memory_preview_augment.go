@@ -99,17 +99,15 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 			WriteError(w, ErrInternal("failed to look up project"))
 			return
 		}
-		mem, err := cfg.Memories.GetByID(r.Context(), memoryID)
+		// Bounded read: a memory outside the project's namespace reads as
+		// not-found, so existence is not leaked across the tenant boundary.
+		mem, err := cfg.Memories.GetByID(r.Context(), memoryID, project.NamespaceID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				WriteError(w, ErrNotFound("memory not found"))
 				return
 			}
 			WriteError(w, ErrInternal("failed to look up memory"))
-			return
-		}
-		if mem.NamespaceID != project.NamespaceID {
-			WriteError(w, ErrNotFound("memory not found"))
 			return
 		}
 

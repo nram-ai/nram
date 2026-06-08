@@ -127,21 +127,21 @@ func TestUpdateAndForgetChain_RealSQL(t *testing.T) {
 	}
 
 	// 4. Chain shape via direct row reads.
-	gotA, err := memRepo.GetByID(ctx, original.ID)
+	gotA, err := memRepo.GetByID(ctx, original.ID, ns.ID)
 	if err != nil {
 		t.Fatalf("reload A: %v", err)
 	}
 	if gotA.SupersededBy == nil || *gotA.SupersededBy != respB.ID {
 		t.Errorf("A.SupersededBy = %v, want %s", gotA.SupersededBy, respB.ID)
 	}
-	gotB, err := memRepo.GetByID(ctx, respB.ID)
+	gotB, err := memRepo.GetByID(ctx, respB.ID, ns.ID)
 	if err != nil {
 		t.Fatalf("reload B: %v", err)
 	}
 	if gotB.SupersededBy == nil || *gotB.SupersededBy != respC.ID {
 		t.Errorf("B.SupersededBy = %v, want %s", gotB.SupersededBy, respC.ID)
 	}
-	gotC, err := memRepo.GetByID(ctx, respC.ID)
+	gotC, err := memRepo.GetByID(ctx, respC.ID, ns.ID)
 	if err != nil {
 		t.Fatalf("reload C: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestUpdateAndForgetChain_RealSQL(t *testing.T) {
 	// 7. After the cascade every chain row should be soft-deleted; reads
 	//    by ID should return ErrNoRows since GetByID filters deleted_at.
 	for _, id := range []uuid.UUID{original.ID, respB.ID, respC.ID} {
-		if _, err := memRepo.GetByID(ctx, id); err == nil {
+		if _, err := memRepo.GetByID(ctx, id, ns.ID); err == nil {
 			t.Errorf("memory %s should be soft-deleted after chain forget", id)
 		}
 	}

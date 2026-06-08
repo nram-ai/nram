@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
+	"github.com/nram-ai/nram/internal/storage"
 )
 
 // fakeAugLister returns a fixed candidate list and records the limit the phase
@@ -19,7 +20,7 @@ type fakeAugLister struct {
 	err       error
 }
 
-func (f *fakeAugLister) ListAugmentationBackfillCandidates(_ context.Context, _ []uuid.UUID, limit int) ([]uuid.UUID, error) {
+func (f *fakeAugLister) ListAugmentationBackfillCandidates(_ context.Context, _ []uuid.UUID, limit int) ([]storage.BackfillCandidate, error) {
 	f.calls++
 	f.lastLimit = limit
 	if f.err != nil {
@@ -29,7 +30,11 @@ func (f *fakeAugLister) ListAugmentationBackfillCandidates(_ context.Context, _ 
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
-	return append([]uuid.UUID(nil), out...), nil
+	cands := make([]storage.BackfillCandidate, len(out))
+	for i, id := range out {
+		cands[i] = storage.BackfillCandidate{ID: id}
+	}
+	return cands, nil
 }
 
 func augSettings(enabled bool, capPerCycle int) *staticDreamSettings {

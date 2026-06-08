@@ -36,7 +36,7 @@ func (m *mockEntityReader) ListByNamespace(_ context.Context, _ uuid.UUID) ([]mo
 	return m.entities, m.err
 }
 
-func (m *mockEntityReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Entity, error) {
+func (m *mockEntityReader) GetBatch(_ context.Context, ids []uuid.UUID, namespaces []uuid.UUID) ([]model.Entity, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -44,11 +44,21 @@ func (m *mockEntityReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model
 	for _, id := range ids {
 		want[id] = struct{}{}
 	}
+	// Mirror the real bounded primitive: a non-empty namespace set restricts
+	// results to those namespaces; an empty set is fail-closed (no rows).
+	allowed := make(map[uuid.UUID]struct{}, len(namespaces))
+	for _, ns := range namespaces {
+		allowed[ns] = struct{}{}
+	}
 	out := make([]model.Entity, 0, len(ids))
 	for _, e := range m.entities {
-		if _, ok := want[e.ID]; ok {
-			out = append(out, e)
+		if _, ok := want[e.ID]; !ok {
+			continue
 		}
+		if _, ok := allowed[e.NamespaceID]; !ok {
+			continue
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }
@@ -77,7 +87,7 @@ type mockTraverser struct {
 	callCount  int
 }
 
-func (m *mockTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, depth, maxEdges int) (storage.TraversalResult, error) {
+func (m *mockTraverser) TraverseFromEntity(_ context.Context, _ uuid.UUID, _ []uuid.UUID, depth, maxEdges int) (storage.TraversalResult, error) {
 	m.lastDepth = depth
 	m.lastMaxEdges = maxEdges
 	m.maxEdgesByCall = append(m.maxEdgesByCall, maxEdges)

@@ -22,7 +22,7 @@ type conflictMockMemoryReader struct {
 	err      error
 }
 
-func (m *conflictMockMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *conflictMockMemoryReader) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*model.Memory, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -33,7 +33,7 @@ func (m *conflictMockMemoryReader) GetByID(_ context.Context, id uuid.UUID) (*mo
 	return mem, nil
 }
 
-func (m *conflictMockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID) ([]model.Memory, error) {
+func (m *conflictMockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid.UUID) ([]model.Memory, error) {
 	if m.err != nil {
 		return nil, m.err
 	}

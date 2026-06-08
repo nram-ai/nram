@@ -33,7 +33,7 @@ func TestMemoryRepo_BumpReinforcement_BumpsAllThreeFields(t *testing.T) {
 			t.Fatalf("expected 1 row affected, got %d", rows)
 		}
 
-		got, err := repo.GetByID(ctx, mem.ID)
+		got, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}
@@ -70,7 +70,7 @@ func TestMemoryRepo_BumpReinforcement_CapsConfidenceAtOne(t *testing.T) {
 			t.Fatalf("bump reinforcement: %v", err)
 		}
 
-		got, err := repo.GetByID(ctx, mem.ID)
+		got, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}
@@ -166,7 +166,7 @@ func TestMemoryRepo_BumpReinforcement_Batch(t *testing.T) {
 		}
 
 		for _, id := range ids {
-			got, err := repo.GetByID(ctx, id)
+			got, err := repo.GetByID(ctx, id, nsID)
 			if err != nil {
 				t.Fatalf("reload %s: %v", id, err)
 			}
@@ -201,7 +201,7 @@ func TestMemoryRepo_DecayConfidence_Multiplies(t *testing.T) {
 			t.Errorf("want 1 row, got %d", rows)
 		}
 
-		got, err := repo.GetByID(ctx, mem.ID)
+		got, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}
@@ -229,7 +229,7 @@ func TestMemoryRepo_DecayConfidence_RespectsFloor(t *testing.T) {
 			t.Fatalf("decay: %v", err)
 		}
 
-		got, err := repo.GetByID(ctx, mem.ID)
+		got, err := repo.GetByID(ctx, mem.ID, nsID)
 		if err != nil {
 			t.Fatalf("reload: %v", err)
 		}

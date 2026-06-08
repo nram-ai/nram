@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -39,10 +40,10 @@ func (m *mockMemoryDeleter) FindBySupersededBy(_ context.Context, _ uuid.UUID, i
 	return out, nil
 }
 
-func (m *mockMemoryDeleter) GetByID(_ context.Context, id uuid.UUID) (*model.Memory, error) {
+func (m *mockMemoryDeleter) GetByID(_ context.Context, id uuid.UUID, namespaceID uuid.UUID) (*model.Memory, error) {
 	mem, ok := m.memories[id]
-	if !ok {
-		return nil, fmt.Errorf("not found")
+	if !ok || mem.NamespaceID != namespaceID {
+		return nil, sql.ErrNoRows
 	}
 	return mem, nil
 }
